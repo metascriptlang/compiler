@@ -78,7 +78,7 @@ export function isAnalysableFieldAccess(orig: Node): boolean {
 // Walks MemberExpr/ArrayAccess/HiddenDeref chains to the Identifier root.
 // Returns the resolvedSym of the root, or null if not found.
 
-export function getRootSym(node: Node): Symbol {
+export function getRootSym(node: Node): Symbol | null {
 	let n = skipConvDfa(node);
 	while (n != null) {
 		match (n.kind) {
@@ -86,10 +86,10 @@ export function getRootSym(node: Node): Symbol {
 			NodeKind.MemberExpr => { n = skipConvDfa((n.data as MemberExprData).object); },
 			NodeKind.ArrayAccess => { n = skipConvDfa((n.data as ArrayAccessData).array); },
 			NodeKind.HiddenDeref | NodeKind.HiddenAddr => { n = skipConvDfa((n.data as HiddenDerefData).expr); },
-			_ => { return null as unknown as Symbol; },
+			_ => { return null; },
 		};
 	}
-	return null as unknown as Symbol;
+	return null;
 }
 
 // ===== Path Decomposition =====

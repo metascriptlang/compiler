@@ -21,6 +21,7 @@ Compiles the post-Phase-3 AST into Raiser bytecode: `parse → check → transfo
 - **Routine lookup uses the resolved symbol's module path and original name** — raw spelling is only the fallback of single-program compilation.
 - **Each module-level variable owns one VM global slot** — initializers run in dependency order, an imported module initializes once per project run, the entry module last.
 - **`CopyValue` gives arrays and structs value semantics** — every compiled function carries a flat copy-plan table, applied at assignment, argument, return and container-store boundaries; shared references and `Span` are preserved.
+- **An assignment into a location that already holds a struct or an array writes into that object** (`emitValueAssign`, NIM-REF CG-40) — an element, a field, a global or local binding, `p[]` and a `ref` parameter, so every pointer to the location keeps seeing it; an array takes the source length first; a parameter or a for-of binding is a view and rebinds; an empty location takes a copy.
 - **A spawned strand gets a graph copy of the parent's global slots** — globals are strand-local snapshots, not shared mutable state.
 - **Spread is lowered before bytecode generation** — each source is evaluated once; array insertion goes through the VM `push` builtin.
 - **Pending generic instances attach to their owning module before monomorphization, macro expansion and Raiser lowering** — on-demand compilation is scoped to the project image and restored afterwards.
@@ -36,6 +37,7 @@ Each probed on `msc run --target=raiser`:
 - `class … extends` — `cannot evaluate 'super' at comptime: symbol kind is Class`.
 - `static` members — `cannot evaluate '<Class>' at comptime: symbol kind is Class`.
 - `out` argument — `cannot compile node kind OutExpr`.
+- a write through a pointer or `ref` parameter to a value that is not a struct or an array (`ref n: int32`) — `cannot assign through a pointer or ref parameter at comptime` (it used to leave the caller's value unchanged).
 
 ## Tests
 

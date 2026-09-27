@@ -86,6 +86,11 @@ export function setFlag(sym: Symbol, flag: SymbolFlag): void {
 	sym.symFlags = sym.symFlags.incl(flag);
 }
 
+export function isViewBinding(sym: Symbol | null): boolean {
+	if (sym == null) return false;
+	return sym.symbolKind == SymbolKind.Parameter || hasFlag(sym, SymbolFlag.ForVar);
+}
+
 export function isCursorSym(sym: Symbol | null): boolean {
 	return sym != null && sym.symFlags.has(SymbolFlag.Cursor);
 }
@@ -327,6 +332,9 @@ export function initSymbol(sym: Symbol, name: string, kind: SymbolKind, symType:
 	sym.nonisolatedFields = [];
 	sym.duVariantSlot = 0;
 	sym.mutatedParams = 0;
+	sym.itemModule = -1;
+	sym.item = 0;
+	sym.instantiatedFrom = null;
 }
 
 // Look up an exported symbol in Module / Global scopes. Uses symbols for

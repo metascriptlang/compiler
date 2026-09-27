@@ -501,13 +501,7 @@ _Noreturn void msRaiseIndexError(int64_t idx, int64_t len);
    race means memory may already be corrupt, so unwinding past it is unsafe). */
 _Noreturn void msMapFatal(msString msg);
 
-/* Raw bits for std's hash (std/core/struct.ms): the address of a Map<unknown, _>
-   key and the IEEE pattern of a float key. BITS ONLY — the avalanche step is
-   std's hashWangYi1, the one mixing site; a second copy here is what once let
-   one copy be fixed and the other stay wrong. */
-static inline uint64_t msPtrBits(const void* p) { return (uint64_t)(uintptr_t)p; }
-static inline uint64_t msFloat64Bits(double d) { uint64_t u; memcpy(&u, &d, sizeof u); return u; }
-static inline uint64_t msHiXorLo(uint64_t a, uint64_t b) { __uint128_t r = (__uint128_t)a * b; return (uint64_t)(r >> 64) ^ (uint64_t)r; }
+#include "runtime/core/hashBits.h"
 
 /* ===== Bounds-Checked Array Access ===== */
 /* GCC statement expression returning lvalue via dereferenced-pointer trick.
@@ -536,6 +530,11 @@ static inline uint64_t msHiXorLo(uint64_t a, uint64_t b) { __uint128_t r = (__ui
 	if ((uint64_t)__idx >= (uint64_t)(a).len) msRaiseIndexError(__idx, (a).len); \
 	&((a).data[__idx]); \
 }))
+
+#define msArrayAccessUnchecked(a, i) ((a).p->data[(int32_t)(i)])
+#define msRefArrayAccessUnchecked msArrayAccessUnchecked
+#define msSizedArrayAccessUnchecked(a, i, n) ((a).data[(int32_t)(i)])
+#define msSpanAccessUnchecked(a, i) ((a).data[(int32_t)(i)])
 
 /* String char access — TypeScript s[i] parity (character-indexed) */
 #define msStringCharAccess(s, i) msStringCharAt((s), (i))

@@ -1,3 +1,4 @@
+// @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @skip-raiser: spawn cost grows with every strand ever created (8k rounds 1.8 s, 40k 19 s, 80k 121 s); 800k rounds outlive the cell timeout
 // @maxrss: 40
 // @stdout: leak-discarded-await done

@@ -240,6 +240,9 @@ export class Symbol {
 	metaValues: Node[];
 	nonisolatedFields: string[];
 	duVariantSlot: int32;  // Narrowed DU field access: 0 = none, N = union variant N-1 (checker stamps on the property sym; C codegen routes .v<N-1>)
+	itemModule: int32;     // Identity within one compilation: the owning module's index and the ordinal of this symbol in it
+	item: int32;
+	instantiatedFrom: Symbol | null;
 }
 
 // ===== Node Flags (Standard parity: TNodeFlags) =====
@@ -264,6 +267,7 @@ export enum NodeFlag {
 	ProtocolCall,
 	Parenthesized, // parser: the expression was written inside grouping parentheses
 	WhenPicked,    // parser: statement spliced in from the selected branch of a `when` chain
+	ExplicitDeref, // parser: HiddenDeref written as `x[]` — the checker validates the pointer, fmt prints it back
 	CommaWritten,  // parser: a comma was written after this match case
 }
 

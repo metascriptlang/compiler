@@ -31,28 +31,7 @@ export extern function charCodeAt(this s: string, idx: int32): int32 from "msStr
 export extern function slice(this s: string, start: int32, end: int32 = 2147483647): string from "msStringSlice";
 export extern function substring(this s: string, start: int32, end: int32): string from "msStringSubstring";
 
-// ===== Zero-Copy Bridge (string → uint8[]) =====
-
-export extern function asBytes(this s: string): Readonly<uint8[]> from "msAsBytes";
-
-// ===== Shared Byte-Loop Algorithms (single source, both backends) =====
-export function byteLength(this s: string): int32 {
-	return s.asBytes().length;
-}
-
-export function byteAt(this s: string, idx: int32): int32 {
-	const b = s.asBytes();
-	if (idx < 0 || idx >= b.length) return -1;
-	return b[idx] as int32;
-}
-
-export function byteSlice(this s: string, start: int32, end: int32): string {
-	const b = s.asBytes();
-	const result: uint8[] = [];
-	let i = start;
-	while (i < end && i < b.length) { result.push(b[i]); i = i + 1; }
-	return result.asString();
-}
+export { asBytes, byteLength, byteAt, byteSlice } from "./bytes";
 
 // ===== Transformation =====
 export extern function padStart(this s: string, targetLen: int32, pad: string): string from "msStringPadStart";

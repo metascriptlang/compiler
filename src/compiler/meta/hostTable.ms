@@ -1158,6 +1158,7 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 	const stdPath = root != "" ? join(root, "std") : "std";
 	const rmsFiles = [
 		join(stdPath, "core/string/index.rms"),
+		join(stdPath, "core/string/bytes.rms"),
 		join(stdPath, "core/array/index.rms"),
 	];
 	// Names the Raiser codegen intercepts to opcodes before CallHost.

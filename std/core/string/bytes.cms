@@ -1,0 +1,28 @@
+// MetaScript String Byte Tier — C Backend
+
+@include("runtime/core/string.h");
+
+// ===== Zero-Copy Bridge (string → uint8[]) =====
+
+/** Returns the string's underlying bytes as a uint8 array (zero-copy). */
+@builtin("AsBytes")
+export extern function asBytes(this s: string): Readonly<uint8[]> from "msAsBytes";
+
+// ===== Shared Byte-Loop Algorithms (single source, both backends) =====
+export function byteLength(this s: string): int32 {
+	return s.asBytes().length;
+}
+
+export function byteAt(this s: string, idx: int32): int32 {
+	const b = s.asBytes();
+	if (idx < 0 || idx >= b.length) return -1;
+	return b[idx] as int32;
+}
+
+export function byteSlice(this s: string, start: int32, end: int32): string {
+	const b = s.asBytes();
+	const result: uint8[] = [];
+	let i = start;
+	while (i < end && i < b.length) { result.push(b[i]); i = i + 1; }
+	return result.asString();
+}

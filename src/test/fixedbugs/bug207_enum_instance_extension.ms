@@ -1,6 +1,6 @@
 // Symptom: `mood.label()` on an enum value failed with "Property 'label' does not exist on type 'Mood'. Available: Calm, Angry".
 // Root cause: checkMemberExpr rewrote every property on an enum-typed object into a member access, so the extension lookup was never reached.
-// Fix: the member rewrite applies only when the property is a member or the receiver is the enum type itself, as Nim's tryReadingTypeField tyEnum arm returns nil for a non-member.
+// Fix: the member rewrite applies only when the property is a member; any other name goes on to the extensions.
 import { Stance207, cost } from "./bug207helper";
 
 enum Mood207 { Calm, Angry }

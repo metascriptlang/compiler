@@ -5,6 +5,7 @@
 
 #include "runtime/core/system.h"
 #include "runtime/core/array.h"
+#include "runtime/core/dragonbox.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -1093,40 +1094,56 @@ void msStringSetChar(msString* s, int64_t idx, msString ch) {
 	}
 }
 
+static int msWriteUint64Decimal(uint64_t value, char* out) {
+	char reversed[20];
+	int n = 0;
+	do {
+		reversed[n++] = (char)('0' + value % 10);
+		value /= 10;
+	} while (value != 0);
+	for (int i = 0; i < n; i++) out[i] = reversed[n - 1 - i];
+	return n;
+}
+
+static int msWriteInt64Decimal(int64_t value, char* out) {
+	if (value < 0) {
+		out[0] = '-';
+		return 1 + msWriteUint64Decimal((uint64_t)0 - (uint64_t)value, out + 1);
+	}
+	return msWriteUint64Decimal((uint64_t)value, out);
+}
+
 msString msIntToString(int64_t value) {
 	char buf[32];
-	int len = snprintf(buf, sizeof(buf), "%lld", (long long)value);
+	int len = msWriteInt64Decimal(value, buf);
 	return msStringNew(buf, len);
 }
 
 static int msShortestRoundTripDigits(double value, char* digits, int* decExp) {
-	char sci[64];
-	int prec = 0;
-	for (; prec < 16; prec++) {
-		snprintf(sci, sizeof(sci), "%.*e", prec, value);
-		if (strtod(sci, NULL) == value) break;
+	uint64_t bits;
+	__builtin_memcpy(&bits, &value, sizeof bits);
+	msDragonboxDecimal decimal = msDragonboxToDecimal64(bits & (MS_DRAGONBOX_HIDDEN_BIT - 1), (bits >> 52) & 0x7FF);
+	uint64_t significand = decimal.significand;
+	int32_t exponent = decimal.exponent;
+	while (significand % 10 == 0) {
+		significand /= 10;
+		exponent++;
 	}
-	if (prec == 16) snprintf(sci, sizeof(sci), "%.16e", value);
-	const char* q = sci;
-	int k = 0;
-	digits[k++] = *q++;
-	if (*q == '.') {
-		q++;
-		while (*q != 'e' && *q != 'E') digits[k++] = *q++;
-	}
-	while (*q != 'e' && *q != 'E') q++;
-	*decExp = (int)strtol(q + 1, NULL, 10);
-	while (k > 1 && digits[k - 1] == '0') k--;
+	int k = msWriteUint64Decimal(significand, digits);
+	*decExp = exponent + k - 1;
 	return k;
 }
 
 msString msNumberToString(double value) {
 	char buf[64];
-	if (isnan(value)) return msStringNew("NaN", 3);
+	uint64_t bits;
+	__builtin_memcpy(&bits, &value, sizeof bits);
+	bool nonFinite = (bits & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL;
+	if (nonFinite && (bits & 0x000FFFFFFFFFFFFFULL) != 0) return msStringNew("NaN", 3);
 	if (value == 0.0) return msStringNew("0", 1);
-	if (isinf(value)) return value < 0.0 ? msStringNew("-Infinity", 9) : msStringNew("Infinity", 8);
+	if (nonFinite) return value < 0.0 ? msStringNew("-Infinity", 9) : msStringNew("Infinity", 8);
 	if (value >= -1e15 && value <= 1e15 && value == (double)(int64_t)value) {
-		int len = snprintf(buf, sizeof(buf), "%lld", (long long)(int64_t)value);
+		int len = msWriteInt64Decimal((int64_t)value, buf);
 		return msStringNew(buf, len);
 	}
 
@@ -1164,7 +1181,7 @@ msString msNumberToString(double value) {
 		}
 		*p++ = 'e';
 		*p++ = n > 0 ? '+' : '-';
-		p += snprintf(p, 8, "%d", n > 0 ? n - 1 : -(n - 1));
+		p += msWriteInt64Decimal(n > 0 ? n - 1 : -(n - 1), p);
 	}
 	return msStringNew(buf, (int)(p - buf));
 }
@@ -1173,7 +1190,7 @@ msString msNumberToString(double value) {
    negative through the signed formatter. */
 msString msUint64ToString(uint64_t value) {
 	char buf[24];
-	int len = snprintf(buf, sizeof(buf), "%llu", (unsigned long long)value);
+	int len = msWriteUint64Decimal(value, buf);
 	return msStringNew(buf, len);
 }
 
@@ -1289,15 +1306,36 @@ msString msStringJoin(msStringArray arr, msString sep) {
 
 /* ===== Parsing ===== */
 
+#ifndef MSOS_SOLANA
 double msStringParseFloat(msString s) {
 	if (s.len == 0 || s.p == NULL) return 0.0;
 	/* Ensure null-terminated (it should be, but be safe) */
 	return strtod(s.p->data, NULL);
 }
+#endif
 
 int64_t msStringParseInt(msString s) {
 	if (s.len == 0 || s.p == NULL) return 0;
-	return strtoll(s.p->data, NULL, 10);
+	const char* p = s.p->data;
+	while (*p == ' ' || (*p >= '\t' && *p <= '\r')) p++;
+	bool negative = false;
+	if (*p == '+' || *p == '-') {
+		negative = *p == '-';
+		p++;
+	}
+	uint64_t limit = negative ? (uint64_t)INT64_MAX + 1 : (uint64_t)INT64_MAX;
+	uint64_t value = 0;
+	bool overflow = false;
+	for (; *p >= '0' && *p <= '9'; p++) {
+		uint64_t digit = (uint64_t)(*p - '0');
+		if (overflow || value > (limit - digit) / 10) {
+			overflow = true;
+			continue;
+		}
+		value = value * 10 + digit;
+	}
+	if (overflow) return negative ? INT64_MIN : INT64_MAX;
+	return negative ? (int64_t)((uint64_t)0 - value) : (int64_t)value;
 }
 
 /* ===== Capacity ===== */

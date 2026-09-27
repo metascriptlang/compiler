@@ -1,6 +1,6 @@
 import { platform } from "std/process";
 import { TargetInfo, hostTargetInfo, isPointerShapedForUnknown, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
-import { isAssignable, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
+import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
@@ -251,7 +251,7 @@ export function collectExports(ctx: CheckerContext, modulePath: string): Exporte
 			const extSym = ext.sym;
 			if (extSym == null || !isExportedBy(ctx, extSym)) continue;
 			const name = exportedNameOf(ctx, extSym);
-			if (!emitted.has(name)) {
+			if (!emitted.has(name) || isStaticExtensionSym(extSym)) {
 				exports.push(buildExportInfo(extSym, ctx.extensionRegistry, modulePath, ctx, name));
 				emitted.add(name);
 			}
@@ -612,6 +612,9 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	if (recvT.kind == TypeKind.Ref && recvT.typeReturn != null && recvT.typeReturn.kind == TypeKind.Array) recvT = recvT.typeReturn;
 	let objT = objType;
 	if (objT.kind == TypeKind.Ref && objT.typeReturn != null && objT.typeReturn.kind == TypeKind.Array) objT = objT.typeReturn;
+	const recvNominal = nominalTypeSym(recvT);
+	const objNominal = nominalTypeSym(objT);
+	if (recvNominal != null && objNominal != null && recvNominal != objNominal) return false;
 	// Generic extensions: try unification on receiver param.
 	// e.g. map<T>(this arr: T[]) should match number[] but NOT string.
 	if (hasGenericParams(recvT)) {
@@ -635,6 +638,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		if (isReinterpretUnsafe(objT, recvT)) return false;
 		return isAssignable(objElem, recvElem);
 	}
+	if (recvNominal != null && objNominal != null) return sameInstanceArgs(recvT, objT);
 	// Name-based matching for well-known types and monomorphized generics.
 	// Monomorphized types have names like "Map__string,string" — match base name "Map".
 	if (ext.receiverTypeName != "") {
@@ -660,6 +664,34 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		if (objType.kind == TypeKind.Ref && objType.typeReturn != null && objType.typeReturn.kind == TypeKind.Struct) return false;
 	}
 	return isAssignable(objType, receiverType);
+}
+
+function instanceArgs(t: Type): Type[] | null {
+	const s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	return s.kind == TypeKind.GenericInstance ? s.typeChildren : null;
+}
+
+function sameInstanceArgs(recv: Type, obj: Type): boolean {
+	const recvArgs = instanceArgs(recv);
+	const objArgs = instanceArgs(obj);
+	if (recvArgs == null || objArgs == null) return true;
+	if (recvArgs.length != objArgs.length) return false;
+	for (let i = 0; i < recvArgs.length; i += 1) {
+		if (!sameType(recvArgs[i], objArgs[i])) return false;
+	}
+	return true;
+}
+
+function nominalTypeSym(t: Type): Symbol | null {
+	let s = t;
+	if (s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
+	if (s.kind == TypeKind.GenericInstance && s.typeExtra != null) {
+		s = s.typeExtra;
+		if (s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
+	}
+	if (s.sym == null || (s.kind != TypeKind.Struct && s.kind != TypeKind.Enum)) return null;
+	const kind = s.sym.symbolKind;
+	return kind == SymbolKind.Class || kind == SymbolKind.Interface || kind == SymbolKind.Struct || kind == SymbolKind.Enum ? s.sym : null;
 }
 
 export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type | null): ExtensionMethod[] {
@@ -713,28 +745,25 @@ function classBaseStruct(t: Type): Type | null {
 }
 
 // ===== Method Dispatch Registry (Nim cgmeth methodDef/g.methods analog) =====
-// Populated by collectPass for every class (parent edge) and every instance
-// method (lifted `<Class>_<method>` sym). Whole-program by construction:
 // collect runs for all modules before any transform/codegen. Codegen consults
 // it at identifier-callee emission to route overridden methods through a
 // msDisp_* if-chain dispatcher. A name declared twice on one class (overload)
 // disables dispatch for that method name — conservative direct call.
 
 export interface DispMethodEntry {
-	className: string;
+	classSym: Symbol;
 	methodName: string;
 	sym: Symbol;
 	overloaded: boolean;
 }
 
-let _dispParent: HashMap<string, string> = new HashMap<string, string>();
 let _dispEntries: DispMethodEntry[] = [];
-let _dispByLifted: HashMap<string, DispMethodEntry> = new HashMap<string, DispMethodEntry>();
+let _dispByClass: HashMap<Symbol, DispMethodEntry[]> = new HashMap<Symbol, DispMethodEntry[]>();
+let _dispBySym: HashMap<Symbol, DispMethodEntry> = new HashMap<Symbol, DispMethodEntry>();
+let _dispByPlace: HashMap<string, DispMethodEntry> = new HashMap<string, DispMethodEntry>();
 
 export interface DispatchRecords {
-	parentClasses: string[];
-	parentBases: string[];
-	methodClasses: string[];
+	classSyms: Symbol[];
 	methodNames: string[];
 	methodSyms: Symbol[];
 }
@@ -742,7 +771,7 @@ let _dispCapture: DispatchRecords | null = null;
 
 export function startDispatchCapture(): DispatchRecords | null {
 	const outer = _dispCapture;
-	_dispCapture = { parentClasses: [], parentBases: [], methodClasses: [], methodNames: [], methodSyms: [] };
+	_dispCapture = { classSyms: [], methodNames: [], methodSyms: [] };
 	return outer;
 }
 
@@ -753,41 +782,37 @@ export function endDispatchCapture(outer: DispatchRecords | null): DispatchRecor
 }
 
 export function replayDispatchRecords(records: DispatchRecords): void {
-	for (let i = 0; i < records.parentClasses.length; i += 1) dispatchRecordParent(records.parentClasses[i], records.parentBases[i]);
-	for (let i = 0; i < records.methodSyms.length; i += 1) dispatchRecordMethod(records.methodClasses[i], records.methodNames[i], records.methodSyms[i]);
+	for (let i = 0; i < records.methodSyms.length; i += 1) dispatchRecordMethod(records.classSyms[i], records.methodNames[i], records.methodSyms[i]);
 }
 
-export function dispatchRecordParent(className: string, baseName: string): void {
-	if (className == "" || baseName == "") return;
+export function dispatchRecordMethod(classSym: Symbol, methodName: string, sym: Symbol): void {
 	if (_dispCapture != null) {
-		_dispCapture.parentClasses.push(className);
-		_dispCapture.parentBases.push(baseName);
-	}
-	_dispParent.set(className, baseName);
-}
-
-export function dispatchRecordMethod(className: string, methodName: string, sym: Symbol): void {
-	if (_dispCapture != null) {
-		_dispCapture.methodClasses.push(className);
+		_dispCapture.classSyms.push(classSym);
 		_dispCapture.methodNames.push(methodName);
 		_dispCapture.methodSyms.push(sym);
 	}
-	const lifted = sym.name;
-	const prev = _dispByLifted.get(lifted);
-	if (prev != null) {
-		const samePlace = prev.sym.modulePath == sym.modulePath
-			&& prev.sym.location.line == sym.location.line
-			&& prev.sym.location.column == sym.location.column;
-		if (samePlace) {
-			prev.sym = sym;
-		} else {
-			prev.overloaded = true;
+	const ofClass = _dispByClass.get(classSym);
+	if (ofClass != null) {
+		for (const prev of ofClass) {
+			if (prev.methodName != methodName) continue;
+			const samePlace = prev.sym.modulePath == sym.modulePath
+				&& prev.sym.location.line == sym.location.line
+				&& prev.sym.location.column == sym.location.column;
+			if (samePlace) {
+				prev.sym = sym;
+				_dispBySym.set(sym, prev);
+			} else {
+				prev.overloaded = true;
+			}
+			return;
 		}
-		return;
 	}
-	const e: DispMethodEntry = { className: className, methodName: methodName, sym: sym, overloaded: false };
+	const e: DispMethodEntry = { classSym: classSym, methodName: methodName, sym: sym, overloaded: false };
 	_dispEntries.push(e);
-	_dispByLifted.set(lifted, e);
+	if (ofClass != null) ofClass.push(e);
+	else _dispByClass.set(classSym, [e]);
+	_dispBySym.set(sym, e);
+	_dispByPlace.set(sym.modulePath + ":" + sym.name, e);
 }
 
 export function dispatchEntryCount(): int32 {
@@ -795,56 +820,62 @@ export function dispatchEntryCount(): int32 {
 }
 
 export function resetDispatchRegistry(): void {
-	_dispParent = new HashMap<string, string>();
 	_dispEntries = [];
-	_dispByLifted = new HashMap<string, DispMethodEntry>();
+	_dispByClass = new HashMap<Symbol, DispMethodEntry[]>();
+	_dispBySym = new HashMap<Symbol, DispMethodEntry>();
+	_dispByPlace = new HashMap<string, DispMethodEntry>();
 }
 
-export function dispatchEntryForLiftedName(liftedName: string): DispMethodEntry | null {
-	if (!_dispByLifted.has(liftedName)) return null;
-	return _dispByLifted.get(liftedName);
+export function dispatchEntryFor(sym: Symbol): DispMethodEntry | null {
+	return _dispBySym.get(sym) ?? null;
 }
 
-function dispDepthBelow(className: string, root: string): int32 {
-	let cur = className;
+export function dispatchEntryAt(modulePath: string, liftedName: string): DispMethodEntry | null {
+	return _dispByPlace.get(modulePath + ":" + liftedName) ?? null;
+}
+
+function dispDepthBelow(classSym: Symbol, root: Symbol): int32 {
+	let cur: Type | null = classSym.symbolType;
 	let d = 0;
-	while (d < 64) {
-		if (cur == root) return d;
-		const nxt = _dispParent.get(cur);
-		if (nxt == null) return -1;
-		cur = nxt;
+	while (cur != null && d < 64) {
+		const own = cur.kind == TypeKind.Ref && cur.typeReturn != null ? cur.typeReturn.sym : cur.sym;
+		if (own == root) return d;
+		cur = classBaseStruct(cur);
 		d += 1;
 	}
 	return -1;
 }
 
-export function classDescendsFrom(className: string, baseName: string): boolean {
-	if (className == "" || baseName == "" || className == baseName) return false;
-	return dispDepthBelow(className, baseName) > 0;
+export function classDescendsFrom(classSym: Symbol, baseSym: Symbol): boolean {
+	if (classSym == baseSym) return false;
+	return dispDepthBelow(classSym, baseSym) > 0;
 }
 
-export function dispatchOverriddenEntry(className: string, methodName: string): DispMethodEntry | null {
-	let cur = _dispParent.get(className);
+export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): DispMethodEntry | null {
+	let cur = classSym.symbolType != null ? classBaseStruct(classSym.symbolType) : null;
 	let d = 0;
 	while (cur != null && d < 64) {
-		for (const e of _dispEntries) {
-			if (e.className == cur && e.methodName == methodName) return e;
+		const ofBase = cur.sym != null ? _dispByClass.get(cur.sym) : null;
+		if (ofBase != null) {
+			for (const e of ofBase) {
+				if (e.methodName == methodName) return e;
+			}
 		}
-		cur = _dispParent.get(cur);
+		cur = classBaseStruct(cur);
 		d += 1;
 	}
 	return null;
 }
 
-export function dispatchOverridesFor(className: string, methodName: string): DispMethodEntry[] {
+export function dispatchOverridesFor(classSym: Symbol, methodName: string): DispMethodEntry[] {
 	const ents: DispMethodEntry[] = [];
 	const depths: int32[] = [];
 	for (const e of _dispEntries) {
 		if (e.methodName != methodName) continue;
+		const dd = dispDepthBelow(e.classSym, classSym);
+		if (dd < 0) continue;
 		if (e.overloaded) return [];
-		if (e.className == className) continue;
-		const dd = dispDepthBelow(e.className, className);
-		if (dd <= 0) continue;
+		if (dd == 0) continue;
 		ents.push(e);
 		depths.push(dd);
 	}
@@ -915,6 +946,11 @@ export function methodCarriesMonoBody(symType: Type): boolean {
 
 export function isStaticExtensionFlag(flags: string): boolean {
 	return findFlagSegment(flags, "sext:") != "";
+}
+
+export function isStaticExtensionSym(sym: Symbol): boolean {
+	const decl = sym.declNode;
+	return decl != null && decl.kind == NodeKind.FunctionDecl && isStaticExtensionFlag((decl.data as FunctionDeclData).fnFlags);
 }
 
 export function getExtReceiverName(flags: string): string {
@@ -1194,6 +1230,7 @@ export class CheckerContext {
 	modulePath: string;          // Implementation parity: source path for name mangling
 	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (reference suggest parity)
 	matchExprDepth: number;      // >0 when inside match expression block arm (return targets match, not function)
+	matchArmExpected: Type | null;
 	initTracker: InitTracker;    // ref parity: TEffects.init — definite assignment tracking
 	affineTracker: AffineTracker; // PARALOCK Phase 1 — affine-Promise consumption tracking
 	strictDefs: boolean;         // ref parity: strictDefs — warn on all uninit var use
@@ -1201,6 +1238,8 @@ export class CheckerContext {
 	inTryExpr: boolean;          // true when checking tryArg of TryExpr or body of TryCatchStmt (V2 await guard)
 	genericInstDepth: int32;     // recursion depth for on-demand instantiation (limit 50)
 	generatedInstances: Node[];  // on-demand instantiated function ASTs to inject into program
+	procInstCache: HashMap<Symbol, Symbol[]>;
+	typeInstCache: HashMap<Symbol, string[]>;
 	pendingEnumToStrings: Type[]; // enum types whose _toString def must be injected in this module (recorded at lowering sites; enums reachable only via imported field types are not in module scope)
 	pendingHoisted: Node[];      // statements an expression-position macro emitted ahead of its value; a stack — each statement-list walk takes a high-water mark on entry and drains only what was queued above it, so a block nested in the value cannot take the call site's prefix
 	pendingTrailing: Node[];
@@ -1208,6 +1247,8 @@ export class CheckerContext {
 	inGenericContext: int32;     // >0 while checking members of a generic class pre-monomorphization — unbound-param diagnostics defer to instantiation
 	stmtPosExpr: Node;           // the expression that IS a statement: a macro there emits statements outright, so the expression-position rules (last element is the value, empty is an error) must not apply
 	disambTable: HashMap<string, int32>; // (module, name) → how many routines of that name were already declared here; source of Symbol.disamb
+	itemModule: int32;           // index of the module this context checks; -1 for a context outside a module graph
+	nextItem: int32;
 	localTypeNames: HashMap<string, boolean>; // names claimed by local (non-module-scope) type decls, module-wide — C keys struct emission and its include guard by bare name, so same-named locals in sibling scopes would silently merge into one definition
 	pendingLocalTypeDecls: Node[]; // admitted local type decls, appended to programStmts after body checking — destructorLifting and codegen discover types by walking module statements only, so a body-only decl would never get DRC hooks or TypeInfo
 	liftedLocalTypeDecls: Node[];
@@ -1274,6 +1315,7 @@ export function createContext(): CheckerContext {
 		modulePath: "",
 		symRecords: [],
 		matchExprDepth: 0,
+		matchArmExpected: null,
 		initTracker: createInitTracker(),
 		affineTracker: createAffineTracker(),
 		strictDefs: false,
@@ -1281,10 +1323,14 @@ export function createContext(): CheckerContext {
 		inTryExpr: false,
 		genericInstDepth: 0,
 		generatedInstances: [],
+		procInstCache: new HashMap<Symbol, Symbol[]>(),
+		typeInstCache: new HashMap<Symbol, string[]>(),
 		pendingEnumToStrings: [],
 		pendingHoisted: [],
 		pendingTrailing: [],
 		disambTable: new HashMap<string, int32>(),
+		itemModule: -1,
+		nextItem: 0,
 		localTypeNames: new HashMap<string, boolean>(),
 		pendingLocalTypeDecls: [],
 		liftedLocalTypeDecls: [],
@@ -1309,6 +1355,7 @@ export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerCon
 	ctx.moduleGraph = graph;
 	ctx.currentModule = mod;
 	ctx.modulePath = mod.path;
+	ctx.itemModule = graph.loadOrder.indexOf(mod.path) as int32;
 	return ctx;
 }
 
@@ -1316,6 +1363,24 @@ export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerCon
 // emitted C name. Keyed on the declaring module so a routine that never joins
 // an overload set — a static member, a routine nested in another body — still
 // gets a distinct name.
+export function stampOwner(ctx: CheckerContext, sym: Symbol): void {
+	sym.modulePath = ctx.modulePath;
+	if (sym.symbolKind == SymbolKind.Function) sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
+	stampItem(ctx, sym);
+}
+
+export function stampItem(ctx: CheckerContext, sym: Symbol): void {
+	ctx.nextItem += 1;
+	sym.itemModule = ctx.itemModule;
+	sym.item = ctx.nextItem;
+}
+
+export function newSym(ctx: CheckerContext, kind: SymbolKind, name: string, symType: Type | null): Symbol {
+	const sym = makeSymbol(name, kind, symType, false);
+	stampOwner(ctx, sym);
+	return sym;
+}
+
 export function nextDisamb(ctx: CheckerContext, modulePath: string, name: string): int32 {
 	const key = modulePath + "\t" + mangle(name);
 	const next = ctx.disambTable.get(key) ?? 0;
@@ -1326,7 +1391,7 @@ export function nextDisamb(ctx: CheckerContext, modulePath: string, name: string
 export function requestEnumToString(cc: CheckerContext, t: Type): void {
 	if (cc == null || t == null || t.typeName == "") return;
 	for (const e of cc.pendingEnumToStrings) {
-		if (e.typeName == t.typeName) return;
+		if (e == t || (e.sym != null && e.sym == t.sym)) return;
 	}
 	cc.pendingEnumToStrings.push(t);
 }

@@ -121,7 +121,7 @@ These use AST-level type inspection (`nodeType`) to emit specialized code per ba
 |-----------|-----------|-----------|-----------|
 | Concat chain | `s + t + u` | `ms_string_concat_many(3, s, t, u)` | `mConStrStr` (chain walk) |
 | Empty string fast path | `s == ""` | `(s.len == 0)` | `mEqStr` (literal check) |
-| Bounds check | `arr[i]` | `({ if(i>=len) ms_raise_index_error(...); arr.p->data[i]; })` | subscript magic |
+| Bounds check | `arr[i]` | `({ if(i>=len) ms_raise_index_error(...); arr.p->data[i]; })`; under `--danger` `arr.p->data[i]` (`msArrayAccessUnchecked`, likewise `T[N]` and `Span<T>`) | subscript magic |
 | Array index write | `arr[i] = v` | `arr.p->data[i] = v` | `mArrPut` |
 
 ### Why these are in codegen (not `std/core.ms`)

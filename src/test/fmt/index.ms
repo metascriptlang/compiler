@@ -97,6 +97,8 @@ import "./cases/operandComments";
 import "./cases/aliasComments";
 import "./cases/stableLayout";
 import "./cases/compileTimeBlocks";
+import "./cases/explicitDeref";
+import "./cases/awaitUnaryOperand";
 import "./cases/yieldArgument";
 import "./cases/matchCaseCommas";
 import "./cases/nestedTypeArgsWritten";

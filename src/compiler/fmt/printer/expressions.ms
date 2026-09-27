@@ -3,7 +3,7 @@
 import {
 	Node, NodeKind, NodeFlag,
 	BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
-	ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData,
+	ArrayAccessData, HiddenDerefData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData,
 	ConditionalExprData, SpreadExprData, NewExprData, TypeAssertionData,
 	MatchExprData, MatchCaseData, TryExprData, MoveExprData,
 	OutExprData, SizeofExprData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
@@ -92,7 +92,7 @@ export function printUnaryExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as UnaryExprData;
 	const isWord = d.unaryOp == "typeof" || d.unaryOp == "void" || d.unaryOp == "delete";
 	const op = isWord ? d.unaryOp + " " : d.unaryOp;
-	if (!isWord && d.operand != null && bindsInsideUnary(d.unaryOp, d.operand)) {
+	if (d.operand != null && (d.operand.kind == NodeKind.AwaitExpr || (!isWord && bindsInsideUnary(d.unaryOp, d.operand)))) {
 		return docGroup([docText(op), callPrintNode(d.operand, options)]);
 	}
 	return docGroup([docText(op), printAtom(d.operand, options)]);
@@ -205,6 +205,11 @@ export function printUpdateExpr(node: Node, options: FormatOptions): Doc {
 		return docGroup([docText(d.updateOp), callPrintNode(d.updateArg, options)]);
 	}
 	return docGroup([callPrintNode(d.updateArg, options), docText(d.updateOp)]);
+}
+
+export function printDerefExpr(node: Node, options: FormatOptions): Doc {
+	const d = node.data as HiddenDerefData;
+	return docGroup([printAtom(d.expr, options), docText("[]")]);
 }
 
 export function printArrayAccess(node: Node, options: FormatOptions): Doc {

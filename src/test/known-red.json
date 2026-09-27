@@ -27,6 +27,7 @@
   "guard": {},
   "hcr": {},
   "san": {
+    "816-sameNameActorsAcrossModules [san]": {"since":"a2c343ea","note":"DRC ledger leak: Counter alloc=3 destroy=1, msFuture alloc=5 destroy=0 (three same-named Counter types across modules); stdout correct; landed with batch 2 on the person's call 2026-09-27, fix owned by name-to-symbol for batch 3"},
     "704-macroExprHoist [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "711-jsxParseNative [san]": {"since":"0e6d4fed","note":"DRC ledger slack drift: msRefArrayRefCell alloc=70005 destroy=70000 against @ledger-slack 6; the same on a control built from main 0845d6e6; ASan clean, stdout right; 711 [san] passed at 90d7a875, cause not bisected (_listEndComments unchanged); measured 2026-09-26 — 2026-09-19-known-red-behind-main.md"},
     "762-bitSetMacro [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},

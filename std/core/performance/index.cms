@@ -10,15 +10,17 @@
 // For wall-clock timestamps (Unix epoch), use the `Date.now()` prelude.
 // `performance.now()` must never go backward — safe for measuring durations.
 
-@include("runtime/core/datetime.h");
-@compile("runtime/core/datetime.c");
+when (!bare && !solana) {
+	@include("runtime/core/datetime.h");
+	@compile("runtime/core/datetime.c");
 
-extern function msTimeMonotonic(): number;
+	extern function msTimeMonotonic(): number;
 
-export class performance {
-	// Monotonic milliseconds (fractional). Origin is arbitrary and not
-	// comparable across processes. Matches `performance.now()` in JS/Node.
-	static now(): number {
-		return msTimeMonotonic();
+	export class performance {
+		// Monotonic milliseconds (fractional). Origin is arbitrary and not
+		// comparable across processes. Matches `performance.now()` in JS/Node.
+		static now(): number {
+			return msTimeMonotonic();
+		}
 	}
 }

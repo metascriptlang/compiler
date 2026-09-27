@@ -13,12 +13,12 @@
 //
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
-import { Node, NodeKind, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, createNode } from "../../ast/node";
-import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, isUnknownType } from "../../checker/types";
+import { Node, NodeKind, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, createNode, makeLoc } from "../../ast/node";
+import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, isUnknownType, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
-import { TransformContext } from "../context";
+import { TransformContext, createTransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef } from "../util";
+import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef, makeTypedIdent, makeArrayAccess, isRuntimeProcCall } from "../util";
 import { checkVariantReads } from "./unionProjectLower";
 
 // reference array: a Ref<Array> receiver reaching access/length lowering (e.g. a node
@@ -44,7 +44,7 @@ export function lowerNativeAccess(program: Node, ctx: TransformContext): Node {
 	// Without this, ArrayLiterals infer TypeKind.Array and get heap-allocated by rewriteArrayLiteral.
 	walkNode(program, propagateSizedArrayType);
 	checkVariantReads(program, ctx);
-	walkNode(program, rewriteAccess);
+	walkNode(program, (n: Node): Node => { return rewriteAccess(n, ctx); });
 	return program;
 }
 
@@ -75,8 +75,8 @@ function propagateSizedArrayType(node: Node): Node {
 
 // ===== Rewriter =====
 
-function rewriteAccess(node: Node): Node {
-	if (node.kind == NodeKind.ArrayAccess) return rewriteArrayAccess(node);
+function rewriteAccess(node: Node, ctx: TransformContext): Node {
+	if (node.kind == NodeKind.ArrayAccess) return rewriteArrayAccess(node, ctx.boundChecks);
 	if (node.kind == NodeKind.MemberExpr) return rewriteMemberExpr(node);
 	if (node.kind == NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
 	if (node.kind == NodeKind.NewExpr) return rewriteNewExpr(node);
@@ -148,7 +148,7 @@ function rewriteNewExpr(node: Node): Node {
 
 // ===== Array/String Index Access =====
 
-function rewriteArrayAccess(node: Node): Node {
+function rewriteArrayAccess(node: Node, boundChecks: boolean): Node {
 	const d = node.data as ArrayAccessData;
 	d.array = unwrapRefArrayRecv(d.array);
 	const peeled = d.array.nodeType != null ? peelTransparentInstance(d.array.nodeType) : null;
@@ -159,7 +159,7 @@ function rewriteArrayAccess(node: Node): Node {
 
 	if (arrType.kind == TypeKind.Array) {
 		const elemType = arrType.typeReturn;
-		const macroName = getArrayMacroName(elemType);
+		const macroName = getArrayMacroName(elemType, boundChecks);
 		const result = makeCall(runtimeRef(macroName, loc), [d.array, d.index], loc);
 		result.nodeType = node.nodeType;
 		return result;
@@ -167,13 +167,13 @@ function rewriteArrayAccess(node: Node): Node {
 
 	if (arrType.kind == TypeKind.SizedArray) {
 		const size = arrType.typeValue;
-		const result = makeCall(runtimeRef("msSizedArrayAccess", loc), [d.array, d.index, makeNumber(size, loc)], loc);
+		const result = makeCall(runtimeRef(boundChecks ? "msSizedArrayAccess" : "msSizedArrayAccessUnchecked", loc), [d.array, d.index, makeNumber(size, loc)], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
 
 	if (arrType.kind == TypeKind.Span) {
-		const result = makeCall(runtimeRef("msSpanAccess", loc), [d.array, d.index], loc);
+		const result = makeCall(runtimeRef(boundChecks ? "msSpanAccess" : "msSpanAccessUnchecked", loc), [d.array, d.index], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
@@ -202,17 +202,19 @@ function rewriteArrayAccess(node: Node): Node {
 }
 
 // Determine macro name from array element type
-function getArrayMacroName(elemType: Type | null): string {
-	if (elemType == null) return "msRefArrayAccess";
-	if (elemType.kind == TypeKind.Uint8) return "msArrayAccess";
-	if (isNumeric(elemType)) return "msArrayAccess";
-	if (elemType.kind == TypeKind.String) return "msArrayAccess";
+function getArrayMacroName(elemType: Type | null, boundChecks: boolean): string {
+	const ref = boundChecks ? "msRefArrayAccess" : "msRefArrayAccessUnchecked";
+	const value = boundChecks ? "msArrayAccess" : "msArrayAccessUnchecked";
+	if (elemType == null) return ref;
+	if (elemType.kind == TypeKind.Uint8) return value;
+	if (isNumeric(elemType)) return value;
+	if (elemType.kind == TypeKind.String) return value;
 	// Pointer element types (classes, refs) use msRefArray — void* indirection
-	if (elemType.kind == TypeKind.Ref || elemType.kind == TypeKind.Ptr) return "msRefArrayAccess";
+	if (elemType.kind == TypeKind.Ref || elemType.kind == TypeKind.Ptr) return ref;
 	// Union(Ref<T>, Null) collapses to T* in C — same representation as Ref<T>.
-	if (elemType.kind == TypeKind.Union && unwrapRefNullUnion(elemType) != null) return "msRefArrayAccess";
+	if (elemType.kind == TypeKind.Union && unwrapRefNullUnion(elemType) != null) return ref;
 	// Value-type struct elements use per-type array typedefs
-	return "msArrayAccess";
+	return value;
 }
 
 // ===== Element Eviction =====
@@ -382,4 +384,31 @@ function rewriteArrayLiteral(node: Node): Node {
 	return node;
 }
 
-// Tests stripped — require reference compiler (test "name" { } keyword form needs fix)
+// ===== Tests =====
+
+function loweredAccess(arrType: Type, boundChecks: boolean): Node {
+	const loc = makeLoc(1, 1);
+	const ctx = createTransformContext();
+	ctx.boundChecks = boundChecks;
+	return rewriteAccess(makeArrayAccess(makeTypedIdent("xs", arrType, loc), makeNumber(0, loc), loc), ctx);
+}
+
+function leafRef(): Type {
+	return createRef(createStruct("Leaf", ["v"], [int32Type()], false));
+}
+
+test "array index is bound-checked when bound checks are on" { assert isRuntimeProcCall(loweredAccess(createArray(int32Type()), true), "msArrayAccess"); }
+
+test "array index is unchecked when bound checks are off" { assert isRuntimeProcCall(loweredAccess(createArray(int32Type()), false), "msArrayAccessUnchecked"); }
+
+test "ref array index is bound-checked when bound checks are on" { assert isRuntimeProcCall(loweredAccess(createArray(leafRef()), true), "msRefArrayAccess"); }
+
+test "ref array index is unchecked when bound checks are off" { assert isRuntimeProcCall(loweredAccess(createArray(leafRef()), false), "msRefArrayAccessUnchecked"); }
+
+test "sized array index is bound-checked when bound checks are on" { assert isRuntimeProcCall(loweredAccess(createSizedArray(int32Type(), 4), true), "msSizedArrayAccess"); }
+
+test "sized array index is unchecked when bound checks are off" { assert isRuntimeProcCall(loweredAccess(createSizedArray(int32Type(), 4), false), "msSizedArrayAccessUnchecked"); }
+
+test "span index is bound-checked when bound checks are on" { assert isRuntimeProcCall(loweredAccess(createSpan(int32Type()), true), "msSpanAccess"); }
+
+test "span index is unchecked when bound checks are off" { assert isRuntimeProcCall(loweredAccess(createSpan(int32Type()), false), "msSpanAccessUnchecked"); }

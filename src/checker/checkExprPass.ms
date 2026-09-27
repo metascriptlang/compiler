@@ -2,9 +2,10 @@
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
+import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { peelTransparentInstance, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant } from "./types";
-import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, addSymbolToScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
+import { peelTransparentInstance, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, isPointerShapedForUnknown, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView } from "./types";
+import { ScopeKind, SymbolFlag, defineSymbol, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
 import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
@@ -363,6 +364,36 @@ function typeLiteralAgainstPayload(ctx: CheckerContext, node: Node, expectedType
 }
 
 // Internal: compute type for node. All match arms and sub-functions return Type.
+function checkExplicitDeref(ctx: CheckerContext, node: Node, target: Node): void {
+	const written = target.nodeType;
+	const ptr = written == null ? null : withoutReadonlyView(written);
+	const pointee = ptr != null && (ptr.kind == TypeKind.Ptr || ptr.kind == TypeKind.Ref) ? ptr.typeReturn : null;
+	if (pointee == null || !derefablePointee(ptr!, pointee)) {
+		addError(ctx, explicitDerefRefusal(ptr, pointee), node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return;
+	}
+	node.nodeType = isReadonlyView(written) ? propagateReadonlyView(pointee) : pointee;
+}
+
+function explicitDerefRefusal(ptr: Type | null, pointee: Type | null): string {
+	if (ptr == null) return "'x[]' dereferences a Ptr<T> or a Ref<T>; this operand has no type";
+	if (ptr.kind == TypeKind.Ptr) return "'x[]' cannot dereference Ptr<void>; cast it to a Ptr<T> first";
+	if (pointee == null) return "'x[]' dereferences a Ptr<T> or a Ref<T>; this operand is " + typeDisplayName(ptr) + ", a value";
+	const shown = ptr.sym != null ? ptr.sym.name : pointee.sym != null ? pointee.sym.name : typeDisplayName(ptr);
+	return "'x[]' dereferences a Ptr<T> or a Ref<T>; this operand is " + shown + ", which is already a reference: use it without '[]'";
+}
+
+function derefablePointee(ptr: Type, pointee: Type): boolean {
+	if (pointee.kind == TypeKind.Void) return false;
+	if (ptr.kind == TypeKind.Ptr) return true;
+	if (pointee.kind == TypeKind.Struct || pointee.kind == TypeKind.GenericInstance) {
+		const decl = pointee.kind == TypeKind.GenericInstance && pointee.typeExtra != null ? pointee.typeExtra : pointee;
+		return decl.sym != null && decl.sym.symbolKind == SymbolKind.Struct;
+	}
+	return pointee.kind != TypeKind.Array && pointee.kind != TypeKind.Function;
+}
+
 function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const result = match (node.kind) {
 		NodeKind.NumberLiteral => {
@@ -1979,6 +2010,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				const varIdx = findUnionVariant(srcType, targetType.typeNames, targetType.typeChildren);
 				if (varIdx >= 0 && varIdx < srcType.typeChildren.length) {
 					node.nodeType = srcType.typeChildren[varIdx];
+					if (isSlotUnion(srcType)) node.data = { asExpr: projectTagUnionMember(d.asExpr, srcType, srcType.typeChildren[varIdx]), asType: d.asType };
 				} else {
 					node.nodeType = targetType;
 				}
@@ -1987,6 +2019,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				const refTarget = targetType.typeReturn;
 				const refIdx = refTarget.typeNames != null ? findUnionVariant(srcType, refTarget.typeNames, refTarget.typeChildren) : -1;
 				node.nodeType = refIdx >= 0 ? srcType.typeChildren[refIdx] : targetType;
+				if (refIdx >= 0 && isSlotUnion(srcType)) node.data = { asExpr: projectTagUnionMember(d.asExpr, srcType, srcType.typeChildren[refIdx]), asType: d.asType };
 			} else {
 				node.nodeType = targetType;
 			}
@@ -2101,6 +2134,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 		NodeKind.HiddenDeref => {
 			const d = node.data as HiddenDerefData;
 			checkExpr(ctx, d.expr, null);
+			if (node.flags.has(NodeFlag.ExplicitDeref)) {
+				checkExplicitDeref(ctx, node, d.expr);
+				return;
+			}
 			if (node.nodeType == null) {
 				const inner = d.expr.nodeType;
 				node.nodeType = (inner != null && inner.kind == TypeKind.Ref && inner.typeReturn != null)
@@ -2739,33 +2776,8 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
-import { callCheckFunctionBody } from "./checkerCallbacks";
-import { addPendingInstance, instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
-import { getIdentId } from "./idents";
+import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
 import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst } from "./callResolve";
-
-// Lower-level: register a freshly-synthesized FunctionDecl as a root-scope symbol,
-// re-check its body, and queue it for the next instantiation drain. Returns the
-// symbol. No call-site rewrite — callers wire up `d.callee` themselves.
-function registerSynthesizedFunction(
-	ctx: CheckerContext, helperName: string, params: string[], paramTypes: Type[],
-	body: Node, fnReturnType: Type, fnNode: Node
-): Symbol {
-	const fnType = createFunction(paramTypes, params, fnReturnType);
-	const instSym = makeSymbol(helperName, SymbolKind.Function, fnType, false);
-	instSym.state = SymbolState.Shaped;
-	instSym.modulePath = "";
-	instSym.nameId = getIdentId(ctx.table.identCache, helperName);
-	let rootScope = ctx.table.current;
-	while (rootScope.parent != null) rootScope = rootScope.parent;
-	addSymbolToScope(rootScope, instSym);
-	fnNode.resolvedSym = instSym;
-	fnNode.nodeType = fnType;
-	fnNode.paramSyms = callCheckFunctionBody(ctx, instSym, params, body, null as unknown as SourceLocation[]);
-	addPendingInstance(fnNode);
-	return instSym;
-}
-
 
 function createSyntheticToken(loc: SourceLocation): Token {
 	return createToken(TokenKind.Ident, "", loc.line);

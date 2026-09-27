@@ -21,10 +21,10 @@ import {
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
-import { isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, inlineVariantStruct } from "./types";
+import { isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion } from "./types";
 import { SymbolKind, Type, CallingConvention } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
-import { dispatchEntryForLiftedName, dispatchOverridesFor } from "./context";
+import { dispatchEntryAt, dispatchOverridesFor } from "./context";
 
 // ===== Global Name Index =====
 // Pre-built name→modulePath index for O(1) cross-module lookup.
@@ -312,9 +312,6 @@ function markTypeInfoOf(type: Type | null): void {
 	}
 	if (t.kind == TypeKind.Union) {
 		markUnionHookEdges(t);
-		for (const member of t.typeChildren) {
-			if (member != null && member.kind == TypeKind.Ref && inlineVariantStruct(member) == null) markTypeInfoOf(member);
-		}
 	}
 	if (t.kind == TypeKind.Struct && (isAnonTypeName(t.typeName) || t.typeName.startsWith("__anon")) && t.typeNames.length > 0) {
 		const an = isAnonTypeName(t.typeName) ? anonTypeName(t) : t.typeName;
@@ -347,6 +344,9 @@ function markTypeInfoOf(type: Type | null): void {
 		if (inner.kind == TypeKind.Ref && inner.typeReturn != null) inner = inner.typeReturn;
 		if (inner.kind != TypeKind.Struct || inner.typeName == "") break;
 		const btiName = inner.typeName + "TypeInfo";
+		if (inner.sym != null && inner.sym.modulePath != "") {
+			markAndWalk(inner.sym.modulePath, btiName);
+		}
 		const bHome = nameIndexLookup(btiName);
 		if (bHome != "") {
 			markAndWalk(bHome, btiName);
@@ -374,18 +374,11 @@ function markAndWalk(modulePath: string, name: string): void {
 	// Dispatch bucket edge (Nim cgmeth: a reachable base method makes every
 	// override + its class TypeInfo reachable — the msDisp_* if-chain
 	// references them all regardless of static call sites).
-	const dde = dispatchEntryForLiftedName(name);
+	const dde = dispatchEntryAt(modulePath, name);
 	if (dde != null && !dde.overloaded) {
-		for (const ov of dispatchOverridesFor(dde.className, dde.methodName)) {
-			const ovHome = nameIndexLookup(ov.sym.name);
-			if (ovHome != "") {
-				markAndWalk(ovHome, ov.sym.name);
-			}
-			const tiName = ov.className + "TypeInfo";
-			const tiHome = nameIndexLookup(tiName);
-			if (tiHome != "") {
-				markAndWalk(tiHome, tiName);
-			}
+		for (const ov of dispatchOverridesFor(dde.classSym, dde.methodName)) {
+			markAndWalk(ov.sym.modulePath, ov.sym.name);
+			markAndWalk(ov.classSym.modulePath, ov.classSym.name + "TypeInfo");
 		}
 	}
 

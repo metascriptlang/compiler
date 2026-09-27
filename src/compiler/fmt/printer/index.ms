@@ -19,7 +19,7 @@ import {
 } from "./literals";
 import {
 	printBinaryExpr, printUnaryExpr, printUpdateExpr, printCallExpr,
-	printMemberExpr, printArrayAccess, printObjectLiteral, printArrayLiteral,
+	printMemberExpr, printArrayAccess, printDerefExpr, printObjectLiteral, printArrayLiteral,
 	printArrowFunction, printConditionalExpr, printSpreadExpr, printNewExpr,
 	printTypeAssertion, printMatchExpr, printTryExpr, printMoveExpr,
 	printOutExpr, printSizeofExpr, printArrayPattern, printObjectPattern,
@@ -66,6 +66,14 @@ function printVerbatimBlock(node: Node, options: FormatOptions): Doc {
 	return docText(text);
 }
 
+function printDeref(node: Node, options: FormatOptions): Doc {
+	if (!node.flags.has(NodeFlag.ExplicitDeref)) {
+		unprintedKinds.push(node.kind.toString());
+		return docNil();
+	}
+	return printDerefExpr(node, options);
+}
+
 function fillWhenSpans(node: Node, source: string): void {
 	for (const c of node.comments) {
 		if (c.kind != TokenKind.When || c.value != "") continue;
@@ -97,6 +105,7 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.CallExpr => printCallExpr(node, options),
 		NodeKind.MemberExpr => printMemberExpr(node, options),
 		NodeKind.ArrayAccess => printArrayAccess(node, options),
+		NodeKind.HiddenDeref => printDeref(node, options),
 		NodeKind.ObjectLiteral => printObjectLiteral(node, options),
 		NodeKind.ArrayLiteral => printArrayLiteral(node, options),
 		NodeKind.ArrowFunction => printArrowFunction(node, options),

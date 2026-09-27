@@ -7,7 +7,7 @@
 //   value.at(idx), value.length
 
 import { JsonKind, JsonValue, asString, asNumber, asBoolean, asInt64 } from "./types";
-import { jsonNull } from "./builder";
+import { jsonNull, jsonObject, jsonString, jsonInt } from "./builder";
 
 export { asString, asNumber, asBoolean, asInt32, asInt64 } from "./types";
 

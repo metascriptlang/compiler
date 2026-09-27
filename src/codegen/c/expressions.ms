@@ -8,7 +8,7 @@
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef } from "../../checker/types";
-import { SymbolFlag, hasFlag, initFnName } from "../../checker/symbol";
+import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
@@ -21,8 +21,8 @@ import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
 import { ensureCrossModuleProto } from "./forward";
 import { useHeader } from "./context";
-import { GcMode, dispatchEntryForLiftedName, dispatchOverridesFor } from "../../checker/context";
-import { lookupCtorDefaults } from "../../checker/instantiate";
+import { GcMode, dispatchOverridesFor, dispatchEntryFor } from "../../checker/context";
+import { lookupCtorDefaults, CtorEntry } from "../../checker/instantiate";
 import { monoBaseName } from "../../monomorphize/registry";
 import { isRuntimeProcSym, isByteViewConv } from "../../transform/util";
 
@@ -31,23 +31,6 @@ import { isRuntimeProcSym, isByteViewConv } from "../../transform/util";
 // do not (ClassDecl AST is intentionally not propagated through ExportedSymInfo,
 // to avoid polluting the importer's type registry), but the Type.sym chain
 // bridges to the defining module's decl — the same bridge used for InterfaceDecl.
-function crossModuleCtorParamTypes(sym: Symbol): Type[] {
-	if (sym == null) return null as unknown as Type[];
-	let dn = sym.declNode;
-	if ((dn == null || dn.kind != NodeKind.ClassDecl) && sym.symbolType != null && sym.symbolType.sym != null) {
-		dn = sym.symbolType.sym.declNode;
-	}
-	if (dn == null || dn.kind != NodeKind.ClassDecl) return null as unknown as Type[];
-	const body = (dn.data as ClassDeclData).classBody;
-	for (const member of body) {
-		if (member.kind == NodeKind.ConstructorDecl && member.nodeType != null
-				&& member.nodeType.kind == TypeKind.Function) {
-			return member.nodeType.typeChildren;
-		}
-	}
-	return null as unknown as Type[];
-}
-
 // Every class carries a `<Class>_init(this)` — ctorLower synthesizes one when
 // the source has no constructor — so field defaults and the parent chain run
 // in one place instead of being re-emitted at each `new` site.
@@ -69,6 +52,28 @@ function classHasInitFn(innerType: Type): boolean {
 function bareTypeName(g: CGen, cName: string): string {
 	const bare = typeCacheGet(g.typeCache, "bare:" + cName);
 	return bare != "" ? bare : cName;
+}
+
+function crossModuleCtorParamTypes(sym: Symbol): Type[] {
+	if (sym == null) return null as unknown as Type[];
+	let dn = sym.declNode;
+	if ((dn == null || dn.kind != NodeKind.ClassDecl) && sym.symbolType != null && sym.symbolType.sym != null) {
+		dn = sym.symbolType.sym.declNode;
+	}
+	if (dn == null || dn.kind != NodeKind.ClassDecl) return null as unknown as Type[];
+	const body = (dn.data as ClassDeclData).classBody;
+	for (const member of body) {
+		if (member.kind == NodeKind.ConstructorDecl && member.nodeType != null
+				&& member.nodeType.kind == TypeKind.Function) {
+			return member.nodeType.typeChildren;
+		}
+	}
+	return null as unknown as Type[];
+}
+
+function ctorParamTypes(entry: CtorEntry | null, classSym: Symbol | null): Type[] {
+	if (entry != null && entry.fnType != null) return entry.fnType.typeChildren;
+	return crossModuleCtorParamTypes(classSym!);
 }
 
 import { getArrayTypeName } from "./types";
@@ -332,7 +337,8 @@ function isNullExpr(node: Readonly<Node>): boolean {
 function isRefArrayAccessCall(node: Readonly<Node>): boolean {
 	if (node.kind != NodeKind.CallExpr) return false;
 	const callee = (node.data as CallExprData).callee;
-	return isRuntimeProcSym(callee.resolvedSym, "msRefArrayAccess");
+	return isRuntimeProcSym(callee.resolvedSym, "msRefArrayAccess")
+		|| isRuntimeProcSym(callee.resolvedSym, "msRefArrayAccessUnchecked");
 }
 
 // Shared ABI shim for call arguments — reference parity: genArg
@@ -389,7 +395,9 @@ function isArrayAccessCall(node: Readonly<Node>): boolean {
 	const sym = callee.resolvedSym;
 	return isRuntimeProcSym(sym, "msArrayAccess") || isRuntimeProcSym(sym, "msStringArrayAccess")
 		|| isRuntimeProcSym(sym, "msNumberArrayAccess") || isRuntimeProcSym(sym, "msRefArrayAccess")
-		|| isRuntimeProcSym(sym, "msUint8ArrayAccess") || isRuntimeProcSym(sym, "msSizedArrayAccess");
+		|| isRuntimeProcSym(sym, "msUint8ArrayAccess") || isRuntimeProcSym(sym, "msSizedArrayAccess")
+		|| isRuntimeProcSym(sym, "msArrayAccessUnchecked") || isRuntimeProcSym(sym, "msRefArrayAccessUnchecked")
+		|| isRuntimeProcSym(sym, "msSizedArrayAccessUnchecked");
 }
 
 // Check if an AST node produces a C lvalue (can have & applied directly).
@@ -682,6 +690,12 @@ function pushUnloweredNew(g: CGen, ctx: ExprEvalCtx, node: Readonly<Node>): void
 	ctx.results.push("MS_NIL");
 }
 
+function pushUnloweredExpr(g: CGen, ctx: ExprEvalCtx, node: Readonly<Node>): void {
+	const pn = g.currentProc != null ? g.currentProc.name : "<toplevel>";
+	addCGenError(g, "internal: expression kind=" + node.kind.toString() + " reached codegen unlowered in " + g.modulePath + " proc " + pn, node.location.line, node.location.column);
+	ctx.results.push("MS_NIL");
+}
+
 // Comma-join top N results from the stack, then remove them.
 function joinChildResults(ctx: ExprEvalCtx, count: number): string {
 	let s = "";
@@ -855,9 +869,9 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			}
 			let emitted = calleeName;
 			if (g.checkerCtx != null && g.checkerCtx.gcMode != GcMode.Manual) {
-				const de = dispatchEntryForLiftedName(idSym.name);
+				const de = dispatchEntryFor(idSym);
 				if (de != null && !de.overloaded) {
-					const ovs = dispatchOverridesFor(de.className, de.methodName);
+					const ovs = dispatchOverridesFor(de.classSym, de.methodName);
 					if (ovs.length > 0) {
 						const ovSyms: Symbol[] = [];
 						for (const oe of ovs) { ovSyms.push(oe.sym); }
@@ -1102,15 +1116,8 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// `methodToFunction` transform) — no `<Class>_new` wrapper exists any
 			// more. This matches the inline pattern already used for class-without-
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
-			const bareNew = bareTypeName(g, cName);
 			const initName = classInitCName(cName);
-			const ctorEntry = lookupCtorDefaults(monoBaseName(bareNew, d.newCallee.resolvedSym != null ? d.newCallee.resolvedSym.modulePath : "") + "_new");
-			let ctorChildren: Type[] = null as unknown as Type[];
-			if (ctorEntry != null && ctorEntry.fnType != null) {
-				ctorChildren = ctorEntry.fnType.typeChildren;
-			} else {
-				ctorChildren = crossModuleCtorParamTypes(d.newCallee.resolvedSym);
-			}
+			const ctorChildren = ctorParamTypes(lookupCtorDefaults(d.newCallee.resolvedSym, bareTypeName(g, cName)), d.newCallee.resolvedSym);
 			const ctorProtoKey = "proto:" + initName;
 			if (ctorChildren != null && node.nodeType != null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
 				nameSetAdd(g.declaredProcs, ctorProtoKey);
@@ -1127,7 +1134,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			emitProcLocalsLine(p, `${cName}* ${newTmp};`);
 			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName)};`);
 			if (ctorChildren == null && d.newArguments.length > 0) {
-				addCGenError(g, `internal: the constructor of '${bareNew}' has no parameter types for its arguments at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+				addCGenError(g, `internal: the constructor of '${bareTypeName(g, cName)}' has no parameter types for its arguments at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
 			let initArgs = newTmp;
 			for (let ai = 0; ai < d.newArguments.length; ai += 1) {
@@ -1208,8 +1215,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		return;
 	}
 
-	addUnloweredError(g, p, node);
-	ctx.results.push("MS_NIL");
+	pushUnloweredExpr(g, ctx, node);
 }
 
 // ===== Discover CallExpr — split by call type =====
@@ -1233,28 +1239,13 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 			parentName = getTypeDesc(g, parentSym.symbolType);
 		}
 		if (parentName != "") {
-			const parentBare = bareTypeName(g, parentName);
 			const parentInitName = classInitCName(parentName);
-			const parentEntry = lookupCtorDefaults(monoBaseName(parentBare, parentSym.modulePath) + "_new");
-			let parentChildren: Type[] = null as unknown as Type[];
-			if (parentEntry != null && parentEntry.fnType != null) {
-				parentChildren = parentEntry.fnType.typeChildren;
-			} else {
-				parentChildren = crossModuleCtorParamTypes(parentSym);
-			}
+			const parentEntry = lookupCtorDefaults(parentSym, bareTypeName(g, parentName));
+			const parentChildren = ctorParamTypes(parentEntry, parentSym);
 			const parentProtoKey = "proto:" + parentInitName;
-			// ctorLower lifts the constructor OUT of classBody, so reading the
-			// parent's ClassDecl finds no ConstructorDecl once that module has been
-			// transformed — which depends on module order. The lifted function's
-			// own symbol is the order-independent source.
-			if (parentChildren == null) {
-				const lifted = dispatchEntryForLiftedName(initFnName(parentBare));
-				if (lifted != null && lifted.sym != null) {
-					ensureCrossModuleProto(g, parentInitName, lifted.sym.symbolType, lifted.sym);
-				}
+			if (parentChildren == null && parentEntry != null && parentEntry.initSym != null) {
+				ensureCrossModuleProto(g, parentInitName, parentEntry.initSym.symbolType, parentEntry.initSym);
 			}
-			// A same-module parent needs no prototype: its `_init` is defined in this
-			// translation unit. Only a foreign parent can end up called undeclared.
 			const parentIsForeign = parentSym.modulePath != "" && parentSym.modulePath != g.modulePath;
 			if (parentIsForeign && parentChildren == null && !nameSetHas(g.declaredProcs, parentProtoKey)) {
 				addCGenError(g, `cannot declare '${parentInitName}': the parent constructor signature is not reachable from this module`, node.location.line, node.location.column);
@@ -1779,35 +1770,17 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			}
 		}
 
-		// Union handling — two directions:
-		// 1. Narrowing: `unionExpr as { field: T }` → `(expr).vN` (access variant)
-		// 2. Construction: `{ field: val } as UnionType` → `(Union){ .vN = *(Union_vN*)&expr }`
-		//    (reinterpret needed for `{...} as unknown as Union` escape-hatch where
-		//    src's C type is anonymous struct, not the named variant struct).
-
-		// Case 1: Source is Union → access variant member
-		// Use getTypeDesc consistency: the type cache (first-write-wins in genUnionType)
-		// ensures structurally identical variants share one C typedef. Find the first
-		// variant whose cached C type matches the target — guaranteed consistent with
-		// variable type declarations. Self-hosting safe (no reference identity on value types).
 		if (srcType != null && srcType.kind == TypeKind.Union && node.nodeType != null
 			&& srcType.typeChildren != null) {
-			// Ensure union type is generated (populates variant type cache)
 			getTypeDesc(g, srcType);
 			const targetDesc = getTypeDesc(g, node.nodeType);
-			let varIdx = -1;
-			let vi = 0;
-			while (vi < srcType.typeChildren.length) {
+			for (let vi = 0; vi < srcType.typeChildren.length; vi += 1) {
 				const variant = srcType.typeChildren[vi];
 				if (variant != null && getTypeDesc(g, variant) == targetDesc) {
-					varIdx = vi;
-					vi = srcType.typeChildren.length;
+					addCGenError(g, "internal: `as " + d.asType + "` from a union to its member " + vi.toString() + " reached codegen unprojected at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
+					ctx.results.push("MS_NIL");
+					return;
 				}
-				vi += 1;
-			}
-			if (varIdx >= 0) {
-				ctx.results.push(`(${expr}).v${varIdx}`);
-				return;
 			}
 		}
 
@@ -2093,7 +2066,6 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			// Never emits inline compound literals — works with C89+ and avoids &({...}) issues.
 			let cType = "";
 			let isClassObj = false;
-			let refVariant: Type | null = null;
 			let unionWrapName = "";
 			let unionWrapIdx = -1;
 			let unionDiscKeyIdx = -1;
@@ -2232,11 +2204,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					}
 					if (unionWrapIdx >= 0 && litType.kind == TypeKind.Union) {
 						const member = litType.typeChildren[unionWrapIdx];
-						if (member != null && member.kind == TypeKind.Ref && member.typeReturn != null
-								&& inlineVariantStruct(member) == null) {
-							cType = getTypeDesc(g, member.typeReturn);
-							isClassObj = true;
-							refVariant = member.typeReturn;
+						if (member != null && member.kind == TypeKind.Ref && inlineVariantStruct(member) == null) {
+							addCGenError(g, "internal: object literal for reference member " + unionWrapIdx.toString() + " of " + unionWrapName + " reached codegen typed as the union in " + g.modulePath, node.location.line, node.location.column);
 						}
 					}
 				} else if (litType.kind == TypeKind.Ref && litType.typeReturn != null) {
@@ -2264,8 +2233,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					// field (Nim nimNewObjUninit parity). The NullLiteral-skip logic below
 					// relies on the field already being zero, so we must also require that
 					// no property in this literal is a bare NullLiteral.
-					const innerStruct = refVariant != null ? refVariant
-						: (node.nodeType != null && node.nodeType.kind == TypeKind.Ref) ? node.nodeType.typeReturn : node.nodeType;
+					const innerStruct = (node.nodeType != null && node.nodeType.kind == TypeKind.Ref) ? node.nodeType.typeReturn : node.nodeType;
 					ensureTypeInfoDef(g, cType, innerStruct);
 					emitProcLocalsLine(p, `${cType}* ${tmpName};`);
 					const fieldNames = (innerStruct != null && innerStruct.typeNames != null) ? innerStruct.typeNames : null as unknown as string[];
@@ -2374,8 +2342,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 	// NewExpr handled entirely in discover phase (inline allocation)
 
 	truncResults(ctx, cc);
-	addUnloweredError(g, p, node);
-	ctx.results.push("MS_NIL");
+	pushUnloweredExpr(g, ctx, node);
 }
 
 // ===== Primitive-union lowering (float32 | string payloads) =====

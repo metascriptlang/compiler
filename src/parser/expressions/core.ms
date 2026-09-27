@@ -110,6 +110,12 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 
 		if (token.kind == TokenKind.LBracket) {
 			advance(state);
+			if (current(state).kind == TokenKind.RBracket) {
+				advance(state);
+				left = createNode(NodeKind.HiddenDeref, { expr: left }, token);
+				left.flags = left.flags.incl(NodeFlag.ExplicitDeref);
+				continue;
+			}
 			let idx = try parseExprWithPrec(state, 0);
 			// Range syntax: arr[start..end] → ArrayAccess(arr, BinaryExpr("..", start, end))
 			if (current(state).kind == TokenKind.DotDot || current(state).kind == TokenKind.DotDotDot) {

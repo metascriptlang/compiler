@@ -2,7 +2,7 @@ import { Node, Type, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckSession, createCheckSession } from "../checker/orchestrator";
 import { GenericTypeInstRow, takeGenericTypeInstsFrom, resetAllSideChannels } from "../parser/context";
-import { pendingInstanceKeyOf, drainPendingInstances, resetInstantiationState } from "../checker/instantiate";
+import { pendingInstanceKeyOf, resetInstantiationState } from "../checker/instantiate";
 import { resetDispatchRegistry } from "../checker/context";
 import { resetDuVariantRegistry } from "../checker/types";
 import { resetDuHashes } from "../analyzer/classify";
@@ -68,7 +68,6 @@ export function createBuildSession(keep: boolean): BuildSession {
 
 export function resetBuildState(): void {
 	resetAllSideChannels();
-	const _stale = drainPendingInstances();
 	resetInstantiationState();
 	resetDispatchRegistry();
 	resetDuVariantRegistry();

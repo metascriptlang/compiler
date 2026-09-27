@@ -15,9 +15,9 @@ import {
 import { RaiserOpcode, RaiserConvClass, raiserABC } from "../../raiser/bytecode";
 import { raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
-import { emitValueCopy } from "./valueCopy";
+import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
 import { getProperty, getElementType, unwrapRef } from "../../checker/types";
-import { SymbolFlag } from "../../checker/symbol";
+import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
 	resolveFunc, isLocalString, isEnumName, findEnumConstant,
@@ -301,6 +301,16 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			}
 			const reg = resolveLocal(s, d.name);
 			if (reg >= 0) return reg;
+			if (node.resolvedSym != null && node.resolvedSym.builtinKind == "NaN") {
+				const nanReg = allocReg(s);
+				emitLoadConst(s, nanReg, raiserFloat(NaN));
+				return nanReg;
+			}
+			if (node.resolvedSym != null && node.resolvedSym.builtinKind == "Infinity") {
+				const infinityReg = allocReg(s);
+				emitLoadConst(s, infinityReg, raiserFloat(Infinity));
+				return infinityReg;
+			}
 			// The checker rewrites `Enum.Member` into an Identifier "Enum_Member".
 			// Raiser emits no enum declaration, so that name has no binding —
 			// inline the ordinal from the enum table. Key by the symbol's enum name
@@ -447,12 +457,82 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 
 // --- Binary ---
 
+function isRefParamTarget(left: Node): boolean {
+	const sym = left.resolvedSym;
+	return left.kind == NodeKind.Identifier && sym != null && sym.symbolKind == SymbolKind.Parameter
+		&& sym.symbolType != null && sym.symbolType.kind == TypeKind.Var;
+}
+
+function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 {
+	if (isRefParamTarget(left)) {
+		const pointeeType = left.resolvedSym!.symbolType.typeReturn;
+		const paramReg = resolveLocal(s, (left.data as IdentifierData).name);
+		if (paramReg < 0 || !needsValueAssign(s, pointeeType)) return -1;
+		const srcReg = compileExpr(s, right);
+		return emitValueAssign(s, paramReg, srcReg, pointeeType);
+	}
+	if (!needsValueAssign(s, left.nodeType)) return -1;
+	if (left.kind == NodeKind.HiddenDeref) {
+		const srcReg = compileExpr(s, right);
+		const pointee = compileExpr(s, (left.data as HiddenDerefData).expr);
+		return emitValueAssign(s, pointee, srcReg, left.nodeType);
+	}
+	if (left.kind == NodeKind.Identifier) {
+		if (isViewBinding(left.resolvedSym)) return -1;
+		const global = resolveGlobal(s, left.resolvedSym);
+		if (global >= 0) {
+			const srcReg = compileExpr(s, right);
+			const held = allocReg(s);
+			emitInst(s, raiserABC(RaiserOpcode.LoadGlobal, held, global, 0));
+			const result = emitValueAssign(s, held, srcReg, left.nodeType);
+			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, result, global, 0));
+			return result;
+		}
+		const targetReg = resolveLocal(s, (left.data as IdentifierData).name);
+		if (targetReg < 0) return -1;
+		const srcReg = compileExpr(s, right);
+		const result = emitValueAssign(s, targetReg, srcReg, left.nodeType);
+		emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, result, 0));
+		return targetReg;
+	}
+	if (left.kind == NodeKind.ArrayAccess) {
+		const srcReg = compileExpr(s, right);
+		const ad = left.data as ArrayAccessData;
+		const arrReg = compileExpr(s, ad.array);
+		const idxReg = compileExpr(s, ad.index);
+		const held = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, held, arrReg, idxReg));
+		const result = emitValueAssign(s, held, srcReg, left.nodeType);
+		emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, result));
+		return result;
+	}
+	if (left.kind == NodeKind.MemberExpr && !(left.data as MemberExprData).isOptional) {
+		const srcReg = compileExpr(s, right);
+		const md = left.data as MemberExprData;
+		const objReg = compileExpr(s, md.object);
+		const nameIdx = addConst(s, raiserString(md.property));
+		const held = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.LoadField, held, objReg, nameIdx));
+		const result = emitValueAssign(s, held, srcReg, left.nodeType);
+		emitInst(s, raiserABC(RaiserOpcode.StoreField, objReg, nameIdx, result));
+		return result;
+	}
+	return -1;
+}
+
 function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as BinaryExprData;
 	const op = d.operator;
 
 	// Assignment: x = expr  or  arr[i] = expr
 	if (op == "=") {
+		const assigned = compileValueAssign(s, d.left, d.right);
+		if (assigned >= 0) return assigned;
+		if (d.left.kind == NodeKind.HiddenDeref || isRefParamTarget(d.left)) {
+			const msg = "cannot assign through a pointer or ref parameter at comptime: the Raiser VM writes in place only into a struct or an array";
+			queueRaiserCompileError(msg, node.location.line, node.location.column);
+			return emitTrapNil(s, msg);
+		}
 		const srcReg = emitValueCopy(s, compileExpr(s, d.right), d.left.nodeType);
 		if (d.left.kind == NodeKind.Identifier) {
 			const id = d.left.data as IdentifierData;
@@ -1093,7 +1173,10 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 	if (d.newCallee.kind == NodeKind.Identifier) {
 		const classId = d.newCallee.data as IdentifierData;
 		const sym = d.newCallee.resolvedSym;
-		let funcIdx = resolveFunc(s, classId.name + "_new");
+		const ctorName = (sym != null ? sym.name : classId.name) + "_new";
+		let funcIdx = s.scopedFunctions && sym != null && sym.modulePath != ""
+			? resolveFunc(s, sym.modulePath + ":" + ctorName)
+			: resolveFunc(s, ctorName);
 		if (funcIdx < 0 && sym != null) funcIdx = callRaiserOnDemand(sym);
 		if (funcIdx >= 0) {
 			const knownCtorless = sym != null && !sym.symFlags.has(SymbolFlag.HasConstructor);

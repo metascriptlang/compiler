@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -251,6 +251,15 @@ const _assignTargets: Type[] = [];
 let _isaCount: float64 = 0;
 let _isaTime: float64 = 0;
 export function isAssignableProfile(): float64[] { return [_isaCount, _isaTime]; }
+export function unmetConstraint(owner: Type, name: string, bound: Type, names: string[], types: Type[]): Type | null {
+	if (bound == null || bound.kind == TypeKind.Error || isUnresolvedType(bound) || isUnknownType(bound) || hasGenericParams(bound)) return null;
+	const raw = typeParamConstraint(owner, name, 0);
+	if (raw == null) return null;
+	const constraint = substituteAllParams(raw, names, types);
+	if (constraint == null || isUnresolvedType(constraint) || hasGenericParams(constraint)) return null;
+	return isAssignable(bound, constraint) ? null : constraint;
+}
+
 export function isAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return isAssignableInner(source, target);
 	if (source == target) return true;
@@ -338,11 +347,9 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 				if (isAtomicRef(source) != isAtomicRef(target)) {
 					return false;
 				}
-				// Nominal shortcut: Ref types with same-named inner struct are assignable
-				// (handles cross-module interface identity where Type objects differ but names match)
 				if (source.typeReturn != null && target.typeReturn != null
 					&& source.typeReturn.kind != TypeKind.GenericInstance
-					&& source.typeReturn.typeName != "" && source.typeReturn.typeName == target.typeReturn.typeName) {
+					&& sameNominal(source.typeReturn, target.typeReturn)) {
 					return true;
 				}
 				return isAssignable(source.typeReturn, target.typeReturn);
@@ -598,7 +605,7 @@ export function takesAddressAtCArg(source: Type | null, target: Type | null): bo
 export function needsStdConv(source: Type, target: Type): boolean {
 	if (source == null || target == null) return false;
 	// Var (out param): unwrap to inner type for conversion check
-	if (target.kind == TypeKind.Var && target.typeReturn != null) {
+	if ((target.kind == TypeKind.Var || target.kind == TypeKind.Sink) && target.typeReturn != null) {
 		return needsStdConv(source, target.typeReturn);
 	}
 	if (source.kind == target.kind) return false;
@@ -710,10 +717,7 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	// Identity: same object → trivially assignable
 	if (source == target) return true;
 	if (source == null || target == null) return false;
-	// Nominal: same typeName means same type (handles self-referencing types like Type, Scope)
-	if (source.typeName != "" && source.typeName == target.typeName) return true;
-	// Cross-module nominal: types linked via sym identity (both point to same Symbol)
-	if (source.sym != null && source.sym == target.sym) return true;
+	if (sameNominal(source, target)) return true;
 	// Exact-field anon→named pairs are assignable; fitNode materializes the
 	// member-wise re-construction. Every other anon→named pair stays rejected:
 	// no lowering exists, so C emits two distinct types (clang error) while js
@@ -774,11 +778,11 @@ export function isObjectShapeMismatch(source: Type | null, target: Type | null):
 	if (s0 == null || t0 == null) return false;
 	const s = unwrapRefBase(s0);
 	const t = unwrapRefBase(t0);
+	if (s.kind == TypeKind.GenericInstance && t.kind == TypeKind.GenericInstance) return !isAssignable(source, shapeTarget);
 	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return false;
 	if (s == t) return false;
 	if (s.typeName == "" || t.typeName == "") return false;
-	if (s.typeName == t.typeName) return false;
-	if (s.sym != null && s.sym == t.sym) return false;
+	if (sameNominal(s, t)) return false;
 	return !isAssignable(source, shapeTarget);
 }
 
@@ -794,7 +798,7 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 	const t = unwrapRefBase(t0);
 	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return "";
 	if (s.typeName == "" || t.typeName == "") return "";
-	if (s.typeName == t.typeName) return "";
+	if (sameNominal(s, t)) return "";
 	if (isAnonLiteralName(s.typeName) && !isAnonLiteralName(t.typeName)) {
 		return " (the literal froze as an anonymous type before reaching '" + t.typeName
 			+ "'; annotate at the literal: `const x: " + t.typeName + " = { ... }`)";
@@ -889,6 +893,11 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 	return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Array || dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union;
 }
 
+export function sameNominal(a: Type, b: Type): boolean {
+	if (a.sym != null && b.sym != null) return a.sym == b.sym;
+	return a.typeName != "" && a.typeName == b.typeName;
+}
+
 export function sameType(a: Type | null, b: Type | null): boolean {
 	if (a == b) return true;
 	if (a == null || b == null) return false;
@@ -920,8 +929,7 @@ function sameNameList(a: string[], b: string[]): boolean {
 }
 
 function sameStructType(a: Type, b: Type): boolean {
-	// Nominal types keep comparing by name; anonymous ones are structural.
-	if (a.typeName != "" || b.typeName != "") return a.typeName == b.typeName;
+	if (a.typeName != "" || b.typeName != "") return sameNominal(a, b);
 	if (a.typeFlags != b.typeFlags) return false;
 	if (!sameNameList(a.typeNames, b.typeNames)) return false;
 	return sameTypeList(a.typeChildren, b.typeChildren);
@@ -958,6 +966,12 @@ function sameTypeInner(a: Type, b: Type): boolean {
 
 const _relationFormals: Type[] = [];
 const _relationActuals: Type[] = [];
+function setRelation(formal: Type, actual: Type): TypeRelation {
+	if (formal.typeReturn == null || actual.typeReturn == null) return sameInnerType(formal, actual) ? TypeRelation.Exact : TypeRelation.None;
+	const elemRel = typeRelation(formal.typeReturn, actual.typeReturn);
+	if (elemRel == TypeRelation.Exact || elemRel == TypeRelation.Generic || elemRel == TypeRelation.FromLiteral) return elemRel;
+	return TypeRelation.None;
+}
 export function typeRelation(formal: Type | null, actual: Type | null): TypeRelation {
 	if (formal == null || actual == null) return typeRelationInner(formal, actual);
 	if (pairOnStack(_relationFormals, _relationActuals, formal, actual)) return TypeRelation.Exact;
@@ -1014,7 +1028,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (formal.typeNames[0] == actual.typeNames[0]) return TypeRelation.Exact;
 				return TypeRelation.None;
 			},
-			TypeKind.Set => sameInnerType(formal, actual) ? TypeRelation.Exact : TypeRelation.None,
+			TypeKind.Set => setRelation(formal, actual),
 			TypeKind.SizedArray => {
 				if (formal.typeValue != actual.typeValue) return TypeRelation.None;
 				if (formal.typeReturn != null && actual.typeReturn != null) {
@@ -1251,17 +1265,21 @@ export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], min
 			score.exactMatches = -1;
 			return score;
 		}
-		match (rel) {
-			TypeRelation.Exact => { score.exactMatches = score.exactMatches + 1; },
-			TypeRelation.FromLiteral => { score.intConvMatches = score.intConvMatches + 256; },
-			TypeRelation.Generic => { score.genericMatches = score.genericMatches + 1; },
-			TypeRelation.Subtype => { score.subtypeMatches = score.subtypeMatches + 1; },
-			TypeRelation.IntConv => { score.intConvMatches = score.intConvMatches + 1; },
-			TypeRelation.Convertible => { score.convMatches = score.convMatches + 1; },
-			_ => {},
-		};
+		countRelation(score, rel);
 	}
 	return score;
+}
+
+export function countRelation(score: CandidateScore, rel: TypeRelation): void {
+	match (rel) {
+		TypeRelation.Exact => { score.exactMatches = score.exactMatches + 1; },
+		TypeRelation.FromLiteral => { score.intConvMatches = score.intConvMatches + 256; },
+		TypeRelation.Generic => { score.genericMatches = score.genericMatches + 1; },
+		TypeRelation.Subtype => { score.subtypeMatches = score.subtypeMatches + 1; },
+		TypeRelation.IntConv => { score.intConvMatches = score.intConvMatches + 1; },
+		TypeRelation.Convertible => { score.convMatches = score.convMatches + 1; },
+		_ => {},
+	};
 }
 
 // Compare inheritance penalties. -1 = inactive (sentinel).
@@ -1961,4 +1979,13 @@ test "readonly propagation stops at the shared type graph" {
 	assert propagateReadonlyView(graph) == graph;
 	assert isReadonlyView(propagateReadonlyView(user));
 	assert isReadonlyView(createReadonlyView(graph));
+}
+
+test "two sets relate as their element types do, and below a generic match they do not" {
+	const color = createEnum("Color", ["Red", "Green"], [0, 1]);
+	const shade = createEnum("Shade", ["Dark", "Light"], [0, 1]);
+	assert typeRelation(createBitSet(color), createBitSet(color)) == TypeRelation.Exact;
+	assert typeRelation(createBitSet(createGenericParam("E")), createBitSet(color)) == TypeRelation.Generic;
+	assert typeRelation(createBitSet(shade), createBitSet(color)) == TypeRelation.None;
+	assert typeRelation(createBitSet(numberType()), createBitSet(createPrimitive(TypeKind.Int32))) == TypeRelation.None;
 }

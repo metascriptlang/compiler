@@ -7,8 +7,8 @@
 // Primary path: extract enum info from checker's symbol table (post-DCE safe).
 // Fallback path: walk AST programStmts (for tests without checker context).
 
-import { Node, NodeKind, ProgramData, EnumDeclData, ExportDeclData, TypeKind, SymbolKind } from "../../ast/node";
-import { TransformContext, NameSet, createNameSet, nameSetContains, nameSetAdd } from "../context";
+import { Node, NodeKind, ProgramData, EnumDeclData, ExportDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { TransformContext } from "../context";
 import {
 	makeSwitch, makeSwitchCase, makeReturn, makeString, makeNumber,
 	makeTypedIdentResolved, makeBlock, makeFnDecl, enumToStringName, enumToStringNameFor,
@@ -32,7 +32,8 @@ function concatStmts(a: Node[], b: Node[]): Node[] {
 
 // fnName comes from the caller: the checker-owned Type (module-qualified, the
 // spelling every lowering site emits) or the bare name on the ctx-less fallback.
-function makeEnumToString(fnName: string, enumName: string, members: string[], loc: SourceLocation): Node {
+function makeEnumToString(fnName: string, enumType: Type, loc: SourceLocation): Node {
+	const members = enumType.typeNames;
 	const cases: Node[] = [];
 	let i = 0;
 	while (i < members.length) {
@@ -43,7 +44,6 @@ function makeEnumToString(fnName: string, enumName: string, members: string[], l
 	// Default case: return "<unknown>"
 	cases.push(makeSwitchCase([], [makeReturn(makeString("<unknown>", loc), loc)], true, loc));
 
-	const enumType = createEnum(enumName, members, null as unknown as number[]);
 	const valueSym = makeSymbol("v", SymbolKind.Parameter, enumType, false);
 	const switchStmt = makeSwitch(makeTypedIdentResolved(valueSym, null, loc), cases, loc);
 	const body = makeBlock([switchStmt], loc);
@@ -134,7 +134,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 	// in the module scope (table.current), not the root global scope.
 	if (ctx != null && ctx.checkerCtx != null && ctx.checkerCtx.table != null) {
 		const toStringFns: Node[] = [];
-		const injected: NameSet = createNameSet();
+		const injected = new HashSet<Symbol>();
 		// Scope scan — C only. Each module is its own translation unit there, so
 		// injecting every enum in scope costs a few unreferenced statics and
 		// covers any lowering site that forgets to request. The JS bundle is ONE
@@ -149,9 +149,9 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 				for (const sym of scope.symbols.values()) {
 					if (sym.symbolKind == SymbolKind.Enum && sym.symbolType != null && sym.symbolType.kind == TypeKind.Enum) {
 						const t = sym.symbolType;
-						if (nameSetContains(injected, t.typeName)) continue;
-						nameSetAdd(injected, t.typeName);
-						toStringFns.push(makeEnumToString(enumToStringNameFor(t), t.typeName, t.typeNames, sym.location));
+						if (injected.has(sym)) continue;
+						injected.add(sym);
+						toStringFns.push(makeEnumToString(enumToStringNameFor(t), t, sym.location));
 					}
 				}
 				scope = scope.parent;
@@ -160,9 +160,11 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		// Lowering sites (builtinLower/debugLower) request enums that are not in
 		// module scope — e.g. reached only through an imported field's type.
 		for (const t of ctx.checkerCtx.pendingEnumToStrings) {
-			if (t.kind != TypeKind.Enum || nameSetContains(injected, t.typeName)) continue;
-			nameSetAdd(injected, t.typeName);
-			toStringFns.push(makeEnumToString(enumToStringNameFor(t), t.typeName, t.typeNames, program.location));
+			if (t.kind != TypeKind.Enum) continue;
+			if (t.sym == null) throw new Error(`internal: enum '${t.typeName}' reached toString lowering without its declaration`);
+			if (injected.has(t.sym)) continue;
+			injected.add(t.sym);
+			toStringFns.push(makeEnumToString(enumToStringNameFor(t), t, program.location));
 		}
 		ctx.checkerCtx.pendingEnumToStrings = [];
 		// Append to program stmts via return-value move (avoids local array aliasing)
@@ -181,7 +183,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		if (enumNode != null) {
 			const d = enumNode.data as EnumDeclData;
 			const loc = enumNode.location;
-			const toStringFn = makeEnumToString(enumToStringName(d.enumName), d.enumName, d.enumMembers, loc);
+			const toStringFn = makeEnumToString(enumToStringName(d.enumName), createEnum(d.enumName, d.enumMembers, null as unknown as number[]), loc);
 			newStmts.push(toStringFn);
 		}
 		i = i + 1;

@@ -237,6 +237,42 @@ export function skipGenericParams(state: ParserState): void {
 
 // Capture generic param names: <T, U> → "T,U", no generics → ""
 // Same depth-tracking as skipGenericParams but returns names instead of discarding.
+interface CapturedConstraint {
+	text: string;
+	closed: int32;
+}
+
+function captureConstraint(state: ParserState): CapturedConstraint {
+	const parts: string[] = [];
+	let nest = 0;
+	let union = false;
+	let closed = 0;
+	while (!isAtEnd(state)) {
+		const k = current(state).kind;
+		if (nest == 0 && (k == TokenKind.Comma || k == TokenKind.Assign || k == TokenKind.Gt || k == TokenKind.GtGt || k == TokenKind.GtGtGt)) break;
+		let value = current(state).value;
+		if (k == TokenKind.Lt || k == TokenKind.LParen || k == TokenKind.LBracket || k == TokenKind.LBrace) nest += 1;
+		else if (k == TokenKind.Gt || k == TokenKind.RParen || k == TokenKind.RBracket || k == TokenKind.RBrace) nest -= 1;
+		else if (k == TokenKind.GtGt || k == TokenKind.GtGtGt) {
+			const width = k == TokenKind.GtGt ? 2 : 3;
+			if (width > nest) {
+				closed = width - nest;
+				value = ">".repeat(nest);
+			}
+			nest -= width - closed;
+		}
+		if (k == TokenKind.Pipe && nest == 0) union = true;
+		parts.push(value);
+		advance(state);
+		if (closed > 0) break;
+	}
+	let text = "";
+	for (let i = 0; i < parts.length; i += 1) {
+		text = i == 0 || parts[i] == "," ? text + parts[i] : text + " " + parts[i];
+	}
+	return { text: union ? `(${text})` : text, closed: closed };
+}
+
 export function captureGenericParams(state: ParserState): string {
 	if (isAtEnd(state) || current(state).kind != TokenKind.Lt) return "";
 	advance(state); // consume <
@@ -254,14 +290,11 @@ export function captureGenericParams(state: ParserState): string {
 			if (names != "") { names = `${names},`; }
 			names = `${names}${current(state).value}`;
 			advance(state);
-			// Check for constraint: T extends Type
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Extends && depth == 1) {
-				advance(state); // skip 'extends'
-				// Capture constraint type name
-				if (!isAtEnd(state) && isIdentLikeToken(current(state))) {
-					names = `${names}:${current(state).value}`;
-					advance(state);
-				}
+				advance(state);
+				const constraint = captureConstraint(state);
+				if (constraint.text != "") names = `${names}:${constraint.text}`;
+				depth -= constraint.closed;
 			}
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Assign && depth == 1) {
 				advance(state);

@@ -18,18 +18,14 @@ export extern class Promise<T> {
 	extern then(callback: (value: T) => void): Promise<void>;
 }
 
-extern function thenThunk<T>(seed: Promise<T>, fn: () => T): Promise<T> from "#.then(#)";
-
 // spawn on js is SCHEDULING, not parallelism — the documented Node-semantics
 // degeneration of the PARALOCK worker-pool spawn (tier 1). The closure body
 // runs on the event loop as the next microtask; async bodies compose through
 // native promise flattening, sync bodies evaluate inside `.then` and resolve
 // immediately. Parallelism stays a C-backend concern (tier 2 worker_threads
 // is deliberately NOT built until a real workload demands it).
-export function spawn<T>(fn: () => T): Promise<T> {
-	const seed: Promise<T> = Promise.resolve(null as unknown as T);
-	return thenThunk(seed, fn);
-}
+@builtin("PromiseSpawn")
+export extern function spawn<T>(fn: () => T): Promise<T> from "Promise.resolve().then(#)";
 
 // sleepAsync — the C twin's msSleepAsync (a timer the exit drain pumps before
 // the process ends). On js the native event loop IS the drain: a pending

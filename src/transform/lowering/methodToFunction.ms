@@ -27,6 +27,8 @@
 import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ActorDeclData, SymbolKind, Type } from "../../ast/node";
 import { TransformContext } from "../context";
 import { makeSymbol, setFlag, SymbolFlag, initFnName } from "../../checker/symbol";
+import { newSym } from "../../checker/context";
+import { registerCtorInit } from "../../checker/instantiate";
 import { createFunction, voidType, noneType } from "../../checker/types";
 import { declGenericParams } from "../../checker/types";
 import { classInitCName, mangledTypeName } from "../../codegen/c/names";
@@ -88,7 +90,7 @@ function methodToFunctionDecl(methodNode: Node): Node {
 // stamped onto the class symbol, which is SymbolKind.Class and not appropriate
 // for a callable. Defaults are receiver-aligned (null prepended) the same way
 // `collectClassMethod` aligns method defaults.
-function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: Node): Node {
+function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: Node, ctx: TransformContext): Node {
 	const cd = ctorNode.data as ConstructorDeclData;
 	const className = (classNode.data as ClassDeclData).className;
 	const initName = initFnName(className);
@@ -141,7 +143,8 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 	// lifts. mutatedParams is left at 0 — ctor params don't currently feed
 	// param-mutation analysis (it runs over functions' bodies, not ctors). If
 	// that becomes a problem, propagate the bitfield here from the class symbol.
-	const initSym = makeSymbol(initName, SymbolKind.Function, fnNode.nodeType, false);
+	const initSym = ctx.checkerCtx != null ? newSym(ctx.checkerCtx, SymbolKind.Function, initName, fnNode.nodeType) : makeSymbol(initName, SymbolKind.Function, fnNode.nodeType, false);
+	if (ctx.checkerCtx != null && classNode.resolvedSym != null) registerCtorInit(classNode.resolvedSym, className, ctorNode.nodeType != null ? ctorNode.nodeType : createFunction([], [], voidType()), initSym);
 	setFlag(initSym, SymbolFlag.Exported);
 	if (classNode.resolvedSym != null) initSym.exportName = classInitCName(mangledTypeName(classNode.resolvedSym, className));
 	initSym.location = ctorNode.location;
@@ -175,7 +178,7 @@ function rewrapDecorated(member: Node, dd: DecoratedDeclData, liftedFn: Node): N
 // (including DecoratedDecl wrappers), produce FunctionDecls. Returns the new
 // body (PropertyDecl + non-callable DecoratedDecls only) plus the collected
 // functions to insert at module top-level.
-function liftMethodsFromClassBody(classNode: Node, body: Node[]): { body: Node[], lifted: Node[] } {
+function liftMethodsFromClassBody(classNode: Node, body: Node[], ctx: TransformContext): { body: Node[], lifted: Node[] } {
 	const newBody: Node[] = [];
 	const lifted: Node[] = [];
 	// Methods + ctors built before resolution need the class generics to render
@@ -187,7 +190,7 @@ function liftMethodsFromClassBody(classNode: Node, body: Node[]): { body: Node[]
 				lifted.push(methodToFunctionDecl(member));
 			},
 			NodeKind.ConstructorDecl => {
-				lifted.push(ctorToInitFunction(classNode, classGenerics, member));
+				lifted.push(ctorToInitFunction(classNode, classGenerics, member, ctx));
 			},
 			NodeKind.DecoratedDecl => {
 				const dd = member.data as DecoratedDeclData;
@@ -195,7 +198,7 @@ function liftMethodsFromClassBody(classNode: Node, body: Node[]): { body: Node[]
 				if (inner != null && inner.kind == NodeKind.MethodDecl) {
 					lifted.push(rewrapDecorated(member, dd, methodToFunctionDecl(inner)));
 				} else if (inner != null && inner.kind == NodeKind.ConstructorDecl) {
-					lifted.push(rewrapDecorated(member, dd, ctorToInitFunction(classNode, classGenerics, inner)));
+					lifted.push(rewrapDecorated(member, dd, ctorToInitFunction(classNode, classGenerics, inner, ctx)));
 				} else {
 					newBody.push(member);
 				}
@@ -226,7 +229,7 @@ export function lowerMethodToFunction(program: Node, ctx: TransformContext): Nod
 		}
 		if (target.kind == NodeKind.ClassDecl) {
 			const cd = target.data as ClassDeclData;
-			const result = liftMethodsFromClassBody(target, cd.classBody);
+			const result = liftMethodsFromClassBody(target, cd.classBody, ctx);
 			cd.classBody = result.body;
 			newStmts.push(stmt);
 			for (const fn of result.lifted) { newStmts.push(fn); }
@@ -238,7 +241,7 @@ export function lowerMethodToFunction(program: Node, ctx: TransformContext): Nod
 			// `actorLower` transform has already rewritten send/call sites, so
 			// no method users remain on the actor body.
 			const ad = target.data as ActorDeclData;
-			const result = liftMethodsFromClassBody(target, ad.actorBody);
+			const result = liftMethodsFromClassBody(target, ad.actorBody, ctx);
 			ad.actorBody = result.body;
 			newStmts.push(stmt);
 			for (const fn of result.lifted) { newStmts.push(fn); }

@@ -4,7 +4,7 @@ import { inferredType, noneType, emptyType, createStruct, createEnum, createType
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordParent, dispatchRecordMethod, nextDisamb, addRuntimeConverter } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, stampOwner, stampItem, isStaticExtensionSym } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -348,8 +348,8 @@ export function stampDecl(ctx: CheckerContext, sym: Symbol, node: Node): void {
 	sym.declNode = node; // Discovery Commitment: link symbol to its declaration node
 	// Implementation parity: stamp module ownership — set once at creation
 	if (sym.modulePath == "") {
-		sym.modulePath = ctx.modulePath;
-		if (sym.symbolKind == SymbolKind.Function || sym.symbolKind == SymbolKind.Variable) sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
+		stampOwner(ctx, sym);
+		if (sym.symbolKind == SymbolKind.Variable) sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
 	}
 }
 
@@ -494,7 +494,6 @@ export function mintClass(ctx: CheckerContext, node: Node): void {
 	const innerType = createStruct(d.className, memberNames, memberTypes, true);
 	if (d.classExtends != "") {
 		innerType.typeExtra = createTypeRef(d.classExtends);
-		dispatchRecordParent(d.className, d.classExtends);
 	}
 	const classType = createRef(innerType);
 	const sym = declSymbol(ctx, node, d.className, SymbolKind.Class, classType, false);
@@ -536,7 +535,7 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 		const classGenerics = declGenericParams(node);
 		const isExternClass = node.flags.has(NodeFlag.ExternC);
 		for (let si = 0; si < d.classBody.length; si += 1) {
-			collectClassMethod(ctx, d.className, classGenerics, d.classBody, si, isExternClass);
+			collectClassMethod(ctx, sym, d.className, classGenerics, d.classBody, si, isExternClass);
 		}
 	}
 	stripIntrinsicMemberWrappers(ctx, sym, d.classBody);
@@ -605,7 +604,7 @@ export function fillActor(ctx: CheckerContext, node: Node): void {
 	if (ctx.extensionRegistry != null) {
 		const actorGenerics = declGenericParams(node);
 		for (let mi = 0; mi < d.actorBody.length; mi += 1) {
-			collectClassMethod(ctx, d.actorName, actorGenerics, d.actorBody, mi, false);
+			collectClassMethod(ctx, sym, d.actorName, actorGenerics, d.actorBody, mi, false);
 		}
 	}
 	stripIntrinsicMemberWrappers(ctx, sym, d.actorBody);
@@ -642,7 +641,7 @@ function methodOverloadPrimary(body: Node[], upTo: int32, methodName: string): S
 
 import { genericParamNamesOf } from "./types";
 
-function collectClassMethod(ctx: CheckerContext, className: string, classGenerics: string, body: Node[], memberIdx: int32, isExternClass: boolean): void {
+function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: string, classGenerics: string, body: Node[], memberIdx: int32, isExternClass: boolean): void {
 	const member = body[memberIdx];
 	let builtinKind = "";
 	let methodNode: Node | null = null;
@@ -731,6 +730,7 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	methodSym.location = member.location;
 	methodSym.modulePath = ctx.modulePath;
 	methodSym.disamb = nextDisamb(ctx, ctx.modulePath, mangledName);
+	stampItem(ctx, methodSym);
 	methodSym.declNode = member;
 	member.resolvedSym = methodSym;
 	methodNode.resolvedSym = methodSym;
@@ -750,7 +750,7 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	}
 	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, className, "", fnType, md.methodIsStatic, methodSym, 1));
 	if (!md.methodIsStatic && !isExternClass && builtinKind == "") {
-		dispatchRecordMethod(className, md.methodName, methodSym);
+		dispatchRecordMethod(classSym, md.methodName, methodSym);
 	}
 }
 
@@ -1058,8 +1058,10 @@ export function importSymFromRegistry(
 		defineOrError(ctx, hole, defNode);
 		return hole;
 	}
-	const r = defineSymbolAs(ctx.table, alias, sym);
-	if (!r.ok) addError(ctx, r.error, nameLoc.line, nameLoc.column);
+	if (!isStaticExtensionSym(sym)) {
+		const r = defineSymbolAs(ctx.table, alias, sym);
+		if (!r.ok) addError(ctx, r.error, nameLoc.line, nameLoc.column);
+	}
 	noteImported(ctx, sym);
 	if (hasFlag(sym, SymbolFlag.Converter)) addRuntimeConverter(ctx, sym);
 	sgRecordSym(ctx, nameLoc.line, nameLoc.column, nameLoc.column + alias.length, sym, sym.symbolType, sym.symbolKind, alias, "", false);
@@ -1314,8 +1316,6 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 		if (methName.length > prefix.length && methName.startsWith(prefix)) {
 			methName = methName.slice(prefix.length, methName.length);
 		}
-		// Only register if not already present
-		if (findExtension(ctx.extensionRegistry, expInfo.extReceiverType, methName) != null) continue;
 		const methSym = expInfo.sym;
 		noteImported(ctx, methSym);
 		if (markExported) exportSymAs(ctx, methSym, expInfo.name);

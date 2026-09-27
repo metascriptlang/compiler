@@ -555,20 +555,24 @@ same missing-initializer path as L33, seen through a pointer instead of a value.
 Re-measured 2026-09-19 on a build of `98886eb2`: C panics as above, JS prints `1` for
 `g.items.length`.
 
-## L35. `await` inside a string concatenation reaches C codegen unlowered (LIVE, measured 2026-09-16)
+## ~~L35. `await` inside a string concatenation reaches C codegen unlowered~~ (RESOLVED, measured 2026-09-26)
+
+An `await` anywhere inside an expression now gets its own declaration before the statement
+(`awaitSpill`, both the async and the sync path). Measured on a candidate built from `90c6fb51`
+plus the fix, against a baseline built from `90c6fb51`:
 
 ```
 async function f(): Promise<string> { return "x"; }
 async function main(): Promise<void> { console.log("a" + await f() + "b"); }
 await main();
-    tip 3dfadbb9: clang "expected expression" on
-    `_mscc1_[1] = /* unsupported expression: kind=YieldExpr */;`
+    baseline: clang "expected expression"   candidate: C drc axb, C orc axb, JS axb
 ```
 
-`const s = await f(); console.log("a" + s + "b");` compiles and runs. The await lowering handles
-the statement position but not an operand inside the concat-array fill the string `+` chain
-emits. Re-measured 2026-09-19 on a build of `98886eb2`: the template form
-`` console.log(`a${await f()}b`) `` fails identically on C; both forms print `axb` on JS.
+The template form `` console.log(`a${await f()}b`) `` inside `main` measures the same, and both
+forms at top level print `axb` on C drc, C orc and JS (the baseline already did at top level).
+Pinned by `src/test/corpus/programs/423-awaitInExpression.ms` (concat in an async return and at
+top level, every lane including Raiser and SAN) and `src/test/fixedbugs/bug228AwaitInExpression.ms`.
+Not measured: the exact L35 program on Raiser and `--danger` (423 covers both shapes there).
 
 ## L36. A method of a function-body class cannot read the enclosing function's locals on C (LIVE, measured 2026-09-19)
 

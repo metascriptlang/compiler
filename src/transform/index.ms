@@ -16,6 +16,7 @@
 //     matchLower            — sees simplest AST
 // 16. tailCallLower         — tail recursion → while + loop-carried shadow locals (both targets)
 //     paramReassignLower    — assigned params → owned shadow locals (C only: DRC sink/destroy)
+//     awaitSpill            — an await inside an expression → its own declaration, operands in order (C only)
 // 17. asyncDesugar          — await → yield, async → generator (before generatorLower)
 // 18. generatorLower        — function* → state machine returning iterator object
 // 19. varHoist              — hoist var declarations to function scope top (JS semantics)
@@ -62,6 +63,7 @@ import { lowerTailCall } from "./lowering/tailCallLower";
 import { retargetJumps } from "./lowering/jumpRetarget";
 import { lowerParamReassign } from "./lowering/paramReassignLower";
 import { lowerJsVarParam } from "./lowering/jsVarParamLower";
+import { lowerAwaitSpill } from "./lowering/awaitSpill";
 import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
@@ -132,12 +134,15 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = retargetJumps(result, ctx);
 	result = lowerTailCall(result, ctx);
 	if (!jsBackend) { result = lowerParamReassign(result, ctx); }
+	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); }
 	if (!jsBackend) { result = lowerActorPre(result, ctx); }
 	if (!jsBackend) { result = lowerSpawnGroup(result, ctx); }
 	if (!jsBackend) { result = lowerAsync(result, ctx); }
 	if (!jsBackend) { result = lowerAsyncBridge(result, ctx); }
 	if (!jsBackend) { result = lowerGenerator(result, ctx); }
 	if (!jsBackend) { result = lowerSpawn(result, ctx); }
+	// lowerSpawn boxes a thunk's return value around its await; spill that before lowerAwait.
+	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); }
 	if (!jsBackend) { result = lowerAwait(result, ctx); }
 	if (!jsBackend) { result = lowerCtorInit(result, ctx); }
 	if (!jsBackend) { result = lowerActor(result, ctx); }

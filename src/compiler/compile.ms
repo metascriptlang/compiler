@@ -4,12 +4,10 @@ import { exit, exec, execFile, execFileCapture, argv, platform, cwd } from "std/
 import { watch, nextChanges, msIoRunOnce, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile } from "std/fs";
 import { writeStderr } from "std/io";
-import { parseSource } from "../parser/statements/validation";
 import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
-import { checkProgramWithRegistry } from "../checker/checkPass";
-import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, CheckSession } from "../checker/orchestrator";
+import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
@@ -29,6 +27,7 @@ import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
 import { collectFreestandingAsync, collectWritableModuleBindings, freestandingAsyncLoc, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
+import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { getSimpleTypeDesc, sealHookSyms } from "../codegen/c/types";
 import { sealRuntimeProcs } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
@@ -49,7 +48,7 @@ import { registerPreludeStampFn, preludePackKey, preludePackStamp, tryLoadPrelud
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
-import { drainPendingInstances, pendingInstanceKeyOf } from "../checker/instantiate";
+import { drainPendingInstances, distinctInstances } from "../checker/instantiate";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTablesFingerprint, collectTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { hookSymMark, hookSymsFrom, replayHookSyms } from "../codegen/c/types";
 import { GenericTypeInstRow, addGenericTypeInstRow } from "../parser/context";
@@ -452,6 +451,7 @@ function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config
 		const deps = tryLoadPreludeDeps(preludePackKey(config.stdPath, backendExt), preludePackStamp(config.stdPath));
 		if (deps != null && seedPreludeModules(graph, provider, deps)) _preludeSeedHit = true;
 	}
+	if (_preludeSeedHit) noteStdGlobalImportModules(graph, provider, config);
 	if (!_preludeSeedHit) {
 		loadStdGlobalImportModules(graph, provider, config);
 		if (config.stdPath != "") captureStdGraphDeps(graph, preludePackKey(config.stdPath, backendExt));
@@ -540,16 +540,6 @@ function captureStdGraphDeps(graph: ModuleGraph, key: string): void {
 		ci = ci + 1;
 	}
 	setStdGraphDepsSnapshot({ mods, circulars }, key);
-}
-
-// Parse source or exit with error message.
-function parseOrExit(source: string, modPath: string): Node {
-	const pr = parseSource(source);
-	if (!pr.ok) {
-		printDiag(`${error("parse error")} [${modPath}]: ${pr.error}`);
-		exit(1);
-	}
-	return pr.value;
 }
 
 // Stored result of Phase A (transform all modules) for Phase B (DCE) and Phase C (codegen).
@@ -670,6 +660,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	const nativeCtx = createTransformContextWithChecker(ctx);
 	nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
+	nativeCtx.boundChecks = opts.mode != MODE_DANGER;
 	const _tr0 = performance.now();
 	const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 	job.timers.refine = job.timers.refine + (performance.now() - _tr0);
@@ -1127,16 +1118,6 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		const j = jobs[ci];
 		const code = exitCodes[ci];
 		if (code != 0) {
-			// Freestanding targets carry no libc/socket layer, so a prelude @compile
-			// naming a platform engine (std/net -> runtime/io/engineSelect.c) cannot
-			// build there. The module itself is dead code on these targets; dropping
-			// the object is the same call already made for BPF.
-			if (targetOs == "solana" || targetOs == "bare") {
-				const why = targetOs == "solana" ? "BPF unsupported" : "freestanding: no libc";
-				console.log(`  ${dim("skip")} @compile ${j.cPath} ${dim(`(${why})`)}`);
-				ci = ci + 1;
-				continue;
-			}
 			printDiag(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
 			stopBuild();
 		}
@@ -1234,6 +1215,50 @@ function readSourceText(path: string): string {
 	return r.value;
 }
 
+function unitProgramAt(paths: string[], programs: Node[], path: string): Node | null {
+	for (let i = 0; i < paths.length; i += 1) {
+		if (paths[i] == path) return programs[i];
+	}
+	return null;
+}
+
+function routeInstances(order: Node[], programOf: (path: string) => Node | null, place: boolean): HashMap<string, Node[]> {
+	const byHome = new HashMap<string, Node[]>();
+	for (const instNode of distinctInstances(order)) {
+		const sym = instNode.resolvedSym;
+		if (sym == null || sym.modulePath == "") throw new Error(`internal: a generic instance of this build has no owning module`);
+		if (instNode.nodeType == null && sym.symbolType != null) instNode.nodeType = sym.symbolType;
+		const program = programOf(sym.modulePath);
+		if (program == null) throw new Error(`internal: generic instance '${sym.name}' belongs to ${sym.modulePath}, which is not a module of this build`);
+		if (!byHome.has(sym.modulePath)) byHome.set(sym.modulePath, []);
+		byHome.get(sym.modulePath).push(instNode);
+		if (place) (program.data as ProgramData).programStmts.push(instNode);
+	}
+	return byHome;
+}
+
+function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[]): void {
+	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true);
+}
+
+function graphCheckedModule(graph: ModuleGraph, modPath: string, mod: Module, opts: CliOptions): { program: Node, ctx: CheckerContext } {
+	const program = lookupModuleProgram(modPath);
+	const ctx = lookupModuleCtx(modPath);
+	if (program == null || ctx == null) throw new Error(`internal: module ${modPath} was not checked by the graph phase`);
+	setOuterProgramForComptime(program);
+	setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
+	ctx.strictDefs = opts.strictDefs;
+	ctx.strictNullChecks = opts.strictNullChecks;
+	exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
+	return { program, ctx };
+}
+
+function checkedModCtxs(mods: { program: Node, ctx: CheckerContext, modPath: string, source: string }[]): CheckerContext[] {
+	const ctxs: CheckerContext[] = [];
+	for (const m of mods) ctxs.push(m.ctx);
+	return ctxs;
+}
+
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
 	// Split mode is what a bundler plugin consumes: one ES module per source
 	// module, imports already relative inside the tree, nothing executed.
@@ -1306,9 +1331,9 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
 
-		const program = parseOrExit(mod.source, modPath);
-		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
+		const checked = graphCheckedModule(graph, modPath, mod, opts);
+		const program = checked.program;
+		const ctx = checked.ctx;
 		ctx.errors = [];
 		validateTypedAST(ctx, program);
 		ctx.errors = [];
@@ -1342,28 +1367,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		unitCtxs.push(ctx);
 	}
 
-	const pendingInsts = drainPendingInstances();
-	for (const instNode of pendingInsts) {
-		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
-			instNode.nodeType = instNode.resolvedSym.symbolType;
-		}
-		let owner = "";
-		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
-			owner = instNode.resolvedSym.modulePath;
-		}
-		let targetIdx: int32 = -1;
-		for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
-			if (unitPaths[pi] == owner) { targetIdx = pi; }
-		}
-		if (targetIdx < 0) {
-			for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
-				if (unitPaths[pi] == entryPath) { targetIdx = pi; }
-			}
-		}
-		if (targetIdx >= 0) {
-			(unitPrograms[targetIdx].data as ProgramData).programStmts.push(instNode);
-		}
-	}
+	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
 
 	// Phase 2 — backend transform + codegen
 	let anyTopLevelAwait = false;
@@ -1371,6 +1375,10 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const modPath = unitPaths[ui];
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
+		if (!(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
+			refuseSyncAwaitOnJs(unitCtxs[ui], unitPrograms[ui]);
+			exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
+		}
 		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 
@@ -2338,8 +2346,6 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	setGlobalHookOwners(sharedHookOwners);
 
 	// PROFILE: sub-phase timings summed across all modules.
-	let tParse: number = 0;
-	let tCheck: number = 0;
 	const a2t: A2Timers = { mono: 0, macro: 0, xform: 0, refine: 0, native: 0, analyze: 0, lower: 0 };
 
 	// Phase A1 — parse + check every module FIRST (no instance drain yet). A generic instance
@@ -2364,65 +2370,20 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		// diagnostics. Reuse the checked pair — reference parity: Nim checks each
 		// module exactly once (sem results cached on the module). LSP-only
 		// finalization (sgSortRecords, stampJsModulePaths) is skipped on this path.
-		const reusedProgram = lookupModuleProgram(modPath);
-		const reusedCtx = lookupModuleCtx(modPath);
-		if (reusedProgram != null && reusedCtx != null) {
-			setOuterProgramForComptime(reusedProgram);
-			setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
-			exitOnFatalCheckerErrors(reusedCtx, modPath, mod.rawSource);
-			if (hasErrors(reusedCtx)) {
-				totalCheckerErrors = totalCheckerErrors + errorCount(reusedCtx);
-			}
-			checkedMods.push({ program: reusedProgram, ctx: reusedCtx, modPath, source: mod.rawSource });
-			programByPath.set(modPath, reusedProgram);
-			continue;
+		const checked = graphCheckedModule(graph, modPath, mod, opts);
+		if (hasErrors(checked.ctx)) {
+			totalCheckerErrors = totalCheckerErrors + errorCount(checked.ctx);
 		}
-		const _tp0 = performance.now();
-		const program = parseOrExit(mod.source, modPath);
-		tParse = tParse + (performance.now() - _tp0);
-		const _tc0 = performance.now();
-		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		tCheck = tCheck + (performance.now() - _tc0);
-		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
-		// Errors and warnings were already rendered in the graph-checker phase
-		// (loadAndCheckGraph → reportModuleErrors). Re-checking here re-populates
-		// ctx.errors with the same diagnostics — only count them for the codegen
-		// gate; do NOT render again, otherwise every error/warning prints twice.
-		if (hasErrors(ctx)) {
-			totalCheckerErrors = totalCheckerErrors + errorCount(ctx);
-		}
-		ctx.errors = [];
-		checkedMods.push({ program, ctx, modPath, source: mod.rawSource });
-		programByPath.set(modPath, program);
+		checkedMods.push({ program: checked.program, ctx: checked.ctx, modPath, source: mod.rawSource });
+		programByPath.set(modPath, checked.program);
 	}
 
-	const instancesByOwner: HashMap<string, Node[]> = new HashMap<string, Node[]>();
-	const routedKeys: HashSet<string> = new HashSet<string>();
 	const routeOrder: Node[] = [];
 	for (const modPath of graph.loadOrder) {
 		const created = session.check.instances.get(modPath);
 		if (created != null) for (const instNode of created) routeOrder.push(instNode);
 	}
-	for (const instNode of drainPendingInstances()) routeOrder.push(instNode);
-	for (const instNode of routeOrder) {
-		const key = pendingInstanceKeyOf(instNode);
-		if (key != "") {
-			if (routedKeys.has(key)) continue;
-			routedKeys.add(key);
-		}
-		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
-			instNode.nodeType = instNode.resolvedSym.symbolType;
-		}
-		let owner = "";
-		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
-			owner = instNode.resolvedSym.modulePath;
-		}
-		const target = owner != "" && programByPath.has(owner) ? owner : programByPath.has(entryPath) ? entryPath : "";
-		if (target == "") continue;
-		if (!instancesByOwner.has(target)) instancesByOwner.set(target, []);
-		instancesByOwner.get(target).push(instNode);
-		if (!session.keep) (programByPath.get(target).data as ProgramData).programStmts.push(instNode);
-	}
+	const instancesByOwner = routeInstances(routeOrder, (path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, !session.keep);
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
 	for (let i = 0; i < hcrModulePaths.length; i += 1) {
@@ -2542,7 +2503,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 
 	if (opts.showTime) printTiming("phase A (parse+check+transform)", tA);
 	if (opts.showTime) {
-		console.log(`    parse=${tParse}ms check=${tCheck}ms mono=${a2t.mono}ms macro=${a2t.macro}ms xform=${a2t.xform}ms refine=${a2t.refine}ms native=${a2t.native}ms analyze=${a2t.analyze}ms lower=${a2t.lower}ms`);
+		console.log(`    mono=${a2t.mono}ms macro=${a2t.macro}ms xform=${a2t.xform}ms refine=${a2t.refine}ms native=${a2t.native}ms analyze=${a2t.analyze}ms lower=${a2t.lower}ms`);
 	}
 
 	// Gate: stop before codegen if any type errors (standard compiler parity).
@@ -2600,7 +2561,6 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 
 	// Compile prelude @compile directives — unconditional.
 	// These are C runtime files, not application code. The linker strips unused sections.
-	// For Solana, processCompileDirectives already skips BPF-unsupported .c files.
 	const hcrImages = opts.isHcr && !opts.emitC;
 	const coreFlags = hcrImages ? appendFlag(allFlags, "-DMS_HCR_CORE") : allFlags;
 	const imageFlags = hcrImages ? appendFlag(allFlags, "-DMS_HCR_MODULE") : allFlags;
@@ -2827,7 +2787,6 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 	clangTime = performance.now() - tCl;
 	let moduleCompileFailed = false;
-	const skippableRoot = opts.targetOs == "solana" ? resolveRuntimeDir() : "";
 	let cji = 0;
 	while (cji < cJobs.length) {
 		const cj = cJobs[cji];
@@ -2840,12 +2799,8 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 			throw new Error(BUILD_STOPPED);
 		} else {
 			invalidateCompileCache(cj.modPath, cj.fp);
-			if (skippableRoot != "" && isUnder(cj.modPath, skippableRoot)) {
-				console.log(`  ${dim("skip")} ${cj.modPath} ${dim("(BPF unsupported)")}`);
-			} else {
-				printDiag(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
-				moduleCompileFailed = true;
-			}
+			printDiag(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
+			moduleCompileFailed = true;
 		}
 		cji = cji + 1;
 	}
@@ -3004,48 +2959,16 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		// created once (instantiation is memoized), attached to the graph-check
 		// program, and the discarded re-check never recreates them, so the owner
 		// module's TU emits none of them.
-		const reusedProgram = lookupModuleProgram(modPath);
-		const reusedCtx = lookupModuleCtx(modPath);
-		if (reusedProgram != null && reusedCtx != null) {
-			setOuterProgramForComptime(reusedProgram);
-			setOuterCheckContext(graphRegistry, graph, mod, graphPreludeCtx);
-			exitOnFatalCheckerErrors(reusedCtx, modPath, mod.rawSource);
-			reusedCtx.errors = [];
-			checkedMods.push({ program: reusedProgram, ctx: reusedCtx, modPath, source: mod.rawSource });
-			programByPath.set(modPath, reusedProgram);
-			continue;
-		}
-		const program = parseOrExit(mod.source, modPath);
-		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
-		ctx.errors = [];
-		checkedMods.push({ program, ctx, modPath, source: mod.rawSource });
-		programByPath.set(modPath, program);
+		const checked = graphCheckedModule(graph, modPath, mod, opts);
+		checked.ctx.errors = [];
+		checkedMods.push({ program: checked.program, ctx: checked.ctx, modPath, source: mod.rawSource });
+		programByPath.set(modPath, checked.program);
 	}
 
 	// Single drain after A1 — route each pending generic instance to its OWNER module's
 	// program so the generic body's module-private helpers are visible in the same TU.
 	// Owner-less nodes fall back to the entry program.
-	const pendingInsts = drainPendingInstances();
-	for (let ii = 0; ii < pendingInsts.length; ii += 1) {
-		const instNode = pendingInsts[ii];
-		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
-			instNode.nodeType = instNode.resolvedSym.symbolType;
-		}
-		let owner = "";
-		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
-			owner = instNode.resolvedSym.modulePath;
-		}
-		let targetProgram: Node | null = null;
-		if (owner != "" && programByPath.has(owner)) {
-			targetProgram = programByPath.get(owner);
-		} else if (programByPath.has(filePath)) {
-			targetProgram = programByPath.get(filePath);
-		}
-		if (targetProgram != null) {
-			(targetProgram.data as ProgramData).programStmts.push(instNode);
-		}
-	}
+	placePendingInstances((path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, checkedModCtxs(checkedMods));
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
 	for (const cm of checkedMods) {
@@ -3065,6 +2988,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
+		nativeCtx.boundChecks = opts.mode != MODE_DANGER;
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
@@ -3327,12 +3251,11 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 
 		if (opts.verbose) verboseLog("compiling " + modPath);
 
-		const program = parseOrExit(mod.source, modPath);
-		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(ctx, modPath, mod.rawSource);
+		const checked = graphCheckedModule(graph, modPath, mod, opts);
+		const ctx = checked.ctx;
 		ctx.errors = [];
 
-		const macroExpanded = expandMacros(program, ctx);
+		const macroExpanded = expandMacros(checked.program, ctx);
 		exitOnCheckerErrors(ctx, modPath, mod.rawSource);
 
 		unitPaths.push(modPath);
@@ -3345,27 +3268,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	// module that first asked for it — leaves the name pointing at one module
 	// and the definition sitting in another, which on this backend becomes a
 	// module importing a symbol from itself. Same routing as the bundle path.
-	for (const instNode of drainPendingInstances()) {
-		if (instNode.nodeType == null && instNode.resolvedSym != null && instNode.resolvedSym.symbolType != null) {
-			instNode.nodeType = instNode.resolvedSym.symbolType;
-		}
-		let owner = "";
-		if (instNode.resolvedSym != null && instNode.resolvedSym.modulePath != "") {
-			owner = instNode.resolvedSym.modulePath;
-		}
-		let targetIdx: int32 = -1;
-		for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
-			if (unitPaths[pi] == owner) { targetIdx = pi; }
-		}
-		if (targetIdx < 0) {
-			for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
-				if (unitPaths[pi] == filePath) { targetIdx = pi; }
-			}
-		}
-		if (targetIdx >= 0) {
-			(unitPrograms[targetIdx].data as ProgramData).programStmts.push(instNode);
-		}
-	}
+	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
 
 	// Export-name surface per module — jsMultiFileName keys public naming off
 	// this list on BOTH the declaring and the referencing side (symbol flags
@@ -3390,6 +3293,10 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		const modPath = unitPaths[ui];
 		const ctx = unitCtxs[ui];
 		const mod = findModule(graph, modPath);
+		if (!(stdRoot != "" && modPath.startsWith(stdRoot))) {
+			refuseSyncAwaitOnJs(ctx, unitPrograms[ui]);
+			exitOnCheckerErrors(ctx, modPath, mod != null ? mod.rawSource : "");
+		}
 		const transformed = transformProgram(unitPrograms[ui], ctx, true);
 		exitOnCheckerErrors(ctx, modPath, mod != null ? mod.rawSource : "");
 
@@ -3614,34 +3521,13 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		if (mod == null) continue;
 
 		if (opts.verbose) verboseLog("compiling " + modPath);
-		const program = parseOrExit(mod.source, modPath);
-		const modCtx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(modCtx, modPath, mod.rawSource);
-		modCtx.errors = [];
-
-
+		const checked = graphCheckedModule(graph, modPath, mod, opts);
+		checked.ctx.errors = [];
 		unitPaths.push(modPath);
-		unitPrograms.push(program);
-		unitCtxs.push(modCtx);
+		unitPrograms.push(checked.program);
+		unitCtxs.push(checked.ctx);
 	}
-	for (const instNode of drainPendingInstances()) {
-		if (instNode.nodeType == null && instNode.resolvedSym != null) {
-			instNode.nodeType = instNode.resolvedSym.symbolType;
-		}
-		const owner = instNode.resolvedSym != null ? instNode.resolvedSym.modulePath : "";
-		let targetIdx: int32 = -1;
-		for (let i = 0; i < unitPaths.length; i += 1) {
-			if (unitPaths[i] == owner) targetIdx = i;
-		}
-		if (targetIdx < 0) {
-			for (let i = 0; i < unitPaths.length; i += 1) {
-				if (unitPaths[i] == entryCanonical) targetIdx = i;
-			}
-		}
-		if (targetIdx >= 0) {
-			(unitPrograms[targetIdx].data as ProgramData).programStmts.push(instNode);
-		}
-	}
+	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
 	for (let i = 0; i < unitPrograms.length; i += 1) {
 		const modCtx = unitCtxs[i];
 		const monoed = monomorphizeProgram(unitPrograms[i], modCtx);

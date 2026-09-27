@@ -35,6 +35,12 @@ msc build examples/actorSpawnBasic.ms --target=c  # compile to C only
 # Optimized self-host binary → ./msc. Add --cc=clang on macOS to get LTO.
 msc build src/index.ms --gc=drc --danger --output=msc
 
+# Dev loop (edit → rebuild → test): drop thin-LTO. The link then takes ~0.2s
+# instead of ~15s — thin-LTO produces machine code only at link, so every
+# rebuild re-pays it even when clang hits the object cache. Same -O3.
+# Numbers + method: docs/BUILD-PERF.md "Measured 2026-09-26".
+msc build src/index.ms --gc=drc --danger --lto=off --output=msc
+
 # Sync to ~/.metascript/ so downstream projects pick it up via $PATH
 ./msc run tools/syncLocalBinary.ms --target=raiser            # full sync
 ./msc run tools/syncLocalBinary.ms --target=raiser check      # dry-run

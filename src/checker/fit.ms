@@ -6,7 +6,6 @@ import { BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, Me
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { convertsImplicitly, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
-import { lookupSymbol } from "./symbol";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
@@ -505,11 +504,11 @@ export function widensToBase(ctx: CheckerContext, from: Type | null, to: Type | 
 	const src = unwrapRef(from);
 	const target = unwrapRef(to);
 	if (src == null || target == null) return false;
-	if (!classDescendsFrom(src.typeName, target.typeName)) return false;
-	const srcSym = lookupSymbol(ctx.table, src.typeName);
+	const srcSym = src.sym;
+	const targetSym = target.sym;
 	if (srcSym == null || srcSym.symbolKind != SymbolKind.Class) return false;
-	const targetSym = lookupSymbol(ctx.table, target.typeName);
-	return targetSym != null && targetSym.symbolKind == SymbolKind.Class;
+	if (targetSym == null || targetSym.symbolKind != SymbolKind.Class) return false;
+	return classDescendsFrom(srcSym, targetSym);
 }
 
 function compoundBase(op: string): string {

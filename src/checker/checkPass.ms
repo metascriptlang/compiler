@@ -7,7 +7,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
-import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
+import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -25,7 +25,7 @@ import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, 
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
-import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, pendingInstanceMark, discardPendingInstancesFrom, CtorEntry, ctorDefaultsMark, ctorDefaultsFrom } from "./instantiate";
+import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, forgetInstances, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults } from "./instantiate";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants } from "./types";
@@ -37,7 +37,7 @@ import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
 import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst } from "./callResolve";
-import { gensymSplicePrefix, templateGensymMark, rewindTemplateGensym, beginGensymUnit } from "./template";
+import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
@@ -1089,14 +1089,15 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 	sym.state = SymbolState.Checked;
 }
 
-function checkGenericOverride(ctx: CheckerContext, d: MethodDeclData, className: string): void {
-	const base = dispatchOverriddenEntry(className, d.methodName);
+function checkGenericOverride(ctx: CheckerContext, d: MethodDeclData, className: string, classType: Type): void {
+	if (classType == null || classType.sym == null) return;
+	const base = dispatchOverriddenEntry(classType.sym, d.methodName);
 	if (base == null) return;
 	let baseDecl = base.sym.declNode;
 	if (baseDecl != null && baseDecl.kind == NodeKind.DecoratedDecl) baseDecl = (baseDecl.data as DecoratedDeclData).decoratedNode;
 	const baseGeneric = baseDecl != null && baseDecl.kind == NodeKind.MethodDecl && isGenericFn((baseDecl.data as MethodDeclData).methodFlags);
 	if (!baseGeneric && !isGenericFn(d.methodFlags)) return;
-	addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.className}.${d.methodName}'; a method with its own type parameters cannot override or be overridden`,
+	addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.classSym.name}.${d.methodName}'; a method with its own type parameters cannot override or be overridden`,
 		d.nameLocation.line, d.nameLocation.column);
 }
 
@@ -1133,7 +1134,7 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 					setFlag(sym, SymbolFlag.Async);
 				}
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
-			if (!d.methodIsStatic) checkGenericOverride(ctx, d, className);
+			if (!d.methodIsStatic) checkGenericOverride(ctx, d, className, classType);
 			// Skip body check for generic methods (body re-checked per instantiation,
 			// like top-level generic fns at checkFunctionDecl:358).
 			if (!isGenericFn(d.methodFlags)) {
@@ -1154,9 +1155,8 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			// ctorLower later lifts this node out of classBody, so a module that only
 			// reaches the class through an import can no longer read the signature off
 			// the AST. The shared registry is the order-independent carrier.
-			if (className != "" && node.nodeType != null && node.nodeType.kind == TypeKind.Function) {
-				const ctorOwner = classType.sym != null ? classType.sym.modulePath : ctx.modulePath;
-				registerCtorDefaults(monoBaseName(className, ctorOwner) + "_new", node.nodeType, d.ctorDefaults != null ? d.ctorDefaults : []);
+			if (className != "" && classType.sym != null && node.nodeType != null && node.nodeType.kind == TypeKind.Function) {
+				registerCtorDefaults(classType.sym, className, node.nodeType, d.ctorDefaults != null ? d.ctorDefaults : []);
 			}
 			// Constructor allocates `this` — prepend to params for checking so this.* resolves,
 			// but don't modify AST (codegen handles `this` as a local, not a param).
@@ -1678,7 +1678,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	// `Foo` is non-nullable. Order matters: stamp BEFORE check would compare
 	// the expected type against itself (trivially passes); check BEFORE stamp
 	// compares Null against expected, which is the real safety question.
-	if (d.argument.kind == NodeKind.NullLiteral) {
+	if (d.argument.kind == NodeKind.NullLiteral && ctx.matchExprDepth == 0) {
 		if (ctx.currentFunction != null
 			&& ctx.currentFunction.symbolType.kind == TypeKind.Function
 			&& ctx.currentFunction.symbolType.typeReturn != null) {
@@ -1734,7 +1734,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	if (errSentinel) {
 		checkExpr(ctx, d.argument, null);
 	} else {
-		checkExpr(ctx, d.argument, returnExpected);
+		checkExpr(ctx, d.argument, ctx.matchExprDepth > 0 ? ctx.matchArmExpected : returnExpected);
 	}
 	const retType = d.argument != null ? d.argument.nodeType : null;
 	// PARALOCK Phase 1 R3/E4: affine Promise<T> cannot escape its creating scope.
@@ -2903,28 +2903,31 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 // BUILD-PERF Phase A1: a disk pack (checker/preludePack.ms) short-circuits the
 // whole load on a warm stamp — see the pack module for the lazy AST rules.
 export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"): CheckerContext {
-	const imps = defaultGlobalImports();
 	const packKey = preludePackKey(stdPath, backendExt);
 	const packStamp = preludePackStamp(stdPath);
 	const packed = tryLoadPreludePack(packKey, packStamp);
 	if (packed != null) return packed;
-	const gensymMark = templateGensymMark();
-	const instanceMark = pendingInstanceMark();
-	const cache = createIdentCache();
-	const ctx = createContextWithCache(cache);
-	ctx.extensionRegistry = createExtensionRegistry();
-	let idx = 0;
-	while (idx < imps.length) {
-		loadPreludeOne(ctx, imps[idx], stdPath, backendExt);
-		idx = idx + 1;
-	}
+	const ctx = checkPreludeFromSource(stdPath, backendExt);
 	// Always write (best-effort): the pack captures whatever scope the fresh
 	// check produced — including its silently-ignored baseCtx errors (e.g. the
 	// pre-existing `Map.set` unresolved-extension diagnostics); the key already
 	// covers every input file, so a broken-environment pack can't go stale.
 	writePreludePack(packKey, packStamp, ctx);
-	rewindTemplateGensym(gensymMark);
-	discardPendingInstancesFrom(instanceMark);
+	return ctx;
+}
+
+export function createGraphPreludeContext(): CheckerContext {
+	const ctx = createContextWithCache(createIdentCache());
+	ctx.extensionRegistry = createExtensionRegistry();
+	return ctx;
+}
+
+export function checkPreludeFromSource(stdPath: string, backendExt: string): CheckerContext {
+	const imps = defaultGlobalImports();
+	const ctx = createContextWithCache(createIdentCache());
+	ctx.extensionRegistry = createExtensionRegistry();
+	for (const imp of imps) loadPreludeOne(ctx, imp, stdPath, backendExt);
+	forgetInstances(ctx);
 	return ctx;
 }
 
@@ -2979,7 +2982,7 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 			if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) {
 				// Imported extensions get scope depth 0 (other module).
 				// Don't mutate ext — preludeCtx may be cached across modules (LSP TransAmDb).
-				registerExtension(ctx.extensionRegistry, createExtMethod(ext.methodName, ext.receiverTypeName, ext.sourcePath, ext.fnType, ext.isStatic, ext.sym, 0));
+				registerExtension(ctx.extensionRegistry, createExtMethod(ext.methodName, ext.receiverTypeName, ext.sourcePath, ext.fnType, ext.isStatic, ext.sym!, 0));
 			}
 			ei = ei + 1;
 		}
@@ -3043,25 +3046,61 @@ export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: Checke
 	}
 }
 
-let _pendingSeedSymbols: Symbol[] = [];
+export function promoteStdModuleIntoPrelude(preludeCtx: CheckerContext, ctx: CheckerContext, specifier: string, injectedIncludes: string, injectedFlags: string): void {
+	if (ctx.extensionRegistry != null && preludeCtx.extensionRegistry != null) {
+		for (const ext of ctx.extensionRegistry.methods) {
+			if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) registerExtension(preludeCtx.extensionRegistry, ext);
+		}
+	}
+	if (specifier == "") return;
+	for (const sym of ctx.interf) {
+		ensureShaped(sym, ctx);
+		for (const ov of sym.overloads) ensureShaped(ov, ctx);
+	}
+	promoteModuleIntoPrelude(preludeCtx, ctx);
+	preludeCtx.preludeInterf.set(specifier, ctx.interf);
+	preludeCtx.includeDirectives = appendDirectiveLines(preludeCtx.includeDirectives, ownDirectives(ctx, ctx.includeDirectives, injectedIncludes));
+	const ownFlags = ownDirectives(ctx, ctx.compilerFlags, injectedFlags);
+	if (ownFlags != "") preludeCtx.compilerFlags = appendFlag(preludeCtx.compilerFlags, ownFlags);
+	preludeCtx.compileDirectives = appendDirectiveLines(preludeCtx.compileDirectives, ctx.compileDirectives);
+}
 
-export function registerSeedSymbols(syms: Symbol[]): void {
+function ownDirectives(ctx: CheckerContext, full: string, injected: string): string {
+	if (!full.startsWith(injected)) throw new Error(`internal: ${ctx.modulePath} lost the prelude directives injected into it`);
+	return full.slice(injected.length, full.length).trimStart();
+}
+
+function appendDirectiveLines(lines: string, more: string): string {
+	if (more == "") return lines;
+	return lines == "" ? more : lines + "\n" + more;
+}
+
+let _pendingSeedSymbols: Symbol[] = [];
+let _pendingSeedExtensions: ExtensionMethod[] = [];
+
+export function registerSeedSymbols(syms: Symbol[], exts: ExtensionMethod[]): void {
 	_pendingSeedSymbols = syms;
+	_pendingSeedExtensions = exts;
 }
 
 export function clearSeedSymbols(): void {
 	_pendingSeedSymbols = [];
+	_pendingSeedExtensions = [];
 }
 
-function drainSeedSymbols(table: SymbolTable): void {
-	if (_pendingSeedSymbols.length == 0) return;
+function drainSeedSymbols(ctx: CheckerContext): void {
+	const table = ctx.table;
 	for (const sym of _pendingSeedSymbols) {
 		const innerNameId = getIdentId(table.identCache, sym.name);
 		if (!table.current.symbols.has(innerNameId)) {
 			table.current.symbols.set(innerNameId, sym);
 		}
 	}
+	for (const ext of _pendingSeedExtensions) {
+		registerExtension(ctx.extensionRegistry, createExtMethod(ext.methodName, ext.receiverTypeName, ext.sourcePath, ext.fnType, ext.isStatic, ext.sym!, 0));
+	}
 	_pendingSeedSymbols = [];
+	_pendingSeedExtensions = [];
 }
 
 // Single internal entry point for all checkProgram variants.
@@ -3098,7 +3137,7 @@ function checkProgramCore(
 	}
 	defineBuiltinConstants(ctx);
 	openScope(ctx.table, ScopeKind.Module);
-	drainSeedSymbols(ctx.table);
+	drainSeedSymbols(ctx);
 	const outerGensym = beginGensymUnit();
 	runThreePasses(ctx, program);
 	rewindTemplateGensym(outerGensym);
@@ -3120,7 +3159,7 @@ interface SharedPrelude {
 	ctx: CheckerContext;
 	typeInstances: GenericTypeInstRow[];
 	duVariants: Type[];
-	ctorDefaults: CtorEntry[];
+	ctorDefaults: CtorRow[];
 	dispatch: DispatchRecords;
 }
 
@@ -3160,7 +3199,7 @@ function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude 
 function replayPreludeContributions(shared: SharedPrelude): void {
 	for (const row of shared.typeInstances) addGenericTypeInstRow(row);
 	replayDuVariants(shared.duVariants);
-	for (const e of shared.ctorDefaults) registerCtorDefaults(e.name, e.fnType, e.defaults);
+	replayCtorDefaults(shared.ctorDefaults);
 	replayDispatchRecords(shared.dispatch);
 }
 
@@ -5116,14 +5155,34 @@ test "a method and a constructor carry their parameter symbols with the receiver
 	assert seen == 2;
 }
 
+function gensymLocals(node: Node | null, out: string[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.VariableDecl) {
+		const name = (node.data as VariableDeclData).declName;
+		if (name.indexOf("$t", 0) >= 0) out.push(name);
+	}
+	forEachChild(node, (child: Node): void => { gensymLocals(child, out); });
+}
+
+function templateLocalsOfOneCheck(): string {
+	const out: string[] = [];
+	for (const stmt of checkedStmts("template logDoubled(x: int32): void {\n\tconst t = x + x;\n\tconsole.log(t);\n}\nfunction f(): void {\n\tlogDoubled(1);\n\tlogDoubled(2);\n}\n")) gensymLocals(stmt, out);
+	return out.join(",");
+}
+
+test "a module numbers its template locals in its own context, whatever was checked before it" {
+	const first = templateLocalsOfOneCheck();
+	assert first != "";
+	checkedStmts("template logBumped(x: int32): void {\n\tconst u = x + 1;\n\tconsole.log(u);\n}\nlogBumped(3);\n");
+	assert templateLocalsOfOneCheck() == first;
+}
+
 test "buildPreludeContext: a fresh prelude check leaves the gensym counter and the pending instances where a pack hit leaves them" {
 	env.set("MSC_NO_PRELUDE_PACK", "1");
 	try {
-		const gensym = templateGensymMark();
-		const instances = pendingInstanceMark();
-		buildPreludeContext(join(resolveRuntimeDir(), "std"));
-		assert templateGensymMark() == gensym;
-		assert pendingInstanceMark() == instances;
+		const ctx = buildPreludeContext(join(resolveRuntimeDir(), "std"));
+		assert ctx.generatedInstances.length == 0;
+		assert ctx.procInstCache.size == 0 && ctx.typeInstCache.size == 0;
 	} finally {
 		env.delete("MSC_NO_PRELUDE_PACK");
 	}
@@ -5132,11 +5191,8 @@ test "buildPreludeContext: a fresh prelude check leaves the gensym counter and t
 function pendingCountOfCheck(prelude: CheckerContext, src: string): int32 {
 	const pr = parseSource(src);
 	if (!pr.ok) return -1;
-	const mark = pendingInstanceMark();
 	const ctx = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, prelude);
-	const n = hasErrors(ctx) ? -1 : pendingInstanceMark() - mark;
-	discardPendingInstancesFrom(mark);
-	return n;
+	return hasErrors(ctx) ? -1 : ctx.generatedInstances.length;
 }
 
 test "an instance requested from inside a prelude generic body stays with the requesting module, so a second check against the same prelude queues it again" {

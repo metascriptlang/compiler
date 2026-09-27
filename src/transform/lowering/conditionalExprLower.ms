@@ -437,7 +437,7 @@ function expandWhileCond(stmt: Node, ctx: TransformContext): Node[] {
 	return [stmt];
 }
 
-function isAssignOperator(op: string): boolean {
+export function isAssignOperator(op: string): boolean {
 	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=";
 }
 
@@ -468,7 +468,7 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 // temp would copy a struct and the store would hit the copy — so only
 // rvalue-producing parts are hoisted: index expressions, and Call/New in
 // object position (their result is a reference; temping preserves identity).
-function hoistAssignTargetEffects(target: Node, pre: Node[], ctx: TransformContext, writes: Symbol[]): Node {
+export function hoistAssignTargetEffects(target: Node, pre: Node[], ctx: TransformContext, writes: Symbol[]): Node {
 	if (target == null) return target;
 	if (target.kind == NodeKind.ArrayAccess) {
 		const ad = target.data as ArrayAccessData;
@@ -550,6 +550,20 @@ function condLowersToStatements(n: Node): boolean {
 	let found = false;
 	forEachChild(n, (c: Node): void => {
 		if (!found && condLowersToStatements(c)) { found = true; }
+	});
+	return found;
+}
+
+export function bodyHasLoopContinue(node: Node): boolean {
+	if (node == null) return false;
+	if (node.kind == NodeKind.ContinueStmt) return true;
+	if (node.kind == NodeKind.WhileStmt || node.kind == NodeKind.DoWhileStmt
+		|| node.kind == NodeKind.ForStmt || node.kind == NodeKind.ForOfStmt
+		|| node.kind == NodeKind.ForInStmt || node.kind == NodeKind.FunctionDecl
+		|| node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction) return false;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && bodyHasLoopContinue(child)) { found = true; }
 	});
 	return found;
 }

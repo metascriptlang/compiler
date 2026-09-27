@@ -469,8 +469,11 @@ export function typeKey(t: Type | null): string {
 		TypeKind.BooleanLiteral => "boollit:" + t.typeName,
 		TypeKind.Void => "void",
 		TypeKind.Null => "null",
-		TypeKind.Enum => { return "enum:" + t.typeName; },
-		TypeKind.EnumLiteral => { return "enum:" + t.typeName; },
+		TypeKind.Enum => { return "enum:" + mangledTypeName(t.sym, t.typeName); },
+		TypeKind.EnumLiteral => {
+			const e = t.typeReturn != null && t.typeReturn.kind == TypeKind.Enum ? t.typeReturn : t;
+			return "enum:" + mangledTypeName(e.sym, e.typeName);
+		},
 		TypeKind.Struct => {
 			// Anonymous/structural types: use structural key to distinguish
 			if (isAnonTypeName(t.typeName)) {

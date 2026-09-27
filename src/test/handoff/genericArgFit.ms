@@ -230,3 +230,67 @@ test "a constrained parameter after an unconstrained one keeps its explicit bind
 	const src = CLASSES + "function g<U, T extends Animal>(u: U, a: T, b: T): T { return a; }\nconst c = g<string, Dog>(\"u\", dog, animal);";
 	assert hasError(src, "Argument type mismatch in 'g' arg 2: got Animal, expected Dog");
 }
+
+// ===== A constraint limits what may bind its type parameter =====
+
+const BOXED = CLASSES + "class Box { name: int32 = 7; }\nfunction g<T extends Animal>(a: T): T { return a; }\n";
+
+test "an inferred binding outside its constraint is rejected at the argument" {
+	assert hasError(BOXED + "const c = g(\"s\");", "Type 'string' does not satisfy constraint 'Animal' for type parameter 'T' in 'g'");
+	assert hasError(BOXED + "const c = g(new Box());", "Type 'Box' does not satisfy constraint 'Animal' for type parameter 'T' in 'g'");
+}
+
+test "an explicit type argument outside its constraint is rejected" {
+	assert hasError(BOXED + "const c = g<string>(\"s\");", "Type 'string' does not satisfy constraint 'Animal' for type parameter 'T' in 'g'");
+}
+
+test "a binding inside its constraint is accepted" {
+	assert strictErrorCount(BOXED + "const c = g(dog);\nconst d = g<Dog>(dog);\nconst e = g(animal);") == 0;
+}
+
+test "a numeric constraint rejects a string and accepts every number" {
+	const src = "function h<T extends number>(a: T): T { return a; }\n";
+	assert hasError(src + "const c = h(\"s\");", "does not satisfy constraint");
+	assert strictErrorCount(src + "const c = h(3);\nconst d = h(2.5);") == 0;
+}
+
+test "a constraint naming an earlier type parameter is checked after both bind" {
+	const src = "function k<T, U extends T[]>(a: T, b: U): T { return a; }\n";
+	assert hasError(src + "const c = k(1, [\"s\"]);", "does not satisfy constraint");
+	assert strictErrorCount(src + "const c = k(1, [2]);") == 0;
+}
+
+test "a constrained template parameter rejects a binding outside its constraint" {
+	const src = TPL_CLASSES + "template tg<T extends Animal>(a: T): T { return a; }\n";
+	assert hasError(src + "const c = tg(\"s\");", "Type 'string' does not satisfy constraint 'Animal' for type parameter 'T' in 'tg'");
+	assert hasError(src + "const c = tg<string>(\"s\");", "Type 'string' does not satisfy constraint 'Animal' for type parameter 'T' in 'tg'");
+	assert strictErrorCount(src + "const c = tg(dog);") == 0;
+}
+
+test "a constraint with its own type arguments is read whole" {
+	const arr = "function f<T extends Array<int32>>(a: T): T { return a; }\n";
+	assert hasError(arr + "const c = f([\"s\"]);", "does not satisfy constraint");
+	assert strictErrorCount(arr + "const c = f([1]);") == 0;
+	const map = "function m<T extends Map<string, int32>, U>(a: T, b: U): U { return b; }\n";
+	assert hasError(map + "const c = m(\"s\", 1);", "Type 'string' does not satisfy constraint");
+	assert strictErrorCount(map + "const c = m(new Map<string, int32>(), 1);") == 0;
+}
+
+test "a union constraint is read whole" {
+	const src = "function u<T extends string | int32>(a: T): T { return a; }\n";
+	assert hasError(src + "const c = u(true);", "does not satisfy constraint");
+	assert strictErrorCount(src + "const c = u(\"s\");\nconst d = u(3);") == 0;
+}
+
+test "an extension's own constrained parameter is checked when its receiver binds it" {
+	const src = CLASSES + "function tagged<T extends Animal>(this xs: T[]): int32 { return xs.length; }\n";
+	assert hasError(src + "const c = [\"s\"].tagged();", "Type 'string' does not satisfy constraint 'Animal' for type parameter 'T' in 'tagged'");
+	assert strictErrorCount(src + "const d: Dog[] = [dog];\nconst c = d.tagged();") == 0;
+}
+
+test "a method's and a static method's own constraint is checked" {
+	const src = CLASSES + "class H { n: int32 = 0; pick<T extends Animal>(a: T): T { return a; } static take<T extends Animal>(a: T): T { return a; } }\n";
+	assert hasError(src + "const c = new H().pick(\"s\");", "Type 'string' does not satisfy constraint 'Animal' for type parameter 'T' in 'pick'");
+	assert hasError(src + "const c = H.take(\"s\");", "Type 'string' does not satisfy constraint 'Animal' for type parameter 'T' in 'take'");
+	assert strictErrorCount(src + "const c = new H().pick(dog);\nconst d = H.take(animal);") == 0;
+}
