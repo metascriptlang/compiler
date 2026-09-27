@@ -115,6 +115,17 @@ Pin contracts BETWEEN phases. E.g. "after transform, every `MatchExpr` is
 gone" or "after analyze, every RC-typed local has a destroy call". Catches
 silent contract drift between adjacent phases.
 
+Compiler-source contracts run in a **native test binary**; adding `--target=js`
+asks the JS backend to compile the checker itself, not to exercise the checked
+program on JS. For example, run
+`msc test src/test/handoff/intLiteralBoundary.ms --tests-in-dir --gc=orc`.
+Its runtime sibling is [`013-int64Fidelity.ms`](../src/test/corpus/programs/013-int64Fidelity.ms),
+run through the real C and JS backends rather than duplicated in the helper tier.
+Measured 2026-09-27 with installed build `b899f456`, source baseline tree
+`2eaafb12be3cc19060f2ed49feebdf7a6186f3c5`: the original and moved diagnostic
+contracts both passed 14/14 natively; the runtime sibling printed
+`int64-fidelity all-ok` on C and JS. This is not a whole-tier green claim.
+
 ### Corpus programs (`corpus/programs/`)
 
 Standalone programs (not `test {}` files) that print to stdout and exit —
