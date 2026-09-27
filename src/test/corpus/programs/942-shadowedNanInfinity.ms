@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser bytecode compiler cannot evaluate the builtin NaN / Infinity (symbol has no declaration node), also on the baseline
 // @stdout: 6 42 true true
 // note: a parameter or local named NaN / Infinity is its own symbol; only the builtins are the C macros (codegen-c-12: C matched the name).
 
