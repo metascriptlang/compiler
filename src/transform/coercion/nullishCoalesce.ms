@@ -6,6 +6,7 @@
 
 import { Node, NodeKind, BinaryExprData, TypeAssertionData, TypeKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
 import { isMaybeType, unwrapMaybeType, isNumeric, isBoolType, isStringLike, unknownType } from "../../checker/types";
+import { fitJoinedBranch, nullishPayloadType } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeNull, makeBinary, makeConditional, makeMember } from "../util";
@@ -49,17 +50,35 @@ export function nullishLowered(left: Node, right: Node, loc: SourceLocation, res
 	// Nullable fallback keeps both arms in the carrier — no rewrite.
 	const lt = left.nodeType;
 	const rt = right.nodeType;
+	const joined = resultType != null && nullishPayloadType(resultType) == null ? resultType : null;
 	if (lt != null && isMaybeType(lt)
 		&& rt != null && rt.kind != TypeKind.Null && !isMaybeType(rt)) {
-		const val = makeMember(left, "value", loc);
-		val.nodeType = unwrapMaybeType(lt);
+		const read = makeMember(left, "value", loc);
+		read.nodeType = unwrapMaybeType(lt);
+		const val = payloadArm(read, joined, ctx);
 		const c = makeConditional(cond, val, right, loc);
-		c.nodeType = val.nodeType;
+		c.nodeType = joined != null ? joined : val.nodeType;
 		return c;
+	}
+	const payload = nullishPayloadType(lt);
+	if (payload != null && joined != null && rt != null && nullishPayloadType(rt) == null && rt.kind != TypeKind.Null) {
+		const asserted = createNodeAt(NodeKind.TypeAssertion, { asExpr: left, asType: "!" } as TypeAssertionData, loc);
+		asserted.nodeType = payload;
+		const val = payloadArm(asserted, joined, ctx);
+		if (val != asserted) {
+			const c = makeConditional(cond, val, right, loc);
+			c.nodeType = joined;
+			return c;
+		}
 	}
 	const lowered = makeConditional(cond, left, right, loc);
 	if (resultType != null) lowered.nodeType = resultType;
 	return lowered;
+}
+
+function payloadArm(read: Node, joined: Type | null, ctx: TransformContext): Node {
+	if (joined == null || ctx.checkerCtx == null) return read;
+	return fitJoinedBranch(ctx.checkerCtx, read, joined);
 }
 
 function lowerNullishNode(node: Node, ctx: TransformContext): Node {
