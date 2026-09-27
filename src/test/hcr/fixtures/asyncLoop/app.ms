@@ -20,8 +20,7 @@ async function frames(count: int32): Promise<int32> {
 			place(`module.logic${EXT}`);
 			place(`module${EXT}.hcrabi`);
 		}
-		const outcome = reload();
-		console.log(`HCR-ASYNC frame ${frame}: ${reloadKindName(outcome.kind)} value ${value()}`);
+		console.log(`HCR-ASYNC frame ${frame}: ${reloadKindName(reload())} value ${value()}`);
 		seen += 1;
 	}
 	return seen;

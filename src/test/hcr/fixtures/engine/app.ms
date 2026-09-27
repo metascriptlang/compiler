@@ -1,6 +1,6 @@
 import { copyFile, readFile, writeFile } from "std/fs";
 import { exit, platform } from "std/process";
-import { reload, reloadKindName } from "std/hcr";
+import { reload, lastReload, reloadKindName } from "std/hcr";
 import { tick, value } from "./logic";
 import { Probe, makeProbe, version } from "./lifecycle";
 
@@ -27,7 +27,8 @@ function truncate(generation: string, name: string): void {
 }
 
 function report(label: string): void {
-	const outcome = reload();
+	reload();
+	const outcome = lastReload();
 	const names = outcome.modules.length > 0 ? " " + outcome.modules.join(",") : "";
 	const reason = outcome.reason != "" ? ` (${outcome.reason})` : "";
 	console.log(`HCR-ENGINE ${label}: ${reloadKindName(outcome.kind)}${names}${reason}`);

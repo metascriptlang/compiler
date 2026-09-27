@@ -685,6 +685,28 @@ function runCommand(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function reloadOff(): void {
+	const tag = "hcrReloadOff";
+	const dir = freshDir(`${TMP}/reloadOff`);
+	copy(`${FIXTURES}/reloadOff/main.ms`, `${dir}/main.ms`);
+	for (const args of [["run", "main.ms"], ["run", "main.ms", "--target=js"]]) {
+		const ran = msc(dir, args);
+		if (!succeeded(ran) || !both(ran).contains("reload without --hcr: no change") || both(ran).contains("is imported but never used")) {
+			console.log(both(ran));
+			failWith(tag, `msc ${args.join(" ")}: reload() without --hcr should answer no change, with no warning from std/hcr`);
+		}
+	}
+	const hcr = mustBuild(tag, dir, ["build", "main.ms", "--hcr"], "the --hcr build of a program importing std/hcr failed");
+	need(tag, !hcr.contains("is imported but never used"), `the --hcr build warns about std/hcr imports:\n${hcr}`);
+	removeAll(`${dir}/out`);
+	mustBuild(tag, dir, ["build", "main.ms", "--emit=c"], "C emission without --hcr failed");
+	const debug = `${dir}/out/debug`;
+	for (const f of cFilesIn(debug)) {
+		need(tag, !read(`${debug}/${f}`).contains("engineReload"), `${f} reaches the HCR engine in a build without --hcr`);
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function sharedVariable(): void {
 	const dir = freshDir(`${TMP}/sharedVariable`);
 	for (const f of ["app.ms", "logic.ms"]) copy(`${FIXTURES}/sharedVariable/${f}`, `${dir}/${f}`);
@@ -785,5 +807,6 @@ moduleAbi();
 firstWarmBuild();
 localNames();
 watchWarm();
+reloadOff();
 coreLinkClang();
 indirect();
