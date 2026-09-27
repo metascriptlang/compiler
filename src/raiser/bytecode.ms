@@ -89,13 +89,12 @@ export enum RaiserOpcode {
 	// through the host table (see src/compiler/meta/hostTable.ms).
 	CallHost,         // ABC: R[A] = hostFn[constants[B].strVal](R[A+1]..R[A+C])
 
-	// Nil identity check (1)
+	// Kind test (1)
 	// Compares value KIND (not just intVal). Required because BneI64/BeqI64
 	// only look at intVal — Array(handle=0) and Nil both have intVal=0 and
-	// would compare equal under BneI64. Codegen emits this opcode whenever
-	// either side of === / !== is a NullLiteral, mirroring the kind-aware
-	// equality treatment Nim and HashLink give to nil checks.
-	IsNil,            // ABC: R[A] = (R[B].kind === Nil) as bool
+	// would compare equal under BneI64. Codegen emits it with C = Nil whenever
+	// either side of === / !== is a NullLiteral, and per variant for `typeof`.
+	IsKind,           // ABC: R[A] = (R[B].kind == C) as bool
 
 	// String ordering (2)
 	// Nim gives `<`/`<=` on strings their own magics (LtStr/LeStr,

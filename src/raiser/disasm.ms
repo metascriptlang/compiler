@@ -76,6 +76,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.ShiftRightU => "ShiftRightU",
 		RaiserOpcode.Conv => "Conv",
 		RaiserOpcode.CallHost => "CallHost",
+		RaiserOpcode.IsKind => "IsKind",
 		RaiserOpcode.Yield => "Yield",
 		RaiserOpcode.Spawn => "Spawn",
 		RaiserOpcode.Await => "Await",

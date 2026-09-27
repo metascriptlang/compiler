@@ -13,7 +13,7 @@ import {
 	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData
 } from "../../ast/node";
 import { RaiserOpcode, RaiserConvClass, raiserABC } from "../../raiser/bytecode";
-import { raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
+import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
 import { getProperty, getElementType, unwrapRef } from "../../checker/types";
@@ -599,14 +599,14 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	// BeqI64/BneI64 only compare intVal — Array(handle=0) shares intVal=0 with
 	// nil and would compare equal under the generic path. Mirror Nim's opcIsNil
 	// and HashLink's OJNotNull: emit a kind-aware check via the dedicated
-	// IsNil opcode whenever one side is a NullLiteral.
+	// IsKind opcode whenever one side is a NullLiteral.
 	const isEqOp = op == "===" || op == "==" || op == "!==" || op == "!=";
 	const hasNullLit = d.left.kind == NodeKind.NullLiteral || d.right.kind == NodeKind.NullLiteral;
 	if (isEqOp && hasNullLit) {
 		const otherSide: Node = d.left.kind == NodeKind.NullLiteral ? d.right : d.left;
 		const valReg = compileExpr(s, otherSide);
 		const dest = allocReg(s);
-		emitInst(s, raiserABC(RaiserOpcode.IsNil, dest, valReg, 0));
+		emitInst(s, raiserABC(RaiserOpcode.IsKind, dest, valReg, RaiserValueKind.Nil as number));
 		if (op == "===" || op == "==") return dest;
 		const negated = allocReg(s);
 		emitLogicalNot(s, negated, dest);

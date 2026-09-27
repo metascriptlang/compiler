@@ -1020,9 +1020,9 @@ function runStrandSlice(vm: RaiserVM): void {
 			vmCmpBranchF64(vm, inst, 5);
 		} else if (op == RaiserOpcode.CallHost) {
 			vmHandleCallHost(vm, inst);
-		} else if (op == RaiserOpcode.IsNil) {
+		} else if (op == RaiserOpcode.IsKind) {
 			const v = getReg(vm, base + inst.b);
-			setReg(vm, base + inst.a, raiserBool(v.kind == RaiserValueKind.Nil));
+			setReg(vm, base + inst.a, raiserBool((v.kind as number) == inst.c));
 		} else if (op == RaiserOpcode.Yield) {
 			vm.yielded = true;
 		} else if (op == RaiserOpcode.Spawn) {
@@ -1724,6 +1724,27 @@ test "neg: -(7) = -7" {
 		[raiserInt(7)]
 	));
 	assert vm.exitValue.intVal == -7;
+}
+
+function execIsKind(value: RaiserValue, kind: RaiserValueKind): RaiserValue {
+	return execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.IsKind, 1, 0, kind as number),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[value]
+	)).exitValue;
+}
+
+test "IsKind answers a boolean for the value kind named by C" {
+	const hit = execIsKind(raiserString("a"), RaiserValueKind.String);
+	assert hit.kind == RaiserValueKind.Bool;
+	assert hit.intVal == 1;
+	assert execIsKind(raiserString("a"), RaiserValueKind.Float).intVal == 0;
+	assert execIsKind(raiserFloat(2.5), RaiserValueKind.Float).intVal == 1;
+	assert execIsKind(raiserNil(), RaiserValueKind.Nil).intVal == 1;
+	assert execIsKind(raiserInt(0), RaiserValueKind.Nil).intVal == 0;
 }
 
 test "chained: (2 + 3) * 4 = 20" {

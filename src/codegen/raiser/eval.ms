@@ -715,7 +715,7 @@ test "continue inside while re-checks condition" {
 // --- Nil identity check — kind-aware equality (regression) ---
 // Pre-fix: `arr !== null` compiled to BneI64 which only checks intVal;
 // Array(handle=0) and Nil both have intVal=0, so the comparison returned
-// false-equal. IsNil opcode now performs kind-aware identity (mirrors Nim
+// false-equal. IsKind opcode now performs kind-aware identity (mirrors Nim
 // opcIsNil + HashLink OJNotNull).
 test "first-allocated array compares correctly against null" {
 	const ctx = evalFull("const arr = [1, 2]; return arr !== null ? 1 : 0;");
