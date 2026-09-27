@@ -72,6 +72,20 @@ test "slot relation: typed values and contextually fitted constants stay distinc
 	for (const source of rejected) assert strictErrorCount(source) == 1, source;
 }
 
+test "slot relation: composite refusals report once at declarations, assignments and elements" {
+	const classes = "class Source { a: int32 = 1; }\nclass Target { b: int32 = 2; }\nclass Cell<T> { v: T; constructor(v: T) { this.v = v; } }\n";
+	const mismatches = [
+		classes + "const x: Target = new Source();",
+		classes + "const x: Cell<int32> = new Cell<string>(\"x\");",
+		"struct Pair { x: int32; y: int32; }\nconst lit = { y: 1, x: 2 };\nconst x: Pair = lit;",
+		"const x: int32 = null;",
+		classes + "function f(): void { let x: Target = new Target(); x = new Source(); }",
+		classes + "function f(): void { let x: Cell<int32> = new Cell<int32>(1); x = new Cell<string>(\"x\"); }",
+		classes + "const xs: Target[] = [new Target(), new Source()];",
+	];
+	for (const source of mismatches) assert strictErrorCount(source) == 1, source;
+}
+
 test "slot relation: contextual fitting survives generic bodies and expression contexts" {
 	const cases = [
 		{ name: "contextual cast, void callback and rest argument", source: "class Base { n: int32 = 0; } class Derived extends Base {}\n"

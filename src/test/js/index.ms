@@ -6,3 +6,5 @@ import "./basic";
 import "./result";
 import "./int64Literal";
 import "./awaitOperand";
+import "./concurrencyBoundary";
+import "./testSuspension";
