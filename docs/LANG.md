@@ -423,6 +423,21 @@ items.forEach(({ label }) => console.log(label));   // typed from the callback s
 function bad({ label }) { ... }                        // error: a destructured parameter needs a type annotation
 ```
 
+A function whose return type needs a value, whether that type is written, contextual or inferred,
+must return on every path; reaching the end of its body is an error. A `never` function must not
+reach its end either.
+
+```typescript
+function sign(n: int32): int32 {
+    if (n > 0) return 1;
+    if (n < 0) return -1;
+}   // error: 'sign' lacks an ending return statement: its return type 'int32' needs a value on every path
+
+function fail(msg: string): never {
+    if (msg == "") throw new Error("empty");
+}   // error: 'fail' returns 'never' but can reach the end of its body
+```
+
 ### Extension Methods
 
 ```typescript
@@ -1404,8 +1419,8 @@ match (ch) {
 ### Result Type & Try Operator
 ```typescript
 function divide(a: number, b: number): Result<number, string> {
-    if (b === 0) return Err("division by zero");
-    return Ok(a / b);
+    if (b === 0) return Result.err("division by zero");
+    return Result.ok(a / b);
 }
 
 // Try: unwrap or early-return error
@@ -1413,6 +1428,17 @@ const result = try divide(10, 2);
 
 // Try with catch: unwrap or use default
 const value = try divide(10, 0) catch 0;
+```
+
+A function that returns `Result<void, E>` still returns a value on its success path, which is
+`Result.ok(null)`. Like every function whose return type needs a value, it must return on every
+path:
+
+```typescript
+function save(ok: boolean): Result<void, string> {
+    if (!ok) return Result.err("disk full");
+    return Result.ok(null);   // without this line: 'save' lacks an ending return statement: its return type 'Result' needs a value on every path
+}
 ```
 
 ### Promise<T> & Async/Await
