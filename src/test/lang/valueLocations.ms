@@ -1,0 +1,145 @@
+struct StoredValue { n: int32; }
+struct StoredInner { v: int32; tags: Vec<int32>; }
+struct StoredOuter { a: int32; inner: StoredInner; }
+struct StoredField { value: StoredValue; }
+struct LocatedPet { hunger: int32; name: string; inner: StoredInner; tags: Vec<int32>; }
+struct LocatedBag { tags: Vec<int32>; n: int32; }
+
+function keepValue(values: StoredValue[], value: StoredValue): void { values.push(value); }
+function rebindValue(value: StoredValue): int32 { value = { n: 9 }; return value.n; }
+function rebindSequence(values: Vec<int32>): int32 { values = [4, 4]; return values[0]; }
+function feed(this ref pet: LocatedPet, amount: int32): void { pet.hunger += amount; }
+function readHunger(this pet: LocatedPet): int32 { return pet.hunger; }
+function locatedPet(value: int32): LocatedPet {
+	return { hunger: value, name: "a", inner: { v: 1, tags: [2] }, tags: [1, 2] };
+}
+let locationReads: int32 = 0;
+function selectedIndex(): int32 { locationReads++; return 1; }
+
+test "valueLocations: native stores copy value elements rather than sharing their source" {
+	let value: StoredValue = { n: 1 };
+	const owned: Vec<StoredValue> = [];
+	const shared: StoredValue[] = [];
+	const throughCall: StoredValue[] = [];
+	owned.push(value);
+	shared.push(value);
+	keepValue(throughCall, value);
+	value.n = 2;
+	assert owned[0].n == 1 && shared[0].n == 1 && throughCall[0].n == 1;
+	const filled: StoredValue[] = [{ n: 0 }, { n: 0 }];
+	filled.fill(value);
+	filled[0].n = 5;
+	assert filled[1].n == 2 && value.n == 2;
+}
+
+test "valueLocations: native element consumers hand out independent value copies" {
+	const source: StoredValue[] = [{ n: 1 }];
+	const slice = source.slice(0, 1);
+	let element = source.at(0)!;
+	const concatenated = source.concat([]);
+	const spread: StoredValue[] = [...source];
+	slice[0].n = 5;
+	element.n = 6;
+	concatenated[0].n = 7;
+	spread[0].n = 8;
+	assert source[0].n == 1;
+	assert slice[0].n == 5 && element.n == 6;
+	assert concatenated[0].n == 7 && spread[0].n == 8;
+}
+
+test "valueLocations: map stores copy nested structs and their owned sequences" {
+	let source: StoredOuter = { a: 1, inner: { v: 2, tags: [1] } };
+	const values = new Map<string, StoredOuter>();
+	values.set("key", source);
+	source.inner.tags.push(5);
+	source.inner.v = 7;
+	const stored = values.get("key")!;
+	assert stored.a == 1 && stored.inner.v == 2;
+	assert stored.inner.tags.length == 1 && stored.inner.tags[0] == 1;
+}
+
+test "valueLocations: assignment updates existing local field and element locations" {
+	let local: StoredValue = { n: 1 };
+	const localView = local as Ptr<StoredValue>;
+	local = { n: 2 };
+	let holder: StoredField = { value: { n: 1 } };
+	const fieldView = holder.value as Ptr<StoredValue>;
+	holder.value = { n: 3 };
+	let elements: StoredValue[2] = [{ n: 1 }, { n: 1 }];
+	const elementView = elements[1] as Ptr<StoredValue>;
+	locationReads = 0;
+	elements[selectedIndex()] = { n: 4 };
+	assert locationReads == 1;
+	assert localView.n == 2 && fieldView.n == 3 && elementView.n == 4;
+	assert elements[0].n == 1;
+	elements[1] = { n: 6 };
+	assert elementView.n == 6;
+}
+
+test "valueLocations: in-place aggregate assignment preserves nested locations without aliasing its source" {
+	let elements: StoredOuter[1] = [{ a: 1, inner: { v: 2, tags: [1] } }];
+	const view = elements[0] as Ptr<StoredOuter>;
+	const nested = elements[0].inner as Ptr<StoredInner>;
+	const source: StoredOuter = { a: 3, inner: { v: 4, tags: [9, 9] } };
+	elements[0] = source;
+	assert view.a == 3 && nested.v == 4;
+	assert view.inner.tags.length == 2 && view.inner.tags[1] == 9;
+	source.inner.tags.push(1);
+	assert view.inner.tags.length == 2;
+}
+
+test "valueLocations: value parameters and iteration views rebind without replacing the caller" {
+	let value: StoredValue = { n: 1 };
+	assert rebindValue(value) == 9 && value.n == 1;
+	const owned: Vec<int32> = [1, 2];
+	assert rebindSequence(owned) == 4 && owned[0] == 1;
+	const shared: StoredValue[] = [{ n: 1 }];
+	for (let item of shared) { item = { n: 9 }; }
+	assert shared[0].n == 1;
+}
+
+test "valueLocations: explicit pointer dereference distinguishes mutation copying and replacement" {
+	let elements: LocatedPet[1] = [locatedPet(1)];
+	const view = elements[0] as Ptr<LocatedPet>;
+	view[].hunger = 4;
+	assert elements[0].hunger == 4;
+	view[].feed(3);
+	assert elements[0].hunger == 7 && view[].readHunger() == 7;
+	let snapshot = view[];
+	snapshot.hunger = 99;
+	assert elements[0].hunger == 7;
+	const nested = elements[0].inner as Ptr<StoredInner>;
+	view[] = { hunger: 20, name: "bb", inner: { v: 9, tags: [3] }, tags: [7, 8, 9] };
+	assert elements[0].hunger == 20 && elements[0].name == "bb";
+	assert elements[0].tags.length == 3 && elements[0].tags[2] == 9;
+	assert nested.v == 9 && nested.tags[0] == 3;
+}
+
+test "valueLocations: reference dereference follows the same four value operations" {
+	const owner: Ref<LocatedPet> = { hunger: 1, name: "a", inner: { v: 1, tags: [2] }, tags: [1, 2] };
+	owner[].hunger = 2;
+	owner[].feed(1);
+	const snapshot = owner[];
+	owner[] = { hunger: 40, name: "r", inner: { v: 2, tags: [] }, tags: [] };
+	assert snapshot.hunger == 3;
+	assert owner[].hunger == 40 && owner[].name == "r";
+	assert owner[].inner.v == 2 && owner[].tags.length == 0;
+}
+
+test "valueLocations: sequence assignment preserves its location across equal grow shrink and empty lengths" {
+	let values: Vec<int32> = [1, 2];
+	const view = values as Ptr<Vec<int32>>;
+	view[] = [7, 8];
+	assert values.length == 2 && values[0] == 7 && values[1] == 8;
+	view[] = [3, 4, 5];
+	assert values.length == 3 && values[2] == 5;
+	view[] = [9];
+	assert values.length == 1 && view[][0] == 9;
+	view[] = [];
+	assert values.length == 0 && view[].length == 0;
+	let bag: LocatedBag = { tags: [1], n: 0 };
+	const field = bag.tags as Ptr<Vec<int32>>;
+	bag = { tags: [4, 5, 6], n: 1 };
+	assert field[].length == 3 && field[][1] == 5;
+	assert bag.n == 1;
+}
