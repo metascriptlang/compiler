@@ -37,6 +37,43 @@ test "nullish coalescing with null" {
 	assert b == "default";
 }
 
+type NullishDirection = "row" | "column";
+
+function nullishWidened(v: uint8 | null): uint32 {
+	const x: uint32 = v ?? 1;
+	return x;
+}
+
+function nullishCrossesInt64(v: int32 | null, d: int64): int64 {
+	const fromLiteral: int64 = v ?? 0;
+	const fromValue: int64 = v ?? d;
+	return fromLiteral + fromValue;
+}
+
+function nullishDirection(s: NullishDirection | null): NullishDirection {
+	const d: NullishDirection = s ?? "row";
+	return d;
+}
+
+function nullishJoinKind(t: string | null): string {
+	const r = t ?? 1;
+	return typeof r;
+}
+
+test "nullish coalescing fits its payload and its fallback into the slot like a conditional" {
+	assert nullishWidened(7) == 7;
+	assert nullishWidened(null) == 1;
+	assert nullishCrossesInt64(7, 5 as int64) == 14;
+	assert nullishCrossesInt64(null, 5 as int64) == 5;
+	assert nullishDirection("column") == "column";
+	assert nullishDirection(null) == "row";
+}
+
+test "nullish coalescing without a slot joins its payload and its fallback" {
+	assert nullishJoinKind("s") == "string";
+	assert nullishJoinKind(null) == "number";
+}
+
 // =========================================================
 // 3. Exponentiation operator
 // =========================================================
