@@ -658,6 +658,12 @@ function runCommand(): void {
 	copy(`${FIXTURES}/run/app.ms`, `${dir}/app.ms`);
 	copy(`${FIXTURES}/indirect/logic.ms`, `${dir}/logic.ms`);
 	copy(`${FIXTURES}/indirect/logicBodyEdit.ms`, `${dir}/edit.txt`);
+	const copies = `${dir}/out/hcr/.hcr`;
+	const ended = `${copies}/999999998`;
+	const alive = `${copies}/${platform == "windows" ? "4" : "1"}`;
+	const foreign = `${copies}/notARun`;
+	for (const d of [`${ended}/core`, alive, foreign]) ensureDir(d);
+	for (const f of [`${ended}/core/app.core${sharedLibraryExt()}`, `${alive}/keep.txt`, `${foreign}/keep.txt`]) put(f, "x");
 	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
@@ -668,6 +674,9 @@ function runCommand(): void {
 		console.log(both(ran));
 		failWith(tag, "msc run --hcr did not rebuild the edited module into the running app");
 	}
+	need(tag, !exists(ended), "the image copies of an ended run survived the next start");
+	need(tag, exists(`${alive}/keep.txt`), "the start removed the copies of a live process");
+	need(tag, exists(`${foreign}/keep.txt`), "the start removed a directory that is not a run");
 	console.log(`ok   ${tag}`);
 }
 
