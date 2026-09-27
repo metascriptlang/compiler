@@ -16,7 +16,7 @@ import { Diagnostic } from "../cparse/error";
 export interface ParseOptions {
 	target: TargetInfo;
 	includePaths: string[];
-	extraDefines: string[];
+	macroFlags: string[];
 	readLog: string[];        // null normally; records every preprocessor file probe/read for the caller's dep cache
 }
 
@@ -29,7 +29,7 @@ export function defaultOptions(): ParseOptions {
 	return {
 		target: hostTarget(),
 		includePaths: [],
-		extraDefines: [],
+		macroFlags: [],
 		readLog: null as unknown as string[],
 	};
 }
@@ -45,7 +45,7 @@ export function parseHeader(
 	const tok = tokenizeFile(source, path);
 	for (const d of tok.diagnostics) diagnostics.push(d);
 
-	const pp = preprocess(tok.head, opts.target, opts.includePaths, opts.readLog);
+	const pp = preprocess(tok.head, opts.target, opts.includePaths, opts.macroFlags, opts.readLog);
 	for (const d of pp.diagnostics) diagnostics.push(d);
 
 	const parsed = parseTranslationUnit(pp.head, opts.target);

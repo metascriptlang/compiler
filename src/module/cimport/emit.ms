@@ -195,7 +195,7 @@ function emitTypedef(obj: Obj, prefix: string): string {
 
 export function translateCHeader(source: string, importedNames: string[], withExport: boolean = false, headerPath: string = "header.h", includePaths: string[] = [], outDiags: Diagnostic[] = null as unknown as Diagnostic[], emittedNames: HashSet<string> = null as unknown as HashSet<string>, readLog: string[] = null as unknown as string[], target: TargetInfo = null as unknown as TargetInfo): string {
 	const prefix = withExport ? "export " : "";
-	const parsed = parseHeader(source, headerPath, { target: target != null ? target : hostTarget(), includePaths, extraDefines: [], readLog });
+	const parsed = parseHeader(source, headerPath, { target: target != null ? target : hostTarget(), includePaths, macroFlags: [], readLog });
 	if (outDiags != null) {
 		for (const d of parsed.diagnostics) outDiags.push(d);
 	}

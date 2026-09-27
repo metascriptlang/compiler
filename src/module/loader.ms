@@ -811,9 +811,14 @@ test "inlineHeaderImports resolves bare .h specifier module-relative (CWD-indepe
 }
 
 function inlinePlatHeaderFor(os: string, cpu: string, errs: ModuleError[]): string {
+	const header = "#if defined(_WIN32)\nint platWin(void);\n#elif defined(__APPLE__)\nint platApple(void);\n#else\nint platOther(void);\n#endif\n";
+	return inlineHeaderFor(os, cpu, header, "platWin, platApple, platOther", errs);
+}
+
+function inlineHeaderFor(os: string, cpu: string, header: string, names: string, errs: ModuleError[]): string {
 	const entries: MapEntry[] = [];
-	entries.push(makeEntry("/tmp/mstarget/plat.h", "#if defined(_WIN32)\nint platWin(void);\n#elif defined(__APPLE__)\nint platApple(void);\n#else\nint platOther(void);\n#endif\n"));
-	const src = "import { platWin, platApple, platOther } from " + "\"./plat.h\";\n";
+	entries.push(makeEntry("/tmp/mstarget/plat.h", header));
+	const src = "import { " + names + " } from " + "\"./plat.h\";\n";
 	const saved = getParserDefines();
 	const defs = createDefineTable();
 	initDefines(defs, "c", os, cpu, "drc", 0);
@@ -843,6 +848,14 @@ test "inlineHeaderImports takes the __APPLE__ branch for a macos build" {
 	const inlined = inlinePlatHeaderFor("macos", "arm64", []);
 	assert inlined.indexOf("extern function platApple") >= 0;
 	assert inlined.indexOf("extern function platOther") < 0;
+}
+
+test "inlineHeaderImports reads a windows export macro that expands to __declspec" {
+	const header = "#if defined(_WIN32)\n#define LIB_API __declspec(dllimport)\n#else\n#define LIB_API\n#endif\nLIB_API int addOne(int x);\n";
+	const errs: ModuleError[] = [];
+	const inlined = inlineHeaderFor("windows", "amd64", header, "addOne", errs);
+	assert errs.length == 0;
+	assert inlined.indexOf("extern function addOne") >= 0;
 }
 
 test "inlineHeaderImports reports a build target with no C model instead of guessing one" {
