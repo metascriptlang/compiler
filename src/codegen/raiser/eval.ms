@@ -497,6 +497,125 @@ test "engine: shift right on uint32 is logical" {
 	assert r.lastResult.intVal == 1;
 }
 
+test "engine: signed sub-int arithmetic wraps at the type width" {
+	const ctx = evalOrcVM("function multiply(left: int16, right: int16): int16 { return left * right; }"
+		+ " function negate(x: int8): int8 { return -x; } let a: int16 = 32767; a += 1; let b: int8 = 127; b++;"
+		+ " console.log(`${multiply(300, 300)} ${multiply(-300, 300)} ${negate(-128)} ${a} ${b}`);");
+	assert ctx.error == "";
+	assert ctx.output == "24464 -24464 -128 -32768 -128\n";
+}
+
+test "engine: unsigned arithmetic wraps at the type width" {
+	const ctx = evalOrcVM("function mul(left: uint16, right: uint16): uint16 { return left * right; }"
+		+ " function add(left: uint32, right: uint32): uint32 { return left + right; } let u: uint8 = 0; u -= 1;"
+		+ " console.log(`${mul(300, 300)} ${add(4294967295, 1)} ${u}`);");
+	assert ctx.error == "";
+	assert ctx.output == "24464 0 255\n";
+}
+
+test "engine: a field or element update wraps at its type width" {
+	const ctx = evalOrcVM("struct Counter { n: int8; } const c: Counter = { n: 127 }; c.n++; const xs: uint8[] = [255]; xs[0] += 2;"
+		+ " console.log(`${c.n} ${xs[0]}`);");
+	assert ctx.error == "";
+	assert ctx.output == "-128 1\n";
+}
+
+test "engine: compound assignment on a float local uses float arithmetic" {
+	const ctx = evalOrcVM("let f: number = 1.5; f += 1.25; let h: float32 = 2.5; h *= 2.0;"
+		+ " let d: float64 = 9.0; d /= 4.0; d -= 0.25; let m: number = 7.5; m %= 2.0;"
+		+ " console.log(`${f} ${h} ${d} ${m}`);");
+	assert ctx.error == "";
+	assert ctx.output == "2.75 5 2 1.5\n";
+}
+
+test "engine: compound assignment on a float field, element or global uses float arithmetic" {
+	const ctx = evalOrcVM("struct P { x: number; } let g: number = 10.5;"
+		+ " function run(): void { let p: P = { x: 1.5 }; p.x += 0.25; const xs: number[] = [0.5]; xs[0] *= 3.0;"
+		+ " g += 0.5; g -= 0.25; console.log(`${p.x} ${xs[0]} ${g}`); } run();");
+	assert ctx.error == "";
+	assert ctx.output == "1.75 1.5 10.75\n";
+}
+
+test "engine: increment and decrement on a float step by one" {
+	const ctx = evalOrcVM("struct P { x: number; }"
+		+ " function run(): void { let p: P = { x: 1.75 }; const xs: number[] = [1.5]; let k: number = 0.5;"
+		+ " const before = k++; ++k; k--; p.x++; xs[0]--; console.log(`${before} ${k} ${p.x} ${xs[0]}`); } run();");
+	assert ctx.error == "";
+	assert ctx.output == "0.5 1.5 2.75 0.5\n";
+}
+
+test "engine: a number-typed length shrinks an array before a push" {
+	const ctx = evalOrcVM("const a: number[] = [1, 2, 3, 4, 5]; const n: number = a.length; a.setLength(n - 1);"
+		+ " const end: number = 3; const start: number = 1; a.setLength(a.length - (end - start)); a.push(9);"
+		+ " const s: string[] = ['a', 'b', 'c', 'd']; const m: number = s.length; s.setLength(m - 1); s.push('z');"
+		+ " console.log(`${a.length} ${a[0]} ${a[1]} ${a[2]} ${s.length} ${s[2]} ${s[3]}`);");
+	assert ctx.error == "";
+	assert ctx.output == "3 1 2 9 4 c z\n";
+}
+
+test "engine: a fractional number length truncates like the C backend" {
+	const ctx = evalOrcVM("const a: number[] = [1, 2, 3, 4]; const n: number = 2.5; a.setLength(n); console.log(`${a.length}`);");
+	assert ctx.error == "";
+	assert ctx.output == "2\n";
+}
+
+test "engine: a not-null comparison yields a boolean" {
+	const ctx = evalOrcVM("class Box { n: int32 = 1; } const item: Box | null = new Box(); const none: Box | null = null;"
+		+ " const stored: boolean = item !== null; console.log(`${item !== null} ${none != null} ${stored}`);");
+	assert ctx.error == "";
+	assert ctx.output == "true false true\n";
+}
+
+test "engine: a predicate returning a not-null comparison yields a boolean" {
+	const ctx = evalOrcVM("class Box { n: int32 = 1; } function isBox(value: unknown): value is Box { return value !== null; }"
+		+ " function present(value: unknown): boolean { return value !== null; } const v = new Box() as unknown;"
+		+ " console.log(`${isBox(v)} ${present(null)}`);");
+	assert ctx.error == "";
+	assert ctx.output == "true false\n";
+}
+
+test "engine: typeof over a nullable union names the variant the value holds" {
+	const ctx = evalOrcVM("function kindOf(value: float32 | string | null): string { return typeof value; }"
+		+ " function swapped(value: string | float32 | null): string { return typeof value; }"
+		+ " console.log(`${kindOf('x')} ${kindOf(2.5)} ${kindOf(null)} ${swapped('x')} ${swapped(2.5)} ${swapped(null)}`);");
+	assert ctx.error == "";
+	assert ctx.output == "string number object string number object\n";
+}
+
+test "engine: a typeof guard selects the branch of the variant held" {
+	const ctx = evalOrcVM("function show(value: int32 | string | boolean): string {"
+		+ " if (typeof value === 'string') return 'text'; if (typeof value === 'boolean') return 'flag'; return 'count'; }"
+		+ " console.log(`${show('50')} ${show(3)} ${show(true)}`);");
+	assert ctx.error == "";
+	assert ctx.output == "text count flag\n";
+}
+
+test "engine: typeof of a single-type operand is its static tag" {
+	const ctx = evalOrcVM("const n: int32 = 4; const s = 'a' + 'b'; const b = n > 2;"
+		+ " console.log(`${typeof n} ${typeof s} ${typeof b}`);");
+	assert ctx.error == "";
+	assert ctx.output == "number string boolean\n";
+}
+
+test "engine: structs with equal field values compare equal" {
+	const ctx = evalOrcVM("struct Record { n: int32; text: string; ratio: float64; }"
+		+ " const a: Record = { n: 1, text: 'm' + 'n', ratio: 0.5 }; const b: Record = { n: 1, text: 'm' + 'n', ratio: 0.5 };"
+		+ " const c: Record = { n: 1, text: 'm' + 'x', ratio: 0.5 }; const d: Record = { n: 1, text: 'm' + 'n', ratio: 0.25 };"
+		+ " console.log(`${a == b} ${a == c} ${a == d} ${a != b} ${a != c}`);");
+	assert ctx.error == "";
+	assert ctx.output == "true false false false true\n";
+}
+
+test "engine: nested structs and tuples compare by value" {
+	const ctx = evalOrcVM("struct Inner { a: int32; tag: string; } struct Outer { inner: Inner; k: int32; }"
+		+ " const o1: Outer = { inner: { a: 1, tag: 't' }, k: 2 }; const o2: Outer = { inner: { a: 1, tag: 't' }, k: 2 };"
+		+ " const o3: Outer = { inner: { a: 1, tag: 'u' }, k: 2 };"
+		+ " const l: [int32, string] = [1, 'a' + 'b']; const r: [int32, string] = [1, 'a' + 'b']; const x: [int32, string] = [1, 'b'];"
+		+ " console.log(`${o1 == o2} ${o1 == o3} ${l == r} ${l == x}`);");
+	assert ctx.error == "";
+	assert ctx.output == "true false true false\n";
+}
+
 test "orc: correct result + no error on object program" {
 	const vm = evalOrcVM("function mk(): { x: number } { return { x: 7 }; } const o = mk(); return o.x;");
 	assert vm.error == "";
@@ -677,7 +796,7 @@ test "continue inside while re-checks condition" {
 // --- Nil identity check — kind-aware equality (regression) ---
 // Pre-fix: `arr !== null` compiled to BneI64 which only checks intVal;
 // Array(handle=0) and Nil both have intVal=0, so the comparison returned
-// false-equal. IsNil opcode now performs kind-aware identity (mirrors Nim
+// false-equal. IsKind opcode now performs kind-aware identity (mirrors Nim
 // opcIsNil + HashLink OJNotNull).
 test "first-allocated array compares correctly against null" {
 	const ctx = evalFull("const arr = [1, 2]; return arr !== null ? 1 : 0;");

@@ -27,6 +27,8 @@ import { lowerCtorInit } from "./lowering/ctorLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerBitSet } from "./lowering/bitSetLower";
+import { lowerAggregateEquality } from "./lowering/operatorLower";
+import { liftEqualityOps } from "./lowering/destructorLifting";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -55,6 +57,8 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerLambda(result, ctx);
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerBitSet(result, ctx);
+	result = lowerAggregateEquality(result, ctx);
 	result = unwrapMaybe(result, ctx);
+	result = liftEqualityOps(result, ctx);
 	return result;
 }

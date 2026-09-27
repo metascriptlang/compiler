@@ -1,7 +1,7 @@
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
-import { raiserInt, raiserString } from "../../raiser/value";
+import { RaiserValueKind, raiserInt, raiserString } from "../../raiser/value";
 import { RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen } from "./context";
 
 function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
@@ -61,13 +61,13 @@ export function emitValueAssign(s: RaiserCompState, destination: int32, source: 
 	const result = allocReg(s);
 	const toEnd: int32[] = [];
 	const sourceNil = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.IsNil, sourceNil, source, 0));
+	emitInst(s, raiserABC(RaiserOpcode.IsKind, sourceNil, source, RaiserValueKind.Nil as number));
 	const sourceHeld = emitBranchIfFalsy(s, sourceNil);
 	emitInst(s, raiserABC(RaiserOpcode.Move, result, source, 0));
 	toEnd.push(emitJumpPlaceholder(s));
 	patchJumpTo(s, sourceHeld, codeLen(s));
 	const destinationNil = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.IsNil, destinationNil, destination, 0));
+	emitInst(s, raiserABC(RaiserOpcode.IsKind, destinationNil, destination, RaiserValueKind.Nil as number));
 	const destinationHeld = emitBranchIfFalsy(s, destinationNil);
 	emitInst(s, raiserABC(RaiserOpcode.CopyValue, result, source, index));
 	toEnd.push(emitJumpPlaceholder(s));

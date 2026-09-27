@@ -204,3 +204,19 @@ const LOCAL_SLOT: string = @comptime {
 test "comptime: a declared local owns its register, never aliases its initializer" {
 	assert LOCAL_SLOT == "keep/changed|7/9|true/false|base/base!";
 }
+
+const RESIZED: string = @comptime {
+	const a: int32[] = [1, 2, 3, 4, 5];
+	const last = a.pop();
+	a.splice(1, 2);
+	a.push(9);
+	const s: string[] = ["a", "b", "c", "d"];
+	const tail = s.pop();
+	s.splice(0, 1);
+	s.push("z");
+	return `${last} ${a.length} ${a[0]} ${a[1]} ${a[2]} ${tail} ${s.length} ${s[0]} ${s[1]} ${s[2]}`;
+};
+
+test "comptime: pop, splice and a later push resize an int32 or string array" {
+	assert RESIZED == "5 3 1 4 9 d 3 b c z";
+}
