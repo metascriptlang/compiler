@@ -1471,6 +1471,12 @@ test "preprocess reports a flag that is neither -D nor -U" {
 	assert r.diagnostics[0].message.indexOf("-Iinclude") >= 0;
 }
 
+test "preprocess windows reads __declspec and calling conventions as attributes" {
+	const src = "__declspec(dllimport) int __stdcall f(int);";
+	assert spelled(preprocessWith(src, "windows", [])) == "__attribute__ ( ( dllimport ) ) int __attribute__ ( ( __stdcall__ ) ) f ( int ) ;";
+	assert spelled(preprocessWith(src, "linux", [])) == "__declspec ( dllimport ) int __stdcall f ( int ) ;";
+}
+
 test "preprocess #error message ends at its line" {
 	const r = preprocessWith("#error stop here\nint after;", "linux", []);
 	assert r.diagnostics.length == 1;

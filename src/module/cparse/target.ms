@@ -120,6 +120,11 @@ export function predefinedMacros(t: TargetInfo): MacroDef[] {
 		"windows" => {
 			result.push(m("_WIN32", "1")); result.push(m("WIN32", "1")); result.push(m("__WIN32__", "1")); result.push(m("__MINGW32__", "1"));
 			if (t.pointerSize == 8) { result.push(m("_WIN64", "1")); result.push(m("WIN64", "1")); result.push(m("__WIN64__", "1")); result.push(m("__MINGW64__", "1")); }
+			result.push(m("__declspec(a)", "__attribute__((a))"));
+			for (const cc of ["cdecl", "stdcall", "fastcall", "thiscall", "pascal"]) {
+				result.push(m(`_${cc}`, `__attribute__((__${cc}__))`));
+				result.push(m(`__${cc}`, `__attribute__((__${cc}__))`));
+			}
 		},
 		"emcc" => { result.push(m("__EMSCRIPTEN__", "1")); },
 		_ => {},
@@ -151,6 +156,9 @@ test "windows x64 is LLP64 on the MinGW ABI" {
 	assert !hasMacro(t, "_MSC_VER");
 	assert !hasMacro(t, "__APPLE__");
 	assert !hasMacro(t, "__LP64__");
+	assert hasMacro(t, "__declspec(a)");
+	assert hasMacro(t, "__stdcall");
+	assert !hasMacro(targetFor("linux", "x86_64"), "__declspec(a)");
 }
 
 test "linux x86_64 is LP64 and takes no apple or windows branch" {
