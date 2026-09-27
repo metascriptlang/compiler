@@ -111,7 +111,7 @@ function f(value: uint32): uint64 {
 	};
 	return 1;
 }`);
-	assert error.indexOf("Return type mismatch in 'f': expected uint64, got string", 0) >= 0, error;
+	assert error.indexOf("Type 'string' is not assignable to type 'uint64'", 0) >= 0, error;
 }
 
 test "bug241: return null in a block arm of a match value is checked against the match" {
