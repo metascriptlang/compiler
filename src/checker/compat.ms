@@ -1209,6 +1209,42 @@ export function scoreCandidate(paramTypes: Type[], argTypes: Type[]): int32 {
 	return score;
 }
 
+export interface TypeParamFold {
+	names: string[];
+	types: Type[];
+	chosen: int32[];
+	misfits: int32[];
+}
+
+export function foldTypeParamCandidates(candNames: string[], candTypes: Type[], skip: boolean[], fixedNames: string[], fixedTypes: Type[]): TypeParamFold {
+	const out: TypeParamFold = { names: [], types: [], chosen: [], misfits: [] };
+	for (let ci = 0; ci < candNames.length; ci += 1) {
+		const name = candNames[ci];
+		let seen = false;
+		for (const n of out.names) { if (n == name) { seen = true; break; } }
+		if (seen) continue;
+		let fixedIdx = -1;
+		for (let fi = 0; fi < fixedNames.length; fi += 1) { if (fixedNames[fi] == name) { fixedIdx = fi; break; } }
+		let chosen: int32 = -1;
+		let bound = fixedIdx >= 0 ? fixedTypes[fixedIdx] : candTypes[ci];
+		if (fixedIdx < 0) {
+			chosen = ci;
+			for (let cj = ci + 1; cj < candNames.length; cj += 1) {
+				if (candNames[cj] != name || skip[cj]) continue;
+				if (isAssignable(bound, candTypes[cj]) && !isAssignable(candTypes[cj], bound)) { bound = candTypes[cj]; chosen = cj; }
+			}
+		}
+		out.names.push(name);
+		out.types.push(bound);
+		out.chosen.push(chosen);
+		for (let cj = ci; cj < candNames.length; cj += 1) {
+			if (candNames[cj] != name || cj == chosen || skip[cj]) continue;
+			if (!isAssignable(candTypes[cj], bound)) out.misfits.push(cj);
+		}
+	}
+	return out;
+}
+
 // ===== Standard-Aligned Overload Resolution (Priority-Based) =====
 
 // Candidate scoring with per-category counters (Standard reference pattern).

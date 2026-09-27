@@ -2,10 +2,10 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, UnaryExprData, createNode, createNodeAt } from "../ast/node";
+import { BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { convertsImplicitly, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
-import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
+import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
@@ -497,18 +497,6 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return isAssignable(a, b) || isAssignable(b, a);
 	if (binaryPointerish(a.kind) && binaryPointerish(b.kind)) return true;
 	return false;
-}
-
-export function widensToBase(ctx: CheckerContext, from: Type | null, to: Type | null): boolean {
-	if (from == null || to == null) return false;
-	const src = unwrapRef(from);
-	const target = unwrapRef(to);
-	if (src == null || target == null) return false;
-	const srcSym = src.sym;
-	const targetSym = target.sym;
-	if (srcSym == null || srcSym.symbolKind != SymbolKind.Class) return false;
-	if (targetSym == null || targetSym.symbolKind != SymbolKind.Class) return false;
-	return classDescendsFrom(srcSym, targetSym);
 }
 
 function compoundBase(op: string): string {

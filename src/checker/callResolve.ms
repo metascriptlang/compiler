@@ -9,9 +9,9 @@ import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { writeRefusal } from "./assignable";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
-import { CandidateScore, convertsImplicitly, refusesIntConv, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
+import { CandidateScore, convertsImplicitly, refusesIntConv, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
-import { checkSwitchCase, fitJoinedBranch, fitNode, instantiateGenericFnValue, widensToBase, isFittingIntLiteral, reportIntConv, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
+import { checkSwitchCase, fitJoinedBranch, fitNode, instantiateGenericFnValue, isFittingIntLiteral, reportIntConv, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
@@ -2022,6 +2022,34 @@ function isGenericInstanceMethod(sym: Symbol): boolean {
 	return !md.methodIsStatic && isGenericFn(md.methodFlags);
 }
 
+function collectArgCandidates(bound: UnifyBindings, raw: UnifyBindings, argIdx: int32, arg: Node, candNames: string[], candTypes: Type[], candFrom: int32[], candSkip: boolean[]): void {
+	for (let bi = 0; bi < raw.names.length; bi += 1) {
+		const t = raw.types[bi];
+		if (hasGenericParams(t) || findBindingIndex(bound, raw.names[bi]) != -1) continue;
+		candNames.push(raw.names[bi]);
+		candTypes.push(t);
+		candFrom.push(argIdx);
+		candSkip.push(bindingConflictSkipArg(arg) || isUnresolvedType(t));
+	}
+}
+
+function reportTypeParamMisfits(ctx: CheckerContext, fold: TypeParamFold, candNames: string[], candTypes: Type[], candFrom: int32[], cd: CallExprData, conflicted: int32[]): void {
+	for (const m of fold.misfits) {
+		const argIdx = candFrom[m];
+		let reported = false;
+		for (const c of conflicted) { if (c == argIdx) { reported = true; break; } }
+		if (reported) continue;
+		let k = 0;
+		for (let ni = 0; ni < fold.names.length; ni += 1) { if (fold.names[ni] == candNames[m]) { k = ni; break; } }
+		const arg = cd.arguments[argIdx];
+		addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(argIdx)
+			+ ": got " + typeDisplayName(candTypes[m]) + ", expected " + typeDisplayName(fold.types[k])
+			+ " — '" + candNames[m] + "' was bound by argument " + String(candFrom[fold.chosen[k]]),
+			arg.location.line, arg.location.column);
+		conflicted.push(argIdx);
+	}
+}
+
 function bindingConflictSkipArg(arg: Node): boolean {
 	if (arg == null) return true;
 	if (arg.kind == NodeKind.ArrowFunction || arg.kind == NodeKind.FunctionExpr) return true;
@@ -2050,60 +2078,6 @@ function literalParamsAwaitFormal(arg: Node): boolean {
 		if (pt == "") return true;
 	}
 	return false;
-}
-
-function strictlyWidens(from: Type, to: Type): boolean {
-	return isAssignable(from, to) && !isAssignable(to, from);
-}
-
-function chooseInferredBindings(ctx: CheckerContext, eb: UnifyBindings, ebFrom: int32[], candNames: string[], candTypes: Type[], candFrom: int32[], cd: CallExprData, conflicted: int32[]): void {
-	for (let ci = 0; ci < candNames.length; ci += 1) {
-		const name = candNames[ci];
-		if (findBindingIndex(eb, name) != -1) continue;
-		let chosen = candTypes[ci];
-		let chosenFrom = candFrom[ci];
-		for (let cj = ci + 1; cj < candNames.length; cj += 1) {
-			if (candNames[cj] != name || bindingConflictSkipArg(cd.arguments[candFrom[cj]])) continue;
-			if (strictlyWidens(chosen, candTypes[cj])) { chosen = candTypes[cj]; chosenFrom = candFrom[cj]; }
-		}
-		eb.names.push(name);
-		eb.types.push(chosen);
-		ebFrom.push(chosenFrom);
-		for (let cj = ci; cj < candNames.length; cj += 1) {
-			if (candNames[cj] != name || candFrom[cj] == chosenFrom) continue;
-			const arg = cd.arguments[candFrom[cj]];
-			if (bindingConflictSkipArg(arg) || isAssignable(candTypes[cj], chosen)) continue;
-			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(candFrom[cj])
-				+ ": got " + typeDisplayName(candTypes[cj]) + ", expected " + typeDisplayName(chosen)
-				+ " — '" + name + "' was bound by argument " + String(chosenFrom),
-				arg.location.line, arg.location.column);
-			conflicted.push(candFrom[cj]);
-		}
-	}
-}
-
-function fillArgBindings(ctx: CheckerContext, raw: UnifyBindings, into: UnifyBindings, cd: CallExprData, argIdx: int32): boolean {
-	let boundTwice = false;
-	for (let bi = 0; bi < raw.names.length; bi += 1) {
-		const candidate = raw.types[bi];
-		if (hasGenericParams(candidate)) continue;
-		const prevIdx = findBindingIndex(into, raw.names[bi]);
-		if (prevIdx == -1) {
-			into.names.push(raw.names[bi]);
-			into.types.push(candidate);
-			continue;
-		}
-		const prev = into.types[prevIdx];
-		if (isUnresolvedType(prev) || isUnresolvedType(candidate) || isAssignable(candidate, prev)) continue;
-		if (widensToBase(ctx, prev, candidate)) { into.types[prevIdx] = candidate; continue; }
-		if (!boundTwice && !bindingConflictSkipArg(cd.arguments[argIdx])) {
-			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(argIdx)
-				+ ": '" + raw.names[bi] + "' is bound to both " + typeDisplayName(prev) + " and " + typeDisplayName(candidate),
-				cd.arguments[argIdx].location.line, cd.arguments[argIdx].location.column);
-			boundTwice = true;
-		}
-	}
-	return boundTwice;
 }
 
 function inDeclaredOrder(eb: UnifyBindings, receiverBindings: UnifyBindings | null, genericNames: string[]): UnifyBindings {
@@ -2142,6 +2116,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	const candNames: string[] = [];
 	const candTypes: Type[] = [];
 	const candFrom: int32[] = [];
+	const candSkip: boolean[] = [];
 	for (let i = 0; i < limit; i += 1) {
 		if (argTypes[i] != null) {
 			// Per-arg filter: a binding whose bound type still CONTAINS generic
@@ -2152,16 +2127,16 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			// concrete object literal.
 			const ab = createUnifyBindings();
 			unifyType(calleeType.typeChildren[i], argTypes[i], ab);
-			const fb = createUnifyBindings();
-			if (fillArgBindings(ctx, ab, fb, cd, i)) conflicted.push(i);
-			for (let bi = 0; bi < fb.names.length; bi += 1) {
-				candNames.push(fb.names[bi]);
-				candTypes.push(fb.types[bi]);
-				candFrom.push(i);
-			}
+			collectArgCandidates(eb, ab, i, cd.arguments[i], candNames, candTypes, candFrom, candSkip);
 		}
 	}
-	chooseInferredBindings(ctx, eb, ebFrom, candNames, candTypes, candFrom, cd, conflicted);
+	const fold = foldTypeParamCandidates(candNames, candTypes, candSkip, [], []);
+	for (let k = 0; k < fold.names.length; k += 1) {
+		eb.names.push(fold.names[k]);
+		eb.types.push(fold.types[k]);
+		ebFrom.push(candFrom[fold.chosen[k]]);
+	}
+	reportTypeParamMisfits(ctx, fold, candNames, candTypes, candFrom, cd, conflicted);
 	// Pass 2: contextual return-type binding (Nim parity — `inheritBindings` in
 	// semcall.nim:777-859). When args + explicit <T> together don't bind all
 	// generic params, walk return type vs expected type to derive bindings from
@@ -2224,10 +2199,15 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			unifyType(argSym.symbolType.typeChildren[gi], substFormal.typeChildren[gi], gbRaw);
 		}
 		unifyType(argSym.symbolType.typeReturn, substFormal.typeReturn, gbRaw);
-		const gb = createUnifyBindings();
-		if (fillArgBindings(ctx, gbRaw, gb, cd, ai)) { conflicted.push(ai); continue; }
-		if (gb.names.length == 0) continue;
-		const argInst = callInstantiateGeneric(argSym, gb.names, gb.types, ctx, argN.location);
+		const gNames: string[] = [];
+		const gTypes: Type[] = [];
+		const gFrom: int32[] = [];
+		const gSkip: boolean[] = [];
+		collectArgCandidates(createUnifyBindings(), gbRaw, ai, argN, gNames, gTypes, gFrom, gSkip);
+		const gFold = foldTypeParamCandidates(gNames, gTypes, gSkip, [], []);
+		if (gFold.misfits.length > 0) { reportTypeParamMisfits(ctx, gFold, gNames, gTypes, gFrom, cd, conflicted); continue; }
+		if (gFold.names.length == 0) continue;
+		const argInst = callInstantiateGeneric(argSym, gFold.names, gFold.types, ctx, argN.location);
 		if (argInst == null) continue;
 		argN.resolvedSym = argInst;
 		argN.nodeType = argInst.symbolType;

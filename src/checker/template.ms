@@ -21,7 +21,7 @@ import {
 } from "../ast/node";
 import { CheckerContext, addError, extractGenericNames } from "./context";
 import { inferredType, errorType, voidType, typeDisplayName, hasGenericParams, isUnknownType, isUnresolvedType } from "./types";
-import { isAssignable, unmetConstraint } from "./compat";
+import { isAssignable, unmetConstraint, foldTypeParamCandidates } from "./compat";
 import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity } from "./resolvePass";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr } from "./checkerCallbacks";
@@ -222,31 +222,22 @@ function templateArgsFit(ctx: CheckerContext, sym: Symbol, fd: FunctionDeclData,
 			return false;
 		}
 	}
-	for (let ci = 0; ci < candNames.length; ci += 1) {
-		const dn = candNames[ci];
-		let bidx = nameIndex(boundNames, dn);
-		if (bidx < 0) {
-			boundNames.push(dn);
-			boundTypes.push(candTypes[ci]);
-			boundFrom.push(candFrom[ci]);
-			bidx = boundNames.length - 1;
-			for (let cj = ci + 1; cj < candNames.length; cj += 1) {
-				if (candNames[cj] != dn) continue;
-				if (isAssignable(boundTypes[bidx], candTypes[cj]) && !isAssignable(candTypes[cj], boundTypes[bidx])) {
-					boundTypes[bidx] = candTypes[cj];
-					boundFrom[bidx] = candFrom[cj];
-				}
-			}
-		} else if (boundFrom[bidx] >= 0) {
-			continue;
-		}
-		for (let cj = ci; cj < candNames.length; cj += 1) {
-			if (candNames[cj] != dn || candFrom[cj] == boundFrom[bidx] || isAssignable(candTypes[cj], boundTypes[bidx])) continue;
-			const origin = boundFrom[bidx] >= 0 ? ` — '${dn}' was bound by argument ${boundFrom[bidx]}` : "";
-			addError(ctx, `Argument type mismatch in '${sym.name}' arg ${candFrom[cj]}: got ${typeDisplayName(candTypes[cj])}, expected ${typeDisplayName(boundTypes[bidx])}${origin}`,
-				args[candFrom[cj]].location.line, args[candFrom[cj]].location.column);
-			return false;
-		}
+	const skip: boolean[] = [];
+	for (let ci = 0; ci < candNames.length; ci += 1) skip.push(false);
+	const fold = foldTypeParamCandidates(candNames, candTypes, skip, explicit.names, explicit.types);
+	for (let k = 0; k < fold.names.length; k += 1) {
+		if (nameIndex(boundNames, fold.names[k]) >= 0) continue;
+		boundNames.push(fold.names[k]);
+		boundTypes.push(fold.types[k]);
+		boundFrom.push(fold.chosen[k] >= 0 ? candFrom[fold.chosen[k]] : -1);
+	}
+	if (fold.misfits.length > 0) {
+		const m = fold.misfits[0];
+		const bidx = nameIndex(boundNames, candNames[m]);
+		const origin = boundFrom[bidx] >= 0 ? ` — '${candNames[m]}' was bound by argument ${boundFrom[bidx]}` : "";
+		addError(ctx, `Argument type mismatch in '${sym.name}' arg ${candFrom[m]}: got ${typeDisplayName(candTypes[m])}, expected ${typeDisplayName(boundTypes[bidx])}${origin}`,
+			args[candFrom[m]].location.line, args[candFrom[m]].location.column);
+		return false;
 	}
 	for (let bi = 0; bi < boundNames.length; bi += 1) {
 		const unmet = unmetConstraint(symType, boundNames[bi], boundTypes[bi], boundNames, boundTypes);

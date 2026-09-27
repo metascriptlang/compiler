@@ -813,11 +813,6 @@ function dispDepthBelow(classSym: Symbol, root: Symbol): int32 {
 	return -1;
 }
 
-export function classDescendsFrom(classSym: Symbol, baseSym: Symbol): boolean {
-	if (classSym == baseSym) return false;
-	return dispDepthBelow(classSym, baseSym) > 0;
-}
-
 export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): DispMethodEntry | null {
 	let cur = classSym.symbolType != null ? classBaseStruct(classSym.symbolType) : null;
 	let d = 0;
