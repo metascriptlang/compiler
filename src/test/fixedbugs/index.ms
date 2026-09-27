@@ -354,3 +354,5 @@ import "./bug554ErrorReportedIntoEarlierModule";
 import "./bug556EnumDiscriminantOfMixedUnion";
 import "./bug222OptionalRefTruthiness";
 import "./bug568ConstIndexOutOfSizedArray";
+import "./bug596ConstCastOutOfRange";
+import "./bug597LocalConstIsConstant";
