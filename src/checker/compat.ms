@@ -236,7 +236,8 @@ function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
 	return false;
 }
 
-const RELATION_MAX_DEPTH = 64;
+// An array layer costs two frames; 256 keeps the 50 nested instantiations the checker admits comparable.
+const RELATION_MAX_DEPTH = 256;
 
 function pairOnStack(sources: Type[], targets: Type[], source: Type | null, target: Type | null): boolean {
 	for (let i = 0; i < sources.length; i += 1) {
