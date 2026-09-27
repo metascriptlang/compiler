@@ -74,6 +74,38 @@ test "nullish coalescing without a slot joins its payload and its fallback" {
 	assert nullishJoinKind(null) == "number";
 }
 
+class NullishHolder { v: int32 | null = 4; }
+
+let nullishCalls = 0;
+
+function nullishCounted(): uint8 | null {
+	nullishCalls += 1;
+	return 7;
+}
+
+function nullishHolder(): NullishHolder {
+	nullishCalls += 1;
+	return new NullishHolder();
+}
+
+test "nullish coalescing evaluates its left operand once" {
+	nullishCalls = 0;
+	const x: uint32 = nullishCounted() ?? 1;
+	assert x == 7;
+	assert nullishCalls == 1;
+	const slots: (int32 | null)[] = [null, 5, null];
+	let i = 0;
+	const first = slots[i++] ?? 9;
+	const second = slots[i++] ?? 9;
+	assert first == 9;
+	assert second == 5;
+	assert i == 2;
+	nullishCalls = 0;
+	const v = nullishHolder().v ?? 0;
+	assert v == 4;
+	assert nullishCalls == 1;
+}
+
 // =========================================================
 // 3. Exponentiation operator
 // =========================================================
