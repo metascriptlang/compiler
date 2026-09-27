@@ -12,14 +12,14 @@ function returnValue(source: string): Node | null {
 	return null;
 }
 
-test "constant folding leaves overflowing integer addition for runtime semantics" {
-	const value = returnValue("function probe(): int32 { return 2147483647 + 1; }");
+test "constant folding leaves overflowing typed integer addition for runtime semantics" {
+	const value = returnValue("const HIGH: int32 = 2147483647; function probe(): int32 { return HIGH + 1; }");
 	assert value != null && value.kind == NodeKind.BinaryExpr;
 	assert (value.data as BinaryExprData).operator == "+";
 }
 
 test "the minimum integer remainder by negative one retains its checked runtime operation" {
-	const value = returnValue("function probe(): int32 { return (-2147483647 - 1) % -1; }");
+	const value = returnValue("const LOW: int32 = -2147483648; function probe(): int32 { return LOW % -1; }");
 	assert value != null && value.kind == NodeKind.CallExpr;
 	const call = value.data as CallExprData;
 	assert call.callee.kind == NodeKind.Identifier;

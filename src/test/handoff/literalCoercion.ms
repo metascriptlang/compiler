@@ -178,6 +178,34 @@ test "int8 out of range literal is error" {
 	assert hasError(src, "cannot convert");
 }
 
+test "an integer constant expression is judged by its exact value at every slot" {
+	const slots = [
+		{ fits: "const v: int64 = 100000 * 100000;", refused: "const v: int32 = 100000 * 100000;" },
+		{ fits: "function f(): int64 { return 100000 * 100000; }", refused: "function f(): int32 { return 100000 * 100000; }" },
+		{ fits: "function take(n: int64): int64 { return n; } const v = take(100000 * 100000);", refused: "function take(n: int32): int32 { return n; } const v = take(100000 * 100000);" },
+		{ fits: "interface H { v: int64; } const h: H = { v: 100000 * 100000 };", refused: "interface H { v: int32; } const h: H = { v: 100000 * 100000 };" },
+		{ fits: "const xs: int64[] = [100000 * 100000];", refused: "const xs: int32[] = [100000 * 100000];" },
+		{ fits: "const K = 100000; const v: int64 = K * K;", refused: "const K = 100000; const v: int32 = K * K;" },
+	];
+	for (const slot of slots) {
+		assert strictErrorCount(slot.fits) == 0, slot.fits;
+		assert strictErrorCount(slot.refused) == 1, slot.refused;
+		assert hasError(slot.refused, "cannot convert 10000000000 to int32"), slot.refused;
+	}
+}
+
+test "an untyped constant is folded exactly before its slot judges it" {
+	assert strictErrorCount("function probe(): int32 { return 2147483647 + 1; }") == 1;
+	assert strictErrorCount("function probe(): int32 { return (-2147483647 - 1) % -1; }") == 0;
+	assert strictErrorCount("function probe(): uint8 { return 16 * 16 - 1; }") == 0;
+	assert strictErrorCount("function probe(): uint8 { return 16 * 16; }") == 1;
+}
+
+test "a bitwise integer constant keeps its int32 value, so it fits an int32 slot" {
+	assert strictErrorCount("const v: int32 = 1 << 31;") == 0;
+	assert strictErrorCount("const v: int32 = ~0 & 255;") == 0;
+}
+
 test "negative literal out of range for uint8 is error" {
 	const src = "const x: uint8 = -1;";
 	// -1 is UnaryExpr so won't trigger literal check directly
