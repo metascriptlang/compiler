@@ -93,6 +93,35 @@ async function b462Values(): Promise<string> {
 	return `${p.x} ${p.y} ${names.join(",")}`;
 }
 
+class B462Counter {
+	v: int32 = 1;
+
+	async bump(): Promise<int32> {
+		this.v = 50;
+		return 3;
+	}
+
+	async sum(): Promise<int32> {
+		return this.v + await this.bump();
+	}
+}
+
+async function b462Computed(): Promise<string> {
+	b462X = 1;
+	const sum = b462X + 1 + await b462Clobber();
+	b462X = 1;
+	b462I = 0;
+	b462Arr[0] = 10;
+	b462Arr[1] = 20;
+	b462Arr[b462I + 1] = await b462Clobber();
+	b462X = 1;
+	const pick = (b462X > 0 ? b462X : 0) + await b462Clobber();
+	b462X = 1;
+	const neg = -b462X + await b462Clobber();
+	const own = await new B462Counter().sum();
+	return `${sum} ${b462Arr[1]} ${pick} ${neg} ${own}`;
+}
+
 test "bug462: a read left of an await is read before it" {
 	assert await b462Reads() == "6 6 15 1005 s5 105";
 }
@@ -103,4 +132,8 @@ test "bug462: a store whose value awaits reads and names its target before it" {
 
 test "bug462: a value struct and an array stay in place" {
 	assert await b462Values() == "5 11 a,5";
+}
+
+test "bug462: a computed operand, an index and a receiver's field left of an await are read before it" {
+	assert await b462Computed() == "7 5 6 4 4";
 }
