@@ -520,6 +520,30 @@ test "engine: a field or element update wraps at its type width" {
 	assert ctx.output == "-128 1\n";
 }
 
+test "engine: compound assignment on a float local uses float arithmetic" {
+	const ctx = evalOrcVM("let f: number = 1.5; f += 1.25; let h: float32 = 2.5; h *= 2.0;"
+		+ " let d: float64 = 9.0; d /= 4.0; d -= 0.25; let m: number = 7.5; m %= 2.0;"
+		+ " console.log(`${f} ${h} ${d} ${m}`);");
+	assert ctx.error == "";
+	assert ctx.output == "2.75 5 2 1.5\n";
+}
+
+test "engine: compound assignment on a float field, element or global uses float arithmetic" {
+	const ctx = evalOrcVM("struct P { x: number; } let g: number = 10.5;"
+		+ " function run(): void { let p: P = { x: 1.5 }; p.x += 0.25; const xs: number[] = [0.5]; xs[0] *= 3.0;"
+		+ " g += 0.5; g -= 0.25; console.log(`${p.x} ${xs[0]} ${g}`); } run();");
+	assert ctx.error == "";
+	assert ctx.output == "1.75 1.5 10.75\n";
+}
+
+test "engine: increment and decrement on a float step by one" {
+	const ctx = evalOrcVM("struct P { x: number; }"
+		+ " function run(): void { let p: P = { x: 1.75 }; const xs: number[] = [1.5]; let k: number = 0.5;"
+		+ " const before = k++; ++k; k--; p.x++; xs[0]--; console.log(`${before} ${k} ${p.x} ${xs[0]}`); } run();");
+	assert ctx.error == "";
+	assert ctx.output == "0.5 1.5 2.75 0.5\n";
+}
+
 test "engine: a not-null comparison yields a boolean" {
 	const ctx = evalOrcVM("class Box { n: int32 = 1; } const item: Box | null = new Box(); const none: Box | null = null;"
 		+ " const stored: boolean = item !== null; console.log(`${item !== null} ${none != null} ${stored}`);");
