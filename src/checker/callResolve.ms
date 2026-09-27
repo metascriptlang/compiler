@@ -1795,9 +1795,22 @@ function fitArgsToBoundFormals(ctx: CheckerContext, node: Node, fnType: Type, bi
 	}
 }
 
+function argumentsMatchFormals(fnType: Type, argTypes: Type[], bindings: UnifyBindings): boolean {
+	const lim = argTypes.length < fnType.typeChildren.length ? argTypes.length : fnType.typeChildren.length;
+	for (let ai = 0; ai < lim; ai += 1) {
+		const at = argTypes[ai];
+		if (at == null || isUnresolvedType(at) || isUnknownType(at) || at.kind == TypeKind.Error || at.kind == TypeKind.Null) continue;
+		const formal = fnType.typeChildren[ai];
+		if (!hasGenericParams(formal)) continue;
+		if (hasGenericParams(applySubstitutions(formal, bindings)) && !isAssignable(at, formal)) return false;
+	}
+	return true;
+}
+
 function bindFromUnfitDestination(fnType: Type, bindings: UnifyBindings, fixed: string[], argTypes: Type[], expectedType: Type | null): boolean {
 	const ret = fnType.typeReturn;
 	if (expectedType == null || isUnresolvedType(expectedType) || ret == null) return false;
+	if (!argumentsMatchFormals(fnType, argTypes, bindings)) return false;
 	const context = bindFromExpectedReturn(fnType, expectedType);
 	const rebound = createUnifyBindings();
 	for (let bi = 0; bi < bindings.names.length; bi += 1) {
@@ -1913,7 +1926,7 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 			&& bindFromUnfitDestination(fnType, argBindings, [], argTypes, expectedType)) {
 		fitArgsToBoundFormals(ctx, callNode, fnType, argBindings);
 	}
-	if (hasExpected) {
+	if (hasExpected && argumentsMatchFormals(fnType, argTypes, argBindings)) {
 		mergeUnifyBindings(argBindings, bindFromExpectedReturn(fnType, expectedType));
 	}
 
@@ -2224,7 +2237,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	// `const colors: Color[] = ...` context. Args alone don't bind T (null is
 	// weak), explicit <T> not present in macro emit. Pass 2 binds T=Color from
 	// return Array<T> vs expected Array<Color>.
-	mergeUnifyBindings(eb, bindFromExpectedReturn(calleeType, expectedType));
+	if (argumentsMatchFormals(calleeType, argTypes, eb)) mergeUnifyBindings(eb, bindFromExpectedReturn(calleeType, expectedType));
 	if (eb.names.length == 0) return null as unknown as Type;
 	const declType = sym.symbolType != null ? sym.symbolType : calleeType;
 	if (reportUnmetConstraints(ctx, node, declType, eb, ebFrom, receiverBindings)) return null as unknown as Type;
