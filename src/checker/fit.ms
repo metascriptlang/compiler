@@ -662,6 +662,14 @@ export function fitIntegerConstant(ctx: CheckerContext, expr: Node, exprType: Ty
 	return wrapInConv(expr, slot);
 }
 
+export function constantOperandAs(expr: Node, other: Node, target: Type | null): Node {
+	const none = null as unknown as Node;
+	if (target == null || !isIntegerType(target) || !isFoldedIntegerConstant(expr) || isUntypedIntegerConstant(other, 0)) return none;
+	const exact = exactUntypedInteger(expr, 0);
+	if (exact == null || !integerValueFits(integerValueOf(exact), target)) return none;
+	return typedIntegerLiteral(integerValueOf(exact), target, expr.location);
+}
+
 function foldedIntFits(value: int64, target: Type): boolean {
 	if ((target.kind == TypeKind.Sink || target.kind == TypeKind.Lent) && target.typeReturn != null) {
 		return foldedIntFits(value, target.typeReturn);
