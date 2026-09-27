@@ -18,11 +18,11 @@ function isInlineConstantType(t: Type | null): boolean {
 	return isIntegerType(t) || isFloatType(t) || t.kind == TypeKind.Number || t.kind == TypeKind.Boolean;
 }
 
-function moduleConstInitializer(node: Node): Node {
+function constInitializer(node: Node): Node {
 	const none = null as unknown as Node;
 	const sym = node.resolvedSym;
 	if (sym == null || sym.symbolKind != SymbolKind.Variable) return none;
-	if (!sym.symFlags.has(SymbolFlag.Global) || sym.symFlags.has(SymbolFlag.Mutable)) return none;
+	if (sym.symFlags.has(SymbolFlag.Mutable)) return none;
 	const decl = sym.declNode;
 	if (decl == null || decl.kind != NodeKind.VariableDecl) return none;
 	if (!isInlineConstantType(decl.nodeType)) return none;
@@ -83,7 +83,7 @@ export function isUntypedIntegerConstant(expr: Node, depth: int32): boolean {
 	if (expr == null || depth > CONSTANT_CHAIN_LIMIT) return false;
 	if (expr.kind == NodeKind.NumberLiteral) return !(expr.data as NumberLiteralData).isFloat;
 	if (expr.kind == NodeKind.Identifier) {
-		const initializer = moduleConstInitializer(expr);
+		const initializer = constInitializer(expr);
 		if (initializer == null || (expr.resolvedSym.declNode.data as VariableDeclData).declType != "") return false;
 		return isUntypedIntegerConstant(initializer, depth + 1);
 	}
@@ -112,7 +112,7 @@ export function constantLiteralOf(expr: Node, depth: int32): Node {
 		NodeKind.NumberLiteral => { return retypedLiteral(expr, expr.nodeType, expr.location); },
 		NodeKind.BooleanLiteral => { return retypedLiteral(expr, expr.nodeType, expr.location); },
 		NodeKind.Identifier => {
-			const initializer = moduleConstInitializer(expr);
+			const initializer = constInitializer(expr);
 			if (initializer == null) return none;
 			const value = constantLiteralOf(initializer, depth + 1);
 			if (value == null) return none;
