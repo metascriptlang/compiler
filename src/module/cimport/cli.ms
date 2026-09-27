@@ -46,8 +46,8 @@ export function runCli(args: string[]): number {
 			opts.emit.withExport = true;
 		} else if (a.startsWith("-I")) {
 			opts.includePaths.push(a.slice(2, a.length));
-		} else if (a.startsWith("-D")) {
-			opts.extraDefines.push(a.slice(2, a.length));
+		} else if (a.startsWith("-D") || a.startsWith("-U")) {
+			opts.macroFlags.push(a);
 		} else if (a.startsWith("--names=")) {
 			const list = a.slice(8, a.length);
 			opts.emit.importedNames = list.split(",");

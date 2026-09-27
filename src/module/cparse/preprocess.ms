@@ -1171,7 +1171,7 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 
 // ===== Initialize Built-in Macros =====
 
-function initMacros(ctx: PPContext): void {
+function initMacros(ctx: PPContext, macroFlags: string[]): void {
 	// Dynamic built-in macros
 	const fileMac = addMacro(ctx, "__FILE__", true, newEof(ctx, makeEofToken("")));
 	fileMac.handler = "__FILE__";
@@ -1180,15 +1180,26 @@ function initMacros(ctx: PPContext): void {
 	const counterMac = addMacro(ctx, "__COUNTER__", true, newEof(ctx, makeEofToken("")));
 	counterMac.handler = "__COUNTER__";
 
-	// Predefined macros from target
-	const defs = predefinedMacros(ctx.target);
-	for (const def of defs) {
-		const valTok = makeEofToken("");
-		valTok.kind = CTokenKind.PPNum;
-		valTok.stringVal = def.value;
-		valTok.next = newEof(ctx, makeEofToken(""));
-		addMacro(ctx, def.name, true, valTok);
+	const builtin = tokenizeFile(builtinSource(ctx, macroFlags), "<built-in>");
+	for (const d of builtin.diagnostics) ctx.diags.push(d);
+	preprocess2(builtin.head, ctx);
+}
+
+function builtinSource(ctx: PPContext, macroFlags: string[]): string {
+	let src = "";
+	for (const def of predefinedMacros(ctx.target)) src = src + `#define ${def.name} ${def.value}\n`;
+	for (const flag of macroFlags) {
+		const body = flag.slice(2, flag.length);
+		if (flag.startsWith("-U")) {
+			src = src + `#undef ${body}\n`;
+		} else if (flag.startsWith("-D")) {
+			const eq = body.indexOf("=");
+			src = src + (eq < 0 ? `#define ${body} 1\n` : `#define ${body.slice(0, eq)} ${body.slice(eq + 1, body.length)}\n`);
+		} else {
+			ctx.diags.push(makeDiag(DiagSeverity.Error, ctx.file, 0, 0, `'${flag}' is not a -D or -U flag`));
+		}
 	}
+	return src;
 }
 
 // ===== Public Entry Point =====
@@ -1197,6 +1208,7 @@ export function preprocess(
 	head: CToken,
 	target: TargetInfo,
 	includePaths: string[],
+	macroFlags: string[] = [],
 	readLog: string[] = null as unknown as string[]
 ): PreprocessResult {
 	const ctx: PPContext = {
@@ -1213,7 +1225,7 @@ export function preprocess(
 		readLog,
 	};
 
-	initMacros(ctx);
+	initMacros(ctx, macroFlags);
 
 	const result = preprocess2(head, ctx);
 
@@ -1426,3 +1438,36 @@ test "preprocess missing include is reported on its own line" {
 	assert r.diagnostics.length == 1;
 	assert r.diagnostics[0].line == 2;
 }
+
+function spelled(r: PreprocessResult): string {
+	let s = "";
+	let tok = r.head;
+	while (tok.kind != CTokenKind.Eof) {
+		s = s == "" ? tok.stringVal : `${s} ${tok.stringVal}`;
+		tok = tok.next;
+	}
+	return s;
+}
+
+function preprocessWith(src: string, os: string, macroFlags: string[]): PreprocessResult {
+	return preprocess(tokenizeFile(src, "test.h").head, targetFor(os, "x86_64"), [], macroFlags);
+}
+
+test "preprocess -D and -U flags apply in command-line order" {
+	const src = "#ifdef ON\non\n#endif\n#ifdef OFF\noff\n#endif\nVAL TWICE(3)";
+	const r = preprocessWith(src, "linux", ["-DON", "-DOFF", "-UOFF", "-DVAL=7", "-DTWICE(x)=x*2"]);
+	assert r.diagnostics.length == 0;
+	assert spelled(r) == "on 7 3 * 2";
+}
+
+test "preprocess -U removes a predefined macro" {
+	assert spelled(preprocessWith("#ifdef __linux__\nlinux\n#endif", "linux", ["-U__linux__"])) == "";
+	assert spelled(preprocessWith("#ifdef __linux__\nlinux\n#endif", "linux", [])) == "linux";
+}
+
+test "preprocess reports a flag that is neither -D nor -U" {
+	const r = preprocessWith("int x;", "linux", ["-Iinclude"]);
+	assert r.diagnostics.length == 1;
+	assert r.diagnostics[0].message.indexOf("-Iinclude") >= 0;
+}
+
