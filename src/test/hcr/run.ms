@@ -303,6 +303,27 @@ function watchWarm(): void {
 		{ file: "boxOverride.ms", target: "box.ms", warm: false, fails: false },
 		{ file: "boxNoHook.ms", target: "box.ms", warm: false, fails: false },
 	];
+	replayMatchesCold(tag, dir, `${FIXTURES}/watchWarm`, ["logic.ms", "view.ms", "shapes.ms", "box.ms"], steps);
+	console.log("ok   hcrWatchWarm");
+}
+
+function watchGeneric(): void {
+	const tag = "hcrWatchGeneric";
+	const dir = freshDir(`${TMP}/watchGeneric`);
+	for (const sub of ["app", "lib"]) {
+		ensureDir(`${dir}/${sub}`);
+		for (const f of readDir(`${FIXTURES}/watchGeneric/${sub}`)) copy(`${FIXTURES}/watchGeneric/${sub}/${f}`, `${dir}/${sub}/${f}`);
+	}
+	const steps: WatchStep[] = [
+		{ file: "logicBody.ms", target: "logic.ms", warm: true, fails: false },
+		{ file: "logicString.ms", target: "logic.ms", warm: false, fails: false },
+		{ file: "logicStringBody.ms", target: "logic.ms", warm: true, fails: false },
+	];
+	replayMatchesCold(tag, `${dir}/app`, `${FIXTURES}/watchGeneric/app`, ["logic.ms"], steps);
+	console.log("ok   hcrWatchGeneric");
+}
+
+function replayMatchesCold(tag: string, dir: string, fixture: string, restored: string[], steps: WatchStep[]): void {
 	let replay = "";
 	for (const s of steps) replay = replay + `${s.file} ${s.target}\n`;
 	put(`${dir}/replay.txt`, replay);
@@ -316,7 +337,7 @@ function watchWarm(): void {
 		failWith(tag, `the watch replay reported ${statuses.length} builds, expected ${steps.length + 1}`);
 	}
 
-	for (const f of ["logic.ms", "view.ms", "shapes.ms", "box.ms"]) copy(`${FIXTURES}/watchWarm/${f}`, `${dir}/${f}`);
+	for (const f of restored) copy(`${fixture}/${f}`, `${dir}/${f}`);
 	const debug = `${dir}/out/debug`;
 	for (let n = 0; n <= steps.length; n += 1) {
 		const step: WatchStep | null = n > 0 ? steps[n - 1] : null;
@@ -344,7 +365,6 @@ function watchWarm(): void {
 			need(tag, status.contains(" built ") && partialRecheck(status), `${label} did not stay warm: ${status}`);
 		}
 	}
-	console.log("ok   hcrWatchWarm");
 }
 
 // ---- hcrIndirect: cross-module calls lowered through module tables ----
@@ -807,6 +827,7 @@ moduleAbi();
 firstWarmBuild();
 localNames();
 watchWarm();
+watchGeneric();
 reloadOff();
 coreLinkClang();
 indirect();
