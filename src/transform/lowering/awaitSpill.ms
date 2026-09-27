@@ -1,5 +1,5 @@
 import {
-	Node, NodeKind, DeclKind, TypeKind, Type, SourceLocation,
+	Node, NodeKind, DeclKind, TypeKind, Type, SourceLocation, SymbolKind, SymbolFlag,
 	VariableDeclData, ExprStmtData, ReturnStmtData, ThrowStmtData, AssertStmtData, ExportDeclData,
 	IfStmtData, WhileStmtData, DoWhileStmtData,
 	AwaitExprData, BinaryExprData, ConditionalExprData, CallExprData, NewExprData, MemberExprData,
@@ -9,7 +9,9 @@ import {
 import { forEachChild } from "../../ast/visitor";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkExpandBlocks, containsExprKind, mapExprChildren, isFuncBoundary } from "../walker";
-import { makeVarDecl, makeIdentResolved, makeExprStmt, makeAssign, makeIf, makeBlock, makeUnary, makeBreak, makeBool, extractBodyStmts } from "../util";
+import { makeVarDecl, makeIdentResolved, makeExprStmt, makeAssign, makeIf, makeBlock, makeUnary, makeBreak, makeBool, extractBodyStmts, makeBinary, isValueLayoutType } from "../util";
+import { isStructType } from "../../checker/types";
+import { cloneIfPure } from "../coercion/intArithJS";
 import { hoistAssignTargetEffects, isAssignOperator, bodyHasLoopContinue } from "./conditionalExprLower";
 import { blockifyAwaitingArrows } from "./awaitLower";
 import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount } from "../testUtil";
@@ -38,6 +40,43 @@ function hasEffect(node: Node): boolean {
 		return child;
 	});
 	return found;
+}
+
+function snapshotsLikeJs(t: Type | null): boolean {
+	if (t == null) return false;
+	const k = t.kind;
+	if (k == TypeKind.Void || k == TypeKind.Array || k == TypeKind.SizedArray || k == TypeKind.Span
+		|| k == TypeKind.Tuple || k == TypeKind.Var || k == TypeKind.Lent || k == TypeKind.Sink
+		|| k == TypeKind.Borrow || k == TypeKind.Ptr || k == TypeKind.Varargs || k == TypeKind.CString
+		|| k == TypeKind.Null || k == TypeKind.Unknown || k == TypeKind.None || k == TypeKind.Pending) return false;
+	return !isStructType(t) && !isValueLayoutType(t);
+}
+
+function isStorageRead(e: Node): boolean {
+	if (e.kind == NodeKind.Identifier) {
+		const s = e.resolvedSym;
+		if (s == null || !s.symFlags.has(SymbolFlag.Mutable)) return false;
+		return s.symbolKind == SymbolKind.Variable || s.symbolKind == SymbolKind.Parameter;
+	}
+	if (e.kind == NodeKind.MemberExpr) {
+		const s = e.resolvedSym;
+		return s == null || s.symbolKind == SymbolKind.Variable || s.symbolKind == SymbolKind.Property;
+	}
+	return e.kind == NodeKind.ArrayAccess;
+}
+
+function isComputed(e: Node): boolean {
+	if (e.kind == NodeKind.BinaryExpr) return !isAssignOperator((e.data as BinaryExprData).operator);
+	return e.kind == NodeKind.UnaryExpr || e.kind == NodeKind.ConditionalExpr;
+}
+
+function readsBeforeAwait(e: Node): boolean {
+	match (e.kind) {
+		NodeKind.TypeAssertion => { return readsBeforeAwait((e.data as TypeAssertionData).asExpr); },
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => { return readsBeforeAwait((e.data as HiddenStdConvData).convExpr); },
+		_ => {},
+	};
+	return (isStorageRead(e) || isComputed(e)) && snapshotsLikeJs(e.nodeType);
 }
 
 function bindTemp(ctx: TransformContext, prefix: string, t: Type | null, init: Node | null, declKind: DeclKind, pre: Node[], loc: SourceLocation): Node {
@@ -74,7 +113,7 @@ function spillOperands(ops: Node[], pre: Node[], ctx: TransformContext): void {
 	for (let i = 0; i < ops.length; i += 1) {
 		if (hasAwait(ops[i])) {
 			ops[i] = spillExpr(ops[i], pre, ctx);
-		} else if (i < last && hasEffect(ops[i])) {
+		} else if (i < last && (hasEffect(ops[i]) || readsBeforeAwait(ops[i]))) {
 			ops[i] = tempEffects(ops[i], pre, ctx);
 		}
 	}
@@ -155,13 +194,52 @@ function spillTarget(target: Node, pre: Node[], ctx: TransformContext): Node {
 	return spillValue(target, pre, ctx);
 }
 
+function settleObject(obj: Node, pre: Node[], ctx: TransformContext): Node {
+	if (obj.kind == NodeKind.HiddenDeref || obj.kind == NodeKind.HiddenAddr) {
+		const d = obj.data as HiddenDerefData;
+		d.expr = settleObject(d.expr, pre, ctx);
+		return obj;
+	}
+	if (obj.kind == NodeKind.CallExpr || obj.kind == NodeKind.NewExpr || readsBeforeAwait(obj)) return tempEffects(obj, pre, ctx);
+	return settleTarget(obj, pre, ctx);
+}
+
+function settleTarget(target: Node, pre: Node[], ctx: TransformContext): Node {
+	match (target.kind) {
+		NodeKind.ArrayAccess => {
+			const d = target.data as ArrayAccessData;
+			d.array = settleObject(d.array, pre, ctx);
+			if (hasEffect(d.index) || readsBeforeAwait(d.index)) { d.index = tempEffects(d.index, pre, ctx); }
+			return target;
+		},
+		NodeKind.MemberExpr => {
+			const d = target.data as MemberExprData;
+			d.object = settleObject(d.object, pre, ctx);
+			return target;
+		},
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
+			const d = target.data as HiddenDerefData;
+			d.expr = settleObject(d.expr, pre, ctx);
+			return target;
+		},
+		_ => {},
+	};
+	return target;
+}
+
 function spillAssign(expr: Node, pre: Node[], ctx: TransformContext): Node {
 	const d = expr.data as BinaryExprData;
 	if (hasAwait(d.left)) { d.left = spillTarget(d.left, pre, ctx); }
-	if (hasAwait(d.right)) {
-		d.left = hoistAssignTargetEffects(d.left, pre, ctx, []);
+	if (!hasAwait(d.right)) return expr;
+	d.left = settleTarget(d.left, pre, ctx);
+	const before = d.operator == "=" ? null : cloneIfPure(d.left);
+	if (before == null) {
 		d.right = spillExpr(d.right, pre, ctx);
+		return expr;
 	}
+	const read = bindTemp(ctx, "sp", d.left.nodeType, before, DeclKind.Const, pre, expr.location);
+	d.right = makeBinary(read, d.operator.slice(0, d.operator.length - 1), spillExpr(d.right, pre, ctx), expr.location);
+	d.operator = "=";
 	return expr;
 }
 
