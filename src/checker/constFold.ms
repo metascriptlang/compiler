@@ -3,7 +3,7 @@ import {
 	BinaryExprData, UnaryExprData, VariableDeclData, PropertyDeclData, TypeAssertionData, HiddenStdConvData,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 } from "../ast/node";
-import { isIntegerType, isFloatType } from "./types";
+import { isIntegerType, isFloatType, createPrimitive } from "./types";
 import { makeNumber, makeIntNumber, makeString, makeBool, syntheticToken } from "./literalNodes";
 
 const CONSTANT_CHAIN_LIMIT: int32 = 64;
@@ -98,6 +98,86 @@ export function isUntypedIntegerConstant(expr: Node, depth: int32): boolean {
 	}
 	if (expr.kind == NodeKind.UnaryExpr) return isUntypedIntegerConstant((expr.data as UnaryExprData).operand, depth + 1);
 	return false;
+}
+
+export function exactUntypedInteger(expr: Node, depth: int32): Node {
+	const none = null as unknown as Node;
+	if (expr == null || depth > CONSTANT_CHAIN_LIMIT) return none;
+	match (expr.kind) {
+		NodeKind.NumberLiteral => {
+			const d = expr.data as NumberLiteralData;
+			if (d.isFloat || d.outOfRangeText != "" || (d.intVal < 0 && d.value > 0)) return none;
+			return makeTypedInteger(d.intVal, createPrimitive(TypeKind.Int64), expr.location);
+		},
+		NodeKind.Identifier => {
+			const initializer = moduleConstInitializer(expr);
+			if (initializer == null || (expr.resolvedSym.declNode.data as VariableDeclData).declType != "") return none;
+			return exactWithin(exactUntypedInteger(initializer, depth + 1), expr.resolvedSym.declNode.nodeType);
+		},
+		NodeKind.MemberExpr => {
+			const initializer = readonlyStaticInitializer(expr);
+			if (initializer == null || (expr.resolvedSym.declNode.data as PropertyDeclData).propType != "") return none;
+			return exactWithin(exactUntypedInteger(initializer, depth + 1), expr.resolvedSym.declNode.nodeType);
+		},
+		NodeKind.BinaryExpr => {
+			const d = expr.data as BinaryExprData;
+			if (isComparisonOperator(d.operator)) return none;
+			const left = exactUntypedInteger(d.left, depth + 1);
+			if (left == null) return none;
+			const right = exactUntypedInteger(d.right, depth + 1);
+			if (right == null) return none;
+			return exactIntegerBinary(d.operator, integerValueOf(left), integerValueOf(right), expr.location);
+		},
+		NodeKind.UnaryExpr => {
+			const d = expr.data as UnaryExprData;
+			const operand = exactUntypedInteger(d.operand, depth + 1);
+			if (operand == null || (d.unaryOp != "-" && d.unaryOp != "+" && d.unaryOp != "~")) return none;
+			const value = integerValueOf(operand);
+			if (d.unaryOp == "-" && value == signedMinValue(createPrimitive(TypeKind.Int64))) return none;
+			if (d.unaryOp == "~" && !integerValueFits(value, createPrimitive(TypeKind.Int32))) return none;
+			const bits: uint64 = match (d.unaryOp) {
+				"-" => 0 - (value as uint64),
+				"~" => ~(value as uint64),
+				_ => value as uint64,
+			};
+			return makeTypedInteger(bits as int64, createPrimitive(TypeKind.Int64), expr.location);
+		},
+		_ => {},
+	};
+	return none;
+}
+
+function isBitwiseOperator(op: string): boolean {
+	return op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>";
+}
+
+function exactIntegerBinary(op: string, left: int64, right: int64, loc: SourceLocation): Node {
+	const none = null as unknown as Node;
+	const wide = createPrimitive(TypeKind.Int64);
+	if (!isBitwiseOperator(op)) return foldIntegerArithmetic(op, left, right, wide, loc, none);
+	const narrow = createPrimitive(TypeKind.Int32);
+	if (!integerValueFits(left, narrow) || !integerValueFits(right, narrow)) return none;
+	const folded = foldIntegerArithmetic(op, left, right, narrow, loc, none);
+	return folded == null ? none : makeTypedInteger(integerValueOf(folded), wide, loc);
+}
+
+export function integerValueOf(literal: Node): int64 {
+	return (literal.data as NumberLiteralData).intVal;
+}
+
+export function integerValueFits(value: int64, t: Type): boolean {
+	if (!isIntegerType(t)) return false;
+	if (isUnsignedIntegerType(t) && value < 0) return false;
+	return integerBitWidth(t) == 64 || wrapToWidth(value as uint64, t) == value;
+}
+
+export function typedIntegerLiteral(value: int64, t: Type, loc: SourceLocation): Node {
+	return makeTypedInteger(value, t, loc);
+}
+
+function exactWithin(literal: Node, t: Type | null): Node {
+	if (literal == null || t == null || !integerValueFits(integerValueOf(literal), t)) return null as unknown as Node;
+	return literal;
 }
 
 function foldedOperand(expr: Node, depth: int32): Node {
