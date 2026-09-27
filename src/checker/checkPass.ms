@@ -1747,7 +1747,6 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return,
 	// or a call to the runtime converter for the return type.
-	const errorsBeforeFit = ctx.errors.length;
 	if (returnExpected != null && !errSentinel && !engineReturnMarshalsToNode(retType, returnExpected)) {
 		d.argument = fitNode(ctx, d.argument, returnExpected, retType);
 	}
@@ -1772,7 +1771,6 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		&& finalRetType.kind != TypeKind.Error
 		&& !isNominalMismatch(finalRetType, returnExpected)
 		&& !errSentinel
-		&& ctx.errors.length == errorsBeforeFit
 		&& !engineReturnMarshalsToNode(finalRetType, returnExpected)
 		&& !isAssignable(finalRetType, returnExpected)) {
 		const got = formatTypeBrief(finalRetType);
