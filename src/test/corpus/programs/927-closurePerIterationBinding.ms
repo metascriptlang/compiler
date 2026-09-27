@@ -115,9 +115,13 @@ function refsPerIteration(): string {
 	return `refs ${c.hits} ${c.names.join(",")}`;
 }
 
-console.log(loopExample());
-console.log(iterationShared());
-console.log(outerShared());
-console.log(nested());
-console.log(header());
-console.log(refsPerIteration());
+function reportValue(actual: string, expected: string): void {
+	assert actual == expected;
+	console.log(actual);
+}
+reportValue(loopExample(), "loop total=3 0/1 1/11 2/21");
+reportValue(iterationShared(), "shared 7 8");
+reportValue(outerShared(), "outer 12 99 100");
+reportValue(nested(), "nested 10 21 1010 1021");
+reportValue(header(), "header c5 u1 u2 u3 j1 j3 j4 j5");
+reportValue(refsPerIteration(), "refs 6 a!,bb!,ccc!");

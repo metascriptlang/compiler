@@ -42,20 +42,28 @@ async function operands(): Promise<void> {
 	const c = `v=${await work(2)}`;
 	const d: int32[] = [await work(1), note("n", 2)];
 	const s: string = "k" + (await work(21)).toString();
+	assert a == 3 && b == 8 && c == "v=4";
+	assert d[0] == 2 && d[1] == 2 && s == "k42";
 	console.log(`${a} ${b} ${c} ${d[0]} ${d[1]} ${s}`);
-	console.log(Math.max(await work(2), await work(3)));
-	console.log(await work(await work(1)));
+	const maximum = Math.max(await work(2), await work(3));
+	assert maximum == 6;
+	console.log(maximum);
+	const nested = await work(await work(1));
+	assert nested == 4;
+	console.log(nested);
 	console.log(trace);
 }
 
 async function order(): Promise<void> {
 	trace = "";
 	const e = note("h", 10) + (await work(4)) + note("k", 1);
+	assert e == 19 && trace == "h;w4;k;";
 	console.log(`${e} ${trace}`);
 	trace = "";
 	const box = mkBox("m1");
 	box.add(await work(7));
 	mkBox("m2").add(await work(8));
+	assert box.items[0] == 14 && trace == "m1;w7;m2;w8;";
 	console.log(`${box.items[0]} ${trace}`);
 }
 
@@ -66,15 +74,24 @@ async function branches(): Promise<void> {
 	const f3 = true && (await flag(true));
 	const f4 = false || (await flag(false));
 	const g = f3 ? await work(5) : await work(6);
+	assert !f1 && f2 && f3 && !f4 && g == 10;
+	assert trace == "f;f;w5;";
 	console.log(`${f1} ${f2} ${f3} ${f4} ${g} ${trace}`);
-	console.log(await pick(true));
-	console.log(await pick(false));
-	console.log(await sum(1));
+	const yes = await pick(true);
+	assert yes == "yes2";
+	console.log(yes);
+	const no = await pick(false);
+	assert no == "no";
+	console.log(no);
+	const total = await sum(1);
+	assert total == 6;
+	console.log(total);
 }
 
 async function loops(): Promise<void> {
 	let i: int32 = 0;
 	while ((await work(i)) < 6) { i++; }
+	assert i == 3;
 	console.log(i);
 	if (i > 100) {
 		console.log("no");
@@ -88,6 +105,7 @@ async function loops(): Promise<void> {
 		if (j == 2) continue;
 		s = s + j.toString();
 	} while ((await work(j)) < 8);
+	assert s == "134";
 	console.log(s);
 }
 

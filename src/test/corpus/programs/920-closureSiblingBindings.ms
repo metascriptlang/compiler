@@ -77,8 +77,18 @@ function siblingInArrowFrame(): string {
 	return run();
 }
 
-console.log(siblingBlocks());
-console.log(siblingIfBlocks(true));
-console.log(siblingTypes());
-console.log(siblingInLoopBody());
-console.log(siblingInArrowFrame());
+const blocks = siblingBlocks();
+const branches = siblingIfBlocks(true);
+const types = siblingTypes();
+const loop = siblingInLoopBody();
+const arrow = siblingInArrowFrame();
+assert blocks == "first,second";
+assert branches == "then";
+assert types == "s18";
+assert loop == "0,5,10,15,";
+assert arrow == "left,right";
+console.log(blocks);
+console.log(branches);
+console.log(types);
+console.log(loop);
+console.log(arrow);

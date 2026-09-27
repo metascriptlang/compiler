@@ -1,6 +1,6 @@
 // Corpus runner — the scriptc-frame spine (msc run src/test/corpus/run.ms).
 //
-// Every programs/NNN-*.ms (or NNN-*/main.ms) is a standalone program whose
+// Every programs/*.ms (or programs/*/main.ms) is a standalone program whose
 // contract lives in its directive head:
 //
 //   // @maxrss: <MB>       -> RSS cells: build+run under --gc=drc AND --gc=orc,
@@ -440,21 +440,39 @@ function parseSpec(name: string, entry: string): Spec {
 	return spec;
 }
 
-// corpus entries are NNN-topic; order by the numeric prefix (readDir order is
-// filesystem-dependent, and string relational compare is not assumed here)
 function entryNumber(name: string): int32 {
 	const dash = name.indexOf("-");
 	if (dash <= 0) { return -1; }
+	for (let i = 0; i < dash; i += 1) {
+		const code = name.charCodeAt(i);
+		if (code < 48 || code > 57) { return -1; }
+	}
 	return name.slice(0, dash).parseInt() as int32;
 }
 
-function sortByNumber(items: string[]): string[] {
+function entryBefore(left: string, right: string): boolean {
+	const leftNumber = entryNumber(left);
+	const rightNumber = entryNumber(right);
+	if (leftNumber >= 0 && rightNumber < 0) { return true; }
+	if (leftNumber < 0 && rightNumber >= 0) { return false; }
+	if (leftNumber >= 0 && leftNumber != rightNumber) { return leftNumber < rightNumber; }
+	let i = 0;
+	while (i < left.length && i < right.length) {
+		const a = left.charCodeAt(i);
+		const b = right.charCodeAt(i);
+		if (a != b) { return a < b; }
+		i += 1;
+	}
+	return left.length < right.length;
+}
+
+function sortEntries(items: string[]): string[] {
 	const out: string[] = [];
 	for (const s of items) { out.push(s); }
 	for (let i = 0; i < out.length; i = i + 1) {
 		let min = i;
 		for (let j = i + 1; j < out.length; j = j + 1) {
-			if (entryNumber(out[j]) < entryNumber(out[min])) { min = j; }
+			if (entryBefore(out[j], out[min])) { min = j; }
 		}
 		if (min != i) { const tmp = out[i]; out[i] = out[min]; out[min] = tmp; }
 	}
@@ -463,7 +481,7 @@ function sortByNumber(items: string[]): string[] {
 
 function discoverSpecs(): Spec[] {
 	const specs: Spec[] = [];
-	for (const e of sortByNumber(readDir(PROG_DIR))) {
+	for (const e of sortEntries(readDir(PROG_DIR))) {
 		const full = PROG_DIR + e;
 		let name = e;
 		let entry = full;
@@ -476,7 +494,6 @@ function discoverSpecs(): Spec[] {
 			if (dotMs <= 0 || e.slice(dotMs, e.length) != ".ms") { continue; }
 			name = e.slice(0, dotMs);
 		}
-		if (entryNumber(name) < 0) { continue; }
 		if (FILTER != "" && !name.contains(FILTER)) { continue; }
 		if (ONLY.length > 0 && !listHas(ONLY, name)) { continue; }
 		specs.push(parseSpec(name, entry));

@@ -87,18 +87,24 @@ async function returnThroughAwaitingFinally(): Promise<int32> {
 	return 0;
 }
 
+function reportValue(actual: int32, expected: int32): void {
+	assert actual == expected;
+	console.log(actual);
+}
+
 async function main(): Promise<void> {
 	await awaitInDo();
-	console.log(saved);
-	console.log(await awaitInSwitch(1));
-	console.log(await awaitInSwitch(2));
-	console.log(await returnInDo(2));
-	console.log(await returnInDo(9));
-	console.log(await returnInSwitch(2));
-	console.log(await returnInSwitch(7));
-	console.log(await closureInDo());
-	console.log(await closureInSwitch(1));
-	console.log(await returnThroughAwaitingFinally());
+	reportValue(saved, 3);
+	reportValue(await awaitInSwitch(1), 11);
+	reportValue(await awaitInSwitch(2), 0);
+	reportValue(await returnInDo(2), 20);
+	reportValue(await returnInDo(9), -1);
+	reportValue(await returnInSwitch(2), 102);
+	reportValue(await returnInSwitch(7), 100);
+	reportValue(await closureInDo(), 8);
+	reportValue(await closureInSwitch(1), 6);
+	reportValue(await returnThroughAwaitingFinally(), 5);
+	assert log == "fin2";
 	console.log(log);
 }
 

@@ -70,6 +70,10 @@ async function main(): Promise<void> {
 	const x = await branchValues(true);
 	const y = await branchValues(false);
 	const j = await jumpsThroughFinally();
+	assert s == 6;
+	assert x == 2 && y == 10;
+	assert j == 2;
+	assert log == "ifF;ifT;m1;m2;f1;f1;f2;";
 	console.log("loopTail=" + s.toString() + " branches=" + x.toString() + "," + y.toString() + " jumps=" + j.toString());
 	console.log("log: " + log);
 }

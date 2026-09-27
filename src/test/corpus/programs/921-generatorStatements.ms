@@ -78,24 +78,27 @@ function* statementKinds(k: int32): Iterator<string> {
 	}
 }
 
-function collectInts(label: string, it: Iterator<int32>): void {
+function collectInts(label: string, it: Iterator<int32>, expected: string): void {
 	let out: string = "";
 	for (const v of it) out = out + v.toString() + ",";
+	assert out == expected, label + ": " + out;
 	console.log(label + ": " + out);
 }
 
-function collectStrings(label: string, it: Iterator<string>): void {
+function collectStrings(label: string, it: Iterator<string>, expected: string): void {
 	let out: string = "";
 	for (const v of it) out = out + v + ",";
+	assert out == expected, label + ": " + out;
 	console.log(label + ": " + out);
 }
 
-collectInts("returns(1)", returns(1));
-collectInts("returns(0)", returns(0));
-collectStrings("forOfLocals", forOfLocals(["a", "b"], [1, 2]));
-collectStrings("sameNames(true)", sameNames(true));
-collectStrings("sameNames(false)", sameNames(false));
-collectInts("jumpsThroughFinally", jumpsThroughFinally());
+collectInts("returns(1)", returns(1), "1,");
+collectInts("returns(0)", returns(0), "1,2,3,");
+collectStrings("forOfLocals", forOfLocals(["a", "b"], [1, 2]), "a1,a2,b1,b2,");
+collectStrings("sameNames(true)", sameNames(true), "str,0,10,");
+collectStrings("sameNames(false)", sameNames(false), "42,0,10,");
+collectInts("jumpsThroughFinally", jumpsThroughFinally(), "0,1,2,100,");
+assert trace == "f1;f1;f2;";
 console.log("trace: " + trace);
-collectStrings("statementKinds(1)", statementKinds(1));
-collectStrings("statementKinds(2)", statementKinds(2));
+collectStrings("statementKinds(1)", statementKinds(1), "do0,do1,case1,arm1,try,finally,");
+collectStrings("statementKinds(2)", statementKinds(2), "do0,do1,default,wild,try,finally,");

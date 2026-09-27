@@ -59,8 +59,12 @@ async function run(): Promise<string> {
 
 let a = "";
 for (const v of gen()) a = a + v.toString() + ",";
+assert a == "0,0,10,20,2,30,3,";
 console.log(a);
 let b = "";
 for (const v of genString()) b = b + v + ",";
+assert b == "a,s,c,";
 console.log(b);
-console.log(await run());
+const asyncValues = await run();
+assert asyncValues == "023";
+console.log(asyncValues);
