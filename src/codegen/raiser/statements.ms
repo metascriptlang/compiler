@@ -22,7 +22,7 @@ import {
 	registerRaiserStmtCompiler, resolveGlobal, isRoutineSym, resolveRoutine,
 } from "./context";
 import { compileExpr, exprIsString } from "./expressions";
-import { emitValueCopy } from "./valueCopy";
+import { emitValueCopy, emitZeroValue } from "./valueCopy";
 
 // --- Statement compilation ---
 
@@ -149,8 +149,7 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 		}
 		declareLocalStr(s, d.declName, reg, isStr);
 	} else {
-		const reg = allocReg(s);
-		emitLoadConst(s, reg, raiserNil());
+		const reg = emitZeroValue(s, node.nodeType);
 		const global = resolveGlobal(s, node.resolvedSym);
 		if (global >= 0) {
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, reg, global, 0));

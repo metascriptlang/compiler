@@ -30,6 +30,7 @@ import {
 } from "./context";
 import { compileStmt } from "./statements";
 import { compileExpr } from "./expressions";
+import { emitZeroValue } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 
 registerCoreParsers();
@@ -156,14 +157,12 @@ function compileClassConstructor(
 	emitInst(s, raiserABC(RaiserOpcode.NewObject, thisReg, 0, 0));
 	declareLocal(s, "this", thisReg);
 
-	// Set default properties (nil)
 	for (let ci = 0; ci < classBody.length; ci += 1) {
 		if (classBody[ci].kind == NodeKind.PropertyDecl) {
 			const pd = classBody[ci].data as PropertyDeclData;
-			const nilReg = allocReg(s);
-			emitLoadConst(s, nilReg, raiserNil());
+			const fieldReg = pd.propIsStatic ? emitZeroValue(s, null) : emitZeroValue(s, classBody[ci].nodeType);
 			const nameIdx = addConst(s, raiserString(pd.propName));
-			emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, nameIdx, nilReg));
+			emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, nameIdx, fieldReg));
 		}
 	}
 
