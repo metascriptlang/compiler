@@ -1473,30 +1473,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 							: objE;
 					}
 					checkExpr(ctx, d.properties[fi], fieldExpected);
-					const errorsBeforeFit = ctx.errors.length;
-					// Auto-wrap directFn → closure when field type is closure (Reference parity)
 					if (fieldExpected != null) {
 						d.properties[fi] = fitNode(ctx, d.properties[fi], fieldExpected, d.properties[fi].nodeType);
-					}
-					// Validate field type assignability against expected struct field type.
-					// checkExpr propagates expectedType for inference but doesn't enforce assignability.
-					const propActual = d.properties[fi].nodeType;
-					const fe = fieldExpected;
-					if (fe != null && propActual != null && ctx.errors.length == errorsBeforeFit) {
-						if (!isUnresolvedType(fe)
-								&& !isUnresolvedType(propActual)
-								&& propActual.kind != TypeKind.Error
-								&& !(typeNameOf(propActual) != "" && typeNameOf(propActual) == typeNameOf(fe))
-								&& !isAssignable(propActual, fe)) {
-							const propTypeName = typeDisplayName(d.properties[fi].nodeType);
-							const expectedTypeName = typeDisplayName(fieldExpected);
-							if (d.keyLocations != null && fi < d.keyLocations.length) {
-								const kl = d.keyLocations[fi];
-								addErrorRange(ctx, `Type '${propTypeName}' is not assignable to type '${expectedTypeName}' for field '${keyName}'`, kl.line, kl.column, kl.column + keyName.length);
-							} else {
-								addError(ctx, `Type '${propTypeName}' is not assignable to type '${expectedTypeName}' for field '${keyName}'`, node.location.line, node.location.column);
-							}
-						}
 					}
 					// Record property key as reference to struct field
 					if (fi < d.keys.length && d.keyLocations != null && fi < d.keyLocations.length && fieldExpected != null) {
