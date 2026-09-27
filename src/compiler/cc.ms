@@ -6,7 +6,7 @@ import { exec, env, cmdExists, findOnPath, platform, exit, execFileCapture, proc
 import { writeFile, ensureDir, exists, readDir, remove } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { writeStderr } from "std/io";
-import { CliOptions, MODE_DANGER } from "./options";
+import { CliOptions, MODE_DANGER, buildCpu } from "./options";
 import { renameReplace, atomicWriteFile, stopBuild } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
 import { managedZigCompiler } from "./toolchain";
@@ -364,7 +364,7 @@ function normalizeCpu(cpu: string): string {
 // Caller is responsible for only invoking when actually cross-compiling
 // (targetOs !== platform || cpuTarget !== "").
 export function crossTargetFlag(targetOs: string, cpuTarget: string, useZig: boolean): string {
-	const cpu = normalizeCpu(cpuTarget != "" ? cpuTarget : "amd64");
+	const cpu = normalizeCpu(buildCpu(targetOs, cpuTarget));
 	if (useZig) {
 		// zig cc target format: cpu-os[-abi]
 		let zigOs = targetOs;
@@ -802,4 +802,11 @@ export function archiveStatic(oFiles: string[], outArchive: string): Result<void
 // Get the runtime directory path (for -I include path).
 export function getRuntimeDir(): string {
 	return resolveRuntime();
+}
+
+test "a cross build without --cpu targets x86_64, --cpu names the triple's cpu" {
+	const other = platform == "linux" ? "windows" : "linux";
+	const abi = other == "linux" ? "linux-gnu" : "windows-gnu";
+	assert crossTargetFlag(other, "", true) == `-target x86_64-${abi}`;
+	assert crossTargetFlag(other, "arm64", true) == `-target aarch64-${abi}`;
 }

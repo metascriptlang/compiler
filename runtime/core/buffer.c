@@ -998,10 +998,11 @@ msString msBufferToStringRange(msBuffer buf, int64_t start, int64_t end, msStrin
 	const char* enc = encoding.p ? encoding.p->data : NULL;
 	int64_t encLen = encoding.len;
 
-	/* utf8/latin1/binary: raw bytes as string */
-	if (!enc || encLen == 0 || encodingEq(enc, encLen, "utf8") || encodingEq(enc, encLen, "utf-8") ||
-	    encodingEq(enc, encLen, "latin1") || encodingEq(enc, encLen, "binary")) {
-		return msStringNew(buf.p->data + start, len);
+	if (!enc || encLen == 0 || encodingEq(enc, encLen, "utf8") || encodingEq(enc, encLen, "utf-8")) {
+		return msStringFromUtf8Lossy(buf.p->data + start, len);
+	}
+	if (encodingEq(enc, encLen, "latin1") || encodingEq(enc, encLen, "binary")) {
+		return msStringFromLatin1(buf.p->data + start, len);
 	}
 
 	if (encodingEq(enc, encLen, "ascii")) {
@@ -1052,5 +1053,5 @@ msString msBufferToStringRange(msBuffer buf, int64_t start, int64_t end, msStrin
 	}
 
 	/* Default: utf8 */
-	return msStringNew(buf.p->data + start, len);
+	return msStringFromUtf8Lossy(buf.p->data + start, len);
 }

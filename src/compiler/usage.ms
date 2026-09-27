@@ -59,6 +59,7 @@ export function printUsage(): void {
 	console.log("  " + cyan("--emit") + "=c             Emit C source only " + dim("(no compile/link)"));
 	console.log("  " + cyan("--gendeps") + "             Write .deps file with module paths");
 	console.log("  " + cyan("--hcr") + "                 Build hot-reloadable module images " + dim("(docs/HCR.md)"));
+	console.log("                        run --hcr: build, launch under a host, rebuild and reload on every save");
 	console.log("  " + cyan("--watch") + "               With --hcr: rebuild on every source save, keeping unchanged modules warm");
 	console.log("  " + cyan("-f") + ", " + cyan("--force") + "           Force full rebuild");
 	console.log("  " + cyan("--tests-in-dir") + "        test: only the tests of modules under the entry's directory");

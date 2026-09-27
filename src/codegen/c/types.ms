@@ -136,7 +136,7 @@ export function hookPrototype(name: string, fnType: Type | null): Symbol {
 
 export function hookComplete(name: string, fnType: Type | null): Symbol {
 	const sym = hookPrototype(name, fnType);
-	sym.symbolType = fnType;
+	sym.symbolType = fnType!;
 	return sym;
 }
 export function genHasDestroyHook(typeName: string): boolean {
@@ -246,34 +246,34 @@ function flushDeferredStructs(g: CGen): void {
 // Generates deterministic C struct names for anonymous interfaces (typeName === "").
 // Uses a structural key (field names + types) hashed to a short hex-like string.
 
-function anonFieldKey(t: Type | null): string {
+function anonFieldKey(t: Type | null, open: Type[]): string {
 	if (t == null) return "null";
 	return match (t.kind) {
 		TypeKind.Struct => {
-			if (t.typeName.length == 0) return `anon(${anonStructuralKey(t)})`;
+			if (t.typeName.length == 0) return anonStructKeyIn(t, open);
 			return t.typeName;
 		},
 		TypeKind.Enum => "enum:" + t.typeName,
-		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn),
+		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn, open),
 		TypeKind.Function => {
 			let k = "fn(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + anonFieldKey(t.typeChildren[i]);
+				k = k + anonFieldKey(t.typeChildren[i], open);
 				i += 1;
 			}
-			return k + "):" + anonFieldKey(t.typeReturn);
+			return k + "):" + anonFieldKey(t.typeReturn, open);
 		},
-		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn),
-		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0]) : "varargs:empty",
+		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn, open),
+		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0], open) : "varargs:empty",
 		TypeKind.Union => {
-			if (t.typeName.length > 0) return "union:" + t.typeName;
+			if (t.typeName.length > 0) return "union:" + structKeyIdentity(t);
 			let k = "union(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + "|";
-				k = k + anonFieldKey(t.typeChildren[i]);
+				k = k + anonFieldKey(t.typeChildren[i], open);
 				i += 1;
 			}
 			return k + ")";
@@ -283,7 +283,7 @@ function anonFieldKey(t: Type | null): string {
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + anonFieldKey(t.typeChildren[i]);
+				k = k + anonFieldKey(t.typeChildren[i], open);
 				i += 1;
 			}
 			return k + ")";
@@ -295,27 +295,43 @@ function anonFieldKey(t: Type | null): string {
 			const simple = getSimpleTypeDesc(t);
 			if (simple != "") return simple;
 			let k = "k" + (t.kind as number).toString() + ":" + t.typeName;
-			if (t.typeReturn != null) k = k + "<" + anonFieldKey(t.typeReturn) + ">";
-			for (const child of t.typeChildren) k = k + "," + anonFieldKey(child);
+			if (t.typeReturn != null) k = k + "<" + anonFieldKey(t.typeReturn, open) + ">";
+			for (const child of t.typeChildren) k = k + "," + anonFieldKey(child, open);
 			return k;
 		},
 	};
 }
 
-function anonStructuralKey(t: Type): string {
+function anonStructKeyIn(t: Type, open: Type[]): string {
+	let depth = open.length - 1;
+	while (depth >= 0) {
+		if (open[depth] == t) return `rec(${open.length - 1 - depth})`;
+		depth -= 1;
+	}
+	open.push(t);
+	const key = `anon(${anonFieldsKey(t, open)})`;
+	open.pop();
+	return key;
+}
+
+function anonFieldsKey(t: Type, open: Type[]): string {
 	let key = "";
 	let i = 0;
 	while (i < t.typeNames.length) {
 		if (i > 0) key = key + ",";
 		key = key + t.typeNames[i] + ":";
 		if (i < t.typeChildren.length && t.typeChildren[i] != null) {
-			key = key + anonFieldKey(t.typeChildren[i]);
+			key = key + anonFieldKey(t.typeChildren[i], open);
 		} else {
 			key = key + "void";
 		}
 		i += 1;
 	}
 	return key;
+}
+
+function anonStructuralKey(t: Type): string {
+	return anonFieldsKey(t, [t]);
 }
 
 // DJB2 hash → base-36 string for short C identifiers
@@ -506,7 +522,7 @@ export function typeKey(t: Type | null): string {
 		TypeKind.Distinct => { return "distinct:" + t.typeName; },
 		TypeKind.Union => {
 			if (t.typeName.length > 0) {
-				return "union:" + t.typeName;
+				return "union:" + structKeyIdentity(t);
 			} else {
 				let key = "union(";
 				let ui = 0;
@@ -559,7 +575,7 @@ export function getSimpleTypeDesc(t: Type): string {
 		TypeKind.Uint64 => "uint64_t",
 		TypeKind.Boolean => "MS_BOOL",
 		TypeKind.BooleanLiteral => "MS_BOOL",
-		TypeKind.Char => "char",
+		TypeKind.Char => "uint8_t",
 		TypeKind.String | TypeKind.StringLiteral => "msString",
 		TypeKind.BigInt => "msBigInt*",
 		TypeKind.CString => "const char*",
@@ -893,6 +909,14 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	if (destroyHook.length > 0) {
 		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.destroyFn = (msDestroyProc)${destroyHook};`);
 	}
+	let traceSym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedTrace) : null;
+	if (traceSym == null && sharedName) traceSym = lookupHookSym(className + "Trace");
+	if (traceSym != null) {
+		const traceHook = mangle(traceSym.name);
+		ensureDrcProto(g, traceHook, traceSym);
+		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.isCyclic = MS_TRUE;`);
+		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.traceFn = (msTraceProc)${traceHook};`);
+	}
 }
 
 // TypeInfo for an Arc<T> heap cell; destroyFn runs the pointee's destructor on the
@@ -936,14 +960,21 @@ export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type | null, cType: 
 // Emit the TypeInfo for a reference-array heap cell (Ref<Array<T>>): a refcounted
 // cell whose destroyFn frees the boxed value-array's payload when rc hits 0. Weak
 // linkage — the same element type may be boxed in several modules; linker dedups.
-export function ensureRefArrayCellTypeInfo(g: CGen, cellName: string, destroyFn: string): void {
+export function ensureRefArrayCellTypeInfo(g: CGen, cellName: string, label: string, destroyFn: string): void {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
 	const key = "refArrayCell:" + cellName;
 	if (typeCacheHas(g.forwTypeCache, key)) return;
 	typeCacheSet(g.forwTypeCache, key, cellName);
 	addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${cellName}TypeInfo;`);
-	addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.name = "${cellName}";`);
+	addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.name = "${label}";`);
 	addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.destroyFn = (msDestroyProc)${destroyFn};`);
+	const traceSym = lookupHookSym(cellName + "Trace");
+	if (traceSym != null) {
+		const traceHook = mangle(traceSym.name);
+		ensureDrcProto(g, traceHook, traceSym);
+		addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.isCyclic = MS_TRUE;`);
+		addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.traceFn = (msTraceProc)${traceHook};`);
+	}
 }
 
 // ===== Full Type Description =====
@@ -1518,7 +1549,7 @@ function elemArrayCName(elem: Type): string {
 	if (elem.kind == TypeKind.Union) {
 		const rm = unwrapRefNullUnion(elem);
 		if (rm != null) return elemArrayCName(rm);
-		return isAnonTypeName(elem.typeName) ? anonUnionCName(elem) : mangle(elem.typeName);
+		return isAnonTypeName(elem.typeName) ? anonUnionCName(elem) : resolvedTypeCName(elem, true);
 	}
 	if (elem.kind == TypeKind.GenericInstance) return monoInstanceName(elem);
 	if (elem.kind == TypeKind.Struct) {
@@ -1540,6 +1571,12 @@ export function arrayCTypeName(t: Type): string {
 	const elemIsClass = elem.sym != null && elem.sym.symbolKind == SymbolKind.Class;
 	if (!elemIsRefArray && (ecn == "void*" || ecn.endsWith("*") || elemIsClass || isPointerType(elem))) return "msRefArray";
 	return getArrayTypeName(ecn);
+}
+
+export function refArrayCellName(t: Type): string {
+	const arrCType = arrayCTypeName(t);
+	if (!arrCType.startsWith("msRefArray")) return arrCType + "RefCell";
+	return arrCType + "_" + hashToBase36(typeKey(t.typeReturn)) + "RefCell";
 }
 
 // Returns the array content/payload struct name for a given array type name.

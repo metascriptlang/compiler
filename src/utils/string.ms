@@ -166,7 +166,7 @@ function scanInteger(s: string): ScannedInteger {
 	// parser cannot know whether the target is int64 or uint64. Narrowing to a
 	// signed range is the checker's job (literalFitsInType), which is the only
 	// place the expected type is known.
-	const limit: uint64 = 0 - 1;
+	const limit: uint64 = (0 - 1) as uint64;
 
 	let acc: uint64 = 0;
 	let fits = true;

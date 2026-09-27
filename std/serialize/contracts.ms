@@ -25,6 +25,6 @@
 //
 // NOT implemented by (schema-bound):
 //   - Protobuf, Cap'n Proto, FlatBuffers, Apache Avro
-export interface UntypedTree<V> {
-	parseValue: (input: string) => Result<V, string>;
+export interface UntypedTree<V, Input> {
+	parseValue: (input: Input) => Result<V, string>;
 }

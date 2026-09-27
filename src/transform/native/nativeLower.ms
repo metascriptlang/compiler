@@ -13,12 +13,13 @@
 //
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
-import { Node, NodeKind, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Type, TypeKind, SymbolKind, createNode, makeLoc } from "../../ast/node";
-import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, isUnknownType, peelTransparentInstance, setRepr, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
+import { Node, NodeKind, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, createNode, makeLoc } from "../../ast/node";
+import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, isUnknownType, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext, createTransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef, makeTypedIdent, makeArrayAccess, isRuntimeProcCall } from "../util";
+import { checkVariantReads } from "./unionProjectLower";
 
 // reference array: a Ref<Array> receiver reaching access/length lowering (e.g. a node
 // synthesized by forOfLower after the checker already ran) is a msXxxArray* pointer, but
@@ -42,6 +43,7 @@ export function lowerNativeAccess(program: Node, ctx: TransformContext): Node {
 	// Pre-pass: propagate SizedArray type from declarations/assignments to ArrayLiteral initializers.
 	// Without this, ArrayLiterals infer TypeKind.Array and get heap-allocated by rewriteArrayLiteral.
 	walkNode(program, propagateSizedArrayType);
+	checkVariantReads(program, ctx);
 	walkNode(program, (n: Node): Node => { return rewriteAccess(n, ctx); });
 	return program;
 }
@@ -96,10 +98,16 @@ function rewriteExternArrayReturn(node: Node): Node {
 			|| sym.symbolKind == SymbolKind.Parameter
 			|| sym.symbolKind == SymbolKind.Property) return node;
 	if (findChar(sym.nativeName, "(") >= 0) return node;
+	if (returnsTypeParam(sym)) return node;
 	node.nodeType = refType.typeReturn;
 	const box = makeCall(runtimeRef("msBoxRefArray", node.location), [node], node.location);
 	box.nodeType = refType;
 	return box;
+}
+
+function returnsTypeParam(sym: Symbol): boolean {
+	const fn = sym.symbolType;
+	return fn != null && fn.typeReturn != null && fn.typeReturn.kind == TypeKind.GenericParam;
 }
 
 // new Array(N) / new Array<T>() typed as Ref<Array<T>>: the inner NewExpr builds a

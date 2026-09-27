@@ -64,7 +64,8 @@ function main(): void {
 	show("builtStr", built.asString());
 	showN("builtLen", built.length);
 
-	const grown = "ab".asBytes();
+	const grownView = "ab".asBytes();
+	const grown = grownView.slice(0);
 	grown.push(99);
 	show("grownStr", grown.asString());
 	showN("grownLen", grown.length);

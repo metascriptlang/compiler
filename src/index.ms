@@ -5,7 +5,7 @@ import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compi
 import { setParserDefines } from "./parser/context";
 import { defineSymbol } from "./compiler/defines";
 import { VERSION, printUsage } from "./compiler/usage";
-import { cmdBuildJS, cmdBuildC, cmdWatchC, cmdRunJS, cmdRunRaiser, cmdTest, cmdTestJS } from "./compiler/compile";
+import { cmdBuildJS, cmdBuildC, cmdWatchC, cmdRunHcr, cmdRunJS, cmdRunRaiser, cmdTest, cmdTestJS } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
 import { lspRunServer } from "./compiler/lsp/server";
 import { loadBuildConfig, loadFmtSection, resolveCcForTarget } from "./compiler/buildConfig";
@@ -102,6 +102,8 @@ export function main(): int32 {
 				cmdRunJS(opts.inputFile, opts);
 			} else if (opts.target == Target.Raiser) {
 				cmdRunRaiser(opts.inputFile, opts);
+			} else if (opts.isHcr) {
+				cmdRunHcr(opts.inputFile, opts);
 			} else {
 				cmdRun(opts.inputFile, opts);
 			}

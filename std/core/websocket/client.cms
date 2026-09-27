@@ -109,7 +109,7 @@ export function stringToBytes(s: string): uint8[] {
 	const n = s.byteLength;
 	let out: uint8[] = [];
 	for (let i: int64 = 0; i < n; i = i + 1) {
-		out.push(s.byteAt(i) as uint8);
+		out.push(s.byteAt(i as int32) as uint8);
 	}
 	return out;
 }
@@ -426,7 +426,7 @@ function defaultConnectOptions(): ConnectOptions {
 	return { subprotocols: subs, extraHeaders: extras, recvSendTimeoutMs: 0 };
 }
 
-export async function connect(url: string, options: ConnectOptions = null): Promise<Result<WsClient, WsError>> {
+export async function connect(url: string, options: ConnectOptions | null = null): Promise<Result<WsClient, WsError>> {
 	const opts = options == null ? defaultConnectOptions() : options;
 
 	const u = parseWsUrl(url);
@@ -475,7 +475,7 @@ export async function connect(url: string, options: ConnectOptions = null): Prom
 	});
 }
 
-export function connectSync(url: string, options: ConnectOptions = null): Result<WsClient, WsError> {
+export function connectSync(url: string, options: ConnectOptions | null = null): Result<WsClient, WsError> {
 	const opts = options == null ? defaultConnectOptions() : options;
 
 	const u = parseWsUrl(url);

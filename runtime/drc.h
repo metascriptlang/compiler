@@ -247,6 +247,10 @@ static inline void msAtomicIncRef(void* p) {
 	}
 }
 
+#ifdef MSGC_ORC
+void msUnregisterCycle(void* p);
+#endif
+
 static inline bool msDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	msRefHeader* h = msHeader(p);
@@ -254,6 +258,9 @@ static inline bool msDecRefIsLast(void* p) {
 	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner.
 	 * Under --gc=drc, MS_RC_MASK=0 so this reduces to h->rc==0. */
 	if ((h->rc & ~MS_RC_MASK) == 0) {
+#ifdef MSGC_ORC
+		if (h->rootIdx >= 0) msUnregisterCycle(p);
+#endif
 		return true;
 	}
 	h->rc -= MS_RC_INCREMENT;
@@ -274,10 +281,6 @@ static inline bool msAtomicDecRefIsLast(void* p) {
 	}
 	return false;
 }
-
-#ifdef MSGC_ORC
-void msUnregisterCycle(void* p);
-#endif
 
 static inline void msDestroyAndDispose(void* p) {
 	if (p != NULL) {

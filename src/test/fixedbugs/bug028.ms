@@ -43,7 +43,7 @@ import { makeSymbol } from "../../checker/symbol";
 import { createNodeAt, NodeKind, SymbolKind, Type, TypeKind, makeLoc, Symbol } from "../../ast/node";
 import { inferredType } from "../../checker/types";
 
-function _symFor(name: string, declKind: int32): Symbol {
+function _symFor(name: string, declKind: NodeKind): Symbol {
 	const zl = makeLoc(0, 0);
 	const sym = makeSymbol(name, SymbolKind.TypeAlias, inferredType(), false);
 	if (declKind == NodeKind.InterfaceDecl) {
@@ -72,7 +72,7 @@ function _symFor(name: string, declKind: int32): Symbol {
 	return sym;
 }
 
-function _bindsDefiningSymbol(name: string, declKind: int32): boolean {
+function _bindsDefiningSymbol(name: string, declKind: NodeKind): boolean {
 	const sym = _symFor(name, declKind);
 	const info = buildExportInfo(sym, null as unknown as ExtensionRegistry, "test.ms", null as unknown as CheckerContext);
 	return info.sym == sym && info.sym.declNode.kind == declKind;

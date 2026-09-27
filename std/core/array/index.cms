@@ -31,7 +31,7 @@ export extern function push(this arr: number[], sink value: number): void from "
 
 /**
  * Removes the last element from an array and returns it.
- * If the array is empty, undefined is returned and the array is not modified.
+ * An empty array raises the index error, as a[-1] would.
  */
 export extern function pop(this arr: number[]): number from "&msNumberArrayPop";
 
@@ -41,7 +41,7 @@ export extern function pop(this arr: number[]): number from "&msNumberArrayPop";
  */
 export extern function shift(this arr: number[]): number from "&msNumberArrayShift";
 
-/** Returns the element at the specified index. */
+/** Returns the element at the specified index; a negative index counts from the end, and one out of range raises the index error. */
 export extern function at(this arr: number[], idx: number): number from "&msNumberArrayAt";
 
 /**
@@ -61,7 +61,7 @@ export extern function includes(this arr: number[], value: number): boolean from
  * @param start The beginning index of the specified portion of the array.
  * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
  */
-export extern function slice(this arr: number[], start: number, end: number): number[] from "&msNumberArraySlice";
+export extern function slice(this arr: number[], start: number, end: number = 9007199254740991): number[] from "&msNumberArraySlice";
 
 /**
  * Combines two or more arrays.
@@ -112,7 +112,7 @@ export extern function push(this arr: string[], sink value: string): void from "
 
 /**
  * Removes the last element from an array and returns it.
- * If the array is empty, undefined is returned and the array is not modified.
+ * An empty array raises the index error, as a[-1] would.
  */
 export extern function pop(this arr: string[]): string from "&msStringArrayPop";
 
@@ -121,9 +121,6 @@ export extern function pop(this arr: string[]): string from "&msStringArrayPop";
  * If the array is empty, undefined is returned and the array is not modified.
  */
 export extern function shift(this arr: string[]): string from "&msStringArrayShift";
-
-/** Returns the element at the specified index. */
-export extern function at(this arr: string[], idx: number): string from "&msStringArrayAt";
 
 /**
  * Returns the index of the first occurrence of a value in an array, or -1 if it is not present.
@@ -142,7 +139,7 @@ export extern function includes(this arr: string[], value: string): boolean from
  * @param start The beginning index of the specified portion of the array.
  * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
  */
-export extern function slice(this arr: string[], start: number, end: number): string[] from "&msStringArraySlice";
+export extern function slice(this arr: string[], start: number, end: number = 9007199254740991): string[] from "&msStringArraySlice";
 
 /**
  * Combines two or more arrays.
@@ -195,21 +192,44 @@ export extern function push<T>(this arr: T[], sink value: T): void from "&msGene
 
 /**
  * Removes the last element from an array and returns it.
- * If the array is empty, undefined is returned and the array is not modified.
+ * An empty array raises the index error, as a[-1] would.
  */
 export extern function pop<T>(this arr: T[]): T from "&msGenericArrayPop";
 
-/** Returns the element at the specified index. */
-export extern function at<T>(this arr: T[], idx: number): T from "&msGenericArrayAt";
+extern function checkedIndex<T>(this arr: T[], idx: number): int64 from "&msGenericArrayCheckedIndex";
 
-/** Sets the length of the array. */
-export extern function setLength<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
+/** Returns a copy of the element at the specified index; a negative index counts from the end, and one out of range raises the index error. */
+export function at<T>(this arr: T[], idx: number): T {
+	const element = arr[arr.checkedIndex(idx)];
+	return element;
+}
+
+extern function growLength<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
+
+/** Sets the length of the array. Shrinking destroys every evicted element. */
+export function setLength<T>(this arr: T[], newLen: number): void {
+	const n = newLen < 0 ? 0 : newLen;
+	while (arr.length > n) {
+		arr.pop();
+	}
+	arr.growLength(n);
+}
 
 /** Returns the allocated capacity of the array buffer. */
 export extern function capacity<T>(this arr: T[]): number from "&msGenericArrayCapacity";
 
 /** Removes deleteCount elements starting at index start. */
-export extern function splice<T>(this arr: T[], start: number, deleteCount: number): void from "&msRefArraySplice";
+export function splice<T>(this arr: T[], start: number, deleteCount: number): void {
+	const n = arr.length;
+	if (start < 0 || start >= n || deleteCount <= 0) return;
+	const k = start + deleteCount > n ? n - start : deleteCount;
+	let i = start;
+	while (i + k < n) {
+		arr[i] = arr[i + k];
+		i = i + 1;
+	}
+	arr.setLength(n - k);
+}
 
 /** Removes deleteCount elements at start, then inserts item at start. */
 export extern function splice<T>(this arr: T[], start: number, deleteCount: number, item: T): void from "&msRefArraySplice3";
@@ -256,7 +276,7 @@ export function map<T, U>(this arr: T[], fn: (x: T, i: number) => U): U[] {
  * @param start The beginning index of the specified portion of the array.
  * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
  */
-export function slice<T>(this arr: T[], start: number, end: number): T[] {
+export function slice<T>(this arr: T[], start: number, end: number = 9007199254740991): T[] {
 	const n = arr.length;
 	let lo = start < 0 ? n + start : start;
 	let hi = end < 0 ? n + end : end;
@@ -361,4 +381,4 @@ export function concat<T>(this arr: T[], other: T[]): T[] {
 
 /** Returns the byte array as a string (zero-copy). */
 @builtin("AsString")
-export extern function asString(this arr: uint8[]): string from "msAsString";
+export extern function asString(this arr: Readonly<uint8[]>): string from "msAsString";

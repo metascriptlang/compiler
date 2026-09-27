@@ -71,7 +71,7 @@ export interface ResolvedOptions {
 }
 
 // Apply FetchOptions over defaults. Null options → all defaults.
-export function resolveFetchOptions(options: FetchOptions, defaultTimeout: int32, defaultMaxRedirects: int32): ResolvedOptions {
+export function resolveFetchOptions(options: FetchOptions | null, defaultTimeout: int32, defaultMaxRedirects: int32): ResolvedOptions {
 	let method = HttpMethod.GET;
 	let body = "";
 	let headers = createHeaders();

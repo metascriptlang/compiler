@@ -8,6 +8,7 @@ import { Node, NodeKind, SourceLocation, makeLoc, Type, TypeKind, Symbol, Symbol
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 import { AffineTracker, createAffineTracker } from "./spawnAffinity";
+import { mangle } from "../codegen/c/names";
 
 
 // ===== Export Registry (cross-module type propagation) =====
@@ -995,6 +996,12 @@ export function extractGenericParamDecls(flags: string): string[] {
 	return result;
 }
 
+export function extractGenericParamNames(flags: string): string[] {
+	const names: string[] = [];
+	for (const param of extractGenericNames(flags)) names.push(splitTopLevel(param, ":")[0].trim());
+	return names;
+}
+
 export function stripGenFlag(flags: string): string {
 	if (flags == "") return "";
 	const parts = splitTopLevel(flags, "|");
@@ -1343,7 +1350,7 @@ export function newSym(ctx: CheckerContext, kind: SymbolKind, name: string, symT
 }
 
 export function nextDisamb(ctx: CheckerContext, modulePath: string, name: string): int32 {
-	const key = modulePath + "\t" + name;
+	const key = modulePath + "\t" + mangle(name);
 	const next = ctx.disambTable.get(key) ?? 0;
 	ctx.disambTable.set(key, next + 1);
 	return next;

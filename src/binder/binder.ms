@@ -30,7 +30,7 @@ import {
 	ExportDeclData, DecoratedDeclData, TestDeclData,
 	MacroInvocationData, SpliceManyData,
 	HiddenDerefData, HiddenStdConvData,
-	IdentifierData,
+	IdentifierData, BooleanLiteralData,
 	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../ast/node";
 
@@ -69,6 +69,9 @@ function createFlowCondition(flag: FlowFlag, antecedent: FlowNode, expr: Node): 
 	// flag must be TrueCondition or FalseCondition
 	if (antecedent == null || antecedent.flags.has(FlowFlag.Unreachable)) {
 		return antecedent;
+	}
+	if (expr.kind == NodeKind.BooleanLiteral && (expr.data as BooleanLiteralData).boolValue == (flag == FlowFlag.FalseCondition)) {
+		return createUnreachableFlow();
 	}
 	const f = createFlowNode(flag);
 	f.antecedent = antecedent;
@@ -216,6 +219,7 @@ function bindContainer(state: BinderState, container: Node, body: Node): void {
 	state.currentExceptionTarget = null;
 
 	if (body != null) bindStatement(state, body);
+	if (body != null && body.kind == NodeKind.BlockStmt) body.flowNode = state.currentFlow;
 
 	state.currentFlow = savedFlow;
 	state.currentBreakTarget = savedBreak;
@@ -440,6 +444,7 @@ function bindSwitchStmt(state: BinderState, node: Node): void {
 			bindStatement(state, caseData.caseStmts[si]);
 			si = si + 1;
 		}
+		caseNode.flowNode = state.currentFlow;
 		addAntecedent(postLabel, state.currentFlow);
 		if (caseData.isDefault) hasDefault = true;
 		i = i + 1;
@@ -859,6 +864,10 @@ function bindCallExpr(state: BinderState, node: Node): void {
 	// fall-through path to the ok variant.
 	if (d.callee != null && isExitCallee(d.callee)) {
 		state.currentFlow = state.unreachableFlow;
+		return;
+	}
+	if (d.arguments.length > 0 || (d.callee != null && (d.callee.kind == NodeKind.MemberExpr || d.callee.kind == NodeKind.Identifier))) {
+		state.currentFlow = createFlowMutation(FlowFlag.Call, state.currentFlow, node);
 	}
 }
 
@@ -880,6 +889,9 @@ function bindNewExpr(state: BinderState, node: Node): void {
 	if (d.newCallee != null) bindExpression(state, d.newCallee);
 	for (const arg of d.newArguments) {
 		bindExpression(state, arg);
+	}
+	if (d.newArguments.length > 0) {
+		state.currentFlow = createFlowMutation(FlowFlag.Call, state.currentFlow, node);
 	}
 }
 

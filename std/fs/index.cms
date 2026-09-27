@@ -1,12 +1,24 @@
 // std/fs — File System (POSIX)
 
-import {
-	msFsReadFile, msFsWriteFileMode, msFsExists, msFsIsFile, msFsIsDir,
-	msFsIsExecutable, msFsRealPath,
-	msFsMkdir, msFsRmdir, msFsRemove, msFsRename, msFsLastErrno,
-	msFsChmod, msFsReadDirEntries, msFsSymlink,
-} from "runtime/fs/header.h";
+@include("runtime/fs/header.h");
+
 import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
+
+extern function msFsLastErrno(): int32;
+extern function msFsReadFile(path: string): string;
+extern function msFsWriteFileMode(path: string, content: string, mode: string): number;
+extern function msFsChmod(path: string, mode: int32): number;
+extern function msFsExists(path: string): number;
+extern function msFsIsFile(path: string): number;
+extern function msFsIsDir(path: string): number;
+extern function msFsIsExecutable(path: string): number;
+extern function msFsRealPath(path: string): string;
+extern function msFsMkdir(path: string): number;
+extern function msFsRmdir(path: string): number;
+extern function msFsReadDirEntries(path: string): string;
+extern function msFsRemove(path: string): number;
+extern function msFsRename(oldPath: string, newPath: string): number;
+extern function msFsSymlink(target: string, path: string): number;
 
 // Path utilities (pure MetaScript)
 export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";

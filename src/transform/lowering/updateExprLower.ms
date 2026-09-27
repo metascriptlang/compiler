@@ -1,15 +1,9 @@
-// Update Expression Lowering — rewrite x++/--x in statement position to assignment
-//
-// In statement position (ExprStmt), `x++;` is lowered to `x = x + 1;`
-// and `--x;` is lowered to `x = x - 1;`.
-//
-// In expression position (e.g. `f(x++)`), update is preserved
-// since C supports ++/-- natively.
+// Update Expression Lowering — statement `x++` becomes `x += 1` (Nim mInc -> binaryStmt `+=`).
 
-import { Node, NodeKind, ExprStmtData, UpdateExprData } from "../../ast/node";
+import { Node, NodeKind, ExprStmtData, UpdateExprData, BinaryExprData } from "../../ast/node";
 import { TransformContext, createTransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeExprStmt, makeAssign, makeBinary, makeNumber } from "../util";
+import { makeExprStmt, makeBinary, makeNumber } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Visitor =====
@@ -20,14 +14,11 @@ function lowerUpdateNode(node: Node): Node {
 	if (d.expr.kind != NodeKind.UpdateExpr) return node;
 	const ud = d.expr.data as UpdateExprData;
 	const loc = node.location;
-	const delta = match (ud.updateOp) {
-		"++" => "+",
-		_ => "-",
+	const op = match (ud.updateOp) {
+		"++" => "+=",
+		_ => "-=",
 	};
-	// x++ or ++x in statement position → x = x + 1 (or x = x - 1)
-	return makeExprStmt(
-		makeAssign(ud.updateArg, makeBinary(ud.updateArg, delta, makeNumber(1, loc), loc), loc),
-	loc);
+	return makeExprStmt(makeBinary(ud.updateArg, op, makeNumber(1, loc), loc), loc);
 }
 
 // ===== Entry Point =====
@@ -50,6 +41,17 @@ function innerExprKindAfterUpdate(input: string): NodeKind {
 	return sd.expr.kind;
 }
 
+function updateOperatorAfter(input: string): string {
+	const result = parseInput(input);
+	if (!result.ok) return "";
+	const prog = lowerUpdateExpr(result.value, createTransformContext());
+	const stmts = getStmts(prog);
+	if (stmts.length == 0 || stmts[0].kind != NodeKind.ExprStmt) return "";
+	const sd = stmts[0].data as ExprStmtData;
+	if (sd.expr.kind != NodeKind.BinaryExpr) return "";
+	return (sd.expr.data as BinaryExprData).operator;
+}
+
 // ===== Tests =====
 test "x++ becomes assignment" { assert innerExprKindAfterUpdate("x++;") == NodeKind.BinaryExpr; }
 
@@ -64,3 +66,7 @@ test "non-update ExprStmt unchanged" { assert firstExprKindAfter("f();", lowerUp
 test "while unchanged" { assert firstStmtKindAfter("while (true) {}", lowerUpdateExpr) == NodeKind.WhileStmt; }
 
 test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", lowerUpdateExpr) == 2; }
+
+test "a[f()]++ updates its location in place" { assert updateOperatorAfter("a[f()]++;") == "+="; }
+
+test "--g().v updates its location in place" { assert updateOperatorAfter("--g().v;") == "-="; }

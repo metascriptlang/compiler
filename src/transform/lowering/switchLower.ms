@@ -6,11 +6,13 @@
 // equivalent. Lowering inline (not returning a raw MatchStmt) keeps the
 // walker recursing into the produced blocks, so nested switches lower too.
 
-import { Node, NodeKind, SourceLocation, SwitchStmtData, SwitchCaseData, BreakStmtData, IfStmtData, BlockStmtData, TryCatchStmtData, MatchStmtData, MatchCaseData } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, SwitchStmtData, SwitchCaseData, BreakStmtData } from "../../ast/node";
+import { forEachChild } from "../../ast/visitor";
 import { TransformContext } from "../context";
 import { makeIdent, makeBlock, makeExprStmt, makeMatchStmt, makeMatchCase, makeSwitchWrapper, isCSwitchableType } from "../util";
 import { walkExpandBlocks } from "../walker";
 import { lowerMatchStmt } from "./matchLower";
+import { isFnBoundary, isLoopKind } from "./jumpRetarget";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 export function lowerSwitch(program: Node, ctx: TransformContext): Node {
@@ -60,9 +62,6 @@ function dropTerminalBreak(stmts: Node[]): void {
 	}
 }
 
-// Breaks owned by this switch (TS semantics: break inside a switch case exits
-// the switch). Descends transparent statements; stops at loops, nested
-// switches, and function boundaries (statements only — never into expressions).
 function collectOwnedBreaks(stmts: Node[], out: Node[]): void {
 	for (const s of stmts) {
 		collectOwnedInStmt(s, out);
@@ -77,31 +76,8 @@ function collectOwnedInStmt(s: Node, out: Node[]): void {
 		}
 		return;
 	}
-	if (s.kind == NodeKind.IfStmt) {
-		const id = s.data as IfStmtData;
-		collectOwnedInStmt(id.consequent, out);
-		if (id.alternate != null) { collectOwnedInStmt(id.alternate, out); }
-		return;
-	}
-	if (s.kind == NodeKind.BlockStmt) {
-		collectOwnedBreaks((s.data as BlockStmtData).statements, out);
-		return;
-	}
-	if (s.kind == NodeKind.TryCatchStmt) {
-		const td = s.data as TryCatchStmtData;
-		collectOwnedInStmt(td.tryBody, out);
-		if (td.catchBody != null) { collectOwnedInStmt(td.catchBody, out); }
-		if (td.finallyBody != null) { collectOwnedInStmt(td.finallyBody, out); }
-		return;
-	}
-	if (s.kind == NodeKind.MatchStmt) {
-		const md = s.data as MatchStmtData;
-		for (const c of md.matchStmtCases) {
-			const cd = c.data as MatchCaseData;
-			collectOwnedInStmt(cd.caseBody, out);
-		}
-		return;
-	}
+	if (s.kind == NodeKind.SwitchStmt || isLoopKind(s.kind) || isFnBoundary(s.kind)) return;
+	forEachChild(s, (child: Node): void => { collectOwnedInStmt(child, out); });
 }
 
 function eraseToMatch(d: SwitchStmtData, loc: SourceLocation, ctx: TransformContext): Node[] {
@@ -143,6 +119,12 @@ test "empty switch keeps only the discriminant eval" {
 test "nested switch in a case body lowers too" {
 	const src = "switch (a) { case 1: switch (b) { case 2: f(); } default: g(); }";
 	assert stmtCountAfter(src, lowerSwitch) == 2;
+}
+
+test "a break in a statement match arm inside a case belongs to the switch" {
+	const src = "switch (s) { case \"a\": match (k) { 1 => { break; } _ => {} } foo(); default: bar(); }";
+	assert stmtCountAfter(src, lowerSwitch) == 1;
+	assert firstStmtKindAfter(src, lowerSwitch) == NodeKind.DoWhileStmt;
 }
 
 test "non-switch passthrough" {

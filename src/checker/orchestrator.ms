@@ -144,7 +144,7 @@ export function setGraphCheckTiming(on: boolean): void {
 // (--os=bare/solana imply Manual). Stamped on the same context and for the same
 // reason as targetOs: checks that depend on the runtime's capabilities (e.g. the
 // freestanding async gate) run inside this pass, long before applyGcMode.
-export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, config: ResolverConfig | null = null, session: CheckSession | null = null): ExportRegistry {
+export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, config: ResolverConfig | null = null, session: CheckSession | null = null, strictDefs: boolean = false, strictNullChecks: boolean = false): ExportRegistry {
 	const kept: TransAmDb | null = session != null ? session.db : null;
 	if (session != null) resetGenericTypeInsts();
 	const _tpre0 = performance.now();
@@ -156,6 +156,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	baseCtx.targetOs = targetOs;
 	baseCtx.targetInfo = targetInfo;
 	baseCtx.gcMode = gcMode;
+	baseCtx.strictDefs = strictDefs;
+	baseCtx.strictNullChecks = strictNullChecks;
 	lastPreludeCtx = baseCtx;
 
 	const _tf0 = performance.now();
@@ -181,6 +183,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	const tFeed = performance.now() - _tf0;
 
 	const _tc0 = performance.now();
+	const checked: { mod: Module, ctx: CheckerContext }[] = [];
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
 		if (mod == null || mod.source == "" || preludeOwned.has(path)) continue;
@@ -207,18 +210,12 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		}
 		if (fresh && mod.stdPrelude) promoteStdModuleIntoPrelude(baseCtx, ctx, mod.preludeSpecifier, injectedIncludes, injectedFlags);
 		if (fresh && mod.extraPrelude) promoteModuleIntoPrelude(baseCtx, ctx);
-		for (const err of ctx.errors) {
-			if (err.severity == Severity.Hint) continue;
-			const sev = match (err.severity) {
-				Severity.Warning => ErrorSeverity.Warning,
-				_ => ErrorSeverity.Error,
-			};
-			mod.errors.push(createModuleError(err.message, err.line, err.column, sev));
-		}
+		checked.push({ mod, ctx });
 		for (const e of collectExports(ctx, path)) {
 			if (!isStaticExtensionSym(e.sym)) mod.exportNames.push(e.name);
 		}
 	}
+	for (const c of checked) mirrorModuleErrors(c.mod, c.ctx);
 	const tCheck = performance.now() - _tc0;
 	if (graphTiming) {
 		console.log(`    prelude=${tPrelude}ms feed=${tFeed}ms check=${tCheck}ms`);
@@ -243,6 +240,17 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		console.log(`    getProperty: n=${gp[0]} t=${gp[1]}ms | findVariantByFieldName: n=${fvb[0]} t=${fvb[1]}ms | findAllExtByName: n=${fae[0]} t=${fae[1]}ms`);
 	}
 	return db.exportRegistry;
+}
+
+function mirrorModuleErrors(mod: Module, ctx: CheckerContext): void {
+	for (const err of ctx.errors) {
+		if (err.severity == Severity.Hint) continue;
+		const sev = match (err.severity) {
+			Severity.Warning => ErrorSeverity.Warning,
+			_ => ErrorSeverity.Error,
+		};
+		mod.errors.push(createModuleError(err.message, err.line, err.column, sev));
+	}
 }
 
 function hasModuleError(mod: Module): boolean {

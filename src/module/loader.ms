@@ -19,15 +19,17 @@ import {
 	Module, ModuleGraph, ModuleState, createModuleGraph, createModule, createImportEntry,
 	findModule, hasModule, addModule, pushImportStack, popImportStack, createModuleError, ModuleError, ErrorSeverity,
 } from "./graph";
-import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig } from "./resolver";
+import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig, Backend } from "./resolver";
 import { lex } from "../lexer/lexer";
-import { createState } from "../parser/context";
+import { createState, getParserDefines, setParserDefines } from "../parser/context";
+import { definedValue, createDefineTable, initDefines } from "../compiler/defines";
 import { callStateProgramParser } from "../parser/statements/callbacks";
 import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../ast/node";
-import { readFile, writeFile, ensureDir, realpath } from "std/fs";
+import { readFile, writeFile, ensureDir, realpath, readDir } from "std/fs";
 import { translateCHeader } from "./cimport/emit";
 import { Diagnostic, DiagSeverity } from "./cparse/error";
+import { TargetInfo, targetFor, hostTarget } from "./cparse/target";
 import { resolveRuntimeDir } from "../utils/path";
 import { isAbsolute, dirname, join, normalize } from "std/fs/path";
 import { cwd, env, platform } from "std/process";
@@ -133,7 +135,7 @@ export function takeInlineHeaderTimings(): InlineHeaderTimings {
 // compile.ms module load, the same cycle-breaker pattern as
 // parser/statements/callbacks.ms.
 
-type HeaderCacheKeyFn = (source: string, modulePath: string, compact: boolean) => string;
+type HeaderCacheKeyFn = (source: string, modulePath: string, compact: boolean, target: string) => string;
 type HeaderCacheLookupFn = (key: string) => string;
 type HeaderCacheStoreFn = (key: string, deps: string[], output: string) => void;
 
@@ -161,7 +163,15 @@ function headerCacheEngage(source: string, modulePath: string, provider: SourceP
 	if (provider.taReadFn != null || !provider.useFileSystem) return "";
 	if (env.get("MSC_NO_HEADER_CACHE") != "") return "";
 	if (source.indexOf(".h") < 0) return "";
-	return _hcKeyFn(source, modulePath, compactReplacement);
+	const t = headerTarget();
+	return _hcKeyFn(source, modulePath, compactReplacement, t != null ? `${t.os}-${t.cpu}` : "");
+}
+
+export function headerTarget(): TargetInfo {
+	const defs = getParserDefines();
+	const os = definedValue(defs, "os");
+	const cpu = definedValue(defs, "cpu");
+	return os != "" && cpu != "" ? targetFor(os, cpu) : hostTarget();
 }
 
 export function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean = false, outErrors: ModuleError[] = null as unknown as ModuleError[]): string {
@@ -310,8 +320,17 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 		const includePaths = compilerRoot != ""
 			? [builtinInclude, compilerRoot, headerDir, headerParentDir]
 			: [builtinInclude, headerDir, headerParentDir];
+		const target = headerTarget();
+		if (target == null) {
+			if (outErrors != null) {
+				const noTargetLine = countLinesBefore(result, importIdx) - insertedLines;
+				outErrors.push(createModuleError(`C header '${specifier}': no C target model for --os=${definedValue(getParserDefines(), "os")} --cpu=${definedValue(getParserDefines(), "cpu")}`, noTargetLine, 1, ErrorSeverity.Error));
+			}
+			searchPos = importIdx + 7;
+			continue;
+		}
 		const headerDiags: Diagnostic[] = [];
-		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags, emittedHeaderDecls, cparseReads);
+		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags, emittedHeaderDecls, cparseReads, target);
 		if (outErrors != null && headerDiags.length > 0) {
 			const importLine = countLinesBefore(result, importIdx) - insertedLines;
 			for (const hd of headerDiags) {
@@ -731,7 +750,7 @@ export function loadModuleGraph(entryPath: string, provider: SourceProvider): Mo
 	const graph = createModuleGraph();
 	// Dummy config — not used in bare mode (useConfig=0)
 	const dummyExts: string[] = [];
-	const dummyCfg: ResolverConfig = { backend: 0, stdPath: "", searchPaths: [], extensions: dummyExts, aliasKeys: [], aliasValues: [] };
+	const dummyCfg: ResolverConfig = { backend: Backend.C, stdPath: "", searchPaths: [], extensions: dummyExts, aliasKeys: [], aliasValues: [] };
 	const _r = loadModule(graph, entryPath, provider, dummyCfg, 0);
 	return graph;
 }
@@ -789,6 +808,77 @@ test "inlineHeaderImports resolves bare .h specifier module-relative (CWD-indepe
 	const src = "import { bareOk } from " + "\"lib/api.h\";\n";
 	const inlined = inlineHeaderImports(src, "/tmp/msbarespec/main.ms", provider);
 	assert inlined.indexOf("extern function bareOk") >= 0;
+}
+
+function inlinePlatHeaderFor(os: string, cpu: string, errs: ModuleError[]): string {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/tmp/mstarget/plat.h", "#if defined(_WIN32)\nint platWin(void);\n#elif defined(__APPLE__)\nint platApple(void);\n#else\nint platOther(void);\n#endif\n"));
+	const src = "import { platWin, platApple, platOther } from " + "\"./plat.h\";\n";
+	const saved = getParserDefines();
+	const defs = createDefineTable();
+	initDefines(defs, "c", os, cpu, "drc", 0);
+	setParserDefines(defs);
+	try {
+		return inlineHeaderImports(src, "/tmp/mstarget/main.ms", createMapProvider(entries), false, errs);
+	} finally {
+		setParserDefines(saved);
+	}
+}
+
+test "inlineHeaderImports takes the _WIN32 branch for a windows build" {
+	const inlined = inlinePlatHeaderFor("windows", "amd64", []);
+	assert inlined.indexOf("extern function platWin") >= 0;
+	assert inlined.indexOf("extern function platApple") < 0;
+	assert inlined.indexOf("extern function platOther") < 0;
+}
+
+test "inlineHeaderImports takes neither the apple nor the windows branch for a linux build" {
+	const inlined = inlinePlatHeaderFor("linux", "arm64", []);
+	assert inlined.indexOf("extern function platOther") >= 0;
+	assert inlined.indexOf("extern function platApple") < 0;
+	assert inlined.indexOf("extern function platWin") < 0;
+}
+
+test "inlineHeaderImports takes the __APPLE__ branch for a macos build" {
+	const inlined = inlinePlatHeaderFor("macos", "arm64", []);
+	assert inlined.indexOf("extern function platApple") >= 0;
+	assert inlined.indexOf("extern function platOther") < 0;
+}
+
+test "inlineHeaderImports reports a build target with no C model instead of guessing one" {
+	const errs: ModuleError[] = [];
+	const inlined = inlinePlatHeaderFor("linux", "vax", errs);
+	assert inlined.indexOf("extern function") < 0;
+	assert errs.length == 1;
+	assert errs[0].severity == ErrorSeverity.Error;
+	assert errs[0].message.indexOf("--cpu=vax") >= 0;
+}
+
+function collectStdHeaderImports(dir: string, found: string[], scanned: int32[]): void {
+	const fromQuote = "fr" + "om \"";
+	const headerQuote = ".h" + "\"";
+	for (const entry of readDir(dir)) {
+		if (entry.endsWith("/")) {
+			collectStdHeaderImports(dir + "/" + entry.slice(0, entry.length - 1), found, scanned);
+			continue;
+		}
+		if (!(entry.endsWith(".ms") || entry.endsWith(".cms") || entry.endsWith(".jms") || entry.endsWith(".rms") || entry.endsWith(".wms"))) continue;
+		scanned[0] = scanned[0] + 1;
+		const src = try readFile(dir + "/" + entry) catch "";
+		for (const line of src.split("\n")) {
+			if (line.indexOf(fromQuote) >= 0 && line.indexOf(headerQuote) >= 0) found.push(`${dir}/${entry}: ${line}`);
+		}
+	}
+}
+
+test "no std module binds C by importing a header" {
+	const root = resolveRuntimeDir();
+	assert root != "";
+	const found: string[] = [];
+	const scanned: int32[] = [0];
+	collectStdHeaderImports(root + "/std", found, scanned);
+	assert scanned[0] > 100;
+	assert found.length == 0;
 }
 
 test "re-export from .h with prefix-colliding names does not double-export" {

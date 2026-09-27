@@ -14,19 +14,19 @@
 
 import {
 	Node, NodeKind, DeclKind, SourceLocation, createNode,
-	ArrayLiteralData, SpreadExprData, IdentifierData, Type, TypeKind,
+	ArrayLiteralData, SpreadExprData, IdentifierData, BinaryExprData, Type, TypeKind,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { int32Type } from "../../checker/types";
 import { Symbol } from "../../ast/node";
-import { walkExpandBlocks } from "../walker";
+import { walkExpandBlocks, walkOnceEvaluated, OnceEvalState } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import {
 	makeVarDecl, makeIdentResolved, makeIdent, makeCall, makeMember, makeExprStmt, makeBlock,
 	makeWhile, makeBinary, makeNumber, makeAssign, makeArrayAccess, makeHiddenAddr, makeHiddenDeref, syntheticToken, runtimeRef,
 } from "../util";
 
-function isLowerableSpreadLiteral(node: Node): boolean {
+export function isLowerableSpreadLiteral(node: Node): boolean {
 	if (node.kind != NodeKind.ArrayLiteral) return false;
 	const t = node.nodeType;
 	if (t == null) return false;
@@ -40,7 +40,13 @@ function isLowerableSpreadLiteral(node: Node): boolean {
 	return false;
 }
 
-function collectSpreadLiterals(node: Node, out: Node[]): void {
+function isAssignedPattern(parent: Node, child: Node): boolean {
+	if (parent.kind != NodeKind.BinaryExpr || child.kind != NodeKind.ArrayLiteral) return false;
+	const bd = parent.data as BinaryExprData;
+	return bd.operator == "=" && bd.left == child;
+}
+
+function collectEverySpreadLiteral(node: Node, out: Node[]): void {
 	if (node == null) return;
 	forEachChild(node, (c: Node): void => {
 		if (c == null) return;
@@ -48,9 +54,17 @@ function collectSpreadLiterals(node: Node, out: Node[]): void {
 		if (k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr
 			|| k == NodeKind.FunctionDecl || k == NodeKind.MethodDecl
 			|| k == NodeKind.BlockStmt) return;
-		collectSpreadLiterals(c, out);
+		if (isAssignedPattern(node, c)) return;
+		collectEverySpreadLiteral(c, out);
 	});
 	if (isLowerableSpreadLiteral(node)) out.push(node);
+}
+
+function collectLeadingSpreadLiterals(stmt: Node, out: Node[]): void {
+	const st: OnceEvalState = { effectSeen: false };
+	walkOnceEvaluated(stmt, st, (n: Node, effectBefore: boolean): void => {
+		if (!effectBefore && isLowerableSpreadLiteral(n)) out.push(n);
+	});
 }
 
 function typedRef(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
@@ -90,7 +104,7 @@ function pushStmt(accSym: Symbol, accT: Type | null, arg: Node, loc: SourceLocat
 	return makeExprStmt(makeCall(runtimeRef("msGenericArrayPush", loc), args, loc), loc);
 }
 
-function buildExpansion(lit: Node, ctx: TransformContext, out: Node[]): void {
+export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[]): void {
 	const litT = lit.nodeType;
 	const loc = lit.location;
 	const d = lit.data as ArrayLiteralData;
@@ -139,17 +153,32 @@ function buildExpansion(lit: Node, ctx: TransformContext, out: Node[]): void {
 	lit.resolvedSym = accSym;
 }
 
-function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
+function expandLeading(stmt: Node, ctx: TransformContext): Node[] {
 	const lits: Node[] = [];
-	collectSpreadLiterals(stmt, lits);
+	collectLeadingSpreadLiterals(stmt, lits);
+	return expandBefore(stmt, lits, ctx);
+}
+
+function expandEvery(stmt: Node, ctx: TransformContext): Node[] {
+	const lits: Node[] = [];
+	collectEverySpreadLiteral(stmt, lits);
+	return expandBefore(stmt, lits, ctx);
+}
+
+function expandBefore(stmt: Node, lits: Node[], ctx: TransformContext): Node[] {
 	if (lits.length == 0) return [stmt];
 	const out: Node[] = [];
-	for (const lit of lits) buildExpansion(lit, ctx, out);
+	for (const lit of lits) expandSpreadLiteral(lit, ctx, out);
 	out.push(stmt);
 	return out;
 }
 
 export function lowerArraySpread(program: Node, ctx: TransformContext): Node {
-	walkExpandBlocks(program, expandStmt, ctx);
+	walkExpandBlocks(program, expandLeading, ctx);
+	return program;
+}
+
+export function lowerArraySpreadEager(program: Node, ctx: TransformContext): Node {
+	walkExpandBlocks(program, expandEvery, ctx);
 	return program;
 }

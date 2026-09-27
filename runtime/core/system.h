@@ -248,7 +248,12 @@ static inline void msStringCopy(msString* dest, msString src) {
 	(d).p = _asc_newp; \
 } while(0)
 #define msArrayStringWasMoved(arr)     msArrayWasMoved(arr)
-#define msArrayStringSink(d, ...)      do { msArrayDestroy(d); (d) = (__VA_ARGS__); } while(0)
+#define msArrayStringSink(d, ...)      do { \
+	msStringArray _ass_src = (__VA_ARGS__); \
+	if ((d).p != _ass_src.p) msStringArrayDestroy(&(d)); \
+	(d).len = _ass_src.len; \
+	(d).p = _ass_src.p; \
+} while(0)
 #define msArrayRefDestroy(arr)         msRefArrayDestroy((msRefArray*)&(arr))
 /* Deep copy: allocate new payload, copy each ref element with incref.
  * Cache (s) in a local to prevent double-evaluation when `s` is a call. */
@@ -270,12 +275,11 @@ static inline void msStringCopy(msString* dest, msString src) {
 	(d).len = _arc_len; \
 	(d).p = (void*)_arc_newp; \
 } while(0)
-/* Sink semantics: old dest payload freed (elements NOT decref'd — ownership
- * transfers from source which already holds the only refs). */
 #define msArrayRefSink(d, ...)         do { \
 	msRefArray _ars_src = (__VA_ARGS__); \
-	if ((d).p != NULL) { free((msRefPayload*)(d).p); } \
-	(d) = _ars_src; \
+	if ((void*)(d).p != (void*)_ars_src.p) msRefArrayDestroy((msRefArray*)&(d)); \
+	(d).len = _ars_src.len; \
+	(d).p = (void*)_ars_src.p; \
 } while(0)
 #define msArrayRefTrace(arr, cb)       do { \
 	for (int64_t _art_i = 0; _art_i < (arr).len && (arr).p; _art_i++) { \
@@ -394,8 +398,8 @@ static inline void msStringCopy(msString* dest, msString src) {
 } while(0)
 
 /* --- Closure lifecycle --- */
-#define msClosureDestroy(c)   do { if ((c).env != NULL) { msDecref((c).env); } (c).fn = NULL; (c).env = NULL; } while(0)
-#define msClosureCopy(c)      do { if ((c).env != NULL) msIncRef((c).env); } while(0)
+#define msClosureDestroy(c)   do { if ((c).env != NULL) { msDecrefCyclic((c).env); } (c).fn = NULL; (c).env = NULL; } while(0)
+#define msClosureCopy(c)      do { if ((c).env != NULL) msIncrefCyclic((c).env); } while(0)
 #define msClosureWasMoved(c)  do { (c).fn = NULL; (c).env = NULL; } while(0)
 #define msClosureSink(d, ...) do { msClosureDestroy(d); (d) = (__VA_ARGS__); } while(0)
 #define msClosureTrace(c, _env) do { if ((c).env != NULL) msOrcTraceRef(&(c).env, (_env)); } while(0)
@@ -504,8 +508,8 @@ _Noreturn void msMapFatal(msString msg);
    Works with any MS_ARRAY(T) typedef. Supports both reads and writes. */
 
 #define msArrayAccess(a, i) (*({ \
-	int32_t __idx = (i); \
-	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
+	int64_t __idx = (i); \
+	if ((uint64_t)__idx >= (uint64_t)(a).len) msRaiseIndexError(__idx, (a).len); \
 	&((a).p->data[__idx]); \
 }))
 
@@ -516,14 +520,14 @@ _Noreturn void msMapFatal(msString msg);
 #define msUint8ArrayAccess  msArrayAccess
 
 #define msSizedArrayAccess(a, i, n) (*({ \
-	int32_t __idx = (i); \
-	if ((uint32_t)__idx >= (uint32_t)(n)) msRaiseIndexError(__idx, (n)); \
+	int64_t __idx = (i); \
+	if ((uint64_t)__idx >= (uint64_t)(n)) msRaiseIndexError(__idx, (n)); \
 	&((a).data[__idx]); \
 }))
 
 #define msSpanAccess(a, i) (*({ \
-	int32_t __idx = (i); \
-	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
+	int64_t __idx = (i); \
+	if ((uint64_t)__idx >= (uint64_t)(a).len) msRaiseIndexError(__idx, (a).len); \
 	&((a).data[__idx]); \
 }))
 
@@ -540,42 +544,37 @@ _Noreturn void msMapFatal(msString msg);
    Inline condition (fast path), helper call only on error (slow path). */
 
 _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi);
+_Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi);
 _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected);
+_Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag);
 
-static inline int8_t msCheckRangeI8(double v, int64_t lo, int64_t hi) {
-	int64_t iv = (int64_t)v;
-	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
-	return (int8_t)iv;
+#define msVariantAccess(u, slot, head, labels) (*({ \
+	__typeof__(u)* __vu = &(u); \
+	if ((int64_t)__vu->_tag != (int64_t)(slot)) msRaiseFieldError((head), (labels), (int64_t)__vu->_tag); \
+	__vu; \
+}))
+
+/* Converting a double outside the destination's range, NaN included, is
+   undefined in C (C11 6.3.1.4): the bounds are tested on the double first. */
+static inline double msCheckRangeF(double v, int64_t lo, int64_t hi) {
+	if (!(v > (double)lo - 1.0 && v < (double)hi + 1.0)) msRaiseRangeErrorF(v, lo, hi);
+	return v;
 }
 
-static inline uint8_t msCheckRangeU8(double v, int64_t lo, int64_t hi) {
-	int64_t iv = (int64_t)v;
-	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
-	return (uint8_t)iv;
+static inline int8_t msCheckRangeI8(double v, int64_t lo, int64_t hi) { return (int8_t)msCheckRangeF(v, lo, hi); }
+static inline uint8_t msCheckRangeU8(double v, int64_t lo, int64_t hi) { return (uint8_t)msCheckRangeF(v, lo, hi); }
+static inline int16_t msCheckRangeI16(double v, int64_t lo, int64_t hi) { return (int16_t)msCheckRangeF(v, lo, hi); }
+static inline uint16_t msCheckRangeU16(double v, int64_t lo, int64_t hi) { return (uint16_t)msCheckRangeF(v, lo, hi); }
+static inline int32_t msCheckRangeI32(double v, int64_t lo, int64_t hi) { return (int32_t)msCheckRangeF(v, lo, hi); }
+static inline uint32_t msCheckRangeU32(double v, int64_t lo, int64_t hi) { return (uint32_t)msCheckRangeF(v, lo, hi); }
+
+static inline int64_t msCheckRangeI64(double v) {
+	if (!(v >= -9223372036854775808.0 && v < 9223372036854775808.0)) msRaiseRangeErrorF(v, INT64_MIN, INT64_MAX);
+	return (int64_t)v;
 }
 
-static inline int16_t msCheckRangeI16(double v, int64_t lo, int64_t hi) {
-	int64_t iv = (int64_t)v;
-	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
-	return (int16_t)iv;
-}
-
-static inline uint16_t msCheckRangeU16(double v, int64_t lo, int64_t hi) {
-	int64_t iv = (int64_t)v;
-	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
-	return (uint16_t)iv;
-}
-
-static inline int32_t msCheckRangeI32(double v, int64_t lo, int64_t hi) {
-	int64_t iv = (int64_t)v;
-	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
-	return (int32_t)iv;
-}
-
-static inline uint32_t msCheckRangeU32(double v, int64_t lo, int64_t hi) {
-	int64_t iv = (int64_t)v;
-	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
-	return (uint32_t)iv;
-}
+_Noreturn void msRaiseDivByZero(void);
+_Noreturn void msRaiseOverflow(void);
+#include "runtime/core/checkedArith.h"
 
 #endif /* SYSTEM_H */

@@ -92,31 +92,7 @@ function encodeUtf8(s: string): Buffer {
 	return out;
 }
 
-function decodeUtf8Range(b: Buffer, start: number, end: number): string {
-	let out = "";
-	let i = start;
-	while (i < end) {
-		let cp: int32 = b.byteAt(i) as int32;
-		i += 1;
-		if (cp >= 240) {
-			cp = ((cp & 7) << 18) | ((b.byteAt(i) & 63) << 12) | ((b.byteAt(i + 1) & 63) << 6) | (b.byteAt(i + 2) & 63);
-			i += 3;
-		} else if (cp >= 224) {
-			cp = ((cp & 15) << 12) | ((b.byteAt(i) & 63) << 6) | (b.byteAt(i + 1) & 63);
-			i += 2;
-		} else if (cp >= 192) {
-			cp = ((cp & 31) << 6) | (b.byteAt(i) & 63);
-			i += 1;
-		}
-		if (cp >= 65536) {
-			const v = cp - 65536;
-			out = out + String.fromCharCode(55296 + (v >> 10)) + String.fromCharCode(56320 + (v & 1023));
-		} else {
-			out = out + String.fromCharCode(cp);
-		}
-	}
-	return out;
-}
+extern function decodeUtf8Range(b: Buffer, start: number, end: number): string from "new TextDecoder('utf-8', { ignoreBOM: true }).decode(#.subarray(#, #))";
 
 export function fromString(this typeof Buffer, value: string, encoding: string): Buffer {
 	if (encoding == "hex") {
@@ -311,10 +287,11 @@ export function toStringEncoded(this b: Buffer, encoding: string, start: number,
 		return toBase64Range(b, start, end);
 	}
 	if (encoding == "binary" || encoding == "latin1" || encoding == "ascii") {
+		const mask: int32 = encoding == "ascii" ? 127 : 255;
 		let out = "";
 		let i = start;
 		while (i < end) {
-			out = out + String.fromCharCode(b.byteAt(i));
+			out = out + String.fromCharCode(b.byteAt(i) & mask);
 			i += 1;
 		}
 		return out;

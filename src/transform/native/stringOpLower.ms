@@ -22,7 +22,7 @@
 // conservative syntactic match. Side-effecting indexes (arr[i++]) fall through.
 
 import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, StringLiteralData, IdentifierData, MemberExprData, NumberLiteralData, CallExprData, HiddenDerefData, TypeKind } from "../../ast/node";
-import { isNumeric, isStringLike, isWideInteger, peelTransparentInstance } from "../../checker/types";
+import { isNumeric, isStringLike, isWideInteger, peelTransparentInstance, stringType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber, makeHiddenAddr, runtimeRef, isRuntimeProcCall } from "../util";
@@ -173,6 +173,7 @@ function coercePartToString(node: Node, loc: SourceLocation): Node {
 	if (node.kind == NodeKind.StringLiteral) return node;
 	if (node.nodeType != null && node.nodeType.kind == TypeKind.String) return node;
 	if (node.nodeType != null) {
+		if (isCharTyped(node)) return charToString(node, loc);
 		if (isWideInteger(node.nodeType)) {
 			const fn = node.nodeType.kind == TypeKind.Uint64 ? "msUint64ToString" : "msIntToString";
 			return makeCall(runtimeRef(fn, loc), [node], loc);
@@ -187,6 +188,25 @@ function coercePartToString(node: Node, loc: SourceLocation): Node {
 	if (node.kind == NodeKind.NumberLiteral) {
 		return makeCall(runtimeRef("msNumberToString", loc), [node], loc);
 	}
+	return node;
+}
+
+export function charToString(node: Node, loc: SourceLocation): Node {
+	const call = makeCall(runtimeRef("msCharToString", loc), [node], loc);
+	call.nodeType = stringType();
+	return call;
+}
+
+export function isCharTyped(node: Node): boolean {
+	return node.nodeType != null && peelTransparentInstance(node.nodeType).kind == TypeKind.Char;
+}
+
+export function stringifyCharOperand(node: Node): Node {
+	if (node.kind != NodeKind.BinaryExpr) return node;
+	const d = node.data as BinaryExprData;
+	if (d.operator != "+" && d.operator != "+=") return node;
+	if (isCharTyped(d.right) && isStringTyped(d.left)) d.right = charToString(d.right, d.right.location);
+	else if (d.operator == "+" && isCharTyped(d.left) && isStringTyped(d.right)) d.left = charToString(d.left, d.left.location);
 	return node;
 }
 

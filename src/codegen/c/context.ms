@@ -137,7 +137,7 @@ export class CBlock {
 	init: Builder;         // cpsInit for this block
 	stmts: Builder;        // cpsStmts for this block
 	isLoop: boolean;
-	nestedFinallyDepth: number;  // snapshot of nestedFinally.length at block entry (reference: TBlock.nestedTryStmts)
+	nestedTryDepth: number;  // snapshot of CProc.nestedTryStmts.length at block entry
 	breakUsed: boolean;    // a labeled break targeted this block — emit the `<label>_x_:` landing after it
 	continueUsed: boolean; // a labeled continue targeted this block — emit the `<label>:` landing inside it
 }
@@ -150,10 +150,16 @@ export function createBlock(id: number, isLoop: boolean): CBlock {
 		init: createBuilder(),
 		stmts: createBuilder(),
 		isLoop,
-		nestedFinallyDepth: 0,
+		nestedTryDepth: 0,
 		breakUsed: false,
 		continueUsed: false,
 	};
+}
+
+export interface CTryEntry {
+	fin: Readonly<Node> | null;
+	label: string;
+	inFlightException: string;
 }
 
 // ===== CProc — per-function state (standard reference parity) =====
@@ -170,8 +176,7 @@ export class CProc {
 	seenSinks: string[];   // tracks declared $sink_N_ temps (prevents duplicates)
 	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
 	indirectLocals: string[];  // locals pointing into union variant data — auto-deref as (*name)
-	nestedFinally: Readonly<Node>[];     // stack of finally body nodes (reference: p.nestedTryStmts[].fin)
-	errorTargets: string[];    // stack of goto labels for error propagation (reference: p.nestedTryStmts[].label → raiseExit)
+	nestedTryStmts: CTryEntry[];
 	beforeRetNeeded: boolean;
 	suppressRaiseCheck: boolean;
 	sigConflicts: string[];   // parallel arrays: [mangledName, count, ...]
@@ -217,8 +222,7 @@ export function createProc(name: string, returnType: Type | null): CProc {
 		seenSinks: [],
 		indirectParams: [],
 		indirectLocals: [],
-		nestedFinally: [],
-		errorTargets: [],
+		nestedTryStmts: [],
 		beforeRetNeeded: false,
 		suppressRaiseCheck: false,
 		sigConflicts: [],
@@ -258,7 +262,7 @@ export function fillLocalName(p: CProc, mangledName: string, isTemp: boolean): s
 	let i = 0;
 	while (i < p.sigConflicts.length) {
 		if (p.sigConflicts[i] == mangledName) {
-			counter = parseInt(p.sigConflicts[i + 1]);
+			counter = parseInt(p.sigConflicts[i + 1]) as int32;
 			counter = counter + 1;
 			p.sigConflicts[i + 1] = counter.toString();
 			found = true;
@@ -278,6 +282,12 @@ export function fillLocalName(p: CProc, mangledName: string, isTemp: boolean): s
 	} else {
 		result = `${mangledName}_${counter}_`;
 	}
+	while (result != mangledName && conflictCount(p, result) > 0) {
+		scopeMangledParam(p, mangledName);
+		counter = counter + 1;
+		result = isTemp ? `${mangledName}_${counter}` : `${mangledName}_${counter}_`;
+	}
+	if (result != mangledName) scopeMangledParam(p, result);
 	// Record mapping so DRC-generated identifiers (without resolvedSym) can resolve the name
 	if (result != mangledName) {
 		p.localNameMap.push(mangledName);
@@ -313,6 +323,13 @@ export function scopeMangledParam(p: CProc, mangledName: string): void {
 	}
 	p.sigConflicts.push(mangledName);
 	p.sigConflicts.push("1");
+}
+
+function conflictCount(p: CProc, name: string): int32 {
+	for (let i = 0; i < p.sigConflicts.length; i += 2) {
+		if (p.sigConflicts[i] == name) return parseInt(p.sigConflicts[i + 1]) as int32;
+	}
+	return 0;
 }
 
 // Current block — top of the block stack (Implementation parity)
@@ -434,7 +451,7 @@ export function pProcStmts(p: CProc): Builder {
 export function pushBlock(p: CProc, isLoop: boolean): void {
 	p.labels += 1;
 	const block = createBlock(p.labels, isLoop);
-	block.nestedFinallyDepth = p.nestedFinally.length;  // reference: TBlock.nestedTryStmts snapshot
+	block.nestedTryDepth = p.nestedTryStmts.length;
 	p.blocks.push(block);
 	if (isLoop) p.withinLoop += 1;
 }
@@ -680,6 +697,13 @@ export function addCGenError(g: CGen, message: string, line: int32, column: int3
 	g.errors.push({ message, line, column, endLine: 0, endColumn: 0, fatal: false, severity: Severity.Error, tags: 0 });
 }
 
+export function addUnloweredError(g: CGen, p: CProc, node: Readonly<Node>): void {
+	const line = node.location.line;
+	const column = node.location.column;
+	const proc = p != null && p.name != "" ? p.name : "<toplevel>";
+	addCGenError(g, `internal: ${node.kind} reached C codegen unlowered at ${line}:${column} in proc ${proc}`, line, column);
+}
+
 // Section accessor by enum index
 export function sec(g: CGen, s: CSection): Builder {
 	return g.sections[s];
@@ -758,6 +782,14 @@ function emitOneInclude(g: CGen, header: string): void {
 	if (nameSetHas(g.declaredThings, "inc:" + header)) return;
 	nameSetAdd(g.declaredThings, "inc:" + header);
 	addLine(sec(g, CSection.Headers), `#include "${header}"`);
+}
+
+const PLATFORM_MACROS = ["LANGUAGE_C", "MIPSEB", "MIPSEL", "PPC", "R3000", "R4000", "i386", "linux", "mips", "near", "far", "powerpc", "unix"];
+
+// windows.h defines `near` and `far` empty and GNU-mode compilers predefine `linux`, `unix`
+// and `i386`: undefine them after the module's last #include, never before it.
+export function undefPlatformMacros(g: CGen): void {
+	for (const name of PLATFORM_MACROS) addLine(sec(g, CSection.Headers), `#undef ${name}`);
 }
 
 // ===== Tests =====

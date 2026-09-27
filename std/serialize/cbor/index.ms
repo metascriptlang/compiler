@@ -32,8 +32,8 @@ export { cborValueToStruct } from "./decode";
 import { CborValue, CborKind } from "./types";
 import { newCborWriter, encodeValue } from "./encoder";
 import { decodeAll } from "./decoder";
-import { cborInt, cborArray } from "./builder";
-import { asInt64 } from "./accessors";
+import { cborInt, cborArray, _cborEnumName } from "./builder";
+import { asInt64, _cborEnumOrd } from "./accessors";
 import { cborValueOf } from "./encode";
 import { cborValueToStruct } from "./decode";
 import { UntypedTree } from "../contracts";
@@ -44,7 +44,6 @@ import { UntypedTree } from "../contracts";
 // so user code must explicitly import these alongside cborValueOf /
 // cborValueToStruct — same pattern as other CBOR builders/accessors.
 //
-// `_cborArrayOfInts<T>` — enum + type-alias element arrays (T castable to int64).
 // `_cborArrayOfStructs<T>` — struct/interface element arrays; body recurses
 // via cborValueOf(arr[i]), which re-expands at monomorphization time.
 //
@@ -63,6 +62,27 @@ export function _cborArrayOfInts<T>(arr: T[]): CborValue {
 		i = i + 1;
 	}
 	return cborArray(items);
+}
+
+export function _cborArrayOfEnums<T>(arr: T[], ords: int32[], names: string[]): CborValue {
+	const items: CborValue[] = [];
+	let i = 0;
+	while (i < arr.length) {
+		items.push(_cborEnumName(arr[i] as int32, ords, names));
+		i = i + 1;
+	}
+	return cborArray(items);
+}
+
+export function _cborToEnumArray<T>(cv: CborValue, witness: T | null, ords: int32[], names: string[]): T[] {
+	const out: T[] = [];
+	if (cv == null || cv.kind != CborKind.Array) return out;
+	let i = 0;
+	while (i < cv.items.length) {
+		out.push(_cborEnumOrd(cv.items[i], ords, names) as T);
+		i = i + 1;
+	}
+	return out;
 }
 
 export function _cborArrayOfStructs<T>(arr: T[]): CborValue {
@@ -124,6 +144,6 @@ export function decode(buf: Buffer): Result<CborValue, string> {
 // promises a `parseValue(buffer) → Result<V, string>` shape — for CBOR the
 // input is a Buffer, so this wraps `decode()`.
 
-export const cborUntyped: UntypedTree<CborValue> = {
+export const cborUntyped: UntypedTree<CborValue, Buffer> = {
 	parseValue: decode,
 };

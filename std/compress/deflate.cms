@@ -7,10 +7,12 @@
 // tdefl_compress state machine. Exposes one-shot helpers and a streaming
 // handle-based API for large inputs.
 
+@include("runtime/compress/deflate.h");
+@compile("runtime/compress/deflate.c");
+@compile("vendor/miniz/miniz.c");
+@compile("vendor/miniz/miniz_tdef.c");
+
 import { CompressError, CompressErrorKind, CompressFormat, compressError } from "./errors";
-import { msDeflateCtx } from "runtime/compress/deflate.h";
-import { mz_ulong } from "vendor/miniz/miniz.h";
-import { tdefl_compressor } from "vendor/miniz/miniz_tdef.h";
 
 // Re-export for convenience so callers don't need a separate `./errors` import.
 export { CompressFormat, CompressError, CompressErrorKind } from "./errors";

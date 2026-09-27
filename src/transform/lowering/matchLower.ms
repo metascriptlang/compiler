@@ -14,7 +14,7 @@
 // Binding patterns (identifier) → const name = $m; prepended to body
 
 import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, BinaryExprData, ConditionalExprData, Type, Symbol, SymbolKind, isEmptyBlock } from "../../ast/node";
-import { TransformContext, freshTempSym } from "../context";
+import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { walkExpandBlocks, containsExprKind, mapExprChildren } from "../walker";
 import {
 	makeIdent, makeIdentResolved, makeTypedIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull,
@@ -384,7 +384,7 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, lo
 					if (labelOwners[li] == lk) { owner = labelOwnerGroup[li]; break; }
 				}
 				if (owner >= 0) {
-					ctx.errors.push("match: duplicate case label '" + lk + "' — pattern overlaps a previous arm with a different pattern set; use either identical or non-overlapping arms");
+					reportTransformError(ctx, "match: duplicate case label '" + lk + "' — pattern overlaps a previous arm with a different pattern set; use either identical or non-overlapping arms", pat.location);
 				}
 			}
 		}
@@ -399,7 +399,7 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, lo
 			const newGroupIdx = patternKeys.length;
 			patternKeys.push(setKey);
 			patternTests.push(caseData.casePatterns);
-			armGuards.push([caseData.caseGuard]);
+			armGuards.push([caseData.caseGuard!]);
 			armBodies.push([armBody]);
 			for (const pat of caseData.casePatterns) {
 				labelOwners.push(patternKey(pat, i));
@@ -470,13 +470,6 @@ function buildIfChain(cases: Node[], matchSym: Symbol, discType: Type, loc: Sour
 		return buildSwitchDispatch(cases, matchSym, discType, loc, mode, varName, assignSym, ctx);
 	}
 
-	// Check if any case is a wildcard/binding — if not, last arm becomes the else
-	let hasDefault = false;
-	for (let ci = 0; ci < cases.length; ci += 1) {
-		const cd = cases[ci].data as MatchCaseData;
-		if (isWildcard(cd.casePatterns) || isBindingPattern(cd.casePatterns)) { hasDefault = true; }
-	}
-
 	let elseNode = makeBlock([], loc);
 
 	for (let i = cases.length - 1; i >= 0; i -= 1) {
@@ -506,13 +499,6 @@ function buildIfChain(cases: Node[], matchSym: Symbol, discType: Type, loc: Sour
 			} else {
 				elseNode = prependToBody(bindDecl, body, loc);
 			}
-			continue;
-		}
-
-		// No wildcard and this is the last arm → use as unconditional else
-		// (checker verified exhaustiveness, so this is safe)
-		if (!hasDefault && i == cases.length - 1 && caseData.caseGuard == null) {
-			elseNode = body;
 			continue;
 		}
 

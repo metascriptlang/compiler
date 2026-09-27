@@ -113,7 +113,7 @@ export function map<T, U>(this arr: T[], fn: (x: T, i: number) => U): U[] {
 	return out;
 }
 
-export function slice<T>(this arr: T[], start: number, end: number): T[] {
+export function slice<T>(this arr: T[], start: number, end: number = 9007199254740991): T[] {
 	const n = arr.length;
 	let lo = start < 0 ? n + start : start;
 	let hi = end < 0 ? n + end : end;
@@ -190,4 +190,4 @@ export function shift<T>(this arr: T[]): T {
 }
 
 // string ← uint8[] kernel (host bridge; mirrors array/index.cms asString)
-export extern function asString(this arr: uint8[]): string from "msAsString";
+export extern function asString(this arr: Readonly<uint8[]>): string from "msAsString";

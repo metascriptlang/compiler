@@ -293,13 +293,29 @@ export function emitBinaryExpr(gen: JSGenerator, node: Node): void {
 		emitNode(gen, d.right);
 	} else {
 		emit(gen, "(");
-		emitNode(gen, d.left);
+		emitOperand(gen, d.left);
 		emit(gen, " ");
 		emit(gen, strictJsOperator(d.operator));
 		emit(gen, " ");
-		emitNode(gen, d.right);
+		emitOperand(gen, d.right);
 		emit(gen, ")");
 	}
+}
+
+// An assignment is emitted without parentheses, so as an operand it needs its own:
+// `(x = 5) + 1` read as `x = 5 + 1` otherwise.
+function emitOperand(gen: JSGenerator, node: Node): void {
+	if (node.kind == NodeKind.BinaryExpr && isAssignmentOp((node.data as BinaryExprData).operator)) {
+		emit(gen, "(");
+		emitNode(gen, node);
+		emit(gen, ")");
+		return;
+	}
+	emitNode(gen, node);
+}
+
+function isAssignmentOp(op: string): boolean {
+	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=";
 }
 
 // ===== Unary Expression =====
@@ -558,6 +574,10 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 	emit(gen, "{ ");
 	for (let i = 0; i < d.keys.length; i += 1) {
 		if (i > 0) emit(gen, ", ");
+		if (d.keys[i] == "..." && i < d.properties.length && d.properties[i].kind == NodeKind.SpreadExpr) {
+			emitNode(gen, d.properties[i]);
+			continue;
+		}
 		emit(gen, d.keys[i]);
 		emit(gen, ": ");
 		if (i < d.properties.length) {

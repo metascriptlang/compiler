@@ -25,6 +25,7 @@ import {
 	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../ast/node";
 import { TransformContext } from "./context";
+import { forEachChild } from "../ast/visitor";
 
 // Visitor function: takes a node, returns replacement (or same node if unchanged)
 type Visitor = (node: Node) => Node;
@@ -502,6 +503,71 @@ export function isFuncBoundary(node: Node): boolean {
 		node.kind == NodeKind.FunctionExpr;
 }
 
+function isEffectNode(n: Node): boolean {
+	if (n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr || n.kind == NodeKind.UpdateExpr
+		|| n.kind == NodeKind.AwaitExpr || n.kind == NodeKind.YieldExpr || n.kind == NodeKind.OutExpr) return true;
+	return n.kind == NodeKind.BinaryExpr && isAssignOp((n.data as BinaryExprData).operator);
+}
+
+function isAssignOp(op: string): boolean {
+	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=";
+}
+
+export function hasEffect(n: Node): boolean {
+	if (n == null || isFuncBoundary(n)) return false;
+	if (isEffectNode(n)) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => {
+		if (!found && hasEffect(c)) { found = true; }
+	});
+	return found;
+}
+
+export interface OnceEvalState {
+	effectSeen: boolean;
+}
+
+export type OnceEvalVisitor = (node: Node, effectBefore: boolean) => void;
+
+export function walkOnceEvaluated(node: Node, st: OnceEvalState, visit: OnceEvalVisitor): void {
+	if (node == null || isFuncBoundary(node)) return;
+	const k = node.kind;
+	if (k == NodeKind.BlockStmt || k == NodeKind.MethodDecl || k == NodeKind.ClassDecl || k == NodeKind.ActorDecl
+		|| k == NodeKind.SwitchCase || k == NodeKind.MatchCase
+		|| k == NodeKind.WhileStmt || k == NodeKind.DoWhileStmt) return;
+	if (k == NodeKind.ForStmt) {
+		walkOnceEvaluated((node.data as ForStmtData).forInit, st, visit);
+		return;
+	}
+	if (k == NodeKind.IfStmt) {
+		walkOnceEvaluated((node.data as IfStmtData).condition, st, visit);
+		return;
+	}
+	if (k == NodeKind.ConditionalExpr) {
+		const cd = node.data as ConditionalExprData;
+		walkOnceEvaluated(cd.ternaryCondition, st, visit);
+		if (hasEffect(cd.ternaryConsequent) || hasEffect(cd.ternaryAlternate)) st.effectSeen = true;
+		return;
+	}
+	if (k == NodeKind.BinaryExpr) {
+		const bd = node.data as BinaryExprData;
+		if (bd.operator == "&&" || bd.operator == "||") {
+			walkOnceEvaluated(bd.left, st, visit);
+			if (hasEffect(bd.right)) st.effectSeen = true;
+			return;
+		}
+		if (bd.operator == "=" && (bd.left.kind == NodeKind.ArrayLiteral || bd.left.kind == NodeKind.ObjectLiteral)) {
+			walkOnceEvaluated(bd.right, st, visit);
+			st.effectSeen = true;
+			return;
+		}
+	}
+	const effectBefore = st.effectSeen;
+	forEachChild(node, (c: Node): void => walkOnceEvaluated(c, st, visit));
+	visit(node, effectBefore);
+	if (isEffectNode(node)) st.effectSeen = true;
+}
+
 // ===== 1:N Block Expansion =====
 // Walks a statement list, allowing each statement to expand into multiple statements.
 // The expanding visitor returns Node[] for each input statement.
@@ -545,6 +611,24 @@ function replaceBlockStmts(node: Node, expander: StmtExpander, ctx: TransformCon
 	node.data = { statements: expandAndRecurseHooked(bd.statements, expander, ctx, onFnEntry, onFnExit) };
 }
 
+function replaceCaseStmts(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
+	const cd = node.data as SwitchCaseData;
+	node.data = { caseTests: cd.caseTests, caseStmts: expandAndRecurseHooked(cd.caseStmts, expander, ctx, onFnEntry, onFnExit), isDefault: cd.isDefault };
+}
+
+let expandTryDepth = 0;
+
+export function expandingInsideTry(): boolean {
+	return expandTryDepth > 0;
+}
+
+function walkFnBodyHooked(body: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
+	const outerTryDepth = expandTryDepth;
+	expandTryDepth = 0;
+	walkExpandBlocksHooked(body, expander, ctx, onFnEntry, onFnExit);
+	expandTryDepth = outerTryDepth;
+}
+
 export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: TransformContext): void {
 	walkExpandBlocksHooked(node, expander, ctx, null as unknown as FnEntryHook, null as unknown as FnExitHook);
 }
@@ -561,30 +645,30 @@ export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: 
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
 			if (onFnEntry != null) onFnEntry(node);
-			walkExpandBlocksHooked(d.fnBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.fnBody, expander, ctx, onFnEntry, onFnExit);
 			if (onFnExit != null) onFnExit(node);
 		},
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;
 			if (onFnEntry != null) onFnEntry(node);
-			walkExpandBlocksHooked(d.arrowBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.arrowBody, expander, ctx, onFnEntry, onFnExit);
 			if (onFnExit != null) onFnExit(node);
 		},
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
 			if (onFnEntry != null) onFnEntry(node);
-			walkExpandBlocksHooked(d.funcExprBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.funcExprBody, expander, ctx, onFnEntry, onFnExit);
 			if (onFnExit != null) onFnExit(node);
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
 			if (onFnEntry != null) onFnEntry(node);
-			walkExpandBlocksHooked(d.methodBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.methodBody, expander, ctx, onFnEntry, onFnExit);
 			if (onFnExit != null) onFnExit(node);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
-			walkExpandBlocksHooked(d.ctorBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.ctorBody, expander, ctx, onFnEntry, onFnExit);
 		},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
@@ -592,7 +676,7 @@ export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: 
 		},
 		NodeKind.TestDecl => {
 			const d = node.data as TestDeclData;
-			walkExpandBlocksHooked(d.testBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.testBody, expander, ctx, onFnEntry, onFnExit);
 		},
 		NodeKind.AssertStmt => {},
 		NodeKind.IfStmt => {
@@ -614,9 +698,11 @@ export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: 
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
+			expandTryDepth += 1;
 			walkExpandBlocksHooked(d.tryBody, expander, ctx, onFnEntry, onFnExit);
 			walkExpandBlocksHooked(d.catchBody, expander, ctx, onFnEntry, onFnExit);
 			walkExpandBlocksHooked(d.finallyBody, expander, ctx, onFnEntry, onFnExit);
+			expandTryDepth -= 1;
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
@@ -627,12 +713,7 @@ export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: 
 			}
 		},
 		NodeKind.SwitchCase => {
-			const d = node.data as SwitchCaseData;
-			let j = 0;
-			while (j < d.caseStmts.length) {
-				walkExpandBlocksHooked(d.caseStmts[j], expander, ctx, onFnEntry, onFnExit);
-				j = j + 1;
-			}
+			replaceCaseStmts(node, expander, ctx, onFnEntry, onFnExit);
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;

@@ -134,6 +134,9 @@ function f(): void {
 test "bug106 stage2: local actor is admitted" {
 	const c = compileToC("function f(): number { actor A { x: number = 1 } return 5 }");
 	assert c.ok;
+
+	const cUsed = compileToC("function f(): number { actor A { x: number = 1; get(): number { return this.x; } } const a = new A(); return a.pid != 0 ? 1 : 0; }\nconsole.log(f());");
+	assert cUsed.ok;
 }
 
 test "bug106: bare top-level block and arrow body are non-module scopes too" {

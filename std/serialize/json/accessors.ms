@@ -135,6 +135,44 @@ export function _jsonCheckDiscStr(v: string, allowed: string[], errs: string[], 
 	return allowed[0];
 }
 
+export function _jsonEnumOrdE(v: JsonValue, ords: int32[], names: string[], enumName: string, errs: string[], pfx: string, field: string): int32 {
+	if (v == null || v.kind != JsonKind.String) {
+		pushKindErr(errs, pfx, field, enumName + " member name", v);
+		return ords[0];
+	}
+	for (let i = 0; i < names.length; i++) {
+		if (names[i] == v.strVal) return ords[i];
+	}
+	errs.push("field '" + pfx + field + "': '" + v.strVal + "' is not a member of " + enumName);
+	return ords[0];
+}
+
+export function _jsonEnumOrd(v: JsonValue, ords: int32[], names: string[]): int32 {
+	if (v != null && v.kind == JsonKind.String) {
+		for (let i = 0; i < names.length; i++) {
+			if (names[i] == v.strVal) return ords[i];
+		}
+	}
+	return ords[0];
+}
+
+test "_jsonEnumOrdE — a member name reads as that member's value" {
+	const errs: string[] = [];
+	assert _jsonEnumOrdE(jsonString("Blue"), [0, 5, 2], ["Red", "Blue", "Green"], "Color", errs, "", "c") == 5 && errs.length == 0;
+}
+
+test "_jsonEnumOrdE — a number where an enum is expected is an error naming the field" {
+	const errs: string[] = [];
+	_jsonEnumOrdE(jsonInt(1), [0, 1], ["Red", "Blue"], "Color", errs, "p.", "c");
+	assert errs.length == 1 && errs[0] == "field 'p.c': expected Color member name, got int";
+}
+
+test "_jsonEnumOrdE — a name the enum does not declare is an error naming the field" {
+	const errs: string[] = [];
+	_jsonEnumOrdE(jsonString("red"), [0, 1], ["Red", "Blue"], "Color", errs, "", "c");
+	assert errs.length == 1 && errs[0] == "field 'c': 'red' is not a member of Color";
+}
+
 export function _jsonIsNull(v: JsonValue): boolean {
 	return v == null || v.kind == JsonKind.Null;
 }

@@ -492,6 +492,11 @@ _Noreturn static inline void msRaiseRangeError(int64_t val, int64_t lo, int64_t 
     __builtin_trap();
 }
 
+_Noreturn static inline void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi) {
+    (void)val; (void)lo; (void)hi;
+    __builtin_trap();
+}
+
 #define msArrayAccess(a, i) (*({ \
     int32_t __idx = (i); \
     if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
@@ -521,13 +526,24 @@ _Noreturn static inline void msRaiseRangeError(int64_t val, int64_t lo, int64_t 
 
 #define msStringCharAccess(s, i) msStringCharAt((s), (i))
 
+#define msVariantAccess(u, slot, head, labels) (*({ \
+    __typeof__(u)* __vu = &(u); \
+    if ((int64_t)__vu->_tag != (int64_t)(slot)) __builtin_trap(); \
+    __vu; \
+}))
+
 /* ===== Range-Checked Integer Casts ===== */
-static inline int8_t   msCheckRangeI8(double v, int64_t lo, int64_t hi)  { int64_t iv=(int64_t)v; if(iv<lo||iv>hi) msRaiseRangeError(iv,lo,hi); return (int8_t)iv; }
-static inline uint8_t  msCheckRangeU8(double v, int64_t lo, int64_t hi)  { int64_t iv=(int64_t)v; if(iv<lo||iv>hi) msRaiseRangeError(iv,lo,hi); return (uint8_t)iv; }
-static inline int16_t  msCheckRangeI16(double v, int64_t lo, int64_t hi) { int64_t iv=(int64_t)v; if(iv<lo||iv>hi) msRaiseRangeError(iv,lo,hi); return (int16_t)iv; }
-static inline uint16_t msCheckRangeU16(double v, int64_t lo, int64_t hi) { int64_t iv=(int64_t)v; if(iv<lo||iv>hi) msRaiseRangeError(iv,lo,hi); return (uint16_t)iv; }
-static inline int32_t  msCheckRangeI32(double v, int64_t lo, int64_t hi) { int64_t iv=(int64_t)v; if(iv<lo||iv>hi) msRaiseRangeError(iv,lo,hi); return (int32_t)iv; }
-static inline uint32_t msCheckRangeU32(double v, int64_t lo, int64_t hi) { int64_t iv=(int64_t)v; if(iv<lo||iv>hi) msRaiseRangeError(iv,lo,hi); return (uint32_t)iv; }
+static inline int8_t   msCheckRangeI8(double v, int64_t lo, int64_t hi)  { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (int8_t)v; }
+static inline uint8_t  msCheckRangeU8(double v, int64_t lo, int64_t hi)  { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (uint8_t)v; }
+static inline int16_t  msCheckRangeI16(double v, int64_t lo, int64_t hi) { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (int16_t)v; }
+static inline uint16_t msCheckRangeU16(double v, int64_t lo, int64_t hi) { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (uint16_t)v; }
+static inline int32_t  msCheckRangeI32(double v, int64_t lo, int64_t hi) { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (int32_t)v; }
+static inline uint32_t msCheckRangeU32(double v, int64_t lo, int64_t hi) { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (uint32_t)v; }
+static inline int64_t  msCheckRangeI64(double v) { if(!(v>=-9223372036854775808.0&&v<9223372036854775808.0)) msRaiseRangeErrorF(v,INT64_MIN,INT64_MAX); return (int64_t)v; }
+
+_Noreturn static inline void msRaiseDivByZero(void) { __builtin_trap(); }
+_Noreturn static inline void msRaiseOverflow(void) { __builtin_trap(); }
+#include "runtime/core/checkedArith.h"
 
 /* ===== Boxing ===== */
 static inline void* msBoxString(msString v) {

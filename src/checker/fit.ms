@@ -2,14 +2,15 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { BinaryExprData, CallingConvention, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, createNode, createNodeAt } from "../ast/node";
+import { BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, UnaryExprData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { dropsReadonlyView, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
-import { CheckerContext, ExtensionMethod, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
+import { convertsImplicitly, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
+import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, classDescendsFrom, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
-import { callCheckExpr } from "./checkerCallbacks";
+import { createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
+import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
+import { constantLiteralOf, isUntypedIntegerConstant } from "./constFold";
 
 // ===== Operator Inference =====
 
@@ -248,13 +249,39 @@ export function synthCStringConv(expr: Node, cstr: Type): Node {
 	return conv;
 }
 
+export function instantiateGenericFnValue(ctx: CheckerContext, expr: Node, formal: Type): boolean {
+	const sym = expr.kind == NodeKind.Identifier ? expr.resolvedSym : null;
+	if (sym == null || sym.declNode == null || sym.declNode.kind != NodeKind.FunctionDecl || sym.symbolType == null) return false;
+	if (!isGenericFn((sym.declNode.data as FunctionDeclData).fnFlags)) return false;
+	const target = skipModifier(formal) ?? formal;
+	const fnType = sym.symbolType;
+	if (target.kind != TypeKind.Function || hasGenericParams(target) || fnType.kind != TypeKind.Function) return false;
+	const raw = createUnifyBindings();
+	for (let i = 0; i < fnType.typeChildren.length && i < target.typeChildren.length; i += 1) unifyType(fnType.typeChildren[i], target.typeChildren[i], raw);
+	unifyType(fnType.typeReturn, target.typeReturn, raw);
+	const names: string[] = [];
+	const types: Type[] = [];
+	for (let bi = 0; bi < raw.names.length; bi += 1) {
+		if (hasGenericParams(raw.types[bi])) continue;
+		names.push(raw.names[bi]);
+		types.push(raw.types[bi]);
+	}
+	if (names.length == 0) return false;
+	const inst = callInstantiateGeneric(sym, names, types, ctx, expr.location);
+	if (inst == null || inst.symbolType == null) return false;
+	expr.resolvedSym = inst;
+	expr.nodeType = inst.symbolType;
+	return true;
+}
+
 // Direct function → closure auto-wrap: a named function (CcDefault) flowing into a
 // closure-typed slot (CcClosure) is a hidden conversion; the transform entry
 // materializes it as the `{fn, env}` closure pair.
 export function synthClosureThunk(expr: Node, formal: Type, exprType: Type): Node {
 	if (formal.kind != TypeKind.Function || exprType.kind != TypeKind.Function
 		|| formal.callConv != CallingConvention.CcClosure
-		|| exprType.callConv == CallingConvention.CcClosure) {
+		|| exprType.callConv == CallingConvention.CcClosure
+		|| !isAssignable(exprType, formal)) {
 		return null as unknown as Node;
 	}
 	const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
@@ -461,11 +488,13 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	if (a.kind == TypeKind.Char || b.kind == TypeKind.Char) return true;
 	if (a.kind == TypeKind.Boolean && b.kind == TypeKind.Boolean) return true;
 	if (a.kind == TypeKind.BooleanLiteral || b.kind == TypeKind.BooleanLiteral) return true;
-	if (a.kind == TypeKind.Enum || b.kind == TypeKind.Enum) return true;
-	if (a.kind == TypeKind.EnumLiteral || b.kind == TypeKind.EnumLiteral) return true;
+	const aEnum = a.kind == TypeKind.Enum || a.kind == TypeKind.EnumLiteral;
+	const bEnum = b.kind == TypeKind.Enum || b.kind == TypeKind.EnumLiteral;
+	if (aEnum && bEnum) return a.typeName == b.typeName;
+	if (aEnum || bEnum) return (aEnum ? b : a).kind == TypeKind.Void;
 	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
 	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
-	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return true;
+	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return isAssignable(a, b) || isAssignable(b, a);
 	if (binaryPointerish(a.kind) && binaryPointerish(b.kind)) return true;
 	return false;
 }
@@ -609,6 +638,43 @@ export function literalFitsInType(node: Node, target: Type, negated: boolean): b
 		TypeKind.Uint64 => !negated || mag == 0,
 		_ => false,
 	};
+}
+
+export function isFittingIntLiteral(expr: Node, target: Type): boolean {
+	if (isNodeIntLit(expr)) return literalFitsInType(expr, target, false);
+	if (expr.kind == NodeKind.UnaryExpr) {
+		const u = expr.data as UnaryExprData;
+		if (u.unaryOp == "-" && isNodeIntLit(u.operand)) return literalFitsInType(u.operand, target, true);
+	}
+	if (!isUntypedIntegerConstant(expr, 0)) return false;
+	const folded = constantLiteralOf(expr, 0);
+	if (folded == null || !isNodeIntLit(folded)) return false;
+	const value = (folded.data as NumberLiteralData).intVal;
+	if (value < 0 && folded.nodeType != null && isUnsignedIntegerType(folded.nodeType)) return false;
+	return foldedIntFits(value, target);
+}
+
+function foldedIntFits(value: int64, target: Type): boolean {
+	if ((target.kind == TypeKind.Sink || target.kind == TypeKind.Lent) && target.typeReturn != null) {
+		return foldedIntFits(value, target.typeReturn);
+	}
+	return match (target.kind) {
+		TypeKind.Int8   => value >= -128 && value <= 127,
+		TypeKind.Int16  => value >= -32768 && value <= 32767,
+		TypeKind.Int32  => value >= -2147483648 && value <= 2147483647,
+		TypeKind.Int64  => true,
+		TypeKind.Uint8  => value >= 0 && value <= 255,
+		TypeKind.Uint16 => value >= 0 && value <= 65535,
+		TypeKind.Uint32 => value >= 0 && value <= 4294967295,
+		TypeKind.Uint64 => value >= 0,
+		_ => false,
+	};
+}
+
+export function reportIntConv(ctx: CheckerContext, expr: Node, from: Type, to: Type, site: string): void {
+	const what = isUnsignedIntegerType(from) != isUnsignedIntegerType(to) ? "changes signedness" : "narrows";
+	addError(ctx, "implicit " + typeDisplayName(from) + " → " + typeDisplayName(to) + " conversion" + site + " " + what
+		+ " — write an explicit 'as " + typeDisplayName(to) + "'", expr.location.line, expr.location.column);
 }
 
 // The parser decides this on the digits: at the boundary the double in `value`
@@ -1090,7 +1156,22 @@ export function reportReadonlyDrop(ctx: CheckerContext, source: Type | null, tar
 	addError(ctx, "Type '" + typeDisplayName(source) + "' is not assignable to type '" + typeDisplayName(target) + "' — a read-only view never converts back to the mutable type (PARALOCK E24)", line, column);
 }
 
+// A refused value is retyped to its slot, so the checks after the slot do not report the same mismatch again.
 export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
+	const mark = ctx.errors.length;
+	const fitted = fitSlot(ctx, expr, formal, exprType);
+	if (formal == null || fitted != expr || !reportedErrorSince(ctx, mark)) return fitted;
+	return wrapInConv(expr, formal);
+}
+
+function reportedErrorSince(ctx: CheckerContext, mark: int32): boolean {
+	for (let i = mark; i < ctx.errors.length; i += 1) {
+		if (ctx.errors[i].severity == Severity.Error) return true;
+	}
+	return false;
+}
+
+function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
 	if (formal == null || exprType == null) return expr;
 	if (dropsReadonlyView(exprType, formal)) { reportReadonlyDrop(ctx, exprType, formal, expr.location.line, expr.location.column); return expr; }
 	if (formal.kind == TypeKind.Unknown || isUnresolvedType(formal)) {
@@ -1137,6 +1218,7 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	}
 	const adopted = tryAdoptAnonStruct(expr, formal, exprType);
 	if (adopted != null as unknown as Node) return adopted;
+	if (instantiateGenericFnValue(ctx, expr, formal)) return fitNode(ctx, expr, formal, expr.nodeType);
 	const thunk = synthClosureThunk(expr, formal, exprType);
 	if (thunk != null as unknown as Node) return thunk;
 	// Implicit T → Maybe<T> coercion (Nim-parity `some(val)` / `none(T)`).
@@ -1147,6 +1229,10 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	if (isMaybeType(formal) && formal.typeReturn != null && !isMaybeType(exprType)) {
 		if (isNominalMismatch(exprType, formal)) {
 			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal.typeReturn) + " | null'", expr.location.line, expr.location.column);
+			return expr;
+		}
+		if (exprType.kind != TypeKind.Null && slotRefuses(exprType, formal.typeReturn)) {
+			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal.typeReturn) + " | null'" + explainStructuralPrefix(exprType, formal.typeReturn), expr.location.line, expr.location.column);
 			return expr;
 		}
 		return synthMaybeWrap(expr, formal, exprType);
@@ -1172,7 +1258,10 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'", expr.location.line, expr.location.column);
 		return expr;
 	}
-	if (formal.kind == exprType.kind && !isReinterpretUnsafe(exprType, formal)) return expr;
+	if (formal.kind == exprType.kind && !isReinterpretUnsafe(exprType, formal)) {
+		if (slotRefuses(exprType, formal)) reportNotAssignable(ctx, expr, exprType, formal);
+		return expr;
+	}
 	if ((exprType.kind == TypeKind.CString && formal.kind == TypeKind.String)
 		|| ((exprType.kind == TypeKind.String || exprType.kind == TypeKind.StringLiteral)
 			&& formal.kind == TypeKind.CString)) {
@@ -1196,8 +1285,12 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 			expr.location.line, expr.location.column);
 		return expr;
 	}
+	if (refusesIntConv(exprType, formal) && !isFittingIntLiteral(expr, formal)) {
+		reportIntConv(ctx, expr, exprType, formal, "");
+		return expr;
+	}
 	// Narrowing integer conversion: wrap in HiddenStdConv
-	if (isNarrowingIntConv(exprType, formal)) {
+	if (isNarrowingIntConv(exprType, formal) || refusesIntConv(exprType, formal)) {
 		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 		const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal }, convTok);
 		convNode.nodeType = formal;
@@ -1211,18 +1304,33 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 		convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 		return convNode;
 	}
-	// Scope: the memory-safety class only — container element-repr and pointer vs
-	// scalar. General `!isAssignable` rejection is intentionally NOT applied — see
-	// NIM-REF CK-51 "Container element assignability + enforcement site" (terminal;
-	// two intentional divergences: TS non-null types + Ref→Ptr cursor).
 	if (isStructIntoPtr(exprType, formal)) {
 		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "' — a struct value is not a pointer, and its address is never taken implicitly", expr.location.line, expr.location.column);
 		return expr;
 	}
 	if (isReinterpretUnsafe(exprType, formal)) {
 		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — memory layout differs (pointer vs scalar, array element, shared field, or function signature repr); a raw cast would reinterpret, not convert (convert explicitly or declare a converter to '" + typeDisplayName(formal) + "')", expr.location.line, expr.location.column);
+		return expr;
 	}
+	if (slotRefuses(exprType, formal)) reportNotAssignable(ctx, expr, exprType, formal);
 	return expr;
+}
+
+export function slotRefuses(exprType: Type, formal: Type): boolean {
+	if (hasGenericParams(formal) || hasGenericParams(exprType)) return false;
+	return !isAssignable(exprType, formal) && !convertsImplicitly(exprType, formal);
+}
+
+export function branchFitsSlot(ctx: CheckerContext, exprType: Type | null, formal: Type | null): boolean {
+	if (exprType == null || formal == null) return true;
+	if (isUnresolvedType(formal) || isUnknownType(formal) || formal.kind == TypeKind.GenericParam
+		|| hasGenericParams(formal) || isMaybeType(formal)) return true;
+	if (isUnresolvedType(exprType) || isUnknownType(exprType) || exprType.kind == TypeKind.Never) return true;
+	return !slotRefuses(exprType, formal) || convertsBetween(ctx, exprType, formal) || hasValueOfProtocol(ctx, exprType);
+}
+
+function reportNotAssignable(ctx: CheckerContext, expr: Node, exprType: Type, formal: Type): void {
+	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + explainStructuralPrefix(exprType, formal), expr.location.line, expr.location.column);
 }
 
 // A float literal whose value has no fractional part converts exactly, so it

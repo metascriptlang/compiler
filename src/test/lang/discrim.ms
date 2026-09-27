@@ -363,3 +363,32 @@ test "flow merge: bool-disc && does not leak" {
 	assert fmBoolAfterAnd(fmErr()) == -1;
 	assert fmBoolAfterAnd(fmOk()) == 5;
 }
+
+type UfWide = { members: int32[], disc: string };
+type UfNarrow = { members: int32[] };
+type UfData = { value: number } | UfWide | UfNarrow;
+type UfOnlyWide = { value: number } | UfWide;
+class UfHolder { d: UfData = { value: 1 }; }
+
+function ufFill(h: UfHolder): void {
+	h.d = { members: [4, 5] };
+}
+
+test "an object literal goes into the union member with exactly its fields" {
+	const lit: UfData = { members: [7] };
+	assert JSON.stringify(lit) == "{\"members\":[7]}";
+}
+
+const ufHolder = new UfHolder();
+ufFill(ufHolder);
+const ufRead = ufHolder.d as UfNarrow;
+
+test "a field stored and read back through a cast agree on the member" {
+	assert ufRead.members.length == 2;
+	assert ufRead.members[1] == 5;
+}
+
+test "an object literal with fewer fields goes into the only member that holds them" {
+	const lit: UfOnlyWide = { members: [7] };
+	assert JSON.stringify(lit) == "{\"members\":[7],\"disc\":\"\"}";
+}

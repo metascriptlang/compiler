@@ -76,6 +76,46 @@ ledger() {
   [ -s "$GATE_LEDGER" ] || printf 'ts\ttree\tlane\tsecs\trc\tred\tknown\tnew\tflaky\twait\n' >"$GATE_LEDGER"
   ledger_fmt "$(date '+%F %T')" "$(basename "$TOP")" "$@" >>"$GATE_LEDGER"
 }
+build_ctl() {
+  local sha=$1 key ctl_dir ctl
+  key=$(tree_key "$sha")
+  [ -n "$key" ] || return 1
+  ctl_dir="$OUT/ctl-$key" ctl="$ctl_dir/msc"
+  if [ ! -x "$ctl" ]; then
+    rm -rf "$ctl_dir" "$OUT/ctl-src"
+    mkdir -p "$ctl_dir" "$OUT/ctl-src"
+    git archive "$sha" src | tar -x -C "$OUT/ctl-src" || return 1
+    (cd "$OUT/ctl-src" && bounded env -u NO_COLOR -u FORCE_COLOR $BUILDER build src/index.ms --gc=drc --danger $CC_FLAG --output="$ctl") >"$OUT/ctl.log" 2>&1
+    [ -x "$ctl" ] || return 1
+  fi
+  touch "$ctl_dir"
+  printf '%s' "$key"
+}
+tier_differ() { [ "$(printf '%s' "$1" | cut -f2-4)" != "$(printf '%s' "$2" | cut -f2-4)" ]; }
+
+tier_select() {
+  local f sf sha key ctl t0=$SECONDS n=0
+  sha=$(git merge-base "$base" HEAD) || { say "tier-select: no merge base, whole"; return 1; }
+  key=$(build_ctl "$sha") || { say "tier-select: no control compiler at $(printf '%s' "$sha" | cut -c1-8), whole"; return 1; }
+  ctl="$OUT/ctl-$key/msc"
+  if awk -F'\t' '{ print $2 }' "$OUT/why" | grep -Eq "$SELECT_BLIND"; then
+    say "tier-select: blind paths in the diff, whole"; return 1
+  fi
+  rm -rf "$OUT/tier"; mkdir -p "$OUT/tier"
+  for f in $TIERS; do n=$((n + 1)); printf '%s %s\n' "${f//\//__}" "$TOP/$f"; done >"$OUT/tier/jobs"
+  emit_side "$ctl" "$OUT/tier/c" <"$OUT/tier/jobs" | sort >"$OUT/tier/ctl.sig"
+  emit_side "$CAND" "$OUT/tier/k" <"$OUT/tier/jobs" | sort >"$OUT/tier/cand.sig"
+  if [ "$(grep -c . "$OUT/tier/ctl.sig" | tr -d ' ')" -ne "$n" ] || [ "$(grep -c . "$OUT/tier/cand.sig" | tr -d ' ')" -ne "$n" ]; then
+    say "tier-select: an emit pass lost tiers, whole"; return 1
+  fi
+  join -t "$(printf '\t')" "$OUT/tier/ctl.sig" "$OUT/tier/cand.sig" \
+    | while IFS=$'\t' read -r sf c1 j1 r1 _ c2 j2 r2 __; do
+        if tier_differ "a	$c1	$j1	$r1	9" "a	$c2	$j2	$r2	9"; then printf '%s\n' "${sf//__/\/}"; fi
+      done >"$OUT/tier/keep"
+  say "tier-select: $(grep -c . "$OUT/tier/keep" | tr -d ' ')/$n tiers differ, $(fmt_secs $((SECONDS - t0)))"
+  ledger tier-select $((SECONDS - t0)) 0 0 0 0 0 "${ADMIT_WAITED:-0}"
+  return 0
+}
 
 inert_range() {
   local paths
@@ -343,6 +383,10 @@ CASES
   got=$(ledger_fmt "2026-09-26 21:00:00" recompiler suite 553 0 2 2 0 0 30 | tr '\t' '|')
   want='2026-09-26 21:00:00|recompiler|suite|553|0|2|2|0|0|30'
   [ "$got" = "$want" ] || { printf 'FAIL ledger fmt: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  if tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'b\t1\t2\t0\t9')"; then printf 'FAIL tier differ: name only\n'; bad=1; fi
+  if ! tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'a\t9\t2\t0\t9')"; then printf 'FAIL tier differ: c digest\n'; bad=1; fi
+  if ! tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'a\t1\t9\t0\t9')"; then printf 'FAIL tier differ: js digest\n'; bad=1; fi
+  if ! tier_differ "$(printf 'a\t1\t2\t0\t9')" "$(printf 'a\t1\t2\t1\t9')"; then printf 'FAIL tier differ: rc\n'; bad=1; fi
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -506,13 +550,20 @@ test_one() {
   echo $? >"$part.rc"
 }
 
+
 run_test_lane() {
   local rc=0 f shard part jobs="src/index.ms -" noresult=" "
   case "$1" in
     suite) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite src/index.ms)" ;;
     tests)
       jobs=$(test_jobs)
+      if [ -z "$lanes_arg" ] && [ "$release" -eq 0 ] && [ "$record" -eq 0 ] && tier_select; then
+        jobs=$(awk -v k="$OUT/tier/keep" 'BEGIN { while ((getline l < k) > 0) w[l] = 1 } w[$1] { print }' <<<"$jobs")
+      else
+        rm -f "$OUT/tier/keep"
+      fi
       while read -r f shard; do
+        [ -n "$f" ] || continue
         if [ "$shard" = - ]; then
           with_slot test_one "$CAND" "$f" "$(part_of tests "$f")" --tests-in-dir &
         else
@@ -522,6 +573,7 @@ run_test_lane() {
       wait ;;
   esac
   while read -r f shard; do
+    [ -n "$f" ] || continue
     if [ "$shard" = - ]; then part=$(part_of "$1" "$f"); else part=$(part_of "$1" "$f.$shard"); fi
     cat "$part"
     [ "$(cat "$part.rc" 2>/dev/null)" = 0 ] || rc=1
@@ -634,18 +686,9 @@ select_whole() { select=0; say "gate: select gave up, no narrowing for $select_l
 select_programs() {
   local sha key ctl_dir ctl t0=$SECONDS n_all line
   sha=$(git merge-base "$base" HEAD) || { select_whole "no merge base with $base"; return; }
-  key=$(tree_key "$sha")
-  [ -n "$key" ] || { select_whole "cannot read the src and std trees at $sha"; return; }
-  ctl_dir="$OUT/ctl-$key" ctl="$OUT/ctl-$key/msc"
   rm -rf "$OUT/ctl"
-  if [ ! -x "$ctl" ]; then
-    rm -rf "$ctl_dir" "$OUT/ctl-src"
-    mkdir -p "$ctl_dir" "$OUT/ctl-src"
-    git archive "$sha" src | tar -x -C "$OUT/ctl-src" || { select_whole "cannot unpack src at $sha"; return; }
-    (cd "$OUT/ctl-src" && bounded env -u NO_COLOR -u FORCE_COLOR $BUILDER build src/index.ms --gc=drc --danger $CC_FLAG --output="$ctl") >"$OUT/ctl.log" 2>&1
-    [ -x "$ctl" ] || { select_whole "the control compiler at $(printf '%s' "$sha" | cut -c1-8) did not build, log: $OUT/ctl.log"; return; }
-  fi
-  touch "$ctl_dir"
+  key=$(build_ctl "$sha") || { select_whole "no control compiler at $(printf '%s' "$sha" | cut -c1-8), log: $OUT/ctl.log"; return; }
+  ctl_dir="$OUT/ctl-$key" ctl="$ctl_dir/msc"
   rm -rf "$EMIT"
   mkdir -p "$EMIT"
   list_programs >"$EMIT/programs"
@@ -685,11 +728,18 @@ narrow_for() {
 }
 
 scope_known() {
-  awk -v only="$only_csv" -v lanes="$lanes_csv" -v drop_raiser="$([ "$1" = corpus ] && [ "$raiser_on" -eq 0 ] && echo 1)" '
+  local tierkeep=""
+  [ "$1" = tests ] && [ -f "$OUT/tier/keep" ] && tierkeep="$OUT/tier/keep"
+  awk -v only="$only_csv" -v lanes="$lanes_csv" -v tierkeep="$tierkeep" -v drop_raiser="$([ "$1" = corpus ] && [ "$raiser_on" -eq 0 ] && echo 1)" '
     BEGIN { n = split(only, a, ","); for (i = 1; i <= n; i++) keep[a[i]] = 1
-            m = split(lanes, b, ","); for (i = 1; i <= m; i++) lane_kept[b[i]] = 1 }
+            m = split(lanes, b, ","); for (i = 1; i <= m; i++) lane_kept[b[i]] = 1
+            scoped = 0
+            if (tierkeep != "") { while ((getline t < tierkeep) > 0) { tier[t] = 1; td[t] = t; if (sub(/\/index\.ms$/, "/", td[t])) dirscope[t] = td[t]; else dirscope[t] = "\001none" } scoped = 1 } }
     { prog = $0; sub(/ \[.*$/, "", prog); lane = $0; sub(/^.*\[/, "", lane); sub(/\].*$/, "", lane)
       if (drop_raiser == 1 && lane == "raiser") next
+      if (scoped == 1) { file = $0; sub(/ > .*$/, "", file); hit = 0
+        for (t in tier) { if (file == t) { hit = 1; break } if (dirscope[t] != "\001none" && index(file, dirscope[t]) == 1) { hit = 1; break } }
+        if (hit == 0) next }
       if (n > 0 && !(prog in keep)) next
       if (m > 0 && lane != "parity" && !(lane in lane_kept)) next
       print }'
@@ -803,10 +853,10 @@ lane_body() {
 PHASES=("tools build" "boundary suite hcr tests fmt" "corpus guard" "san")
 
 start=$SECONDS
-ran="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
+ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
 mkdir -p "$GATES_DIR" && : >"$GATES_DIR/$$"
 trap 'rm -f "$GATES_DIR/$$"' EXIT
-PAR=${GATE_PAR:-$(share_of_cores 10)}
+PAR=${GATE_PAR:-$(share_of_cores 5)}
 rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
 [ "$lanes" = tools ] || admit
 
@@ -835,7 +885,7 @@ for phase in "${PHASES[@]}"; do
     log="$OUT/$lane.log"
     : >"$OUT/$lane.scope"
     case "$lane" in build|tools) ;; *) need_cand "$lane" ;; esac
-    case "$lane" in corpus|san)
+    case "$lane" in corpus|san|tests)
       if [ -n "$select_pid" ]; then wait "$select_pid"; select_pid=""; read -r select selected <"$OUT/select.state"; fi
       [ "$select" -eq 0 ] || [ "$selected" -eq 1 ] || select_programs
       narrow="" only_csv="" lanes_csv=""
@@ -853,6 +903,12 @@ for phase in "${PHASES[@]}"; do
   log="$OUT/$lane.log"
   rc=$(sed -n 's/^RC=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1); rc=${rc:-1}
   secs=$(sed -n 's/^SECS=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1)
+  if [ "$lane" = san ] && [ "$rc" = 77 ] && grep -q '!! SAN BLOCKED' "$log"; then
+    say "gate: san $(fmt_secs "${secs:-0}") · BLOCKED on this host, $(sed -n 's/^ *!! SAN BLOCKED — //p' "$log" | head -1)"
+    blocked="$blocked san"
+    ledger san "${secs:-0}" "$rc" 0 0 0 0 "$ADMIT_WAITED"
+    continue
+  fi
   { read -r only_csv; read -r lanes_csv; } <"$OUT/$lane.scope" || { only_csv=""; lanes_csv=""; }
   reused=""
   [ "$reuse" -eq 0 ] || reused=" (reused log)"
@@ -900,19 +956,23 @@ if [ "$record" -eq 1 ]; then
   sha=$(git rev-parse --short HEAD)
   [ -f "$KNOWN" ] || echo '{}' >"$KNOWN.prev"
   [ -f "$KNOWN" ] && cp "$KNOWN" "$KNOWN.prev"
-  merged=$(jq --arg lanes "$KNOWN_LANES flaky" 'with_entries(select(.key as $k | $lanes | split(" ") | index($k)))' "$KNOWN.prev")
+  merged="$OUT/known.merged"
+  jq --arg lanes "$KNOWN_LANES flaky" 'with_entries(select(.key as $k | $lanes | split(" ") | index($k)))' "$KNOWN.prev" >"$merged" \
+    || die "--record: cannot read $KNOWN.prev"
   for lane in $ran; do
     case " $KNOWN_LANES " in *" $lane "*) ;; *) continue ;; esac
-    merged=$(jq -n --argjson prev "$merged" --arg l "$lane" --arg sha "$sha" --rawfile reds "$OUT/$lane.red" '
-      ($reds | split("\n") | map(select(length > 0))) as $names
-      | $prev + {($l): ($names | map({key: ., value: (($prev[$l] // {})[.] // {since: $sha, note: ""})}) | from_entries)}')
+    jq --arg l "$lane" --arg sha "$sha" --rawfile reds "$OUT/$lane.red" '
+      . as $prev
+      | ($reds | split("\n") | map(select(length > 0))) as $names
+      | $prev + {($l): ($names | map({key: ., value: (($prev[$l] // {})[.] // {since: $sha, note: ""})}) | from_entries)}' "$merged" >"$merged.next" \
+      && mv "$merged.next" "$merged" || die "--record: merging the $lane reds failed"
   done
-  printf '%s' "$merged" | jq -r '
+  jq -r '
     "{\n" + ([to_entries | sort_by(.key)[] |
       "  \(.key | @json): {" +
       (if (.value | length) == 0 then "" else
         "\n" + ([.value | to_entries | sort_by(.key)[] | "    \(.key | @json): \(.value | tojson)"] | join(",\n")) + "\n  "
-      end) + "}"] | join(",\n")) + "\n}"' >"$KNOWN"
+      end) + "}"] | join(",\n")) + "\n}"' "$merged" >"$KNOWN" || die "--record: writing $KNOWN failed"
   diff -u "$KNOWN.prev" "$KNOWN" | sed -n '3,$p'
   rm -f "$KNOWN.prev"
   say "gate: RECORDED $(jq '[.[] | length] | add // 0' "$KNOWN") known red(s) at $sha ($(fmt_secs $((SECONDS - start)))) -> src/test/known-red.json"
@@ -920,6 +980,6 @@ if [ "$record" -eq 1 ]; then
   exit 0
 fi
 
-say "gate: $verdict ($(printf '%s' "$ran" | sed 's/^ //; s/ /, /g')) $(fmt_secs $((SECONDS - start)))"
+say "gate: $verdict ($(printf '%s' "$ran" | sed 's/^ //; s/ /, /g')) $(fmt_secs $((SECONDS - start)))${blocked:+ · not run on this host:$blocked}"
 ledger total $((SECONDS - start)) "$([ "$verdict" = GREEN ] && echo 0 || echo 1)" "$red_sum" "$((red_sum - new_sum))" "$new_sum" "$flaky_sum" "$ADMIT_WAITED"
 [ "$verdict" = GREEN ]

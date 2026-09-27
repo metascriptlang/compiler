@@ -204,6 +204,7 @@ export function createSizedArray(element: Type | null, size: int32): Type {
 	t.kind = TypeKind.SizedArray;
 	t.typeReturn = element;
 	t.typeValue = size;
+	if (element != null) propagateToOwner(t, element);
 	return t;
 }
 
@@ -324,7 +325,7 @@ export function createPromise(innerType: Type | null): Type {
 	base.typeName = "Promise";
 	base.typeNames = [];
 	base.typeChildren = [];
-	return createGenericInstance(base, [innerType]);
+	return createGenericInstance(base, [innerType!]);
 }
 
 // Affine, scope-bound `Promise<T>` produced by `spawn(...)`. Surface type is
@@ -344,7 +345,7 @@ export function createSpawnHandle(innerType: Type | null): Type {
 	// GenericInstance so isAffineAwaitable(t) can detect spawn-origin Promises
 	// anywhere they flow.
 	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.AwaitableAffine).incl(TypeFlag.AwaitableScopeBound);
-	return createGenericInstance(base, [innerType]);
+	return createGenericInstance(base, [innerType!]);
 }
 
 // Iterator<T> — return type of function* generators. Wraps yield type T.
@@ -694,10 +695,16 @@ export function duVariantRegistry(): Type[] {
 // Returns the variant index, or -1 if no variant matches.
 export function findUnionVariant(unionType: Type | null, fieldNames: string[], fieldTypes: Type[]): int32 {
 	if (unionType == null || unionType.typeChildren == null || fieldNames.length == 0) return -1;
+	const exact = variantHoldingFields(unionType, fieldNames, fieldTypes, true);
+	return exact >= 0 ? exact : variantHoldingFields(unionType, fieldNames, fieldTypes, false);
+}
+
+function variantHoldingFields(unionType: Type, fieldNames: string[], fieldTypes: Type[], exact: boolean): int32 {
 	let vi = 0;
 	while (vi < unionType.typeChildren.length) {
 		const variant = peelToStruct(unionType.typeChildren[vi]);
-		if (variant != null && variant.typeNames != null && variant.typeNames.length >= fieldNames.length) {
+		if (variant != null && variant.typeNames != null && variant.typeNames.length >= fieldNames.length
+				&& (!exact || variant.typeNames.length == fieldNames.length)) {
 			let allFound = true;
 			let ti = 0;
 			while (ti < fieldNames.length) {
@@ -945,9 +952,6 @@ export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
 	if (byIdentity >= 0) return byIdentity;
 	const names = exprType.typeNames;
 	if (names == null || names.length == 0) return -1;
-	// EXACT field-set match only. findUnionVariant accepts a superset, which
-	// picks the wrong slot when one variant's fields contain another's
-	// (`{typExprMembers, …}` vs `{typExprMembers}` → tagged 76, held 77).
 	// Candidates that survive the type comparison are the same structural type;
 	// they share a layout only when their storage matches, else refuse.
 	const types = exprType.typeChildren;
@@ -1054,6 +1058,7 @@ export function duSharedFieldOffsetDiffers(unionType: Type | null, fieldName: st
 export function duFieldRequiresNarrowing(unionType: Type | null, fieldName: string): boolean {
 	if (unionType == null || unionType.typeChildren == null) return false;
 	if (unwrapRefNullUnion(unionType) != null) return false;
+	if (duSharedFieldSlotDiffers(unionType, fieldName)) return true;
 	let firstSig = "";
 	let found = 0;
 	let variants = 0;
@@ -1078,6 +1083,34 @@ export function duFieldRequiresNarrowing(unionType: Type | null, fieldName: stri
 	}
 	if (found == 0) return false;
 	return found < variants;
+}
+
+export function literalTagDiscriminant(unionType: Type | null): string {
+	if (unionType == null || unionType.typeChildren == null) return "";
+	if (isDiscriminatedUnion(unionType)) {
+		const dt = unionType.typeExtra;
+		return dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String || dt.kind == TypeKind.Enum) ? getDiscriminantName(unionType) : "";
+	}
+	const strDisc = findSharedStringDiscriminant(unionType);
+	if (strDisc != "") return strDisc;
+	const boolDisc = findSharedBooleanDiscriminant(unionType);
+	return boolDisc != "" ? boolDisc : findSharedEnumDiscriminant(unionType);
+}
+
+export function duSharedFieldSlotDiffers(unionType: Type | null, fieldName: string): boolean {
+	if (unionType == null || unionType.typeChildren == null) return false;
+	let firstInline = -1;
+	for (const member of unionType.typeChildren) {
+		const variant = peelToStruct(member);
+		if (variant == null || variant.typeNames == null || !variant.typeNames.includes(fieldName)) continue;
+		const inline = inlineVariantStruct(member) != null ? 1 : 0;
+		if (firstInline < 0) {
+			firstInline = inline;
+		} else if (inline != firstInline) {
+			return literalTagDiscriminant(unionType) != fieldName;
+		}
+	}
+	return false;
 }
 
 // Find variant index by discriminant enum value name (e.g. "NumLit" or "NodeKind.NumLit").
@@ -1470,7 +1503,7 @@ export function lockedCellName(payload: Type | null): string {
 export function createLockedCell(payload: Type | null): Type {
 	return createStruct(lockedCellName(payload),
 		["lockNext", "lockServing", "value"],
-		[getSysType(TypeKind.Int32), getSysType(TypeKind.Int32), payload], true);
+		[getSysType(TypeKind.Int32), getSysType(TypeKind.Int32), payload!], true);
 }
 
 export function createLocked(payload: Type | null): Type {
@@ -1888,8 +1921,14 @@ export function genericParamsOf(t: Type | null): string {
 		const base = cur.typeExtra != null ? unwrapRefBase(cur.typeExtra) : null;
 		owner = base != null ? base.sym : null;
 	}
-	if (owner != null && owner.declNode != null) return declGenericParams(owner.declNode);
+	if (owner != null && owner.declNode != null) return genericParamNamesOf(declGenericParams(owner.declNode));
 	return builtinGenericParams(cur.typeName);
+}
+
+export function genericParamNamesOf(params: string): string {
+	const names: string[] = [];
+	for (const param of splitTopLevel(params, ",")) names.push(splitTopLevel(param, ":")[0].trim());
+	return names.join(",");
 }
 
 export function declFieldNamesJoined(decl: Node | null): string {
@@ -1935,6 +1974,14 @@ export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
 let _instantiatedBodies: int32 = 0;
 export function instantiatedBodyCount(): int32 { return _instantiatedBodies; }
 
+function bodyWouldShareTheDeclaration(base: Type, names: string[], args: Type[]): boolean {
+	if (!isDeclaredStruct(base) || symGenericParams(base.sym) == "") return false;
+	for (let i = 0; i < names.length; i += 1) {
+		if (args[i] == null || args[i].kind != TypeKind.GenericParam || args[i].typeName != names[i]) return true;
+	}
+	return false;
+}
+
 // Reference parity (handleGenericInvocation): eagerly instantiate
 // GenericInstance body. Uses explicit param names from the parser's generic declaration
 // store. Produces a fully concrete body
@@ -1956,11 +2003,12 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	const args: Type[] = [];
 	let pi = 0;
 	while (pi < paramNames.length) {
-		names.push(paramNames[pi].trim());
+		names.push(splitTopLevel(paramNames[pi], ":")[0].trim());
 		args.push(gi.typeChildren[pi]);
 		pi = pi + 1;
 	}
 	const body = substituteAllParams(innerBase, names, args);
+	if (body == innerBase && bodyWouldShareTheDeclaration(innerBase, names, args)) return;
 	// Re-wrap in Ref if the base was Ref<Struct>
 	gi.typeReturn = isRefWrapped ? createRef(body) : body;
 	_instantiatedBodies = _instantiatedBodies + 1;
@@ -2881,7 +2929,9 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 				// substituteTypeInner (walking it cost ~20× compile time).
 				const gi = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(gi, names, concretes, active);
-				if (gi.typeReturn != null) {
+				if (gi.typeReturn != null && typeVisitHas(active, gi.typeReturn)) {
+					gi.typeReturn = null as unknown as Type;
+				} else if (gi.typeReturn != null) {
 					gi.typeReturn = substituteAllParamsInner(gi.typeReturn, names, concretes, active);
 				}
 				return gi;
@@ -3557,6 +3607,9 @@ function typeDisplayNameInner(t: Type | null): string {
 	if (t.kind == TypeKind.Set) return "BitSet<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Borrow && t.typeReturn != null) return "Borrow<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Var && t.typeReturn != null) return "out " + typeDisplayName(t.typeReturn);
+	if (isMaybeType(t) && t.typeReturn != null) return typeDisplayName(t.typeReturn) + " | null";
+	const shape = namelessObjectShape(t);
+	if (shape != "") return shape;
 	const name = typeNameOf(t);
 	// typeNameOf peels Ref and Ptr alike, which renders a pointer and its
 	// pointee with the SAME text ("got QB, expected QB"). Ref stays hidden — an
@@ -3590,11 +3643,25 @@ function typeDisplayNameInner(t: Type | null): string {
 		TypeKind.Inferred => "<inferring>",
 		TypeKind.Function => "function",
 		TypeKind.GenericParam => t.typeName != "" ? t.typeName : "<T>",
-		// Anonymous struct (object literal type) — typeName is "" so typeNameOf
-		// returns empty. Diagnostics historically display these as "object".
-		TypeKind.Struct => "object",
 		_ => "<kind:" + t.kind.toString() + ">",
 	};
+}
+
+let _shapeDepth: int32 = 0;
+function namelessObjectShape(t: Type): string {
+	const obj = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	if (obj.kind != TypeKind.Struct) return "";
+	if (obj.typeName != "" && !obj.typeName.startsWith("__anon")) return "";
+	if (obj.typeNames.length == 0) return "{}";
+	if (_shapeDepth >= 3) return "{ ... }";
+	_shapeDepth = _shapeDepth + 1;
+	let out = "{ ";
+	for (let i = 0; i < obj.typeNames.length; i += 1) {
+		const field = i < obj.typeChildren.length ? typeDisplayName(obj.typeChildren[i]) : "unknown";
+		out = out + obj.typeNames[i] + ": " + field + "; ";
+	}
+	_shapeDepth = _shapeDepth - 1;
+	return out + "}";
 }
 
 // getBuiltinKind — read the @builtin("...") tag from a type's underlying class Symbol.

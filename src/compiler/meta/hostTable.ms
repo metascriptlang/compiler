@@ -56,7 +56,7 @@ import {
 	readFile, writeFile, appendFile, chmod,
 	mkdir, rmdir, remove, rename, symlink, readDir,
 } from "std/fs";
-import { cwd, platform, env, exec, argv, execFile, execFileResult } from "std/process";
+import { cwd, platform, arch, env, exec, argv, execFile, execFileResult } from "std/process";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { performance } from "std/core/performance";
 import { fromCodePoint } from "std/core/string";
@@ -209,6 +209,10 @@ function _bridgeMsProcessCwd(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsProcessPlatform(args: RaiserValue[]): RaiserValue {
 	return boxString(platform);
+}
+
+function _bridgeMsProcessArch(args: RaiserValue[]): RaiserValue {
+	return boxString(arch);
 }
 
 function _bridgeMsProcessGetEnv(args: RaiserValue[]): RaiserValue {
@@ -553,7 +557,7 @@ function _bridgeMsStringTrimEnd(args: RaiserValue[]): RaiserValue {
 // indexOf: MS declares (s, sub, start: int64 = 0) — handle optional 3rd arg
 function _bridgeMsStringIndexOf(args: RaiserValue[]): RaiserValue {
 	const start = args.length > 2 ? args[2].intVal : 0;
-	return boxInt(unboxString(args[0]).indexOf(unboxString(args[1]), start));
+	return boxInt(unboxString(args[0]).indexOf(unboxString(args[1]), start as int32));
 }
 
 function _bridgeMsStringCharCodeAt(args: RaiserValue[]): RaiserValue {
@@ -791,6 +795,7 @@ export function ensureHostTableLoaded(): void {
 	// process accessors
 	registerHostFn("msProcessCwd",       _bridgeMsProcessCwd);
 	registerHostFn("msProcessPlatform",  _bridgeMsProcessPlatform);
+	registerHostFn("msProcessArch",      _bridgeMsProcessArch);
 	registerHostFn("msProcessGetEnv",    _bridgeMsProcessGetEnv);
 	// process spawn/exec
 	registerHostFn("msProcessSpawnSync",    _bridgeMsProcessSpawnSync);
@@ -910,6 +915,7 @@ test "ensureHostTableLoaded registers process accessors" {
 	ensureHostTableLoaded();
 	assert lookupHostFn("msProcessCwd") != null;
 	assert lookupHostFn("msProcessPlatform") != null;
+	assert lookupHostFn("msProcessArch") != null;
 	assert lookupHostFn("msProcessGetEnv") != null;
 }
 

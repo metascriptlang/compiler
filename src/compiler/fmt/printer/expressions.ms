@@ -17,7 +17,7 @@ import {
 	docCommaSepList,
 } from "../doc";
 import { callPrintNode } from "./callbacks";
-import { rawTemplateAt, rawObjectKeyAt, sourceByteAt } from "./literals";
+import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
 import { flagHas, buildParamList, paramListInParens, wrapNodeComments, isParamPatternDecl } from "./statements";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
@@ -105,6 +105,17 @@ function bindsInsideUnary(op: string, operand: Node): boolean {
 	return !((op == "-" && inner == "-") || (op == "+" && inner == "+"));
 }
 
+function writtenTypeArgs(node: Node, callee: Node, options: FormatOptions): string {
+	if (node.typeArg == "") return "";
+	let raw = "";
+	if (callee != null && callee.location != null && callee.kind == NodeKind.Identifier) {
+		raw = rawGenericsAt(options.source, callee.location.line, callee.location.column, (callee.data as IdentifierData).name);
+	} else if (callee != null && callee.location != null && callee.kind == NodeKind.MemberExpr) {
+		raw = rawGenericsAt(options.source, callee.location.line, callee.location.column, "." + (callee.data as MemberExprData).property);
+	}
+	return raw != "" ? raw : "<" + node.typeArg + ">";
+}
+
 export function printCallExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as CallExprData;
 	const args: Doc[] = [];
@@ -112,8 +123,7 @@ export function printCallExpr(node: Node, options: FormatOptions): Doc {
 		args.push(callPrintNode(arg, options));
 	}
 
-	const typeArgs = node.typeArg != "" ? "<" + node.typeArg + ">" : "";
-	const callParts: Doc[] = [printAtom(d.callee, options), docText(typeArgs + "(")];
+	const callParts: Doc[] = [printAtom(d.callee, options), docText(writtenTypeArgs(node, d.callee, options) + "(")];
 	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), innerComments(node))) callParts.push(p);
 	callParts.push(docText(")"));
 	return docGroup(callParts);
@@ -412,8 +422,7 @@ export function printNewExpr(node: Node, options: FormatOptions): Doc {
 	for (const arg of d.newArguments) {
 		args.push(callPrintNode(arg, options));
 	}
-	const typeArgs = node.typeArg != "" ? "<" + node.typeArg + ">" : "";
-	const newParts: Doc[] = [docText("new "), printAtom(d.newCallee, options), docText(typeArgs + "(")];
+	const newParts: Doc[] = [docText("new "), printAtom(d.newCallee, options), docText(writtenTypeArgs(node, d.newCallee, options) + "(")];
 	for (const p of listBody(args, wantsTrailingComma(options, CommaContext.Params), innerComments(node))) newParts.push(p);
 	newParts.push(docText(")"));
 	return docGroup(newParts);
@@ -432,8 +441,9 @@ export function printTypeAssertion(node: Node, options: FormatOptions): Doc {
 export function printMatchExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as MatchExprData;
 	const cases: Doc[] = [];
-	for (const c of d.matchCases) {
-		cases.push(wrapNodeComments(c, printMatchCase(c, options)));
+	for (let i = 0; i < d.matchCases.length; i += 1) {
+		const c = d.matchCases[i];
+		cases.push(wrapNodeComments(c, printMatchCase(c, options, i == d.matchCases.length - 1)));
 	}
 	return docGroup([
 		docText("match ("),
@@ -445,7 +455,7 @@ export function printMatchExpr(node: Node, options: FormatOptions): Doc {
 	]);
 }
 
-export function printMatchCase(node: Node, options: FormatOptions): Doc {
+export function printMatchCase(node: Node, options: FormatOptions, isLast: boolean): Doc {
 	const d = node.data as MatchCaseData;
 	const pats: Doc[] = [];
 	for (const p of d.casePatterns) {
@@ -458,8 +468,14 @@ export function printMatchCase(node: Node, options: FormatOptions): Doc {
 	}
 	parts.push(docText(" => "));
 	parts.push(callPrintNode(d.caseBody, options));
-	parts.push(docText(","));
+	if (writesCaseComma(node, d.caseBody, options, isLast)) parts.push(docText(","));
 	return docGroup(parts);
+}
+
+function writesCaseComma(node: Node, body: Node, options: FormatOptions, isLast: boolean): boolean {
+	if (node.flags.has(NodeFlag.CommaWritten)) return true;
+	if (body.kind == NodeKind.BlockStmt) return false;
+	return isLast || options.source == "";
 }
 
 export function printTryExpr(node: Node, options: FormatOptions): Doc {
@@ -490,7 +506,7 @@ export function printAwaitExpr(node: Node, options: FormatOptions): Doc {
 export function printYieldExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as YieldExprData;
 	const star = d.isDelegate ? "*" : "";
-	return docGroup([docText("yield" + star + " "), printAtom(d.yieldArg, options)]);
+	return docGroup([docText("yield" + star + " "), callPrintNode(d.yieldArg, options)]);
 }
 
 export function printSizeofExpr(node: Node): Doc {

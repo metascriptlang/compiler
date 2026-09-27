@@ -85,7 +85,7 @@ when (!bare && !solana) {
 	// binary contains mbedtls. For a plain-HTTP-only binary, import
 	// `{ request }` from "std/http" directly and skip fetch().
 
-	export function fetch(url: string, options: FetchOptions = null): Result<HttpResponse, HttpError> {
+	export function fetch(url: string, options: FetchOptions | null = null): Result<HttpResponse, HttpError> {
 		const u = try parseUrl(url);
 		if (u.protocol != "http" && u.protocol != "https") {
 			return Result.err(invalidRequest("unsupported URL protocol: " + u.protocol));

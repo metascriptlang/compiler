@@ -366,7 +366,7 @@ export function transAmHashNode(node: Node): number {
 		},
 		NodeKind.EnumDecl => {
 			const d = node.data as EnumDeclData;
-			h = hS(h, d.enumName); h = hStrings(h, d.enumMembers); h = hNumbers(h, d.enumValues);
+			h = hS(h, d.enumName); h = hStrings(h, d.enumMembers); h = hNumbers(h, d.enumValues); h = hNodes(h, d.enumInits);
 		},
 		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = node.data as InterfaceDeclData;
@@ -532,14 +532,14 @@ test "chained order matters" {
 }
 
 test "different kinds produce different hashes" {
-	const a: TaQueryKey = { queryKind: 0, fileId: 1 };
-	const b: TaQueryKey = { queryKind: 1, fileId: 1 };
+	const a: TaQueryKey = { queryKind: TaQueryKind.FileText, fileId: 1 };
+	const b: TaQueryKey = { queryKind: TaQueryKind.FileHash, fileId: 1 };
 	assert taHashKey(a) != taHashKey(b);
 }
 
 test "different fileIds produce different hashes" {
-	const a: TaQueryKey = { queryKind: 0, fileId: 1 };
-	const b: TaQueryKey = { queryKind: 0, fileId: 2 };
+	const a: TaQueryKey = { queryKind: TaQueryKind.FileText, fileId: 1 };
+	const b: TaQueryKey = { queryKind: TaQueryKind.FileText, fileId: 2 };
 	assert taHashKey(a) != taHashKey(b);
 }
 

@@ -268,6 +268,7 @@ export enum NodeFlag {
 	Parenthesized, // parser: the expression was written inside grouping parentheses
 	WhenPicked,    // parser: statement spliced in from the selected branch of a `when` chain
 	ExplicitDeref, // parser: HiddenDeref written as `x[]` — the checker validates the pointer, fmt prints it back
+	CommaWritten,  // parser: a comma was written after this match case
 }
 
 // ===== Node Kind Enum =====
@@ -433,7 +434,7 @@ export type NodeData =
 	| { importNames: string[], importAliases: string[], importSource: string, nameLocations: SourceLocation[] }  // ImportDecl
 	| { exportedDecl: Node }                                       // ExportDecl
 	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation } // TypeAliasDecl
-	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[] } // EnumDecl
+	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] } // EnumDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation } // InterfaceDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation } // StructDecl
 	| { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation } // ClassDecl
@@ -659,7 +660,7 @@ export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };
 export type ImportDeclData = { importNames: string[], importAliases: string[], importSource: string, nameLocations: SourceLocation[] };
 export type ExportDeclData = { exportedDecl: Node };
 export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation };
-export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[] };
+export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] };
 export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation };
 export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation };
 export type ClassDeclData = { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation };

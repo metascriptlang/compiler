@@ -12,7 +12,7 @@ import { attachedOpSym } from "../transform/util";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp } from "../ast/node";
 import { canFormAcycle } from "../transform/cycles";
 import { monoInstanceName } from "../monomorphize/registry";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, anonUnionCName } from "../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, anonUnionCName, hashToBase36, typeKey } from "../codegen/c/types";
 
 // ===== RC Classification Kind =====
 
@@ -89,6 +89,13 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		const n = arrayCTypeName(t);
 		return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
 	}
+	if (elem.kind == TypeKind.Tuple) {
+		if (!classifyType(elem, ctx).needsCleanup) {
+			return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
+		}
+		const n = arrayCTypeName(t);
+		return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
+	}
 	// Named struct/union elements — use hasAsgnFlag to decide if per-type hooks
 	// are needed. Reference parity: fillBody checks tfHasAsgn regardless of
 	// kind (Struct/Union/GenericInstance). GenericInstance whose base
@@ -148,7 +155,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		if (isAtomicRef(elem)) {
 			return makeRcInfo(RcKind.Named, "", "msArrayAtomicRefDestroy", "msArrayAtomicRefCopy", "msArrayRefWasMoved", "msArrayAtomicRefCopy", true);
 		}
-		return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy", true);
+		return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefSink", true);
 	}
 	// Closure element (function type) — msClosureArray stores msClosure structs
 	// INLINE (16B stride), NOT as void* pointers. Routing to msArrayRefDestroy
@@ -182,7 +189,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	// BUG #3 family — msArrayRefDestroy will misread struct data. Future
 	// TypeKind additions in element position must add an explicit case
 	// above (verify with a runtime cleanup probe before falling through).
-	return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy", true);
+	return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefSink", true);
 }
 
 // ===== Sub-classifiers for complex arms =====
@@ -343,6 +350,11 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			}
 			return noRcInfo();
 		},
+		TypeKind.SizedArray => {
+			if (!classifyType(t.typeReturn, ctx).needsCleanup) return noRcInfo();
+			const sn = sizedArrayHookName(t);
+			return makeRcInfo(RcKind.Named, sn, sn + "Destroy", sn + "Copy", sn + "WasMoved", sn + "Sink", false);
+		},
 		TypeKind.Tuple => {
 			// RC tuples get first-class named hooks (destructorLifting ensureTupleHooks); the
 			// name MUST be tupleTypeName — the single source codegen + hooks share — so
@@ -357,6 +369,10 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 		},
 		_ => noRcInfo(),
 	};
+}
+
+export function sizedArrayHookName(t: Type): string {
+	return "msSized_" + hashToBase36(typeKey(t));
 }
 
 export function anonUnionOwnsRc(t: Type, ctx: TransformContext): boolean {

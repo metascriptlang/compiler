@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec, execFile, platform, cwd } from "std/process";
+import { exit, exec, execFile, execFileCapture, argv, platform, cwd } from "std/process";
 import { watch, nextChanges, msIoRunOnce, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile } from "std/fs";
 import { writeStderr } from "std/io";
@@ -67,7 +67,7 @@ import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "
 import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
-import { resolveRuntimeDir } from "../utils/path";
+import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
 import { HcrAbiExport, HcrModuleAbi, HcrReloadDecision, HcrReloadKind, HcrReloadReason, buildHcrModuleAbi, classifyHcrReload, createHcrAbiExport, hcrAbiFingerprint, hcrExportKey, hcrLayoutKey, hcrReloadDiagnostic, hcrSignatureKey, parseHcrAbiBundle, serializeHcrAbiBundle } from "./hcrAbi";
 import { VERSION } from "./usage";
@@ -377,8 +377,8 @@ export function setGraphLoadTiming(on: boolean): void {
 	graphLoadTiming = on;
 }
 
-function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, session: CheckSession | null = null): ModuleGraph {
-	if (verbose) verboseLog(`loading module graph from ${entryPath}`);
+function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliOptions, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, session: CheckSession | null = null): ModuleGraph {
+	if (opts.verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const provider = createFileSystemProvider();
 
 	// Load preludes FIRST so they end up at the start of graph.loadOrder.
@@ -408,12 +408,12 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	if (graph.errors.length > 0) stopBuild();
 	exitOnModuleErrors(graph, "error");
 
-	if (verbose) verboseLog("cross-module type check");
+	if (opts.verbose) verboseLog("cross-module type check");
 	// Pass targetOs through so @platform("...") directives are filtered against
 	// the build target during collectDirectives. Without this, modules check
 	// with stale ctx.targetOs → mac directives leak into a cross-compile
 	// windows build's linkFlags().
-	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, targetOs, targetInfo, gcMode, config, session);
+	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, opts.targetOs, targetInfo, gcMode, config, session, opts.strictDefs, opts.strictNullChecks);
 	graphPreludeCtx = getPreludeContext();
 	reportModuleErrors(graph, "type error");
 	// Standard reference parity (main.nim: `if conf.errorCounter > 0: return` before
@@ -657,6 +657,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const _tx0 = performance.now();
 	const transformed = transformProgram(comptimeResolved, ctx, false);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
+	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	const nativeCtx = createTransformContextWithChecker(ctx);
 	nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 	nativeCtx.boundChecks = opts.mode != MODE_DANGER;
@@ -668,6 +669,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.timers.native = job.timers.native + (performance.now() - _tn0);
 	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
 	const hcrResult = hcrSlot >= 0 ? lowerHcrIndirection(hcrLifted, job.hcrModules[hcrSlot], job.hcrModules) : hcrLifted;
+	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 		else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
 		else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
@@ -678,7 +680,8 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const analyzed = analyzeProgram(hcrResult, ctx);
 	if (ctx.errors.length > preAnErrors) {
 		for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
-			printDiag(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
+			const e = ctx.errors[ei];
+			renderModuleError(modPath, job.source, { message: e.message, line: e.line, column: e.column, severity: ErrorSeverity.Error });
 		}
 		throw new Error(BUILD_STOPPED);
 	}
@@ -1281,7 +1284,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	entryPath = canonicalModulePath(entryPath);
 	registerCoreParsers();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, opts.targetInfo);
+	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo);
 	const outDir = outputDir != "" ? outputDir : "out";
 	// Project root for deriving module IDs
 	const projectRoot = config.stdPath.length > 4 ? config.stdPath.slice(0, config.stdPath.length - 4) : dirname(entryPath);
@@ -1496,7 +1499,7 @@ export function cmdCheckC(entryPath: string, opts: CliOptions, resolveSection: R
 	const config = buildResolverConfig(opts.target, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, opts.targetInfo, gcModeOf(opts.gcMode));
+	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode));
 	console.log(`${success("OK")} ${dim(`no type errors in ${graph.loadOrder.length} module(s)`)}`);
 }
 
@@ -2014,9 +2017,12 @@ function changedSources(changes: FsChanges): string[] {
 	return sources;
 }
 
-function waitForSourceChange(feed: WatchFeed): boolean {
+function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
 	while (true) {
-		while (feed.batches.length == 0) pumpFeed(feed, 50);
+		while (feed.batches.length == 0) {
+			if (stopped()) return false;
+			pumpFeed(feed, 50);
+		}
 		const queued = feed.batches;
 		feed.batches = [];
 		let rescan = false;
@@ -2068,7 +2074,17 @@ function copyForReplay(from: string, to: string): void {
 	}
 }
 
-export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
+interface WatchRun {
+	entryPath: string;
+	opts: CliOptions;
+	resolveSection: ResolveSection;
+	session: BuildSession;
+	feed: WatchFeed | null;
+	replay: string[][];
+	step: int32;
+}
+
+function openWatch(entryPath: string, opts: CliOptions, resolveSection: ResolveSection): WatchRun {
 	if (!opts.isHcr) {
 		printDiag(`${error("error")}: --watch needs --hcr: only per-module HCR images keep a module's lowering independent of the others`);
 		exit(1);
@@ -2086,47 +2102,103 @@ export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: R
 		console.log(`watch: watching ${root}`);
 	}
 	setRecoverableBuild(true);
-	let session = createBuildSession(true);
-	let step = 0;
-	while (true) {
-		if (opts.emitC) opts.emitSubdir = `watch${step}`;
-		const t0 = performance.now();
-		let status = BuildStatus.Built;
-		let stopped = false;
-		let internal = "";
+	return { entryPath, opts, resolveSection, session: createBuildSession(true), feed, replay, step: 0 };
+}
+
+function watchBuild(run: WatchRun): boolean {
+	const opts = run.opts;
+	if (opts.emitC) opts.emitSubdir = `watch${run.step}`;
+	const t0 = performance.now();
+	let status = BuildStatus.Built;
+	let stopped = false;
+	let internal = "";
+	try {
+		status = buildC(run.entryPath, opts, run.resolveSection, run.session);
+	} catch (e) {
+		if (e.message == BUILD_STOPPED) stopped = true;
+		else internal = e.message;
+	}
+	let label = status == BuildStatus.UpToDate ? "up-to-date" : "built";
+	if (!stopped && internal == "" && status == BuildStatus.Stale) {
+		console.log(`watch: rebuilding from scratch: ${run.session.staleReason}`);
+		run.session = createBuildSession(true);
 		try {
-			status = buildC(entryPath, opts, resolveSection, session);
+			status = buildC(run.entryPath, opts, run.resolveSection, run.session);
 		} catch (e) {
 			if (e.message == BUILD_STOPPED) stopped = true;
 			else internal = e.message;
 		}
-		let label = status == BuildStatus.UpToDate ? "up-to-date" : "built";
-		if (!stopped && internal == "" && status == BuildStatus.Stale) {
-			console.log(`watch: rebuilding from scratch: ${session.staleReason}`);
-			session = createBuildSession(true);
-			try {
-				status = buildC(entryPath, opts, resolveSection, session);
-			} catch (e) {
-				if (e.message == BUILD_STOPPED) stopped = true;
-				else internal = e.message;
-			}
-			label = "rebuilt";
-		}
-		if (stopped) label = "failed";
-		if (internal != "") {
-			printDiag(`${error("error")}: internal: the build threw '${internal}'`);
-			session = createBuildSession(true);
-			label = "failed";
-		}
-		console.log(`watch: build ${step} ${label} in ${Math.round(performance.now() - t0)} ms (checked ${session.check.rechecked.size}/${session.moduleCount}, lowered ${session.loweredCount})`);
-		step = step + 1;
-		if (feed == null) {
-			if (step > replay.length) return;
-			copyForReplay(replay[step - 1][0], replay[step - 1][1]);
-			continue;
-		}
-		if (!waitForSourceChange(feed!)) return;
+		label = "rebuilt";
 	}
+	if (stopped) label = "failed";
+	if (internal != "") {
+		printDiag(`${error("error")}: internal: the build threw '${internal}'`);
+		run.session = createBuildSession(true);
+		label = "failed";
+	}
+	const session = run.session;
+	console.log(`watch: build ${run.step} ${label} in ${Math.round(performance.now() - t0)} ms (checked ${session.check.rechecked.size}/${session.moduleCount}, lowered ${session.loweredCount})`);
+	run.step = run.step + 1;
+	return label != "failed";
+}
+
+function watchNext(run: WatchRun, stopped: () => boolean): boolean {
+	if (run.feed == null) {
+		if (run.step > run.replay.length) return false;
+		copyForReplay(run.replay[run.step - 1][0], run.replay[run.step - 1][1]);
+		return true;
+	}
+	return waitForSourceChange(run.feed!, stopped);
+}
+
+export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
+	const run = openWatch(entryPath, opts, resolveSection);
+	while (true) {
+		watchBuild(run);
+		if (!watchNext(run, (): boolean => false)) return;
+	}
+}
+
+struct HostExit {
+	code: int32;
+	done: boolean;
+}
+
+function buildHcrHost(dir: string): string {
+	const source = `${resolveRuntimeDir()}/std/hcr/host.cms`;
+	const host = `${dir}/host${exeSuffix()}`;
+	const built = execFileCapture(resolveArgv0(argv[0]), ["build", source, `--output=${host}`]);
+	if (!built.ok) {
+		printDiag(`${error("error")}: cannot build the HCR host from ${source}`);
+		printDiag(built.error.errorOutput != "" ? built.error.errorOutput : built.error.message);
+		exit(1);
+	}
+	return host;
+}
+
+export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
+	if (opts.watchReplay != "") {
+		printDiag(`${error("error")}: msc run --hcr watches the sources itself; --watch-replay belongs to msc build`);
+		exit(1);
+	}
+	const dir = "out/hcr";
+	const stem = replaceExt(basename(entryPath), "");
+	ensureDir(dir);
+	opts.outputPath = `${dir}/${stem}${soSuffix()}`;
+	const host = buildHcrHost(dir);
+	const run = openWatch(entryPath, opts, resolveSection);
+	while (!watchBuild(run)) {
+		if (!watchNext(run, (): boolean => false)) exit(1);
+	}
+	const exited: Locked<HostExit> = new Locked({ code: 0, done: false });
+	const running = spawn((): int32 => {
+		const code = execFile(host, [dir, stem]) as int32;
+		lockedUpdate(exited, (v: HostExit): HostExit => { return { code: code, done: true }; });
+		return code;
+	});
+	while (watchNext(run, (): boolean => lockedRead(exited, (v: HostExit): boolean => v.done))) watchBuild(run);
+	const code = await running;
+	exit(code);
 }
 
 export function buildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection, session: BuildSession): BuildStatus {
@@ -2148,7 +2220,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
-	const graph = loadAndCheckGraph(entryPath, opts.verbose, config, opts.targetOs, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
+	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
 	applyGcMode(opts);
 	session.moduleCount = graph.loadOrder.length as int32;
 
@@ -2851,7 +2923,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	resolveCC(opts);
 	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs, opts.targetInfo, gcModeOf(opts.gcMode));
+	const graph = loadAndCheckGraph(filePath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode));
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules
 	const processed: ProcessedModule[] = [];
@@ -2909,12 +2981,14 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const transformed = transformProgram(comptimeResolved, ctx, false);
+		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 		nativeCtx.boundChecks = opts.mode != MODE_DANGER;
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		exitOnCheckerErrors(ctx, modPath, cm.source);
 		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
 			else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
@@ -2925,7 +2999,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		if (ctx.errors.length > preAnErrors) {
 			for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
-				printDiag(`${error("error")}: ${modPath}: ${ctx.errors[ei].message}`);
+				const e = ctx.errors[ei];
+				renderModuleError(modPath, cm.source, { message: e.message, line: e.line, column: e.column, severity: ErrorSeverity.Error });
 			}
 			exit(1);
 		}
@@ -3137,7 +3212,7 @@ export interface JsTreeResult {
 function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boolean, outRootOverride: string): JsTreeResult {
 	registerCoreParsers();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
+	const graph = loadAndCheckGraph(filePath, config, opts);
 
 	// Self-contained out tree rooted at the PROJECT, not the CWD: user modules
 	// mirror the source tree, std/runtime modules land under _std/, anything
@@ -3430,7 +3505,7 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	const t0 = performance.now();
 	const config = buildResolverConfig(Target.Raiser, defaultResolveSection());
-	const graph = loadAndCheckGraph(filePath, opts.verbose, config, opts.targetOs);
+	const graph = loadAndCheckGraph(filePath, config, opts);
 
 	const modules: RaiserModuleInput[] = [];
 	const entryCanonical = canonicalModulePath(filePath);

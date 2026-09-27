@@ -1,23 +1,27 @@
 // For-Of Lowering — transforms for-of loops into index-based while loops
 // Follows reference for_of_lower.zig
 //
-// Arrays/Strings:
+// Arrays/Strings (a string yields its bytes as char; arrays and strings check
+// their length after each element, as Nim's items in lib/system/iterators.nim):
 //   for (const item of arr) { body }
-//   → { const $iter = arr; let $idx = 0; const $len = $iter.length;
-//       while ($idx < $len) { const item = $iter[$idx]; body; $idx++; } }
+//   → { let $idx = 0; const $len = arr.length;
+//       while (true) { if (arr.length != $len) throw "..."; if (!($idx < $len)) break;
+//                      const item = arr[$idx]; $idx++; body } }
 
-import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol } from "../../ast/node";
+import {
+	Node, NodeKind, NodeData, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, createNodeAt,
+	BlockStmtData, WhileStmtData, IfStmtData, ThrowStmtData, StringLiteralData, VariableDeclData, CallExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
+} from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { setFlag, SymbolFlag } from "../../checker/symbol";
-import { int32Type, noneType, isIterator, getIteratorNextFnType } from "../../checker/types";
+import { int32Type, charType, stringType, noneType, createArray, createSizedArray, isIterator, isMaybeType, getIteratorNextFnType } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import {
 	makeIdentResolved, cloneIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
-	extractBodyStmts, boolToDeclKind,
+	makeIf, makeBreak, makeBool, makeString, makeHiddenDeref, runtimeRef, extractBodyStmts, boolToDeclKind,
 } from "../util";
-import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 
 // ===== Main Entry Point =====
 
@@ -105,13 +109,15 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	const elemArrType = (iterType != null && iterType.kind == TypeKind.Ref
 			&& iterType.typeReturn != null && iterType.typeReturn.kind == TypeKind.Array)
 		? iterType.typeReturn : iterType;
+	const isString = iterType != null && iterType.kind == TypeKind.String;
+	const lengthCanChange = isString || (elemArrType != null && elemArrType.kind == TypeKind.Array);
 
-	// Stable lvalue check: Identifier/MemberExpr can be accessed directly without copy.
-	// Value-based arrays in C are {len, p} structs — copying creates a stale p pointer
-	// if the loop body pushes to the original (reallocation invalidates the copy).
-	// For non-lvalue expressions (calls, etc.), still use a temp to evaluate once.
-	const isStableLvalue = d.forOfIterable.kind == NodeKind.Identifier
-		|| d.forOfIterable.kind == NodeKind.MemberExpr;
+	// Re-read a path of reads from a symbol every iteration, as Nim's items maps such an argument
+	// (transf.nim putArgInto, paDirectMapping): a snapshot temp ends its live range inside the
+	// loop and costs the element binding its cursor (+40-60% on a Box[] loop, 2026-09-26).
+	const iterable = d.forOfIterable;
+	const isStableLvalue = iterable.kind == NodeKind.Identifier
+		|| (iterable.kind == NodeKind.MemberExpr && isSymbolPath(iterable));
 
 	const preamble: Node[] = [];
 
@@ -121,15 +127,6 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		const iterSym = freshTempSym(ctx, "iter", iterType != null ? iterType : noneType());
 		const iterDecl = makeVarDecl(iterSym.name, d.forOfIterable, DeclKind.Const, loc);
 		iterDecl.resolvedSym = iterSym;
-		// A fresh owned value (call result / array literal) has no other owner, so the
-		// temp must own+destroy it (like `const t = f(); for..of t`). Cursor here would
-		// skip destroy and leak the array every iteration. Aliasing rvalues (conditional,
-		// type-assertion of an lvalue) stay Cursor to avoid double-free.
-		const producesFreshOwned = d.forOfIterable.kind == NodeKind.CallExpr
-			|| d.forOfIterable.kind == NodeKind.ArrayLiteral;
-		if (!producesFreshOwned) {
-			setFlag(iterSym, SymbolFlag.Cursor);
-		}
 		preamble.push(iterDecl);
 		iterExpr = makeIdentResolved(iterSym, loc);
 	}
@@ -139,9 +136,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	idxDecl.resolvedSym = idxSym;
 	preamble.push(idxDecl);
 
-	// const $len = <iter>.length;  — captured once (new elements from push won't be visited)
-	const lenExpr = makeMember(cloneExpr(iterExpr, loc), "length", loc);
-	const lenDecl = makeVarDecl(lenSym.name, lenExpr, DeclKind.Const, loc);
+	const lenDecl = makeVarDecl(lenSym.name, lengthOf(iterExpr, isString, loc), DeclKind.Const, loc);
 	lenDecl.resolvedSym = lenSym;
 	preamble.push(lenDecl);
 
@@ -183,18 +178,21 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		}
 	} else {
 		// Simple binding: const item = <iter>[$idx];
-		// The binding borrows from the array: its symbol is a cursor, so DRC skips destroy
-		const itemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
+		const itemAccess = isString
+			? makeCall(runtimeRef("msStringByteAt", loc), [cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc)], loc)
+			: makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
 		if (bindingSym != null) {
 			itemDecl.resolvedSym = bindingSym;
-			setFlag(bindingSym, SymbolFlag.Cursor);
 		}
 		// Stamp the element type (Array<T>.typeReturn = T after mono) so downstream
 		// passes can see the monomorphized binding type. Same reason as the iterator
 		// path above — without this, generic for..of bindings degrade to `void*` in
 		// generated C and break DRC hook resolution.
-		if (elemArrType != null && elemArrType.typeReturn != null) {
+		if (isString) {
+			itemDecl.nodeType = charType();
+			itemAccess.nodeType = charType();
+		} else if (elemArrType != null && elemArrType.typeReturn != null) {
 			itemDecl.nodeType = elemArrType.typeReturn;
 			itemAccess.nodeType = elemArrType.typeReturn;
 		}
@@ -212,16 +210,48 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		bi += 1;
 	}
 
-	const whileCond = makeBinary(makeIdentResolved(idxSym, loc), "<", makeIdentResolved(lenSym, loc), loc);
-	const whileBody = makeBlock(whileStmts, loc);
-	const whileNode = makeWhile(whileCond, whileBody, loc);
+	const inRange = makeBinary(makeIdentResolved(idxSym, loc), "<", makeIdentResolved(lenSym, loc), loc);
+	if (!lengthCanChange) {
+		preamble.push(makeWhile(inRange, makeBlock(whileStmts, loc), loc));
+		return makeBlock(preamble, loc);
+	}
 
-	preamble.push(whileNode);
+	const changed = makeBinary(lengthOf(iterExpr, isString, loc), "!=", makeIdentResolved(lenSym, loc), loc);
+	const message = `the length of the ${isString ? "string" : "array"} changed while iterating over it`;
+	const raise = createNodeAt(NodeKind.ThrowStmt, { throwArg: makeString(message, loc) }, loc);
+	const guarded: Node[] = [
+		makeIf(changed, makeBlock([raise], loc), makeBlock([], loc), loc),
+		makeIf(makeUnary("!", inRange, loc), makeBlock([makeBreak(loc)], loc), makeBlock([], loc), loc),
+	];
+	for (const s of whileStmts) guarded.push(s);
+	preamble.push(makeWhile(makeBool(true, loc), makeBlock(guarded, loc), loc));
 	return makeBlock(preamble, loc);
 }
 
-// Clone a simple expression node (Identifier or MemberExpr) for reuse in lowered code.
-// Avoids sharing a single AST node across multiple parents.
+function lengthOf(iterExpr: Node, isString: boolean, loc: SourceLocation): Node {
+	if (!isString) return makeMember(cloneExpr(iterExpr, loc), "length", loc);
+	const call = makeCall(runtimeRef("msStringByteLength", loc), [cloneExpr(iterExpr, loc)], loc);
+	call.nodeType = int32Type();
+	return call;
+}
+
+function isSymbolPath(node: Node): boolean {
+	if (node.kind == NodeKind.Identifier) return true;
+	if (node.kind == NodeKind.MemberExpr) return isSymbolPath((node.data as MemberExprData).object);
+	if (node.kind == NodeKind.HiddenDeref) return isSymbolPath((node.data as HiddenDerefData).expr);
+	if (node.kind == NodeKind.TypeAssertion) return isSymbolPath((node.data as TypeAssertionData).asExpr);
+	if (isVariantRead(node)) return isSymbolPath((node.data as HiddenStdConvData).convExpr);
+	return false;
+}
+
+function isVariantRead(node: Node): boolean {
+	if (node.kind != NodeKind.HiddenSubConv || node.variantSlot <= 0) return false;
+	const d = node.data as HiddenStdConvData;
+	const from = d.convExpr.nodeType;
+	return from != null && from.kind == TypeKind.Union
+		&& d.convType.kind != TypeKind.Union && !isMaybeType(d.convType);
+}
+
 function cloneExpr(node: Node, loc: SourceLocation): Node {
 	if (node.kind == NodeKind.Identifier) {
 		return cloneIdent(node, loc);
@@ -233,8 +263,27 @@ function cloneExpr(node: Node, loc: SourceLocation): Node {
 		clone.resolvedSym = node.resolvedSym;
 		return clone;
 	}
-	// Fallback: return as-is (temp ident from non-lvalue path)
-	return node;
+	if (node.kind == NodeKind.HiddenDeref) {
+		const clone = makeHiddenDeref(cloneExpr((node.data as HiddenDerefData).expr, loc), loc);
+		clone.nodeType = node.nodeType;
+		return clone;
+	}
+	if (node.kind == NodeKind.TypeAssertion) {
+		const d = node.data as TypeAssertionData;
+		const clone = createNodeAt(NodeKind.TypeAssertion, { asExpr: cloneExpr(d.asExpr, loc), asType: d.asType } as TypeAssertionData, loc);
+		clone.nodeType = node.nodeType;
+		clone.flags = node.flags;
+		return clone;
+	}
+	if (isVariantRead(node)) {
+		const d = node.data as HiddenStdConvData;
+		const clone = createNodeAt(NodeKind.HiddenSubConv, { convExpr: cloneExpr(d.convExpr, loc), convType: d.convType } as NodeData, loc);
+		clone.nodeType = node.nodeType;
+		clone.flags = node.flags;
+		clone.variantSlot = node.variantSlot;
+		return clone;
+	}
+	throw new Error(`internal: for-of re-reads an iterable that is not a symbol path (node kind ${node.kind})`);
 }
 
 // ===== Pattern Expansion Helper =====
@@ -250,3 +299,62 @@ test "for-of preserves surrounding stmts" { assert stmtCountAfter("x(); for (con
 test "destructured for-of becomes block" { assert firstStmtKindAfter("for (const [a, b] of arr) { use(a); }", lowerForOf) == NodeKind.BlockStmt; }
 
 test "destructured for-of preserves surrounding" { assert stmtCountAfter("x(); for (const [a, b] of arr) {} y();", lowerForOf) == 3; }
+
+function loweredStmts(src: string, iterType: Type): Node[] {
+	const parsed = parseInput(src);
+	if (!parsed.ok) throw new Error(parsed.error);
+	const stmt = getStmts(parsed.value)[0];
+	(stmt.data as ForOfStmtData).forOfIterable.nodeType = iterType;
+	const block = getStmts(lowerForOf(parsed.value, makeCtx()))[0];
+	return (block.data as BlockStmtData).statements;
+}
+
+function loweredLoop(iterType: Type): Node {
+	const stmts = loweredStmts("for (const x of arr) { use(x); }", iterType);
+	return stmts[stmts.length - 1];
+}
+
+test "a call in the iterable path runs once, into a temp before the loop" {
+	const stmts = loweredStmts("for (const x of mk().inner.items) { use(x); }", createArray(stringType()));
+	assert stmts.length == 4;
+	const iter = (stmts[0].data as VariableDeclData).initializer;
+	assert iter.kind == NodeKind.MemberExpr;
+	const len = (stmts[2].data as VariableDeclData).initializer;
+	assert ((len.data as MemberExprData).object.kind == NodeKind.Identifier);
+}
+
+test "a field path from a symbol through a cast is read again at each element" {
+	const stmts = loweredStmts("for (const x of (n.data as D).items) { use(x); }", createArray(stringType()));
+	assert stmts.length == 3;
+	assert stmts[0].kind == NodeKind.VariableDecl;
+	assert stmts[2].kind == NodeKind.WhileStmt;
+}
+
+function loopBody(loop: Node): Node[] {
+	return ((loop.data as WhileStmtData).whileBody.data as BlockStmtData).statements;
+}
+
+test "an array for-of raises when the length changed before the next element" {
+	const loop = loweredLoop(createArray(int32Type()));
+	assert (loop.data as WhileStmtData).whileCondition.kind == NodeKind.BooleanLiteral;
+	const guard = loopBody(loop)[0];
+	assert guard.kind == NodeKind.IfStmt;
+	const raise = ((guard.data as IfStmtData).consequent.data as BlockStmtData).statements[0];
+	assert raise.kind == NodeKind.ThrowStmt;
+	assert ((raise.data as ThrowStmtData).throwArg.data as StringLiteralData).value.contains("array changed while iterating");
+}
+
+test "a string for-of binds each byte as a char" {
+	const loop = loweredLoop(stringType());
+	const item = loopBody(loop)[2];
+	assert item.kind == NodeKind.VariableDecl;
+	assert item.nodeType!.kind == TypeKind.Char;
+	const read = (item.data as VariableDeclData).initializer;
+	assert read.kind == NodeKind.CallExpr;
+	assert ((read.data as CallExprData).callee.data as IdentifierData).name == "msStringByteAt";
+}
+
+test "a sized array for-of keeps the bounded loop" {
+	const loop = loweredLoop(createSizedArray(int32Type(), 3));
+	assert (loop.data as WhileStmtData).whileCondition.kind == NodeKind.BinaryExpr;
+}

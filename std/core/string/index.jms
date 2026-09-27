@@ -64,7 +64,7 @@ export function lastIndexOf(this s: string, sub: string, startIdx: int32 = -1): 
 	unreachable;
 }
 
-export function slice(this s: string, start: int32, end: int32): string {
+export function slice(this s: string, start: int32, end: int32 = 2147483647): string {
 	@emit(`return ${s}.slice(${start}, ${end});`);
 	unreachable;
 }
@@ -198,6 +198,14 @@ export function msStringHash(s: string): int32 {
 export function msStringLength(s: string): int32 {
 	@emit(`return ${s}.length;`);
 	unreachable;
+}
+
+export function msStringByteLength(s: string): int32 {
+	return wtf8Cached(s).length;
+}
+
+export function msStringByteAt(s: string, idx: int32): int32 {
+	return s.byteAt(idx);
 }
 
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====

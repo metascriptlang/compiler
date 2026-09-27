@@ -188,11 +188,9 @@ test "negative literal out of range for uint8 is error" {
 // ===== K: fitNode — implicit narrowing HiddenStdConv insertion =====
 // Parity: standard reference's node fitting and transformation patterns
 
-test "narrowing int32 to int8 var decl inserts HiddenStdConv" {
-	// When declType is int8 and initializer is int32, fitNode wraps in HiddenStdConv
-	const src = "const a: int32 = 1 as int32;\nconst x: int8 = a;";
-	// Should not error — narrowing is allowed with implicit range check
-	assert strictErrorCount(src) == 0;
+test "narrowing int32 to int8 var decl needs an explicit as" {
+	assert strictErrorCount("const a: int32 = 1 as int32;\nconst x: int8 = a;") == 1;
+	assert strictErrorCount("const a: int32 = 1 as int32;\nconst x: int8 = a as int8;") == 0;
 }
 
 test "widening int8 to int32 has no HiddenStdConv" {

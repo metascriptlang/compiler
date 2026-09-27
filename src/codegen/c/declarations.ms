@@ -10,12 +10,12 @@ import {
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString, addCGenError,
 } from "./context";
-import { genExpr, refArrayDestroyFn, refArrayCellName } from "./expressions";
+import { genExpr, refArrayDestroyFn, refArrayCellLabel, bareArrayTypeName } from "./expressions";
 import { genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isCompilerGenCName, isNilableValueType, ensureDrcProto, procHeader } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, refArrayCellName, isCompilerGenCName, isNilableValueType, ensureDrcProto, procHeader } from "./types";
 import { genTestDeclNode } from "./test";
-import { formatCNumber, formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
+import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isBakeableAggregateConst } from "../../checker/reachability";
@@ -47,7 +47,7 @@ function isDeclAlive(g: CGen, node: Readonly<Node>): boolean {
 	if (name.length > 0 && name.slice(0, 1) == "$") return true;
 	const sym = node.resolvedSym;
 	const isSeqHookSuffix = name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
-		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved");
+		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved") || name.endsWith("RefCellTrace");
 	if (isSeqHookSuffix) return true;
 	return aliveSetHas(g.aliveSet, g.modulePath, name);
 }
@@ -350,7 +350,7 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	// globals. Reachable because checkClassDecl resolves the class name to
 	// the same-named Function symbol.
 	if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function) {
-		genStaticFieldGlobals(g, d);
+		genStaticFieldGlobals(g, d, node.resolvedSym);
 		return;
 	}
 
@@ -372,7 +372,7 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	// The struct body emission below is separately guarded by typeAlreadyDeclared
 	// to avoid re-emitting the forward decl / struct body.
 	nameSetAdd(g.declaredThings, name);
-	genStaticFieldGlobals(g, d);
+	genStaticFieldGlobals(g, d, node.resolvedSym);
 
 	// Emit struct type definition (skip if already declared by genObjectType for generic instances)
 	if (!typeAlreadyDeclared) {
@@ -424,19 +424,28 @@ function initializerLiteralType(literal: Readonly<Node>, declType: Type | null):
 
 // Static field globals + initializer emission for a class body. Shared by the
 // normal class path and the merged callable-namespace attachment.
-function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>): void {
+function staticFieldSymOf(owner: Symbol | null, qualifiedName: string): Symbol | null {
+	if (owner == null) return null;
+	for (const sf of owner.staticFields) {
+		if (sf.name == qualifiedName) return sf;
+	}
+	return null;
+}
+
+function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>, owner: Symbol | null): void {
 	for (const member of d.classBody) {
 		if (member.kind != NodeKind.PropertyDecl) { continue; }
 		const pd = member.data as PropertyDeclData;
 		if (!pd.propIsStatic) { continue; }
 		const cType = member.nodeType != null ? getTypeDesc(g, member.nodeType) : "double";
-		const globalName = staticFieldCName(d.className + "." + pd.propName);
+		const qualifiedName = d.className + "." + pd.propName;
+		const globalName = staticFieldCName(staticFieldSymOf(owner, qualifiedName), qualifiedName);
 		addLine(sec(g, CSection.GlobalVars), `${cType} ${globalName};`);
 		if (pd.propInitializer != null) {
 			match (pd.propInitializer.kind) {
 				NodeKind.NumberLiteral => {
-					const nv = (pd.propInitializer.data as NumberLiteralData).value;
-					addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumber(nv, initializerLiteralType(pd.propInitializer, member.nodeType))};`);
+					const nd = pd.propInitializer.data as NumberLiteralData;
+					addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumberLit(nd, initializerLiteralType(pd.propInitializer, member.nodeType))};`);
 				},
 				NodeKind.StringLiteral => {
 					const sv = (pd.propInitializer.data as StringLiteralData).value;
@@ -635,7 +644,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 			if (g.preparingDeclarations) {
 				if (g.preparationFacts == null) return;
 				g.preparationFacts.skippedTypeInfos.add(skipBase);
-				const skipCBase = typeCacheGet(g.typeCache, "cname:" + skipBase);
+				const skipCBase = typeInfoCBase(g, d, skipBase);
 				if (skipCBase != "") g.preparationFacts.skippedTypeInfos.add(skipCBase);
 			}
 			return;
@@ -776,9 +785,9 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) return true;
 	const arrCType = cType.slice(0, cType.length - 1);
 	const destroyFn = refArrayDestroyFn(arrT.typeReturn, arrCType);
-	const cellName = refArrayCellName(destroyFn, arrCType);
+	const cellName = refArrayCellName(arrT);
 	ensureDrcProto(g, destroyFn, null);
-	ensureRefArrayCellTypeInfo(g, cellName, destroyFn);
+	ensureRefArrayCellTypeInfo(g, cellName, refArrayCellLabel(destroyFn, bareArrayTypeName(g, arrCType)), destroyFn);
 	// ensureRefArrayCellTypeInfo is a no-op under --gc=manual (types.ms), so the cell
 	// symbol does not exist there - take the null slot like msBoxRefArray does.
 	const tiSlot = (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
@@ -790,15 +799,22 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 
 // ===== TypeInfo Variable (from destructorLifting) =====
 // Emits msTypeInfo declaration to GlobalVars and field assignments to DatInit.
-// The ObjectLiteral initializer has fields { name, isCyclic, traceFn, destroyFn }.
+
+function typeInfoCBase(g: CGen, d: Readonly<VariableDeclData>, baseName: string): string {
+	if (d.initializer != null && d.initializer.kind == NodeKind.ObjectLiteral) {
+		const od = d.initializer.data as ObjectLiteralData;
+		for (let i = 0; i < od.keys.length; i += 1) {
+			const v = od.properties[i];
+			if (od.keys[i] == "cname" && v.kind == NodeKind.StringLiteral) return mangle((v.data as StringLiteralData).value);
+		}
+	}
+	return typeCacheGet(g.typeCache, "cname:" + baseName);
+}
 
 function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string): void {
 	// Extract base type name: strip "TypeInfo" suffix (8 chars)
 	const baseName = d.declName.slice(0, d.declName.length - 8);
-	// The emitted symbol must match what consumers derive from the Type
-	// (qualified C name via mangledTypeName) — the decl arm registered it
-	// in typeCache before destructorLifting's TypeInfo var reaches codegen.
-	const cBase = typeCacheGet(g.typeCache, "cname:" + baseName);
+	const cBase = typeInfoCBase(g, d, baseName);
 	const infoName = (cBase != "") ? cBase + "TypeInfo" : varName;
 	// Mark as defined so ensureTypeInfoDef doesn't duplicate
 	typeCacheSet(g.forwTypeCache, "typeInfoDef:" + baseName, baseName);
@@ -820,7 +836,9 @@ function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string)
 
 		for (let i = 0; i < od.keys.length; i += 1) {
 			const key = od.keys[i];
-			if (key == "name") {
+			if (key == "cname") {
+				continue;
+			} else if (key == "name") {
 				// name field: emit C string literal (const char*), not msString
 				addLine(datInit, `  ${infoName}.name = "${baseName}";`);
 			} else if (key == "destroyFn") {

@@ -18,6 +18,6 @@ import { UntypedTree } from "../contracts";
 // SERIALIZE UntypedTree<V> capability instance for JSON.
 // Cross-format tools that target `UntypedTree<V>` accept this for JSON input.
 // Schema-bound formats (Protobuf, Avro) deliberately don't export an instance.
-export const jsonUntyped: UntypedTree<JsonValue> = {
+export const jsonUntyped: UntypedTree<JsonValue, string> = {
 	parseValue: parseJson,
 };

@@ -143,7 +143,7 @@ function spillTarget(target: Node, pre: Node[], ctx: TransformContext): Node {
 		NodeKind.ArrayAccess => {
 			const d = target.data as ArrayAccessData;
 			if (hasAwait(d.index)) {
-				d.array = hasAwait(d.array) ? spillTarget(d.array, pre, ctx) : hoistAssignTargetEffects(d.array, pre, ctx);
+				d.array = hasAwait(d.array) ? spillTarget(d.array, pre, ctx) : hoistAssignTargetEffects(d.array, pre, ctx, []);
 				d.index = spillExpr(d.index, pre, ctx);
 			} else {
 				d.array = spillTarget(d.array, pre, ctx);
@@ -159,7 +159,7 @@ function spillAssign(expr: Node, pre: Node[], ctx: TransformContext): Node {
 	const d = expr.data as BinaryExprData;
 	if (hasAwait(d.left)) { d.left = spillTarget(d.left, pre, ctx); }
 	if (hasAwait(d.right)) {
-		d.left = hoistAssignTargetEffects(d.left, pre, ctx);
+		d.left = hoistAssignTargetEffects(d.left, pre, ctx, []);
 		d.right = spillExpr(d.right, pre, ctx);
 	}
 	return expr;
@@ -174,7 +174,7 @@ function spillCall(expr: Node, pre: Node[], ctx: TransformContext): Node {
 	if (d.callee.kind == NodeKind.MemberExpr) {
 		const md = d.callee.data as MemberExprData;
 		if (hasAwait(md.object)) { md.object = spillTarget(md.object, pre, ctx); }
-		if (argAwaits) { md.object = hoistAssignTargetEffects(md.object, pre, ctx); }
+		if (argAwaits) { md.object = hoistAssignTargetEffects(md.object, pre, ctx, []); }
 	} else {
 		d.callee = spillValue(d.callee, pre, ctx);
 		if (argAwaits && hasEffect(d.callee)) { d.callee = tempEffects(d.callee, pre, ctx); }

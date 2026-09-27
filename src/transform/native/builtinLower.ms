@@ -23,6 +23,7 @@ import {
 	makeHiddenAddr, runtimeRef,
 } from "../util";
 import { rewriteEcho, buildStructToString, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
+import { charToString, stringifyCharOperand } from "./stringOpLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 import { tryLowerPromiseBuiltin, lowerNewPromise } from "../lowering/promiseLower";
 import { evictHelperName } from "./nativeLower";
@@ -41,7 +42,7 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 		}
 		// arr.length = n → msXxxArraySetLen(&arr, n)
 		if (node.kind == NodeKind.BinaryExpr) {
-			return lowerLengthAssign(node, ctx);
+			return lowerLengthAssign(stringifyCharOperand(node), ctx);
 		}
 		// E[v] → E_toString(v) (enum reverse index)
 		if (node.kind == NodeKind.ArrayAccess) {
@@ -147,6 +148,7 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	}
 	// Priority 2: compiler defaults
 	const tk = objType.kind;
+	if (tk == TypeKind.Char && (callNode.data as CallExprData).arguments.length == 0) return charToString(obj, loc);
 	// Number/int/float → msNumberToStringRadix(value, radix) — radix defaults to 10.
 	// 64-bit integers take the int64-parameter variant: a double argument would
 	// truncate the value before the digits are ever produced.

@@ -108,3 +108,31 @@ test "manual string search" {
 	assert !"hello".contains("xyz");
 	assert "abc".contains("");
 }
+
+function byteChar(s: string, i: int32): char {
+	return s.byteAt(i) as char;
+}
+
+test "a char converts to its character in a concatenation" {
+	const c = byteChar("a", 0);
+	assert "<" + c + ">" + c == "<a>a";
+	assert c + "x" == "ax";
+	assert `${c}-${c}` == "a-a";
+	let acc = "";
+	for (let i: int32 = 0; i < 3; i += 1) acc += c;
+	assert acc == "aaa";
+}
+
+test "a char converts to its character through toString and String" {
+	const c = byteChar("b", 0);
+	assert c.toString() == "b";
+	assert String(c) == "b";
+	assert c.toString(16) == "62";
+}
+
+test "a lone byte of 0x80 or more converts to U+FFFD" {
+	const hi = byteChar("\u{00E9}", 0);
+	assert String(hi) == "\u{FFFD}";
+	assert "[" + hi + "]" == "[\u{FFFD}]";
+	assert `${hi}`.byteLength == 3;
+}

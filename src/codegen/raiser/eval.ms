@@ -199,6 +199,22 @@ function compileProgramIntoEngine(program: Node, seeds: Symbol[], exts: Extensio
 	return idx;
 }
 
+const WIRE_ENUMS = ["NodeKind", "DeclKind", "ExternKind"];
+
+function seedWireEnums(seeds: Symbol[]): void {
+	let nodeSym: Symbol | null = null;
+	for (const s of seeds) if (s.name == "Node" && s.modulePath != "") nodeSym = s;
+	if (nodeSym == null) return;
+	const nodeCtx = lookupModuleCtx(nodeSym.modulePath);
+	if (nodeCtx == null) return;
+	for (const s of moduleScopeSymbols(nodeCtx.table)) {
+		if (!WIRE_ENUMS.includes(s.name)) continue;
+		let present = false;
+		for (const t of seeds) if (t.name == s.name) present = true;
+		if (!present) seeds.push(s);
+	}
+}
+
 export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string): EngineMacroResult {
 	if (_engineToken != token) {
 		_engine = freshEngine();
@@ -214,6 +230,7 @@ export function compileMacroIntoEngine(program: Node, token: CheckerContext, mac
 			for (const e of seedExtensionsOf(declCtx, null)) exts.push(e);
 		}
 	}
+	seedWireEnums(seeds);
 	_pendingHelperErrors = [];
 	takeRaiserCompileErrors(); // reset: stale entries from an earlier compile must not leak in
 	const funcIdx = compileProgramIntoEngine(program, seeds, exts, macroFnName);

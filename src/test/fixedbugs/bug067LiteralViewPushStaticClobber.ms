@@ -24,9 +24,27 @@
 // probe (audit2 rerun) proved that layout holds today. Assert via charCodeAt:
 // `neighbor === "hello-neighbor"` stays TRUE under the bug (both sides read
 // the same clobbered payload).
+//
+// Since:      2026-09-26 (runtime-rc-8) `asBytes()` returns `Readonly<uint8[]>`, so a
+//             push through the view is refused at compile time; a copy of the view
+//             grows on its own payload.
 
-test "bug067: literal byte view push must not clobber static neighbors" {
-	const v = "abc".asBytes();
+import { compileToCWithStd } from "../helpers";
+
+test "bug067: a push through a literal's byte view is refused" {
+	const c = compileToCWithStd(`
+		function main(): void {
+			const v = "abc".asBytes();
+			v.push(88);
+		}
+		main();
+	`);
+	assert !c.ok && c.error.includes("'push' mutates its receiver");
+}
+
+test "bug067: a copy of a literal's byte view grows without touching static neighbors" {
+	const view = "abc".asBytes();
+	const v = view.slice(0);
 	let k = 0;
 	while (k < 40) {
 		v.push(88);
@@ -36,6 +54,7 @@ test "bug067: literal byte view push must not clobber static neighbors" {
 	assert neighbor.charCodeAt(0) == 104;
 	assert neighbor.charCodeAt(13) == 114;
 	assert neighbor.length == 14;
+	assert "abc".length == 3;
 	assert v.length == 43;
 	assert v[0] == 97;
 	assert v[2] == 99;
@@ -43,11 +62,13 @@ test "bug067: literal byte view push must not clobber static neighbors" {
 	assert v[42] == 88;
 }
 
-test "bug067: heap-source byte view push still grows coherently" {
+test "bug067: a copy of a heap string's byte view grows coherently" {
 	const src = "ab" + "c";
-	const v = src.asBytes();
+	const view = src.asBytes();
+	const v = view.slice(0);
 	v.push(33);
 	assert v.length == 4;
 	assert v[0] == 97;
 	assert v[3] == 33;
+	assert src.length == 3;
 }

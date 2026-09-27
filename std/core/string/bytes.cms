@@ -6,7 +6,7 @@
 
 /** Returns the string's underlying bytes as a uint8 array (zero-copy). */
 @builtin("AsBytes")
-export extern function asBytes(this s: string): uint8[] from "msAsBytes";
+export extern function asBytes(this s: string): Readonly<uint8[]> from "msAsBytes";
 
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
 export function byteLength(this s: string): int32 {

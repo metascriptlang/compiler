@@ -51,20 +51,11 @@ export interface DrcScope {
 	isFunction: boolean;          // is this a function scope?
 }
 
-// ===== Outer Statement Context (for cross-scope last-read analysis) =====
-
-export class OuterEntry {
-	outerStmts: Node[];
-	fromIndex: number;
-	isFunctionBoundary: boolean;  // function boundary — stop cross-scope search
-}
-
 // ===== DRC Context =====
 
 export interface DrcContext {
 	ctx: TransformContext;
 	scopes: DrcScope[];          // scope stack
-	outerCtx: OuterEntry[];      // cross-scope remaining stmts for last-read
 	currentStmtIdx: number;      // Index of the statement currently being processed
 	currentStmtList: Node[];     // The list containing the current statement
 	finallyProtectedVars: Symbol[];   // vars in enclosing finally blocks — never last-read (Phase A); identity by Symbol
@@ -94,7 +85,6 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 	return {
 		ctx,
 		scopes: [],
-		outerCtx: [],
 		currentStmtIdx: 0,
 		currentStmtList: [],
 		finallyProtectedVars: [],
@@ -269,17 +259,6 @@ export function clearMoveInContext(dctx: DrcContext, sym: Symbol | null): void {
 
 // ===== needsTry Propagation =====
 
-// Set needsTry on all scopes from innermost to loop boundary (break/continue)
-export function setNeedsTryToLoop(dctx: DrcContext): void {
-	let i = dctx.scopes.length;
-	while (i > 0) {
-		i -= 1;
-		dctx.scopes[i].needsTry = true;
-		if (dctx.scopes[i].isLoop) return;
-	}
-}
-
-// Set needsTry on ALL scopes (return/throw)
 export function setNeedsTryAll(dctx: DrcContext): void {
 	for (let i = 0; i < dctx.scopes.length; i += 1) {
 		dctx.scopes[i].needsTry = true;
@@ -397,17 +376,6 @@ export function symListAdd(list: Symbol[], sym: Symbol): void {
 
 export function hasPre(dctx: DrcContext): boolean {
 	return currentScope(dctx).preStmts.length > 0;
-}
-
-// ===== Outer Statement Context Operations =====
-
-export function pushOuterStmts(dctx: DrcContext, stmts: Node[], fromIndex: number, isFunctionBoundary: boolean): void {
-	const entry: OuterEntry = { outerStmts: stmts, fromIndex, isFunctionBoundary };
-	dctx.outerCtx.push(entry);
-}
-
-export function popOuterStmts(dctx: DrcContext): void {
-	dctx.outerCtx.pop();
 }
 
 // ===== Test Helpers =====
@@ -532,20 +500,6 @@ test "setNeedsTryAll" {
 	assert dctx.scopes[0].needsTry;
 	assert dctx.scopes[1].needsTry;
 	assert dctx.scopes[2].needsTry;
-	popScope(dctx);
-	popScope(dctx);
-	popScope(dctx);
-}
-
-test "setNeedsTryToLoop stops at loop" {
-	const dctx = testDrcCtx();
-	pushScope(dctx, false, true);   // function
-	pushScope(dctx, true, false);   // loop
-	pushScope(dctx, false, false);  // block inside loop
-	setNeedsTryToLoop(dctx);
-	assert !dctx.scopes[0].needsTry;  // function — NOT set
-	assert dctx.scopes[1].needsTry;    // loop — set (it's the boundary)
-	assert dctx.scopes[2].needsTry;    // block — set
 	popScope(dctx);
 	popScope(dctx);
 	popScope(dctx);

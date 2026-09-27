@@ -8,7 +8,10 @@
 // instance methods (toISOString, getFullYear, etc.).
 
 when (!bare && !solana) {
-	import { msTimeNow } from "runtime/core/datetime.h";
+	@include("runtime/core/datetime.h");
+	@compile("runtime/core/datetime.c");
+
+	extern function msTimeNow(): number;
 
 	export class Date {
 		// Wall-clock time in milliseconds since Unix epoch (fractional).

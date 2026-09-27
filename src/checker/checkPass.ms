@@ -1,7 +1,7 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType } from "./types";
@@ -25,16 +25,17 @@ import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, 
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, forgetInstances } from "./instantiate";
+import { monoBaseName } from "../monomorphize/registry";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { declGenericParams } from "./types";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
-import { getFlowTypeOfReference } from "./flow";
+import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
 import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMutationLocation } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr } from "./checkExprPass";
-import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, checkPropagatedErrorAgainst } from "./callResolve";
+import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
+import { checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst } from "./callResolve";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { checkActorStaticField } from "./sendable";
@@ -773,7 +774,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		addError(ctx, `Duplicate symbol '${d.declName}'`, d.nameLocation.line, d.nameLocation.column);
 	}
 	if (existing != null) {
-		existing.symbolType = varType;
+		existing.symbolType = varType!;
 		if (d.declKind != DeclKind.Const) {
 			setFlag(existing, SymbolFlag.Mutable);
 		}
@@ -1546,6 +1547,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 
 function checkForInStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForInStmtData;
+	addError(ctx, "'for...in' is not supported: no backend lowers it; iterate a collection with 'for...of'", node.location.line, node.location.column);
 	checkExpr(ctx, d.forInObject, null);
 	const oldInitState = saveInitState(ctx.initTracker);
 	const affineSnap = saveConsumeState(ctx.affineTracker);
@@ -1862,7 +1864,8 @@ function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 	const branchBreaks: BreakState[] = [];
 	const branchConsumes: string[][] = [];
 	let hasDefault = false;
-	for (const c of d.switchCases) {
+	for (let ci = 0; ci < d.switchCases.length; ci += 1) {
+		const c = d.switchCases[ci];
 		const cd = c.data as SwitchCaseData;
 		if (cd.caseTests.length == 0) hasDefault = true;
 		restoreInitState(ctx.initTracker, oldState);
@@ -1875,6 +1878,9 @@ function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 		ctx.inSwitch = true;
 		for (const s of cd.caseStmts) { checkStmt(ctx, s); }
 		ctx.inSwitch = savedInSwitch;
+		if (cd.caseStmts.length > 0 && ci + 1 < d.switchCases.length && isEndOfBodyReachable(c)) {
+			addError(ctx, "switch case falls through into the next case: end it with 'break', 'return', 'continue' or 'throw'", c.location.line, c.location.column);
+		}
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchConsumes.push(collectNewConsumes(ctx.affineTracker, oldAffine));
 		// Build a block from case stmts to check break state
@@ -1941,6 +1947,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 					const sd = p.data as StringLiteralData;
 					coveredMembers.push(sd.value);
 				}
+				if (p.kind == NodeKind.BooleanLiteral && !hasGuard) coveredMembers.push((p.data as BooleanLiteralData).boolValue ? "true" : "false");
 				checkExpr(ctx, p, discType);
 			}
 		}
@@ -1988,11 +1995,16 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 			if (allCovered) isExhaustive = true;
 		}
 	}
+	if (!isExhaustive && coversEveryLiteral(discType, coveredMembers)) isExhaustive = true;
 	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, isExhaustive);
 	mergeConsumeBranches(ctx.affineTracker, oldAffine, branchConsumes, branchBreaks, isExhaustive);
 	if (discType.kind == TypeKind.Enum && !hasWildcard) {
 		const discEnd = estimateExprEndCol(d.matchStmtDisc) + 1;
 		checkEnumExhaustiveness(ctx, discType!, coveredMembers, node.location.line, node.location.column, discEnd);
+	}
+	if (!isExhaustive && discType.kind != TypeKind.Enum && !(narrowIsStringDU && narrowUnion != null) && !isUnresolvedType(discType)
+			&& mustCoverEveryValue(discType)) {
+		reportUncoveredMatch(ctx, discType, node, d.matchStmtDisc);
 	}
 	// Tier 2: report missing string DU variants
 	if (narrowIsStringDU && narrowUnion != null && !hasWildcard) {
@@ -2070,6 +2082,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	}
 	if (body.kind == NodeKind.BlockStmt) {
 		checkStmt(ctx, body);
+		refuseFallOffEndOf(ctx, sym, body);
 	} else {
 		// Expression body (arrow functions) — infer return type
 		checkExpr(ctx, body, null);
@@ -2092,6 +2105,33 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		console.log(`    SLOWFN ${ctx.modulePath} :: ${sym != null ? sym.name : "<anon>"} ${_fb1 - _fb0}ms`);
 	}
 	return paramSyms;
+}
+
+function refuseFallOffEndOf(ctx: CheckerContext, sym: Symbol, body: Node): void {
+	if (sym == null || sym.symbolType == null || sym.symbolType.kind != TypeKind.Function || hasFlag(sym, SymbolFlag.ImportC)) return;
+	let decl = sym.declNode;
+	while (decl != null && decl.kind == NodeKind.DecoratedDecl) decl = (decl.data as DecoratedDeclData).decoratedNode;
+	if (decl == null || (decl.kind != NodeKind.FunctionDecl && decl.kind != NodeKind.MethodDecl)) return;
+	let flags = "";
+	let at = body.location;
+	let native = "";
+	let shown = sym.name;
+	if (decl != null && decl.kind == NodeKind.FunctionDecl) {
+		const fd = decl.data as FunctionDeclData;
+		shown = fd.fnName;
+		flags = fd.fnFlags;
+		native = fd.nativeName;
+		at = fd.nameLocation;
+	} else if (decl != null && decl.kind == NodeKind.MethodDecl) {
+		const md = decl.data as MethodDeclData;
+		shown = md.methodName;
+		flags = md.methodFlags;
+		native = md.nativeName;
+		at = md.nameLocation;
+	}
+	if ((native != null && native != "") || flags.indexOf("extern") >= 0 || flags.indexOf("overload") >= 0 || flags.indexOf("abstract") >= 0) return;
+	refuseFallingOffEnd(ctx, shown, body, sym.symbolType.typeReturn, hasFlag(sym, SymbolFlag.Async) || flags.indexOf("async") >= 0,
+		flags.indexOf("generator") >= 0, at);
 }
 
 function enterLoopScope(ctx: CheckerContext): boolean {
@@ -2962,6 +3002,8 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 	// the checker API.
 	ctx.targetOs = preludeCtx.targetOs;
 	ctx.targetInfo = preludeCtx.targetInfo;
+	ctx.strictDefs = preludeCtx.strictDefs;
+	ctx.strictNullChecks = preludeCtx.strictNullChecks;
 	// @passL/@link go directly to global linkState — no per-module merge needed
 }
 

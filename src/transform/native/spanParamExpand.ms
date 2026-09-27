@@ -27,7 +27,7 @@
 
 import { Node, NodeKind, DeclKind, FunctionDeclData, CallExprData, ObjectLiteralData, ArrayLiteralData, BlockStmtData, Type, TypeKind } from "../../ast/node";
 import { createPtr, createSpan, getSysType } from "../../checker/types";
-import { TransformContext } from "../context";
+import { TransformContext, reportTransformError } from "../context";
 import { walkNode } from "../walker";
 import {
 	makeVarDecl, makeTypedIdent, makeObjectLiteral, makeMember,
@@ -341,7 +341,7 @@ function checkClosureSpanParams(node: Node, ctx: TransformContext): void {
 	while (i < fnType.typeChildren.length) {
 		const pType = fnType.typeChildren[i];
 		if (pType != null && pType.kind == TypeKind.Span) {
-			ctx.errors.push("Span parameters in closures are not yet supported in the C backend");
+			reportTransformError(ctx, "Span parameters in closures are not yet supported in the C backend", node.location);
 			return; // One diagnostic per closure is enough
 		}
 		i = i + 1;

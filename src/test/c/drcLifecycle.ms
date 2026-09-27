@@ -120,7 +120,7 @@ test "E2E C: generic function instantiation" {
 		const x = first<number>(nums);
 	`);
 	assert c.ok;
-	assert c.value.contains("first__number");
+	assert c.value.contains("first_") && c.value.contains("__number__");
 }
 
 // ===== Test: class with methods (Symbol↔Type cross-ref) =====

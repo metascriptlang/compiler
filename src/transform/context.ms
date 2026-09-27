@@ -1,7 +1,7 @@
 // Transform Context — shared state across all transforms
 
-import { CheckerContext } from "../checker/context";
-import { Type, Symbol, SymbolKind } from "../ast/node";
+import { CheckerContext, addError } from "../checker/context";
+import { Type, Symbol, SymbolKind, SourceLocation } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { noneType } from "../checker/types";
 
@@ -26,16 +26,22 @@ export class TransformContext {
 	pendingCarrierEqs: Type[];   // synthesized carrier structs (Maybe<T>) compared by ==; carried as Type because they have no symbol-table entry to look the name up by
 	cyclicCache: NameSet;     // canFormAcycle entry-level memo (types confirmed cyclic)
 	acyclicCache: NameSet;    // canFormAcycle entry-level memo (types confirmed acyclic)
+	splitLoopLocals: Symbol[];  // bindings of a loop body split at a yield: generatorLower hoists them to one slot for the whole loop
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, rangeChecks: true, boundChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingStructEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet() };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, rangeChecks: true, boundChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingStructEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [] };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
 	const ctx = createTransformContext();
 	ctx.checkerCtx = cc;
 	return ctx;
+}
+
+export function reportTransformError(ctx: TransformContext, msg: string, loc: SourceLocation): void {
+	if (ctx.checkerCtx != null) addError(ctx.checkerCtx, msg, loc.line, loc.column);
+	else ctx.errors.push(msg);
 }
 
 

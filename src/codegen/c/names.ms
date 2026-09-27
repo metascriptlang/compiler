@@ -226,13 +226,14 @@ export function classInitCName(classCName: string): string {
 	return classCName + "_init";
 }
 
-// Static field global name: "Counter.total" → "Counter__total"
-export function staticFieldCName(qualifiedName: string): string {
+// Static field global name: "Counter.total" → "Counter__total__<module>"
+export function staticFieldCName(sym: Readonly<Symbol> | null, qualifiedName: string): string {
 	const dotIdx = qualifiedName.indexOf(".");
-	if (dotIdx >= 0) {
-		return mangle(qualifiedName.slice(0, dotIdx)) + "__" + safeName(qualifiedName.slice(dotIdx + 1, qualifiedName.length));
-	}
-	return mangle(qualifiedName);
+	const base = dotIdx >= 0
+		? mangle(qualifiedName.slice(0, dotIdx)) + "__" + safeName(qualifiedName.slice(dotIdx + 1, qualifiedName.length))
+		: mangle(qualifiedName);
+	if (sym != null && sym.modulePath != "") return `${base}__${mangleModuleName(sym.modulePath)}`;
+	return base;
 }
 
 // ===== Symbol-aware C name: shared early-exit =====
@@ -353,7 +354,8 @@ export function mangledGlobalName(sym: Symbol | null, name: string): string {
 		? `__static${sym.location.line.toString()}_${sym.location.column.toString()}`
 		: "";
 	if (sym != null && sym.modulePath != "") {
-		return mangleQualified(baseName, mangleModuleName(sym.modulePath)) + site;
+		const ordinal = sym.disamb > 0 ? `_u${sym.disamb}` : "";
+		return mangleQualified(baseName, mangleModuleName(sym.modulePath)) + ordinal + site;
 	}
 	return safeName(baseName) + site;
 }
@@ -362,7 +364,7 @@ export function mangledGlobalName(sym: Symbol | null, name: string): string {
 
 export function mangleFieldName(name: string): string {
 	const mangled = mangle(name);
-	if (isCKeyword(mangled)) return mangled + "_0";
+	if (isCKeyword(mangled) || isCMacroName(mangled)) return mangled + "_0";
 	return mangled;
 }
 
@@ -385,7 +387,14 @@ function isCStdlibName(name: string): boolean {
 		"read" | "write" | "open" | "close" | "stat" | "fstat" | "lstat" => true,
 		"getenv" | "setenv" | "system" | "remove" | "rename" => true,
 		"isdigit" | "isalpha" | "isalnum" | "isspace" | "toupper" | "tolower" => true,
-		"stdin" | "stdout" | "stderr" => true,
+		_ => false,
+	};
+}
+
+function isCMacroName(name: string): boolean {
+	return match (name) {
+		"stdin" | "stdout" | "stderr" | "errno" | "EOF" => true,
+		"NAN" | "INFINITY" | "assert" | "offsetof" => true,
 		_ => false,
 	};
 }
@@ -394,7 +403,7 @@ function isCStdlibName(name: string): boolean {
 
 export function safeName(name: string): string {
 	const mangled = mangle(name);
-	if (isCKeyword(mangled) || isCStdlibName(mangled)) return mangled + "_";
+	if (isCKeyword(mangled) || isCStdlibName(mangled) || isCMacroName(mangled)) return mangled + "_";
 	return mangled;
 }
 
@@ -515,6 +524,17 @@ test "mangledFunctionName no modulePath with overloadIdx" {
 test "normal field" {
 	assert mangleFieldName("x") == "x";
 	assert mangleFieldName("myField") == "myField";
+}
+
+test "a field named after a standard-header macro is escaped" {
+	assert mangleFieldName("errno") == "errno_0";
+	assert mangleFieldName("stdout") == "stdout_0";
+	assert mangleFieldName("NAN") == "NAN_0";
+}
+
+test "a stdlib function name is a valid field name" {
+	assert mangleFieldName("time") == "time";
+	assert mangleFieldName("read") == "read";
 }
 
 test "keyword field" {

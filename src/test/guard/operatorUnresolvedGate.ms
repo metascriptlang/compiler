@@ -22,16 +22,13 @@
 //   instead of a compiler diagnostic about the operator, which is why the check
 //   pins the message text, not merely the failure.
 //
-// SPECIMEN: `>>>`, the remaining operator the checker types but the C backend
-//   cannot emit (JS emits it natively — measured 2026-08-15). `**` was the
-//   original specimen until it got its pow() emit; re-specimen when this one
-//   does too.
-// GUARD-CHECK-FAIL operator '>>>' reached codegen unresolved
+// SPECIMEN: `in`, an operator the checker types but the C backend cannot emit
+//   (JS emits it natively); re-specimen when it gets its C emit.
+// GUARD-CHECK-FAIL operator 'in' reached codegen unresolved
 
 export function main(): void {
-	const x: int32 = 0 - 8;
-	const y: int32 = 1;
-	console.log("shr=" + (x >>> y).toString());
+	const has: boolean = "x" in { x: 1 };
+	console.log("in=" + has.toString());
 }
 
 main();

@@ -144,3 +144,22 @@ test "interface concrete instantiation of generic parent" {
 	assert h.item == 7;
 	assert h.extra == "x";
 }
+
+class Pet { name: string; constructor(n: string) { this.name = n; } }
+class Dog extends Pet { constructor(n: string) { super(n); } }
+class Cat extends Pet { constructor(n: string) { super(n); } }
+struct Kennel { pet: Dog | Cat; }
+
+test "instanceof on a union of classes tests the stored member" {
+	const k: Kennel = { pet: new Dog("rex") };
+	const held = k.pet;
+	assert held instanceof Dog;
+	assert !(held instanceof Cat);
+	assert held instanceof Pet;
+	let other: Dog | Cat = new Cat("tom");
+	assert other instanceof Cat;
+	assert !(other instanceof Dog);
+	other = new Dog("max");
+	assert other instanceof Dog;
+	if (held instanceof Dog) assert held.name == "rex";
+}

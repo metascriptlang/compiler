@@ -124,7 +124,7 @@ void msNumberArrayPush(msNumberArray* arr, double value) {
 }
 
 double msNumberArrayPop(msNumberArray* arr) {
-	if (arr->len <= 0) return 0.0;
+	if (arr->len <= 0) msRaiseIndexError(arr->len - 1, arr->len);
 	arr->len--;
 	return arr->p->data[arr->len];
 }
@@ -138,9 +138,9 @@ double msNumberArrayShift(msNumberArray* arr) {
 }
 
 double msNumberArrayAt(msNumberArray* arr, int64_t idx) {
-	if (idx < 0) idx = arr->len + idx;
-	if (idx < 0 || idx >= arr->len) return 0.0;
-	return arr->p->data[idx];
+	int64_t i = idx < 0 ? arr->len + idx : idx;
+	if ((uint64_t)i >= (uint64_t)arr->len) msRaiseIndexError(idx, arr->len);
+	return arr->p->data[i];
 }
 
 int64_t msNumberArrayIndexOf(msNumberArray* arr, double value) {
@@ -363,15 +363,9 @@ void msStringArrayPush(msStringArray* arr, msString value) {
 }
 
 msString msStringArrayPop(msStringArray* arr) {
-	if (arr->len <= 0) return MS_EMPTY_STRING;
+	if (arr->len <= 0) msRaiseIndexError(arr->len - 1, arr->len);
 	arr->len--;
 	return arr->p->data[arr->len];
-}
-
-msString msStringArrayAt(msStringArray* arr, int64_t idx) {
-	if (idx < 0) idx = arr->len + idx;
-	if (idx < 0 || idx >= arr->len || arr->p == NULL) return MS_EMPTY_STRING;
-	return arr->p->data[idx];
 }
 
 int64_t msStringArrayIndexOf(msStringArray* arr, msString value) {
@@ -564,9 +558,9 @@ void msUint8ArrayPush(msUint8Array* arr, uint8_t value) {
 }
 
 uint8_t msUint8ArrayAt(msUint8Array* arr, int64_t idx) {
-	if (idx < 0) idx = arr->len + idx;
-	if (idx < 0 || idx >= arr->len || arr->p == NULL) return 0;
-	return arr->p->data[idx];
+	int64_t i = idx < 0 ? arr->len + idx : idx;
+	if ((uint64_t)i >= (uint64_t)arr->len) msRaiseIndexError(idx, arr->len);
+	return arr->p->data[i];
 }
 
 /* Copying exit kernel (cstrToNimstr shape): the result OWNS a fresh payload,
@@ -587,7 +581,7 @@ msRefArray msRefArrayNew(int64_t cap) {
 
 void msRefArrayDestroy(msRefArray* arr) {
 	if (arr->p != NULL) {
-		for (int64_t i = 0; i < arr->len; i++) msDecref(arr->p->data[i]);
+		for (int64_t i = 0; i < arr->len; i++) msDecrefCyclic(arr->p->data[i]);
 		free(arr->p);
 		arr->p = NULL;
 	}
@@ -603,22 +597,22 @@ void msRefArrayPush(msRefArray* arr, void* value) {
 }
 
 void* msRefArrayPop(msRefArray* arr) {
-	if (arr->len <= 0) return NULL;
+	if (arr->len <= 0) msRaiseIndexError(arr->len - 1, arr->len);
 	arr->len--;
 	return arr->p->data[arr->len];
 }
 
 void* msRefArrayAt(msRefArray* arr, int64_t idx) {
-	if (idx < 0) idx = arr->len + idx;
-	if (idx < 0 || idx >= arr->len || arr->p == NULL) return NULL;
-	return arr->p->data[idx];
+	int64_t i = idx < 0 ? arr->len + idx : idx;
+	if ((uint64_t)i >= (uint64_t)arr->len) msRaiseIndexError(idx, arr->len);
+	return arr->p->data[i];
 }
 
 void msRefArrayShrink(msRefArray* arr, int64_t newLen) {
 	if (newLen < 0) newLen = 0;
 	if (newLen >= arr->len) return;
 	for (int64_t i = newLen; i < arr->len; i++) {
-		msDecref(arr->p->data[i]);
+		msDecrefCyclic(arr->p->data[i]);
 		arr->p->data[i] = NULL;
 	}
 	arr->len = newLen;
@@ -709,7 +703,7 @@ void msRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
 	if (arr->p == NULL || start < 0 || start >= arr->len) return;
 	if (deleteCount <= 0) return;
 	if (start + deleteCount > arr->len) deleteCount = arr->len - start;
-	for (int64_t i = start; i < start + deleteCount; i++) msDecref(arr->p->data[i]);
+	for (int64_t i = start; i < start + deleteCount; i++) msDecrefCyclic(arr->p->data[i]);
 	int64_t remaining = arr->len - start - deleteCount;
 	if (remaining > 0) {
 		memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(void*));
@@ -734,7 +728,7 @@ void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void
 	if (start < 0) start = 0;
 	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
 		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
-		for (int64_t i = start; i < start + deleteCount; i++) msDecref(arr->p->data[i]);
+		for (int64_t i = start; i < start + deleteCount; i++) msDecrefCyclic(arr->p->data[i]);
 		int64_t remaining = arr->len - start - deleteCount;
 		if (remaining > 0) {
 			memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(void*));

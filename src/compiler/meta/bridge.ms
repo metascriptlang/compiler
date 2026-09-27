@@ -254,6 +254,15 @@ function enumToAst(t: Type, loc: SourceLocation): Node {
 	}, loc);
 }
 
+function enumLiteralToAst(t: Type, loc: SourceLocation): Node {
+	const member = t.typeNames != null && t.typeNames.length > 0 ? t.typeNames[0] : "";
+	return createNodeAt(NodeKind.MemberExpr, {
+		object: atomicTypeNode(nameOrDefault(t, ""), loc),
+		property: member,
+		isOptional: false,
+	}, loc);
+}
+
 function tupleToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	return createNodeAt(NodeKind.TypeGeneric, {
 		typExprBase: atomicTypeNode("tuple", loc),
@@ -417,6 +426,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[]):
 		// (cast msString → int64). See bug028 for the regression test.
 		TypeKind.StringLiteral => createNodeAt(NodeKind.StringLiteral, { value: nameOrDefault(t, "") }, loc),
 		TypeKind.BooleanLiteral => createNodeAt(NodeKind.BooleanLiteral, { boolValue: nameOrDefault(t, "") == "true" }, loc),
+		TypeKind.EnumLiteral => enumLiteralToAst(t, loc),
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Sink | TypeKind.Lent | TypeKind.Var | TypeKind.Distinct
 			=> modifierToAst(t, loc, visited),
 		TypeKind.Function => functionToAst(t, loc, visited),
@@ -463,6 +473,12 @@ function serializeStrings(strs: string[], arrHeap: RaiserArrayHeap): RaiserValue
 		heapArrayPush(arrHeap, handle, v);
 	}
 	return raiserArray(handle);
+}
+
+function setNums(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, nums: number[]): void {
+	const handle = heapAllocArray(arrHeap);
+	for (const n of nums) heapArrayPush(arrHeap, handle, raiserFloat(n));
+	heapObjectSetField(objHeap, h, name, raiserArray(handle));
 }
 
 function setStr(objHeap: RaiserObjectHeap, h: number, name: string, val: string): void {
@@ -942,6 +958,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as EnumDeclData;
 			setStr(objHeap, handle, "enumName", d.enumName);
 			setStrs(objHeap, arrHeap, handle, "enumMembers", d.enumMembers);
+			setNums(objHeap, arrHeap, handle, "enumValues", d.enumValues != null ? d.enumValues : []);
 		},
 		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = node.data as InterfaceDeclData;
@@ -1206,6 +1223,18 @@ function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: numbe
 		const elem = heapArrayGet(arrHeap, handle, i);
 		result.push(valueToNode(elem, objHeap, arrHeap, fallbackLoc));
 		i = i + 1;
+	}
+	return result;
+}
+
+function readNums(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string): number[] {
+	const v = heapObjectGetField(objHeap, h, name);
+	const result: number[] = [];
+	if (v.kind != RaiserValueKind.Array) return result;
+	const len = heapArrayLen(arrHeap, v.intVal);
+	for (let i = 0; i < len; i++) {
+		const elem = heapArrayGet(arrHeap, v.intVal, i);
+		result.push(elem.kind == RaiserValueKind.Float ? elem.floatVal : (elem.kind == RaiserValueKind.Int ? elem.intVal + 0.0 : 0.0));
 	}
 	return result;
 }
@@ -1723,7 +1752,7 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const enumName = readStr(objHeap, h, "enumName");
 			const enumMembers = readStrs(objHeap, arrHeap, h, "enumMembers");
 			return createNodeAt(NodeKind.EnumDecl, {
-				enumName, enumMembers, enumValues: [], nameLocation: loc, memberLocations: [],
+				enumName, enumMembers, enumValues: readNums(objHeap, arrHeap, h, "enumValues"), nameLocation: loc, memberLocations: [],
 			}, loc);
 		},
 		NodeKind.InterfaceDecl => {
@@ -2418,6 +2447,19 @@ test "mapTypeToAst — Enum renders as EnumDecl carrying members and values" {
 	assert d.enumValues[1] == 5;
 }
 
+test "mapTypeToAst — EnumLiteral renders as the member it admits, not as the enum's name" {
+	const loc = makeLoc(1, 0);
+	const t = makePrimType(TypeKind.EnumLiteral);
+	t.typeName = "EvKind";
+	t.typeNames = ["Click"];
+	const out = mapTypeToAst(t, loc);
+	assert out.kind == NodeKind.MemberExpr;
+	const d = out.data as MemberExprData;
+	assert d.property == "Click";
+	assert d.object.kind == NodeKind.Identifier;
+	assert (d.object.data as IdentifierData).name == "EvKind";
+}
+
 test "mapTypeToAst — Enum without explicit values renders an empty value list" {
 	const t = makePrimType(TypeKind.Enum);
 	t.typeName = "Flag";
@@ -2425,6 +2467,18 @@ test "mapTypeToAst — Enum without explicit values renders an empty value list"
 	const out = mapTypeToAst(t, makeLoc(1, 0));
 	assert out.kind == NodeKind.EnumDecl;
 	assert (out.data as EnumDeclData).enumValues.length == 0;
+}
+
+test "round-trip EnumDecl keeps the member values a macro reads" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(2, 1);
+	const orig = createNode(NodeKind.EnumDecl, {
+		enumName: "Status", enumMembers: ["Active", "Inactive"], enumValues: [5, 2],
+		nameLocation: loc, memberLocations: [],
+	}, synthToken(loc));
+	const d = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc).data as EnumDeclData;
+	assert d.enumValues.length == 2 && d.enumValues[0] == 5 && d.enumValues[1] == 2;
 }
 
 test "mapTypeToAst — Tuple renders as TypeGeneric tuple<...> over the element types" {

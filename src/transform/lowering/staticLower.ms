@@ -4,7 +4,7 @@ import {
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkExpandBlocks } from "../walker";
-import { literalTakesType } from "../coercion/constantFolding";
+import { literalTakesType } from "../../checker/constFold";
 import { makeAssign, makeMember, makeIdentResolved, makeIdent, makeExprStmt } from "../util";
 import { parseInput, getStmts } from "../testUtil";
 

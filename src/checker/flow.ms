@@ -14,6 +14,8 @@ import {
 	IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData,
 	StringLiteralData, NumberLiteralData, BooleanLiteralData, HiddenStdConvData,
 	SwitchStmtData, SwitchCaseData, VariableDeclData, CallExprData,
+	UpdateExprData, NewExprData, OutExprData, HiddenDerefData,
+	ArrayLiteralData, ObjectLiteralData, SpreadExprData, SymbolFlag,
 } from "../ast/node";
 import {
 	createUnion, inferredType, nullType, neverType,
@@ -24,6 +26,7 @@ import {
 	isAtomicRef, peelToStructOrUnion, typeofTagOf, isTypeofTag,
 } from "./types";
 import { typeRelation, TypeRelation, sameType } from "./compat";
+import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 
 // ===== FlowType =====
 //
@@ -447,7 +450,10 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			continue;
 		}
 		if (flags.has(FlowFlag.Call)) {
-			// Assertion functions (Phase 6+). Phase 2: tail-recurse.
+			if (callWritesInto(current.node, state.reference)) {
+				result = flowType(state.declaredType, false);
+				break;
+			}
 			current = current.antecedent;
 			continue;
 		}
@@ -954,7 +960,7 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 	// (matches the reference's getTypeOfDottedName + narrowTypeByAliasedCondition).
 	if (expr.kind == NodeKind.Identifier) {
 		const aliased = getAliasedCondition(expr);
-		if (aliased != null) {
+		if (aliased != null && aliasStillHolds(expr, refNode)) {
 			return narrowType(t, aliased, refNode, assumeTrue);
 		}
 	}
@@ -1154,15 +1160,6 @@ function extractNullFromType(t: Type | null): Type | null {
 	return t;
 }
 
-// narrowByAssignment — called when walking a FlowFlag.Assignment node.
-// Returns the RHS type if the assignment's target matches `refNode`, else
-// null. Constrains the result to a subtype of `declared` (assignment
-// narrowing is always bounded by the declared type). Handles:
-//   1. BinaryExpr with `=`            — `x = rhs`
-//   2. VariableDecl with initializer  — `let x = rhs` / `const x = rhs`
-// Compound assignments (`+=`, `-=`), UpdateExpr (`x++`, `--x`), and
-// destructuring assignments fall through to `null` — the caller widens to
-// `declared` by tail-recursing to the antecedent, which is the safe default.
 // Hidden conversions are repr plumbing (fitNode's variant↔union wrap/project);
 // the flow fact lives on the expression underneath.
 function skipHiddenConv(n: Node): Node {
@@ -1176,10 +1173,15 @@ function skipHiddenConv(n: Node): Node {
 
 function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): Type | null {
 	if (node == null) return null;
+	if (node.kind == NodeKind.UpdateExpr) {
+		const target = (node.data as UpdateExprData).updateArg;
+		return target != null && holdsBelowTop(refNode, target) ? declared : null;
+	}
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
-		if (d.operator != "=") return null;
 		if (d.left == null) return null;
+		if (patternWritesInto(d.left, refNode)) return declared;
+		if (d.operator != "=") return null;
 		if (!isMatchingReference(d.left, refNode)) {
 			return assignsUncheckedName(d.left, refNode) ? declared : null;
 		}
@@ -1206,6 +1208,155 @@ function assignsUncheckedName(left: Node, refNode: Node): boolean {
 	if (left.kind != NodeKind.Identifier || refNode.kind != NodeKind.Identifier) return false;
 	if (left.resolvedSym != null) return false;
 	return (left.data as IdentifierData).name == (refNode.data as IdentifierData).name;
+}
+
+function stripHidden(n: Node | null): Node | null {
+	let walk = n;
+	while (walk != null) {
+		if (walk.kind == NodeKind.HiddenDeref || walk.kind == NodeKind.HiddenAddr) {
+			walk = (walk.data as HiddenDerefData).expr;
+		} else if (walk.kind == NodeKind.HiddenStdConv || walk.kind == NodeKind.HiddenSubConv) {
+			walk = (walk.data as HiddenStdConvData).convExpr;
+		} else {
+			return walk;
+		}
+	}
+	return walk;
+}
+
+function sameLocation(part: Node | null, target: Node): boolean {
+	const p = stripHidden(part);
+	const t = stripHidden(target);
+	if (p == null || t == null) return false;
+	if (isMatchingReference(p, t)) return true;
+	if (p.kind != t.kind) return false;
+	if (t.kind == NodeKind.Identifier) {
+		return t.resolvedSym == null
+			&& (t.data as IdentifierData).name == (p.data as IdentifierData).name;
+	}
+	if (t.kind == NodeKind.MemberExpr) {
+		const pd = p.data as MemberExprData;
+		const td = t.data as MemberExprData;
+		return pd.property == td.property && sameLocation(pd.object, td.object);
+	}
+	return false;
+}
+
+function holdsBelowTop(refNode: Node, target: Node): boolean {
+	const top = stripHidden(refNode);
+	if (top == null) return false;
+	if (top.kind == NodeKind.MemberExpr) {
+		const obj = (top.data as MemberExprData).object;
+		return sameLocation(obj, target) || holdsBelowTop(obj, target);
+	}
+	if (top.kind == NodeKind.ArrayAccess) {
+		const ad = top.data as ArrayAccessData;
+		return sameLocation(ad.array, target) || sameLocation(ad.index, target)
+			|| holdsBelowTop(ad.array, target);
+	}
+	return false;
+}
+
+function patternWritesInto(target: Node, refNode: Node): boolean {
+	const t = stripHidden(target);
+	if (t == null) return false;
+	if (t.kind == NodeKind.ArrayLiteral) {
+		for (const el of (t.data as ArrayLiteralData).elements) {
+			const inner = el.kind == NodeKind.SpreadExpr ? (el.data as SpreadExprData).spreadArg : el;
+			if (inner != null && (sameLocation(refNode, inner) || patternWritesInto(inner, refNode))) return true;
+		}
+		return false;
+	}
+	if (t.kind == NodeKind.ObjectLiteral) {
+		for (const prop of (t.data as ObjectLiteralData).properties) {
+			if (prop != null && (sameLocation(refNode, prop) || patternWritesInto(prop, refNode))) return true;
+		}
+		return false;
+	}
+	return holdsBelowTop(refNode, t);
+}
+
+function calleeParams(callee: Node | null): Type[] {
+	if (callee == null) return null as unknown as Type[];
+	let fnType = callee.nodeType;
+	if ((fnType == null || fnType.kind != TypeKind.Function)
+			&& callee.kind == NodeKind.Identifier && callee.resolvedSym != null) {
+		fnType = callee.resolvedSym.symbolType;
+	}
+	if (fnType == null || fnType.kind != TypeKind.Function) return null as unknown as Type[];
+	return fnType.typeChildren;
+}
+
+function callNeverReturns(call: Node | null): boolean {
+	if (call == null || call.kind != NodeKind.CallExpr) return false;
+	const callee = (call.data as CallExprData).callee;
+	if (callee == null) return false;
+	const sym = callee.resolvedSym;
+	if (sym != null && sym.symFlags.has(SymbolFlag.NoReturn)) return true;
+	let fnType = callee.nodeType;
+	if ((fnType == null || fnType.kind != TypeKind.Function) && sym != null) fnType = sym.symbolType;
+	return fnType != null && fnType.kind == TypeKind.Function && fnType.typeReturn != null && fnType.typeReturn.kind == TypeKind.Never;
+}
+
+export function isEndOfBodyReachable(body: Node): boolean {
+	if (body.flowNode == null) return false;
+	const seen = new HashSet<FlowNode>();
+	const todo: FlowNode[] = [body.flowNode];
+	while (todo.length > 0) {
+		const flow = todo.pop();
+		if (flow == null || flow.flags.has(FlowFlag.Unreachable) || seen.has(flow)) continue;
+		seen.add(flow);
+		if (flow.flags.has(FlowFlag.Start)) return true;
+		if (flow.flags.has(FlowFlag.Call) && callNeverReturns(flow.node)) continue;
+		if (flow.flags.has(FlowFlag.LoopLabel) || flow.flags.has(FlowFlag.BranchLabel)) {
+			let list: FlowList | null = flow.antecedents;
+			while (list != null) {
+				todo.push(list.flow);
+				list = list.next;
+			}
+			continue;
+		}
+		if (flow.antecedent != null) todo.push(flow.antecedent);
+	}
+	return false;
+}
+
+function callWritesInto(call: Node | null, refNode: Node): boolean {
+	if (call == null) return false;
+	let args: Node[] = [];
+	let callee: Node | null = null;
+	if (call.kind == NodeKind.CallExpr) {
+		const cd = call.data as CallExprData;
+		args = cd.arguments;
+		callee = cd.callee;
+	} else if (call.kind == NodeKind.NewExpr) {
+		args = (call.data as NewExprData).newArguments;
+	} else {
+		return false;
+	}
+	const params = calleeParams(callee);
+	let i = 0;
+	for (const arg of args) {
+		const param = params != null && i < params.length ? params[i] : null as unknown as Type;
+		i = i + 1;
+		let passed = stripHidden(arg);
+		if (passed != null && passed.kind == NodeKind.OutExpr) {
+			passed = (passed.data as OutExprData).outArg;
+		} else if (param == null || param.kind != TypeKind.Var) {
+			passed = null;
+		}
+		if (passed != null && writesThrough(passed, refNode)) return true;
+	}
+	const top = stripHidden(callee);
+	if (top != null && top.kind == NodeKind.MemberExpr) {
+		const md = top.data as MemberExprData;
+		if (isMutatingArrayMethod(md.property) && holdsBelowTop(refNode, md.object)) return true;
+	}
+	return false;
+}
+
+function writesThrough(byAddress: Node, refNode: Node): boolean {
+	return sameLocation(refNode, byAddress) || holdsBelowTop(refNode, byAddress);
 }
 
 // Constrain an assigned value's type to remain within the variable's declared
@@ -1264,6 +1415,54 @@ function getAliasedCondition(idNode: Node): Node {
 		return init;
 	}
 	return null as unknown as Node;
+}
+
+function isConstBinding(refNode: Node): boolean {
+	const top = stripHidden(refNode);
+	if (top == null || top.kind != NodeKind.Identifier || top.resolvedSym == null) return false;
+	const decl = top.resolvedSym.declNode;
+	return decl != null && decl.kind == NodeKind.VariableDecl
+		&& (decl.data as VariableDeclData).declKind == DeclKind.Const;
+}
+
+function writesReference(node: Node | null, refNode: Node): boolean {
+	if (node == null) return false;
+	if (node.kind == NodeKind.BinaryExpr) {
+		const left = (node.data as BinaryExprData).left;
+		return left != null && (sameLocation(refNode, left) || patternWritesInto(left, refNode));
+	}
+	if (node.kind == NodeKind.UpdateExpr) {
+		const target = (node.data as UpdateExprData).updateArg;
+		return target != null && (sameLocation(refNode, target) || holdsBelowTop(refNode, target));
+	}
+	return false;
+}
+
+function aliasStillHolds(aliasId: Node, refNode: Node): boolean {
+	if (isConstBinding(refNode)) return true;
+	if (aliasId.flowNode == null || aliasId.resolvedSym == null) return false;
+	const decl = aliasId.resolvedSym.declNode;
+	const seen = new HashSet<FlowNode>();
+	const todo: FlowNode[] = [aliasId.flowNode];
+	while (todo.length > 0) {
+		const flow = todo.pop();
+		if (flow == null || flow.flags.has(FlowFlag.Unreachable) || seen.has(flow)) continue;
+		seen.add(flow);
+		if (flow.flags.has(FlowFlag.Start)) return false;
+		if (flow.flags.has(FlowFlag.Assignment)) {
+			if (flow.node == decl) continue;
+			if (writesReference(flow.node, refNode)) return false;
+		} else if (flow.flags.has(FlowFlag.Call) && callWritesInto(flow.node, refNode)) {
+			return false;
+		}
+		if (flow.antecedent != null) todo.push(flow.antecedent);
+		let list: FlowList | null = flow.antecedents;
+		while (list != null) {
+			todo.push(list.flow);
+			list = list.next;
+		}
+	}
+	return true;
 }
 
 function narrowTypeByEquality(
@@ -1341,7 +1540,8 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 		for (const m of members) {
 			if (typeofStringMatches(m, d.value) == assumeTrue) kept.push(m);
 		}
-		if (kept.length == 0 || kept.length == members.length) return t;
+		if (kept.length == 0) return noValueLeft(t, t);
+		if (kept.length == members.length) return t;
 		if (kept.length == 1) return kept[0];
 		return nullableUnionOf(kept);
 	}
@@ -1357,16 +1557,25 @@ function narrowTypeByTypeof(t: Type | null, literalExpr: Node, assumeTrue: boole
 				if (isMatch == assumeTrue) remaining.push(v);
 			}
 		}
-		if (remaining.length == 0 || remaining.length == t.typeChildren.length) return t;
+		if (remaining.length == 0) return noValueLeft(t, t);
+		if (remaining.length == t.typeChildren.length) return t;
 		if (remaining.length == 1) return remaining[0];
 		return createUnion(remaining);
 	}
 	// For non-union types: if the kind matches, keep/drop based on assumeTrue.
 	const matches = typeofStringMatches(t, d.value);
 	if (assumeTrue) {
-		return matches ? t : inferredType();
+		return matches ? t : noValueLeft(t, inferredType());
 	}
-	return matches ? inferredType() : t;
+	return matches ? noValueLeft(t, inferredType()) : t;
+}
+
+function noValueLeft(t: Type, unresolved: Type): Type {
+	if (hasGenericParams(t) || t.kind == TypeKind.GenericParam || t.kind == TypeKind.Unknown
+			|| t.kind == TypeKind.Inferred || t.kind == TypeKind.Error) {
+		return unresolved;
+	}
+	return neverType();
 }
 
 function typeofStringMatches(v: Type, s: string): boolean {

@@ -19,8 +19,9 @@
 //
 // Both cases clear fnFlags so generatorLower skips these functions.
 
-import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, ReturnStmtData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, ExprStmtData, Symbol, SymbolKind, IfStmtData, WhileStmtData, TryCatchStmtData, CallExprData, BinaryExprData, Type, TypeKind, isEmptyBlock } from "../../ast/node";
-import { mapChildren } from "../walker";
+import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, BlockStmtData, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, ReturnStmtData, VariableDeclData, Symbol, SymbolKind, IfStmtData, TryCatchStmtData, Type, TypeKind, isEmptyBlock } from "../../ast/node";
+import { mapChildren, isFuncBoundary } from "../walker";
+import { forEachChild } from "../../ast/visitor";
 import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { TransformContext } from "../context";
 import {
@@ -30,7 +31,7 @@ import {
 } from "../util";
 import { NameSet, createNameSet, nameSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
-import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
+import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
 import { stmtCountAfter } from "../testUtil";
 
 // ===== Variable Type Collection =====
@@ -40,39 +41,21 @@ import { stmtCountAfter } from "../testUtil";
 interface VarTypeInfo { name: string; varType: Type; varSym: Symbol | null; }
 
 function collectVarTypes(node: Node, result: VarTypeInfo[]): void {
-	if (node == null) return;
-	match (node.kind) {
-		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
-		NodeKind.VariableDecl => {
-			const d = node.data as VariableDeclData;
-			let varType = node.nodeType;
-			if (varType == null && d.initializer != null && d.initializer.nodeType != null) {
-				varType = d.initializer.nodeType;
-			}
-			if (varType == null && node.resolvedSym != null && node.resolvedSym.symbolType != null) {
-				varType = node.resolvedSym.symbolType;
-			}
-			if (varType != null) {
-				result.push({ name: d.declName, varType, varSym: node.resolvedSym });
-			}
-		},
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			for (const s of d.statements) { collectVarTypes(s, result); }
-		},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			collectVarTypes(d.consequent, result);
-			collectVarTypes(d.alternate, result);
-		},
-		NodeKind.WhileStmt => { collectVarTypes((node.data as WhileStmtData).whileBody, result); },
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			collectVarTypes(d.tryBody, result);
-			collectVarTypes(d.catchBody, result);
-		},
-		_ => {},
-	};
+	if (node == null || isFuncBoundary(node)) return;
+	if (node.kind == NodeKind.VariableDecl) {
+		const d = node.data as VariableDeclData;
+		let varType = node.nodeType;
+		if (varType == null && d.initializer != null && d.initializer.nodeType != null) {
+			varType = d.initializer.nodeType;
+		}
+		if (varType == null && node.resolvedSym != null && node.resolvedSym.symbolType != null) {
+			varType = node.resolvedSym.symbolType;
+		}
+		if (varType != null) {
+			result.push({ name: d.declName, varType, varSym: node.resolvedSym });
+		}
+	}
+	forEachChild(node, (child: Node): void => { collectVarTypes(child, result); });
 }
 
 function findVarType(entries: VarTypeInfo[], name: string): Type {
@@ -123,37 +106,6 @@ function zeroValueForType(t: Type, loc: SourceLocation): Node {
 }
 
 // ===== Core: Rewrite a was-async function body =====
-
-// Check if this function body contains any yield (from asyncDesugar converting await→yield).
-// If no yield, the async function is synchronous and can use the simple wrapper pattern.
-function hasYieldInBody(node: Node | null): boolean {
-	if (node == null) return false;
-	return match (node.kind) {
-		NodeKind.YieldExpr => true,
-		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction => false,
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			for (const s of d.statements) { if (hasYieldInBody(s)) return true; }
-			return false;
-		},
-		NodeKind.ReturnStmt => { return hasYieldInBody((node.data as ReturnStmtData).argument); },
-		NodeKind.ExprStmt => { return hasYieldInBody((node.data as ExprStmtData).expr); },
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			return hasYieldInBody(d.consequent) || hasYieldInBody(d.alternate);
-		},
-		NodeKind.WhileStmt => { return hasYieldInBody((node.data as WhileStmtData).whileBody); },
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			return hasYieldInBody(d.tryBody) || hasYieldInBody(d.catchBody) || hasYieldInBody(d.finallyBody);
-		},
-		NodeKind.VariableDecl => {
-			const d = node.data as VariableDeclData;
-			return hasYieldInBody(d.initializer);
-		},
-		_ => false,
-	};
-}
 
 // ===== Await case: inline stepper with state machine =====
 // Reuses generatorLower's state-splitting algorithm but emits a stepper function
@@ -216,65 +168,39 @@ function finalliesBeforeReturn(pending: Node[][]): Node[] {
 
 function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutSym: Symbol, pendingFinallies: Node[][], stateSym: Symbol): void {
 	for (let i = 0; i < stmts.length; i += 1) {
-		const stmt = stmts[i];
-		if (stmt == null) continue;
-		match (stmt.kind) {
-			NodeKind.ReturnStmt => {
-				const rd = stmt.data as ReturnStmtData;
-				const isVoidReturn = fnReturnInner == null || fnReturnInner.kind == TypeKind.Void;
-
-				const completeStmts = makeFutureCompleteStmts(rd.argument, isVoidReturn, promiseType, fnReturnInner, loc, retFutSym);
-				const blockStmts: Node[] = [];
-				// finallyPath: enclosing split-try finallies run before the
-				// function exits (before $state=-1 and the completion).
-				for (const fs of finalliesBeforeReturn(pendingFinallies)) blockStmts.push(fs);
-				blockStmts.push(makeStateAssign(-1, loc, stateSym));
-				for (const cs of completeStmts) blockStmts.push(cs);
-				blockStmts.push(makeReturn(makeNull(loc), loc));
-				const block = makeBlock(blockStmts, loc);
-				stmts[i] = block;
-			},
-			NodeKind.BlockStmt => {
-				const bd = stmt.data as BlockStmtData;
-				rewriteAsyncReturns(bd.statements, promiseType, fnReturnInner, loc, retFutSym, pendingFinallies, stateSym);
-			},
-			NodeKind.IfStmt => {
-				const id = stmt.data as IfStmtData;
-				if (id.consequent != null && id.consequent.kind == NodeKind.BlockStmt) {
-					rewriteAsyncReturns((id.consequent.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutSym, pendingFinallies, stateSym);
-				}
-				if (id.alternate != null && id.alternate.kind == NodeKind.BlockStmt) {
-					rewriteAsyncReturns((id.alternate.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutSym, pendingFinallies, stateSym);
-				}
-			},
-			NodeKind.WhileStmt => {
-				const wd = stmt.data as WhileStmtData;
-				if (wd.whileBody != null && wd.whileBody.kind == NodeKind.BlockStmt) {
-					rewriteAsyncReturns((wd.whileBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutSym, pendingFinallies, stateSym);
-				}
-			},
-			NodeKind.TryCatchStmt => {
-				const td = stmt.data as TryCatchStmtData;
-				// Only a try that WILL split (yield in try or catch body — the
-				// finally body itself must stay yield-free) loses its C-level
-				// finally; those and only those contribute to the pending list.
-				let childPending: Node[][] = pendingFinallies;
-				const hasFin = td.finallyBody != null && !isEmptyBlock(td.finallyBody);
-				if (hasFin && (containsYield(td.tryBody) || containsYield(td.catchBody))) {
-					childPending = [];
-					for (const p of pendingFinallies) childPending.push(p);
-					childPending.push(extractBodyStmts(td.finallyBody));
-				}
-				if (td.tryBody != null && td.tryBody.kind == NodeKind.BlockStmt) {
-					rewriteAsyncReturns((td.tryBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutSym, childPending, stateSym);
-				}
-				if (td.catchBody != null && td.catchBody.kind == NodeKind.BlockStmt) {
-					rewriteAsyncReturns((td.catchBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc, retFutSym, childPending, stateSym);
-				}
-			},
-			_ => {},
-		};
+		stmts[i] = rewriteAsyncReturn(stmts[i], promiseType, fnReturnInner, loc, retFutSym, pendingFinallies, stateSym);
 	}
+}
+
+function rewriteAsyncReturn(node: Node, promiseType: Type, fnReturnInner: Type | null, loc: SourceLocation, retFutSym: Symbol, pendingFinallies: Node[][], stateSym: Symbol): Node {
+	if (node == null || isFuncBoundary(node)) return node;
+	if (node.kind == NodeKind.ReturnStmt) {
+		const rd = node.data as ReturnStmtData;
+		const isVoidReturn = fnReturnInner == null || fnReturnInner.kind == TypeKind.Void;
+		const completeStmts = makeFutureCompleteStmts(rd.argument, isVoidReturn, promiseType, fnReturnInner, loc, retFutSym);
+		const blockStmts: Node[] = [];
+		for (const fs of finalliesBeforeReturn(pendingFinallies)) blockStmts.push(fs);
+		blockStmts.push(makeStateAssign(-1, loc, stateSym));
+		for (const cs of completeStmts) blockStmts.push(cs);
+		blockStmts.push(makeReturn(makeNull(loc), loc));
+		return makeBlock(blockStmts, loc);
+	}
+	if (node.kind == NodeKind.TryCatchStmt) {
+		const td = node.data as TryCatchStmtData;
+		td.finallyBody = rewriteAsyncReturn(td.finallyBody, promiseType, fnReturnInner, loc, retFutSym, pendingFinallies, stateSym);
+		let childPending: Node[][] = pendingFinallies;
+		const hasFin = td.finallyBody != null && !isEmptyBlock(td.finallyBody);
+		if (hasFin && containsYield(node)) {
+			childPending = [];
+			for (const p of pendingFinallies) childPending.push(p);
+			childPending.push(extractBodyStmts(td.finallyBody));
+		}
+		td.tryBody = rewriteAsyncReturn(td.tryBody, promiseType, fnReturnInner, loc, retFutSym, childPending, stateSym);
+		td.catchBody = rewriteAsyncReturn(td.catchBody, promiseType, fnReturnInner, loc, retFutSym, childPending, stateSym);
+		return node;
+	}
+	mapChildren(node, (child: Node): Node => rewriteAsyncReturn(child, promiseType, fnReturnInner, loc, retFutSym, pendingFinallies, stateSym));
+	return node;
 }
 
 // Extract yield argument from nested stmts. Generator lower may place the yield return
@@ -542,14 +468,15 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 		}
 	}
 
-	// 6. Convert variable declarations to assignments in all state bodies
+	// 6. Convert the declarations of the locals that outlive a state to assignments
+	const lifted = localsSpanningStates(sc, nc);
 	// Also add yielded-future locals ($yf0, $yf1, ...) to the hoisted set
 	// with typed future types (Promise<T> from the yield variable type)
 	for (let si = 0; si < sc.items.length; si += 1) {
-		convertDeclsToAssigns(sc.items[si].stmts, nc, loc);
+		convertDeclsToAssigns(sc.items[si].stmts, lifted, loc);
 		if (sc.items[si].isYield) {
 			const yfName = "$yf" + si;
-			nameSetAdd(nc, yfName);
+			nameSetAdd(lifted, yfName);
 			// Set $yf type to Promise<T> where T = yield variable type
 			const yfVarType = sc.items[si].yieldVarType;
 			const yfFutType = promiseTypeFor(yfVarType);
@@ -619,7 +546,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 
 	// Hoisted locals: let a; let b; let $yf0; let $yf1; ...
 	// Set nodeType from original declarations so lambda lifting creates typed env fields.
-	for (const localName of nc.items) {
+	for (const localName of lifted.items) {
 		const origType = findVarType(varTypes, localName);
 		const defaultInit = (origType != null) ? makeDefaultValue(origType, loc) : makeNull(loc);
 		const localDecl = makeVarDecl(localName, defaultInit, DeclKind.Let, loc);
@@ -658,61 +585,55 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 // Recursively rewrite all ReturnStmt nodes to msFutureComplete + return $retFut.
 // Stops at nested function boundaries (each function has its own return semantics).
 function rewriteReturns(node: Node, promiseType: Type | null, fnReturnInner: Type | null, retFutSym: Symbol): void {
-	if (node == null) return;
-	match (node.kind) {
-		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction => {},
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			const newStmts: Node[] = [];
-			for (const stmt of d.statements) {
-				if (stmt.kind == NodeKind.ReturnStmt) {
-					const rd = stmt.data as ReturnStmtData;
-					const loc = stmt.location;
-					const isVoid = fnReturnInner == null || fnReturnInner.kind == TypeKind.Void;
-					let completeCall: Node | null = null;
-					if (isVoid || rd.argument == null) {
-						completeCall = makeCall(runtimeRef("msFutureCompleteVoid", loc),
-							[makeTypedIdentResolved(retFutSym, promiseType, loc)], loc);
-					} else if (boxedInFuture(fnReturnInner)) {
-						// Boxed types: msSinkBoxStruct is a multi-statement expansion (nesting it
-						// corrupts the result stack), so box via a separate VarDecl.
-						const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
-						const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [rd.argument], loc);
-						boxCall.nodeType = voidPtrType;
-						const boxSym = makeSymbol(retFutSym.name + "_b", SymbolKind.Variable, voidPtrType, false);
-						const boxDecl = makeVarDecl(retFutSym.name + "_b", boxCall, DeclKind.Const, loc);
-						boxDecl.nodeType = voidPtrType;
-						boxDecl.resolvedSym = boxSym;
-						newStmts.push(boxDecl);
-						completeCall = makeCall(runtimeRef("msFutureComplete", loc),
-							[makeTypedIdentResolved(retFutSym, promiseType, loc), makeTypedIdentResolved(boxSym, voidPtrType, loc)], loc);
-					} else {
-						completeCall = makeCall(runtimeRef("msFutureCompleteT", loc),
-							[makeTypedIdentResolved(retFutSym, promiseType, loc), rd.argument], loc);
-					}
-					newStmts.push(makeExprStmt(completeCall, loc));
-					newStmts.push(makeReturn(makeTypedIdentResolved(retFutSym, promiseType, loc), loc));
-				} else {
-					rewriteReturns(stmt, promiseType, fnReturnInner, retFutSym);
-					newStmts.push(stmt);
-				}
+	if (node == null || isFuncBoundary(node)) return;
+	if (node.kind == NodeKind.BlockStmt) {
+		const d = node.data as BlockStmtData;
+		const newStmts: Node[] = [];
+		for (const stmt of d.statements) {
+			if (stmt.kind == NodeKind.ReturnStmt) {
+				for (const s of completeAndReturn(stmt, promiseType, fnReturnInner, retFutSym)) newStmts.push(s);
+			} else {
+				rewriteReturns(stmt, promiseType, fnReturnInner, retFutSym);
+				newStmts.push(stmt);
 			}
-			d.statements = newStmts;
-		},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			rewriteReturns(d.consequent, promiseType, fnReturnInner, retFutSym);
-			rewriteReturns(d.alternate, promiseType, fnReturnInner, retFutSym);
-		},
-		NodeKind.WhileStmt => { rewriteReturns((node.data as WhileStmtData).whileBody, promiseType, fnReturnInner, retFutSym); },
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			rewriteReturns(d.tryBody, promiseType, fnReturnInner, retFutSym);
-			rewriteReturns(d.catchBody, promiseType, fnReturnInner, retFutSym);
-			rewriteReturns(d.finallyBody, promiseType, fnReturnInner, retFutSym);
-		},
-		_ => {},
-	};
+		}
+		d.statements = newStmts;
+		return;
+	}
+	mapChildren(node, (child: Node): Node => {
+		if (child.kind == NodeKind.ReturnStmt) return makeBlock(completeAndReturn(child, promiseType, fnReturnInner, retFutSym), child.location);
+		rewriteReturns(child, promiseType, fnReturnInner, retFutSym);
+		return child;
+	});
+}
+
+function completeAndReturn(stmt: Node, promiseType: Type | null, fnReturnInner: Type | null, retFutSym: Symbol): Node[] {
+	const rd = stmt.data as ReturnStmtData;
+	const loc = stmt.location;
+	const out: Node[] = [];
+	const isVoid = fnReturnInner == null || fnReturnInner.kind == TypeKind.Void;
+	let completeCall: Node | null = null;
+	if (isVoid || rd.argument == null) {
+		completeCall = makeCall(runtimeRef("msFutureCompleteVoid", loc),
+			[makeTypedIdentResolved(retFutSym, promiseType, loc)], loc);
+	} else if (boxedInFuture(fnReturnInner)) {
+		const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
+		const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [rd.argument], loc);
+		boxCall.nodeType = voidPtrType;
+		const boxSym = makeSymbol(retFutSym.name + "_b", SymbolKind.Variable, voidPtrType, false);
+		const boxDecl = makeVarDecl(retFutSym.name + "_b", boxCall, DeclKind.Const, loc);
+		boxDecl.nodeType = voidPtrType;
+		boxDecl.resolvedSym = boxSym;
+		out.push(boxDecl);
+		completeCall = makeCall(runtimeRef("msFutureComplete", loc),
+			[makeTypedIdentResolved(retFutSym, promiseType, loc), makeTypedIdentResolved(boxSym, voidPtrType, loc)], loc);
+	} else {
+		completeCall = makeCall(runtimeRef("msFutureCompleteT", loc),
+			[makeTypedIdentResolved(retFutSym, promiseType, loc), rd.argument], loc);
+	}
+	out.push(makeExprStmt(completeCall, loc));
+	out.push(makeReturn(makeTypedIdentResolved(retFutSym, promiseType, loc), loc));
+	return out;
 }
 
 // Simple wrapper: async function with no await → wrap return value in msFutureComplete
@@ -796,16 +717,25 @@ function rewriteAsyncFnBody(body: Node, fnReturnInner: Type | null): Node {
 	if (body != null && body.kind != NodeKind.BlockStmt) {
 		throw "internal: async fn body reached asyncBridge un-normalized (expected BlockStmt)";
 	}
-	if (!hasYieldInBody(body)) {
+	if (!containsYield(body)) {
 		return rewriteSimpleAsyncBody(body, fnReturnInner);
 	}
 	return rewriteAwaitAsyncBody(body, fnReturnInner);
 }
 
-// Walk expressions to find async FunctionExpr/ArrowFunction nodes
-function walkBridgeExpr(node: Node | null): void {
+function walkBridge(node: Node | null): void {
 	if (node == null) return;
 	match (node.kind) {
+		NodeKind.FunctionDecl => {
+			const d = node.data as FunctionDeclData;
+			walkBridge(d.fnBody);
+			if (isWasAsync(node)) { d.fnBody = rewriteAsyncFnBody(d.fnBody, getFnReturnInner(node)); d.fnFlags = ""; }
+		},
+		NodeKind.MethodDecl => {
+			const d = node.data as MethodDeclData;
+			walkBridge(d.methodBody);
+			if (isWasAsync(node)) { d.methodBody = rewriteAsyncFnBody(d.methodBody, getFnReturnInner(node)); d.methodFlags = ""; }
+		},
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
 			walkBridge(d.funcExprBody);
@@ -816,76 +746,7 @@ function walkBridgeExpr(node: Node | null): void {
 			walkBridge(d.arrowBody);
 			if (isWasAsync(node)) { d.arrowBody = rewriteAsyncFnBody(d.arrowBody, getFnReturnInner(node)); d.arrowFlags = ""; }
 		},
-		_ => {
-			mapChildren(node, (child: Node) => {
-				walkBridgeExpr(child);
-				return child;
-			});
-		},
-	};
-}
-
-function walkBridge(node: Node): void {
-	if (node == null) return;
-	match (node.kind) {
-		NodeKind.Program => {
-			const d = node.data as ProgramData;
-			for (const s of d.programStmts) { walkBridge(s); }
-		},
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			for (const s of d.statements) { walkBridge(s); }
-		},
-		NodeKind.FunctionDecl => {
-			const d = node.data as FunctionDeclData;
-			walkBridge(d.fnBody);
-			if (isWasAsync(node)) { d.fnBody = rewriteAsyncFnBody(d.fnBody, getFnReturnInner(node)); d.fnFlags = ""; }
-		},
-		NodeKind.VariableDecl => {
-			const d = node.data as VariableDeclData;
-			walkBridgeExpr(d.initializer);
-		},
-		NodeKind.ExprStmt => {
-			const d = node.data as ExprStmtData;
-			walkBridgeExpr(d.expr);
-		},
-		NodeKind.ReturnStmt => {
-			const d = node.data as ReturnStmtData;
-			walkBridgeExpr(d.argument);
-		},
-		NodeKind.ExportDecl => {
-			const d = node.data as ExportDeclData;
-			walkBridge(d.exportedDecl);
-		},
-		NodeKind.ClassDecl => {
-			const d = node.data as ClassDeclData;
-			for (const member of d.classBody) { walkBridge(member); }
-		},
-		NodeKind.MethodDecl => {
-			const d = node.data as MethodDeclData;
-			walkBridge(d.methodBody);
-			if (isWasAsync(node)) { d.methodBody = rewriteAsyncFnBody(d.methodBody, getFnReturnInner(node)); d.methodFlags = ""; }
-		},
-		NodeKind.DecoratedDecl => {
-			const d = node.data as DecoratedDeclData;
-			walkBridge(d.decoratedNode);
-		},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			walkBridge(d.consequent);
-			walkBridge(d.alternate);
-		},
-		NodeKind.WhileStmt => {
-			const d = node.data as WhileStmtData;
-			walkBridge(d.whileBody);
-		},
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			walkBridge(d.tryBody);
-			walkBridge(d.catchBody);
-			walkBridge(d.finallyBody);
-		},
-		_ => {},
+		_ => { forEachChild(node, (child: Node): void => { walkBridge(child); }); },
 	};
 }
 

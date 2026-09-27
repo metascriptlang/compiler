@@ -5,10 +5,8 @@
 //   value's type and always returned the Result's ok type, so
 //   `try divide(1,0) catch null` typed as int32 and the null was coerced to the
 //   value type — the error path silently produced 0 instead of null.
-// NIM-REF CK-75 — DIVERGE-INCOMPLETE -> SAME, SCOPED.
-//   Only a NULLABLE widening of the ok type is carried (`T`, `Maybe<T>`, `T|null`
-//   pointer form). A genuinely different catch type (`catch "s"` on Result<int32,_>)
-//   still reports today's loud C diagnostic rather than a half-lowered union.
+// NIM-REF CK-75 — DIVERGE-INCOMPLETE -> SAME. The join is the ternary's; a
+//   different catch type joins into a union (corpus 824-tryCatchBranchTypes).
 //
 // WHAT IT CATCHES: RED pre-fix on the value-type arm — `n` came back 0, not null
 //   (0 and null share a C representation, so the discriminating arm is an ok

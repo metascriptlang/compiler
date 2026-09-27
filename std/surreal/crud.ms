@@ -127,8 +127,8 @@ export function patch(this c: SurrealClient, thing: string, patches: CborValue):
 	let thingCbor: CborValue = cborText(thing);
 	const colon = thing.indexOf(":");
 	if (colon > 0 as int64 && (colon + 1 as int64) < thing.length as int64) {
-		const table = thing.slice(0 as int64, colon);
-		const id = thing.slice(colon + 1 as int64, thing.length as int64);
+		const table = thing.slice(0, colon);
+		const id = thing.slice(colon + 1, thing.length);
 		thingCbor = recordId(table, id);
 	}
 	return rpc(c, "patch", [thingCbor, patches]);

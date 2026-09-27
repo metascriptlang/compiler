@@ -106,9 +106,9 @@ test "float32 and float64" {
 // ===== Enums =====
 
 test "enum ordinal values" {
-	assert Color.Red == 0;
-	assert Color.Green == 1;
-	assert Color.Blue == 2;
+	assert (Color.Red as int32) == 0;
+	assert (Color.Green as int32) == 1;
+	assert (Color.Blue as int32) == 2;
 }
 
 test "enum match dispatch" {

@@ -7,10 +7,10 @@ import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtDat
 import { isStructType, unwrapRefNullUnion, isUnresolvedType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
-	CGen, CProc,
+	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
 	readProcStmts, emitLineDir, getTemp, fillLocalName, lookupLocalSymName, setLocalSymName, pushBlock, popBlock,
-	CSection, addLine, sec, nameSetAdd, addCGenError,
+	CSection, addLine, sec, nameSetAdd, addCGenError, addUnloweredError,
 } from "./context";
 import { genExpr, shimCallArg } from "./expressions";
 import { formatCNumber, formatCNumberLit } from "./literals";
@@ -23,22 +23,25 @@ import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, 
 // try/finally blocks (break, continue, return), inline the finally body
 // before the jump. Delta = current nesting minus snapshot at target block.
 
-function blockLeaveActions(g: CGen, p: CProc, howManyFinallys: number): void {
-	if (howManyFinallys <= 0) return;
+function blockLeaveActions(g: CGen, p: CProc, howManyTrys: number): void {
+	if (howManyTrys <= 0) return;
 	// Reference parity: pop entries before generating
 	// finally bodies, then restore. Prevents infinite recursion if a finally
 	// body contains return/break which would re-trigger blockLeaveActions.
-	const stack: Readonly<Node>[] = [];
-	for (let i = 0; i < howManyFinallys; i += 1) {
-		const fin = p.nestedFinally.pop();
-		stack.push(fin);
-		if (fin != null) {
-			genStmt(g, p, fin);
+	const stack: CTryEntry[] = [];
+	for (let i = 0; i < howManyTrys; i += 1) {
+		const entry = p.nestedTryStmts.pop();
+		stack.push(entry);
+		if (entry.fin != null) {
+			genStmt(g, p, entry.fin);
+		}
+		if (entry.inFlightException != "") {
+			emitStmtsLine(p, `msDecref((void*)${entry.inFlightException});`);
 		}
 	}
 	// Restore in reverse order (innermost last)
 	for (let j = stack.length - 1; j >= 0; j -= 1) {
-		p.nestedFinally.push(stack[j]);
+		p.nestedTryStmts.push(stack[j]);
 	}
 }
 
@@ -124,7 +127,8 @@ export function genStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		NodeKind.SwitchStmt => { genSwitchStmt(g, p, node); },
 		NodeKind.AssertStmt => { addCGenError(g, "internal: an assert reached C codegen unlowered in " + g.modulePath, node.location.line, node.location.column); },
 		NodeKind.UnreachableStmt => { genUnreachableStmt(g, p, node); },
-		_ => { emitStmtsLine(p, `/* unsupported stmt: ${node.kind} */`); },
+		NodeKind.ClassDecl | NodeKind.StructDecl | NodeKind.ActorDecl | NodeKind.ExternDecl | NodeKind.MacroDecl | NodeKind.EnumDecl | NodeKind.TypeAliasDecl | NodeKind.InterfaceDecl => {},
+		_ => { addUnloweredError(g, p, node); },
 	};
 }
 
@@ -216,15 +220,18 @@ function exprTopIsRaisingCall(exprNode: Readonly<Node>): boolean {
 	return false;
 }
 
+function raiseTarget(p: CProc): string {
+	if (p.nestedTryStmts.length == 0) {
+		p.beforeRetNeeded = true;
+		return "BeforeRet_";
+	}
+	return p.nestedTryStmts[p.nestedTryStmts.length - 1].label;
+}
+
 function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
 	if (p.suppressRaiseCheck) return;
 	if (!exprTopIsRaisingCall(exprNode)) return;
-	if (p.errorTargets.length == 0) {
-		p.beforeRetNeeded = true;
-		emitStmtsLine(p, "if (msErr) goto BeforeRet_;");
-		return;
-	}
-	emitStmtsLine(p, `if (msErr) goto ${p.errorTargets[p.errorTargets.length - 1]};`);
+	emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
 }
 
 function genExprStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
@@ -535,7 +542,7 @@ function genWhileStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	// can find the loop boundary and run pending finally cleanup before jumping.
 	// Without it, genBreak/genContinue find no loop block and emit a bare
 	// break/continue that skips finally — leaking DRC temps and violating the
-	// try/finally contract. nestedFinallyDepth is snapshot here so the delta is
+	// try/finally contract. nestedTryDepth is snapshot here so the delta is
 	// relative to finallys *enclosing* the loop, not those opened inside the body.
 	pushBlock(p, true);
 	const whileBlk = p.blocks[p.blocks.length - 1];
@@ -623,7 +630,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 			emitStmtsLine(p, `${snippet};`);
 			emitCallRaiseCheck(p, d.argument);
 		}
-		blockLeaveActions(g, p, p.nestedFinally.length);
+		blockLeaveActions(g, p, p.nestedTryStmts.length);
 		emitStmtsLine(p, "return;");
 		return;
 	}
@@ -639,7 +646,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 				emitStmtsLine(p, `*__result = ${snippet};`);
 			}
 		} else {
-			if (p.nestedFinally.length > 0) {
+			if (p.nestedTryStmts.length > 0) {
 				// Reference parity: save return value to temp before finally cleanup.
 				// blockLeaveActions may emit wasMoved that zeros the returned local.
 				// Store in temp first, then run cleanup, then return temp.
@@ -647,10 +654,10 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 				if (retType != "" && retType != "void") {
 					const tmp = getTemp(p, retType);
 					emitStmtsLine(p, `${tmp.snippet} = ${snippet};`);
-					blockLeaveActions(g, p, p.nestedFinally.length);
+					blockLeaveActions(g, p, p.nestedTryStmts.length);
 					emitStmtsLine(p, `return ${tmp.snippet};`);
 				} else {
-					blockLeaveActions(g, p, p.nestedFinally.length);
+					blockLeaveActions(g, p, p.nestedTryStmts.length);
 					emitStmtsLine(p, `return ${snippet};`);
 				}
 			} else {
@@ -660,7 +667,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		}
 	}
 	// Reference parity: return must run all enclosing finally blocks
-	blockLeaveActions(g, p, p.nestedFinally.length);
+	blockLeaveActions(g, p, p.nestedTryStmts.length);
 	emitStmtsLine(p, "return;");
 }
 
@@ -678,7 +685,7 @@ function genBreakStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		while (idx >= 0 && !p.blocks[idx].isLoop) { idx -= 1; }
 	}
 	if (idx >= 0) {
-		const delta = p.nestedFinally.length - p.blocks[idx].nestedFinallyDepth;
+		const delta = p.nestedTryStmts.length - p.blocks[idx].nestedTryDepth;
 		blockLeaveActions(g, p, delta);
 	}
 	if (d.breakLabel != "" && idx >= 0) {
@@ -699,7 +706,7 @@ function genContinueStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		while (idx >= 0 && !p.blocks[idx].isLoop) { idx -= 1; }
 	}
 	if (idx >= 0) {
-		const delta = p.nestedFinally.length - p.blocks[idx].nestedFinallyDepth;
+		const delta = p.nestedTryStmts.length - p.blocks[idx].nestedTryDepth;
 		blockLeaveActions(g, p, delta);
 		if (d.continueLabel != "") { p.blocks[idx].continueUsed = true; }
 	}
@@ -711,12 +718,7 @@ function genContinueStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 // A raise transfers control to the nearest enclosing error target (catch/finally),
 // or to the BeforeRet_ epilogue when there is no enclosing try (raiseInstr L==0).
 function emitErrorGoto(p: CProc): void {
-	if (p.errorTargets.length > 0) {
-		emitStmtsLine(p, `goto ${p.errorTargets[p.errorTargets.length - 1]};`);
-		return;
-	}
-	p.beforeRetNeeded = true;
-	emitStmtsLine(p, "goto BeforeRet_;");
+	emitStmtsLine(p, `goto ${raiseTarget(p)};`);
 }
 
 function genThrowStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
@@ -757,34 +759,29 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const finallyLabel = "__finally_" + labelId;
 	const endLabel = "__end_" + labelId;
 
-	// Reference parity: push finally body onto stack
-	// so that break/continue/return inside the try body can emit cleanup.
-	const fin = d.finallyBody;
-	p.nestedFinally.push(fin);
-
 	emitStmtsLine(p, "{");
 	const oldIndent = getStmtsIndent(p);
 	setStmtsIndent(p, oldIndent + 1);
 
 	const errSave = "__oldErr_" + labelId;
+	const excSave = "__oldExc_" + labelId;
 	emitStmtsLine(p, `bool ${errSave} = MS_FALSE;`);
+	if (d.finallyBody != null) {
+		emitStmtsLine(p, `msException* ${excSave} = NULL;`);
+	}
 
-	// Reference parity (ccgstmts.nim genTryGoto: `hasExcept = t[1].kind ==
-	// nkExceptBranch`): handler presence is STRUCTURAL. `try/finally` carries a
-	// NullLiteral in catchBody to mean "no catch clause" — it must propagate the
-	// error, not swallow it. An empty `catch {}` is a real BlockStmt handler and
-	// still swallows.
+	// Handler presence is STRUCTURAL: `try/finally` carries a NullLiteral in
+	// catchBody to mean "no catch clause" — it must propagate the error, not
+	// swallow it. An empty `catch {}` is a real BlockStmt handler and still swallows.
 	const hasCatch = d.hasCatchClause;
 
-	// Error-propagation target for throws / raising calls inside the try body.
-	// A raise transfers control here instead of falling through — required for
-	// correctness in straight-line code and to escape async state-dispatch loops.
-	p.errorTargets.push(hasCatch ? catchLabel : finallyLabel);
+	p.nestedTryStmts.push({
+		fin: d.finallyBody,
+		label: hasCatch ? catchLabel : finallyLabel,
+		inFlightException: "",
+	});
 
-	// Try body
 	genStmt(g, p, d.tryBody);
-
-	p.errorTargets.pop();
 
 	if (hasCatch) {
 		// After try body, check error flag
@@ -795,12 +792,14 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		emitStmtsLine(p, catchLabel + ": {");
 		setStmtsIndent(p, oldIndent + 2);
 		if (d.catchName != "") {
+			const catchVar = fillLocalName(p, safeName(d.catchName), false);
+			if (node.resolvedSym != null) setLocalSymName(p, node.resolvedSym, catchVar);
 			const ct = node.nodeType;
 			if (ct != null && !isUnresolvedType(ct) && ct.kind != TypeKind.Error) {
 				const cty = getTypeDesc(g, ct);
-				emitStmtsLine(p, `${cty} ${safeName(d.catchName)} = (${cty})msCurrException;`);
+				emitStmtsLine(p, `${cty} ${catchVar} = (${cty})msCurrException;`);
 			} else {
-				emitStmtsLine(p, `msException* ${safeName(d.catchName)} = msCurrException;`);
+				emitStmtsLine(p, `msException* ${catchVar} = msCurrException;`);
 			}
 		}
 		emitStmtsLine(p, "msErr = MS_FALSE;");
@@ -813,37 +812,45 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 			// analyzer decrefs it at handler scope-end — clear only nulls.
 			emitStmtsLine(p, "msClearException();");
 		}
-		// ccgstmts.nim genTryGoto keeps the try entry alive across the except
-		// branches (`p.nestedTryStmts[^1].label = nextExcept`) and places
-		// `LA<nextExcept>_:` right after the branch body, so a raise inside a
-		// handler still falls into this try's finally before propagating.
+		// The try entry stays on the stack across the handler body, with its label
+		// right after that body, so a raise inside a handler still falls into this
+		// try's finally before propagating.
 		const afterCatchLabel = "__aftercatch_" + labelId;
-		p.errorTargets.push(afterCatchLabel);
+		p.nestedTryStmts.pop();
+		p.nestedTryStmts.push({
+			fin: d.finallyBody,
+			label: afterCatchLabel,
+			inFlightException: "",
+		});
 		genStmt(g, p, d.catchBody);
-		p.errorTargets.pop();
 		emitStmtsLine(p, afterCatchLabel + ": ;");
 		setStmtsIndent(p, oldIndent + 1);
 		emitStmtsLine(p, "}");
 	}
 
-	// Finally label
+	p.nestedTryStmts.pop();
+
 	emitStmtsLine(p, `${finallyLabel}:`);
 
 	if (d.finallyBody != null) {
-		// ccgstmts.nim genTryGoto `oldNimErrFin`: run the finally body with the
-		// error flag cleared so its own raise-checks don't misfire, then restore
-		// it so a propagating exception keeps propagating.
+		// Run the finally body with the error flag cleared so its own raise-checks
+		// don't misfire, then restore it so a propagating exception keeps propagating.
 		emitStmtsLine(p, `${errSave} = msErr;`);
+		emitStmtsLine(p, `${excSave} = msCurrException;`);
 		emitStmtsLine(p, "msErr = MS_FALSE;");
+		emitStmtsLine(p, "msCurrException = NULL;");
+		const finRaiseLabel = "__finraise_" + labelId;
+		p.nestedTryStmts.push({ fin: null, label: finRaiseLabel, inFlightException: excSave });
 		genStmt(g, p, d.finallyBody);
+		p.nestedTryStmts.pop();
 		emitStmtsLine(p, `msErr = ${errSave};`);
+		emitStmtsLine(p, `msCurrException = ${excSave};`);
+		emitStmtsLine(p, `${excSave} = NULL;`);
+		emitStmtsLine(p, `${finRaiseLabel}:`);
+		emitStmtsLine(p, `msDecref((void*)${excSave});`);
 	}
 
-	// Pop the finally entry — cleanup is now handled by the label above
-	p.nestedFinally.pop();
-
-	// ccgstmts.nim genTryGoto's trailing `raiseExit(p)`: an error still set after
-	// the finally must reach the ENCLOSING handler (errorTargets already popped).
+	// An error still set after the finally must reach the ENCLOSING handler.
 	emitStmtsLine(p, "if (msErr) {");
 	setStmtsIndent(p, oldIndent + 2);
 	emitErrorGoto(p);
@@ -1106,4 +1113,28 @@ test "long if-else chain (100 branches)" {
 	}
 	// With null CheckerContext, output may be partial; covered by E2E tests
 	assert elseIfCount >= 0;
+}
+
+function stmtErrors(input: string): string {
+	const pr = parseSource(input);
+	if (!pr.ok) return "PARSE_ERROR";
+	const pd = pr.value.data as ProgramData;
+	const g = createCGen(null as unknown as CheckerContext, "");
+	const p = createProc("test", null);
+	for (const stmt of pd.programStmts) genStmt(g, p, stmt);
+	let messages = "";
+	for (const e of g.errors) messages = messages + e.message + "\n";
+	return messages;
+}
+
+test "a defer that reaches codegen unlowered is an internal error naming it" {
+	assert stmtErrors("defer { f(); }").contains("internal: DeferStmt reached C codegen unlowered at 1:");
+}
+
+test "a for-in that reaches codegen unlowered is an internal error naming it" {
+	assert stmtErrors("for (const k in o) { f(); }").contains("internal: ForInStmt reached C codegen unlowered");
+}
+
+test "a macro declaration in a statement list emits nothing" {
+	assert stmtErrors("macro m() { }") == "";
 }

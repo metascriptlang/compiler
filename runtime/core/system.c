@@ -104,6 +104,7 @@ void msTestErrorFlag(void) {
 	fputs("Error: unhandled exception: ", stderr);
 	if (m.p != NULL && m.len > 0) fwrite(m.p->data, 1, (size_t)m.len, stderr);
 	fputc('\n', stderr);
+	msDecref((void*)msCurrException);
 	msCurrException = NULL;
 	exit(1);
 }
@@ -130,6 +131,16 @@ _Noreturn void msRaiseIndexError(int64_t idx, int64_t len) {
 	exit(1);
 }
 
+_Noreturn void msRaiseDivByZero(void) {
+	fprintf(stderr, "Error: division by zero\n");
+	exit(1);
+}
+
+_Noreturn void msRaiseOverflow(void) {
+	fprintf(stderr, "Error: over- or underflow\n");
+	exit(1);
+}
+
 /* Parity: standard reference range error handling */
 _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 	fprintf(stderr, "Error: value %lld not in range %lld .. %lld\n",
@@ -137,9 +148,33 @@ _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 	exit(1);
 }
 
+_Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi) {
+	if (val >= -9223372036854775808.0 && val < 9223372036854775808.0 && val == (double)(int64_t)val) {
+		msRaiseRangeError((int64_t)val, lo, hi);
+	}
+	fprintf(stderr, "Error: value %.17g not in range %lld .. %lld\n",
+		val, (long long)lo, (long long)hi);
+	exit(1);
+}
+
 _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected) {
 	fprintf(stderr, "Error: invalid union conversion: value holds member %lld, target expects %lld\n",
 		(long long)tag, (long long)expected);
+	exit(1);
+}
+
+_Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag) {
+	const char* text = labels.p != NULL ? labels.p->data : "";
+	int64_t start = 0;
+	int64_t seen = 0;
+	for (int64_t i = 0; i < labels.len && seen < tag; i += 1) {
+		if (text[i] == '|') { seen += 1; start = i + 1; }
+	}
+	int64_t end = start;
+	while (end < labels.len && text[end] != '|') end += 1;
+	if (seen < tag || tag < 0) end = start;
+	fprintf(stderr, "Error: %.*s%.*s'\n", (int)head.len, head.p != NULL ? head.p->data : "",
+		(int)(end - start), text + start);
 	exit(1);
 }
 

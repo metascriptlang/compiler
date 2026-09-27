@@ -4,25 +4,28 @@
 // for (let i = 0; i < 10; i++) { body; }
 // →
 // { let i = 0; while (i < 10) { body; i++; } }
-//
-// Handles continue by inserting update before each continue statement.
 
-import { Node, NodeKind, ForStmtData, BlockStmtData, IfStmtData, TryCatchStmtData, WhileStmtData, MatchStmtData, MatchCaseData } from "../../ast/node";
-import { TransformContext } from "../context";
-import { walkNode } from "../walker";
-import { makeBool, makeBlock, makeWhile, makeExprStmt, extractBodyStmts } from "../util";
+import { Node, NodeKind, SourceLocation, ForStmtData, BlockStmtData, IfStmtData, TryCatchStmtData, WhileStmtData, DoWhileStmtData, MatchStmtData, MatchCaseData, VariableDeclData, IdentifierData, BreakStmtData, ContinueStmtData, DeclKind, Symbol, createNode } from "../../ast/node";
+import { forEachChild } from "../../ast/visitor";
+import { TransformContext, freshOwnedSym } from "../context";
+import { walkNode, mapChildren, isFuncBoundary } from "../walker";
+import { makeBool, makeBlock, makeWhile, makeExprStmt, makeBreak, makeSwitchWrapper, extractBodyStmts, makeVarDecl, makeIdentResolved, makeAssign, makeIf, makeUnary, syntheticToken } from "../util";
+import { isFnBoundary, LoopJumps, hasLoopContinue, retargetLoopJumps } from "./jumpRetarget";
+import { booleanType } from "../../checker/types";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 
 // ===== Main Entry Point =====
 
 export function lowerForLoop(program: Node, ctx: TransformContext): Node {
-	walkNode(program, lowerForNode);
+	walkNode(program, (node: Node): Node => lowerForNode(node, ctx));
 	return program;
 }
 
-function lowerForNode(node: Node): Node {
+function lowerForNode(node: Node, ctx: TransformContext): Node {
 	if (node.kind != NodeKind.ForStmt) return node;
 	const d = node.data as ForStmtData;
+	const captured = capturedLetBinding(d);
+	if (captured != null) return lowerPerIteration(d, captured, ctx, node.location);
 	const loc = node.location;
 	const outerStmts: Node[] = [];
 
@@ -39,22 +42,54 @@ function lowerForNode(node: Node): Node {
 		cond = makeBool(true, loc);
 	}
 
-	// 3. Extract body statements and rewrite continue to include update
-	const bodyStmts: Node[] = extractBodyStmts(d.forBody);
-
-	// 4. Append update as last statement, and insert before each continue
+	let bodyStmts: Node[] = extractBodyStmts(d.forBody);
+	let whileLabel = "";
 	if (d.forUpdate != null) {
 		const updateStmt = makeExprStmt(d.forUpdate, loc);
-		rewriteContinues(bodyStmts, updateStmt);
+		if (hasLoopContinue(bodyStmts, "")) {
+			if (loopSuspends(d, bodyStmts)) {
+				rewriteContinues(bodyStmts, updateStmt);
+			} else {
+				ctx.tempCounter += 1;
+				const jumps: LoopJumps = { bodyLabel: `__cont${ctx.tempCounter}`, loopLabel: `__lp${ctx.tempCounter}`, loopBroken: false };
+				let i = 0;
+				while (i < bodyStmts.length) {
+					bodyStmts[i] = retargetLoopJumps(bodyStmts[i], jumps, false);
+					i += 1;
+				}
+				bodyStmts = [makeSwitchWrapper(bodyStmts, jumps.bodyLabel, loc)];
+				if (jumps.loopBroken) whileLabel = jumps.loopLabel;
+			}
+		}
 		bodyStmts.push(updateStmt);
 	}
 
 	// 5. Build while loop
 	const whileBody = makeBlock(bodyStmts, loc);
 	const whileNode = makeWhile(cond, whileBody, loc);
+	(whileNode.data as WhileStmtData).whileLabel = whileLabel;
 	outerStmts.push(whileNode);
 
 	return makeBlock(outerStmts, loc);
+}
+
+function loopSuspends(d: ForStmtData, bodyStmts: Node[]): boolean {
+	if (d.forCondition != null && hasSuspendPoint(d.forCondition)) return true;
+	if (hasSuspendPoint(d.forUpdate)) return true;
+	for (const s of bodyStmts) {
+		if (hasSuspendPoint(s)) return true;
+	}
+	return false;
+}
+
+function hasSuspendPoint(node: Node): boolean {
+	if (node.kind == NodeKind.YieldExpr || node.kind == NodeKind.AwaitExpr) return true;
+	if (isFnBoundary(node.kind)) return false;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && hasSuspendPoint(child)) found = true;
+	});
+	return found;
 }
 
 // Rewrite continue → { update; continue; } at current loop level.
@@ -115,75 +150,258 @@ function cloneStmt(node: Node): Node {
 	};
 }
 
-// ===== Test helpers =====
-
-// True iff every ContinueStmt sits right after another statement in its block
-// (i.e., was rewritten to { update; continue; }). A continue at block index 0
-// means the update insertion was missed.
-function continuesGuarded(node: Node): boolean {
-	if (node.kind == NodeKind.BlockStmt) {
-		const bd = node.data as BlockStmtData;
-		let i = 0;
-		while (i < bd.statements.length) {
-			const s = bd.statements[i];
-			if (s.kind == NodeKind.ContinueStmt) {
-				if (i == 0 || bd.statements[i - 1].kind != NodeKind.ExprStmt) return false;
-			} else if (!continuesGuarded(s)) {
-				return false;
-			}
-			i += 1;
-		}
-		return true;
-	}
-	if (node.kind == NodeKind.WhileStmt) {
-		const wd = node.data as WhileStmtData;
-		return continuesGuarded(wd.whileBody);
-	}
-	if (node.kind == NodeKind.IfStmt) {
-		const ifd = node.data as IfStmtData;
-		if (ifd.consequent != null && !continuesGuarded(ifd.consequent)) return false;
-		if (ifd.alternate != null && !continuesGuarded(ifd.alternate)) return false;
-		return true;
-	}
-	if (node.kind == NodeKind.MatchStmt) {
-		const md = node.data as MatchStmtData;
-		let i = 0;
-		while (i < md.matchStmtCases.length) {
-			const c = md.matchStmtCases[i];
-			if (c.kind == NodeKind.MatchCase) {
-				const cd = c.data as MatchCaseData;
-				if (cd.caseBody != null && !continuesGuarded(cd.caseBody)) return false;
-			}
-			i += 1;
-		}
-		return true;
-	}
-	return true;
+function capturedLetBinding(d: ForStmtData): Symbol | null {
+	if (d.forInit == null || d.forInit.kind != NodeKind.VariableDecl) return null;
+	if ((d.forInit.data as VariableDeclData).declKind != DeclKind.Let) return null;
+	const sym = d.forInit.resolvedSym;
+	if (sym == null) return null;
+	if (capturedInClosure(d.forBody, sym, false) || headerCaptures(d, sym)) return sym;
+	return null;
 }
 
-function loweredGuarded(input: string): boolean {
-	const r = parseInput(input);
-	if (!r.ok) return false;
-	const lowered = lowerForLoop(r.value, makeCtx());
-	const stmts = getStmts(lowered);
-	let i = 0;
-	while (i < stmts.length) {
-		if (!continuesGuarded(stmts[i])) return false;
-		i += 1;
+function headerCaptures(d: ForStmtData, sym: Symbol): boolean {
+	return capturedInClosure((d.forInit.data as VariableDeclData).initializer, sym, false)
+		|| capturedInClosure(d.forCondition, sym, false)
+		|| capturedInClosure(d.forUpdate, sym, false);
+}
+
+function capturedInClosure(n: Node | null, sym: Symbol, nested: boolean): boolean {
+	if (n == null) return false;
+	if (nested && n.kind == NodeKind.Identifier && n.resolvedSym == sym) return true;
+	const inner = nested || isFuncBoundary(n);
+	let found = false;
+	forEachChild(n, (c: Node): void => {
+		if (!found && capturedInClosure(c, sym, inner)) found = true;
+	});
+	return found;
+}
+
+function renameBinding(n: Node | null, from: Symbol, to: Symbol): void {
+	if (n == null) return;
+	walkNode(n, (m: Node): Node => {
+		if (m.kind == NodeKind.Identifier && m.resolvedSym == from) {
+			(m.data as IdentifierData).name = to.name;
+			m.resolvedSym = to;
+		}
+		return m;
+	});
+}
+
+function isLoopNode(n: Node): boolean {
+	return n.kind == NodeKind.WhileStmt || n.kind == NodeKind.DoWhileStmt || n.kind == NodeKind.ForStmt
+		|| n.kind == NodeKind.ForOfStmt || n.kind == NodeKind.ForInStmt;
+}
+
+function hasOwnContinue(n: Node | null): boolean {
+	if (n == null) return false;
+	if (n.kind == NodeKind.ContinueStmt) return (n.data as ContinueStmtData).continueLabel == "";
+	if (isFuncBoundary(n) || isLoopNode(n)) return false;
+	let found = false;
+	forEachChild(n, (c: Node): void => {
+		if (!found && hasOwnContinue(c)) found = true;
+	});
+	return found;
+}
+
+function labelOwnBreaks(n: Node | null, label: string): boolean {
+	if (n == null) return false;
+	if (n.kind == NodeKind.BreakStmt) {
+		const bd = n.data as BreakStmtData;
+		if (bd.breakLabel != "") return false;
+		bd.breakLabel = label;
+		return true;
 	}
-	return true;
+	if (isFuncBoundary(n) || isLoopNode(n) || n.kind == NodeKind.SwitchStmt) return false;
+	let labelled = false;
+	forEachChild(n, (c: Node): void => {
+		if (labelOwnBreaks(c, label)) labelled = true;
+	});
+	return labelled;
+}
+
+function letOf(sym: Symbol, init: Node, loc: SourceLocation): Node {
+	const decl = makeVarDecl(sym.name, init, DeclKind.Let, loc);
+	decl.resolvedSym = sym;
+	decl.nodeType = sym.symbolType;
+	return decl;
+}
+
+function assignOf(sym: Symbol, value: Node, loc: SourceLocation): Node {
+	return makeExprStmt(makeAssign(makeIdentResolved(sym, loc), value, loc), loc);
+}
+
+function iterationBody(body: Node, ctx: TransformContext, loc: SourceLocation): { stmts: Node[], label: string } {
+	const stmts = extractBodyStmts(body);
+	if (!hasOwnContinue(body)) return { stmts, label: "" };
+	ctx.tempCounter += 1;
+	const label = `__lp${ctx.tempCounter}`;
+	let labelled = false;
+	for (const s of stmts) {
+		if (labelOwnBreaks(s, label)) labelled = true;
+	}
+	const wrapper = createNode(NodeKind.DoWhileStmt, { doBody: makeBlock(stmts, loc), doCondition: makeBool(false, loc), dwLabel: "", dwSwitchWrapper: false }, syntheticToken(loc));
+	return { stmts: [wrapper], label: labelled ? label : "" };
+}
+
+function lowerPerIteration(d: ForStmtData, sym: Symbol, ctx: TransformContext, loc: SourceLocation): Node {
+	const iter = freshOwnedSym(ctx, "fi", sym.symbolType);
+	renameBinding(d.forBody, sym, iter);
+	const inHeader = headerCaptures(d, sym);
+	const outer: Node[] = [d.forInit];
+	const loopStmts: Node[] = [];
+	let carrier = sym;
+	let cond = d.forCondition != null ? d.forCondition : makeBool(true, loc);
+	if (inHeader) {
+		carrier = freshOwnedSym(ctx, "fc", sym.symbolType);
+		outer.push(letOf(carrier, makeIdentResolved(sym, loc), loc));
+		renameBinding(d.forCondition, sym, iter);
+		renameBinding(d.forUpdate, sym, iter);
+	}
+	loopStmts.push(letOf(iter, makeIdentResolved(carrier, loc), loc));
+	if (inHeader) {
+		if (d.forUpdate != null) {
+			const first = freshOwnedSym(ctx, "ff", booleanType());
+			outer.push(letOf(first, makeBool(true, loc), loc));
+			loopStmts.push(makeIf(
+				makeIdentResolved(first, loc),
+				makeBlock([assignOf(first, makeBool(false, loc), loc)], loc),
+				makeBlock([makeExprStmt(d.forUpdate, loc)], loc),
+				loc,
+			));
+		}
+		if (d.forCondition != null) {
+			loopStmts.push(makeIf(makeUnary("!", d.forCondition, loc), makeBlock([makeBreak(loc)], loc), null, loc));
+		}
+		cond = makeBool(true, loc);
+	}
+	const body = iterationBody(d.forBody, ctx, loc);
+	for (const s of body.stmts) loopStmts.push(s);
+	loopStmts.push(assignOf(carrier, makeIdentResolved(iter, loc), loc));
+	if (!inHeader && d.forUpdate != null) loopStmts.push(makeExprStmt(d.forUpdate, loc));
+	const loop = makeWhile(cond, makeBlock(loopStmts, loc), loc);
+	(loop.data as WhileStmtData).whileLabel = body.label;
+	outer.push(loop);
+	return makeBlock(outer, loc);
+}
+
+// ===== Test helpers =====
+
+function loweredLoop(input: string): Node {
+	const r = parseInput(input);
+	if (!r.ok) return null as unknown as Node;
+	const stmts = getStmts(lowerForLoop(r.value, makeCtx()));
+	for (const s of stmts) {
+		if (s.kind == NodeKind.BlockStmt) {
+			for (const inner of (s.data as BlockStmtData).statements) {
+				if (inner.kind == NodeKind.WhileStmt) return inner;
+			}
+		}
+	}
+	for (const s of stmts) {
+		if (s.kind == NodeKind.FunctionDecl) {
+			let found: Node | null = null;
+			forEachChild(s, (child: Node): void => { if (found == null) found = findWhile(child); });
+			if (found != null) return found;
+		}
+	}
+	return null as unknown as Node;
+}
+
+function findWhile(node: Node): Node | null {
+	if (node.kind == NodeKind.WhileStmt) return node;
+	let found: Node | null = null;
+	forEachChild(node, (child: Node): void => { if (found == null) found = findWhile(child); });
+	return found;
+}
+
+function loopBodyStmts(loop: Node): Node[] {
+	return ((loop.data as WhileStmtData).whileBody.data as BlockStmtData).statements;
+}
+
+function bodyBlockLabel(loop: Node): string {
+	const first = loopBodyStmts(loop)[0];
+	if (first.kind != NodeKind.DoWhileStmt) return "";
+	return (first.data as DoWhileStmtData).dwLabel;
+}
+
+function jumpLabels(node: Node, kind: NodeKind, out: string[]): void {
+	if (node.kind == kind) {
+		out.push(kind == NodeKind.BreakStmt ? (node.data as BreakStmtData).breakLabel : (node.data as ContinueStmtData).continueLabel);
+	}
+	forEachChild(node, (child: Node): void => { jumpLabels(child, kind, out); });
+}
+
+function breaksIn(loop: Node): string[] {
+	const out: string[] = [];
+	jumpLabels(loop, NodeKind.BreakStmt, out);
+	return out;
+}
+
+function continuesIn(loop: Node): string[] {
+	const out: string[] = [];
+	jumpLabels(loop, NodeKind.ContinueStmt, out);
+	return out;
+}
+
+function updateFollowsBody(loop: Node): boolean {
+	const stmts = loopBodyStmts(loop);
+	return stmts.length == 2 && stmts[0].kind == NodeKind.DoWhileStmt && stmts[1].kind == NodeKind.ExprStmt;
+}
+
+function leavesBodyBlock(input: string): boolean {
+	const loop = loweredLoop(input);
+	if (loop == null || !updateFollowsBody(loop) || continuesIn(loop).length != 0) return false;
+	const breaks = breaksIn(loop);
+	return breaks.length == 1 && breaks[0] == bodyBlockLabel(loop);
 }
 
 // ===== Tests =====
 test "basic for becomes block" { assert firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForLoop) == NodeKind.BlockStmt; }
 
-test "bare continue gets update" { assert loweredGuarded("for (let i = 0; i < 4; i += 1) { if (i === 1) continue; }"); }
+test "a body without continue keeps the update last and no body block" {
+	const loop = loweredLoop("for (let i = 0; i < 4; i += 1) { if (i === 1) break; }");
+	const stmts = loopBodyStmts(loop);
+	assert stmts.length == 2 && stmts[0].kind == NodeKind.IfStmt && stmts[1].kind == NodeKind.ExprStmt;
+	assert breaksIn(loop)[0] == "";
+}
 
-test "continue in else gets update" { assert loweredGuarded("for (let i = 0; i < 4; i += 1) { if (i === 0) {} else { continue; } }"); }
+test "a continue in an if leaves the body block" { assert leavesBodyBlock("for (let i = 0; i < 4; i += 1) { if (i === 1) continue; }"); }
 
-test "continue in else-if chain gets update" { assert loweredGuarded("for (let i = 0; i < 4; i += 1) { if (i === 0) {} else if (i === 1) {} else { continue; } }"); }
+test "a continue in an else-if chain leaves the body block" { assert leavesBodyBlock("for (let i = 0; i < 4; i += 1) { if (i === 0) {} else if (i === 1) {} else { continue; } }"); }
 
-test "continue in match case gets update" { assert loweredGuarded("for (let i = 0; i < 4; i += 1) { match (i) { 1 => { continue; } _ => {} } }"); }
+test "a continue in a switch case leaves the body block" { assert leavesBodyBlock("for (let i = 0; i < 4; i += 1) { switch (i) { case 1: continue; default: i; } }"); }
+
+test "a continue in a statement match arm leaves the body block" { assert leavesBodyBlock("for (let i = 0; i < 4; i += 1) { match (i) { 1 => { continue; } _ => {} } }"); }
+
+test "a continue in a try body leaves the body block before the update runs" { assert leavesBodyBlock("for (let i = 0; i < 4; i += 1) { try { continue; } finally { i; } }"); }
+
+test "a continue inside a match inside a switch leaves the body block" { assert leavesBodyBlock("for (let i = 0; i < 4; i += 1) { switch (i) { case 1: match (i) { 1 => { continue; } _ => {} } default: i; } }"); }
+
+test "a break in a match arm names the loop" {
+	const loop = loweredLoop("for (let i = 0; i < 4; i += 1) { if (i === 0) continue; match (i) { 2 => { break; } _ => {} } }");
+	const label = (loop.data as WhileStmtData).whileLabel;
+	assert label != "" && breaksIn(loop).indexOf(label) >= 0;
+}
+
+test "a break in a switch case stays with the switch" {
+	const loop = loweredLoop("for (let i = 0; i < 4; i += 1) { if (i === 0) continue; switch (i) { case 2: break; default: i; } }");
+	assert (loop.data as WhileStmtData).whileLabel == "" && breaksIn(loop).indexOf("") >= 0;
+}
+
+test "a continue of a nested loop stays with that loop" {
+	const loop = loweredLoop("for (let i = 0; i < 4; i += 1) { if (i === 0) continue; while (i < 2) { continue; } }");
+	assert continuesIn(loop).length == 1 && continuesIn(loop)[0] == "";
+}
+
+test "a body that yields keeps the update before each continue" {
+	const loop = loweredLoop("function* g() { for (let i = 0; i < 4; i += 1) { if (i === 1) continue; yield i; } }");
+	assert bodyBlockLabel(loop) == "" && continuesIn(loop).length == 1;
+}
+
+test "a body that awaits keeps the update before each continue" {
+	const loop = loweredLoop("async function g() { for (let i = 0; i < 4; i += 1) { if (i === 1) continue; await h(i); } }");
+	assert bodyBlockLabel(loop) == "" && continuesIn(loop).length == 1;
+}
 
 test "while unchanged" { assert firstStmtKindAfter("while (true) {}", lowerForLoop) == NodeKind.WhileStmt; }
 

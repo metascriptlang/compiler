@@ -11,7 +11,10 @@
 // `performance.now()` must never go backward — safe for measuring durations.
 
 when (!bare && !solana) {
-	import { msTimeMonotonic } from "runtime/core/datetime.h";
+	@include("runtime/core/datetime.h");
+	@compile("runtime/core/datetime.c");
+
+	extern function msTimeMonotonic(): number;
 
 	export class performance {
 		// Monotonic milliseconds (fractional). Origin is arbitrary and not
