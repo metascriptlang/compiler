@@ -1421,8 +1421,9 @@ function compileArraySetLenCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
 	const arrReg = compileExpr(s, md.object);
-	const lenReg = compileExpr(s, d.arguments[0]);
-	emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, arrReg, lenReg, 0));
+	const count = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.Conv, count, compileExpr(s, d.arguments[0]), RaiserConvClass.I64));
+	emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, arrReg, count, 0));
 	return arrReg;
 }
 

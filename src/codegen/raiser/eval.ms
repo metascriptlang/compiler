@@ -544,6 +544,21 @@ test "engine: increment and decrement on a float step by one" {
 	assert ctx.output == "0.5 1.5 2.75 0.5\n";
 }
 
+test "engine: a number-typed length shrinks an array before a push" {
+	const ctx = evalOrcVM("const a: number[] = [1, 2, 3, 4, 5]; const n: number = a.length; a.setLength(n - 1);"
+		+ " const end: number = 3; const start: number = 1; a.setLength(a.length - (end - start)); a.push(9);"
+		+ " const s: string[] = ['a', 'b', 'c', 'd']; const m: number = s.length; s.setLength(m - 1); s.push('z');"
+		+ " console.log(`${a.length} ${a[0]} ${a[1]} ${a[2]} ${s.length} ${s[2]} ${s[3]}`);");
+	assert ctx.error == "";
+	assert ctx.output == "3 1 2 9 4 c z\n";
+}
+
+test "engine: a fractional number length truncates like the C backend" {
+	const ctx = evalOrcVM("const a: number[] = [1, 2, 3, 4]; const n: number = 2.5; a.setLength(n); console.log(`${a.length}`);");
+	assert ctx.error == "";
+	assert ctx.output == "2\n";
+}
+
 test "engine: a not-null comparison yields a boolean" {
 	const ctx = evalOrcVM("class Box { n: int32 = 1; } const item: Box | null = new Box(); const none: Box | null = null;"
 		+ " const stored: boolean = item !== null; console.log(`${item !== null} ${none != null} ${stored}`);");
