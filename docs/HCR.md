@@ -31,14 +31,20 @@ backend and DRC/ORC runtime.
 | Single-image POSIX `dlopen` host | Re-pinned by `examples/hcrProbe/run.sh` (2026-09-22, run, not read): body-only reload preserves lifted state (same `_GlobalState` pointer, `PROBE PASS`), layout change + truncated image rejected loud, current stays live. Executes via `--os=linux --cc=zig` cross-build + WSL: this Windows host's toolchains ship no `dlfcn.h` |
 | Single-image Windows `LoadLibrary` host | Implemented by `examples/hcrProbe/hostWindows.ms`, guarded by `src/test/hcr/run.ms` (`hcrWindowsReload`): body-only reload preserves lifted state; layout and bad-image candidates fail loud while current stays callable |
 | Per-module native object cache | Implemented by generated-C fingerprints; `src/test/hcr/run.ms` proves a body-only edit recompiles only the changed module |
-| Per-module shared libraries | Windows x64: a non-reloadable `<stem>.core.dll` (runtime, std, registry) plus one DLL per project module, guarded by `src/test/hcr/run.ms` (`hcrIndirect`): the unrebuilt app calls a reloaded `logic` image. Linux and macOS link flags exist but are not verified |
+| Per-module shared libraries | Windows x64 and Linux x64: a non-reloadable `<stem>.core.<ext>` (runtime, std, registry) plus one image per project module, guarded by `src/test/hcr/run.ms` (`hcrIndirect`): the unrebuilt app calls a reloaded `logic` image. macOS link flags exist and have never run |
 | Cross-module vtable calls | Lowered by `src/transform/native/hcrIndirect.ms` and replaced at runtime by publishing a reloaded image's table, guarded by `src/test/hcr/run.ms` (`hcrIndirect`) |
-| Full transactional current/old/candidate module registry | Windows x64: `std/hcr` in the core image discovers, copy-loads and reloads module images, stages tables and commits or rolls them back, guarded by `src/test/hcr/run.ms` (`hcrEngine`); POSIX loader not implemented (the engine aborts loud) |
-| `@beforeReload` / `@afterReload` lifecycle handlers | Implemented on Windows x64, guarded by `hcrEngine`: leaf-to-root, before on the old generation, after on the new one; a throwing after-handler rolls the transaction back |
-| TypeInfo across reloads | Windows x64, guarded by `hcrEngine`: one TypeInfo per class for the process, restored when a reload rolls back; a changed class, interface or struct layout answers `RestartRequired` |
-| Watch build (`msc build --hcr --watch`) | Windows x64: rebuilds after each source save through a kept build session, guarded by `src/test/hcr/run.ms` (`hcrWatchWarm`: the C of a warm build equals a cold build's at every step of a replayed edit sequence); POSIX has no file-watch backend, so only `--watch-replay` runs there (not verified) |
+| Full transactional current/old/candidate module registry | Windows x64 (`LoadLibrary`) and Linux x64 (`dlopen`): `std/hcr` in the core image discovers, copy-loads and reloads module images, stages tables and commits or rolls them back, guarded by `src/test/hcr/run.ms` (`hcrEngine`); macOS never run |
+| `@beforeReload` / `@afterReload` lifecycle handlers | Windows x64 and Linux x64, guarded by `hcrEngine`: leaf-to-root, before on the old generation, after on the new one; a throwing after-handler rolls the transaction back |
+| TypeInfo across reloads | Windows x64 and Linux x64, guarded by `hcrEngine`: one TypeInfo per class for the process, restored when a reload rolls back; a changed class, interface or struct layout answers `RestartRequired` |
+| Watch build (`msc build --hcr --watch`) | Windows x64 (`ReadDirectoryChangesW`) and Linux x64 (inotify): rebuilds after each source save through a kept build session, guarded by `src/test/hcr/run.ms` (`hcrWatchWarm`: the C of a warm build equals a cold build's at every step of a replayed edit sequence; the inputs it does not cover are listed under "Watch builds (S6)"). macOS has no file-watch backend: `std/fs/watch` aborts with `file watching has no backend for this platform yet` |
+| `msc run app.ms --hcr` | Windows x64 and Linux x64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
 | iOS and automated deploy loops | Not implemented |
 | Neon Fast Refresh integration | Contract defined here; implementation belongs to the Neon repo |
+
+On 2026-09-27, tree `565df01d46c8`, `MSC=./msc ./msc run src/test/hcr/run.ms --target=raiser`
+printed `ok` for twelve cases on Windows 11 x64 (zig; `hcrCoreLinkClang` skipped) and for
+twelve on WSL Ubuntu x64 with a gcc-built compiler of the same tree (`hcrWindowsReload` runs on
+Windows only).
 
 Implementation anchors: `src/transform/native/hcrLift.ms` `liftHcrState`,
 `src/compiler/cache.ms` `moduleCompileFp` / `isCCodeCached`, `runtime/hcr.h`,
@@ -173,8 +179,7 @@ These cannot silently survive a reload:
 - GPU/window/socket resources owned by a reloadable image.
 
 They must quiesce, re-register through stable handles, or move ownership into the
-non-reloadable host. Reload lifecycle hooks will be explicit; their source syntax is not yet
-chosen.
+non-reloadable host, from the `@beforeReload` / `@afterReload` handlers ("Host runtime (S4)").
 
 ## Compiler work
 
@@ -571,9 +576,75 @@ modules, so it is not equivalent to a cold build. Nim's per-module backend avoid
 emitting every definition a module demands into that module's unit and keeping one per C name at
 merge (`cgen.nim` `findPendingModule`); that placement is a new mechanism, not taken here.
 
-Not verified: a live watch on macOS or Linux (no inotify/kqueue backend), timings off this host,
-edit-to-visible latency with a running host, a project with import cycles, and edits to
+Edit to visible with a running program, `msc run app.ms --hcr` on `examples/hcrApp/` (55
+modules), five saves of distinct `logic.ms` bodies written with `cat new > logic.ms`, timed from
+before the write to the line the app prints after `reload()` answers `Reloaded`; tree
+`565df01d46c8`, 2026-09-27:
+
+| Host | Edit to visible | Build | Conditions |
+|---|---|---|---|
+| WSL Ubuntu x64, 24 cores, gcc, `--release` compiler | 289–300 ms | 232–243 ms | load 1.3–1.7 |
+| Windows 11 x64, zig, `--danger` compiler | 824–902 ms | 687–728 ms | 20–51 % CPU from other sessions |
+
+A split taken on Linux on 2026-09-26 (load about 3.5, tree not recorded): the watcher sees a save
+in 3–4 ms, the settle waits 60 ms, the build takes 246–290 ms (front end and C emission about
+70 ms, the rest `cc -c` and the link of `logic`), and `reload()` 1.9–3.0 ms. The Windows
+`reload()` figure above (0.45–0.56 s, 2026-09-24) was not measured again; the 2026-09-27 runs
+leave 100–180 ms between the end of the build and the visible line.
+
+A writer that empties the file before writing it (`cat new > logic.ms` from Git Bash, whose fork
+takes more than the 60 ms settle) can let a build read the empty file. That build fails with
+`Cannot resolve module './logic'`, because the loader treats an empty module as a missing one (an
+open loader bug), and the write's own event rebuilds and reloads: 5/5 saves on Windows, measured
+with trace prints on 2026-09-27. Batches that arrive during the settle are dropped safely: their
+writes precede the build's read. `hcrWatchWarm` replays an empty `logic.ms` between two steps to
+pin that a failed module load leaves the kept session warm; it goes red when a failed load drops
+the kept TransAm db.
+
+A warm build still reuses per-build checker registries whose keys stay the same across builds.
+Measured on tree `565df01d46c8` with `--watch-replay` and `--emit=c`, each diffed against a cold
+`--emit=c` of the same sources:
+
+| Edit in a module-local class | Warm C | Cold C |
+|---|---|---|
+| constructor default `4` → `40` (plain and generic class) | passes `4` | passes `40` |
+| `area()` override removed from `Circle` | still dispatches to `Circle_area` | no `Circle` branch |
+| body of a generic extension `onDestroy<T>` | equal to cold | — |
+
+The third row was reported to fail the link (`call to undeclared function 'Bag_onDestroy_…'`) with
+the compiler of `b899f456`; it did not reproduce on this tree. `hcrWatchWarm` has no step for these
+inputs.
+
+Not verified: a live watch on macOS (no backend), a project with import cycles, and edits to
 `build.ms` during a watch (it is not re-read).
+
+### Running an app
+
+`msc run app.ms --hcr` (`cmdRunHcr`, `src/compiler/compile.ms`) builds the host from
+`std/hcr/host.cms` into `out/hcr/host`, builds the images into `out/hcr/<stem>.<ext>` through the
+watch session above, runs the host on them as a separate process, and rebuilds after every save
+until the host exits; the host's exit code is `msc run`'s. The host copies the core image into
+`.hcr/<pid>/core/`, loads it and calls `msHcrLaunch` and `msHcrEngineStart`. The engine runs the
+modules' inits and then the rest of the generated main, so pending async work finishes and an
+unhandled rejection exits 1, as it does without `--hcr`.
+
+The watch loop learns that the host ended from a `Locked<HostExit>` that the spawned task writes.
+Awaiting the spawn's Promise with `.then` from the loop was rejected: a spawn Promise is affine
+and bound to the scope that made it, and the checker refuses it inside a function.
+
+Each run copies its images under `.hcr/<pid>/`. At start the engine removes the directory of
+every pid that no longer runs (`sweepEndedRuns`, `std/hcr/index.cms`; `msHcrProcessAlive` opens
+the process and waits on it on Windows, and calls `kill(pid, 0)` on POSIX; a process it may not
+open counts as alive), so a run's copies stay until the next start. nimhcr unloads a module and
+overwrites one `<name>.copy.<ext>` next to it (`lib/nimhcr.nim` `loadDll`) and never deletes it;
+here accepted generations stay loaded, so each needs its own file, and the engine cannot delete
+its own directory at exit, because it runs from the core image in it and Windows refuses to
+delete a loaded DLL. On 2026-09-27, Windows x64 and Linux x64, `hcrRun` placed three directories
+before the start: `999999998` was removed, the pid of a live system process (`4` on Windows, `1`
+on Linux) and `notARun` stayed. The installed compiler of `c54a8671` left `999999998` in place.
+
+A program that never imports `std/hcr` has no engine in its core image, and the host stops with
+`HCR-HOST the core image does not export msHcrEngineStart`.
 
 ## Neon Fast Refresh boundary
 
@@ -633,9 +704,9 @@ These adapters implement one publication, compatibility and state-survival contr
 do not share a lowest-common-denominator linker strategy. A target is supported only when
 its native adapter proves that contract end to end.
 
-The current implementation has single-image foundations for POSIX and native Windows.
-Per-module artifacts, vtable dispatch, the full module registry and automated deployment
-remain later slices.
+Windows x64 and Linux x64 run the whole loop: per-module images, vtable dispatch, the module
+registry, watch builds and `msc run --hcr` (see "Current status"). macOS has the loader code and
+no file-watch backend, and has never run; iOS deployment is a later slice.
 
 On 2026-09-22, Windows 11 x64 source tree
 `112b9d0a69e7a1058ba3931d15f69dec3e61a9a0` was built as a candidate compiler, then
@@ -653,17 +724,20 @@ loader/raw-function-pointer ABI edge.
 
 ### Compiler contract
 
-`examples/hcrApp/` is recreated with `app.ms` calling `logic.ms`:
+`examples/hcrApp/` has `app.ms` calling `logic.ms`; `src/test/hcr/run.ms` holds each item
+except where noted:
 
 - only `logic` rebuilds for a body-only change;
 - unrecompiled `app` observes new behavior through the current vtable;
 - persistent state survives;
 - incomplete artifacts retry without disturbing current;
-- load/init failure and candidate crash preserve or restore current behavior;
+- load/init failure preserves or restores current behavior (a candidate crash is out of scope,
+  "Host runtime (S4)");
 - a layout change reports restart-required;
 - a live DRC object destroys exactly once through the accepted TypeInfo generation;
-- old code purges only after safe-point proof;
-- `--hcr`-off C output is byte-identical to a build without HCR Phase 3.
+- old code purges only after safe-point proof (not built: every accepted generation stays
+  loaded);
+- a build without `--hcr` carries no HCR machinery (`hcrIndirect`).
 
 ### Neon contract
 
