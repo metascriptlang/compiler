@@ -2,6 +2,8 @@
 // @stdout: start 3 -1 0 1
 // @xfail(danger): --danger elides the division checks, so 7 / 0 is undefined there
 // @xfail(raiser): the Raiser VM reports the uncaught division by zero as its own 'raiser runtime error' on stderr, not C's 'Error: division by zero'
+// @xfail(js): node reports the uncaught division defect with its own trace on stderr, where C prints 'Error: division by zero'; C also makes the defect fatal where JS lets it be caught
+// @xfail(esm): node reports the uncaught division defect with its own trace on stderr, where C prints 'Error: division by zero'; C also makes the defect fatal where JS lets it be caught
 // note: an integer division by zero raises on every backend in debug and release instead of printing a value (codegen-c-9: C --release and JS printed 0 and went on). The remainder of MIN by -1 is 0 and does not raise.
 
 function d(a: int32, b: int32): int32 { return a / b; }
