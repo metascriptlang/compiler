@@ -11,7 +11,7 @@ import { writeRefusal } from "./assignable";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, convertsImplicitly, refusesIntConv, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
-import { checkSwitchCase, convertIntoUnknown, fitJoinedBranch, fitNode, instantiateGenericFnValue, isFittingIntLiteral, reportIntConv, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
+import { checkSwitchCase, convertIntoUnknown, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingIntLiteral, reportIntConv, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
@@ -1795,6 +1795,39 @@ function fitArgsToBoundFormals(ctx: CheckerContext, node: Node, fnType: Type, bi
 	}
 }
 
+function bindFromUnfitDestination(fnType: Type, bindings: UnifyBindings, fixed: string[], argTypes: Type[], expectedType: Type | null): boolean {
+	const ret = fnType.typeReturn;
+	if (expectedType == null || isUnresolvedType(expectedType) || ret == null) return false;
+	const context = bindFromExpectedReturn(fnType, expectedType);
+	const rebound = createUnifyBindings();
+	for (let bi = 0; bi < bindings.names.length; bi += 1) {
+		rebound.names.push(bindings.names[bi]);
+		rebound.types.push(bindings.types[bi]);
+	}
+	mergeUnifyBindings(rebound, context);
+	const current = applySubstitutions(ret, rebound);
+	if (hasGenericParams(current) || !slotRefuses(current, expectedType)) return false;
+	let moved = false;
+	for (let ci = 0; ci < context.names.length; ci += 1) {
+		const idx = findBindingIndex(rebound, context.names[ci]);
+		if (idx == -1 || hasGenericParams(context.types[ci]) || sameType(rebound.types[idx], context.types[ci])) continue;
+		if (fixed.includes(context.names[ci])) return false;
+		rebound.types[idx] = context.types[ci];
+		moved = true;
+	}
+	if (!moved || !isAssignable(applySubstitutions(ret, rebound), expectedType)) return false;
+	const lim = argTypes.length < fnType.typeChildren.length ? argTypes.length : fnType.typeChildren.length;
+	for (let ai = 0; ai < lim; ai += 1) {
+		const at = argTypes[ai];
+		if (at == null || isUnresolvedType(at) || at.kind == TypeKind.Error || at.kind == TypeKind.Null) continue;
+		if (!hasGenericParams(fnType.typeChildren[ai])) continue;
+		const formal = applySubstitutions(fnType.typeChildren[ai], rebound);
+		if (hasGenericParams(formal) || slotRefuses(at, formal)) return false;
+	}
+	for (let bi = 0; bi < bindings.types.length; bi += 1) bindings.types[bi] = rebound.types[bi];
+	return true;
+}
+
 // Compute the column where the type arg name starts (after '<') in a call expression.
 // For `foo<T>(...)`: callee.col + "foo".length + 1 (skip '<')
 // For `obj.method<T>(...)`: callee.col + 1 + "method".length + 1 (skip '.' and '<')
@@ -1876,6 +1909,10 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 		unifyType(fnType.typeChildren[i], at, argBindings);
 	}
 
+	if (hasExpected && callNode != null && callNode.kind == NodeKind.CallExpr
+			&& bindFromUnfitDestination(fnType, argBindings, [], argTypes, expectedType)) {
+		fitArgsToBoundFormals(ctx, callNode, fnType, argBindings);
+	}
 	if (hasExpected) {
 		mergeUnifyBindings(argBindings, bindFromExpectedReturn(fnType, expectedType));
 	}
@@ -2166,6 +2203,16 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		ebFrom.push(candFrom[fold.chosen[k]]);
 	}
 	reportTypeParamMisfits(ctx, fold, candNames, candTypes, candFrom, cd, conflicted);
+	const fixedNames: string[] = [];
+	for (let bi = 0; bi < eb.names.length; bi += 1) {
+		if (ebFrom[bi] < 0) fixedNames.push(eb.names[bi]);
+	}
+	if (bindFromUnfitDestination(calleeType, eb, fixedNames, argTypes, expectedType)) {
+		fitArgsToBoundFormals(ctx, node, calleeType, eb);
+		for (let ai = 0; ai < argTypes.length && ai < calleeType.typeChildren.length; ai += 1) {
+			if (hasGenericParams(calleeType.typeChildren[ai])) argTypes[ai] = applySubstitutions(calleeType.typeChildren[ai], eb);
+		}
+	}
 	// Pass 2: contextual return-type binding (Nim parity — `inheritBindings` in
 	// semcall.nim:777-859). When args + explicit <T> together don't bind all
 	// generic params, walk return type vs expected type to derive bindings from
