@@ -697,7 +697,7 @@ export function addCGenError(g: CGen, message: string, line: int32, column: int3
 	g.errors.push({ message, line, column, endLine: 0, endColumn: 0, fatal: false, severity: Severity.Error, tags: 0 });
 }
 
-export function addUnloweredError(g: CGen, p: CProc, node: Readonly<Node>): void {
+export function addUnloweredError(g: CGen, p: CProc | null, node: Readonly<Node>): void {
 	const line = node.location.line;
 	const column = node.location.column;
 	const proc = p != null && p.name != "" ? p.name : "<toplevel>";

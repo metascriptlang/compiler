@@ -691,8 +691,7 @@ function pushUnloweredNew(g: CGen, ctx: ExprEvalCtx, node: Readonly<Node>): void
 }
 
 function pushUnloweredExpr(g: CGen, ctx: ExprEvalCtx, node: Readonly<Node>): void {
-	const pn = g.currentProc != null ? g.currentProc.name : "<toplevel>";
-	addCGenError(g, "internal: expression kind=" + node.kind.toString() + " reached codegen unlowered in " + g.modulePath + " proc " + pn, node.location.line, node.location.column);
+	addUnloweredError(g, g.currentProc, node);
 	ctx.results.push("MS_NIL");
 }
 
