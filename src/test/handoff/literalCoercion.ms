@@ -201,6 +201,13 @@ test "an untyped constant is folded exactly before its slot judges it" {
 	assert strictErrorCount("function probe(): uint8 { return 16 * 16; }") == 1;
 }
 
+test "a constant past int32 widens its typed partner to int64, which an int32 slot refuses" {
+	assert strictErrorCount("function probe(i: int32): int64 { return i * (100000 * 100000); }") == 0;
+	assert strictErrorCount("function probe(i: int32): int32 { return i * (100000 * 100000); }") == 1;
+	assert strictErrorCount("function probe(i: int32): int32 { return i + 4000000000; }") == 1;
+	assert strictErrorCount("const big = 100000 * 100000; function probe(): int32 { return big; }") == 1;
+}
+
 test "a nullish payload and its fallback are judged by the slot once, like conditional arms" {
 	assert strictErrorCount("function f(v: uint8 | null): uint32 { const x: uint32 = v ?? 1; return x; }") == 0;
 	assert strictErrorCount("function f(v: int32 | null): int64 { const x: int64 = v ?? 0; return x; }") == 0;
