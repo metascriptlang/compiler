@@ -96,6 +96,18 @@ test "numericRepresentation: an integer constant expression folds exactly into i
 	assert wideConstantReturned() == 10000000000;
 }
 
+test "numericRepresentation: an integer constant past int32 takes int64 without a slot, beside a narrower operand and in a float slot" {
+	const unslotted = 100000 * 100000;
+	const lone = 4000000000;
+	const narrow: int32 = 2;
+	const wider = narrow * (100000 * 100000);
+	const real: float64 = 100000 * 100000;
+	assert unslotted == 10000000000;
+	assert lone + 1 == 4000000001;
+	assert wider == 20000000000;
+	assert real == 10000000000.0;
+}
+
 test "numericRepresentation: a bitwise integer constant keeps its int32 value in an int64 slot" {
 	const shifted: int64 = 1 << 31;
 	const expected: int64 = -2147483648;
