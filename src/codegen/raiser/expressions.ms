@@ -25,7 +25,7 @@ import {
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine,
 	callRaiserStmtCompiler, emitTrapNil, resolveGlobal,
 } from "./context";
-import { emitZeroFill, zeroArrayType } from "./valueCopy";
+import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros } from "./valueCopy";
 
 // A CallHost the registry cannot serve would only fail at macro RUN time
 // ("Unknown host function"). The host table is loaded before bytecodegen
@@ -1162,6 +1162,7 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 		const nameIdx = addConst(s, raiserString(d.keys[i]));
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, dest, nameIdx, valReg));
 	}
+	if (d.keys.length == d.properties.length) emitOmittedFieldZeros(s, dest, node.nodeType, d.keys);
 
 	return dest;
 }

@@ -501,6 +501,15 @@ test "engine: a local and a global declared without an initializer hold their ty
 	assert vm.output == "0 0 [] 0 0\n";
 }
 
+test "engine: a struct literal that omits a field stores the field's zero value" {
+	const vm = evalOrcVM("struct Inner { x: int32; }"
+		+ " struct E { h: int64; v: int32; ok: boolean; tag: string; items: Vec<int32>; label: string | null; inner: Inner; }"
+		+ " const e: E = { v: 1 };"
+		+ " console.log(`${e.h} ${e.v} ${e.ok} [${e.tag}] ${e.items.length} ${e.label == null ? \"null\" : \"set\"} ${e.inner.x}`);");
+	assert vm.error == "";
+	assert vm.output == "0 1 false [] 0 null 0\n";
+}
+
 test "engine: shift left on int64 keeps bits past 31" {
 	const r = evalSourceFull("function shl(one: int64, n: int64): int64 { return one << n; } return shl(1, 39);");
 	assert r.lastError == "";
