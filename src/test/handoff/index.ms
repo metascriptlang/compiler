@@ -24,6 +24,7 @@ import "./genericArgFit";
 import "./genericMethodOverride";
 import "./typeAliasStruct";
 import "./literalCoercion";
+import "./intLiteralBoundary";
 import "./discriminatedUnion";
 import "./classGeneric";
 import "./macroNodeFieldTyped";
