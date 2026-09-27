@@ -85,6 +85,12 @@ export function fitJoinedBranch(ctx: CheckerContext, expr: Node, joined: Type | 
 	return fitNode(ctx, expr, joined, bt);
 }
 
+export function nullishPayloadType(t: Type | null): Type | null {
+	if (t == null) return null;
+	if (isMaybeType(t)) return t.typeReturn;
+	return t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : null;
+}
+
 // Reference parity (sigmatch.nim:2596 `localConvMatch`, :2179 `implicitConv`): a
 // stringification the call site needs is planted DURING checking, so it is bound
 // by the same overload resolution a hand-written `x.toString()` gets and reaches

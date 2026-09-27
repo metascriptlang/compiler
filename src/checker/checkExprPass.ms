@@ -29,7 +29,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -716,8 +716,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						d.left.location.line, d.left.location.column);
 				}
 			}
-			// For assignment, pass LHS type as expectedType to RHS
-			const rightExpected = (d.operator == "=") ? leftType : null;
+			const rightExpected = d.operator == "=" ? leftType : (d.operator == "??" ? nullishArmExpected(expectedType) : null);
 			const rhsGuarded = d.operator == "&&" || d.operator == "||" || d.operator == "??";
 			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth + 1;
 			checkExpr(ctx, d.right, rightExpected);
@@ -1081,6 +1080,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (isRelational) checkRelationalOperands(ctx, d.operator, effLeft!, effRight!, node);
 			if (rejectBigIntMix(ctx, d.operator, effLeft, effRight, node)) { node.nodeType = errorType(); return; }
 			if (checkBinaryOperands(ctx, d.operator, effLeft!, effRight!, node)) { node.nodeType = errorType(); return; }
+			const nullishJoined = d.operator == "??" ? fitNullishArms(ctx, d, effLeft, effRight, expectedType) : null;
+			if (nullishJoined != null) { node.nodeType = nullishJoined; return; }
 			node.nodeType = inferBinaryOp(d.operator, effLeft!, effRight!);
 			if (d.operator == "??" && node.nodeType != null && isMaybeType(node.nodeType)) {
 				d.right = fitJoinedBranch(ctx, d.right, node.nodeType);
@@ -1875,25 +1876,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			checkExpr(ctx, d.ternaryConsequent, expectedType);
 			checkExpr(ctx, d.ternaryAlternate, expectedType);
 			ctx.condEvalDepth = ctx.condEvalDepth - 1;
-			if (expectedType != null
-				&& branchFitsSlot(ctx, d.ternaryConsequent.nodeType, expectedType)
-				&& branchFitsSlot(ctx, d.ternaryAlternate.nodeType, expectedType)) {
-				d.ternaryConsequent = fitNode(ctx, d.ternaryConsequent, expectedType, d.ternaryConsequent.nodeType);
-				d.ternaryAlternate = fitNode(ctx, d.ternaryAlternate, expectedType, d.ternaryAlternate.nodeType);
-			} else {
-				retypeEmptyArrayBranch(d.ternaryConsequent, d.ternaryAlternate.nodeType);
-				retypeEmptyArrayBranch(d.ternaryAlternate, d.ternaryConsequent.nodeType);
-				const branchTypes: Type[] = [];
-				if (d.ternaryConsequent.nodeType != null) { branchTypes.push(d.ternaryConsequent.nodeType); }
-				if (d.ternaryAlternate.nodeType != null) { branchTypes.push(d.ternaryAlternate.nodeType); }
-				const joined = joinBranchTypes(branchTypes);
-				if (!isUnresolvedType(joined)) {
-					d.ternaryConsequent = fitJoinedBranch(ctx, d.ternaryConsequent, joined);
-					d.ternaryAlternate = fitJoinedBranch(ctx, d.ternaryAlternate, joined);
-					node.nodeType = joined; return;
-				}
-			}
-			node.nodeType = d.ternaryConsequent.nodeType; return;
+			node.nodeType = fitConditionalArms(ctx, d, expectedType); return;
 		},
 		NodeKind.TypeAssertion => {
 			let d = node.data as TypeAssertionData;
@@ -2201,6 +2184,43 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 // Phase 5: resolve `super` identifier to the parent class symbol.
 // `super` is only valid inside an instance method (where "this" is in scope).
 // Walks: this → enclosing class type → typeExtra → parent class.
+function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expectedType: Type | null): Type | null {
+	if (expectedType != null
+		&& branchFitsSlot(ctx, d.ternaryConsequent.nodeType, expectedType)
+		&& branchFitsSlot(ctx, d.ternaryAlternate.nodeType, expectedType)) {
+		d.ternaryConsequent = fitNode(ctx, d.ternaryConsequent, expectedType, d.ternaryConsequent.nodeType);
+		d.ternaryAlternate = fitNode(ctx, d.ternaryAlternate, expectedType, d.ternaryAlternate.nodeType);
+		return d.ternaryConsequent.nodeType;
+	}
+	retypeEmptyArrayBranch(d.ternaryConsequent, d.ternaryAlternate.nodeType);
+	retypeEmptyArrayBranch(d.ternaryAlternate, d.ternaryConsequent.nodeType);
+	const branchTypes: Type[] = [];
+	if (d.ternaryConsequent.nodeType != null) { branchTypes.push(d.ternaryConsequent.nodeType); }
+	if (d.ternaryAlternate.nodeType != null) { branchTypes.push(d.ternaryAlternate.nodeType); }
+	const joined = joinBranchTypes(branchTypes);
+	if (isUnresolvedType(joined)) return d.ternaryConsequent.nodeType;
+	d.ternaryConsequent = fitJoinedBranch(ctx, d.ternaryConsequent, joined);
+	d.ternaryAlternate = fitJoinedBranch(ctx, d.ternaryAlternate, joined);
+	return joined;
+}
+
+function nullishArmExpected(expectedType: Type | null): Type | null {
+	return expectedType != null && isMaybeType(expectedType) ? expectedType.typeReturn : expectedType;
+}
+
+function fitNullishArms(ctx: CheckerContext, d: BinaryExprData, leftType: Type | null, rightType: Type | null, expectedType: Type | null): Type | null {
+	if (rightType == null || rightType.kind == TypeKind.Null || isMaybeType(rightType) || nullishPayloadType(rightType) != null) return null;
+	const payload = nullishPayloadType(leftType);
+	if (payload == null) return null;
+	const payloadArm = createNodeAt(NodeKind.TypeAssertion, { asExpr: d.left, asType: "!" } as TypeAssertionData, d.left.location);
+	payloadArm.nodeType = payload;
+	payloadArm.flags = payloadArm.flags.incl(NodeFlag.Sem);
+	const arms = { ternaryCondition: d.left, ternaryConsequent: payloadArm, ternaryAlternate: d.right } as ConditionalExprData;
+	const joined = fitConditionalArms(ctx, arms, nullishArmExpected(expectedType));
+	d.right = arms.ternaryAlternate;
+	return joined;
+}
+
 // Sets node.resolvedSym to the parent class symbol so codegen can emit the
 // correct `ParentClassName_new` call. Returns parent class type.
 // Errors if used outside a method, in a static method, or if the enclosing
