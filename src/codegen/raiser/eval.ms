@@ -22,7 +22,7 @@ import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction 
 import { RaiserFuncMap } from "./context";
 import { moduleScopeSymbols } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
-import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
+import { lookupModuleCtx, registerEngineBodyCtxFn, instanceTypeParamSymbols } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
@@ -264,6 +264,19 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	_engine.seen.set(name, _engine.image.functions.length);
 	const seedCtx = seedCtxForSym(sym);
 	const seeds: Symbol[] = [];
+	if (sym.instantiatedFrom != null) {
+		const bound = seedCtx != null ? instanceTypeParamSymbols(sym, seedCtx.table.identCache) : null;
+		if (bound == null) {
+			const loc = sym.declNode.location;
+			_pendingHelperErrors.push({
+				message: `helper '${name}': internal: instance of '${sym.instantiatedFrom!.name}' has no recorded type arguments to bind`,
+				line: loc.line, column: loc.column, endLine: loc.endLine, endColumn: loc.endColumn,
+				fatal: true, severity: Severity.Error, tags: 0,
+			});
+			return -1;
+		}
+		for (const b of bound) seeds.push(b);
+	}
 	let exts: ExtensionMethod[] = [];
 	if (seedCtx != null) {
 		for (const s of moduleScopeSymbols(seedCtx.table)) {

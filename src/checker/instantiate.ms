@@ -18,7 +18,7 @@ import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../mon
 import { mangleMonoName, monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
 import { beginGensymUnit, rewindTemplateGensym } from "./template";
-import { getIdentId } from "./idents";
+import { getIdentId, IdentCache } from "./idents";
 import { fitJoinedBranch } from "./fit";
 import { bindFunctionFlow } from "../binder/index";
 
@@ -448,18 +448,37 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 	}
 }
 
+function typeParamSymbols(names: string[], types: Type[], cache: IdentCache): Symbol[] {
+	const syms: Symbol[] = [];
+	for (let i = 0; i < names.length && i < types.length; i += 1) {
+		const sym = makeSymbol(names[i].trim(), SymbolKind.TypeAlias, types[i], false);
+		sym.state = SymbolState.Shaped;
+		sym.nameId = getIdentId(cache, sym.name);
+		syms.push(sym);
+	}
+	return syms;
+}
+
+interface InstanceTypeArgs {
+	names: string[];
+	types: Type[];
+}
+
+const _instanceTypeArgs = new HashMap<Symbol, InstanceTypeArgs>();
+
+export function instanceTypeParamSymbols(inst: Symbol, cache: IdentCache): Symbol[] | null {
+	const args = _instanceTypeArgs.get(inst);
+	if (args == null) return null;
+	return typeParamSymbols(args.names, args.types, cache);
+}
+
 function openInstanceScope(ctx: CheckerContext, names: string[], types: Type[]): Scope {
 	const callerScope = ctx.table.current;
 	let top = callerScope;
 	while (top.scopeKind != ScopeKind.Module && top.parent != null) top = top.parent;
 	ctx.table.current = top;
 	openScope(ctx.table, ScopeKind.Block);
-	for (let i = 0; i < names.length && i < types.length; i += 1) {
-		const sym = makeSymbol(names[i].trim(), SymbolKind.TypeAlias, types[i], false);
-		sym.state = SymbolState.Shaped;
-		sym.nameId = getIdentId(ctx.table.identCache, sym.name);
-		addSymbolToScope(ctx.table.current, sym);
-	}
+	for (const sym of typeParamSymbols(names, types, ctx.table.identCache)) addSymbolToScope(ctx.table.current, sym);
 	return callerScope;
 }
 
@@ -633,7 +652,7 @@ function substAnnotationAll(ann: string, paramNames: string[], concreteTypes: Ty
 
 // Apply substitutions to node-local state (nodeType + per-kind string annotations).
 // Does NOT descend into children — that's forEachChild's job.
-function substNodeLocal(node: Node, paramNames: string[], concreteTypes: Type[]): void {
+function substNodeLocal(node: Node, paramNames: string[], concreteTypes: Type[], strings: boolean): void {
 	if (node.nodeType != null) {
 		for (let i = 0; i < paramNames.length; i += 1) {
 			if (i < concreteTypes.length) {
@@ -645,6 +664,7 @@ function substNodeLocal(node: Node, paramNames: string[], concreteTypes: Type[])
 	// Without this, the checker's NewExpr/CallExpr generic resolution falls back
 	// to a location-keyed side channel that still holds the original (unsubstituted)
 	// strings, producing HashMap<Unknown, Unknown> during re-check of cloned bodies.
+	if (!strings) return;
 	if (node.typeArg != null && node.typeArg != "" && declGenericParams(node) == "") {
 		node.typeArg = substAnnotationAll(node.typeArg, paramNames, concreteTypes);
 	}
@@ -674,8 +694,14 @@ function substNodeLocal(node: Node, paramNames: string[], concreteTypes: Type[])
 
 export function replaceTypeVars(node: Node, paramNames: string[], concreteTypes: Type[]): void {
 	if (node == null) return;
-	substNodeLocal(node, paramNames, concreteTypes);
+	substNodeLocal(node, paramNames, concreteTypes, true);
 	forEachChild(node, (child: Node): void => { replaceTypeVars(child, paramNames, concreteTypes); });
+}
+
+function replaceBodyTypeVars(node: Node, paramNames: string[], concreteTypes: Type[]): void {
+	if (node == null) return;
+	substNodeLocal(node, paramNames, concreteTypes, false);
+	forEachChild(node, (child: Node): void => { replaceBodyTypeVars(child, paramNames, concreteTypes); });
 }
 
 // ===== On-Demand Instantiation =====
@@ -756,7 +782,8 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	// (via substNodeLocal) and walks the body via forEachChild.
 	const cloned = monoCloneNode(fnNode);
 	const cd = cloned.data as FunctionDeclData;
-	replaceTypeVars(cloned, dedup.names, dedup.types);
+	substNodeLocal(cloned, dedup.names, dedup.types, true);
+	replaceBodyTypeVars(cd.fnBody, dedup.names, dedup.types);
 
 	// Rename + strip flags
 	cd.fnName = mangledName;
@@ -784,6 +811,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	instSym.nameId = getIdentId(host.table.identCache, mangledName);
 	instSym.instantiatedFrom = sym;
 	cacheInstance(host, sym, instSym);
+	_instanceTypeArgs.set(instSym, { names: dedup.names, types: dedup.types });
 	cloned.resolvedSym = instSym;
 
 	// Reference parity (semProcBody): check body in the DEFINING module's scope
@@ -882,7 +910,7 @@ function instanceFieldInits(classData: ClassDeclData, names: string[], types: Ty
 			continue;
 		}
 		const field = monoCloneNode(member);
-		replaceTypeVars(field, names, types);
+		replaceBodyTypeVars(field, names, types);
 		field.nodeType = fieldType;
 		fields.push(field);
 	}
@@ -890,6 +918,7 @@ function instanceFieldInits(classData: ClassDeclData, names: string[], types: Ty
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
+	const callerScope = openInstanceScope(bodyCtx, names, types);
 	const injectedSyms: Symbol[] = [];
 	for (const ct of types) {
 		injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
@@ -909,6 +938,7 @@ function instanceFieldInits(classData: ClassDeclData, names: string[], types: Ty
 	}
 	bodyCtx.modulePath = savedModulePath;
 	removeInjectedSyms(bodyCtx, injectedSyms);
+	bodyCtx.table.current = callerScope;
 	truncateCallerExtensions(bodyCtx, extPreCount);
 	return fields;
 }
@@ -1020,7 +1050,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], typ
 
 	// Substitute type vars in body
 	if (clonedBody != null) {
-		replaceTypeVars(clonedBody, names, types);
+		replaceBodyTypeVars(clonedBody, names, types);
 	}
 
 	// Clone constructor defaults (for default-fill at call sites)
