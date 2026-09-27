@@ -69,6 +69,9 @@ answer either question. Putting one there needs a run that shows both outcomes.
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait for load <= cores (default 1800, 0 = do not wait)
 ledger: one row per lane and per run (lane secs rc red known new flaky wait) appended to GATE_LEDGER (default ~/.metascript/gate.tsv)
+        one row per narrowing step (step secs kept total differ_c differ_js touched) appended to
+        GATE_SELECT_LEDGER (default ~/.metascript/gate-select.tsv); step is tier-select, select or
+        select-whole, kept is what the step leaves the lanes (tiers, or corpus programs)
 USAGE
 }
 
@@ -78,6 +81,11 @@ ledger_fmt() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 ledger() {
   [ -s "$GATE_LEDGER" ] || printf 'ts\ttree\tlane\tsecs\trc\tred\tknown\tnew\tflaky\twait\n' >"$GATE_LEDGER"
   ledger_fmt "$(date '+%F %T')" "$(basename "$TOP")" "$@" >>"$GATE_LEDGER"
+}
+select_ledger_fmt() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
+select_ledger() {
+  [ -s "$GATE_SELECT_LEDGER" ] || printf 'ts\ttree\tstep\tsecs\tkept\ttotal\tdiffer_c\tdiffer_js\ttouched\n' >"$GATE_SELECT_LEDGER"
+  select_ledger_fmt "$(date '+%F %T')" "$(basename "$TOP")" "$@" >>"$GATE_SELECT_LEDGER"
 }
 build_ctl() {
   local sha=$1 key ctl_dir ctl
@@ -103,12 +111,13 @@ tier_touched() {
 }
 
 tier_select() {
-  local f dir deps emits="" t0=$SECONDS n=0
+  local f dir deps emits="" t0=$SECONDS n=0 all
+  all=$(set -- $TIERS; printf '%s' "$#")
   if awk -F'\t' '{ print $2 }' "$OUT/why" | grep -Eq "$SELECT_BLIND"; then
-    say "tier-select: blind paths in the diff, whole"; return 1
+    say "tier-select: blind paths in the diff, whole"; select_ledger tier-select 0 "$all" "$all" "" "" ""; return 1
   fi
   if awk -F'\t' '{ print $2 }' "$OUT/why" | compiler_changed; then
-    say "tier-select: the compiler changed, whole"; return 1
+    say "tier-select: the compiler changed, whole"; select_ledger tier-select 0 "$all" "$all" "" "" ""; return 1
   fi
   rm -rf "$OUT/tier"; mkdir -p "$OUT/tier"
   for f in $TIERS; do
@@ -124,6 +133,7 @@ tier_select() {
   done >"$OUT/tier/keep"
   say "tier-select: $(grep -c . "$OUT/tier/keep" | tr -d ' ')/$n tiers compile a changed path, $(fmt_secs $((SECONDS - t0)))"
   ledger tier-select $((SECONDS - t0)) 0 0 0 0 0 "${ADMIT_WAITED:-0}"
+  select_ledger tier-select "$((SECONDS - t0))" "$(grep -c . "$OUT/tier/keep" | tr -d ' ')" "$n" "" "" ""
   return 0
 }
 
@@ -245,6 +255,7 @@ case "$(uname -s)" in
 esac
 EMIT="$OUT/emit"
 GATE_LEDGER=${GATE_LEDGER:-$HOME/.metascript/gate.tsv}
+GATE_SELECT_LEDGER=${GATE_SELECT_LEDGER:-$HOME/.metascript/gate-select.tsv}
 
 reds_of() {
   local lane=$1 log=$2 rc=$3
@@ -423,6 +434,13 @@ CASES
   got=$(ledger_fmt "2026-09-26 21:00:00" recompiler suite 553 0 2 2 0 0 30 | tr '\t' '|')
   want='2026-09-26 21:00:00|recompiler|suite|553|0|2|2|0|0|30'
   [ "$got" = "$want" ] || { printf 'FAIL ledger fmt: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  local keep_sl=${GATE_SELECT_LEDGER:-}; GATE_SELECT_LEDGER=$(mktemp); : >"$GATE_SELECT_LEDGER"
+  select_ledger tier-select 18 2 8 "" "" ""
+  select_ledger select 540 14 442 2 0 12
+  got=$(cut -f3- "$GATE_SELECT_LEDGER" | tr '\t' '|' | paste -sd'#' -)
+  want='step|secs|kept|total|differ_c|differ_js|touched#tier-select|18|2|8|||#select|540|14|442|2|0|12'
+  [ "$got" = "$want" ] || { printf 'FAIL select ledger: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
+  rm -f "$GATE_SELECT_LEDGER"; GATE_SELECT_LEDGER=$keep_sl
   if ! printf 'src/checker/a.ms\n' | compiler_changed; then printf 'FAIL compiler changed: checker\n'; bad=1; fi
   if printf 'src/test/c/x.ms\ndocs/a.md\n' | compiler_changed; then printf 'FAIL compiler changed: tests only\n'; bad=1; fi
   local progs; progs=$(mktemp -d)
@@ -732,7 +750,10 @@ emit_control() {
   awk -v dir="$dir" '{ f = dir "/" $1 ".sig"; if ((getline l < f) > 0) print l; close(f) }' "$EMIT/programs" | sort >"$EMIT/ctl.sig"
 }
 
-select_whole() { select=0; say "gate: select gave up, no narrowing for $select_label ($1)"; }
+select_whole() {
+  select=0; say "gate: select gave up, no narrowing for $select_label ($1)"
+  select_ledger select-whole "$((SECONDS - ${t0:-$SECONDS}))" "" "" "" "" ""
+}
 
 select_programs() {
   local sha key ctl_dir ctl t0=$SECONDS n_all line
@@ -763,6 +784,8 @@ select_programs() {
   line="gate: select $(fmt_secs $((SECONDS - t0))) · $n_all programs · $(grep -c . "$EMIT/differ.c" | tr -d ' ') differ in C · $(grep -c . "$EMIT/differ.js" | tr -d ' ') in JS · $(grep -c . "$EMIT/touched" | tr -d ' ') touched"
   [ -s "$EMIT/only.corpus" ] || line="$line — byte-neutral for the corpus; if this is a fix, its repro belongs in corpus/programs"
   say "$line"
+  select_ledger select "$((SECONDS - t0))" "$(grep -c . "$EMIT/only.corpus" | tr -d ' ')" "$n_all" \
+    "$(grep -c . "$EMIT/differ.c" | tr -d ' ')" "$(grep -c . "$EMIT/differ.js" | tr -d ' ')" "$(grep -c . "$EMIT/touched" | tr -d ' ')"
   selected=1
 }
 
