@@ -13,6 +13,7 @@
     "762-bitSetMacro [esm]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [js]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
     "762-bitSetMacro [orc]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
+    "767-optionalRefTruthiness [raiser]": {"since":"629cd956","note":"red on main 39c2553d: the Raiser VM prints 'str none none' where C and JS print 'str x none' (an optional string field read as absent); the raiser lane never ran when 41a803c9 landed it; recorded 2026-09-27"},
     "773-bitSetAlgebra [esm]": {"since":"52ae61ea","note":"runs but stdout misses '3,1,1,2,true,true,true,false|3,1,1,2,true,true…'; measured 2026-09-21"},
     "775-bitSetIterate [esm]": {"since":"52ae61ea","note":"runs but stdout misses 'A,C|A,C|W3,W39||X5,X70,X99||{A, C}|{}|{X5, X70…'; measured 2026-09-21"}
   },
