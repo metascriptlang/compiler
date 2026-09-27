@@ -77,6 +77,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.Conv => "Conv",
 		RaiserOpcode.CallHost => "CallHost",
 		RaiserOpcode.IsKind => "IsKind",
+		RaiserOpcode.Trap => "Trap",
 		RaiserOpcode.Yield => "Yield",
 		RaiserOpcode.Spawn => "Spawn",
 		RaiserOpcode.Await => "Await",
