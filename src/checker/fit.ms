@@ -11,6 +11,7 @@ import { createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, 
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedIntegerConstant } from "./constFold";
+import { int64ToDecimal } from "../utils/string";
 
 // ===== Operator Inference =====
 
@@ -688,20 +689,32 @@ export function checkNegatedIntLiteral(ctx: CheckerContext, lit: Node, target: T
 	lit.nodeType = target;
 }
 
+function constIntegerOf(expr: Node): Node {
+	const none = null as unknown as Node;
+	const folded = constantLiteralOf(expr, 0);
+	if (folded == null || !isNodeIntLit(folded)) return none;
+	const value = (folded.data as NumberLiteralData).intVal;
+	if (value < 0 && folded.nodeType != null && isUnsignedIntegerType(folded.nodeType)) return none;
+	return folded;
+}
+
 export function reportConstIndexBound(ctx: CheckerContext, arrType: Type, index: Node, node: Node): void {
 	if (arrType.kind != TypeKind.SizedArray) return;
-	let lit = index;
-	let negated = false;
-	if (lit.kind == NodeKind.UnaryExpr && (lit.data as UnaryExprData).unaryOp == "-") {
-		lit = (lit.data as UnaryExprData).operand;
-		negated = true;
-	}
-	if (!isNodeIntLit(lit)) return;
-	const mag = (lit.data as NumberLiteralData).value;
-	const v = negated ? 0 - mag : mag;
-	if (v >= 0 && v < arrType.typeValue) return;
+	const folded = constIntegerOf(index);
+	if (folded == null) return;
+	const v = (folded.data as NumberLiteralData).intVal;
+	if (v >= 0 && v < (arrType.typeValue as int64)) return;
 	const spelled = typeDisplayName(arrType.typeReturn) + "[" + arrType.typeValue + "]";
-	addError(ctx, "index " + v + " out of bounds for '" + spelled + "' (0.." + (arrType.typeValue - 1) + ")", node.location.line, node.location.column);
+	addError(ctx, "index " + int64ToDecimal(v) + " out of bounds for '" + spelled + "' (0.." + (arrType.typeValue - 1) + ")", node.location.line, node.location.column);
+}
+
+export function reportConstCast(ctx: CheckerContext, expr: Node, target: Type): void {
+	if (!isIntegerType(target) || isUnsignedIntegerType(target)) return;
+	const folded = constIntegerOf(expr);
+	if (folded == null) return;
+	const value = (folded.data as NumberLiteralData).intVal;
+	if (foldedIntFits(value, target)) return;
+	addError(ctx, "cannot convert " + int64ToDecimal(value) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);
 }
 
 // ===== Runtime Converters =====
