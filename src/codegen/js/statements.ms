@@ -309,6 +309,13 @@ export function emitSwitchCase(gen: JSGenerator, node: Node): void {
 export function emitThrowStmt(gen: JSGenerator, node: Node): void {
 	const d = node.data as ThrowStmtData;
 	emitIndent(gen);
+	const argType = d.throwArg.nodeType;
+	if (argType != null && argType.kind == TypeKind.String) {
+		emit(gen, "throw new Error(");
+		emitNode(gen, d.throwArg);
+		emit(gen, ");\n");
+		return;
+	}
 	emit(gen, "throw ");
 	emitNode(gen, d.throwArg);
 	emit(gen, ";\n");
