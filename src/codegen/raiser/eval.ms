@@ -535,6 +535,29 @@ test "engine: a predicate returning a not-null comparison yields a boolean" {
 	assert ctx.output == "true false\n";
 }
 
+test "engine: typeof over a nullable union names the variant the value holds" {
+	const ctx = evalOrcVM("function kindOf(value: float32 | string | null): string { return typeof value; }"
+		+ " function swapped(value: string | float32 | null): string { return typeof value; }"
+		+ " console.log(`${kindOf('x')} ${kindOf(2.5)} ${kindOf(null)} ${swapped('x')} ${swapped(2.5)} ${swapped(null)}`);");
+	assert ctx.error == "";
+	assert ctx.output == "string number object string number object\n";
+}
+
+test "engine: a typeof guard selects the branch of the variant held" {
+	const ctx = evalOrcVM("function show(value: int32 | string | boolean): string {"
+		+ " if (typeof value === 'string') return 'text'; if (typeof value === 'boolean') return 'flag'; return 'count'; }"
+		+ " console.log(`${show('50')} ${show(3)} ${show(true)}`);");
+	assert ctx.error == "";
+	assert ctx.output == "text count flag\n";
+}
+
+test "engine: typeof of a single-type operand is its static tag" {
+	const ctx = evalOrcVM("const n: int32 = 4; const s = 'a' + 'b'; const b = n > 2;"
+		+ " console.log(`${typeof n} ${typeof s} ${typeof b}`);");
+	assert ctx.error == "";
+	assert ctx.output == "number string boolean\n";
+}
+
 test "orc: correct result + no error on object program" {
 	const vm = evalOrcVM("function mk(): { x: number } { return { x: 7 }; } const o = mk(); return o.x;");
 	assert vm.error == "";

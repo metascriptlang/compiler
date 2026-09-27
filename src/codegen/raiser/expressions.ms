@@ -16,7 +16,7 @@ import { RaiserOpcode, RaiserConvClass, raiserABC } from "../../raiser/bytecode"
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
-import { getProperty, getElementType, unwrapRef } from "../../checker/types";
+import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
@@ -737,8 +737,72 @@ function emitLogicalNot(s: RaiserCompState, dest: int32, srcReg: int32): void {
 	emitLoadConst(s, dest, raiserBool(false));
 }
 
+function typeofVariants(t: Type | null): Type[] {
+	if (t == null) return [];
+	if (isMaybeType(t) && t.typeReturn != null) {
+		const variants = typeofVariants(t.typeReturn);
+		variants.push(nullType());
+		return variants;
+	}
+	if (isTagCarriedUnion(t)) return t.typeChildren.slice(0);
+	return [t];
+}
+
+function typeofValueKinds(variant: Type, tag: string): int32[] {
+	if (variant.kind == TypeKind.Null) return [RaiserValueKind.Nil as int32];
+	return match (tag) {
+		"number" => [RaiserValueKind.Int as int32, RaiserValueKind.Float as int32],
+		"string" => [RaiserValueKind.String as int32],
+		"boolean" => [RaiserValueKind.Bool as int32],
+		"function" => [RaiserValueKind.Int as int32, RaiserValueKind.Object as int32],
+		"object" => [RaiserValueKind.Object as int32, RaiserValueKind.Array as int32, RaiserValueKind.Future as int32],
+		_ => [],
+	};
+}
+
+function compileTypeof(s: RaiserCompState, operand: Node): int32 {
+	const valReg = compileExpr(s, operand);
+	const variants = typeofVariants(operand.nodeType);
+	const kinds: int32[] = [];
+	const tags: string[] = [];
+	for (const variant of variants) {
+		const tag = typeofTagOf(variant);
+		const variantKinds = typeofValueKinds(variant, tag);
+		if (variantKinds.length == 0 && variants.length > 1) {
+			const msg = `cannot evaluate typeof over a union with a '${tag}' variant at comptime: no Raiser value kind carries it`;
+			queueRaiserCompileError(msg, operand.location.line, operand.location.column);
+			return emitTrapNil(s, msg);
+		}
+		for (const kind of variantKinds) {
+			const at = kinds.indexOf(kind);
+			if (at < 0) {
+				kinds.push(kind);
+				tags.push(tag);
+			} else if (tags[at] != tag) {
+				const msg = `cannot evaluate typeof at comptime: '${tags[at]}' and '${tag}' variants share Raiser value kind ${kind}`;
+				queueRaiserCompileError(msg, operand.location.line, operand.location.column);
+				return emitTrapNil(s, msg);
+			}
+		}
+	}
+	const dest = allocReg(s);
+	const fallback = tags.length > 0 ? tags[tags.length - 1] : typeofTagOf(operand.nodeType);
+	emitLoadConst(s, dest, raiserString(fallback));
+	const zeroReg = allocReg(s);
+	const isKind = allocReg(s);
+	emitLoadConst(s, zeroReg, raiserInt(0));
+	for (let i = 0; i < kinds.length; i += 1) {
+		if (tags[i] == fallback) continue;
+		emitInst(s, raiserABC(RaiserOpcode.IsKind, isKind, valReg, kinds[i]));
+		emitInst(s, raiserABC(RaiserOpcode.BeqI64, isKind, zeroReg, 1));
+		emitLoadConst(s, dest, raiserString(tags[i]));
+	}
+	return dest;
+}
+
 function compileUnaryExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as UnaryExprData;
+	if (d.unaryOp == "typeof") return compileTypeof(s, d.operand);
 	const srcReg = compileExpr(s, d.operand);
 	const dest = allocReg(s);
 
