@@ -10,7 +10,6 @@ import { InitTracker, createInitTracker } from "./initTracker";
 import { AffineTracker, createAffineTracker } from "./spawnAffinity";
 import { mangle } from "../codegen/c/names";
 
-
 // ===== Export Registry (cross-module type propagation) =====
 // Lives only during checkModuleGraph execution — NOT on Module/ModuleGraph (DRC constraint).
 // Reference implementation equivalent: per-module public symbol table.
@@ -994,12 +993,6 @@ export function extractGenericParamDecls(flags: string): string[] {
 		}
 	}
 	return result;
-}
-
-export function extractGenericParamNames(flags: string): string[] {
-	const names: string[] = [];
-	for (const param of extractGenericNames(flags)) names.push(splitTopLevel(param, ":")[0].trim());
-	return names;
 }
 
 export function stripGenFlag(flags: string): string {
