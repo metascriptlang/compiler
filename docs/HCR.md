@@ -36,7 +36,7 @@ backend and DRC/ORC runtime.
 | Full transactional current/old/candidate module registry | Windows x64 (`LoadLibrary`) and Linux x64 (`dlopen`): `std/hcr` in the core image discovers, copy-loads and reloads module images, stages tables and commits or rolls them back, guarded by `src/test/hcr/run.ms` (`hcrEngine`); macOS never run |
 | `@beforeReload` / `@afterReload` lifecycle handlers | Windows x64 and Linux x64, guarded by `hcrEngine`: leaf-to-root, before on the old generation, after on the new one; a throwing after-handler rolls the transaction back |
 | TypeInfo across reloads | Windows x64 and Linux x64, guarded by `hcrEngine`: one TypeInfo per class for the process, restored when a reload rolls back; a changed class, interface or struct layout answers `RestartRequired` |
-| Watch build (`msc build --hcr --watch`) | Windows x64 (`ReadDirectoryChangesW`) and Linux x64 (inotify): rebuilds after each source save through a kept build session, guarded by `src/test/hcr/run.ms` (`hcrWatchWarm`: the C of a warm build equals a cold build's at every step of a replayed edit sequence; the inputs it does not cover are listed under "Watch builds (S6)"). macOS has no file-watch backend: `std/fs/watch` aborts with `file watching has no backend for this platform yet` |
+| Watch build (`msc build --hcr --watch`) | Windows x64 (`ReadDirectoryChangesW`) and Linux x64 (inotify): rebuilds after each source save through a kept build session, guarded by `src/test/hcr/run.ms` (`hcrWatchWarm`: the C of a warm build equals a cold build's at every step of a replayed edit sequence, including constructor defaults, removed overrides and generic hook instances). macOS has no file-watch backend: `std/fs/watch` aborts with `file watching has no backend for this platform yet` |
 | `msc run app.ms --hcr` | Windows x64 and Linux x64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
 | iOS and automated deploy loops | Not implemented |
 | Neon Fast Refresh integration | Contract defined here; implementation belongs to the Neon repo |
@@ -601,19 +601,27 @@ writes precede the build's read. `hcrWatchWarm` replays an empty `logic.ms` betw
 pin that a failed module load leaves the kept session warm; it goes red when a failed load drops
 the kept TransAm db.
 
-A warm build still reuses per-build checker registries whose keys stay the same across builds.
-Measured on tree `565df01d46c8` with `--watch-replay` and `--emit=c`, each diffed against a cold
-`--emit=c` of the same sources:
+A warm build keeps the checker's per-build registries, which are not reset between builds. A
+rechecked module gets new symbols, so a registry keyed by symbol identity serves its new entries,
+while one keyed by name served the previous check's entry. This is the split the reference keeps
+between `attachedOps` (keyed by type identity) and `loadedOps` (keyed by a structural key and
+replaced on re-registration, `setAttachedOp` in `compiler/modulegraphs.nim`). The instance hooks of
+a generic class were the last registry keyed by name: the instances already scanned are now kept
+per class symbol, and the entry for an instance name records the class symbol that produced it and
+is dropped when a new generation of that class scans it. Warm C diffed against a cold `--emit=c` of
+the same sources, one edit in a module-local class:
 
-| Edit in a module-local class | Warm C | Cold C |
-|---|---|---|
-| constructor default `4` → `40` (plain and generic class) | passes `4` | passes `40` |
-| `area()` override removed from `Circle` | still dispatches to `Circle_area` | no `Circle` branch |
-| body of a generic extension `onDestroy<T>` | equal to cold | — |
+| Edit | `b899f456` | main `91dbf527` (tree `04c852acc7fc`) | tree `6f81673a0003` |
+|---|---|---|---|
+| constructor default `4` → `40` | warm passes `4` | equal | equal |
+| `area()` override removed from `Circle` | still dispatched | equal | equal |
+| any edit in a module with a generic extension `onDestroy<T>` | hook instance missing | missing | equal |
 
-The third row was reported to fail the link (`call to undeclared function 'Bag_onDestroy_…'`) with
-the compiler of `b899f456`; it did not reproduce on this tree. `hcrWatchWarm` has no step for these
-inputs.
+The missing hook instance also showed on a rebuild from scratch, because
+`resetInstantiationState` did not clear the hook tables; it does now. `hcrWatchWarm` replays these
+edits through `box.ms` (`boxHookBody` … `boxNoHook`, including a removed hook and two edits in a
+row); on the compiler of `91dbf527` it fails at the first step that rebuilds from scratch
+(`logicMap.ms`), and with the `box` steps moved first, at `boxHookBody.ms`.
 
 Not verified: a live watch on macOS (no backend), a project with import cycles, and edits to
 `build.ms` during a watch (it is not re-read).
