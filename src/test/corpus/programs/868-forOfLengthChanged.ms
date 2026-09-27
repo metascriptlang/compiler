@@ -1,6 +1,6 @@
-// @stdout: pop raised after 1, | push raised after 1, | last raised after 1,2,3, | continue raised after 1, | break finished 1, | rebind raised after 1, | same-length rebind finished 1,8,9, | field raised after 1, | vec raised after 1,
+// @stdout: pop raised after 1, | push raised after 1, | last raised after 1,2,3, | continue raised after 1, | break finished 1, | rebind finished 1,2,3, | same-length rebind finished 1,2,3, | field raised after 1, | vec raised after 1,
 // @xfail(raiser): the Raiser VM runs for-of itself, with no length check; pop() fails there first with 'ArraySetLen expected an integer length, got kind Float'
-// note: for-of over an array checks the length before each next element and raises when the body changed it, as Nim's items does for seq. The loop used to fix the length once and then read past the end (C: index error, JS: undefined) or skip the pushed elements. A rebinding of the iterated variable is read through, as Nim's items reads a symbol argument.
+// note: for-of over an array checks the length after each element and raises when the body changed it, as Nim's items does for seq. The loop used to fix the length once and then read past the end (C: index error, JS: undefined) or skip the pushed elements. Rebinding the iterated T[] variable leaves the loop on the array it started, as TypeScript's for-of holds it (NIM-REF TR-26); the loop used to read through the rebinding and raise, or mix the two arrays when their lengths matched (1,8,9).
 
 class Bag { items: int32[]; constructor() { this.items = [1, 2, 3]; } }
 
