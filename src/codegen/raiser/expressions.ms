@@ -596,11 +596,9 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		const dest = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.IsNil, dest, valReg, 0));
 		if (op == "===" || op == "==") return dest;
-		// `!== null` → bool XOR 1 negates without a separate Not opcode.
-		const oneReg = allocReg(s);
-		emitLoadConst(s, oneReg, raiserInt(1));
-		emitInst(s, raiserABC(RaiserOpcode.BitXor, dest, dest, oneReg));
-		return dest;
+		const negated = allocReg(s);
+		emitLogicalNot(s, negated, dest);
+		return negated;
 	}
 
 	// String comparison: == / != / === / !== where either operand is a string
@@ -718,6 +716,14 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 
 // --- Unary ---
 
+function emitLogicalNot(s: RaiserCompState, dest: int32, srcReg: int32): void {
+	const zeroReg = allocReg(s);
+	emitLoadConst(s, zeroReg, raiserInt(0));
+	emitLoadConst(s, dest, raiserBool(true));
+	emitInst(s, raiserABC(RaiserOpcode.BeqI64, srcReg, zeroReg, 1));
+	emitLoadConst(s, dest, raiserBool(false));
+}
+
 function compileUnaryExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as UnaryExprData;
 	const srcReg = compileExpr(s, d.operand);
@@ -734,12 +740,7 @@ function compileUnaryExpr(s: RaiserCompState, node: Node): int32 {
 		const bits = intBandBits(node.nodeType);
 		if (bits > 0 && isUnsignedBand(node.nodeType)) emitInst(s, raiserABC(RaiserOpcode.NarrowU, dest, bits, 0));
 	} else if (d.unaryOp == "!") {
-		// Logical NOT: result = (src == 0) ? true : false
-		const zeroReg = allocReg(s);
-		emitLoadConst(s, zeroReg, raiserInt(0));
-		emitLoadConst(s, dest, raiserBool(true));
-		emitInst(s, raiserABC(RaiserOpcode.BeqI64, srcReg, zeroReg, 1));
-		emitLoadConst(s, dest, raiserBool(false));
+		emitLogicalNot(s, dest, srcReg);
 	} else {
 		emitInst(s, raiserABC(RaiserOpcode.Move, dest, srcReg, 0));
 	}

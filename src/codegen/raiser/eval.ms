@@ -497,6 +497,21 @@ test "engine: shift right on uint32 is logical" {
 	assert r.lastResult.intVal == 1;
 }
 
+test "engine: a not-null comparison yields a boolean" {
+	const ctx = evalOrcVM("class Box { n: int32 = 1; } const item: Box | null = new Box(); const none: Box | null = null;"
+		+ " const stored: boolean = item !== null; console.log(`${item !== null} ${none != null} ${stored}`);");
+	assert ctx.error == "";
+	assert ctx.output == "true false true\n";
+}
+
+test "engine: a predicate returning a not-null comparison yields a boolean" {
+	const ctx = evalOrcVM("class Box { n: int32 = 1; } function isBox(value: unknown): value is Box { return value !== null; }"
+		+ " function present(value: unknown): boolean { return value !== null; } const v = new Box() as unknown;"
+		+ " console.log(`${isBox(v)} ${present(null)}`);");
+	assert ctx.error == "";
+	assert ctx.output == "true false\n";
+}
+
 test "orc: correct result + no error on object program" {
 	const vm = evalOrcVM("function mk(): { x: number } { return { x: 7 }; } const o = mk(); return o.x;");
 	assert vm.error == "";
