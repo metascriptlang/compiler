@@ -1,7 +1,7 @@
 import { Node, bindSym } from "std/meta";
-import { HcrReloadKind, HcrReloadResult } from "./types";
+import { ReloadKind, ReloadResult } from "./types";
 
-export { HcrReloadKind, HcrReloadResult, reloadKindName } from "./types";
+export { ReloadKind, ReloadResult, reloadKindName } from "./types";
 
 when (hcr) {
 	import { engineReload, engineLastReload } from "./engine";
@@ -10,15 +10,15 @@ when (hcr) {
 		return quote { ${bindSym("engineReload")}() };
 	}
 
-	export function lastReload(): HcrReloadResult {
+	export function lastReload(): ReloadResult {
 		return engineLastReload();
 	}
 } else {
 	export macro reload(): Node {
-		return quote { ${bindSym("HcrReloadKind")}.NoChange };
+		return quote { ${bindSym("ReloadKind")}.NoChange };
 	}
 
-	export function lastReload(): HcrReloadResult {
-		return { kind: HcrReloadKind.NoChange, modules: [], reason: "" };
+	export function lastReload(): ReloadResult {
+		return { kind: ReloadKind.NoChange, modules: [], reason: "" };
 	}
 }

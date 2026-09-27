@@ -1,7 +1,7 @@
 import { exit } from "../process";
 import { writeStderr } from "../io";
 import { readDir, removeAll } from "../fs";
-import { HcrReloadKind, HcrReloadResult } from "./types";
+import { ReloadKind, ReloadResult } from "./types";
 
 @include("runtime/hcrEngine.h");
 
@@ -75,11 +75,11 @@ let generation: int32 = 0;
 let coreIdentity: uint64 = 0;
 let bundleIdentity: uint64 = 0;
 let pending = false;
-let last: HcrReloadResult = { kind: HcrReloadKind.NoChange, modules: [], reason: "" };
+let last: ReloadResult = { kind: ReloadKind.NoChange, modules: [], reason: "" };
 const modules: HcrModule[] = [];
 const discovering: string[] = [];
 
-function result(kind: HcrReloadKind, names: string[], reason: string): HcrReloadResult {
+function result(kind: ReloadKind, names: string[], reason: string): ReloadResult {
 	return { kind, modules: names, reason };
 }
 
@@ -289,22 +289,22 @@ function changedType(item: HcrCandidate): string {
 	return "";
 }
 
-export function engineReload(): HcrReloadKind {
+export function engineReload(): ReloadKind {
 	last = performReload();
 	return last.kind;
 }
 
-export function engineLastReload(): HcrReloadResult {
+export function engineLastReload(): ReloadResult {
 	return last;
 }
 
-function performReload(): HcrReloadResult {
-	if (!started) return result(HcrReloadKind.Rejected, [], "the program was not started by an HCR host");
+function performReload(): ReloadResult {
+	if (!started) return result(ReloadKind.Rejected, [], "the program was not started by an HCR host");
 	const bundle = msHcrFileIdentity(bundlePath());
-	if (bundle == bundleIdentity && !pending) return result(HcrReloadKind.NoChange, [], "");
+	if (bundle == bundleIdentity && !pending) return result(ReloadKind.NoChange, [], "");
 	if (msHcrFileIdentity(corePath()) != coreIdentity) {
 		bundleIdentity = bundle;
-		return result(HcrReloadKind.RestartRequired, [], "the core image changed (runtime, standard library or toolchain)");
+		return result(ReloadKind.RestartRequired, [], "the core image changed (runtime, standard library or toolchain)");
 	}
 
 	generation += 1;
@@ -316,20 +316,20 @@ function performReload(): HcrReloadResult {
 		if (identity == module.identity) continue;
 		if (identity == module.failedIdentity) {
 			release(candidates);
-			return result(HcrReloadKind.Pending, [module.moduleId], `${module.source} is not a loadable image yet`);
+			return result(ReloadKind.Pending, [module.moduleId], `${module.source} is not a loadable image yet`);
 		}
 		const loaded = copyLoad(module.source);
 		if (loaded.failure != "") {
 			module.failedIdentity = identity;
 			pending = true;
 			release(candidates);
-			return result(HcrReloadKind.Pending, [module.moduleId], loaded.failure);
+			return result(ReloadKind.Pending, [module.moduleId], loaded.failure);
 		}
 		if (loaded.image.moduleId != module.moduleId) {
 			hcrClose(loaded.image.handle);
 			release(candidates);
 			bundleIdentity = bundle;
-			return result(HcrReloadKind.Rejected, [module.moduleId],
+			return result(ReloadKind.Rejected, [module.moduleId],
 				`${module.source} now declares module '${loaded.image.moduleId}'`);
 		}
 		candidates.push({ module, image: loaded.image, identity, isNew: false });
@@ -346,14 +346,14 @@ function performReload(): HcrReloadResult {
 				release(candidates);
 				release(added);
 				forgetAfter(known);
-				return result(HcrReloadKind.Pending, [dependency], failure);
+				return result(ReloadKind.Pending, [dependency], failure);
 			}
 		}
 	}
 	for (const item of added) candidates.push(item);
 	if (candidates.length == 0) {
 		bundleIdentity = bundle;
-		return result(HcrReloadKind.NoChange, [], "");
+		return result(ReloadKind.NoChange, [], "");
 	}
 
 	const mismatch = keyMismatch(candidates);
@@ -361,7 +361,7 @@ function performReload(): HcrReloadResult {
 		release(candidates);
 		forgetAfter(known);
 		bundleIdentity = bundle;
-		return result(HcrReloadKind.Rejected, [], mismatch);
+		return result(ReloadKind.Rejected, [], mismatch);
 	}
 
 	for (const item of candidates) {
@@ -370,7 +370,7 @@ function performReload(): HcrReloadResult {
 			release(candidates);
 			forgetAfter(known);
 			bundleIdentity = bundle;
-			return result(HcrReloadKind.RestartRequired, [item.module.moduleId],
+			return result(ReloadKind.RestartRequired, [item.module.moduleId],
 				`the layout of type '${changed}' in module '${item.module.moduleId}' changed`);
 		}
 	}
@@ -383,7 +383,7 @@ function performReload(): HcrReloadResult {
 			release(candidates);
 			forgetAfter(known);
 			bundleIdentity = bundle;
-			return result(HcrReloadKind.RestartRequired, [item.module.moduleId],
+			return result(ReloadKind.RestartRequired, [item.module.moduleId],
 				`the lifted state layout of module '${item.module.moduleId}' changed`);
 		}
 		states.push(state);
@@ -394,7 +394,7 @@ function performReload(): HcrReloadResult {
 		release(candidates);
 		forgetAfter(known);
 		bundleIdentity = bundle;
-		return result(HcrReloadKind.Rejected, [quiesceFailed], `the before-reload handler of module '${quiesceFailed}' threw`);
+		return result(ReloadKind.Rejected, [quiesceFailed], `the before-reload handler of module '${quiesceFailed}' threw`);
 	}
 
 	msHcrStageBegin();
@@ -423,7 +423,7 @@ function performReload(): HcrReloadResult {
 	bundleIdentity = bundle;
 
 	const resumeFailed = failingHandler("HcrAfterReload000", modules.length);
-	if (resumeFailed == "") return result(HcrReloadKind.Reloaded, names, "");
+	if (resumeFailed == "") return result(ReloadKind.Reloaded, names, "");
 	for (let i = 0; i < candidates.length; i += 1) {
 		const item = candidates[i];
 		if (item.isNew) continue;
@@ -432,6 +432,6 @@ function performReload(): HcrReloadResult {
 		item.module.image = previousImages[i];
 		item.module.identity = previousIdentities[i];
 	}
-	return result(HcrReloadKind.Rejected, [resumeFailed],
+	return result(ReloadKind.Rejected, [resumeFailed],
 		`the after-reload handler of module '${resumeFailed}' threw; rolled back ${names.join(",")}`);
 }

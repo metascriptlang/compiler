@@ -1,4 +1,4 @@
-export enum HcrReloadKind {
+export enum ReloadKind {
 	NoChange,
 	Reloaded,
 	Pending,
@@ -6,18 +6,18 @@ export enum HcrReloadKind {
 	RestartRequired,
 }
 
-export struct HcrReloadResult {
-	kind: HcrReloadKind;
+export struct ReloadResult {
+	kind: ReloadKind;
 	modules: string[];
 	reason: string;
 }
 
-export function reloadKindName(kind: HcrReloadKind): string {
+export function reloadKindName(kind: ReloadKind): string {
 	return match (kind) {
-		HcrReloadKind.NoChange => "no change",
-		HcrReloadKind.Reloaded => "reloaded",
-		HcrReloadKind.Pending => "pending",
-		HcrReloadKind.Rejected => "rejected",
-		HcrReloadKind.RestartRequired => "restart required",
+		ReloadKind.NoChange => "no change",
+		ReloadKind.Reloaded => "reloaded",
+		ReloadKind.Pending => "pending",
+		ReloadKind.Rejected => "rejected",
+		ReloadKind.RestartRequired => "restart required",
 	};
 }

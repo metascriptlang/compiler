@@ -1,7 +1,7 @@
-import { reload, lastReload, reloadKindName, HcrReloadKind } from "std/hcr";
+import { reload, lastReload, reloadKindName, ReloadKind } from "std/hcr";
 
 for (let i = 0; i < 3; i += 1) {
 	const kind = reload();
-	if (kind != HcrReloadKind.NoChange) console.log(`unexpected ${reloadKindName(kind)} ${lastReload().reason}`);
+	if (kind != ReloadKind.NoChange) console.log(`unexpected ${reloadKindName(kind)} ${lastReload().reason}`);
 }
 console.log(`reload without --hcr: ${reloadKindName(reload())}`);
