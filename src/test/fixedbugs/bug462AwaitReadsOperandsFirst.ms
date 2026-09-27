@@ -122,6 +122,18 @@ async function b462Computed(): Promise<string> {
 	return `${sum} ${b462Arr[1]} ${pick} ${neg} ${own}`;
 }
 
+function b462Take(wide: int64, value: int32): string {
+	return `${wide}+${value}`;
+}
+
+async function b462Widened(): Promise<string> {
+	b462X = 1;
+	const cast = (b462X as int64) + await b462Clobber();
+	b462X = 1;
+	const arg = b462Take(b462X, await b462Clobber());
+	return `${cast} ${arg}`;
+}
+
 test "bug462: a read left of an await is read before it" {
 	assert await b462Reads() == "6 6 15 1005 s5 105";
 }
@@ -136,4 +148,8 @@ test "bug462: a value struct and an array stay in place" {
 
 test "bug462: a computed operand, an index and a receiver's field left of an await are read before it" {
 	assert await b462Computed() == "7 5 6 4 4";
+}
+
+test "bug462: a read under a cast or an implicit widening left of an await is read before it" {
+	assert await b462Widened() == "6 1+5";
 }
