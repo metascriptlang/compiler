@@ -301,6 +301,16 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			}
 			const reg = resolveLocal(s, d.name);
 			if (reg >= 0) return reg;
+			if (node.resolvedSym != null && node.resolvedSym.builtinKind == "NaN") {
+				const nanReg = allocReg(s);
+				emitLoadConst(s, nanReg, raiserFloat(NaN));
+				return nanReg;
+			}
+			if (node.resolvedSym != null && node.resolvedSym.builtinKind == "Infinity") {
+				const infinityReg = allocReg(s);
+				emitLoadConst(s, infinityReg, raiserFloat(Infinity));
+				return infinityReg;
+			}
 			// The checker rewrites `Enum.Member` into an Identifier "Enum_Member".
 			// Raiser emits no enum declaration, so that name has no binding —
 			// inline the ordinal from the enum table. Key by the symbol's enum name
