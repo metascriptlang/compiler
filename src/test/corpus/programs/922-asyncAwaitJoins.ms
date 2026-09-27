@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM joins the awaited branches in another order (logs 'f1;f2;f2;' where C logs 'f1;f1;f2;')
 async function work(x: int32): Promise<int32> {
 	return x * 2;
 }

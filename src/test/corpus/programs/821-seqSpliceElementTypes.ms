@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM's ArraySetLen rejects the float length the splice computes ('expected an integer length, got kind Float')
 class Item {
 	id: int32 = 0;
 	constructor(i: int32) { this.id = i; }

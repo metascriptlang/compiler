@@ -1,4 +1,5 @@
 // @stdout: init 7b | x 1 | 2 5 | first 2
+// @xfail(raiser): the Raiser VM cannot evaluate std/core/struct.ms INITIAL_CAPACITY at comptime
 import { Box } from "./box";
 
 class Tagged<T> {

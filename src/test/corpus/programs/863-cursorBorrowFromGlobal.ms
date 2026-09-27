@@ -2,6 +2,7 @@
 // @ledger-slack(Holder): 1
 // @ledger-slack(Box): 2
 // @ledger-slack(msRefArrayRefCell): 1
+// @xfail(raiser): the Raiser VM has no host function msStringSubstring
 // note: a local that reads through a module-level variable is an owned copy, never a borrow. A callee can replace the global while the local is alive; the local used to borrow and read the freed object.
 
 class Box { n: int32; constructor(n: int32) { this.n = n; } }

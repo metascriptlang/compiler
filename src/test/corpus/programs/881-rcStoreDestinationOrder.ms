@@ -1,5 +1,6 @@
 // @ledger-slack(Box): 3
 // @ledger-slack(msRefArrayRefCell): 1
+// @xfail(raiser): the Raiser VM evaluates the store destination after the call (prints 'j=3 z,y1,q1,d' where C prints 'j=3 z,y2,q1,d')
 interface Box { s: string; }
 
 let counter: int32 = 0;

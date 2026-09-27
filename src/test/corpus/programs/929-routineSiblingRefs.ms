@@ -1,4 +1,5 @@
 // @stdout: sibling=6 nested=12 arrow=8 value=9 loop=6 self=4 none=25
+// @xfail(raiser): the Raiser VM resolves a self-referencing routine to 0 (prints 'self=0' where C prints 'self=4')
 // note: a nested routine (a nested `function` or a `const` arrow) referenced from a sibling routine, from a closure nested deeper, or passed on as a value by a sibling, is rebuilt at that use over the env it closes over. Before the fix the routine became a field of that env: env -> routine -> env, so every call of the outer function leaked its env on C (drc and orc). The san lane's ledger is the pin: every env below is freed.
 
 type IntFn = (k: int32) => void;

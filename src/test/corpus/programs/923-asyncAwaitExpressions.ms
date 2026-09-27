@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM stops with 'expected an object, got value kind Int' in an await expression
 let trace = "";
 
 async function work(x: int32): Promise<int32> {

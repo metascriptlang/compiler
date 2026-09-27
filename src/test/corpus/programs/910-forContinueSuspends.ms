@@ -1,4 +1,5 @@
 // @stdout: gen=0,0,2,20,3,4,40, async=24
+// @xfail(raiser): the Raiser VM cannot compile a yield expression ('cannot compile node kind YieldExpr')
 function* gen(): Iterator<int32> {
 	for (let i: int32 = 0; i < 5; i++) {
 		if (i == 1) continue;

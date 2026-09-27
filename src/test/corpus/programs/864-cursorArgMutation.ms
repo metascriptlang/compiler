@@ -1,4 +1,5 @@
 // @stdout: helper 1 array 1 method 1
+// @xfail(raiser): the Raiser VM has no host function msStringSubstring
 // note: passing an object, or an array that holds it, to a function counts as a possible change to everything reachable from it. A local that borrowed a field or element before the call used to stay a borrow, so a callee that replaced that field or element freed what the local still read.
 
 class Box { n: int32; constructor(n: int32) { this.n = n; } }

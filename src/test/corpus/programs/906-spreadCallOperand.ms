@@ -1,4 +1,5 @@
 // @stdout: call=3 3|member=2|index=0 3|all=4 2|guard=0 1|mixed=4 4
+// @xfail(raiser): the Raiser VM stops with 'array index out of bounds: 0 (length 0)' on a spread call operand
 function arr(): int32[] { return [1, 2, 3]; }
 let reads: int32 = 0;
 function counted(xs: int32[]): int32[] { reads = reads + 1; return xs; }

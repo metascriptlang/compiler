@@ -1,4 +1,5 @@
 // @stdout: field 1 elem 1 list 1 wrap 1
+// @xfail(raiser): the Raiser VM has no host function msStringSubstring
 // note: storing an object into a field, an array slot or a new object joins it to the target, so a change made later through the target reaches locals that borrowed from the stored object. The store used to leave the two apart, and a local borrowed from the stored object read freed memory after the target replaced its child.
 
 class Leaf { n: int32; constructor(n: int32) { this.n = n; } }

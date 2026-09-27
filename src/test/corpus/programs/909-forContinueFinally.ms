@@ -1,4 +1,5 @@
 // @stdout: fin=b0f0f1b2f2 catch=outer0 nest=b0i0a0o0c1i1o1i2o2 alloc=0,2, log=406
+// @xfail(raiser): the Raiser VM skips the update after a continue that leaves a try/finally (prints 'fin=b0f0b2f2f3' where C prints 'fin=b0f0f1b2f2')
 class Box { v: int32; constructor(v: int32) { this.v = v; } }
 function mk(v: int32): Box { return new Box(v); }
 

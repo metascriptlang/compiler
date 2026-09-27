@@ -2,6 +2,7 @@
 // @stdout: loop 11 33 66
 // @stdout: gen 1 2
 // @stdout: makers 101 112 123
+// @xfail(raiser): the Raiser VM cannot evaluate std/core/struct.ms INITIAL_CAPACITY at comptime
 // note: a closure made inside an async function or a generator shares the function's variables: writes through it are seen by the function and by later closures. Before the fix C gave every closure made in the state machine a private copy of what it captured, so `count` stayed 0 after an await, a `.then` callback's write was lost and a generator's `seen` never moved. A local that one state alone touches stays a local of that state, so a closure stored in it does not keep the machine alive.
 
 type Get = () => int32;

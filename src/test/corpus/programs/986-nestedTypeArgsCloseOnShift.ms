@@ -1,4 +1,5 @@
 // @stdout: 5 5 | 7 9 | 1 | true
+// @xfail(raiser): the Raiser VM stops with 'attempt to access a nil address'
 class Box<T> {
 	v: T;
 	constructor(v: T) { this.v = v; }

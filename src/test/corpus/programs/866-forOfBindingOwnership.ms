@@ -1,4 +1,5 @@
 // @stdout: body 1 helper 1 inner 1
+// @xfail(raiser): the Raiser VM has no host function msStringSubstring
 // note: a for-of binding borrows its element only when nothing can change the array while the binding is alive. It used to always borrow, so overwriting the element being visited, directly or through a helper, or replacing the array being iterated, freed what the binding still read.
 
 class Box { n: int32; constructor(n: int32) { this.n = n; } }

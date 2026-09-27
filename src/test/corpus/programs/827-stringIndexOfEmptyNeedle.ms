@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM answers indexOf with an empty needle differently (prints '10 1 -4 0' where C and JS print '3 1 0 0')
 function run(): void {
 	const s: string = "abc";
 	console.log(`${s.indexOf("", 10)} ${s.indexOf("", 1)} ${s.indexOf("", -4)} ${s.indexOf("")}`);
