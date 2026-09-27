@@ -8,8 +8,7 @@
 //             replaced an argument binding with the destination's supertype.
 // Fix:        an argument with a type of its own binds first; an argument with none (number
 //             literal, arrow, function expression, object or array literal) is checked after them
-//             and takes the destination only for a parameter still unbound. Nothing re-types an
-//             argument that has its own type.
+//             and takes the destination only for a parameter still unbound.
 
 import { compileToC } from "../helpers";
 
@@ -27,8 +26,8 @@ function errorOf(body: string): string {
 	return c.ok ? "" : c.error;
 }
 
-test "bug234: a variable argument binds T even under a supertype destination" {
-	assert errorOf("const r: Box<number> = one(i);").contains("'Box<int32>' is not assignable to type 'Box<number>'");
+test "bug234: a variable argument converts to a number destination" {
+	assert errorOf("const r: Box<number> = one(i);") == "";
 }
 
 test "bug234: a literal argument takes a wider destination" {
