@@ -25,6 +25,7 @@ import {
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine,
 	callRaiserStmtCompiler, emitTrapNil, resolveGlobal,
 } from "./context";
+import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros } from "./valueCopy";
 
 // A CallHost the registry cannot serve would only fail at macro RUN time
 // ("Unknown host function"). The host table is loaded before bytecodegen
@@ -1253,14 +1254,30 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 		const nameIdx = addConst(s, raiserString(d.keys[i]));
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, dest, nameIdx, valReg));
 	}
+	if (d.keys.length == d.properties.length) emitOmittedFieldZeros(s, dest, node.nodeType, d.keys);
 
 	return dest;
 }
 
 // --- New ---
 
+function compileNewArray(s: RaiserCompState, node: Node, arrayType: Type): int32 {
+	const d = node.data as NewExprData;
+	const array = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.NewArray, array, 0, 0));
+	if (d.newArguments.length == 1) {
+		const count = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.Conv, count, compileExpr(s, d.newArguments[0]), RaiserConvClass.I64));
+		emitZeroFill(s, array, count, arrayType.typeReturn);
+	}
+	return array;
+}
+
 function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as NewExprData;
+
+	const arrayType = zeroArrayType(node.nodeType);
+	if (arrayType != null && d.newArguments.length <= 1) return compileNewArray(s, node, arrayType);
 
 	if (d.newCallee.kind == NodeKind.Identifier) {
 		const classId = d.newCallee.data as IdentifierData;

@@ -455,6 +455,61 @@ test "engine: array spread preserves source ownership" {
 	assert r.lastResult.intVal == 123;
 }
 
+test "engine: a class field with no initializer holds its type's zero value" {
+	const vm = evalOrcVM("struct Inner { x: int32; tag: string; }"
+		+ " class Box { n: int32; f: float64; flag: boolean; name: string; items: Vec<int32>; inner: Inner; }"
+		+ " const b = new Box();"
+		+ " console.log(`${b.n} ${b.f} ${b.flag} [${b.name}] ${b.items.length} ${b.inner.x} [${b.inner.tag}]`);");
+	assert vm.error == "";
+	assert vm.output == "0 0 false [] 0 0 []\n";
+}
+
+test "engine: new Array(n) holds n distinct zero elements" {
+	const vm = evalOrcVM("struct E { h: int64; key: string; }"
+		+ " let es: Vec<E> = new Array(3); es[2].h = 5;"
+		+ " const ns = new Array<int32>(4);"
+		+ " console.log(`${es.length} ${es[0].h} [${es[1].key}] ${es[2].h} ${ns.length} ${ns[3]}`);");
+	assert vm.error == "";
+	assert vm.output == "3 0 [] 5 4 0\n";
+}
+
+test "engine: a BitSet with no initializer holds its representation's zero in every width band" {
+	const narrow = evalOrcVM("enum Small { A, B, C, D } let s: BitSet<Small>; return s;");
+	assert narrow.error == "";
+	assert narrow.exitValue.kind == RaiserValueKind.Int;
+	assert narrow.exitValue.intVal == 0;
+	const wide = evalOrcVM("enum Wide { A, B, C, D, E, F, G, H, I } class Holder { w: BitSet<Wide>; } return new Holder().w;");
+	assert wide.error == "";
+	assert wide.exitValue.kind == RaiserValueKind.Int;
+	assert wide.exitValue.intVal == 0;
+	let members = "";
+	for (let i = 0; i < 70; i++) members = `${members}M${i}, `;
+	const huge = evalOrcVM(`enum Huge { ${members} } enum Small { A, B, C, D }`
+		+ " class Holder { s: BitSet<Small>; h: BitSet<Huge>; }"
+		+ " let h: BitSet<Huge>; h = h | Huge.M69;"
+		+ " const k = new Holder(); k.h = k.h | Huge.M3;"
+		+ " console.log(`${h.has(Huge.M69) ? 1 : 0}${h.has(Huge.M0) ? 1 : 0}${k.h.has(Huge.M3) ? 1 : 0}${k.h.has(Huge.M69) ? 1 : 0}${k.s.has(Small.A) ? 1 : 0}`);");
+	assert huge.error == "";
+	assert huge.output == "10100\n";
+}
+
+test "engine: a local and a global declared without an initializer hold their type's zero value" {
+	const vm = evalOrcVM("struct P { x: int32; } let g: int32;"
+		+ " function f(): string { let n: int32; let t: string; let v: Vec<int32>; let p: P; return `${n} [${t}] ${v.length} ${p.x}`; }"
+		+ " console.log(`${g} ${f()}`);");
+	assert vm.error == "";
+	assert vm.output == "0 0 [] 0 0\n";
+}
+
+test "engine: a struct literal that omits a field stores the field's zero value" {
+	const vm = evalOrcVM("struct Inner { x: int32; }"
+		+ " struct E { h: int64; v: int32; ok: boolean; tag: string; items: Vec<int32>; label: string | null; inner: Inner; }"
+		+ " const e: E = { v: 1 };"
+		+ " console.log(`${e.h} ${e.v} ${e.ok} [${e.tag}] ${e.items.length} ${e.label == null ? \"null\" : \"set\"} ${e.inner.x}`);");
+	assert vm.error == "";
+	assert vm.output == "0 1 false [] 0 null 0\n";
+}
+
 test "engine: shift left on int64 keeps bits past 31" {
 	const r = evalSourceFull("function shl(one: int64, n: int64): int64 { return one << n; } return shl(1, 39);");
 	assert r.lastError == "";
