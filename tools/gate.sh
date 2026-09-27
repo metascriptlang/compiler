@@ -548,7 +548,7 @@ run_test_lane() {
     suite) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite src/index.ms)" ;;
     tests)
       jobs=$(test_jobs)
-      if tier_select; then
+      if [ -z "$lanes_arg" ] && [ "$release" -eq 0 ] && [ "$record" -eq 0 ] && tier_select; then
         jobs=$(awk -v k="$OUT/tier/keep" 'BEGIN { while ((getline l < k) > 0) w[l] = 1 } w[$1] { print }' <<<"$jobs")
       else
         rm -f "$OUT/tier/keep"
