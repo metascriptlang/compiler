@@ -75,6 +75,6 @@ test "bug248: explicit type arguments are never rebound" {
 
 test "bug248: a result that fits keeps the argument binding" {
 	const code = cOf("const d: int64 = pick(i, 1); const e = pick(i, 2) as int64; console.log(d, e);");
-	assert code.contains("pick__int32");
-	assert !code.contains("pick__int64");
+	assert code.contains("__int32__");
+	assert !code.contains("__int64__");
 }

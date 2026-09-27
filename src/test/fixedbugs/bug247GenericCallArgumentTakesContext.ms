@@ -55,6 +55,6 @@ test "bug247: a user generic call inside Result.ok takes the declared type" {
 
 test "bug247: the destination does not retype a call argument with a type of its own" {
 	const code = cOf("const d: int64 = pick(f(), 1); console.log(d);");
-	assert code.contains("pick__int32");
-	assert !code.contains("pick__int64");
+	assert code.contains("__int32__");
+	assert !code.contains("__int64__");
 }

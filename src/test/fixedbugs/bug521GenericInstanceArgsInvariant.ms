@@ -23,15 +23,15 @@ test "bug521: a Box<int32> argument is refused for a Box<string> parameter" {
 }
 
 test "bug521: a Box<int32> is refused by a Box<string> declaration" {
-	assert hasError(BOX521 + "const b = new Box<int32>(5);\nconst c: Box<string> = b;\n", "Type 'Box' is not assignable to type 'Box'");
+	assert hasError(BOX521 + "const b = new Box<int32>(5);\nconst c: Box<string> = b;\n", "Type 'Box<int32>' is not assignable to type 'Box<string>'");
 }
 
 test "bug521: a Box<int32> is refused as a Box<string> return value" {
-	assert hasError(BOX521 + "function back(x: Box<int32>): Box<string> { return x; }\n", "Type 'Box' is not assignable to type 'Box'");
+	assert hasError(BOX521 + "function back(x: Box<int32>): Box<string> { return x; }\n", "Type 'Box<int32>' is not assignable to type 'Box<string>'");
 }
 
 test "bug521: a wider integer argument does not relate either" {
-	assert hasError(BOX521 + "const b = new Box<int32>(5);\nconst c: Box<int64> = b;\n", "Type 'Box' is not assignable to type 'Box'");
+	assert hasError(BOX521 + "const b = new Box<int32>(5);\nconst c: Box<int64> = b;\n", "Type 'Box<int32>' is not assignable to type 'Box<int64>'");
 }
 
 test "bug521: an overload taking another instance does not match" {
