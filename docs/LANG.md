@@ -2177,7 +2177,7 @@ extern function ok<T>(val: T): Result<T, any>;
 | `@compilerFunc` | extern function | The compiler may synthesize calls to this routine; its declaration is where they read their signature | DONE (2026-09-18) |
 | `@throws` | extern function | The routine raises by setting the runtime error flag instead of returning | DONE (2026-09-18) |
 | `@delegate` | body-less function, distinct type | Reuse the base function's implementation or expose the base's fields; see [Delegating a distinct](#delegating-a-distinct) | Verified on C and JS (2026-09-30) |
-| `@beforeReload` / `@afterReload` | module-level `(): void` function | Hot-reload lifecycle handler, run by `std/hcr` around a reload under `--hcr` (docs/HCR.md "Host runtime (S4)") | DONE on Windows x64 (2026-09-23) |
+| `@beforeReload` / `@afterReload` | module-level `(): void` function | Hot-reload lifecycle handler, run by `std/hcr` around a reload under `--hcr` ("Hot Code Reload" below) | DONE on Windows x64 and Linux x64 (`hcrEngine`, 2026-09-27) |
 | `@comptime` | block | Compile-time evaluation | PLANNED |
 | `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
 | `@inline` | function | Hint to inline function body at call site | PLANNED |
@@ -2300,6 +2300,64 @@ user has not set. `msc --help-defines` lists everything currently defined.
 > `@target(...)` and `@platform(...)` were retired 2026-08-09 in favour of `when`.
 > `@target` never gated anything (the name was accepted, the filter was never
 > written); `@platform` gated directives only. Both now raise an error pointing here.
+
+## Hot Code Reload (`--hcr`)
+
+`msc run app.ms --hcr` builds the program as one native image per module, starts it under
+the host from `std/hcr`, and on every save rebuilds the module that changed while the
+program keeps running. New code takes effect where the program calls `reload()`, once per
+pass of its main loop:
+
+```typescript
+import { reload, HcrReloadKind } from "std/hcr";
+import { tick, message } from "./logic";
+
+while (true) {
+	tick();
+	if (reload().kind == HcrReloadKind.Reloaded) console.log(message());
+	await sleepAsync(16);
+}
+```
+
+Edit the body of `message` in `logic.ms` and save: the next `reload()` answers `Reloaded`,
+and the next `message()` runs the new code. `examples/hcrApp/` is this program.
+
+| `reload().kind` | When |
+|---|---|
+| `NoChange` | no image changed since the last call |
+| `Reloaded` | the changed images are loaded, initialized and published |
+| `Pending` | an image cannot be loaded yet (the linker is still writing it); retried when it changes |
+| `Rejected` | a candidate failed, or an after-reload handler threw; the running code is unchanged |
+| `RestartRequired` | the change cannot apply to live state (below); `reason` names what changed |
+
+What a reload keeps and what it refuses:
+
+- **Module-level variables keep their values.** Their initializers ran at first load and do
+  not run again, so editing `let count = 0` to `let count = 5` leaves the live `count` alone.
+  Adding, removing or retyping a module-level variable answers `RestartRequired`.
+- **Types keep their layout.** Method bodies reload and live objects run the new methods; a
+  field added, removed or retyped in a class, interface or struct, a base class included,
+  answers `RestartRequired`. So does an edit that makes the program use a runtime or
+  standard-library routine it did not use before.
+- **New code is reached through another module.** A call into an imported module goes through
+  that module's table and sees the reload; a call inside one module stays direct. A loop
+  written in the entry module keeps running the entry module's code from the start, so
+  reloadable logic belongs in modules it imports.
+- **Two exports cannot cross images**, and are compile errors under `--hcr`: an exported
+  variable another project module reads (`HCR cannot share exported variable 'logic::LIMIT'
+  with module 'app' across module images; export a function that reads it instead`), and a
+  generic exported function (`HCR ABI cannot represent generic export 'logic::pick'`).
+- **`@beforeReload` / `@afterReload`** mark module-level `(): void` functions that run around
+  a reload, leaf module first: before-handlers on the old code, after-handlers on the new
+  code. A throwing after-handler rolls the reload back and answers `Rejected`. Callbacks
+  handed to native code or other threads are re-registered here.
+- **A program that never imports `std/hcr` has no reload engine**: `msc run --hcr` stops with
+  `HCR-HOST the core image does not export msHcrEngineStart`.
+- **Without `--hcr` none of this exists**: no tables, no lifted state, no host.
+
+Windows x64 and Linux x64 run the whole loop (`src/test/hcr/run.ms`). macOS has no
+file-watch backend yet and has never run it; iOS is not implemented. Architecture, measured
+latency and the rejected designs: [`HCR.md`](HCR.md).
 
 ## Strings and Characters
 
