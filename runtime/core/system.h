@@ -531,10 +531,10 @@ _Noreturn void msMapFatal(msString msg);
 	&((a).data[__idx]); \
 }))
 
-#define msArrayAccessUnchecked(a, i) ((a).p->data[(int32_t)(i)])
+#define msArrayAccessUnchecked(a, i) ((a).p->data[(int64_t)(i)])
 #define msRefArrayAccessUnchecked msArrayAccessUnchecked
-#define msSizedArrayAccessUnchecked(a, i, n) ((a).data[(int32_t)(i)])
-#define msSpanAccessUnchecked(a, i) ((a).data[(int32_t)(i)])
+#define msSizedArrayAccessUnchecked(a, i, n) ((a).data[(int64_t)(i)])
+#define msSpanAccessUnchecked(a, i) ((a).data[(int64_t)(i)])
 
 /* String char access — TypeScript s[i] parity (character-indexed) */
 #define msStringCharAccess(s, i) msStringCharAt((s), (i))
