@@ -894,12 +894,16 @@ function longest<T extends { length: number }>(a: T, b: T): T { ... }
 
 // Default type parameters
 type Result<T, E = Error> = { ok: true; value: T } | { ok: false; error: E };
-
-// Const generics
-class Matrix<const ROWS: int32, const COLS: int32> {
-    getTotalElements(): int32 { return ROWS * COLS; }
-}
 ```
+
+A generic parameter is always a type. A value parameter (a "const generic") is refused by the parser:
+
+```typescript
+class Matrix<const ROWS: int32, const COLS: int32> { }
+// error: const generic parameter 'ROWS' is not supported: a generic parameter is a type, pass the value as an argument
+```
+
+Pass the value as a constructor or function argument instead.
 
 **Inferring one type parameter from several arguments.** The first argument binds `T`; every
 argument that binds the same `T` is a candidate. The binding starts as the first candidate and
