@@ -388,6 +388,10 @@ function isShapedByContext(arg: Node): boolean {
 		|| isNumberLiteralArg(arg);
 }
 
+function takesContext(arg: Node): boolean {
+	return isShapedByContext(arg) || arg.kind == NodeKind.CallExpr || arg.kind == NodeKind.NewExpr;
+}
+
 function isNumberLiteralArg(arg: Node): boolean {
 	if (arg.kind == NodeKind.NumberLiteral) return true;
 	if (arg.kind != NodeKind.UnaryExpr) return false;
@@ -1139,7 +1143,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				paramExpected = _formal;
 			}
 			if (_contextBindings.names.length > 0 && hasGenericParams(paramExpected)
-				&& isShapedByContext(d.arguments[ai])) {
+				&& takesContext(d.arguments[ai])) {
 				paramExpected = instantiateGeneric(paramExpected, _contextBindings.names, _contextBindings.types);
 			}
 			// Limitation case (Phase D): if paramExpected still contains
