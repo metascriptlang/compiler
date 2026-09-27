@@ -91,3 +91,85 @@ test "E2E C: throw statement" {
 	assert c.ok;
 	assert c.value.contains("msCurrException = (msException*)(");
 }
+
+const forOfDecls = `
+struct Node { children: Vec<int32>; flag: int32; }
+struct Tree { nodes: Vec<Node>; }
+struct Deep { trees: Vec<Tree>; }
+class Box { n: int32 = 1; }
+class Holder { items: Box[] = []; }
+function boxes(): Box[] { return [new Box(), new Box()]; }
+`;
+
+function emittedBody(src: string, fn: string): string {
+	const c = compileToC(forOfDecls + src);
+	if (!c.ok) throw new Error(c.error);
+	const start = c.value.indexOf(`${fn}__`, c.value.indexOf(`${fn}__`) + 1);
+	return c.value.slice(start, c.value.indexOf("\n}\n", start));
+}
+
+test "E2E C: a for-of over a value path written through its root iterates in place" {
+	const cases: string[][] = [
+		["walk", `
+function walk(ref t: Tree, i: int32): int32 {
+	let sum: int32 = 0;
+	for (const c of t.nodes[i].children) { t.nodes[c].flag = 1; sum = sum + c; }
+	return sum;
+}
+let t: Tree = { nodes: [{ children: [1], flag: 0 }, { children: [], flag: 0 }] };
+console.log(walk(t, 0));
+`],
+		["row", `
+function row(i: int32): int32 {
+	let g: Vec<Vec<int32>> = [[1, 2, 3], [4, 5]];
+	let sum: int32 = 0;
+	for (const c of g[i]) { g[1][0] = c; sum = sum + c; }
+	return sum;
+}
+console.log(row(0));
+`],
+		["deep", `
+function deep(ref d: Deep, i: int32, j: int32): int32 {
+	let sum: int32 = 0;
+	for (const c of d.trees[i].nodes[j].children) { d.trees[i].nodes[c].flag = 2; sum = sum + c; }
+	return sum;
+}
+let d: Deep = { trees: [{ nodes: [{ children: [0], flag: 0 }] }] };
+console.log(deep(d, 0, 0));
+`],
+	];
+	for (const c of cases) assert !emittedBody(c[1], c[0]).contains("msArrayCopy"), c[0];
+}
+
+test "E2E C: a for-of binding borrows each element of the array the loop holds" {
+	const cases: string[][] = [
+		["sumCall", `
+function sumCall(): int32 {
+	let s: int32 = 0;
+	for (const b of boxes()) s = s + b.n;
+	return s;
+}
+console.log(sumCall());
+`],
+		["sumField", `
+function sumField(h: Holder): int32 {
+	let s: int32 = 0;
+	for (const b of h.items) s = s + b.n;
+	return s;
+}
+console.log(sumField(new Holder()));
+`],
+		["sumSkip", `
+function sumSkip(): int32 {
+	let s: int32 = 0;
+	for (const b of boxes()) {
+		if (b.n == 0) continue;
+		s = s + b.n;
+	}
+	return s;
+}
+console.log(sumSkip());
+`],
+	];
+	for (const c of cases) assert !emittedBody(c[1], c[0]).contains("msIncref"), c[0];
+}
