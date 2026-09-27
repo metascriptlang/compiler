@@ -472,4 +472,5 @@ wt_context_extra() {
 
 cmd_context() {
   hook_session
+  wt_context_extra
 }

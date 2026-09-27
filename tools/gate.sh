@@ -548,7 +548,7 @@ run_test_lane() {
     suite) with_test_binary with_slot test_one "$BUILDER" src/index.ms "$(part_of suite src/index.ms)" ;;
     tests)
       jobs=$(test_jobs)
-      if tier_select; then
+      if [ -z "$lanes_arg" ] && [ "$release" -eq 0 ] && [ "$record" -eq 0 ] && tier_select; then
         jobs=$(awk -v k="$OUT/tier/keep" 'BEGIN { while ((getline l < k) > 0) w[l] = 1 } w[$1] { print }' <<<"$jobs")
       else
         rm -f "$OUT/tier/keep"
@@ -847,7 +847,7 @@ start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
 mkdir -p "$GATES_DIR" && : >"$GATES_DIR/$$"
 trap 'rm -f "$GATES_DIR/$$"' EXIT
-PAR=${GATE_PAR:-$(share_of_cores 10)}
+PAR=${GATE_PAR:-$(share_of_cores 5)}
 rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
 [ "$lanes" = tools ] || admit
 
