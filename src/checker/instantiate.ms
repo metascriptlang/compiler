@@ -731,13 +731,14 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	if (sym.nativeName != "") return null as unknown as Symbol;
 
 	// Reference parity: refuse to instantiate if any type arg
-	// is still a GenericParam (inference didn't complete). Unknown is allowed
+	// still holds a GenericParam, at any depth (inference didn't complete, or the
+	// call sits in a generic body checked before its own instantiation). Unknown is allowed
 	// through because `unknown` is a real user-facing concrete type (TS parity:
 	// type-erased handles like `type HostNode = unknown`), represented as void*
 	// in C. Blocking Unknown here forced callers to fall back to a wrong cached
 	// instance — see nullableFunction.ms regression coverage.
 	for (const ct of concreteTypes) {
-		if (ct == null || ct.kind == TypeKind.GenericParam) {
+		if (ct == null || hasGenericParams(ct)) {
 			return null as unknown as Symbol;
 		}
 	}
