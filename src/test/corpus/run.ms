@@ -182,6 +182,54 @@ function ccUsable(cc: string, flags: string = ""): boolean {
 	const r = runCapture(cc + (flags == "" ? "" : " " + flags) + " " + winPath(src) + " -o " + winPath(bin));
 	return r.exitCode == 0 && exists(bin);
 }
+// Windows has no single driver that both accepts the runtime's header surface
+// and links the ASan runtime: scoop's clang is an MSVC target with no MinGW
+// headers behind it (pthread.h not found), scoop's MinGW gcc ships no libasan
+// (ld: cannot find -lasan), and zig cc's Windows link step leaves
+// __asan_version_mismatch_check_v8 undefined. Measured working combination
+// (2026-09-28, scoop llvm 23 + scoop MinGW 16): clang driving the mingw
+// target — headers resolve through the gcc installation it detects — with the
+// MSVC-ABI clang_rt.asan runtime renamed into the windows-gnu resource
+// layout behind a local -resource-dir shim, and the runtime DLL on PATH when
+// the cell runs. The probe below must catch a planted stack-use-after-scope:
+// a driver that links but does not detect is not a usable SAN lane.
+const SAN_SHIM = OUT_DIR + "asan-shim/";
+let SAN_WIN_LIBS = "";
+
+function sanWindowsClang(): string {
+	if (!IS_WIN || !cmdExists("clang")) { return ""; }
+	const res = shellOut("clang -print-resource-dir");
+	if (res == "" || !isDir(res)) { return ""; }
+	const libs = res + "/lib/windows/";
+	const dyn = libs + "clang_rt.asan_dynamic-x86_64.lib";
+	const thunk = libs + "clang_rt.asan_dynamic_runtime_thunk-x86_64.lib";
+	if (!exists(dyn) || !exists(thunk)) { return ""; }
+	const gnu = SAN_SHIM + "lib/x86_64-w64-windows-gnu/";
+	if (!exists(gnu + "libclang_rt.asan_dynamic.dll.a")) {
+		ensureDir(SAN_SHIM);
+		shellOut("xcopy /E /I /Y \"" + winPath(res) + "\" \"" + winPath(SAN_SHIM) + "\"");
+		if (!exists(SAN_SHIM + "include/mm_malloc.h")) { return ""; }
+		ensureDir(gnu);
+		shellOut("copy /Y \"" + winPath(dyn) + "\" \"" + winPath(gnu + "libclang_rt.asan_dynamic.a") + "\"");
+		shellOut("copy /Y \"" + winPath(dyn) + "\" \"" + winPath(gnu + "libclang_rt.asan_dynamic.dll.a") + "\"");
+		shellOut("copy /Y \"" + winPath(thunk) + "\" \"" + winPath(gnu + "libclang_rt.asan_dynamic_runtime_thunk.a") + "\"");
+		if (!exists(gnu + "libclang_rt.asan_dynamic.dll.a")) { return ""; }
+	}
+	const flags = "--target=x86_64-w64-mingw32 -resource-dir " + winPath(SAN_SHIM.endsWith("/") ? SAN_SHIM.slice(0, SAN_SHIM.length - 1) : SAN_SHIM);
+	const pdir = OUT_DIR + "asanprobe/";
+	ensureDir(pdir);
+	writeFile(pdir + "uaf.c", "int main(void){int a[4]={0};int*p=a;{int b[4]={1,2,3,4};p=b;}return p[3];}\n");
+	const bin = pdir + "uaf" + (IS_WIN ? ".exe" : "");
+	if (exists(bin)) { remove(bin); }
+	const cr = runCapture("clang " + flags + " -fsanitize=address -pthread " + winPath(pdir + "uaf.c") + " -o " + winPath(bin));
+	if (cr.exitCode != 0 || !exists(bin)) { return ""; }
+	shellOut("copy /Y \"" + winPath(libs + "clang_rt.asan_dynamic-x86_64.dll") + "\" \"" + winPath(pdir) + "\"");
+	const rr = runCapture(winPath(bin));
+	if (!rr.output.contains("AddressSanitizer")) { return ""; }
+	SAN_WIN_LIBS = libs;
+	return flags;
+}
+
 
 const HAS_CLANG = ccUsable("clang");
 const DANGER_CC = HAS_CLANG ? " --cc=clang" : "";
@@ -201,12 +249,14 @@ const DANGER_PASSC = (IS_WIN && HAS_CLANG) ? " --passC=-Wno-error=incompatible-p
 // self-link it. Prefer clang (parity with the danger lane), fall back to
 // gcc (stock Linux), and only then go driverless (managed zig), which is
 // correct on the hosts where that combination is known to work.
-const SAN_CC = !SAN ? "" : ccUsable("clang", SAN_PASSL) ? " --cc=clang" : (ccUsable("gcc", SAN_PASSL) ? " --cc=gcc" : "");
+const SAN_WIN = SAN ? sanWindowsClang() : "";
+const SAN_CC = !SAN ? "" : SAN_WIN != "" ? " --cc=clang" : ccUsable("clang", SAN_PASSL) ? " --cc=clang" : (ccUsable("gcc", SAN_PASSL) ? " --cc=gcc" : "");
 
 const EXIT_SAN_HOST_BLOCKED = 77;
 
 function sanBuildCmd(entry: string, bin: string): string {
-	return MSC_CMD + " build " + entry + " --gc=drc" + SAN_CC + " --passC=\"" + SAN_PASSC + "\" --passL=\"" + SAN_PASSL + "\" --output=" + bin;
+	const extra = SAN_WIN != "" ? " " + SAN_WIN : "";
+	return MSC_CMD + " build " + entry + " --gc=drc" + SAN_CC + " --passC=\"" + SAN_PASSC + extra + "\" --passL=\"" + SAN_PASSL + extra + "\" --output=" + bin;
 }
 
 function asanLinkGap(): string {
@@ -571,7 +621,7 @@ function cellInner(c: Cell, q: (p: string) => string): string {
 		// Windows: `VAR=v cmd` is sh syntax — inside the cell .bat it must be a
 		// `set` line, else cmd.exe treats ASAN_OPTIONS as the command (exit 9009).
 		if (IS_WIN) {
-			return "set \"ASAN_OPTIONS=detect_leaks=0\"\r\n" + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
+			return (SAN_WIN_LIBS == "" ? "" : "set \"PATH=" + winPath(SAN_WIN_LIBS) + ";%PATH%\"\r\n") + "set \"ASAN_OPTIONS=detect_leaks=0\"\r\n" + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
 		}
 		return "ASAN_OPTIONS=detect_leaks=0 " + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
 	}
@@ -928,7 +978,7 @@ function buildOneJob(job: Readonly<BuildJob>): int32 {
 	}
 	if (!builtOk) {
 		ensureDir(job.cell.dir);
-		writeFile(job.cell.dir + "build.log", b.output);
+		writeFile(job.cell.dir + "build.log", "cmd: " + job.cmd + "\n\n" + b.output);
 		return BUILD_FAILED;
 	}
 	return retried ? BUILD_OK_RETRIED : BUILD_OK;
@@ -1051,6 +1101,9 @@ function main(): void {
 	}
 
 	if (SAN) {
+		if (SAN_WIN != "") {
+			progress("  san: clang mingw-target through the asan-shim resource dir — probe caught a planted stack-use-after-scope");
+		}
 		const gap = asanLinkGap();
 		if (gap != "") {
 			progress("  !! SAN BLOCKED — no C driver on this host links the ASan runtime: " + gap);
