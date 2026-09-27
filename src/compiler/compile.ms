@@ -2185,6 +2185,10 @@ function buildHcrHost(dir: string): string {
 	return host;
 }
 
+function hcrHostMissesEngine(graph: ModuleGraph, stdPath: string): boolean {
+	return findModule(graph, canonicalModulePath(`${stdPath}/hcr/engine.cms`)) == null;
+}
+
 export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
 	if (opts.watchReplay != "") {
 		printDiag(`${error("error")}: msc run --hcr watches the sources itself; --watch-replay belongs to msc build`);
@@ -2194,6 +2198,7 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 	const stem = replaceExt(basename(entryPath), "");
 	ensureDir(dir);
 	opts.outputPath = `${dir}/${stem}${soSuffix()}`;
+	opts.hcrHost = true;
 	const host = buildHcrHost(dir);
 	const run = openWatch(entryPath, opts, resolveSection);
 	while (!watchBuild(run)) {
@@ -2232,6 +2237,10 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
 	applyGcMode(opts);
 	session.moduleCount = graph.loadOrder.length as int32;
+	if (opts.hcrHost && hcrHostMissesEngine(graph, config.stdPath)) {
+		printDiag(`${error("error")}: ${basename(entryPath)} never imports std/hcr, so nothing calls reload() and an edit would never reach the running program; import { reload } from "std/hcr" and call reload() once per pass of the main loop`);
+		stopBuild();
+	}
 
 	// Solana: resolve the SBF toolchain, force release mode. The gc force lives
 	// in resolveTargetGcMode (it has to happen before the check pass).
@@ -3612,4 +3621,11 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 	if (ctx.lastResult.kind == RaiserValueKind.Int) {
 		exit(ctx.lastResult.intVal);
 	}
+}
+
+test "msc run --hcr needs the std/hcr engine in the program's graph" {
+	const graph = createModuleGraph();
+	assert hcrHostMissesEngine(graph, "/std");
+	addModule(graph, createModule(canonicalModulePath("/std/hcr/engine.cms")));
+	assert !hcrHostMissesEngine(graph, "/std");
 }
