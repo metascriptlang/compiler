@@ -35,10 +35,16 @@ test "try inside Result<void, string> fn compiles" {
 	assert result.ok;
 }
 
-test "try void Result fn without explicit return" {
+test "try void Result fn that reaches its end needs a return" {
 	const src = "interface Person { name: string; value: number; }\nfunction hello(): Result<void, string> {\nconst me = try JSON.parse<Person>(\"{}\");\nconsole.log(me.name);\n}\nhello();";
 	const result = compileToC(src);
-	if (!result.ok) { console.log("ERROR-no-return: " + result.error); }
+	assert !result.ok && result.error.contains("'hello' lacks an ending return statement");
+}
+
+test "try void Result fn with an explicit ok return" {
+	const src = "interface Person { name: string; value: number; }\nfunction hello(): Result<void, string> {\nconst me = try JSON.parse<Person>(\"{}\");\nconsole.log(me.name);\nreturn Result.ok(null);\n}\nhello();";
+	const result = compileToC(src);
+	if (!result.ok) { console.log("ERROR-ok-return: " + result.error); }
 	assert result.ok;
 }
 
