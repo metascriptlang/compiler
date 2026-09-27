@@ -558,6 +558,25 @@ test "engine: typeof of a single-type operand is its static tag" {
 	assert ctx.output == "number string boolean\n";
 }
 
+test "engine: structs with equal field values compare equal" {
+	const ctx = evalOrcVM("struct Record { n: int32; text: string; ratio: float64; }"
+		+ " const a: Record = { n: 1, text: 'm' + 'n', ratio: 0.5 }; const b: Record = { n: 1, text: 'm' + 'n', ratio: 0.5 };"
+		+ " const c: Record = { n: 1, text: 'm' + 'x', ratio: 0.5 }; const d: Record = { n: 1, text: 'm' + 'n', ratio: 0.25 };"
+		+ " console.log(`${a == b} ${a == c} ${a == d} ${a != b} ${a != c}`);");
+	assert ctx.error == "";
+	assert ctx.output == "true false false false true\n";
+}
+
+test "engine: nested structs and tuples compare by value" {
+	const ctx = evalOrcVM("struct Inner { a: int32; tag: string; } struct Outer { inner: Inner; k: int32; }"
+		+ " const o1: Outer = { inner: { a: 1, tag: 't' }, k: 2 }; const o2: Outer = { inner: { a: 1, tag: 't' }, k: 2 };"
+		+ " const o3: Outer = { inner: { a: 1, tag: 'u' }, k: 2 };"
+		+ " const l: [int32, string] = [1, 'a' + 'b']; const r: [int32, string] = [1, 'a' + 'b']; const x: [int32, string] = [1, 'b'];"
+		+ " console.log(`${o1 == o2} ${o1 == o3} ${l == r} ${l == x}`);");
+	assert ctx.error == "";
+	assert ctx.output == "true false true false\n";
+}
+
 test "orc: correct result + no error on object program" {
 	const vm = evalOrcVM("function mk(): { x: number } { return { x: 7 }; } const o = mk(); return o.x;");
 	assert vm.error == "";

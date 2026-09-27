@@ -451,6 +451,21 @@ export function lowerOperators(program: Node, ctx: TransformContext): Node {
 	});
 }
 
+export function lowerAggregateEquality(program: Node, ctx: TransformContext): Node {
+	return walkNode(program, (node: Node): Node => {
+		if (node.kind != NodeKind.BinaryExpr || ctx.checkerCtx == null) return node;
+		const d = node.data as BinaryExprData;
+		if (d.operator != "==" && d.operator != "===") return node;
+		const resolved = resolveType(ctx, d.left);
+		const peeled = resolved != null ? peelThrough(resolved, PEEL_ALIAS) : null;
+		if (peeled == null) return node;
+		const leftType = peelTransparentInstance(peeled);
+		if (!isValueObject(leftType) && leftType.kind != TypeKind.Tuple) return node;
+		const lowered = resolveOpCall(ctx, typeNameOf(leftType), "==", leftType, d.left, d.right, node.location);
+		return lowered != null ? lowered : node;
+	});
+}
+
 // ===== Tests =====
 
 import { createContext, createExtensionRegistry, registerExtension } from "../../checker/context";
