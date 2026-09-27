@@ -595,8 +595,12 @@ Developer writes normal code — the compiler picks the fastest path automatical
 |---|---|---|
 | *(default)* | `f(v: Struct)` | Auto-optimized: compiler picks best ABI |
 | `readonly` | `f(readonly v: Struct)` | Explicit copy — caller's value unaffected |
-| `move` | `f(move v: Struct)` | Ownership transfer — caller's value zeroed |
+| `ref` | `f(ref v: Struct)` | In-out — the callee reads and writes the caller's value |
 | `out` | `f(out v: Struct)` | Output parameter — callee fills the value |
+
+`move` is not a parameter modifier: it is written at the call site, `f(move v)` (see Move
+Semantics). A `sink` parameter is only for an `extern` declaration; on a MetaScript function it is
+refused (`'sink' parameter on 'f': only an extern declaration can take ownership of an argument`).
 
 #### When to use what
 
@@ -1324,7 +1328,19 @@ consume(move buffer);     // callee takes ownership
 // With move: forces sink path, source always zeroed
 ```
 
-### Defer
+`move` promises that no copy is made, and a `move` that would copy is refused. An element of an
+array lives behind the array's shared storage and cannot be moved out, even at its last read:
+
+```typescript
+const arr: string[] = ["a".repeat(2), "b"];
+const x = move arr[0];           // error: cannot move 'arr[0]', which introduces an implicit copy
+return move grid[0][1];          // error: cannot move 'grid[0][1]', which introduces an implicit copy
+const t = move h.f;              // ok: a field moves, and h.f is left empty
+take(move arr[0]);               // ok when `take` has a plain parameter: nothing is copied, arr[0] stays
+```
+
+Measured on C (msc b899f456). The JS backend does not check moves yet. It accepts the refused lines
+above, keeps the element, and does not empty a moved field (`h.f` still holds its value).
 ```typescript
 // Execute at scope end (LIFO order)
 function process(): void {
