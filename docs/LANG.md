@@ -2310,12 +2310,12 @@ program keeps running. New code takes effect where the program calls `reload()`,
 imports from `std/hcr` where it wants reloads to happen, once per pass of its main loop:
 
 ```typescript
-import { reload, HcrReloadKind } from "std/hcr";
+import { reload, ReloadKind } from "std/hcr";
 import { tick, message } from "./logic";
 
 while (true) {
 	tick();
-	if (reload() == HcrReloadKind.Reloaded) console.log(message());
+	if (reload() == ReloadKind.Reloaded) console.log(message());
 	await sleepAsync(16);
 }
 ```
@@ -2356,7 +2356,7 @@ What a reload keeps and what it refuses:
   `reload()`, so `error: app.ms never imports std/hcr, …` stops the build and the watch waits
   for the save that adds the import.
 - **Without `--hcr` none of this exists**: no tables, no lifted state, no host. `reload` is a
-  macro, and without `--hcr` it expands to `HcrReloadKind.NoChange` at compile time: the same
+  macro, and without `--hcr` it expands to `ReloadKind.NoChange` at compile time: the same
   source builds for production, and the loop's `reload()` costs no call there. `--hcr` defines
   `hcr` for `when`.
 

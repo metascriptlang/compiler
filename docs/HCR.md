@@ -366,7 +366,7 @@ imports `reload` from `std/hcr` where it wants reloads to happen and calls it at
 
 `std/hcr` (`std/hcr/index.ms`) builds on every backend, with or without `--hcr`. `reload` is a
 macro chosen by `when (hcr)`: under `--hcr` it expands to a call into the engine, which only then
-is imported; without it, to the constant `HcrReloadKind.NoChange`, so a production build emits no
+is imported; without it, to the constant `ReloadKind.NoChange`, so a production build emits no
 call and links no engine. The reference ships the same pair: `lib/core/hotcodereloading.nim` is
 imported explicitly and turns `performCodeReload` and the handler templates into `discard` when
 `hotcodereloading` is not defined, and `--hotcodereloading:on` defines that symbol
