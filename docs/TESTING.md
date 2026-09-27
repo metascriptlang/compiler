@@ -46,28 +46,19 @@ Rules:
 - Use only the standard library and language features — never reach into
   `src/checker/`, `src/codegen/`, etc.
 
-### Regression tests (`fixedbugs/bugNNN_*.ms`)
+### Regression contracts
 
-One file per shipped bug. Append-only — old entries never get deleted or
-refactored, even if the underlying API changes.
+Name the compiler invariant and the consumer boundary, not the event that
+found it. A checker refusal belongs with its `handoff/` family; an observable
+program belongs under `lang/` or in a standalone semantic corpus entry;
+emitted ABI details belong under `c/` or `js/` only when the emitted form
+itself is the contract. Reuse an existing owner before adding a file.
 
-Required header block:
-```ms
-// bugNNN — <one-line summary>
-//
-// Symptom:    <what the user observed>
-// Root cause: <where the actual fix lives, file path optional>
-// Fix:        <what changed — one line>
-//
-// Body: minimal repro as a `test "bugNNN: <slug>" { ... }`.
-```
-
-Rules:
-- File name: `bugNNN_short_slug.ms` where `NNN` is the next free 3-digit
-  number. Look at the highest existing number in `fixedbugs/` and add 1.
-- Test name: `"bugNNN: <slug>"` so failures point back to the file.
-- Keep the repro minimal — the smallest program that triggers the bug.
-- Add the import to `fixedbugs/index.ms`.
+The historical `fixedbugs/` lane still runs while its contracts migrate, but
+it is **not** an authoring destination. Keep a repro variant when it catches
+an independent mechanism; retire obsolete emitted-token and compile-only
+assertions once a real consumer proves their intended behavior. The final
+cutover removes that lane and its old known-red identities together.
 
 ### Pipeline tests (`c/*.ms`, `js/*.ms`)
 
@@ -275,8 +266,9 @@ Traps, measured 2026-07-28 unless a line says otherwise:
   sides in the same minute showed 32.47s vs 32.25s, i.e. identical.
 - **`msc test` accepts exactly one file** — no directories, no globs, no
   `--filter`. Grouping is only possible through an aggregator module.
-- **A `fixedbugs/bugNNN` test runs the SOURCE checker**, so it proves red and
-  green for a checker or codegen rule before any rebuild of the compiler.
+- **Compiler-source handoff contracts run natively.** `--target=js` on a
+  source-importing checker test asks JS to compile the compiler itself; a
+  JS behavior claim needs a standalone language/corpus consumer instead.
 
 ## Emit-diff selector — corpus confidence for narrow fixes
 
