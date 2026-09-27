@@ -891,7 +891,7 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 		addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${className}TypeInfo;`);
 	}
 	// Runtime-visible name keeps the pre-qualification spelling (mangled bare
-	// name) — the DRC ledger and balance guards key on this exact string.
+	// name) — the DRC ledger prints it and balance guards select rows by it.
 	const runtimeName = bareOrigin != "" ? mangle(bareOrigin) : className;
 	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.name = "${runtimeName}";`);
 	let destroyHook = "";

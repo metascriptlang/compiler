@@ -15,7 +15,6 @@
 #include "runtime/drc.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <pthread.h>
 
 /* Open-addressing pointer set: holds objects finalized (destroyFn dispatched)
@@ -29,11 +28,11 @@ enum { MS_LSLOT_EMPTY = 0, MS_LSLOT_USED = 1, MS_LSLOT_TOMB = 2 };
 static void*   gLedgerKey[MS_LEDGER_SET_SIZE];
 static uint8_t gLedgerState[MS_LEDGER_SET_SIZE];
 
-#define MS_LEDGER_NAMES 4096
-static const char* gLedgerName[MS_LEDGER_NAMES];
-static long        gLedgerAllocN[MS_LEDGER_NAMES];
-static long        gLedgerDestroyN[MS_LEDGER_NAMES];
-static int         gLedgerNameCount = 0;
+#define MS_LEDGER_ROWS 4096
+static const msTypeInfo* gLedgerType[MS_LEDGER_ROWS];
+static long        gLedgerAllocN[MS_LEDGER_ROWS];
+static long        gLedgerDestroyN[MS_LEDGER_ROWS];
+static int         gLedgerRowCount = 0;
 
 static pthread_mutex_t gLedgerMutex = PTHREAD_MUTEX_INITIALIZER;
 static int gLedgerAtexit = 0;
@@ -71,17 +70,20 @@ static void msLedgerSetRemove(void* p) {
 		i = (i + 1) & MS_LEDGER_SET_MASK;
 	}
 }
-static int msLedgerNameIdx(const char* n) {
-	if (n == NULL) n = "<untyped>";
-	for (int i = 0; i < gLedgerNameCount; i++) {
-		if (gLedgerName[i] == n || strcmp(gLedgerName[i], n) == 0) return i;
+static int msLedgerRowIdx(const msTypeInfo* type) {
+	for (int i = 0; i < gLedgerRowCount; i++) {
+		if (gLedgerType[i] == type) return i;
 	}
-	if (gLedgerNameCount < MS_LEDGER_NAMES) {
-		int i = gLedgerNameCount++;
-		gLedgerName[i] = n; gLedgerAllocN[i] = 0; gLedgerDestroyN[i] = 0;
+	if (gLedgerRowCount < MS_LEDGER_ROWS) {
+		int i = gLedgerRowCount++;
+		gLedgerType[i] = type; gLedgerAllocN[i] = 0; gLedgerDestroyN[i] = 0;
 		return i;
 	}
 	return -1;
+}
+static const char* msLedgerRowName(const msTypeInfo* type) {
+	if (type == NULL) return "<untyped>";
+	return type->name != NULL ? type->name : "<unnamed>";
 }
 /* TOTAL prints even at zero counts: the SAN corpus runner treats "no LEDGER
  * line at all" as instrumentation loss, and a program whose only allocations
@@ -89,9 +91,9 @@ static int msLedgerNameIdx(const char* n) {
 static void msLedgerDump(void) {
 	pthread_mutex_lock(&gLedgerMutex);
 	long totalA = 0, totalD = 0;
-	for (int i = 0; i < gLedgerNameCount; i++) {
+	for (int i = 0; i < gLedgerRowCount; i++) {
 		fprintf(stderr, "LEDGER %s alloc=%ld destroy=%ld\n",
-			gLedgerName[i], gLedgerAllocN[i], gLedgerDestroyN[i]);
+			msLedgerRowName(gLedgerType[i]), gLedgerAllocN[i], gLedgerDestroyN[i]);
 		totalA += gLedgerAllocN[i];
 		totalD += gLedgerDestroyN[i];
 	}
@@ -107,7 +109,7 @@ void msLedgerAlloc(void* p, const msTypeInfo* type) {
 	pthread_mutex_lock(&gLedgerMutex);
 	if (!gLedgerAtexit) { gLedgerAtexit = 1; atexit(msLedgerDump); }
 	msLedgerSetRemove(p);   /* slab slot reused → fresh object */
-	int idx = msLedgerNameIdx(type ? type->name : NULL);
+	int idx = msLedgerRowIdx(type);
 	if (idx >= 0) gLedgerAllocN[idx]++;
 	pthread_mutex_unlock(&gLedgerMutex);
 }
@@ -115,13 +117,12 @@ void msLedgerDestroy(void* p, const msTypeInfo* type) {
 	if (p == NULL) return;
 	pthread_mutex_lock(&gLedgerMutex);
 	if (msLedgerSetContains(p)) {
-		const char* n = (type && type->name) ? type->name : "<untyped>";
-		fprintf(stderr, "\nNIM-GUARD LEDGER: DOUBLE-DESTROY of %s at %p\n", n, p);
+		fprintf(stderr, "\nNIM-GUARD LEDGER: DOUBLE-DESTROY of %s at %p\n", msLedgerRowName(type), p);
 		fflush(stderr);
 		abort();
 	}
 	msLedgerSetInsert(p);
-	int idx = msLedgerNameIdx(type ? type->name : NULL);
+	int idx = msLedgerRowIdx(type);
 	if (idx >= 0) gLedgerDestroyN[idx]++;
 	pthread_mutex_unlock(&gLedgerMutex);
 }
