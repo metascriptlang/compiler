@@ -38,3 +38,12 @@ test "bug562: a refused class, generic instance, anonymous literal or null is re
 	assert errorCount(CLASSES562 + "function g(): void { let y: H562<int32> = new H562<int32>(1); y = new H562<string>(\"x\"); }\n") == 1;
 	assert errorCount(CLASSES562 + "const xs: B562[] = [new B562(), new A562()];\n") == 1;
 }
+
+test "bug562: a return takes the widening fitNode takes at a declaration and an argument" {
+	assert errorCount("function f(x: uint8): uint32 { return x; }\n") == 0;
+	assert errorCount("function f(x: int16): int32 { return x; }\n") == 0;
+	assert errorCount("const g = (x: int8): int32 => x;\n") == 0;
+	assert errorCount("const g = (x: uint8): uint32 => { return x; };\n") == 0;
+	assert errorCount("function f(x: int64): int32 { return x; }\n") == 1;
+	assert errorCount("const g = (): int32 => \"x\";\n") == 1;
+}
