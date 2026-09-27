@@ -18,10 +18,14 @@
 // RED MEANS: a TypeInfo defined in codegen lost its trace hook. Run /trace-nim on Box.
 // GUARD-BALANCE-ORC Box
 // GUARD-BALANCE-ORC Named
+// GUARD-BALANCE-ORC DeepBox
 
 interface Box { inner: { back: Box | null; s: string }; }
 interface Link { back: Named | null; s: string; }
 interface Named { inner: Link; }
+class DeepBox {
+	inner: { mid: { back: DeepBox | null; w: int32 } } = { mid: { back: null, w: 1 } };
+}
 
 function churn(): int32 {
 	let i: int32 = 0;
@@ -30,6 +34,8 @@ function churn(): int32 {
 		b.inner.back = b;
 		const n: Named = { inner: { back: null, s: "r" } };
 		n.inner.back = n;
+		const d = new DeepBox();
+		d.inner.mid.back = d;
 		i = i + 1;
 	}
 	return i;

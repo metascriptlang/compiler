@@ -15,22 +15,48 @@
 //
 // WHY A SUBPROCESS: the observable is the RUNNER's verdict on a FAILING test,
 //   which a passing test file cannot express about itself. So this guard spawns
-//   the msc under test on a fixture that must fail, and asserts the exit code.
-//   `cwd()` is the recompiler root when run the standard way
-//   (`./msc test src/test/guard/testBoundaryReportsEscape.ms`), so `./msc` is
-//   the freshly built binary being guarded — not whatever is on $PATH.
+//   the msc under test on a fixture that must fail, and checks the exit code.
 //
 // RED PRE-FIX: the fixture's escaping throw is swallowed, the runner prints
-//   "1 passed" and exits 0 -> the assert below fails.
+//   "1 passed" and exits 0 -> the consumer check below fails.
 // GREEN POST-FIX: the fixture is reported failed, exit code is non-zero.
 
-import { execFile, cwd } from "std/process";
+import { execFile, execFileCapture, cwd, env, exit } from "std/process";
 
-test "a test whose body throws is reported as a failure, not a pass" {
-	const root = cwd();
-	const mscPath = root + "/msc";
+function requireCondition(ok: boolean, detail: string): void {
+	if (!ok) {
+		console.log("GUARD-FAIL " + detail);
+		exit(1);
+	}
+}
+
+function checkEscapingThrow(mscPath: string, root: string): void {
 	const fixture = root + "/src/test/guard/fixtures/escapingThrow.test.ms";
 
-	const code = execFile(mscPath, ["test", fixture]);
-	assert code == 1, "an escaping exception was reported as a passing test";
+	const code = execFile(mscPath, ["test", fixture, "--tests-in-dir"]);
+	requireCondition(code == 1, "an escaping exception was reported as a passing test");
 }
+
+function checkAssertionMessages(mscPath: string, root: string): void {
+	const fixture = root + "/src/test/guard/fixtures/macroAssertionMessageDependencies.test.ms";
+	for (const target of ["c", "js"]) {
+		const result = execFileCapture(mscPath, ["test", fixture, "--tests-in-dir", "--target=" + target]);
+		requireCondition(!result.ok, target + " must report the deliberate assertion failures");
+		if (!result.ok) {
+			const output = result.error.output + result.error.errorOutput;
+			requireCondition(result.error.exitCode == 1, target + "\n" + output);
+			requireCondition(output.contains("constant-message-payload"), target + "\n" + output);
+			requireCondition(output.contains("helper-message-payload"), target + "\n" + output);
+			requireCondition(output.contains("enum-message-Second"), target + "\n" + output);
+			requireCondition(output.contains("3 failed"), target + "\n" + output);
+			requireCondition(output.contains("macroAssertionMessageDependencies.test.ms (4)"), target + " did not execute the passing-path control\n" + output);
+		}
+	}
+}
+
+const root = cwd();
+const mscEnv = env.get("MSC");
+const mscPath = mscEnv != "" ? mscEnv : root + "/msc";
+checkEscapingThrow(mscPath, root);
+checkAssertionMessages(mscPath, root);
+console.log("GUARD-OK");
