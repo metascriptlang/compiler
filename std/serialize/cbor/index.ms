@@ -144,6 +144,6 @@ export function decode(buf: Buffer): Result<CborValue, string> {
 // promises a `parseValue(buffer) → Result<V, string>` shape — for CBOR the
 // input is a Buffer, so this wraps `decode()`.
 
-export const cborUntyped: UntypedTree<CborValue> = {
+export const cborUntyped: UntypedTree<CborValue, Buffer> = {
 	parseValue: decode,
 };
