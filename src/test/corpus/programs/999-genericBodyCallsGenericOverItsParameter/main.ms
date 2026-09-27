@@ -34,10 +34,14 @@ function drain<T>(qs: Q<T>[]): int32 {
 	return qs.length as int32;
 }
 
-const h = new Hub<int32>();
-h.attach();
-h.attach();
-const n = new Nest<string>();
-n.add();
-const qs: Q<boolean>[] = [{ ops: [] }, { ops: [] }, { ops: [] }];
-console.log(`ok ${h.drop()} ${n.drop()} ${drain<boolean>(qs)}`);
+function main(): void {
+	const h = new Hub<int32>();
+	h.attach();
+	h.attach();
+	const n = new Nest<string>();
+	n.add();
+	const qs: Q<boolean>[] = [{ ops: [] }, { ops: [] }, { ops: [] }];
+	console.log(`ok ${h.drop()} ${n.drop()} ${drain<boolean>(qs)}`);
+}
+
+main();
