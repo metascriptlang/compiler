@@ -1,4 +1,4 @@
-// bug247 — a generic call passed as an argument never saw the destination
+// bug578 — a generic call passed as an argument never saw the destination
 //
 // Symptom:    `return Result.ok(Result.err("inner fail"))` into
 //             `Result<Result<number, string>, string>` and `const xs: string[] = pick(make(), ["a"])`
@@ -33,27 +33,27 @@ function cOf(body: string): string {
 	return c.ok ? c.value : c.error;
 }
 
-test "bug247: Result.err inside Result.ok takes the declared return type" {
+test "bug578: Result.err inside Result.ok takes the declared return type" {
 	assert errorOf("function f2(): Result<Result<number, string>, string> { return Result.ok(Result.err(\"inner fail\")); } const r = f2();") == "";
 }
 
-test "bug247: a generic call one level deeper takes the declared return type" {
+test "bug578: a generic call one level deeper takes the declared return type" {
 	assert errorOf("function f3(): Result<Result<Result<number, string>, string>, string> { return Result.ok(Result.ok(Result.err(\"x\"))); } const r = f3();") == "";
 }
 
-test "bug247: a generic call before an array literal takes the declared type" {
+test "bug578: a generic call before an array literal takes the declared type" {
 	assert errorOf("const xs: string[] = pick(make(), [\"a\"]); xs.push(\"b\");") == "";
 }
 
-test "bug247: a generic call after an array literal takes the declared type" {
+test "bug578: a generic call after an array literal takes the declared type" {
 	assert errorOf("const xs: string[] = pick([\"a\"], make()); xs.push(\"b\");") == "";
 }
 
-test "bug247: a user generic call inside Result.ok takes the declared type" {
+test "bug578: a user generic call inside Result.ok takes the declared type" {
 	assert errorOf("const r: Result<Box<int64>, string> = Result.ok(one(5));") == "";
 }
 
-test "bug247: the destination does not retype a call argument with a type of its own" {
+test "bug578: the destination does not retype a call argument with a type of its own" {
 	const code = cOf("const d: int64 = pick(f(), 1); console.log(d);");
 	assert code.contains("__int32__");
 	assert !code.contains("__int64__");

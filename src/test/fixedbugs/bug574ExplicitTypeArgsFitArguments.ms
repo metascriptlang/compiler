@@ -1,4 +1,4 @@
-// bug237 — explicit type arguments on a static generic never reached the arguments
+// bug574 — explicit type arguments on a static generic never reached the arguments
 //
 // Symptom:    `Result.ok<string, string>(5)` passed the checker and failed in clang;
 //             `Result.ok<Entry, string>(tag)` handed the variant pointer to a union slot in C
@@ -10,7 +10,7 @@
 
 import { compileToC } from "../helpers";
 
-test "bug237: an argument against an explicit type argument is checked" {
+test "bug574: an argument against an explicit type argument is checked" {
 	const r = compileToC("const r = Result.ok<string, string>(5);");
 	assert !r.ok;
 	if (!r.ok) {

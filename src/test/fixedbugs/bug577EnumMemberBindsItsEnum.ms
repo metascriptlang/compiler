@@ -1,4 +1,4 @@
-// bug240 — an enum member argument bound a type parameter to its literal type
+// bug577 — an enum member argument bound a type parameter to its literal type
 //
 // Symptom:    `pair(K.A, K.B)` failed with "got K.B, expected K.A — 'T' was bound by argument 0";
 //             `let k = id(K.A); k = K.B` was refused; once the arguments bound first,
@@ -27,19 +27,19 @@ function errorOf(body: string): string {
 	return js.ok ? "" : js.error;
 }
 
-test "bug240: two members of one enum bind T to the enum" {
+test "bug577: two members of one enum bind T to the enum" {
 	assert errorOf("const xs = pair(K.A, K.B); console.log(xs.length);") == "";
 }
 
-test "bug240: a member bound through a generic widens to its enum" {
+test "bug577: a member bound through a generic widens to its enum" {
 	assert errorOf("let k = id(K.A); k = K.B; console.log(k == K.B);") == "";
 }
 
-test "bug240: a literal-typed parameter beside a type parameter keeps the literal" {
+test "bug577: a literal-typed parameter beside a type parameter keeps the literal" {
 	assert errorOf("console.log(tag(5, K.A));") == "";
 	assert errorOf("console.log(tag(5, K.B));").contains("got K.B, expected K.A");
 }
 
-test "bug240: a literal-typed parameter still refuses another member" {
+test "bug577: a literal-typed parameter still refuses another member" {
 	assert errorOf("console.log(handleA(K.B));").contains("got K.B, expected K.A");
 }

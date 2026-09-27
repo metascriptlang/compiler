@@ -1,4 +1,4 @@
-// bug238 — two modules declaring one generic name shared its params and its C struct
+// bug575 — two modules declaring one generic name shared its params and its C struct
 //
 // Symptom:    `type Box<U>` in a.ms and `type Box<T>` in main.ms made a.ms's `Box<string>` bind
 //             main's parameter names (a checker error inside a.ms); with equal type arguments the
@@ -15,10 +15,10 @@ import { MapEntry } from "../../module/loader";
 
 function project(aSrc: string, mainSrc: string): string {
 	const entries: MapEntry[] = [
-		{ entryPath: "test/bug238/a.ms", entrySource: aSrc },
-		{ entryPath: "test/bug238/main.ms", entrySource: mainSrc },
+		{ entryPath: "test/bug575/a.ms", entrySource: aSrc },
+		{ entryPath: "test/bug575/main.ms", entrySource: mainSrc },
 	];
-	return compileProjectToC(entries, "test/bug238/main.ms");
+	return compileProjectToC(entries, "test/bug575/main.ms");
 }
 
 function instanceNamesFor(out: string, base: string, suffix: string): string[] {
@@ -41,19 +41,19 @@ const m: Box<string> = { n: 7, w: "m" };
 console.log(m.w, mkA().v);
 `;
 
-test "bug238: two same-named generics with equal arguments get two C structs" {
+test "bug575: two same-named generics with equal arguments get two C structs" {
 	const out = project(`export type Box<T> = { v: T };\nexport function mkA(): Box<string> { return { v: "a" }; }\n`, MAIN);
 	assert !out.startsWith("ERROR");
 	assert instanceNamesFor(out, "Box", "__string").length == 2;
 }
 
-test "bug238: each declaration binds its own parameter names" {
+test "bug575: each declaration binds its own parameter names" {
 	const out = project(`export type Box<U> = { v: U };\nexport function mkA(): Box<string> { return { v: "a" }; }\n`, MAIN);
 	assert !out.startsWith("ERROR");
 	assert instanceNamesFor(out, "Box", "__string").length == 2;
 }
 
-test "bug238: same-named generic interfaces keep their own layouts" {
+test "bug575: same-named generic interfaces keep their own layouts" {
 	const out = project(`export interface Box<U> { v: U; }\nexport function mkA(): Box<string> { return { v: "a" }; }\n`,
 		`import { mkA } from "./a";\ninterface Box<T> { n: int32; w: T; }\nconst m: Box<string> = { n: 7, w: "m" };\nconsole.log(m.w, mkA().v);\n`);
 	assert !out.startsWith("ERROR");

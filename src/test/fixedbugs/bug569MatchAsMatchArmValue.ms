@@ -1,4 +1,4 @@
-// bug232 — a match used as the value of another match arm reached codegen unlowered
+// bug569 — a match used as the value of another match arm reached codegen unlowered
 //
 // Symptom:    `Side.Left => match (step) { … }` inside a `return match` or a `const r = match`
 //             emitted `/* unsupported expression: kind=MatchExpr */`: C failed to compile, JS
@@ -77,23 +77,23 @@ function lowered(source: string): boolean {
 	return c.ok && js.ok && !c.value.contains("unsupported") && !js.value.contains("unsupported");
 }
 
-test "bug232: a match arm value of a returned match is lowered" {
+test "bug569: a match arm value of a returned match is lowered" {
 	assert lowered(viaReturn);
 }
 
-test "bug232: a match arm value of a match initializer is lowered" {
+test "bug569: a match arm value of a match initializer is lowered" {
 	assert lowered(viaLet);
 }
 
-test "bug232: a match two levels deep in arm values is lowered" {
+test "bug569: a match two levels deep in arm values is lowered" {
 	assert lowered(deeper);
 }
 
-test "bug232: a match arm value under a string discriminant is lowered" {
+test "bug569: a match arm value under a string discriminant is lowered" {
 	assert lowered(byName);
 }
 
-test "bug232: a match arm value of a statement match is kept" {
+test "bug569: a match arm value of a statement match is kept" {
 	const c = compileToC(asStatement);
 	const js = compileToJS(asStatement);
 	assert c.ok && js.ok;

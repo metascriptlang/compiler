@@ -1,4 +1,4 @@
-// bug239 — a constrained generic alias instance kept its type parameter unsubstituted
+// bug576 — a constrained generic alias instance kept its type parameter unsubstituted
 //
 // Symptom:    `type Box<T extends number> = { value: T }; const b: Box<int32> = { value: 42 };`
 //             printed `<T>` on C: the instance body still carried the parameter.
@@ -8,7 +8,7 @@
 
 import { compileToC } from "../helpers";
 
-test "bug239: a constrained alias instance lays out its argument type" {
+test "bug576: a constrained alias instance lays out its argument type" {
 	const c = compileToC("type Box<T extends number> = { value: T };\nconst b: Box<int32> = { value: 42 };\nconsole.log(b.value);");
 	assert c.ok;
 	if (c.ok) {

@@ -1,4 +1,4 @@
-// bug236 — a typed pointer stopped reaching an untyped pointer parameter
+// bug573 — a typed pointer stopped reaching an untyped pointer parameter
 //
 // Symptom:    yoga's `applyStyle(yg: Ptr<void>, ...)` refused `YGNodeNew()`: "got Ptr<YGNode>,
 //             expected Ptr<void>", after a bodiless extern struct became a closed struct.
@@ -21,18 +21,18 @@ function errorOf(body: string): string {
 	return r.ok ? "" : r.error;
 }
 
-test "bug236: a typed pointer passes as an untyped pointer" {
+test "bug573: a typed pointer passes as an untyped pointer" {
 	assert errorOf("erase(newOpaque());") == "";
 }
 
-test "bug236: a typed pointer initializes an untyped pointer" {
+test "bug573: a typed pointer initializes an untyped pointer" {
 	assert errorOf("const raw: Ptr<void> = newOpaque(); erase(raw);") == "";
 }
 
-test "bug236: an untyped pointer does not pass as a typed pointer" {
+test "bug573: an untyped pointer does not pass as a typed pointer" {
 	assert errorOf("const raw: Ptr<void> = newOpaque(); useOpaque(raw);").contains("got Ptr<void>, expected Ptr<Opaque>");
 }
 
-test "bug236: an untyped pointer passes as a typed pointer through a cast" {
+test "bug573: an untyped pointer passes as a typed pointer through a cast" {
 	assert errorOf("const raw: Ptr<void> = newOpaque(); useOpaque(raw as Ptr<Opaque>);") == "";
 }

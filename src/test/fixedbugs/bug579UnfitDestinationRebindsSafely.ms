@@ -1,4 +1,4 @@
-// bug248 — a typed argument refused a destination it converts to without loss
+// bug579 — a typed argument refused a destination it converts to without loss
 //
 // Symptom:    `return Result.ok(r - 1)` with `let r = 0` into `Result<number, string>`,
 //             `return Result.ok(circle)` into `Result<Circle | Square, string>` and
@@ -40,40 +40,40 @@ function cOf(body: string): string {
 	return c.ok ? c.value : c.error;
 }
 
-test "bug248: an int32 expression in Result.ok takes a number return type" {
+test "bug579: an int32 expression in Result.ok takes a number return type" {
 	assert errorOf("function f(): Result<number, string> { let r = 0; return Result.ok(r - 1); } const x = f();") == "";
 }
 
-test "bug248: a variant in Result.ok takes its union" {
+test "bug579: a variant in Result.ok takes its union" {
 	assert errorOf("function f(): Result<Shape, string> { return Result.ok(circle); } const x = f();") == "";
 }
 
-test "bug248: a user generic takes a number destination" {
+test "bug579: a user generic takes a number destination" {
 	assert errorOf("const b: Box<number> = one(i);") == "";
 }
 
-test "bug248: integers widen within their signedness" {
+test "bug579: integers widen within their signedness" {
 	assert errorOf("const b: Box<int64> = one(i); const c: Box<uint32> = one(u);") == "";
 }
 
-test "bug248: a signed argument does not rebind an unsigned destination" {
+test "bug579: a signed argument does not rebind an unsigned destination" {
 	assert errorOf("const b: Box<uint32> = one(i);").contains("'Box<int32>' is not assignable to type 'Box<uint32>'");
 }
 
-test "bug248: a wider argument does not rebind a narrower destination" {
+test "bug579: a wider argument does not rebind a narrower destination" {
 	assert errorOf("const b: Box<int32> = one(w);").contains("'Box<int64>' is not assignable to type 'Box<int32>'");
 }
 
-test "bug248: an array argument does not rebind another element type" {
+test "bug579: an array argument does not rebind another element type" {
 	const xs = "const xs: int32[] = [1, 2]; const b: Box<number[]> = wrap(xs);";
 	assert errorOf(xs).contains("'Box<int32[]>' is not assignable to type 'Box<number[]>'");
 }
 
-test "bug248: explicit type arguments are never rebound" {
+test "bug579: explicit type arguments are never rebound" {
 	assert errorOf("const b: Box<number> = one<int32>(i);").contains("'Box<int32>' is not assignable to type 'Box<number>'");
 }
 
-test "bug248: a result that fits keeps the argument binding" {
+test "bug579: a result that fits keeps the argument binding" {
 	const code = cOf("const d: int64 = pick(i, 1); const e = pick(i, 2) as int64; console.log(d, e);");
 	assert code.contains("__int32__");
 	assert !code.contains("__int64__");

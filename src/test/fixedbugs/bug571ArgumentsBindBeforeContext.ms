@@ -1,4 +1,4 @@
-// bug234 — the destination type overrode what the arguments bound
+// bug571 — the destination type overrode what the arguments bound
 //
 // Symptom:    `Result<number, string> = ok(i32)` and `Box<number> = one(i32)` bound `T` to the
 //             destination's supertype and handed the int32 to a number slot unconverted
@@ -26,42 +26,42 @@ function errorOf(body: string): string {
 	return c.ok ? "" : c.error;
 }
 
-test "bug234: a variable argument converts to a number destination" {
+test "bug571: a variable argument converts to a number destination" {
 	assert errorOf("const r: Box<number> = one(i);") == "";
 }
 
-test "bug234: a literal argument takes a wider destination" {
+test "bug571: a literal argument takes a wider destination" {
 	assert errorOf("const b: Box<int64> = one(1);") == "";
 }
 
-test "bug234: a literal in Result.ok takes the declared return type" {
+test "bug571: a literal in Result.ok takes the declared return type" {
 	assert errorOf("function f(): Result<number, string> { return Result.ok(42); } const r = f();") == "";
 }
 
-test "bug234: a literal before a variable follows the variable" {
+test "bug571: a literal before a variable follows the variable" {
 	assert errorOf("const d = pick(1, i) as int64; const e: int64 = Math.max(1, i);") == "";
 }
 
-test "bug234: a literal that does not fit the destination is refused" {
+test "bug571: a literal that does not fit the destination is refused" {
 	assert errorOf("const b: Box<uint8> = one(300);").contains("cannot convert 300 to uint8");
 }
 
-test "bug234: a negative literal that does not fit the destination is refused" {
+test "bug571: a negative literal that does not fit the destination is refused" {
 	assert errorOf("const b: Box<uint64> = one(-1);").contains("cannot convert -1 to uint64");
 }
 
-test "bug234: an argument spelled in the destination type binds it" {
+test "bug571: an argument spelled in the destination type binds it" {
 	assert errorOf("const b: Box<number> = one(i as number);") == "";
 }
 
-test "bug234: the context fills a type parameter no argument binds" {
+test "bug571: the context fills a type parameter no argument binds" {
 	assert errorOf("const xs: string[] = make(); xs.push(\"a\");") == "";
 }
 
-test "bug234: an arrow argument takes its parameter types from the context" {
+test "bug571: an arrow argument takes its parameter types from the context" {
 	assert errorOf("const f: (x: int32) => int32 = id((x) => x * 2);") == "";
 }
 
-test "bug234: an empty array argument takes its element type from the context" {
+test "bug571: an empty array argument takes its element type from the context" {
 	assert errorOf("const xs: int32[] = id([]); xs.push(1);") == "";
 }
