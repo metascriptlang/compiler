@@ -1,11 +1,12 @@
 import { Node, NodeKind, TypeKind, Type, SourceLocation, HiddenStdConvData, TypeAssertionData, MemberExprData, BinaryExprData, HiddenDerefData, ArrayAccessData } from "../../ast/node";
 import { narrowUnionToVariant, isSlotUnion, projectTagUnionMember } from "../../checker/fit";
-import { isMaybeType, typeDisplayName, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType } from "../../checker/types";
+import { isMaybeType, typeDisplayName, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType } from "../../checker/types";
+import { requestEnumToString } from "../../checker/context";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeBool, makeCall, makeConditional, makeMember, makeNumber, makeString, runtimeRef } from "../util";
+import { makeBinary, makeBool, makeCall, makeConditional, makeIdent, makeMember, makeNumber, makeString, runtimeRef, enumToStringNameFor } from "../util";
 
 export function projectNarrowedUnions(program: Node, ctx: TransformContext): Node {
 	walkNode(program, projectNode);
@@ -191,7 +192,12 @@ function guardProjectionJS(p: Node, field: string, ctx: TransformContext): void 
 	if (want == null) return;
 	const disc = getDiscriminantName(ut);
 	const same = makeBinary(makeMember(cloneNodeKeepSem(u), disc, loc), "==", want, loc);
-	const fail = makeCall(runtimeRef("msFieldError", loc), [makeString(accessHead(field, p, ut) + disc + " = ", loc), makeMember(cloneNodeKeepSem(u), disc, loc)], loc);
+	const en = ut.typeExtra;
+	if (en == null) return;
+	if (ctx.checkerCtx != null) requestEnumToString(ctx.checkerCtx, en);
+	const actual = makeCall(makeIdent(enumToStringNameFor(en), loc), [makeMember(cloneNodeKeepSem(u), disc, loc)], loc);
+	actual.nodeType = stringType();
+	const fail = makeCall(runtimeRef("msFieldError", loc), [makeString(accessHead(field, p, ut) + disc + " = ", loc), actual], loc);
 	const guarded = makeConditional(same, u, fail, loc);
 	guarded.nodeType = ut;
 	d.convExpr = guarded;

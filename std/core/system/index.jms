@@ -44,7 +44,7 @@ export class Error {
 export extern function compilerFunc(): void;
 
 @compilerFunc
-function msFieldError(head: string, actual: number): never {
+function msFieldError(head: string, actual: string): never {
 	@emit(`throw new Error(${head} + ${actual} + "'");`);
 	unreachable;
 }
