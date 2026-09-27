@@ -85,7 +85,25 @@ const masked = flags & 0x00FF00FF;
 const shifted = byte << 4;
 ```
 
-**Type Promotion Rules**: Sized integers widen implicitly (e.g., `int8` → `int32` → `int64`). Narrowing requires explicit cast. `number` (f64) and sized integers do not implicitly convert — use explicit cast at the boundary.
+**Type Promotion Rules**:
+- An integer converts implicitly only to a wider type of the same signedness, for example
+  `int8` → `int32` → `int64` and `uint8` → `uint32` → `uint64`. The rule is the same at a typed slot, an
+  argument and in overload scoring.
+- Narrowing or a change of signedness needs an explicit `as`, even when the target could hold the
+  value (`uint8` → `int32`):
+
+```typescript
+const big: int64 = 300;
+takeU8(big);            // error: implicit int64 → uint8 conversion in 'takeU8' arg 0 changes signedness — write an explicit 'as uint8'
+takeI32(big);           // error: implicit int64 → int32 conversion in 'takeI32' arg 0 narrows — write an explicit 'as int32'
+takeI32(big as int32);  // ok
+```
+
+- A float converts to an integer only through `as`: `implicit float64 → int32 narrowing … drops the
+  fractional part`. An integer converts to `float64`/`float32`/`number` implicitly today. Whether the
+  lossy cases (`int64` → `float64`, `int32` → `float32`, `float64` → `float32`) should need `as` is an
+  open decision.
+- Measured on C and `--target=js` with the same result on both (msc b899f456).
 
 ### Float Types
 
