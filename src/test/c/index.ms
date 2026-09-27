@@ -35,3 +35,5 @@ import "./numericNarrowing";
 import "./voidValue";
 import "./promiseThenTyped";
 import "./buildIsolation";
+import "./aggregateLifecycle";
+import "./referenceTransfer";
