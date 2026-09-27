@@ -99,7 +99,9 @@ function isStorageRead(e: Node): boolean {
 }
 
 function readsBeforeAwait(e: Node): boolean {
-	return isStorageRead(e) && snapshotsLikeJs(e.nodeType);
+	if (e.kind == NodeKind.TypeAssertion) return readsBeforeAwait((e.data as TypeAssertionData).asExpr);
+	if (e.kind == NodeKind.HiddenStdConv || e.kind == NodeKind.HiddenSubConv) return readsBeforeAwait((e.data as HiddenStdConvData).convExpr);
+	return (isStorageRead(e) || e.kind == NodeKind.ConditionalExpr) && snapshotsLikeJs(e.nodeType);
 }
 
 function bindIfEarly(e: Node, pre: Node[]): Node {
