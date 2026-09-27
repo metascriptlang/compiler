@@ -141,6 +141,19 @@ tree_key() {
 }
 differ_c() { awk -F'\t' '$2 != $6 || $4 != 0 || $8 != 0 { print $1 }'; }
 
+list_programs() {
+  local e n dir=${1:-$TOP/src/test/corpus/programs}
+  for e in "$dir"/* "$dir"/.[!.]*; do
+    [ -e "$e" ] || continue
+    n=${e##*/}
+    if [ -d "$e" ]; then
+      [ -f "$e/main.ms" ] && printf '%s %s\n' "$n" "$e/main.ms"
+    else
+      case "$n" in *.ms) printf '%s %s\n' "${n%.ms}" "$e" ;; esac
+    fi
+  done
+}
+
 narrow_for() {
   narrow="" only_csv="" lanes_csv=""
   [ "$select" -eq 1 ] || return 0
@@ -412,6 +425,12 @@ CASES
   [ "$got" = "$want" ] || { printf 'FAIL ledger fmt: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   if ! printf 'src/checker/a.ms\n' | compiler_changed; then printf 'FAIL compiler changed: checker\n'; bad=1; fi
   if printf 'src/test/c/x.ms\ndocs/a.md\n' | compiler_changed; then printf 'FAIL compiler changed: tests only\n'; bad=1; fi
+  local progs; progs=$(mktemp -d)
+  mkdir -p "$progs/010-numbered" "$progs/unnumberedDir" "$progs/noMain"
+  : >"$progs/010-numbered/main.ms"; : >"$progs/unnumberedDir/main.ms"; : >"$progs/plain.ms"; : >"$progs/notes.txt"
+  got=$(list_programs "$progs" | cut -d' ' -f1 | sort | paste -sd'|' -)
+  rm -rf "$progs"
+  [ "$got" = "010-numbered|plain|unnumberedDir" ] || { printf 'FAIL programs as the corpus runner finds them: want "010-numbered|plain|unnumberedDir", got "%s"\n' "$got"; bad=1; }
   local depsf; depsf=$(mktemp)
   printf 'C:/w/src/test/c/index.ms\nC:/w/src/test/helpers.ms\n' >"$depsf"
   if ! printf 'src/test/helpers.ms\n' | tier_touched "$depsf" C:/w; then printf 'FAIL tier touched: its helper\n'; bad=1; fi
@@ -667,18 +686,6 @@ totals_of() {
   esac
 }
 
-list_programs() {
-  local e n
-  for e in "$TOP"/src/test/corpus/programs/*; do
-    n=${e##*/}
-    case "$n" in [0-9]*-*) ;; *) continue ;; esac
-    if [ -d "$e" ]; then
-      [ -f "$e/main.ms" ] && printf '%s %s\n' "$n" "$e/main.ms"
-    else
-      case "$n" in *.ms) printf '%s %s\n' "${n%.ms}" "$e" ;; esac
-    fi
-  done
-}
 
 emit_side() {
   local jobs
