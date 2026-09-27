@@ -153,6 +153,8 @@ export function resetInstantiationState(): void {
 	_moduleProgramMap = new HashMap<string, Node>();
 	_ctorRegistry = new HashMap<Symbol, CtorEntry[]>();
 	_ctorRows = [];
+	_instanceHooks = new HashMap<string, InstanceHook>();
+	_hookScannedInstances = new HashMap<Symbol, HashSet<string>>();
 }
 
 export function lookupCtorDefaults(classSym: Symbol | null, className: string): CtorEntry | null {
@@ -171,21 +173,25 @@ export function registerCtorInit(classSym: Symbol, className: string, fnType: Ty
 	if (entry != null) entry.initSym = initSym;
 }
 
-let _instanceHooks: HashMap<string, Symbol> = new HashMap<string, Symbol>();
-let _hookScannedInstances: HashSet<string> = new HashSet<string>();
+interface InstanceHook {
+	owner: Symbol;
+	sym: Symbol;
+}
+
+let _instanceHooks: HashMap<string, InstanceHook> = new HashMap<string, InstanceHook>();
+let _hookScannedInstances: HashMap<Symbol, HashSet<string>> = new HashMap<Symbol, HashSet<string>>();
 const USER_HOOK_NAMES: string[] = ["onDestroy", "onCopy", "onMove", "onMoved", "onClone", "onTrace"];
 
 export function lookupInstanceHook(instanceName: string, methodName: string): Symbol | null {
-	const key = instanceName + "." + methodName;
-	if (!_instanceHooks.has(key)) return null;
-	return _instanceHooks.get(key);
+	const hook = _instanceHooks.get(instanceName + "." + methodName);
+	return hook != null ? hook.sym : null;
 }
 
 function isUserHookName(name: string): boolean {
 	return USER_HOOK_NAMES.includes(name);
 }
 
-function instantiateInstanceHooks(classData: ClassDeclData, instanceName: string, names: string[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
+function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, instanceName: string, names: string[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
 	for (const raw of classData.classBody) {
 		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
 		if (member == null || member.kind != NodeKind.MethodDecl) continue;
@@ -198,7 +204,7 @@ function instantiateInstanceHooks(classData: ClassDeclData, instanceName: string
 		}
 		ensureShaped(hookSym, ctx);
 		const inst = instantiateGenericFunction(hookSym, names, types, ctx, loc);
-		if (inst != null) _instanceHooks.set(instanceName + "." + md.methodName, inst);
+		if (inst != null) _instanceHooks.set(instanceName + "." + md.methodName, { owner, sym: inst });
 	}
 }
 
@@ -208,7 +214,10 @@ function instantiateExtensionHooks(genericSym: Symbol, instanceName: string, ins
 	let settled = true;
 	for (const hookName of USER_HOOK_NAMES) {
 		const key = instanceName + "." + hookName;
-		if (_instanceHooks.has(key) || !hasExtensionByName(registry, hookName)) continue;
+		const known = _instanceHooks.get(key);
+		if (known != null && known.owner == genericSym) continue;
+		if (known != null) _instanceHooks.delete(key);
+		if (!hasExtensionByName(registry, hookName)) continue;
 		for (const m of findAllExtensionsByName(registry, hookName)) {
 			const hookSym = m.sym;
 			if (m.isStatic || hookSym == null || m.receiverTypeName != genericSym.name || hookSym.modulePath != genericSym.modulePath) continue;
@@ -227,14 +236,14 @@ function instantiateExtensionHooks(genericSym: Symbol, instanceName: string, ins
 			while ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr) && formal.typeReturn != null) formal = formal.typeReturn;
 			if (!hasGenericParams(formal)) {
 				if (formal.kind != TypeKind.GenericInstance || monoInstanceName(formal) != instanceName) continue;
-				_instanceHooks.set(key, hookSym);
+				_instanceHooks.set(key, { owner: genericSym, sym: hookSym });
 				break;
 			}
 			const bindings = createUnifyBindings();
 			unifyType(formal, instType, bindings);
 			if (bindings.names.length == 0) continue;
 			const inst = instantiateGenericFunction(hookSym, bindings.names, bindings.types, ctx, loc);
-			if (inst != null) _instanceHooks.set(key, inst);
+			if (inst != null) _instanceHooks.set(key, { owner: genericSym, sym: inst });
 			break;
 		}
 	}
@@ -257,8 +266,13 @@ function instantiateHooksInType(t: Type | null, ctx: CheckerContext, loc: Source
 	const owner = base != null ? base.sym : null;
 	if (owner == null) return;
 	const name = monoInstanceName(t);
-	if (_hookScannedInstances.has(name)) return;
-	_hookScannedInstances.add(name);
+	let scanned = _hookScannedInstances.get(owner);
+	if (scanned == null) {
+		scanned = new HashSet<string>();
+		_hookScannedInstances.set(owner, scanned);
+	}
+	if (scanned.has(name)) return;
+	scanned.add(name);
 	for (const arg of t.typeChildren) instantiateHooksInType(arg, ctx, loc, depth + 1);
 	const settled = instantiateExtensionHooks(owner, name, t, ctx, loc);
 	if (t.typeReturn == null) {
@@ -269,7 +283,7 @@ function instantiateHooksInType(t: Type | null, ctx: CheckerContext, loc: Source
 	if (body != null && body.kind == TypeKind.Struct) {
 		for (const field of body.typeChildren) instantiateHooksInType(field, ctx, loc, depth + 1);
 	}
-	if (!settled) _hookScannedInstances.delete(name);
+	if (!settled) scanned.delete(name);
 }
 
 function pendingInstanceKey(node: Node, name: string): string {
@@ -977,7 +991,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	classNode.nodeType = concreteClassType;
 	classNode.resolvedSym = classSym;
 	addPendingInstance(host, classNode);
-	instantiateInstanceHooks(classData, mangledClass, dedup.names, dedup.types, ctx, loc);
+	instantiateInstanceHooks(structBase.sym != null ? structBase.sym : classSym, classData, mangledClass, dedup.names, dedup.types, ctx, loc);
 	const instType = createGenericInstance(structBase, dedup.types);
 	instType.typeName = classSym.name;
 	instantiateHooksInType(instType, ctx, loc, 0);
