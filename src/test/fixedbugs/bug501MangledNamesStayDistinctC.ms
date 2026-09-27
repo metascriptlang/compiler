@@ -40,7 +40,7 @@ test "bug501: a method and a function spelling its C base get distinct ordinals 
 }
 
 test "bug501: a local spelled like a temp's suffix is not redeclared on C" {
-	const c = cOf("export function f(): int32 { const dollarv: int32 = 11; const $v_1: int32 = 12; return dollarv + $v_1; }\n");
+	const c = cOf("export function f(): int32 { let dollarv: int32 = 11; let $v_1: int32 = 12; return dollarv + $v_1; }\n");
 	assert c.contains("dollarv_1_ + dollarv_1__2");
 }
 
