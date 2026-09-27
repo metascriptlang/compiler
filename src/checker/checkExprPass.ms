@@ -10,7 +10,7 @@ import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, a
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
-	CandidateScore, sameType, explainStructuralPrefix, isObjectShapeMismatch, isAnonStructAdoption, dropsReadonlyView } from "./compat";
+	CandidateScore, sameType, explainStructuralPrefix, isAnonStructAdoption, dropsReadonlyView } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { writeRefusal } from "./assignable";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
@@ -742,12 +742,6 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				} else if (operandReadsValue(ctx, d.operator, leftType, rightType, false) && valueOfInPlace(ctx, d.right)) {
 					rightType = d.right.nodeType;
 				}
-			}
-			if (d.operator == "=" && isObjectShapeMismatch(rightType, leftType)) {
-				addError(ctx,
-					"Type '" + typeDisplayName(rightType) + "' is not assignable to type '" + typeDisplayName(leftType) + "'"
-						+ explainStructuralPrefix(rightType, leftType),
-					d.right.location.line, d.right.location.column);
 			}
 			// Parity: standard reference node fitting — insert HiddenStdConv for narrowing assignment
 			if (d.operator == "=" && leftType != null) {
@@ -1775,12 +1769,6 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				for (let i = 0; i < d.elements.length; i += 1) {
 					checkExpr(ctx, d.elements[i], elemExpected);
 					if (elemExpected != null) {
-						if (isObjectShapeMismatch(d.elements[i].nodeType, elemExpected)) {
-							addError(ctx,
-								"Type '" + typeDisplayName(d.elements[i].nodeType) + "' is not assignable to element type '" + typeDisplayName(elemExpected) + "'"
-									+ explainStructuralPrefix(d.elements[i].nodeType, elemExpected),
-								d.elements[i].location.line, d.elements[i].location.column);
-						}
 						d.elements[i] = fitNode(ctx, d.elements[i], elemExpected, d.elements[i].nodeType);
 					}
 				}

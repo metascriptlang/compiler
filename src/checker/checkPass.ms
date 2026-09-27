@@ -20,7 +20,7 @@ import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
-import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShapeMismatch, nonNullMemberOfNullable } from "./compat";
+import { isAssignable, isNominalMismatch, explainStructuralPrefix, nonNullMemberOfNullable } from "./compat";
 import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType } from "./types";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
@@ -728,31 +728,6 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		addWarning(ctx,
 			`explicit 'Promise<T>' annotation on a spawn result strips PARALOCK affine tracking — '${d.declName}' will not be lifetime-checked. Remove the annotation to enable affine checking, or keep it as an opt-out`,
 			d.nameLocation.line, d.nameLocation.column);
-	}
-	// TS-aligned (TS2322): `const x: T = expr` where expr's type is `null` and
-	// T is non-nullable is a type error at the assignment. Targeted at `null`
-	// only — broader assignability checking at var-decl is a separate concern
-	// (the codebase historically defers most decl-time mismatches to downstream
-	// passes; widening this filter risks surfacing latent legacy mismatches).
-	// Catches `const x: int32 = id(null)` where the naked-T `id<T>(x:T):T`
-	// returns `null` and we want the error here, not at C compile.
-	const dt = declType;
-	if (dt != null && initType != null
-		&& initType.kind == TypeKind.Null
-		&& !isUnresolvedType(dt)
-		&& dt.kind != TypeKind.GenericParam
-		&& !isAssignable(initType, dt)) {
-		const initLoc = d.initializer != null ? d.initializer.location : d.nameLocation;
-		addError(ctx,
-			"Type 'null' is not assignable to type '" + typeDisplayName(dt) + "'",
-			initLoc.line, initLoc.column);
-	}
-	if (isObjectShapeMismatch(initType, dt)) {
-		const shapeLoc = d.initializer != null ? d.initializer.location : d.nameLocation;
-		addError(ctx,
-			"Type '" + typeDisplayName(initType) + "' is not assignable to type '" + typeDisplayName(dt) + "'"
-				+ explainStructuralPrefix(initType, dt),
-			shapeLoc.line, shapeLoc.column);
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions
 	if (declType != null && d.initializer != null) {

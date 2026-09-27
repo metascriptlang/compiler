@@ -771,21 +771,6 @@ function objectShapeTarget(source: Type | null, target: Type | null): Type | nul
 	return target;
 }
 
-export function isObjectShapeMismatch(source: Type | null, target: Type | null): boolean {
-	const shapeTarget = objectShapeTarget(source, target);
-	const s0 = skipModifier(source);
-	const t0 = skipModifier(shapeTarget);
-	if (s0 == null || t0 == null) return false;
-	const s = unwrapRefBase(s0);
-	const t = unwrapRefBase(t0);
-	if (s.kind == TypeKind.GenericInstance && t.kind == TypeKind.GenericInstance) return !isAssignable(source, shapeTarget);
-	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return false;
-	if (s == t) return false;
-	if (s.typeName == "" || t.typeName == "") return false;
-	if (sameNominal(s, t)) return false;
-	return !isAssignable(source, shapeTarget);
-}
-
 // Error-path only: when a rejected object pair HAS every required field but in
 // the wrong slots, "got A, expected B" reads like a compiler bug. Name the field
 // that moved. Empty string when the plain message already explains the rejection.
