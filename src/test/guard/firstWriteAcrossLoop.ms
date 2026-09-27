@@ -19,24 +19,28 @@ class FwBox { v: string; constructor(v: string) { this.v = v; } }
 
 function viaFor(n: int32): string {
 	let b: FwBox;
-	for (let i: int32 = 0; i < n; i += 1) { b = new FwBox("f" + i); }
-	return b.v;
+	let last = "";
+	for (let i: int32 = 0; i < n; i += 1) { b = new FwBox("f" + i); last = b.v; }
+	return last;
 }
 
 function viaWhileBranches(): string {
 	let b: FwBox;
+	let last = "";
 	let i: int32 = 0;
 	while (i < 4) {
 		if (i % 2 == 0) { b = new FwBox("e" + i); } else { b = new FwBox("o" + i); }
+		last = b.v;
 		i += 1;
 	}
-	return b.v;
+	return last;
 }
 
 function viaForOf(xs: int32[]): string {
 	let b: FwBox;
-	for (const x of xs) { b = new FwBox("x" + x); }
-	return b.v;
+	let last = "";
+	for (const x of xs) { b = new FwBox("x" + x); last = b.v; }
+	return last;
 }
 
 function viaDoWhile(): string {
