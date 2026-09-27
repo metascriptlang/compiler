@@ -88,7 +88,7 @@ async function returnThroughAwaitingFinally(): Promise<int32> {
 }
 
 function reportValue(actual: int32, expected: int32): void {
-	assert actual == expected;
+	if (actual != expected) throw new Error("expected=" + expected.toString() + " actual=" + actual.toString());
 	console.log(actual);
 }
 
@@ -104,7 +104,7 @@ async function main(): Promise<void> {
 	reportValue(await closureInDo(), 8);
 	reportValue(await closureInSwitch(1), 6);
 	reportValue(await returnThroughAwaitingFinally(), 5);
-	assert log == "fin2";
+	if (log != "fin2") throw new Error("log: " + log);
 	console.log(log);
 }
 

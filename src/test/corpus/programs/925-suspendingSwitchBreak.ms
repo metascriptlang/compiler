@@ -57,14 +57,18 @@ async function run(): Promise<string> {
 	return out;
 }
 
+function expectStr(label: string, actual: string, expected: string): void {
+	if (actual != expected) throw new Error(label + " expected=" + expected + " actual=" + actual);
+}
+
 let a = "";
 for (const v of gen()) a = a + v.toString() + ",";
-assert a == "0,0,10,20,2,30,3,";
+expectStr("gen", a, "0,0,10,20,2,30,3,");
 console.log(a);
 let b = "";
 for (const v of genString()) b = b + v + ",";
-assert b == "a,s,c,";
+expectStr("genString", b, "a,s,c,");
 console.log(b);
 const asyncValues = await run();
-assert asyncValues == "023";
+expectStr("run", asyncValues, "023");
 console.log(asyncValues);

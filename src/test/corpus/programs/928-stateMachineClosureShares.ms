@@ -57,27 +57,35 @@ function* makers(): Iterator<Get> {
 	base = 100;
 }
 
+function expectInt(label: string, actual: int32, expected: int32): void {
+	if (actual != expected) throw new Error(label + " expected=" + expected.toString() + " actual=" + actual.toString());
+}
+
+function expectStr(label: string, actual: string, expected: string): void {
+	if (actual != expected) throw new Error(label + " expected=" + expected + " actual=" + actual);
+}
+
 async function main(): Promise<void> {
 	const a = await afterAwait();
-	assert a == 7;
+	expectInt("afterAwait", a, 7);
 	console.log(`after-await ${a}`);
 	const fs = await loopAfterAwait();
 	let s = "loop";
 	for (const f of fs) s = s + ` ${f()}`;
-	assert s == "loop 11 33 66";
+	expectStr("loopAfterAwait", s, "loop 11 33 66");
 	console.log(s);
 	const t = await thenWrites();
-	assert t == 10;
+	expectInt("thenWrites", t, 10);
 	console.log(`then ${t}`);
 	let g = "gen";
 	for (const v of bumps()) g = g + ` ${v}`;
-	assert g == "gen 1 2";
+	expectStr("bumps", g, "gen 1 2");
 	console.log(g);
 	const saved: Get[] = [];
 	for (const f of makers()) saved.push(f);
 	let m = "makers";
 	for (const f of saved) m = m + ` ${f()}`;
-	assert m == "makers 101 112 123";
+	expectStr("makers", m, "makers 101 112 123");
 	console.log(m);
 }
 

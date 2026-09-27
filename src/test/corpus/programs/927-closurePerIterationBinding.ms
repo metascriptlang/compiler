@@ -116,7 +116,7 @@ function refsPerIteration(): string {
 }
 
 function reportValue(actual: string, expected: string): void {
-	assert actual == expected;
+	if (actual != expected) throw new Error("expected=" + expected + " actual=" + actual);
 	console.log(actual);
 }
 reportValue(loopExample(), "loop total=3 0/1 1/11 2/21");

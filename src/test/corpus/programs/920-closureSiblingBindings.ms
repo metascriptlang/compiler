@@ -77,16 +77,20 @@ function siblingInArrowFrame(): string {
 	return run();
 }
 
+function expectStr(label: string, actual: string, expected: string): void {
+	if (actual != expected) throw new Error(label + " expected=" + expected + " actual=" + actual);
+}
+
 const blocks = siblingBlocks();
 const branches = siblingIfBlocks(true);
 const types = siblingTypes();
 const loop = siblingInLoopBody();
 const arrow = siblingInArrowFrame();
-assert blocks == "first,second";
-assert branches == "then";
-assert types == "s18";
-assert loop == "0,5,10,15,";
-assert arrow == "left,right";
+expectStr("blocks", blocks, "first,second");
+expectStr("branches", branches, "then");
+expectStr("types", types, "s18");
+expectStr("loop", loop, "0,5,10,15,");
+expectStr("arrow", arrow, "left,right");
 console.log(blocks);
 console.log(branches);
 console.log(types);

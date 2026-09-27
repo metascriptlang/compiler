@@ -61,6 +61,14 @@ async function jumpsThroughFinally(): Promise<int32> {
 	return i;
 }
 
+function expectInt(label: string, actual: int32, expected: int32): void {
+	if (actual != expected) throw new Error(label + " expected=" + expected.toString() + " actual=" + actual.toString());
+}
+
+function expectStr(label: string, actual: string, expected: string): void {
+	if (actual != expected) throw new Error(label + " expected=" + expected + " actual=" + actual);
+}
+
 async function main(): Promise<void> {
 	await ifTail(false);
 	await ifTail(true);
@@ -70,10 +78,11 @@ async function main(): Promise<void> {
 	const x = await branchValues(true);
 	const y = await branchValues(false);
 	const j = await jumpsThroughFinally();
-	assert s == 6;
-	assert x == 2 && y == 10;
-	assert j == 2;
-	assert log == "ifF;ifT;m1;m2;f1;f1;f2;";
+	expectInt("loopTail", s, 6);
+	expectInt("branchTrue", x, 2);
+	expectInt("branchFalse", y, 10);
+	expectInt("jumps", j, 2);
+	expectStr("log", log, "ifF;ifT;m1;m2;f1;f1;f2;");
 	console.log("loopTail=" + s.toString() + " branches=" + x.toString() + "," + y.toString() + " jumps=" + j.toString());
 	console.log("log: " + log);
 }

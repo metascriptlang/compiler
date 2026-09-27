@@ -81,14 +81,14 @@ function* statementKinds(k: int32): Iterator<string> {
 function collectInts(label: string, it: Iterator<int32>, expected: string): void {
 	let out: string = "";
 	for (const v of it) out = out + v.toString() + ",";
-	assert out == expected, label + ": " + out;
+	if (out != expected) throw new Error(label + ": " + out);
 	console.log(label + ": " + out);
 }
 
 function collectStrings(label: string, it: Iterator<string>, expected: string): void {
 	let out: string = "";
 	for (const v of it) out = out + v + ",";
-	assert out == expected, label + ": " + out;
+	if (out != expected) throw new Error(label + ": " + out);
 	console.log(label + ": " + out);
 }
 
@@ -98,7 +98,7 @@ collectStrings("forOfLocals", forOfLocals(["a", "b"], [1, 2]), "a1,a2,b1,b2,");
 collectStrings("sameNames(true)", sameNames(true), "str,0,10,");
 collectStrings("sameNames(false)", sameNames(false), "42,0,10,");
 collectInts("jumpsThroughFinally", jumpsThroughFinally(), "0,1,2,100,");
-assert trace == "f1;f1;f2;";
+if (trace != "f1;f1;f2;") throw new Error("trace: " + trace);
 console.log("trace: " + trace);
 collectStrings("statementKinds(1)", statementKinds(1), "do0,do1,case1,arm1,try,finally,");
 collectStrings("statementKinds(2)", statementKinds(2), "do0,do1,default,wild,try,finally,");
