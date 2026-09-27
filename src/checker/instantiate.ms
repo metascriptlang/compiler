@@ -4,9 +4,9 @@
 // immediately clone the function body, substitute types, and register
 // the specialized version. No separate monomorphize pass needed.
 
-import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, VariableDeclData, TypeAssertionData, ArrowFunctionData, HiddenDerefData, HiddenStdConvData, SizeofExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { declGenericParams, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
+import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
 import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
@@ -660,19 +660,6 @@ function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void 
 // src/ast/visitor.ms) so every NodeKind is covered by construction — adding a
 // new NodeKind cannot silently break generic instantiation.
 
-// Substitute all generic param names → concrete types in a single annotation string.
-function substAnnotationAll(ann: string, paramNames: string[], concreteTypes: Type[]): string {
-	if (ann == "") return ann;
-	let out = ann;
-	for (let i = 0; i < paramNames.length; i += 1) {
-		if (i < concreteTypes.length) {
-			out = monoSubstAnnotation(out, paramNames[i], monoConcreteTypeName(concreteTypes[i]));
-		}
-	}
-	return out;
-}
-
-// Apply substitutions to node-local state (nodeType + per-kind string annotations).
 // Does NOT descend into children — that's forEachChild's job.
 function substNodeLocal(node: Node, paramNames: string[], concreteTypes: Type[]): void {
 	if (node.nodeType != null) {
@@ -681,35 +668,6 @@ function substNodeLocal(node: Node, paramNames: string[], concreteTypes: Type[])
 				node.nodeType = substituteType(node.nodeType, paramNames[i], concreteTypes[i]);
 			}
 		}
-	}
-	// Substitute explicit type args on the node (e.g. "K, V" in new HashMap<K, V>()).
-	// Without this, the checker's NewExpr/CallExpr generic resolution falls back
-	// to a location-keyed side channel that still holds the original (unsubstituted)
-	// strings, producing HashMap<Unknown, Unknown> during re-check of cloned bodies.
-	if (node.typeArg != null && node.typeArg != "" && declGenericParams(node) == "") {
-		node.typeArg = substAnnotationAll(node.typeArg, paramNames, concreteTypes);
-	}
-	if (node.kind == NodeKind.VariableDecl) {
-		const d = node.data as VariableDeclData;
-		d.declType = substAnnotationAll(d.declType, paramNames, concreteTypes);
-	} else if (node.kind == NodeKind.TypeAssertion) {
-		const d = node.data as TypeAssertionData;
-		d.asType = substAnnotationAll(d.asType, paramNames, concreteTypes);
-	} else if (node.kind == NodeKind.FunctionDecl) {
-		const d = node.data as FunctionDeclData;
-		d.fnReturnType = substAnnotationAll(d.fnReturnType, paramNames, concreteTypes);
-		for (let p = 0; p < d.fnParamTypes.length; p += 1) {
-			d.fnParamTypes[p] = substAnnotationAll(d.fnParamTypes[p], paramNames, concreteTypes);
-		}
-	} else if (node.kind == NodeKind.ArrowFunction) {
-		const d = node.data as ArrowFunctionData;
-		d.arrowReturnType = substAnnotationAll(d.arrowReturnType, paramNames, concreteTypes);
-		for (let p = 0; p < d.arrowParamTypes.length; p += 1) {
-			d.arrowParamTypes[p] = substAnnotationAll(d.arrowParamTypes[p], paramNames, concreteTypes);
-		}
-	} else if (node.kind == NodeKind.SizeofExpr) {
-		const d = node.data as SizeofExprData;
-		d.sizeofType = substAnnotationAll(d.sizeofType, paramNames, concreteTypes);
 	}
 }
 
@@ -931,6 +889,7 @@ function instanceFieldInits(classData: ClassDeclData, names: string[], types: Ty
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
+	const callerScope = openInstanceScope(bodyCtx, names, types);
 	const injectedSyms: Symbol[] = [];
 	for (const ct of types) {
 		injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
@@ -950,6 +909,7 @@ function instanceFieldInits(classData: ClassDeclData, names: string[], types: Ty
 	}
 	bodyCtx.modulePath = savedModulePath;
 	removeInjectedSyms(bodyCtx, injectedSyms);
+	bodyCtx.table.current = callerScope;
 	truncateCallerExtensions(bodyCtx, extPreCount);
 	return fields;
 }
