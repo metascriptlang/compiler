@@ -2289,6 +2289,7 @@ Comparison is numeric when both sides are numeric, string otherwise.
 | OS family (computed) | `posix`, `unix`, `bsd` |
 | Memory mode | `drc`, `orc`, `none`, `manual`, plus `gc=orc` |
 | Build mode | `debug`, `release`, `danger`, plus `mode=release` |
+| Hot code reload | `hcr` under `--hcr` |
 | Command line | `-d:myFlag`, `-d:tier=3`, `--define:name=value` |
 
 A flag with no value is `"true"`. A name that is not defined is **false, never an
@@ -2305,8 +2306,8 @@ user has not set. `msc --help-defines` lists everything currently defined.
 
 `msc run app.ms --hcr` builds the program as one native image per module, starts it under
 the host from `std/hcr`, and on every save rebuilds the module that changed while the
-program keeps running. New code takes effect where the program calls `reload()`, once per
-pass of its main loop:
+program keeps running. New code takes effect where the program calls `reload()`, which it
+imports from `std/hcr` where it wants reloads to happen, once per pass of its main loop:
 
 ```typescript
 import { reload, HcrReloadKind } from "std/hcr";
@@ -2314,7 +2315,7 @@ import { tick, message } from "./logic";
 
 while (true) {
 	tick();
-	if (reload().kind == HcrReloadKind.Reloaded) console.log(message());
+	if (reload() == HcrReloadKind.Reloaded) console.log(message());
 	await sleepAsync(16);
 }
 ```
@@ -2322,13 +2323,13 @@ while (true) {
 Edit the body of `message` in `logic.ms` and save: the next `reload()` answers `Reloaded`,
 and the next `message()` runs the new code. `examples/hcrApp/` is this program.
 
-| `reload().kind` | When |
+| `reload()` | When |
 |---|---|
 | `NoChange` | no image changed since the last call |
 | `Reloaded` | the changed images are loaded, initialized and published |
 | `Pending` | an image cannot be loaded yet (the linker is still writing it); retried when it changes |
 | `Rejected` | a candidate failed, or an after-reload handler threw; the running code is unchanged |
-| `RestartRequired` | the change cannot apply to live state (below); `reason` names what changed |
+| `RestartRequired` | the change cannot apply to live state (below); `lastReload().reason` names what changed |
 
 What a reload keeps and what it refuses:
 
@@ -2351,9 +2352,13 @@ What a reload keeps and what it refuses:
   a reload, leaf module first: before-handlers on the old code, after-handlers on the new
   code. A throwing after-handler rolls the reload back and answers `Rejected`. Callbacks
   handed to native code or other threads are re-registered here.
-- **A program that never imports `std/hcr` has no reload engine**: `msc run --hcr` stops with
-  `HCR-HOST the core image does not export msHcrEngineStart`.
-- **Without `--hcr` none of this exists**: no tables, no lifted state, no host.
+- **A program that never imports `std/hcr` is refused by `msc run --hcr`**: nothing would call
+  `reload()`, so `error: app.ms never imports std/hcr, …` stops the build and the watch waits
+  for the save that adds the import.
+- **Without `--hcr` none of this exists**: no tables, no lifted state, no host. `reload` is a
+  macro, and without `--hcr` it expands to `HcrReloadKind.NoChange` at compile time: the same
+  source builds for production, and the loop's `reload()` costs no call there. `--hcr` defines
+  `hcr` for `when`.
 
 Windows x64 and Linux x64 run the whole loop (`src/test/hcr/run.ms`). macOS has no
 file-watch backend yet and has never run it; iOS is not implemented. Architecture, measured
