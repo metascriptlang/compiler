@@ -22,10 +22,7 @@ async function run(): Promise<int32> {
 	return acc;
 }
 
-async function main(): Promise<void> {
-	let out = "";
-	for (const v of gen()) { out = out + v.toString() + ","; }
-	const r = await run();
-	console.log(`gen=${out} async=${r}`);
-}
-main();
+let out = "";
+for (const v of gen()) { out = out + v.toString() + ","; }
+const r = await run();
+console.log(`gen=${out} async=${r}`);

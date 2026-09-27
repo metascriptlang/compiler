@@ -101,7 +101,7 @@ function f(value: uint32): Result<uint64, Failure> {
 }
 
 test "bug241: a wrong return in a block arm of a statement match is a return type mismatch" {
-	const error = compileError241(`
+	const inMatch = compileError241(`
 function f(value: uint32): uint64 {
 	match (value) {
 		0 => {
@@ -111,7 +111,15 @@ function f(value: uint32): uint64 {
 	};
 	return 1;
 }`);
-	assert error.indexOf("Type 'string' is not assignable to type 'uint64'", 0) >= 0, error;
+	const inIf = compileError241(`
+function f(value: uint32): uint64 {
+	if (value == 0) {
+		return "s";
+	}
+	return 1;
+}`);
+	assert inMatch != "", inMatch;
+	assert inMatch == inIf, `${inMatch} | ${inIf}`;
 }
 
 test "bug241: return null in a block arm of a match value is checked against the match" {

@@ -294,3 +294,34 @@ test "a method's and a static method's own constraint is checked" {
 	assert hasError(src + "const c = H.take(\"s\");", "Type 'string' does not satisfy constraint 'Animal' for type parameter 'T' in 'take'");
 	assert strictErrorCount(src + "const c = new H().pick(dog);\nconst d = H.take(animal);") == 0;
 }
+
+// ===== One rule settles every candidate of a type parameter =====
+
+const PAIR = "interface Pair<A, B> { first: A; second: B; }\nfunction same<T>(p: Pair<T, T>): T { return p.first; }\n";
+
+test "numeric candidates inside one argument are refused alike in either order" {
+	const a = PAIR + "const p: Pair<int32, float64> = { first: 1, second: 2.5 };\nconst c = same(p);";
+	const b = PAIR + "const p: Pair<float64, int32> = { first: 2.5, second: 1 };\nconst c = same(p);";
+	assert hasError(a, "Argument type mismatch in 'same' arg 0: got Pair");
+	assert hasError(b, "Argument type mismatch in 'same' arg 0: got Pair");
+	assert !hasError(a, "is bound to both");
+	assert strictErrorCount(a) == 1;
+	assert strictErrorCount(b) == 1;
+}
+
+test "class candidates inside one argument are refused alike in either order" {
+	const a = CLASSES + PAIR + "const p: Pair<Dog, Animal> = { first: dog, second: animal };\nconst c = same(p);";
+	const b = CLASSES + PAIR + "const p: Pair<Animal, Dog> = { first: animal, second: dog };\nconst c = same(p);";
+	assert hasError(a, "Argument type mismatch in 'same' arg 0: got Pair");
+	assert hasError(b, "Argument type mismatch in 'same' arg 0: got Pair");
+}
+
+test "sibling candidates inside one argument are rejected" {
+	const src = CLASSES + "class Cat extends Animal { lives: int32 = 9; }\n" + PAIR + "const cat = new Cat();\nconst p: Pair<Dog, Cat> = { first: dog, second: cat };\nconst c = same(p);";
+	assert hasError(src, "Argument type mismatch in 'same' arg 0");
+}
+
+test "candidates across arguments settle on the wider one in either order" {
+	assert strictErrorCount("function pick<T>(a: T, b: T): T { return a; }\nconst c = pick(1, 2.5);\nconst d = pick(2.5, 1);") == 0;
+	assert strictErrorCount(CLASSES + "const c = pair(animal, dog);\nconst d = pair(dog, animal);") == 0;
+}

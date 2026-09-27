@@ -32,16 +32,19 @@ test "a missing function-typed field is reported by name" {
 	assert hasError(FOR_REQ + "const xs: number[] = [7, 8];\nconst s = For({ each: () => xs });", "field 'children' must be initialized");
 }
 
-test "two fields binding T to different types inside one literal are rejected" {
-	assert hasError(FOR_REQ + "const s = For({ each: () => [7, 8], children: (item: number) => \"i\" });", "'T' is bound to both int32 and number");
+test "two fields binding T to int32 and number inside one literal settle on number" {
+	assert strictErrorCount(FOR_REQ + "const s = For({ each: () => [7, 8], children: (item: number) => \"i\" });") == 0;
 }
 
-test "the within-literal conflict is reported once" {
-	assert strictErrorCount(FOR_REQ + "const s = For({ each: () => [7, 8], children: (item: number) => \"i\" });") == 1;
+test "an existing int32 array is not read as the number array T settled on" {
+	const src = FOR_REQ + "const ints: int32[] = [7, 8];\nconst s = For({ each: () => ints, children: (item: number) => \"i\" });";
+	assert hasError(src, "Type 'int32[]' is not assignable to type 'number[]'");
+	assert strictErrorCount(src) == 1;
 }
 
-test "a generic function passed as a value reports the same conflict" {
-	const src = FOR_REQ + CC + "const s = createComponent(For, { each: () => [7, 8], children: (item: number) => \"i\" });";
-	assert hasError(src, "'T' is bound to both int32 and number");
+test "a generic function passed as a value settles T the same way" {
+	assert strictErrorCount(FOR_REQ + CC + "const s = createComponent(For, { each: () => [7, 8], children: (item: number) => \"i\" });") == 0;
+	const src = FOR_REQ + CC + "const ints: int32[] = [7, 8];\nconst s = createComponent(For, { each: () => ints, children: (item: number) => \"i\" });";
+	assert hasError(src, "Type 'int32[]' is not assignable to type 'number[]'");
 	assert strictErrorCount(src) == 1;
 }

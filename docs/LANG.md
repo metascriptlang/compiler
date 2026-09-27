@@ -2996,6 +2996,7 @@ Used for high-performance scenarios where heap allocation is undesirable. These 
 - **Allocation**: Stack (within a C struct).
 - **Size**: Fixed at compile-time (must be a constant).
 - **Behavior**: Passed by value (struct copy) unless passed to a `Span<T>`.
+- **Constant index**: an integer literal outside `0..N-1` is a compile error in every build mode, `--danger` included (`index 5 out of bounds for 'int32[4]' (0..3)`, measured 2026-09-27); a variable index is checked at run time, and not at all under `--danger`.
 - **Usage**:
   ```typescript
   const buffer: uint8[1024] = [0]; // Stack-allocated 1KB buffer

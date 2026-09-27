@@ -10,7 +10,6 @@ import { InitTracker, createInitTracker } from "./initTracker";
 import { AffineTracker, createAffineTracker } from "./spawnAffinity";
 import { mangle } from "../codegen/c/names";
 
-
 // ===== Export Registry (cross-module type propagation) =====
 // Lives only during checkModuleGraph execution — NOT on Module/ModuleGraph (DRC constraint).
 // Reference implementation equivalent: per-module public symbol table.
@@ -846,11 +845,6 @@ function dispDepthBelow(classSym: Symbol, root: Symbol): int32 {
 	return -1;
 }
 
-export function classDescendsFrom(classSym: Symbol, baseSym: Symbol): boolean {
-	if (classSym == baseSym) return false;
-	return dispDepthBelow(classSym, baseSym) > 0;
-}
-
 export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): DispMethodEntry | null {
 	let cur = classSym.symbolType != null ? classBaseStruct(classSym.symbolType) : null;
 	let d = 0;
@@ -1026,12 +1020,6 @@ export function extractGenericParamDecls(flags: string): string[] {
 		}
 	}
 	return result;
-}
-
-export function extractGenericParamNames(flags: string): string[] {
-	const names: string[] = [];
-	for (const param of extractGenericNames(flags)) names.push(splitTopLevel(param, ":")[0].trim());
-	return names;
 }
 
 export function stripGenFlag(flags: string): string {

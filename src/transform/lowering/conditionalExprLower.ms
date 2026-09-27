@@ -437,7 +437,7 @@ function expandWhileCond(stmt: Node, ctx: TransformContext): Node[] {
 	return [stmt];
 }
 
-export function isAssignOperator(op: string): boolean {
+function isAssignOperator(op: string): boolean {
 	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=";
 }
 
@@ -468,7 +468,7 @@ function expandAssignStmt(stmt: Node, ctx: TransformContext): Node[] {
 // temp would copy a struct and the store would hit the copy — so only
 // rvalue-producing parts are hoisted: index expressions, and Call/New in
 // object position (their result is a reference; temping preserves identity).
-export function hoistAssignTargetEffects(target: Node, pre: Node[], ctx: TransformContext, writes: Symbol[]): Node {
+function hoistAssignTargetEffects(target: Node, pre: Node[], ctx: TransformContext, writes: Symbol[]): Node {
 	if (target == null) return target;
 	if (target.kind == NodeKind.ArrayAccess) {
 		const ad = target.data as ArrayAccessData;
@@ -554,7 +554,7 @@ function condLowersToStatements(n: Node): boolean {
 	return found;
 }
 
-export function bodyHasLoopContinue(node: Node): boolean {
+function bodyHasLoopContinue(node: Node): boolean {
 	if (node == null) return false;
 	if (node.kind == NodeKind.ContinueStmt) return true;
 	if (node.kind == NodeKind.WhileStmt || node.kind == NodeKind.DoWhileStmt

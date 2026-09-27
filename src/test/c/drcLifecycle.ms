@@ -345,3 +345,26 @@ test "E2E C: a narrowed captured local returned through an identity assertion is
 	assert c.value.contains(").got.value));");
 	assert !c.value.contains("*__result = (*_env");
 }
+
+test "E2E C: a fresh object returned through a cast to an unmanaged type keeps its reference" {
+	const c = compileToC(`
+		class Node1 { text: string = "hi"; }
+		function make(): Node1 { return new Node1(); }
+		function asHandle(): unknown { return make() as unknown; }
+	`);
+	assert c.ok;
+	assert c.value.contains("return ((void*)make");
+	assert !c.value.contains("msDecrefCyclic(dollartmp");
+}
+
+test "E2E C: a fresh object returned through two casts to an unmanaged alias keeps its reference" {
+	const c = compileToC(`
+		class Node1 { text: string = "hi"; }
+		type Handle = unknown;
+		function make(): Node1 { return new Node1(); }
+		const create = (tag: string): Handle => make() as unknown as Handle;
+	`);
+	assert c.ok;
+	assert c.value.contains("return ((void*)make");
+	assert !c.value.contains("msDecrefCyclic(dollartmp");
+}

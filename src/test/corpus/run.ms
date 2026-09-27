@@ -692,7 +692,7 @@ function firstLineContaining(text: string, needle: string): string {
 	return "";
 }
 
-// LEDGER <Type> ... alloc=N ... destroy=M (stderr, one line per type), then a
+// LEDGER <Type> ... alloc=N ... destroy=M (stderr, one line per TypeInfo), then a
 // final "LEDGER TOTAL" line that always prints — liveness marker only (sums
 // include per-type imbalances excused by destroy==0 or slack, so TOTAL is
 // exempt from the balance rule).
@@ -711,6 +711,13 @@ function ledgerSlackFor(spec: Spec, typeName: string): int32 {
 }
 
 function parseLedgerFailure(err: string, spec: Spec): string {
+	for (const slackType of spec.slackTypes) {
+		let rows = 0;
+		for (const line of err.split("\n")) {
+			if (line.startsWith(`LEDGER ${slackType} `)) rows = rows + 1;
+		}
+		if (rows > 1) return slackType + " @ledger-slack names " + rows + " ledger rows (same-named types of different modules) — slack cannot tell them apart";
+	}
 	for (const line of err.split("\n")) {
 		if (line.indexOf("LEDGER ") != 0) { continue; }
 		let typeName = "";
