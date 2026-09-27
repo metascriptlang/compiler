@@ -369,3 +369,4 @@ import "./bug237ExplicitTypeArgsFitArguments";
 import "./bug238SameNameGenericsAcrossModules";
 import "./bug239ConstrainedGenericAlias";
 import "./bug240EnumMemberBindsItsEnum";
+import "./bug247GenericCallArgumentTakesContext";
