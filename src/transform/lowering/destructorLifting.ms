@@ -1707,8 +1707,8 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 	for (let i = 0; i < objType.typeNames.length; i += 1) {
 		const fieldName = objType.typeNames[i];
 		const fieldType = objType.typeChildren[i];
-		const aField = makeMember(makeTypedIdentResolved(aSym, null, loc), fieldName, loc);
-		const bField = makeMember(makeTypedIdentResolved(bSym, null, loc), fieldName, loc);
+		const aField = makeMember(makeTypedIdentResolved(aSym, objType, loc), fieldName, loc);
+		const bField = makeMember(makeTypedIdentResolved(bSym, objType, loc), fieldName, loc);
 
 		// Generate: if (!fieldEq) return false;
 		const eqExpr = fieldEqExpr(aField, bField, fieldType, lctx, loc);
@@ -1909,8 +1909,10 @@ function ensureTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLoc
 
 // Tuple field access helper: a._0, a._1, etc.
 function tupleField(obj: Node, idx: number, lctx: LiftCtx, loc: SourceLocation): Node {
-	if (lctx.jsBackend) return makeArrayAccess(obj, makeNumber(idx, loc), loc);
-	return makeMember(obj, "_" + idx.toString(), loc);
+	const field = lctx.jsBackend ? makeArrayAccess(obj, makeNumber(idx, loc), loc) : makeMember(obj, "_" + idx.toString(), loc);
+	const t = obj.nodeType;
+	if (t != null && t.kind == TypeKind.Tuple && idx < t.typeChildren.length) field.nodeType = t.typeChildren[idx];
+	return field;
 }
 
 // Generate element-by-element equality for tuples.
@@ -1923,8 +1925,8 @@ function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
 	let i = 0;
 	while (i < t.typeChildren.length) {
-		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
-		const bField = tupleField(makeTypedIdentResolved(bSym, null, loc), i, lctx, loc);
+		const aField = tupleField(makeTypedIdentResolved(aSym, t, loc), i, lctx, loc);
+		const bField = tupleField(makeTypedIdentResolved(bSym, t, loc), i, lctx, loc);
 		const eqExpr = fieldEqExpr(aField, bField, t.typeChildren[i], lctx, loc);
 		buf.push(makeIf(makeUnary("!", eqExpr, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
 		i += 1;
