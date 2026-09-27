@@ -941,19 +941,23 @@ if [ "$record" -eq 1 ]; then
   sha=$(git rev-parse --short HEAD)
   [ -f "$KNOWN" ] || echo '{}' >"$KNOWN.prev"
   [ -f "$KNOWN" ] && cp "$KNOWN" "$KNOWN.prev"
-  merged=$(jq --arg lanes "$KNOWN_LANES flaky" 'with_entries(select(.key as $k | $lanes | split(" ") | index($k)))' "$KNOWN.prev")
+  merged="$OUT/known.merged"
+  jq --arg lanes "$KNOWN_LANES flaky" 'with_entries(select(.key as $k | $lanes | split(" ") | index($k)))' "$KNOWN.prev" >"$merged" \
+    || die "--record: cannot read $KNOWN.prev"
   for lane in $ran; do
     case " $KNOWN_LANES " in *" $lane "*) ;; *) continue ;; esac
-    merged=$(jq -n --argjson prev "$merged" --arg l "$lane" --arg sha "$sha" --rawfile reds "$OUT/$lane.red" '
-      ($reds | split("\n") | map(select(length > 0))) as $names
-      | $prev + {($l): ($names | map({key: ., value: (($prev[$l] // {})[.] // {since: $sha, note: ""})}) | from_entries)}')
+    jq --arg l "$lane" --arg sha "$sha" --rawfile reds "$OUT/$lane.red" '
+      . as $prev
+      | ($reds | split("\n") | map(select(length > 0))) as $names
+      | $prev + {($l): ($names | map({key: ., value: (($prev[$l] // {})[.] // {since: $sha, note: ""})}) | from_entries)}' "$merged" >"$merged.next" \
+      && mv "$merged.next" "$merged" || die "--record: merging the $lane reds failed"
   done
-  printf '%s' "$merged" | jq -r '
+  jq -r '
     "{\n" + ([to_entries | sort_by(.key)[] |
       "  \(.key | @json): {" +
       (if (.value | length) == 0 then "" else
         "\n" + ([.value | to_entries | sort_by(.key)[] | "    \(.key | @json): \(.value | tojson)"] | join(",\n")) + "\n  "
-      end) + "}"] | join(",\n")) + "\n}"' >"$KNOWN"
+      end) + "}"] | join(",\n")) + "\n}"' "$merged" >"$KNOWN" || die "--record: writing $KNOWN failed"
   diff -u "$KNOWN.prev" "$KNOWN" | sed -n '3,$p'
   rm -f "$KNOWN.prev"
   say "gate: RECORDED $(jq '[.[] | length] | add // 0' "$KNOWN") known red(s) at $sha ($(fmt_secs $((SECONDS - start)))) -> src/test/known-red.json"
