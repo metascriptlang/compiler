@@ -1,5 +1,4 @@
-// @exit: 1
-// @stdout: the length of the array changed while iterating over it
+// @stdout: array raised after 2: the length of the array changed while iterating over it
 // @xfail(raiser): the Raiser VM runs for-of itself and rejects a string iterable ('expected an array, got value kind String')
 // note: an uncaught length change of a for-of array ends the program with Nim's items message; a string that grows while iterated raises too, as Nim's items does for string. The loop used to read past the end or skip what was added.
 
@@ -29,8 +28,12 @@ console.log(grownString() + " | " + sameLengthString());
 
 const names: string[] = ["a", "b", "c"];
 let visited = 0;
-for (const n of names) {
-	visited += 1;
-	if (n == "b") names.pop();
+try {
+	for (const n of names) {
+		visited += 1;
+		if (n == "b") names.pop();
+	}
+	console.log("not reached " + String(visited));
+} catch (e) {
+	console.log("array raised after " + String(visited) + ": " + e.message);
 }
-console.log("not reached " + String(visited));
