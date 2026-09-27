@@ -297,6 +297,11 @@ function watchWarm(): void {
 		{ file: "logicExport.ms", target: "logic.ms", warm: false, fails: false },
 		{ file: "logicInt64.ms", target: "logic.ms", warm: false, fails: false },
 		{ file: "logicOriginal.ms", target: "logic.ms", warm: false, fails: false },
+		{ file: "boxHookBody.ms", target: "box.ms", warm: true, fails: false },
+		{ file: "boxRunBody.ms", target: "box.ms", warm: true, fails: false },
+		{ file: "boxCtor.ms", target: "box.ms", warm: true, fails: false },
+		{ file: "boxOverride.ms", target: "box.ms", warm: false, fails: false },
+		{ file: "boxNoHook.ms", target: "box.ms", warm: false, fails: false },
 	];
 	let replay = "";
 	for (const s of steps) replay = replay + `${s.file} ${s.target}\n`;
@@ -311,7 +316,7 @@ function watchWarm(): void {
 		failWith(tag, `the watch replay reported ${statuses.length} builds, expected ${steps.length + 1}`);
 	}
 
-	for (const f of ["logic.ms", "view.ms", "shapes.ms"]) copy(`${FIXTURES}/watchWarm/${f}`, `${dir}/${f}`);
+	for (const f of ["logic.ms", "view.ms", "shapes.ms", "box.ms"]) copy(`${FIXTURES}/watchWarm/${f}`, `${dir}/${f}`);
 	const debug = `${dir}/out/debug`;
 	for (let n = 0; n <= steps.length; n += 1) {
 		const step: WatchStep | null = n > 0 ? steps[n - 1] : null;
