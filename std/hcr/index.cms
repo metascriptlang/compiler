@@ -1,5 +1,6 @@
 import { exit } from "../process";
 import { writeStderr } from "../io";
+import { readDir, removeAll } from "../fs";
 
 @include("runtime/hcrEngine.h");
 
@@ -17,6 +18,7 @@ extern function msHcrFileIdentity(path: cstring): uint64;
 extern function msHcrCopyImage(from: cstring, to: cstring): int32;
 extern function msHcrMakeDir(path: cstring): int32;
 extern function msHcrProcessId(): uint32;
+extern function msHcrProcessAlive(pid: uint32): int32;
 extern function hcrOpen(path: cstring): Ptr<void> from "msHcrImageOpen";
 extern function hcrSymbol(handle: Ptr<void>, name: cstring): Ptr<void> from "msHcrImageSymbol";
 extern function hcrClose(handle: Ptr<void>): int32 from "msHcrImageClose";
@@ -217,6 +219,19 @@ function handover(image: HcrImage, state: Ptr<void>): Ptr<void> {
 	return hcrCallHandover(raw, state);
 }
 
+function sweepEndedRuns(root: string): void {
+	const own = `${msHcrProcessId()}`;
+	for (const entry of readDir(root)) {
+		if (!entry.endsWith("/")) continue;
+		const name = entry.slice(0, entry.length - 1);
+		const pid = name.parseInt();
+		if (name == own || `${pid}` != name || pid <= 0 || pid > 4294967295) continue;
+		if (msHcrProcessAlive(pid as uint32) != 0) continue;
+		const removed = removeAll(`${root}/${name}`);
+		if (!removed.ok) writeStderr(`HCR: cannot remove the copies of ended run ${root}/${name}: ${removed.error.message}\n`);
+	}
+}
+
 @exportName("msHcrEngineStart")
 export function start(): int32 {
 	if (started) fatal("the engine was already started");
@@ -225,6 +240,7 @@ export function start(): int32 {
 	if (launchDir == "" || launchStem == "") fatal("msHcrLaunch(dir, stem) must run before msHcrEngineStart");
 	copyRoot = `${launchDir}/.hcr/${msHcrProcessId()}`;
 	if (msHcrMakeDir(`${launchDir}/.hcr`) == 0 || msHcrMakeDir(copyRoot) == 0) fatal(`cannot create ${copyRoot}`);
+	sweepEndedRuns(`${launchDir}/.hcr`);
 	generation = 1;
 	coreIdentity = msHcrFileIdentity(corePath());
 	bundleIdentity = msHcrFileIdentity(bundlePath());

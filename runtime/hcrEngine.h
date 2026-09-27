@@ -47,9 +47,17 @@ static inline int32_t msHcrMakeDir(const char* path) {
 	return 0;
 }
 static inline uint32_t msHcrProcessId(void) { return (uint32_t)GetCurrentProcessId(); }
+static inline int32_t msHcrProcessAlive(uint32_t pid) {
+	HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+	if (process == NULL) return GetLastError() == ERROR_INVALID_PARAMETER ? 0 : 1;
+	DWORD waited = WaitForSingleObject(process, 0);
+	CloseHandle(process);
+	return waited == WAIT_TIMEOUT ? 1 : 0;
+}
 #else
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -92,6 +100,10 @@ static inline int32_t msHcrMakeDir(const char* path) {
 	return 0;
 }
 static inline uint32_t msHcrProcessId(void) { return (uint32_t)getpid(); }
+static inline int32_t msHcrProcessAlive(uint32_t pid) {
+	if (pid == 0 || pid > 0x7fffffffU) return 0;
+	return kill((pid_t)pid, 0) == 0 || errno == EPERM ? 1 : 0;
+}
 #endif
 
 #endif
