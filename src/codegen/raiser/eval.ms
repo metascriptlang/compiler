@@ -2,7 +2,8 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, createNode, NodeKind, ProgramData, makeLoc } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, makeLoc } from "../../ast/node";
+import { createUnifyBindings, unifyType } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode } from "../../checker/context";
@@ -20,7 +21,7 @@ import { RaiserContext, createContext, load, execute } from "../../raiser/contex
 import { RaiserVM, execModule, createVM } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
 import { RaiserFuncMap } from "./context";
-import { moduleScopeSymbols } from "../../checker/symbol";
+import { moduleScopeSymbols, makeSymbolState } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
@@ -253,6 +254,18 @@ function seedCtxForSym(sym: Symbol): CheckerContext {
 	return null as unknown as CheckerContext;
 }
 
+function instanceTypeParamSeeds(sym: Symbol): Symbol[] {
+	const seeds: Symbol[] = [];
+	const generic = sym.instantiatedFrom;
+	if (generic == null || generic.symbolType == null || sym.symbolType == null) return seeds;
+	const bindings = createUnifyBindings();
+	unifyType(generic.symbolType, sym.symbolType, bindings);
+	for (let i = 0; i < bindings.names.length && i < bindings.types.length; i += 1) {
+		seeds.push(makeSymbolState(bindings.names[i], SymbolKind.TypeAlias, bindings.types[i], false, SymbolState.Shaped));
+	}
+	return seeds;
+}
+
 function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (_engine == null) return -1;
 	const isClass = sym.symbolKind == SymbolKind.Class;
@@ -263,7 +276,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (sym.declNode == null) return -1;
 	_engine.seen.set(name, _engine.image.functions.length);
 	const seedCtx = seedCtxForSym(sym);
-	const seeds: Symbol[] = [];
+	const seeds: Symbol[] = instanceTypeParamSeeds(sym);
 	let exts: ExtensionMethod[] = [];
 	if (seedCtx != null) {
 		for (const s of moduleScopeSymbols(seedCtx.table)) {
