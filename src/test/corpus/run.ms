@@ -919,7 +919,7 @@ function activeCount(running: Cell[]): int32 {
 const CELL_TIMEOUT_MS: float64 = envOr("MSCORPUS_CELL_TIMEOUT_MS", "300000").parseInt() as float64;
 
 function cellTimedOut(c: Cell): boolean {
-	return c.launched && !c.finished && performance.now() - c.launchedAtMs > CELL_TIMEOUT_MS;
+	return c.launched && !c.finished && !cellDone(c) && performance.now() - c.launchedAtMs > CELL_TIMEOUT_MS;
 }
 
 function failCellTimeout(c: Cell, t: Tally): void {
