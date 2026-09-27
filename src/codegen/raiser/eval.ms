@@ -464,6 +464,15 @@ test "engine: a class field with no initializer holds its type's zero value" {
 	assert vm.output == "0 0 false [] 0 0 []\n";
 }
 
+test "engine: new Array(n) holds n distinct zero elements" {
+	const vm = evalOrcVM("struct E { h: int64; key: string; }"
+		+ " let es: Vec<E> = new Array(3); es[2].h = 5;"
+		+ " const ns = new Array<int32>(4);"
+		+ " console.log(`${es.length} ${es[0].h} [${es[1].key}] ${es[2].h} ${ns.length} ${ns[3]}`);");
+	assert vm.error == "";
+	assert vm.output == "3 0 [] 5 4 0\n";
+}
+
 test "engine: a BitSet with no initializer holds its representation's zero in every width band" {
 	const narrow = evalOrcVM("enum Small { A, B, C, D } let s: BitSet<Small>; return s;");
 	assert narrow.error == "";
