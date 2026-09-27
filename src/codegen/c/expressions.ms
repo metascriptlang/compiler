@@ -690,9 +690,8 @@ function pushUnloweredNew(g: CGen, ctx: ExprEvalCtx, node: Readonly<Node>): void
 	ctx.results.push("MS_NIL");
 }
 
-function pushUnloweredExpr(g: CGen, ctx: ExprEvalCtx, node: Readonly<Node>): void {
-	const pn = g.currentProc != null ? g.currentProc.name : "<toplevel>";
-	addCGenError(g, "internal: expression kind=" + node.kind.toString() + " reached codegen unlowered in " + g.modulePath + " proc " + pn, node.location.line, node.location.column);
+function pushUnloweredExpr(g: CGen, p: CProc, ctx: ExprEvalCtx, node: Readonly<Node>): void {
+	addUnloweredError(g, p, node);
 	ctx.results.push("MS_NIL");
 }
 
@@ -1215,7 +1214,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		return;
 	}
 
-	pushUnloweredExpr(g, ctx, node);
+	pushUnloweredExpr(g, p, ctx, node);
 }
 
 // ===== Discover CallExpr — split by call type =====
@@ -2342,7 +2341,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 	// NewExpr handled entirely in discover phase (inline allocation)
 
 	truncResults(ctx, cc);
-	pushUnloweredExpr(g, ctx, node);
+	pushUnloweredExpr(g, p, ctx, node);
 }
 
 // ===== Primitive-union lowering (float32 | string payloads) =====
