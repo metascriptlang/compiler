@@ -356,14 +356,25 @@ in `app` over `shapes` returned `PROBE 17` (4 + 9 + 4); other generic shapes are
 
 ### Host runtime (S4)
 
-The reload engine is the standard-library module `std/hcr` (`std/hcr/index.cms`), linked into
-the core image; the registry and the Win32 loader edge stay C (`runtime/hcr.c`,
-`runtime/hcrEngine.h`). A thin host copies `<stem>.core.dll` into `<dir>/.hcr/<pid>/core/`,
-loads it, calls `msHcrLaunch(dir, stem)` and then `msHcrEngineStart`; the fixture host is
-`src/test/hcr/fixtures/engine/host.ms`. A program that never imports `std/hcr` has no engine
-in its core, and the host stops at the missing `msHcrEngineStart`. The program calls
-`reload()` at its safe point (the Neon frame loop) and reacts to the returned kind:
-`NoChange`, `Reloaded`, `Pending`, `Rejected` or `RestartRequired`.
+The reload engine is `std/hcr/engine.cms`, linked into the core image; the registry and the
+Win32 loader edge stay C (`runtime/hcr.c`, `runtime/hcrEngine.h`). A thin host copies
+`<stem>.core.dll` into `<dir>/.hcr/<pid>/core/`, loads it, calls `msHcrLaunch(dir, stem)` and then
+`msHcrEngineStart`; the fixture host is `src/test/hcr/fixtures/engine/host.ms`. The program
+imports `reload` from `std/hcr` where it wants reloads to happen and calls it at its safe point
+(the Neon frame loop); it answers `NoChange`, `Reloaded`, `Pending`, `Rejected` or
+`RestartRequired`, and `lastReload()` gives the modules and the reason of the last call.
+
+`std/hcr` (`std/hcr/index.ms`) builds on every backend, with or without `--hcr`. `reload` is a
+macro chosen by `when (hcr)`: under `--hcr` it expands to a call into the engine, which only then
+is imported; without it, to the constant `HcrReloadKind.NoChange`, so a production build emits no
+call and links no engine. The reference ships the same pair: `lib/core/hotcodereloading.nim` is
+imported explicitly and turns `performCodeReload` and the handler templates into `discard` when
+`hotcodereloading` is not defined, and `--hotcodereloading:on` defines that symbol
+(`compiler/commands.nim`); `--hcr` defines `hcr` the same way. The import stays explicit, not a
+global import: a program decides where it reloads. On 2026-09-28, Windows x64, `hcrReloadOff`
+ran a loop over `reload()` without `--hcr` on C and JS (`no change`, no warning), and no C file
+of that build named the engine; the compiler of `91dbf527` failed it (JS cannot import the
+C-only engine).
 
 The shape follows nimhcr (`lib/nimhcr.nim`: `hcrInit`, `recursiveDiscovery`, `initModules`,
 `hcrPerformCodeReload`, `hcrAddEventHandler`) with these decisions:
@@ -641,7 +652,7 @@ Awaiting the spawn's Promise with `.then` from the loop was rejected: a spawn Pr
 and bound to the scope that made it, and the checker refuses it inside a function.
 
 Each run copies its images under `.hcr/<pid>/`. At start the engine removes the directory of
-every pid that no longer runs (`sweepEndedRuns`, `std/hcr/index.cms`; `msHcrProcessAlive` opens
+every pid that no longer runs (`sweepEndedRuns`, `std/hcr/engine.cms`; `msHcrProcessAlive` opens
 the process and waits on it on Windows, and calls `kill(pid, 0)` on POSIX; a process it may not
 open counts as alive), so a run's copies stay until the next start. nimhcr unloads a module and
 overwrites one `<name>.copy.<ext>` next to it (`lib/nimhcr.nim` `loadDll`) and never deletes it;
@@ -651,8 +662,14 @@ delete a loaded DLL. On 2026-09-27, Windows x64 and Linux x64, `hcrRun` placed t
 before the start: `999999998` was removed, the pid of a live system process (`4` on Windows, `1`
 on Linux) and `notARun` stayed. The installed compiler of `c54a8671` left `999999998` in place.
 
-A program that never imports `std/hcr` has no engine in its core image, and the host stops with
-`HCR-HOST the core image does not export msHcrEngineStart`.
+A program that never imports `std/hcr` has no engine in its core image, so nothing would ever
+reload it. `msc run --hcr` stops that build with `error: app.ms never imports std/hcr, so nothing
+calls reload() and an edit would never reach the running program; import { reload } from
+"std/hcr" and call reload() once per pass of the main loop`, and keeps watching: the save that
+adds the import starts the host (`hcrHostMissesEngine`, measured on Windows 2026-09-28; the lane
+cannot drive a waiting `msc run`, so the inline test in `compile.ms` holds the check and `hcrRun`
+holds the path of the engine). Before, the host started and stopped at `HCR-HOST the core image
+does not export msHcrEngineStart`.
 
 ## Neon Fast Refresh boundary
 
