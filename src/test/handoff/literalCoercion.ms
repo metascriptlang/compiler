@@ -201,6 +201,16 @@ test "an untyped constant is folded exactly before its slot judges it" {
 	assert strictErrorCount("function probe(): uint8 { return 16 * 16; }") == 1;
 }
 
+test "a nullish payload and its fallback are judged by the slot once, like conditional arms" {
+	assert strictErrorCount("function f(v: uint8 | null): uint32 { const x: uint32 = v ?? 1; return x; }") == 0;
+	assert strictErrorCount("function f(v: int32 | null): int64 { const x: int64 = v ?? 0; return x; }") == 0;
+	assert strictErrorCount("type D = \"row\" | \"column\"; function f(s: D | null): D { const d: D = s ?? \"row\"; return d; }") == 0;
+	assert strictErrorCount("function f(v: int32 | null): uint32 { const x: uint32 = v ?? 1; return x; }") == 1;
+	assert strictErrorCount("function f(v: int32 | null, u: uint32): uint32 { const x: uint32 = v ?? u; return x; }") == 1;
+	assert strictErrorCount("function f(v: uint8 | null): uint8 { const x: uint8 = v ?? 300; return x; }") == 1;
+	assert hasError("function f(v: uint8 | null): uint8 { const x: uint8 = v ?? 300; return x; }", "cannot convert 300 to uint8");
+}
+
 test "a bitwise integer constant keeps its int32 value, so it fits an int32 slot" {
 	assert strictErrorCount("const v: int32 = 1 << 31;") == 0;
 	assert strictErrorCount("const v: int32 = ~0 & 255;") == 0;
