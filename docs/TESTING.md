@@ -128,10 +128,10 @@ contracts both passed 14/14 natively; the runtime sibling printed
 
 ### Corpus programs (`corpus/programs/`)
 
-Standalone programs (not `test {}` files) that print to stdout and exit —
-flat `NNN-topic.ms`, or `NNN-topic/main.ms` with sibling modules for
-multi-module cases. ONE runner (`corpus/run.ms`, MetaScript dogfood)
-executes every program through its lanes.
+Standalone programs (not `test {}` files) print deterministic stdout and exit.
+Use a semantic entry name (`topicName.ms`, or `topicName/main.ms` with sibling
+modules); the older `NNN-topic` names remain discoverable. `corpus/run.ms`
+discovers both forms and runs each entry through its selected lanes.
 
 Authoring contract — the runner stays a dumb executor; the program's
 contract lives entirely in its directive head (leading `// @...` comment
@@ -173,10 +173,17 @@ lines), and ALL determinism obligations live on the program:
   by weakening the comparison.
 - **Deterministic stdout only**: no timers, no randomness, no
   pointer/address or RSS/timing prints. Ordered output, fixed loop bounds.
-- **Name files `NNN-topic`**, clustered by hundreds (0xx basics,
-  1xx strings, 2xx DU/match/types, 3xx closures, 4xx async/actor,
-  5xx std, 6xx RC/DRC stress, 7xx meta/macro/jsx).
-  Append-only, like `fixedbugs/`.
+- **Name new programs by the invariant**, not the date or bug number. Merge a
+  new variant into its existing owner's program when it has the same consumer
+  and oracle; create a separate entry when its failure mechanism is distinct.
+  The older numbered entries stay runnable while their contracts are reviewed.
+  Measured on Windows with the candidate built from `252fadec`: a direct
+  `MSCORPUS_ONLY` run of 17 semantic entries reported `88 pass · 11 fail`;
+  twelve entries passed C, ORC, danger, JS and ESM plus parity, while five
+  exposed target-specific failures and stayed outside the repo. Raiser and
+  SAN were not exercised for these entries. The `e8431cc9` land selector
+  picked two unrelated known-red programs, so its green verdict is not
+  evidence that the newly added corpus entries ran.
 - **Write RC-stress shapes deliberately**: churn in loops, values relayed
   through calls then dropped unread, throw/catch unwinding mid-build,
   refcounted values held across await. The plain lane asserts behavior;
