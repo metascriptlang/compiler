@@ -655,6 +655,19 @@ function isFoldedIntegerConstant(expr: Node): boolean {
 	return isUntypedIntegerConstant(expr, 0);
 }
 
+export function untypedIntegerLiteralType(node: Node): Type {
+	const wide = createPrimitive(TypeKind.Int64);
+	if (literalFitsInType(node, int32Type(), false) || !literalFitsInType(node, wide, false)) return int32Type();
+	return wide;
+}
+
+export function exactConstantType(expr: Node, t: Type | null): Type | null {
+	if (t == null || !isIntegerType(t) || !isFoldedIntegerConstant(expr)) return t;
+	const exact = exactUntypedInteger(expr, 0);
+	if (exact == null || integerValueFits(integerValueOf(exact), t)) return t;
+	return createPrimitive(TypeKind.Int64);
+}
+
 export function fitIntegerConstant(ctx: CheckerContext, expr: Node, exprType: Type | null, formal: Type | null): Node {
 	const none = null as unknown as Node;
 	if (formal == null || exprType == null || !isIntegerType(exprType)) return none;

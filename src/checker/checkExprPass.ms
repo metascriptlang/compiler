@@ -29,7 +29,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, unwrapAsUnknown, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -429,11 +429,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						node.nodeType = child; return;
 					}
 				}
-				if (isNodeIntLit(node)) { node.nodeType = int32Type(); return; }
+				if (isNodeIntLit(node)) { node.nodeType = untypedIntegerLiteralType(node); return; }
 				node.nodeType = float64Type(); return;
 			} else {
-				// Default inference: integer literals → int32, float literals → float64
-				if (isNodeIntLit(node)) { node.nodeType = int32Type(); return; }
+				// Default inference: integer literals → int32 (int64 past its range), float literals → float64
+				if (isNodeIntLit(node)) { node.nodeType = untypedIntegerLiteralType(node); return; }
 				node.nodeType = float64Type(); return;
 			}
 		},
@@ -1082,7 +1082,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (checkBinaryOperands(ctx, d.operator, effLeft!, effRight!, node)) { node.nodeType = errorType(); return; }
 			const nullishJoined = d.operator == "??" ? fitNullishArms(ctx, d, effLeft, effRight, expectedType) : null;
 			if (nullishJoined != null) { node.nodeType = nullishJoined; return; }
-			node.nodeType = inferBinaryOp(d.operator, effLeft!, effRight!);
+			node.nodeType = exactConstantType(node, inferBinaryOp(d.operator, effLeft!, effRight!));
 			if (d.operator == "??" && node.nodeType != null && isMaybeType(node.nodeType)) {
 				d.right = fitJoinedBranch(ctx, d.right, node.nodeType);
 			}
