@@ -240,7 +240,7 @@ export function compileTestBuildToJS(source: string): CompileResult {
 
 	const transformed = transformProgram(unit.program, checkerCtx, true);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
-	const res = generateJSModule(transformed, [], modPath, [], [], [], [], [], [], true, false);
+	const res = generateJSModule(transformed, [], modPath, [], [], [], [], [], [], [], true, false);
 	return Result.ok(res.code);
 }
 

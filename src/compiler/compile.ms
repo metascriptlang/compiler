@@ -6,7 +6,7 @@ import { exists, readFile, writeFile } from "std/fs";
 import { writeStderr } from "std/io";
 import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
-import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, Severity } from "../checker/context";
+import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isStaticExtensionSym, Severity } from "../checker/context";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
@@ -3275,11 +3275,21 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	// don't survive the registry round-trip; mod.exportNames does).
 	const modExportKeys: string[] = [];
 	const modExportVals: string[][] = [];
-	for (const modPath of unitPaths) {
+	const modFunctionOwnerNames: string[][] = [];
+	for (let ui = 0; ui < unitPaths.length; ui += 1) {
+		const modPath = unitPaths[ui];
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
 		modExportKeys.push(modPath);
 		modExportVals.push(mod.exportNames);
+		const names: string[] = [];
+		const exports = findModuleExports(unitCtxs[ui].exportRegistry, modPath);
+		if (exports != null) {
+			for (const info of exports.symbols) {
+				if (info.sym.symbolKind == SymbolKind.Function && info.sym.modulePath == modPath && !isStaticExtensionSym(info.sym)) names.push(info.name);
+			}
+		}
+		modFunctionOwnerNames.push(names);
 	}
 
 	const moduleCodes: string[] = [];
@@ -3318,7 +3328,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 			moduleSpecVals.push(relSpecBetween(fromRel, outRelVals[mi]));
 		}
 
-		const res = generateJSModule(transformed, ctx.jsImportRegistry, modPath, importSpecKeys, importSpecVals, moduleSpecKeys, moduleSpecVals, modExportKeys, modExportVals, isTestBuild, opts.sourcemap);
+		const res = generateJSModule(transformed, ctx.jsImportRegistry, modPath, importSpecKeys, importSpecVals, moduleSpecKeys, moduleSpecVals, modExportKeys, modExportVals, modFunctionOwnerNames, isTestBuild, opts.sourcemap);
 		moduleCodes.push(res.code);
 		moduleSmaps.push(res.smap);
 		moduleNeededMods.push(res.neededModules);

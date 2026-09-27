@@ -440,6 +440,10 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 			if (gen.multiFile) { gen.exportedNames.push(jsSymbolName(gen, inner.resolvedSym, (inner.data as ClassDeclData).className)); }
 			emitClassDeclInner(gen, inner);
 		},
+		NodeKind.ActorDecl => {
+			if (gen.multiFile) { gen.exportedNames.push(jsSymbolName(gen, inner.resolvedSym, (inner.data as ActorDeclData).actorName)); }
+			emitActorDecl(gen, inner);
+		},
 		_ => { emitNode(gen, inner); },
 	};
 }

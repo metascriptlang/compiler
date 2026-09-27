@@ -151,7 +151,7 @@ function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: 
 function moduleCountExporting(gen: JSGenerator, baseName: string): int32 {
 	let count = 0;
 	for (let mi = 0; mi < gen.modExportKeys.length; mi += 1) {
-		const names = gen.modExportVals[mi];
+		const names = gen.modFunctionOwnerNames[mi];
 		for (let ni = 0; ni < names.length; ni += 1) {
 			if (names[ni] == baseName) { count += 1; break; }
 		}
@@ -162,7 +162,7 @@ function moduleCountExporting(gen: JSGenerator, baseName: string): int32 {
 function exportersBefore(gen: JSGenerator, modulePath: string, baseName: string): int32 {
 	let before = 0;
 	for (let mi = 0; mi < gen.modExportKeys.length; mi += 1) {
-		const names = gen.modExportVals[mi];
+		const names = gen.modFunctionOwnerNames[mi];
 		let exports = false;
 		for (let ni = 0; ni < names.length; ni += 1) {
 			if (names[ni] == baseName) { exports = true; break; }
@@ -225,9 +225,6 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string, declared: 
 	if (sym.symbolKind == SymbolKind.Function) {
 		if (moduleExportsName(gen, effPath, baseName) && !isStaticExtensionSym(sym)) {
 			const inSet = sym.overloadIdx > 0 || (sym.overloads != null && sym.overloads.length > 0);
-			// The declaring side compiles alone, so a set spanning modules
-			// never shows in its symbol state — both sides read the collision
-			// off the export surface instead, the one list they share.
 			let slot = sym.overloadIdx;
 			let suffixed = inSet;
 			if (moduleCountExporting(gen, baseName) > 1) {
@@ -240,7 +237,7 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string, declared: 
 		} else {
 			return safeJsName(name);
 		}
-	} else if (sym.symbolKind == SymbolKind.Class) {
+	} else if (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor) {
 		if (moduleExportsName(gen, effPath, baseName)) {
 			emitted = exportedBindingName(baseName);
 		} else if (hasModule) {
