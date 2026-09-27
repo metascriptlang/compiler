@@ -10,7 +10,7 @@ import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, a
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
-	CandidateScore, sameType, explainStructuralPrefix, isAnonStructAdoption, dropsReadonlyView } from "./compat";
+	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { writeRefusal } from "./assignable";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
@@ -2616,15 +2616,6 @@ function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (unwrapped != null) returnExpected = unwrapped;
 		}
 		if (returnExpected.kind != TypeKind.Void) d.arrowBody = fitNode(ctx, d.arrowBody, returnExpected, d.arrowBody.nodeType);
-		const finalRetType = d.arrowBody.nodeType;
-		if (finalRetType != null
-			&& !isUnresolvedType(finalRetType)
-			&& finalRetType.kind != TypeKind.Error
-			&& returnExpected.kind != TypeKind.Void
-			&& !hasGenericParams(returnExpected)
-			&& !isAssignable(finalRetType, returnExpected)) {
-			addError(ctx, "Return type mismatch in '<arrow>': expected " + typeDisplayName(returnExpected) + ", got " + typeDisplayName(finalRetType) + explainStructuralPrefix(finalRetType, returnExpected), d.arrowBody.location.line, d.arrowBody.location.column);
-		}
 	}
 	return fnType;
 }

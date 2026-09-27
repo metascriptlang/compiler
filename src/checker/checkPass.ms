@@ -20,7 +20,7 @@ import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
-import { isAssignable, isNominalMismatch, explainStructuralPrefix, nonNullMemberOfNullable } from "./compat";
+import { isAssignable, nonNullMemberOfNullable } from "./compat";
 import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType } from "./types";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
@@ -1740,19 +1740,6 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		if (returnExpected == null && d.argument != null) {
 			ctx.inferredReturnStmts.push(node);
 		}
-	}
-	// Assignability check against the (already-unwrapped) expected return type.
-	if (returnExpected != null
-		&& finalRetType != null
-		&& !isUnresolvedType(finalRetType)
-		&& finalRetType.kind != TypeKind.Error
-		&& !isNominalMismatch(finalRetType, returnExpected)
-		&& !errSentinel
-		&& !engineReturnMarshalsToNode(finalRetType, returnExpected)
-		&& !isAssignable(finalRetType, returnExpected)) {
-		const got = formatTypeBrief(finalRetType);
-		const expected = formatTypeBrief(returnExpected);
-		addError(ctx, "Return type mismatch in '" + ctx.currentFunction.name + "': expected " + expected + ", got " + got + explainStructuralPrefix(finalRetType, returnExpected), node.location.line, node.location.column);
 	}
 }
 
