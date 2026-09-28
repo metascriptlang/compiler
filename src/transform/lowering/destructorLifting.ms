@@ -2463,12 +2463,10 @@ function ensureHooksByName(typeName: string, lctx: LiftCtx, loc: SourceLocation,
 	if (lctx.checkerCtx == null) return;
 	// Local (block-scoped) type decls are invisible to a module-scope name
 	// lookup by the time transforms run — their scope is closed. The lifted
-	// decl node still holds the symbol, so fall back to it.
-	// Only when the node's symbol IS this type: a monomorphized instance decl
-	// carries the GENERIC symbol, and taking its type would emit the instance's
-	// hook with the uninstantiated param type.
+	// decl node still holds the symbol, so fall back to it. Not for a generic
+	// instance: its hooks come from its instantiation (fixedbugs/bug335).
 	let sym = lookupSymbol(lctx.checkerCtx.table, typeName);
-	if (sym == null && declSym != null && declSym.name == typeName) sym = declSym;
+	if (sym == null && declSym != null && declSym.name == typeName && declSym.instantiatedFrom == null) sym = declSym;
 	if (sym != null && sym.symbolType != null) {
 		// TypeAlias-to-Ref: ensureHooks' category resolver handles it (same skip path).
 		const objType = unwrapRef(sym.symbolType);
