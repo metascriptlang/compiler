@@ -96,7 +96,7 @@ function entryPath(): string {
 }
 
 function imagePath(moduleId: string): string {
-	return moduleId == entryId ? entryPath() : `${launchDir}/${launchStem}.${moduleId}${msHcrImageExt()}`;
+	return moduleId == entryId ? entryPath() : `${launchDir}/${launchStem}.${moduleId.replaceAll("/", ".")}${msHcrImageExt()}`;
 }
 
 function baseName(path: string): string {
