@@ -319,6 +319,23 @@ function explicitSiblingBefore(): int32 {
 	const pair: MovedPair = { n: holder.kids.length, kids: move holder.kids };
 	return pair.n * 10 + pair.kids.length;
 }
+function explicitSiblingThroughRef(ref holder: MovedHolder): int32 {
+	const pair: MovedPair = { n: holder.kids.length, kids: move holder.kids };
+	return pair.n * 10 + pair.kids.length;
+}
+async function explicitSiblingSuspended(): Promise<int32> {
+	let holder: MovedHolder = { kids: [1, 2, 3] };
+	await Promise.resolve(0);
+	const pair: MovedPair = { n: holder.kids.length, kids: move holder.kids };
+	return pair.n * 10 + pair.kids.length;
+}
+class MovedOwner {
+	kids: Vec<int32> = [1, 2, 3];
+	take(): int32 {
+		const pair: MovedPair = { n: this.kids.length, kids: move this.kids };
+		return pair.n * 10 + pair.kids.length;
+	}
+}
 function explicitAfterThrow(fail: boolean): int32 {
 	let tree = movedTree();
 	if (fail) throw new Error("before the move");
@@ -361,6 +378,10 @@ test "valueLocations: an explicit move of a next link advances a linked list" {
 
 test "valueLocations: a sibling read before an explicit move in one literal sees the value" {
 	assert explicitSiblingBefore() == 33;
+	let holder: MovedHolder = { kids: [1, 2, 3] };
+	assert explicitSiblingThroughRef(holder) == 33;
+	assert new MovedOwner().take() == 33;
+	assert await explicitSiblingSuspended() == 33;
 }
 
 test "valueLocations: a throw before an explicit move never evaluates the moved path" {
