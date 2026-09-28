@@ -405,8 +405,7 @@ void msPoolBusyInc(void) {
 /* ===== Shutdown ===== */
 
 void msPoolShutdown(void) {
-	if (msIsPoolWorker) return;
-	if (gPool == NULL) return;
+	if (gPool == NULL || msIsPoolWorker) return;
 	MS_LOCK(gPool);
 	gPool->shutdown = true;
 	for (int i = 0; i < gPool->workerCount; i++) {
