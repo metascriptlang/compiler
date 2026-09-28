@@ -208,7 +208,8 @@ function floatCollection(gen: JSGenerator, native: string): string {
 // of their own, so the native constructor is named here rather than aliased.
 export function emitCollectionNew(gen: JSGenerator, node: Node): boolean {
 	const d = node.data as NewExprData;
-	const sym = d.newCallee.resolvedSym;
+	const called = d.newCallee.resolvedSym;
+	const sym = called != null && called.instantiatedFrom != null ? called.instantiatedFrom : called;
 	if (sym == null || sym.declNode == null || !sym.declNode.flags.has(NodeFlag.ExternC)) return false;
 	const isMap = sym.name == "Map" || sym.name == "HashMap";
 	const isSet = sym.name == "Set" || sym.name == "HashSet";

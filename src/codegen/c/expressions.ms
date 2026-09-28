@@ -1142,7 +1142,8 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// more. This matches the inline pattern already used for class-without-
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
 			const initName = classInitCName(cName);
-			const ctorChildren = ctorParamTypes(lookupCtorDefaults(d.newCallee.resolvedSym, bareTypeName(g, cName)), d.newCallee.resolvedSym);
+			const ctorOwner = d.newCallee.resolvedSym.instantiatedFrom ?? d.newCallee.resolvedSym;
+			const ctorChildren = ctorParamTypes(lookupCtorDefaults(ctorOwner, bareTypeName(g, cName)), ctorOwner);
 			const ctorProtoKey = "proto:" + initName;
 			if (ctorChildren != null && node.nodeType != null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
 				nameSetAdd(g.declaredProcs, ctorProtoKey);
