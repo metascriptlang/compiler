@@ -365,6 +365,7 @@ import "./bug576ConstrainedGenericAlias";
 import "./bug577EnumMemberBindsItsEnum";
 import "./bug578GenericCallArgumentTakesContext";
 import "./bug579UnfitDestinationRebindsSafely";
+import "./bug588ThunkConstructsItsOwnValues";
 import "./bug596ConstCastOutOfRange";
 import "./bug597LocalConstIsConstant";
 import "./bug598TupleIndexConstant";

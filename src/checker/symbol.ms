@@ -247,6 +247,11 @@ export function isFrameValue(sym: Symbol): boolean {
 	return (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp) && !hasFlag(sym, SymbolFlag.Global);
 }
 
+export function isCapturableValue(sym: Symbol): boolean {
+	return sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter
+		|| sym.symbolKind == SymbolKind.Temp || sym.symbolKind == SymbolKind.Module;
+}
+
 export function isCapturedAcross(table: SymbolTable, name: string, sym: Symbol, boundary: Cursor<Scope>): boolean {
 	const nameId = getIdentId(table.identCache, name);
 	let scope = table.current;
