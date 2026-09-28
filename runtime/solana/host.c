@@ -1,0 +1,504 @@
+#ifndef MSOS_SOLANA
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "runtime/solana/solana.h"
+
+#define MS_SOL_HOST_HEAP_SIZE (32 * 1024)
+#define MS_SOL_HOST_COMPUTE_BUDGET 200000ULL
+#define MS_SOL_MAX_SEEDS 16
+#define MS_SOL_MAX_SEED_LEN 32
+#define MS_SOL_MAX_RETURN_DATA 1024
+
+typedef struct {
+    uint8_t program[32];
+    uint64_t metaCount;
+    uint8_t* metas;
+    uint64_t dataLength;
+    uint8_t* data;
+    uint64_t signerCount;
+} msSolHostInvocation;
+
+static _Alignas(16) uint8_t msSolHostHeap[MS_SOL_HOST_HEAP_SIZE];
+static const uint64_t msSolHostEmptyInput[6];
+static msSolanaContext msSolHostState;
+static uint8_t* msSolHostInputBuffer;
+static uint64_t msSolHostFaultCode;
+static char msSolHostFaultText[160];
+static char** msSolHostLogLines;
+static uint64_t msSolHostLogCount;
+static msSolHostInvocation* msSolHostInvocations;
+static uint64_t msSolHostInvocationCount;
+static uint8_t msSolHostReturnData[MS_SOL_MAX_RETURN_DATA];
+static uint64_t msSolHostReturnLength;
+static uint8_t msSolHostReturnProgram[32];
+static uint64_t msSolHostClock[5];
+
+msSolanaContext* msSolHostContext(void) {
+    if (msSolHostState.input == 0) {
+        msSolHostState.input = (uint64_t)msSolHostEmptyInput;
+        msSolHostState.arenaPosition = sizeof(msSolanaContext);
+    }
+    return &msSolHostState;
+}
+
+static void msSolHostFault(uint64_t code, const char* text) {
+    if (msSolHostFaultCode != 0) return;
+    msSolHostFaultCode = code;
+    snprintf(msSolHostFaultText, sizeof(msSolHostFaultText), "%s", text);
+}
+
+uint64_t msSolHostAlloc(uint64_t size) {
+    msSolanaContext* context = msSolHostContext();
+    size = (size + 7) & ~(uint64_t)7;
+    if (context->arenaPosition + size > MS_SOL_HOST_HEAP_SIZE) {
+        fprintf(stderr, "std/solana host: the 32 KiB program heap is exhausted (asked %llu more bytes at %llu)\n",
+            (unsigned long long)size, (unsigned long long)context->arenaPosition);
+        abort();
+    }
+    uint64_t address = (uint64_t)(msSolHostHeap + context->arenaPosition);
+    context->arenaPosition += size;
+    return address;
+}
+
+static void msSolHostForget(void) {
+    for (uint64_t index = 0; index < msSolHostLogCount; index++) free(msSolHostLogLines[index]);
+    free(msSolHostLogLines);
+    msSolHostLogLines = NULL;
+    msSolHostLogCount = 0;
+    for (uint64_t index = 0; index < msSolHostInvocationCount; index++) {
+        free(msSolHostInvocations[index].metas);
+        free(msSolHostInvocations[index].data);
+    }
+    free(msSolHostInvocations);
+    msSolHostInvocations = NULL;
+    msSolHostInvocationCount = 0;
+}
+
+void msSolHostEnter(uint64_t input) {
+    msSolHostForget();
+    memset(msSolHostHeap, 0, sizeof(msSolHostHeap));
+    memset(&msSolHostState, 0, sizeof(msSolHostState));
+    msSolHostState.input = input == 0 ? (uint64_t)msSolHostEmptyInput : input;
+    msSolHostState.arenaPosition = sizeof(msSolanaContext);
+    msSolHostFaultCode = 0;
+    msSolHostFaultText[0] = 0;
+    msSolHostReturnLength = 0;
+    memset(msSolHostReturnProgram, 0, sizeof(msSolHostReturnProgram));
+}
+
+uint64_t msSolHostInput(uint64_t size) {
+    free(msSolHostInputBuffer);
+    msSolHostInputBuffer = (uint8_t*)calloc(1, (size_t)size);
+    if (msSolHostInputBuffer == NULL) abort();
+    return (uint64_t)msSolHostInputBuffer;
+}
+
+uint64_t msSolHostResult(void) { return msSolHostState.result; }
+uint64_t msSolHostFaultCodeOf(void) { return msSolHostFaultCode; }
+msString msSolHostFaultMessage(void) { return msStringNew(msSolHostFaultText, (int64_t)strlen(msSolHostFaultText)); }
+uint64_t msSolHostLogTotal(void) { return msSolHostLogCount; }
+
+msString msSolHostLogAt(uint64_t index) {
+    if (index >= msSolHostLogCount) return msStringNew("", 0);
+    return msStringNew(msSolHostLogLines[index], (int64_t)strlen(msSolHostLogLines[index]));
+}
+
+uint64_t msSolHostInvocationTotal(void) { return msSolHostInvocationCount; }
+
+uint64_t msSolHostInvocationAt(uint64_t index) {
+    return index < msSolHostInvocationCount ? (uint64_t)&msSolHostInvocations[index] : 0;
+}
+
+void msSolHostSetClock(uint64_t slot, uint64_t epochStart, uint64_t epoch, uint64_t leaderEpoch, uint64_t unixTime) {
+    msSolHostClock[0] = slot;
+    msSolHostClock[1] = epochStart;
+    msSolHostClock[2] = epoch;
+    msSolHostClock[3] = leaderEpoch;
+    msSolHostClock[4] = unixTime;
+}
+
+static void msSolHostRecordLog(const char* text) {
+    char** grown = (char**)realloc(msSolHostLogLines, (size_t)(msSolHostLogCount + 1) * sizeof(char*));
+    if (grown == NULL) abort();
+    msSolHostLogLines = grown;
+    size_t length = strlen(text);
+    char* copy = (char*)malloc(length + 1);
+    if (copy == NULL) abort();
+    memcpy(copy, text, length + 1);
+    msSolHostLogLines[msSolHostLogCount++] = copy;
+}
+
+static void msSolHostBase58(const uint8_t* key, char* out) {
+    static const char alphabet[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    uint8_t digits[64];
+    size_t digitCount = 0;
+    for (size_t index = 0; index < 32; index++) {
+        uint32_t carry = key[index];
+        for (size_t digit = 0; digit < digitCount; digit++) {
+            carry += (uint32_t)digits[digit] << 8;
+            digits[digit] = (uint8_t)(carry % 58);
+            carry /= 58;
+        }
+        while (carry > 0) {
+            digits[digitCount++] = (uint8_t)(carry % 58);
+            carry /= 58;
+        }
+    }
+    size_t length = 0;
+    for (size_t index = 0; index < 32 && key[index] == 0; index++) out[length++] = '1';
+    while (digitCount > 0) out[length++] = alphabet[digits[--digitCount]];
+    out[length] = 0;
+}
+
+void msSolHostLog(uint64_t address, uint64_t length) {
+    char* line = (char*)malloc((size_t)length + 14);
+    if (line == NULL) abort();
+    memcpy(line, "Program log: ", 13);
+    memcpy(line + 13, (const void*)address, (size_t)length);
+    line[13 + length] = 0;
+    msSolHostRecordLog(line);
+    free(line);
+}
+
+void msSolHostLog64(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e) {
+    char line[160];
+    snprintf(line, sizeof(line), "Program log: 0x%llx, 0x%llx, 0x%llx, 0x%llx, 0x%llx",
+        (unsigned long long)a, (unsigned long long)b, (unsigned long long)c, (unsigned long long)d, (unsigned long long)e);
+    msSolHostRecordLog(line);
+}
+
+void msSolHostLogPubkey(uint64_t address) {
+    char encoded[64];
+    char line[96];
+    msSolHostBase58((const uint8_t*)address, encoded);
+    snprintf(line, sizeof(line), "Program log: %s", encoded);
+    msSolHostRecordLog(line);
+}
+
+void msSolHostLogComputeUnits(void) {
+    char line[96];
+    snprintf(line, sizeof(line), "Program consumption: %llu units remaining", (unsigned long long)MS_SOL_HOST_COMPUTE_BUDGET);
+    msSolHostRecordLog(line);
+}
+
+uint64_t msSolHostRemainingComputeUnits(void) { return MS_SOL_HOST_COMPUTE_BUDGET; }
+
+void msSolHostCopy(uint64_t destination, uint64_t source, uint64_t length) {
+    if ((destination < source + length) && (source < destination + length)) {
+        msSolHostFault(1, "sol_memcpy_: overlapping copy");
+        return;
+    }
+    memcpy((void*)destination, (const void*)source, (size_t)length);
+}
+
+void msSolHostFill(uint64_t destination, uint8_t value, uint64_t length) {
+    memset((void*)destination, value, (size_t)length);
+}
+
+int32_t msSolHostCompare(uint64_t left, uint64_t right, uint64_t length) {
+    const uint8_t* a = (const uint8_t*)left;
+    const uint8_t* b = (const uint8_t*)right;
+    for (uint64_t index = 0; index < length; index++) {
+        if (a[index] != b[index]) return (int32_t)a[index] - (int32_t)b[index];
+    }
+    return 0;
+}
+
+typedef struct {
+    uint32_t state[8];
+    uint8_t block[64];
+    uint64_t length;
+    size_t used;
+} msSolHostSha;
+
+static const uint32_t msSolHostShaK[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+};
+
+static uint32_t msSolHostRotr(uint32_t value, int by) { return (value >> by) | (value << (32 - by)); }
+
+static void msSolHostShaBlock(msSolHostSha* sha) {
+    uint32_t w[64];
+    for (int index = 0; index < 16; index++) {
+        w[index] = ((uint32_t)sha->block[index * 4] << 24) | ((uint32_t)sha->block[index * 4 + 1] << 16) |
+            ((uint32_t)sha->block[index * 4 + 2] << 8) | (uint32_t)sha->block[index * 4 + 3];
+    }
+    for (int index = 16; index < 64; index++) {
+        uint32_t s0 = msSolHostRotr(w[index - 15], 7) ^ msSolHostRotr(w[index - 15], 18) ^ (w[index - 15] >> 3);
+        uint32_t s1 = msSolHostRotr(w[index - 2], 17) ^ msSolHostRotr(w[index - 2], 19) ^ (w[index - 2] >> 10);
+        w[index] = w[index - 16] + s0 + w[index - 7] + s1;
+    }
+    uint32_t a = sha->state[0], b = sha->state[1], c = sha->state[2], d = sha->state[3];
+    uint32_t e = sha->state[4], f = sha->state[5], g = sha->state[6], h = sha->state[7];
+    for (int index = 0; index < 64; index++) {
+        uint32_t t1 = h + (msSolHostRotr(e, 6) ^ msSolHostRotr(e, 11) ^ msSolHostRotr(e, 25)) + ((e & f) ^ (~e & g)) +
+            msSolHostShaK[index] + w[index];
+        uint32_t t2 = (msSolHostRotr(a, 2) ^ msSolHostRotr(a, 13) ^ msSolHostRotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+    sha->state[0] += a; sha->state[1] += b; sha->state[2] += c; sha->state[3] += d;
+    sha->state[4] += e; sha->state[5] += f; sha->state[6] += g; sha->state[7] += h;
+}
+
+static void msSolHostShaStart(msSolHostSha* sha) {
+    static const uint32_t start[8] = {
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    };
+    memcpy(sha->state, start, sizeof(start));
+    sha->length = 0;
+    sha->used = 0;
+}
+
+static void msSolHostShaAdd(msSolHostSha* sha, const uint8_t* data, size_t length) {
+    for (size_t index = 0; index < length; index++) {
+        sha->block[sha->used++] = data[index];
+        if (sha->used == 64) {
+            msSolHostShaBlock(sha);
+            sha->used = 0;
+        }
+    }
+    sha->length += length;
+}
+
+static void msSolHostShaFinish(msSolHostSha* sha, uint8_t out[32]) {
+    uint64_t bits = sha->length * 8;
+    uint8_t pad = 0x80;
+    msSolHostShaAdd(sha, &pad, 1);
+    pad = 0;
+    while (sha->used != 56) msSolHostShaAdd(sha, &pad, 1);
+    for (int index = 7; index >= 0; index--) {
+        uint8_t byte = (uint8_t)(bits >> (index * 8));
+        msSolHostShaAdd(sha, &byte, 1);
+    }
+    for (int index = 0; index < 8; index++) {
+        out[index * 4] = (uint8_t)(sha->state[index] >> 24);
+        out[index * 4 + 1] = (uint8_t)(sha->state[index] >> 16);
+        out[index * 4 + 2] = (uint8_t)(sha->state[index] >> 8);
+        out[index * 4 + 3] = (uint8_t)sha->state[index];
+    }
+}
+
+uint64_t msSolHostSha256(uint64_t slices, uint64_t count, uint64_t out) {
+    msSolHostSha sha;
+    msSolHostShaStart(&sha);
+    for (uint64_t index = 0; index < count; index++) {
+        const uint64_t* slice = (const uint64_t*)(slices + index * 16);
+        msSolHostShaAdd(&sha, (const uint8_t*)slice[0], (size_t)slice[1]);
+    }
+    msSolHostShaFinish(&sha, (uint8_t*)out);
+    return 0;
+}
+
+typedef uint64_t msSolHostFe[5];
+typedef unsigned __int128 msSolHostWide;
+#define MS_SOL_HOST_MASK51 ((1ULL << 51) - 1)
+
+static void msSolHostFeCarry(msSolHostFe h) {
+    for (int round = 0; round < 2; round++) {
+        for (int index = 0; index < 4; index++) {
+            h[index + 1] += h[index] >> 51;
+            h[index] &= MS_SOL_HOST_MASK51;
+        }
+        h[0] += 19 * (h[4] >> 51);
+        h[4] &= MS_SOL_HOST_MASK51;
+    }
+}
+
+static void msSolHostFeMul(msSolHostFe h, const msSolHostFe f, const msSolHostFe g) {
+    msSolHostWide t[5];
+    uint64_t g19[5];
+    for (int index = 0; index < 5; index++) g19[index] = g[index] * 19;
+    t[0] = (msSolHostWide)f[0] * g[0] + (msSolHostWide)f[1] * g19[4] + (msSolHostWide)f[2] * g19[3] + (msSolHostWide)f[3] * g19[2] + (msSolHostWide)f[4] * g19[1];
+    t[1] = (msSolHostWide)f[0] * g[1] + (msSolHostWide)f[1] * g[0] + (msSolHostWide)f[2] * g19[4] + (msSolHostWide)f[3] * g19[3] + (msSolHostWide)f[4] * g19[2];
+    t[2] = (msSolHostWide)f[0] * g[2] + (msSolHostWide)f[1] * g[1] + (msSolHostWide)f[2] * g[0] + (msSolHostWide)f[3] * g19[4] + (msSolHostWide)f[4] * g19[3];
+    t[3] = (msSolHostWide)f[0] * g[3] + (msSolHostWide)f[1] * g[2] + (msSolHostWide)f[2] * g[1] + (msSolHostWide)f[3] * g[0] + (msSolHostWide)f[4] * g19[4];
+    t[4] = (msSolHostWide)f[0] * g[4] + (msSolHostWide)f[1] * g[3] + (msSolHostWide)f[2] * g[2] + (msSolHostWide)f[3] * g[1] + (msSolHostWide)f[4] * g[0];
+    for (int index = 0; index < 4; index++) {
+        t[index + 1] += t[index] >> 51;
+        t[index] &= MS_SOL_HOST_MASK51;
+    }
+    t[0] += 19 * (t[4] >> 51);
+    t[4] &= MS_SOL_HOST_MASK51;
+    for (int index = 0; index < 5; index++) h[index] = (uint64_t)t[index];
+    msSolHostFeCarry(h);
+}
+
+static void msSolHostFeCanonical(const msSolHostFe f, uint8_t out[32]) {
+    msSolHostFe h;
+    memcpy(h, f, sizeof(h));
+    msSolHostFeCarry(h);
+    uint64_t q = (h[0] + 19) >> 51;
+    q = (h[1] + q) >> 51;
+    q = (h[2] + q) >> 51;
+    q = (h[3] + q) >> 51;
+    q = (h[4] + q) >> 51;
+    h[0] += 19 * q;
+    for (int index = 0; index < 4; index++) {
+        h[index + 1] += h[index] >> 51;
+        h[index] &= MS_SOL_HOST_MASK51;
+    }
+    h[4] &= MS_SOL_HOST_MASK51;
+    memset(out, 0, 32);
+    for (int bit = 0; bit < 255; bit++) {
+        if ((h[bit / 51] >> (bit % 51)) & 1) out[bit / 8] |= (uint8_t)(1 << (bit % 8));
+    }
+}
+
+static int msSolHostIsOnCurve(const uint8_t point[32]) {
+    static const msSolHostFe d = {929955233495203ULL, 466365720129213ULL, 1662059464998953ULL, 2033849074728123ULL, 1442794654840575ULL};
+    static const msSolHostFe one = {1, 0, 0, 0, 0};
+    msSolHostFe y = {0, 0, 0, 0, 0};
+    for (int bit = 0; bit < 255; bit++) {
+        if ((point[bit / 8] >> (bit % 8)) & 1) y[bit / 51] |= 1ULL << (bit % 51);
+    }
+    msSolHostFe y2, u, v, w, chi;
+    msSolHostFeMul(y2, y, y);
+    static const msSolHostFe twoP = {0xFFFFFFFFFFFDAULL, 0xFFFFFFFFFFFFEULL, 0xFFFFFFFFFFFFEULL, 0xFFFFFFFFFFFFEULL, 0xFFFFFFFFFFFFEULL};
+    for (int index = 0; index < 5; index++) u[index] = y2[index] + twoP[index] - one[index];
+    msSolHostFeCarry(u);
+    msSolHostFeMul(v, d, y2);
+    v[0] += 1;
+    msSolHostFeCarry(v);
+    msSolHostFeMul(w, u, v);
+    memcpy(chi, one, sizeof(chi));
+    for (int bit = 253; bit >= 0; bit--) {
+        msSolHostFeMul(chi, chi, chi);
+        if (bit != 0 && bit != 3) msSolHostFeMul(chi, chi, w);
+    }
+    uint8_t bytes[32];
+    msSolHostFeCanonical(chi, bytes);
+    int isZero = 1;
+    for (int index = 0; index < 32; index++) isZero &= bytes[index] == 0;
+    int isOne = bytes[0] == 1;
+    for (int index = 1; index < 32; index++) isOne &= bytes[index] == 0;
+    return isZero || isOne;
+}
+
+static int msSolHostSeedsFit(uint64_t seeds, uint64_t count) {
+    if (count > MS_SOL_MAX_SEEDS) return 0;
+    for (uint64_t index = 0; index < count; index++) {
+        if (((const uint64_t*)(seeds + index * 16))[1] > MS_SOL_MAX_SEED_LEN) return 0;
+    }
+    return 1;
+}
+
+static int msSolHostDerive(uint64_t seeds, uint64_t count, const uint8_t* bump, uint64_t programId, uint8_t out[32]) {
+    if (count + (bump != NULL ? 1 : 0) > MS_SOL_MAX_SEEDS) return 0;
+    msSolHostSha sha;
+    msSolHostShaStart(&sha);
+    for (uint64_t index = 0; index < count; index++) {
+        const uint64_t* slice = (const uint64_t*)(seeds + index * 16);
+        msSolHostShaAdd(&sha, (const uint8_t*)slice[0], (size_t)slice[1]);
+    }
+    if (bump != NULL) msSolHostShaAdd(&sha, bump, 1);
+    msSolHostShaAdd(&sha, (const uint8_t*)programId, 32);
+    msSolHostShaAdd(&sha, (const uint8_t*)"ProgramDerivedAddress", 21);
+    msSolHostShaFinish(&sha, out);
+    return !msSolHostIsOnCurve(out);
+}
+
+uint64_t msSolHostCreateProgramAddress(uint64_t seeds, uint64_t count, uint64_t programId, uint64_t out) {
+    if (!msSolHostSeedsFit(seeds, count)) {
+        msSolHostFault(2, "sol_create_program_address: more than 16 seeds or a seed over 32 bytes");
+        return 1;
+    }
+    uint8_t address[32];
+    if (!msSolHostDerive(seeds, count, NULL, programId, address)) return 1;
+    memcpy((void*)out, address, 32);
+    return 0;
+}
+
+uint64_t msSolHostTryFindProgramAddress(uint64_t seeds, uint64_t count, uint64_t programId, uint64_t out, uint64_t bumpOut) {
+    if (!msSolHostSeedsFit(seeds, count)) {
+        msSolHostFault(2, "sol_try_find_program_address: more than 16 seeds or a seed over 32 bytes");
+        return 1;
+    }
+    uint8_t bump = 255;
+    for (int attempt = 0; attempt < 255; attempt++) {
+        uint8_t address[32];
+        if (msSolHostDerive(seeds, count, &bump, programId, address)) {
+            memcpy((void*)out, address, 32);
+            *(uint8_t*)bumpOut = bump;
+            return 0;
+        }
+        bump--;
+    }
+    return 1;
+}
+
+uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint64_t accountInfoCount, uint64_t signers, uint64_t signerCount) {
+    (void)accountInfos;
+    (void)accountInfoCount;
+    (void)signers;
+    const uint64_t* header = (const uint64_t*)instruction;
+    msSolHostInvocation* grown = (msSolHostInvocation*)realloc(msSolHostInvocations,
+        (size_t)(msSolHostInvocationCount + 1) * sizeof(msSolHostInvocation));
+    if (grown == NULL) abort();
+    msSolHostInvocations = grown;
+    msSolHostInvocation* record = &msSolHostInvocations[msSolHostInvocationCount++];
+    memcpy(record->program, (const void*)header[0], 32);
+    record->metaCount = header[2];
+    record->metas = (uint8_t*)malloc((size_t)(header[2] * 34 + 1));
+    if (record->metas == NULL) abort();
+    for (uint64_t index = 0; index < header[2]; index++) {
+        const uint8_t* meta = (const uint8_t*)(header[1] + index * 16);
+        memcpy(record->metas + index * 34, (const void*)*(const uint64_t*)meta, 32);
+        record->metas[index * 34 + 32] = meta[8];
+        record->metas[index * 34 + 33] = meta[9];
+    }
+    record->dataLength = header[4];
+    record->data = (uint8_t*)malloc((size_t)header[4] + 1);
+    if (record->data == NULL) abort();
+    if (header[4] > 0) memcpy(record->data, (const void*)header[3], (size_t)header[4]);
+    record->signerCount = signerCount;
+    msSolHostReturnLength = 0;
+    return 0;
+}
+
+uint64_t msSolHostGetClock(uint64_t out) {
+    memcpy((void*)out, msSolHostClock, sizeof(msSolHostClock));
+    return 0;
+}
+
+uint64_t msSolHostGetRent(uint64_t out) {
+    uint8_t* rent = (uint8_t*)out;
+    uint64_t lamportsPerByteYear = 3480;
+    uint64_t exemptionThreshold = 0x4000000000000000ULL;
+    memset(rent, 0, 17);
+    memcpy(rent, &lamportsPerByteYear, 8);
+    memcpy(rent + 8, &exemptionThreshold, 8);
+    rent[16] = 50;
+    return 0;
+}
+
+void msSolHostSetReturnData(const uint8_t* data, int64_t length) {
+    if (length < 0 || length > MS_SOL_MAX_RETURN_DATA) {
+        msSolHostFault(3, "sol_set_return_data: more than 1024 bytes");
+        return;
+    }
+    memcpy(msSolHostReturnData, data, (size_t)length);
+    msSolHostReturnLength = (uint64_t)length;
+    memcpy(msSolHostReturnProgram, (const void*)msSolHostContext()->programId, 32);
+}
+
+uint64_t msSolHostGetReturnData(uint64_t data, uint64_t length, uint64_t programId) {
+    uint64_t copied = length < msSolHostReturnLength ? length : msSolHostReturnLength;
+    if (copied != 0) {
+        memcpy((void*)data, msSolHostReturnData, (size_t)copied);
+        memcpy((void*)programId, msSolHostReturnProgram, 32);
+    }
+    return msSolHostReturnLength;
+}
+
+#endif
