@@ -1,0 +1,271 @@
+@include("runtime/arbitrum/arbitrum.h");
+@compile("runtime/arbitrum/arbitrum.c");
+@passL("-Wl,--no-entry -Wl,--export=user_entrypoint -Wl,--export-memory");
+
+extern function msArbCalldataAddress(): uint32;
+extern function msArbCalldataLength(): uint32;
+extern function msArbScratch(): uint32;
+extern function msArbAllocate(length: uint32): uint32;
+extern function msArbSetResult(address: uint32, length: uint32, status: int32): void;
+extern function msArbStorageLoad(key: uint32, destination: uint32): void;
+extern function msArbStorageStore(key: uint32, value: uint32): void;
+extern function msArbMsgSender(destination: uint32): void;
+extern function msArbContractAddress(destination: uint32): void;
+extern function msArbMsgValue(destination: uint32): void;
+extern function msArbLoadByte(address: uint32): uint8;
+extern function msArbStoreByte(address: uint32, value: uint8): void;
+
+export struct Address {
+	high: uint32;
+	middle: uint64;
+	low: uint64;
+}
+
+export struct Word {
+	word0: uint64;
+	word1: uint64;
+	word2: uint64;
+	word3: uint64;
+}
+
+export struct StorageKey {
+	word: Word;
+}
+
+export struct Bytes {
+	address: uint32;
+	length: uint32;
+}
+
+export enum ArbitrumError {
+	InvalidCalldata,
+	OutOfBounds,
+	IntegerOverflow,
+	NonPayable,
+	UnknownSelector,
+	OutOfMemory,
+	Rejected,
+}
+
+function loadBigEndian(address: uint32, length: int32): uint64 {
+	let value: uint64 = 0;
+	for (let index: int32 = 0; index < length; index++) {
+		value = (value << 8) | (msArbLoadByte(address + (index as uint32)) as uint64);
+	}
+	return value;
+}
+
+function storeBigEndian(address: uint32, value: uint64, length: int32): void {
+	for (let index: int32 = 0; index < length; index++) {
+		const shift = ((length - index - 1) * 8) as uint64;
+		msArbStoreByte(address + (index as uint32), ((value >> shift) & 255) as uint8);
+	}
+}
+
+function loadWord(address: uint32): Word {
+	return {
+		word0: loadBigEndian(address, 8),
+		word1: loadBigEndian(address + 8, 8),
+		word2: loadBigEndian(address + 16, 8),
+		word3: loadBigEndian(address + 24, 8),
+	};
+}
+
+function storeAt(this value: Word, address: uint32): void {
+	storeBigEndian(address, value.word0, 8);
+	storeBigEndian(address + 8, value.word1, 8);
+	storeBigEndian(address + 16, value.word2, 8);
+	storeBigEndian(address + 24, value.word3, 8);
+}
+
+function loadAddress(address: uint32): Address {
+	return {
+		high: loadBigEndian(address, 4) as uint32,
+		middle: loadBigEndian(address + 4, 8),
+		low: loadBigEndian(address + 12, 8),
+	};
+}
+
+export function fromUint64(this typeof Word, value: uint64): Word {
+	return { word0: 0, word1: 0, word2: 0, word3: value };
+}
+
+export function toUint64(this value: Word): Result<uint64, ArbitrumError> {
+	if (value.word0 != 0 || value.word1 != 0 || value.word2 != 0) {
+		return Result.err(ArbitrumError.IntegerOverflow);
+	}
+	return Result.ok(value.word3);
+}
+
+export function isZero(this value: Word): boolean {
+	return value.word0 == 0 && value.word1 == 0 && value.word2 == 0 && value.word3 == 0;
+}
+
+export function toWord(this value: Address): Word {
+	return {
+		word0: 0,
+		word1: value.high as uint64,
+		word2: value.middle,
+		word3: value.low,
+	};
+}
+
+export function toAddress(this value: Word): Result<Address, ArbitrumError> {
+	if (value.word0 != 0 || (value.word1 >> 32) != 0) {
+		return Result.err(ArbitrumError.InvalidCalldata);
+	}
+	const address: Address = {
+		high: value.word1 as uint32,
+		middle: value.word2,
+		low: value.word3,
+	};
+	return Result.ok(address);
+}
+
+export function calldata(): Bytes {
+	return { address: msArbCalldataAddress(), length: msArbCalldataLength() };
+}
+
+export function allocate(this typeof Bytes, length: uint32): Result<Bytes, ArbitrumError> {
+	const address = msArbAllocate(length);
+	if (address == 0) { return Result.err(ArbitrumError.OutOfMemory); }
+	const bytes: Bytes = { address: address, length: length };
+	return Result.ok(bytes);
+}
+
+export function slice(
+	this bytes: Bytes,
+	offset: uint32,
+	length: uint32,
+): Result<Bytes, ArbitrumError> {
+	if (offset > bytes.length || length > bytes.length - offset) {
+		return Result.err(ArbitrumError.OutOfBounds);
+	}
+	const maximum: uint32 = 0xffffffff;
+	if (bytes.address > maximum - offset) {
+		return Result.err(ArbitrumError.OutOfBounds);
+	}
+	const address = bytes.address + offset;
+	if (length > maximum - address) { return Result.err(ArbitrumError.OutOfBounds); }
+	const result: Bytes = { address: address, length: length };
+	return Result.ok(result);
+}
+
+export function byteAt(this bytes: Bytes, offset: uint32): Result<uint8, ArbitrumError> {
+	const view = try bytes.slice(offset, 1);
+	return Result.ok(msArbLoadByte(view.address));
+}
+
+export function selector(this bytes: Bytes): Result<uint32, ArbitrumError> {
+	if (bytes.length < 4) { return Result.err(ArbitrumError.InvalidCalldata); }
+	const view = try bytes.slice(0, 4);
+	return Result.ok(loadBigEndian(view.address, 4) as uint32);
+}
+
+export function requireArguments(
+	this bytes: Bytes,
+	count: uint32,
+): Result<Bytes, ArbitrumError> {
+	if (count > 134217727 || bytes.length != 4 + count * 32) {
+		return Result.err(ArbitrumError.InvalidCalldata);
+	}
+	return bytes.slice(4, count * 32);
+}
+
+export function wordAt(this bytes: Bytes, offset: uint32): Result<Word, ArbitrumError> {
+	const view = try bytes.slice(offset, 32);
+	return Result.ok(loadWord(view.address));
+}
+
+export function uint64At(this bytes: Bytes, offset: uint32): Result<uint64, ArbitrumError> {
+	const value = try bytes.wordAt(offset);
+	return value.toUint64();
+}
+
+export function addressAt(this bytes: Bytes, offset: uint32): Result<Address, ArbitrumError> {
+	const value = try bytes.wordAt(offset);
+	return value.toAddress();
+}
+
+export function writeWord(
+	this bytes: Bytes,
+	offset: uint32,
+	value: Word,
+): Result<Bytes, ArbitrumError> {
+	const view = try bytes.slice(offset, 32);
+	value.storeAt(view.address);
+	return Result.ok(bytes);
+}
+
+export function slot(this typeof StorageKey, index: uint64): StorageKey {
+	return { word: Word.fromUint64(index) };
+}
+
+export function load(this key: StorageKey): Word {
+	const scratch = msArbScratch();
+	key.word.storeAt(scratch);
+	msArbStorageLoad(scratch, scratch + 32);
+	return loadWord(scratch + 32);
+}
+
+export function store(this key: StorageKey, value: Word): void {
+	const scratch = msArbScratch();
+	key.word.storeAt(scratch);
+	value.storeAt(scratch + 32);
+	msArbStorageStore(scratch, scratch + 32);
+}
+
+export function msgSender(): Address {
+	const scratch = msArbScratch();
+	msArbMsgSender(scratch);
+	return loadAddress(scratch);
+}
+
+export function contractAddress(): Address {
+	const scratch = msArbScratch();
+	msArbContractAddress(scratch);
+	return loadAddress(scratch);
+}
+
+export function msgValue(): Word {
+	const scratch = msArbScratch();
+	msArbMsgValue(scratch);
+	return loadWord(scratch);
+}
+
+export function nonPayable(): Result<Word, ArbitrumError> {
+	const value = msgValue();
+	if (!value.isZero()) { return Result.err(ArbitrumError.NonPayable); }
+	return Result.ok(value);
+}
+
+export function returnBytes(this bytes: Bytes): void {
+	msArbSetResult(bytes.address, bytes.length, 0);
+}
+
+export function revertBytes(this bytes: Bytes): void {
+	msArbSetResult(bytes.address, bytes.length, 1);
+}
+
+export function returnWord(this value: Word): void {
+	const scratch = msArbScratch();
+	value.storeAt(scratch);
+	msArbSetResult(scratch, 32, 0);
+}
+
+export function revertError(error: ArbitrumError): void {
+	const scratch = msArbScratch();
+	const selector: uint64 = 0xb7d7fc7e;
+	storeBigEndian(scratch, selector, 4);
+	const code = Word.fromUint64((error as int32) as uint64);
+	code.storeAt(scratch + 4);
+	msArbSetResult(scratch, 36, 1);
+}
+
+export function finish(result: Result<Word, ArbitrumError>): void {
+	if (result.ok) {
+		result.value.returnWord();
+	} else {
+		revertError(result.error);
+	}
+}
