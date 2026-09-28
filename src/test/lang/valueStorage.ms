@@ -607,3 +607,40 @@ test "valueStorage: a ref sequence parameter reads through two indices" {
 	let shared: int32[][] = [[1], [4, 5]];
 	assert refReferenceReadCell(shared) == 6;
 }
+
+let pushedFlat: Vec<int32> = [];
+let pushedRows: Vec<Vec<int32>> = [];
+function pushIntoFlat(count: int32): int32 {
+	for (let j: int32 = 0; j < count; j++) pushedFlat.push(j);
+	return 99;
+}
+function pushIntoRow(count: int32): int32 {
+	for (let j: int32 = 0; j < count; j++) pushedRows[0].push(j);
+	return 99;
+}
+function pushIntoShared(ref values: int32[], count: int32): int32 {
+	for (let j: int32 = 0; j < count; j++) values.push(j);
+	return 99;
+}
+function pushedInOrder(values: Span<int32>, count: int32): boolean {
+	if (values.length != count + 2 || values[0] != 1 || values[count + 1] != 99) return false;
+	for (let j: int32 = 0; j < count; j++) if (values[j + 1] != j) return false;
+	return true;
+}
+
+test "valueStorage: a push whose value grows its receiver keeps every element" {
+	const counts: int32[] = [1, 3, 7, 15, 31];
+	for (const count of counts) {
+		pushedFlat = [1];
+		pushedFlat.push(pushIntoFlat(count));
+		assert pushedInOrder(pushedFlat, count);
+		pushedRows = [[1]];
+		pushedRows[0].push(pushIntoRow(count));
+		assert pushedInOrder(pushedRows[0], count);
+		let shared: int32[] = [1];
+		shared.push(pushIntoShared(shared, count));
+		assert pushedInOrder(shared, count);
+	}
+	pushedFlat = [];
+	pushedRows = [];
+}
