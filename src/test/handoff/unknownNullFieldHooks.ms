@@ -1,7 +1,3 @@
-// `unknown` is pointer-top and deliberately outside reference counting, so a
-// field typed `unknown | null` must not be either: the store side never increfs
-// it, and a destroy hook that decrefs it frees a value nobody owned.
-
 import { fullPipeline } from "./helpers";
 import { Node, NodeKind, ProgramData, FunctionDeclData } from "../../ast/node";
 
