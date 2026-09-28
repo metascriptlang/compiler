@@ -177,6 +177,29 @@ _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected) {
 	exit(1);
 }
 
+_Noreturn void msRaiseStrLitError(msString s, msString target) {
+	fprintf(stderr, "Error: invalid union conversion: \"%.*s\" is not %.*s\n", (int)s.len, s.p != NULL ? s.p->data : "",
+		(int)target.len, target.p != NULL ? target.p->data : "");
+	exit(1);
+}
+
+msString msStrLitConv(msString s, msString members, msString target) {
+	const char* list = members.p != NULL ? members.p->data : "";
+	const char* text = s.p != NULL ? s.p->data : "";
+	int64_t i = 0;
+	while (i < members.len) {
+		int64_t n = 0;
+		while (i < members.len && list[i] != ':') {
+			n = n * 10 + (list[i] - '0');
+			i += 1;
+		}
+		i += 1;
+		if (n == s.len && i + n <= members.len && memcmp(list + i, text, (size_t)n) == 0) return s;
+		i += n;
+	}
+	msRaiseStrLitError(s, target);
+}
+
 _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag) {
 	const char* text = labels.p != NULL ? labels.p->data : "";
 	int64_t start = 0;

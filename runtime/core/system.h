@@ -555,6 +555,8 @@ _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi);
 _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected);
 _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag);
 _Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target);
+_Noreturn void msRaiseStrLitError(msString s, msString target);
+msString msStrLitConv(msString s, msString members, msString target);
 
 static inline void* msObjDownConv(void* p, const msTypeInfo* target) {
 	if (p != NULL && !msIsInstance(p, target)) msRaiseObjectConversionError(p, target);
@@ -569,6 +571,12 @@ static inline void msFfiRelease(void* p) { msDecrefCyclic(p); }
 	if ((int64_t)__vu->_tag != (int64_t)(slot)) msRaiseFieldError((head), (labels), (int64_t)__vu->_tag); \
 	__vu; \
 }))
+
+#define msVariantAccessVal(u, slot, head, labels) ({ \
+	__typeof__(u) __vv = (u); \
+	if ((int64_t)__vv._tag != (int64_t)(slot)) msRaiseFieldError((head), (labels), (int64_t)__vv._tag); \
+	__vv; \
+})
 
 /* Converting a double outside the destination's range, NaN included, is
    undefined in C (C11 6.3.1.4): the bounds are tested on the double first. */

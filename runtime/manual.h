@@ -561,6 +561,12 @@ static inline int64_t msSliceLen(int64_t start, int64_t end, int64_t len) {
     __vu; \
 }))
 
+#define msVariantAccessVal(u, slot, head, labels) ({ \
+    __typeof__(u) __vv = (u); \
+    if ((int64_t)__vv._tag != (int64_t)(slot)) __builtin_trap(); \
+    __vv; \
+})
+
 /* ===== Range-Checked Integer Casts ===== */
 static inline int8_t   msCheckRangeI8(double v, int64_t lo, int64_t hi)  { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (int8_t)v; }
 static inline uint8_t  msCheckRangeU8(double v, int64_t lo, int64_t hi)  { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (uint8_t)v; }
