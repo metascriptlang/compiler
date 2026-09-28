@@ -24,6 +24,10 @@ import { parseIntStr } from "../utils/string";
 import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink } from "./marshal";
 
+@include("runtime/promise/dispatch.h");
+extern function msMonoTimeMs(): int64;
+extern function msSleepMs(ms: int32): void;
+
 // --- VM State ---
 
 export interface RaiserRegFile {
@@ -1693,6 +1697,12 @@ function execBinOp(op: RaiserOpcode, a: number, b: number): RaiserVM {
 }
 
 // --- Tests ---
+test "the host clock advances across a host wait" {
+	const before = msMonoTimeMs();
+	msSleepMs(20);
+	assert msMonoTimeMs() - before >= 20;
+}
+
 test "halt returns constant" {
 	const vm = execModule(makeTestModule(
 		[
