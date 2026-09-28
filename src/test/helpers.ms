@@ -572,9 +572,10 @@ function emitJSTwoPhase(graph: ModuleGraph, entryFilter: MapEntry[] | null, cano
 		for (let pi: int32 = 0; pi < unitPaths.length; pi += 1) {
 			if (unitPaths[pi] == owner) { targetIdx = pi; }
 		}
+		const home = targetIdx >= 0;
 		if (targetIdx < 0) { targetIdx = unitPaths.length - 1; }
 		if (targetIdx >= 0) {
-			placeInstance((unitPrograms[targetIdx].data as ProgramData).programStmts, instNode, true);
+			placeInstance((unitPrograms[targetIdx].data as ProgramData).programStmts, instNode, home);
 		}
 	}
 
