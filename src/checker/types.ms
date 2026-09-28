@@ -2536,7 +2536,7 @@ export function isPointerShapedForUnknown(t: Type | null): boolean {
 	};
 }
 
-export enum UnknownRefusal { None, Address, Value }
+export enum UnknownRefusal { None, Address, Value, Builtin }
 
 export function unknownRefusal(t: Type | null): UnknownRefusal {
 	if (t == null) return UnknownRefusal.None;
@@ -2544,11 +2544,19 @@ export function unknownRefusal(t: Type | null): UnknownRefusal {
 	if (inner == null) return UnknownRefusal.None;
 	const held = inner.kind == TypeKind.Union ? unwrapRefNullUnion(inner) : inner;
 	if (held == null) return UnknownRefusal.Value;
+	if (held.kind == TypeKind.Ref && !isClassOrInterfaceObject(held)) return UnknownRefusal.Builtin;
 	return match (held.kind) {
 		TypeKind.Unknown | TypeKind.Null | TypeKind.Ref | TypeKind.GenericParam | TypeKind.Error | TypeKind.Never => UnknownRefusal.None,
 		TypeKind.Ptr | TypeKind.Borrow | TypeKind.CString => UnknownRefusal.Address,
 		_ => UnknownRefusal.Value,
 	};
+}
+
+function isClassOrInterfaceObject(ref: Type): boolean {
+	if (isAtomicRef(ref) || getBuiltinKind(ref) != "") return false;
+	if (ref.sym != null && ref.sym.symbolKind == SymbolKind.Actor) return false;
+	const body = ref.typeReturn;
+	return body != null && (body.kind == TypeKind.Struct || body.kind == TypeKind.GenericInstance);
 }
 
 export function smuggledIntoUnknown(src: Type | null, target: Type | null): Type | null {
@@ -2573,6 +2581,9 @@ export function unknownRefusalText(t: Type | null, what: UnknownRefusal): string
 	const shown = typeDisplayName(t);
 	if (what == UnknownRefusal.Address) {
 		return "cannot hold the raw address " + shown + " as unknown — unknown holds objects; keep a C address as Ptr<void>";
+	}
+	if (what == UnknownRefusal.Builtin) {
+		return "cannot hold " + shown + " as unknown — unknown holds class and interface instances; keep it in a field of a class";
 	}
 	return "cannot hold the value type " + shown + " as unknown — only objects (class or interface instances) are unknown";
 }

@@ -123,9 +123,11 @@ test "hashWangYi1 matches a 128-bit C product" {
 	assert (m.get(4294967294.0) ?? "") == "lo";
 }
 
+class HashProbe { n: int32 = 0; }
+
 test "reference hashing routes through the one mixing site" {
-	const a = new Map<number, string>();
-	const b = new Map<number, string>();
+	const a = new HashProbe();
+	const b = new HashProbe();
 	assert a.hash() == hashWangYi1(msPtrBits(a as Ptr<void>));
 	assert b.hash() == hashWangYi1(msPtrBits(b as Ptr<void>));
 	assert a.hash() == a.hash(), "stable for one identity";
