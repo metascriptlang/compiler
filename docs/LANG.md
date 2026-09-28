@@ -986,6 +986,33 @@ type Extended = IUser & { role: string };
 struct SuperUser = IUser & { role: string; };
 ```
 
+#### `as` between a union and its members
+
+`x as T` converts; it never reads one representation as another.
+
+```ms
+type Align = "auto" | "center" | "stretch";
+type Wire = number | string | null;
+
+const w = a as Wire;            // a: Align | null — the same conversion as `const w: Wire = a`
+const a2 = w as Align | null;   // tag test (holds a string?), then membership; null passes
+const s = w as string;          // tag test
+const b = text as Align;        // text: string — membership test
+```
+
+- Widening into a union or a nullable union is the assignment's conversion; a string-literal
+  union takes the union's `string` slot, so `const w: Wire = a` compiles too.
+- Narrowing to a member tests the tag, and narrowing a string into a string-literal union tests
+  membership. A failed test exits 1 with the same line on C and JS:
+  `Error: member 'string' is not accessible for type 'number | string' using 'number'`, or
+  `Error: invalid union conversion: "middle" is not Align`.
+- `--danger` drops the membership test and the tag test of a bare union, as it drops bound checks;
+  the tag test of a nullable union (`Wire as Align | null`) stays.
+
+Measured on tree `2d72bcc3` plus this change: corpus `649`–`654` on C drc/orc/danger, JS and ESM,
+`fixedbugs/bug602`. Not covered: the Raiser VM tests no conversion, and JS tests the tag only for a
+string, number or boolean member.
+
 ### Discriminated Union Types
 
 MetaScript supports two flavors of discriminated unions, both lowered to a tagged C union (`_tag` + variant payloads):
