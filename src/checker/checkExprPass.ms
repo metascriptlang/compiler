@@ -959,7 +959,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& d.operator != "=" && d.operator != "===" && d.operator != "!=="
 				&& d.operator != "==" && d.operator != "!="
 				&& d.operator != "&&" && d.operator != "||" && d.operator != "??"
-				&& d.operator != "&&=" && d.operator != "||=" && d.operator != "??=") {
+				&& d.operator != "&&=" && d.operator != "||=" && d.operator != "??="
+				&& d.operator != "instanceof") {
 				addError(ctx, "operator '" + d.operator + "' cannot be applied to 'unknown' — narrow with an explicit cast", node.location.line, node.location.column);
 			}
 			const voidLeft = effLeft != null && effLeft.kind == TypeKind.Void;
