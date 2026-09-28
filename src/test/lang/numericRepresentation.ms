@@ -6,6 +6,16 @@ const WideConstantLOWEST: int32 = -2147483648;
 
 const WideConstantNEGATIVE: int64 = -9223372036854775807;
 
+const WideConstantFOUR_GB: int64 = 1024 * 1024 * 1024 * 4;
+
+function wideConstantScaled(k: int64): int64 {
+	return 100000 * 100000 * k;
+}
+
+function wideConstantReturned(): int64 {
+	return 100000 * 100000;
+}
+
 struct WideLoopHolder { epoch: uint64; }
 
 function wideLoopAdvancedTo(this holder: WideLoopHolder, epoch: uint64): WideLoopHolder {
@@ -74,6 +84,34 @@ test "numericRepresentation: uint64 division keeps all bits" {
 test "numericRepresentation: signed boundary literals keep their value" {
 	assert WideConstantLOWEST + 1 == -2147483647;
 	assert WideConstantNEGATIVE + 9223372036854775807 == 0;
+}
+
+test "numericRepresentation: an integer constant expression folds exactly into its int64 slot" {
+	const big: int64 = 100000 * 100000;
+	const year: int64 = 60 * 60 * 24 * 365 * 1000;
+	assert big == 10000000000;
+	assert year == 31536000000;
+	assert WideConstantFOUR_GB == 4294967296;
+	assert wideConstantScaled(1) == 10000000000;
+	assert wideConstantReturned() == 10000000000;
+}
+
+test "numericRepresentation: an integer constant past int32 takes int64 without a slot, beside a narrower operand and in a float slot" {
+	const unslotted = 100000 * 100000;
+	const lone = 4000000000;
+	const narrow: int32 = 2;
+	const wider = narrow * (100000 * 100000);
+	const real: float64 = 100000 * 100000;
+	assert unslotted == 10000000000;
+	assert lone + 1 == 4000000001;
+	assert wider == 20000000000;
+	assert real == 10000000000.0;
+}
+
+test "numericRepresentation: a bitwise integer constant keeps its int32 value in an int64 slot" {
+	const shifted: int64 = 1 << 31;
+	const expected: int64 = -2147483648;
+	assert shifted == expected;
 }
 
 test "numericRepresentation: uint64 counter crosses 2^31" {

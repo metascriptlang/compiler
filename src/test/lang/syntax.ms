@@ -37,6 +37,75 @@ test "nullish coalescing with null" {
 	assert b == "default";
 }
 
+type NullishDirection = "row" | "column";
+
+function nullishWidened(v: uint8 | null): uint32 {
+	const x: uint32 = v ?? 1;
+	return x;
+}
+
+function nullishCrossesInt64(v: int32 | null, d: int64): int64 {
+	const fromLiteral: int64 = v ?? 0;
+	const fromValue: int64 = v ?? d;
+	return fromLiteral + fromValue;
+}
+
+function nullishDirection(s: NullishDirection | null): NullishDirection {
+	const d: NullishDirection = s ?? "row";
+	return d;
+}
+
+function nullishJoinKind(t: string | null): string {
+	const r = t ?? 1;
+	return typeof r;
+}
+
+test "nullish coalescing fits its payload and its fallback into the slot like a conditional" {
+	assert nullishWidened(7) == 7;
+	assert nullishWidened(null) == 1;
+	assert nullishCrossesInt64(7, 5 as int64) == 14;
+	assert nullishCrossesInt64(null, 5 as int64) == 5;
+	assert nullishDirection("column") == "column";
+	assert nullishDirection(null) == "row";
+}
+
+test "nullish coalescing without a slot joins its payload and its fallback" {
+	assert nullishJoinKind("s") == "string";
+	assert nullishJoinKind(null) == "number";
+}
+
+class NullishHolder { v: int32 | null = 4; }
+
+let nullishCalls = 0;
+
+function nullishCounted(): uint8 | null {
+	nullishCalls += 1;
+	return 7;
+}
+
+function nullishHolder(): NullishHolder {
+	nullishCalls += 1;
+	return new NullishHolder();
+}
+
+test "nullish coalescing evaluates its left operand once" {
+	nullishCalls = 0;
+	const x: uint32 = nullishCounted() ?? 1;
+	assert x == 7;
+	assert nullishCalls == 1;
+	const slots: (int32 | null)[] = [null, 5, null];
+	let i = 0;
+	const first = slots[i++] ?? 9;
+	const second = slots[i++] ?? 9;
+	assert first == 9;
+	assert second == 5;
+	assert i == 2;
+	nullishCalls = 0;
+	const v = nullishHolder().v ?? 0;
+	assert v == 4;
+	assert nullishCalls == 1;
+}
+
 // =========================================================
 // 3. Exponentiation operator
 // =========================================================

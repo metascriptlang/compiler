@@ -10,7 +10,8 @@ import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPoin
 import { createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
-import { constantLiteralOf, isUntypedIntegerConstant } from "./constFold";
+import { constantLiteralOf, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
+import { int64ToDecimal } from "../utils/string";
 
 // ===== Operator Inference =====
 
@@ -82,6 +83,12 @@ export function fitJoinedBranch(ctx: CheckerContext, expr: Node, joined: Type | 
 	if (bt == null || bt.kind == TypeKind.Never || bt.kind == TypeKind.Void || isUnresolvedType(bt)) return expr;
 	if (bt == joined || (sameType(bt, joined) && bt.callConv == joined.callConv)) return expr;
 	return fitNode(ctx, expr, joined, bt);
+}
+
+export function nullishPayloadType(t: Type | null): Type | null {
+	if (t == null) return null;
+	if (isMaybeType(t)) return t.typeReturn;
+	return t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : null;
 }
 
 // Reference parity (sigmatch.nim:2596 `localConvMatch`, :2179 `implicitConv`): a
@@ -640,6 +647,46 @@ export function isFittingIntLiteral(expr: Node, target: Type): boolean {
 	const value = (folded.data as NumberLiteralData).intVal;
 	if (value < 0 && folded.nodeType != null && isUnsignedIntegerType(folded.nodeType)) return false;
 	return foldedIntFits(value, target);
+}
+
+function isFoldedIntegerConstant(expr: Node): boolean {
+	if (isNodeIntLit(expr)) return false;
+	if (expr.kind == NodeKind.UnaryExpr && isNodeIntLit((expr.data as UnaryExprData).operand)) return false;
+	return isUntypedIntegerConstant(expr, 0);
+}
+
+export function untypedIntegerLiteralType(node: Node): Type {
+	const wide = createPrimitive(TypeKind.Int64);
+	if (literalFitsInType(node, int32Type(), false) || !literalFitsInType(node, wide, false)) return int32Type();
+	return wide;
+}
+
+export function exactConstantType(expr: Node, t: Type | null): Type | null {
+	if (t == null || !isIntegerType(t) || !isFoldedIntegerConstant(expr)) return t;
+	const exact = exactUntypedInteger(expr, 0);
+	if (exact == null || integerValueFits(integerValueOf(exact), t)) return t;
+	return createPrimitive(TypeKind.Int64);
+}
+
+export function fitIntegerConstant(ctx: CheckerContext, expr: Node, exprType: Type | null, formal: Type | null): Node {
+	const none = null as unknown as Node;
+	if (formal == null || exprType == null || !isIntegerType(exprType)) return none;
+	const slot = isMaybeType(formal) && formal.typeReturn != null ? formal.typeReturn : formal;
+	if (!isIntegerType(slot) || !isFoldedIntegerConstant(expr)) return none;
+	const exact = exactUntypedInteger(expr, 0);
+	if (exact == null) return none;
+	const value = integerValueOf(exact);
+	if (integerValueFits(value, slot)) return typedIntegerLiteral(value, slot, expr.location);
+	addError(ctx, "cannot convert " + int64ToDecimal(value) + " to " + typeDisplayName(slot), expr.location.line, expr.location.column);
+	return wrapInConv(expr, slot);
+}
+
+export function constantOperandAs(expr: Node, other: Node, target: Type | null): Node {
+	const none = null as unknown as Node;
+	if (target == null || !isIntegerType(target) || !isFoldedIntegerConstant(expr) || isUntypedIntegerConstant(other, 0)) return none;
+	const exact = exactUntypedInteger(expr, 0);
+	if (exact == null || !integerValueFits(integerValueOf(exact), target)) return none;
+	return typedIntegerLiteral(integerValueOf(exact), target, expr.location);
 }
 
 function foldedIntFits(value: int64, target: Type): boolean {
@@ -1212,6 +1259,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 			+ "' — a void call produces no value", expr.location.line, expr.location.column);
 		return expr;
 	}
+	const constantFit = fitIntegerConstant(ctx, expr, exprType, formal);
+	if (constantFit != null) return constantFit.nodeType == formal ? constantFit : fitNode(ctx, constantFit, formal, constantFit.nodeType);
 	const payloadSlot = isMaybeType(formal) && formal.typeReturn != null && !isMaybeType(exprType) ? formal.typeReturn : formal;
 	if (!hasGenericParams(formal) && !slotTakesValue(exprType, payloadSlot)) {
 		const converted = tryApplyConverter(ctx, expr, exprType, formal);
