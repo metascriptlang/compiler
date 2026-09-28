@@ -12,7 +12,8 @@ import { monomorphizeProgram } from "../../monomorphize/collect";
 import { validateTypedAST } from "../../checker/validate";
 import { transformProgram } from "../../transform/index";
 import { transformForNative } from "../../transform/native/index";
-import { createTransformContextWithChecker } from "../../transform/context";
+import { createTransformContextWithChecker, createNameSet } from "../../transform/context";
+import { setGlobalHookOwners } from "../../transform/lowering/destructorLifting";
 import { Node, NodeKind, ProgramData, FunctionDeclData } from "../../ast/node";
 import { createMapProvider, loadModuleGraph } from "../../module/loader";
 import { Module, ModuleGraph } from "../../module/graph";
@@ -34,6 +35,7 @@ export function checkSource(source: string): CheckerContext {
 
 export function fullPipeline(source: string): Node {
 	resetAllSideChannels();
+	setGlobalHookOwners(createNameSet());
 	if (getPreludeContext() == null) {
 		const g = loadModuleGraph("test/handoff.ms", createMapProvider([{ entryPath: "test/handoff.ms", entrySource: "const _p: number = 0;" }]));
 		checkModuleGraph(g, "");
