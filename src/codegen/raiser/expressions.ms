@@ -977,14 +977,20 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		return compileExitCall(s, node);
 	}
 
-	// spawn(fn) / waitFor(h) / Promise.resolve(v) — the async surface the VM
-	// owns as opcodes. Keyed on builtinKind (set from the @builtin decorator
-	// in std/core/promise), never on the name.
+	// spawn(fn) / sleepAsync(ms) / waitFor(h) / Promise.resolve(v) — the async
+	// surface the VM owns as opcodes. Keyed on builtinKind (set from the @builtin
+	// decorator in std/core/promise), never on the name.
 	const asyncKind = asyncBuiltinKind(node);
 	if (asyncKind == "PromiseSpawn" && d.arguments.length == 1) {
 		const closureReg = compileExpr(s, d.arguments[0]);
 		const dest = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.Spawn, dest, closureReg, 0));
+		return dest;
+	}
+	if (asyncKind == "SleepAsync" && d.arguments.length == 1) {
+		const delayReg = compileExpr(s, d.arguments[0]);
+		const dest = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.Sleep, dest, delayReg, 0));
 		return dest;
 	}
 	if (asyncKind == "PromiseResolve" && d.arguments.length == 1) {
