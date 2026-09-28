@@ -15,37 +15,80 @@ MetaScript is a systems programming language with TypeScript syntax that compile
 | `never` | Unreachable (bottom type) | N/A |
 | `null` | Null value | `NULL` |
 | `undefined` | Alias of `null` (warns — prefer `null`) | `NULL` |
-| `unknown` | Top type — opaque until cast | `void*` |
+| `unknown` | Top type — a class or interface instance, counted; opaque until cast | `void*` |
 
 **There is no `any`.** `unknown` is the sole top type: opaque, readable only
 through an explicit cast. A native target has no dynamic member lookup, so an
 annotation promising one would be a promise the backend cannot keep — the
 checker rejects it and names the alternative.
 
-#### `unknown` vs `Ptr<void>` — same C repr, opposite intent
+#### `unknown`, `Ptr<void>`, `Handle<T>` — one construct per job
 
-Both compile to `void*`, so it is tempting to treat them as one thing. They are
-not, and picking the wrong one hides a real bug:
+| job | construct |
+|---|---|
+| an object whose type is not known yet | `unknown` |
+| a raw address at a C boundary | `Ptr<void>` |
+| keep an object alive while C holds its address | `Handle<T>` from `std/ffi` |
 
-| | `unknown` | `Ptr<void>` |
+`unknown` is the managed top, the reference's `RootRef` and Swift's `AnyObject`:
+
+- It holds class and interface instances only. A value (number, string, struct, closure),
+  an array, a `Map`/`HashMap`, an `Arc`/`Locked` cell, an actor and a raw address (`Ptr`,
+  `Borrow`, `cstring`) are refused on every way in — slot, argument, return and
+  `x as unknown` alike (`src/checker/types.ms` `unknownRefusal`). An array or a map goes in
+  a field of a class. Arrays and maps are out because only an object header names the
+  destroy a type-erased release must run.
+- It owns what it holds: a store counts, a release goes through the header's type, and a
+  cycle through an `unknown` field is collected under `--gc=orc`.
+- Reads need a cast. `u as C` for a class `C` is tested at run time on C and JS, and so is
+  `base as Derived`: a wrong class stops the program with
+  `Error: invalid object conversion: <runtime class> is not C`, exit 1; `null` passes.
+  `--danger` drops this test, as it drops bound checks, and `--gc=manual` has no type
+  header to test. `instanceof` narrows an `unknown` on every backend and is never dropped.
+- Only a non-generic class is a cast target out of `unknown`. An interface or a generic
+  class instance has no run-time identity to test (JS erases `Box<number>` and
+  `Box<string>` to one class), so `u as I` is refused: make `I` a class, or keep the values
+  in a discriminated union.
+- `x as unknown as T` is two conversions, up then a tested down, never a reinterpret:
+  `i as unknown as K` for an `int32` is refused — write `i as K`. `null as unknown as T`
+  still works, because a `null` literal takes any type.
+- An `unknown` reaches an actor only by `move`, and a spawn thunk sees a captured one as
+  `Readonly<unknown>`, like every captured reference.
+
+`Ptr<void>` is an address the DRC never counts. A C `extern` may not name `unknown` in a
+parameter or a return — declare `Ptr<void>`. An object's address is `x as Ptr<void>`
+(uncounted) and back is `p as C` (untested, like every `Ptr` read). The rest parameter of an
+`extern` is the reference's untyped `{.varargs.}`: each argument reaches C as itself, so
+`printf(fmt, s, n)` passes `s` and `n`, not an array.
+
+`Handle<T>` (`std/ffi`, a plain struct over the reference's `GC_ref`/`GC_unref`, the shape of
+Swift's `Unmanaged`):
+
+| MetaScript | count | use |
 |---|---|---|
-| **Means** | "a value I must prove the type of before I touch it" | "a raw machine address" |
-| **Reads** (`x.field`, `x()`, `x + 1`) | rejected by the checker — narrow with `as` first | allowed where pointer arithmetic / FFI expects it |
-| **What flows in** | anything pointer-shaped (`Ref`, `Ptr`, `null`, `cstring`, another `unknown`); value types (`number`, a bare struct) are rejected — box them or pass a `Ref` | whatever the FFI/`malloc` boundary hands back |
-| **Use for** | the `null as unknown as T` nullable-field idiom; opaque handles crossing an API you re-narrow at the other end | C interop, allocator return values, deliberately untyped memory |
+| `Handle.retain(x)` | +1 | `x` stays alive while C holds `h.ptr` |
+| `Handle.borrow(x)` | none | C borrows while the owner outlives it, e.g. an object passing itself as a callback context |
+| `h.ptr` / `Handle.at<T>(p)` | none | to C as `Ptr<void>` and back |
+| `h.value()` | the caller's own reference | read the object |
+| `h.take()` | the +1 comes back as the caller's reference | end the hand-off |
+| `h.retain()` / `h.release()` | +1 / −1 | pair them with `defer` |
 
-Rule of thumb: reach for `Ptr<void>` **only** at an `extern`/FFI boundary or when
-you genuinely mean "an address." Everywhere else the opaque value wants
-`unknown`, because the checker's narrow-before-use discipline is the whole point
-— `Ptr<void>` gives you none of it (`p.field` compiles and reads garbage).
+A `Handle` is copied freely; a second `release` is a use-after-free and a missing one is a
+leak, both caught by the ledger and SAN lanes. On JS `h.ptr` is the object and the counts do
+nothing. Structs have no constructor, so the retained form is `Handle.retain(x)`, not
+`new Handle(x)`.
 
-`unknown` is **not** a universal top type in the TypeScript sense. TS `unknown`
-accepts every value because every JS value is already boxed; MS keeps values
-unboxed for native speed, so a value type has no `void*` form to reinterpret and
-is rejected on the way in. The discipline TS `unknown` actually buys —
-can't-touch-until-narrowed — is preserved in full; only the "literally any value
-fits" part is traded away, on purpose. If you need to hold "one of several
-concrete types," that is a discriminated union or a generic, not `unknown`.
+Measured on tree `09e272c1`: corpus `643`–`648` on C drc/orc/danger, JS and ESM (SAN clean),
+`bug599`–`bug601`, guards `unknownFieldCycleCollects` and `handleKeepsObjectForC` (a real C
+file keeps the address; red with the retain or the release removed). Not measured: a
+`--gc=manual` build of a conversion. Not covered yet: C `extern class` values are not refused
+into `unknown` (the checker cannot tell a C extern class from a JS one declared in a shared
+`.ms`), and the Raiser VM neither tests a conversion nor loads `std/ffi`.
+
+**`unknown` is not a universal top type in the TypeScript sense**:
+TS `unknown` accepts every value because every JS value is already boxed, while MS keeps
+values unboxed. If you need "one of several concrete types," that is a discriminated union
+or a generic, not `unknown`.
 
 **`undefined` is accepted as an alias of `null`** for TypeScript
 backward-compatibility, and warns so the code can be migrated to `null`. MS has
@@ -1300,6 +1343,10 @@ function process(): void {
 
     if (error) return;         // defer still runs
 }
+
+// Pair a Handle's +1 with its release (std/ffi)
+const h = Handle.retain(view);
+defer h.release();
 ```
 
 ### Match Expression
