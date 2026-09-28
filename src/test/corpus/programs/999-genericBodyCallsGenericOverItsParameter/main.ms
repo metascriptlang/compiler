@@ -1,6 +1,5 @@
 // @stdout: ok 1 0 2
 // @exit: 0
-// @xfail(raiser): raiser pop sets the length from a Float and stops with "ArraySetLen expected an integer length, got kind Float" (inbox 2026-09-25-raiser-array-pop-fails)
 // note: a generic class's method and a generic function call std's generic `pop` on an array whose element type still names their own `T` (`Q<T>[]`, one level deeper `Q<Q<T>>[]`). Checking the generic body before its instantiation must not instantiate `pop` over the unbound `T`: such an instance is never defined, and the JS bundle exported its name from std's array module ("Export … is not defined in module").
 
 interface Q<T> {
