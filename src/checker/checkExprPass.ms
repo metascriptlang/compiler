@@ -29,7 +29,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -1276,6 +1276,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (idxType != null && idxType.kind == TypeKind.Number && d.index.kind != NodeKind.BinaryExpr) {
 				d.index = wrapInConv(d.index, createPrimitive(TypeKind.Int64));
 			}
+			const rangeIndex = d.index.kind == NodeKind.BinaryExpr
+				&& ((d.index.data as BinaryExprData).operator == ".." || (d.index.data as BinaryExprData).operator == "...");
+			if (arrType.kind == TypeKind.Tuple && arrType.typeChildren != null && !rangeIndex) {
+				node.nodeType = tupleIndexType(ctx, arrType, d, node); return;
+			}
 			// Range access: arr[start..end] returns Span<elemType>
 			let accessType: Type = inferredType();
 			if (d.index.kind == NodeKind.BinaryExpr) {
@@ -1290,11 +1295,6 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 			} else if (arrType.kind == TypeKind.String) {
 				accessType = stringType();
-			} else if (arrType.kind == TypeKind.Tuple && d.index.kind == NodeKind.NumberLiteral
-					&& arrType.typeChildren != null) {
-				const idx = (d.index.data as NumberLiteralData).value;
-				accessType = (idx >= 0 && idx < arrType.typeChildren.length)
-					? arrType.typeChildren[idx] : inferredType();
 			} else {
 				accessType = getElementType(arrType);
 			}
