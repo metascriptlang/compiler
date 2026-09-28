@@ -109,20 +109,20 @@ void msTestErrorFlag(void) {
 	exit(1);
 }
 
-void msFutureRaiseFrom(msFutureBase* f) {
+void msRaiseAwaitedError(void* err) {
 	msErr = true;
+	msCurrException = err != NULL ? (msException*)err : (msException*)msMakeError(msStringFromCStr("noproc"));
+	msErrPayload = (void*)msCurrException;
+}
+
+void msFutureRaiseFrom(msFutureBase* f) {
 	if (f != NULL) {
 		atomic_store_explicit(&f->errorObserved, true, memory_order_relaxed);
 		msClearOrphanFailure(f);
 	}
 	void* err = (f != NULL) ? f->error : NULL;
-	if (err != NULL) {
-		msCurrException = (msException*)err;
-		f->error = NULL;
-	} else {
-		msCurrException = (msException*)msMakeError(msStringFromCStr("noproc"));
-	}
-	msErrPayload = (void*)msCurrException;
+	if (f != NULL) f->error = NULL;
+	msRaiseAwaitedError(err);
 }
 
 _Noreturn void msRaiseIndexError(int64_t idx, int64_t len) {

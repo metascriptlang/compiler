@@ -21,6 +21,7 @@
 //      const $ag = msAwaitGroupInit(1);
 //      msSpawnTaskSubmit($ag, 0, fn);
 //      msAwaitGroupBlocking($ag);
+//      msAwaitGroupCheckFailed($ag);
 //      const x = msUnboxT(msAwaitGroupResult($ag, 0));
 //      msAwaitGroupFree($ag);
 //
@@ -273,6 +274,8 @@ function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: Transf
 	// 4. Blocking wait with deadline
 	const waitStmts = emitAwaitGroupWait(ag.ident, timeoutExpr, loc, ctx);
 	for (const ws of waitStmts) stmts.push(ws);
+	stmts.push(makeExprStmt(
+		makeCall(runtimeRef("msAwaitGroupCheckFailed", loc), [ag.ident], loc), loc));
 
 	// 5. const $agr = msAwaitGroupResult($ag, 0);
 	const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitGroupResult", loc), [ag.ident, makeNumber(0, loc)], loc), VOID_PTR_TYPE, loc);

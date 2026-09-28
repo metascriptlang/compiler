@@ -60,7 +60,6 @@
 #define MS_THREAD_LOCAL _Thread_local
 #endif
 MS_TLS_EXTERN(bool, msErr);         /* slot-failure propagation (mirror future.h) */
-MS_TLS_EXTERN(void*, msErrPayload);
 
 /* Amendment G (PARALOCK, I16): in-flight ownership of cross-thread completion
  * futures. The queue's completion ref is taken on the OWNER thread at submit
@@ -176,6 +175,7 @@ msAwaitGroup* msAwaitGroupInit(int32_t n);
  * completed — calling during an outstanding submission is UB. The transform
  * pass emits this call after msAwaitGroupBlocking returns. */
 void msAwaitGroupFree(msAwaitGroup* g);
+void msAwaitGroupCheckFailed(msAwaitGroup* g);
 
 /* ===== Completion (called by workers) ===== */
 
@@ -359,10 +359,15 @@ static inline void msAwaitSlotWait(void* sp) {
     if (dec) msPoolBusyInc();  /* back to own work */
 }
 
+void msRaiseAwaitedError(void* err);
+
 static inline void* msAwaitSlotResult(void* sp) {
     msAwaitSlot* s = (msAwaitSlot*)sp;
     if (atomic_load_explicit(&s->failed, memory_order_acquire)) {
-        msErr = true; msErrPayload = s->error; return NULL;
+        void* err = s->error;
+        msAwaitSlotRelease(sp);
+        msRaiseAwaitedError(err);
+        return NULL;
     }
     return s->result;
 }

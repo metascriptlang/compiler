@@ -142,6 +142,13 @@ void msAwaitGroupCompleteSlot(msAwaitGroup* g, int32_t slot, void* value) {
 	finishSlot(g);
 }
 
+void msAwaitGroupCheckFailed(msAwaitGroup* g) {
+	if (g == NULL || !atomic_load_explicit(&g->failed, memory_order_acquire)) return;
+	void* err = g->error;
+	msAwaitGroupFree(g);
+	msRaiseAwaitedError(err);
+}
+
 void msAwaitGroupFailSlot(msAwaitGroup* g, int32_t slot, void* error) {
 	if (g == NULL) return;
 	if (slot < 0 || slot >= g->size) return;

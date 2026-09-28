@@ -8,6 +8,7 @@
 //   const $ag = msAwaitGroupInit(N);
 //   msSpawnTaskSubmit($ag, 0, closure0); ... msSpawnTaskSubmit($ag, N-1, closureN);
 //   msAwaitGroupBlocking($ag);
+//   msAwaitGroupCheckFailed($ag);  // a failed child: free the group, re-raise its error
 //   const $r0 = msAwaitGroupResult($ag, 0); ... const $rN = msAwaitGroupResult($ag, N-1);
 //   msAwaitGroupFree($ag);
 //   [$r0, ..., $rN]  // replacement array
@@ -163,6 +164,8 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		const waitStmts = emitAwaitGroupWait(ag.ident, groupTimeout, loc, ctx);
 		for (const ws of waitStmts) stmts.push(ws);
 	}
+	stmts.push(makeExprStmt(
+		makeCall(runtimeRef("msAwaitGroupCheckFailed", loc), [ag.ident], loc), loc));
 
 	// 4. Check if all slots return void (skip result reading)
 	let allVoid = true;
