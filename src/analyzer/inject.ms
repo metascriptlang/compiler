@@ -377,6 +377,8 @@ function writtenRoot(target: Node): Symbol | null {
 			NodeKind.MemberExpr => { cur = (cur.data as MemberExprData).object; },
 			NodeKind.ArrayAccess => { cur = (cur.data as ArrayAccessData).array; },
 			NodeKind.HiddenDeref | NodeKind.HiddenAddr => { cur = (cur.data as HiddenDerefData).expr; },
+			NodeKind.TypeAssertion => { cur = (cur.data as TypeAssertionData).asExpr; },
+			NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => { cur = (cur.data as HiddenStdConvData).convExpr; },
 			_ => { return null; },
 		};
 	}
