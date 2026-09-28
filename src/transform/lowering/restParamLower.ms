@@ -18,7 +18,7 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
-import { lookupSymbol, getCtorParamTypes } from "../../checker/symbol";
+import { lookupSymbol, getCtorParamTypes, hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // Holds the active ctx for the current walk. Closure over `ctx` would be
 // cleaner but walkNode's visitor signature is fixed to (node) => node.
@@ -111,7 +111,7 @@ function lowerRest(node: Node): Node {
 	if (d.resolvedOverloadIdx > 0 && sym.overloads != null && d.resolvedOverloadIdx - 1 < sym.overloads.length) {
 		sym = sym.overloads[d.resolvedOverloadIdx - 1];
 	}
-	if (sym.builtinKind != "") return node;
+	if (sym.builtinKind != "" || hasFlag(sym, SymbolFlag.ImportC)) return node;
 	if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return node;
 
 	const typeChildren = sym.symbolType.typeChildren;

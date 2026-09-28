@@ -1473,9 +1473,10 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			continue;
 		}
 		if (argTypes[pi] == null || argTypes[pi] == null) continue;
+		const foreignVarargs = hasRest && pi >= restParamIdx && node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ImportC);
 		const formal: Type = skipModifier(paramType) ?? paramType;
 		const formalHeld = formal.kind == TypeKind.Union ? unwrapRefNullUnion(formal) : formal;
-		if (isUnknownType(formalHeld)) {
+		if (isUnknownType(formalHeld) && !foreignVarargs) {
 			const refusal = unknownRefusal(argTypes[pi]);
 			if (refusal != UnknownRefusal.None) {
 				addError(ctx, argLabelCap(pi, hasReceiver) + ": " + unknownRefusalText(argTypes[pi], refusal), node.location.line, node.location.column);
@@ -1486,7 +1487,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				addError(ctx, argLabelCap(pi, hasReceiver) + ": unknown is not assignable to " + typeDisplayName(formal) + " — narrow with an explicit cast", node.location.line, node.location.column);
 			}
 		}
-		const intoUnknown = convertIntoUnknown(args[pi], argTypes[pi], paramType);
+		const intoUnknown = foreignVarargs ? args[pi] : convertIntoUnknown(args[pi], argTypes[pi], paramType);
 		if (intoUnknown != args[pi]) {
 			args[pi] = intoUnknown;
 			argTypes[pi] = intoUnknown.nodeType!;
