@@ -269,6 +269,27 @@ fix or soft-float implementation is included. This does not affect the unchanged
 math demo, whose runtime console arguments are strings. Do not generalize the
 18-line proof to floating-point programs.
 
+The companion `~/metascript/talks/solana-meetup/demo/abt.sh` now presents the
+same source → build → execute flow as that directory's `demo.sh`. On tooling
+tree `e0dc768d2c2329568ea4d43e50c86c97244f3750`, running `./abt.sh --math` and
+`./abt.sh` directly, with no environment overrides, exited 0:
+
+```text
+math: 5400-byte WASM; 18 matching events in each invocation; gas 42761, 33083
+hello: 2566-byte WASM; ["hello solana"] in each invocation; gas 31213, 21921
+```
+
+The math results were compared against every line of the saved native/LiteSVM
+comparison; the original source SHA-256 above still matched. The shell wrapper
+pins the tested worktree compiler, not the unsynced installed binary. Its
+local README owns replacement-toolchain instructions. `arbitrumConsole.mjs
+--demo` changes presentation only: identical repeat output is summarized,
+while both complete results remain in the proof file.
+
+The user chose this no-faucet simulation for the video instead of public
+transactions. It still needs network access to the RPC; it is not an offline
+localnet, and these runs establish no persisted public deployment.
+
 ## Phase 1: `--gc=manual` (No RC, malloc available) — DONE
 
 DRC injection is skipped. RC operations are no-ops. Allocation still uses malloc (libc available). Generated C code is identical to `--gc=orc` — only the linked runtime header differs.
