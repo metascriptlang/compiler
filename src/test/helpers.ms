@@ -28,7 +28,7 @@ import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { ErrorSeverity, Module, ModuleGraph, findModule } from "../module/graph";
 import { Node, ProgramData } from "../ast/node";
-import { drainPendingInstances, lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
+import { drainPendingInstances, lookupModuleCtx, lookupModuleProgram, placeInstance } from "../checker/instantiate";
 import { platform } from "std/process";
 // Side-effect import — registers the Raiser-VM-backed macro evaluator so
 // macros encountered in compileToC sources actually expand. Without this,
@@ -77,7 +77,7 @@ function uncheckedError(mod: Module): string {
 	return pr.ok ? `internal: ${mod.path} was not checked by the graph phase` : `parse: ${pr.error}`;
 }
 
-function placeOwnedInstances(units: CheckedUnit[]): void {
+function placeOwnedInstances(units: CheckedUnit[], classesBesideGeneric: boolean): void {
 	const ctxs: CheckerContext[] = [];
 	for (const u of units) ctxs.push(u.ctx);
 	for (const inst of drainPendingInstances(ctxs)) {
@@ -86,7 +86,7 @@ function placeOwnedInstances(units: CheckedUnit[]): void {
 		if (inst.nodeType == null && sym.symbolType != null) inst.nodeType = sym.symbolType;
 		for (const u of units) {
 			if (u.path == sym.modulePath) {
-				(u.program.data as ProgramData).programStmts.push(inst);
+				placeInstance((u.program.data as ProgramData).programStmts, inst, classesBesideGeneric);
 				break;
 			}
 		}
@@ -113,7 +113,7 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	if (unit == null) return Result.err(uncheckedError(mod));
 	const checkerCtx = unit.ctx;
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
-	placeOwnedInstances([unit]);
+	placeOwnedInstances([unit], false);
 
 	const monoed = monomorphizeProgram(unit.program, checkerCtx);
 
@@ -164,7 +164,7 @@ export function compileToCWithStd(source: string): CompileResult {
 	if (unit == null) return Result.err(uncheckedError(mod));
 	const checkerCtx = unit.ctx;
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
-	placeOwnedInstances([unit]);
+	placeOwnedInstances([unit], false);
 
 	const monoed = monomorphizeProgram(unit.program, checkerCtx);
 
@@ -205,7 +205,7 @@ export function compileToJS(source: string, target: TargetInfo = hostTargetInfo(
 	if (unit == null) return Result.err(uncheckedError(mod));
 	const checkerCtx = unit.ctx;
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
-	placeOwnedInstances([unit]);
+	placeOwnedInstances([unit], true);
 
 	const transformed = transformProgram(unit.program, checkerCtx, true);
 	// Mirrors the drain compile.ms runs after the JS transform: a pass that
@@ -236,7 +236,7 @@ export function compileTestBuildToJS(source: string): CompileResult {
 	if (unit == null) return Result.err(uncheckedError(mod));
 	const checkerCtx = unit.ctx;
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
-	placeOwnedInstances([unit]);
+	placeOwnedInstances([unit], true);
 
 	const transformed = transformProgram(unit.program, checkerCtx, true);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
@@ -288,7 +288,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		if (hasErrors(unit.ctx)) return checkErrorMessage(unit);
 		units.push(unit);
 	}
-	placeOwnedInstances(units);
+	placeOwnedInstances(units, false);
 
 	// Compute global alive set for DCE (same as compile.ms:345)
 	const monoed_programs: Node[] = [];
@@ -437,7 +437,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		if (hasErrors(unit.ctx)) return checkErrorMessage(unit);
 		units.push(unit);
 	}
-	placeOwnedInstances(units);
+	placeOwnedInstances(units, false);
 
 	const monoed_programs: Node[] = [];
 	const monoed_paths: string[] = [];
@@ -574,7 +574,7 @@ function emitJSTwoPhase(graph: ModuleGraph, entryFilter: MapEntry[] | null, cano
 		}
 		if (targetIdx < 0) { targetIdx = unitPaths.length - 1; }
 		if (targetIdx >= 0) {
-			(unitPrograms[targetIdx].data as ProgramData).programStmts.push(instNode);
+			placeInstance((unitPrograms[targetIdx].data as ProgramData).programStmts, instNode, true);
 		}
 	}
 

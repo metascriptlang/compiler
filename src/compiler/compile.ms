@@ -48,7 +48,7 @@ import { registerPreludeStampFn, preludePackKey, preludePackStamp, tryLoadPrelud
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
-import { drainPendingInstances, distinctInstances } from "../checker/instantiate";
+import { drainPendingInstances, distinctInstances, placeInstance } from "../checker/instantiate";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTablesFingerprint, collectTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { hookSymMark, hookSymsFrom, replayHookSyms } from "../codegen/c/types";
 import { GenericTypeInstRow, addGenericTypeInstRow } from "../parser/context";
@@ -1224,7 +1224,7 @@ function unitProgramAt(paths: string[], programs: Node[], path: string): Node | 
 	return null;
 }
 
-function routeInstances(order: Node[], programOf: (path: string) => Node | null, place: boolean): HashMap<string, Node[]> {
+function routeInstances(order: Node[], programOf: (path: string) => Node | null, place: boolean, classesBesideGeneric: boolean = false): HashMap<string, Node[]> {
 	const byHome = new HashMap<string, Node[]>();
 	for (const instNode of distinctInstances(order)) {
 		const sym = instNode.resolvedSym;
@@ -1234,13 +1234,13 @@ function routeInstances(order: Node[], programOf: (path: string) => Node | null,
 		if (program == null) throw new Error(`internal: generic instance '${sym.name}' belongs to ${sym.modulePath}, which is not a module of this build`);
 		if (!byHome.has(sym.modulePath)) byHome.set(sym.modulePath, []);
 		byHome.get(sym.modulePath).push(instNode);
-		if (place) (program.data as ProgramData).programStmts.push(instNode);
+		if (place) placeInstance((program.data as ProgramData).programStmts, instNode, classesBesideGeneric);
 	}
 	return byHome;
 }
 
-function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[]): void {
-	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true);
+function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[], classesBesideGeneric: boolean = false): void {
+	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true, classesBesideGeneric);
 }
 
 function graphCheckedModule(graph: ModuleGraph, modPath: string, mod: Module, opts: CliOptions): { program: Node, ctx: CheckerContext } {
@@ -1369,7 +1369,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		unitCtxs.push(ctx);
 	}
 
-	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
+	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs, true);
 
 	// Phase 2 — backend transform + codegen
 	let anyTopLevelAwait = false;
@@ -3281,7 +3281,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	// module that first asked for it — leaves the name pointing at one module
 	// and the definition sitting in another, which on this backend becomes a
 	// module importing a symbol from itself. Same routing as the bundle path.
-	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
+	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs, true);
 
 	// Export-name surface per module — jsMultiFileName keys public naming off
 	// this list on BOTH the declaring and the referencing side (symbol flags

@@ -308,6 +308,30 @@ export function distinctInstances(order: Node[]): Node[] {
 	return out;
 }
 
+function declaredClass(stmt: Node): Node | null {
+	let n = stmt;
+	if (n.kind == NodeKind.ExportDecl) n = (n.data as ExportDeclData).exportedDecl;
+	if (n != null && n.kind == NodeKind.DecoratedDecl) n = (n.data as DecoratedDeclData).decoratedNode;
+	return n != null && n.kind == NodeKind.ClassDecl ? n : null;
+}
+
+function placeBesideGeneric(stmts: Node[], instNode: Node): void {
+	const generic = instanceGenericOf(instNode)!;
+	let at = -1;
+	for (let i = 0; i < stmts.length; i += 1) {
+		const decl = declaredClass(stmts[i]);
+		if (decl != null && decl == generic.declNode) { at = i + 1; break; }
+	}
+	if (at < 0) throw new Error(`internal: generic class '${generic.name}' of instance '${(instNode.data as ClassDeclData).className}' is not declared at the top level of ${generic.modulePath}`);
+	while (at < stmts.length && stmts[at].kind == NodeKind.ClassDecl && instanceGenericOf(stmts[at]) == generic) at += 1;
+	stmts.splice(at, 0, instNode);
+}
+
+export function placeInstance(stmts: Node[], instNode: Node, classesBesideGeneric: boolean): void {
+	if (classesBesideGeneric && instNode.kind == NodeKind.ClassDecl) placeBesideGeneric(stmts, instNode);
+	else stmts.push(instNode);
+}
+
 export function addPendingInstance(host: CheckerContext, node: Node): void {
 	host.generatedInstances.push(node);
 }
