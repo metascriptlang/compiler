@@ -377,3 +377,5 @@ import "./bug612MaybeCacheKeepsItsPayload";
 import "./bug613BorrowFindsItsBase";
 import "./bug614MethodSignatureChecksItsImplementation";
 import "./bug615ConstraintScanVisitsEachTypeOnce";
+import "./bug616MethodCallAddressReceiver";
+import "./bug617MethodCallAddressReceiverChecked";
