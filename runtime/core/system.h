@@ -496,6 +496,7 @@ static inline void* msBoxStruct(const void* val, size_t size) {
 
 /* Bounds check failure — prints error and exits */
 _Noreturn void msRaiseIndexError(int64_t idx, int64_t len);
+_Noreturn void msRaiseSliceError(int64_t start, int64_t end, int64_t len);
 
 /* Concurrent Map/Set access detected — unrecoverable (Go fatal model: a detected
    race means memory may already be corrupt, so unwinding past it is unsafe). */
@@ -535,6 +536,12 @@ _Noreturn void msMapFatal(msString msg);
 #define msRefArrayAccessUnchecked msArrayAccessUnchecked
 #define msSizedArrayAccessUnchecked(a, i, n) ((a).data[(int64_t)(i)])
 #define msSpanAccessUnchecked(a, i) ((a).data[(int64_t)(i)])
+
+static inline int64_t msSliceLen(int64_t start, int64_t end, int64_t len) {
+	if (end != start && (start < 0 || end < start || end > len)) msRaiseSliceError(start, end, len);
+	return end - start;
+}
+#define msSliceLenUnchecked(start, end, len) ((int64_t)(end) - (int64_t)(start))
 
 /* String char access — TypeScript s[i] parity (character-indexed) */
 #define msStringCharAccess(s, i) msStringCharAt((s), (i))

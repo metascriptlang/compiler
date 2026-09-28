@@ -139,6 +139,12 @@ _Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target) {
 	exit(1);
 }
 
+_Noreturn void msRaiseSliceError(int64_t start, int64_t end, int64_t len) {
+	fprintf(stderr, "Error: slice %lld..%lld out of bounds (length %lld)\n",
+		(long long)start, (long long)end, (long long)len);
+	exit(1);
+}
+
 _Noreturn void msRaiseDivByZero(void) {
 	fprintf(stderr, "Error: division by zero\n");
 	exit(1);

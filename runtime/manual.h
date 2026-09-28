@@ -487,6 +487,11 @@ _Noreturn static inline void msRaiseIndexError(int64_t idx, int64_t len) {
     __builtin_trap();
 }
 
+_Noreturn static inline void msRaiseSliceError(int64_t start, int64_t end, int64_t len) {
+    (void)start; (void)end; (void)len;
+    __builtin_trap();
+}
+
 _Noreturn static inline void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
     (void)val; (void)lo; (void)hi;
     __builtin_trap();
@@ -523,6 +528,12 @@ _Noreturn static inline void msRaiseRangeErrorF(double val, int64_t lo, int64_t 
 #define msRefArrayAccessUnchecked msArrayAccessUnchecked
 #define msSizedArrayAccessUnchecked(a, i, n) ((a).data[(int64_t)(i)])
 #define msSpanAccessUnchecked(a, i) ((a).data[(int64_t)(i)])
+
+static inline int64_t msSliceLen(int64_t start, int64_t end, int64_t len) {
+    if (end != start && (start < 0 || end < start || end > len)) msRaiseSliceError(start, end, len);
+    return end - start;
+}
+#define msSliceLenUnchecked(start, end, len) ((int64_t)(end) - (int64_t)(start))
 
 #define msStringCharAccess(s, i) msStringCharAt((s), (i))
 
