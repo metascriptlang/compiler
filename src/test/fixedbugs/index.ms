@@ -373,3 +373,4 @@ import "./bug600UnknownIsManagedTop";
 import "./bug601ObjectDownConversion";
 import "./bug610ValueStructIsNominal";
 import "./bug611TryConvertsSameShapedStructError";
+import "./bug612MaybeCacheKeepsItsPayload";
