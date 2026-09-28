@@ -2038,12 +2038,6 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				const widened = widenVariantToUnion(d.asExpr, targetType, srcType);
 				if (widened != null as unknown as Node) node.data = { asExpr: widened, asType: d.asType };
 			}
-			const objConv = reportedErrorSince(ctx, operandMark) ? ObjConv.None : objectConversion(srcType, targetType);
-			if (objConv == ObjConv.BadTarget) {
-				addError(ctx, "cannot check a conversion from unknown to " + typeDisplayName(targetType) + " — only a non-generic class has a runtime identity; convert to a class, or keep the value in a discriminated union", asLoc.line, asLoc.column);
-			} else if (objConv == ObjConv.Checked) {
-				node.flags = node.flags.incl(NodeFlag.ObjCheck);
-			}
 			const castSrcUnknown =(srcType != null && srcType.kind == TypeKind.Union) ? unwrapRefNullUnion(srcType) : srcType;
 			if (castSrcUnknown != null && isUnknownType(castSrcUnknown) && !isUnresolvedType(targetType)
 				&& !reportedErrorSince(ctx, operandMark)) {
@@ -2053,6 +2047,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				} else if (targetBare.kind == TypeKind.CString) {
 					addError(ctx, "cannot cast unknown to cstring — unknown holds objects, never a C string; keep a C string as cstring or Ptr<void>", asLoc.line, asLoc.column);
 				}
+			}
+			const objConv = reportedErrorSince(ctx, operandMark) ? ObjConv.None : objectConversion(srcType, targetType);
+			if (objConv == ObjConv.BadTarget) {
+				addError(ctx, "cannot check a conversion from unknown to " + typeDisplayName(targetType) + " — only a non-generic class has a runtime identity; convert to a class, or keep the value in a discriminated union", asLoc.line, asLoc.column);
+			} else if (objConv == ObjConv.Checked) {
+				node.flags = node.flags.incl(NodeFlag.ObjCheck);
 			}
 			if (srcType != null && isReadonlyView(srcType) && node.nodeType != null) node.nodeType = propagateReadonlyView(node.nodeType);
 			return;
