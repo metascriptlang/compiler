@@ -180,8 +180,12 @@ static inline uint64_t msSolSha256(uint64_t slices, uint64_t count, uint64_t out
     return ((uint64_t (*)(uint64_t, uint64_t, uint64_t))0x11f49d86ULL)(slices, count, out);
 }
 
-static inline void msSolSetReturnData(uint64_t address, uint64_t length) {
-    ((void (*)(uint64_t, uint64_t))0xa226d3ebULL)(address, length);
+static inline void msSolSetReturnData(const uint8_t* data, int64_t length) {
+    ((void (*)(uint64_t, uint64_t))0xa226d3ebULL)((uint64_t)data, (uint64_t)length);
+}
+
+static inline uint64_t msSolGetReturnData(uint64_t data, uint64_t length, uint64_t programId) {
+    return ((uint64_t (*)(uint64_t, uint64_t, uint64_t))0x5d2245e4ULL)(data, length, programId);
 }
 
 #endif

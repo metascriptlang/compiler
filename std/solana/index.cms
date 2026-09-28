@@ -28,6 +28,10 @@ extern function msSolTryFindProgramAddress(seeds: uint64, seedCount: uint64, pro
 extern function msSolInvokeSigned(instruction: uint64, accountInfos: uint64, accountInfoCount: uint64, signers: uint64, signerCount: uint64): uint64;
 extern function msSolGetClock(out: uint64): uint64;
 extern function msSolGetRent(out: uint64): uint64;
+extern function msSolSetReturnData(data: Span<uint8>): void;
+extern function msSolGetReturnData(data: uint64, length: uint64, programId: uint64): uint64;
+
+const MAX_RETURN_DATA: uint64 = 1024;
 
 export struct Pubkey {
 	word0: uint64;
@@ -71,6 +75,11 @@ export struct Clock {
 	epoch: uint64;
 	leaderScheduleEpoch: uint64;
 	unixTimestamp: int64;
+}
+
+export struct ReturnData {
+	program: Pubkey;
+	data: Bytes;
 }
 
 function builtinError(index: uint64): ProgramError {
@@ -636,6 +645,20 @@ export function clock(): Clock {
 		unixTimestamp: msSolLoadU64(out + 32) as int64,
 	};
 	return value;
+}
+
+export function setReturnData(data: Span<uint8>): void {
+	msSolSetReturnData(data);
+}
+
+export function returnData(): ReturnData | null {
+	const out = msSolAlloc(32 + MAX_RETURN_DATA);
+	const length = msSolGetReturnData(out + 32, MAX_RETURN_DATA, out);
+	if (length == 0) { return null; }
+	return {
+		program: loadPubkey(out),
+		data: { address: out + 32, length: Math.min(length, MAX_RETURN_DATA) },
+	};
 }
 
 export function logU64(value: uint64): void {
