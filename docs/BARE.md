@@ -143,6 +143,68 @@ verifier re-fetches receipts, checks deployed bytes and reads counter state at r
 blocks; successful L2 receipts do not establish L1 finality. Other target claims in
 this document were not re-audited by this tooling run.
 
+### MetaScript counter in Nitro — measured 2026-09-28
+
+The generic target is `--os=bare --cpu=wasm32 --gc=manual --app=lib`, not
+`--os=wasm` or a chain-specific compiler target. The ordinary LLVM Clang/wasm-ld
+toolchain emits the contract; no Rust contract or WASI host is involved.
+
+On source tree `aa2a89d6118531a64f7a4b4be98102df1e3d1973` (based on landed
+`a363a27c`), Clang 22.1.1 and cargo-stylus 0.6.3:
+
+```sh
+./out/arbitrumProbe/mscFinal build examples/onchainCounter/arbitrum.ms \
+  --os=bare --cpu=wasm32 --gc=manual --app=lib \
+  --cc=/opt/homebrew/opt/llvm/bin/clang --release \
+  --output=out/arbitrumProbe/counterFinal.wasm
+node examples/onchainCounter/arbitrumProof.mjs prepare \
+  out/arbitrumProbe/counterFinal.wasm \
+  0x1234567890123456789012345678901234567890 \
+  out/arbitrumProbe/nitroFinalProof.json
+node examples/onchainCounter/arbitrumProof.mjs simulate \
+  out/arbitrumProbe/nitroFinalProof.json
+```
+
+The address above is a simulation sender with a balance override, not an approved
+wallet. `mscFinal` was self-hosted from this tree with `--gc=drc --danger --cc=clang`.
+The old provisioned builder rejected `NaN`/`Infinity` in the current compiler sources;
+bootstrapping used the fixing session's newer builder, then one candidate-built
+self-host. Nothing was synced to `~/.metascript`.
+
+Observed:
+
+```text
+Built 14 module(s) → out/arbitrumProbe/counterFinal.wasm
+WASM: 9047 bytes; exact packaged code: 2967 bytes
+SHA-256: 1d8d2f8c18e49138be0e812abbdb7176e43beb4ab6c17a4f70be0ab32b9f1154
+code hash: 0xe75ae214693a32cf82e07392b50bbadac7d20461bc75544bf023963d53cca935
+Sepolia block: 313448260; Stylus version: 3
+activation fee: 51356019610341 wei
+simulation.passed: true; finalValue: 1000000
+confirmed.complete: false; confirmed.transactions: 0
+```
+
+`CounterSimulation` executed CREATE, activation and the real MetaScript WASM through
+`CounterCaller`: `0 → 7 → 12`, Solidity `msg.sender`, exact custom-error payloads,
+write-then-revert rollback, malformed ABI and domain rejection, and the upper boundary.
+All calls were inside one Nitro `eth_call`; this proves child-frame rollback, not
+cross-transaction persistence or a public deployment. The earlier bootstrap-stage
+artifact also passed the same consumer; the final artifact was checked separately,
+not assumed equivalent from a successful build.
+
+Additional focused checks: scalar WASM `probeAdd` returned `5`, `0`, `42` for
+`(2,3)`, `(UINT64_MAX,1)`, `(40,2)`; freestanding heap sort matched expected order
+for 16 count/pattern combinations plus three-byte records; allocation alignment,
+linear-memory growth, realloc preservation, calloc overflow and overlapping memmove
+passed in WASM. Shared domain tests passed 300/300 on C and 63/63 on JS including
+transitive dependency tests. The separate Solana adapter built 15 modules without C
+errors and passed the eight local LiteSVM simulation scenarios recorded by its probe;
+those simulations do not establish committed Solana state.
+
+Still unverified: browser-wallet signing, confirmed testnet deployment and calls
+across separate transactions. No corpus, gate, full lane, land or installed-binary
+sync ran for this measurement.
+
 ## Phase 1: `--gc=manual` (No RC, malloc available) — DONE
 
 DRC injection is skipped. RC operations are no-ops. Allocation still uses malloc (libc available). Generated C code is identical to `--gc=orc` — only the linked runtime header differs.
