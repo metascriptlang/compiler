@@ -527,6 +527,15 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 	fillDefaults(ctx, cd.arguments, fnDefaults, totalParams, defaultOffset, paramTypes, definingModulePath);
 }
 
+function instanceBindings(names: string[], args: Type[]): UnifyBindings {
+	const b = createUnifyBindings();
+	for (let i = 0; i < names.length; i += 1) {
+		b.names.push(names[i]);
+		b.types.push(args[i]);
+	}
+	return b;
+}
+
 function checkNewArgs(ctx: CheckerContext, args: Node[]): void {
 	for (const arg of args) { callCheckExpr(ctx, arg, null); }
 }
@@ -585,8 +594,9 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		}
 		// Interface/value type: new HashMap() / new Array(32) with type from variable annotation
 		// Also handle Ref<Struct> and Ref<GenericInstance> (interface types are Ref-wrapped)
+		const newSym = lookupSymbol(ctx.table, id.name);
 		if (expected != null && (expected.kind == TypeKind.Struct || expected.kind == TypeKind.GenericInstance)
-				&& expected.typeName == id.name) {
+				&& expected.typeName == id.name && (newSym == null || !hasFlag(newSym, SymbolFlag.HasConstructor))) {
 			node.nodeType = expected;
 			checkNewArgs(ctx, d.newArguments);
 			return expected;
@@ -684,11 +694,14 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 					const colonAt = findChar(trimmed, ":");
 					classGenericNames.push(colonAt > 0 ? trimmed.slice(0, colonAt).trim() : trimmed);
 				}
-				const explicitBindings = bindFromExplicitTypeArgs(node, classGenericNames, ctx);
-				if (explicitBindings.names.length > 0) {
+				const classBindings = innerType != null && innerType.kind == TypeKind.GenericInstance
+					&& innerType.typeChildren.length == classGenericNames.length
+					? instanceBindings(classGenericNames, innerType.typeChildren)
+					: bindFromExplicitTypeArgs(node, classGenericNames, ctx);
+				if (classBindings.names.length > 0) {
 					const substituted: Type[] = [];
 					for (const t of rawCtorTypes) {
-						substituted.push(instantiateGeneric(t, explicitBindings.names, explicitBindings.types));
+						substituted.push(instantiateGeneric(t, classBindings.names, classBindings.types));
 					}
 					ctorFormalTypes = substituted;
 				}
