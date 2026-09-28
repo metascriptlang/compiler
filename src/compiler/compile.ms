@@ -1119,6 +1119,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		const j = jobs[ci];
 		const code = exitCodes[ci];
 		if (code != 0) {
+
 			printDiag(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
 			stopBuild();
 		}
@@ -1454,6 +1455,13 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 // Platform-specific runtime compile — dispatch + selectors + pool + fs.
 function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string, opts: CliOptions): string[] {
+	if (opts.targetOs == "bare" && opts.cpuTarget == "wasm32") {
+		return processCompileDirectives(
+			"runtime/freestanding/libc.c", ".", includePaths, allFlags,
+			opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose,
+			opts.targetOs, opts.projectRoot, resolveRuntimeDir(),
+		);
+	}
 	if (opts.targetOs == "bare" || opts.targetOs == "solana") return [];
 
 	let rtFiles = "";
@@ -2271,7 +2279,10 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		if (opts.targetOs == "windows") suffix = dynLib ? ".dll" : ".exe";
 		if (opts.appMode == "staticlib") suffix = ".a";
 		if (opts.targetOs == "solana") suffix = ".so";
-		if (opts.targetOs == "wasm") suffix = ".wasm";
+		if (opts.targetOs == "wasm" ||
+			(opts.targetOs == "bare" && opts.cpuTarget == "wasm32" && opts.appMode != "staticlib")) {
+			suffix = ".wasm";
+		}
 		if (opts.targetOs == "emcc") suffix = ".js";  // emcc outputs .js + .wasm pair
 		outBinary = outDir + "/" + replaceExt(basename(entryPath), "") + suffix;
 	}

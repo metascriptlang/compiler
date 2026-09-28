@@ -50,7 +50,13 @@ static inline msRefHeader* msHeader(void* p) {
 
 #ifdef MSOS_BARE
 
-#ifdef MSOS_SOLANA
+#if defined(MS_FREESTANDING_LIBC)
+
+void* msArenaAlloc(size_t size);
+void* msArenaRealloc(void* old, size_t old_size, size_t new_size);
+void msArenaReset(void);
+
+#elif defined(MSOS_SOLANA)
 
 #define MS_SOLANA_HEAP_START 0x300000000ULL
 #ifndef MS_SOLANA_HEAP_SIZE
@@ -116,8 +122,9 @@ static inline void* msArenaAlloc(size_t size) {
     return p;
 }
 
-#endif /* MSOS_SOLANA */
+#endif
 
+#ifndef MS_FREESTANDING_LIBC
 static inline void* msArenaRealloc(void* old, size_t old_size, size_t new_size) {
     void* p = msArenaAlloc(new_size);
     if (p && old && old_size > 0) {
@@ -131,6 +138,7 @@ static inline void* msArenaRealloc(void* old, size_t old_size, size_t new_size) 
 static inline void msArenaReset(void) { msSolanaCurrentContext()->arenaPosition = sizeof(msSolanaContext); }
 #else
 static inline void msArenaReset(void) { _ms_arena_pos = 0; }
+#endif
 #endif
 
 static inline void* msAlloc(size_t size) {
@@ -280,6 +288,14 @@ static inline void* _ms_manual_calloc(size_t n, size_t size) {
 #define calloc(n, s)  _ms_manual_calloc((n), (s))
 #define realloc(p, s) _ms_manual_realloc((p), (s))
 #define free(p)       ((void)(p))
+
+#elif defined(MS_FREESTANDING_LIBC)
+
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <math.h>
 
 #elif defined(MSOS_BARE)
 

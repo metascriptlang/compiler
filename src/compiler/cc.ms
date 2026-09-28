@@ -365,6 +365,9 @@ function normalizeCpu(cpu: string): string {
 // (targetOs !== platform || cpuTarget !== "").
 export function crossTargetFlag(targetOs: string, cpuTarget: string, useZig: boolean): string {
 	const cpu = normalizeCpu(buildCpu(targetOs, cpuTarget));
+	if (targetOs == "bare" && cpu == "wasm32") {
+		return useZig ? "-target wasm32-freestanding" : "--target=wasm32-unknown-unknown";
+	}
 	if (useZig) {
 		// zig cc target format: cpu-os[-abi]
 		let zigOs = targetOs;
@@ -530,6 +533,18 @@ export function cliCompileFlags(opts: CliOptions): string {
 		if (opts.passC != "") flags = appendFlag(flags, opts.passC);
 		return flags;
 	}
+	if (opts.targetOs == "bare" && opts.cpuTarget == "wasm32") {
+		const useZig = isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary));
+		flags = appendFlag(flags, crossTargetFlag(opts.targetOs, opts.cpuTarget, useZig));
+		flags = appendFlag(flags, "-ffreestanding -fno-builtin -DMS_FREESTANDING_LIBC");
+		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
+		const rtDir = resolveRuntimeDir();
+		if (rtDir != "") {
+			flags = appendFlag(flags, "-isystem");
+			flags = appendFlag(flags, quoteCcArg(`${rtDir}/runtime/freestanding/wasm`));
+		}
+		return appendFlag(flags, opts.passC);
+	}
 	// Cross-compilation target triple
 	// zig cc: -target cpu-os-abi (bundled sysroot, no --target= prefix)
 	// clang/gcc: --target=cpu-vendor-os-abi
@@ -582,6 +597,14 @@ export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean =
 		wflags = appendFlag(wflags, "-Wl,--gc-sections -Wl,--strip-all");
 		wflags = appendFlag(wflags, opts.passL);
 		return wflags;
+	}
+	if (opts.targetOs == "bare" && opts.cpuTarget == "wasm32") {
+		let flags = appendFlag(base, "-nostdlib -Wl,--gc-sections");
+		if (!forceExe && (opts.appMode == "lib" || opts.appMode == "staticlib")) {
+			flags = appendFlag(flags, "-Wl,--no-entry");
+		}
+		if (opts.strip) flags = appendFlag(flags, "-Wl,--strip-all");
+		return appendFlag(flags, opts.passL);
 	}
 	let flags = base;
 	flags = appendFlag(flags, opts.passL);
@@ -672,9 +695,9 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 	args.push(cFile);
 	args.push("-o");
 	args.push(outBinary);
-	args.push("-lm");
 	const flags = appendParsedFlags(command.path, args, extraFlags);
 	if (!flags.ok) return Result.err(flags.error);
+	if (!args.includes("-nostdlib") && !args.includes("-nodefaultlibs")) args.push("-lm");
 	const r = runCc(command, args);
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
@@ -764,12 +787,12 @@ export function linkObjects(oFiles: string[], outBinary: string, extraFlags: str
 	for (const oFile of oFiles) bulk.push(oFile);
 	const flags = appendParsedFlags(command.path, bulk, extraFlags);
 	if (!flags.ok) return Result.err(flags.error);
+	if (!bulk.includes("-nostdlib") && !bulk.includes("-nodefaultlibs")) bulk.push("-lm");
 	const direct: string[] = [];
 	for (const arg of prefix) direct.push(arg);
 	for (const arg of bulk) direct.push(arg);
 	direct.push("-o");
 	direct.push(outBinary);
-	direct.push("-lm");
 
 	let r: Result<string, ProcessError>;
 	if (commandLength(command, direct) <= LINK_CMD_LIMIT) {
@@ -782,7 +805,6 @@ export function linkObjects(oFiles: string[], outBinary: string, extraFlags: str
 		responseArgs.push(`@${rspPath}`);
 		responseArgs.push("-o");
 		responseArgs.push(outBinary);
-		responseArgs.push("-lm");
 		r = runCc(command, responseArgs);
 	}
 	if (!r.ok) return Result.err(r.error);
