@@ -212,6 +212,26 @@ function isDeclaringCtorThisWrite(ctx: CheckerContext, object: Node, declaring: 
 	return receiver.sym == declaring || classDeclNodeOf(receiver.sym) == classDeclNodeOf(declaring);
 }
 
+function reportReadonlyField(ctx: CheckerContext, target: Node): void {
+	const md = target.data as MemberExprData;
+	if (md.object.nodeType == null) return;
+	let ownerType = md.object.nodeType;
+	if (ownerType.kind == TypeKind.Ref && ownerType.typeReturn != null) ownerType = ownerType.typeReturn;
+	if (ownerType.sym == null) return;
+	if (ownerType.sym.symbolKind == SymbolKind.Actor && md.property == "pid") {
+		addError(ctx, `cannot assign to 'pid' because it is a read-only property`,
+			target.location.line, target.location.column);
+	}
+	const declaring = readonlyFieldDeclarer(ownerType.sym, md.property);
+	if (declaring == null || isDeclaringCtorThisWrite(ctx, md.object, declaring)) return;
+	if (!isDeclaringStaticBlockWrite(ctx, declaring)) {
+		addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
+			target.location.line, target.location.column);
+	} else if (target.resolvedSym != null && target.resolvedSym.symFlags.has(SymbolFlag.Static)) {
+		setFlag(target.resolvedSym, SymbolFlag.Mutable);
+	}
+}
+
 // Phase 4: invalidateFacts / factReferencesVar deleted.
 // Assignments that invalidate narrowing now flow through the binder's
 // FlowAssignment node + getFlowTypeOfReference. Per-use-site queries see
@@ -664,27 +684,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// Block assignment to read-only properties
 			if (isAsgn && d.left.kind == NodeKind.MemberExpr) {
 				const md = d.left.data as MemberExprData;
-				// Check readonly fields: user-declared `readonly` properties + actor `pid`
-				if (md.object.nodeType != null) {
-					let ownerType = md.object.nodeType;
-					if (ownerType.kind == TypeKind.Ref && ownerType.typeReturn != null) ownerType = ownerType.typeReturn;
-					if (ownerType.sym != null) {
-						// Actor pid is always readonly (synthetic, not in source body)
-						if (ownerType.sym.symbolKind == SymbolKind.Actor && md.property == "pid") {
-							addError(ctx, `cannot assign to 'pid' because it is a read-only property`,
-								d.left.location.line, d.left.location.column);
-						}
-						const declaring = readonlyFieldDeclarer(ownerType.sym, md.property);
-						if (declaring != null && !isDeclaringCtorThisWrite(ctx, md.object, declaring)) {
-							if (!isDeclaringStaticBlockWrite(ctx, declaring)) {
-								addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
-									d.left.location.line, d.left.location.column);
-							} else if (d.left.resolvedSym != null && d.left.resolvedSym.symFlags.has(SymbolFlag.Static)) {
-								setFlag(d.left.resolvedSym, SymbolFlag.Mutable);
-							}
-						}
-					}
-				}
+				reportReadonlyField(ctx, d.left);
 				// Built-in readonly: str.length, sized-array.length
 				if (md.property == "length" && md.object.nodeType != null) {
 					if (isStringLike(md.object.nodeType) || md.object.nodeType.kind == TypeKind.CString) {
@@ -2113,6 +2113,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const roMove = readonlyRootType(d.moveArg);
 			if (roMove != null) {
 				addError(ctx, "cannot move out of " + typeDisplayName(roMove) + " — a read-only view is borrowed, not owned; to hand a value to a spawn thunk, list it in spawn(fn, { move: [x] }) (PARALOCK E24)", node.location.line, node.location.column);
+			} else if (d.moveArg.kind == NodeKind.MemberExpr || d.moveArg.kind == NodeKind.ArrayAccess) {
+				const refusal = writeRefusal(d.moveArg, false);
+				if (refusal != "") addError(ctx, refusal, d.moveArg.location.line, d.moveArg.location.column);
+				if (d.moveArg.kind == NodeKind.MemberExpr) reportReadonlyField(ctx, d.moveArg);
 			}
 			// PARALOCK Phase 1: `move h` on an affine Promise counts as consumption.
 			// Ownership transfers out of the current scope, so the binding must
