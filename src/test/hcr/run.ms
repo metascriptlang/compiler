@@ -330,18 +330,26 @@ function copyAppAndLib(fixture: string): string {
 }
 
 function newInstance(): void {
-	const tag = "hcrNewInstance";
-	const dir = copyAppAndLib("newInstance");
+	reloadsNewTypeEdit("hcrNewInstance", "newInstance", "HCR-NEW", "a new generic instance over a new app type did not reload into the running app");
+}
+
+function privateHelper(): void {
+	reloadsNewTypeEdit("hcrPrivateHelper", "privateHelper", "HCR-PRIVATE", "a generic body calling private functions of its module did not build or reload in the image that uses it");
+}
+
+function reloadsNewTypeEdit(tag: string, fixture: string, prefix: string, why: string): void {
+	const dir = copyAppAndLib(fixture);
 	copy(`${dir}/app/logicTag.ms`, `${dir}/app/edit.txt`);
+	mustBuild(tag, `${dir}/app`, ["build", "app.ms", "--hcr", "--output=out/built/app"], why);
 	const ran = msc(`${dir}/app`, ["run", "app.ms", "--hcr"]);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
-		if (line.startsWith("HCR-NEW ")) seen.push(line);
+		if (line.startsWith(`${prefix} `)) seen.push(line);
 	}
-	const want = ["HCR-NEW start 9", "HCR-NEW reloaded 15"];
+	const want = [`${prefix} start 9`, `${prefix} reloaded 15`];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
-		failWith(tag, "a new generic instance over a new app type did not reload into the running app");
+		failWith(tag, why);
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -852,6 +860,7 @@ localNames();
 watchWarm();
 watchGeneric();
 newInstance();
+privateHelper();
 reloadOff();
 coreLinkClang();
 indirect();
