@@ -228,7 +228,7 @@ function raiseTarget(p: CProc): string {
 	return p.nestedTryStmts[p.nestedTryStmts.length - 1].label;
 }
 
-function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
+export function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
 	if (p.suppressRaiseCheck) return;
 	if (!exprTopIsRaisingCall(exprNode)) return;
 	emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
