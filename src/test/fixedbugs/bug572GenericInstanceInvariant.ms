@@ -35,7 +35,12 @@ test "bug572: a declaration refuses a wider numeric type argument" {
 }
 
 test "bug572: a declaration refuses another generic" {
-	assert errorOf("const o: Other<int32> = a;").contains("is not assignable");
+	assert errorOf("const o: Other<string> = a;").contains("is not assignable");
+	assert errorOf("struct Twin<T> { a: T; b: T; }\nconst w: Twin<int32> = p;").contains("is not assignable");
+}
+
+test "bug572: another generic class of the same shape fits, as two classes do" {
+	assert errorOf("const o: Other<int32> = a;") == "";
 }
 
 test "bug572: an assignment refuses another type argument" {

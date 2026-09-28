@@ -365,6 +365,7 @@ import "./bug576ConstrainedGenericAlias";
 import "./bug577EnumMemberBindsItsEnum";
 import "./bug578GenericCallArgumentTakesContext";
 import "./bug579UnfitDestinationRebindsSafely";
+import "./bug580SameNamedTypesOfTwoModulesAreTwoTypes";
 import "./bug588ThunkConstructsItsOwnValues";
 import "./bug589TopLevelInitializerRaiseCheck";
 import "./bug596ConstCastOutOfRange";
