@@ -3,13 +3,13 @@
 //
 // Must run AFTER optionalChain so obj?.prop ?? fallback is already lowered.
 
-import { Node, NodeKind, BinaryExprData, MemberExprData, TypeAssertionData, TypeKind, DeclKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, MemberExprData, TypeAssertionData, ConditionalExprData, ExprStmtData, TypeKind, DeclKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
 import { isMaybeType, unwrapMaybeType, peelTransparentInstance, isNumeric, isBoolType, isStringLike, unknownType, createPtr, voidType } from "../../checker/types";
 import { fitJoinedBranch, nullishPayloadType } from "../../checker/fit";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocks } from "../walker";
 import { makeNull, makeBinary, makeConditional, makeMember, makeVarDecl, makeAssign, makeIdentResolved } from "../util";
-import { firstExprKindAfter } from "../testUtil";
+import { firstExprKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 import { cloneIfPure } from "./intArithJS";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
@@ -137,3 +137,23 @@ test "nullish coalesce becomes conditional" { assert firstExprKindAfter("x ?? 42
 test "other binary unchanged" { assert firstExprKindAfter("x + y;", lowerNullishCoalesce) == NodeKind.BinaryExpr; }
 
 test "logical or unchanged" { assert firstExprKindAfter("x || y;", lowerNullishCoalesce) == NodeKind.BinaryExpr; }
+
+function loweredArms(input: string): ConditionalExprData | null {
+	const parsed = parseInput(input);
+	if (!parsed.ok) return null;
+	const stmts = getStmts(lowerNullishCoalesce(parsed.value, makeCtx()));
+	if (stmts.length == 0 || stmts[0].kind != NodeKind.ExprStmt) return null;
+	const expr = (stmts[0].data as ExprStmtData).expr;
+	return expr.kind == NodeKind.ConditionalExpr ? expr.data as ConditionalExprData : null;
+}
+
+test "a pure left operand is read again through its own node" {
+	for (const input of ["x ?? 1;", "q.o ?? 1;", "q.rows[i].o ?? 1;"]) {
+		const arms = loweredArms(input);
+		assert arms != null, input;
+		if (arms != null) {
+			const tested = (arms.ternaryCondition.data as BinaryExprData).left;
+			assert arms.ternaryConsequent != tested && arms.ternaryConsequent.kind == tested.kind, input;
+		}
+	}
+}
