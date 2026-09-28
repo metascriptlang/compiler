@@ -614,6 +614,7 @@ export function isPointerType(t: Type): boolean {
 // Used by codegen to emit {0} instead of MS_NIL, and memset instead of NULL assignment.
 export function isNilableValueType(t: Type): boolean {
 	if (t == null) return false;
+	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return isNilableValueType(t.typeReturn);
 	const k = t.kind;
 	return k == TypeKind.Struct || k == TypeKind.Array || k == TypeKind.GenericInstance
 		|| k == TypeKind.Tuple || k == TypeKind.String || k == TypeKind.Function
