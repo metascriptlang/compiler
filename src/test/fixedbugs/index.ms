@@ -357,3 +357,4 @@ import "./bug568ConstIndexOutOfSizedArray";
 import "./bug596ConstCastOutOfRange";
 import "./bug597LocalConstIsConstant";
 import "./bug599UnknownHoldsObjectsOnly";
+import "./bug600UnknownIsManagedTop";
