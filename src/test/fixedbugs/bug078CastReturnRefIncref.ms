@@ -16,8 +16,8 @@
 import { compileToC } from "../helpers";
 
 const src = `
-interface Thing {
-	_x: number;
+class Thing {
+	_x: number = 0;
 }
 
 interface Box {
