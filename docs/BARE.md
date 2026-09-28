@@ -205,6 +205,70 @@ Still unverified: browser-wallet signing, confirmed testnet deployment and calls
 across separate transactions. No corpus, gate, full lane, land or installed-binary
 sync ran for this measurement.
 
+### Unchanged Solana math demo on Stylus — measured 2026-09-28
+
+The external demo `~/metascript/talks/solana-meetup/demo/math.ms` ran unchanged:
+source SHA-256 `643e8e79672df06618539efc54215c21a0c3e7af6612c83aaea83e44e548c5bd`.
+On tree `579d5e55759b4afca161087dee2858095db7869b`, the console runner generated
+an entry module importing that source and `std/arbitrum`, then built it with the
+generic bare-wasm flags. No `--os=arbitrum` or compiler recognition of a chain
+define was added. This is explicit library-adapter selection, not yet a generic
+package/profile selected by `-d:arbitrum`.
+
+```sh
+node examples/onchainCounter/arbitrumConsole.mjs \
+  "$HOME/metascript/talks/solana-meetup/demo/math.ms" \
+  out/arbitrumProbe/mathNitroProof \
+  --msc out/arbitrumProbe/mscFinal \
+  --cc /opt/homebrew/opt/llvm/bin/clang
+```
+
+Use a fresh output directory; the runner refuses to overwrite an existing proof.
+The script checks the source hash before and after execution. It uses
+`eth_simulateV1` to deploy, activate and invoke the program twice, recording the
+actual event payloads returned by Nitro. The default PublicNode Sepolia endpoint
+was measured working. The official Sepolia endpoint rejected this simulation
+request with an internal error; neither endpoint exposed `debug_traceCall`.
+No automatic fallback or mock logging is used.
+
+The host maps string console output to anonymous EVM events with UTF-8 data and
+zero topics, using the documented
+[`emit_log` host ABI](https://github.com/OffchainLabs/stylus-sdk-c/blob/main/include/hostio.h).
+It does not buffer output into the contract return value. Event transport differs
+from Solana syscall logs; decoded line content is identical.
+
+Observed:
+
+```text
+Native == LiteSVM == Nitro invocation 1 == Nitro invocation 2: all 18 lines
+FAILED lines: 0
+WASM: 5402 bytes; exact packaged code: 2256 bytes
+WASM SHA-256: a0b2691aa84bf5551c1a611144eef6278a6dff88b311e2f70435574c794f4ea9
+Base block: 0x12af14ee; simulated block: 0x12af14ef; Stylus version: 3
+SVM: 4044 CU; Nitro invocation gas: 42761, 33083
+```
+
+Those resource units are not comparable benchmarks. All arithmetic checks,
+including integer division and int64 multiplication, passed; compile-time
+factorial, Fibonacci, primes and squares output matched as well. The demo's
+printed “0 CU” and “200k CU” text is preserved Solana-oriented prose, not a measured
+Arbitrum cost claim. Empty strings, UTF-8 text and multiple string arguments also
+matched their expected events on two Nitro invocations.
+
+Scope: local unsigned LiteSVM plus real public Nitro simulation with balance/nonce
+overrides; no wallet, signature, broadcast or persisted deployment. The runner's
+`passed` records successful execution, not arbitrary program correctness; the math
+consumer additionally compared every output line and rejected `FAILED`.
+
+**Known unimplemented boundary:** runtime formatting of default `number` values.
+`console.log("value", 42)` linked the numeric formatter and failed on missing
+`__multi3`. A temporary wide-multiply builtin got past linking, after which official
+Stylus validation failed with `No implementation for floating point operation
+RelOp(F64, Eq) in user`. That experiment was reverted; no partial numeric-formatting
+fix or soft-float implementation is included. This does not affect the unchanged
+math demo, whose runtime console arguments are strings. Do not generalize the
+18-line proof to floating-point programs.
+
 ## Phase 1: `--gc=manual` (No RC, malloc available) — DONE
 
 DRC injection is skipped. RC operations are no-ops. Allocation still uses malloc (libc available). Generated C code is identical to `--gc=orc` — only the linked runtime header differs.
