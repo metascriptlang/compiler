@@ -37,13 +37,13 @@ function srNoCapture(): int32 {
 }
 
 function srArrow(): int32 {
-	const base: int32 = 10;
+	let base: int32 = 10;
 	const walk = (k: int32): int32 => k <= 0 ? base : walk(k - 1) + 1;
 	return walk(3);
 }
 
 function srMake(): (k: int32) => int32 {
-	const base: int32 = 100;
+	let base: int32 = 100;
 	function climb(k: int32): int32 {
 		return k <= 0 ? base : climb(k - 1) + 1;
 	}
