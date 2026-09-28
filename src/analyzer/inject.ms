@@ -215,7 +215,9 @@ function processAssertionWrapper(node: Node, dctx: DrcContext, mode: DrcMode): N
 }
 
 function isReprCast(node: Node, dctx: DrcContext): boolean {
-	const operand = (node.data as TypeAssertionData).asExpr;
+	const operand = node.kind == NodeKind.TypeAssertion
+		? (node.data as TypeAssertionData).asExpr
+		: (node.data as HiddenStdConvData).convExpr;
 	if (operand == null || operand.nodeType == null || node.nodeType == null) return false;
 	return sinkClassify(operand.nodeType, dctx).needsCleanup != sinkClassify(node.nodeType, dctx).needsCleanup;
 }
@@ -232,6 +234,7 @@ function returnMode(arg: Node, dctx: DrcContext): DrcMode {
 			if (isReprCast(n, dctx)) return DrcMode.Consumed;
 			n = (n.data as TypeAssertionData).asExpr;
 		} else if (n.kind == NodeKind.HiddenStdConv || n.kind == NodeKind.HiddenSubConv) {
+			if (n.kind == NodeKind.HiddenStdConv && isReprCast(n, dctx)) return DrcMode.Consumed;
 			n = (n.data as HiddenStdConvData).convExpr;
 		} else {
 			n = null;
@@ -249,6 +252,10 @@ function processConvWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 			return passCopyToSink(node, dctx);
 		}
 		return node;
+	}
+	if (mode == DrcMode.SinkArg && node.kind == NodeKind.HiddenStdConv && isReprCast(node, dctx)) {
+		cv.convExpr = processNode(cv.convExpr, dctx, DrcMode.Normal);
+		return passCopyToSink(node, dctx);
 	}
 	cv.convExpr = processNode(cv.convExpr, dctx, mode);
 	return node;

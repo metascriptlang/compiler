@@ -11,7 +11,7 @@ import { writeRefusal } from "./assignable";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, convertsImplicitly, refusesIntConv, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
-import { checkSwitchCase, fitJoinedBranch, fitNode, instantiateGenericFnValue, isFittingIntLiteral, reportIntConv, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
+import { checkSwitchCase, convertIntoUnknown, fitJoinedBranch, fitNode, instantiateGenericFnValue, isFittingIntLiteral, reportIntConv, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
@@ -1492,6 +1492,11 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				addError(ctx, argLabelCap(pi, hasReceiver) + ": unknown is not assignable to " + typeDisplayName(formal) + " — narrow with an explicit cast", node.location.line, node.location.column);
 			}
 		}
+		const intoUnknown = convertIntoUnknown(args[pi], argTypes[pi], paramType);
+		if (intoUnknown != args[pi]) {
+			args[pi] = intoUnknown;
+			argTypes[pi] = intoUnknown.nodeType!;
+		}
 		const fnShaped = peelTransparentInstance(argTypes[pi]).kind == TypeKind.Function
 			|| peelTransparentInstance(paramType).kind == TypeKind.Function;
 		if (!isUnresolvedType(paramType) && paramType.kind != TypeKind.GenericParam
@@ -2259,6 +2264,14 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			if (arg.nodeType == null) arg.nodeType = substituted;
 			if (pi < argTypes.length) argTypes[pi] = arg.nodeType;
 			continue;
+		}
+		if (!hasGenericParams(substituted)) {
+			const intoUnknown = convertIntoUnknown(arg, arg.nodeType, substituted);
+			if (intoUnknown != arg) {
+				cd.arguments[pi] = intoUnknown;
+				if (pi < argTypes.length) argTypes[pi] = intoUnknown.nodeType!;
+				continue;
+			}
 		}
 		const substitutedValue = skipModifier(substituted);
 		if (substitutedValue != null && substitutedValue.kind == TypeKind.Union && arg.nodeType != null) {

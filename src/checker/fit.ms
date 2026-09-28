@@ -1181,6 +1181,16 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	return wrapInConv(expr, formal);
 }
 
+export function convertIntoUnknown(expr: Node, exprType: Type | null, formal: Type): Node {
+	const slot = skipModifier(formal) ?? formal;
+	const slotHeld = slot.kind == TypeKind.Union ? unwrapRefNullUnion(slot) : slot;
+	if (!isUnknownType(slotHeld) || exprType == null) return expr;
+	const bare = skipModifier(exprType);
+	const held = bare != null && bare.kind == TypeKind.Union ? unwrapRefNullUnion(bare) : bare;
+	if (held == null || held.kind != TypeKind.Ref) return expr;
+	return wrapInConv(expr, slot);
+}
+
 function reportedErrorSince(ctx: CheckerContext, mark: int32): boolean {
 	for (let i = mark; i < ctx.errors.length; i += 1) {
 		if (ctx.errors[i].severity == Severity.Error) return true;
@@ -1205,10 +1215,14 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 				&& (isIntegerType(srcT) || srcT.kind == TypeKind.Boolean || srcT.kind == TypeKind.Char || srcT.kind == TypeKind.Enum);
 			if (!isPointerShapedForUnknown(srcT) && !castReinterpretOk) {
 				addError(ctx, "cannot pass value type " + typeDisplayName(srcT) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", expr.location.line, expr.location.column);
+				return expr;
 			}
+			return convertIntoUnknown(expr, exprType, formal);
 		}
 		return expr;
 	}
+	const intoNullableUnknown = convertIntoUnknown(expr, exprType, formal);
+	if (intoNullableUnknown != expr) return intoNullableUnknown;
 	if (exprType.kind == TypeKind.Unknown || isUnresolvedType(exprType)) {
 		const collapsed = formal.kind == TypeKind.Union ? unwrapRefNullUnion(formal) : null;
 		const unknownFamilyFormal = formal.kind == TypeKind.GenericParam
