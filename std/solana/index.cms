@@ -69,6 +69,12 @@ export struct Instruction {
 	dataCapacity: uint64;
 }
 
+export struct AccountMeta {
+	key: Pubkey;
+	writable: boolean;
+	signer: boolean;
+}
+
 export struct Clock {
 	slot: uint64;
 	epochStartTimestamp: int64;
@@ -550,6 +556,59 @@ export function appendText(this instruction: Instruction, value: string): Instru
 	const address = reserve(instruction, length);
 	if (address != 0 && length > 0) { msSolCopy(address, msSolStringAddress(value), length); }
 	return instruction;
+}
+
+export function writable(this typeof AccountMeta, key: Pubkey): AccountMeta {
+	return { key: key, writable: true, signer: false };
+}
+
+export function readonly(this typeof AccountMeta, key: Pubkey): AccountMeta {
+	return { key: key, writable: false, signer: false };
+}
+
+export function appendAccountMeta(this instruction: Instruction, meta: AccountMeta): Instruction {
+	instruction.appendPubkey(meta.key);
+	instruction.appendU8(flagByte(meta.signer));
+	return instruction.appendU8(flagByte(meta.writable));
+}
+
+export function accountLength(this instruction: Instruction): uint64 {
+	return msSolLoadU64(instruction.address + 16);
+}
+
+export function encodedLength(this instruction: Instruction): uint64 {
+	return 48 + 34 * instruction.accountLength() + msSolLoadU64(instruction.address + 32);
+}
+
+export function addAccountsOf(this instruction: Instruction, inner: Instruction): Instruction {
+	const count = inner.accountLength();
+	for (let index: uint64 = 0; index < count; index++) {
+		const found: Account = { address: msSolLoadU64(infosAddress(inner) + index * 56) - 8 };
+		instruction.addAccount(found, found.isWritable(), found.isSigner());
+	}
+	return instruction;
+}
+
+export function appendInstruction(this instruction: Instruction, inner: Instruction): Instruction {
+	if (msSolLoadU64(inner.address + 40) != 0) {
+		msSolStoreU64(instruction.address + 40, 1);
+		return instruction;
+	}
+	instruction.appendPubkey(loadPubkey(msSolLoadU64(inner.address)));
+	const count = inner.accountLength();
+	instruction.appendU64(count);
+	for (let index: uint64 = 0; index < count; index++) {
+		const meta = metasAddress(inner) + index * 16;
+		instruction.appendPubkey(loadPubkey(msSolLoadU64(meta)));
+		instruction.appendU8(msSolLoadU8(meta + 9));
+		instruction.appendU8(msSolLoadU8(meta + 8));
+	}
+	const payload: Bytes = {
+		address: payloadAddress(inner),
+		length: msSolLoadU64(inner.address + 32),
+	};
+	instruction.appendU64(payload.length);
+	return instruction.appendBytes(payload);
 }
 
 export function invokeSigned(this instruction: Instruction, signer: Seeds): Result<uint64, ProgramError> {
