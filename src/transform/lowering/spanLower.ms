@@ -11,7 +11,7 @@
 // - Stack-promoted literals: HiddenStdConv(ArrayLiteral, Span<T>) → SizedArray temp on stack
 
 import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, Type, TypeKind } from "../../ast/node";
-import { createSizedArray, createPtr, peelToStructOrUnion } from "../../checker/types";
+import { createSizedArray, createPtr, createPrimitive, peelToStructOrUnion } from "../../checker/types";
 import { takesAddressAtCArg, nonNullMemberOfNullable } from "../../checker/compat";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
@@ -238,11 +238,10 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 		dataExpr.nodeType = createPtr(resultType.typeReturn);
 	}
 
-	// len = end - start (exclusive ..) or (end - start) + 1 (inclusive ...)
-	let lenExpr = makeBinary(endExpr, "-", startExpr, loc);
-	if (bd.operator == "...") {
-		lenExpr = makeBinary(lenExpr, "+", makeNumber(1, loc), loc);
-	}
+	const endExclusive = bd.operator == "..." ? makeBinary(endExpr, "+", makeNumber(1, loc), loc) : endExpr;
+	const sourceLen = arrType.kind == TypeKind.SizedArray ? makeNumber(arrType.typeValue, loc) : makeMember(d.array, "len", loc);
+	const lenExpr = makeCall(runtimeRef("msSliceLen", loc), [startExpr, endExclusive, sourceLen], loc);
+	lenExpr.nodeType = createPrimitive(TypeKind.Int64);
 
 	return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], resultType, loc);
 }

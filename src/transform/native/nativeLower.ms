@@ -77,6 +77,7 @@ function propagateSizedArrayType(node: Node): Node {
 
 function rewriteAccess(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.ArrayAccess) return rewriteArrayAccess(node, ctx.boundChecks);
+	if (!ctx.boundChecks && isRuntimeProcCall(node, "msSliceLen")) return uncheckedSliceLen(node);
 	if (node.kind == NodeKind.MemberExpr) return rewriteMemberExpr(node);
 	if (node.kind == NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
 	if (node.kind == NodeKind.NewExpr) return rewriteNewExpr(node);
@@ -144,6 +145,13 @@ function rewriteNewExpr(node: Node): Node {
 		return box;
 	}
 	return node;
+}
+
+function uncheckedSliceLen(node: Node): Node {
+	const d = node.data as CallExprData;
+	const result = makeCall(runtimeRef("msSliceLenUnchecked", node.location), d.arguments, node.location);
+	result.nodeType = node.nodeType;
+	return result;
 }
 
 // ===== Array/String Index Access =====
@@ -411,3 +419,15 @@ test "sized array index is unchecked when bound checks are off" { assert isRunti
 test "span index is bound-checked when bound checks are on" { assert isRuntimeProcCall(loweredAccess(createSpan(int32Type()), true), "msSpanAccess"); }
 
 test "span index is unchecked when bound checks are off" { assert isRuntimeProcCall(loweredAccess(createSpan(int32Type()), false), "msSpanAccessUnchecked"); }
+
+function loweredSliceLen(boundChecks: boolean): Node {
+	const loc = makeLoc(1, 1);
+	const ctx = createTransformContext();
+	ctx.boundChecks = boundChecks;
+	const call = makeCall(runtimeRef("msSliceLen", loc), [makeNumber(1, loc), makeNumber(3, loc), makeNumber(4, loc)], loc);
+	return rewriteAccess(call, ctx);
+}
+
+test "a slice length is bound-checked when bound checks are on" { assert isRuntimeProcCall(loweredSliceLen(true), "msSliceLen"); }
+
+test "a slice length is unchecked when bound checks are off" { assert isRuntimeProcCall(loweredSliceLen(false), "msSliceLenUnchecked"); }
