@@ -111,6 +111,32 @@ function variantSlotAccess(u: Type, vi: number): string {
 	return inlineVariantStruct(u.typeChildren[vi]) != null ? "." : "->";
 }
 
+function strLitPayload(t: Type): Type | null {
+	const payload = isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
+	return payload.kind != TypeKind.String && isStringLike(payload) ? payload : null;
+}
+
+function memberDisplayName(m: Type): string {
+	return m.kind == TypeKind.Ref && m.typeReturn != null ? typeDisplayName(m.typeReturn) : typeDisplayName(m);
+}
+
+function variantFailArgs(g: CGen, u: Type, slot: int32): string {
+	const labels: string[] = [];
+	for (const m of u.typeChildren) labels.push(memberDisplayName(m));
+	const unionName = u.sym != null && u.sym.name != "" ? u.sym.name : labels.join(" | ");
+	const head = `member '${slot < labels.length ? labels[slot] : "?"}' is not accessible for type '${unionName}' using '`;
+	const joined = labels.join("|");
+	return `${msStringPoolRef(internString(g.stringPool, head), cStringByteLen(head))}, ${msStringPoolRef(internString(g.stringPool, joined), cStringByteLen(joined))}`;
+}
+
+function strLitConvArgs(g: CGen, set: Type): string {
+	const literals: Type[] = set.kind == TypeKind.StringLiteral ? [set] : set.typeChildren;
+	let members = "";
+	for (const lit of literals) members += `${lit.typeName.byteLength}:${lit.typeName}`;
+	const name = set.sym != null && set.sym.name != "" ? set.sym.name : typeDisplayName(set);
+	return `${msStringPoolRef(internString(g.stringPool, members), cStringByteLen(members))}, ${msStringPoolRef(internString(g.stringPool, name), cStringByteLen(name))}`;
+}
+
 function literalDiscriminantOf(u: Type): string {
 	if (isDiscriminatedUnion(u)) {
 		const dt = u.typeExtra;
@@ -1769,6 +1795,27 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			}
 		}
 
+		const strLitTarget = node.nodeType != null && node.flags.has(NodeFlag.ConvCheck) ? strLitPayload(node.nodeType) : null;
+		if (strLitTarget != null && node.nodeType != null) {
+			const from = d.asExpr != null ? d.asExpr.nodeType : null;
+			if (!isMaybeType(node.nodeType) && from != null && !isMaybeType(from) && isStringLike(from)) {
+				ctx.results.push(`msStrLitConv(${expr}, ${strLitConvArgs(g, strLitTarget)})`);
+				return;
+			}
+			if (isMaybeType(node.nodeType) && from != null && isMaybeType(from) && from.typeReturn != null && isStringLike(from.typeReturn)) {
+				const targetC = getTypeDesc(g, node.nodeType);
+				g.labels += 1;
+				const tmp = `_mconv${g.labels}_`;
+				emitProcLocalsLine(p, `${getTypeDesc(g, from)} ${tmp};`);
+				emitStmtsLine(p, `${tmp} = ${expr};`);
+				ctx.results.push(`(${tmp}.present ? (${targetC}){.value=msStrLitConv(${tmp}.value, ${strLitConvArgs(g, strLitTarget)}), .present=true} : (${targetC}){0})`);
+				return;
+			}
+			addCGenError(g, "internal: checked `as " + d.asType + "` into a string-literal union reached codegen from " + (from != null ? typeDisplayName(from) : "an untyped value") + " at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
+			ctx.results.push("MS_NIL");
+			return;
+		}
+
 		// Identity cast — src and target have the same C type. Fires at the top
 		// so it short-circuits every downstream case (Union narrow, Union wrap,
 		// nilable reinterpret, fallback cast). Common after monomorphization and
@@ -1853,6 +1900,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// Value types (structs) can't be directly C-cast. Use pointer reinterpret.
 		if (node.nodeType != null && isNilableValueType(node.nodeType)
 			&& d.asExpr != null && d.asExpr.nodeType != null && isNilableValueType(d.asExpr.nodeType)) {
+			const fromCarrier = d.asExpr.nodeType;
+			if (isMaybeType(node.nodeType) && isMaybeType(fromCarrier) && node.nodeType.typeReturn != null && fromCarrier.typeReturn != null
+				&& getTypeDesc(g, node.nodeType.typeReturn) != getTypeDesc(g, fromCarrier.typeReturn)) {
+				addCGenError(g, "internal: `as " + d.asType + "` from " + typeDisplayName(fromCarrier) + " to " + typeDisplayName(node.nodeType) + " reached codegen as a reinterpret of one carrier as another at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
+				ctx.results.push("MS_NIL");
+				return;
+			}
 			ctx.results.push(`(*(${targetType}*)&(${expr}))`);
 			return;
 		}
@@ -1938,7 +1992,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const tmp = `_mnarrow${g.labels}_`;
 			emitProcLocalsLine(p, `${srcC} ${tmp};`);
 			emitStmtsLine(p, `${tmp} = ${inner};`);
-			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${rvi}) msRaiseVariantError(${tmp}.value._tag, ${rvi});`);
+			const heldUnion = d.convExpr.nodeType.typeReturn;
+			const failArgs = heldUnion != null ? variantFailArgs(g, heldUnion, rvi) : "MS_EMPTY_STRING, MS_EMPTY_STRING";
+			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${rvi}) msRaiseFieldError(${failArgs}, (int64_t)${tmp}.value._tag);`);
 			ctx.results.push(`(${tmp}.present ? ${tmp}.value.v${rvi} : (${targetC})NULL)`);
 			return;
 		}
@@ -1976,7 +2032,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// would hand refcounting a tagged slot to free, so it takes a zeroed union.
 		const srcMaybe = d.convExpr.nodeType;
 		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && isMaybeType(d.convType)
-			&& d.convType.typeReturn != null && d.convType.typeReturn.kind == TypeKind.Union
+			&& d.convType.typeReturn != null && isTagCarriedUnion(d.convType.typeReturn)
 			&& srcMaybe != null && isMaybeType(srcMaybe)) {
 			const wvi = projSlot - 1;
 			const payloadC = getTypeDesc(g, d.convType.typeReturn);
@@ -1998,8 +2054,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const tmp = `_mnarrow${g.labels}_`;
 			emitProcLocalsLine(p, `${srcC} ${tmp};`);
 			emitStmtsLine(p, `${tmp} = ${inner};`);
-			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${nvi}) msRaiseVariantError(${tmp}.value._tag, ${nvi});`);
-			ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${tmp}.value.v${nvi}, .present=true} : (${targetC}){0})`);
+			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${nvi}) msRaiseFieldError(${variantFailArgs(g, srcMaybe.typeReturn, nvi)}, (int64_t)${tmp}.value._tag);`);
+			const strLitSet = node.flags.has(NodeFlag.ConvCheck) ? strLitPayload(d.convType) : null;
+			const slotRead = `${tmp}.value.v${nvi}`;
+			const payload = strLitSet != null ? `msStrLitConv(${slotRead}, ${strLitConvArgs(g, strLitSet)})` : slotRead;
+			ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${payload}, .present=true} : (${targetC}){0})`);
 			return;
 		}
 		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && d.convType.kind != TypeKind.Union) {

@@ -171,12 +171,6 @@ _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi) {
 	exit(1);
 }
 
-_Noreturn void msRaiseVariantError(int64_t tag, int64_t expected) {
-	fprintf(stderr, "Error: invalid union conversion: value holds member %lld, target expects %lld\n",
-		(long long)tag, (long long)expected);
-	exit(1);
-}
-
 _Noreturn void msRaiseStrLitError(msString s, msString target) {
 	fprintf(stderr, "Error: invalid union conversion: \"%.*s\" is not %.*s\n", (int)s.len, s.p != NULL ? s.p->data : "",
 		(int)target.len, target.p != NULL ? target.p->data : "");
