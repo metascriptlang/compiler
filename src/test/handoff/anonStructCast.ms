@@ -34,8 +34,9 @@ test "null as unknown as struct compiles to zero-init" {
 
 // ===== struct-to-struct reinterpret via as unknown as =====
 
-test "struct as unknown as other struct compiles" {
+test "an interface reinterpreted through unknown is refused" {
 	const src = "interface A { x: number; y: number; }\ninterface B { a: number; b: number; }\nfunction convert(a: A): B {\n\treturn a as unknown as B;\n}";
 	const result = compileToC(src);
-	assert result.ok;
+	assert !result.ok;
+	assert result.error.contains("only a non-generic class has a runtime identity");
 }

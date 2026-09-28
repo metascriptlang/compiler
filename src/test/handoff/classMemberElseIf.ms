@@ -123,7 +123,8 @@ test "class field access in else-if condition" {
 // Test 5: Type alias as-cast should resolve fields
 test "as cast with type alias resolves fields" {
 	const ctx = checkSource(`
-		type FooData = { name: string };
+		class Foo { name: string = ""; }
+		type FooData = Foo;
 		interface Bar {
 			data: unknown;
 		}
