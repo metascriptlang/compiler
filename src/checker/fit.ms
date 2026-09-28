@@ -1116,7 +1116,7 @@ export function narrowUnionToVariant(expr: Node, exprType: Type): Node {
 }
 
 export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
-	if (exprType.kind == TypeKind.Union) return -1;
+	if (exprType.kind == TypeKind.Union && !isStringLike(exprType)) return -1;
 	let ci: int32 = 0;
 	for (const child of declared.typeChildren) {
 		if (child == exprType) return ci;
@@ -1141,6 +1141,49 @@ export function narrowMaybePayload(expr: Node, carrier: Type, narrowed: Type): N
 	const vi = tagUnionMemberSlot(carrier.typeReturn, payload);
 	if (vi < 0) return null as unknown as Node;
 	return hiddenSlotConv(expr, narrowed, vi);
+}
+
+export function isStrLitSet(t: Type | null): boolean {
+	return t != null && t.kind != TypeKind.String && isStringLike(t);
+}
+
+function assertionPayload(t: Type): Type {
+	return isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
+}
+
+export function assertionNarrows(srcType: Type, target: Type): boolean {
+	const from = assertionPayload(srcType);
+	const to = assertionPayload(target);
+	if (isSlotUnion(from) && tagUnionMemberSlot(from, to) >= 0) return true;
+	return from.kind == TypeKind.String && isStrLitSet(to);
+}
+
+export function checkedAssertion(expr: Node, target: Type): Node {
+	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
+	const conv = createNode(NodeKind.TypeAssertion, { asExpr: expr, asType: "" } as NodeData, convTok);
+	conv.nodeType = target;
+	conv.flags = conv.flags.incl(NodeFlag.Sem).incl(NodeFlag.ConvCheck);
+	return conv;
+}
+
+export function checkedProjection(expr: Node, declared: Type, member: Type): Node {
+	const projected = projectTagUnionMember(expr, declared, member);
+	if (projected != null as unknown as Node) projected.flags = projected.flags.incl(NodeFlag.ConvCheck);
+	return projected;
+}
+
+export function assertIntoNullable(expr: Node, srcType: Type, target: Type): Node {
+	if (!isMaybeType(target) || target.typeReturn == null || srcType.kind == TypeKind.Null) return null as unknown as Node;
+	if (isMaybeType(srcType)) return widenMaybePayload(expr, target, srcType);
+	const payload = target.typeReturn;
+	if (isSlotUnion(srcType) && tagUnionMemberSlot(srcType, payload) >= 0) {
+		return synthMaybeWrap(checkedAssertion(checkedProjection(expr, srcType, payload), payload), target, payload);
+	}
+	if (srcType.kind == TypeKind.String && isStrLitSet(payload)) {
+		return synthMaybeWrap(checkedAssertion(expr, payload), target, payload);
+	}
+	if (slotRefuses(srcType, payload)) return null as unknown as Node;
+	return synthMaybeWrap(expr, target, srcType);
 }
 
 function hiddenSlotConv(expr: Node, target: Type, vi: int32): Node {

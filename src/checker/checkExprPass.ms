@@ -29,7 +29,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -1972,11 +1972,21 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					}
 				}
 			}
-			if (srcType != null && isSlotUnion(srcType) && targetType.kind != TypeKind.Union
+			if (srcType != null && isSlotUnion(srcType) && (targetType.kind != TypeKind.Union || isStrLitSet(targetType))
 				&& !isUnresolvedType(targetType) && tagUnionMemberSlot(srcType, targetType) >= 0) {
-				node.data = { asExpr: projectTagUnionMember(d.asExpr, srcType, targetType), asType: d.asType };
+				node.data = { asExpr: checkedProjection(d.asExpr, srcType, targetType), asType: d.asType };
 				node.nodeType = isReadonlyView(srcType) ? propagateReadonlyView(targetType) : targetType;
+				node.flags = node.flags.incl(NodeFlag.ConvCheck);
 				return;
+			}
+			if (srcType != null && !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
+				&& !hasGenericParams(srcType) && !hasGenericParams(targetType) && !reportedErrorSince(ctx, operandMark)) {
+				const carried = assertIntoNullable(d.asExpr, srcType, targetType);
+				if (carried != null as unknown as Node) {
+					node.data = { asExpr: carried, asType: d.asType };
+					node.nodeType = targetType;
+					return;
+				}
 			}
 			if (srcType != null && !isUnresolvedType(targetType) && !isUnknownType(targetType)
 				&& !slotTakesValue(srcType, targetType)) {
@@ -2036,7 +2046,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			} else {
 				node.nodeType = targetType;
 			}
-			if (srcType != null && srcType.kind != TypeKind.Union && targetType.kind == TypeKind.Union) {
+			if (srcType != null && (srcType.kind != TypeKind.Union || isStrLitSet(srcType)) && targetType.kind == TypeKind.Union) {
 				const widened = widenVariantToUnion(d.asExpr, targetType, srcType);
 				if (widened != null as unknown as Node) node.data = { asExpr: widened, asType: d.asType };
 			}
@@ -2055,6 +2065,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				addError(ctx, "cannot check a conversion from unknown to " + typeDisplayName(targetType) + " — only a non-generic class has a runtime identity; convert to a class, or keep the value in a discriminated union", asLoc.line, asLoc.column);
 			} else if (objConv == ObjConv.Checked) {
 				node.flags = node.flags.incl(NodeFlag.ObjCheck);
+			}
+			if (srcType != null && !isUnresolvedType(targetType) && !reportedErrorSince(ctx, operandMark)
+				&& assertionNarrows(srcType, targetType)) {
+				node.flags = node.flags.incl(NodeFlag.ConvCheck);
 			}
 			if (srcType != null && isReadonlyView(srcType) && node.nodeType != null) node.nodeType = propagateReadonlyView(node.nodeType);
 			return;
