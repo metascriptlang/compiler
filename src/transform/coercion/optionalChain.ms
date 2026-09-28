@@ -9,6 +9,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeNull, makeBinary, makeConditional } from "../util";
 import { firstExprKindAfter } from "../testUtil";
+import { rereadOperand } from "./nullishCoalesce";
 
 // ===== Main Entry Point =====
 
@@ -26,7 +27,7 @@ function lowerOptionalNode(node: Node): Node {
 	const loc = node.location;
 	// obj?.prop → obj !== null ? obj.prop : null
 	const cond = makeBinary(d.object, "!==", makeNull(loc), loc);
-	const cons = makeMember(d.object, d.property, loc);
+	const cons = makeMember(rereadOperand(d.object), d.property, loc);
 	const alt = makeNull(loc);
 	return makeConditional(cond, cons, alt, loc);
 }

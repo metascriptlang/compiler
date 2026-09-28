@@ -10,6 +10,8 @@ import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocks } from "../walker";
 import { makeNull, makeBinary, makeConditional, makeMember, makeVarDecl, makeAssign, makeIdentResolved } from "../util";
 import { firstExprKindAfter } from "../testUtil";
+import { cloneIfPure } from "./intArithJS";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 // ===== Main Entry Point =====
 
@@ -28,6 +30,10 @@ function lowerNullishStmt(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 // ===== Visitor =====
+
+export function rereadOperand(operand: Node): Node {
+	return cloneIfPure(operand) != null ? cloneNodeKeepSem(operand) : operand;
+}
 
 export function asUnknown(n: Node, loc: SourceLocation): Node {
 	const checked = createNodeAt(NodeKind.TypeAssertion, { asExpr: n, asType: "unknown" } as TypeAssertionData, loc);
@@ -77,6 +83,8 @@ function lowerNullish(left: Node, right: Node, loc: SourceLocation, resultType: 
 		temps.push(decl);
 		cond = makeBinary(makeAssign(makeIdentResolved(sym, loc), asUnknown(left, loc), loc), "!==", makeNull(loc), loc);
 		held = makeIdentResolved(sym, loc);
+	} else {
+		held = rereadOperand(left);
 	}
 
 	// Value-carried nullable (Maybe struct in C): when the fallback is non-null the
