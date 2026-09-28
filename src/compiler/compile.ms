@@ -661,6 +661,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const nativeCtx = createTransformContextWithChecker(ctx);
 	nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 	nativeCtx.boundChecks = opts.mode != MODE_DANGER;
+	nativeCtx.objChecks = opts.mode != MODE_DANGER;
 	const _tr0 = performance.now();
 	const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 	job.timers.refine = job.timers.refine + (performance.now() - _tr0);
@@ -2985,6 +2986,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 		nativeCtx.boundChecks = opts.mode != MODE_DANGER;
+		nativeCtx.objChecks = opts.mode != MODE_DANGER;
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;

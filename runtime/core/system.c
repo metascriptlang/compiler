@@ -131,6 +131,14 @@ _Noreturn void msRaiseIndexError(int64_t idx, int64_t len) {
 	exit(1);
 }
 
+_Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target) {
+	const msTypeInfo* t = msHeader(p)->type;
+	fprintf(stderr, "Error: invalid object conversion: %s is not %s\n",
+		(t != NULL && t->name != NULL) ? t->name : "<untyped>",
+		target->name != NULL ? target->name : "<untyped>");
+	exit(1);
+}
+
 _Noreturn void msRaiseDivByZero(void) {
 	fprintf(stderr, "Error: division by zero\n");
 	exit(1);

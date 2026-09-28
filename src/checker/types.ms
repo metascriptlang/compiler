@@ -2560,6 +2560,50 @@ function isClassOrInterfaceObject(ref: Type): boolean {
 	return body != null && (body.kind == TypeKind.Struct || body.kind == TypeKind.GenericInstance);
 }
 
+export enum ObjConv { None, Checked, BadTarget }
+
+export function objectConversion(src: Type | null, target: Type | null): ObjConv {
+	const s = heldObjectOrUnknown(src);
+	const t = heldTarget(target);
+	if (s == null || t == null) return ObjConv.None;
+	if (isUnknownType(t) || t.kind == TypeKind.Ptr || t.kind == TypeKind.Borrow) return ObjConv.None;
+	const checkable = isRuntimeCheckedClass(t);
+	if (isUnknownType(s)) return checkable ? ObjConv.Checked : ObjConv.BadTarget;
+	if (!checkable || isClassOrSubclass(s, t)) return ObjConv.None;
+	return ObjConv.Checked;
+}
+
+function heldTarget(t: Type | null): Type | null {
+	const bare = t != null ? skipModifier(t) : null;
+	if (bare == null) return null;
+	return bare.kind == TypeKind.Union ? unwrapRefNullUnion(bare) : bare;
+}
+
+function heldObjectOrUnknown(t: Type | null): Type | null {
+	const held = heldTarget(t);
+	if (held == null) return null;
+	if (isUnknownType(held)) return held;
+	if (held.kind != TypeKind.Ref || held.typeReturn == null) return null;
+	const body = held.typeReturn;
+	return body.kind == TypeKind.Struct || body.kind == TypeKind.GenericInstance ? held : null;
+}
+
+function isRuntimeCheckedClass(t: Type): boolean {
+	return t.kind == TypeKind.Ref && t.sym != null && t.sym.symbolKind == SymbolKind.Class
+		&& t.typeReturn != null && t.typeReturn.kind == TypeKind.Struct;
+}
+
+function isClassOrSubclass(sub: Type, sup: Type): boolean {
+	if (sup.sym == null) return false;
+	let cur: Type | null = sub.kind == TypeKind.Ref ? sub.typeReturn : sub;
+	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		if (cur.sym == sup.sym) return true;
+		const base: Type | null = cur.typeExtra;
+		cur = base != null && base.kind == TypeKind.Ref ? base.typeReturn : base;
+	}
+	return false;
+}
+
 export function smuggledIntoUnknown(src: Type | null, target: Type | null): Type | null {
 	const s = src != null ? skipModifier(src) : null;
 	const t = target != null ? skipModifier(target) : null;

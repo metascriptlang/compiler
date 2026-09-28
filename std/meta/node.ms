@@ -269,6 +269,7 @@ export enum NodeFlag {
 	WhenPicked,    // parser: statement spliced in from the selected branch of a `when` chain
 	ExplicitDeref, // parser: HiddenDeref written as `x[]` — the checker validates the pointer, fmt prints it back
 	CommaWritten,  // parser: a comma was written after this match case
+	ObjCheck,      // checker: this TypeAssertion is an object down-conversion checked at run time
 }
 
 // ===== Node Kind Enum =====

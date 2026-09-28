@@ -1753,6 +1753,22 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		truncResults(ctx, cc);
 		const d = node.data as TypeAssertionData;
 
+		if (node.flags.has(NodeFlag.ObjCheck) && node.nodeType != null) {
+			const checkedRef = node.nodeType.kind == TypeKind.Union ? unwrapRefNullUnion(node.nodeType) : node.nodeType;
+			const checkedClass = checkedRef != null && checkedRef.kind == TypeKind.Ref ? checkedRef.typeReturn : null;
+			if (checkedClass == null || checkedClass.kind != TypeKind.Struct) {
+				addCGenError(g, "internal: checked conversion `as " + d.asType + "` has no class target at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
+				ctx.results.push("MS_NIL");
+				return;
+			}
+			if (checkedRef!.sym == null || !hasFlag(checkedRef!.sym!, SymbolFlag.ImportC)) {
+				const cName = getTypeDesc(g, checkedClass);
+				ensureTypeInfoDef(g, cName, checkedClass);
+				ctx.results.push(`((${getTypeDesc(g, node.nodeType)})msObjDownConv((void*)(${expr}), &${cName}TypeInfo))`);
+				return;
+			}
+		}
+
 		// Identity cast — src and target have the same C type. Fires at the top
 		// so it short-circuits every downstream case (Union narrow, Union wrap,
 		// nilable reinterpret, fallback cast). Common after monomorphization and

@@ -10,7 +10,7 @@ import {
 	ArrowFunctionData, FunctionExprData,
 	TypeAssertionData, ConditionalExprData,
 	SpreadExprData, NewExprData, MoveExprData,
-	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData,
+	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, createNodeAt,
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
@@ -20,6 +20,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym } from "../../transform/util";
+import { unwrapRefNullUnion } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -682,7 +683,25 @@ export function emitNewExpr(gen: JSGenerator, node: Node): void {
 
 export function emitTypeAssertion(gen: JSGenerator, node: Node): void {
 	const d = node.data as TypeAssertionData;
+	const target = checkedConversionTarget(node);
+	if (target == null) {
+		emitNode(gen, d.asExpr);
+		return;
+	}
+	const classRef = createNodeAt(NodeKind.Identifier, { name: target.name } as IdentifierData, node.location);
+	classRef.resolvedSym = target;
+	classRef.nodeType = target.symbolType;
+	emit(gen, "((v) => (v == null || v instanceof ");
+	emitNode(gen, classRef);
+	emit(gen, ") ? v : (() => { throw new Error(\"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + escapeJSString(target.name) + "\"); })())(");
 	emitNode(gen, d.asExpr);
+	emit(gen, ")");
+}
+
+function checkedConversionTarget(node: Node): Symbol | null {
+	if (!node.flags.has(NodeFlag.ObjCheck) || node.nodeType == null) return null;
+	const t = node.nodeType.kind == TypeKind.Union ? unwrapRefNullUnion(node.nodeType) : node.nodeType;
+	return t != null && t.kind == TypeKind.Ref ? t.sym : null;
 }
 
 // ===== Move Expression (no-op in JS) =====

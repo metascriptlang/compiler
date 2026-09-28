@@ -547,6 +547,12 @@ _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi);
 _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi);
 _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected);
 _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag);
+_Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target);
+
+static inline void* msObjDownConv(void* p, const msTypeInfo* target) {
+	if (p != NULL && !msIsInstance(p, target)) msRaiseObjectConversionError(p, target);
+	return p;
+}
 
 #define msVariantAccess(u, slot, head, labels) (*({ \
 	__typeof__(u)* __vu = &(u); \

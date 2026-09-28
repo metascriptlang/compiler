@@ -20,6 +20,7 @@ export class TransformContext {
 	jsBackend: boolean;
 	rangeChecks: boolean;
 	boundChecks: boolean;
+	objChecks: boolean;
 	keepBuiltinMemberCalls: boolean;  // backend resolves builtins natively (opcodes / native methods) — keep member-call form instead of UFCS-rewriting to direct calls (mangled-name backends like C set false)
 	pendingTupleOps: PendingTupleOp[];  // tuple comparison ops to generate (reference parity)
 	pendingStructEqs: string[];  // struct/interface == uses to lift Eq for on-demand
@@ -30,7 +31,7 @@ export class TransformContext {
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, rangeChecks: true, boundChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingStructEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [] };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingStructEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [] };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
