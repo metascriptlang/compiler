@@ -29,8 +29,7 @@ export interface VarInfo {
 }
 
 export class MovedVar {
-	sym: Symbol | null;    // moved variable (null for expression-level moves)
-	exprNode: Node;        // pre-built wasMoved call node (null for variable-level moves)
+	sym: Symbol | null;
 }
 
 export class BorrowRead {
@@ -43,7 +42,7 @@ export class BorrowRead {
 
 export interface DrcScope {
 	varsToCleanup: VarInfo[];     // variables needing cleanup at scope exit
-	wasMoved: MovedVar[];         // expr-level wasMoved calls (emitted in finally) + var-level move bookkeeping
+	wasMoved: MovedVar[];         // var-level move bookkeeping
 	preStmts: Node[];             // stmts to flush before current statement (per-scope isolation, reference parity)
 	pendingStmts: Node[];         // stmts to flush after current statement (per-scope isolation, reference parity)
 	needsTry: boolean;            // does this scope need try/finally wrapping?
@@ -190,7 +189,7 @@ export function recordMove(dctx: DrcContext, sym: Symbol | null): void {
 	if (sym == null) return;
 	const scope = currentScope(dctx);
 	if (wasMovedInScope(scope, sym)) return;
-	const mv: MovedVar = { sym, exprNode: null as unknown as Node };
+	const mv: MovedVar = { sym };
 	scope.wasMoved.push(mv);
 }
 
@@ -212,7 +211,7 @@ export function recordMoveInContext(dctx: DrcContext, sym: Symbol | null): void 
 		const vi = findVarInfo(dctx.scopes[i], sym);
 		if (vi != null) {
 			if (!wasMovedInScope(dctx.scopes[i], sym)) {
-				const mv: MovedVar = { sym, exprNode: null as unknown as Node };
+				const mv: MovedVar = { sym };
 				dctx.scopes[i].wasMoved.push(mv);
 			}
 			return;
@@ -220,14 +219,6 @@ export function recordMoveInContext(dctx: DrcContext, sym: Symbol | null): void 
 	}
 	// Fallback: record on current scope
 	recordMove(dctx, sym);
-}
-
-// Record an expression-level wasMoved call (for move obj.field / move arr[i]).
-// Stored in wasMoved with a null symbol — emitted in finally before destructors.
-export function recordMoveExpr(dctx: DrcContext, wasMovedCall: Node): void {
-	const scope = currentScope(dctx);
-	const mv: MovedVar = { sym: null, exprNode: wasMovedCall };
-	scope.wasMoved.push(mv);
 }
 
 // True if the variable was recorded moved in the scope that actually tracks it.

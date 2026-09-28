@@ -22,7 +22,7 @@ import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
 import {
 	DrcContext, DrcScope, noSym,
 	createDrcContext, pushScope, popScope, currentScope, scopeDepth,
-	registerVar, markUninitialized, recordMove, recordMoveInContext, recordMoveExpr, wasMovedInScope, varMovedInContext, clearMoveInContext, findVarInfo, findVarInfoInContext, findVarInfoInFunction, testVarSym, BorrowRead,
+	registerVar, markUninitialized, recordMove, recordMoveInContext, wasMovedInScope, varMovedInContext, clearMoveInContext, findVarInfo, findVarInfoInContext, findVarInfoInFunction, testVarSym, BorrowRead,
 	setNeedsTryAll, addPending, hasPending, clearPendingForVar, symListHas, symListAdd,
 	addPre,
 	testStringRc, classifyRc,
@@ -383,6 +383,13 @@ function writtenRoot(target: Node): Symbol | null {
 	return null;
 }
 
+function isWasMovedCall(n: Node): boolean {
+	if (n.kind != NodeKind.CallExpr) return false;
+	const cd = n.data as CallExprData;
+	return cd.arguments.length == 1 && cd.callee != null && cd.callee.resolvedSym != null
+		&& hasFlag(cd.callee.resolvedSym, SymbolFlag.WasMovedOp);
+}
+
 function collectWrites(n: Node, writes: Symbol[]): void {
 	if (n == null || isFunctionNode(n)) return;
 	let target: Node | null = null;
@@ -394,6 +401,8 @@ function collectWrites(n: Node, writes: Symbol[]): void {
 		target = (n.data as OutExprData).outArg;
 	} else if (n.kind == NodeKind.HiddenAddr) {
 		target = (n.data as HiddenDerefData).expr;
+	} else if (isWasMovedCall(n)) {
+		target = (n.data as CallExprData).arguments[0];
 	}
 	if (target != null) {
 		const root = writtenRoot(target);
@@ -674,16 +683,17 @@ function retroHoistStmtReads(srcSym: Symbol, fallbackType: Type, dctx: DrcContex
 // before the zero, so a same-statement destroy-old of src sees NULL → runtime no-op.
 function destructiveMoveVar(srcExpr: Node, rcInfo: RcInfo, dctx: DrcContext): Node {
 	const loc = srcExpr.location;
-	const srcSym = srcExpr.resolvedSym!;
-	retroHoistStmtReads(srcSym, srcExpr.nodeType!, dctx);
-	const tmpSym = freshTempSym(dctx.ctx, "move", srcExpr.nodeType);
+	const isVar = srcExpr.kind == NodeKind.Identifier;
+	if (isVar) retroHoistStmtReads(srcExpr.resolvedSym!, srcExpr.nodeType!, dctx);
+	const source = isVar ? srcExpr : stabilizeLocation(srcExpr, dctx);
+	const tmpSym = freshTempSym(dctx.ctx, "move", source.nodeType);
 	setFlag(tmpSym, SymbolFlag.SinkTemp);
 	const tmpName = tmpSym.name;
-	const tmpDecl = makeVarDecl(tmpName, srcExpr, DeclKind.Const, loc);
-	if (srcExpr.nodeType != null) tmpDecl.nodeType = srcExpr.nodeType;
+	const tmpDecl = makeVarDecl(tmpName, source, DeclKind.Const, loc);
+	if (source.nodeType != null) tmpDecl.nodeType = source.nodeType;
 	tmpDecl.resolvedSym = tmpSym;
 	addPre(dctx, tmpDecl);
-	addPre(dctx, makeWasMovedCall(srcSym, rcInfo, loc));
+	addPre(dctx, isVar ? makeWasMovedCall(srcExpr.resolvedSym!, rcInfo, loc) : makeWasMovedOnExpr(source, rcInfo, loc));
 	return makeIdentResolved(tmpSym, loc);
 }
 
@@ -834,30 +844,16 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	dctx.inEnsureMove += 1;
 	md.moveArg = processNode(md.moveArg, dctx, consume ? DrcMode.Consumed : DrcMode.Normal);
 	dctx.inEnsureMove -= 1;
-	// Identifiers: the Consumed walk above already blit+zeroed via destructiveMoveVar;
-	// recordMoveInContext stays as bookkeeping for the self-consume assignment gates
-	// (cleanup destroys unconditionally — it never suppresses the scope-exit destroy).
-	// Fields/elements: recordMoveExpr defers wasMoved to the finally, before the container destroy.
-	const moveType = md.moveArg.nodeType;
-	if (moveType != null && consume) {
-		const rcInfo = classifyRc(moveType, dctx);
-		if (rcInfo.needsCleanup) {
-			if (md.moveArg.kind == NodeKind.Identifier) {
-				recordMoveInContext(dctx, md.moveArg.resolvedSym);
-			} else {
-				if (md.moveArg.kind == NodeKind.MemberExpr) {
-					const fieldRc = classifyMemberFieldRc(md.moveArg, dctx);
-					if (fieldRc.needsCleanup && fieldRc.wasMovedFn != null) {
-						recordMoveExpr(dctx, makeWasMovedOnExpr(md.moveArg, fieldRc, node.location));
-					}
-				} else if (md.moveArg.kind == NodeKind.ArrayAccess) {
-					const elemRc = classifyArrayElementRc(md.moveArg, dctx);
-					if (elemRc.needsCleanup && elemRc.wasMovedFn != null) {
-						recordMoveExpr(dctx, makeWasMovedOnExpr(md.moveArg, elemRc, node.location));
-					}
-				}
-			}
+	if (!consume) return node;
+	if (md.moveArg.kind == NodeKind.MemberExpr) {
+		const fieldRc = classifyMemberFieldRc(md.moveArg, dctx);
+		if (fieldRc.needsCleanup && fieldRc.wasMovedFn != null) {
+			md.moveArg = destructiveMoveVar(md.moveArg, fieldRc, dctx);
 		}
+	}
+	const moveType = md.moveArg.nodeType;
+	if (md.moveArg.kind == NodeKind.Identifier && moveType != null && classifyRc(moveType, dctx).needsCleanup) {
+		recordMoveInContext(dctx, md.moveArg.resolvedSym);
 	}
 	return node;
 }
@@ -1310,8 +1306,6 @@ function moveOrCopy(stmt: Node, dest: Node, rhs: Node, rcInfo: RcInfo,
 				&& dest.resolvedSym != null && md.moveArg.resolvedSym == dest.resolvedSym) {
 				return stmt;
 			}
-			// Aliased move: x = move x.field → destructiveMoveVar pattern
-			// Capture to temp, zero source, destroy old dest, assign from temp.
 			if (destSym != null && deepAliases(dest, md.moveArg)) {
 				const captureType = dest.nodeType;
 				const moveTmpSym = freshTempSym(dctx.ctx, "moveTmp", captureType);
@@ -1320,18 +1314,7 @@ function moveOrCopy(stmt: Node, dest: Node, rhs: Node, rcInfo: RcInfo,
 				captureDecl.nodeType = captureType;
 				captureDecl.resolvedSym = moveTmpSym;
 				const moveResult: Node[] = [captureDecl];
-				// Zero source BEFORE destroying old dest
-				if (md.moveArg.kind == NodeKind.MemberExpr) {
-					const fieldRc = classifyMemberFieldRc(md.moveArg, dctx);
-					if (fieldRc.needsCleanup && fieldRc.wasMovedFn != null) {
-						moveResult.push(makeWasMovedOnExpr(md.moveArg, fieldRc, loc));
-					}
-				} else if (md.moveArg.kind == NodeKind.ArrayAccess) {
-					const elemRc = classifyArrayElementRc(md.moveArg, dctx);
-					if (elemRc.needsCleanup && elemRc.wasMovedFn != null) {
-						moveResult.push(makeWasMovedOnExpr(md.moveArg, elemRc, loc));
-					}
-				} else if (md.moveArg.kind == NodeKind.Identifier && md.moveArg.resolvedSym != null) {
+				if (md.moveArg.kind == NodeKind.Identifier && md.moveArg.resolvedSym != null) {
 					if (rcInfo.wasMovedFn != null) {
 						moveResult.push(makeWasMovedCall(md.moveArg.resolvedSym, rcInfo, loc));
 					}
@@ -1423,7 +1406,6 @@ function classifyArrayElementRc(arrayExpr: Node, dctx: DrcContext): RcInfo {
 	return classifyRc(arrayExpr.nodeType, dctx);
 }
 
-// Emit wasMoved on MoveExpr source. Handles identifier, field, array element.
 // checkLastRead: true when idx/stmts context is valid (for errFailedMove diagnostic)
 // Returns true if wasMoved was emitted.
 function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation, checkLastRead: boolean): boolean {
@@ -1434,19 +1416,12 @@ function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmt
 		recordMoveInContext(dctx, moveArg.resolvedSym);
 		return true;
 	}
-	if (moveArg.kind == NodeKind.MemberExpr) {
-		const fieldRc = classifyMemberFieldRc(moveArg, dctx);
-		if (fieldRc.needsCleanup && fieldRc.wasMovedFn != null) {
-			addPending(dctx, makeWasMovedOnExpr(moveArg, fieldRc, loc));
-		}
-		return true;
-	}
-	if (moveArg.kind == NodeKind.ArrayAccess) {
-		const elemRc = classifyArrayElementRc(moveArg, dctx);
-		if (elemRc.needsCleanup && elemRc.wasMovedFn != null) {
-			addPending(dctx, makeWasMovedOnExpr(moveArg, elemRc, loc));
-		}
-		return true;
+	if (moveArg.kind == NodeKind.MemberExpr || moveArg.kind == NodeKind.ArrayAccess) {
+		dctx.ctx.checkerCtx.errors.push({
+			message: "DRC internal error: a moved field or element reached its consumer without being captured at the move",
+			line: moveArg.location.line, column: moveArg.location.column, fatal: false,
+		});
+		return false;
 	}
 	// CallExpr / other: source is fresh, no variable to zero
 	return false;
@@ -1456,11 +1431,6 @@ function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmt
 
 function generateCleanup(scope: DrcScope, loc: SourceLocation): Node[] {
 	const result: Node[] = [];
-	for (const mv of scope.wasMoved) {
-		if (mv.sym == null && mv.exprNode != null) {
-			result.push(mv.exprNode);
-		}
-	}
 	let i = scope.varsToCleanup.length;
 	while (i > 0) {
 		i -= 1;
