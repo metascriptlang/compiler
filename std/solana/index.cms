@@ -737,3 +737,59 @@ export function logComputeUnits(): void {
 export function remainingComputeUnits(): uint64 {
 	return msSolRemainingComputeUnits();
 }
+
+test "custom error 0 is not the success code" {
+	const customZero: uint64 = 4294967296;
+	assert ProgramError.custom(0).code == customZero;
+	assert ProgramError.custom(7).code == 7;
+}
+
+function hostProgram(): Pubkey {
+	const word0: uint64 = 0x5f177da80e773981;
+	const word1: uint64 = 0xcc7e4cc36654a356;
+	const word2: uint64 = 0xa237eeb4918a8dcb;
+	const word3: uint64 = 0x94b3c98f5b0ff65d;
+	return { word0: word0, word1: word1, word2: word2, word3: word3 };
+}
+
+function byteSeeds(count: uint64): Seeds {
+	let seeds = Seeds.empty(count);
+	for (let index: uint64 = 0; index < count; index++) {
+		seeds = seeds.addU8(index as uint8);
+	}
+	return seeds;
+}
+
+test "findProgramAddress finds the address and bump the runtime finds" {
+	const word0: uint64 = 0x5bbef3568cc31bd5;
+	const word1: uint64 = 0xb66374bcbfd8ecfb;
+	const word2: uint64 = 0x883424f155a9d409;
+	const word3: uint64 = 0x142077d63f0a9d66;
+	const identity: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
+	const found = Seeds.empty(1).addText("identity").findProgramAddress(hostProgram());
+	assert found.ok;
+	if (found.ok) {
+		assert found.value.bump == 255;
+		assert found.value.key.equals(identity);
+	}
+}
+
+test "findProgramAddress skips bumps whose address is on the curve" {
+	const word0: uint64 = 0x5ea6a552d1419250;
+	const word1: uint64 = 0x8c23c9e819ea60d7;
+	const word2: uint64 = 0xe0f59dbed6d4270a;
+	const word3: uint64 = 0x34a4af1cc0b7ce81;
+	const derived: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
+	const found = byteSeeds(15).findProgramAddress(hostProgram());
+	assert found.ok;
+	if (found.ok) {
+		assert found.value.bump == 249;
+		assert found.value.key.equals(derived);
+	}
+}
+
+test "findProgramAddress refuses a sixteenth caller seed" {
+	const found = byteSeeds(16).findProgramAddress(hostProgram());
+	assert !found.ok;
+	if (!found.ok) { assert found.error.code == ProgramError.maxSeedLengthExceeded().code; }
+}
