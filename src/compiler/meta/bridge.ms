@@ -3239,6 +3239,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		itemModule: -1 as int32,
 		item: 0 as int32,
 		instantiatedFrom: null,
+		borrowedFrom: null,
 	};
 }
 

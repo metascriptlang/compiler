@@ -22,7 +22,7 @@ import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
 import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
-import { unionHasMemberOfKind, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
+import { unionHasMemberOfKind, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
@@ -2830,6 +2830,75 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
 }
 
+export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at: SourceLocation): void {
+	const fnType = sym.symbolType;
+	const baseArgs: Type[] = [];
+	let hasDistinct = false;
+	for (const param of fnType.typeChildren) {
+		const isVar = param.kind == TypeKind.Var && param.typeReturn != null;
+		const inner: Type = isVar ? param.typeReturn : param;
+		const base = distinctBody(inner);
+		if (base != null) hasDistinct = true;
+		const arg = base != null ? base : inner;
+		baseArgs.push(isVar ? createVar(arg) : arg);
+	}
+	if (!hasDistinct) {
+		addError(ctx, `@borrow '${name}' has no distinct parameter, so there is nothing to borrow`, at.line, at.column);
+		return;
+	}
+	const shown = `${name}(${baseArgs.map((t: Type): string => typeDisplayName(t)).join(", ")})`;
+	const set = lookupSymbol(ctx.table, name);
+	const cands: Symbol[] = [];
+	if (set != null) {
+		if (set != sym) cands.push(set);
+		for (const o of set.overloads) {
+			if (o != sym) cands.push(o);
+		}
+	}
+	let best: Symbol | null = null;
+	let bestScore: CandidateScore = null as unknown as CandidateScore;
+	let ambiguous = false;
+	for (const cand of cands) {
+		const candType = cand.symbolType;
+		if (candType == null || candType.kind != TypeKind.Function) continue;
+		const score = scoreCandidateWithSkip(candType.typeChildren, baseArgs, getMinArity(candType), null as unknown as boolean[]);
+		if (score.exactMatches < 0) continue;
+		const cmp = best == null ? 1 : cmpCandidates(score, bestScore, candType, best.symbolType);
+		if (cmp > 0) {
+			best = cand;
+			bestScore = score;
+			ambiguous = false;
+		} else if (cmp == 0) {
+			ambiguous = true;
+		}
+	}
+	if (best == null) {
+		addError(ctx, `@borrow '${name}': no ${shown} to borrow from`, at.line, at.column);
+		return;
+	}
+	if (ambiguous) {
+		addError(ctx, `@borrow '${name}': more than one ${shown} to borrow from`, at.line, at.column);
+		return;
+	}
+	if (hasGenericParams(best.symbolType) && !hasFlag(best, SymbolFlag.Borrow)) {
+		addError(ctx, `@borrow '${name}' cannot borrow from a generic function: its base type must not mention a type parameter`, at.line, at.column);
+		return;
+	}
+	const own = fnType.typeReturn;
+	const theirs = best.symbolType.typeReturn;
+	if (!sameType(peelDistinctReturn(own), peelDistinctReturn(theirs))) {
+		addError(ctx, `@borrow '${name}' returns '${typeDisplayName(own)}' but ${shown} returns '${typeDisplayName(theirs)}'`, at.line, at.column);
+		return;
+	}
+	sym.borrowedFrom = best;
+	markUsedIn(ctx, best);
+}
+
+function peelDistinctReturn(t: Type | null): Type | null {
+	const base = distinctBody(t);
+	return base != null ? peelDistinctReturn(base) : t;
+}
+
 // Resolve extension method overloads: multiple extensions match same receiver+method.
 // Each extension's fnType includes the receiver as param[0]; strip it before scoring.
 function isValueCallee(callee: Node): boolean {
@@ -3455,6 +3524,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	if (isBrandDistinct(resolvedObjType) && resolvedObjType.typeReturn != null) {
 		resolvedObjType = resolvedObjType.typeReturn;
 	}
+	const dotBase = borrowedDotField(resolvedObjType, d.property);
+	if (dotBase != null) resolvedObjType = dotBase;
 	// Generic match-type alias: peel GenericInstance through typeReturn/typeExtra
 	// to reach the underlying Union body. Required for field resolution +
 	// narrowing on `Result<T, E> = Ref<ResultData<T, E>>` style types.
@@ -4155,6 +4226,18 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 // declaration of their own; their type is SourceLocation's, read from it here
 // rather than spelled again — spelling it as `number` is what let the engine
 // view disagree with the source until a narrowing rule made it fatal.
+function borrowedDotField(t: Type, name: string): Type | null {
+	let base = borrowedDotBase(t);
+	if (base == null) return null;
+	let next = borrowedDotBase(base);
+	while (next != null) {
+		base = next;
+		next = borrowedDotBase(base);
+	}
+	const fields = peelToStructOrUnion(base);
+	return isUnresolvedType(getProperty(fields != null ? fields : base, name)) ? null : base;
+}
+
 function flattenedLocationFieldType(recvType: Type, name: string): Type | null {
 	if (name != "line" && name != "column" && name != "endLine" && name != "endColumn") return null;
 	if (recvType.typeNames == null || recvType.typeChildren == null) return int32Type();

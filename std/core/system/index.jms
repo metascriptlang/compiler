@@ -43,6 +43,9 @@ export class Error {
 @builtin("compilerFunc")
 export extern function compilerFunc(): void;
 
+@builtin("borrow")
+export extern function borrow(): void;
+
 @compilerFunc
 function msFieldError(head: string, actual: string): never {
 	@emit(`throw new Error(${head} + ${actual} + "'");`);

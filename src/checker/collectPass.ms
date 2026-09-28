@@ -265,12 +265,44 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 		if (exportName != "") sym.overloads[idx].exportName = exportName;
 		if (info.throws) setFlag(sym.overloads[idx], SymbolFlag.Throws);
 		if (info.compilerFunc) registerCompilerFunc(ctx, sym.overloads[idx]);
+		if (info.borrow) markBorrow(ctx, dd, sym.overloads[idx]);
 	} else {
 		if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
 		if (exportName != "") sym.exportName = exportName;
 		if (info.throws) setFlag(sym, SymbolFlag.Throws);
 		if (info.compilerFunc) registerCompilerFunc(ctx, sym);
+		if (info.borrow) markBorrow(ctx, dd, sym);
 	}
+}
+
+function markBorrow(ctx: CheckerContext, dd: DecoratedDeclData, sym: Symbol): void {
+	const problem = borrowMisuse(dd);
+	if (problem != "") {
+		const dec = borrowDecorator(dd.decorators);
+		addError(ctx, problem, dec.location.line, dec.location.column);
+		return;
+	}
+	setFlag(sym, SymbolFlag.Borrow);
+	sym.symFlags = sym.symFlags.excl(SymbolFlag.OverloadSig);
+}
+
+function borrowDecorator(decorators: Node[]): Node {
+	for (const dec of decorators) {
+		if (dec.kind == NodeKind.MacroInvocation && (dec.data as MacroInvocationData).macroName == "borrow") return dec;
+	}
+	return decorators[0];
+}
+
+function borrowMisuse(dd: DecoratedDeclData): string {
+	if ((borrowDecorator(dd.decorators).data as MacroInvocationData).macroArgs.length > 0) return "@borrow takes no arguments";
+	let decl = dd.decoratedNode;
+	if (decl.kind == NodeKind.ExportDecl) decl = (decl.data as ExportDeclData).exportedDecl;
+	if (decl.kind == NodeKind.TypeAliasDecl) return "";
+	if (decl.kind != NodeKind.FunctionDecl) return "@borrow applies to a function or a distinct type";
+	const fd = decl.data as FunctionDeclData;
+	if (fd.fnFlags.indexOf("extern", 0) >= 0) return "@borrow cannot bind an extern function; it takes the implementation of its base function";
+	if (fd.fnFlags.indexOf("overload", 0) < 0) return `@borrow takes the body of the base function: declare '${fd.fnName}' without one`;
+	return "";
 }
 
 // A `@compilerFunc` declaration is the one place a synthesized call can read its

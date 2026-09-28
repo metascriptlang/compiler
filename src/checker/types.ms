@@ -1851,6 +1851,13 @@ export function distinctBody(t: Type | null): Type | null {
 	return distinctInstanceRepr(t);
 }
 
+export function borrowedDotBase(t: Type | null): Type | null {
+	if (t == null) return null;
+	const wrapper = t.kind == TypeKind.GenericInstance ? t.typeExtra : t;
+	if (wrapper == null || wrapper.kind != TypeKind.Distinct || !wrapper.typeFlags.has(TypeFlag.BorrowDot)) return null;
+	return distinctBody(t);
+}
+
 export function distinctCallTarget(t: Type | null): Type | null {
 	const body = distinctBody(t);
 	return body != null && body.kind == TypeKind.Function ? body : null;

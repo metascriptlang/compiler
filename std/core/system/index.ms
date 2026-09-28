@@ -57,6 +57,9 @@ export extern function compilerFunc(): void;
 @builtin("throws")
 export extern function throws(): void;
 
+@builtin("borrow")
+export extern function borrow(): void;
+
 @compilerFunc @throws
 extern function msAssertFail(msg: cstring, file: cstring, line: int32): void from "msAssertFail";
 

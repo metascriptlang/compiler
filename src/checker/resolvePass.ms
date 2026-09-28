@@ -1751,6 +1751,9 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	if (sym == null) return;
 	node.resolvedSym = sym;
 	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.aliasName.length, sym, sym.symbolType, SymbolKind.TypeAlias, d.aliasName, "", true);
+	if (hasFlag(sym, SymbolFlag.Borrow) && !d.aliasIsDistinct) {
+		addError(ctx, `only a distinct type can borrow its base's fields: type ${d.aliasName} = distinct …`, d.nameLocation.line, d.nameLocation.column);
+	}
 
 	if (d.aliasType == "" && d.discriminantName == "") {
 		return;
@@ -1847,6 +1850,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		const distType = createDistinct(resolved);
 		distType.typeName = d.aliasName;
 		if (resolved.kind == TypeKind.Function) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BrandWiden);
+		if (hasFlag(sym, SymbolFlag.Borrow)) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BorrowDot);
 		assignType(sym.symbolType, distType);
 		node.nodeType = sym.symbolType;
 	} else if ((hasGenericAlias ? declaredByAnotherSymbol(resolved, sym) : resolved.sym != null)

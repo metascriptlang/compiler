@@ -335,6 +335,7 @@ export function initSymbol(sym: Symbol, name: string, kind: SymbolKind, symType:
 	sym.itemModule = -1;
 	sym.item = 0;
 	sym.instantiatedFrom = null;
+	sym.borrowedFrom = null;
 }
 
 // Look up an exported symbol in Module / Global scopes. Uses symbols for
