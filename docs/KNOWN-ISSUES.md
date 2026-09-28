@@ -908,7 +908,7 @@ critical section, and main in `msAwaitSlotWait → msPoolHelpOne` running a help
 reproduced on 2026-09-19. To chase it, loop the cell until it hangs, then sample every thread of
 the program binary, not the `sh -c` wrapper.
 
-## L56. `closureCallMarker` builds a `Token` one field short (LIVE, measured 2026-09-19)
+## L56. `closureCallMarker` builds a `Token` one field short (FIXED; `8fff4d62`, and the checker refuses the shape, 2026-09-29)
 
 `src/transform/native/closureCallMarker.ms` has 6 sites that build `{ kind, value, line, column } as
 unknown as Token`, while `Token` (`std/meta/token.ms`) also has `rawValue`. The cast reinterprets
@@ -916,6 +916,12 @@ the smaller literal, so the emitted C reads `rawValue` past the end of the stack
 nothing wrong today by accident. `syntheticToken()` builds a complete token and is the replacement.
 `as unknown as <T>` is safe only while both layouts are equal; the same cast in the checker's
 `sizeof` fold silently broke when the literal type gained fields.
+
+Since `8fff4d62` the sites build their token with `createToken`, and the checker refuses the shape
+itself: `{ kind: 0, value: "", line: 0, column: 0 } as unknown as Token` is `cannot check a
+conversion from unknown to Token — only a non-generic class has a runtime identity; …` on C and JS
+with main tree `80d320e9`, where the installed `013853dd` built it and printed `0`. `null as unknown
+as Token` stays legal.
 
 ## L57. `src/test/index.ms` does not type-check and runs in no gate lane (LIVE, measured 2026-09-19)
 
