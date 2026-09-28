@@ -106,6 +106,28 @@ test "nullish coalescing evaluates its left operand once" {
 	assert nullishCalls == 1;
 }
 
+class NullishLeaf { v: int32; constructor(v: int32) { this.v = v; } }
+struct NullishSlot { o: int32 | null; leaf: NullishLeaf | null; }
+function nullishThroughRef(ref slot: NullishSlot): int32 { return slot.o ?? -1; }
+function nullishThroughOut(out slot: NullishSlot): int32 { slot = { o: 6, leaf: null }; return slot.o ?? -1; }
+function nullishLeafThroughRef(ref slot: NullishSlot): int32 { return (slot.leaf ?? new NullishLeaf(-1)).v; }
+function nullishBump(ref slot: NullishSlot): void { if (slot.o != null) slot.o = slot.o + 1; }
+
+test "nullish coalescing and optional chaining read a field through a ref, out or boxed binding" {
+	let slot: NullishSlot = { o: 4, leaf: new NullishLeaf(9) };
+	assert nullishThroughRef(slot) == 4;
+	assert nullishLeafThroughRef(slot) == 9;
+	let fresh: NullishSlot = { o: null, leaf: null };
+	assert nullishThroughOut(fresh) == 6;
+	nullishBump(slot);
+	assert (slot.o ?? -1) == 5;
+	assert (slot.leaf?.v ?? -1) == 9;
+	let empty: NullishSlot = { o: null, leaf: null };
+	nullishBump(empty);
+	assert (empty.o ?? -1) == -1;
+	assert nullishLeafThroughRef(empty) == -1;
+}
+
 // =========================================================
 // 3. Exponentiation operator
 // =========================================================
