@@ -358,3 +358,4 @@ import "./bug596ConstCastOutOfRange";
 import "./bug597LocalConstIsConstant";
 import "./bug599UnknownHoldsObjectsOnly";
 import "./bug600UnknownIsManagedTop";
+import "./bug601ObjectDownConversion";
