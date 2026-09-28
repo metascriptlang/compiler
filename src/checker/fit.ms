@@ -7,7 +7,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { convertsImplicitly, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, isPointerShapedForUnknown, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
+import { createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedIntegerConstant } from "./constFold";
@@ -244,7 +244,7 @@ export function wrapInConv(expr: Node, targetType: Type): Node {
 // is inserted — mirrors an explicit `as cstring` cast, for implicit call args.
 export function synthCStringConv(expr: Node, cstr: Type): Node {
 	const tok = createToken(TokenKind.Ident, "", expr.location.line);
-	const conv = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: cstr } as unknown as NodeData, tok);
+	const conv = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: cstr }, tok);
 	conv.nodeType = cstr;
 	conv.flags = conv.flags.incl(NodeFlag.Sem);
 	return conv;
@@ -1191,7 +1191,7 @@ export function convertIntoUnknown(expr: Node, exprType: Type | null, formal: Ty
 	return wrapInConv(expr, slot);
 }
 
-function reportedErrorSince(ctx: CheckerContext, mark: int32): boolean {
+export function reportedErrorSince(ctx: CheckerContext, mark: int32): boolean {
 	for (let i = mark; i < ctx.errors.length; i += 1) {
 		if (ctx.errors[i].severity == Severity.Error) return true;
 	}
@@ -1201,28 +1201,17 @@ function reportedErrorSince(ctx: CheckerContext, mark: int32): boolean {
 function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): Node {
 	if (formal == null || exprType == null) return expr;
 	if (dropsReadonlyView(exprType, formal)) { reportReadonlyDrop(ctx, exprType, formal, expr.location.line, expr.location.column); return expr; }
-	if (formal.kind == TypeKind.Unknown || isUnresolvedType(formal)) {
-		if (isUnknownType(formal)) {
-			let srcT = exprType;
-			let probe = expr;
-			while (probe.kind == NodeKind.TypeAssertion) {
-				probe = (probe.data as TypeAssertionData).asExpr;
-				if (probe != null && probe.nodeType != null) srcT = probe.nodeType;
-			}
-			// Explicit cast chains reinterpret pointer-SIZED scalars (Nim isCastable,
-			// semexprs.nim:320: dstSize >= srcSize / integral); fat values stay illegal.
-			const castReinterpretOk = probe != expr && srcT != null
-				&& (isIntegerType(srcT) || srcT.kind == TypeKind.Boolean || srcT.kind == TypeKind.Char || srcT.kind == TypeKind.Enum);
-			if (!isPointerShapedForUnknown(srcT) && !castReinterpretOk) {
-				addError(ctx, "cannot pass value type " + typeDisplayName(srcT) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", expr.location.line, expr.location.column);
-				return expr;
-			}
-			return convertIntoUnknown(expr, exprType, formal);
+	if (isUnresolvedType(formal)) return expr;
+	const formalHeld = formal.kind == TypeKind.Union ? unwrapRefNullUnion(formal) : formal;
+	if (isUnknownType(formalHeld)) {
+		const refusal = unknownRefusal(exprType);
+		if (refusal != UnknownRefusal.None) {
+			addError(ctx, unknownRefusalText(exprType, refusal), expr.location.line, expr.location.column);
+			return expr;
 		}
-		return expr;
+		const converted = convertIntoUnknown(expr, exprType, formal);
+		if (converted != expr || isUnknownType(formal)) return converted;
 	}
-	const intoNullableUnknown = convertIntoUnknown(expr, exprType, formal);
-	if (intoNullableUnknown != expr) return intoNullableUnknown;
 	if (exprType.kind == TypeKind.Unknown || isUnresolvedType(exprType)) {
 		const collapsed = formal.kind == TypeKind.Union ? unwrapRefNullUnion(formal) : null;
 		const unknownFamilyFormal = formal.kind == TypeKind.GenericParam
@@ -1386,15 +1375,3 @@ function isNullAssertion(node: Node): boolean {
 	return false;
 }
 
-// Unwrap `expr as unknown` chains — returns inner expr if found, null otherwise.
-// General: collapses TS-specific double-cast before downstream handlers run.
-export function unwrapAsUnknown(node: Node): Node | null {
-	if (node == null) return null;
-	if (node.kind == NodeKind.TypeAssertion) {
-		const d = node.data as TypeAssertionData;
-		if (d.asType == "unknown") return d.asExpr;
-		// Nested: `expr as unknown as unknown` (unlikely but safe)
-		return unwrapAsUnknown(d.asExpr);
-	}
-	return null;
-}

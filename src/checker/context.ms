@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { TargetInfo, hostTargetInfo, isPointerShapedForUnknown, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
+import { TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -603,7 +603,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	}
 	// `unknown` receiver: the catch-all — binds only what an `unknown` argument may
 	if (isUnresolvedType(receiverType)) return true;
-	if (receiverType.kind == TypeKind.Unknown) return isPointerShapedForUnknown(objType);
+	if (receiverType.kind == TypeKind.Unknown) return unknownRefusal(objType) == UnknownRefusal.None;
 	// Array methods are Ref-agnostic: T[] (Ref<Array>) and Vec<T> (value Array) share
 	// one element-typed method set. Unwrap the Ref<Array> envelope on both sides so
 	// matching compares element types; codegen dispatches &value vs ptr on the receiver.

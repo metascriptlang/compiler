@@ -2536,6 +2536,47 @@ export function isPointerShapedForUnknown(t: Type | null): boolean {
 	};
 }
 
+export enum UnknownRefusal { None, Address, Value }
+
+export function unknownRefusal(t: Type | null): UnknownRefusal {
+	if (t == null) return UnknownRefusal.None;
+	const inner = skipModifier(t);
+	if (inner == null) return UnknownRefusal.None;
+	const held = inner.kind == TypeKind.Union ? unwrapRefNullUnion(inner) : inner;
+	if (held == null) return UnknownRefusal.Value;
+	return match (held.kind) {
+		TypeKind.Unknown | TypeKind.Null | TypeKind.Ref | TypeKind.GenericParam | TypeKind.Error | TypeKind.Never => UnknownRefusal.None,
+		TypeKind.Ptr | TypeKind.Borrow | TypeKind.CString => UnknownRefusal.Address,
+		_ => UnknownRefusal.Value,
+	};
+}
+
+export function smuggledIntoUnknown(src: Type | null, target: Type | null): Type | null {
+	const s = src != null ? skipModifier(src) : null;
+	const t = target != null ? skipModifier(target) : null;
+	if (s == null || t == null) return null;
+	const tHeld = t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
+	if (isUnknownType(tHeld)) return unknownRefusal(s) != UnknownRefusal.None ? s : null;
+	const sHeld = s.kind == TypeKind.Union ? unwrapRefNullUnion(s) : s;
+	if (isUnknownType(sHeld)) return unknownRefusal(t) != UnknownRefusal.None ? t : null;
+	if (s.kind != TypeKind.Function || t.kind != TypeKind.Function) return null;
+	const inReturn = smuggledIntoUnknown(s.typeReturn, t.typeReturn);
+	if (inReturn != null) return inReturn;
+	for (let i = 0; i < s.typeChildren.length && i < t.typeChildren.length; i += 1) {
+		const inParam = smuggledIntoUnknown(s.typeChildren[i], t.typeChildren[i]);
+		if (inParam != null) return inParam;
+	}
+	return null;
+}
+
+export function unknownRefusalText(t: Type | null, what: UnknownRefusal): string {
+	const shown = typeDisplayName(t);
+	if (what == UnknownRefusal.Address) {
+		return "cannot hold the raw address " + shown + " as unknown — unknown holds objects; keep a C address as Ptr<void>";
+	}
+	return "cannot hold the value type " + shown + " as unknown — only objects (class or interface instances) are unknown";
+}
+
 // unwrapRef — unwrap Ref<T> or Ptr<T> to get inner type (reference: skip pointer types).
 // Caller passes a non-null Type (or pre-narrowed value); typeReturn for Ref/Ptr
 // is guaranteed non-null by createRef/createPtr, so the result is non-null.

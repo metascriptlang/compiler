@@ -22,7 +22,7 @@ import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
 import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
-import { unionHasMemberOfKind, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, isPointerShapedForUnknown, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
+import { unionHasMemberOfKind, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr } from "./checkerCallbacks";
 
@@ -1474,17 +1474,11 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 		}
 		if (argTypes[pi] == null || argTypes[pi] == null) continue;
 		const formal: Type = skipModifier(paramType) ?? paramType;
-		if (isUnknownType(formal)) {
-			let argSrcT = argTypes[pi];
-			let argProbe = args[pi];
-			while (argProbe.kind == NodeKind.TypeAssertion) {
-				argProbe = (argProbe.data as TypeAssertionData).asExpr;
-				if (argProbe != null && argProbe.nodeType != null) argSrcT = argProbe.nodeType;
-			}
-			const argCastOk = argProbe != args[pi] && argSrcT != null
-				&& (isIntegerType(argSrcT) || argSrcT.kind == TypeKind.Boolean || argSrcT.kind == TypeKind.Char || argSrcT.kind == TypeKind.Enum);
-			if (!isPointerShapedForUnknown(argSrcT) && !argCastOk) {
-				addError(ctx, argLabelCap(pi, hasReceiver) + ": cannot pass value type " + typeDisplayName(argSrcT) + " as unknown — no void* representation (box it or pass a Ref/Ptr)", node.location.line, node.location.column);
+		const formalHeld = formal.kind == TypeKind.Union ? unwrapRefNullUnion(formal) : formal;
+		if (isUnknownType(formalHeld)) {
+			const refusal = unknownRefusal(argTypes[pi]);
+			if (refusal != UnknownRefusal.None) {
+				addError(ctx, argLabelCap(pi, hasReceiver) + ": " + unknownRefusalText(argTypes[pi], refusal), node.location.line, node.location.column);
 			}
 		} else if (isUnknownType(argTypes[pi]) && formal.kind != TypeKind.Unknown && !isUnresolvedType(formal) && formal.kind != TypeKind.GenericParam) {
 			const collapsedParam = formal.kind == TypeKind.Union ? unwrapRefNullUnion(formal) : null;
@@ -2805,7 +2799,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 			specific.push(e);
 		}
 		if (specific.length > 0 && specific.length < exts.length) { exts = specific; }
-		if (!isPointerShapedForUnknown(objType)) {
+		if (unknownRefusal(objType) != UnknownRefusal.None) {
 			const shaped: ExtensionMethod[] = [];
 			for (const e of exts) {
 				const ft = getExtFnType(e);

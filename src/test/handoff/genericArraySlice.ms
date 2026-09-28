@@ -51,8 +51,8 @@ test "slice on a class array" {
 
 test "slice on unknown, boolean and nested arrays" {
 	let us: unknown[] = [];
-	us.push(1 as unknown);
-	us.push(2 as unknown);
+	us.push(new GsBox(1));
+	us.push(new GsBox(2));
 	assert us.slice(0, 1).length == 1, "unknown";
 
 	let bs: boolean[] = [];
