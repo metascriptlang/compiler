@@ -67,3 +67,21 @@ test "bug601: JS tests the same conversion with instanceof and the same message"
 	assert r.value.contains("instanceof");
 	assert r.value.contains("invalid object conversion: ");
 }
+
+const aliases = "type Native = NativeNode;\ntype Base = BaseNode;\n";
+const throughAliases = "function f(u: unknown): string { return (u as Native).view; }\n"
+	+ "function g(n: NativeNode): Base { return n as Base; }\nconsole.log(f(new NativeNode()) + g(new NativeNode()).id.toString());";
+
+test "bug601: an alias of a class is that class as a target, down and up" {
+	const r = compileToC(nodes + aliases + throughAliases);
+	assert r.ok;
+	const first = r.value.indexOf("msObjDownConv(");
+	assert first >= 0;
+	assert r.value.indexOf("msObjDownConv(", first + 1) < 0, "the upcast through an alias is not tested";
+}
+
+test "bug601: JS tests an alias of a class against the class" {
+	const r = compileToJS(nodes + aliases + throughAliases);
+	assert r.ok;
+	assert r.value.contains("instanceof NativeNode");
+}
