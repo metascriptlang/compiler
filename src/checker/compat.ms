@@ -719,6 +719,22 @@ function isAnonLiteralName(name: string): boolean {
 	return name.length > 6 && name.slice(0, 6) == "__anon";
 }
 
+export function isValueStructDecl(t: Type | null): boolean {
+	if (t == null) return false;
+	return t.sym != null && t.sym.symbolType != null && t.sym.symbolType.kind == TypeKind.Struct;
+}
+
+export function valueStructBaseDepth(source: Type, target: Type): int32 {
+	let base = source.typeExtra;
+	let depth = 1;
+	while (isValueStructDecl(base) && depth <= 64) {
+		if (sameNominal(base as Type, target)) return depth;
+		base = (base as Type).typeExtra;
+		depth += 1;
+	}
+	return 0;
+}
+
 // Object assignability: nominal first, then structural (source has all target properties)
 function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	// Identity: same object → trivially assignable
@@ -731,6 +747,7 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	// runs the cast silently. Annotating at the literal is the supported path.
 	if (isAnonStructAdoption(source, target)) return true;
 	if (isAnonLiteralName(source.typeName) && target.typeName != "" && !isAnonLiteralName(target.typeName)) return false;
+	if (isValueStructDecl(target)) return valueStructBaseDepth(source, target) > 0;
 	// Pin source/target fields to locals — the binder's flow narrowing on the
 	// `source: Type | null` parameter doesn't always propagate into nested
 	// for-of bodies (each loop iteration walks the narrowing chain anew).

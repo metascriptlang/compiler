@@ -13,7 +13,7 @@ import { markUsedIn, CheckerContext, findExtension, getExtTypeName, getExtReceiv
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
-import { isAssignable as isAssignableCheck } from "./compat";
+import { isAssignable as isAssignableCheck, isValueStructDecl } from "./compat";
 import { monoBaseName, monoTypeKey } from "../monomorphize/registry";
 
 function anyHasGenericParams(types: Type[]): boolean {
@@ -1725,6 +1725,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.typeNames = mergedNames;
 	target.typeChildren = mergedTypes;
 	target.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
+	if (sym.symbolType.kind == TypeKind.Struct && parentTypes.length == 1 && isValueStructDecl(parentTypes[0])) target.typeExtra = parentTypes[0];
 	for (const pt of mergedTypes) { propagateToOwner(target, pt); }
 	node.nodeType = sym.symbolType;
 	// Record each OWN interface field DEF for symbol graph (inherited fields
