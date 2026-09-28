@@ -335,10 +335,15 @@ For a value type that meant hashing the ADDRESS: two sets equal by value hashed 
 every `HashMap<BitSet<E>, V>` lookup missed silently while `size` still counted the inserts. The
 emitted C showed it plainly as `hash__…_u3(&s)`.
 
-The same rule already applied to an `unknown` PARAMETER (`isPointerShapedForUnknown`, the error
-`cannot pass value type … as unknown — no void* representation`); it now applies to an extension
-RECEIVER too, and only when another candidate remains, so every single-candidate call is
-unchanged. Structs are still hashed by address where no better candidate exists.
+One rule governs an `unknown` PARAMETER and an extension RECEIVER, `unknownRefusal`
+(`src/checker/types.ms`). A struct `s: S` passed to an `unknown` parameter is refused with
+`cannot hold the value type S as unknown — only objects (class or interface instances) are
+unknown`. A value-typed receiver never
+binds the catch-all, even as the only candidate: with only `tag(this u: unknown)` declared,
+`p.tag()` on a struct is `Property 'tag' does not exist on type 'P'`. A struct hashes by value:
+equal `{ x: int32 }` and nested `{ p: P; f: number }` values hash equally, different ones do not.
+Measured 2026-09-29 on C: the message on main tree `80d320e9`, the receiver and the hashes on that
+tree and on the installed `013853dd` alike.
 
 ## L22. `new X<A<B>>` — a `>>` closing two type-argument lists types the instance as `Inferred` (LIVE, measured 2026-09-13)
 
