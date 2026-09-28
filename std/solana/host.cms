@@ -1,0 +1,347 @@
+@include("runtime/solana/solana.h");
+
+import {
+	AccountMeta,
+	Clock,
+	ProgramError,
+	Pubkey,
+	Seeds,
+	account,
+	clock,
+	failWith,
+	instructionData,
+	logU64,
+	transfer,
+	writableAccount,
+} from "./index";
+
+extern function msSolHostInput(size: uint64): uint64;
+extern function msSolHostEnter(input: uint64): void;
+extern function msSolHostResult(): uint64;
+extern function msSolHostFaultCodeOf(): uint64;
+extern function msSolHostFaultMessage(): string;
+extern function msSolHostLogTotal(): uint64;
+extern function msSolHostLogAt(index: uint64): string;
+extern function msSolHostInvocationTotal(): uint64;
+extern function msSolHostInvocationAt(index: uint64): uint64;
+extern function msSolHostSetClock(
+	slot: uint64,
+	epochStart: uint64,
+	epoch: uint64,
+	leaderEpoch: uint64,
+	unixTime: uint64,
+): void;
+extern function msSolLoadU8(address: uint64): uint8;
+extern function msSolLoadU64(address: uint64): uint64;
+extern function msSolStoreU8(address: uint64, value: uint8): void;
+extern function msSolStoreU64(address: uint64, value: uint64): void;
+
+export struct HostAccount {
+	key: Pubkey;
+	owner: Pubkey;
+	lamports: uint64;
+	data: uint8[];
+	signer: boolean;
+	writable: boolean;
+	executable: boolean;
+}
+
+export struct HostRun {
+	result: uint64;
+	fault: string;
+}
+
+export struct HostInvocation {
+	program: Pubkey;
+	accounts: AccountMeta[];
+	data: uint8[];
+	signers: uint64;
+}
+
+function storeKey(address: uint64, key: Pubkey): void {
+	msSolStoreU64(address, key.word0);
+	msSolStoreU64(address + 8, key.word1);
+	msSolStoreU64(address + 16, key.word2);
+	msSolStoreU64(address + 24, key.word3);
+}
+
+function loadKey(address: uint64): Pubkey {
+	return {
+		word0: msSolLoadU64(address),
+		word1: msSolLoadU64(address + 8),
+		word2: msSolLoadU64(address + 16),
+		word3: msSolLoadU64(address + 24),
+	};
+}
+
+function flag(value: boolean): uint8 {
+	if (value) { return 1; }
+	return 0;
+}
+
+function firstOccurrence(accounts: HostAccount[], index: int32): int32 {
+	for (let earlier = 0; earlier < index; earlier++) {
+		if (accounts[earlier].key.equals(accounts[index].key)) { return earlier; }
+	}
+	return index;
+}
+
+function paddedLength(length: uint64): uint64 {
+	return (length + 7) / 8 * 8;
+}
+
+function serializedLength(accounts: HostAccount[], data: Span<uint8>): uint64 {
+	let size: uint64 = 8;
+	for (let index = 0; index < accounts.length; index++) {
+		if (firstOccurrence(accounts, index) != index) {
+			size = size + 8;
+		} else {
+			size = size + 88 + paddedLength(accounts[index].data.length as uint64) + 10240 + 8;
+		}
+	}
+	return size + 8 + (data.length as uint64) + 32;
+}
+
+function serialized(program: Pubkey, accounts: HostAccount[], data: Span<uint8>): uint64 {
+	const input = msSolHostInput(serializedLength(accounts, data));
+	msSolStoreU64(input, accounts.length as uint64);
+	let cursor = input + 8;
+	const addresses: uint64[] = [];
+	for (let index = 0; index < accounts.length; index++) {
+		const first = firstOccurrence(accounts, index);
+		addresses.push(cursor);
+		if (first != index) {
+			msSolStoreU8(cursor, first as uint8);
+			cursor = cursor + 8;
+			continue;
+		}
+		const holder = accounts[index];
+		msSolStoreU8(cursor, 0xff);
+		msSolStoreU8(cursor + 1, flag(holder.signer));
+		msSolStoreU8(cursor + 2, flag(holder.writable));
+		msSolStoreU8(cursor + 3, flag(holder.executable));
+		storeKey(cursor + 8, holder.key);
+		storeKey(cursor + 40, holder.owner);
+		msSolStoreU64(cursor + 72, holder.lamports);
+		msSolStoreU64(cursor + 80, holder.data.length as uint64);
+		for (let offset = 0; offset < holder.data.length; offset++) {
+			msSolStoreU8(cursor + 88 + (offset as uint64), holder.data[offset]);
+		}
+		cursor = cursor + 88 + paddedLength(holder.data.length as uint64) + 10240;
+		msSolStoreU64(cursor, 0xffffffffffffffff);
+		cursor = cursor + 8;
+	}
+	msSolStoreU64(cursor, data.length as uint64);
+	for (let offset = 0; offset < data.length; offset++) {
+		msSolStoreU8(cursor + 8 + (offset as uint64), data[offset]);
+	}
+	storeKey(cursor + 8 + (data.length as uint64), program);
+	return input;
+}
+
+function readBack(accounts: HostAccount[], input: uint64, lengths: uint64[]): void {
+	let cursor = input + 8;
+	for (let index = 0; index < accounts.length; index++) {
+		const first = firstOccurrence(accounts, index);
+		if (first != index) {
+			accounts[index] = {
+				...accounts[index],
+				owner: accounts[first].owner,
+				lamports: accounts[first].lamports,
+				data: accounts[first].data,
+			};
+			cursor = cursor + 8;
+			continue;
+		}
+		const length = msSolLoadU64(cursor + 80);
+		const bytes: uint8[] = [];
+		for (let offset: uint64 = 0; offset < length; offset++) {
+			bytes.push(msSolLoadU8(cursor + 88 + offset));
+		}
+		accounts[index] = {
+			...accounts[index],
+			owner: loadKey(cursor + 40),
+			lamports: msSolLoadU64(cursor + 72),
+			data: bytes,
+		};
+		cursor = cursor + 88 + paddedLength(lengths[index]) + 10240 + 8;
+	}
+}
+
+export function run(
+	program: Pubkey,
+	accounts: HostAccount[],
+	data: Span<uint8>,
+	entry: () => void,
+): HostRun {
+	const lengths: uint64[] = [];
+	for (const holder of accounts) { lengths.push(holder.data.length as uint64); }
+	const input = serialized(program, accounts, data);
+	msSolHostEnter(input);
+	entry();
+	readBack(accounts, input, lengths);
+	const fault = msSolHostFaultCodeOf() != 0 ? msSolHostFaultMessage() : "";
+	return { result: msSolHostResult(), fault: fault };
+}
+
+export function logs(): string[] {
+	const lines: string[] = [];
+	for (let index: uint64 = 0; index < msSolHostLogTotal(); index++) {
+		lines.push(msSolHostLogAt(index));
+	}
+	return lines;
+}
+
+export function invocations(): HostInvocation[] {
+	const found: HostInvocation[] = [];
+	for (let index: uint64 = 0; index < msSolHostInvocationTotal(); index++) {
+		const record = msSolHostInvocationAt(index);
+		const metaCount = msSolLoadU64(record + 32);
+		const metas = msSolLoadU64(record + 40);
+		const metaList: AccountMeta[] = [];
+		for (let meta: uint64 = 0; meta < metaCount; meta++) {
+			const entry = metas + meta * 34;
+			metaList.push({
+				key: loadKey(entry),
+				writable: msSolLoadU8(entry + 32) != 0,
+				signer: msSolLoadU8(entry + 33) != 0,
+			});
+		}
+		const dataLength = msSolLoadU64(record + 48);
+		const dataAddress = msSolLoadU64(record + 56);
+		const bytes: uint8[] = [];
+		for (let offset: uint64 = 0; offset < dataLength; offset++) {
+			bytes.push(msSolLoadU8(dataAddress + offset));
+		}
+		found.push({
+			program: loadKey(record),
+			accounts: metaList,
+			data: bytes,
+			signers: msSolLoadU64(record + 64),
+		});
+	}
+	return found;
+}
+
+export function setClock(clock: Clock): void {
+	msSolHostSetClock(
+		clock.slot,
+		clock.epochStartTimestamp as uint64,
+		clock.epoch,
+		clock.leaderScheduleEpoch,
+		clock.unixTimestamp as uint64,
+	);
+}
+
+function keyOf(word: uint64): Pubkey {
+	return { word0: word, word1: 0, word2: 0, word3: 0 };
+}
+
+function holderOf(word: uint64, data: uint8[], signer: boolean, writable: boolean): HostAccount {
+	return {
+		key: keyOf(word),
+		owner: keyOf(7),
+		lamports: 1000,
+		data: data,
+		signer: signer,
+		writable: writable,
+		executable: false,
+	};
+}
+
+function counterStep(): Result<uint64, ProgramError> {
+	const target = try writableAccount(0);
+	const amount = try instructionData().readU64(0);
+	const data = target.data();
+	const next = (try data.readU64(0)) + amount;
+	const _written = try data.writeU64(0, next);
+	logU64(next);
+	return Result.ok(next);
+}
+
+function addToCounter(): void {
+	const result = counterStep();
+	if (!result.ok) { failWith(result.error); }
+}
+
+function secondStep(): Result<uint64, ProgramError> {
+	const first = try account(0);
+	const second = try writableAccount(1);
+	if (first.address != second.address) { return Result.err(ProgramError.invalidArgument()); }
+	return second.data().writeU64(0, 42);
+}
+
+function writeThroughSecond(): void {
+	const result = secondStep();
+	if (!result.ok) { failWith(result.error); }
+}
+
+function logSlot(): void {
+	logU64(clock().slot);
+}
+
+function payStep(): Result<uint64, ProgramError> {
+	const source = try account(0);
+	const destination = try account(1);
+	return transfer(source, destination, 10, Seeds.none());
+}
+
+function payTen(): void {
+	const result = payStep();
+	if (!result.ok) { failWith(result.error); }
+}
+
+test "a run writes the program's account changes back and records its logs" {
+	const accounts: HostAccount[] = [holderOf(1, [5, 0, 0, 0, 0, 0, 0, 0], false, true)];
+	const amount: uint8[] = [3, 0, 0, 0, 0, 0, 0, 0];
+	const outcome = run(keyOf(9), accounts, amount, addToCounter);
+	assert outcome.result == 0;
+	assert outcome.fault == "";
+	assert accounts[0].data[0] == 8;
+	assert logs()[0] == "Program log: 0x0, 0x0, 0x0, 0x0, 0x8";
+}
+
+test "a failing program reports the error code it exits with" {
+	const accounts: HostAccount[] = [holderOf(1, [5, 0, 0, 0, 0, 0, 0, 0], false, true)];
+	const short: uint8[] = [3];
+	const outcome = run(keyOf(9), accounts, short, addToCounter);
+	assert outcome.result == ProgramError.accountDataTooSmall().code;
+	assert accounts[0].data[0] == 5;
+}
+
+test "a repeated account is serialized once and both indexes reach it" {
+	const accounts: HostAccount[] = [
+		holderOf(1, [0, 0, 0, 0, 0, 0, 0, 0], false, true),
+		holderOf(1, [0, 0, 0, 0, 0, 0, 0, 0], false, true),
+	];
+	const empty: uint8[] = [];
+	const outcome = run(keyOf(9), accounts, empty, writeThroughSecond);
+	assert outcome.result == 0;
+	assert accounts[0].data[0] == 42;
+	assert accounts[1].data[0] == 42;
+}
+
+test "a CPI is recorded with its program, accounts and data" {
+	const accounts: HostAccount[] = [holderOf(1, [], true, true), holderOf(2, [], false, true)];
+	const empty: uint8[] = [];
+	const outcome = run(keyOf(9), accounts, empty, payTen);
+	assert outcome.result == 0;
+	const calls = invocations();
+	assert calls.length == 1;
+	assert calls[0].program.isZero();
+	assert calls[0].accounts.length == 2;
+	assert calls[0].accounts[0].key.equals(keyOf(1));
+	assert calls[0].accounts[0].signer && calls[0].accounts[0].writable;
+	assert !calls[0].accounts[1].signer && calls[0].accounts[1].writable;
+	assert calls[0].data.length == 12;
+	assert calls[0].data[0] == 2 && calls[0].data[4] == 10;
+}
+
+test "a program reads the clock the test sets" {
+	setClock({ slot: 77, epochStartTimestamp: 1, epoch: 3, leaderScheduleEpoch: 4, unixTimestamp: 5 });
+	const accounts: HostAccount[] = [];
+	const empty: uint8[] = [];
+	const outcome = run(keyOf(9), accounts, empty, logSlot);
+	assert outcome.result == 0;
+	assert logs()[0] == "Program log: 0x0, 0x0, 0x0, 0x0, 0x4d";
+}
