@@ -18,7 +18,7 @@ import {
 } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
 import { walkExpandBlocks, walkNode, containsExprKind, isFuncBoundary } from "../walker";
-import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount, parseInput, makeCtx, getStmts } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 
 let _spillCtx: TransformContext = null as unknown as TransformContext;
 
@@ -483,3 +483,15 @@ test "an assert operand await spills before the assert" { assert stmtCountAfter(
 test "an exported initializer await spills before the export" { assert stmtCountAfter("export const v = (await g()) + 1;", lowerAwaitSpill) == 2; }
 
 test "a statement without await is unchanged" { assert stmtCountAfter("const v = a() + b();", lowerAwaitSpill) == 1; }
+
+test "an await argument spills out of the call" { assert stmtCountAfter("f(await g());", lowerAwaitSpill) == 2; }
+
+test "an await on the left of && is awaited before the guard" { assert firstStmtKindAfter("const v = await g() && a;", lowerAwaitSpill) == NodeKind.VariableDecl; }
+
+test "an await in a ternary arm runs under a guard" { assert stmtCountAfter("const v = c ? await g() : 7;", lowerAwaitSpill) == 3; }
+
+test "an await in a ternary condition spills before the branches" { assert firstStmtKindAfter("const v = (await g()) ? 1 : 2;", lowerAwaitSpill) == NodeKind.VariableDecl; }
+
+test "an if condition await spills before the if" { assert firstStmtKindAfter("if (await g()) { f(); }", lowerAwaitSpill) == NodeKind.VariableDecl; }
+
+test "an assignment from an await keeps its target" { assert firstStmtKindAfter("x = await g() + 1;", lowerAwaitSpill) == NodeKind.VariableDecl; }

@@ -11,14 +11,14 @@ export function pop<T>(this arr: T[]): T {
 	unreachable;
 }
 export extern function shift<T>(this arr: T[]): T from "#.shift()";
-function atIndex(n: number, idx: number): int32 {
-	@emit(`var x = Math.trunc(${idx}), i = x < 0 ? ${n} + x : x;
-	if (!(i >= 0 && i < ${n})) throw new Error("index " + x + " out of bounds (length " + ${n} + ")");
+function checkedIndex<T>(this arr: T[], idx: number): int64 {
+	@emit(`var n = ${arr}.length, x = Math.trunc(${idx}), i = x < 0 ? n + x : x;
+	if (!(i >= 0 && i < n)) throw new Error("index " + x + " out of bounds (length " + n + ")");
 	return i;`);
 	unreachable;
 }
 export function at<T>(this arr: T[], idx: number): T {
-	return arr[atIndex(arr.length, idx)];
+	return arr[arr.checkedIndex(idx)];
 }
 export extern function indexOf<T>(this arr: T[], value: T): number from "#.indexOf(#)";
 export extern function includes<T>(this arr: T[], value: T): boolean from "#.includes(#)";

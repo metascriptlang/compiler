@@ -498,8 +498,8 @@ _Noreturn static inline void msRaiseRangeErrorF(double val, int64_t lo, int64_t 
 }
 
 #define msArrayAccess(a, i) (*({ \
-    int32_t __idx = (i); \
-    if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
+    int64_t __idx = (i); \
+    if ((uint64_t)__idx >= (uint64_t)(a).len) msRaiseIndexError(__idx, (a).len); \
     &((a).p->data[__idx]); \
 }))
 #define msNumberArrayAccess msArrayAccess
@@ -508,21 +508,21 @@ _Noreturn static inline void msRaiseRangeErrorF(double val, int64_t lo, int64_t 
 #define msUint8ArrayAccess  msArrayAccess
 
 #define msSizedArrayAccess(a, i, n) (*({ \
-    int32_t __idx = (i); \
-    if ((uint32_t)__idx >= (uint32_t)(n)) msRaiseIndexError(__idx, (n)); \
+    int64_t __idx = (i); \
+    if ((uint64_t)__idx >= (uint64_t)(n)) msRaiseIndexError(__idx, (n)); \
     &((a).data[__idx]); \
 }))
 
 #define msSpanAccess(a, i) (*({ \
-    int32_t __idx = (i); \
-    if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
+    int64_t __idx = (i); \
+    if ((uint64_t)__idx >= (uint64_t)(a).len) msRaiseIndexError(__idx, (a).len); \
     &((a).data[__idx]); \
 }))
 
-#define msArrayAccessUnchecked(a, i) ((a).p->data[(int32_t)(i)])
+#define msArrayAccessUnchecked(a, i) ((a).p->data[(int64_t)(i)])
 #define msRefArrayAccessUnchecked msArrayAccessUnchecked
-#define msSizedArrayAccessUnchecked(a, i, n) ((a).data[(int32_t)(i)])
-#define msSpanAccessUnchecked(a, i) ((a).data[(int32_t)(i)])
+#define msSizedArrayAccessUnchecked(a, i, n) ((a).data[(int64_t)(i)])
+#define msSpanAccessUnchecked(a, i) ((a).data[(int64_t)(i)])
 
 #define msStringCharAccess(s, i) msStringCharAt((s), (i))
 

@@ -710,7 +710,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	// in C. Blocking Unknown here forced callers to fall back to a wrong cached
 	// instance — see nullableFunction.ms regression coverage.
 	for (const ct of concreteTypes) {
-		if (ct == null || ct.kind == TypeKind.GenericParam) {
+		if (ct == null || hasGenericParams(ct)) {
 			return null as unknown as Symbol;
 		}
 	}
