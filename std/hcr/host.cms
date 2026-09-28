@@ -2,23 +2,23 @@ import { argv, exit } from "std/process";
 
 @include("runtime/hcrEngine.h");
 
-extern function hcrOpen(path: cstring): unknown from "msHcrImageOpen";
-extern function hcrSymbol(handle: unknown, name: cstring): unknown from "msHcrImageSymbol";
-extern function hcrIsNull(value: unknown): int32 from "msHcrImageIsNull";
+extern function hcrOpen(path: cstring): Ptr<void> from "msHcrImageOpen";
+extern function hcrSymbol(handle: Ptr<void>, name: cstring): Ptr<void> from "msHcrImageSymbol";
+extern function hcrIsNull(value: Ptr<void>): int32 from "msHcrImageIsNull";
 extern function hcrFailure(): string from "msHcrFailureText";
 extern function hcrImageExt(): string from "msHcrImageExt";
 extern function hcrCopyImage(from: cstring, to: cstring): int32 from "msHcrCopyImage";
 extern function hcrMakeDir(path: cstring): int32 from "msHcrMakeDir";
 extern function hcrProcessId(): uint32 from "msHcrProcessId";
-extern function hcrLaunch(raw: unknown, dir: cstring, stem: cstring): void from "msHcrImageCallLaunch";
-extern function hcrStart(raw: unknown): int32 from "msHcrImageCallProbe";
+extern function hcrLaunch(raw: Ptr<void>, dir: cstring, stem: cstring): void from "msHcrImageCallLaunch";
+extern function hcrStart(raw: Ptr<void>): int32 from "msHcrImageCallProbe";
 
 function fail(message: string): void {
 	console.log(`HCR-HOST ${message}`);
 	exit(1);
 }
 
-function required(handle: unknown, name: string): unknown {
+function required(handle: Ptr<void>, name: string): Ptr<void> {
 	const raw = hcrSymbol(handle, name);
 	if (hcrIsNull(raw) != 0) fail(`the core image does not export ${name}`);
 	return raw;

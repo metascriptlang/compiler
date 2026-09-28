@@ -90,7 +90,7 @@ export function hashWangYi1(x: uint64): int64 {
 	return h;
 }
 
-extern function msPtrBits(p: unknown): uint64;
+extern function msPtrBits(p: Ptr<void>): uint64;
 extern function msFloat64Bits(d: number): uint64;
 
 export function hashNumber(n: number): int64 { return hashWangYi1(msFloat64Bits(n + 0.0)); }
@@ -126,8 +126,8 @@ test "hashWangYi1 matches a 128-bit C product" {
 test "reference hashing routes through the one mixing site" {
 	const a = new Map<number, string>();
 	const b = new Map<number, string>();
-	assert a.hash() == hashWangYi1(msPtrBits(a));
-	assert b.hash() == hashWangYi1(msPtrBits(b));
+	assert a.hash() == hashWangYi1(msPtrBits(a as Ptr<void>));
+	assert b.hash() == hashWangYi1(msPtrBits(b as Ptr<void>));
 	assert a.hash() == a.hash(), "stable for one identity";
 	const seen = new Map<unknown, string>();
 	seen.set(a, "A");
@@ -155,7 +155,7 @@ export function hash(this i: uint8): int64 { return hashWangYi1(i as uint64); }
 export function hash(this i: uint16): int64 { return hashWangYi1(i as uint64); }
 export function hash(this i: uint32): int64 { return hashWangYi1(i as uint64); }
 export function hash(this u: uint64): int64 { return hashWangYi1(u); }
-export function hash(this u: unknown): int64 { return hashWangYi1(msPtrBits(u)); }
+export function hash(this u: unknown): int64 { return hashWangYi1(msPtrBits(u as Ptr<void>)); }
 
 test "scalar keys hash by ordinal value and float bits" {
 	const low = 7 as uint64;

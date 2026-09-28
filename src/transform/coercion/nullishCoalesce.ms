@@ -5,7 +5,7 @@
 // Note: evaluates LHS twice for complex expressions (same limitation as reference).
 
 import { Node, NodeKind, BinaryExprData, TypeAssertionData, TypeKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
-import { isMaybeType, unwrapMaybeType, isNumeric, isBoolType, isStringLike, unknownType } from "../../checker/types";
+import { isMaybeType, unwrapMaybeType, isNumeric, isBoolType, isStringLike, unknownType, createPtr, voidType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeNull, makeBinary, makeConditional, makeMember } from "../util";
@@ -26,7 +26,7 @@ function nullishPresence(left: Node, loc: SourceLocation, ctx: TransformContext)
 		checked.nodeType = unknownType();
 	} else if (left.nodeType != null && isStringLike(left.nodeType)) {
 		checked = makeMember(left, "p", loc);
-		checked.nodeType = unknownType();
+		checked.nodeType = createPtr(voidType());
 	}
 	return makeBinary(checked, "!==", makeNull(loc), loc);
 }

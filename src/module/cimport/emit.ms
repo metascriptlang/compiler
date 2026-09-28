@@ -41,8 +41,7 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 		const mapped = mapRuntimeType(t.typedefName);
 		if (mapped != "") return mapped;
 		// Opaque types from heuristic (unknown C types without #include)
-		// map to unknown (void* in C) since we don't know if they're pointers or structs
-		if (!t.isComplete) return "unknown";
+		if (!t.isComplete) return "Ptr<void>";
 		return t.typedefName;
 	}
 	return match (t.kind) {

@@ -9,24 +9,24 @@ extern function msHcrStageBegin(): void;
 extern function msHcrStageEnd(): void;
 extern function msHcrStaged(moduleId: cstring): int32;
 extern function msHcrCommit(moduleId: cstring): void;
-extern function msHcrCallText(raw: unknown): string;
-extern function msHcrImportCount(raw: unknown): int32;
-extern function msHcrImportId(raw: unknown, index: int32): string;
-extern function msHcrImportKey(raw: unknown, index: int32): string;
+extern function msHcrCallText(raw: Ptr<void>): string;
+extern function msHcrImportCount(raw: Ptr<void>): int32;
+extern function msHcrImportId(raw: Ptr<void>, index: int32): string;
+extern function msHcrImportKey(raw: Ptr<void>, index: int32): string;
 extern function msHcrFileIdentity(path: cstring): uint64;
 extern function msHcrCopyImage(from: cstring, to: cstring): int32;
 extern function msHcrMakeDir(path: cstring): int32;
 extern function msHcrProcessId(): uint32;
-extern function hcrOpen(path: cstring): unknown from "msHcrImageOpen";
-extern function hcrSymbol(handle: unknown, name: cstring): unknown from "msHcrImageSymbol";
-extern function hcrClose(handle: unknown): int32 from "msHcrImageClose";
+extern function hcrOpen(path: cstring): Ptr<void> from "msHcrImageOpen";
+extern function hcrSymbol(handle: Ptr<void>, name: cstring): Ptr<void> from "msHcrImageSymbol";
+extern function hcrClose(handle: Ptr<void>): int32 from "msHcrImageClose";
 extern function msHcrFailureText(): string;
 extern function msHcrImageExt(): string;
-extern function hcrIsNull(value: unknown): int32 from "msHcrImageIsNull";
-extern function hcrNull(): unknown from "msHcrImageNull";
-extern function hcrCallHandover(raw: unknown, state: unknown): unknown from "msHcrImageCallHandover";
-extern function hcrCallInit(raw: unknown): void from "msHcrImageCallInit";
-extern function hcrCallStatus(raw: unknown): int32 from "msHcrImageCallProbe";
+extern function hcrIsNull(value: Ptr<void>): int32 from "msHcrImageIsNull";
+extern function hcrNull(): Ptr<void> from "msHcrImageNull";
+extern function hcrCallHandover(raw: Ptr<void>, state: Ptr<void>): Ptr<void> from "msHcrImageCallHandover";
+extern function hcrCallInit(raw: Ptr<void>): void from "msHcrImageCallInit";
+extern function hcrCallStatus(raw: Ptr<void>): int32 from "msHcrImageCallProbe";
 extern function msHcrRollback(moduleId: cstring): void;
 extern function msHcrRestoreTypeInfos(moduleId: cstring): void;
 extern function msDrainUntilIdle(): void;
@@ -47,14 +47,14 @@ export struct HcrReloadResult {
 }
 
 interface HcrImage {
-	handle: unknown;
+	handle: Ptr<void>;
 	moduleId: string;
 	key: string;
 	importIds: string[];
 	importKeys: string[];
 	typeNames: string[];
 	typeKeys: string[];
-	state: unknown;
+	state: Ptr<void>;
 }
 
 interface HcrModule {
@@ -126,11 +126,11 @@ function fatal(message: string): void {
 	exit(1);
 }
 
-function symbolOf(image: unknown, name: string): unknown {
+function symbolOf(image: Ptr<void>, name: string): Ptr<void> {
 	return hcrSymbol(image, name);
 }
 
-function describe(handle: unknown): HcrImage {
+function describe(handle: Ptr<void>): HcrImage {
 	const idRaw = symbolOf(handle, "HcrModuleId000");
 	const keyRaw = symbolOf(handle, "HcrAbiKey000");
 	const importsRaw = symbolOf(handle, "HcrImports000");
@@ -205,13 +205,13 @@ function discover(moduleId: string, source: string, order: HcrCandidate[]): stri
 	return "";
 }
 
-function required(image: HcrImage, name: string): unknown {
+function required(image: HcrImage, name: string): Ptr<void> {
 	const raw = symbolOf(image.handle, name);
 	if (hcrIsNull(raw) != 0) fatal(`module '${image.moduleId}' does not export ${name}`);
 	return raw;
 }
 
-function handover(image: HcrImage, state: unknown): unknown {
+function handover(image: HcrImage, state: Ptr<void>): Ptr<void> {
 	const raw = symbolOf(image.handle, "_hcr_handover");
 	if (hcrIsNull(raw) != 0) return hcrNull();
 	return hcrCallHandover(raw, state);
@@ -362,7 +362,7 @@ export function reload(): HcrReloadResult {
 		}
 	}
 
-	const states: unknown[] = [];
+	const states: Ptr<void>[] = [];
 	for (const item of candidates) {
 		const previous = item.isNew ? hcrNull() : item.module.image.state;
 		const state = handover(item.image, previous);
