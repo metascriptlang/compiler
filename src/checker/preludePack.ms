@@ -1083,7 +1083,7 @@ function buildNodeData(kind: NodeKind, f: string[], nodes: Node[], types: Type[]
 	if (kind == NodeKind.ObjectPattern) return { patternProps: parseNodeArr(f[0], nodes), hasRestProp: f[1] == "1" } as NodeData;
 	if (kind == NodeKind.ObjectPatternProp) return { propKey: unescapeP(f[0]), propAlias: nd(f[1].parseInt() as int32, nodes) as Node, propDefault: nd(f[2].parseInt() as int32, nodes) } as NodeData;
 	if (kind == NodeKind.DestructuringDecl) return { destrPattern: nd(f[0].parseInt() as int32, nodes) as Node, destrInit: nd(f[1].parseInt() as int32, nodes) as Node, destrIsConst: f[2] == "1" } as NodeData;
-	if (kind == NodeKind.VariableDecl) return { declName: unescapeP(f[0]), declType: unescapeP(f[1]), initializer: nd(f[2].parseInt() as int32, nodes) as Node, declKind: f[3].parseInt() as int32 as unknown as DeclKind, nameLocation: parseLoc(f[4]) } as NodeData;
+	if (kind == NodeKind.VariableDecl) return { declName: unescapeP(f[0]), declType: unescapeP(f[1]), initializer: nd(f[2].parseInt() as int32, nodes) as Node, declKind: f[3].parseInt() as int32 as DeclKind, nameLocation: parseLoc(f[4]) } as NodeData;
 	if (kind == NodeKind.IfStmt) return { condition: nd(f[0].parseInt() as int32, nodes) as Node, consequent: nd(f[1].parseInt() as int32, nodes) as Node, alternate: nd(f[2].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.WhileStmt) return { whileCondition: nd(f[0].parseInt() as int32, nodes) as Node, whileBody: nd(f[1].parseInt() as int32, nodes) as Node, whileLabel: unescapeP(f[2]) } as NodeData;
 	if (kind == NodeKind.ForStmt) return { forInit: nd(f[0].parseInt() as int32, nodes) as Node, forCondition: nd(f[1].parseInt() as int32, nodes) as Node, forUpdate: nd(f[2].parseInt() as int32, nodes) as Node, forBody: nd(f[3].parseInt() as int32, nodes) as Node } as NodeData;
@@ -1116,7 +1116,7 @@ function buildNodeData(kind: NodeKind, f: string[], nodes: Node[], types: Type[]
 	if (kind == NodeKind.DeferStmt) return { deferExpr: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.TestDecl) return { testName: unescapeP(f[0]), testBody: nd(f[1].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.AssertStmt) return { assertExpr: nd(f[0].parseInt() as int32, nodes) as Node, assertSource: unescapeP(f[1]), assertMessage: unescapeP(f[2]), assertMessageExpr: nd(f[3].parseInt() as int32, nodes) } as NodeData;
-	if (kind == NodeKind.ExternDecl) return { externKind: f[0].parseInt() as int32 as unknown as ExternKind, externName: unescapeP(f[1]), nativeName: unescapeP(f[2]), externType: unescapeP(f[3]) } as NodeData;
+	if (kind == NodeKind.ExternDecl) return { externKind: f[0].parseInt() as int32 as ExternKind, externName: unescapeP(f[1]), nativeName: unescapeP(f[2]), externType: unescapeP(f[3]) } as NodeData;
 	if (kind == NodeKind.MacroDecl) return { macroDeclName: unescapeP(f[0]), macroDeclParams: splitCsv(f[1]), macroDeclParamTypes: splitCsv(f[2]), macroDeclReturnType: unescapeP(f[3]), macroDeclBody: nd(f[4].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.QuoteExpr) return { quoteBody: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.ComptimeBlock) return { comptimeBody: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
@@ -1183,10 +1183,10 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			continue;
 		} if (f[0] == "T") {
 			const t = emptyType();
-			t.kind = f[2].parseInt() as int32 as unknown as TypeKind;
+			t.kind = f[2].parseInt() as int32 as TypeKind;
 			t.typeFlags = f[3].parseInt() as uint32 as BitSet<TypeFlag>;
 			t.typeValue = f[4].parseInt() as int32;
-			t.callConv = f[5].parseInt() as int32 as unknown as CallingConvention;
+			t.callConv = f[5].parseInt() as int32 as CallingConvention;
 			t.typeName = unescapeP(f[6]);
 			t.typeNames = splitCsv(f[7]);
 			typeChildrenIdx.push(parseIntsCsv(f[8]));
@@ -1196,11 +1196,11 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			const opsRaw = splitCsv(f[12]);
 			t.attachedOps = [];
 			for (let oi = 0; oi < opsRaw.length; oi += 1) {
-				t.attachedOps.push(opsRaw[oi] != "" ? attachedOpSym(opsRaw[oi], oi as int32 as unknown as AttachedOp) : null);
+				t.attachedOps.push(opsRaw[oi] != "" ? attachedOpSym(opsRaw[oi], oi as int32 as AttachedOp) : null);
 			}
 			types.push(t);
 		} else if (f[0] == "N") {
-			const kind = f[2].parseInt() as int32 as unknown as NodeKind;
+			const kind = f[2].parseInt() as int32 as NodeKind;
 			const loc = makeLoc(f[4].parseInt() as int32, f[5].parseInt() as int32);
 			loc.endLine = f[6].parseInt() as int32;
 			loc.endColumn = f[7].parseInt() as int32;
@@ -1223,8 +1223,8 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			}
 			nodePayload.push(payloadFields);
 		} else if (f[0] == "S") {
-			const s = makeSymbolState(unescapeP(f[13]), f[2].parseInt() as int32 as unknown as SymbolKind, null, false, SymbolState.Hollow);
-			s.state = f[3].parseInt() as int32 as unknown as SymbolState;
+			const s = makeSymbolState(unescapeP(f[13]), f[2].parseInt() as int32 as SymbolKind, null, false, SymbolState.Hollow);
+			s.state = f[3].parseInt() as int32 as SymbolState;
 			s.symFlags = f[4].parseInt() as uint32 as BitSet<SymbolFlag>;
 			s.overloadIdx = f[5].parseInt() as int32;
 			s.mutatedParams = f[6].parseInt() as int32;

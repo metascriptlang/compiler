@@ -506,7 +506,7 @@ function resetClient(client: ClientState, fd: int32): void {
 }
 
 function resetRequest(client: ClientState, fd: int32, method: int32): void {
-	client.request.method = method as unknown as HttpMethod;
+	client.request.method = method as HttpMethod;
 	// path is set by parsePathInto (zero-alloc) — not reset here
 	client.request.clientFd = fd;
 	client.request.body = "";
@@ -751,7 +751,7 @@ async function handleConnSync(server: Readonly<HttpServer>, client: ClientState,
 
 		// 3) Frame body — recv more until ready / reject
 		let bufferAfter = client.data.slice(endPos, client.data.length);
-		let frame: FrameResult = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
+		let frame: FrameResult = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
 		while (alive && frame.kind == "needMore") {
 			if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
 				msNetSend(fd, buildErrorResponse(413));
@@ -763,7 +763,7 @@ async function handleConnSync(server: Readonly<HttpServer>, client: ClientState,
 				} else {
 					client.data += more; client.lastActivityMs = msMonoTimeMs();
 					bufferAfter = client.data.slice(endPos, client.data.length);
-					frame = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
+					frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
 				}
 			}
 		}
@@ -883,7 +883,7 @@ function handleBlocking(server: HttpServer, fd: int32): boolean {
 		// concat churn before 413 fires. Functional DoS is blocked; tight
 		// memory bound needs an incremental chunked decoder (v2).
 		let bufferAfter = data.slice(endPos, data.length);
-		let frame: FrameResult = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
+		let frame: FrameResult = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
 		while (frame.kind == "needMore") {
 			const more = msNetRecv(fd, server.maxHeaderSize);
 			if (more.length == 0) return false;  // peer closed mid-body
@@ -893,7 +893,7 @@ function handleBlocking(server: HttpServer, fd: int32): boolean {
 				msNetSend(fd, buildErrorResponse(413));
 				return false;
 			}
-			frame = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
+			frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
 		}
 		if (frame.kind == "reject") {
 			msNetSend(fd, buildErrorResponse(frame.rejectStatus));
@@ -954,7 +954,7 @@ function dispatchUringRecv(server: Readonly<HttpServer>, client: ClientState, fd
 	parseHeadersInline(client.data, client.headersEndPos, client.request.headers);
 
 	const bufferAfter = client.data.slice(client.headersEndPos, client.data.length);
-	const frame = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
+	const frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
 	if (frame.kind == "needMore") {
 		if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
 			msNetSend(fd, buildErrorResponse(413));
@@ -1136,7 +1136,7 @@ async function handleConnAsync(server: Readonly<HttpServer>, client: ClientState
 
 		// 3) Frame body
 		let bufferAfter = client.data.slice(endPos, client.data.length);
-		let frame: FrameResult = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
+		let frame: FrameResult = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
 		while (alive && frame.kind == "needMore") {
 			if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
 				msNetSend(fd, buildErrorResponse(413));
@@ -1148,7 +1148,7 @@ async function handleConnAsync(server: Readonly<HttpServer>, client: ClientState
 				} else {
 					client.data += more; client.lastActivityMs = msMonoTimeMs();
 					bufferAfter = client.data.slice(endPos, client.data.length);
-					frame = frameRequest(client.request.headers, methodInt as unknown as HttpMethod, bufferAfter, server.maxBodySize);
+					frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
 				}
 			}
 		}

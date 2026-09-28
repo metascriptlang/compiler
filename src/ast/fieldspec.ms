@@ -146,7 +146,7 @@ export function rebuildNodeData(n: Node, X: FieldXform): NodeData {
 	if (kind == NodeKind.ObjectPattern) { const d = n.data as ObjectPatternData; return { patternProps: X.nodes(d.patternProps) as Node[], hasRestProp: X.bool(d.hasRestProp) } as NodeData; }
 	if (kind == NodeKind.ObjectPatternProp) { const d = n.data as ObjectPatternPropData; return { propKey: X.str(d.propKey), propAlias: X.node(d.propAlias) as Node, propDefault: X.node(d.propDefault) } as NodeData; }
 	if (kind == NodeKind.DestructuringDecl) { const d = n.data as DestructuringDeclData; return { destrPattern: X.node(d.destrPattern) as Node, destrInit: X.node(d.destrInit) as Node, destrIsConst: X.bool(d.destrIsConst) } as NodeData; }
-	if (kind == NodeKind.VariableDecl) { const d = n.data as VariableDeclData; return { declName: X.str(d.declName), declType: X.str(d.declType), initializer: X.node(d.initializer) as Node, declKind: X.integer(d.declKind as int32 as int64) as int32 as unknown as DeclKind, nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
+	if (kind == NodeKind.VariableDecl) { const d = n.data as VariableDeclData; return { declName: X.str(d.declName), declType: X.str(d.declType), initializer: X.node(d.initializer) as Node, declKind: X.integer(d.declKind as int32 as int64) as int32 as DeclKind, nameLocation: X.loc(d.nameLocation) as SourceLocation } as NodeData; }
 	if (kind == NodeKind.IfStmt) { const d = n.data as IfStmtData; return { condition: X.node(d.condition) as Node, consequent: X.node(d.consequent) as Node, alternate: X.node(d.alternate) as Node } as NodeData; }
 	if (kind == NodeKind.WhileStmt) { const d = n.data as WhileStmtData; return { whileCondition: X.node(d.whileCondition) as Node, whileBody: X.node(d.whileBody) as Node, whileLabel: X.str(d.whileLabel) } as NodeData; }
 	if (kind == NodeKind.ForStmt) { const d = n.data as ForStmtData; return { forInit: X.node(d.forInit) as Node, forCondition: X.node(d.forCondition) as Node, forUpdate: X.node(d.forUpdate) as Node, forBody: X.node(d.forBody) as Node } as NodeData; }
@@ -179,7 +179,7 @@ export function rebuildNodeData(n: Node, X: FieldXform): NodeData {
 	if (kind == NodeKind.DeferStmt) { const d = n.data as DeferStmtData; return { deferExpr: X.node(d.deferExpr) as Node } as NodeData; }
 	if (kind == NodeKind.TestDecl) { const d = n.data as TestDeclData; return { testName: X.str(d.testName), testBody: X.node(d.testBody) as Node } as NodeData; }
 	if (kind == NodeKind.AssertStmt) { const d = n.data as AssertStmtData; return { assertExpr: X.node(d.assertExpr) as Node, assertSource: X.str(d.assertSource), assertMessage: X.str(d.assertMessage), assertMessageExpr: X.node(d.assertMessageExpr) } as NodeData; }
-	if (kind == NodeKind.ExternDecl) { const d = n.data as ExternDeclData; return { externKind: X.integer(d.externKind as int32 as int64) as int32 as unknown as ExternKind, externName: X.str(d.externName), nativeName: X.str(d.nativeName), externType: X.str(d.externType) } as NodeData; }
+	if (kind == NodeKind.ExternDecl) { const d = n.data as ExternDeclData; return { externKind: X.integer(d.externKind as int32 as int64) as int32 as ExternKind, externName: X.str(d.externName), nativeName: X.str(d.nativeName), externType: X.str(d.externType) } as NodeData; }
 	if (kind == NodeKind.MacroDecl) { const d = n.data as MacroDeclData; return { macroDeclName: X.str(d.macroDeclName), macroDeclParams: X.strArr(d.macroDeclParams), macroDeclParamTypes: X.strArr(d.macroDeclParamTypes), macroDeclReturnType: X.str(d.macroDeclReturnType), macroDeclBody: X.node(d.macroDeclBody) as Node } as NodeData; }
 	if (kind == NodeKind.QuoteExpr) { const d = n.data as QuoteExprData; return { quoteBody: X.node(d.quoteBody) as Node } as NodeData; }
 	if (kind == NodeKind.ComptimeBlock) { const d = n.data as ComptimeBlockData; return { comptimeBody: X.node(d.comptimeBody) as Node } as NodeData; }
@@ -385,7 +385,7 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	out.push(objPat);
 	out.push(objPatProp);
 	out.push(createNodeAt(NodeKind.DestructuringDecl, { destrPattern: objPat, destrInit: n1, destrIsConst: true } as NodeData, makeLoc(17, 37)));
-	out.push(createNodeAt(NodeKind.VariableDecl, { declName: "v", declType: "int32", initializer: n1, declKind: 2 as int32 as unknown as DeclKind, nameLocation: pkLoc(6) } as NodeData, makeLoc(17, 38)));
+	out.push(createNodeAt(NodeKind.VariableDecl, { declName: "v", declType: "int32", initializer: n1, declKind: 2 as int32 as DeclKind, nameLocation: pkLoc(6) } as NodeData, makeLoc(17, 38)));
 	out.push(createNodeAt(NodeKind.IfStmt, { condition: a, consequent: block, alternate: a } as NodeData, makeLoc(17, 39)));
 	out.push(createNodeAt(NodeKind.WhileStmt, { whileCondition: a, whileBody: block, whileLabel: "lbl" } as NodeData, makeLoc(17, 40)));
 	out.push(createNodeAt(NodeKind.ForStmt, { forInit: a, forCondition: a, forUpdate: a, forBody: block } as NodeData, makeLoc(17, 41)));
@@ -419,7 +419,7 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	out.push(createNodeAt(NodeKind.DeferStmt, { deferExpr: a } as NodeData, makeLoc(17, 69)));
 	out.push(createNodeAt(NodeKind.TestDecl, { testName: "t", testBody: block } as NodeData, makeLoc(17, 70)));
 	out.push(createNodeAt(NodeKind.AssertStmt, { assertExpr: a, assertSource: "src.ms", assertMessage: "msg", assertMessageExpr: pkIdent("am") } as NodeData, makeLoc(17, 71)));
-	out.push(createNodeAt(NodeKind.ExternDecl, { externKind: 2 as int32 as unknown as ExternKind, externName: "ext", nativeName: "nat", externType: "void" } as NodeData, makeLoc(17, 72)));
+	out.push(createNodeAt(NodeKind.ExternDecl, { externKind: 2 as int32 as ExternKind, externName: "ext", nativeName: "nat", externType: "void" } as NodeData, makeLoc(17, 72)));
 	out.push(createNodeAt(NodeKind.MacroDecl, { macroDeclName: "md", macroDeclParams: ["p"], macroDeclParamTypes: ["string"], macroDeclReturnType: "void", macroDeclBody: block } as NodeData, makeLoc(17, 73)));
 	out.push(createNodeAt(NodeKind.QuoteExpr, { quoteBody: block } as NodeData, makeLoc(17, 74)));
 	out.push(createNodeAt(NodeKind.ComptimeBlock, { comptimeBody: block } as NodeData, makeLoc(17, 75)));

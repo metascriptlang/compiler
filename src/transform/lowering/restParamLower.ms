@@ -41,7 +41,7 @@ function isConsoleLogCallee(callee: Node): boolean {
 
 function makeArrayLit(elements: Node[], restType: Type, line: int32): Node {
 	const arr = createNode(NodeKind.ArrayLiteral,
-		{ elements } as unknown as NodeData,
+		{ elements },
 		createToken(TokenKind.LBracket, "[", line));
 	if (restType != null) arr.nodeType = restType;
 	return arr;
