@@ -917,7 +917,8 @@ export function duVariantIndexOfType(unionType: Type | null, variantType: Type |
 export function primitiveMemberIndexInUnion(formal: Type, exprType: Type): int32 {
 	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return -1;
 	const ek = exprType.kind;
-	if (ek == TypeKind.Struct || ek == TypeKind.Union || ek == TypeKind.Null) return -1;
+	const stringCarried = isAllStringLiteralUnion(exprType);
+	if (ek == TypeKind.Struct || (ek == TypeKind.Union && !stringCarried) || ek == TypeKind.Null) return -1;
 	let allStrLit = true;
 	for (const child of formal.typeChildren) {
 		if (child == null || child.kind == TypeKind.Null) return -1;
@@ -928,7 +929,9 @@ export function primitiveMemberIndexInUnion(formal: Type, exprType: Type): int32
 	let vi: int32 = 0;
 	for (const child of formal.typeChildren) {
 		let hit = child == exprType;
-		if (!hit && child.kind != TypeKind.Struct && child.kind != TypeKind.Ref) {
+		if (!hit && stringCarried) {
+			hit = child.kind == TypeKind.String;
+		} else if (!hit && child.kind != TypeKind.Struct && child.kind != TypeKind.Ref) {
 			hit = child.kind == ek
 				|| (child.kind == TypeKind.String && ek == TypeKind.StringLiteral);
 		}
@@ -989,8 +992,6 @@ export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
 
 // `A | null` meeting `A | B | null`: the same subtyping one level down, under
 // the Maybe carrier. Returns the payload's slot in the wider union, or -1.
-// A union payload widening into a wider union has no single slot to stamp and
-// is refused here rather than guessed.
 export function maybePayloadWidenSlot(source: Type | null, target: Type | null): int32 {
 	if (source == null || target == null) return -1;
 	if (!isMaybeType(source) || !isMaybeType(target)) return -1;
@@ -998,7 +999,7 @@ export function maybePayloadWidenSlot(source: Type | null, target: Type | null):
 	const wide = target.typeReturn;
 	if (narrow == null || wide == null) return -1;
 	if (wide.kind != TypeKind.Union || wide.typeChildren == null) return -1;
-	if (narrow.kind == TypeKind.Union) return -1;
+	if (narrow.kind == TypeKind.Union && !isAllStringLiteralUnion(narrow)) return -1;
 	if (unwrapRefNullUnion(wide) != null) return -1;
 	return variantIndexInUnion(wide, unwrapRef(narrow));
 }

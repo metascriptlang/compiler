@@ -301,7 +301,7 @@ export function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
 	if (formal.typeReturn != null) {
 		const thunk = synthClosureThunk(expr, formal.typeReturn, exprType);
 		if (thunk != null as unknown as Node) payload = thunk;
-		if (formal.typeReturn.kind == TypeKind.Union && exprType.kind != TypeKind.Union && isTagCarriedUnion(formal.typeReturn)) {
+		if (formal.typeReturn.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isStringLike(exprType)) && isTagCarriedUnion(formal.typeReturn)) {
 			const injected = widenVariantToUnion(payload, formal.typeReturn, exprType);
 			if (injected != null as unknown as Node) payload = injected;
 		}
@@ -1300,7 +1300,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	// position (var init, assign, return, ternary, call arg) shares the one
 	// wrap — no position can forget it. Nilable pointer unions collapse to a
 	// bare pointer and take no tag.
-	if (formal.kind == TypeKind.Union && exprType.kind != TypeKind.Union
+	if (formal.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isStringLike(exprType))
 		&& unwrapRefNullUnion(formal) == null) {
 		const widened = widenVariantToUnion(expr, formal, exprType);
 		if (widened != null as unknown as Node) return widened;
