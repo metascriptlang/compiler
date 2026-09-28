@@ -1761,7 +1761,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				ctx.results.push("MS_NIL");
 				return;
 			}
-			if (checkedRef!.sym == null || !hasFlag(checkedRef!.sym!, SymbolFlag.ImportC)) {
+			if (checkedClass.sym == null || !hasFlag(checkedClass.sym!, SymbolFlag.ImportC)) {
 				const cName = getTypeDesc(g, checkedClass);
 				ensureTypeInfoDef(g, cName, checkedClass);
 				ctx.results.push(`((${getTypeDesc(g, node.nodeType)})msObjDownConv((void*)(${expr}), &${cName}TypeInfo))`);

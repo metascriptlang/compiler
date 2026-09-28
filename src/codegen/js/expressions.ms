@@ -701,7 +701,7 @@ export function emitTypeAssertion(gen: JSGenerator, node: Node): void {
 function checkedConversionTarget(node: Node): Symbol | null {
 	if (!node.flags.has(NodeFlag.ObjCheck) || node.nodeType == null) return null;
 	const t = node.nodeType.kind == TypeKind.Union ? unwrapRefNullUnion(node.nodeType) : node.nodeType;
-	return t != null && t.kind == TypeKind.Ref ? t.sym : null;
+	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn.sym : null;
 }
 
 // ===== Move Expression (no-op in JS) =====

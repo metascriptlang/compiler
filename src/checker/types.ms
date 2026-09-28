@@ -2590,15 +2590,16 @@ function heldObjectOrUnknown(t: Type | null): Type | null {
 }
 
 function isRuntimeCheckedClass(t: Type): boolean {
-	return t.kind == TypeKind.Ref && t.sym != null && t.sym.symbolKind == SymbolKind.Class
-		&& t.typeReturn != null && t.typeReturn.kind == TypeKind.Struct;
+	const body = t.kind == TypeKind.Ref ? t.typeReturn : null;
+	return body != null && body.kind == TypeKind.Struct && body.sym != null && body.sym.symbolKind == SymbolKind.Class;
 }
 
 function isClassOrSubclass(sub: Type, sup: Type): boolean {
-	if (sup.sym == null) return false;
+	const supSym = sup.typeReturn != null ? sup.typeReturn.sym : null;
+	if (supSym == null) return false;
 	let cur: Type | null = sub.kind == TypeKind.Ref ? sub.typeReturn : sub;
 	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
-		if (cur.sym == sup.sym) return true;
+		if (cur.sym == supSym) return true;
 		const base: Type | null = cur.typeExtra;
 		cur = base != null && base.kind == TypeKind.Ref ? base.typeReturn : base;
 	}
