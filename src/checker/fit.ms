@@ -4,7 +4,7 @@
 
 import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { convertsImplicitly, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
+import { convertsImplicitly, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
@@ -305,6 +305,8 @@ export function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
 			const injected = widenVariantToUnion(payload, formal.typeReturn, exprType);
 			if (injected != null as unknown as Node) payload = injected;
 		}
+		const upcast = tryValueStructUpcast(payload, formal.typeReturn, exprType);
+		if (upcast != null as unknown as Node) payload = upcast;
 	}
 	const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
 	const wrapped = createNode(NodeKind.HiddenStdConv, { convExpr: payload, convType: formal } as NodeData, wrapTok);
@@ -1185,6 +1187,20 @@ export function tryAdoptAnonStruct(expr: Node, formalIn: Type | null, exprTypeIn
 	return lit;
 }
 
+export function tryValueStructUpcast(expr: Node, formalIn: Type | null, exprTypeIn: Type | null): Node {
+	const formal = skipModifier(formalIn);
+	const exprType = skipModifier(exprTypeIn);
+	if (formal == null || exprType == null || formal == exprType) return null as unknown as Node;
+	if (formal.kind != TypeKind.Struct || exprType.kind != TypeKind.Struct) return null as unknown as Node;
+	if (!isValueStructDecl(formal) || !isValueStructDecl(exprType)) return null as unknown as Node;
+	if (valueStructBaseDepth(exprType, formal) == 0) return null as unknown as Node;
+	const conv = createNode(NodeKind.TypeAssertion, { asExpr: expr, asType: formal.typeName } as NodeData, createToken(TokenKind.Ident, "", expr.location.line));
+	conv.nodeType = formal;
+	conv.flags = conv.flags.incl(NodeFlag.Sem);
+	conv.location = expr.location;
+	return conv;
+}
+
 export function reportReadonlyDrop(ctx: CheckerContext, source: Type | null, target: Type | null, line: int32, column: int32): void {
 	addError(ctx, "Type '" + typeDisplayName(source) + "' is not assignable to type '" + typeDisplayName(target) + "' — a read-only view never converts back to the mutable type (PARALOCK E24)", line, column);
 }
@@ -1254,6 +1270,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	}
 	const adopted = tryAdoptAnonStruct(expr, formal, exprType);
 	if (adopted != null as unknown as Node) return adopted;
+	const upcast = tryValueStructUpcast(expr, formal, exprType);
+	if (upcast != null as unknown as Node) return upcast;
 	if (instantiateGenericFnValue(ctx, expr, formal)) return fitNode(ctx, expr, formal, expr.nodeType);
 	const thunk = synthClosureThunk(expr, formal, exprType);
 	if (thunk != null as unknown as Node) return thunk;

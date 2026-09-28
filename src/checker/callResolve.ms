@@ -11,7 +11,7 @@ import { writeRefusal } from "./assignable";
 import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { CandidateScore, convertsImplicitly, refusesIntConv, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
-import { checkSwitchCase, convertIntoUnknown, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingIntLiteral, reportIntConv, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
+import { checkSwitchCase, convertIntoUnknown, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingIntLiteral, reportIntConv, isIntegralNumberLiteral, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
@@ -1574,6 +1574,11 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				args[pi] = adoptedArg;
 				argTypes[pi] = paramType;
 			}
+			const upcastArg = tryValueStructUpcast(args[pi], paramType, argTypes[pi]);
+			if (upcastArg != null as unknown as Node) {
+				args[pi] = upcastArg;
+				argTypes[pi] = paramType;
+			}
 			if (instantiateGenericFnValue(ctx, args[pi], paramType)) argTypes[pi] = args[pi].nodeType!;
 			const thunkArg = synthClosureThunk(args[pi], paramType, argTypes[pi]);
 			if (thunkArg != null as unknown as Node) {
@@ -1947,6 +1952,8 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 			}
 			const adoptedGen = tryAdoptAnonStruct(arg, formal, arg.nodeType);
 			if (adoptedGen != null as unknown as Node) cd.arguments[ai] = adoptedGen;
+			const upcastGen = tryValueStructUpcast(cd.arguments[ai], formal, cd.arguments[ai].nodeType);
+			if (upcastGen != null as unknown as Node) cd.arguments[ai] = upcastGen;
 		}
 	}
 	// Eagerly instantiate body for concrete GenericInstance — mirrors
