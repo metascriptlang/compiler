@@ -374,3 +374,6 @@ import "./bug601ObjectDownConversion";
 import "./bug610ValueStructIsNominal";
 import "./bug611TryConvertsSameShapedStructError";
 import "./bug612MaybeCacheKeepsItsPayload";
+import "./bug613BorrowFindsItsBase";
+import "./bug614MethodSignatureChecksItsImplementation";
+import "./bug615ConstraintScanVisitsEachTypeOnce";
