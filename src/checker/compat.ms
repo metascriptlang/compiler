@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAwaitable, isAffineAwaitable, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -363,23 +363,17 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			},
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Struct => isObjectAssignable(source, target),
-			TypeKind.Enum | TypeKind.Distinct => source.typeName == target.typeName,
-			TypeKind.EnumLiteral => source.typeName == target.typeName
-				&& source.typeNames.length > 0 && target.typeNames.length > 0
-				&& source.typeNames[0] == target.typeNames[0],
+			TypeKind.Enum => sameNominal(source, target),
+			TypeKind.Distinct => source.typeName == target.typeName,
+			TypeKind.EnumLiteral => sameEnumMember(source, target),
 			TypeKind.GenericInstance => {
-				// Structural compatibility: compare type args pairwise
+				if (!sameGenericBase(source, target)) return differentGenericsFit(source, target);
 				const limit = source.typeChildren.length < target.typeChildren.length ? source.typeChildren.length : target.typeChildren.length;
 				const invariant = isNominalType(source);
 				for (let gi = 0; gi < limit; gi += 1) {
 					if (invariant ? !sameType(source.typeChildren[gi], target.typeChildren[gi]) : !sameElement(source.typeChildren[gi], target.typeChildren[gi])) return false;
 				}
-				// PARALOCK: an affine `Promise<T>` (spawn-origin, AwaitableAffine bit set)
-				// upcasts to a plain `Promise<T>` with compatible inner — this is the
-				// opt-out path that strips affinity. Element type compatibility is
-				// already verified by the loop above.
-				if (isAffineAwaitable(source) && isAwaitable(target) && !isAffineAwaitable(target)) return true;
-				return source.typeName == target.typeName;
+				return true;
 			},
 			TypeKind.Union => isUnionAssignable(source, target),
 			TypeKind.Tuple => isTupleAssignable(source, target),
@@ -742,6 +736,10 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == target) return true;
 	if (source == null || target == null) return false;
 	if (sameNominal(source, target)) return true;
+	return objectLayoutFits(source, target);
+}
+
+function objectLayoutFits(source: Type, target: Type): boolean {
 	// Exact-field anon→named pairs are assignable; fitNode materializes the
 	// member-wise re-construction. Every other anon→named pair stays rejected:
 	// no lowering exists, so C emits two distinct types (clang error) while js
@@ -924,6 +922,29 @@ export function sameNominal(a: Type, b: Type): boolean {
 	return a.typeName != "" && a.typeName == b.typeName;
 }
 
+function sameGenericBase(a: Type, b: Type): boolean {
+	if (a.typeExtra != null && b.typeExtra != null) return sameNominal(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra));
+	return a.typeName == b.typeName;
+}
+
+function differentGenericsFit(source: Type, target: Type): boolean {
+	if (source.typeExtra != null && isValueStructDecl(unwrapRefBase(source.typeExtra))) return false;
+	if (target.typeExtra != null && isValueStructDecl(unwrapRefBase(target.typeExtra))) return false;
+	const sBody = source.typeReturn;
+	const tBody = target.typeReturn;
+	if (sBody == null || tBody == null) return false;
+	const s = unwrapRefBase(sBody);
+	const t = unwrapRefBase(tBody);
+	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return isAssignable(sBody, tBody);
+	return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(s, t);
+}
+
+function sameEnumMember(a: Type, b: Type): boolean {
+	if (a.typeNames.length == 0 || b.typeNames.length == 0 || a.typeNames[0] != b.typeNames[0]) return false;
+	if (a.typeReturn != null && b.typeReturn != null) return sameNominal(a.typeReturn, b.typeReturn);
+	return a.typeName == b.typeName;
+}
+
 export function sameType(a: Type | null, b: Type | null): boolean {
 	if (a == b) return true;
 	if (a == null || b == null) return false;
@@ -971,11 +992,11 @@ function sameTypeInner(a: Type, b: Type): boolean {
 	if (a.kind != b.kind) return false;
 	return match (a.kind) {
 		TypeKind.Struct => sameStructType(a, b),
-		TypeKind.Enum | TypeKind.Distinct | TypeKind.GenericParam
-			| TypeKind.StringLiteral | TypeKind.BooleanLiteral
+		TypeKind.Enum => sameNominal(a, b),
+		TypeKind.Distinct | TypeKind.GenericParam | TypeKind.StringLiteral | TypeKind.BooleanLiteral
 			| TypeKind.TypeReference => a.typeName == b.typeName,
-		TypeKind.EnumLiteral => a.typeName == b.typeName && sameNameList(a.typeNames, b.typeNames),
-		TypeKind.GenericInstance => a.typeName == b.typeName && sameTypeList(a.typeChildren, b.typeChildren),
+		TypeKind.EnumLiteral => sameEnumMember(a, b),
+		TypeKind.GenericInstance => sameGenericBase(a, b) && sameTypeList(a.typeChildren, b.typeChildren),
 		TypeKind.Union | TypeKind.Tuple | TypeKind.Varargs
 			| TypeKind.Conditional => sameTypeList(a.typeChildren, b.typeChildren),
 		TypeKind.Function => sameTypeList(a.typeChildren, b.typeChildren) && sameInnerType(a, b),
@@ -1038,22 +1059,15 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
 				return TypeRelation.None;
 			},
-			TypeKind.Enum | TypeKind.Distinct => {
-				if (formal.typeName == actual.typeName) return TypeRelation.Exact;
-				return TypeRelation.None;
-			},
+			TypeKind.Enum => sameNominal(formal, actual) ? TypeRelation.Exact : TypeRelation.None,
+			TypeKind.Distinct => formal.typeName == actual.typeName ? TypeRelation.Exact : TypeRelation.None,
 			// Literal types carry their value in typeName — two different literals
 			// are different types (isAssignable :368/:384, sameType :651).
 			TypeKind.StringLiteral | TypeKind.BooleanLiteral => {
 				if (formal.typeName == actual.typeName) return TypeRelation.Exact;
 				return TypeRelation.None;
 			},
-			TypeKind.EnumLiteral => {
-				if (formal.typeName != actual.typeName) return TypeRelation.None;
-				if (formal.typeNames.length == 0 || actual.typeNames.length == 0) return TypeRelation.None;
-				if (formal.typeNames[0] == actual.typeNames[0]) return TypeRelation.Exact;
-				return TypeRelation.None;
-			},
+			TypeKind.EnumLiteral => sameEnumMember(formal, actual) ? TypeRelation.Exact : TypeRelation.None,
 			TypeKind.Set => setRelation(formal, actual),
 			TypeKind.SizedArray => {
 				if (formal.typeValue != actual.typeValue) return TypeRelation.None;
@@ -1074,7 +1088,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			},
 			TypeKind.GenericInstance => {
 				// Structural type arg comparison (Result, Promise, Map, Set, user generics)
-				if (formal.typeName != actual.typeName) return TypeRelation.None;
+				if (!sameGenericBase(formal, actual)) return TypeRelation.None;
 				const giLimit = formal.typeChildren.length < actual.typeChildren.length ? formal.typeChildren.length : actual.typeChildren.length;
 				let instRel = TypeRelation.Exact;
 				for (let gi = 0; gi < giLimit; gi += 1) {

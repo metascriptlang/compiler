@@ -1476,9 +1476,20 @@ export function createMaybeType(inner: Type): Type {
 }
 
 function maybePayloadIs(cached: Type, inner: Type): boolean {
-	const payload = cached.typeReturn;
-	if (payload == null || payload == inner || payload.sym == null || inner.sym == null) return true;
-	return payload.sym == inner.sym;
+	return sameDeclarationsIn(cached.typeReturn, inner, 0);
+}
+
+function sameDeclarationsIn(a: Type | null, b: Type | null, depth: int32): boolean {
+	if (a == null || b == null || a == b || depth > 4) return true;
+	if (a.sym != null && b.sym != null) return a.sym == b.sym;
+	if (a.kind == TypeKind.GenericInstance && a.typeExtra != null && b.typeExtra != null
+		&& !sameDeclarationsIn(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra), depth + 1)) return false;
+	if (!sameDeclarationsIn(a.typeReturn, b.typeReturn, depth + 1)) return false;
+	const n = a.typeChildren.length < b.typeChildren.length ? a.typeChildren.length : b.typeChildren.length;
+	for (let i = 0; i < n; i += 1) {
+		if (!sameDeclarationsIn(a.typeChildren[i], b.typeChildren[i], depth + 1)) return false;
+	}
+	return true;
 }
 
 export function createRef(inner: Type | null): Type {
