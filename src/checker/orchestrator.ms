@@ -520,12 +520,10 @@ function mainErrorsWith(mainSource: string): int32 {
 
 function soloErrorsWith(source: string): int32 {
 	const stdPath = join(resolveRuntimeDir(), "std");
-	const dir = "/tmp/msc-generic-instance-identity";
-	ensureDir(dir);
-	const soloPath = `${dir}/solo.ms`;
-	writeFile(soloPath, "class Crate<T> {\n\tv: T;\n\tconstructor(v: T) { this.v = v; }\n}\nfunction tag(this b: Crate<number>): number { return b.v; }\n" + source);
+	const soloPath = "/src/solo.ms";
 	const config = createDefaultConfig(backendOfExtension(".cms"), stdPath);
-	const provider = createFileSystemProvider();
+	const provider = createMapProvider([{ entryPath: soloPath, entrySource: "class Crate<T> {\n\tv: T;\n\tconstructor(v: T) { this.v = v; }\n}\nfunction tag(this b: Crate<number>): number { return b.v; }\n" + source }]);
+	provider.useFileSystem = true;
 	const graph = createModuleGraph();
 	loadStdGlobalImportModules(graph, provider, config);
 	loadModule(graph, soloPath, provider, config, 1);
