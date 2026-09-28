@@ -1549,7 +1549,7 @@ function hcrFunctionSlot(info: ExportedSymInfo, fn: Symbol): string {
 
 
 function appendHcrFunctionExport(exports: HcrAbiExport[], moduleId: string, info: ExportedSymInfo, fn: Symbol): Result<void, string> {
-	if (hasFlag(fn, SymbolFlag.OverloadSig)) return Result.ok(null);
+	if (hasFlag(fn, SymbolFlag.OverloadSig) || hasFlag(fn, SymbolFlag.Borrow)) return Result.ok(null);
 	if (hasGenericParams(fn.symbolType)) {
 		return Result.err(`HCR ABI cannot represent generic export '${moduleId}::${info.name}'`);
 	}

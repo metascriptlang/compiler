@@ -75,6 +75,7 @@ import { lowerLambda } from "./lowering/lambdaLifting";
 import { lowerCallHoist } from "./lowering/callHoist";
 import { lowerRvalueBridge } from "./lowering/rvalueLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
+import { lowerBorrow } from "./lowering/borrowLower";
 import { lowerMethodToFunction } from "./lowering/methodToFunction";
 import { lowerCtorInit } from "./lowering/ctorLower";
 import { lowerStaticInit } from "./lowering/staticLower";
@@ -105,6 +106,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	ctx.jsBackend = jsBackend;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	let result = eraseBrandTypes(program);
+	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
 	result = jsBackend ? lowerPowerAssert(result, ctx) : result;
 	result = lowerDefer(result, ctx);
