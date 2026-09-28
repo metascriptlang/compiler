@@ -309,18 +309,41 @@ function watchWarm(): void {
 
 function watchGeneric(): void {
 	const tag = "hcrWatchGeneric";
-	const dir = freshDir(`${TMP}/watchGeneric`);
-	for (const sub of ["app", "lib"]) {
-		ensureDir(`${dir}/${sub}`);
-		for (const f of readDir(`${FIXTURES}/watchGeneric/${sub}`)) copy(`${FIXTURES}/watchGeneric/${sub}/${f}`, `${dir}/${sub}/${f}`);
-	}
+	const dir = copyAppAndLib("watchGeneric");
 	const steps: WatchStep[] = [
 		{ file: "logicBody.ms", target: "logic.ms", warm: true, fails: false },
 		{ file: "logicString.ms", target: "logic.ms", warm: false, fails: false },
 		{ file: "logicStringBody.ms", target: "logic.ms", warm: true, fails: false },
+		{ file: "logicTag.ms", target: "logic.ms", warm: false, fails: false },
 	];
 	replayMatchesCold(tag, `${dir}/app`, `${FIXTURES}/watchGeneric/app`, ["logic.ms"], steps);
 	console.log("ok   hcrWatchGeneric");
+}
+
+function copyAppAndLib(fixture: string): string {
+	const dir = freshDir(`${TMP}/${fixture}`);
+	for (const sub of ["app", "lib"]) {
+		ensureDir(`${dir}/${sub}`);
+		for (const f of readDir(`${FIXTURES}/${fixture}/${sub}`)) copy(`${FIXTURES}/${fixture}/${sub}/${f}`, `${dir}/${sub}/${f}`);
+	}
+	return dir;
+}
+
+function newInstance(): void {
+	const tag = "hcrNewInstance";
+	const dir = copyAppAndLib("newInstance");
+	copy(`${dir}/app/logicTag.ms`, `${dir}/app/edit.txt`);
+	const ran = msc(`${dir}/app`, ["run", "app.ms", "--hcr"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-NEW ")) seen.push(line);
+	}
+	const want = ["HCR-NEW start 9", "HCR-NEW reloaded 15"];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "a new generic instance over a new app type did not reload into the running app");
+	}
+	console.log(`ok   ${tag}`);
 }
 
 function replayMatchesCold(tag: string, dir: string, fixture: string, restored: string[], steps: WatchStep[]): void {
@@ -828,6 +851,7 @@ firstWarmBuild();
 localNames();
 watchWarm();
 watchGeneric();
+newInstance();
 reloadOff();
 coreLinkClang();
 indirect();
