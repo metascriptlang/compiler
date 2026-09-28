@@ -15,9 +15,9 @@
 // (synthMaybeWrap), so the store writes the whole struct. Bottom-up walking wraps the
 // LHS before the assignment node is visited — undo it there.
 
-import { Node, NodeKind, TypeKind, BinaryExprData, MemberExprData, ArrayAccessData, OutExprData, HiddenStdConvData, TypeAssertionData, Type } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, TypeKind, BinaryExprData, MemberExprData, ArrayAccessData, OutExprData, HiddenStdConvData, TypeAssertionData, Type } from "../../ast/node";
 import { isMaybeType, unwrapMaybeType, isTagCarriedUnion, unwrapRefNullUnion } from "../../checker/types";
-import { projectTagUnionMember, narrowMaybePayload } from "../../checker/fit";
+import { projectTagUnionMember, narrowMaybePayload, checkedProjection } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember } from "../util";
@@ -81,15 +81,27 @@ function unwrapIfMaterialized(n: Node): Node {
 
 function narrowAssertedCarrier(node: Node): Node {
 	const target = node.nodeType;
-	if (target == null || !isMaybeType(target)) return node;
+	if (target == null) return node;
 	const inner = (node.data as TypeAssertionData).asExpr;
 	if (inner == null || inner.nodeType == null) return node;
 	const carrier = inner.nodeType;
 	if (!isMaybeType(carrier) || carrier == target) return node;
-	if (!isTagCarriedUnion(unwrapMaybeType(carrier))) return node;
+	const payload = unwrapMaybeType(carrier);
+	if (!isTagCarriedUnion(payload)) return node;
+	const checked = node.flags.has(NodeFlag.ConvCheck);
+	if (!isMaybeType(target)) {
+		if (!checked) return node;
+		const val = makeMember(inner, "value", node.location);
+		val.nodeType = payload;
+		const projected = checkedProjection(val, payload, target);
+		if (projected == null as unknown as Node) return node;
+		(node.data as TypeAssertionData).asExpr = projected;
+		return node;
+	}
 	const narrowed = narrowMaybePayload(inner, carrier, target);
-	if (narrowed != null as unknown as Node) return narrowed;
-	return node;
+	if (narrowed == null as unknown as Node) return node;
+	if (checked) narrowed.flags = narrowed.flags.incl(NodeFlag.ConvCheck);
+	return narrowed;
 }
 
 function visitMaybeRead(node: Node, project: boolean): Node {

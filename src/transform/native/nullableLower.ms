@@ -9,7 +9,7 @@
 //   4. Value wrapping (decl): const x: T|null = tok → const x = { value: tok, present: true }
 //   5. Value wrapping (assign): x = tok → x = { value: tok, present: true }
 
-import { Node, NodeKind, SourceLocation, MemberExprData, TypeAssertionData, VariableDeclData, BinaryExprData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, MemberExprData, TypeAssertionData, VariableDeclData, BinaryExprData, Type, TypeKind } from "../../ast/node";
 import { isStructType, isMaybeType, isTagCarriedUnion, getProperty } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -106,6 +106,11 @@ function lowerNullableNode(node: Node): Node {
 			&& isMaybeType(d.asExpr.nodeType)
 			&& node.nodeType != null && !isMaybeType(node.nodeType)) {
 			const member = makeMember(d.asExpr, "value", loc);
+			if (node.flags.has(NodeFlag.ConvCheck)) {
+				member.nodeType = d.asExpr.nodeType.typeReturn;
+				d.asExpr = member;
+				return node;
+			}
 			member.nodeType = node.nodeType;
 			return member;
 		}
