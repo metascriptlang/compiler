@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { peelToStructOrUnion, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
+import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
 import { markUsedIn, CheckerContext, findExtension, getExtTypeName, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
@@ -1458,6 +1458,9 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	if (predicateSentinel != null) {
 		fnType.typeExtra = predicateSentinel;
 	}
+	if (d.fnFlags.indexOf("extern", 0) >= 0 && !ctx.modulePath.endsWith(".jms")) {
+		refuseUnknownAtCBoundary(ctx, d.fnName, paramTypes, returnType, node);
+	}
 
 	// Set minArity for functions with default parameters (Reference parity: count non-null defaults)
 	let defCount = 0;
@@ -1533,6 +1536,24 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 
 function hookWritesItsReceiver(name: string): boolean {
 	return name == "onCopy" || name == "onMove" || name == "onMoved" || name == "onTrace";
+}
+
+function holdsUnknown(t: Type | null): boolean {
+	const bare = t != null ? skipModifier(t) : null;
+	if (bare == null) return false;
+	if (bare.kind == TypeKind.Varargs) return false;
+	if (bare.kind == TypeKind.Union) return isUnknownType(unwrapRefNullUnion(bare));
+	return isUnknownType(bare);
+}
+
+function refuseUnknownAtCBoundary(ctx: CheckerContext, name: string, paramTypes: Type[], returnType: Type, node: Node): void {
+	let spot = "";
+	for (let i = 0; i < paramTypes.length && spot == ""; i += 1) {
+		if (holdsUnknown(paramTypes[i])) spot = "parameter " + (i + 1).toString();
+	}
+	if (spot == "" && holdsUnknown(returnType)) spot = "return type";
+	if (spot == "") return;
+	addError(ctx, "extern '" + name + "' " + spot + ": unknown holds managed objects, a C function sees raw addresses — declare it Ptr<void>", node.location.line, node.location.column);
 }
 
 function refuseHookReceiverByValue(ctx: CheckerContext, node: Node, paramTypes: Type[]): void {

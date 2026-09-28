@@ -9,10 +9,10 @@
 import { compileToC } from "../helpers";
 
 const header = `
-extern function opaque(): unknown from "NULL";
-extern function keep(sink v: unknown): void from "keep";
+class Box { n: int32 = 0; }
+extern function keep<T>(sink v: T): void from "keep";
 extern function keepInt(sink v: int32): void from "keepInt";
-function make(): unknown { return opaque(); }
+function make(): unknown { return new Box(); }
 `;
 
 function errorOf(body: string): string {
