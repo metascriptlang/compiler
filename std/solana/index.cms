@@ -94,6 +94,7 @@ function builtinError(index: uint64): ProgramError {
 }
 
 export function custom(this typeof ProgramError, code: uint32): ProgramError {
+	if (code == 0) { return builtinError(1); }
 	const error: ProgramError = { code: code as uint64 };
 	return error;
 }
