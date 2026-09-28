@@ -43,6 +43,7 @@ import { nodeHasPositionalNew } from "./newExprLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
 import { isLowerableSpreadLiteral, expandSpreadLiteral } from "../desugar/arraySpreadLower";
 import { spreadStructOf, expandObjectSpread } from "../desugar/objectSpreadLower";
+import { needsIntegerCompoundRewrite } from "../coercion/intArithJS";
 
 // ===== Hoist (top-down) =====
 
@@ -319,11 +320,23 @@ function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContex
 // BLOCKS — so the direct shapes must hoist from their ternary's CONDITION
 // themselves (the generated IfStmt is never re-expanded).
 function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
-	// On JS, ternaries and short-circuits are native and need no statement
-	// rewrite — UNLESS one holds a positional `new`, which cannot stay in a JS
-	// expression after newExprLower refused it. Gate the whole statement on
-	// that, so `const x = true ? 1 : 2` stays `(true ? 1 : 2)` on JS.
-	if (ctx.jsBackend && !nodeHasPositionalNew(stmt)) return [stmt];
+	if (ctx.jsBackend && !nodeHasPositionalNew(stmt)) {
+		if (stmt.kind == NodeKind.ExprStmt) {
+			const expr = (stmt.data as ExprStmtData).expr;
+			if (expr.kind == NodeKind.BinaryExpr) {
+				const d = expr.data as BinaryExprData;
+				if (needsIntegerCompoundRewrite(d)) {
+					const pre: Node[] = [];
+					d.left = hoistAssignTargetEffects(d.left, pre, ctx, []);
+					if (pre.length > 0) {
+						pre.push(stmt);
+						return pre;
+					}
+				}
+			}
+		}
+		return [stmt];
+	}
 	const loc = stmt.location;
 	match (stmt.kind) {
 		NodeKind.VariableDecl => {
