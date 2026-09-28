@@ -1036,11 +1036,11 @@ function splitSemi(s: string): string[] {
 	return out;
 }
 
-function parseNestedNodeArrs(s: string, nodes: Node[]): (Node | null)[][] {
+function parseNestedNodeArrs(s: string, nodes: Node[]): Node[][] {
 	if (s == "-" || s == "") return [];
 	const parts = splitSemi(s);
-	const out: (Node | null)[][] = [];
-	for (const p of parts) out.push(parseNodeIdxList(p, nodes));
+	const out: Node[][] = [];
+	for (const p of parts) out.push(parseNodeArr(p, nodes));
 	return out;
 }
 
@@ -1125,7 +1125,7 @@ function buildNodeData(kind: NodeKind, f: string[], nodes: Node[], types: Type[]
 	if (kind == NodeKind.TypeUnion) return { typExprMembers: parseNodeArr(f[0], nodes), discFieldName: unescapeP(f[1]), variantKeys: splitCsv(f[2]), discKind: unescapeP(f[3]) } as NodeData;
 	if (kind == NodeKind.TypeIntersection) return { typExprMembers: parseNodeArr(f[0], nodes) } as NodeData;
 	if (kind == NodeKind.TypeFunction) return { typExprParams: parseNodeArr(f[0], nodes), typExprReturn: nd(f[1].parseInt() as int32, nodes) as Node, typExprParamNames: splitCsv(f[2]) } as NodeData;
-	if (kind == NodeKind.TypeObject) return { typExprFieldNames: splitCsv(f[0]), typExprFieldTypes: parseNodeArr(f[1], nodes), typExprIndexKey: nd(f[2].parseInt() as int32, nodes) as Node, typExprIndexValue: nd(f[3].parseInt() as int32, nodes) as Node, typExprFieldDecorators: parseNestedNodeArrs(f[4], nodes) as unknown as Node[][], typExprTypeName: unescapeP(f[5]) } as NodeData;
+	if (kind == NodeKind.TypeObject) return { typExprFieldNames: splitCsv(f[0]), typExprFieldTypes: parseNodeArr(f[1], nodes), typExprIndexKey: nd(f[2].parseInt() as int32, nodes) as Node, typExprIndexValue: nd(f[3].parseInt() as int32, nodes) as Node, typExprFieldDecorators: parseNestedNodeArrs(f[4], nodes), typExprTypeName: unescapeP(f[5]) } as NodeData;
 	if (kind == NodeKind.Program) return { programStmts: parseNodeArr(f[0], nodes) } as NodeData;
 	if (kind == NodeKind.ActorDecl) return { actorName: unescapeP(f[0]), actorBody: parseNodeArr(f[1], nodes), nameLocation: parseLoc(f[2]) } as NodeData;
 	if (kind == NodeKind.SpliceMany) return { spliceNodes: parseNodeArr(f[0], nodes) } as NodeData;
