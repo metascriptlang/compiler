@@ -1449,7 +1449,10 @@ export function createMaybeType(inner: Type): Type {
 	const key = maybeCacheKey(inner);
 	let i = 0;
 	while (i < _maybeCacheNames.length) {
-		if (_maybeCacheNames[i] == key) return _maybeCache[i];
+		if (_maybeCacheNames[i] == key) {
+			if (maybePayloadIs(_maybeCache[i], inner)) return _maybeCache[i];
+			break;
+		}
 		i += 1;
 	}
 	const t = emptyType();
@@ -1461,10 +1464,20 @@ export function createMaybeType(inner: Type): Type {
 	t.typeReturn = inner;    // store inner type for unwrapping
 	propagateToOwner(t, inner);
 	if (!_queryCachesReadOnly) {
-		_maybeCache.push(t);
-		_maybeCacheNames.push(key);
+		if (i < _maybeCacheNames.length) {
+			_maybeCache[i] = t;
+		} else {
+			_maybeCache.push(t);
+			_maybeCacheNames.push(key);
+		}
 	}
 	return t;
+}
+
+function maybePayloadIs(cached: Type, inner: Type): boolean {
+	const payload = cached.typeReturn;
+	if (payload == null || payload == inner || payload.sym == null || inner.sym == null) return true;
+	return payload.sym == inner.sym;
 }
 
 export function createRef(inner: Type | null): Type {
