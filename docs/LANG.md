@@ -26,7 +26,7 @@ checker rejects it and names the alternative.
 
 | job | construct |
 |---|---|
-| an object whose type is not known yet | `unknown` |
+| an object whose type is not known yet, e.g. Neon's `HostNode`, a node its render host owns | `unknown` |
 | a raw address at a C boundary | `Ptr<void>` |
 | keep an object alive while C holds its address | `Handle<T>` from `std/ffi` |
 
@@ -44,7 +44,9 @@ checker rejects it and names the alternative.
   `base as Derived`: a wrong class stops the program with
   `Error: invalid object conversion: <runtime class> is not C`, exit 1; `null` passes.
   `--danger` drops this test, as it drops bound checks, and `--gc=manual` has no type
-  header to test. `instanceof` narrows an `unknown` on every backend and is never dropped.
+  header to test. `u as C` has no unchecked spelling and `--danger` is its only switch; a
+  `Ptr<void>` read (`(u as Ptr<void>) as C`) is the one untested path, as below.
+  `instanceof` narrows an `unknown` on every backend and is never dropped.
 - Only a non-generic class is a cast target out of `unknown`. An interface or a generic
   class instance has no run-time identity to test (JS erases `Box<number>` and
   `Box<string>` to one class), so `u as I` is refused: make `I` a class, or keep the values
@@ -61,8 +63,9 @@ parameter or a return — declare `Ptr<void>`. An object's address is `x as Ptr<
 `extern` is the reference's untyped `{.varargs.}`: each argument reaches C as itself, so
 `printf(fmt, s, n)` passes `s` and `n`, not an array.
 
-`Handle<T>` (`std/ffi`, a plain struct over the reference's `GC_ref`/`GC_unref`, the shape of
-Swift's `Unmanaged`):
+`Handle<T>` (`std/ffi`) is a plain struct over the reference's `GC_ref`/`GC_unref`. The
+reference has only those two procs, so the retain/borrow/take surface is Swift's `Unmanaged`,
+the API already proven for C holding an object's address:
 
 | MetaScript | count | use |
 |---|---|---|
@@ -75,8 +78,10 @@ Swift's `Unmanaged`):
 
 A `Handle` is copied freely; a second `release` is a use-after-free and a missing one is a
 leak, both caught by the ledger and SAN lanes. On JS `h.ptr` is the object and the counts do
-nothing. Structs have no constructor, so the retained form is `Handle.retain(x)`, not
-`new Handle(x)`.
+nothing. The retained form is `Handle.retain(x)` and the read is `h.value()`, not
+`new Handle(x)` and a `h.value` getter: a struct has no constructor or getter, and a class
+would make every handle a heap object. `using h = …` was dropped because `defer h.release()`
+already does the same job.
 
 Measured on tree `09e272c1`: corpus `643`–`648` on C drc/orc/danger, JS and ESM (SAN clean),
 `bug599`–`bug601`, guards `unknownFieldCycleCollects` and `handleKeepsObjectForC` (a real C
@@ -84,6 +89,13 @@ file keeps the address; red with the retain or the release removed). Not measure
 `--gc=manual` build of a conversion. Not covered yet: C `extern class` values are not refused
 into `unknown` (the checker cannot tell a C extern class from a JS one declared in a shared
 `.ms`), and the Raiser VM neither tests a conversion nor loads `std/ffi`.
+
+Measured 2026-09-29 on tree `80d320e9`, C and JS: `(u as Ptr<void>) as B` passes an `A` untested
+while `u as B` stops with `A is not B`. Broken on C: a conversion or an `instanceof` whose target
+class the program never constructs is an internal error (`TypeInfo '…' demanded … but
+reachability marked it dead`), on `u as B`, `u instanceof B`, `base as Derived` and
+`base instanceof Derived` alike; JS runs them. The `instanceof` form already failed before this
+section's rules.
 
 **`unknown` is not a universal top type in the TypeScript sense**:
 TS `unknown` accepts every value because every JS value is already boxed, while MS keeps
