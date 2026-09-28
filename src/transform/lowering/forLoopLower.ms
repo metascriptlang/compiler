@@ -46,22 +46,9 @@ function lowerForNode(node: Node, ctx: TransformContext): Node {
 	let whileLabel = "";
 	if (d.forUpdate != null) {
 		const updateStmt = makeExprStmt(d.forUpdate, loc);
-		if (hasLoopContinue(bodyStmts, "")) {
-			if (loopSuspends(d, bodyStmts)) {
-				rewriteContinues(bodyStmts, updateStmt);
-			} else {
-				ctx.tempCounter += 1;
-				const jumps: LoopJumps = { bodyLabel: `__cont${ctx.tempCounter}`, loopLabel: `__lp${ctx.tempCounter}`, loopBroken: false };
-				let i = 0;
-				while (i < bodyStmts.length) {
-					bodyStmts[i] = retargetLoopJumps(bodyStmts[i], jumps, false);
-					i += 1;
-				}
-				bodyStmts = [makeSwitchWrapper(bodyStmts, jumps.bodyLabel, loc)];
-				if (jumps.loopBroken) whileLabel = jumps.loopLabel;
-			}
-		}
-		bodyStmts.push(updateStmt);
+		const tail = appendLoopTail(bodyStmts, updateStmt, (): Node => cloneStmt(updateStmt), loopSuspends(d, bodyStmts), ctx, loc);
+		bodyStmts = tail.tailStmts;
+		whileLabel = tail.tailLabel;
 	}
 
 	// 5. Build while loop
@@ -73,9 +60,40 @@ function lowerForNode(node: Node, ctx: TransformContext): Node {
 	return makeBlock(outerStmts, loc);
 }
 
+export interface LoopTail {
+	tailStmts: Node[];
+	tailLabel: string;
+}
+
+export function appendLoopTail(bodyStmts: Node[], tail: Node, tailAt: () => Node, suspends: boolean, ctx: TransformContext, loc: SourceLocation): LoopTail {
+	let stmts = bodyStmts;
+	let label = "";
+	if (hasLoopContinue(stmts, "")) {
+		if (suspends) {
+			rewriteContinues(stmts, tailAt);
+		} else {
+			ctx.tempCounter += 1;
+			const jumps: LoopJumps = { bodyLabel: `__cont${ctx.tempCounter}`, loopLabel: `__lp${ctx.tempCounter}`, loopBroken: false };
+			let i = 0;
+			while (i < stmts.length) {
+				stmts[i] = retargetLoopJumps(stmts[i], jumps, false);
+				i += 1;
+			}
+			stmts = [makeSwitchWrapper(stmts, jumps.bodyLabel, loc)];
+			if (jumps.loopBroken) label = jumps.loopLabel;
+		}
+	}
+	stmts.push(tail);
+	return { tailStmts: stmts, tailLabel: label };
+}
+
 function loopSuspends(d: ForStmtData, bodyStmts: Node[]): boolean {
 	if (d.forCondition != null && hasSuspendPoint(d.forCondition)) return true;
 	if (hasSuspendPoint(d.forUpdate)) return true;
+	return bodySuspends(bodyStmts);
+}
+
+export function bodySuspends(bodyStmts: Node[]): boolean {
 	for (const s of bodyStmts) {
 		if (hasSuspendPoint(s)) return true;
 	}
@@ -94,10 +112,10 @@ function hasSuspendPoint(node: Node): boolean {
 
 // Rewrite continue → { update; continue; } at current loop level.
 // Does NOT descend into nested loops (their continues target inner loops).
-function rewriteContinues(stmts: Node[], updateStmt: Node): void {
+function rewriteContinues(stmts: Node[], tailAt: () => Node): void {
 	let i = 0;
 	while (i < stmts.length) {
-		stmts[i] = rewriteContinuesInNode(stmts[i], updateStmt);
+		stmts[i] = rewriteContinuesInNode(stmts[i], tailAt);
 		i += 1;
 	}
 }
@@ -106,22 +124,22 @@ function rewriteContinues(stmts: Node[], updateStmt: Node): void {
 // Recurses into every position that can host a same-level continue — blocks,
 // full if/else-if chains (alternate is an IfStmt, not a block), try/catch/finally,
 // and match cases (matchLower runs after forLoopLower and keeps continue as-is).
-function rewriteContinuesInNode(node: Node, updateStmt: Node): Node {
+function rewriteContinuesInNode(node: Node, tailAt: () => Node): Node {
 	if (node.kind == NodeKind.ContinueStmt) {
-		return makeBlock([cloneStmt(updateStmt), node], node.location);
+		return makeBlock([tailAt(), node], node.location);
 	}
 	if (node.kind == NodeKind.BlockStmt) {
 		const bd = node.data as BlockStmtData;
-		rewriteContinues(bd.statements, updateStmt);
+		rewriteContinues(bd.statements, tailAt);
 	} else if (node.kind == NodeKind.IfStmt) {
 		const ifd = node.data as IfStmtData;
-		if (ifd.consequent != null) ifd.consequent = rewriteContinuesInNode(ifd.consequent, updateStmt);
-		if (ifd.alternate != null) ifd.alternate = rewriteContinuesInNode(ifd.alternate, updateStmt);
+		if (ifd.consequent != null) ifd.consequent = rewriteContinuesInNode(ifd.consequent, tailAt);
+		if (ifd.alternate != null) ifd.alternate = rewriteContinuesInNode(ifd.alternate, tailAt);
 	} else if (node.kind == NodeKind.TryCatchStmt) {
 		const td = node.data as TryCatchStmtData;
-		if (td.tryBody != null) td.tryBody = rewriteContinuesInNode(td.tryBody, updateStmt);
-		if (td.catchBody != null) td.catchBody = rewriteContinuesInNode(td.catchBody, updateStmt);
-		if (td.finallyBody != null) td.finallyBody = rewriteContinuesInNode(td.finallyBody, updateStmt);
+		if (td.tryBody != null) td.tryBody = rewriteContinuesInNode(td.tryBody, tailAt);
+		if (td.catchBody != null) td.catchBody = rewriteContinuesInNode(td.catchBody, tailAt);
+		if (td.finallyBody != null) td.finallyBody = rewriteContinuesInNode(td.finallyBody, tailAt);
 	} else if (node.kind == NodeKind.MatchStmt) {
 		const md = node.data as MatchStmtData;
 		let i = 0;
@@ -129,7 +147,7 @@ function rewriteContinuesInNode(node: Node, updateStmt: Node): Node {
 			const c = md.matchStmtCases[i];
 			if (c.kind == NodeKind.MatchCase) {
 				const cd = c.data as MatchCaseData;
-				if (cd.caseBody != null) cd.caseBody = rewriteContinuesInNode(cd.caseBody, updateStmt);
+				if (cd.caseBody != null) cd.caseBody = rewriteContinuesInNode(cd.caseBody, tailAt);
 			}
 			i += 1;
 		}

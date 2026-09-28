@@ -5,21 +5,23 @@
 // their length after each element, as Nim's items in lib/system/iterators.nim):
 //   for (const item of arr) { body }
 //   → { let $idx = 0; const $len = arr.length;
-//       while (true) { if (arr.length != $len) throw "..."; if (!($idx < $len)) break;
-//                      const item = arr[$idx]; $idx++; body } }
+//       while ($idx < $len) { const item = arr[$idx]; $idx++; body;
+//                             if (arr.length != $len) throw "..." } }
 
 import {
 	Node, NodeKind, NodeData, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, createNodeAt,
 	BlockStmtData, WhileStmtData, IfStmtData, ThrowStmtData, StringLiteralData, VariableDeclData, CallExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
+	ArrayAccessData, NumberLiteralData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { int32Type, charType, stringType, noneType, createArray, createSizedArray, isIterator, isMaybeType, getIteratorNextFnType } from "../../checker/types";
+import { appendLoopTail, bodySuspends } from "./forLoopLower";
+import { int32Type, charType, stringType, noneType, createArray, createSizedArray, createRef, isIterator, isMaybeType, getIteratorNextFnType } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import {
 	makeIdentResolved, cloneIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
-	makeIf, makeBreak, makeBool, makeString, makeHiddenDeref, runtimeRef, extractBodyStmts, boolToDeclKind,
+	makeIf, makeString, makeHiddenDeref, runtimeRef, extractBodyStmts, boolToDeclKind,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 
@@ -106,24 +108,24 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	// reference array: the iter expr keeps its Ref<Array> type (nativeLower derefs the
 	// synthesized .length/[idx] access), but element-type stamping must read through the
 	// Ref to the value array so `.typeReturn` yields the element type, not the inner array.
-	const elemArrType = (iterType != null && iterType.kind == TypeKind.Ref
-			&& iterType.typeReturn != null && iterType.typeReturn.kind == TypeKind.Array)
-		? iterType.typeReturn : iterType;
+	const isRefArray = iterType != null && iterType.kind == TypeKind.Ref
+		&& iterType.typeReturn != null && iterType.typeReturn.kind == TypeKind.Array;
+	const elemArrType = isRefArray ? iterType.typeReturn : iterType;
 	const isString = iterType != null && iterType.kind == TypeKind.String;
 	const lengthCanChange = isString || (elemArrType != null && elemArrType.kind == TypeKind.Array);
 
-	// Re-read a path of reads from a symbol every iteration, as Nim's items maps such an argument
-	// (transf.nim putArgInto, paDirectMapping): a snapshot temp ends its live range inside the
-	// loop and costs the element binding its cursor (+40-60% on a Box[] loop, 2026-09-26).
+	// A value iterable reached from a symbol is read at its location each element: a snapshot of a
+	// value is a heap copy whenever the body writes through the same root, and an address taken once
+	// dangles when the body grows an outer array (NIM-REF TR-26). A T[] is a reference, read once.
 	const iterable = d.forOfIterable;
-	const isStableLvalue = iterable.kind == NodeKind.Identifier
-		|| (iterable.kind == NodeKind.MemberExpr && isSymbolPath(iterable));
+	const readsLocation = !isRefArray && (iterable.kind == NodeKind.Identifier
+		|| ((iterable.kind == NodeKind.MemberExpr || iterable.kind == NodeKind.ArrayAccess) && isSymbolPath(iterable)));
 
 	const preamble: Node[] = [];
+	if (readsLocation) hoistIndices(iterable, ctx, preamble, loc);
 
-	// For non-stable expressions, copy to a temp (evaluated once)
 	let iterExpr: Node = d.forOfIterable;
-	if (!isStableLvalue) {
+	if (!readsLocation) {
 		const iterSym = freshTempSym(ctx, "iter", iterType != null ? iterType : noneType());
 		const iterDecl = makeVarDecl(iterSym.name, d.forOfIterable, DeclKind.Const, loc);
 		iterDecl.resolvedSym = iterSym;
@@ -203,29 +205,28 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	// (while-loop continue jumps to condition, skipping trailing statements)
 	whileStmts.push(incStmt);
 
-	const bodyStmts = extractBodyStmts(d.forOfBody);
-	let bi = 0;
-	while (bi < bodyStmts.length) {
-		whileStmts.push(bodyStmts[bi]);
-		bi += 1;
+	let bodyStmts = extractBodyStmts(d.forOfBody);
+	let whileLabel = "";
+	if (lengthCanChange) {
+		const checkAt = (): Node => lengthCheck(iterExpr, lenSym, isString, loc);
+		const tail = appendLoopTail(bodyStmts, checkAt(), checkAt, bodySuspends(bodyStmts), ctx, loc);
+		bodyStmts = tail.tailStmts;
+		whileLabel = tail.tailLabel;
 	}
+	for (const s of bodyStmts) whileStmts.push(s);
 
 	const inRange = makeBinary(makeIdentResolved(idxSym, loc), "<", makeIdentResolved(lenSym, loc), loc);
-	if (!lengthCanChange) {
-		preamble.push(makeWhile(inRange, makeBlock(whileStmts, loc), loc));
-		return makeBlock(preamble, loc);
-	}
+	const loop = makeWhile(inRange, makeBlock(whileStmts, loc), loc);
+	(loop.data as WhileStmtData).whileLabel = whileLabel;
+	preamble.push(loop);
+	return makeBlock(preamble, loc);
+}
 
+function lengthCheck(iterExpr: Node, lenSym: Symbol, isString: boolean, loc: SourceLocation): Node {
 	const changed = makeBinary(lengthOf(iterExpr, isString, loc), "!=", makeIdentResolved(lenSym, loc), loc);
 	const message = `the length of the ${isString ? "string" : "array"} changed while iterating over it`;
 	const raise = createNodeAt(NodeKind.ThrowStmt, { throwArg: makeString(message, loc) }, loc);
-	const guarded: Node[] = [
-		makeIf(changed, makeBlock([raise], loc), makeBlock([], loc), loc),
-		makeIf(makeUnary("!", inRange, loc), makeBlock([makeBreak(loc)], loc), makeBlock([], loc), loc),
-	];
-	for (const s of whileStmts) guarded.push(s);
-	preamble.push(makeWhile(makeBool(true, loc), makeBlock(guarded, loc), loc));
-	return makeBlock(preamble, loc);
+	return makeIf(changed, makeBlock([raise], loc), makeBlock([], loc), loc);
 }
 
 function lengthOf(iterExpr: Node, isString: boolean, loc: SourceLocation): Node {
@@ -235,13 +236,37 @@ function lengthOf(iterExpr: Node, isString: boolean, loc: SourceLocation): Node 
 	return call;
 }
 
+function pathInner(node: Node): Node | null {
+	if (node.kind == NodeKind.MemberExpr) return (node.data as MemberExprData).object;
+	if (node.kind == NodeKind.HiddenDeref) return (node.data as HiddenDerefData).expr;
+	if (node.kind == NodeKind.TypeAssertion) return (node.data as TypeAssertionData).asExpr;
+	if (isVariantRead(node)) return (node.data as HiddenStdConvData).convExpr;
+	if (node.kind == NodeKind.ArrayAccess) {
+		const array = (node.data as ArrayAccessData).array;
+		const t = array.nodeType;
+		if (t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray)) return array;
+	}
+	return null;
+}
+
 function isSymbolPath(node: Node): boolean {
 	if (node.kind == NodeKind.Identifier) return true;
-	if (node.kind == NodeKind.MemberExpr) return isSymbolPath((node.data as MemberExprData).object);
-	if (node.kind == NodeKind.HiddenDeref) return isSymbolPath((node.data as HiddenDerefData).expr);
-	if (node.kind == NodeKind.TypeAssertion) return isSymbolPath((node.data as TypeAssertionData).asExpr);
-	if (isVariantRead(node)) return isSymbolPath((node.data as HiddenStdConvData).convExpr);
-	return false;
+	const inner = pathInner(node);
+	return inner != null && isSymbolPath(inner);
+}
+
+function hoistIndices(node: Node, ctx: TransformContext, out: Node[], loc: SourceLocation): void {
+	const inner = pathInner(node);
+	if (inner == null) return;
+	hoistIndices(inner, ctx, out, loc);
+	if (node.kind != NodeKind.ArrayAccess) return;
+	const d = node.data as ArrayAccessData;
+	if (d.index.kind == NodeKind.NumberLiteral) return;
+	const atSym = freshTempSym(ctx, "at", d.index.nodeType);
+	const atDecl = makeVarDecl(atSym.name, d.index, DeclKind.Const, loc);
+	atDecl.resolvedSym = atSym;
+	out.push(atDecl);
+	d.index = makeIdentResolved(atSym, loc);
 }
 
 function isVariantRead(node: Node): boolean {
@@ -281,6 +306,20 @@ function cloneExpr(node: Node, loc: SourceLocation): Node {
 		clone.nodeType = node.nodeType;
 		clone.flags = node.flags;
 		clone.variantSlot = node.variantSlot;
+		return clone;
+	}
+	if (node.kind == NodeKind.ArrayAccess) {
+		const d = node.data as ArrayAccessData;
+		const clone = makeArrayAccess(cloneExpr(d.array, loc), cloneExpr(d.index, loc), loc);
+		clone.nodeType = node.nodeType;
+		clone.flags = node.flags;
+		return clone;
+	}
+	if (node.kind == NodeKind.NumberLiteral) {
+		const d = node.data as NumberLiteralData;
+		const clone = createNodeAt(NodeKind.NumberLiteral, { value: d.value, isFloat: d.isFloat, intVal: d.intVal, outOfRangeText: d.outOfRangeText, isBitPattern: d.isBitPattern } as NumberLiteralData, loc);
+		clone.nodeType = node.nodeType;
+		clone.flags = node.flags;
 		return clone;
 	}
 	throw new Error(`internal: for-of re-reads an iterable that is not a symbol path (node kind ${node.kind})`);
@@ -334,19 +373,50 @@ function loopBody(loop: Node): Node[] {
 	return ((loop.data as WhileStmtData).whileBody.data as BlockStmtData).statements;
 }
 
-test "an array for-of raises when the length changed before the next element" {
-	const loop = loweredLoop(createArray(int32Type()));
-	assert (loop.data as WhileStmtData).whileCondition.kind == NodeKind.BooleanLiteral;
-	const guard = loopBody(loop)[0];
-	assert guard.kind == NodeKind.IfStmt;
+function lastIsLengthCheck(stmts: Node[]): boolean {
+	const guard = stmts[stmts.length - 1];
+	if (guard.kind != NodeKind.IfStmt) return false;
 	const raise = ((guard.data as IfStmtData).consequent.data as BlockStmtData).statements[0];
-	assert raise.kind == NodeKind.ThrowStmt;
-	assert ((raise.data as ThrowStmtData).throwArg.data as StringLiteralData).value.contains("array changed while iterating");
+	return raise.kind == NodeKind.ThrowStmt
+		&& ((raise.data as ThrowStmtData).throwArg.data as StringLiteralData).value.contains("array changed while iterating");
+}
+
+test "an array for-of checks the length after the body, under a bounded condition" {
+	const loop = loweredLoop(createArray(int32Type()));
+	assert (loop.data as WhileStmtData).whileCondition.kind == NodeKind.BinaryExpr;
+	assert lastIsLengthCheck(loopBody(loop));
+}
+
+test "a continue in the body still reaches the length check" {
+	const stmts = loweredStmts("for (const x of arr) { if (x) continue; use(x); }", createArray(int32Type()));
+	const body = loopBody(stmts[stmts.length - 1]);
+	assert body[2].kind == NodeKind.DoWhileStmt;
+	assert lastIsLengthCheck(body);
+}
+
+test "a reference array is read once into a temp" {
+	const stmts = loweredStmts("for (const x of arr) { use(x); }", createRef(createArray(int32Type())));
+	assert stmts.length == 4;
+	assert (stmts[0].data as VariableDeclData).initializer.kind == NodeKind.Identifier;
+	const len = (stmts[2].data as VariableDeclData).initializer;
+	assert ((len.data as MemberExprData).object.data as IdentifierData).name != "arr";
+}
+
+test "an index in a value path is evaluated once, before the loop" {
+	const parsed = parseInput("for (const x of g[pick()]) { use(x); }");
+	if (!parsed.ok) throw new Error(parsed.error);
+	const iter = (getStmts(parsed.value)[0].data as ForOfStmtData).forOfIterable;
+	iter.nodeType = createArray(int32Type());
+	(iter.data as ArrayAccessData).array.nodeType = createArray(createArray(int32Type()));
+	const stmts = (getStmts(lowerForOf(parsed.value, makeCtx()))[0].data as BlockStmtData).statements;
+	assert stmts.length == 4;
+	assert (stmts[0].data as VariableDeclData).initializer.kind == NodeKind.CallExpr;
+	assert ((iter.data as ArrayAccessData).index.kind == NodeKind.Identifier);
 }
 
 test "a string for-of binds each byte as a char" {
 	const loop = loweredLoop(stringType());
-	const item = loopBody(loop)[2];
+	const item = loopBody(loop)[0];
 	assert item.kind == NodeKind.VariableDecl;
 	assert item.nodeType!.kind == TypeKind.Char;
 	const read = (item.data as VariableDeclData).initializer;
