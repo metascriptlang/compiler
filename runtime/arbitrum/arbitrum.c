@@ -15,6 +15,7 @@ MS_ARB_HOOK(msg_sender) extern void msArbReadSender(uint8_t* destination);
 MS_ARB_HOOK(contract_address) extern void msArbReadAddress(uint8_t* destination);
 MS_ARB_HOOK(msg_value) extern void msArbReadValue(uint8_t* destination);
 MS_ARB_HOOK(pay_for_memory_grow) extern void msArbPayForMemoryGrow(uint16_t pages);
+MS_ARB_HOOK(emit_log) extern void msArbEmitLog(const uint8_t* data, uint32_t length, uint32_t topics);
 
 extern void MsMain(void);
 
@@ -87,4 +88,10 @@ void msArbContractAddress(uint32_t destination) {
 
 void msArbMsgValue(uint32_t destination) {
     msArbReadValue((uint8_t*)(uintptr_t)destination);
+}
+
+void msPrintln(msString value) {
+    if (value.len < 0 || (uint64_t)value.len > UINT32_MAX) __builtin_trap();
+    const uint8_t* bytes = value.len == 0 ? (const uint8_t*)"" : (const uint8_t*)value.p->data;
+    msArbEmitLog(bytes, (uint32_t)value.len, 0);
 }

@@ -407,6 +407,8 @@ static inline void msPrintln(msString s) {
         ((uint64_t (*)(const char*, uint64_t))MS_SOL_LOG_STATIC_SYSCALL_MURMUR3)(s.p->data, (uint64_t)s.len);
     }
 }
+#elif defined(MS_FREESTANDING_LIBC)
+void msPrintln(msString s);
 #else
 static inline void msPrintln(msString s) {
     if (s.p != NULL && s.len > 0) {
