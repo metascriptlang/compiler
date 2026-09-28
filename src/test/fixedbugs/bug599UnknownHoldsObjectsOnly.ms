@@ -30,6 +30,10 @@ test "bug599: unknown does not cast to cstring" {
 	assert hasError("function f(u: unknown): cstring { return u as cstring; }", "never a C string");
 }
 
+test "bug599: unknown does not cast to a value type" {
+	assert hasError("function f(u: unknown): int32 { return u as int32; }", "the value type int32");
+}
+
 test "bug599: an int32 is not reinterpreted as an enum through unknown" {
 	assert hasError("enum K { A, B }\nfunction f(i: int32): K { return i as unknown as K; }", "convert with `as K`");
 }
