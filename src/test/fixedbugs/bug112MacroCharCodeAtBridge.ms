@@ -16,7 +16,7 @@ import { Node, NodeKind } from "std/meta";
 
 export macro hashName(node: Node): Node {
 	const s = "padding:8px;";
-	let h = 5381;
+	let h: int64 = 5381;
 	for (let i = 0; i < s.length; i += 1) {
 		h = (h * 33 + s.charCodeAt(i)) % 4294967296;
 	}
