@@ -1,4 +1,5 @@
 // @stdout: rebound 1,2,3, 1 | field 1,2,3, 1 | index 1,2,3, 1 | written 1,2,30, | continued 1,raised | generated raised
+// @xfail(raiser): the Raiser VM cannot compile a yield expression ('cannot compile node kind YieldExpr')
 // note: a for-of over a T[] reads the array reference once, as TypeScript does, and checks the length after each element, as Nim's items does (NIM-REF TR-26). Rebinding the variable, field or slot that held the array lets the loop finish the array it started, where the lowering used to re-read the path and raise or mix in the new array; a write to an element is seen. A continue or a yield in the body still reaches the length check.
 
 class Holder { xs: number[] = []; }
