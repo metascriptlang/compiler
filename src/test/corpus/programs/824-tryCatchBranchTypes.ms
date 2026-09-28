@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser `typeof` of a union value yields the value, not its type name — `const t = f ? 7 : "x"; typeof t` prints `x` on v0.2.55, the same with no try
 // Parity program — `try r catch v` types and lowers like the ternary `r.ok ? r.value : v`.
 // Axes: a `Result<void, E>` in statement position with a value catch and a call catch, and bound
 // to a const; a catch of another type joining into a union; null (Maybe), the same type, a

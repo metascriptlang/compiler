@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: expected an object, got value kind Int
 // @stdout: named-fn storage ok
 //
 // A named function stored anywhere a function value lives — inside a

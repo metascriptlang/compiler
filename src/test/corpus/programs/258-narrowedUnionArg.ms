@@ -1,4 +1,3 @@
-// @xfail(raiser): output differs from c: total=0
 // Parity program — the OTHER direction of 253: a reference whose STORAGE is
 // the union, narrowed to one variant by a discriminant guard, then handed back
 // to a formal that wants the union. The declared type never changed, so the

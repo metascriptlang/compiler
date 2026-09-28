@@ -1,5 +1,4 @@
 // @stdout: a-str 2.5 | a-str 2.5 | 7 b-str 4
-// @xfail(raiser): the Raiser VM prints empty union payloads (' |  |  4' where C prints 'a-str 2.5 | a-str 2.5 | 7 b-str 4')
 import { U as UA, mkA } from "./a";
 import { U as UB, mkB } from "./b";
 

@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: attempt to access a nil address
 // Parity program — std collections: HashMap<K,V> / HashSet<T>.
 // C = open addressing (std/core/struct.ms); JS = native Map/Set aliases
 // (std/core/struct.jms — STRING-CONTRACT §5: the containers promise NO

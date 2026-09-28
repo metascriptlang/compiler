@@ -1,4 +1,3 @@
-// @xfail(raiser): runs but stdout misses its @stdout line (exit=0)
 // @stdout: s:x n:7 null | s:ab n:1 null
 
 // A nullable narrow type flowing into a nullable WIDER union is sound
