@@ -59,7 +59,7 @@ function typeMsgKind(t: Type | null): string {
 		TypeKind.Int64 | TypeKind.Uint64 => "int64",
 		TypeKind.Boolean => "bool",
 		TypeKind.Function | TypeKind.Span | TypeKind.Union => "struct",
-		TypeKind.Ref | TypeKind.Ptr | TypeKind.CString => "ptr",
+		TypeKind.Ref | TypeKind.Ptr | TypeKind.CString | TypeKind.Unknown => "ptr",
 		_ => "",
 	};
 	if (result == "") throw "actor: unsupported TypeKind " + typeDisplayName(t);
