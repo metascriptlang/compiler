@@ -273,6 +273,7 @@ export enum NodeFlag {
 	ExplicitDeref, // parser: HiddenDeref written as `x[]` — the checker validates the pointer, fmt prints it back
 	CommaWritten,  // parser: a comma was written after this match case
 	ObjCheck,      // checker: this TypeAssertion is an object down-conversion checked at run time
+	ConvCheck,     // checker: this conversion narrows to a union member or into a string-literal union, tested at run time
 }
 
 // ===== Node Kind Enum =====
