@@ -170,22 +170,43 @@ export function undelegate(delegated: Account, buffer: Account, payer: Account, 
 	return delegated.data().copyFrom(buffer.data());
 }
 
-export function scheduleTask(payer: Account, taskId: uint64, intervalMillis: uint64, iterations: uint64, target: Account, targetData: Bytes, targetProgram: Pubkey): Result<uint64, ProgramError> {
+function scheduled(
+	payer: Account,
+	taskId: uint64,
+	intervalMillis: uint64,
+	iterations: uint64,
+	task: Instruction,
+): Result<uint64, ProgramError> {
 	if (!payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
-	const instruction = Instruction.forProgram(Pubkey.magicProgram(), 2, 128 + targetData.length);
+	const instruction = Instruction.forProgram(
+		Pubkey.magicProgram(),
+		1 + task.accountLength(),
+		36 + task.encodedLength(),
+	);
 	instruction.addWritableSigner(payer);
-	instruction.addAccount(target, target.isWritable(), false);
+	instruction.addAccountsOf(task);
 	instruction.appendU32(6);
 	instruction.appendU64(taskId);
 	instruction.appendU64(intervalMillis);
 	instruction.appendU64(iterations);
 	instruction.appendU64(1);
-	instruction.appendPubkey(targetProgram);
-	instruction.appendU64(1);
-	instruction.appendPubkey(target.key());
-	instruction.appendU8(0);
-	instruction.appendU8(1);
-	instruction.appendU64(targetData.length);
-	instruction.appendBytes(targetData);
+	instruction.appendInstruction(task);
 	return instruction.invoke();
+}
+
+export function scheduleTask(payer: Account, taskId: uint64, intervalMillis: uint64, iterations: uint64, target: Account, targetData: Bytes, targetProgram: Pubkey): Result<uint64, ProgramError> {
+	const task = Instruction.forProgram(targetProgram, 1, targetData.length);
+	task.addWritable(target);
+	task.appendBytes(targetData);
+	return scheduled(payer, taskId, intervalMillis, iterations, task);
+}
+
+export function scheduleTask(
+	payer: Account,
+	taskId: uint64,
+	intervalMillis: uint64,
+	iterations: uint64,
+	task: Instruction,
+): Result<uint64, ProgramError> {
+	return scheduled(payer, taskId, intervalMillis, iterations, task);
 }
