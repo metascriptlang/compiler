@@ -129,6 +129,7 @@ export function monoTypeKey(t: Type | null): string {
 		TypeKind.Array => "arr_" + monoTypeKey(t.typeReturn),
 		TypeKind.Ref => "ref_" + monoTypeKey(t.typeReturn),
 		TypeKind.Ptr => "ptr_" + monoTypeKey(t.typeReturn),
+		TypeKind.EnumLiteral => "k" + (t.kind as number).toString() + "_" + monoTypeKey(t.typeReturn) + "_" + (t.typeNames.length > 0 ? t.typeNames[0] : ""),
 		TypeKind.Struct | TypeKind.Enum => {
 			if (t.typeName == "") return "anon" + hashToBase36(monoStructuralKey(t));
 			const owner = monoOwnerPath(t);

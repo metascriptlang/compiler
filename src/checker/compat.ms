@@ -32,6 +32,15 @@ function sameElement(a: Type | null, b: Type | null): boolean {
 // A reference array/span/ptr is assigned by a raw payload cast — no per-element
 // conversion runs. So numeric elements of different C width (int32 vs number)
 // would be reinterpreted, not converted → OOB/garbage. Require matching repr.
+function sameInstanceArg(a: Type | null, b: Type | null): boolean {
+	if (a != null && b != null && (isLiteralKind(a) || isLiteralKind(b))) return sameType(a, b);
+	return sameElement(a, b);
+}
+
+function isLiteralKind(t: Type): boolean {
+	return t.kind == TypeKind.EnumLiteral || t.kind == TypeKind.StringLiteral || t.kind == TypeKind.BooleanLiteral;
+}
+
 function sameElementRepr(a: Type | null, b: Type | null): boolean {
 	if (a == null || b == null) return true;
 	if (!isNumeric(a) || !isNumeric(b)) return true;
@@ -371,7 +380,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 				const limit = source.typeChildren.length < target.typeChildren.length ? source.typeChildren.length : target.typeChildren.length;
 				const invariant = isNominalType(source);
 				for (let gi = 0; gi < limit; gi += 1) {
-					if (invariant ? !sameType(source.typeChildren[gi], target.typeChildren[gi]) : !sameElement(source.typeChildren[gi], target.typeChildren[gi])) return false;
+					if (invariant ? !sameType(source.typeChildren[gi], target.typeChildren[gi]) : !sameInstanceArg(source.typeChildren[gi], target.typeChildren[gi])) return false;
 				}
 				return true;
 			},
@@ -1094,7 +1103,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				for (let gi = 0; gi < giLimit; gi += 1) {
 					const argRel = typeRelation(formal.typeChildren[gi], actual.typeChildren[gi]);
 					if (argRel == TypeRelation.Generic) instRel = TypeRelation.Generic;
-					else if (argRel != TypeRelation.Exact && !sameElement(actual.typeChildren[gi], formal.typeChildren[gi])) return TypeRelation.None;
+					else if (argRel != TypeRelation.Exact && !sameInstanceArg(actual.typeChildren[gi], formal.typeChildren[gi])) return TypeRelation.None;
 				}
 				return instRel;
 			},

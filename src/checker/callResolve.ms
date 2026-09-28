@@ -381,15 +381,24 @@ function bindFromExpectedReturn(calleeType: Type, expectedType: Type | null): Un
 	return bindings;
 }
 
-function isShapedByContext(arg: Node): boolean {
+function isShapedByContext(ctx: CheckerContext, arg: Node): boolean {
 	return isContextSensitive(arg)
 		|| arg.kind == NodeKind.FunctionExpr
 		|| arg.kind == NodeKind.ArrayLiteral
-		|| isNumberLiteralArg(arg);
+		|| isNumberLiteralArg(arg)
+		|| isEnumMemberArg(ctx, arg);
 }
 
-function takesContext(arg: Node): boolean {
-	return isShapedByContext(arg) || arg.kind == NodeKind.CallExpr || arg.kind == NodeKind.NewExpr;
+function takesContext(ctx: CheckerContext, arg: Node): boolean {
+	return isShapedByContext(ctx, arg) || arg.kind == NodeKind.CallExpr || arg.kind == NodeKind.NewExpr;
+}
+
+function isEnumMemberArg(ctx: CheckerContext, arg: Node): boolean {
+	if (arg.kind != NodeKind.MemberExpr) return false;
+	const obj = (arg.data as MemberExprData).object;
+	if (obj.kind != NodeKind.Identifier) return false;
+	const sym = lookupSymbol(ctx.table, (obj.data as IdentifierData).name);
+	return sym != null && sym.symbolKind == SymbolKind.Enum;
 }
 
 function isNumberLiteralArg(arg: Node): boolean {
@@ -399,14 +408,14 @@ function isNumberLiteralArg(arg: Node): boolean {
 	return (ud.unaryOp == "-" || ud.unaryOp == "+") && ud.operand.kind == NodeKind.NumberLiteral;
 }
 
-function genericArgOrder(args: Node[], isGeneric: boolean): int32[] {
+function genericArgOrder(ctx: CheckerContext, args: Node[], isGeneric: boolean): int32[] {
 	const order: int32[] = [];
 	for (let ai = 0; ai < args.length; ai += 1) {
-		if (!isGeneric || !isShapedByContext(args[ai])) order.push(ai as int32);
+		if (!isGeneric || !isShapedByContext(ctx, args[ai])) order.push(ai as int32);
 	}
 	if (!isGeneric) return order;
 	for (let ai = 0; ai < args.length; ai += 1) {
-		if (isShapedByContext(args[ai])) order.push(ai as int32);
+		if (isShapedByContext(ctx, args[ai])) order.push(ai as int32);
 	}
 	return order;
 }
@@ -1140,7 +1149,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		const spawnCalleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
 		let spawnMoveKeys: string[] = [];
 		if (spawnCalleeSym != null && spawnCalleeSym.builtinKind == "PromiseSpawn") spawnMoveKeys = desugarSpawnMoveList(ctx, d);
-	const argOrder = genericArgOrder(d.arguments, _isGenericCall);
+	const argOrder = genericArgOrder(ctx, d.arguments, _isGenericCall);
 	for (let oi = 0; oi < argOrder.length; oi += 1) {
 		const ai = argOrder[oi];
 		let paramExpected: Type | null = null;
@@ -1157,7 +1166,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				paramExpected = _formal;
 			}
 			if (_contextBindings.names.length > 0 && hasGenericParams(paramExpected)
-				&& takesContext(d.arguments[ai])) {
+				&& takesContext(ctx, d.arguments[ai])) {
 				paramExpected = instantiateGeneric(paramExpected, _contextBindings.names, _contextBindings.types);
 			}
 			// Limitation case (Phase D): if paramExpected still contains
