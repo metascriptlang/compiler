@@ -2630,6 +2630,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	for (const p of processed) {
 		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
 		prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
+		if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) emissionFacts.hcrCoreUnits.add(p.modPath);
 	}
 	const emissionJobs: ModuleEmissionJob[] = [];
 	for (const p of processed) {

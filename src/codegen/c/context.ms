@@ -610,6 +610,7 @@ export function aliveSetModuleCount(aliveSet: Readonly<AliveSet>): int32 {
 export class CEmissionFacts {
 	genericOwners: HashMap<string, string> = new HashMap<string, string>();
 	skippedTypeInfos: HashSet<string> = new HashSet<string>();
+	hcrCoreUnits: HashSet<string> = new HashSet<string>();
 }
 
 export interface DeferredStructDef {
