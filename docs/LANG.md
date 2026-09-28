@@ -91,11 +91,10 @@ into `unknown` (the checker cannot tell a C extern class from a JS one declared 
 `.ms`), and the Raiser VM neither tests a conversion nor loads `std/ffi`.
 
 Measured 2026-09-29 on tree `80d320e9`, C and JS: `(u as Ptr<void>) as B` passes an `A` untested
-while `u as B` stops with `A is not B`. Broken on C: a conversion or an `instanceof` whose target
-class the program never constructs is an internal error (`TypeInfo '…' demanded … but
-reachability marked it dead`), on `u as B`, `u instanceof B`, `base as Derived` and
-`base instanceof Derived` alike; JS runs them. The `instanceof` form already failed before this
-section's rules.
+while `u as B` stops with `A is not B`. A conversion or an `instanceof` whose target class the
+program never constructs runs on C too (`u as B` stops with `A is not B`, `base instanceof
+Derived` is `false`; corpus `655` on C drc/orc/danger, JS and ESM); before it both were an
+internal error on C.
 
 **`unknown` is not a universal top type in the TypeScript sense**:
 TS `unknown` accepts every value because every JS value is already boxed, while MS keeps
