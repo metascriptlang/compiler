@@ -143,3 +143,87 @@ test "valueLocations: sequence assignment preserves its location across equal gr
 	assert field[].length == 3 && field[][1] == 5;
 	assert bag.n == 1;
 }
+
+struct MovedNode { kids: Vec<int32>; }
+struct MovedTree { nodes: Vec<MovedNode>; rows: Vec<Vec<int32>>; }
+struct MovedForest { trees: Vec<MovedTree>; }
+struct MovedHolder { kids: Vec<int32>; }
+
+let movedIndexReads: int32 = 0;
+function movedIndex(): int32 { movedIndexReads++; return 0; }
+function movedTree(): MovedTree { return { nodes: [{ kids: [1, 2] }], rows: [[3, 4]] }; }
+function movedForest(): MovedForest { return { trees: [movedTree()] }; }
+
+function declNestedFromCall(): int32 {
+	const kids = movedTree().nodes[movedIndex()].kids;
+	return kids.length;
+}
+function declNestedFromLocal(): int32 {
+	const tree = movedTree();
+	const kids = tree.nodes[movedIndex()].kids;
+	return kids.length;
+}
+function declOutermostFromLocal(): int32 {
+	const tree = movedTree();
+	const row = tree.rows[movedIndex()];
+	return row.length;
+}
+function declMiddleFromLocal(): int32 {
+	const forest = movedForest();
+	const kids = forest.trees[movedIndex()].nodes[0].kids;
+	return kids.length;
+}
+function declTwoIndices(): int32 {
+	const forest = movedForest();
+	const kids = forest.trees[movedIndex()].nodes[movedIndex()].kids;
+	return kids.length;
+}
+function assignNestedToLocal(): int32 {
+	const tree = movedTree();
+	let kids: Vec<int32> = [9];
+	kids = tree.nodes[movedIndex()].kids;
+	return kids.length;
+}
+function assignNestedToField(): int32 {
+	const tree = movedTree();
+	let holder: MovedHolder = { kids: [9] };
+	holder.kids = tree.nodes[movedIndex()].kids;
+	return holder.kids.length;
+}
+function forOfNestedFromCall(): int32 {
+	let sum: int32 = 0;
+	for (const kid of movedTree().nodes[movedIndex()].kids) sum += kid;
+	return sum;
+}
+function forOfMiddleFromCall(): int32 {
+	let sum: int32 = 0;
+	for (const kid of movedForest().trees[movedIndex()].nodes[0].kids) sum += kid;
+	return sum;
+}
+
+test "valueLocations: a declaration moving out of an indexed path evaluates each index once" {
+	movedIndexReads = 0;
+	assert declNestedFromCall() == 2 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert declNestedFromLocal() == 2 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert declOutermostFromLocal() == 2 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert declMiddleFromLocal() == 2 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert declTwoIndices() == 2 && movedIndexReads == 2;
+}
+
+test "valueLocations: an assignment moving out of an indexed path evaluates each index once" {
+	movedIndexReads = 0;
+	assert assignNestedToLocal() == 2 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert assignNestedToField() == 2 && movedIndexReads == 1;
+}
+
+test "valueLocations: a for-of over an indexed path of a fresh value evaluates each index once" {
+	movedIndexReads = 0;
+	assert forOfNestedFromCall() == 3 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert forOfMiddleFromCall() == 3 && movedIndexReads == 1;
+}
