@@ -1,4 +1,5 @@
 // @stdout: down-conv native=native dom=42 base=native null=ok iof=native,other,other mixed=100/300
+// @xfail(raiser): the Raiser VM cannot evaluate class inheritance (super) or instanceof at comptime
 
 type HostNode = unknown;
 

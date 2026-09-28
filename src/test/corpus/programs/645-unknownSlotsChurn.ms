@@ -1,4 +1,5 @@
 // @stdout: unknown-slots arr=2 lit=2 map=m field=r2 box=b2 cap=cap await=40
+// @xfail(raiser): the Raiser VM has no host bridge for msMapFatal and stops with 'expected an object, got value kind Array'
 
 class Node {
 	name: string;
