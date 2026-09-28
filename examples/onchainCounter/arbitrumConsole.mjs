@@ -7,12 +7,13 @@ import { encodeFunctionData, decodeFunctionResult, getContractAddress, toHex, he
 import { chainId, arbWasm, arbWasmAbi, connect, activeVersion, loadArtifact, sha256 } from "./arbitrumClient.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const usage = "node arbitrumConsole.mjs SOURCE.ms OUTPUT_DIRECTORY --msc COMPILER --cc CLANG [--rpc URL]";
+const usage = "node arbitrumConsole.mjs SOURCE.ms OUTPUT_DIRECTORY --msc COMPILER --cc CLANG [--rpc URL] [--demo]";
 const json = (value) => JSON.stringify(value, (_, item) => typeof item === "bigint" ? item.toString() : item, 2);
 
 async function run() {
 	const { values, positionals } = parseArgs({ options: {
 		msc: { type: "string" }, cc: { type: "string" }, rpc: { type: "string", default: "https://arbitrum-sepolia-rpc.publicnode.com" }, help: { type: "boolean" },
+		demo: { type: "boolean" },
 	}, allowPositionals: true });
 	if (values.help) { console.log(usage); return; }
 	if (positionals.length !== 2 || !values.msc || !values.cc) throw new Error(usage);
@@ -38,6 +39,9 @@ async function run() {
 		writeFileSync(join(output, "build.log"), build);
 		const artifact = loadArtifact(wasm);
 		proof.artifact = artifact;
+		console.log(values.demo
+			? `   program.wasm  ${artifact.wasmBytes} bytes  (${artifact.compressedBytes} bytes packaged)`
+			: `WASM: ${artifact.wasmBytes} bytes · packaged: ${artifact.compressedBytes} bytes · SHA-256 ${artifact.sha256}`);
 		proof.sdkCheck = execFileSync("cargo", ["stylus", "check", "--wasm-file", wasm, "--endpoint", values.rpc], { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
 		const client = await connect(values.rpc);
 		const blockNumber = await client.getBlockNumber();
@@ -55,6 +59,9 @@ async function run() {
 			method: "eth_simulateV1",
 			params: [{ blockStateCalls: [{ stateOverrides: { [from]: { balance: toHex(100n * 10n ** 18n), nonce: "0x0" } }, calls }], validation: false, traceTransfers: false }, toHex(blockNumber)],
 		};
+		const heading = `3 — execute on Nitro (unsigned simulation, Arbitrum Sepolia ${chainId}, block ${blockNumber})`;
+		console.log(values.demo ? `\n\u001b[1;36m▸ ${heading}\u001b[0m` : heading);
+		console.log(`   deploy → ${version === null ? "activate → " : "already-active codehash → "}invoke twice; no broadcast or persisted deployment`);
 		writeFileSync(proofPath, `${json(proof)}\n`);
 		const result = await client.request(proof.request);
 		proof.response = result;
@@ -82,7 +89,11 @@ async function run() {
 		proof.passed = true;
 		writeFileSync(proofPath, `${json(proof)}\n`);
 		for (const [index, invocation] of invocations.entries()) {
-			console.log(`Invocation ${index + 1}: ${invocation.lines.length} console events`);
+			if (values.demo && index > 0 && json(invocation.lines) === json(invocations[0].lines)) {
+				console.log(`Repeat invocation: identical console output · simulated gas ${BigInt(invocation.gasUsed)}`);
+				continue;
+			}
+			console.log(`Invocation ${index + 1}: ${invocation.lines.length} console events · simulated gas ${BigInt(invocation.gasUsed)}`);
 			for (const line of invocation.lines) console.log(line);
 		}
 		console.log(`Execution recorded in ${proofPath}; program-specific output assertions belong to the consumer.`);
