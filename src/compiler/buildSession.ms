@@ -160,6 +160,15 @@ export function collectTypeInstanceRows(check: CheckSession, loadOrder: string[]
 		if (created != null) lists.push(created);
 	}
 	lists.push(takeGenericTypeInstsFrom(0));
+	return distinctTypeRows(lists);
+}
+
+export function moduleTypeInstanceRows(check: CheckSession, path: string): GenericTypeInstRow[] {
+	const created = check.typeInstances.get(path);
+	return created != null ? distinctTypeRows([created]) : [];
+}
+
+function distinctTypeRows(lists: GenericTypeInstRow[][]): GenericTypeInstRow[] {
 	const rows: GenericTypeInstRow[] = [];
 	const seen = new HashSet<string>();
 	for (const list of lists) {

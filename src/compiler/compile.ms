@@ -49,7 +49,7 @@ import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
 import { drainPendingInstances, distinctInstances } from "../checker/instantiate";
-import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTablesFingerprint, collectTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
+import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTablesFingerprint, collectTypeInstanceRows, moduleTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { hookSymMark, hookSymsFrom, replayHookSyms } from "../codegen/c/types";
 import { GenericTypeInstRow, addGenericTypeInstRow } from "../parser/context";
 import { dbLower } from "./transam/index";
@@ -1224,23 +1224,39 @@ function unitProgramAt(paths: string[], programs: Node[], path: string): Node | 
 	return null;
 }
 
-function routeInstances(order: Node[], programOf: (path: string) => Node | null, place: boolean): HashMap<string, Node[]> {
-	const byHome = new HashMap<string, Node[]>();
-	for (const instNode of distinctInstances(order)) {
+function routeInstances(order: Node[], programOf: (path: string) => Node | null, place: boolean, homes: HashMap<Node, string> | null): HashMap<string, Node[]> {
+	const grouped = new HashMap<string, Node[]>();
+	const homeOrder: string[] = [];
+	for (const instNode of order) {
 		const sym = instNode.resolvedSym;
 		if (sym == null || sym.modulePath == "") throw new Error(`internal: a generic instance of this build has no owning module`);
-		if (instNode.nodeType == null && sym.symbolType != null) instNode.nodeType = sym.symbolType;
-		const program = programOf(sym.modulePath);
-		if (program == null) throw new Error(`internal: generic instance '${sym.name}' belongs to ${sym.modulePath}, which is not a module of this build`);
-		if (!byHome.has(sym.modulePath)) byHome.set(sym.modulePath, []);
-		byHome.get(sym.modulePath).push(instNode);
-		if (place) (program.data as ProgramData).programStmts.push(instNode);
+		const home = (homes != null ? homes.get(instNode) : null) ?? sym.modulePath;
+		let group = grouped.get(home);
+		if (group == null) {
+			group = [];
+			grouped.set(home, group);
+			homeOrder.push(home);
+		}
+		group.push(instNode);
+	}
+	const byHome = new HashMap<string, Node[]>();
+	for (const home of homeOrder) {
+		const program = programOf(home);
+		if (program == null) throw new Error(`internal: generic instances are placed in ${home}, which is not a module of this build`);
+		const placed = distinctInstances(grouped.get(home)!);
+		for (const instNode of placed) {
+			const sym = instNode.resolvedSym!;
+			if (instNode.nodeType == null && sym.symbolType != null) instNode.nodeType = sym.symbolType;
+			if (instNode.kind == NodeKind.FunctionDecl) sym.modulePath = home;
+			if (place) (program.data as ProgramData).programStmts.push(instNode);
+		}
+		byHome.set(home, placed);
 	}
 	return byHome;
 }
 
 function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[]): void {
-	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true);
+	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true, null);
 }
 
 function graphCheckedModule(graph: ModuleGraph, modPath: string, mod: Module, opts: CliOptions): { program: Node, ctx: CheckerContext } {
@@ -2399,12 +2415,19 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		programByPath.set(modPath, checked.program);
 	}
 
+	const reloadable: string[] = opts.isHcr ? hcrModulePaths : [];
 	const routeOrder: Node[] = [];
+	const homes = new HashMap<Node, string>();
 	for (const modPath of graph.loadOrder) {
 		const created = session.check.instances.get(modPath);
-		if (created != null) for (const instNode of created) routeOrder.push(instNode);
+		if (created == null) continue;
+		const keeps = reloadable.includes(modPath);
+		for (const instNode of created) {
+			routeOrder.push(instNode);
+			if (keeps) homes.set(instNode, modPath);
+		}
 	}
-	const instancesByOwner = routeInstances(routeOrder, (path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, !session.keep);
+	const instancesByOwner = routeInstances(routeOrder, (path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, !session.keep, homes);
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
 	for (let i = 0; i < hcrModulePaths.length; i += 1) {
@@ -2416,8 +2439,15 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		hcrModules[i].beforeReload = hcrReloadHandlers(program, SymbolFlag.BeforeReload);
 		hcrModules[i].afterReload = hcrReloadHandlers(program, SymbolFlag.AfterReload);
 	}
-	const typeRows = collectTypeInstanceRows(session.check, graph.loadOrder);
 	const firstModule = checkedMods.length > 0 ? checkedMods[0].modPath : "";
+	const typeRowsOf = new HashMap<string, GenericTypeInstRow[]>();
+	const sharedOrder: string[] = [];
+	for (const path of graph.loadOrder) {
+		if (reloadable.includes(path) && path != firstModule) typeRowsOf.set(path, moduleTypeInstanceRows(session.check, path));
+		else sharedOrder.push(path);
+	}
+	typeRowsOf.set(firstModule, collectTypeInstanceRows(session.check, sharedOrder));
+	const noTypeRows: GenericTypeInstRow[] = [];
 	const ownerFingerprints: HashMap<string, string> = new HashMap<string, string>();
 	if (session.keep) {
 		if (opts.isHcr) {
@@ -2434,7 +2464,8 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		}
 		for (const cm of checkedMods) {
 			let fingerprint = instancesFingerprint(session, instancesByOwner.get(cm.modPath));
-			if (cm.modPath == firstModule) fingerprint = fingerprint + "#types:" + typeInstanceRowsFingerprint(typeRows);
+			const rows = typeRowsOf.get(cm.modPath);
+			if (rows != null && rows.length > 0) fingerprint = fingerprint + "#types:" + typeInstanceRowsFingerprint(rows);
 			ownerFingerprints.set(cm.modPath, fingerprint);
 			if (session.check.rechecked.has(cm.modPath) || !session.lowerFingerprints.has(cm.modPath)) continue;
 			if (session.lowerFingerprints.get(cm.modPath) != fingerprint) {
@@ -2461,7 +2492,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 			timers: a2t,
 			diagnostics: [],
 			instances: routed != null ? routed : [],
-			typeInstances: modPath == firstModule ? typeRows : [],
+			typeInstances: typeRowsOf.get(modPath) ?? noTypeRows,
 			cloneInput: session.keep,
 			ran: false,
 			claims: { typeInfos: [], hooks: [] },
