@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isUnresolvedType, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, inferredType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isUnknownType, isPrimitiveUnionMember } from "../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isUnknownType, isPrimitiveUnionMember } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
 import { attachedOpSym } from "../transform/util";
@@ -326,7 +326,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				if (refInner.kind == TypeKind.Ptr) return noRcInfo();
 				// unknown | null: same bare-void* repr; unknown is a non-owning view
 				// (Nim parity: `pointer` is RC-inert) and may hold foreign handles.
-				if (isUnresolvedType(refInner)) return noRcInfo();
+				if (isUnknownType(refInner)) return noRcInfo();
 				if (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor) return noRcInfo();
 				if (isAtomicRef(refInner)) return makeRcInfo(RcKind.Ref, "", "msAtomicDecref", "msAtomicIncref", "msPtrWasMoved", "", false);
 				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) {
@@ -410,6 +410,13 @@ test "Ptr | null → None (raw pointer, never refcounted)" {
 	assert !info.needsCleanup;
 }
 
+test "unknown | null → None (same inert repr as bare unknown)" {
+	const ctx = createTransformContext();
+	const info = classifyType(createUnion([unknownType(), nullType()]), ctx);
+	assert info.rcKind == RcKind.None;
+	assert !info.needsCleanup;
+}
+
 test "pure strlit union → String ops (msString repr)" {
 	const ctx = createTransformContext();
 	const u = createUnion([createStringLiteral("column"), createStringLiteral("row")]);
@@ -445,7 +452,7 @@ test "null → None" {
 
 test "unknown → None" {
 	const ctx = createTransformContext();
-	const info = classifyType(inferredType(), ctx);
+	const info = classifyType(unknownType(), ctx);
 	assert info.rcKind == RcKind.None;
 }
 
