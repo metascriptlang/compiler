@@ -554,6 +554,9 @@ static inline void* msObjDownConv(void* p, const msTypeInfo* target) {
 	return p;
 }
 
+static inline void msFfiRetain(void* p) { msIncrefCyclic(p); }
+static inline void msFfiRelease(void* p) { msDecrefCyclic(p); }
+
 #define msVariantAccess(u, slot, head, labels) (*({ \
 	__typeof__(u)* __vu = &(u); \
 	if ((int64_t)__vu->_tag != (int64_t)(slot)) msRaiseFieldError((head), (labels), (int64_t)__vu->_tag); \
