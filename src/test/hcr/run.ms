@@ -337,6 +337,26 @@ function privateHelper(): void {
 	reloadsNewTypeEdit("hcrPrivateHelper", "privateHelper", "HCR-PRIVATE", "a generic body calling private functions of its module did not build or reload in the image that uses it");
 }
 
+function subdirModule(): void {
+	const tag = "hcrSubdirModule";
+	const dir = freshDir(`${TMP}/subdir`);
+	ensureDir(`${dir}/lib`);
+	copy(`${FIXTURES}/subdir/app.ms`, `${dir}/app.ms`);
+	copy(`${FIXTURES}/subdir/lib/util.ms`, `${dir}/lib/util.ms`);
+	copy(`${FIXTURES}/subdir/utilEdit.ms`, `${dir}/edit.txt`);
+	const ran = msc(dir, ["run", "app.ms", "--hcr"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-SUB ")) seen.push(line);
+	}
+	const want = ["HCR-SUB start 7", "HCR-SUB reloaded true 8"];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "a module in a subdirectory did not load or reload under msc run --hcr");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function reloadsNewTypeEdit(tag: string, fixture: string, prefix: string, why: string): void {
 	const dir = copyAppAndLib(fixture);
 	copy(`${dir}/app/logicTag.ms`, `${dir}/app/edit.txt`);
@@ -861,6 +881,7 @@ watchWarm();
 watchGeneric();
 newInstance();
 privateHelper();
+subdirModule();
 reloadOff();
 coreLinkClang();
 indirect();
