@@ -3422,14 +3422,20 @@ export function getElementType(t: Type): Type {
 }
 
 export function typeParamConstraint(t: Type | null, name: string, depth: int32): Type | null {
+	return constraintScan(t, name, depth, new TypeVisitSet());
+}
+
+function constraintScan(t: Type | null, name: string, depth: int32, visited: TypeVisitSet): Type | null {
 	if (t == null || depth > 20) return null;
 	if (t.kind == TypeKind.GenericParam) return t.typeName == name ? t.typeExtra : null;
-	const fromReturn = typeParamConstraint(t.typeReturn, name, depth + 1);
+	if (isDeclaredStruct(t) && !t.typeFlags.has(TypeFlag.HasGenericParam)) return null;
+	if (!typeVisitAdd(visited, t)) return null;
+	const fromReturn = constraintScan(t.typeReturn, name, depth + 1, visited);
 	if (fromReturn != null) return fromReturn;
-	const fromExtra = typeParamConstraint(t.typeExtra, name, depth + 1);
+	const fromExtra = constraintScan(t.typeExtra, name, depth + 1, visited);
 	if (fromExtra != null) return fromExtra;
 	for (const c of t.typeChildren) {
-		const fromChild = typeParamConstraint(c, name, depth + 1);
+		const fromChild = constraintScan(c, name, depth + 1, visited);
 		if (fromChild != null) return fromChild;
 	}
 	return null;
