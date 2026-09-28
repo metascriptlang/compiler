@@ -60,13 +60,13 @@ function peelToGenericInstance(t: Type | null): Type | null {
 //      Without this, the user is forced to repeat type args on both
 //      sides of the assignment, which is awkward for the common
 //      Map/Set/Box patterns.
-function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Type, astTypeArg: string, expectedType: Type | null): Type {
-	if (callee.kind != NodeKind.Identifier) return calleeType;
+function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Type, astTypeArg: string, expectedType: Type | null): { type: Type, instance: Symbol | null } {
+	if (callee.kind != NodeKind.Identifier) return { type: calleeType, instance: null };
 	const calleeName = (callee.data as IdentifierData).name;
 	const ltCol = callee.location.column + calleeName.length;
 	const calleeSym = callee.resolvedSym != null ? callee.resolvedSym : lookupSymbol(ctx.table, calleeName);
 	const genericParams = calleeSym != null ? symGenericParams(calleeSym) : builtinGenericParams(calleeName);
-	if (genericParams == "") return calleeType;
+	if (genericParams == "") return { type: calleeType, instance: null };
 	// Try explicit type args first (sources 1 + 2 in priority comment above).
 	const typeArgStr = astTypeArg;
 	let args: string[] = [];
@@ -103,7 +103,7 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 				|| giCtx.typeName != calleeName
 				|| giCtx.typeChildren == null
 				|| giCtx.typeChildren.length != paramNames.length) {
-			return calleeType;
+			return { type: calleeType, instance: null };
 		}
 		for (let pi = 0; pi < paramNames.length; pi += 1) {
 			trimmedParamNames.push(paramNames[pi].trim());
@@ -120,7 +120,7 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	}
 	recordGenericTypeInstantiation(calleeName, calleeSym, args, ctx);
 	const baseSym = calleeSym;
-	if (baseSym == null) return calleeType;
+	if (baseSym == null) return { type: calleeType, instance: null };
 	ensureShaped(baseSym, ctx);
 	// Build GenericInstance — same structure as type annotation path in resolvePass.
 	// Avoids instantiateGeneric which creates shared type references that cause DRC
@@ -130,10 +130,11 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	if (isRefBase && baseType.typeReturn != null) baseType = baseType.typeReturn;
 	const instType = createGenericInstance(baseType, concreteTypes);
 	instantiateGenericBody(instType, genericParams);
+	let instance: Symbol | null = null;
 	if (baseSym.symbolKind == SymbolKind.Class || hasFlag(baseSym, SymbolFlag.HasConstructor)) {
-		instantiateClassConstructor(baseSym, trimmedParamNames, concreteTypes, ctx);
+		instance = instantiateClassConstructor(baseSym, trimmedParamNames, concreteTypes, ctx);
 	}
-	return isRefBase ? createRef(instType) : instType;
+	return { type: isRefBase ? createRef(instType) : instType, instance };
 }
 
 // Resolve the defining module info for a type by name.
@@ -652,7 +653,8 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	// it over the stale location-keyed side channel (important for cloned bodies).
 	// Also pass `expected` so that `const m: Map<K, V> = new Map();` (no type
 	// args on the `new`) can pull K/V from the contextual annotation.
-	const resolvedType = resolveGenericNewExpr(ctx, d.newCallee, calleeType!, node.typeArg, expected);
+	const generic = resolveGenericNewExpr(ctx, d.newCallee, calleeType!, node.typeArg, expected);
+	const resolvedType = generic.type;
 	// Error: generic type without type args AND no inferable contextual type.
 	// `resolveGenericNewExpr` returns the bare `calleeType` (still
 	// `Ref<GenericInstance>` with un-substituted GenericParam children) when
@@ -765,6 +767,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			fillDefaults(ctx, d.newArguments, defaults, defaults.length, 0, ctorParamTypes, classModule);
 		}
 	}
+	if (generic.instance != null) d.newCallee.resolvedSym = generic.instance;
 	if (resolvedType != null && (resolvedType.kind == TypeKind.Struct || resolvedType.kind == TypeKind.Ref || resolvedType.kind == TypeKind.GenericInstance)) {
 		return resolvedType;
 	}

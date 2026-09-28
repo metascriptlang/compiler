@@ -286,7 +286,6 @@ export function pendingInstanceKeyOf(node: Node): string {
 export function instanceGenericOf(node: Node): Symbol | null {
 	const sym = node.resolvedSym;
 	if (sym == null) return null;
-	if (node.kind == NodeKind.ClassDecl) return sym;
 	return sym.instantiatedFrom;
 }
 
@@ -351,7 +350,7 @@ export function drainPendingInstances(moduleCtxs: CheckerContext[]): Node[] {
 export function forgetInstances(ctx: CheckerContext): void {
 	ctx.generatedInstances = [];
 	ctx.procInstCache = new HashMap<Symbol, Symbol[]>();
-	ctx.typeInstCache = new HashMap<Symbol, string[]>();
+	ctx.typeInstCache = new HashMap<Symbol, Symbol[]>();
 }
 
 // ===== Helpers =====
@@ -949,21 +948,21 @@ function canonicalInstance(base: Type, typeArgs: Type[], classSym: Symbol): Type
 // Reference parity: on-demand proc instantiation (same pattern as standard generateInstance).
 // For classes with constructors, we generate a standalone FunctionDecl named ClassName_new.
 
-export function instantiateClassConstructor(classSym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): void {
+export function instantiateClassConstructor(classSym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): Symbol | null {
 	// Refuse unresolved types
 	for (const ct of concreteTypes) {
-		if (ct == null || ct.kind == TypeKind.GenericParam || isUnresolvedType(ct)) return;
+		if (ct == null || ct.kind == TypeKind.GenericParam || isUnresolvedType(ct)) return null;
 	}
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);
 	const mangledClass = mangleMonoName(monoBaseName(classSym.name, classSym.modulePath), dedup.types);
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
-	let instances: string[] = [];
+	let instances: Symbol[] = [];
 	const known = host.typeInstCache.get(classSym);
 	if (known != null) instances = known;
-	for (const name of instances) {
-		if (name == mangledClass) return;
+	for (const inst of instances) {
+		if (inst.name == mangledClass) return inst;
 	}
 
 	// An imported class symbol carries the ImportDecl, not the ClassDecl — export
@@ -977,18 +976,25 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		const declSym = lookupSymbol(declCtx.table, classSym.name);
 		classDeclNode = declSym != null ? declSym.declNode : null;
 	}
-	if (classDeclNode == null || classDeclNode.kind != NodeKind.ClassDecl) return;
+	if (classDeclNode == null || classDeclNode.kind != NodeKind.ClassDecl) return null;
 	const classData = classDeclNode.data as ClassDeclData;
 	let ctorNode: Node | null = null;
 	for (const member of classData.classBody) {
 		if (member.kind == NodeKind.ConstructorDecl) { ctorNode = member; }
 	}
-	instances.push(mangledClass);
-	host.typeInstCache.set(classSym, instances);
 	const loc = ctorNode != null && ctorNode.location != null ? ctorNode.location : (classDeclNode.location != null ? classDeclNode.location : makeLoc(0, 0));
 	const structBase = unwrapClassStruct(classSym);
 	const substStruct = instanceStruct(structBase, mangledClass, dedup.names, dedup.types);
 	const concreteClassType = createRef(substStruct);
+	const instSym = makeSymbol(mangledClass, SymbolKind.Class, concreteClassType, false);
+	instSym.state = SymbolState.Shaped;
+	instSym.symFlags = classSym.symFlags;
+	instSym.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
+	instSym.location = classSym.location;
+	instSym.nameId = getIdentId(host.table.identCache, mangledClass);
+	instSym.instantiatedFrom = classSym;
+	instances.push(instSym);
+	host.typeInstCache.set(classSym, instances);
 	const classBody: Node[] = instanceFieldInits(classData, dedup.names, dedup.types, substStruct, classSym, ctx, loc);
 	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, dedup.names, dedup.types, mangledClass, createRef(canonicalInstance(structBase, concreteTypes, classSym)), ctx, loc));
 	// Set classNode.nodeType to the concrete (instantiated) class type so the
@@ -999,12 +1005,14 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	const classNodeData: NodeData = { className: mangledClass, classExtends: "", classBody, nameLocation: loc };
 	const classNode = createNodeAt(NodeKind.ClassDecl, classNodeData, loc);
 	classNode.nodeType = concreteClassType;
-	classNode.resolvedSym = classSym;
+	classNode.resolvedSym = instSym;
+	instSym.declNode = classNode;
 	addPendingInstance(host, classNode);
 	instantiateInstanceHooks(classData, mangledClass, dedup.names, dedup.types, ctx, loc);
 	const instType = createGenericInstance(structBase, dedup.types);
 	instType.typeName = classSym.name;
 	instantiateHooksInType(instType, ctx, loc, 0);
+	return instSym;
 }
 
 function unwrapClassStruct(classSym: Symbol): Type {

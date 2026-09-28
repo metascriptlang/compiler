@@ -1239,7 +1239,7 @@ export class CheckerContext {
 	genericInstDepth: int32;     // recursion depth for on-demand instantiation (limit 50)
 	generatedInstances: Node[];  // on-demand instantiated function ASTs to inject into program
 	procInstCache: HashMap<Symbol, Symbol[]>;
-	typeInstCache: HashMap<Symbol, string[]>;
+	typeInstCache: HashMap<Symbol, Symbol[]>;
 	pendingEnumToStrings: Type[]; // enum types whose _toString def must be injected in this module (recorded at lowering sites; enums reachable only via imported field types are not in module scope)
 	pendingHoisted: Node[];      // statements an expression-position macro emitted ahead of its value; a stack — each statement-list walk takes a high-water mark on entry and drains only what was queued above it, so a block nested in the value cannot take the call site's prefix
 	pendingTrailing: Node[];
@@ -1324,7 +1324,7 @@ export function createContext(): CheckerContext {
 		genericInstDepth: 0,
 		generatedInstances: [],
 		procInstCache: new HashMap<Symbol, Symbol[]>(),
-		typeInstCache: new HashMap<Symbol, string[]>(),
+		typeInstCache: new HashMap<Symbol, Symbol[]>(),
 		pendingEnumToStrings: [],
 		pendingHoisted: [],
 		pendingTrailing: [],
