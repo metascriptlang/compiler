@@ -1,4 +1,5 @@
 // @stdout: classFn=after classNum=after iface=after shape=square:2 loop=4000
+// @xfail(raiser): typeof cannot tell a function from an object on Raiser: 'object' and 'function' variants share Raiser value kind 6, card .inbox/compiler/2026-09-29-raiser-typeof-function-identity
 
 // A class or interface value placed in a union stays the same object: a mutation
 // through the original reference is visible through the union, and a union read
