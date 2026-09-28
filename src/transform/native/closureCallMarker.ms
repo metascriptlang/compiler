@@ -16,7 +16,6 @@
 
 import { Node, NodeKind, SymbolKind, Symbol, CallExprData, makeLoc, NodeFlag, Type, TypeKind, CallingConvention } from "../../ast/node";
 import { createFunction, voidType, peelTransparentInstance, closureStorageType } from "../../checker/types";
-import { Token } from "../../lexer/token";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeObjectLiteral, makeNull } from "../util";
@@ -98,10 +97,11 @@ import { makeSymbol } from "../../checker/symbol";
 import { createNode } from "../../ast/node";
 import { makeIdent, makeCall, makeMember } from "../util";
 import { makeCtx } from "../testUtil";
+import { createToken, TokenKind } from "../../lexer/token";
 
 // Helper: wrap statements in a Program node for markClosureCalls
 function wrapProgram(stmts: Node[]): Node {
-	return createNode(NodeKind.Program, { programStmts: stmts }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
+	return createNode(NodeKind.Program, { programStmts: stmts }, createToken(TokenKind.Number, "", 0));
 }
 
 // Helper: create an ExprStmt wrapping a CallExpr, return the CallExpr's data
@@ -118,7 +118,7 @@ function makeTestCall(calleeName: string, sym: Symbol, calleeType: Type): { prog
 		callee.nodeType = calleeType;
 	}
 	const callNode = makeCall(callee, [], loc);
-	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
+	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, createToken(TokenKind.Number, "", 0));
 	const prog = wrapProgram([exprStmt]);
 	return { prog, call: callNode };
 }
@@ -133,7 +133,7 @@ function makeMemberTestCall(): { prog: Node, call: Node } {
 	const obj = makeIdent("obj", loc);
 	const mem = makeMember(obj, "method", loc);
 	const callNode = makeCall(mem, [], loc);
-	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
+	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, createToken(TokenKind.Number, "", 0));
 	const prog = wrapProgram([exprStmt]);
 	return { prog, call: callNode };
 }
@@ -150,7 +150,7 @@ test "MemberExpr holding a closure is a closure call" {
 	const mem = makeMember(obj, "handler", loc);
 	mem.nodeType = createClosureType([numberType()], [], voidType());
 	const callNode = makeCall(mem, [], loc);
-	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
+	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, createToken(TokenKind.Number, "", 0));
 	const prog = wrapProgram([exprStmt]);
 	markClosureCalls(prog, makeCtx());
 	assert isDirect(callNode) == false;
@@ -185,7 +185,7 @@ test "Synthesized callee without a symbol stays direct" {
 	const callee = makeIdent("HashMapEntry_copy", loc);
 	callee.nodeType = createFunction([numberType()], [], voidType());
 	const callNode = makeCall(callee, [], loc);
-	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
+	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, createToken(TokenKind.Number, "", 0));
 	markClosureCalls(wrapProgram([exprStmt]), makeCtx());
 	assert isDirect(callNode) == true;
 }
@@ -208,7 +208,7 @@ test "Callee produced by another call is a closure call" {
 	const inner = makeCall(makeIdent("make", loc), [], loc);
 	inner.nodeType = createClosureType([numberType()], [], voidType());
 	const outer = makeCall(inner, [], loc);
-	const exprStmt = createNode(NodeKind.ExprStmt, { expr: outer }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
+	const exprStmt = createNode(NodeKind.ExprStmt, { expr: outer }, createToken(TokenKind.Number, "", 0));
 	markClosureCalls(wrapProgram([exprStmt]), makeCtx());
 	assert isDirect(outer) == false;
 }

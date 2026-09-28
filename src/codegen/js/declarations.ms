@@ -232,7 +232,7 @@ export function emitActorDecl(gen: JSGenerator, node: Node): void {
 		propIsReadonly: true,
 		propVisibility: "",
 		propInitializer: null as unknown as Node,
-	} as unknown as PropertyDeclData, node.location);
+	} as PropertyDeclData, node.location);
 	const body: Node[] = [pidField];
 	for (const m of d.actorBody) body.push(m);
 	const cls = createNodeAt(NodeKind.ClassDecl, {
@@ -240,7 +240,7 @@ export function emitActorDecl(gen: JSGenerator, node: Node): void {
 		classExtends: "",
 		classBody: body,
 		nameLocation: d.nameLocation,
-	} as unknown as ClassDeclData, node.location);
+	} as ClassDeclData, node.location);
 	cls.resolvedSym = node.resolvedSym;
 	gen.inActorDecl = true;
 	emitIndent(gen);
