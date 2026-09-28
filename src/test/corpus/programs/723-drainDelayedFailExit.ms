@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msSleepAsync
 // @exit: 1
 // @skip-js: node exits 1 like C but prints its own unhandled-rejection report, and parity compares merged stdout+stderr (sibling of 721)
 async function delayedBoom(): Promise<void> {

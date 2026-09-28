@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msSleepAsync
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @stdout: spawn-timer done 100
 // @serial
