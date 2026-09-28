@@ -112,6 +112,14 @@ scalar pointer is a compile error (`expression has no address`). A `ref` paramet
 caller's pointer through. Only an extern C function gets this: a MetaScript function with a
 `Ptr<T> | null` parameter refuses a value (NIM-REF CK-102).
 
+A class instance is refused at a `void*` parameter (`got View, expected Ptr<void> | null`): pass
+`v as Ptr<void>`, read it back with `p as View`. Neither counts, so when C keeps the address past
+the call, pass `Handle.retain(v).ptr` from `std/ffi` instead. An `extern` may name `unknown` only in
+its rest parameter. Rules and measurements: `docs/LANG.md` §"`unknown`, `Ptr<void>`, `Handle<T>`".
+Measured 2026-09-29 on C with main tree `80d320e9` and a probe `.h`/`.c` pair that stores the
+address: the refusal, `v as Ptr<void>` coming back equal, and `Handle.retain` then
+`Handle.at<View>(p).value()`.
+
 ```ms
 import { iter_new, iter_next, state_get, Iter, Key } from "./g.h";
 let it: Iter;
