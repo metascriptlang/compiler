@@ -1366,8 +1366,9 @@ function moveOrCopy(stmt: Node, dest: Node, rhs: Node, rcInfo: RcInfo,
 		NodeKind.MemberExpr | NodeKind.ArrayAccess | NodeKind.HiddenDeref => {
 			const srcOwns = rhs.nodeType != null && classifyRc(rhs.nodeType, dctx).needsCleanup;
 			if (srcOwns && rcInfo.wasMovedFn != null && isLastReadFieldSafe(rhs, idx, stmts, dctx)) {
-				addPending(dctx, makeWasMovedOnExpr(rhs, rcInfo, loc));
-				return genSink(stmt, dest, destSym, rhs, rcInfo, flags, idx, stmts, dctx, loc);
+				const source = stabilizeLocation(rhs, dctx);
+				addPending(dctx, makeWasMovedOnExpr(source, rcInfo, loc));
+				return genSink(stmt, dest, destSym, source, rcInfo, flags, idx, stmts, dctx, loc);
 			}
 			return genCopy(stmt, dest, destSym, rhs, rcInfo, flags, dctx, loc);
 		},
