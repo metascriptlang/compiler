@@ -146,6 +146,7 @@ export enum RaiserOpcode {
 	LoadGlobal,
 	StoreGlobal,
 	StrByteLen,
+	Sleep,
 }
 
 export enum RaiserConvClass {

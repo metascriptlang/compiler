@@ -81,6 +81,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.Yield => "Yield",
 		RaiserOpcode.Spawn => "Spawn",
 		RaiserOpcode.Await => "Await",
+		RaiserOpcode.Sleep => "Sleep",
 		RaiserOpcode.Try => "Try",
 		RaiserOpcode.Catch => "Catch",
 		RaiserOpcode.Finally => "Finally",

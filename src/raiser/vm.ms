@@ -24,6 +24,10 @@ import { parseIntStr } from "../utils/string";
 import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink } from "./marshal";
 
+@include("runtime/promise/dispatch.h");
+extern function msMonoTimeMs(): int64;
+extern function msSleepMs(ms: int32): void;
+
 // --- VM State ---
 
 export interface RaiserRegFile {
@@ -104,9 +108,19 @@ export interface RaiserFutures {
 	items: RaiserFuture[];
 }
 
+export interface RaiserTimer {
+	dueMs: int64;
+	future: number;
+}
+
+export interface RaiserTimers {
+	items: RaiserTimer[];
+}
+
 export interface RaiserSched {
 	strands: RaiserStrands;
 	futures: RaiserFutures;
+	timers: RaiserTimers;
 	nextStrandId: number;
 }
 
@@ -203,7 +217,9 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const strands: RaiserStrands = { items: strandItems };
 	const futureItems: RaiserFuture[] = [];
 	const futures: RaiserFutures = { items: futureItems };
-	const sched: RaiserSched = { strands, futures, nextStrandId: 1 };
+	const timerItems: RaiserTimer[] = [];
+	const timers: RaiserTimers = { items: timerItems };
+	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1 };
 	const safePoints: number[] = [];
 	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "" };
 }
@@ -322,6 +338,7 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	vm.sched.nextStrandId = 1;
 	vm.yielded = false;
 	vm.sched.futures.items.length = 0;
+	vm.sched.timers.items.length = 0;
 }
 
 // --- Futures ---
@@ -353,6 +370,49 @@ function futureComplete(vm: RaiserVM, handle: number, value: RaiserValue): void 
 		if (s.status == RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
 	}
 	f.waiters.length = 0;
+}
+
+// --- Timers ---
+
+function vmArmTimer(vm: RaiserVM, delay: RaiserValue): number {
+	let ms: int64 = 0;
+	if (delay.kind == RaiserValueKind.Float && delay.floatVal > 0) ms = delay.floatVal as int64;
+	if (delay.kind == RaiserValueKind.Int && delay.intVal > 0) ms = delay.intVal;
+	const timer: RaiserTimer = { dueMs: msMonoTimeMs() + ms, future: newFuture(vm) };
+	const items = vm.sched.timers.items;
+	items.push(timer);
+	let at = items.length - 1;
+	while (at > 0 && items[at - 1].dueMs > timer.dueMs) {
+		items[at] = items[at - 1];
+		at -= 1;
+	}
+	items[at] = timer;
+	return timer.future;
+}
+
+function vmFireDueTimer(vm: RaiserVM): void {
+	const items = vm.sched.timers.items;
+	if (items.length == 0 || items[0].dueMs > msMonoTimeMs()) return;
+	const timer = items[0];
+	for (let i = 1; i < items.length; i += 1) items[i - 1] = items[i];
+	items.length = items.length - 1;
+	futureComplete(vm, timer.future, raiserNil());
+}
+
+function vmWaitForTimer(vm: RaiserVM): void {
+	const wait = vm.sched.timers.items[0].dueMs - msMonoTimeMs();
+	if (wait <= 0) return;
+	const capped: int64 = wait > 2147483647 ? 2147483647 : wait;
+	msSleepMs(capped as int32);
+}
+
+function vmHandleSleep(vm: RaiserVM, inst: RaiserInstruction): void {
+	if (vm.gcMode != "orc") {
+		vmError(vm, "sleepAsync is not available in compile-time evaluation: a timer would make its result depend on wall-clock time");
+		return;
+	}
+	const fut = vmArmTimer(vm, getReg(vm, vm.baseReg + inst.b));
+	setReg(vm, vm.baseReg + inst.a, raiserFuture(fut));
 }
 
 function futureFail(vm: RaiserVM, handle: number, message: string): void {
@@ -605,7 +665,7 @@ function vmHasBlocked(vm: RaiserVM): boolean {
 // skips the drain, Node parity.
 function finishProgram(vm: RaiserVM, value: RaiserValue, abrupt: boolean): void {
 	copyValueInto(vm.exitValue, value);
-	if (!abrupt && vmHasRunnable(vm)) {
+	if (!abrupt && (vmHasRunnable(vm) || vm.sched.timers.items.length > 0)) {
 		vm.yielded = true;
 		return;
 	}
@@ -768,7 +828,14 @@ function execStrandLoop(vm: RaiserVM): void {
 		const cur = vm.sched.strands.items[vm.current];
 		if (cur.status == RaiserStrandStatus.Running) cur.status = RaiserStrandStatus.Ready;
 		strandSave(vm);
-		const next = schedulePick(vm);
+		vmFireDueTimer(vm);
+		let next = schedulePick(vm);
+		while (next < 0 && vm.sched.timers.items.length > 0 && !vm.halted) {
+			vmWaitForTimer(vm);
+			vmFireDueTimer(vm);
+			next = schedulePick(vm);
+		}
+		if (vm.halted) return;
 		if (next < 0) {
 			// Nothing runnable — the event loop is empty and the program is
 			// over. A strand still parked on a future nobody can complete is
@@ -1030,6 +1097,8 @@ function runStrandSlice(vm: RaiserVM): void {
 			if (fut >= 0) setReg(vm, base + inst.a, raiserFuture(fut));
 		} else if (op == RaiserOpcode.Await) {
 			vmHandleAwait(vm, inst);
+		} else if (op == RaiserOpcode.Sleep) {
+			vmHandleSleep(vm, inst);
 		} else if (op == RaiserOpcode.Try) {
 			vm.safePoints.push(vm.ip - 1 + getBx(inst));
 		} else if (op == RaiserOpcode.Catch) {
@@ -1693,6 +1762,12 @@ function execBinOp(op: RaiserOpcode, a: number, b: number): RaiserVM {
 }
 
 // --- Tests ---
+test "the host clock advances across a host wait" {
+	const before = msMonoTimeMs();
+	msSleepMs(20);
+	assert msMonoTimeMs() - before >= 20;
+}
+
 test "halt returns constant" {
 	const vm = execModule(makeTestModule(
 		[
@@ -3084,6 +3159,72 @@ test "process.exit skips the drain" {
 	const vm = execModule(mod, "arena");
 	assert vm.output == "1\n";
 	assert vm.sched.strands.items[1].status == RaiserStrandStatus.Ready;
+}
+
+function sleepingWorker(delayMs: int64): RaiserFunction {
+	const code: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Sleep, 1, 0, 0),
+		raiserABC(RaiserOpcode.Await, 2, 1, 0),
+		raiserABx(RaiserOpcode.LoadConst, 3, 1),
+		raiserABC(RaiserOpcode.Print, 3, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 3, 0, 0),
+	];
+	return createRaiserFunction("worker", code, [raiserInt(delayMs), raiserInt(2)], 0, 0, 4);
+}
+
+function yieldingMain(abrupt: int32): RaiserFunction {
+	const mainCode = closurePairCode();
+	mainCode.push(raiserABC(RaiserOpcode.Spawn, 3, 1, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Yield, 0, 0, 0));
+	mainCode.push(raiserABx(RaiserOpcode.LoadConst, 4, 4));
+	mainCode.push(raiserABC(RaiserOpcode.Print, 4, 0, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Halt, 4, abrupt, 0));
+	const mainConsts = closurePairConsts(1);
+	mainConsts.push(raiserInt(1));
+	return createRaiserFunction("main", mainCode, mainConsts, 0, 0, 8);
+}
+
+test "main ending waits for a strand parked on a pending timer" {
+	const funcs: RaiserFunction[] = [yieldingMain(0), sleepingWorker(20)];
+	const before = msMonoTimeMs();
+	const vm = execModule(createRaiserModule("t", funcs, 0), "orc");
+	assert vm.error == "";
+	assert vm.output == "1\n2\n";
+	assert msMonoTimeMs() - before >= 20;
+}
+
+test "process.exit drops a pending timer" {
+	const funcs: RaiserFunction[] = [yieldingMain(1), sleepingWorker(20)];
+	const vm = execModule(createRaiserModule("t", funcs, 0), "orc");
+	assert vm.error == "";
+	assert vm.output == "1\n";
+	assert vm.sched.timers.items.length == 1;
+}
+
+test "a strand parked on a timer is not a deadlock, one parked on a future nobody completes is" {
+	const mainCode = closurePairCode();
+	mainCode.push(raiserABC(RaiserOpcode.Spawn, 3, 1, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Await, 4, 3, 0));
+	mainCode.push(raiserABC(RaiserOpcode.Halt, 4, 0, 0));
+	const workerCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Sleep, 1, 0, 0),
+		raiserABC(RaiserOpcode.Await, 2, 1, 0),
+		raiserABx(RaiserOpcode.LoadConst, 3, 1),
+		raiserABC(RaiserOpcode.Print, 3, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 4, 2),
+		raiserABC(RaiserOpcode.Await, 5, 4, 0),
+		raiserABC(RaiserOpcode.Ret, 5, 0, 0),
+	];
+	const workerConsts: RaiserValue[] = [raiserInt(5), raiserInt(2), raiserFuture(0)];
+	const funcs: RaiserFunction[] = [
+		createRaiserFunction("main", mainCode, closurePairConsts(1), 0, 0, 8),
+		createRaiserFunction("worker", workerCode, workerConsts, 0, 0, 6),
+	];
+	const vm = execModule(createRaiserModule("t", funcs, 0), "orc");
+	assert vm.output == "2\n";
+	assert vm.error == "deadlock: no runnable strand";
 }
 
 // --- Exceptions ---

@@ -1,10 +1,7 @@
-// std/core/promise — Raiser tier. The Raiser VM is single-threaded, so the
-// async surface runs eager-sync: `await X → X`, `spawn(fn) → fn()`,
-// `Promise.resolve(v) → v` are removed before codegen by
-// lowerRaiserAsyncSync (src/transform/lowering/raiserAsyncSync.ms). This tier
-// only has to make the surface TYPE-CHECK — the `ms*` externs below are never
-// reached by the VM (the lowering deletes every call site in live code; any
-// left in an uncalled std body is a harmless queued warning).
+// std/core/promise — Raiser tier. `spawn`, `sleepAsync` and `Promise.resolve`
+// compile by their @builtin kind to VM opcodes (src/codegen/raiser/expressions.ms);
+// any other extern here reaches CallHost and needs a bridge in
+// src/compiler/meta/hostTable.ms.
 
 export class Promise<T> {
 	finished: boolean;
@@ -35,6 +32,7 @@ export class Promise<T> {
 @builtin("PromiseSpawn")
 export extern function spawn<T>(fn: () => T): Promise<T> from "msSpawn";
 
+@builtin("SleepAsync")
 export extern function sleepAsync(ms: number): Promise<void> from "msSleepAsync";
 
 export function asyncCheck(fut: Promise<void>): void {

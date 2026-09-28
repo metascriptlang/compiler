@@ -344,8 +344,7 @@ function evalFull(code: string): RaiserContext {
 	return evalASTFull(parseResult.value);
 }
 
-// Full pipeline under ORC (gcMode=orc) — returns the VM so heap state is inspectable.
-function evalOrcVM(code: string): RaiserVM {
+function compileForOrc(code: string): RaiserModule {
 	const parseResult = parseSource(code);
 	if (!parseResult.ok) { unreachable; }
 	const program = parseResult.value;
@@ -353,8 +352,12 @@ function evalOrcVM(code: string): RaiserVM {
 	const txCtx = createTransformContextWithChecker(checkerCtx);
 	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
 	const transformed = transformForRaiser(refined, checkerCtx);
-	const mod = generateRaiser(transformed);
-	return execModule(mod, "orc");
+	return generateRaiser(transformed);
+}
+
+// Full pipeline under ORC (gcMode=orc) — returns the VM so heap state is inspectable.
+function evalOrcVM(code: string): RaiserVM {
+	return execModule(compileForOrc(code), "orc");
 }
 
 test "engine: byteLength counts UTF-8 bytes independently from UTF-16 length" {
@@ -508,6 +511,39 @@ test "engine: a struct literal that omits a field stores the field's zero value"
 		+ " console.log(`${e.h} ${e.v} ${e.ok} [${e.tag}] ${e.items.length} ${e.label == null ? \"null\" : \"set\"} ${e.inner.x}`);");
 	assert vm.error == "";
 	assert vm.output == "0 1 false [] 0 null 0\n";
+}
+
+const RAISER_TIER_SLEEP = "@builtin(\"SleepAsync\") extern function nap(ms: number): Promise<void> from \"msSleepAsync\";";
+
+test "engine: sleepAsync parks the strand for at least its delay" {
+	const mod = compileForOrc(RAISER_TIER_SLEEP + " await nap(30); console.log(\"woke\");");
+	const started = performance.now();
+	const vm = execModule(mod, "orc");
+	assert vm.error == "";
+	assert vm.output == "woke\n";
+	assert performance.now() - started >= 30;
+}
+
+test "engine: two sleepers wake in deadline order, not spawn order" {
+	const vm = evalOrcVM(RAISER_TIER_SLEEP
+		+ " const b = spawn(() => { await nap(2); console.log(\"b\"); return 1; });"
+		+ " const a = spawn(() => { await nap(1); console.log(\"a\"); return 1; });"
+		+ " const c = spawn(() => { let n: int32 = 0; while (n < 100000) { n += 1; } return 1; });"
+		+ " const r = (await b) + (await a) + (await c); console.log(`done ${r}`);");
+	assert vm.error == "";
+	assert vm.output == "a\nb\ndone 3\n";
+}
+
+test "engine: awaiting a strand that sleeps is not a deadlock" {
+	const vm = evalOrcVM(RAISER_TIER_SLEEP
+		+ " const r = await spawn(() => { await nap(10); return 7; }); console.log(`${r}`);");
+	assert vm.error == "";
+	assert vm.output == "7\n";
+}
+
+test "engine: sleepAsync is refused in compile-time evaluation" {
+	const r = evalFull(RAISER_TIER_SLEEP + " await nap(1); return 1;");
+	assert r.lastError.includes("sleepAsync is not available in compile-time evaluation");
 }
 
 test "engine: shift left on int64 keeps bits past 31" {
