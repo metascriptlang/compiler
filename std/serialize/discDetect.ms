@@ -16,8 +16,8 @@
 //
 // Called only from inside macro bodies (jsonValueOf, jsonValueToStruct, etc.).
 // Macro VM passes Node arguments as flat-field heap objects, so we cast each
-// Node to its NodeData variant via `node.data as XData`; the bridge serializes data
-// fields at the top level and points `data` back at the node (bridge.ms nodeToValue).
+// Node to its NodeData variant via `node as XData`; the runtime heap lookup for the
+// named field works because the wire writes data fields at the top level.
 import { Node, NodeKind, TypeUnionData, TypeGenericData, TypeObjectData, IdentifierData,
 	StringLiteralData, BooleanLiteralData,
 	CallExprData, MemberExprData, TypeAssertionData,
@@ -163,7 +163,7 @@ export function pickAtomicAccessor(tn: string): AtomicAccessor {
 // tt.typExprMembers; generic-instance variants land as TypeGeneric wrappers.
 function peelVariant(vRaw: Node): Node {
 	if (vRaw.kind == NodeKind.TypeGeneric) {
-		const gd: TypeGenericData = vRaw.data as TypeGenericData;
+		const gd: TypeGenericData = vRaw as TypeGenericData;
 		return gd.typExprArgs[0];
 	}
 	return vRaw;
@@ -178,20 +178,20 @@ function peelVariant(vRaw: Node): Node {
 // that bypasses the new bridge cases.
 function extractVariantKey(v: Node, discField: string): string {
 	if (v.kind != NodeKind.TypeObject) return "";
-	const od: TypeObjectData = v.data as TypeObjectData;
+	const od: TypeObjectData = v as TypeObjectData;
 	for (let fi = 0; fi < od.typExprFieldNames.length; fi = fi + 1) {
 		if (od.typExprFieldNames[fi] == discField) {
 			const ft: Node = od.typExprFieldTypes[fi];
 			if (ft.kind == NodeKind.StringLiteral) {
-				const sd: StringLiteralData = ft.data as StringLiteralData;
+				const sd: StringLiteralData = ft as StringLiteralData;
 				return sd.value;
 			}
 			if (ft.kind == NodeKind.BooleanLiteral) {
-				const bd: BooleanLiteralData = ft.data as BooleanLiteralData;
+				const bd: BooleanLiteralData = ft as BooleanLiteralData;
 				return bd.boolValue ? "true" : "false";
 			}
 			if (ft.kind == NodeKind.Identifier) {
-				const id: IdentifierData = ft.data as IdentifierData;
+				const id: IdentifierData = ft as IdentifierData;
 				return id.name;
 			}
 			return "";
@@ -205,12 +205,12 @@ function extractVariantKey(v: Node, discField: string): string {
 // drop it so auto-detect / variant building treats only the typed members.
 function isNullVariant(m: Node): boolean {
 	if (m.kind != NodeKind.Identifier) return false;
-	const id: IdentifierData = m.data as IdentifierData;
+	const id: IdentifierData = m as IdentifierData;
 	return id.name == "null";
 }
 
 export function detectUnionDisc(tt: Node): DiscInfo {
-	const ttd: TypeUnionData = tt.data as TypeUnionData;
+	const ttd: TypeUnionData = tt as TypeUnionData;
 	let discField: string = ttd.discFieldName;
 	let discKind: string = ttd.discKind;
 
@@ -227,13 +227,13 @@ export function detectUnionDisc(tt: Node): DiscInfo {
 	if (discField == "" && realMembers.length >= 2) {
 		const v0: Node = peelVariant(realMembers[0]);
 		if (v0.kind == NodeKind.TypeObject) {
-			const v0d: TypeObjectData = v0.data as TypeObjectData;
+			const v0d: TypeObjectData = v0 as TypeObjectData;
 			for (const candidate of v0d.typExprFieldNames) {
 				let foundInAll: boolean = true;
 				for (let vi = 1; vi < realMembers.length; vi = vi + 1) {
 					const v: Node = peelVariant(realMembers[vi]);
 					if (v.kind != NodeKind.TypeObject) { foundInAll = false; break; }
-					const vd: TypeObjectData = v.data as TypeObjectData;
+					const vd: TypeObjectData = v as TypeObjectData;
 					let inV: boolean = false;
 					for (const f of vd.typExprFieldNames) {
 						if (f == candidate) { inV = true; break; }
