@@ -395,7 +395,7 @@ corpus lane 504-hashContainers [js]          exit=0
 Kept as a numbered entry because the retraction is the useful record: a single-variant probe on a
 known-broken path produced a confident wrong claim about a whole backend surface.
 
-## L26. An enum member literal bound as a generic parameter is passed as `unknown` (LIVE, measured 2026-09-13)
+## L26. An enum member literal bound as a generic parameter is passed as `unknown` (FIXED; the repro runs on C and JS, 2026-09-29)
 
 ```
 function keep<T>(x: T): T { const y: T = x; return y; }
@@ -406,6 +406,10 @@ keep(7); keep([1, 2])     right
 
 The inferred `T` is the `EnumLiteral` kind, which `injectConcreteTypeSyms` does not know, so the
 body's `T` re-resolves to `unknown`. Belongs to the generic argument-fit list.
+
+Measured 2026-09-29: `console.log(keep(E.B) == E.B)` prints `true` on C and JS with main tree
+`80d320e9`, and on C with the installed `013853dd`; so do a bare `keep(E.B);`, `keep(E.C)` into a
+`const` and `[keep(E.A), keep(E.B)]`. Not found: the commit that fixed it, and a test that pins it.
 
 ## L27. A default (`-O0`) gen-1 build of the compiler segfaults checking or testing the compiler (LIVE, measured 2026-09-13)
 
