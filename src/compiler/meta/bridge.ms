@@ -1166,7 +1166,6 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 	if (node.resolvedSym != null) {
 		heapObjectSetField(objHeap, handle, "resolvedSym", symbolToValue(node.resolvedSym, objHeap));
 	}
-	heapObjectSetField(objHeap, handle, "data", raiserObject(handle));
 
 	return raiserObject(handle);
 }
