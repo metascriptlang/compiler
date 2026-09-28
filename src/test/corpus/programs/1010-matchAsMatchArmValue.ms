@@ -8,6 +8,8 @@
 
 enum Side { Left, Right }
 
+const out: string[] = [];
+
 function viaReturn(side: Side, step: int32): int32 {
 	return match (side) {
 		Side.Left => match (step) {
@@ -72,7 +74,7 @@ function inBlock(side: Side, step: int32): int32 {
 }
 
 function say(n: int32): int32 {
-	console.log(n);
+	out.push(`${n}`);
 	return n;
 }
 
@@ -86,11 +88,12 @@ function asStatement(side: Side, step: int32): void {
 	};
 }
 
-console.log(viaReturn(Side.Left, 2), viaReturn(Side.Left, 1), viaReturn(Side.Right, 0));
-console.log(viaLet(Side.Left, 2), viaLet(Side.Left, 1), viaLet(Side.Right, 0));
-console.log(deeper(Side.Left, 2, true), deeper(Side.Left, 1, true), deeper(Side.Left, 5, false), deeper(Side.Right, 0, true));
-console.log(byName("a", 1), byName("a", 2), byName("b", 1));
-console.log(inBlock(Side.Left, 2), inBlock(Side.Left, 0), inBlock(Side.Right, 0));
+out.push(`${viaReturn(Side.Left, 2)} ${viaReturn(Side.Left, 1)} ${viaReturn(Side.Right, 0)}`);
+out.push(`${viaLet(Side.Left, 2)} ${viaLet(Side.Left, 1)} ${viaLet(Side.Right, 0)}`);
+out.push(`${deeper(Side.Left, 2, true)} ${deeper(Side.Left, 1, true)} ${deeper(Side.Left, 5, false)} ${deeper(Side.Right, 0, true)}`);
+out.push(`${byName("a", 1)} ${byName("a", 2)} ${byName("b", 1)}`);
+out.push(`${inBlock(Side.Left, 2)} ${inBlock(Side.Left, 0)} ${inBlock(Side.Right, 0)}`);
 asStatement(Side.Left, 2);
 asStatement(Side.Left, 1);
 asStatement(Side.Right, 0);
+console.log(out.join("|"));

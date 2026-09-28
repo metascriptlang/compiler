@@ -4,6 +4,8 @@
 // bind the other module's parameter names, and C used to emit one struct for both `Box<string>`.
 import { libBox, libCell, libPair, readBox } from "./lib";
 
+const out: string[] = [];
+
 type Box<T> = { n: int32, w: T };
 interface Cell<T> { n: int32; w: T; }
 class Pair<T> { w: T; n: int32; constructor(w: T) { this.w = w; this.n = 9; } }
@@ -13,7 +15,8 @@ const cell: Cell<string> = { n: 8, w: "main-cell" };
 const pair = new Pair<string>("main-pair");
 const num: Box<number> = { n: 12, w: 1.5 };
 
-console.log(`${box.w} ${box.n} ${libBox().v} ${readBox(libBox())}`);
-console.log(`${cell.w} ${cell.n} ${libCell().v}`);
-console.log(`${pair.w} ${pair.n} ${libPair().v}`);
-console.log(`${num.n} main-num`);
+out.push(`${box.w} ${box.n} ${libBox().v} ${readBox(libBox())}`);
+out.push(`${cell.w} ${cell.n} ${libCell().v}`);
+out.push(`${pair.w} ${pair.n} ${libPair().v}`);
+out.push(`${num.n} main-num`);
+console.log(out.join("|"));

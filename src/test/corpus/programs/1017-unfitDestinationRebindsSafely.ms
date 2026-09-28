@@ -13,6 +13,8 @@ function one<T>(a: T): Box<T> { return new Box<T>(a); }
 function pick<T>(a: T, b: T): T { return a; }
 function area(sh: Shape): float64 { if (sh.kind == "circle") return sh.r; return sh.s; }
 
+const out: string[] = [];
+
 function minusOne(): Result<number, string> {
 	let r = 0;
 	return Result.ok(r - 1);
@@ -24,19 +26,20 @@ function shape(): Result<Shape, string> {
 }
 
 const m = minusOne();
-if (m.ok) console.log(m.value);
+if (m.ok) out.push(`${m.value}`);
 const s = shape();
-if (s.ok) console.log(area(s.value));
+if (s.ok) out.push(`${area(s.value)}`);
 
 const i: int32 = 3;
 const u: uint16 = 65535;
 const b: Box<number> = one(i);
-console.log(b.v, b.v / 2);
+out.push(`${b.v} ${b.v / 2}`);
 const b64: Box<int64> = one(i);
-console.log(b64.v);
+out.push(`${b64.v}`);
 const bu: Box<uint32> = one(u);
-console.log(bu.v);
+out.push(`${bu.v}`);
 
 const power: int32 = 7;
 const d: int64 = pick(power, 1);
-console.log(Math.max(power, 1) as int64, d);
+out.push(`${Math.max(power, 1) as int64} ${d}`);
+console.log(out.join("|"));

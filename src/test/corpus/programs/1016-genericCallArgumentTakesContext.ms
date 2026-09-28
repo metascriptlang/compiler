@@ -11,6 +11,8 @@ function pick<T>(a: T, b: T): T { return a; }
 function make<T>(): T[] { return []; }
 function three(): int32 { return 3; }
 
+const out: string[] = [];
+
 function nested(x: number): Result<Result<number, string>, string> {
 	if (x < 0) return Result.err("outer fail");
 	if (x == 0) return Result.ok(Result.err("inner fail"));
@@ -22,20 +24,21 @@ function deeper(): Result<Result<Result<number, string>, string>, string> {
 }
 
 const a = nested(0);
-if (a.ok) { const inner = a.value; if (!inner.ok) console.log(inner.error); }
+if (a.ok) { const inner = a.value; if (!inner.ok) out.push(inner.error); }
 const b = nested(2);
-if (b.ok) { const inner = b.value; if (inner.ok) console.log(inner.value); }
+if (b.ok) { const inner = b.value; if (inner.ok) out.push(`${inner.value}`); }
 const c = nested(-1);
-if (!c.ok) console.log(c.error);
+if (!c.ok) out.push(c.error);
 const d = deeper();
-if (d.ok) { const mid = d.value; if (mid.ok) { const low = mid.value; if (!low.ok) console.log(low.error); } }
+if (d.ok) { const mid = d.value; if (mid.ok) { const low = mid.value; if (!low.ok) out.push(low.error); } }
 
 const xs: string[] = pick(make(), ["a"]);
 const ys: string[] = pick(["a"], make());
-console.log(xs.length, ys.length);
+out.push(`${xs.length} ${ys.length}`);
 
 const r: Result<Box<int64>, string> = Result.ok(one(5));
-if (r.ok) console.log(r.value.v);
+if (r.ok) out.push(`${r.value.v}`);
 
 const n: int64 = pick(three(), 1);
-console.log(n);
+out.push(`${n}`);
+console.log(out.join("|"));
