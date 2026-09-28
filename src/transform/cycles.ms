@@ -40,7 +40,7 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 			if (t.typeReturn == null) return true;
 			return cfaAux(t.typeReturn, origKey, true, marker);
 		},
-		TypeKind.Function => true,
+		TypeKind.Function | TypeKind.Unknown => true,
 		TypeKind.Struct => {
 			// Non-final rule (types.nim:436-438 `if tfFinal notin t.flags: result = true`):
 			// a class that is extended (OpenClass bit, stamped in resolveClass) can be
@@ -138,8 +138,8 @@ export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache
 		const refInner = unwrapRefNullUnion(subject);
 		if (refInner != null) subject = refInner;
 	}
-	if (subject.kind == TypeKind.Function) return true;
-	if (subject.kind == TypeKind.Ptr || isUnknownType(subject)) return false;
+	if (subject.kind == TypeKind.Function || isUnknownType(subject)) return true;
+	if (subject.kind == TypeKind.Ptr) return false;
 	if (subject.kind == TypeKind.Ref) {
 		if (subject.typeReturn == null) return true;
 		subject = subject.typeReturn;

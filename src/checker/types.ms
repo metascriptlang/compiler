@@ -110,7 +110,7 @@ export function createPrimitive(kind: TypeKind): Type {
 	// bigint is a managed primitive like string, but its ordinal sits past the
 	// _sysTypes bound, so the flag cannot be stamped on a shared instance — an
 	// owner that never sees HasAsgn on the field gets no scope destroy at all.
-	if (kind == TypeKind.BigInt) { t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn); }
+	if (kind == TypeKind.BigInt || kind == TypeKind.Unknown) { t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn); }
 	return t;
 }
 
@@ -2658,7 +2658,7 @@ export function arrayElementNeedsCleanup(elem: Type): boolean {
 	if (elem == null) return false;
 	if (elem.kind == TypeKind.String || elem.kind == TypeKind.Ref
 		|| elem.kind == TypeKind.Ptr || elem.kind == TypeKind.Function
-		|| elem.kind == TypeKind.BigInt) return true;
+		|| elem.kind == TypeKind.BigInt || elem.kind == TypeKind.Unknown) return true;
 	if (elem.kind == TypeKind.Distinct && elem.typeReturn != null) {
 		return arrayElementNeedsCleanup(elem.typeReturn);
 	}
@@ -3506,7 +3506,6 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind == TypeKind.Enum
 		|| kind == TypeKind.EnumLiteral
 		|| kind == TypeKind.Never
-		|| kind == TypeKind.Unknown
 		|| kind == TypeKind.Char
 		|| kind == TypeKind.CString
 		|| kind == TypeKind.StringLiteral

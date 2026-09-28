@@ -224,15 +224,14 @@ function getArrayMacroName(elemType: Type | null, boundChecks: boolean): string 
 // msGenericArraySetLen, which lowers len and releases nothing, so a counted
 // element needs the msRefArray family whether or not its rc is atomic; an
 // atomic cell is born at MS_RC_INCREMENT, so it needs the atomic twin on top.
-// The counted-element test mirrors classify.ms classifyArray — Actor handles,
-// `unknown` and nested ref-arrays keep their own families.
+// The counted-element test mirrors classify.ms classifyArray — Actor handles
+// and nested ref-arrays keep their own families.
 export function evictHelperName(nativeName: string, elemType: Type | null): string {
 	if (elemType == null) return "";
 	const bare = elemType.kind == TypeKind.Union ? unwrapRefNullUnion(elemType) : elemType;
 	if (bare == null) return "";
-	if (bare.kind != TypeKind.Ref && bare.kind != TypeKind.Ptr) return "";
+	if (bare.kind != TypeKind.Ref && bare.kind != TypeKind.Ptr && !isUnknownType(bare)) return "";
 	if (bare.sym != null && bare.sym.symbolKind == SymbolKind.Actor) return "";
-	if (isUnknownType(bare)) return "";
 	if (bare.kind == TypeKind.Ref && bare.typeReturn != null && bare.typeReturn.kind == TypeKind.Array) return "";
 	const atomic = isAtomicRef(bare);
 	if (nativeName == "msGenericArraySetLen") return atomic ? "msAtomicRefArraySetLen" : "msRefArraySetLen";
