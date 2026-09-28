@@ -890,7 +890,8 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 	if (dstInner != null) dst = dstInner;
 	if (!isReadonlyView(src) || isReadonlyView(dst)) return false;
 	if (src.kind == TypeKind.Union && dst.kind != TypeKind.Union) return false;
-	return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Array || dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union;
+	return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Array || dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union
+		|| dst.kind == TypeKind.Unknown;
 }
 
 export function sameNominal(a: Type, b: Type): boolean {
