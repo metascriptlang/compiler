@@ -384,3 +384,6 @@ import "./bug627NullableFieldEq";
 import "./bug628NullableStructEqJS";
 import "./bug629FixedArrayEq";
 import "./bug630FixedArrayEqSameType";
+import "./bug631FixedArrayComparedWithNull";
+import "./bug632NullableValueIsMaybe";
+import "./bug633GenericTypeNeedsArguments";
