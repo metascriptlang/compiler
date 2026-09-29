@@ -387,3 +387,5 @@ import "./bug630FixedArrayEqSameType";
 import "./bug631FixedArrayComparedWithNull";
 import "./bug632NullableValueIsMaybe";
 import "./bug633GenericTypeNeedsArguments";
+import "./bug634JsNarrowingIsChecked";
+import "./bug635OverloadCallUsesItsWinner";
