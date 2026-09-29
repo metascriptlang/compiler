@@ -368,6 +368,7 @@ import "./bug579UnfitDestinationRebindsSafely";
 import "./bug580SameNamedTypesOfTwoModulesAreTwoTypes";
 import "./bug581NewChecksConstructorArguments";
 import "./bug582EnumLiteralTypeArguments";
+import "./bug583GenericOverloadBindsFromArguments";
 import "./bug588ThunkConstructsItsOwnValues";
 import "./bug589TopLevelInitializerRaiseCheck";
 import "./bug596ConstCastOutOfRange";
