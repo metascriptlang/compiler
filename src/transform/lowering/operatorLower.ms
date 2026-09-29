@@ -377,7 +377,8 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		// js de-materializes a Maybe to the value itself: `===` already answers for a
 		// primitive payload, a value payload needs the carrier's Eq.
 		const routed = (leftIsMaybe || rightIsMaybe) && carrierType != null
-			&& (!ctx.jsBackend || hasValueEq(unwrapMaybeType(carrierType)));
+			&& (!ctx.jsBackend || hasValueEq(unwrapMaybeType(carrierType))
+				|| unwrapMaybeType(carrierType).kind == TypeKind.Tuple);
 		if (routed && carrierName != "" && carriersAgree) {
 			const eqLeft = leftIsMaybe ? d.left : makeMaybeCarrier(d.left, carrierType, loc);
 			const eqRight = rightIsMaybe ? d.right : makeMaybeCarrier(d.right, carrierType, loc);

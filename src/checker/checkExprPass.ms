@@ -1429,7 +1429,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				// short-circuits fitNode's same-kind check and no wrap is emitted —
 				// codegen then writes the literal's T-shape fields into Maybe<T>'s slot.
 				if (stampType != null && isMaybeType(stampType)) {
-					stampType = objExpected;
+					stampType = stampType.typeReturn != null ? stampType.typeReturn : objExpected;
 				}
 				node.nodeType = (stampType != null) ? stampType : objExpected;
 				// Pin to consts so the inner while-loop body sees non-null typeNames/

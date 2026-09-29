@@ -2532,6 +2532,8 @@ export function isMaybeWrappable(t: Type | null): boolean {
 	if (t.kind == TypeKind.String) return true;
 	if (t.kind == TypeKind.StringLiteral) return true;
 	if (isAllStringLiteralUnion(t)) return true;
+	if (t.kind == TypeKind.SizedArray || t.kind == TypeKind.Tuple || t.kind == TypeKind.Array) return true;
+	if (t.kind == TypeKind.GenericInstance) return t.typeExtra != null && isStructType(t.typeExtra);
 	return false;
 }
 
