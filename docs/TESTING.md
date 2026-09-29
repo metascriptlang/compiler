@@ -367,8 +367,23 @@ Traps, all paid for on 2026-09-05:
 - The selector degenerates for broad changes (codegen/runtime/analyzer work
   that rewrites most programs' C): |A| large ⇒ the full run is the honest
   option. |A| is self-calibrating, no guessing up front.
-- SAN on hosts without libasan (scoop MinGW: `cannot find -lasan`) is
-  environment-blocked — record it, don't chase phantom code bugs.
+- Missing sanitizer support is environment-blocked, not a program red. Host
+  selection and capability checks live in `src/test/corpus/run.ms`
+  `sanWindowsClang` / `asanLinkGap`.
+- Windows capability measurement (2026-09-30, LLVM 23.1.0 + MinGW 16.1.0,
+  x64): `MSC=C:/Users/metacraft/.metascript/bin/msc.exe MSCORPUS_SAN=1
+  MSCORPUS_ONLY=820-float32ConstFold MSCORPUS_BUILD_JOBS=1 MSCORPUS_JOBS=1
+  <installed-msc> run src/test/corpus/run.ms` returned
+  `1 pass · 0 fail · 0 xfail · 0 xpass` in 16.78 s. Subject and support trees
+  were installed build `35601908`, not the current integration compiler;
+  the harness was `4225315e` plus the stricter capability-probe follow-up.
+  Its clean C control printed `asan-control=42`; the planted fault had to
+  exit nonzero with `ERROR: AddressSanitizer: stack-use-after-scope`.
+  With `ASAN_OPTIONS=detect_leaks=notbool`, the runtime instead reports
+  `AddressSanitizer: ERROR: Flag parsing failed` (exit 1): that is not evidence
+  of fault detection and must not satisfy the capability check.
+  Other toolchain versions/architectures and a full current integration SAN
+  run were not verified by this measurement.
 - Heap corruption inside the compiler itself: build it under ASan with the
   DRC slab off, `msc build src/index.ms --gc=drc --sanitize=address
   --passC=-DMS_SLAB_MAX=0 --passL=-fsanitize=address --cc=clang
