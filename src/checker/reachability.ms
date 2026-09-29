@@ -26,7 +26,7 @@ import { hasFlag, SymbolFlag, initFnName } from "./symbol";
 import { isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
-import { DispMethodEntry, dispatchEntryAt, dispatchEntryFor, dispatchOverridesFor } from "./context";
+import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
 
 // ===== Global Name Index =====
 // Pre-built name→modulePath index for O(1) cross-module lookup.
@@ -396,7 +396,6 @@ function markAndWalk(modulePath: string, name: string): void {
 	if (visitedHas(key)) return;
 	visitedAdd(key);
 	aliveSetAdd(_aliveSet, modulePath, name);
-	markDispatchOverrides(dispatchEntryAt(modulePath, name));
 
 	// Walk ALL declarations with this name (handles overloaded functions)
 	let di = _declHead.get(key) ?? -1;
@@ -412,7 +411,7 @@ function markAndWalk(modulePath: string, name: string): void {
 function markDispatchOverrides(dde: DispMethodEntry | null): void {
 	if (dde == null || dde.overloaded) return;
 	for (const ov of dispatchOverridesFor(dde.classSym, dde.methodName)) {
-		markAndWalk(ov.sym.modulePath, ov.sym.name);
+		markSymAndWalk(ov.sym, ov.sym.modulePath);
 		markAndWalk(ov.classSym.modulePath, ov.classSym.name + "TypeInfo");
 	}
 }
@@ -466,8 +465,12 @@ function walkDecl(di: int32): void {
 	const found = _declNodes[di];
 	const modulePath = _declPaths[di];
 	const name = topDeclName(found);
-	if (found.resolvedSym != null) aliveSetAddSym(_aliveSet, found.resolvedSym);
-	else aliveSetAdd(_aliveSet, modulePath, name);
+	if (found.resolvedSym != null) {
+		aliveSetAddSym(_aliveSet, found.resolvedSym);
+		markDispatchOverrides(dispatchEntryFor(found.resolvedSym));
+	} else {
+		aliveSetAdd(_aliveSet, modulePath, name);
+	}
 	aliveSetAddModule(_aliveSet, modulePath);
 	walkBody(found, modulePath);
 	// When a class becomes alive, also mark `<className>_init` alive —

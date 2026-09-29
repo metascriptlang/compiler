@@ -765,7 +765,6 @@ export interface DispMethodEntry {
 let _dispEntries: DispMethodEntry[] = [];
 let _dispByClass: HashMap<Symbol, DispMethodEntry[]> = new HashMap<Symbol, DispMethodEntry[]>();
 let _dispBySym: HashMap<Symbol, DispMethodEntry> = new HashMap<Symbol, DispMethodEntry>();
-let _dispByPlace: HashMap<string, DispMethodEntry> = new HashMap<string, DispMethodEntry>();
 
 export interface DispatchRecords {
 	classSyms: Symbol[];
@@ -817,7 +816,6 @@ export function dispatchRecordMethod(classSym: Symbol, methodName: string, sym: 
 	if (ofClass != null) ofClass.push(e);
 	else _dispByClass.set(classSym, [e]);
 	_dispBySym.set(sym, e);
-	_dispByPlace.set(sym.modulePath + ":" + sym.name, e);
 }
 
 export function dispatchEntryCount(): int32 {
@@ -828,15 +826,10 @@ export function resetDispatchRegistry(): void {
 	_dispEntries = [];
 	_dispByClass = new HashMap<Symbol, DispMethodEntry[]>();
 	_dispBySym = new HashMap<Symbol, DispMethodEntry>();
-	_dispByPlace = new HashMap<string, DispMethodEntry>();
 }
 
 export function dispatchEntryFor(sym: Symbol): DispMethodEntry | null {
 	return _dispBySym.get(sym) ?? null;
-}
-
-export function dispatchEntryAt(modulePath: string, liftedName: string): DispMethodEntry | null {
-	return _dispByPlace.get(modulePath + ":" + liftedName) ?? null;
 }
 
 function dispDepthBelow(classSym: Symbol, root: Symbol): int32 {
