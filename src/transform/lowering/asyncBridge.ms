@@ -487,7 +487,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	// with typed future types (Promise<T> from the yield variable type)
 	const yfs: YieldFuture[] = [];
 	for (let si = 0; si < sc.items.length; si += 1) {
-		convertDeclsToAssigns(sc.items[si].stmts, lifted, loc);
+		convertDeclsToAssigns(sc.items[si].stmts, lifted, ctx, loc);
 		if (sc.items[si].isYield) {
 			const yfName = "$yf" + si;
 			nameSetAdd(lifted, yfName);

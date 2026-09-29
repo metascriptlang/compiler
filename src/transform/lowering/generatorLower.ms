@@ -23,7 +23,7 @@ import {
 	ExprStmtData, TryCatchStmtData, YieldExprData,
 	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type, TypeKind,
 	IdentifierData, Symbol, SymbolKind,
-	isEmptyBlock,
+	isEmptyBlock, makeLoc,
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { mapChildren } from "../walker";
@@ -31,7 +31,7 @@ import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, reportTransformError } from "../context";
 import {
-	makeIdent, makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
+	makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign, makeContinue,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
@@ -870,20 +870,18 @@ export function localsSpanningStates(sc: StateCollector, nc: NameSet): NameSet {
 // Convert lifted variable declarations to assignments in state bodies.
 // Variables are hoisted to function scope, so decls become assignments.
 
-export function convertDeclsToAssigns(stmts: Node[], liftedNames: NameSet, loc: SourceLocation): void {
+export function convertDeclsToAssigns(stmts: Node[], liftedNames: NameSet, ctx: TransformContext, loc: SourceLocation): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (stmt.kind == NodeKind.VariableDecl) {
 			const vd = stmt.data as VariableDeclData;
 			if (nameSetContains(liftedNames, vd.declName)) {
+				if (stmt.resolvedSym == null) {
+					reportTransformError(ctx, `internal: the local '${vd.declName}' outlives a state of the state machine without its symbol`, stmt.location);
+					continue;
+				}
 				// Convert: const/let x = init → x = init (assignment)
-				// Preserve the VarDecl's resolvedSym on the LHS Identifier so downstream
-				// passes (lambdaLifting capture resolution, codegen) identify this as the
-				// original local binding — not a fall-through to an outer/global with the
-				// same name. Critical for shadow-safe rewriting of async state machines.
-				const lhs = (stmt.resolvedSym != null)
-					? makeIdentResolved(stmt.resolvedSym, loc)
-					: makeIdent(vd.declName, loc);
+				const lhs = makeIdentResolved(stmt.resolvedSym, loc);
 				(lhs.data as IdentifierData).name = vd.declName;
 				let init = vd.initializer;
 				if (init == null) {
@@ -946,7 +944,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	// 5. Convert the declarations of the locals that outlive a state to assignments
 	const lifted = localsSpanningStates(sc, nc);
 	for (const st of sc.items) {
-		convertDeclsToAssigns(st.stmts, lifted, loc);
+		convertDeclsToAssigns(st.stmts, lifted, ctx, loc);
 	}
 
 	// 6. Build the state dispatch (if-else chain)
@@ -1131,3 +1129,14 @@ test "a yield inside an expression is reported, not passed through" { assert spl
 test "a statement kind the splitter cannot split is reported" { assert splitErrorsFor("function* gen() { throw (yield 1); }") == 1; }
 
 test "a splittable body reports nothing" { assert splitErrorsFor("function* gen() { do { yield 1; } while (false); switch (1) { case 1: yield 2; } }") == 0; }
+
+test "a hoisted local without its symbol is refused, not rebuilt by name" {
+	const loc = makeLoc(1, 1);
+	const stmts: Node[] = [makeVarDecl("x", makeNumber(1, loc), DeclKind.Let, loc)];
+	const lifted = createNameSet();
+	nameSetAdd(lifted, "x");
+	const ctx = makeCtx();
+	convertDeclsToAssigns(stmts, lifted, ctx, loc);
+	assert ctx.errors.length == 1;
+	assert stmts[0].kind == NodeKind.VariableDecl;
+}
