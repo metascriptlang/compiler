@@ -5,7 +5,7 @@ import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, 
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
-import { lookupHookSym, requireOpByKey, getOpByKey, setOpByKey } from "../codegen/c/types";
+import { lookupHookSym, requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
 import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
@@ -138,9 +138,6 @@ export function receiverKind(t: Type | null): TypeKind {
 	return cur == null ? TypeKind.Unknown : cur.kind;
 }
 
-export function enumToStringName(enumName: string): string {
-	return enumName + "_toString";
-}
 
 // Synthetic per-type helpers (struct dump) are declared once per
 // requesting module. Two modules may declare the same type name: C keeps the
@@ -164,18 +161,10 @@ export function enumToStringSym(ctx: TransformContext, t: Type): Symbol {
 	for (const c of ctx.jsEnumToStrings) {
 		if (c.enumType == t || (c.enumType.sym != null && c.enumType.sym == t.sym)) return c.fnSym;
 	}
-	const fnSym = mintSym(ctx, SymbolKind.Function, enumToStringName(t.typeName), createFunction([t], ["v"], stringType()));
+	const fnSym = mintSym(ctx, SymbolKind.Function, t.typeName + "_toString", createFunction([t], ["v"], stringType()));
 	ctx.jsEnumToStrings.push({ enumType: t, fnSym });
 	return fnSym;
 }
-
-export function liftEnumToStrings(program: Node, ctx: TransformContext): void {
-	for (const t of declaredEnums(program)) {
-		if (getOpByKey(t, AttachedOp.AttachedToString) != null) continue;
-		setOpByKey(t, AttachedOp.AttachedToString, mintSym(ctx, SymbolKind.Function, enumToStringName(t.typeName), createFunction([t], ["v"], stringType())));
-	}
-}
-
 export function declaredEnums(program: Node): Type[] {
 	const found: Type[] = [];
 	walkEnumDecls(program, found);

@@ -2230,6 +2230,11 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
+// Reference parity: global hook ownership registry shared across all modules.
+// First module to need a type's DRC hooks generates them; others get extern protos.
+// Before the graph check: enum toString ops register during checking, and this resets the op table.
+const sharedHookOwners = createNameSet();
+setGlobalHookOwners(sharedHookOwners);
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
 	applyGcMode(opts);
 	session.moduleCount = graph.loadOrder.length as int32;
@@ -2353,10 +2358,6 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	const fsAsyncHits: FsAsyncHit[] = [];
 	const fsWritableHits: { modPath: string, source: string, name: string, sym: Symbol | null, line: int32, column: int32, message: string }[] = [];
 
-	// Reference parity: global hook ownership registry shared across all modules.
-	// First module to need a type's DRC hooks generates them; others get extern protos.
-	const sharedHookOwners = createNameSet();
-	setGlobalHookOwners(sharedHookOwners);
 
 	// PROFILE: sub-phase timings summed across all modules.
 	const a2t: A2Timers = { mono: 0, macro: 0, xform: 0, refine: 0, native: 0, analyze: 0, lower: 0 };
@@ -2942,6 +2943,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	resolveCC(opts);
 	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
+// Reference parity: global hook ownership registry shared across all modules.
+// Before the graph check: enum toString ops register during checking, and this resets the op table.
+const sharedHookOwners = createNameSet();
+setGlobalHookOwners(sharedHookOwners);
 	const graph = loadAndCheckGraph(filePath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode));
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules
@@ -2953,9 +2958,6 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const includePaths = bs.includePaths;
 	let oFiles: string[] = [];
 
-	// Reference parity: global hook ownership registry shared across all modules.
-	const sharedHookOwners = createNameSet();
-	setGlobalHookOwners(sharedHookOwners);
 
 
 	// Phase A1 — parse + check every module FIRST (no instance drain yet), so a generic

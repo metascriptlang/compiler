@@ -20,6 +20,7 @@ import { registerModuleProgram, instantiateProfile, instantiateTimings, lookupMo
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbParse, dbTypeCheck, dbCheckIsCurrent, dbGetCheckedProgram, TransAmDb } from "../compiler/transam/index";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, resetGenericTypeInsts } from "../parser/context";
+import { opMark, opsFrom, replayOps, KeyedOp } from "../codegen/c/types";
 
 export class CheckSession {
 	db: TransAmDb | null;
@@ -28,6 +29,7 @@ export class CheckSession {
 	typeInstances: HashMap<string, GenericTypeInstRow[]>;
 	preludeTypeInstances: GenericTypeInstRow[];
 	rechecked: HashSet<string>;
+	ops: HashMap<string, KeyedOp[]>;
 }
 
 export function createCheckSession(): CheckSession {
@@ -38,6 +40,7 @@ export function createCheckSession(): CheckSession {
 		typeInstances: new HashMap<string, GenericTypeInstRow[]>(),
 		preludeTypeInstances: [],
 		rechecked: new HashSet<string>(),
+		ops: new HashMap<string, KeyedOp[]>(),
 	};
 }
 
@@ -192,13 +195,18 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		const injectedFlags = baseCtx.compilerFlags;
 		const _tm0 = performance.now();
 		const typeInstanceMark = genericTypeInstMark();
+		const opsMark0 = opMark();
 		const ctx = dbTypeCheck(db, path);
 		const fresh = session == null || session.checks.get(path) != ctx;
 		if (session != null && ctx != null && fresh) {
 			session.checks.set(path, ctx);
 			session.instances.set(path, ctx.generatedInstances);
 			session.typeInstances.set(path, takeGenericTypeInstsFrom(typeInstanceMark));
+			session.ops.set(path, opsFrom(opsMark0));
 			session.rechecked.add(path);
+		} else if (session != null && ctx != null) {
+			const warmOps = session.ops.get(path);
+			if (warmOps != null) replayOps(warmOps);
 		}
 		const _tm1 = performance.now();
 		if (graphTiming && (_tm1 - _tm0) > 100) {

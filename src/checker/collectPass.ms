@@ -1,10 +1,10 @@
-import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp } from "../ast/node";
 import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator } from "./decoratorHelpers";
-import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, int32Type, getSysType } from "./types";
+import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, int32Type, getSysType, stringType } from "./types";
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, stampOwner, stampItem, isStaticExtensionSym } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, stampOwner, stampItem, isStaticExtensionSym, newSym } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -14,6 +14,7 @@ import { quoteCcArg } from "../utils/commandLine";
 import { declGenericParams } from "./types";
 import { callDecoratorDefers, callCheckExpr } from "./checkerCallbacks";
 import { mangleModuleName } from "../codegen/c/names";
+import { setOpByKey } from "../codegen/c/types";
 
 // ===== Top-Level Collector =====
 
@@ -822,6 +823,9 @@ export function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 		enumSym.nativeName = d.enumName;
 	}
 	defineOrError(ctx, enumSym, node);
+	const toStringSym = newSym(ctx, SymbolKind.Function, d.enumName + "_toString", createFunction([enumType], ["v"], stringType()));
+	toStringSym.state = SymbolState.Checked;
+	setOpByKey(enumType, AttachedOp.AttachedToString, toStringSym);
 	// Record enum type DEF for symbol graph
 	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.enumName.length, enumSym, enumType, SymbolKind.Enum, d.enumName, "", true);
 	// Record each enum member for the symbol graph (DEF records for go-to-definition).

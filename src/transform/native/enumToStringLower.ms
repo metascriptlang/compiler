@@ -11,7 +11,7 @@ import { Node, NodeKind, ProgramData, EnumDeclData, ExportDeclData, Type, TypeKi
 import { TransformContext } from "../context";
 import {
 	makeSwitch, makeSwitchCase, makeReturn, makeString, makeNumber,
-	makeTypedIdentResolved, makeBlock, makeFnDecl, enumToStringName, declaredEnums,
+	makeTypedIdentResolved, makeBlock, makeFnDecl, declaredEnums,
 } from "../util";
 import { makeSymbol } from "../../checker/symbol";
 import { createEnum, stringType, createFunction } from "../../checker/types";
@@ -164,7 +164,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		if (enumNode != null) {
 			const d = enumNode.data as EnumDeclData;
 			const loc = enumNode.location;
-			const toStringFn = makeEnumToString(null, enumToStringName(d.enumName), createEnum(d.enumName, d.enumMembers, null as unknown as number[]), loc);
+			const toStringFn = makeEnumToString(null, d.enumName + "_toString", createEnum(d.enumName, d.enumMembers, null as unknown as number[]), loc);
 			newStmts.push(toStringFn);
 		}
 		i = i + 1;
