@@ -23,7 +23,7 @@ import {
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { hasFlag, SymbolFlag } from "./symbol";
-import { isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion } from "./types";
+import { hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { lookupCtorDefaults } from "./instantiate";
@@ -462,6 +462,7 @@ function walkDecl(di: int32): void {
 		aliveSetAdd(_aliveSet, modulePath, name);
 	}
 	aliveSetAddModule(_aliveSet, modulePath);
+	if (found.nodeType != null && hasGenericParams(found.nodeType)) return;
 	walkBody(found, modulePath);
 	// Codegen lowers `super(args)` to `<Parent>_init(this, args)` with no AST
 	// edge, so a live class keeps its init alive, as `new C(...)` needs.
