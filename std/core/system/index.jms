@@ -261,7 +261,36 @@ function msPowU64(a: uint64, b: uint64): uint64 {
 @compilerFunc
 function msChkIndex(i: int64, len: int64): int64 {
 	@emit(`if (!(${i} >= 0 && ${i} < ${len})) throw new Error("index " + ${i} + " out of bounds (length " + ${len} + ")");
-	return ${i};`);
+	return Number(${i});`);
+	unreachable;
+}
+
+@compilerFunc
+function msSpanAt(v: unknown, i: int64): unknown {
+	@emit(`if (!(${i} >= 0 && ${i} < ${v}.len)) throw new Error("index " + ${i} + " out of bounds (length " + ${v}.len + ")");
+	return ${v}.base[${v}.off + Number(${i})];`);
+	unreachable;
+}
+
+@compilerFunc
+function msSpanOf(a: unknown): unknown {
+	@emit(`return { base: ${a}, off: 0, len: ${a}.length };`);
+	unreachable;
+}
+
+@compilerFunc
+function msSliceOf(a: unknown, start: number, end: number): unknown {
+	@emit(`const s = Number(${start}), e = Number(${end}), n = ${a}.length;
+	if (e !== s && (s < 0 || e < s || e > n)) throw new Error("slice " + s + ".." + e + " out of bounds (length " + n + ")");
+	return { base: ${a}, off: s, len: e - s };`);
+	unreachable;
+}
+
+@compilerFunc
+function msSliceSpan(v: unknown, start: number, end: number): unknown {
+	@emit(`const s = Number(${start}), e = Number(${end}), n = ${v}.len;
+	if (e !== s && (s < 0 || e < s || e > n)) throw new Error("slice " + s + ".." + e + " out of bounds (length " + n + ")");
+	return { base: ${v}.base, off: ${v}.off + s, len: e - s };`);
 	unreachable;
 }
 

@@ -12,10 +12,46 @@ test "a sized array element read is checked" {
 	assert result.value.contains("msArrayAt(a, i)");
 }
 
-test "a span element read is checked" {
+test "a span element read is checked through the view" {
 	const result = compileToJS("function f(xs: Span<int32>, i: int32): int32 { return xs[i]; }");
 	assert result.ok;
-	assert result.value.contains("msArrayAt(xs, i)");
+	assert result.value.contains("msSpanAt(xs, i)");
+}
+
+test "a span element write lands in the view's base" {
+	const result = compileToJS("function f(xs: Span<int32>, i: int32): void { xs[i] = 5; }");
+	assert result.ok;
+	assert result.value.contains("xs.base[(xs.off + msChkIndex(i, xs.len))] = 5");
+}
+
+test "a span length reads the view" {
+	const result = compileToJS("function f(xs: Span<int32>): int32 { return xs.length; }");
+	assert result.ok;
+	assert result.value.contains("xs.len");
+}
+
+test "an array passed as a span becomes a view" {
+	const result = compileToJS("function f(xs: Span<int32>): int32 { return xs.length; } function g(a: int32[]): int32 { return f(a); }");
+	assert result.ok;
+	assert result.value.contains("msSpanOf(a)");
+}
+
+test "an array slice is a checked view" {
+	const result = compileToJS("function f(xs: Span<int32>): int32 { return xs.length; } function g(a: int32[], s: int32, e: int32): int32 { return f(a[s..e]); }");
+	assert result.ok;
+	assert result.value.contains("msSliceOf(a, s, e)");
+}
+
+test "an inclusive slice passes the end past the last element" {
+	const result = compileToJS("function f(xs: Span<int32>): int32 { return xs.length; } function g(a: int32[], s: int32, e: int32): int32 { return f(a[s...e]); }");
+	assert result.ok;
+	assert result.value.contains("msSliceOf(a, s, (e + 1))");
+}
+
+test "a slice of a span rebases the view" {
+	const result = compileToJS("function f(xs: Span<int32>): int32 { return xs.length; } function g(v: Span<int32>): int32 { return f(v[1..2]); }");
+	assert result.ok;
+	assert result.value.contains("msSliceSpan(v, 1, 2)");
 }
 
 test "an element write checks the index against the array it writes" {

@@ -172,7 +172,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerStringOps(result, ctx); }
 	result = lowerSubscript(result, ctx);
 	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
-	if (!jsBackend) { result = spanLower(result, ctx); }
+	result = spanLower(result, ctx);
 	if (!jsBackend) { result = spanParamExpand(result, ctx); }
 	result = lowerConditionalExpr(result, ctx);
 	// Conditionally-evaluated positions (ternary arm, `&&`/`||` RHS, while-cond)
