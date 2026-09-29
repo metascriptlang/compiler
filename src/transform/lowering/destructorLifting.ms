@@ -2524,6 +2524,13 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 // Look up the declared type's sym and dispatch to `ensureHooks`. Pulled out of
 // processDecl's match arms so all three decl kinds share one resolve+dispatch.
 // processDecl is the DEFINING-module path — passes emitTypeInfo=true.
+function namesAnotherType(sym: Symbol, objType: Type, typeName: string): boolean {
+	return sym.symbolKind == SymbolKind.TypeAlias
+		&& sym.symbolType.kind != TypeKind.Ref
+		&& objType.typeName != ""
+		&& objType.typeName != typeName;
+}
+
 function ensureHooksByName(typeName: string, lctx: LiftCtx, loc: SourceLocation, declSym: Symbol | null): void {
 	if (typeName == "") return;
 	if (lctx.checkerCtx == null) return;
@@ -2537,6 +2544,7 @@ function ensureHooksByName(typeName: string, lctx: LiftCtx, loc: SourceLocation,
 		// TypeAlias-to-Ref: ensureHooks' category resolver handles it (same skip path).
 		const objType = unwrapRef(sym.symbolType);
 		if (objType == null) return;
+		if (namesAnotherType(sym, objType, typeName)) return;
 		const refType = (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Interface)
 			? sym.symbolType
 			: null as unknown as Type;
