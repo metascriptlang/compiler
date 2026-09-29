@@ -451,6 +451,11 @@ function markInstanceCopy(generic: Symbol, name: string): void {
 	}
 }
 
+function markRootDecl(decl: Node, modulePath: string): void {
+	if (decl.resolvedSym != null) markSymAndWalk(decl.resolvedSym, modulePath);
+	else markAndWalk(modulePath, topDeclName(decl));
+}
+
 function markSymlessDecls(modulePath: string, name: string): void {
 	let di = _declHead.get(modulePath + ":" + name) ?? -1;
 	while (di >= 0) {
@@ -664,7 +669,7 @@ export function computeAliveSet(
 			if (modulePath == entryPath && bare.kind == NodeKind.FunctionDecl) {
 				const fd = bare.data as FunctionDeclData;
 				if (fd.fnName == "main") {
-					markAndWalk(modulePath, "main");
+					markRootDecl(bare, modulePath);
 					continue;
 				}
 			}
@@ -674,7 +679,7 @@ export function computeAliveSet(
 				if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.FunctionDecl) {
 					const fd = ed.exportedDecl.data as FunctionDeclData;
 					if (fd.fnName == "main") {
-						markAndWalk(modulePath, "main");
+						markRootDecl(ed.exportedDecl, modulePath);
 						continue;
 					}
 				}
@@ -696,7 +701,7 @@ export function computeAliveSet(
 					continue;
 				}
 				if (bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
-					markAndWalk(modulePath, fn);
+					markSymAndWalk(bare.resolvedSym, modulePath);
 					continue;
 				}
 			}
@@ -722,14 +727,17 @@ export function computeAliveSet(
 			}
 
 			if (exportsCSymbol(bare)) {
-				markAndWalk(modulePath, getDeclName(bare));
+				markRootDecl(topDecl(bare)!, modulePath);
 				continue;
 			}
 
 			if ((modulePath == entryPath || exportRootModules.includes(modulePath)) && isExportedDecl(bare)) {
-				const name = getDeclName(bare);
-				if (name != "") {
-					markAndWalk(modulePath, name);
+				const decl = topDecl(bare);
+				if (decl != null) {
+					markRootDecl(decl, modulePath);
+				} else {
+					const name = getDeclName(bare);
+					if (name != "") markAndWalk(modulePath, name);
 				}
 			}
 		}
