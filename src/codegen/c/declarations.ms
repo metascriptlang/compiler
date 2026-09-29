@@ -12,7 +12,7 @@ import {
 } from "./context";
 import { genExpr, refArrayDestroyFn, refArrayCellLabel, bareArrayTypeName } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
-import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
+import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
 import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, refArrayCellName, isCompilerGenCName, isNilableValueType, ensureDrcProto, procHeader } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
@@ -627,7 +627,8 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	// convention is ORC-internal); revisit if collision reports surface.
 	const nameLen = d.declName.length;
 	const isTypeInfo = nameLen > 8 && d.declName.slice(nameLen - 8, nameLen) == "TypeInfo";
-	const varName = isTypeInfo ? safeName(d.declName) : mangledGlobalName(node.resolvedSym, d.declName);
+	const isModuleSlot = isModuleGlobalVar(node.resolvedSym);
+	const varName = isTypeInfo || !isModuleSlot ? safeName(d.declName) : mangledGlobalName(node.resolvedSym, d.declName);
 	// Identifier references recompute the mangled name on demand via mangledGlobalName
 	// (see expressions.ms isModuleGlobalVar branch). We deliberately DO NOT write to
 	// sym.nativeName here: that field is an extern/FFI marker — codegen uses
@@ -656,10 +657,10 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 
 	if (g.preparingDeclarations) return;
 	const cType = getTypeDesc(g, node.nodeType);
-	// Symbols without a modulePath (DRC/transform temps hoisted to top level) mangle to a
+	// Slots that are not module globals (DRC/transform temps hoisted to top level) keep a
 	// bare name that repeats across modules (per-module tempCounter) — static linkage is
 	// what makes them collision-free; nothing outside this module can reference them.
-	const staticPfx = (node.resolvedSym == null || node.resolvedSym.modulePath == "") ? "static " : "";
+	const staticPfx = isModuleSlot ? "" : "static ";
 	// Literal initializers → fold to C global initializer. This makes the global
 	// READY at program load time instead of waiting for Init000 dispatch order.
 	// Critical for things like `const INITIAL_CAPACITY: int32 = 32;` — if left to

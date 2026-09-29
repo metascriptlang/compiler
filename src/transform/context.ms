@@ -1,7 +1,7 @@
 // Transform Context — shared state across all transforms
 
-import { CheckerContext, addError } from "../checker/context";
-import { Type, Symbol, SymbolKind, SourceLocation } from "../ast/node";
+import { CheckerContext, addError, newSym } from "../checker/context";
+import { Type, Symbol, SymbolKind, SymbolState, SourceLocation } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { noneType } from "../checker/types";
 
@@ -90,11 +90,16 @@ export function freshTemp(ctx: TransformContext, prefix: string): string {
 	return "$" + prefix + "_" + n.toString();
 }
 
+export function mintSym(ctx: TransformContext, kind: SymbolKind, name: string, t: Type | null): Symbol {
+	const sym = ctx.checkerCtx != null ? newSym(ctx.checkerCtx, kind, name, t) : makeSymbol(name, kind, t, false);
+	sym.state = SymbolState.Checked;
+	return sym;
+}
+
 // Reference parity (getTemp): create a Symbol for a DRC temp variable.
 // Returns a Symbol with declNode=null — safe to store on VarInfo (no destroy cascade).
 export function freshTempSym(ctx: TransformContext, prefix: string, t: Type | null): Symbol {
-	const name = freshTemp(ctx, prefix);
-	return makeSymbol(name, SymbolKind.Temp, t != null ? t : noneType(), false);
+	return mintSym(ctx, SymbolKind.Temp, freshTemp(ctx, prefix), t != null ? t : noneType());
 }
 
 // Owned long-lived synthetic local. Must NOT be $-prefixed: the DRC injector
