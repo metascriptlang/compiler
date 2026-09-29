@@ -610,15 +610,37 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 	const d = node.data as ArrayLiteralData;
 	const t = node.nodeType;
+	const sized = t != null && t.kind == TypeKind.SizedArray && t.typeReturn != null;
+	if (sized && d.elements.length == 0) {
+		emit(gen, jsDefaultValue(t));
+		return;
+	}
 	let typedName = "";
-	if (t != null && t.kind == TypeKind.SizedArray && t.typeReturn != null) {
+	if (sized) {
 		typedName = jsTypedArrayName(t.typeReturn.kind);
 	}
 	if (typedName != "") emit(gen, "new " + typedName + "(");
 	emit(gen, "[");
+	let needComma = false;
 	for (let i = 0; i < d.elements.length; i += 1) {
-		if (i > 0) emit(gen, ", ");
+		if (needComma) emit(gen, ", ");
 		emitArrayElement(gen, d.elements[i]);
+		needComma = true;
+	}
+	if (sized) {
+		let fill = "0";
+		if (typedName == "") {
+			const elemDefault = jsDefaultValue(t.typeReturn);
+			if (elemDefault != "") fill = elemDefault;
+			else fill = "null";
+		}
+		let extra = (t.typeValue as int32) - d.elements.length;
+		while (extra > 0) {
+			if (needComma) emit(gen, ", ");
+			emit(gen, fill);
+			needComma = true;
+			extra = extra - 1;
+		}
 	}
 	emit(gen, "]");
 	if (typedName != "") emit(gen, ")");
