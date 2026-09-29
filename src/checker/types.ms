@@ -2073,6 +2073,13 @@ export function getSysType(kind: TypeKind): Type {
 // Thin wrappers over getSysType for backward compatibility + readability.
 
 export function numberType(): Type { return getSysType(TypeKind.Number); }
+
+export function literalBase(t: Type): Type {
+	if (t.kind == TypeKind.StringLiteral) return stringType();
+	if (t.kind == TypeKind.BooleanLiteral) return booleanType();
+	if (t.kind == TypeKind.EnumLiteral && t.typeReturn != null) return t.typeReturn;
+	return t;
+}
 export function stringType(): Type { return getSysType(TypeKind.String); }
 export function booleanType(): Type { return getSysType(TypeKind.Boolean); }
 export function voidType(): Type { return getSysType(TypeKind.Void); }

@@ -13,7 +13,7 @@
 // kinds remain for JSON-related rewrites here.
 
 import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType } from "../../checker/types";
+import { peelTransparentInstance, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase } from "../../checker/types";
 import { findExtension, requestEnumToString } from "../../checker/context";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -127,6 +127,8 @@ function lowerEnumReverseIndex(node: Node, ctx: TransformContext): Node {
 // Resolution: user extension > number > boolean > enum > string > struct/class > array > fallback
 
 function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLocation, ctx: TransformContext): Node {
+	const base = literalBase(objType);
+	if (base != objType) return lowerToString(callNode, obj, base, loc, ctx);
 	// bigint is a primitive with no user-extensible toString, and the synthetic
 	// calls that interpolation and concat build carry no symbol for
 	// extensionMethodLower to route — so it resolves ahead of the extension probe.

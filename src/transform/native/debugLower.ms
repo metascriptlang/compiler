@@ -5,7 +5,7 @@
 // json builders (jsonObject/jsonString/jsonNumber/jsonBool) + stringify from std/core/json.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, createNode } from "../../ast/node";
-import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance } from "../../checker/types";
+import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase } from "../../checker/types";
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension, requestEnumToString } from "../../checker/context";
@@ -28,7 +28,7 @@ function resolveJsonTargetType(typeArgStr: string, ctx: TransformContext): Type 
 
 function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): Node {
 	if (arg.nodeType == null) return arg;
-	const t = peelTransparentInstance(arg.nodeType);
+	const t = literalBase(peelTransparentInstance(arg.nodeType));
 	// String: as-is
 	if (t.kind == TypeKind.String || arg.kind == NodeKind.StringLiteral) return arg;
 	if (t.kind == TypeKind.Char) return charToString(arg, loc);
