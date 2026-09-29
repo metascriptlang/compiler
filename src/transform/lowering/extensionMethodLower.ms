@@ -8,7 +8,7 @@
 import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, ExprStmtData, IdentifierData, SymbolKind, Symbol } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall } from "../util";
+import { makeTypedIdentResolved, makeCall } from "../util";
 import { defineSymbol, makeSymbol } from "../../checker/symbol";
 import { inferredType, createFunction } from "../../checker/types";
 import { createContext, registerExtension, ExtensionMethod } from "../../checker/context";
@@ -49,14 +49,11 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 		&& sym.declNode.kind == NodeKind.MethodDecl) {
 		return node;
 	}
-	// Use mangled name from resolved sym (e.g. Greeter_greet), fall back to property name
-	const callName = (sym != null && sym.name != "") ? sym.name : member.property;
+	if (sym == null) throw new Error(`internal: extension call '.${member.property}' reached lowering without its resolved symbol`);
 
 	// Static extension: Math.floor(x) → floor(x) — no receiver prepend
 	if (node.flags.has(NodeFlag.ExtStatic)) {
-		const staticIdent = makeIdent(callName, loc);
-		staticIdent.resolvedSym = sym;
-		const newCall = makeCall(staticIdent, call.arguments, loc);
+		const newCall = makeCall(makeTypedIdentResolved(sym, null, loc), call.arguments, loc);
 		newCall.nodeType = node.nodeType;
 		return newCall;
 	}
@@ -67,9 +64,7 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	for (let ai = 0; ai < call.arguments.length; ai += 1) {
 		newArgs.push(call.arguments[ai]);
 	}
-	const calleeIdent = makeIdent(callName, loc);
-	calleeIdent.resolvedSym = sym;
-	const newCall = makeCall(calleeIdent, newArgs, loc);
+	const newCall = makeCall(makeTypedIdentResolved(sym, null, loc), newArgs, loc);
 	newCall.nodeType = node.nodeType;
 	return newCall;
 }
