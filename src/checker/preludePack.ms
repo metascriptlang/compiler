@@ -542,7 +542,6 @@ function writePreludeDeps(root: string, key: string, stamp: string): void {
 //     name modulePath nativeName builtinKind headerPath jsModulePath
 //     typeIdx overloadsCsv staticCsv declIdx dpCsv disamb exportName
 //   E methodName receiverTypeName sourcePath isStatic scopeDepth symIdx fnTypeIdx
-//   M macroName declModule bodyIdx paramsCsv paramTypesCsv
 //   C converterName targetTypeName typeIdx
 //   P compilerFuncName symIdx
 //   D includeDirectives
@@ -655,7 +654,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	// symbols (registry entries hold their own sym identity — e.g. a specific
 	// overload) — walk them into the closure or the pack emits ext.sym=null
 	// and every extension call fails to match on load. Same for converter
-	// payload types and macro bodies.
+	// payload types.
 	if (ctx.extensionRegistry != null) {
 		for (const ext of ctx.extensionRegistry.methods) {
 			enqSym(ext.sym, false);
@@ -663,9 +662,6 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	}
 	for (const ct of ctx.converterTargetTypes.values()) {
 		enqType(ct);
-	}
-	for (const mb of ctx.macroBodyRegistry.values()) {
-		enqNode(mb);
 	}
 	for (const members of ctx.preludeInterf.values()) {
 		for (const m of members) enqSym(m, false);
@@ -781,15 +777,6 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			const fnRef = ext.sym == null && ext.fnType != null ? idxType(ext.fnType) : -1;
 			lines.push(`E\t${escapeP(ext.methodName)}\t${escapeP(ext.receiverTypeName)}\t${escapeP(ext.sourcePath)}\t${ext.isStatic ? 1 : 0}\t${ext.scopeDepth as int32}\t${idxSym(ext.sym)}\t${fnRef}`);
 		}
-	}
-
-	for (const name of ctx.macroDeclModuleRegistry.keys()) {
-		const dm = ctx.macroDeclModuleRegistry.get(name);
-		if (dm == null || dm == "") continue;
-		const body = ctx.macroBodyRegistry.get(name);
-		const params = ctx.macroParamsRegistry.get(name);
-		const pts = ctx.macroParamTypesRegistry.get(name);
-		lines.push(`M\t${escapeP(name)}\t${escapeP(dm)}\t${idxNode(body)}\t${params !== null ? joinCsv(params) : "-"}\t${pts !== null ? joinCsv(pts) : "-"}`);
 	}
 
 	for (const name of ctx.converterTargetByName.keys()) {
@@ -1165,7 +1152,6 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const nodePssRaw: string[] = [];
 	const nodePayload: string[][] = [];
 	const extRows: string[][] = [];
-	const macroRows: string[][] = [];
 	const convRows: string[][] = [];
 	const compilerFuncRows: string[][] = [];
 	const interfRows: string[][] = [];
@@ -1252,8 +1238,6 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			syms.push(s);
 		} else if (f[0] == "E") {
 			extRows.push(f);
-		} else if (f[0] == "M") {
-			macroRows.push(f);
 		} else if (f[0] == "C") {
 			convRows.push(f);
 		} else if (f[0] == "P") {
@@ -1364,15 +1348,6 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		const extType = fnRef >= 0 && fnRef < types.length ? types[fnRef] : noneType();
 		const ext = createExtMethod(unescapeP(f[1]), unescapeP(f[2]), unescapeP(f[3]), extType, f[4] == "1", extSym, f[5].parseInt() as int32);
 		registerExtension(ctx.extensionRegistry, ext);
-	}
-
-	for (const f of macroRows) {
-		const name = unescapeP(f[1]);
-		ctx.macroDeclModuleRegistry.set(name, unescapeP(f[2]));
-		const bi = f[3].parseInt() as int32;
-		if (bi >= 0 && bi < nodes.length) ctx.macroBodyRegistry.set(name, nodes[bi]);
-		if (f[4] != "-") ctx.macroParamsRegistry.set(name, splitCsv(f[4]));
-		if (f[5] != "-") ctx.macroParamTypesRegistry.set(name, splitCsv(f[5]));
 	}
 
 	for (const f of convRows) {

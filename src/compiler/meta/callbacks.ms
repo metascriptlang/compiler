@@ -1,7 +1,7 @@
 // Meta Callbacks — breaks circular dependency between expand.ms and eval.ms.
 // Same pattern as checker/checkerCallbacks.ms.
 
-import { Node } from "../../ast/node";
+import { Node, Symbol } from "../../ast/node";
 import { RaiserContext } from "../../raiser/context";
 import { RaiserModule } from "../../raiser/module";
 import { RaiserVM } from "../../raiser/vm";
@@ -59,12 +59,12 @@ export function registerMacroEngineCompiler(fn: MacroEngineCompilerFn): void {
 	macroEngineCompilerFn = fn;
 }
 
-type MacroBodyPreparerFn = (body: Node, ctx: CheckerContext, regCtx: CheckerContext, macroName: string) => Node;
-let macroBodyPreparerFn: MacroBodyPreparerFn = (body: Node, ctx: CheckerContext, regCtx: CheckerContext, macroName: string): Node => {
+type MacroBodyPreparerFn = (body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string) => Node;
+let macroBodyPreparerFn: MacroBodyPreparerFn = (body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string): Node => {
 	return body;
 };
-export function callMacroBodyPreparer(body: Node, ctx: CheckerContext, regCtx: CheckerContext, macroName: string): Node {
-	return macroBodyPreparerFn(body, ctx, regCtx, macroName);
+export function callMacroBodyPreparer(body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string): Node {
+	return macroBodyPreparerFn(body, ctx, macroSym, macroName);
 }
 export function registerMacroBodyPreparer(fn: MacroBodyPreparerFn): void {
 	macroBodyPreparerFn = fn;

@@ -1,7 +1,7 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
-import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
+import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -316,17 +316,28 @@ export function macroDepthExceeded(ctx: CheckerContext, name: string, node: Node
 	return true;
 }
 
-export function rewriteCallAsMacroInvocation(node: Node): void {
+export function rewriteCallAsMacroInvocation(node: Node, macroSym: Symbol): void {
 	const cd = node.data as CallExprData;
-	const bound = cd.callee.flags.has(NodeFlag.BoundSym) && cd.callee.resolvedSym != null
-		&& cd.callee.resolvedSym.symbolKind == SymbolKind.Macro;
-	const boundSym = bound ? cd.callee.resolvedSym : null as unknown as Symbol;
+	const bound = cd.callee.flags.has(NodeFlag.BoundSym) && cd.callee.resolvedSym == macroSym;
 	node.kind = NodeKind.MacroInvocation;
 	node.data = { macroName: (cd.callee.data as IdentifierData).name, macroArgs: cd.arguments, macroHasParens: true };
-	if (bound) {
-		node.resolvedSym = boundSym;
-		node.flags = node.flags.incl(NodeFlag.BoundSym);
-	}
+	node.resolvedSym = macroSym;
+	if (bound) node.flags = node.flags.incl(NodeFlag.BoundSym);
+}
+
+export function macroDeclOf(sym: Symbol | null): MacroDeclData | null {
+	if (sym == null || sym.symbolKind != SymbolKind.Macro) return null;
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.MacroDecl) return null;
+	return decl.data as MacroDeclData;
+}
+
+export function invokedMacroSym(ctx: CheckerContext, node: Node): Symbol | null {
+	const bound = node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null;
+	const sym = bound || macroDeclOf(node.resolvedSym) != null
+		? node.resolvedSym
+		: lookupSymbol(ctx.table, (node.data as MacroInvocationData).macroName);
+	return macroDeclOf(sym) != null ? sym : null;
 }
 
 // True iff any arg's nodeType still carries a GenericParam — the marker
@@ -924,7 +935,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			foldComptimeNodeAliasArgs(ctx, d.arguments);
 			const macroArgsRef = d.arguments;
 			checkJsxConsumed(ctx, macroArgsRef);
-			rewriteCallAsMacroInvocation(node);
+			rewriteCallAsMacroInvocation(node, sym);
 			// SERIALIZE A3 — Defer convention: if any arg has parametric type
 			// (contains GenericParam), DON'T eager-expand. The MacroInvocation
 			// persists through monomorphize (clone.ms:191 preserves it), where

@@ -29,13 +29,8 @@ export interface ExportedSymInfo {
 	extIsStatic: boolean;
 	overloadExtReceiverTypes: string[];
 	overloadExtIsStatic: boolean[];
-	// Phase E: cross-module macros — carry body AST + param names through
-	// the export pipeline so importing modules can register in macroBodyRegistry.
-	macroBody: Node;
 	converterTarget: string; // converter target type name ("" = not a converter)
 	converterTargetType: Type; // resolved converter target (null when unresolved / not a converter)
-	macroParams: string[];
-	macroParamTypes: string[];
 }
 
 export interface ModuleExports {
@@ -160,37 +155,20 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		ovExtStatics.push(ovExt != null ? ovExt.isStatic : false);
 	}
 
-	// Phase E: carry macro body + params for cross-module macro import.
-	let mBody: Node = null as unknown as Node;
-	let mParams: string[] = [];
-	let mParamTypes: string[] = [];
 	let mConverterTarget = "";
 	let mConverterTargetType: Type = null as unknown as Type;
 	if (sym.symbolKind == SymbolKind.Macro && ctx != null) {
-		const registeredBody = ctx.macroBodyRegistry.get(sym.name);
-		if (registeredBody != null) {
-			mBody = registeredBody;
-		}
 		const ct = ctx.converterTargetByName.get(sym.name);
 		if (ct != null) { mConverterTarget = ct; }
 		const ctt = ctx.converterTargetTypes.get(sym.name);
 		if (ctt != null) { mConverterTargetType = ctt; }
-		const registeredParams = ctx.macroParamsRegistry.get(sym.name);
-		if (registeredParams != null) {
-			mParams = registeredParams;
-		}
-		const registeredParamTypes = ctx.macroParamTypesRegistry.get(sym.name);
-		if (registeredParamTypes != null) {
-			mParamTypes = registeredParamTypes;
-		}
 	}
 
 	return {
 		name: exportedName != "" ? exportedName : sym.name, sym,
 		extReceiverType: extRecv, extIsStatic: extStatic,
 		overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics,
-		macroBody: mBody, converterTarget: mConverterTarget, converterTargetType: mConverterTargetType,
-		macroParams: mParams, macroParamTypes: mParamTypes,
+		converterTarget: mConverterTarget, converterTargetType: mConverterTargetType,
 	};
 }
 
@@ -1161,16 +1139,12 @@ export class CheckerContext {
 	adoptedDecls: HashMap<Node, Symbol>;
 	compilerFuncs: HashMap<string, Symbol>;       // @compilerFunc — name the compiler synthesizes a call under → its declared symbol
 	extensionRegistry: ExtensionRegistry;
-	macroBodyRegistry: HashMap<string, Node>;       // Phase B: macroName → macroDeclBody
 	converterTargets: HashMap<string, string>;      // converter: target type name → converter name (in-scope pair table)
 	converterTargetOrigin: HashMap<string, int32>;  // converter: target type name → 0 local decl | 1 import (shadowing + dup detection)
 	converterTargetByName: HashMap<string, string>; // converter: converter name → target type name (export pipeline)
 	converterTargetTypes: HashMap<string, Type>;    // converter: converter name → target type resolved in the DECLARING module
 	runtimeConverters: Symbol[];
 	converterTargetKeys: string[];                  // registration-ordered target keys (Nim c.converters seq analog)
-	macroParamsRegistry: HashMap<string, string[]>; // Phase B: macroName → param names
-	macroParamTypesRegistry: HashMap<string, string[]>;
-	macroDeclModuleRegistry: HashMap<string, string>;
 	macroExpansionDepth: int32;                  // Phase B+ eager: recursion limit for macros that produce macros
 	jsxMacroArgDepth: int32;                     // JSX leak guard: >0 while checking a macro's args (JSX there is consumed, not leaked)
 	inferredReturn: Type;  // tracks inferred return type during function body checking
@@ -1245,16 +1219,12 @@ export function createContext(): CheckerContext {
 		adoptedDecls: new HashMap<Node, Symbol>(),
 		compilerFuncs: new HashMap<string, Symbol>(),
 		extensionRegistry: createExtensionRegistry(),
-		macroBodyRegistry: new HashMap<string, Node>(),
 		converterTargets: new HashMap<string, string>(),
 		converterTargetOrigin: new HashMap<string, int32>(),
 		converterTargetByName: new HashMap<string, string>(),
 		converterTargetTypes: new HashMap<string, Type>(),
 		runtimeConverters: [],
 		converterTargetKeys: [],
-		macroParamsRegistry: new HashMap<string, string[]>(),
-		macroParamTypesRegistry: new HashMap<string, string[]>(),
-		macroDeclModuleRegistry: new HashMap<string, string>(),
 		macroExpansionDepth: 0,
 		jsxMacroArgDepth: 0,
 		inferredReturn: inferredType(),
@@ -1569,7 +1539,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [] };
+	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -1587,7 +1557,7 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [] };
+	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");
@@ -1595,7 +1565,7 @@ test "missing symbol returns null" {
 }
 
 function namedExportInfo(name: string): ExportedSymInfo {
-	return { name, sym: makeSymbol(name, SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [] };
+	return { name, sym: makeSymbol(name, SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [] };
 }
 
 test "the name index keeps registration order across export updates" {

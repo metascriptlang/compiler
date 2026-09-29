@@ -319,13 +319,14 @@ function tryConverterAtBoundary(ctx: CheckerContext, node: Node, expectedType: T
 		}
 	}
 	if (convName == null) return false;
-	if (!ctx.macroBodyRegistry.has(convName)) return false;
+	const convSym = lookupSymbol(ctx.table, convName);
+	if (macroDeclOf(convSym) == null) return false;
 	const jsxArg = createNodeAt(node.kind, node.data, node.location);
 	jsxArg.typeExpr = node.typeExpr;
 	node.kind = NodeKind.MacroInvocation;
 	node.data = { macroName: convName, macroArgs: [jsxArg], macroHasParens: true };
 	node.nodeType = null as unknown as Type;
-	node.resolvedSym = null;
+	node.resolvedSym = convSym;
 	node.flags = 0 as BitSet<NodeFlag>;
 	node.variantSlot = 0;
 	checkExpr(ctx, node, expectedType);
@@ -2179,11 +2180,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// declared-return-type assignability check.
 			//
 			// Mirrors the CallExpr eager path. Only fires for
-			// user macros (in registry); builtin directives (emit, include, ...)
+			// names that resolve to a macro; builtin directives (emit, include, ...)
 			// keep the voidType behavior. If args still contain GenericParam
 			// (defer convention), return inferredType — let the next mono level
 			// or post-mono expand pass handle it.
-			if (ctx.macroBodyRegistry.has(md.macroName)) {
+			const macroSym = invokedMacroSym(ctx, node);
+			if (macroSym != null) {
+				node.resolvedSym = macroSym;
 				if (macroDepthExceeded(ctx, md.macroName, node)) return;
 				if (anyArgIsParametric(md.macroArgs)) { node.nodeType = inferredType(); return; }
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth + 1;
@@ -2811,7 +2814,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
-import { anyArgIsParametric, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst } from "./callResolve";
+import { anyArgIsParametric, invokedMacroSym, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst } from "./callResolve";
 
 function createSyntheticToken(loc: SourceLocation): Token {
 	return createToken(TokenKind.Ident, "", loc.line);

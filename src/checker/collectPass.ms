@@ -974,10 +974,6 @@ export function collectMacro(ctx: CheckerContext, node: Node): void {
 	const sym = declSymbol(ctx, node, d.macroDeclName, SymbolKind.Macro, noneType(), false);
 	sym.symbolType.sym = sym;
 	defineOrError(ctx, sym, node);
-	ctx.macroBodyRegistry.set(d.macroDeclName, d.macroDeclBody);
-	ctx.macroParamsRegistry.set(d.macroDeclName, d.macroDeclParams);
-	ctx.macroParamTypesRegistry.set(d.macroDeclName, d.macroDeclParamTypes);
-	ctx.macroDeclModuleRegistry.set(d.macroDeclName, ctx.modulePath);
 	if (node.flags.has(NodeFlag.Converter)) {
 		registerConverter(ctx, d.macroDeclReturnType, d.macroDeclName, 0, node.location.line, node.location.column);
 	}
@@ -1179,12 +1175,6 @@ function importAliasedPreludeSym(ctx: CheckerContext, alias: string, name: strin
 	const info = buildExportInfo(sym, pre.extensionRegistry, sym.modulePath, pre);
 	const primary = importSymFromRegistry(ctx, alias, name, info, sym.modulePath, nameLoc, defNode);
 	propagateImportedExtensions(ctx, alias, info, sym.modulePath, primary);
-	if (info.sym.symbolKind == SymbolKind.Macro && info.macroBody != null && info.macroParams != null) {
-		ctx.macroBodyRegistry.set(alias, info.macroBody);
-		ctx.macroParamsRegistry.set(alias, info.macroParams);
-		if (info.macroParamTypes != null) ctx.macroParamTypesRegistry.set(alias, info.macroParamTypes);
-		ctx.macroDeclModuleRegistry.set(alias, info.sym.modulePath);
-	}
 	return primary;
 }
 
@@ -1271,22 +1261,10 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 			} else if (exportInfo != null) {
 				const nameLoc = d.nameLocations != null && i < d.nameLocations.length ? d.nameLocations[i] : node.location;
 				const primarySym = importSymFromRegistry(ctx, localAlias, importName, exportInfo, sourcePath, nameLoc, node);
-				// Phase E: cross-module macros — register imported macro body
-				// in the local context's registry so expandMacroInvocation finds it.
-				if (primarySym.symbolKind == SymbolKind.Macro
-						&& exportInfo.macroBody != null
-						&& exportInfo.macroParams != null) {
-					ctx.macroBodyRegistry.set(localAlias, exportInfo.macroBody);
-					ctx.macroParamsRegistry.set(localAlias, exportInfo.macroParams);
-					if (exportInfo.macroParamTypes != null) {
-						ctx.macroParamTypesRegistry.set(localAlias, exportInfo.macroParamTypes);
-					}
-					ctx.macroDeclModuleRegistry.set(localAlias, primarySym.modulePath != "" ? primarySym.modulePath : sourcePath);
-					if (exportInfo.converterTarget != "") {
-						registerConverter(ctx, exportInfo.converterTarget, localAlias, 1, nameLoc.line, nameLoc.column);
-						if (exportInfo.converterTargetType != null) {
-							ctx.converterTargetTypes.set(localAlias, exportInfo.converterTargetType);
-						}
+				if (primarySym.symbolKind == SymbolKind.Macro && exportInfo.converterTarget != "") {
+					registerConverter(ctx, exportInfo.converterTarget, localAlias, 1, nameLoc.line, nameLoc.column);
+					if (exportInfo.converterTargetType != null) {
+						ctx.converterTargetTypes.set(localAlias, exportInfo.converterTargetType);
 					}
 				}
 				// Propagate -iquote for header search path
@@ -1432,23 +1410,6 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 						} else if (exportInfo != null) {
 							const reNameLoc = imp.nameLocations != null && i < imp.nameLocations.length ? imp.nameLocations[i] : d.exportedDecl.location;
 							const primaryNamed = importSymFromRegistry(ctx, alias, importName, exportInfo, sourcePath, reNameLoc, node);
-							// Phase E re-export parity: when re-exporting a macro through a
-							// hub (`export { jsonStringify } from "./encode"`), populate the
-							// hub's macroBodyRegistry too. Without this, the hub's own
-							// exportInfo (built later by buildExportInfo from this ctx) carries
-							// macroBody=null, so downstream importers get a Macro sym with no
-							// body — recursive expansion fails on the empty registry. Mirrors
-							// the same population in collectImport.
-							if (primaryNamed.symbolKind == SymbolKind.Macro
-									&& exportInfo.macroBody != null
-									&& exportInfo.macroParams != null) {
-								ctx.macroBodyRegistry.set(alias, exportInfo.macroBody);
-								ctx.macroParamsRegistry.set(alias, exportInfo.macroParams);
-								if (exportInfo.macroParamTypes != null) {
-									ctx.macroParamTypesRegistry.set(alias, exportInfo.macroParamTypes);
-								}
-								ctx.macroDeclModuleRegistry.set(alias, primaryNamed.modulePath != "" ? primaryNamed.modulePath : sourcePath);
-							}
 							// Re-export parity: propagate extension-method dispatch via
 							// shared helper. Same path used by collectImport's primary
 							// reg, named re-export, and star re-export.
@@ -1960,7 +1921,6 @@ test "re-export preserves original location and records sgSymRecord" {
 	const fakeExport: ExportedSymInfo = {
 		name: "get", sym: defining, extReceiverType: "", extIsStatic: false,
 		overloadExtReceiverTypes: [], overloadExtIsStatic: [],
-		macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [],
 	};
 	registerModuleExports(ctx.exportRegistry, "/test/hub/accessors", [fakeExport]);
 

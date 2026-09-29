@@ -36,7 +36,7 @@ import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMuta
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
-import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst } from "./callResolve";
+import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, macroDeclOf } from "./callResolve";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { checkActorStaticField } from "./sendable";
@@ -314,8 +314,8 @@ function checkEnumStmt(ctx: CheckerContext, node: Node): void {
 	ctx.pendingLocalTypeDecls.push(node);
 }
 
-// A macro emits nothing, but its body must be in the registry before
-// expandMacros runs; collectMacro is what puts it there.
+// A macro emits nothing, but its symbol must be in scope before its first
+// invocation is checked; collectMacro is what defines it.
 function checkMacroStmt(ctx: CheckerContext, node: Node): void {
 	const k = ctx.table.current.scopeKind;
 	if (k == ScopeKind.Module || k == ScopeKind.Global) {
@@ -2275,30 +2275,20 @@ function markMacroBodyUsed(ctx: CheckerContext, node: Node): void {
 function importedStmtMacro(ctx: CheckerContext, call: Node): Symbol | null {
 	let name = "";
 	let sym: Symbol | null = null;
-	let bound = false;
 	if (call.kind == NodeKind.CallExpr) {
 		const callee = (call.data as CallExprData).callee;
 		if (callee.kind != NodeKind.Identifier) return null;
 		name = (callee.data as IdentifierData).name;
 		sym = resolveCalleeIdent(ctx, callee);
-		bound = callee.flags.has(NodeFlag.BoundSym) && callee.resolvedSym != null;
 	} else if (call.kind == NodeKind.MacroInvocation) {
 		name = (call.data as MacroInvocationData).macroName;
-		bound = call.flags.has(NodeFlag.BoundSym) && call.resolvedSym != null;
-		sym = bound ? call.resolvedSym : lookupSymbol(ctx.table, name);
+		sym = invokedMacroSym(ctx, call);
 	} else {
 		return null;
 	}
-	if (sym == null || sym.symbolKind != SymbolKind.Macro || isBuiltinDirective(name)) return null;
-	let regCtx = ctx;
-	if (bound) {
-		const boundCtx = lookupModuleCtx(sym.modulePath);
-		if (boundCtx == null) return null;
-		regCtx = boundCtx;
-	}
-	if (!regCtx.macroBodyRegistry.has(name)) return null;
-	const declModule = regCtx.macroDeclModuleRegistry.get(name);
-	if (declModule == null || declModule == ctx.modulePath || lookupModuleCtx(declModule) == null) return null;
+	if (macroDeclOf(sym) == null || isBuiltinDirective(name)) return null;
+	const declModule = sym!.modulePath;
+	if (declModule == "" || declModule == ctx.modulePath || lookupModuleCtx(declModule) == null) return null;
 	return sym;
 }
 
@@ -2323,7 +2313,7 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 		const callee = (call.data as CallExprData).callee;
 		const calleeName = (callee.data as IdentifierData).name;
 		sgRecordSym(ctx, callee.location.line, callee.location.column, callee.location.column + calleeName.length, sym, sym.symbolType, sym.symbolKind, calleeName, "", false);
-		rewriteCallAsMacroInvocation(call);
+		rewriteCallAsMacroInvocation(call, sym);
 	}
 	const md = call.data as MacroInvocationData;
 	for (const arg of md.macroArgs) markMacroBodyUsed(ctx, arg);
@@ -2919,25 +2909,14 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 		if (isPreludeExport(preludeCtx, sym)) {
 			addSymbolToScope(ctx.table.current, sym);
 			if (hasFlag(sym, SymbolFlag.Converter)) addRuntimeConverter(ctx, sym);
-			// Exported macros (converters included) expand per-module: mirror the
-			// import branch (collectPass) — body/params/declModule registries, and
-			// the converter pair at tier 2 so local decls and explicit imports shadow it.
-			if (sym.symbolKind == SymbolKind.Macro) {
-				const body = preludeCtx.macroBodyRegistry.get(sym.name);
-				const params = preludeCtx.macroParamsRegistry.get(sym.name);
-				if (body != null && params != null) {
-					ctx.macroBodyRegistry.set(sym.name, body);
-					ctx.macroParamsRegistry.set(sym.name, params);
-					const pt = preludeCtx.macroParamTypesRegistry.get(sym.name);
-					if (pt != null) { ctx.macroParamTypesRegistry.set(sym.name, pt); }
-					const dm = preludeCtx.macroDeclModuleRegistry.get(sym.name);
-					if (dm != null) { ctx.macroDeclModuleRegistry.set(sym.name, dm); }
-					const ct = preludeCtx.converterTargetByName.get(sym.name);
-					if (ct != null && ct != "") {
-						registerConverter(ctx, ct, sym.name, 2, 0, 0);
-						const ctt = preludeCtx.converterTargetTypes.get(sym.name);
-						if (ctt != null) { ctx.converterTargetTypes.set(sym.name, ctt); }
-					}
+			// Exported converters join the pair table at tier 2 so local decls and
+			// explicit imports shadow them.
+			if (macroDeclOf(sym) != null) {
+				const ct = preludeCtx.converterTargetByName.get(sym.name);
+				if (ct != null && ct != "") {
+					registerConverter(ctx, ct, sym.name, 2, 0, 0);
+					const ctt = preludeCtx.converterTargetTypes.get(sym.name);
+					if (ctt != null) { ctx.converterTargetTypes.set(sym.name, ctt); }
 				}
 			}
 		}
@@ -2985,16 +2964,7 @@ export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: Checke
 		if (!isExportedBy(ctx, sym)) continue;
 		addSymbolToScope(preludeCtx.table.current, sym);
 		preludeCtx.preludeExports.add(sym);
-		if (sym.symbolKind != SymbolKind.Macro) continue;
-		const body = ctx.macroBodyRegistry.get(sym.name);
-		const params = ctx.macroParamsRegistry.get(sym.name);
-		if (body == null || params == null) continue;
-		preludeCtx.macroBodyRegistry.set(sym.name, body);
-		preludeCtx.macroParamsRegistry.set(sym.name, params);
-		const pt = ctx.macroParamTypesRegistry.get(sym.name);
-		if (pt != null) preludeCtx.macroParamTypesRegistry.set(sym.name, pt);
-		const dm = ctx.macroDeclModuleRegistry.get(sym.name);
-		preludeCtx.macroDeclModuleRegistry.set(sym.name, dm != null ? dm : ctx.modulePath);
+		if (macroDeclOf(sym) == null) continue;
 		const ct = ctx.converterTargetByName.get(sym.name);
 		if (ct != null && ct != "") {
 			preludeCtx.converterTargetByName.set(sym.name, ct);
@@ -3186,10 +3156,6 @@ function packContentView(shared: CheckerContext): CheckerContext {
 	view.includeDirectives = shared.includeDirectives;
 	view.compileDirectives = shared.compileDirectives;
 	view.compilerFlags = shared.compilerFlags;
-	view.macroBodyRegistry = shared.macroBodyRegistry;
-	view.macroParamsRegistry = shared.macroParamsRegistry;
-	view.macroParamTypesRegistry = shared.macroParamTypesRegistry;
-	view.macroDeclModuleRegistry = shared.macroDeclModuleRegistry;
 	view.converterTargetByName = shared.converterTargetByName;
 	view.converterTargetTypes = shared.converterTargetTypes;
 	view.preludeInterf = shared.preludeInterf;
