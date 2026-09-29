@@ -26,12 +26,14 @@ import { lowerLambda } from "./lowering/lambdaLifting";
 import { lowerCtorInit } from "./lowering/ctorLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
+import { lowerBorrow } from "./lowering/borrowLower";
 import { lowerBitSet } from "./lowering/bitSetLower";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
-	let result = lowerImplicitConv(program, ctx);
+	let result = lowerBorrow(program, ctx);
+	result = lowerImplicitConv(result, ctx);
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
 	result = lowerObjectSpreadEager(result, ctx);
