@@ -26,6 +26,7 @@ import { hasFlag, SymbolFlag, initFnName } from "./symbol";
 import { isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
+import { lookupCtorDefaults } from "./instantiate";
 import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
 
 // ===== Global Name Index =====
@@ -176,13 +177,6 @@ function walkBody(node: Node, modulePath: string): void {
 		return;
 	}
 
-	// NewExpr — class constructor expressions need `<className>_init` alive.
-	// `methodToFunction` transform lifts the ctor body to a top-level
-	// `<className>_init(this, ...)` FunctionDecl AFTER reachability runs,
-	// so the lifted name isn't auto-discoverable here. We seed it explicitly
-	// when a class with `HasConstructor` is constructed: same mark-alive
-	// pattern MemberExpr uses for class methods, but keyed off the ctor's
-	// future synthetic name.
 	if (k == NodeKind.NewExpr) {
 		const nd = node.data as NewExprData;
 		walkBody(nd.newCallee, modulePath);
@@ -191,10 +185,7 @@ function walkBody(node: Node, modulePath: string): void {
 		}
 		if (nd.newCallee.resolvedSym != null) {
 			const classSym = nd.newCallee.resolvedSym;
-			const className = classSym.name;
-			const initName = initFnName(className);
 			const ctorMod = classSym.modulePath != "" ? classSym.modulePath : modulePath;
-			markAndWalk(ctorMod, initName);
 			let gi = node.nodeType;
 			if (gi != null && (gi.kind == TypeKind.Ref || gi.kind == TypeKind.Ptr) && gi.typeReturn != null) gi = gi.typeReturn;
 			if (gi != null && gi.kind == TypeKind.GenericInstance && gi.typeName != "" && gi.typeChildren.length > 0) {
@@ -451,6 +442,15 @@ function markInstanceCopy(generic: Symbol, name: string): void {
 	}
 }
 
+function markClassInit(classDecl: Node, modulePath: string, className: string): void {
+	const entry = classDecl.resolvedSym != null ? lookupCtorDefaults(classDecl.resolvedSym, className) : null;
+	if (entry != null && entry.initSym != null) {
+		markSymAndWalk(entry.initSym, modulePath);
+		return;
+	}
+	markAndWalk(modulePath, initFnName(className));
+}
+
 function markRootDecl(decl: Node, modulePath: string): void {
 	if (decl.resolvedSym != null) markSymAndWalk(decl.resolvedSym, modulePath);
 	else markAndWalk(modulePath, topDeclName(decl));
@@ -478,24 +478,9 @@ function walkDecl(di: int32): void {
 	}
 	aliveSetAddModule(_aliveSet, modulePath);
 	walkBody(found, modulePath);
-	// When a class becomes alive, also mark `<className>_init` alive —
-	// `methodToFunction` lifts the ctor body into a top-level
-	// FunctionDecl with that name and removes the ConstructorDecl from
-	// classBody, so the name is not discoverable from the class node.
-	// Every class carries an `_init` (ctorLower synthesizes one when
-	// the source has no constructor), and marking a name that has no
-	// declaration is inert. Required for both `new C(...)` and
-	// `super(args)` from a child class — which codegen lowers to
-	// `<Parent>_init(this, args)`, so any reachable parent in the
-	// inheritance chain needs its `_init` alive too.
-	if (found.kind == NodeKind.ClassDecl) {
-		// Recursive: markAndWalk so the lifted `_init` body is also
-		// visited. The ctor body may contain `super(args)` whose
-		// parent class needs to be reached + that parent's `_init`
-		// chained alive too. Without recursion, A → B → C inheritance
-		// chains stop at the leaf and parent `_init`s drop out.
-		markAndWalk(modulePath, initFnName(name));
-	}
+	// Codegen lowers `super(args)` to `<Parent>_init(this, args)` with no AST
+	// edge, so a live class keeps its init alive, as `new C(...)` needs.
+	if (found.kind == NodeKind.ClassDecl) markClassInit(found, modulePath, name);
 	// Actors: actorLower erased the NewExpr before this walk runs, so
 	// no allocation-site edge fires — but a spawned actor's TypeInfo
 	// is always demanded. Marking it walks its initializer, which
