@@ -142,6 +142,7 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 				cb(d.casePatterns[i]);
 				i += 1;
 			}
+			if (d.caseGuard != null) { cb(d.caseGuard); }
 			cb(d.caseBody);
 		},
 		// Declarations with bodies
