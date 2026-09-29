@@ -70,8 +70,7 @@ function materializeBigInt(node: Node, ctx: TransformContext): Node {
 		const d = node.data as TypeAssertionData;
 		const bigCast = bigintCast(node, d);
 		if (bigCast != null) return bigCast;
-		let dstK = intKindOfName(d.asType);
-		if (dstK == TypeKind.Unknown) dstK = reprKind(node.nodeType);
+		const dstK = reprKind(node.nodeType);
 		if (dstK == TypeKind.Unknown || d.asExpr == null) return node;
 		const srcK = reprKind(d.asExpr.nodeType);
 		if (srcK == TypeKind.Unknown) return node;
@@ -111,7 +110,7 @@ function bigLit(text: string, kind: TypeKind, loc: SourceLocation): Node {
 function bigintCast(node: Node, d: TypeAssertionData): Node | null {
 	if (d.asExpr == null) return null;
 	const srcT = d.asExpr.nodeType;
-	const dstBig = d.asType == "bigint";
+	const dstBig = reprKind(node.nodeType) == TypeKind.BigInt;
 	const srcBig = srcT != null && srcT.kind == TypeKind.BigInt;
 	if (!dstBig && !srcBig) return null;
 	const loc = node.location;
@@ -120,7 +119,7 @@ function bigintCast(node: Node, d: TypeAssertionData): Node | null {
 		if (is64Kind(srcT.kind)) return d.asExpr;
 		return bigIntOf(d.asExpr, loc);
 	}
-	const dstK = intKindOfName(d.asType);
+	const dstK = reprKind(node.nodeType);
 	if (dstK == TypeKind.Int64) return asN(false, 64, d.asExpr, loc);
 	if (dstK == TypeKind.Uint64) return asN(true, 64, d.asExpr, loc);
 	const bits = narrowBits(dstK);
@@ -343,17 +342,3 @@ function isShiftOp(op: string): boolean {
 	return op == "<<" || op == ">>" || op == ">>>";
 }
 
-function intKindOfName(name: string): TypeKind {
-	return match (name) {
-		"int8" => TypeKind.Int8,
-		"int16" => TypeKind.Int16,
-		"int32" => TypeKind.Int32,
-		"int64" => TypeKind.Int64,
-		"uint8" => TypeKind.Uint8,
-		"uint16" => TypeKind.Uint16,
-		"uint32" => TypeKind.Uint32,
-		"uint64" => TypeKind.Uint64,
-		"number" => TypeKind.Unknown,
-		_ => TypeKind.Unknown,
-	};
-}

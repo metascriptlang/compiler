@@ -12,47 +12,11 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber, runtimeRef } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
-import { ExprStmtData } from "../../ast/node";
-import { createTransformContext } from "../context";
+import { ExprStmtData, VariableDeclData } from "../../ast/node";
+import { createTransformContextWithChecker } from "../context";
+import { checkProgram } from "../../checker/checkPass";
 
 // ===== Helpers =====
-
-// Get the range check function name for a narrow integer type
-function getRangeCheckFn(typeName: string): string {
-	return match (typeName) {
-		"int8" => "msCheckRangeI8",
-		"uint8" => "msCheckRangeU8",
-		"int16" => "msCheckRangeI16",
-		"uint16" => "msCheckRangeU16",
-		"int32" => "msCheckRangeI32",
-		"uint32" => "msCheckRangeU32",
-		_ => "",
-	};
-}
-
-// Get the minimum value for a narrow integer type
-function getRangeMin(typeName: string): number {
-	return match (typeName) {
-		"int8" => -128,
-		"int16" => -32768,
-		"int32" => -2147483648,
-		"uint8" | "uint16" | "uint32" => 0,
-		_ => 0,
-	};
-}
-
-// Get the maximum value for a narrow integer type
-function getRangeMax(typeName: string): number {
-	return match (typeName) {
-		"int8" => 127,
-		"uint8" => 255,
-		"int16" => 32767,
-		"uint16" => 65535,
-		"int32" => 2147483647,
-		"uint32" => 4294967295,
-		_ => 0,
-	};
-}
 
 // ===== Main Entry Point =====
 
@@ -100,10 +64,6 @@ function getRangeMaxForKind(kind: TypeKind): number {
 
 function isUnsignedKind(kind: TypeKind): boolean {
 	return kind == TypeKind.Uint8 || kind == TypeKind.Uint16 || kind == TypeKind.Uint32;
-}
-
-function isUnsignedName(typeName: string): boolean {
-	return typeName == "uint8" || typeName == "uint16" || typeName == "uint32";
 }
 
 function destCovers(src: Type | null, dest: Type): boolean {
@@ -166,11 +126,8 @@ function rangeCheckVisitor(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
 		const src = d.asExpr != null ? d.asExpr.nodeType : null;
-		if (node.nodeType != null) return checkedConv(ctx, d.asExpr, src, node.nodeType, node);
-		const fnName = getRangeCheckFn(d.asType);
-		if (fnName == "") return node;
-		if (!ctx.rangeChecks || isUnsignedName(d.asType)) return node;
-		return makeRangeCheck(d.asExpr, fnName, getRangeMin(d.asType), getRangeMax(d.asType), node.location);
+		if (node.nodeType == null) return node;
+		return checkedConv(ctx, d.asExpr, src, node.nodeType, node);
 	}
 	if (node.kind == NodeKind.HiddenStdConv) {
 		const d = node.data as HiddenStdConvData;
@@ -194,14 +151,19 @@ export function makeRangeCheck(expr: Node, fnName: string, minVal: number, maxVa
 function castExprKind(input: string, rangeChecks: boolean = true): NodeKind {
 	const result = parseInput(input);
 	if (!result.ok) return NodeKind.Program;
-	const ctx = createTransformContext();
+	const ctx = createTransformContextWithChecker(checkProgram(result.value));
 	ctx.rangeChecks = rangeChecks;
 	injectRangeChecks(result.value, ctx);
-	const stmts = getStmts(result.value);
-	if (stmts.length == 0) return NodeKind.Program;
-	if (stmts[0].kind != NodeKind.ExprStmt) return NodeKind.Program;
-	const sd = stmts[0].data as ExprStmtData;
-	return sd.expr.kind;
+	const found: NodeKind[] = [];
+	walkNode(result.value, (n: Node): Node => {
+		if (n.kind == NodeKind.VariableDecl && (n.data as VariableDeclData).declName == "r") found.push((n.data as VariableDeclData).initializer.kind);
+		return n;
+	});
+	return found.length > 0 ? found[0] : NodeKind.Program;
+}
+
+function castOf(target: string): string {
+	return "function f(v: float64): void { const r = v as " + target + "; }";
 }
 
 function parsedAsType(input: string): string {
@@ -233,18 +195,20 @@ test "parser stores asType number" { assert parsedAsType("x as number;") == "num
 
 test "parser stores asType union" { assert parsedAsType("x as string | null;") == "string | null"; }
 
-test "cast to int8 becomes range check" { assert castExprKind("x as int8;") == NodeKind.CallExpr; }
+test "cast to int8 becomes range check" { assert castExprKind(castOf("int8")) == NodeKind.CallExpr; }
 
-test "cast to uint16 stays a plain cast" { assert castExprKind("x as uint16;") == NodeKind.TypeAssertion; }
+test "cast to uint16 stays a plain cast" { assert castExprKind(castOf("uint16")) == NodeKind.TypeAssertion; }
 
-test "cast to uint8 stays a plain cast" { assert castExprKind("x as uint8;") == NodeKind.TypeAssertion; }
+test "cast to uint8 stays a plain cast" { assert castExprKind(castOf("uint8")) == NodeKind.TypeAssertion; }
 
-test "cast to uint32 stays a plain cast" { assert castExprKind("x as uint32;") == NodeKind.TypeAssertion; }
+test "cast to uint32 stays a plain cast" { assert castExprKind(castOf("uint32")) == NodeKind.TypeAssertion; }
 
-test "cast to int8 stays a plain cast when range checks are off" { assert castExprKind("x as int8;", false) == NodeKind.TypeAssertion; }
+test "cast to int8 stays a plain cast when range checks are off" { assert castExprKind(castOf("int8"), false) == NodeKind.TypeAssertion; }
 
-test "cast to int32 becomes range check" { assert castExprKind("x as int32;") == NodeKind.CallExpr; }
+test "cast to int32 becomes range check" { assert castExprKind(castOf("int32")) == NodeKind.CallExpr; }
 
-test "cast to number unchanged" { assert castExprKind("x as number;") == NodeKind.TypeAssertion; }
+test "cast to an alias of int8 becomes range check" { assert castExprKind("type SByte = int8;\n" + castOf("SByte")) == NodeKind.CallExpr; }
 
-test "cast to string unchanged" { assert castExprKind("x as string;") == NodeKind.TypeAssertion; }
+test "cast to number unchanged" { assert castExprKind(castOf("number")) == NodeKind.TypeAssertion; }
+
+test "cast to string unchanged" { assert castExprKind("function f(v: string): void { const r = v as string; }") == NodeKind.TypeAssertion; }

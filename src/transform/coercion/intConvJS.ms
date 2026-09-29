@@ -13,6 +13,8 @@ import { createPrimitive, isWideningInt64Conv } from "../../checker/types";
 import { isFloatKind } from "./bigIntJS";
 import { rangeCheckHelper, makeRangeCheckFor } from "../native/rangeCheckInject";
 import { parseInput, makeCtx, getStmts, firstExprKindAfter } from "../testUtil";
+import { VariableDeclData } from "../../ast/node";
+import { checkProgram } from "../../checker/checkPass";
 
 export function lowerIntConvJS(program: Node, ctx: TransformContext): Node {
 	walkNode(program, materializeIntConv);
@@ -27,10 +29,8 @@ export function injectRangeChecksJS(program: Node, ctx: TransformContext): Node 
 function checkConvRange(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
-		if (d.asExpr == null) return node;
-		const named = createPrimitive(intKindOfName(d.asType));
-		const dest = node.nodeType != null ? node.nodeType : named;
-		d.asExpr = checkedSource(d.asExpr, dest, ctx);
+		if (d.asExpr == null || node.nodeType == null) return node;
+		d.asExpr = checkedSource(d.asExpr, node.nodeType, ctx);
 		return node;
 	}
 	if (node.kind == NodeKind.HiddenStdConv) {
@@ -52,13 +52,13 @@ function checkedSource(expr: Node, dest: Type, ctx: TransformContext): Node {
 function materializeIntConv(node: Node): Node {
 	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
-		const kind = intKindOfName(d.asType);
-		if (kind == TypeKind.Unknown) {
-			const floatKind = floatKindOfName(d.asType);
-			if (floatKind != TypeKind.Unknown && d.asExpr != null) {
+		if (node.nodeType == null || d.asType == "!") return node;
+		const kind = node.nodeType.kind;
+		if (!isIntConvKind(kind)) {
+			if (isFloatKind(kind) && d.asExpr != null) {
 				const srcT = d.asExpr.nodeType;
 				if (srcT != null && (srcT.kind == TypeKind.Int64 || srcT.kind == TypeKind.Uint64)) {
-					return numberOf64(d.asExpr, floatKind, node.location);
+					return numberOf64(d.asExpr, kind == TypeKind.Float32 ? TypeKind.Float32 : TypeKind.Float64, node.location);
 				}
 			}
 			return node;
@@ -84,14 +84,6 @@ function materializeIntConv(node: Node): Node {
 		return truncateTo(d.convExpr, d.convType.kind, node.location);
 	}
 	return node;
-}
-
-function floatKindOfName(name: string): TypeKind {
-	return match (name) {
-		"float32" => TypeKind.Float32,
-		"float64" | "number" => TypeKind.Float64,
-		_ => TypeKind.Unknown,
-	};
 }
 
 function numberOf64(inner: Node, kind: TypeKind, loc: SourceLocation): Node {
@@ -127,53 +119,56 @@ export function isIntConvKind(kind: TypeKind): boolean {
 	};
 }
 
-function intKindOfName(name: string): TypeKind {
-	return match (name) {
-		"int8" => TypeKind.Int8,
-		"int16" => TypeKind.Int16,
-		"int32" => TypeKind.Int32,
-		"int64" => TypeKind.Int64,
-		"uint8" => TypeKind.Uint8,
-		"uint16" => TypeKind.Uint16,
-		"uint32" => TypeKind.Uint32,
-		"uint64" => TypeKind.Uint64,
-		_ => TypeKind.Unknown,
-	};
-}
-
 // ===== Test Helpers =====
 
-function castOp(input: string): string {
+function castResult(input: string): Node | null {
 	const result = parseInput(input);
-	if (!result.ok) return "";
-	const ctx = makeCtx();
-	lowerIntConvJS(result.value, ctx);
-	const stmts = getStmts(result.value);
-	if (stmts.length == 0) return "";
-	if (stmts[0].kind != NodeKind.ExprStmt) return "";
-	const sd = stmts[0].data as ExprStmtData;
-	if (sd.expr.kind != NodeKind.BinaryExpr) return "";
-	return (sd.expr.data as BinaryExprData).operator;
+	if (!result.ok) return null;
+	checkProgram(result.value);
+	lowerIntConvJS(result.value, makeCtx());
+	const found: Node[] = [];
+	walkNode(result.value, (n: Node): Node => {
+		if (n.kind == NodeKind.VariableDecl && (n.data as VariableDeclData).declName == "r") found.push((n.data as VariableDeclData).initializer);
+		return n;
+	});
+	return found.length > 0 ? found[0] : null;
+}
+
+function castOp(input: string): string {
+	const r = castResult(input);
+	if (r == null || r.kind != NodeKind.BinaryExpr) return "";
+	return (r.data as BinaryExprData).operator;
+}
+
+function castKind(input: string): NodeKind {
+	const r = castResult(input);
+	return r != null ? r.kind : NodeKind.Program;
+}
+
+function castOf(target: string): string {
+	return "function f(v: float64): void { const r = v as " + target + "; }";
 }
 
 // ===== Tests =====
 
-test "int32 cast truncates with or" { assert castOp("x as int32;") == "|"; }
+test "int32 cast truncates with or" { assert castOp(castOf("int32")) == "|"; }
 
-test "int8 cast truncates with or" { assert castOp("x as int8;") == "|"; }
+test "int8 cast truncates with or" { assert castOp(castOf("int8")) == "|"; }
 
-test "uint8 cast masks to a byte" { assert castOp("x as uint8;") == "&"; }
+test "uint8 cast masks to a byte" { assert castOp(castOf("uint8")) == "&"; }
 
-test "uint16 cast masks to a half" { assert castOp("x as uint16;") == "&"; }
+test "uint16 cast masks to a half" { assert castOp(castOf("uint16")) == "&"; }
 
-test "uint32 cast shifts unsigned" { assert castOp("x as uint32;") == ">>>"; }
+test "uint32 cast shifts unsigned" { assert castOp(castOf("uint32")) == ">>>"; }
 
-test "int64 cast becomes a call" { assert firstExprKindAfter("x as int64;", lowerIntConvJS) == NodeKind.CallExpr; }
+test "int64 cast becomes a call" { assert castKind(castOf("int64")) == NodeKind.CallExpr; }
 
-test "cast to number unchanged" { assert firstExprKindAfter("x as number;", lowerIntConvJS) == NodeKind.TypeAssertion; }
+test "a cast to an alias of uint8 masks to a byte" { assert castOp("type Byte = uint8;\n" + castOf("Byte")) == "&"; }
 
-test "cast to string unchanged" { assert firstExprKindAfter("x as string;", lowerIntConvJS) == NodeKind.TypeAssertion; }
+test "cast to number unchanged" { assert castKind(castOf("number")) == NodeKind.TypeAssertion; }
 
-test "non-cast unchanged" { assert castOp("x + y;") == "+"; }
+test "cast to string unchanged" { assert castKind("function f(v: string): void { const r = v as string; }") == NodeKind.TypeAssertion; }
+
+test "non-cast unchanged" { assert castOp("function f(x: int32, y: int32): void { const r = x + y; }") == "+"; }
 
 test "identifier unchanged" { assert firstExprKindAfter("x;", lowerIntConvJS) == NodeKind.Identifier; }
