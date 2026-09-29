@@ -1,5 +1,5 @@
 // @exit: 1
-// @xfail(raiser): the Raiser VM has no int64 index check; it stops with its own 'array index out of bounds: -4294967295 (length 3)'
+// @xfail(raiser): the Raiser VM reports the uncaught index defect as its own 'raiser runtime error: array index out of bounds: -4294967295 (length 3)' on stderr, not C's 'Error: index ... out of bounds (length ...)'
 // @xfail(danger): --danger drops bound checks, so the out-of-range index is undefined behaviour there, not an index error
 // @xfail(js): node reports the uncaught index defect with its own trace on stderr, where C prints 'Error: index ... out of bounds (length ...)'; C also makes the defect fatal where JS lets it be caught
 // @xfail(esm): node reports the uncaught index defect with its own trace on stderr, where C prints 'Error: index ... out of bounds (length ...)'; C also makes the defect fatal where JS lets it be caught
