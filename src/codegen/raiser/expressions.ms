@@ -452,6 +452,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			const hd = node.data as HiddenStdConvData;
 			const reg = compileExpr(s, hd.convExpr);
+			if (isSpanType(hd.convType) && exprIsString(s, hd.convExpr)) return compileStringBytes(s, reg);
 			return emitNumericConv(s, reg, hd.convExpr.nodeType, hd.convType);
 		},
 		// Statement-list-in-expression position: run n-1 statements, the last
@@ -1342,8 +1343,47 @@ function compileArrayLiteral(s: RaiserCompState, node: Node): int32 {
 	return dest;
 }
 
+function isSpanType(t: Type | null): boolean {
+	if (t == null) return false;
+	if ((t.kind == TypeKind.Var || t.kind == TypeKind.Sink || t.kind == TypeKind.Lent) && t.typeReturn != null) return t.typeReturn.kind == TypeKind.Span;
+	return t.kind == TypeKind.Span;
+}
+
+function compileStringBytes(s: RaiserCompState, strReg: int32): int32 {
+	const dest = allocReg(s);
+	const arg = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.Move, arg, strReg, 0));
+	const nameIdx = addConst(s, raiserString("msAsBytes"));
+	emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, 1));
+	return dest;
+}
+
+function compileArraySlice(s: RaiserCompState, d: ArrayAccessData, bd: BinaryExprData): int32 {
+	let srcReg = compileExpr(s, d.array);
+	if (exprIsString(s, d.array)) srcReg = compileStringBytes(s, srcReg);
+	const startReg = compileExpr(s, bd.left);
+	const endReg = compileExpr(s, bd.right);
+	const slotStart = allocReg(s);
+	const slotEnd = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.Move, slotStart, startReg, 0));
+	if (bd.operator == "...") {
+		const one = allocReg(s);
+		emitLoadConst(s, one, raiserInt(1));
+		emitInst(s, raiserABC(RaiserOpcode.AddI64, slotEnd, endReg, one));
+	} else {
+		emitInst(s, raiserABC(RaiserOpcode.Move, slotEnd, endReg, 0));
+	}
+	const dest = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.ArraySlice, dest, srcReg, slotStart));
+	return dest;
+}
+
 function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as ArrayAccessData;
+	if (d.index.kind == NodeKind.BinaryExpr) {
+		const bd = d.index.data as BinaryExprData;
+		if (bd.operator == ".." || bd.operator == "...") return compileArraySlice(s, d, bd);
+	}
 	const arrReg = compileExpr(s, d.array);
 	const idxReg = compileExpr(s, d.index);
 	const dest = allocReg(s);

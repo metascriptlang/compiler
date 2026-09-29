@@ -147,6 +147,7 @@ export enum RaiserOpcode {
 	StoreGlobal,
 	StrByteLen,
 	Sleep,
+	ArraySlice,       // ABC: R[A] = view of R[B] over [R[C], R[C+1]), bounds checked
 }
 
 export enum RaiserConvClass {

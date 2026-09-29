@@ -9,7 +9,7 @@ import {
 import {
 	RaiserValue, RaiserValueKind,
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserString, raiserArray, raiserToString, copyValueInto,
-	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
+	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField,
 	raiserFuture,
 	rcIncref, rcDecref, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap,
@@ -1039,6 +1039,8 @@ function runStrandSlice(vm: RaiserVM): void {
 			vmHandleArrayPush(vm, inst);
 		} else if (op == RaiserOpcode.ArraySetLen) {
 			vmHandleArraySetLen(vm, inst);
+		} else if (op == RaiserOpcode.ArraySlice) {
+			vmHandleArraySlice(vm, inst);
 		} else if (op == RaiserOpcode.NewObject) {
 			vmHandleNewObject(vm, inst);
 		} else if (op == RaiserOpcode.LoadField) {
@@ -1338,6 +1340,9 @@ function vmHandleArrayPush(vm: RaiserVM, inst: RaiserInstruction): void {
 	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
 		vmError(vm, `array handle out of bounds: ${handle}`); return;
 	}
+	if (heapArrayIsView(vm.arrayHeap, handle)) {
+		vmError(vm, "cannot push to a slice"); return;
+	}
 	heapArrayPush(vm.arrayHeap, handle, val);
 	vmIncref(vm, val);
 }
@@ -1353,7 +1358,36 @@ function vmHandleArraySetLen(vm: RaiserVM, inst: RaiserInstruction): void {
 	if (lenVal.kind != RaiserValueKind.Int) {
 		vmError(vm, `ArraySetLen expected an integer length, got kind ${lenVal.kind}`); return;
 	}
+	if (heapArrayIsView(vm.arrayHeap, handle)) {
+		vmError(vm, "cannot set the length of a slice"); return;
+	}
 	heapArraySetLen(vm.arrayHeap, handle, lenVal.intVal);
+}
+
+function vmHandleArraySlice(vm: RaiserVM, inst: RaiserInstruction): void {
+	const srcVal = getReg(vm, vm.baseReg + inst.b);
+	const start = getReg(vm, vm.baseReg + inst.c).intVal;
+	const end = getReg(vm, vm.baseReg + inst.c + 1).intVal;
+	const handle = vmHeapOperand(vm, srcVal, RaiserValueKind.Array, "an array");
+	if (vm.halted) return;
+	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
+		vmError(vm, `array handle out of bounds: ${handle}`); return;
+	}
+	const len = heapArrayLen(vm.arrayHeap, handle);
+	if (end != start && (start < 0 || end < start || end > len)) {
+		vmError(vm, `slice ${start}..${end} out of bounds (length ${len})`); return;
+	}
+	let base = srcVal;
+	let off = start;
+	const data = vm.arrayHeap.arrays[handle];
+	if (data.viewOff >= 0) {
+		base = data.items[0];
+		off = (data.viewOff as int64) + start;
+	}
+	const view = heapAllocView(vm.arrayHeap, base, off as number, (end - start) as number);
+	vmIncref(vm, base);
+	setReg(vm, vm.baseReg + inst.a, raiserArray(view));
+	vmMaybeCollect(vm);
 }
 
 // --- Object opcode handlers ---

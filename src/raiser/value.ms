@@ -201,6 +201,8 @@ export interface RaiserArrayData {
 	items: RaiserValue[];
 	rc: int32;
 	color: int32;
+	viewOff: number;
+	viewLen: number;
 }
 
 export interface RaiserArrayHeap {
@@ -222,26 +224,50 @@ export function heapAllocArray(heap: RaiserArrayHeap): number {
 		data.items.length = 0;
 		data.rc = 0;
 		data.color = 0;
+		data.viewOff = -1;
+		data.viewLen = 0;
 		return reused;
 	}
 	const idx = heap.arrays.length;
 	const items: RaiserValue[] = [];
-	const data: RaiserArrayData = { items, rc: 0, color: 0 };
+	const data: RaiserArrayData = { items, rc: 0, color: 0, viewOff: -1, viewLen: 0 };
 	heap.arrays.push(data);
 	return idx;
 }
 
+// A view (a slice) owns no elements: its only item is the plain array it
+// views, which keeps that array alive through RC, the collector and copyGraph.
+export function heapAllocView(heap: RaiserArrayHeap, base: RaiserValue, off: number, len: number): number {
+	const handle = heapAllocArray(heap);
+	heapArrayPush(heap, handle, base);
+	heap.arrays[handle].viewOff = off;
+	heap.arrays[handle].viewLen = len;
+	return handle;
+}
+
+export function heapArrayIsView(heap: RaiserArrayHeap, handle: number): boolean {
+	return heap.arrays[handle].viewOff >= 0;
+}
+
 export function heapArrayLen(heap: RaiserArrayHeap, handle: number): number {
-	return heap.arrays[handle].items.length;
+	const data = heap.arrays[handle];
+	return data.viewOff >= 0 ? data.viewLen : data.items.length;
 }
 
 export function heapArrayGet(heap: RaiserArrayHeap, handle: number, index: number): RaiserValue {
-	return heap.arrays[handle].items[index];
+	const data = heap.arrays[handle];
+	if (data.viewOff >= 0) return heap.arrays[data.items[0].intVal].items[data.viewOff + index];
+	return data.items[index];
 }
 
 export function heapArraySet(heap: RaiserArrayHeap, handle: number, index: number, val: RaiserValue): void {
+	const data = heap.arrays[handle];
+	if (data.viewOff >= 0) {
+		copyValueInto(heap.arrays[data.items[0].intVal].items[data.viewOff + index], val);
+		return;
+	}
 	// Deep copy to avoid pointer aliasing
-	copyValueInto(heap.arrays[handle].items[index], val);
+	copyValueInto(data.items[index], val);
 }
 
 export function heapArrayPush(heap: RaiserArrayHeap, handle: number, val: RaiserValue): void {
@@ -496,6 +522,8 @@ export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap,
 			heapArrayPush(dstArr, dstHandle, copied);
 			rcIncref(dstArr, dstObj, copied);
 		}
+		dstArr.arrays[dstHandle].viewOff = srcArr.arrays[val.intVal].viewOff;
+		dstArr.arrays[dstHandle].viewLen = srcArr.arrays[val.intVal].viewLen;
 		return raiserArray(dstHandle);
 	}
 	if (val.kind == RaiserValueKind.Object) {
