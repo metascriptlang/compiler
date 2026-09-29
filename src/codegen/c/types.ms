@@ -92,6 +92,16 @@ let _hookSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
 let _hookSymOrder: Symbol[] = [];
 let _hookSymsSealed = false;
 
+export interface KeyedOp {
+	key: string;
+	sym: Symbol;
+	canon: boolean;
+}
+
+let _opSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+let _opKeyOfName: HashMap<string, string> = new HashMap<string, string>();
+let _opOrder: KeyedOp[] = [];
+
 export function sealHookSyms(sealed: boolean): void {
 	_hookSymsSealed = sealed;
 }
@@ -99,6 +109,77 @@ export function sealHookSyms(sealed: boolean): void {
 export function resetHookSyms(): void {
 	_hookSyms = new HashMap<string, Symbol>();
 	_hookSymOrder = [];
+	_opSyms = new HashMap<string, Symbol>();
+	_opKeyOfName = new HashMap<string, string>();
+	_opOrder = [];
+}
+
+function attachedOpName(op: AttachedOp): string {
+	return match (op) {
+		AttachedOp.AttachedWasMoved => "wasMoved",
+		AttachedOp.AttachedDestructor => "destroy",
+		AttachedOp.AttachedAsgn => "copy",
+		AttachedOp.AttachedDup => "dup",
+		AttachedOp.AttachedSink => "sink",
+		AttachedOp.AttachedTrace => "trace",
+		AttachedOp.AttachedEq => "eq",
+		AttachedOp.AttachedLt => "lt",
+		AttachedOp.AttachedLe => "le",
+	};
+}
+
+function opKey(t: Type, op: AttachedOp): string {
+	return attachedOpName(op) + "|" + typeKey(t);
+}
+
+function recordOp(key: string, sym: Symbol, canon: boolean): void {
+	const held = _opSyms.get(key);
+	if (held != null && held.name != sym.name) {
+		throw new Error(`internal: type-bound op ${key} is both '${held.name}' and '${sym.name}'`);
+	}
+	if (canon) {
+		const heldKey = _opKeyOfName.get(sym.name);
+		if (heldKey != null && heldKey != key) {
+			throw new Error(`internal: generated op '${sym.name}' serves two types: ${heldKey} and ${key}`);
+		}
+		if (heldKey == null) _opKeyOfName.set(sym.name, key);
+	}
+	if (held != null) return;
+	_opSyms.set(key, sym);
+	_opOrder.push({ key, sym, canon });
+}
+
+export function setOpByKey(t: Type, op: AttachedOp, sym: Symbol): void {
+	recordOp(opKey(t, op), sym, true);
+}
+
+export function aliasOpByKey(orig: Type, canon: Type, op: AttachedOp): void {
+	const sym = _opSyms.get(opKey(canon, op));
+	if (sym != null) recordOp(opKey(orig, op), sym, false);
+}
+
+export function checkOpByKey(t: Type, op: AttachedOp, name: string): void {
+	const byName = _hookSyms.get(name);
+	if (byName == null) return;
+	const key = opKey(t, op);
+	const byKey = _opSyms.get(key);
+	if (byKey == byName) return;
+	const held = byKey != null ? `'${byKey.name}'` : "nothing";
+	throw new Error(`internal: type-bound op ${key} holds ${held} where the hook table names '${name}'`);
+}
+
+export function opMark(): int32 {
+	return _opOrder.length as int32;
+}
+
+export function opsFrom(mark: int32): KeyedOp[] {
+	const taken: KeyedOp[] = [];
+	for (let i = mark; i < _opOrder.length; i += 1) taken.push(_opOrder[i]);
+	return taken;
+}
+
+export function replayOps(ops: KeyedOp[]): void {
+	for (const op of ops) recordOp(op.key, op.sym, op.canon);
 }
 
 export function hookSymMark(): int32 {

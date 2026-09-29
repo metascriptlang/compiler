@@ -25,7 +25,7 @@ import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType } from "../../checker/types";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
@@ -226,6 +226,25 @@ function markLifecycleOp(fnNode: Node, name: string, hook: string): Symbol {
 	if (hook == "destroy") setFlag(sym, SymbolFlag.DestroyOp);
 	else if (hook == "wasMoved") setFlag(sym, SymbolFlag.WasMovedOp);
 	return sym;
+}
+
+function aliasLiftedOps(orig: Type, canon: Type): void {
+	if (orig == canon) return;
+	aliasOpByKey(orig, canon, AttachedOp.AttachedDestructor);
+	aliasOpByKey(orig, canon, AttachedOp.AttachedAsgn);
+	aliasOpByKey(orig, canon, AttachedOp.AttachedSink);
+	aliasOpByKey(orig, canon, AttachedOp.AttachedWasMoved);
+	aliasOpByKey(orig, canon, AttachedOp.AttachedTrace);
+	aliasOpByKey(orig, canon, AttachedOp.AttachedDup);
+}
+
+function checkLiftedOps(canon: Type, cName: string): void {
+	checkOpByKey(canon, AttachedOp.AttachedDestructor, cName + "Destroy");
+	checkOpByKey(canon, AttachedOp.AttachedAsgn, cName + "Copy");
+	checkOpByKey(canon, AttachedOp.AttachedSink, cName + "Sink");
+	checkOpByKey(canon, AttachedOp.AttachedWasMoved, cName + "WasMoved");
+	checkOpByKey(canon, AttachedOp.AttachedTrace, cName + "Trace");
+	checkOpByKey(canon, AttachedOp.AttachedDup, cName + "Dup");
 }
 
 // Set hook function param/return types to concrete Types.
@@ -647,7 +666,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				// Reference parity: trace only emits for cyclic field types (defaultOp is no-op for trace)
 				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
 					// Field-recursion is a CONSUMER path — skip TypeInfo emission.
-					ensureHooks(resolvedName, fieldType, null as unknown as Type, false, lctx, loc);
+					ensureHooks(resolvedName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					const fieldCName = hookCName(resolvedName, fieldType, lctx);
 					if (namedTypeHasHooks(fieldCName, lctx)) {
 						namedObjOp(hook, fieldCName, xf, yf, buf, loc);
@@ -718,7 +737,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			const unwrapped = unwrapGenericInstance(fieldType);
 			if (unwrapped.mangledName != "") {
 				if (hook != "trace" || isCyclicType(unwrapped.body, lctx, visited)) {
-					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, false, lctx, loc);
+					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, fieldType, false, lctx, loc);
 					const monoCName = hookCName(unwrapped.mangledName, unwrapped.body, lctx);
 					if (namedTypeHasHooks(monoCName, lctx)) {
 						namedObjOp(hook, monoCName, xf, yf, buf, loc);
@@ -749,7 +768,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			} else if (fieldType.typeName != "") {
 				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
 					// Field-recursion is a CONSUMER path — skip TypeInfo emission.
-					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, false, lctx, loc);
+					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					const unionCName = hookCName(fieldType.typeName, fieldType, lctx);
 					if (namedTypeHasHooks(unionCName, lctx)) {
 						namedObjOp(hook, unionCName, xf, yf, buf, loc);
@@ -1479,17 +1498,25 @@ function emitDup(typeName: string, cName: string, objType: Type, classType: Type
 // pattern) but skip TypeInfo to avoid duplicate-symbol link errors with
 // codegen's `ensureTypeInfoDef` path. processDecl passes `true`;
 // scanForAnonStructTypes / fillBody field-recursion pass `false`.
-function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInfo: boolean, lctx: LiftCtx, loc: SourceLocation): void {
+function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type, emitTypeInfo: boolean, lctx: LiftCtx, loc: SourceLocation): void {
 	// ----- Guards (order matches old ensureTypeHooks for perf parity) -----
 	if (typeName == "") return;
 	if (hasGenericParams(objType)) return;
 	const cName = hookCName(typeName, objType, lctx);
-	if (nameSetContains(lctx.generated, cName) || nameSetContains(lctx.trivial, cName)) return;
+	if (nameSetContains(lctx.generated, cName) || nameSetContains(lctx.trivial, cName)) {
+		checkLiftedOps(objType, cName);
+		aliasLiftedOps(orig, objType);
+		return;
+	}
 	// Global dedup. Split: hooks-owned blocks hook emission, TypeInfo-owned
 	// blocks TypeInfo emission. When defining module (emitTypeInfo=true) sees
 	// hooks-owned but !typeInfo-owned, it still needs to enter and emit the
 	// TypeInfo — that's the race the unified entry fixes. Otherwise skip.
 	const hooksOwned = isGloballyOwned(cName);
+	if (hooksOwned) {
+		checkLiftedOps(objType, cName);
+		aliasLiftedOps(orig, objType);
+	}
 	if (hooksOwned && (!emitTypeInfo || isTypeInfoGloballyOwned(cName))) return;
 	if (nameSetContains(lctx.generating, cName)) return;
 	nameSetAdd(lctx.generating, cName);
@@ -1530,6 +1557,8 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 	// callers (emitTypeInfo=false) mark as seen locally and bail; the defining
 	// module's processDecl (emitTypeInfo=true) emits both hooks and TypeInfo.
 	if (isCrossModuleClass && !emitTypeInfo) {
+		checkLiftedOps(objType, cName);
+		aliasLiftedOps(orig, objType);
 		nameSetAdd(lctx.generated, cName);
 		return;
 	}
@@ -1573,9 +1602,13 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 
 	if (shouldEmitHooks) {
 		const destroySym = generateHook("destroy",  typeName, cName, objType, classType, lctx, loc);
+		setOpByKey(objType, AttachedOp.AttachedDestructor, destroySym);
 		const copySym = generateHook("copy",     typeName, cName, objType, classType, lctx, loc);
+		setOpByKey(objType, AttachedOp.AttachedAsgn, copySym);
 		const sinkSym = generateHook("sink",     typeName, cName, objType, classType, lctx, loc);
+		setOpByKey(objType, AttachedOp.AttachedSink, sinkSym);
 		const wasMovedSym = generateHook("wasMoved", typeName, cName, objType, classType, lctx, loc);
+		setOpByKey(objType, AttachedOp.AttachedWasMoved, wasMovedSym);
 		setAttachedOp(objType, AttachedOp.AttachedDestructor, destroySym);
 		setAttachedOp(objType, AttachedOp.AttachedAsgn,       copySym);
 		setAttachedOp(objType, AttachedOp.AttachedSink,       sinkSym);
@@ -1585,11 +1618,14 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 		hasCycles = isCyclicType(objType, lctx, visited);
 		if (hasCycles) {
 			const traceSym = generateHook("trace", typeName, cName, objType, classType, lctx, loc);
+			setOpByKey(objType, AttachedOp.AttachedTrace, traceSym);
 			setAttachedOp(objType, AttachedOp.AttachedTrace, traceSym);
 		}
 
 		const dupSym = emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
+		setOpByKey(objType, AttachedOp.AttachedDup, dupSym);
 		setAttachedOp(objType, AttachedOp.AttachedDup, dupSym);
+		aliasLiftedOps(orig, objType);
 
 		claimGlobal(cName);
 	} else if (shouldEmitTypeInfo) {
@@ -1670,7 +1706,7 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 	if (fieldType.kind == TypeKind.GenericInstance) {
 		const gi = unwrapGenericInstance(fieldType);
 		if (gi.mangledName != "" && gi.body != null && gi.body.kind == TypeKind.Struct) {
-			ensureInstanceEq(gi.mangledName, gi.body, lctx, loc);
+			ensureInstanceEq(gi.mangledName, gi.body, fieldType, lctx, loc);
 			return makeCall(makeTypedIdentResolved(opProcSym(gi.mangledName + "Eq"), null, loc), [aField, bField], loc);
 		}
 	}
@@ -1710,7 +1746,7 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 	return makeBinary(aField, "===", bField, loc);
 }
 
-function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceLocation): void {
+function generateEq(typeName: string, objType: Type, orig: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	// Build: function TypeName_eq(a: TypeName, b: TypeName): boolean {
 	//   if (a.field1 !== b.field1) return false;
 	//   if (a.field2 !== b.field2) return false;
@@ -1735,7 +1771,8 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 	const eqFn = makeFnDecl(typeName + "Eq", [aSym, bSym], [typeName, typeName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(eqFn, 0, objType);
 	setHookParamType(eqFn, 1, objType);
-	markGeneratedOp(eqFn, typeName + "Eq");
+	setOpByKey(objType, AttachedOp.AttachedEq, markGeneratedOp(eqFn, typeName + "Eq"));
+	if (orig != objType) aliasOpByKey(orig, objType, AttachedOp.AttachedEq);
 	lctx.collector.push(eqFn);
 }
 
@@ -1752,20 +1789,26 @@ function claimEq(key: string, lctx: LiftCtx): boolean {
 	return true;
 }
 
-function ensureInstanceEq(mangledName: string, body: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	if (!claimEq(mangledName + "Eq", lctx)) return;
-	generateEq(mangledName, body, lctx, loc);
+function ensureInstanceEq(mangledName: string, body: Type, orig: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	if (!claimEq(mangledName + "Eq", lctx)) {
+		checkOpByKey(body, AttachedOp.AttachedEq, mangledName + "Eq");
+		aliasOpByKey(orig, body, AttachedOp.AttachedEq);
+		return;
+	}
+	generateEq(mangledName, body, orig, lctx, loc);
 }
 
 function ensureStructEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
 	const cName = hookCName(t.typeName, t, lctx);
-	if (claimEq(cName + "Eq", lctx)) generateEq(cName, t, lctx, loc);
+	if (claimEq(cName + "Eq", lctx)) generateEq(cName, t, t, lctx, loc);
+	else checkOpByKey(t, AttachedOp.AttachedEq, cName + "Eq");
 	return cName + "Eq";
 }
 
 function ensureSizedArrayEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
 	const name = sizedArrayHookName(t);
 	if (claimEq(name + "Eq", lctx)) generateSizedArrayEq(name, t, lctx, loc);
+	else checkOpByKey(t, AttachedOp.AttachedEq, name + "Eq");
 	return name + "Eq";
 }
 
@@ -1797,17 +1840,20 @@ function generateSizedArrayEq(name: string, t: Type, lctx: LiftCtx, loc: SourceL
 	const eqFn = makeFnDecl(name + "Eq", [aSym, bSym], [name, name], body, "", "boolean", loc);
 	setHookParamType(eqFn, 0, t);
 	setHookParamType(eqFn, 1, t);
-	markGeneratedOp(eqFn, name + "Eq");
+	setOpByKey(t, AttachedOp.AttachedEq, markGeneratedOp(eqFn, name + "Eq"));
 	lctx.collector.push(eqFn);
 }
 
 function ensureCarrierEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
 	const carrierName = typeNameOf(t);
-	if (!claimEq(carrierName + "Eq", lctx)) return carrierName + "Eq";
+	if (!claimEq(carrierName + "Eq", lctx)) {
+		checkOpByKey(t, AttachedOp.AttachedEq, carrierName + "Eq");
+		return carrierName + "Eq";
+	}
 	if (lctx.jsBackend && isMaybeType(t)) {
 		generateNullableEqJS(carrierName, t, lctx, loc);
 	} else {
-		generateEq(carrierName, t, lctx, loc);
+		generateEq(carrierName, t, t, lctx, loc);
 	}
 	return carrierName + "Eq";
 }
@@ -1828,7 +1874,7 @@ function generateNullableEqJS(
 	const eqFn = makeFnDecl(carrierName + "Eq", [aSym, bSym], names, body, "", "boolean", loc);
 	setHookParamType(eqFn, 0, t);
 	setHookParamType(eqFn, 1, t);
-	markGeneratedOp(eqFn, carrierName + "Eq");
+	setOpByKey(t, AttachedOp.AttachedEq, markGeneratedOp(eqFn, carrierName + "Eq"));
 	lctx.collector.push(eqFn);
 }
 
@@ -1873,7 +1919,7 @@ function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftC
 	const paramType = createVar(t);
 	setHookParamType(fnNode, 0, paramType);
 	if (!isUnary) setHookParamType(fnNode, 1, paramType);
-	markLifecycleOp(fnNode, tupleName + suffix, hook);
+	setOpByKey(t, attachedOpOf(hook), markLifecycleOp(fnNode, tupleName + suffix, hook));
 	lctx.collector.push(fnNode);
 }
 
@@ -1901,15 +1947,18 @@ function ensureAnonUnionHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): stri
 	const name = anonUnionCName(t);
 	if (!nameSetContains(lctx.generated, name) && !isGloballyOwned(name)) {
 		if (!typeNeedsHooks(t, lctx, loc)) return "";
-		ensureHooks(name, t, null as unknown as Type, false, lctx, loc);
+		ensureHooks(name, t, null as unknown as Type, t, false, lctx, loc);
 	}
 	return namedTypeHasHooks(name, lctx) ? name : "";
 }
 
 function ensureTupleHooks(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (tupleName == "" || t == null || t.kind != TypeKind.Tuple) return;
-	if (nameSetContains(lctx.generated, tupleName)) return;
-	if (isGloballyOwned(tupleName)) { nameSetAdd(lctx.generated, tupleName); return; }
+	if (nameSetContains(lctx.generated, tupleName) || isGloballyOwned(tupleName)) {
+		checkLiftedOps(t, tupleName);
+		nameSetAdd(lctx.generated, tupleName);
+		return;
+	}
 	if (nameSetContains(lctx.generating, tupleName)) return;
 	if (!tupleNeedsHooks(t, lctx, loc)) return;
 	nameSetAdd(lctx.generating, tupleName);
@@ -1953,15 +2002,18 @@ function generateSizedArrayHook(hook: string, name: string, t: Type, lctx: LiftC
 		: makeFnDecl(name + suffix, [s1, s2], [name, name], makeBlock(buf.items, loc), "", "void", loc);
 	setHookParamType(fnNode, 0, createVar(t));
 	if (!isUnary) setHookParamType(fnNode, 1, createVar(t));
-	markLifecycleOp(fnNode, name + suffix, hook);
+	setOpByKey(t, attachedOpOf(hook), markLifecycleOp(fnNode, name + suffix, hook));
 	lctx.collector.push(fnNode);
 }
 
 function ensureSizedArrayHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (t == null || t.kind != TypeKind.SizedArray || t.typeReturn == null) return;
 	const name = sizedArrayHookName(t);
-	if (nameSetContains(lctx.generated, name)) return;
-	if (isGloballyOwned(name)) { nameSetAdd(lctx.generated, name); return; }
+	if (nameSetContains(lctx.generated, name) || isGloballyOwned(name)) {
+		checkLiftedOps(t, name);
+		nameSetAdd(lctx.generated, name);
+		return;
+	}
 	if (nameSetContains(lctx.generating, name)) return;
 	if (!sizedArrayNeedsHooks(t, lctx, loc)) return;
 	nameSetAdd(lctx.generating, name);
@@ -1977,7 +2029,10 @@ function ensureSizedArrayHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): voi
 // Shares the `tupleName + "Eq"` dedup key with operatorLower's pending-ops, so one body.
 function ensureTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (tupleName == "" || t == null || t.kind != TypeKind.Tuple) return;
-	if (!claimEq(tupleName + "Eq", lctx)) return;
+	if (!claimEq(tupleName + "Eq", lctx)) {
+		checkOpByKey(t, AttachedOp.AttachedEq, tupleName + "Eq");
+		return;
+	}
 	generateTupleEq(tupleName, t, lctx, loc);
 }
 
@@ -2013,7 +2068,7 @@ function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	const teqFn = makeFnDecl(tupleName + "Eq", [aSym, bSym], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(teqFn, 0, t);
 	setHookParamType(teqFn, 1, t);
-	markGeneratedOp(teqFn, tupleName + "Eq");
+	setOpByKey(t, AttachedOp.AttachedEq, markGeneratedOp(teqFn, tupleName + "Eq"));
 	lctx.collector.push(teqFn);
 }
 
@@ -2046,7 +2101,7 @@ function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	const tltFn = makeFnDecl(tupleName + "Lt", [aSym, bSym], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(tltFn, 0, t);
 	setHookParamType(tltFn, 1, t);
-	markGeneratedOp(tltFn, tupleName + "Lt");
+	setOpByKey(t, AttachedOp.AttachedLt, markGeneratedOp(tltFn, tupleName + "Lt"));
 	lctx.collector.push(tltFn);
 }
 
@@ -2075,7 +2130,7 @@ function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	const tleFn = makeFnDecl(tupleName + "Le", [aSym, bSym], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(tleFn, 0, t);
 	setHookParamType(tleFn, 1, t);
-	markGeneratedOp(tleFn, tupleName + "Le");
+	setOpByKey(t, AttachedOp.AttachedLe, markGeneratedOp(tleFn, tupleName + "Le"));
 	lctx.collector.push(tleFn);
 }
 
@@ -2388,7 +2443,7 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 			// invalid C identifier anyway).
 			if (node.nodeType.kind == TypeKind.Struct && node.nodeType.typeName != ""
 				&& node.nodeType.typeName.indexOf(".") < 0) {
-				ensureHooks(node.nodeType.typeName, node.nodeType, null as unknown as Type, false, lctx, node.location);
+				ensureHooks(node.nodeType.typeName, node.nodeType, null as unknown as Type, node.nodeType, false, lctx, node.location);
 			} else if (node.nodeType.kind == TypeKind.Struct && node.nodeType.typeName == ""
 				&& node.nodeType.typeNames.length > 0
 				&& !node.nodeType.typeFlags.has(TypeFlag.DuVariant)) {
@@ -2396,34 +2451,34 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 				// generate their defs here or the analyzer's destroy/copy calls become
 				// undefined symbols. DU-variant payloads excluded (classify defers them
 				// to the DU machinery; a stray unstamped copy just makes a dead def).
-				ensureHooks(anonTypeName(node.nodeType), node.nodeType, null as unknown as Type, false, lctx, node.location);
+				ensureHooks(anonTypeName(node.nodeType), node.nodeType, null as unknown as Type, node.nodeType, false, lctx, node.location);
 			} else if (node.nodeType.kind == TypeKind.Ref && node.nodeType.typeReturn != null
 				&& node.nodeType.typeReturn.kind == TypeKind.Struct
 				&& isAnonTypeName(node.nodeType.typeReturn.typeName)
 				&& node.nodeType.typeReturn.typeNames.length > 0) {
-				ensureHooks(anonTypeName(node.nodeType.typeReturn), node.nodeType.typeReturn, node.nodeType, false, lctx, node.location);
+				ensureHooks(anonTypeName(node.nodeType.typeReturn), node.nodeType.typeReturn, node.nodeType, node.nodeType.typeReturn, false, lctx, node.location);
 			} else if (node.nodeType.kind == TypeKind.Union && node.nodeType.typeName != ""
 				&& hasAsgnFlag(node.nodeType)
 				&& !isAllStringLiteralUnion(node.nodeType)
 				&& unwrapRefNullUnion(node.nodeType) == null) {
-				ensureHooks(node.nodeType.typeName, node.nodeType, null as unknown as Type, false, lctx, node.location);
+				ensureHooks(node.nodeType.typeName, node.nodeType, null as unknown as Type, node.nodeType, false, lctx, node.location);
 			} else if (node.nodeType.kind == TypeKind.Ref && node.nodeType.typeReturn != null
 				&& node.nodeType.typeReturn.kind == TypeKind.Struct && node.nodeType.typeReturn.typeName != "") {
 				// Monomorphized class/interface: unwrap Ref, pass Ref as refType for HiddenDeref.
-				ensureHooks(node.nodeType.typeReturn.typeName, node.nodeType.typeReturn, node.nodeType, false, lctx, node.location);
+				ensureHooks(node.nodeType.typeReturn.typeName, node.nodeType.typeReturn, node.nodeType, node.nodeType.typeReturn, false, lctx, node.location);
 			} else if (node.nodeType.kind == TypeKind.GenericInstance) {
 				// Generic struct/class instance — unwrap to concrete Struct body with mangled
 				// typeName so hook signatures match codegen's struct emission (types.ms:582-620).
 				const unwrapped = unwrapGenericInstance(node.nodeType);
 				if (unwrapped.mangledName != "") {
-					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, false, lctx, node.location);
+					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, node.nodeType, false, lctx, node.location);
 				}
 			} else if (node.nodeType.kind == TypeKind.Ref && node.nodeType.typeReturn != null
 				&& node.nodeType.typeReturn.kind == TypeKind.GenericInstance) {
 				// Ref<GenericInstance> — class/interface of generic (e.g. Ref<Map<K,V>>).
 				const unwrapped = unwrapGenericInstance(node.nodeType.typeReturn);
 				if (unwrapped.mangledName != "") {
-					ensureHooks(unwrapped.mangledName, unwrapped.body, node.nodeType, false, lctx, node.location);
+					ensureHooks(unwrapped.mangledName, unwrapped.body, node.nodeType, node.nodeType.typeReturn, false, lctx, node.location);
 				}
 			}
 			// Array element hooks for any array used anywhere, including expression
@@ -2474,7 +2529,7 @@ function ensureHooksByName(typeName: string, lctx: LiftCtx, loc: SourceLocation,
 		const refType = (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Interface)
 			? sym.symbolType
 			: null as unknown as Type;
-		ensureHooks(typeName, objType, refType, true, lctx, loc);
+		ensureHooks(typeName, objType, refType, objType, true, lctx, loc);
 		return;
 	}
 	// Sym not in checker table. This happens for lambda-lifting synthesized
@@ -2537,10 +2592,21 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 // Comparison operators operatorLower routed to generated functions: tuple ==/</<=,
 // struct ==, and == on types with no symbol (Maybe carriers, generic struct instances).
 // reference parity: reference core:1973 (==), :1980 (<=), :1989 (<) for tuples.
+function tupleCompareOp(suffix: string): AttachedOp {
+	return match (suffix) {
+		"Lt" => AttachedOp.AttachedLt,
+		"Le" => AttachedOp.AttachedLe,
+		_ => AttachedOp.AttachedEq,
+	};
+}
+
 function liftComparisons(ctx: TransformContext, lctx: LiftCtx, loc: SourceLocation): void {
 	for (const pending of ctx.pendingTupleOps) {
 		for (const op of pending.ops) {
-			if (!claimEq(pending.tupleName + op, lctx)) continue;
+			if (!claimEq(pending.tupleName + op, lctx)) {
+				checkOpByKey(pending.tupleType, tupleCompareOp(op), pending.tupleName + op);
+				continue;
+			}
 			match (op) {
 				"Eq" => { generateTupleEq(pending.tupleName, pending.tupleType, lctx, loc); },
 				"Lt" => { generateTupleLt(pending.tupleName, pending.tupleType, lctx, loc); },
@@ -2560,7 +2626,7 @@ function liftComparisons(ctx: TransformContext, lctx: LiftCtx, loc: SourceLocati
 		if (carrierType.kind == TypeKind.GenericInstance) {
 			const gi = unwrapGenericInstance(carrierType);
 			if (gi.mangledName != "" && gi.body != null && gi.body.kind == TypeKind.Struct) {
-				ensureInstanceEq(gi.mangledName, gi.body, lctx, loc);
+				ensureInstanceEq(gi.mangledName, gi.body, carrierType, lctx, loc);
 				continue;
 			}
 		}

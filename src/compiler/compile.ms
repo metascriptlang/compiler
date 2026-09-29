@@ -50,7 +50,7 @@ import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
 import { drainPendingInstances, distinctInstances, placeInstance } from "../checker/instantiate";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTablesFingerprint, collectTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
-import { hookSymMark, hookSymsFrom, replayHookSyms } from "../codegen/c/types";
+import { hookSymMark, hookSymsFrom, replayHookSyms, opMark, opsFrom, replayOps } from "../codegen/c/types";
 import { GenericTypeInstRow, addGenericTypeInstRow } from "../parser/context";
 import { dbLower } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
@@ -617,6 +617,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.ran = true;
 	const typeInfoMark = typeInfoOwnerMark();
 	const hookMark = hookSymMark();
+	const keyedOpMark = opMark();
 	const opts = job.opts;
 	const modPath = job.modPath;
 	let program = checked;
@@ -691,7 +692,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 	job.timers.lower = job.timers.lower + (performance.now() - _tl0);
 	truncateErrors(ctx, errBase);
-	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), hooks: hookSymsFrom(hookMark) };
+	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), hooks: hookSymsFrom(hookMark), ops: opsFrom(keyedOpMark) };
 	return nativeLowered;
 }
 
@@ -2455,7 +2456,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 			typeInstances: modPath == firstModule ? typeRows : [],
 			cloneInput: session.keep,
 			ran: false,
-			claims: { typeInfos: [], hooks: [] },
+			claims: { typeInfos: [], hooks: [], ops: [] },
 		};
 		let nativeLowered: Node;
 		if (session.keep) {
@@ -2475,6 +2476,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 				if (claims != null) {
 					replayTypeInfoOwners(claims.typeInfos);
 					replayHookSyms(claims.hooks);
+					replayOps(claims.ops);
 				}
 				const replay = session.lowerDiagnostics.get(modPath);
 				if (replay != null) for (const shown of replay) renderModuleError(modPath, cm.source, shown);

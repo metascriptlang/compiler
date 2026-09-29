@@ -13,6 +13,7 @@ import { ModuleError } from "../module/graph";
 import { monoTypeKey } from "../monomorphize/registry";
 import { HcrIndirectModule } from "../transform/native/hcrIndirect";
 import { taHashString, transAmHashNode } from "./transam/hash";
+import { KeyedOp } from "../codegen/c/types";
 
 export enum BuildStatus {
 	Built,
@@ -23,6 +24,7 @@ export enum BuildStatus {
 export interface LowerClaims {
 	typeInfos: string[];
 	hooks: Symbol[];
+	ops: KeyedOp[];
 }
 
 export function sameClaims(a: LowerClaims, b: LowerClaims): boolean {
@@ -30,6 +32,10 @@ export function sameClaims(a: LowerClaims, b: LowerClaims): boolean {
 	if (a.hooks.length != b.hooks.length) return false;
 	for (let i = 0; i < a.hooks.length; i += 1) {
 		if (a.hooks[i].name != b.hooks[i].name) return false;
+	}
+	if (a.ops.length != b.ops.length) return false;
+	for (let i = 0; i < a.ops.length; i += 1) {
+		if (a.ops[i].key != b.ops[i].key || a.ops[i].sym.name != b.ops[i].sym.name) return false;
 	}
 	return true;
 }

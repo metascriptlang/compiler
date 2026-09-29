@@ -88,6 +88,9 @@ export enum AttachedOp {
 	AttachedDup,
 	AttachedSink,
 	AttachedTrace,
+	AttachedEq,
+	AttachedLt,
+	AttachedLe,
 }
 
 // ===== Type =====
