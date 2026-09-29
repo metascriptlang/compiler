@@ -9,7 +9,7 @@ import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType,
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension } from "../../checker/context";
-import { makeIdent, makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl, runtimeRef } from "../util";
+import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl, runtimeRef } from "../util";
 import { anonTypeName, isAnonTypeName } from "../../codegen/c/types";
 import { charToString } from "./stringOpLower";
 import { SymbolKind } from "../../ast/node";
@@ -124,8 +124,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 function resolveDbgIdent(name: string, ctx: TransformContext, loc: SourceLocation): Node {
 	const sym = compilerFuncSym(name);
 	if (sym == null) {
-		reportTransformError(ctx, `the prelude declares no compiler routine '${name}' (@compilerFunc)`, loc);
-		return makeIdent(name, loc);
+		throw new Error(`internal: debug lowering asked for compiler routine '${name}' that the prelude does not declare (@compilerFunc)`);
 	}
 	return makeIdentResolved(sym, loc);
 }
