@@ -2116,6 +2116,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			let cType = "";
 			let isClassObj = false;
 			let unionWrapName = "";
+			let unionWrapType: Type | null = null;
 			let unionWrapIdx = -1;
 			let unionDiscKeyIdx = -1;
 			let isRefUnion = false;
@@ -2222,6 +2223,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 						if (varIdx >= 0) {
 							cType = variantStructCName(g, litType, varIdx, unionName);
 							unionWrapName = unionName;
+							unionWrapType = namingType;
 							unionWrapIdx = varIdx;
 						}
 					} else {
@@ -2248,6 +2250,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 						if (varIdx >= 0) {
 							cType = variantStructCName(g, litType, varIdx, unionName);
 							unionWrapName = unionName;
+							unionWrapType = namingType;
 							unionWrapIdx = varIdx;
 						}
 					}
@@ -2330,7 +2333,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					p.labels += 1;
 					const refTmp = `_ref${p.labels}_`;
 					emitProcLocalsLine(p, `${unionWrapName}* ${refTmp};`);
-					ensureTypeInfoDef(g, unionWrapName, null as unknown as Type);
+					ensureTypeInfoDef(g, unionWrapName, unionWrapType);
 					emitStmtsLine(p, `${refTmp} = (${unionWrapName}*)msAllocTyped(sizeof(${unionWrapName}), &${unionWrapName}TypeInfo);`);
 					emitStmtsLine(p, `${refTmp}->_tag = ${unionWrapIdx};`);
 					emitStmtsLine(p, `${refTmp}->v${unionWrapIdx} = ${tmpName};`);
