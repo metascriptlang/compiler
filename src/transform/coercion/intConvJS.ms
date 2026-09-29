@@ -5,17 +5,48 @@
 // nodes into the operator that truncates, or the fraction survives the
 // conversion: `const x: int32 = f` emitted `3.9` on JS against `3` on C.
 
-import { Node, NodeKind, TypeAssertionData, HiddenStdConvData, BinaryExprData, ExprStmtData, SourceLocation, TypeKind } from "../../ast/node";
+import { Node, NodeKind, TypeAssertionData, HiddenStdConvData, BinaryExprData, ExprStmtData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeMember, makeNumber, runtimeRef } from "../util";
 import { createPrimitive, isWideningInt64Conv } from "../../checker/types";
 import { isFloatKind } from "./bigIntJS";
+import { rangeCheckHelper, makeRangeCheckFor } from "../native/rangeCheckInject";
 import { parseInput, makeCtx, getStmts, firstExprKindAfter } from "../testUtil";
 
 export function lowerIntConvJS(program: Node, ctx: TransformContext): Node {
 	walkNode(program, materializeIntConv);
 	return program;
+}
+
+export function injectRangeChecksJS(program: Node, ctx: TransformContext): Node {
+	walkNode(program, (node: Node): Node => checkConvRange(node, ctx));
+	return program;
+}
+
+function checkConvRange(node: Node, ctx: TransformContext): Node {
+	if (node.kind == NodeKind.TypeAssertion) {
+		const d = node.data as TypeAssertionData;
+		if (d.asExpr == null) return node;
+		const named = createPrimitive(intKindOfName(d.asType));
+		const dest = node.nodeType != null ? node.nodeType : named;
+		d.asExpr = checkedSource(d.asExpr, dest, ctx);
+		return node;
+	}
+	if (node.kind == NodeKind.HiddenStdConv) {
+		const d = node.data as HiddenStdConvData;
+		if (d.convType == null || d.convExpr == null) return node;
+		d.convExpr = checkedSource(d.convExpr, d.convType, ctx);
+	}
+	return node;
+}
+
+function checkedSource(expr: Node, dest: Type, ctx: TransformContext): Node {
+	const fnName = rangeCheckHelper(expr.nodeType, dest, ctx.rangeChecks);
+	if (fnName == "") return expr;
+	const call = makeRangeCheckFor(fnName, expr, dest, expr.location);
+	call.nodeType = expr.nodeType;
+	return call;
 }
 
 function materializeIntConv(node: Node): Node {

@@ -129,19 +129,37 @@ function isFloatSource(src: Type | null): boolean {
 	return s.kind == TypeKind.Float32 || s.kind == TypeKind.Float64 || s.kind == TypeKind.Number;
 }
 
-function checkedConv(ctx: TransformContext, expr: Node, src: Type | null, dest: Type, node: Node): Node {
-	if (dest.kind == TypeKind.Int64) {
-		if (!ctx.rangeChecks || !isFloatSource(src)) return node;
-		const call = makeCall(runtimeRef("msCheckRangeI64", node.location), [expr], node.location);
-		call.nodeType = dest;
-		return call;
-	}
+export function rangeCheckHelper(src: Type | null, dest: Type, rangeChecks: boolean): string {
+	if (!rangeChecks) return "";
+	if (dest.kind == TypeKind.Int64) return isFloatSource(src) ? "msCheckRangeI64" : "";
 	const fnName = getRangeCheckForTypeKind(dest.kind);
+	if (fnName == "" || isUnsignedKind(dest.kind) || destCovers(src, dest)) return "";
+	return fnName;
+}
+
+export function makeRangeCheckFor(
+	fnName: string,
+	expr: Node,
+	dest: Type,
+	loc: SourceLocation,
+): Node {
+	if (fnName == "msCheckRangeI64") return makeCall(runtimeRef(fnName, loc), [expr], loc);
+	const lo = getRangeMinForKind(dest.kind);
+	return makeRangeCheck(expr, fnName, lo, getRangeMaxForKind(dest.kind), loc);
+}
+
+function checkedConv(
+	ctx: TransformContext,
+	expr: Node,
+	src: Type | null,
+	dest: Type,
+	node: Node,
+): Node {
+	const fnName = rangeCheckHelper(src, dest, ctx.rangeChecks);
 	if (fnName == "") return node;
-	if (!ctx.rangeChecks) return node;
-	if (isUnsignedKind(dest.kind)) return node;
-	if (destCovers(src, dest)) return node;
-	return makeRangeCheck(expr, fnName, getRangeMinForKind(dest.kind), getRangeMaxForKind(dest.kind), node.location);
+	const call = makeRangeCheckFor(fnName, expr, dest, node.location);
+	if (fnName == "msCheckRangeI64") call.nodeType = dest;
+	return call;
 }
 
 function rangeCheckVisitor(node: Node, ctx: TransformContext): Node {
