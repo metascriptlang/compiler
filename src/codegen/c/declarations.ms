@@ -14,7 +14,7 @@ import {
 import { genExpr, refArrayDestroyFn, refArrayCellLabel, bareArrayTypeName } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, refArrayCellName, isCompilerGenCName, isNilableValueType, ensureDrcProto, procHeader } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, refArrayCellName, isCompilerGenCName, isNilableValueType, ensureDrcProto, procHeader, isTypeBoundOp } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -164,7 +164,8 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	// Generic instances: not static, not exported — one definition, other modules get forward decl.
 	const isExported = sym != null && (exported || hasFlag(sym, SymbolFlag.Exported) || sym.exportName != "");
 	const exportPrefix = isExported && g.isHcr ? "MS_HCR_EXPORT " : "";
-	const linkage = (isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance) ? "" : "static ";
+	const isTypeBound = sym != null && isTypeBoundOp(sym);
+	const linkage = (isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance || isTypeBound) ? "" : "static ";
 	const prefix = exportPrefix + linkage;
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
