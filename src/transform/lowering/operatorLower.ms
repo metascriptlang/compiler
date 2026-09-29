@@ -20,7 +20,7 @@ import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberEx
 import { TransformContext, PendingTupleOp } from "../context";
 import { hookPrototype, hookBaseCName } from "../../codegen/c/types";
 import { walkNode } from "../walker";
-import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
+import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral, receiverKind } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, unwrapMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { sizedArrayHookName } from "../../analyzer/classify";
@@ -46,13 +46,14 @@ function resolveType(ctx: TransformContext, node: Node): Type | null {
 }
 
 // Built-in types that use native C operators — never rewrite these.
-function isBuiltinType(typeName: string): boolean {
-	// String is NOT builtin — it has operator overloads (==, <, <=) in prelude.
-	return typeName == "" || typeName == "number"
-		|| typeName == "boolean" || typeName == "void" || typeName == "null"
-		|| typeName == "int8" || typeName == "int16" || typeName == "int32" || typeName == "int64"
-		|| typeName == "uint8" || typeName == "uint16" || typeName == "uint32" || typeName == "uint64"
-		|| typeName == "float32" || typeName == "float64";
+// String is NOT builtin — it has operator overloads (==, <, <=) in prelude.
+function isBuiltinOperand(t: Type | null): boolean {
+	return match (receiverKind(t)) {
+		TypeKind.Number | TypeKind.Boolean | TypeKind.Float32 | TypeKind.Float64 => true,
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => true,
+		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => true,
+		_ => false,
+	};
 }
 
 
@@ -248,7 +249,7 @@ function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
 	if (t == null) return node;
 	if (isStringLike(t)) return node;
 	const typeName = typeNameOf(t);
-	if (typeName == "" || isBuiltinType(typeName)) return node;
+	if (typeName == "" || isBuiltinOperand(t)) return node;
 	const ext = resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, op, [t]);
 	if (ext == null) return node;
 	let callName = op;
@@ -293,7 +294,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		&& (d.left.kind == NodeKind.Identifier || d.left.kind == NodeKind.MemberExpr)
 		&& ctx.checkerCtx.extensionRegistry != null) {
 		const ltName = isStringLike(leftType) ? "string" : typeNameOf(leftType);
-		if (ltName != "" && !isBuiltinType(ltName)) {
+		if (ltName != "" && !isBuiltinOperand(leftType)) {
 			const crt = resolveType(ctx, d.right);
 			const cext = crt != null ? resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, compoundBase, [leftType, crt]) : null as unknown as ExtensionMethod;
 			if (cext != null) {
@@ -415,7 +416,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	// No hardcoded lowering — the overloads are registered as extensions and found above.
 
 	// 2b. Built-in types use native C operators — no rewrite needed.
-	if (isBuiltinType(typeName)) return node;
+	if (isBuiltinOperand(leftType)) return node;
 
 	// 4. Derived operators — fallback for types without explicit prelude overloads.
 	// 4. Derived operators — fallback for types without prelude overloads.

@@ -8,10 +8,10 @@
 // Builtin indexable types (Array, string, @builtin("IndexableMap") classes) are never rewritten.
 
 import { Node, NodeKind, ArrayAccessData, BinaryExprData, IdentifierData, Symbol, SymbolKind } from "../../ast/node";
-import { Type } from "../../ast/node";
+import { Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall } from "../util";
+import { makeIdent, makeCall, receiverKind } from "../util";
 import { lookupSymbol, defineSymbol, makeSymbol } from "../../checker/symbol";
 import { inferredType, createStruct, createFunction, createArray, typeNameOf, isIndexableMapType } from "../../checker/types";
 import { ExtensionMethod, createContext, registerExtension, findExtension } from "../../checker/context";
@@ -36,13 +36,12 @@ function getReceiverType(ctx: TransformContext, node: Node): Type {
 }
 
 // Builtin types that use native [] — never rewrite these.
-// Covers primitive "Array"/"string" plus any class tagged @builtin("IndexableMap").
+// Covers arrays and strings plus any class tagged @builtin("IndexableMap").
 function isBuiltinIndexable(t: Type): boolean {
 	if (t == null) return false;
 	if (isIndexableMapType(t)) return true;
-	const n = typeNameOf(t);
-	return match (n) {
-		"Array" | "string" => true,
+	return match (receiverKind(t)) {
+		TypeKind.Array | TypeKind.SizedArray | TypeKind.String => true,
 		_ => false,
 	};
 }

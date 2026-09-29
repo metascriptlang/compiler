@@ -121,6 +121,17 @@ export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, l
 
 // Canonical name for auto-generated enum-to-string function (e.g., "Color_toString").
 // Used by enumToStringLower (generation), builtinLower + debugLower (call site rewriting).
+export function receiverKind(t: Type | null): TypeKind {
+	let cur = t;
+	let hops = 0;
+	while (cur != null && cur.typeReturn != null && hops < 8
+			&& (cur.kind == TypeKind.Sink || cur.kind == TypeKind.Lent || cur.kind == TypeKind.Ref || cur.kind == TypeKind.Ptr)) {
+		cur = cur.typeReturn;
+		hops += 1;
+	}
+	return cur == null ? TypeKind.Unknown : cur.kind;
+}
+
 export function enumToStringName(enumName: string): string {
 	return enumName + "_toString";
 }
