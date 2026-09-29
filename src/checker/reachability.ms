@@ -1,11 +1,11 @@
 // Global Dead Code Elimination — Reachability Analysis
 //
-// Computes an AliveSet of "modulePath:symbolName" keys by walking ASTs
-// starting from roots (main, top-level stmts, test decls, exported symbols).
-// Cross-module references traced via ImportDecl source paths.
+// Computes an AliveSet of symbols by walking ASTs from roots (main, top-level
+// stmts, test decls, exported symbols); symbol-less TypeInfo and hook
+// declarations are still keyed "modulePath:name".
 
 import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, HiddenStdConvData,
-	ExportDeclData, IdentifierData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
+	ExportDeclData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
 	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
@@ -143,7 +143,6 @@ function walkBody(node: Node, modulePath: string): void {
 
 	// Identifier — mark its declaration alive
 	if (k == NodeKind.Identifier) {
-		const id = node.data as IdentifierData;
 		const sym = node.resolvedSym;
 		if (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp)) {
 			markAndWalk(modulePath, sym.name);
@@ -153,17 +152,7 @@ function walkBody(node: Node, modulePath: string): void {
 			}
 			return;
 		}
-		if (sym != null) {
-			markReferenced(sym, modulePath);
-		} else if (id.name.length > 0) {
-			// No resolvedSym: transform-generated or generic-instantiated identifiers.
-			// Try current module first, then use pre-built name index for cross-module.
-			markAndWalk(modulePath, id.name);
-			const crossMod = nameIndexLookup(id.name);
-			if (crossMod != "" && crossMod != modulePath) {
-				markAndWalk(crossMod, id.name);
-			}
-		}
+		if (sym != null) markReferenced(sym, modulePath);
 		return;
 	}
 
@@ -218,19 +207,7 @@ function walkBody(node: Node, modulePath: string): void {
 	if (k == NodeKind.MemberExpr) {
 		const md = node.data as MemberExprData;
 		walkBody(md.object, modulePath);
-		if (node.resolvedSym != null) {
-			markReferenced(node.resolvedSym, modulePath);
-		} else if (md.property != "") {
-			// No resolvedSym (generic instantiation clears it).
-			// Search all modules for the method — extension methods may be cross-module.
-			// No resolvedSym — use pre-built name index for cross-module extension methods.
-			const crossMod2 = nameIndexLookup(md.property);
-			if (crossMod2 != "") {
-				markAndWalk(crossMod2, md.property);
-			} else {
-				markAndWalk(modulePath, md.property);
-			}
-		}
+		if (node.resolvedSym != null) markReferenced(node.resolvedSym, modulePath);
 		return;
 	}
 
@@ -413,10 +390,6 @@ function markSymAndWalk(sym: Symbol, modulePath: string): void {
 		markInstanceCopy(sym.instantiatedFrom, sym.name);
 		return;
 	}
-	if (di < 0) {
-		markSymlessDecls(home, sym.name);
-		return;
-	}
 	while (di >= 0) {
 		walkDecl(di);
 		di = _symDeclNext[di];
@@ -441,14 +414,6 @@ function markRootDecl(decl: Node, modulePath: string): void {
 	else markAndWalk(modulePath, topDeclName(decl));
 }
 
-function markSymlessDecls(modulePath: string, name: string): void {
-	let di = _declHead.get(modulePath + ":" + name) ?? -1;
-	while (di >= 0) {
-		if (_declNodes[di].resolvedSym == null) walkDecl(di);
-		di = _declNext[di];
-	}
-}
-
 function walkDecl(di: int32): void {
 	if (_declWalked[di]) return;
 	_declWalked[di] = true;
@@ -469,8 +434,7 @@ function walkDecl(di: int32): void {
 	if (found.kind == NodeKind.ClassDecl) markClassInit(found, modulePath, name);
 	// Actors: actorLower erased the NewExpr before this walk runs, so
 	// no allocation-site edge fires — but a spawned actor's TypeInfo
-	// is always demanded. Marking it walks its initializer, which
-	// marks Destroy/Trace via the Identifier fallback.
+	// is always demanded.
 	const isActorOrigin = found.kind == NodeKind.ActorDecl
 		|| (found.kind == NodeKind.ClassDecl && found.resolvedSym != null
 			&& found.resolvedSym.symbolKind == SymbolKind.Actor);
