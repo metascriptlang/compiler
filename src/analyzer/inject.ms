@@ -15,7 +15,7 @@ import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, un
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, createTransformContext, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
-	makeIdent, makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
+	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, makeFnDecl, runtimeRef,
 } from "../transform/util";
 import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
@@ -2522,6 +2522,14 @@ export function testLoc(): SourceLocation {
 	return makeLoc(0, 0);
 }
 
+export function testFnRef(name: string, loc: SourceLocation): Node {
+	return makeIdentResolved(makeSymbol(name, SymbolKind.Function, null, false), loc);
+}
+
+export function testVarRef(name: string, loc: SourceLocation): Node {
+	return makeIdentResolved(testVarSym(name), loc);
+}
+
 test "injectProgram no-op on primitives" {
 	const dctx = testDrcContext("const x = 1; const y = 2;");
 	const prog = makeBlock([], testLoc());
@@ -2626,7 +2634,7 @@ test "callCanThrow false for ms-prefixed runtime calls" {
 
 test "callCanThrow true for user functions" {
 	const loc = testLoc();
-	const call = makeCall(makeIdent("parseExpr", loc), [], loc);
+	const call = makeCall(testFnRef("parseExpr", loc), [], loc);
 	assert callCanThrow(call);
 }
 
@@ -2642,7 +2650,7 @@ function scanSetsNeedsTry(stmt: Node): boolean {
 
 function userCallStmt(): Node {
 	const loc = testLoc();
-	return makeExprStmt(makeCall(makeIdent("parseExpr", loc), [], loc), loc);
+	return makeExprStmt(makeCall(testFnRef("parseExpr", loc), [], loc), loc);
 }
 
 test "setNeedsTryIfRaises marks every open scope for a user call statement" {
@@ -2651,19 +2659,19 @@ test "setNeedsTryIfRaises marks every open scope for a user call statement" {
 
 test "setNeedsTryIfRaises finds a user call inside an if body" {
 	const loc = testLoc();
-	const guarded = makeIf(makeIdent("flag", loc), makeBlock([userCallStmt()], loc), null as unknown as Node, loc);
+	const guarded = makeIf(testVarRef("flag", loc), makeBlock([userCallStmt()], loc), null as unknown as Node, loc);
 	assert scanSetsNeedsTry(guarded);
 }
 
 test "setNeedsTryIfRaises finds a user call in an if condition" {
 	const loc = testLoc();
-	const cond = makeCall(makeIdent("parseExpr", loc), [], loc);
+	const cond = makeCall(testFnRef("parseExpr", loc), [], loc);
 	assert scanSetsNeedsTry(makeIf(cond, makeBlock([], loc), null as unknown as Node, loc));
 }
 
 test "setNeedsTryIfRaises finds a user call passed to a runtime call" {
 	const loc = testLoc();
-	const inner = makeCall(makeIdent("parseExpr", loc), [], loc);
+	const inner = makeCall(testFnRef("parseExpr", loc), [], loc);
 	const outer = makeCall(runtimeRef("msStringDecref", loc), [inner], loc);
 	assert scanSetsNeedsTry(makeExprStmt(outer, loc));
 }
@@ -2687,7 +2695,7 @@ test "setNeedsTryIfRaises ignores a null node" {
 test "needsReturnIncref false for call expr (fresh)" {
 	const dctx = testDrcContext("function getString(): string { return \"\"; }");
 	const loc = testLoc();
-	const call = makeCall(makeIdent("getString", loc), [], loc);
+	const call = makeCall(testFnRef("getString", loc), [], loc);
 	assert !needsReturnIncref(call, dctx);
 }
 
@@ -2706,7 +2714,7 @@ test "needsReturnIncref false for local var (moved)" {
 test "needsReturnIncref false for member expr with string field (strings use passCopyToSink)" {
 	const dctx = testDrcContext("interface Obj { name: string; } const o: Obj = { name: \"\" };");
 	const loc = testLoc();
-	const memberExpr = makeMember(makeIdent("o", loc), "name", loc);
+	const memberExpr = makeMember(testVarRef("o", loc), "name", loc);
 	// String fields use passCopyToSink (deep copy), not msIncref (pointer refcount)
 	assert !needsReturnIncref(memberExpr, dctx);
 }
@@ -2715,7 +2723,7 @@ test "emitReturnWithIncref produces block with 3 stmts" {
 	const dctx = testDrcContext("interface Obj { name: string; } const o: Obj = { name: \"\" };");
 	const loc = testLoc();
 	pushScope(dctx, false, true);
-	const arg = makeMember(makeIdent("o", loc), "name", loc);
+	const arg = makeMember(testVarRef("o", loc), "name", loc);
 	const result = emitReturnWithIncref(arg, dctx, loc);
 	assert result.kind == NodeKind.BlockStmt;
 	const bd = result.data as BlockStmtData;
@@ -2793,7 +2801,7 @@ test "collectFinallyVars finds vars in finally block" {
 	const loc = testLoc();
 	const s = testVarSym("s");
 	const finallyBody = makeBlock([
-		makeExprStmt(makeCall(makeIdent("cleanup", loc), [makeIdentResolved(s, loc)], loc), loc),
+		makeExprStmt(makeCall(testFnRef("cleanup", loc), [makeIdentResolved(s, loc)], loc), loc),
 	], loc);
 	const tryStmt = makeTryFinally(
 		makeBlock([makeExprStmt(makeIdentResolved(s, loc), loc)], loc),
@@ -2803,7 +2811,7 @@ test "collectFinallyVars finds vars in finally block" {
 	const body = makeBlock([tryStmt], loc);
 	const vars = collectFinallyVars(body);
 	assert symListHas(vars, s);
-	assert vars.length == 1;
+	assert vars.length == 2;  // s plus the callee's function symbol — both ride along, only vars gate moves
 }
 
 test "collectFinallyVars empty when no finally" {
@@ -2870,7 +2878,7 @@ test "emitMoveSourceWasMoved on call expr returns false (fresh)" {
 	const rcStr = testStringRc();
 	const loc = testLoc();
 	pushScope(dctx, false, true);
-	const call = makeCall(makeIdent("f", loc), [], loc);
+	const call = makeCall(testFnRef("f", loc), [], loc);
 	const handled = emitMoveSourceWasMoved(call, rcStr, 0, [], dctx, loc, false);
 	assert !handled;
 	assert !hasPending(dctx);
@@ -2882,7 +2890,7 @@ test "isFreshExpr includes MoveExpr" { assert isFreshExpr(NodeKind.MoveExpr); }
 test "classifyMemberFieldRc returns RC info for string field" {
 	const dctx = testDrcContext("interface Obj { name: string; } const o: Obj = { name: \"\" };");
 	const loc = testLoc();
-	const memberExpr = makeMember(makeIdent("o", loc), "name", loc);
+	const memberExpr = makeMember(testVarRef("o", loc), "name", loc);
 	// classifyMemberFieldRc checks nodeType — must set it for the test to work
 	memberExpr.nodeType = createPrimitive(TypeKind.String);
 	const rc = classifyMemberFieldRc(memberExpr, dctx);
@@ -2906,7 +2914,7 @@ test "makeSinkCall emits sinkFn call node" {
 	const rcStr = testStringRc();
 	const loc = testLoc();
 	const xSym = makeSymbol("x", SymbolKind.Variable, noneType(), true);
-	const sink = makeSinkCall(xSym, makeIdent("y", loc), rcStr, loc);
+	const sink = makeSinkCall(xSym, testVarRef("y", loc), rcStr, loc);
 	// Should produce an ExprStmt containing a CallExpr with 2 args
 	assert sink.kind == NodeKind.ExprStmt;
 	const sd = sink.data as ExprStmtData;
