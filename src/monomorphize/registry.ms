@@ -205,14 +205,7 @@ export function monoTypeKey(t: Type | null): string {
 // identity<number>     → "identity__number"
 // pair<number, string> → "pair__number_string"
 export function mangleMonoName(baseName: string, concreteTypes: Type[]): string {
-	let result = baseName + "__";
-	for (let i = 0; i < concreteTypes.length; i += 1) {
-		if (i > 0) {
-			result = result + "_";
-		}
-		result = result + monoTypeKey(concreteTypes[i]);
-	}
-	return result;
+	return baseName + "__" + buildTypeArgKeys(concreteTypes).join("_");
 }
 
 // ===== Deduplication =====

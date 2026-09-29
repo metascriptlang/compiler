@@ -14,7 +14,7 @@ import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeSt
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl } from "./compat";
-import { monoBaseName, monoTypeKey } from "../monomorphize/registry";
+import { buildTypeArgKeys, monoBaseName, monoInstanceNameOf, monoTypeKey } from "../monomorphize/registry";
 
 function anyHasGenericParams(types: Type[]): boolean {
 	for (const t of types) {
@@ -1189,10 +1189,19 @@ function substituteGenericParamsInType(rawType: string, paramNames: string[], ar
 // NOTE: Avoids all `let` string variables — only const strings + number let variables.
 // DRC generates msDecref instead of msStringDecref for let string locals in complex functions.
 export function recordGenericTypeInstantiation(baseName: string, genericSym: Symbol | null, args: string[], ctx: CheckerContext): void {
-	const typeArgKey = buildTypeArgKey(args, ctx);
+	const argTypes: Type[] = [];
+	for (const arg of args) {
+		const trimmed = arg.trim();
+		if (trimmed == "") return;
+		const resolved = resolveAnnotation(trimmed, ctx, 0, 0);
+		if (isUnresolvedType(resolved)) return;
+		argTypes.push(resolved);
+	}
+	const typeArgKey = buildTypeArgKeys(argTypes).join("_");
 	const decl = genericSym != null ? genericSym.declNode : null;
-	const instBase = monoBaseName(baseName, genericSym != null ? genericSym.modulePath : "");
-	const mangledName = instBase + "__" + typeArgKey;
+	const owner = genericSym != null ? genericSym.modulePath : "";
+	const instBase = monoBaseName(baseName, owner);
+	const mangledName = monoInstanceNameOf(baseName, owner, argTypes);
 
 	const fieldNamesStr = declFieldNamesJoined(decl);
 	const fieldTypesStr = declFieldTypesJoined(decl);
