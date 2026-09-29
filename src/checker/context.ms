@@ -1233,7 +1233,6 @@ export class CheckerContext {
 	generatedInstances: Node[];  // on-demand instantiated function ASTs to inject into program
 	procInstCache: HashMap<Symbol, Symbol[]>;
 	typeInstCache: HashMap<Symbol, Symbol[]>;
-	pendingEnumToStrings: EnumToStringRequest[]; // enum types whose _toString def must be injected in this module (recorded at lowering sites; enums reachable only via imported field types are not in module scope)
 	pendingHoisted: Node[];      // statements an expression-position macro emitted ahead of its value; a stack — each statement-list walk takes a high-water mark on entry and drains only what was queued above it, so a block nested in the value cannot take the call site's prefix
 	pendingTrailing: Node[];
 	condEvalDepth: int32;        // >0 while checking a conditionally-evaluated position (&&/|| rhs, ternary arm, loop condition) — hoisting out of one would run it unconditionally
@@ -1318,7 +1317,6 @@ export function createContext(): CheckerContext {
 		generatedInstances: [],
 		procInstCache: new HashMap<Symbol, Symbol[]>(),
 		typeInstCache: new HashMap<Symbol, Symbol[]>(),
-		pendingEnumToStrings: [],
 		pendingHoisted: [],
 		pendingTrailing: [],
 		disambTable: new HashMap<string, int32>(),
@@ -1379,22 +1377,6 @@ export function nextDisamb(ctx: CheckerContext, modulePath: string, name: string
 	const next = ctx.disambTable.get(key) ?? 0;
 	ctx.disambTable.set(key, next + 1);
 	return next;
-}
-
-export interface EnumToStringRequest {
-	enumType: Type;
-	fnSym: Symbol;
-}
-
-export function requestedEnumToString(cc: CheckerContext, t: Type): Symbol | null {
-	for (const e of cc.pendingEnumToStrings) {
-		if (e.enumType == t || (e.enumType.sym != null && e.enumType.sym == t.sym)) return e.fnSym;
-	}
-	return null;
-}
-
-export function requestEnumToString(cc: CheckerContext, t: Type, fnSym: Symbol): void {
-	cc.pendingEnumToStrings.push({ enumType: t, fnSym });
 }
 
 // Create context with a shared IdentCache (one cache per compilation).

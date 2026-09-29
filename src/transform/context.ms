@@ -29,10 +29,16 @@ export class TransformContext {
 	acyclicCache: NameSet;    // canFormAcycle entry-level memo (types confirmed acyclic)
 	splitLoopLocals: Symbol[];  // bindings of a loop body split at a yield: generatorLower hoists them to one slot for the whole loop
 	actorImpls: HashMap<Symbol, Symbol>;  // actor method → its _impl handler (actor lowering emits async ones in lowerActorPre)
+	jsEnumToStrings: EnumToStringCopy[];
+}
+
+export interface EnumToStringCopy {
+	enumType: Type;
+	fnSym: Symbol;
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingValueEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>() };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingValueEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [] };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {

@@ -126,6 +126,7 @@ function attachedOpName(op: AttachedOp): string {
 		AttachedOp.AttachedEq => "eq",
 		AttachedOp.AttachedLt => "lt",
 		AttachedOp.AttachedLe => "le",
+		AttachedOp.AttachedToString => "toString",
 	};
 }
 
@@ -139,11 +140,12 @@ function recordOp(key: string, sym: Symbol, canon: boolean): void {
 		throw new Error(`internal: type-bound op ${key} is both '${held.name}' and '${sym.name}'`);
 	}
 	if (canon) {
-		const heldKey = _opKeyOfName.get(sym.name);
+		const identity = sym.modulePath != "" ? `${sym.modulePath}:${sym.name}:${sym.disamb}` : sym.name;
+		const heldKey = _opKeyOfName.get(identity);
 		if (heldKey != null && heldKey != key) {
 			throw new Error(`internal: generated op '${sym.name}' serves two types: ${heldKey} and ${key}`);
 		}
-		if (heldKey == null) _opKeyOfName.set(sym.name, key);
+		if (heldKey == null) _opKeyOfName.set(identity, key);
 		_canonOps.add(sym);
 	}
 	if (held != null) return;

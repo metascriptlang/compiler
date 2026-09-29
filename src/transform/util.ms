@@ -5,8 +5,8 @@ import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, 
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
-import { lookupHookSym } from "../codegen/c/types";
-import { requestEnumToString, requestedEnumToString } from "../checker/context";
+import { lookupHookSym, requireOpByKey, getOpByKey, setOpByKey } from "../codegen/c/types";
+import { forEachChild } from "../ast/visitor";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
 import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
 import { syntheticToken, makeNumber, makeIntNumber, makeString, makeBool } from "../checker/literalNodes";
@@ -142,7 +142,7 @@ export function enumToStringName(enumName: string): string {
 	return enumName + "_toString";
 }
 
-// Synthetic per-type helpers (enum toString, struct dump) are declared once per
+// Synthetic per-type helpers (struct dump) are declared once per
 // requesting module. Two modules may declare the same type name: C keeps the
 // copies apart with static linkage per translation unit, but the JS bundle is
 // one flat scope where the later declaration silently replaces the earlier one
@@ -158,17 +158,41 @@ export function typeHelperName(t: Type, bare: string): string {
 	return bare;
 }
 
-export function enumToStringNameFor(t: Type): string {
-	return typeHelperName(t, enumToStringName(t.typeName));
-}
-
 export function enumToStringSym(ctx: TransformContext, t: Type): Symbol {
 	if (ctx.checkerCtx == null || t.typeName == "") throw new Error(`internal: toString of enum '${t.typeName}' requested without a checker context`);
-	const existing = requestedEnumToString(ctx.checkerCtx, t);
-	if (existing != null) return existing;
+	if (!ctx.jsBackend) return requireOpByKey(t, AttachedOp.AttachedToString);
+	for (const c of ctx.jsEnumToStrings) {
+		if (c.enumType == t || (c.enumType.sym != null && c.enumType.sym == t.sym)) return c.fnSym;
+	}
 	const fnSym = mintSym(ctx, SymbolKind.Function, enumToStringName(t.typeName), createFunction([t], ["v"], stringType()));
-	requestEnumToString(ctx.checkerCtx, t, fnSym);
+	ctx.jsEnumToStrings.push({ enumType: t, fnSym });
 	return fnSym;
+}
+
+export function liftEnumToStrings(program: Node, ctx: TransformContext): void {
+	for (const t of declaredEnums(program)) {
+		if (getOpByKey(t, AttachedOp.AttachedToString) != null) continue;
+		setOpByKey(t, AttachedOp.AttachedToString, mintSym(ctx, SymbolKind.Function, enumToStringName(t.typeName), createFunction([t], ["v"], stringType())));
+	}
+}
+
+export function declaredEnums(program: Node): Type[] {
+	const found: Type[] = [];
+	walkEnumDecls(program, found);
+	return found;
+}
+
+function walkEnumDecls(node: Node, found: Type[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.EnumDecl) {
+		const sym = node.resolvedSym;
+		if (sym == null || sym.symbolType == null || sym.symbolType.kind != TypeKind.Enum) {
+			throw new Error(`internal: an enum declaration reached lowering without its symbol`);
+		}
+		found.push(sym.symbolType);
+		return;
+	}
+	forEachChild(node, (c: Node): void => { walkEnumDecls(c, found); });
 }
 
 // ===== Literal Builders =====

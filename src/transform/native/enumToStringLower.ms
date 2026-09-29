@@ -11,12 +11,12 @@ import { Node, NodeKind, ProgramData, EnumDeclData, ExportDeclData, Type, TypeKi
 import { TransformContext } from "../context";
 import {
 	makeSwitch, makeSwitchCase, makeReturn, makeString, makeNumber,
-	makeTypedIdentResolved, makeBlock, makeFnDecl, enumToStringName, enumToStringNameFor,
+	makeTypedIdentResolved, makeBlock, makeFnDecl, enumToStringName, declaredEnums,
 } from "../util";
 import { makeSymbol } from "../../checker/symbol";
 import { createEnum, stringType, createFunction } from "../../checker/types";
-import { SourceLocation, makeLoc } from "../../ast/node";
-import { requestedEnumToString } from "../../checker/context";
+import { SourceLocation, makeLoc, AttachedOp } from "../../ast/node";
+import { requireOpByKey } from "../../codegen/c/types";
 
 // Helper: concat two Node arrays — returns new array (moved, not destroyed)
 function concatStmts(a: Node[], b: Node[]): Node[] {
@@ -129,45 +129,25 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 	if (program == null || program.kind != NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
 
-	// Primary path: extract enums from checker's symbol table (DCE-safe).
-	// Walk all scopes from current up to global — user enums are typically
-	// in the module scope (table.current), not the root global scope.
 	if (ctx != null && ctx.checkerCtx != null && ctx.checkerCtx.table != null) {
 		const toStringFns: Node[] = [];
-		const injected = new HashSet<Symbol>();
-		// Scope scan — C only. Each module is its own translation unit there, so
-		// injecting every enum in scope costs a few unreferenced statics and
-		// covers any lowering site that forgets to request. The JS bundle is ONE
-		// flat scope: the same scan walks the scope chain into the prelude and
-		// re-emits its whole enum set once per module (measured: 55 defs, 20+
-		// copies of JsonKind_toString for a 3-member user enum). JS therefore
-		// injects exactly what the lowering sites requested below — the request
-		// list is complete, every site calls requestEnumToString.
 		if (!ctx.jsBackend) {
-			let scope = ctx.checkerCtx.table.current;
-			while (scope != null) {
-				for (const sym of scope.symbols.values()) {
-					if (sym.symbolKind == SymbolKind.Enum && sym.symbolType != null && sym.symbolType.kind == TypeKind.Enum) {
-						const t = sym.symbolType;
-						if (injected.has(sym)) continue;
-						injected.add(sym);
-						toStringFns.push(makeEnumToString(requestedEnumToString(ctx.checkerCtx, t), enumToStringNameFor(t), t, sym.location));
-					}
-				}
-				scope = scope.parent;
+			for (const t of declaredEnums(program)) {
+				const op = requireOpByKey(t, AttachedOp.AttachedToString);
+				toStringFns.push(makeEnumToString(op, op.name, t, program.location));
 			}
+		} else {
+			const injected = new HashSet<Symbol>();
+			for (const req of ctx.jsEnumToStrings) {
+				const t = req.enumType;
+				if (t.kind != TypeKind.Enum) continue;
+				if (t.sym == null) throw new Error(`internal: enum '${t.typeName}' reached toString lowering without its declaration`);
+				if (injected.has(t.sym)) continue;
+				injected.add(t.sym);
+				toStringFns.push(makeEnumToString(req.fnSym, req.fnSym.name, t, program.location));
+			}
+			ctx.jsEnumToStrings = [];
 		}
-		// Lowering sites (builtinLower/debugLower) request enums that are not in
-		// module scope — e.g. reached only through an imported field's type.
-		for (const req of ctx.checkerCtx.pendingEnumToStrings) {
-			const t = req.enumType;
-			if (t.kind != TypeKind.Enum) continue;
-			if (t.sym == null) throw new Error(`internal: enum '${t.typeName}' reached toString lowering without its declaration`);
-			if (injected.has(t.sym)) continue;
-			injected.add(t.sym);
-			toStringFns.push(makeEnumToString(req.fnSym, enumToStringNameFor(t), t, program.location));
-		}
-		ctx.checkerCtx.pendingEnumToStrings = [];
 		// Append to program stmts via return-value move (avoids local array aliasing)
 		program.data = { programStmts: concatStmts(pd.programStmts, toStringFns) };
 		return program;
