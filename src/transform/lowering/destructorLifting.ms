@@ -2442,81 +2442,96 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 	// Covers anonymous structs (__anon*), programmatically-created structs
 	// (e.g. IteratorResult from createIterator), monomorphized class types
 	// (HashMap<K,V>, HashSet<K>), and any other type without a declared AST node.
+	const paramTypes: Type[] = [];
 	walkNode(program, (node: Node): Node => {
+		if (node.kind == NodeKind.FunctionDecl && node.nodeType != null && node.nodeType.kind == TypeKind.Function) {
+			for (const pt of node.nodeType.typeChildren) {
+				if (pt != null) paramTypes.push(pt.kind == TypeKind.Var && pt.typeReturn != null ? pt.typeReturn : pt);
+			}
+		}
 		if (node.nodeType != null && !lctx.scannedTypes.has(node.nodeType)) {
 			lctx.scannedTypes.add(node.nodeType);
-			// Consumer path — emitTypeInfo=false so we don't duplicate TypeInfo
-			// with the defining module's emission or codegen's ensureTypeInfoDef.
-			//
-			// Skip match-type variant structs (typeName like "Alias.Key") — their
-			// hooks are emitted via the parent Union's `<Union>_v<N>` helper
-			// dispatch, not as standalone `<Alias.Key>Copy` (which would be an
-			// invalid C identifier anyway).
-			if (node.nodeType.kind == TypeKind.Struct && node.nodeType.typeName != ""
-				&& node.nodeType.typeName.indexOf(".") < 0) {
-				ensureHooks(node.nodeType.typeName, node.nodeType, null as unknown as Type, node.nodeType, false, lctx, node.location);
-			} else if (node.nodeType.kind == TypeKind.Struct && node.nodeType.typeName == ""
-				&& node.nodeType.typeNames.length > 0
-				&& !node.nodeType.typeFlags.has(TypeFlag.DuVariant)) {
-				// Nameless anon structs: classify OWNS these now (msAnon_<hash> hooks) —
-				// generate their defs here or the analyzer's destroy/copy calls become
-				// undefined symbols. DU-variant payloads excluded (classify defers them
-				// to the DU machinery; a stray unstamped copy just makes a dead def).
-				ensureHooks(anonTypeName(node.nodeType), node.nodeType, null as unknown as Type, node.nodeType, false, lctx, node.location);
-			} else if (node.nodeType.kind == TypeKind.Ref && node.nodeType.typeReturn != null
-				&& node.nodeType.typeReturn.kind == TypeKind.Struct
-				&& isAnonTypeName(node.nodeType.typeReturn.typeName)
-				&& node.nodeType.typeReturn.typeNames.length > 0) {
-				ensureHooks(anonTypeName(node.nodeType.typeReturn), node.nodeType.typeReturn, node.nodeType, node.nodeType.typeReturn, false, lctx, node.location);
-			} else if (node.nodeType.kind == TypeKind.Union && node.nodeType.typeName != ""
-				&& hasAsgnFlag(node.nodeType)
-				&& !isAllStringLiteralUnion(node.nodeType)
-				&& unwrapRefNullUnion(node.nodeType) == null) {
-				ensureHooks(node.nodeType.typeName, node.nodeType, null as unknown as Type, node.nodeType, false, lctx, node.location);
-			} else if (node.nodeType.kind == TypeKind.Ref && node.nodeType.typeReturn != null
-				&& node.nodeType.typeReturn.kind == TypeKind.Struct && node.nodeType.typeReturn.typeName != "") {
-				// Monomorphized class/interface: unwrap Ref, pass Ref as refType for HiddenDeref.
-				ensureHooks(node.nodeType.typeReturn.typeName, node.nodeType.typeReturn, node.nodeType, node.nodeType.typeReturn, false, lctx, node.location);
-			} else if (node.nodeType.kind == TypeKind.GenericInstance) {
-				// Generic struct/class instance — unwrap to concrete Struct body with mangled
-				// typeName so hook signatures match codegen's struct emission (types.ms:582-620).
-				const unwrapped = unwrapGenericInstance(node.nodeType);
-				if (unwrapped.mangledName != "") {
-					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, node.nodeType, false, lctx, node.location);
-				}
-			} else if (node.nodeType.kind == TypeKind.Ref && node.nodeType.typeReturn != null
-				&& node.nodeType.typeReturn.kind == TypeKind.GenericInstance) {
-				// Ref<GenericInstance> — class/interface of generic (e.g. Ref<Map<K,V>>).
-				const unwrapped = unwrapGenericInstance(node.nodeType.typeReturn);
-				if (unwrapped.mangledName != "") {
-					ensureHooks(unwrapped.mangledName, unwrapped.body, node.nodeType, node.nodeType.typeReturn, false, lctx, node.location);
-				}
-			}
-			// Array element hooks for any array used anywhere, including expression
-			// position (literals, call args, returns). The decl-only scanStmtForArrayTypes
-			// misses those, leaving a boxed T[]'s per-type <Name>ArrayDestroy walker
-			// unemitted → undefined symbol once codegen references it.
-			if (node.nodeType.kind == TypeKind.Array
-				|| (node.nodeType.kind == TypeKind.Ref && node.nodeType.typeReturn != null
-					&& node.nodeType.typeReturn.kind == TypeKind.Array)) {
-				const arrVisited: NameSet = createNameSet();
-				scanTypeForArrays(node.nodeType, lctx, arrVisited, []);
-			}
-			// A bare tuple local (reassigned or dropped) needs the same named hooks, but
-			// fillBody only emits them for tuples that appear as a struct field — pre-register
-			// here so classify.ms's msTuple_<hash>{Destroy,Sink} reference isn't undefined.
-			if (node.nodeType.kind == TypeKind.Tuple) {
-				ensureTupleHooks(tupleTypeName(node.nodeType), node.nodeType, lctx, node.location);
-			}
-			if (node.nodeType.kind == TypeKind.SizedArray) {
-				ensureSizedArrayHooks(node.nodeType, lctx, node.location);
-			}
-			if (node.nodeType.kind == TypeKind.Union && node.nodeType.typeName == "") {
-				ensureAnonUnionHooks(node.nodeType, lctx, node.location);
-			}
+			liftTypeOps(node.nodeType, lctx, node.location);
 		}
 		return node;
 	});
+	for (const pt of paramTypes) {
+		if (lctx.scannedTypes.has(pt)) continue;
+		lctx.scannedTypes.add(pt);
+		liftTypeOps(pt, lctx, loc);
+	}
+}
+
+function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+		// Consumer path — emitTypeInfo=false so we don't duplicate TypeInfo
+		// with the defining module's emission or codegen's ensureTypeInfoDef.
+		//
+		// Skip match-type variant structs (typeName like "Alias.Key") — their
+		// hooks are emitted via the parent Union's `<Union>_v<N>` helper
+		// dispatch, not as standalone `<Alias.Key>Copy` (which would be an
+		// invalid C identifier anyway).
+		if (t.kind == TypeKind.Struct && t.typeName != ""
+			&& t.typeName.indexOf(".") < 0) {
+			ensureHooks(t.typeName, t, null as unknown as Type, t, false, lctx, loc);
+		} else if (t.kind == TypeKind.Struct && t.typeName == ""
+			&& t.typeNames.length > 0
+			&& !t.typeFlags.has(TypeFlag.DuVariant)) {
+			// Nameless anon structs: classify OWNS these now (msAnon_<hash> hooks) —
+			// generate their defs here or the analyzer's destroy/copy calls become
+			// undefined symbols. DU-variant payloads excluded (classify defers them
+			// to the DU machinery; a stray unstamped copy just makes a dead def).
+			ensureHooks(anonTypeName(t), t, null as unknown as Type, t, false, lctx, loc);
+		} else if (t.kind == TypeKind.Ref && t.typeReturn != null
+			&& t.typeReturn.kind == TypeKind.Struct
+			&& isAnonTypeName(t.typeReturn.typeName)
+			&& t.typeReturn.typeNames.length > 0) {
+			ensureHooks(anonTypeName(t.typeReturn), t.typeReturn, t, t.typeReturn, false, lctx, loc);
+		} else if (t.kind == TypeKind.Union && t.typeName != ""
+			&& hasAsgnFlag(t)
+			&& !isAllStringLiteralUnion(t)
+			&& unwrapRefNullUnion(t) == null) {
+			ensureHooks(t.typeName, t, null as unknown as Type, t, false, lctx, loc);
+		} else if (t.kind == TypeKind.Ref && t.typeReturn != null
+			&& t.typeReturn.kind == TypeKind.Struct && t.typeReturn.typeName != "") {
+			// Monomorphized class/interface: unwrap Ref, pass Ref as refType for HiddenDeref.
+			ensureHooks(t.typeReturn.typeName, t.typeReturn, t, t.typeReturn, false, lctx, loc);
+		} else if (t.kind == TypeKind.GenericInstance) {
+			// Generic struct/class instance — unwrap to concrete Struct body with mangled
+			// typeName so hook signatures match codegen's struct emission (types.ms:582-620).
+			const unwrapped = unwrapGenericInstance(t);
+			if (unwrapped.mangledName != "") {
+				ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, t, false, lctx, loc);
+			}
+		} else if (t.kind == TypeKind.Ref && t.typeReturn != null
+			&& t.typeReturn.kind == TypeKind.GenericInstance) {
+			// Ref<GenericInstance> — class/interface of generic (e.g. Ref<Map<K,V>>).
+			const unwrapped = unwrapGenericInstance(t.typeReturn);
+			if (unwrapped.mangledName != "") {
+				ensureHooks(unwrapped.mangledName, unwrapped.body, t, t.typeReturn, false, lctx, loc);
+			}
+		}
+		// Array element hooks for any array used anywhere, including expression
+		// position (literals, call args, returns). The decl-only scanStmtForArrayTypes
+		// misses those, leaving a boxed T[]'s per-type <Name>ArrayDestroy walker
+		// unemitted → undefined symbol once codegen references it.
+		if (t.kind == TypeKind.Array
+			|| (t.kind == TypeKind.Ref && t.typeReturn != null
+				&& t.typeReturn.kind == TypeKind.Array)) {
+			const arrVisited: NameSet = createNameSet();
+			scanTypeForArrays(t, lctx, arrVisited, []);
+		}
+		// A bare tuple local (reassigned or dropped) needs the same named hooks, but
+		// fillBody only emits them for tuples that appear as a struct field — pre-register
+		// here so classify.ms's msTuple_<hash>{Destroy,Sink} reference isn't undefined.
+		if (t.kind == TypeKind.Tuple) {
+			ensureTupleHooks(tupleTypeName(t), t, lctx, loc);
+		}
+		if (t.kind == TypeKind.SizedArray) {
+			ensureSizedArrayHooks(t, lctx, loc);
+		}
+		if (t.kind == TypeKind.Union && t.typeName == "") {
+			ensureAnonUnionHooks(t, lctx, loc);
+		}
 }
 
 // ===== Process Declarations =====
