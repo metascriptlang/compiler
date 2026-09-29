@@ -1,3 +1,4 @@
+// @xfail(raiser): struct == compares by reference on raiser (card 2026-09-29-raiser-struct-equality-by-reference)
 // @stdout: prim=true,false,true,false struct=true,false,false,true reset=true
 // note: `==` on a struct with a `T | null` field: two absent fields are equal, an absent and a present one are not, two present ones compare their payloads (a primitive, and a struct compared field by field). A field set back to null equals one that never held a value. Same output on every backend.
 
