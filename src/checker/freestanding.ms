@@ -19,6 +19,7 @@
 
 import { Node, NodeKind, SourceLocation, Symbol, DeclKind, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, VariableDeclData, ExportDeclData, DecoratedDeclData, ProgramData, createNodeAt, makeLoc } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { readonlyDataConstBinding } from "./constFold";
 
 // Single wording shared by both consumers — only the severity differs.
 export const FREESTANDING_ASYNC_MSG: string = "async/await is unsupported under the freestanding runtime (gc=manual): no dispatcher, no thread pool, no await slots (FREESTANDING E01)";
@@ -132,8 +133,16 @@ export function moduleBindingNeedsWritableStorage(node: Node): boolean {
 	const d = binding.data as VariableDeclData;
 	if (d.declKind != DeclKind.Const) return true;
 	if (d.initializer == null) return true;
-	return d.initializer.kind != NodeKind.NumberLiteral
-		&& d.initializer.kind != NodeKind.BooleanLiteral;
+	if (d.initializer.kind == NodeKind.NumberLiteral || d.initializer.kind == NodeKind.BooleanLiteral) return false;
+	return !isReadonlyDataConst(binding);
+}
+
+// A `const` sized array or struct of scalar literals lands in .rodata (Nim
+// genConstDefinition emits the braced initializer as C `const`), so it needs no
+// writable storage. Must agree with genGlobalVar's solana emission in
+// codegen/c/declarations.ms, or the SBF link fails where E02 stayed silent.
+export function isReadonlyDataConst(binding: Node): boolean {
+	return readonlyDataConstBinding(binding);
 }
 
 export function writableModuleBindingMessage(node: Node): string {

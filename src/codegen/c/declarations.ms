@@ -3,7 +3,8 @@
 // Handles function, enum, interface (struct), class, export, and import declarations.
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
-import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, HiddenStdConvData, DeclKind, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
+import { readonlyDataConstBinding } from "../../checker/constFold";
 import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
@@ -662,6 +663,21 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 			nameSetAdd(g.declaredGlobals, varName);
 			return;
 		}
+		// Solana keeps only .text and .rodata; a deep-const sized array or struct
+		// whose leaves are scalar literals is emitted as C `const` with a braced
+		// initializer (Nim genConstDefinition), never as writable static + Init000.
+		// readonlyDataConstBinding must match moduleBindingNeedsWritableStorage,
+		// or the SBF link fails where FREESTANDING E02 stayed silent.
+		if (g.checkerCtx != null && g.checkerCtx.targetOs == "solana"
+				&& d.declKind == DeclKind.Const
+				&& readonlyDataConstBinding(node)) {
+			const braced = readonlyDataBracedInit(g, init, node.nodeType);
+			if (braced != "") {
+				addLine(sec(g, CSection.GlobalVars), `const ${cType} ${varName} = ${braced};`);
+				nameSetAdd(g.declaredGlobals, varName);
+				return;
+			}
+		}
 		if (init.kind == NodeKind.ObjectLiteral && node.nodeType != null && isBakeableAggregateConst(node)) {
 			if (genBakedConstCell(g, node, varName, staticPfx, cType)) return;
 		}
@@ -766,6 +782,46 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
 	nameSetAdd(g.declaredGlobals, varName);
 	return true;
+}
+
+function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Type | null): string {
+	match (init.kind) {
+		NodeKind.NumberLiteral => {
+			return formatCNumberLit(init.data as NumberLiteralData, init.nodeType);
+		},
+		NodeKind.BooleanLiteral => {
+			return cBoolLiteral((init.data as BooleanLiteralData).boolValue);
+		},
+		NodeKind.HiddenStdConv => {
+			return readonlyDataBracedInit(g, (init.data as HiddenStdConvData).convExpr, t);
+		},
+		NodeKind.ArrayLiteral => {
+			// A sized array's C type is a struct with one `data[N]` member, so
+			// the element list needs the extra struct-level brace at every depth.
+			const ad = init.data as ArrayLiteralData;
+			const elemT = t != null && t.kind == TypeKind.SizedArray ? t.typeReturn : null;
+			let parts = "";
+			for (const e of ad.elements) {
+				const part = readonlyDataBracedInit(g, e, elemT);
+				if (part == "") return "";
+				parts = parts.length == 0 ? part : parts + ", " + part;
+			}
+			const arrayBraced = `{ ${parts} }`;
+			return t != null && t.kind == TypeKind.SizedArray ? `{ ${arrayBraced} }` : arrayBraced;
+		},
+		NodeKind.ObjectLiteral => {
+			const od = init.data as ObjectLiteralData;
+			let parts = "";
+			for (let i = 0; i < od.properties.length; i += 1) {
+				const part = readonlyDataBracedInit(g, od.properties[i], null);
+				if (part == "") return "";
+				const kv = `.${mangleFieldName(od.keys[i])} = ${part}`;
+				parts = parts.length == 0 ? kv : parts + ", " + kv;
+			}
+			return `{ ${parts} }`;
+		},
+		_ => { return ""; },
+	};
 }
 
 // ===== TypeInfo Variable (from destructorLifting) =====

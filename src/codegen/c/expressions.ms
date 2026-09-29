@@ -6,7 +6,8 @@
 // Follows standard reference implementation pattern for destination carriers.
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
-import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { readonlyDataConstBinding } from "../../checker/constFold";
 import { isUnknownType, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
@@ -35,6 +36,17 @@ import { isRuntimeProcSym } from "../../transform/util";
 // Every class carries a `<Class>_init(this)` — ctorLower synthesizes one when
 // the source has no constructor — so field defaults and the parent chain run
 // in one place instead of being re-emitted at each `new` site.
+
+function isSolanaReadonlyDataConst(g: CGen, idSym: Symbol | null): boolean {
+	if (g.checkerCtx == null || g.checkerCtx.targetOs != "solana") return false;
+	if (idSym == null) return false;
+	const decl = idSym.declNode;
+	if (decl == null || decl.kind != NodeKind.VariableDecl) return false;
+	if (decl.resolvedSym != idSym) return false;
+	const vd = decl.data as VariableDeclData;
+	return vd.declKind == DeclKind.Const && readonlyDataConstBinding(decl);
+}
+
 function classHasInitFn(innerType: Type): boolean {
 	if (innerType == null) return false;
 	let t: Type | null = innerType;
@@ -859,7 +871,10 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			const sName = mangledGlobalName(idSym, referenceName(idSym, d.name));
 			if (!nameSetHas(g.declaredGlobals, sName)) {
 				const cType = getTypeDesc(g, node.nodeType);
-				addLine(sec(g, CSection.GlobalVars), `extern ${cType} ${sName};`);
+				// The defining module emits a Solana rodata const as C `const`;
+				// the extern must carry the same qualifier or the types conflict.
+				const constQual = isSolanaReadonlyDataConst(g, idSym) ? "const " : "";
+				addLine(sec(g, CSection.GlobalVars), `extern ${constQual}${cType} ${sName};`);
 				nameSetAdd(g.declaredGlobals, sName);
 			}
 		}
