@@ -1640,10 +1640,9 @@ function payloadUnionEqExpr(aField: Node, bField: Node, u: Type, lctx: LiftCtx, 
 }
 
 function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx, loc: SourceLocation): Node {
-	// For nested value-type objects, call their _eq function — ensure it exists (on-demand, like tuples below)
 	if (fieldType.kind == TypeKind.Struct && fieldType.typeName != "") {
-		ensureEq(fieldType.typeName, lctx, loc);
-		return makeCall(makeTypedIdentResolved(opProcSym(fieldType.typeName + "Eq"), null, loc), [aField, bField], loc);
+		const eqSym = opProcSym(ensureStructEq(fieldType, lctx, loc));
+		return makeCall(makeTypedIdentResolved(eqSym, null, loc), [aField, bField], loc);
 	}
 	// Tuple fields are C structs — `===` would emit an invalid struct comparison.
 	// Route to the generated msTuple_<hash>Eq (field-by-field), ensuring it exists.
@@ -1742,17 +1741,16 @@ function ensureInstanceEq(mangledName: string, body: Type, lctx: LiftCtx, loc: S
 	generateEq(mangledName, body, lctx, loc);
 }
 
-function ensureEq(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
-	if (!claimEq(typeName + "Eq", lctx)) return;
+function ensureStructEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
+	const cName = hookCName(t.typeName, t, lctx);
+	if (claimEq(cName + "Eq", lctx)) generateEq(cName, t, lctx, loc);
+	return cName + "Eq";
+}
 
-	const sym = lookupSymbol(lctx.checkerCtx.table, typeName);
-	if (sym == null) return;
-	// For value-type structs and interfaces (not classes — classes use reference equality)
-	if (sym.symbolKind == SymbolKind.Class) return;
-	const eqType = unwrapRef(sym.symbolType);
-	if (eqType.kind != TypeKind.Struct) return;
-
-	generateEq(typeName, eqType, lctx, loc);
+function ensureCarrierEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
+	const carrierName = typeNameOf(t);
+	if (claimEq(carrierName + "Eq", lctx)) generateEq(carrierName, t, lctx, loc);
+	return carrierName + "Eq";
 }
 
 // ===== Tuple Lifecycle Hooks (first-class value type) =====
@@ -2472,8 +2470,8 @@ function liftComparisons(ctx: TransformContext, lctx: LiftCtx, loc: SourceLocati
 			};
 		}
 	}
-	for (const structName of ctx.pendingStructEqs) {
-		ensureEq(structName, lctx, loc);
+	for (const structType of ctx.pendingStructEqs) {
+		ensureStructEq(structType, lctx, loc);
 	}
 	for (const carrierType of ctx.pendingCarrierEqs) {
 		if (carrierType.kind == TypeKind.GenericInstance) {
@@ -2483,10 +2481,8 @@ function liftComparisons(ctx: TransformContext, lctx: LiftCtx, loc: SourceLocati
 				continue;
 			}
 		}
-		const carrierName = typeNameOf(carrierType);
-		if (carrierName == "") continue;
-		if (!claimEq(carrierName + "Eq", lctx)) continue;
-		generateEq(carrierName, carrierType, lctx, loc);
+		if (typeNameOf(carrierType) == "") continue;
+		ensureCarrierEq(carrierType, lctx, loc);
 	}
 }
 

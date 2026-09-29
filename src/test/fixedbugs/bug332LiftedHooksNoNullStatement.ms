@@ -45,7 +45,7 @@ run();
 	const c = compileToC(src);
 	assert c.ok;
 	if (c.ok) {
-		assert c.value.contains("QEq(");
+		assert c.value.contains("Ze2eOmsEq(");
 		assert c.value.contains("WasMoved(");
 		assert !c.value.contains("unsupported stmt");
 	}

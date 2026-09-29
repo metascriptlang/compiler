@@ -18,7 +18,7 @@
 
 import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
-import { hookPrototype } from "../../codegen/c/types";
+import { hookPrototype, hookBaseCName } from "../../codegen/c/types";
 import { walkNode } from "../walker";
 import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
@@ -84,8 +84,9 @@ function isStructInstance(t: Type): boolean {
 	return nominal != null && nominal.kind == TypeKind.Struct;
 }
 
-function eqTypeName(t: Type, typeName: string): string {
-	return t.kind == TypeKind.GenericInstance ? monoInstanceName(t) : typeName;
+function eqTypeName(ctx: TransformContext, t: Type): string {
+	if (t.kind == TypeKind.GenericInstance) return monoInstanceName(t);
+	return hookBaseCName(t.typeName, t, ctx.checkerCtx);
 }
 
 
@@ -122,19 +123,15 @@ function makeMaybeCarrier(payload: Node, carrierType: Type, loc: SourceLocation)
 	return makeTypedObjectLiteral(["value", "present"], [payload, makeBool(true, loc)], carrierType, loc);
 }
 
-// Register a struct/interface == use for later on-demand Eq generation by destructorLifting.
-function registerStructEq(ctx: TransformContext, typeName: string, t: Type): void {
-	// ensureEq resolves the name in the CONSUMING module's scope; a struct whose
-	// name was never imported there is invisible to it, so route it through the
-	// carrier channel, which generates from the Type instead.
-	if (ctx.checkerCtx != null && lookupSymbol(ctx.checkerCtx.table, typeName) == null) {
+function registerStructEq(ctx: TransformContext, t: Type): void {
+	if (t.kind == TypeKind.GenericInstance) {
 		registerCarrierEq(ctx, t);
 		return;
 	}
-	for (const n of ctx.pendingStructEqs) {
-		if (n == typeName) return;
+	for (const pending of ctx.pendingStructEqs) {
+		if (pending == t) return;
 	}
-	ctx.pendingStructEqs.push(typeName);
+	ctx.pendingStructEqs.push(t);
 }
 
 // Build a call to an operator extension — resolves nativeName for extern operators.
@@ -169,8 +166,8 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 	}
 	// Auto-generated == for interfaces (=== same as == for value types)
 	if ((opName == "==" || opName == "===") && isValueObject(leftType)) {
-		const eqName = eqTypeName(leftType, typeName);
-		registerStructEq(ctx, eqName, leftType);
+		const eqName = eqTypeName(ctx, leftType);
+		registerStructEq(ctx, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 		const callee = makeIdent(eqName + "Eq", loc);
 		callee.nodeType = fnType;
@@ -424,8 +421,8 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	// 5. Direct base operators for value-type objects (auto-generated ==).
 	// === is the same as == for value types (no reference identity distinction).
 	if ((opName == "==" || opName == "===") && isValueObject(leftType)) {
-		const eqName = eqTypeName(leftType, typeName);
-		registerStructEq(ctx, eqName, leftType);
+		const eqName = eqTypeName(ctx, leftType);
+		registerStructEq(ctx, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 		const callee = makeIdent(eqName + "Eq", loc);
 		callee.nodeType = fnType;

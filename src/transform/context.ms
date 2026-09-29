@@ -23,7 +23,7 @@ export class TransformContext {
 	objChecks: boolean;
 	keepBuiltinMemberCalls: boolean;  // backend resolves builtins natively (opcodes / native methods) — keep member-call form instead of UFCS-rewriting to direct calls (mangled-name backends like C set false)
 	pendingTupleOps: PendingTupleOp[];  // tuple comparison ops to generate (reference parity)
-	pendingStructEqs: string[];  // struct/interface == uses to lift Eq for on-demand
+	pendingStructEqs: Type[];
 	pendingCarrierEqs: Type[];   // synthesized carrier structs (Maybe<T>) compared by ==; carried as Type because they have no symbol-table entry to look the name up by
 	cyclicCache: NameSet;     // canFormAcycle entry-level memo (types confirmed cyclic)
 	acyclicCache: NameSet;    // canFormAcycle entry-level memo (types confirmed acyclic)
