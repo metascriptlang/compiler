@@ -1056,6 +1056,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& ((isStringLike(effLeft) && isStringLike(effRight))
 					|| (isStructType(effLeft) && isStructType(effRight) && typeNameOf(effLeft) == typeNameOf(effRight))
 					|| (effLeft.kind == TypeKind.Tuple && effRight.kind == TypeKind.Tuple)
+					|| (tplOpName == "!=" && effLeft.kind == TypeKind.SizedArray
+						&& effRight.kind == TypeKind.SizedArray)
 					|| (effLeft.kind == TypeKind.Ref && effRight.kind == TypeKind.Ref && typeNameOf(effLeft) == typeNameOf(effRight)))) {
 				const opConc = ctx.extensionRegistry != null
 					? resolveOperatorCall(ctx.table, ctx.extensionRegistry, tplOpName, [effLeft, effRight])

@@ -498,6 +498,7 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
 	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
 	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return isAssignable(a, b) || isAssignable(b, a);
+	if (a.kind == TypeKind.SizedArray || b.kind == TypeKind.SizedArray) return sameType(a, b);
 	if (binaryPointerish(a.kind) && binaryPointerish(b.kind)) return true;
 	return false;
 }
