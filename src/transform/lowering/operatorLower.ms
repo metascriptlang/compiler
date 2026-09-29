@@ -23,6 +23,7 @@ import { walkNode } from "../walker";
 import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, unwrapMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
+import { sizedArrayHookName } from "../../analyzer/classify";
 import { lookupSymbol } from "../../checker/symbol";
 import { resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
 
@@ -84,8 +85,21 @@ function isStructInstance(t: Type): boolean {
 	return nominal != null && nominal.kind == TypeKind.Struct;
 }
 
+function hasValueEq(t: Type): boolean {
+	return isValueObject(t) || t.kind == TypeKind.SizedArray;
+}
+
+function sizedArrayOperandsAgree(ctx: TransformContext, leftType: Type, right: Node): boolean {
+	if (leftType.kind != TypeKind.SizedArray) return true;
+	const rt = resolveType(ctx, right);
+	if (rt == null) return false;
+	const peeled = peelThrough(rt, PEEL_ALIAS);
+	return peelTransparentInstance(peeled != null ? peeled : rt).kind == TypeKind.SizedArray;
+}
+
 function eqTypeName(ctx: TransformContext, t: Type): string {
 	if (t.kind == TypeKind.GenericInstance) return monoInstanceName(t);
+	if (t.kind == TypeKind.SizedArray) return sizedArrayHookName(t);
 	return hookBaseCName(t.typeName, t, ctx.checkerCtx);
 }
 
@@ -128,10 +142,10 @@ function registerStructEq(ctx: TransformContext, t: Type): void {
 		registerCarrierEq(ctx, t);
 		return;
 	}
-	for (const pending of ctx.pendingStructEqs) {
+	for (const pending of ctx.pendingValueEqs) {
 		if (pending == t) return;
 	}
-	ctx.pendingStructEqs.push(t);
+	ctx.pendingValueEqs.push(t);
 }
 
 // Build a call to an operator extension — resolves nativeName for extern operators.
@@ -363,7 +377,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		// js de-materializes a Maybe to the value itself: `===` already answers for a
 		// primitive payload, a value payload needs the carrier's Eq.
 		const routed = (leftIsMaybe || rightIsMaybe) && carrierType != null
-			&& (!ctx.jsBackend || isValueObject(unwrapMaybeType(carrierType)));
+			&& (!ctx.jsBackend || hasValueEq(unwrapMaybeType(carrierType)));
 		if (routed && carrierName != "" && carriersAgree) {
 			const eqLeft = leftIsMaybe ? d.left : makeMaybeCarrier(d.left, carrierType, loc);
 			const eqRight = rightIsMaybe ? d.right : makeMaybeCarrier(d.right, carrierType, loc);
@@ -422,7 +436,8 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 
 	// 5. Direct base operators for value-type objects (auto-generated ==).
 	// === is the same as == for value types (no reference identity distinction).
-	if ((opName == "==" || opName == "===") && isValueObject(leftType)) {
+	if ((opName == "==" || opName == "===") && hasValueEq(leftType)
+		&& sizedArrayOperandsAgree(ctx, leftType, d.right)) {
 		const eqName = eqTypeName(ctx, leftType);
 		registerStructEq(ctx, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());

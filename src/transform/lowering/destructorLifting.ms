@@ -1656,6 +1656,10 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 		const eqSym = opProcSym(ensureStructEq(fieldType, lctx, loc));
 		return makeCall(makeTypedIdentResolved(eqSym, null, loc), [aField, bField], loc);
 	}
+	if (fieldType.kind == TypeKind.SizedArray) {
+		const eqSym = opProcSym(ensureSizedArrayEq(fieldType, lctx, loc));
+		return makeCall(makeTypedIdentResolved(eqSym, null, loc), [aField, bField], loc);
+	}
 	// Tuple fields are C structs — `===` would emit an invalid struct comparison.
 	// Route to the generated msTuple_<hash>Eq (field-by-field), ensuring it exists.
 	if (fieldType.kind == TypeKind.Tuple) {
@@ -1757,6 +1761,44 @@ function ensureStructEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
 	const cName = hookCName(t.typeName, t, lctx);
 	if (claimEq(cName + "Eq", lctx)) generateEq(cName, t, lctx, loc);
 	return cName + "Eq";
+}
+
+function ensureSizedArrayEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
+	const name = sizedArrayHookName(t);
+	if (claimEq(name + "Eq", lctx)) generateSizedArrayEq(name, t, lctx, loc);
+	return name + "Eq";
+}
+
+function generateSizedArrayEq(name: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const elem = t.typeReturn;
+	if (elem == null) throw new Error(`internal: fixed array '${name}' has no element type`);
+	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
+	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
+	const counter = "$i_" + lctx.tempCounter.toString();
+	lctx.tempCounter = lctx.tempCounter + 1;
+	const ai = makeArrayAccess(makeTypedIdentResolved(aSym, t, loc), makeIdent(counter, loc), loc);
+	const bi = makeArrayAccess(makeTypedIdentResolved(bSym, t, loc), makeIdent(counter, loc), loc);
+	ai.nodeType = elem;
+	bi.nodeType = elem;
+	const differs = makeUnary("!", fieldEqExpr(ai, bi, elem, lctx, loc), loc);
+	const next = makeBinary(makeIdent(counter, loc), "+", makeNumber(1, loc), loc);
+	const step = makeBlock([
+		makeIf(differs, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc),
+		makeExprStmt(makeAssign(makeIdent(counter, loc), next, loc), loc),
+	], loc);
+	const length = makeNumber(t.typeValue as number, loc);
+	const bound = makeBinary(makeIdent(counter, loc), "<", length, loc);
+	const buf: Node[] = [
+		makeVarDecl(counter, makeNumber(0, loc), DeclKind.Let, loc),
+		makeWhile(bound, step, loc),
+		makeReturn(makeBool(true, loc), loc),
+	];
+	const body = makeBlock(buf, loc);
+	const eqFn = makeFnDecl(name + "Eq", [aSym, bSym], [name, name], body, "", "boolean", loc);
+	setHookParamType(eqFn, 0, t);
+	setHookParamType(eqFn, 1, t);
+	markGeneratedOp(eqFn, name + "Eq");
+	lctx.collector.push(eqFn);
 }
 
 function ensureCarrierEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
@@ -2507,8 +2549,12 @@ function liftComparisons(ctx: TransformContext, lctx: LiftCtx, loc: SourceLocati
 			};
 		}
 	}
-	for (const structType of ctx.pendingStructEqs) {
-		ensureStructEq(structType, lctx, loc);
+	for (const valueType of ctx.pendingValueEqs) {
+		if (valueType.kind == TypeKind.SizedArray) {
+			ensureSizedArrayEq(valueType, lctx, loc);
+		} else {
+			ensureStructEq(valueType, lctx, loc);
+		}
 	}
 	for (const carrierType of ctx.pendingCarrierEqs) {
 		if (carrierType.kind == TypeKind.GenericInstance) {
