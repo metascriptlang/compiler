@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -1639,7 +1639,22 @@ function payloadUnionEqExpr(aField: Node, bField: Node, u: Type, lctx: LiftCtx, 
 	return acc;
 }
 
+function nullableEqJS(aField: Node, bField: Node, payload: Type, lctx: LiftCtx, loc: SourceLocation): Node {
+	const aPresent = makeBinary(clonePath(aField, loc), "!==", makeNull(loc), loc);
+	const bPresent = makeBinary(clonePath(bField, loc), "!==", makeNull(loc), loc);
+	const payloadEq = fieldEqExpr(clonePath(aField, loc), clonePath(bField, loc), payload, lctx, loc);
+	const bothEqual = makeBinary(makeBinary(aPresent, "&&", bPresent, loc), "&&", payloadEq, loc);
+	return makeBinary(makeBinary(aField, "===", bField, loc), "||", bothEqual, loc);
+}
+
 function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx, loc: SourceLocation): Node {
+	if (isMaybeType(fieldType) && lctx.jsBackend) {
+		return nullableEqJS(aField, bField, unwrapMaybeType(fieldType), lctx, loc);
+	}
+	if (isMaybeType(fieldType)) {
+		const eqSym = opProcSym(ensureCarrierEq(fieldType, lctx, loc));
+		return makeCall(makeTypedIdentResolved(eqSym, null, loc), [aField, bField], loc);
+	}
 	if (fieldType.kind == TypeKind.Struct && fieldType.typeName != "") {
 		const eqSym = opProcSym(ensureStructEq(fieldType, lctx, loc));
 		return makeCall(makeTypedIdentResolved(eqSym, null, loc), [aField, bField], loc);
