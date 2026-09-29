@@ -2,18 +2,22 @@
 
 import { JsonKind, JsonValue, asString } from "./types";
 
+@compilerFunc
 export function jsonNull(): JsonValue {
 	return { kind: JsonKind.Null };
 }
 
+@compilerFunc
 export function jsonBool(v: boolean): JsonValue {
 	return { kind: JsonKind.Bool, boolVal: v };
 }
 
+@compilerFunc
 export function jsonNumber(n: number): JsonValue {
 	return { kind: JsonKind.Number, numVal: n };
 }
 
+@compilerFunc
 export function jsonString(s: string): JsonValue {
 	return { kind: JsonKind.String, strVal: s };
 }
@@ -22,10 +26,12 @@ export function jsonArray(items: JsonValue[]): JsonValue {
 	return { kind: JsonKind.Array, items: items };
 }
 
+@compilerFunc
 export function jsonObject(keys: string[], values: JsonValue[]): JsonValue {
 	return { kind: JsonKind.Object, keys: keys, values: values };
 }
 
+@compilerFunc
 export function jsonInt(n: int64): JsonValue {
 	return { kind: JsonKind.Int, intVal: n };
 }

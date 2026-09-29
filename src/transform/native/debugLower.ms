@@ -6,10 +6,10 @@
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol, createNode } from "../../ast/node";
 import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase } from "../../checker/types";
-import { TransformContext, mintSym } from "../context";
+import { TransformContext, mintSym, reportTransformError } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension } from "../../checker/context";
-import { makeIdent, makeIdentResolved, makeTypedIdentResolved, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl, runtimeRef } from "../util";
+import { makeIdent, makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl, runtimeRef } from "../util";
 import { anonTypeName, isAnonTypeName } from "../../codegen/c/types";
 import { charToString } from "./stringOpLower";
 import { SymbolKind } from "../../ast/node";
@@ -121,17 +121,13 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	return placeholder;
 }
 
-// Resolve a prelude identifier with symbol from checker table
 function resolveDbgIdent(name: string, ctx: TransformContext, loc: SourceLocation): Node {
-	const ident = makeIdent(name, loc);
-	if (ctx.checkerCtx != null && ctx.checkerCtx.table != null) {
-		const sym = lookupSymbol(ctx.checkerCtx.table, name);
-		if (sym != null) {
-			ident.resolvedSym = sym;
-			if (sym.symbolType != null) ident.nodeType = sym.symbolType;
-		}
+	const sym = compilerFuncSym(name);
+	if (sym == null) {
+		reportTransformError(ctx, `the prelude declares no compiler routine '${name}' (@compilerFunc)`, loc);
+		return makeIdent(name, loc);
 	}
-	return ident;
+	return makeIdentResolved(sym, loc);
 }
 
 // Wrap a field access node in the appropriate json builder call.

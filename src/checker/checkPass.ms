@@ -2813,6 +2813,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		const subCtx = createContextWithCache(ctx.table.identCache);
 		subCtx.extensionRegistry = createExtensionRegistry();
 		subCtx.exportRegistry = ctx.exportRegistry;
+		subCtx.compilerFuncs = ctx.compilerFuncs;
 		// Inject prelude symbols so sub-module can reference them
 		for (const sym of ctx.table.current.symbols.values()) {
 			addSymbolToScope(subCtx.table.current, sym);
