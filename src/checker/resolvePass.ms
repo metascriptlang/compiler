@@ -17,6 +17,7 @@ import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
 import { buildTypeArgKeys, monoBaseName, monoInstanceNameOf, monoTypeKey } from "../monomorphize/registry";
+import { constantLiteralOf } from "./constFold";
 
 function anyHasGenericParams(types: Type[]): boolean {
 	for (const t of types) {
@@ -392,6 +393,30 @@ export function builtinTypeNamed(ctx: CheckerContext, name: string): Type | null
 	return isUnresolvedType(t) || t.kind == TypeKind.Null || t.sym != null ? null : t;
 }
 
+function isAllDigits(s: string): boolean {
+	if (s.length == 0) return false;
+	for (let i = 0; i < s.byteLength; i += 1) {
+		const code = s.byteAt(i);
+		if (code < "0".code || code > "9".code) return false;
+	}
+	return true;
+}
+
+function constArrayDimension(name: string, ctx: CheckerContext, line: int32, col: int32): int32 {
+	const sym = lookupSymbol(ctx.table, name);
+	if (sym != null) {
+		markUsedIn(ctx, sym);
+		const ident = createNodeAt(NodeKind.Identifier, { name }, makeLoc(line, col));
+		ident.resolvedSym = sym;
+		const folded = constantLiteralOf(ident, 0);
+		if (folded != null && folded.kind == NodeKind.NumberLiteral) {
+			const fd = folded.data as NumberLiteralData;
+			if (!fd.isFloat && fd.intVal >= 0 && fd.intVal <= 2147483647) return fd.intVal as int32;
+		}
+	}
+	return -1;
+}
+
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	let trimmed = text.trim();
 	if (trimmed == "") return inferredType();
@@ -673,8 +698,19 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			if (sizeStr == "" || sizeStr == " ") {
 				return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
 			}
-			const size = parseIntStr(sizeStr) as int32;
-			return createSizedArray(resolveAnnotation(inner, ctx, line, col), size);
+			if (isAllDigits(sizeStr)) {
+				return createSizedArray(resolveAnnotation(inner, ctx, line, col), parseIntStr(sizeStr));
+			}
+
+			const dim = constArrayDimension(sizeStr, ctx, line, col);
+			if (dim < 0) {
+				if (line > 0) {
+					addError(ctx, `array size '${sizeStr}' must be a compile-time integer constant`, line, col);
+					return errorType();
+				}
+				return createSizedArray(resolveAnnotation(inner, ctx, line, col), 0);
+			}
+			return createSizedArray(resolveAnnotation(inner, ctx, line, col), dim);
 		}
 	}
 
