@@ -20,7 +20,7 @@ import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
-import { isAssignable, isNominalMismatch, explainStructuralPrefix, isObjectShapeMismatch, nonNullMemberOfNullable } from "./compat";
+import { isAssignable, isNominalMismatch, explainStructuralPrefix, nonNullMemberOfNullable } from "./compat";
 import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType } from "./types";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
@@ -746,13 +746,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 			"Type 'null' is not assignable to type '" + typeDisplayName(dt) + "'",
 			initLoc.line, initLoc.column);
 	}
-	if (isObjectShapeMismatch(initType, dt)) {
-		const shapeLoc = d.initializer != null ? d.initializer.location : d.nameLocation;
-		addError(ctx,
-			"Type '" + typeDisplayName(initType) + "' is not assignable to type '" + typeDisplayName(dt) + "'"
-				+ explainStructuralPrefix(initType, dt),
-			shapeLoc.line, shapeLoc.column);
-	} else if (declType != null && d.initializer != null) {
+	if (declType != null && d.initializer != null) {
 		// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions
 		d.initializer = fitNode(ctx, d.initializer, declType, initType);
 	}

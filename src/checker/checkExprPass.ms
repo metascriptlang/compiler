@@ -743,12 +743,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					rightType = d.right.nodeType;
 				}
 			}
-			if (d.operator == "=" && isObjectShapeMismatch(rightType, leftType)) {
-				addError(ctx,
-					"Type '" + typeDisplayName(rightType) + "' is not assignable to type '" + typeDisplayName(leftType) + "'"
-						+ explainStructuralPrefix(rightType, leftType),
-					d.right.location.line, d.right.location.column);
-			} else if (d.operator == "=" && leftType != null) {
+			if (d.operator == "=" && leftType != null) {
 				// Parity: standard reference node fitting — insert HiddenStdConv for narrowing assignment
 				d.right = fitNode(ctx, d.right, leftType, rightType);
 			}
