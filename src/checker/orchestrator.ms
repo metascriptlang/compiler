@@ -789,7 +789,7 @@ test "extra globalImports entry resolving to a module is not a graph error" {
 }
 
 function sharedPreludeShape(ctx: CheckerContext): string {
-	return `${ctx.table.current.symbols.size}|${ctx.extensionRegistry.methods.length}|${ctx.compilerFuncs.size}|${ctx.preludeExports.size}|${ctx.interf.length}|${ctx.converterTargetByName.size}`;
+	return `${ctx.table.current.symbols.size}|${ctx.extensionRegistry.methods.length}|${ctx.compilerFuncs.size}|${ctx.preludeExports.size}|${ctx.interf.length}|${ctx.converterTargetTypes.size}`;
 }
 
 test "a graph check leaves the prelude every build shares as it found it" {

@@ -6,7 +6,7 @@ import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, innermostFunctionScope, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
-import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode } from "./context";
+import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -300,31 +300,12 @@ function tryConverterAtBoundary(ctx: CheckerContext, node: Node, expectedType: T
 	if (expectedType == null) return false;
 	if (isUnresolvedType(expectedType) || expectedType.kind == TypeKind.GenericParam) return false;
 	if (ctx.jsxMacroArgDepth > 0) return false;
-	const target = converterSlotTarget(expectedType);
-	const targetName = typeDisplayName(target);
-	let convName: string | null = null;
-	if (ctx.converterTargets.has(targetName)) {
-		convName = ctx.converterTargets.get(targetName);
-	} else {
-		// Name fast-path missed (non-nominal target: alias of function/union/
-		// primitive). Nim's dest-side rule is resolved-type identity — typeRel
-		// in {isEqual} (userConvMatch, sigmatch.nim:2316) — so walk the
-		// registered targets in order and compare with sameType.
-		for (const key of ctx.converterTargetKeys) {
-			const cand = ctx.converterTargets.get(key);
-			if (cand == null) continue;
-			const targetType = ctx.converterTargetTypes.get(cand);
-			if (targetType == null) continue;
-			if (sameType(targetType, target)) { convName = cand; break; }
-		}
-	}
-	if (convName == null) return false;
-	const convSym = lookupSymbol(ctx.table, convName);
-	if (macroDeclOf(convSym) == null) return false;
+	const convSym = macroConverterFor(ctx, converterSlotTarget(expectedType));
+	if (convSym == null || macroDeclOf(convSym) == null) return false;
 	const jsxArg = createNodeAt(node.kind, node.data, node.location);
 	jsxArg.typeExpr = node.typeExpr;
 	node.kind = NodeKind.MacroInvocation;
-	node.data = { macroName: convName, macroArgs: [jsxArg], macroHasParens: true };
+	node.data = { macroName: convSym.name, macroArgs: [jsxArg], macroHasParens: true };
 	node.nodeType = null as unknown as Type;
 	node.resolvedSym = convSym;
 	node.flags = 0 as BitSet<NodeFlag>;

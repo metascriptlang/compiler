@@ -6,10 +6,10 @@
 //   A. Parsing type annotation strings into Type objects
 //   B. Building proper Function/Object types for collected declarations
 
-import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
-import { markUsedIn, CheckerContext, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls } from "./context";
+import { markUsedIn, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -1081,6 +1081,7 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 			NodeKind.TypeAliasDecl => resolveTypeAlias(ctx, node),
 			NodeKind.VariableDecl => resolveVariable(ctx, node),
 			NodeKind.ExternDecl => resolveExtern(ctx, node),
+			NodeKind.MacroDecl => resolveConverterTarget(ctx, node, sym),
 			_ => {},
 		};
 	}
@@ -1098,6 +1099,20 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 
 	// Recursively ensure all overloads are shaped (Demand-Driven Completeness)
 	drainOverloads(sym, ctx);
+}
+
+// The target resolves in the declaring module's scope, with line=0 so an
+// unresolvable annotation adds no diagnostic; such a converter never applies.
+function resolveConverterTarget(ctx: CheckerContext, node: Node, sym: Symbol): void {
+	if (!node.flags.has(NodeFlag.Converter)) return;
+	const d = node.data as MacroDeclData;
+	if (d.macroDeclReturnType == "") return;
+	const t = resolveAnnotation(d.macroDeclReturnType, ctx, 0, 0);
+	if (t == null) return;
+	if (t.kind == TypeKind.Inferred || t.kind == TypeKind.Error || t.kind == TypeKind.None
+		|| t.kind == TypeKind.TypeReference || t.kind == TypeKind.Unknown) return;
+	ctx.converterTargetTypes.set(sym, t);
+	reportDuplicateConverter(ctx, sym, node.location.line, node.location.column);
 }
 
 // Shape every overload hanging off `sym`. Split out so the already-shaped

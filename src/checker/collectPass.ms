@@ -4,7 +4,7 @@ import { inferredType, noneType, emptyType, createStruct, createEnum, createType
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, stampOwner, stampItem, isStaticExtensionSym, newSym } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -974,43 +974,18 @@ export function collectMacro(ctx: CheckerContext, node: Node): void {
 	const sym = declSymbol(ctx, node, d.macroDeclName, SymbolKind.Macro, noneType(), false);
 	sym.symbolType.sym = sym;
 	defineOrError(ctx, sym, node);
+	node.resolvedSym = sym;
 	if (node.flags.has(NodeFlag.Converter)) {
-		registerConverter(ctx, d.macroDeclReturnType, d.macroDeclName, 0, node.location.line, node.location.column);
+		registerConverter(ctx, sym, 0, node.location.line, node.location.column);
 	}
 }
 
-// Converter pair table (LANG.md "Converter Declarations" rules 3-4), tiered:
-// origin 0 = local decl, 1 = import, 2 = build.ms globalImports inject.
-// A LOWER origin shadows a higher one; two converters for the same pair at the
-// SAME tier is an error — the compiler never chooses between equals.
-export function registerConverter(ctx: CheckerContext, target: string, name: string, origin: int32, line: int32, column: int32): void {
-	ctx.converterTargetByName.set(name, target);
-	if (!ctx.converterTargets.has(target)) { ctx.converterTargetKeys.push(target); }
-	if (ctx.converterTargets.has(target)) {
-		const existing = ctx.converterTargets.get(target);
-		if (existing == name) { return; }
-		let existingOrigin: int32 = 1;
-		if (ctx.converterTargetOrigin.has(target)) {
-			const eo = ctx.converterTargetOrigin.get(target);
-			if (eo != null) { existingOrigin = eo; }
-		}
-		if (origin > existingOrigin) { return; }
-		if (origin == existingOrigin) {
-			if (origin == 0) {
-				addError(ctx, "duplicate converter for target '" + target + "': '" + (existing != null ? existing : "") + "' and '" + name + "' declared in the same module",
-					line, column);
-			} else if (origin == 1) {
-				addError(ctx, "duplicate converter for target '" + target + "': '" + (existing != null ? existing : "") + "' and '" + name + "' are both in scope — the compiler never chooses; import only one or call one explicitly",
-					line, column);
-			} else {
-				addError(ctx, "duplicate converter for target '" + target + "': '" + (existing != null ? existing : "") + "' and '" + name + "' are both injected via build.ms globalImports",
-					line, column);
-			}
-			return;
-		}
+export function registerConverter(ctx: CheckerContext, sym: Symbol, tier: int32, line: int32, column: int32): void {
+	for (let i = 0; i < ctx.macroConverters.length; i += 1) {
+		if (ctx.macroConverters[i].sym == sym) return;
 	}
-	ctx.converterTargets.set(target, name);
-	ctx.converterTargetOrigin.set(target, origin);
+	ctx.macroConverters.push({ sym, tier });
+	reportDuplicateConverter(ctx, sym, line, column);
 }
 
 // Look up resolved source path for an import specifier from the module's import entries
@@ -1261,11 +1236,9 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 			} else if (exportInfo != null) {
 				const nameLoc = d.nameLocations != null && i < d.nameLocations.length ? d.nameLocations[i] : node.location;
 				const primarySym = importSymFromRegistry(ctx, localAlias, importName, exportInfo, sourcePath, nameLoc, node);
-				if (primarySym.symbolKind == SymbolKind.Macro && exportInfo.converterTarget != "") {
-					registerConverter(ctx, exportInfo.converterTarget, localAlias, 1, nameLoc.line, nameLoc.column);
-					if (exportInfo.converterTargetType != null) {
-						ctx.converterTargetTypes.set(localAlias, exportInfo.converterTargetType);
-					}
+				if (primarySym.symbolKind == SymbolKind.Macro && exportInfo.converterTargetType != null) {
+					ctx.converterTargetTypes.set(primarySym, exportInfo.converterTargetType);
+					registerConverter(ctx, primarySym, 1, nameLoc.line, nameLoc.column);
 				}
 				// Propagate -iquote for header search path
 				if (primarySym.headerPath != "" && primarySym.modulePath != "") {

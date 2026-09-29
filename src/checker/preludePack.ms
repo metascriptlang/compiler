@@ -542,7 +542,7 @@ function writePreludeDeps(root: string, key: string, stamp: string): void {
 //     name modulePath nativeName builtinKind headerPath jsModulePath
 //     typeIdx overloadsCsv staticCsv declIdx dpCsv disamb exportName
 //   E methodName receiverTypeName sourcePath isStatic scopeDepth symIdx fnTypeIdx
-//   C converterName targetTypeName typeIdx
+//   C converterSymIdx targetTypeIdx
 //   P compilerFuncName symIdx
 //   D includeDirectives
 //   F compilerFlags
@@ -659,6 +659,9 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		for (const ext of ctx.extensionRegistry.methods) {
 			enqSym(ext.sym, false);
 		}
+	}
+	for (const conv of ctx.converterTargetTypes.keys()) {
+		enqSym(conv, false);
 	}
 	for (const ct of ctx.converterTargetTypes.values()) {
 		enqType(ct);
@@ -779,11 +782,8 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		}
 	}
 
-	for (const name of ctx.converterTargetByName.keys()) {
-		const target = ctx.converterTargetByName.get(name);
-		if (target == null) continue;
-		const ct = ctx.converterTargetTypes.get(name);
-		lines.push(`C\t${escapeP(name)}\t${escapeP(target)}\t${idxType(ct)}`);
+	for (const conv of ctx.converterTargetTypes.keys()) {
+		lines.push(`C\t${idxSym(conv)}\t${idxType(ctx.converterTargetTypes.get(conv))}`);
 	}
 
 	for (const name of ctx.compilerFuncs.keys()) {
@@ -1351,10 +1351,9 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	}
 
 	for (const f of convRows) {
-		const name = unescapeP(f[1]);
-		ctx.converterTargetByName.set(name, unescapeP(f[2]));
-		const ti = f[3].parseInt() as int32;
-		if (ti >= 0 && ti < types.length) ctx.converterTargetTypes.set(name, types[ti]);
+		const si = f[1].parseInt() as int32;
+		const ti = f[2].parseInt() as int32;
+		if (si >= 0 && si < syms.length && ti >= 0 && ti < types.length) ctx.converterTargetTypes.set(syms[si], types[ti]);
 	}
 
 	for (const f of compilerFuncRows) {

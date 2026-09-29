@@ -324,6 +324,7 @@ function checkMacroStmt(ctx: CheckerContext, node: Node): void {
 	}
 	if (!claimLocalTypeName(ctx, node, "macro")) return;
 	collectMacro(ctx, node);
+	if (node.resolvedSym != null) ensureShaped(node.resolvedSym, ctx);
 	checkMacroDecl(ctx, node);
 	ctx.pendingLocalTypeDecls.push(node);
 }
@@ -2200,20 +2201,8 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 }
 
 // Mark symbols referenced inside a macro body as used.
-// Converter targets match by RESOLVED type (Nim userConvMatch walks resolved
-// converter symbols; sigmatch.nim:2297). The annotation resolves HERE, in the
-// declaring module's scope, with line=0 so an unresolvable target stays a
-// silent name-only entry instead of a new diagnostic.
 function checkMacroDecl(ctx: CheckerContext, node: Node): void {
 	markMacroUsedSymbols(ctx, node);
-	if (!node.flags.has(NodeFlag.Converter)) return;
-	const d = node.data as MacroDeclData;
-	if (d.macroDeclReturnType == "") return;
-	const t = resolveAnnotation(d.macroDeclReturnType, ctx, 0, 0);
-	if (t == null) return;
-	if (t.kind == TypeKind.Inferred || t.kind == TypeKind.Error || t.kind == TypeKind.None
-		|| t.kind == TypeKind.TypeReference || t.kind == TypeKind.Unknown) return;
-	ctx.converterTargetTypes.set(d.macroDeclName, t);
 }
 
 function checkConverterOwner(ctx: CheckerContext, d: FunctionDeclData, fnType: Type | null): void {
@@ -2911,13 +2900,10 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 			if (hasFlag(sym, SymbolFlag.Converter)) addRuntimeConverter(ctx, sym);
 			// Exported converters join the pair table at tier 2 so local decls and
 			// explicit imports shadow them.
-			if (macroDeclOf(sym) != null) {
-				const ct = preludeCtx.converterTargetByName.get(sym.name);
-				if (ct != null && ct != "") {
-					registerConverter(ctx, ct, sym.name, 2, 0, 0);
-					const ctt = preludeCtx.converterTargetTypes.get(sym.name);
-					if (ctt != null) { ctx.converterTargetTypes.set(sym.name, ctt); }
-				}
+			const ctt = macroDeclOf(sym) != null ? preludeCtx.converterTargetTypes.get(sym) : null;
+			if (ctt != null) {
+				ctx.converterTargetTypes.set(sym, ctt);
+				registerConverter(ctx, sym, 2, 0, 0);
 			}
 		}
 	}
@@ -2965,12 +2951,8 @@ export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: Checke
 		addSymbolToScope(preludeCtx.table.current, sym);
 		preludeCtx.preludeExports.add(sym);
 		if (macroDeclOf(sym) == null) continue;
-		const ct = ctx.converterTargetByName.get(sym.name);
-		if (ct != null && ct != "") {
-			preludeCtx.converterTargetByName.set(sym.name, ct);
-			const ctt = ctx.converterTargetTypes.get(sym.name);
-			if (ctt != null) preludeCtx.converterTargetTypes.set(sym.name, ctt);
-		}
+		const ctt = ctx.converterTargetTypes.get(sym);
+		if (ctt != null) preludeCtx.converterTargetTypes.set(sym, ctt);
 	}
 	if (ctx.extensionRegistry == null || preludeCtx.extensionRegistry == null) return;
 	const exts = ctx.extensionRegistry.methods;
@@ -3156,7 +3138,6 @@ function packContentView(shared: CheckerContext): CheckerContext {
 	view.includeDirectives = shared.includeDirectives;
 	view.compileDirectives = shared.compileDirectives;
 	view.compilerFlags = shared.compilerFlags;
-	view.converterTargetByName = shared.converterTargetByName;
 	view.converterTargetTypes = shared.converterTargetTypes;
 	view.preludeInterf = shared.preludeInterf;
 	view.preludeExports = shared.preludeExports;

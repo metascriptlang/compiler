@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
+import { TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -29,7 +29,6 @@ export interface ExportedSymInfo {
 	extIsStatic: boolean;
 	overloadExtReceiverTypes: string[];
 	overloadExtIsStatic: boolean[];
-	converterTarget: string; // converter target type name ("" = not a converter)
 	converterTargetType: Type; // resolved converter target (null when unresolved / not a converter)
 }
 
@@ -155,12 +154,9 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		ovExtStatics.push(ovExt != null ? ovExt.isStatic : false);
 	}
 
-	let mConverterTarget = "";
 	let mConverterTargetType: Type = null as unknown as Type;
 	if (sym.symbolKind == SymbolKind.Macro && ctx != null) {
-		const ct = ctx.converterTargetByName.get(sym.name);
-		if (ct != null) { mConverterTarget = ct; }
-		const ctt = ctx.converterTargetTypes.get(sym.name);
+		const ctt = ctx.converterTargetTypes.get(sym);
 		if (ctt != null) { mConverterTargetType = ctt; }
 	}
 
@@ -168,7 +164,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		name: exportedName != "" ? exportedName : sym.name, sym,
 		extReceiverType: extRecv, extIsStatic: extStatic,
 		overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics,
-		converterTarget: mConverterTarget, converterTargetType: mConverterTargetType,
+		converterTargetType: mConverterTargetType,
 	};
 }
 
@@ -878,6 +874,55 @@ function declaredName(sym: Symbol): string {
 	return sym.name;
 }
 
+// Tier 0 = local decl, 1 = import, 2 = build.ms globalImports inject (LANG.md
+// "Converter Declarations" rules 3-4). A LOWER tier shadows a higher one; two
+// converters for one target type at the SAME tier is an error — the compiler
+// never chooses between equals.
+export interface MacroConverter {
+	sym: Symbol;
+	tier: int32;
+}
+
+export function reportDuplicateConverter(ctx: CheckerContext, sym: Symbol, line: int32, column: int32): void {
+	const target = ctx.converterTargetTypes.get(sym);
+	if (target == null) return;
+	let tier: int32 = -1;
+	for (let i = 0; i < ctx.macroConverters.length; i += 1) {
+		if (ctx.macroConverters[i].sym == sym) tier = ctx.macroConverters[i].tier;
+	}
+	if (tier < 0) return;
+	for (let i = 0; i < ctx.macroConverters.length; i += 1) {
+		const other = ctx.macroConverters[i].sym;
+		if (other == sym || ctx.macroConverters[i].tier != tier) continue;
+		const otherTarget = ctx.converterTargetTypes.get(other);
+		if (otherTarget == null || !sameType(otherTarget, target)) continue;
+		const pair = "duplicate converter for target '" + typeDisplayName(target) + "': '" + other.name + "' and '" + sym.name + "'";
+		if (tier == 0) {
+			addError(ctx, pair + " declared in the same module", line, column);
+		} else if (tier == 1) {
+			addError(ctx, pair + " are both in scope — the compiler never chooses; import only one or call one explicitly", line, column);
+		} else {
+			addError(ctx, pair + " are both injected via build.ms globalImports", line, column);
+		}
+		return;
+	}
+}
+
+export function macroConverterFor(ctx: CheckerContext, target: Type): Symbol | null {
+	let best: Symbol | null = null;
+	let bestTier: int32 = 0;
+	for (let i = 0; i < ctx.macroConverters.length; i += 1) {
+		const entry = ctx.macroConverters[i];
+		const t = ctx.converterTargetTypes.get(entry.sym);
+		if (t == null || !sameType(t, target)) continue;
+		if (best == null || entry.tier < bestTier) {
+			best = entry.sym;
+			bestTier = entry.tier;
+		}
+	}
+	return best;
+}
+
 export function addRuntimeConverter(ctx: CheckerContext, sym: Symbol): void {
 	for (const known of ctx.runtimeConverters) {
 		if (known == sym) return;
@@ -1139,12 +1184,9 @@ export class CheckerContext {
 	adoptedDecls: HashMap<Node, Symbol>;
 	compilerFuncs: HashMap<string, Symbol>;       // @compilerFunc — name the compiler synthesizes a call under → its declared symbol
 	extensionRegistry: ExtensionRegistry;
-	converterTargets: HashMap<string, string>;      // converter: target type name → converter name (in-scope pair table)
-	converterTargetOrigin: HashMap<string, int32>;  // converter: target type name → 0 local decl | 1 import (shadowing + dup detection)
-	converterTargetByName: HashMap<string, string>; // converter: converter name → target type name (export pipeline)
-	converterTargetTypes: HashMap<string, Type>;    // converter: converter name → target type resolved in the DECLARING module
+	macroConverters: MacroConverter[];              // in-scope compile-time converters, registration order
+	converterTargetTypes: HashMap<Symbol, Type>;    // converter symbol → target type resolved in the DECLARING module
 	runtimeConverters: Symbol[];
-	converterTargetKeys: string[];                  // registration-ordered target keys (Nim c.converters seq analog)
 	macroExpansionDepth: int32;                  // Phase B+ eager: recursion limit for macros that produce macros
 	jsxMacroArgDepth: int32;                     // JSX leak guard: >0 while checking a macro's args (JSX there is consumed, not leaked)
 	inferredReturn: Type;  // tracks inferred return type during function body checking
@@ -1219,12 +1261,9 @@ export function createContext(): CheckerContext {
 		adoptedDecls: new HashMap<Node, Symbol>(),
 		compilerFuncs: new HashMap<string, Symbol>(),
 		extensionRegistry: createExtensionRegistry(),
-		converterTargets: new HashMap<string, string>(),
-		converterTargetOrigin: new HashMap<string, int32>(),
-		converterTargetByName: new HashMap<string, string>(),
-		converterTargetTypes: new HashMap<string, Type>(),
+		macroConverters: [],
+		converterTargetTypes: new HashMap<Symbol, Type>(),
 		runtimeConverters: [],
-		converterTargetKeys: [],
 		macroExpansionDepth: 0,
 		jsxMacroArgDepth: 0,
 		inferredReturn: inferredType(),
