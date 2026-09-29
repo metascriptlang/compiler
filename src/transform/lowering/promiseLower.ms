@@ -25,7 +25,7 @@
 import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind } from "../../ast/node";
 import { isAwaitable, awaitedType, unwrapRef } from "../../checker/types";
 import { TransformContext } from "../context";
-import { makeIdent, makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef } from "../util";
+import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef } from "../util";
 
 // ===== Type-tag dispatch =====
 

@@ -17,7 +17,7 @@ import { Node, NodeKind, DeclKind, ExprStmtData, CallExprData, MemberExprData, V
 import { TransformContext, freshTempSym } from "../context";
 import { noneType } from "../../checker/types";
 import { walkNode, walkExpandBlocks } from "../walker";
-import { makeVarDecl, makeIdent, makeIdentResolved, makeCall, makeMember, makeExprStmt, makeBlock } from "../util";
+import { makeVarDecl, makeIdentResolved, makeCall, makeMember, makeExprStmt, makeBlock } from "../util";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Helpers =====

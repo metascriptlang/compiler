@@ -3,7 +3,7 @@ import { bitSetElemType, setRepr, booleanType, createPrimitive } from "../../che
 import { addError } from "../../checker/context";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocks, replaceInExpr } from "../walker";
-import { makeBinary, makeUnary, makeNumber, makeIdent, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeIf, makeBreak, makeBool, runtimeRef } from "../util";
+import { makeBinary, makeUnary, makeNumber, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeIf, makeBreak, makeBool, runtimeRef } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
 import { DeclKind } from "../../ast/node";
 

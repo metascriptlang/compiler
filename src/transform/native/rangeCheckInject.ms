@@ -10,7 +10,7 @@ import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, T
 import { integerRank, isIntegerType, peelToRepr } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeNumber, runtimeRef } from "../util";
+import { makeCall, makeNumber, runtimeRef } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { ExprStmtData, VariableDeclData } from "../../ast/node";
 import { createTransformContextWithChecker } from "../context";
