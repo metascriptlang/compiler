@@ -871,6 +871,11 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		"cstring" => cstringType(),
 		_ => {
 			const sym = lookupSymbol(ctx.table, trimmed);
+			if (sym != null && line > 0 && isGenericTypeDecl(sym)) {
+				const count = splitTopLevel(declGenericParams(sym.declNode), ",").length;
+				addError(ctx, `generic type '${trimmed}' requires ${count} type argument(s)`, line, col);
+				return errorType();
+			}
 			if (sym != null) {
 				markUsedIn(ctx, sym);
 				// Demand-driven: ensure shaped before using
@@ -885,6 +890,13 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			return emitUnresolvedTypeRef(ctx, trimmed, line, col, "");
 		},
 	};
+}
+
+function isGenericTypeDecl(sym: Symbol): boolean {
+	const k = sym.symbolKind;
+	const isTypeDecl = k == SymbolKind.Class || k == SymbolKind.Interface || k == SymbolKind.Struct
+		|| k == SymbolKind.TypeAlias || k == SymbolKind.Actor;
+	return isTypeDecl && sym.declNode != null && declGenericParams(sym.declNode) != "";
 }
 
 // Emit error for unresolved type name and return TypeRef for recovery.
