@@ -2735,9 +2735,18 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	// args, so closure params don't inherit GenericParam from the
 	// un-substituted formal type. Reuses the shared deriveCallBindings
 	// helper used by checkCallExpr's non-overload path.
+	let explicitWinner = winnerType;
 	if (winnerType.kind == TypeKind.Function && hasGenericParams(winnerType)) {
 		const winnerSym = candSyms[bestIdx];
-		const bindings = deriveCallBindings(ctx, callNode, winnerSym, winnerType, expectedType);
+		const bindings = deriveCallBindings(ctx, callNode, winnerSym, winnerType, null);
+		if (bindings.names.length > 0) explicitWinner = instantiateGeneric(winnerType, bindings.names, bindings.types);
+		for (const ai of genericArgOrder(ctx, args, true)) {
+			if (skipMask[ai] || argTypes[ai] == null || ai >= winnerType.typeChildren.length) continue;
+			const fwd = createUnifyBindings();
+			unifyType(winnerType.typeChildren[ai], argTypes[ai], fwd);
+			mergeUnifyBindings(bindings, fwd);
+		}
+		mergeUnifyBindings(bindings, bindFromExpectedReturn(winnerType, expectedType));
 		if (bindings.names.length > 0) {
 			winnerType = instantiateGeneric(winnerType, bindings.names, bindings.types);
 		}
@@ -2838,7 +2847,7 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 				d.callee.resolvedSym = winnerSym;
 				d.callee.nodeType = winnerSym.symbolType;
 			}
-			const newCalleeType = tryInstantiateGenericCallee(ctx, callNode, winnerType, argTypes, winnerFlags, expectedType);
+			const newCalleeType = tryInstantiateGenericCallee(ctx, callNode, explicitWinner, argTypes, winnerFlags, expectedType);
 			if (newCalleeType != null) {
 				// Mono fired. callNode.resolvedSym now points to instSym (no
 				// overloads → codegen takes direct path). Keep d.resolvedOverloadIdx
