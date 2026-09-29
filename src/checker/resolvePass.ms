@@ -9,7 +9,7 @@
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
-import { markUsedIn, CheckerContext, findExtension, getExtTypeName, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls } from "./context";
+import { markUsedIn, CheckerContext, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -1518,19 +1518,6 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 				if (d.fnDefaults != null && d.fnDefaults.length > 0) {
 					overload.defaultParams = d.fnDefaults;
 				}
-				// Update extension fnType cache (secondary — getExtFnType reads sym.symbolType first)
-				const extTypeName2 = getExtTypeName(d.fnFlags);
-				if (extTypeName2 != "" && ctx.extensionRegistry != null) {
-					const ext2 = findExtension(ctx.extensionRegistry, extTypeName2, d.fnName);
-					if (ext2 != null) {
-						// Reference parity: sym is the single source of truth for the type.
-						// Only set fnType as fallback when sym is not available.
-						if (ext2.sym == null) {
-							ext2.fnType = fnType;
-							ext2.sym = overload;
-						}
-					}
-				}
 				return;
 			}
 		}
@@ -1541,19 +1528,6 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	// Copy defaults to primary sym for cross-module availability
 	if (d.fnDefaults != null && d.fnDefaults.length > 0) {
 		sym.defaultParams = d.fnDefaults;
-	}
-	// Reference parity: sym is the single source of truth for the type.
-	// Only set fnType as fallback when sym is not available. Never store the same Type
-	// in both fnType and sym.symbolType — that causes double-decref on ExtensionMethod destruction.
-	const extTypeName = getExtTypeName(d.fnFlags);
-	if (extTypeName != "" && ctx.extensionRegistry != null) {
-		const ext = findExtension(ctx.extensionRegistry, extTypeName, d.fnName);
-		if (ext != null) {
-			if (ext.sym == null) {
-				ext.fnType = fnType;
-				ext.sym = sym;
-			}
-		}
 	}
 }
 
