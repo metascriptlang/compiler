@@ -130,6 +130,12 @@ function msCheckRangeI32(v: float64, lo: float64, hi: float64): float64 {
 }
 
 @compilerFunc
+function msToInt32(v: float64): int32 {
+	@emit(`return ${v} | 0;`);
+	unreachable;
+}
+
+@compilerFunc
 function msCheckRangeI64(v: float64): float64 {
 	@emit(`if (!(${v} >= -9223372036854775808 && ${v} < 9223372036854775808)) throw new Error("value " + ${v} + " not in range -9223372036854775808 .. 9223372036854775807");
 	return ${v};`);

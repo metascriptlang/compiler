@@ -40,6 +40,7 @@ import { lowerVoidBind } from "./desugar/voidBindLower";
 import { lowerObjectLiteralComplete } from "./coercion/objectLiteralComplete";
 import { lowerStringLengthJS } from "./coercion/stringLengthJS";
 import { lowerIntConvJS, injectRangeChecksJS } from "./coercion/intConvJS";
+import { lowerNumberBitwiseOperands } from "./native/intCheckInject";
 import { lowerIntArithJS } from "./coercion/intArithJS";
 import { lowerBigIntJS } from "./coercion/bigIntJS";
 import { refuseUnfoldedSizeofJS } from "./coercion/sizeofJS";
@@ -196,6 +197,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// mangled as a module global. The 64-bit pass runs first so the width
 	// passes below never see the nodes it consumed.
 	if (jsBackend) { result = refuseUnfoldedSizeofJS(result, ctx); }
+	if (jsBackend) { result = lowerNumberBitwiseOperands(result, ctx); }
 	if (jsBackend) { result = injectRangeChecksJS(result, ctx); }
 	if (jsBackend) { result = lowerBigIntJS(result, ctx); }
 	if (jsBackend) { result = lowerIntConvJS(result, ctx); }
