@@ -4,12 +4,10 @@
 //             made both closures read "second"; with different types
 //             (`const x: string` then `const x: int32`) the emitted C did not
 //             compile. JS was correct.
-// Root cause: src/transform/lowering/lambdaLiftingRename.ms renamed a binding
-//             only when it shadowed a visible one, so disjoint sibling scopes
-//             kept one name, and the name-keyed capture sets and env fields
-//             merged the two bindings.
-// Fix:        the renamer gives every repeated binding name within a frame a
-//             fresh name, visible or not.
+// Root cause: the capture sets and env fields were keyed by name, so two
+//             bindings of one spelling in disjoint sibling scopes merged.
+// Fix:        src/transform/lowering/lambdaLifting.ms keys captures and env
+//             fields by the binding's symbol.
 //
 // Guarded end-to-end by corpus/programs/920-closureSiblingBindings.ms.
 

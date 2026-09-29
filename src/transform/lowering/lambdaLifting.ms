@@ -39,7 +39,6 @@ import {
 	detectionGetCaptures, detectionGetCapturedIdents, routineBindingSym,
 	isOnceLoop, iterationBodyOf, collectIterationDecls,
 } from "./lambdaLiftingDetect";
-import { renameRepeatedBindings } from "./lambdaLiftingRename";
 import {
 	ScopeStack, createScopeStack, cloneScopeStack, pushFuncBoundary, popFuncBoundary,
 	pushLoopBoundary, popLoopBoundary,
@@ -2506,9 +2505,6 @@ function normalizeArrowBodies(node: Node): Node {
 export function lowerLambda(program: Node, ctx: TransformContext): Node {
 	const state = createLiftState();
 	normalizeArrowBodies(program);
-	// Pass 0: one name is one binding, so the string-keyed machinery below
-	// cannot confuse a shadow with the binding it shadows.
-	renameRepeatedBindings(program);
 	// Pass 1: collect per-fn capture info upfront (Nim parity).
 	state.detection = detectPass(program);
 	state.splitLoopLocals = ctx.splitLoopLocals;

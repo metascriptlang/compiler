@@ -40,7 +40,6 @@ import {
 } from "../util";
 import { numberType, createPtr, createPrimitive } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
-import { renameRepeatedBindingsInFrame } from "./lambdaLiftingRename";
 import { isOnceLoop, collectIterationDecls } from "./lambdaLiftingDetect";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
@@ -917,7 +916,6 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType:
 
 function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, ctx: TransformContext, loc: SourceLocation): Node {
 	// 1. Collect all locals and their types
-	renameRepeatedBindingsInFrame(params, body, "$g");
 	const locals = createSymSet();
 	collectStateLocals(body, ctx, locals);
 	const dtSyms: Symbol[] = [];

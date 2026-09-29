@@ -15,11 +15,10 @@
 //             distinct bindings sharing a name became one storage slot. The
 //             reference keys captures and env fields by symbol id instead
 //             (`capturedVars.incl(s.id)`, `addField` → `lookupInRecord`).
-// Fix:        src/transform/lowering/lambdaLiftingRename.ms — a scope-aware
-//             pre-pass renames a shadowing binding (and its references) to a
-//             fresh name before capture detection, so a name identifies exactly
-//             one binding. Module-scope bindings and parameters keep their
-//             names; only the inner, shadowing binding is renamed.
+// Fix:        capture sets, env fields and redirects are keyed by the
+//             binding's symbol, and an env field is named after its binding
+//             and its position, so a shadow never lands in another binding's
+//             slot.
 //
 // Guarded end-to-end by corpus/programs/308-closureNestedShadow.ms and
 // guard/closureShadowBindingIdentity.ms.
