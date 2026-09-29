@@ -13,6 +13,7 @@ import {
 	AliveSet,
 	createAliveSet,
 	aliveSetAdd,
+	aliveSetAddSym,
 	aliveSetAddModule,
 	aliveSetHas,
 	aliveSetHasModule,
@@ -400,6 +401,7 @@ function markAndWalk(modulePath: string, name: string): void {
 	while (di >= 0) {
 		const found = _declNodes[di];
 		di = _declNext[di];
+		if (found.resolvedSym != null) aliveSetAddSym(_aliveSet, found.resolvedSym);
 		walkBody(found, modulePath);
 		// When a class becomes alive, also mark `<className>_init` alive —
 		// `methodToFunction` lifts the ctor body into a top-level
@@ -544,10 +546,13 @@ export function computeAliveSet(
 	isTest: boolean,
 	graph: ModuleGraph,
 	exportRootModules: string[] = [],
-	exportRootFunctions: string[] = [],
+	exportRootFunctions: Symbol[] = [],
 ): AliveSet {
-	const rootFunctions = new HashSet<string>();
-	for (const key of exportRootFunctions) rootFunctions.add(key);
+	const rootFunctions = new HashSet<Symbol>();
+	for (const sym of exportRootFunctions) {
+		rootFunctions.add(sym);
+		for (const overload of sym.overloads) rootFunctions.add(overload);
+	}
 	_aliveSet = createAliveSet();
 	_visitedSet = new HashSet<string>();
 	nameIndexBuild(programs, paths);
@@ -609,7 +614,7 @@ export function computeAliveSet(
 					walkBody(bare, modulePath);
 					continue;
 				}
-				if (rootFunctions.has(modulePath + ":" + fn)) {
+				if (bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
 					markAndWalk(modulePath, fn);
 					continue;
 				}

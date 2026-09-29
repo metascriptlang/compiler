@@ -587,10 +587,24 @@ export class AliveSet {
 	entries: string[];       // "modulePath:symbolName" keys
 	_set: HashSet<string>;       // O(1) lookup mirror
 	_modules: HashSet<string>;   // O(1) module-level lookup
+	_syms: HashSet<Symbol>;
 }
 
 export function createAliveSet(): AliveSet {
-	return { entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>() };
+	return { entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>(), _syms: new HashSet<Symbol>() };
+}
+
+export function aliveSetAddSym(aliveSet: AliveSet, sym: Symbol): void {
+	aliveSet._syms.add(sym);
+}
+
+export function aliveSetHasSym(aliveSet: Readonly<AliveSet>, sym: Symbol): boolean {
+	return aliveSet._syms.has(sym);
+}
+
+export function aliveSetHasDecl(aliveSet: Readonly<AliveSet>, modulePath: string, name: string, sym: Symbol | null): boolean {
+	if (sym != null) return aliveSet._syms.has(sym);
+	return aliveSetHas(aliveSet, modulePath, name);
 }
 
 export function aliveSetAdd(aliveSet: AliveSet, modulePath: string, name: string): void {

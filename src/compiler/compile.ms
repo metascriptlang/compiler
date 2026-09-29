@@ -22,7 +22,7 @@ import { createContext as createRaiserContext, load as raiserLoad, execute as ra
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
-import { aliveSetHas, aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
+import { aliveSetHasDecl, aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
@@ -1864,14 +1864,14 @@ function hcrReloadHandlers(program: Node | null, flag: SymbolFlag): string[] {
 	return names;
 }
 
-function hcrRootFunctions(modulePaths: string[]): string[] {
-	const roots: string[] = [];
+function hcrRootFunctions(modulePaths: string[]): Symbol[] {
+	const roots: Symbol[] = [];
 	for (const modPath of modulePaths) {
 		const moduleExports = findModuleExports(graphRegistry, modPath);
 		if (moduleExports == null) continue;
 		for (const info of moduleExports.symbols) {
 			if (info.sym.modulePath != modPath || info.sym.symbolKind != SymbolKind.Function) continue;
-			roots.push(modPath + ":" + info.name);
+			roots.push(info.sym);
 		}
 	}
 	return roots;
@@ -2351,7 +2351,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	let totalCheckerErrors = 0;
 	// FREESTANDING E01 sites, collected pre-transform in A2, reported post-DCE.
 	const fsAsyncHits: FsAsyncHit[] = [];
-	const fsWritableHits: { modPath: string, source: string, name: string, line: int32, column: int32, message: string }[] = [];
+	const fsWritableHits: { modPath: string, source: string, name: string, sym: Symbol | null, line: int32, column: int32, message: string }[] = [];
 
 	// Reference parity: global hook ownership registry shared across all modules.
 	// First module to need a type's DRC hooks generates them; others get extern protos.
@@ -2496,6 +2496,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 					modPath,
 					source: cm.source,
 					name: d.declName,
+					sym: hitNode.resolvedSym,
 					line: d.nameLocation.line,
 					column: d.nameLocation.column,
 					message: writableModuleBindingMessage(hitNode),
@@ -2557,7 +2558,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	if (fsWritableHits.length > 0) {
 		let fsReported = 0;
 		for (const h of fsWritableHits) {
-			if (!aliveSetHas(aliveSet, h.modPath, h.name)) continue;
+			if (!aliveSetHasDecl(aliveSet, h.modPath, h.name, h.sym)) continue;
 			renderModuleError(h.modPath, h.source, {
 				message: h.message,
 				line: h.line,
