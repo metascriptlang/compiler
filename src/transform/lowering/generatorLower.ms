@@ -52,6 +52,7 @@ export interface GenState {
 	nextState: number;
 	stmts: Node[];
 	yieldVarName: string;   // variable assigned from yield (for async resume)
+	yieldVarSym: Symbol | null;
 	yieldVarType: Type | null;     // type of the variable (for unboxing msFutureRead)
 	excLanding: number;     // reference exceptionTable[i]: state to jump to if this state raises (-1 = propagate)
 }
@@ -325,7 +326,7 @@ function needsSplit(stmt: Node, sc: StateCollector): boolean {
 
 export function allocState(sc: StateCollector): number {
 	const idx = sc.items.length;
-	const st: GenState = { index: idx, isYield: false, nextState: -1, stmts: [], yieldVarName: "", yieldVarType: null, excLanding: -1 };
+	const st: GenState = { index: idx, isYield: false, nextState: -1, stmts: [], yieldVarName: "", yieldVarSym: null, yieldVarType: null, excLanding: -1 };
 	sc.items.push(st);
 	return idx;
 }
@@ -428,6 +429,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 				const nextSt = allocState(sc);
 				emitYield(sc, currentState, nextSt, yd.yieldArg, loc, resultType);
 				sc.items[currentState].yieldVarName = vd.declName;
+				sc.items[currentState].yieldVarSym = stmt.resolvedSym;
 				sc.items[currentState].yieldVarType = stmt.nodeType;
 				// On resume: convert decl to assignment (var is lifted)
 				currentState = nextSt;
