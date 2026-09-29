@@ -312,7 +312,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	const hasNullRight = isNullExpr(d.right);
 	if (isNullEqOp && (hasNullLeft || hasNullRight)) {
 		const valueType = hasNullLeft ? resolveType(ctx, d.right) : leftType;
-		if (valueType != null && isValueObject(valueType)) {
+		if (valueType != null && hasValueEq(valueType)) {
 			return makeBool(isNotEqual, loc);
 		}
 		// Maybe<T>: x !== null → x.present, x === null → !x.present
