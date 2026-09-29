@@ -15,7 +15,7 @@ import { fitNode } from "./fit";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode } from "./context";
 import { createContext } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
-import { mangleMonoName, monoBaseName, monoInstanceName } from "../monomorphize/registry";
+import { mangleMonoName, monoInstanceName, monoInstanceNameOf } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
 import { beginGensymUnit, rewindTemplateGensym } from "./template";
 import { getIdentId } from "./idents";
@@ -955,7 +955,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	}
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);
-	const mangledClass = mangleMonoName(monoBaseName(classSym.name, classSym.modulePath), dedup.types);
+	const mangledClass = monoInstanceNameOf(classSym.name, classSym.modulePath, dedup.types);
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
 	let instances: Symbol[] = [];

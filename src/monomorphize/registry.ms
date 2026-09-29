@@ -102,7 +102,11 @@ export function monoRoutineBaseName(baseName: string, ownerPath: string, disamb:
 // analyzer, transform and codegen so the struct, its hooks and every call site
 // cannot drift apart.
 export function monoInstanceName(gi: Type): string {
-	return mangleMonoName(monoBaseName(gi.typeName, monoGenericOwner(gi)), gi.typeChildren);
+	return monoInstanceNameOf(gi.typeName, monoGenericOwner(gi), gi.typeChildren);
+}
+
+export function monoInstanceNameOf(genericName: string, ownerPath: string, typeArgs: Type[]): string {
+	return mangleMonoName(monoBaseName(genericName, ownerPath), typeArgs);
 }
 
 // C-safe type key for name mangling and dedup.
