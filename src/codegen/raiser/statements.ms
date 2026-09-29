@@ -362,8 +362,10 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	if (d.hasCatchClause) {
 		catchIdx = emitAbxPlaceholder(s, RaiserOpcode.Catch);
 		catchReg = allocReg(s);
+		const savedLocals = s.locals.items.length;
 		if (d.catchName != "") declareLocal(s, d.catchName, catchReg);
 		if (d.catchBody != null) compileStmt(s, d.catchBody);
+		s.locals.items.length = savedLocals;
 		catchEnd = emitJumpPlaceholder(s);
 	}
 
