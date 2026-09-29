@@ -2727,10 +2727,19 @@ const node: Ref<ASTNode> = { kind: "binary", left: a, right: b };
 // Explicit Ptr — heap-allocated, no RC (manual lifetime)
 const buf: Ptr<Buffer> = arenaAlloc(arena, sizeof Buffer);
 
-// Ptr for C interop
-extern function malloc(size: number): Ptr<void> from "ms_malloc";
+// Ptr for C interop — the @include'd header declares the C symbols
+@include("stdlib.h")
+extern function malloc(size: uint64): Ptr<void>;
 extern function free(p: Ptr<void>): void;
 ```
+
+Without the `@include`, a call to either extern fails the C compile with
+`call to undeclared function` — an extern binds a C symbol, it does not
+declare one. Match the parameter type to the header too: `size: uint64`
+(`size_t`), not `number` (a `double` the C prototype rejects). Verified
+2026-09-30 with `msc run` on exactly this shape (malloc, two byte writes
+through `buf as Ptr<uint8>`, free): prints `42|7`. C backend only — extern
+C functions have no JS linkage.
 
 #### Linked structures: arena ownership + `Ptr<T>` links
 
@@ -3678,11 +3687,12 @@ macro deriveEq(target) {
 
 ### Extern Declarations (FFI)
 ```typescript
-// Standard FFI (names match)
+// Standard FFI (names match) — a header you @include declares the symbol
+@include("stdlib.h")
 extern function free(p: Ptr<void>): void;
 
-// Aliased FFI (names differ)
-extern function malloc(size: number): Ptr<void> from "ms_malloc";
+// Aliased FFI (names differ) — `from` binds the C name
+extern function myAbs(n: int32): int32 from "abs";
 
 // cstring is used for zero-copy C interop. 
 // Standard 'string' implicitly coerces to 'cstring'.
