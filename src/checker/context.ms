@@ -403,13 +403,6 @@ export function hasExtensionByName(registry: ExtensionRegistry, methodName: stri
 	return registry.byNameHead.has(methodName);
 }
 
-// findExtensionByName — find first extension with this method name (any receiver)
-export function findExtensionByName(registry: ExtensionRegistry, methodName: string): ExtensionMethod {
-	const i = registry.byNameHead.get(methodName) ?? -1;
-	if (i >= 0) return registry.methods[i];
-	return null as unknown as ExtensionMethod;
-}
-
 // findExtensionByType — find extension matching method name + fnType identity (for overload export)
 export function findExtensionByType(registry: ExtensionRegistry, methodName: string, fnType: Type): ExtensionMethod {
 	let i = registry.byNameHead.get(methodName) ?? -1;
@@ -1048,37 +1041,6 @@ export function stripGenFlag(flags: string): string {
 	return result;
 }
 
-// ===== Attached Operations (lifecycle hooks per type) =====
-// Detects onDestroy/onCopy/onMove extension methods for destructor lifting.
-
-export interface AttachedOps {
-	typeName: string;
-	onDestroy: ExtensionMethod;    // null if not defined
-	onCopy: ExtensionMethod;       // null if not defined
-	onMove: ExtensionMethod;       // null if not defined
-}
-
-export function findAttachedOps(registry: ExtensionRegistry, typeName: string): AttachedOps {
-	const ops: AttachedOps = {
-		typeName,
-		onDestroy: null as unknown as ExtensionMethod,
-		onCopy: null as unknown as ExtensionMethod,
-		onMove: null as unknown as ExtensionMethod,
-	};
-	for (const m of registry.methods) {
-		if (m.receiverTypeName == typeName) {
-			if (m.methodName == "onDestroy") { ops.onDestroy = m; }
-			if (m.methodName == "onCopy") { ops.onCopy = m; }
-			if (m.methodName == "onMove") { ops.onMove = m; }
-		}
-	}
-	return ops;
-}
-
-export function hasAttachedOps(ops: AttachedOps): boolean {
-	return ops.onDestroy != null || ops.onCopy != null || ops.onMove != null;
-}
-
 // ===== Cancel Context =====
 // Single source of truth for cancellation context type.
 // transam/cancel.ms imports this (transam→checker dependency already established).
@@ -1583,8 +1545,8 @@ test "extension name lookups keep registration order across truncation" {
 	assert !hasExtensionByName(r, "other");
 	const c: ExtensionMethod = { methodName: "m", receiverTypeName: "C", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, c);
-	assert findExtensionByName(r, "m") == c;
 	assert findAllExtensionsByName(r, "m").length == 1;
+	assert findAllExtensionsByName(r, "m")[0] == c;
 }
 
 test "static ext filter keeps only statics of that receiver" {
@@ -1597,45 +1559,6 @@ test "static ext filter keeps only statics of that receiver" {
 	assert got[0].receiverTypeName == "String";
 	assert got[0].isStatic;
 	assert filterStaticExtsByReceiverName(all, "").length == 0;
-}
-
-test "no attached ops" {
-	const r = createExtensionRegistry();
-	const ops = findAttachedOps(r, "Foo");
-	assert !hasAttachedOps(ops);
-}
-
-test "detect onDestroy" {
-	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	registerExtension(r, m);
-	const ops = findAttachedOps(r, "Foo");
-	assert hasAttachedOps(ops);
-	assert ops.onDestroy != null;
-	assert ops.onCopy == null;
-}
-
-test "detect all lifecycle hooks" {
-	const r = createExtensionRegistry();
-	const d: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	registerExtension(r, d);
-	const c: ExtensionMethod = { methodName: "onCopy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	registerExtension(r, c);
-	const mv: ExtensionMethod = { methodName: "onMove", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	registerExtension(r, mv);
-	const ops = findAttachedOps(r, "Bar");
-	assert hasAttachedOps(ops);
-	assert ops.onDestroy != null;
-	assert ops.onCopy != null;
-	assert ops.onMove != null;
-}
-
-test "wrong type no match" {
-	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	registerExtension(r, m);
-	const ops = findAttachedOps(r, "Bar");
-	assert !hasAttachedOps(ops);
 }
 
 test "create empty registry" {
