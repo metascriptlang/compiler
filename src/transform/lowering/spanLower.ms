@@ -18,7 +18,7 @@ import { walkNode } from "../walker";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary, makeCall, makeIdent,
 	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
-	makeConditional, makeNull, makeHiddenStdConv, runtimeRef,
+	makeConditional, makeNull, makeHiddenStdConv, runtimeRef, overloadWinner,
 } from "../util";
 
 export function spanLower(program: Node, ctx: TransformContext): Node {
@@ -89,11 +89,11 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 }
 
 function calleeFnType(node: Node): Type {
-	if (node.resolvedSym != null && node.resolvedSym.symbolType != null) {
-		const t = node.resolvedSym.symbolType;
-		if (t.kind == TypeKind.Function) return t;
-	}
 	const cd = node.data as CallExprData;
+	if (node.resolvedSym != null) {
+		const t = overloadWinner(node.resolvedSym, cd.resolvedOverloadIdx).symbolType;
+		if (t != null && t.kind == TypeKind.Function) return t;
+	}
 	if (cd.callee != null && cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {
 		return cd.callee.nodeType;
 	}

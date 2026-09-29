@@ -16,6 +16,7 @@ import {
 	createNode,
 } from "../../ast/node";
 import { TransformContext } from "../context";
+import { overloadWinner } from "../util";
 import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
 import { lookupSymbol, getCtorParamTypes, hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -108,9 +109,7 @@ function lowerRest(node: Node): Node {
 		}
 	}
 	if (sym == null) return node;
-	if (d.resolvedOverloadIdx > 0 && sym.overloads != null && d.resolvedOverloadIdx - 1 < sym.overloads.length) {
-		sym = sym.overloads[d.resolvedOverloadIdx - 1];
-	}
+	sym = overloadWinner(sym, d.resolvedOverloadIdx);
 	if (sym.builtinKind != "" || hasFlag(sym, SymbolFlag.ImportC)) return node;
 	if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return node;
 

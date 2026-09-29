@@ -38,7 +38,7 @@ import { forEachChild } from "../../ast/visitor";
 import {
 	makeBool, makeBlock, makeWhile, makeVarDecl, makeIf, makeReturn,
 	makeIdent, makeIdentResolved, makeAssign, makeExprStmt, makeContinue,
-	extractBodyStmts,
+	extractBodyStmts, overloadWinner,
 } from "../util";
 import { lowerTernaryInReturn } from "./conditionalExprLower";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, getStmts, makeCtx } from "../testUtil";
@@ -287,21 +287,30 @@ function isTailCallExpr(expr: Node | null, fnName: string, fnSym: Symbol | null)
 	if (expr == null) return false;
 	if (expr.kind != NodeKind.CallExpr) return false;
 	const cd = expr.data as CallExprData;
-	if (cd.callee.kind == NodeKind.MemberExpr) return isThisMethodCall(cd.callee, fnName, fnSym);
+	if (cd.callee.kind == NodeKind.MemberExpr) {
+		return isThisMethodCall(cd.callee, cd.resolvedOverloadIdx, fnName, fnSym);
+	}
 	if (cd.callee.kind != NodeKind.Identifier) return false;
 	if (fnSym != null && cd.callee.resolvedSym != null) {
-		return cd.callee.resolvedSym == fnSym;
+		return overloadWinner(cd.callee.resolvedSym, cd.resolvedOverloadIdx) == fnSym;
 	}
 	const id = cd.callee.data as IdentifierData;
 	return id.name == fnName;
 }
 
-function isThisMethodCall(callee: Node, fnName: string, fnSym: Symbol | null): boolean {
+function isThisMethodCall(
+	callee: Node,
+	overloadIdx: number,
+	fnName: string,
+	fnSym: Symbol | null,
+): boolean {
 	const md = callee.data as MemberExprData;
 	if (md.property != fnName) return false;
 	if (md.object.kind != NodeKind.Identifier) return false;
 	if ((md.object.data as IdentifierData).name != "this") return false;
-	if (fnSym != null && callee.resolvedSym != null) return callee.resolvedSym == fnSym;
+	if (fnSym != null && callee.resolvedSym != null) {
+		return overloadWinner(callee.resolvedSym, overloadIdx) == fnSym;
+	}
 	return true;
 }
 
