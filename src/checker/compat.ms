@@ -1130,8 +1130,10 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	}
 	// Implicit coercion to Span: T[] -> Span<T> or T[N] -> Span<T>
 	if (formal.kind == TypeKind.Span) {
-		if (actual.kind == TypeKind.Array || actual.kind == TypeKind.SizedArray) {
-			const elemRel = typeRelation(formal.typeReturn, actual.typeReturn);
+		const seq = actual.kind == TypeKind.Ref && actual.typeReturn != null
+			&& actual.typeReturn.kind == TypeKind.Array ? actual.typeReturn : actual;
+		if (seq.kind == TypeKind.Array || seq.kind == TypeKind.SizedArray) {
+			const elemRel = typeRelation(formal.typeReturn, seq.typeReturn);
 			if (elemRel != TypeRelation.None) return TypeRelation.Subtype;
 		}
 	}
