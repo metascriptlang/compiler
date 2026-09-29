@@ -69,9 +69,9 @@ answer either question. Putting one there needs a run that shows both outcomes.
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait for load <= cores (default 1800, 0 = do not wait)
 ledger: one row per lane and per run (lane secs rc red known new flaky wait) appended to GATE_LEDGER (default ~/.metascript/gate.tsv)
-        one row per narrowing step (step secs kept total differ_c differ_js touched) appended to
-        GATE_SELECT_LEDGER (default ~/.metascript/gate-select.tsv); step is tier-select, select or
-        select-whole, kept is what the step leaves the lanes (tiers, or corpus programs)
+        one row per selection decision (step secs kept total differ_c differ_js touched) appended to
+        GATE_SELECT_LEDGER (default ~/.metascript/gate-select.tsv); step is tier-select, select,
+        select-whole or select-off; select-off has zero seconds and empty counts
 USAGE
 }
 
@@ -86,6 +86,10 @@ select_ledger_fmt() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 select_ledger() {
   [ -s "$GATE_SELECT_LEDGER" ] || printf 'ts\ttree\tstep\tsecs\tkept\ttotal\tdiffer_c\tdiffer_js\ttouched\n' >"$GATE_SELECT_LEDGER"
   select_ledger_fmt "$(date '+%F %T')" "$(basename "$TOP")" "$@" >>"$GATE_SELECT_LEDGER"
+}
+record_select_off() {
+  [ -n "$select_why" ] && [ -n "$select_label" ] || return 0
+  select_ledger select-off 0 "" "" "" "" ""
 }
 build_ctl() {
   local sha=$1 key ctl_dir ctl
@@ -437,8 +441,16 @@ CASES
   local keep_sl=${GATE_SELECT_LEDGER:-}; GATE_SELECT_LEDGER=$(mktemp); : >"$GATE_SELECT_LEDGER"
   select_ledger tier-select 18 2 8 "" "" ""
   select_ledger select 540 14 442 2 0 12
+  local select_why="--lanes runs a lane whole" select_label="corpus and san"
+  record_select_off
+  select_label=san
+  record_select_off
+  select_label=""
+  record_select_off
+  select_label=corpus select_why=""
+  record_select_off
   got=$(cut -f3- "$GATE_SELECT_LEDGER" | tr '\t' '|' | paste -sd'#' -)
-  want='step|secs|kept|total|differ_c|differ_js|touched#tier-select|18|2|8|||#select|540|14|442|2|0|12'
+  want='step|secs|kept|total|differ_c|differ_js|touched#tier-select|18|2|8|||#select|540|14|442|2|0|12#select-off|0|||||#select-off|0|||||'
   [ "$got" = "$want" ] || { printf 'FAIL select ledger: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   rm -f "$GATE_SELECT_LEDGER"; GATE_SELECT_LEDGER=$keep_sl
   if ! printf 'src/checker/a.ms\n' | compiler_changed; then printf 'FAIL compiler changed: checker\n'; bad=1; fi
@@ -851,6 +863,7 @@ if [ "$record" -eq 0 ] && [ -f "$KNOWN" ]; then
     die "known red(s) without a note: each one names why it is still red, or the card that owns it"
   fi
 fi
+record_select_off
 
 mkdir -p "$OUT"
 flaky_ids >"$OUT/flaky.ids"
