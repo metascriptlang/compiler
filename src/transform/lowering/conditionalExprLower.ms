@@ -37,7 +37,7 @@ import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect } from "../walker";
-import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken } from "../util";
+import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter } from "../testUtil";
 import { nodeHasPositionalNew } from "./newExprLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
@@ -394,9 +394,15 @@ function lowerTernaryInVar(stmt: Node, ctx: TransformContext): Node[] {
 	letDecl.resolvedSym = stmt.resolvedSym;
 	if (stmt.nodeType != null) { letDecl.nodeType = stmt.nodeType; }
 	result.push(letDecl);
-	const thenTarget = makeIdent(vd.declName, loc);
+	// A generic template body is unchecked until instantiation, so its decls
+	// carry no symbols here; only the instantiated copies do.
+	const thenTarget = stmt.resolvedSym != null
+		? makeTypedIdentResolved(stmt.resolvedSym, null, loc)
+		: makeIdent(vd.declName, loc);
 	thenTarget.resolvedSym = stmt.resolvedSym;
-	const elseTarget = makeIdent(vd.declName, loc);
+	const elseTarget = stmt.resolvedSym != null
+		? makeTypedIdentResolved(stmt.resolvedSym, null, loc)
+		: makeIdent(vd.declName, loc);
 	elseTarget.resolvedSym = stmt.resolvedSym;
 	const thenStmt = branchValueStmt(thenTarget, cd.ternaryConsequent, loc);
 	const elseStmt = branchValueStmt(elseTarget, cd.ternaryAlternate, loc);
