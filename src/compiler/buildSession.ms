@@ -127,7 +127,7 @@ function foldTypes(session: BuildSession, node: Node, h: number): number {
 	let acc = h;
 	if (node.nodeType != null) acc = mix(acc, taHashString(typeShape(session, node.nodeType)));
 	const sym = node.resolvedSym;
-	if (sym != null) acc = mix(acc, taHashString(sym.name + "|" + sym.modulePath + "|" + typeShape(session, sym.symbolType)));
+	if (sym != null) acc = mix(acc, taHashString(sym.name + "|" + sym.modulePath + "|" + String(sym.disamb) + "|" + typeShape(session, sym.symbolType)));
 	const children: Node[] = [];
 	forEachChild(node, (child: Node): void => { children.push(child); });
 	for (const child of children) acc = foldTypes(session, child, acc);
@@ -202,4 +202,22 @@ export function projectTypesFingerprint(session: BuildSession, paths: string[]):
 	}
 	shapes.sort();
 	return shapes.join("\n");
+}
+
+import { NodeKind, createNodeAt, makeLoc } from "../ast/node";
+import { makeSymbol } from "../checker/symbol";
+import { int32Type } from "../checker/types";
+
+function slotReference(disamb: int32): Node {
+	const sym = makeSymbol("slot", SymbolKind.Variable, int32Type(), false);
+	sym.modulePath = "/m.ms";
+	sym.disamb = disamb;
+	const ref = createNodeAt(NodeKind.Identifier, { name: "slot" }, makeLoc(1, 1));
+	ref.resolvedSym = sym;
+	return ref;
+}
+
+test "an instance fingerprint tells two same-named symbols of one module apart" {
+	const session = createBuildSession(true);
+	assert instancesFingerprint(session, [slotReference(1)]) != instancesFingerprint(session, [slotReference(2)]);
 }
