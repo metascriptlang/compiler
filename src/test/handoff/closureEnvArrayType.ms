@@ -48,7 +48,7 @@ test "string[] env field resolves to Array(String)" {
 	assert prog != null;
 	const env = findEnvDecl(prog);
 	assert env != null;
-	assert envFieldType(env, "items") == TypeKind.Array;
+	assert envFieldType(env, "items1") == TypeKind.Array;
 }
 
 test "number[] env field resolves to Array(Number)" {
@@ -57,7 +57,7 @@ test "number[] env field resolves to Array(Number)" {
 	assert prog != null;
 	const env = findEnvDecl(prog);
 	assert env != null;
-	assert envFieldType(env, "nums") == TypeKind.Array;
+	assert envFieldType(env, "nums1") == TypeKind.Array;
 }
 
 test "struct[] env field resolves to Array" {
@@ -66,5 +66,5 @@ test "struct[] env field resolves to Array" {
 	assert prog != null;
 	const env = findEnvDecl(prog);
 	assert env != null;
-	assert envFieldType(env, "items") == TypeKind.Array;
+	assert envFieldType(env, "items1") == TypeKind.Array;
 }

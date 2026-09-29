@@ -73,7 +73,7 @@ function main(): void {
 	assert c.ok;
 	if (c.ok) {
 		// State machine present.
-		assert c.value.contains("dollarstate_");
+		assert c.value.contains("dollarstate1_");
 		// Pre-fix bug shape: bare `break;` at state-body indent inside the
 		// dispatcher (12 spaces for this source's nesting depth). Must NOT
 		// appear after fix — break is rewritten to state-assign + continue.
