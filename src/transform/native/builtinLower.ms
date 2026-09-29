@@ -14,12 +14,12 @@
 
 import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
 import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase } from "../../checker/types";
-import { findExtension, requestEnumToString } from "../../checker/context";
+import { findExtension } from "../../checker/context";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import {
-	makeIdent, makeCall, makeString, makeNumber, makeMember, makeConditional,
-	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringNameFor,
+	makeTypedIdentResolved, makeCall, makeString, makeNumber, makeMember, makeConditional,
+	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringSym,
 	makeHiddenAddr, runtimeRef,
 } from "../util";
 import { rewriteEcho, buildStructToString, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
@@ -111,13 +111,12 @@ function lowerEnumReverseIndex(node: Node, ctx: TransformContext): Node {
 	if (sym == null || sym.symbolKind != SymbolKind.Enum) return node;
 	const t = sym.symbolType;
 	if (t == null || t.kind != TypeKind.Enum || t.typeName == "") return node;
-	if (ctx.checkerCtx != null) requestEnumToString(ctx.checkerCtx, t);
 	const loc = node.location;
 	let idx = d.index;
 	if (idx.nodeType != null && idx.nodeType.kind == TypeKind.Number) {
 		idx = makeHiddenStdConv(idx, createPrimitive(TypeKind.Int32), loc);
 	}
-	const call = makeCall(makeIdent(enumToStringNameFor(t), loc), [idx], loc);
+	const call = makeCall(makeTypedIdentResolved(enumToStringSym(ctx, t), null, loc), [idx], loc);
 	call.nodeType = stringType();
 	return call;
 }
@@ -172,8 +171,7 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	}
 	// Enum → EnumName_toString
 	if (tk == TypeKind.Enum && objType.typeName != "") {
-		if (ctx.checkerCtx != null) requestEnumToString(ctx.checkerCtx, objType);
-		const call = makeCall(makeIdent(enumToStringNameFor(objType), loc), [obj], loc);
+		const call = makeCall(makeTypedIdentResolved(enumToStringSym(ctx, objType), null, loc), [obj], loc);
 		call.nodeType = stringType();
 		return call;
 	}

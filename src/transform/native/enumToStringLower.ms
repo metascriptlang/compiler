@@ -16,6 +16,7 @@ import {
 import { makeSymbol } from "../../checker/symbol";
 import { createEnum, stringType, createFunction } from "../../checker/types";
 import { SourceLocation, makeLoc } from "../../ast/node";
+import { requestedEnumToString } from "../../checker/context";
 
 // Helper: concat two Node arrays — returns new array (moved, not destroyed)
 function concatStmts(a: Node[], b: Node[]): Node[] {
@@ -30,9 +31,7 @@ function concatStmts(a: Node[], b: Node[]): Node[] {
 //     switch (v) { case 0: return "Member0"; ... default: return "<unknown>"; }
 //   }
 
-// fnName comes from the caller: the checker-owned Type (module-qualified, the
-// spelling every lowering site emits) or the bare name on the ctx-less fallback.
-function makeEnumToString(fnName: string, enumType: Type, loc: SourceLocation): Node {
+function makeEnumToString(fnSym: Symbol | null, fnName: string, enumType: Type, loc: SourceLocation): Node {
 	const members = enumType.typeNames;
 	const cases: Node[] = [];
 	let i = 0;
@@ -47,9 +46,10 @@ function makeEnumToString(fnName: string, enumType: Type, loc: SourceLocation): 
 	const valueSym = makeSymbol("v", SymbolKind.Parameter, enumType, false);
 	const switchStmt = makeSwitch(makeTypedIdentResolved(valueSym, null, loc), cases, loc);
 	const body = makeBlock([switchStmt], loc);
-	const fn = makeFnDecl(fnName, [valueSym], ["int32"], body, "", "string", loc);
+	const fn = makeFnDecl(fnSym != null ? fnSym.name : fnName, [valueSym], ["int32"], body, "", "string", loc);
 	// Override nodeType with proper enum param type
 	fn.nodeType = createFunction([enumType], [valueSym.name], stringType());
+	if (fnSym != null) fn.resolvedSym = fnSym;
 	return fn;
 }
 
@@ -151,7 +151,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 						const t = sym.symbolType;
 						if (injected.has(sym)) continue;
 						injected.add(sym);
-						toStringFns.push(makeEnumToString(enumToStringNameFor(t), t, sym.location));
+						toStringFns.push(makeEnumToString(requestedEnumToString(ctx.checkerCtx, t), enumToStringNameFor(t), t, sym.location));
 					}
 				}
 				scope = scope.parent;
@@ -159,12 +159,13 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		}
 		// Lowering sites (builtinLower/debugLower) request enums that are not in
 		// module scope — e.g. reached only through an imported field's type.
-		for (const t of ctx.checkerCtx.pendingEnumToStrings) {
+		for (const req of ctx.checkerCtx.pendingEnumToStrings) {
+			const t = req.enumType;
 			if (t.kind != TypeKind.Enum) continue;
 			if (t.sym == null) throw new Error(`internal: enum '${t.typeName}' reached toString lowering without its declaration`);
 			if (injected.has(t.sym)) continue;
 			injected.add(t.sym);
-			toStringFns.push(makeEnumToString(enumToStringNameFor(t), t, program.location));
+			toStringFns.push(makeEnumToString(req.fnSym, enumToStringNameFor(t), t, program.location));
 		}
 		ctx.checkerCtx.pendingEnumToStrings = [];
 		// Append to program stmts via return-value move (avoids local array aliasing)
@@ -183,7 +184,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		if (enumNode != null) {
 			const d = enumNode.data as EnumDeclData;
 			const loc = enumNode.location;
-			const toStringFn = makeEnumToString(enumToStringName(d.enumName), createEnum(d.enumName, d.enumMembers, null as unknown as number[]), loc);
+			const toStringFn = makeEnumToString(null, enumToStringName(d.enumName), createEnum(d.enumName, d.enumMembers, null as unknown as number[]), loc);
 			newStmts.push(toStringFn);
 		}
 		i = i + 1;

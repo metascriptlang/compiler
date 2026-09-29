@@ -3,9 +3,10 @@
 
 import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
-import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
+import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike } from "../checker/types";
+import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { lookupHookSym } from "../codegen/c/types";
+import { requestEnumToString, requestedEnumToString } from "../checker/context";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
 import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
 import { syntheticToken, makeNumber, makeIntNumber, makeString, makeBool } from "../checker/literalNodes";
@@ -142,6 +143,15 @@ export function typeHelperName(t: Type, bare: string): string {
 
 export function enumToStringNameFor(t: Type): string {
 	return typeHelperName(t, enumToStringName(t.typeName));
+}
+
+export function enumToStringSym(ctx: TransformContext, t: Type): Symbol {
+	if (ctx.checkerCtx == null || t.typeName == "") throw new Error(`internal: toString of enum '${t.typeName}' requested without a checker context`);
+	const existing = requestedEnumToString(ctx.checkerCtx, t);
+	if (existing != null) return existing;
+	const fnSym = mintSym(ctx, SymbolKind.Function, enumToStringName(t.typeName), createFunction([t], ["v"], stringType()));
+	requestEnumToString(ctx.checkerCtx, t, fnSym);
+	return fnSym;
 }
 
 // ===== Literal Builders =====
