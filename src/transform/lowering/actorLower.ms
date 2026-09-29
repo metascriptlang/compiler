@@ -10,18 +10,18 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	ActorDeclData, MethodDeclData, ConstructorDeclData,
 	DecoratedDeclData, ExportDeclData, ProgramData, NewExprData,
-	IdentifierData, VariableDeclData, FunctionDeclData, IfStmtData,
+	VariableDeclData, FunctionDeclData, IfStmtData,
 	WhileStmtData, ForOfStmtData, ForStmtData, BlockStmtData,
 	DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData,
 	ExprStmtData, ReturnStmtData, TestDeclData, ArrowFunctionData, FunctionExprData,
-	Symbol, SymbolKind, SymbolState, createNode } from "../../ast/node";
-import { TransformContext, freshTempSym } from "../context";
+	Symbol, SymbolKind, createNode } from "../../ast/node";
+import { TransformContext, freshTempSym, mintSym } from "../context";
 import { canFormAcycle } from "../cycles";
 import { containsExprKind, mapExprChildren, replaceInExpr } from "../walker";
 import { forEachChild } from "../../ast/visitor";
-import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
+import { setFlag, SymbolFlag } from "../../checker/symbol";
 import {
-	syntheticToken, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeCall, makeExprStmt, makeReturn,
+	syntheticToken, makeIdentResolved, makeTypedIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
 	isValueLayoutType, makeHiddenAddr, makeTryFinally, runtimeRef,
 } from "../util";
@@ -146,10 +146,10 @@ function markValueLayoutParamsAsMutated(sym: Symbol, paramTypes: Type[]): void {
 	sym.mutatedParams = bits;
 }
 
-function actorParamSyms(names: string[], types: Type[]): Symbol[] {
+function actorParamSyms(ctx: TransformContext, names: string[], types: Type[]): Symbol[] {
 	const syms: Symbol[] = [];
 	for (let i = 0; i < names.length; i += 1) {
-		syms.push(makeSymbol(names[i], SymbolKind.Parameter, i < types.length ? types[i] : noneType(), false));
+		syms.push(mintSym(ctx, SymbolKind.Parameter, names[i], i < types.length ? types[i] : noneType()));
 	}
 	return syms;
 }
@@ -259,24 +259,20 @@ function buildCallProxy(kind: number, params: Symbol[], paramTypes: Type[], retT
 	return makeBlock(stmts, loc);
 }
 
-// Resolved ident needed so ensureCrossModuleProto reads implSym.mutatedParams
-// for correct forward-decl signatures (T* vs T for value-layout params).
-function findImplSym(result: Node[], implName: string): Symbol {
-	for (const n of result) {
-		let inner = n;
-		if (n.kind == NodeKind.DecoratedDecl) {
-			const dd = n.data as DecoratedDeclData;
-			if (dd.decoratedNode != null) inner = dd.decoratedNode;
-		}
-		if (inner.kind == NodeKind.FunctionDecl && inner.resolvedSym != null
-				&& inner.resolvedSym.nativeName == implName) {
-			return inner.resolvedSym;
-		}
-	}
-	return null as unknown as Symbol;
+function recordActorImpl(ctx: TransformContext, method: Node, implSym: Symbol): void {
+	if (method.resolvedSym == null) throw new Error(`internal: actor method '${(method.data as MethodDeclData).methodName}' reached actor lowering without its symbol`);
+	ctx.actorImpls.set(method.resolvedSym, implSym);
 }
 
-function buildDispatchBody(methods: Node[], actorName: string, actorRefType: Type, thisSym: Symbol, msgParamSym: Symbol, loc: SourceLocation, result: Node[]): Node {
+// Resolved ident needed so ensureCrossModuleProto reads implSym.mutatedParams
+// for correct forward-decl signatures (T* vs T for value-layout params).
+function actorImplOf(ctx: TransformContext, method: Node): Symbol {
+	const implSym = method.resolvedSym != null ? ctx.actorImpls.get(method.resolvedSym) : null;
+	if (implSym == null) throw new Error(`internal: actor method '${(method.data as MethodDeclData).methodName}' reached its dispatch without an _impl handler`);
+	return implSym;
+}
+
+function buildDispatchBody(methods: Node[], actorRefType: Type, thisSym: Symbol, msgParamSym: Symbol, ctx: TransformContext, loc: SourceLocation): Node {
 	const stmts: Node[] = [];
 	// Cast void* this to actor's Ref type via HiddenStdConv (no C cast emitted — just type annotation).
 	// This tells codegen the argument is already a pointer, preventing &() struct promotion.
@@ -286,8 +282,8 @@ function buildDispatchBody(methods: Node[], actorName: string, actorRefType: Typ
 		convType: actorRefType,
 	}, syntheticToken(loc));
 	castThis.nodeType = actorRefType;
-	const selfSym = makeSymbol("_self", SymbolKind.Variable, actorRefType, false);
-	const selfDecl = makeVarDecl("_self", castThis, DeclKind.Const, loc);
+	const selfSym = mintSym(ctx, SymbolKind.Variable, "_self", actorRefType);
+	const selfDecl = makeVarDecl(selfSym.name, castThis, DeclKind.Const, loc);
 	selfDecl.nodeType = actorRefType;
 	selfDecl.resolvedSym = selfSym;
 	stmts.push(selfDecl);
@@ -335,20 +331,17 @@ function buildDispatchBody(methods: Node[], actorName: string, actorRefType: Typ
 			}
 			dSlot = dSlot + paramSlotWidth(mParamTypes, ai);
 		}
-		const implName = actorName + "_" + md.methodName + "_impl";
-		const implSym = findImplSym(result, implName);
 		// Callee resolved (forward-decl correctness) but CallExpr.resolvedSym=null
 		// to avoid emitNativeCall path which skips ccgIntroducedPtr promotion.
-		const implIdent = implSym != null ? makeIdentResolved(implSym, loc) : makeIdent(implName, loc);
-		const handlerCall = makeCall(implIdent, handlerArgs, loc);
+		const handlerCall = makeCall(makeIdentResolved(actorImplOf(ctx, m), loc), handlerArgs, loc);
 		handlerCall.resolvedSym = null;
 		let body: Node;
 		const isSuspending = md.methodFlags == "async_actor";
 		if (isSuspending) {
 			// Phase 5: async _impl returns msFuture*. Suspend actor, chain reply.
 			const bodyStmts: Node[] = [];
-			const implFutSym = makeSymbol("_implFut", SymbolKind.Variable, VOID_PTR, false);
-			const implFutDecl = makeVarDecl("_implFut", handlerCall, DeclKind.Const, loc);
+			const implFutSym = mintSym(ctx, SymbolKind.Variable, "_implFut", VOID_PTR);
+			const implFutDecl = makeVarDecl(implFutSym.name, handlerCall, DeclKind.Const, loc);
 			implFutDecl.nodeType = VOID_PTR;
 			implFutDecl.resolvedSym = implFutSym;
 			bodyStmts.push(implFutDecl);
@@ -359,12 +352,14 @@ function buildDispatchBody(methods: Node[], actorName: string, actorRefType: Typ
 				// so msString (16B) and other typed values are copied correctly.
 				const chainFn = futureChainFnForReturn(m.nodeType);
 				const futAccessCall = makeCall(runtimeRef("msMsgReplyFuture", loc), [makeTypedIdentResolved(msgParamSym, null, loc)], loc);
-				const replyDecl = makeVarDecl("_replyFut", futAccessCall, DeclKind.Const, loc);
+				const replyFutSym = mintSym(ctx, SymbolKind.Variable, "_replyFut", VOID_PTR);
+				const replyDecl = makeVarDecl(replyFutSym.name, futAccessCall, DeclKind.Const, loc);
 				replyDecl.nodeType = VOID_PTR;
+				replyDecl.resolvedSym = replyFutSym;
 				bodyStmts.push(replyDecl);
 				bodyStmts.push(makeExprStmt(
-					makeCall(runtimeRef(chainFn, loc), [makeIdentResolved(implFutSym, loc), makeIdent("_replyFut", loc)], loc), loc));
-				replyFutArg = makeIdent("_replyFut", loc);
+					makeCall(runtimeRef(chainFn, loc), [makeIdentResolved(implFutSym, loc), makeIdentResolved(replyFutSym, loc)], loc), loc));
+				replyFutArg = makeIdentResolved(replyFutSym, loc);
 			}
 			// Derive msActor* from _self.pid, pass reply future for R1 stop
 			const selfPid = makeMember(makeIdentResolved(selfSym, loc), "pid", loc);
@@ -381,8 +376,8 @@ function buildDispatchBody(methods: Node[], actorName: string, actorRefType: Typ
 			const retType = m.nodeType != null && m.nodeType.typeReturn != null ? m.nodeType.typeReturn : null;
 			const retMk = typeMsgKind(retType);
 			const completeFn = msgCompleteName(retMk);
-			const resultSym = makeSymbol("_result", SymbolKind.Variable, retType != null ? retType : noneType(), false);
-			const resultDecl = makeVarDecl("_result", handlerCall, DeclKind.Const, loc);
+			const resultSym = mintSym(ctx, SymbolKind.Variable, "_result", retType != null ? retType : noneType());
+			const resultDecl = makeVarDecl(resultSym.name, handlerCall, DeclKind.Const, loc);
 			resultDecl.resolvedSym = resultSym;
 			const futAccessCall = makeCall(runtimeRef("msMsgReplyFuture", loc), [makeTypedIdentResolved(msgParamSym, null, loc)], loc);
 			if ((retMk == "array" || retMk == "struct") && retType != null) {
@@ -391,9 +386,11 @@ function buildDispatchBody(methods: Node[], actorName: string, actorRefType: Typ
 				// boxCall.nodeType = void* per PARALOCK I13 (asyncBridge canonical).
 				const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [makeIdentResolved(resultSym, loc)], loc);
 				boxCall.nodeType = VOID_PTR;
-				const boxDecl = makeVarDecl("_boxed", boxCall, DeclKind.Const, loc);
+				const boxedSym = mintSym(ctx, SymbolKind.Variable, "_boxed", VOID_PTR);
+				const boxDecl = makeVarDecl(boxedSym.name, boxCall, DeclKind.Const, loc);
 				boxDecl.nodeType = VOID_PTR;
-				const completeCall = makeCall(runtimeRef(completeFn, loc), [futAccessCall, makeIdent("_boxed", loc)], loc);
+				boxDecl.resolvedSym = boxedSym;
+				const completeCall = makeCall(runtimeRef(completeFn, loc), [futAccessCall, makeIdentResolved(boxedSym, loc)], loc);
 				body = makeBlock([resultDecl, boxDecl, makeExprStmt(completeCall, loc)], loc);
 			} else {
 				const completeCall = makeCall(runtimeRef(completeFn, loc), [futAccessCall, makeIdentResolved(resultSym, loc)], loc);
@@ -414,7 +411,7 @@ function buildDispatchBody(methods: Node[], actorName: string, actorRefType: Typ
 
 // ===== Emit state struct (ClassDecl with pid field) =====
 
-function emitActorStruct(node: Node, d: ActorDeclData, loc: SourceLocation): Node {
+function emitActorStruct(node: Node, d: ActorDeclData, ctx: TransformContext, loc: SourceLocation): Node {
 	const structMembers: Node[] = [];
 	const pidProp = createNode(NodeKind.PropertyDecl, {
 		propName: "pid",
@@ -454,7 +451,7 @@ function emitActorStruct(node: Node, d: ActorDeclData, loc: SourceLocation): Nod
 					names.push(ps.name);
 					types.push(ps.symbolType);
 				}
-				emptyCtor.paramSyms = actorParamSyms(names, types);
+				emptyCtor.paramSyms = actorParamSyms(ctx, names, types);
 			}
 			structMembers.push(emptyCtor);
 		}
@@ -496,8 +493,9 @@ function emitActorStruct(node: Node, d: ActorDeclData, loc: SourceLocation): Nod
 // try/finally (not a trailing statement) so early returns AND async suspension
 // (finally rides the async body's completion) both release. Applies to
 // message-dispatched methods only — lifecycle hooks never cross the boundary.
-function wrapImplBodyWithShareRelease(body: Node, params: string[], paramTypes: Type[] | null, isVoid: boolean, ctx: TransformContext, loc: SourceLocation): Node {
+function wrapImplBodyWithShareRelease(body: Node, method: Node, paramTypes: Type[] | null, isVoid: boolean, ctx: TransformContext, loc: SourceLocation): Node {
 	if (paramTypes == null) return body;
+	const params = (method.data as MethodDeclData).methodParams;
 	const releases: Node[] = [];
 	for (let ai = 1; ai < params.length; ai = ai + 1) {
 		const t = ai < paramTypes.length ? paramTypes[ai] : null;
@@ -517,8 +515,8 @@ function wrapImplBodyWithShareRelease(body: Node, params: string[], paramTypes: 
 		} else {
 			continue;
 		}
-		const argIdent = makeIdent(params[ai], loc);
-		argIdent.nodeType = t;
+		if (method.paramSyms == null || ai >= method.paramSyms.length) throw new Error(`internal: actor method '${(method.data as MethodDeclData).methodName}' reached its boundary release without the symbol of parameter '${params[ai]}'`);
+		const argIdent = makeTypedIdentResolved(method.paramSyms[ai], t, loc);
 		releases.push(makeExprStmt(makeCall(runtimeRef(releaseFn, loc), [argIdent], loc), loc));
 	}
 	if (releases.length == 0) return body;
@@ -529,7 +527,7 @@ function wrapImplBodyWithShareRelease(body: Node, params: string[], paramTypes: 
 	return makeBlock([boundaryRelease], loc);
 }
 
-function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext, loc: SourceLocation, result: Node[]): void {
+function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered, ctx: TransformContext, loc: SourceLocation, result: Node[]): void {
 	let msgKind = 0;
 	for (const member of d.actorBody) {
 		let m = member;
@@ -559,11 +557,17 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 				implNode.typeExprs = m.typeExprs;
 				implNode.paramLocations = m.paramLocations;
 				implNode.paramSyms = m.paramSyms;
-				const implSym = makeSymbol(implNativeName, SymbolKind.Function, m.nodeType != null ? m.nodeType : noneType(), false);
+				const implSym = mintSym(ctx, SymbolKind.Function, implNativeName, m.nodeType != null ? m.nodeType : noneType());
 				implSym.nativeName = implNativeName;
-				implSym.state = SymbolState.Checked;
 				implNode.resolvedSym = implSym;
+				recordActorImpl(ctx, m, implSym);
 				result.push(implNode);
+				match (md.methodName) {
+					"onTerminate" => { lowered.onTerminate = implSym; },
+					"onExit" => { lowered.onExit = implSym; },
+					"onDown" => { lowered.onDown = implSym; },
+					_ => { lowered.onIdle = implSym; },
+				};
 				continue;
 			}
 			const isVoid = md.methodReturnType == "" || md.methodReturnType == "void";
@@ -581,7 +585,7 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 					fnName: implNativeName,
 					params: md.methodParams,
 					fnParamTypes: md.methodParamTypes,
-					fnBody: wrapImplBodyWithShareRelease(md.methodBody, md.methodParams, m.nodeType != null ? m.nodeType.typeChildren : null, isVoid, ctx, loc),
+					fnBody: wrapImplBodyWithShareRelease(md.methodBody, m, m.nodeType != null ? m.nodeType.typeChildren : null, isVoid, ctx, loc),
 					fnFlags: md.methodFlags,
 					fnReturnType: md.methodReturnType,
 					fnDefaults: [],
@@ -592,18 +596,18 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 				implNode.typeExprs = m.typeExprs;
 				implNode.paramLocations = m.paramLocations;
 				implNode.paramSyms = m.paramSyms;
-				const implSym = makeSymbol(implNativeName, SymbolKind.Function, m.nodeType != null ? m.nodeType : noneType(), false);
+				const implSym = mintSym(ctx, SymbolKind.Function, implNativeName, m.nodeType != null ? m.nodeType : noneType());
 				implSym.nativeName = implNativeName;
-				implSym.state = SymbolState.Checked;
 				implNode.resolvedSym = implSym;
 				if (m.nodeType != null) markValueLayoutParamsAsMutated(implSym, m.nodeType.typeChildren);
+				recordActorImpl(ctx, m, implSym);
 				result.push(implNode);
 			}
 
 			// Proxy: enqueues message (what extensionMethodLower resolves to)
 			const methodParamTypes = m.nodeType != null ? m.nodeType.typeChildren : [];
 			const methodRetType = m.nodeType != null && m.nodeType.typeReturn != null ? m.nodeType.typeReturn : voidType();
-			const proxySyms = actorParamSyms(md.methodParams, methodParamTypes);
+			const proxySyms = actorParamSyms(ctx, md.methodParams, methodParamTypes);
 			const proxyBody = isVoid
 				? buildSendProxy(msgKind, proxySyms, methodParamTypes, ctx, loc)
 				: buildCallProxy(msgKind, proxySyms, methodParamTypes, methodRetType, ctx, loc);
@@ -687,10 +691,10 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 				for (const tc of m.nodeType.typeChildren) ctorTypeChildren.push(tc);
 			}
 			fnNode.nodeType = createFunction(ctorTypeChildren, ctorParams, voidType());
-			const ctorSym = makeSymbol(name + "_constructor", SymbolKind.Function, fnNode.nodeType, false);
+			const ctorSym = mintSym(ctx, SymbolKind.Function, name + "_constructor", fnNode.nodeType);
 			ctorSym.nativeName = name + "_constructor";
-			ctorSym.state = SymbolState.Checked;
 			fnNode.resolvedSym = ctorSym;
+			lowered.ctor = ctorSym;
 			fnNode.typeExprs = m.typeExprs;
 			fnNode.paramLocations = m.paramLocations;
 			fnNode.paramSyms = m.paramSyms;
@@ -701,10 +705,10 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 
 // ===== Emit dispatch function =====
 
-function emitActorDispatch(d: ActorDeclData, name: string, actorType: Type, methods: Node[], loc: SourceLocation, result: Node[]): Node {
+function emitActorDispatch(d: ActorDeclData, name: string, actorType: Type, methods: Node[], ctx: TransformContext, loc: SourceLocation): Node {
 	const dispatchNativeName = name + "_dispatch";
-	const dispatchParamSyms = actorParamSyms(["this", "_dmsg"], [createPtr(voidType()), createPtr(voidType())]);
-	const dispatchBody = buildDispatchBody(methods, name, actorType, dispatchParamSyms[0], dispatchParamSyms[1], loc, result);
+	const dispatchParamSyms = actorParamSyms(ctx, ["this", "_dmsg"], [createPtr(voidType()), createPtr(voidType())]);
+	const dispatchBody = buildDispatchBody(methods, actorType, dispatchParamSyms[0], dispatchParamSyms[1], ctx, loc);
 	const fnNode = createNode(NodeKind.FunctionDecl, {
 		fnName: dispatchNativeName,
 		params: ["this", "_dmsg"],
@@ -720,9 +724,8 @@ function emitActorDispatch(d: ActorDeclData, name: string, actorType: Type, meth
 	const dispatchType = createFunction([createPtr(voidType()), createPtr(voidType())], ["this", "_dmsg"], voidType());
 	fnNode.nodeType = dispatchType;
 	fnNode.paramSyms = dispatchParamSyms;
-	const dispatchSym = makeSymbol(dispatchNativeName, SymbolKind.Function, dispatchType, false);
+	const dispatchSym = mintSym(ctx, SymbolKind.Function, dispatchNativeName, dispatchType);
 	dispatchSym.nativeName = dispatchNativeName;
-	dispatchSym.state = SymbolState.Checked;
 	fnNode.resolvedSym = dispatchSym;
 	return fnNode;
 }
@@ -744,7 +747,7 @@ function collectActorMethods(d: ActorDeclData): Node[] {
 
 // ===== ActorDecl → struct + handlers + proxies + dispatch =====
 
-function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[]): Node[] {
+function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, actors: ActorLowered[]): Node[] {
 	const d = node.data as ActorDeclData;
 	const name = d.actorName;
 	const result: Node[] = [];
@@ -753,53 +756,38 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 		return result;
 	}
 	const actorType = node.resolvedSym.symbolType;
+	const lowered: ActorLowered = {
+		actorSym: node.resolvedSym,
+		dispatch: null,
+		onTerminate: null,
+		onExit: null,
+		onDown: null,
+		onIdle: null,
+		sysMsg: null,
+		ctor: null,
+	};
+	actors.push(lowered);
 
-	result.push(emitActorStruct(node, d, loc));
+	result.push(emitActorStruct(node, d, ctx, loc));
 
 	const methods = collectActorMethods(d);
-	emitActorMethods(d, name, ctx, loc, result);
-
-	// Track lifecycle hooks for wiring
-	let hasOnTerminate = false;
-	let hasOnExit = false;
-	let hasOnDown = false;
-	let hasOnIdle = false;
-	let hasConstructor = false;
-	for (const m of methods) {
-		const md = m.data as MethodDeclData;
-		if (md.methodName == "onTerminate") hasOnTerminate = true;
-		if (md.methodName == "onExit") hasOnExit = true;
-		if (md.methodName == "onDown") hasOnDown = true;
-		if (md.methodName == "onIdle") hasOnIdle = true;
-	}
-	for (const member of d.actorBody) {
-		let m = member;
-		if (m.kind == NodeKind.DecoratedDecl) {
-			const dd = m.data as DecoratedDeclData;
-			if (dd.decoratedNode != null) m = dd.decoratedNode;
-		}
-		if (m.kind == NodeKind.ConstructorDecl) hasConstructor = true;
-	}
-	wireInfos.push({
-		name,
-		hasOnTerminate,
-		hasSysMsg: hasOnExit || hasOnDown || hasOnIdle,
-		hasTrapExits: hasOnExit,
-		hasCtor: hasConstructor,
-	});
+	emitActorMethods(d, name, lowered, ctx, loc, result);
 
 	// Emit system message handler if actor has onExit or onDown
-	if (hasOnExit || hasOnDown || hasOnIdle) {
+	const onExit = lowered.onExit;
+	const onDown = lowered.onDown;
+	const onIdle = lowered.onIdle;
+	if (onExit != null || onDown != null || onIdle != null) {
 		const sysHandlerName = name + "_systemMsg_impl";
 		const actorRefType = actorType;
-		const sysParamSyms = actorParamSyms(["this", "_smsg"], [createPtr(voidType()), createPtr(voidType())]);
+		const sysParamSyms = actorParamSyms(ctx, ["this", "_smsg"], [createPtr(voidType()), createPtr(voidType())]);
 		const selfIdent = makeTypedIdentResolved(sysParamSyms[0], actorRefType, loc);
 		const stmts: Node[] = [];
 		// Cast void* this to actor Ref type
 		const castThis = createNode(NodeKind.HiddenStdConv, { convExpr: selfIdent, convType: actorRefType }, syntheticToken(loc));
 		castThis.nodeType = actorRefType;
-		const sysSelfSym = makeSymbol("_self", SymbolKind.Variable, actorRefType, false);
-		const selfDecl = makeVarDecl("_self", castThis, DeclKind.Const, loc);
+		const sysSelfSym = mintSym(ctx, SymbolKind.Variable, "_self", actorRefType);
+		const selfDecl = makeVarDecl(sysSelfSym.name, castThis, DeclKind.Const, loc);
 		selfDecl.nodeType = actorRefType;
 		selfDecl.resolvedSym = sysSelfSym;
 		stmts.push(selfDecl);
@@ -807,42 +795,45 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 		selfRef.nodeType = actorRefType;
 
 		// if (msMsgKind(_smsg) === -1 && hasOnExit) → call onExit_impl(_self, pid, reason)
-		if (hasOnExit) {
+		if (onExit != null) {
 			const kindCheck = makeBinary(
 				makeCall(runtimeRef("msMsgKind", loc), [makeTypedIdentResolved(sysParamSyms[1], null, loc)], loc),
 				"===", makeNumber(-1, loc), loc);
-			const exitCall = makeCall(makeIdent(name + "_onExit_impl", loc), [
+			const exitCall = makeCall(makeIdentResolved(onExit, loc), [
 				selfRef,
 				makeCall(runtimeRef("msMsgGetDouble", loc), [makeTypedIdentResolved(sysParamSyms[1], null, loc), makeNumber(0, loc)], loc),
 				makeCall(runtimeRef("msMsgGetDouble", loc), [makeTypedIdentResolved(sysParamSyms[1], null, loc), makeNumber(1, loc)], loc),
 			], loc);
+			exitCall.resolvedSym = null;
 			stmts.push(createNode(NodeKind.IfStmt, {
 				condition: kindCheck, consequent: makeBlock([makeExprStmt(exitCall, loc)], loc),
 				alternate: makeBlock([], loc),
 			}, syntheticToken(loc)));
 		}
 		// if (msMsgKind(_smsg) === -2 && hasOnDown) → call onDown_impl(_self, ref, pid, reason)
-		if (hasOnDown) {
+		if (onDown != null) {
 			const kindCheck2 = makeBinary(
 				makeCall(runtimeRef("msMsgKind", loc), [makeTypedIdentResolved(sysParamSyms[1], null, loc)], loc),
 				"===", makeNumber(-2, loc), loc);
-			const downCall = makeCall(makeIdent(name + "_onDown_impl", loc), [
+			const downCall = makeCall(makeIdentResolved(onDown, loc), [
 				selfRef,
 				makeCall(runtimeRef("msMsgGetDouble", loc), [makeTypedIdentResolved(sysParamSyms[1], null, loc), makeNumber(0, loc)], loc),
 				makeCall(runtimeRef("msMsgGetDouble", loc), [makeTypedIdentResolved(sysParamSyms[1], null, loc), makeNumber(1, loc)], loc),
 				makeCall(runtimeRef("msMsgGetDouble", loc), [makeTypedIdentResolved(sysParamSyms[1], null, loc), makeNumber(2, loc)], loc),
 			], loc);
+			downCall.resolvedSym = null;
 			stmts.push(createNode(NodeKind.IfStmt, {
 				condition: kindCheck2, consequent: makeBlock([makeExprStmt(downCall, loc)], loc),
 				alternate: makeBlock([], loc),
 			}, syntheticToken(loc)));
 		}
 		// if (msMsgKind(_smsg) === -3 && hasOnIdle) → call onIdle_impl(_self)
-		if (hasOnIdle) {
+		if (onIdle != null) {
 			const kindCheck3 = makeBinary(
 				makeCall(runtimeRef("msMsgKind", loc), [makeTypedIdentResolved(sysParamSyms[1], null, loc)], loc),
 				"===", makeNumber(-3, loc), loc);
-			const idleCall = makeCall(makeIdent(name + "_onIdle_impl", loc), [selfRef], loc);
+			const idleCall = makeCall(makeIdentResolved(onIdle, loc), [selfRef], loc);
+			idleCall.resolvedSym = null;
 			stmts.push(createNode(NodeKind.IfStmt, {
 				condition: kindCheck3, consequent: makeBlock([makeExprStmt(idleCall, loc)], loc),
 				alternate: makeBlock([], loc),
@@ -859,19 +850,17 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 		const sysType = createFunction([createPtr(voidType()), createPtr(voidType())], ["this", "_smsg"], voidType());
 		sysHandlerNode.nodeType = sysType;
 		sysHandlerNode.paramSyms = sysParamSyms;
-		const sysSym = makeSymbol(sysHandlerName, SymbolKind.Function, sysType, false);
+		const sysSym = mintSym(ctx, SymbolKind.Function, sysHandlerName, sysType);
 		sysSym.nativeName = sysHandlerName;
-		sysSym.state = SymbolState.Checked;
 		sysHandlerNode.resolvedSym = sysSym;
 		result.push(sysHandlerNode);
+		lowered.sysMsg = sysSym;
 	}
 
 	if (methods.length > 0) {
-		const dispatchNode = emitActorDispatch(d, name, actorType, methods, loc, result);
+		const dispatchNode = emitActorDispatch(d, name, actorType, methods, ctx, loc);
 		result.push(dispatchNode);
-		const dispatchSym = dispatchNode.resolvedSym;
-		dispatchSyms.push(dispatchSym!);
-		dispatchNames.push(name);
+		lowered.dispatch = dispatchNode.resolvedSym;
 	}
 
 	return result;
@@ -879,25 +868,21 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 
 // ===== Program-level: expand ActorDecl + inject include + rewrite new =====
 
-function expandActorDecls(program: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], ctx: TransformContext): Node {
+function expandActorDecls(program: Node, actors: ActorLowered[], ctx: TransformContext): Node {
 	if (program.kind != NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
 	const newStmts: Node[] = [];
 
 	for (const stmt of pd.programStmts) {
 		if (stmt.kind == NodeKind.ActorDecl) {
-			const ad = stmt.data as ActorDeclData;
-			names.push(ad.actorName);
-			const expanded = lowerActorDecl(stmt, stmt.location, ctx, dispatchSyms, dispatchNames, wireInfos);
+			const expanded = lowerActorDecl(stmt, stmt.location, ctx, actors);
 			for (const n of expanded) newStmts.push(n);
 			continue;
 		}
 		if (stmt.kind == NodeKind.ExportDecl) {
 			const ed = stmt.data as ExportDeclData;
 			if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.ActorDecl) {
-				const ad = ed.exportedDecl.data as ActorDeclData;
-				names.push(ad.actorName);
-				const expanded = lowerActorDecl(ed.exportedDecl, ed.exportedDecl.location, ctx, dispatchSyms, dispatchNames, wireInfos);
+				const expanded = lowerActorDecl(ed.exportedDecl, ed.exportedDecl.location, ctx, actors);
 				for (const n of expanded) {
 					newStmts.push(createNode(NodeKind.ExportDecl, {
 						exportedDecl: n,
@@ -912,7 +897,7 @@ function expandActorDecls(program: Node, names: string[], dispatchSyms: Symbol[]
 	pd.programStmts = newStmts;
 
 	// Inject @include for actor.h if actors were found
-	if (names.length > 0 && ctx.checkerCtx != null) {
+	if (actors.length > 0 && ctx.checkerCtx != null) {
 		if (ctx.checkerCtx.includeDirectives != "") {
 			ctx.checkerCtx.includeDirectives = ctx.checkerCtx.includeDirectives + "\n";
 		}
@@ -922,42 +907,40 @@ function expandActorDecls(program: Node, names: string[], dispatchSyms: Symbol[]
 	return program;
 }
 
-// Per-actor wiring flags — tracks which lifecycle hooks need runtime wiring
-interface ActorWireInfo {
-	name: string;
-	hasOnTerminate: boolean;
-	hasSysMsg: boolean;
-	hasTrapExits: boolean;
-	hasCtor: boolean;
+// The routines lowering emitted for one actor of this module; `new` of the actor wires them.
+interface ActorLowered {
+	actorSym: Symbol;
+	dispatch: Symbol | null;
+	onTerminate: Symbol | null;
+	onExit: Symbol | null;
+	onDown: Symbol | null;
+	onIdle: Symbol | null;
+	sysMsg: Symbol | null;
+	ctor: Symbol | null;
 }
 
-function findWireInfo(infos: ActorWireInfo[], actorName: string): ActorWireInfo {
-	for (const info of infos) {
-		if (info.name == actorName) return info;
+// The actor a `new` constructs, when it is one this module declares.
+function loweredActorOf(actors: ActorLowered[], ne: NewExprData): ActorLowered | null {
+	const calleeSym = ne.newCallee.resolvedSym;
+	if (calleeSym == null) return null;
+	for (const a of actors) {
+		if (a.actorSym == calleeSym) return a;
 	}
-	return null as unknown as ActorWireInfo;
+	return null;
 }
 
 // ===== Generate actor pid wiring statements for a variable =====
 
-function generateActorWiring(varName: string, varSym: Symbol | null, actorName: string, dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], loc: SourceLocation, newExprNode: Node): Node[] {
+function generateActorWiring(varName: string, varSym: Symbol | null, actor: ActorLowered, loc: SourceLocation, newExprNode: Node): Node[] {
 	const result: Node[] = [];
-	let dSym: Symbol | null = null;
-	for (let di = 0; di < dispatchNames.length; di = di + 1) {
-		if (dispatchNames[di] == actorName) { dSym = dispatchSyms[di]; }
-	}
-	const dispatchRef = dSym != null
-		? makeIdentResolved(dSym, loc)
-		: makeIdent(actorName + "_dispatch", loc);
-	// Use makeIdentResolved when we have the variable's symbol — required for
-	// module-top-level vars whose mangled name is `<name>__Z85<modulePath>`.
-	// makeIdent emits the bare identifier, which only works for function-local
-	// variables (no mangle prefix). At module scope the bare name is undeclared
-	// in the generated C and the build fails to link the actor wiring stmts.
+	const actorName = actor.actorSym.name;
+	const dSym = actor.dispatch;
+	if (dSym == null) throw new Error(`internal: actor '${actorName}' declares no message method, so it has no dispatch to wire at 'new'`);
+	if (varSym == null) throw new Error(`internal: the binding '${varName}' of a new '${actorName}' reached actor wiring without its symbol`);
+	const bound: Symbol = varSym;
+	const dispatchRef = makeIdentResolved(dSym, loc);
 	const varRef = function(): Node {
-		return varSym != null
-			? makeIdentResolved(varSym, loc)
-			: makeIdent(varName, loc);
+		return makeIdentResolved(bound, loc);
 	};
 	const pidMember = function(): Node {
 		const m = makeMember(varRef(), "pid", loc);
@@ -982,37 +965,40 @@ function generateActorWiring(varName: string, varSym: Symbol | null, actorName: 
 		varRef(),
 	], loc);
 	result.push(makeExprStmt(increfCall, loc));
-	const wi = findWireInfo(wireInfos, actorName);
-	if (wi != null && wi.hasOnTerminate) {
+	const onTerminate = actor.onTerminate;
+	if (onTerminate != null) {
 		const pidRef2 = pidMember();
 		const setTermCall = makeCall(runtimeRef("msActorSetOnTerminate", loc), [
 			makeCall(runtimeRef("msActorFromPid", loc), [pidRef2], loc),
-			makeIdent(actorName + "_onTerminate_impl", loc),
+			makeIdentResolved(onTerminate, loc),
 		], loc);
 		result.push(makeExprStmt(setTermCall, loc));
 	}
-	if (wi != null && wi.hasSysMsg) {
+	const sysMsg = actor.sysMsg;
+	if (sysMsg != null) {
 		const pidRef3 = pidMember();
 		const setSysCall = makeCall(runtimeRef("msActorSetSystemMsgHandler", loc), [
 			makeCall(runtimeRef("msActorFromPid", loc), [pidRef3], loc),
-			makeIdent(actorName + "_systemMsg_impl", loc),
+			makeIdentResolved(sysMsg, loc),
 		], loc);
 		result.push(makeExprStmt(setSysCall, loc));
 	}
-	if (wi != null && wi.hasTrapExits) {
+	if (actor.onExit != null) {
 		const trapCall = makeCall(runtimeRef("msActorTrapExits", loc), [
 			pidMember(),
 			makeNumber(1, loc),
 		], loc);
 		result.push(makeExprStmt(trapCall, loc));
 	}
-	if (wi != null && wi.hasCtor && newExprNode != null) {
+	const ctor = actor.ctor;
+	if (ctor != null && newExprNode != null) {
 		const ne = newExprNode.data as NewExprData;
 		const ctorArgs: Node[] = [varRef()];
 		if (ne.newArguments != null) {
 			for (const arg of ne.newArguments) ctorArgs.push(arg);
 		}
-		const ctorCall = makeCall(makeIdent(actorName + "_constructor", loc), ctorArgs, loc);
+		const ctorCall = makeCall(makeIdentResolved(ctor, loc), ctorArgs, loc);
+		ctorCall.resolvedSym = null;
 		result.push(makeExprStmt(ctorCall, loc));
 	}
 	return result;
@@ -1023,7 +1009,7 @@ function generateActorWiring(varName: string, varSym: Symbol | null, actorName: 
 // where the NewExpr is not directly in a VarDecl initializer.
 // Returns pre-statements to inject before the original statement.
 
-function extractActorNewExprs(stmt: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], ctx: TransformContext): Node[] {
+function extractActorNewExprs(stmt: Node, actors: ActorLowered[], ctx: TransformContext): Node[] {
 	// Skip VarDecl with direct NewExpr initializer — handled by existing code path
 	if (stmt.kind == NodeKind.VariableDecl) {
 		const vd = stmt.data as VariableDeclData;
@@ -1045,19 +1031,15 @@ function extractActorNewExprs(stmt: Node, names: string[], dispatchSyms: Symbol[
 		if (node.kind != NodeKind.NewExpr) return node;
 		const ne = node.data as NewExprData;
 		if (ne.newCallee.kind != NodeKind.Identifier) return node;
-		const id = ne.newCallee.data as IdentifierData;
-		let actorName = "";
-		for (const n of names) {
-			if (n == id.name) actorName = n;
-		}
-		if (actorName == "") return node;
+		const actor = loweredActorOf(actors, ne);
+		if (actor == null) return node;
 		const loc = node.location;
 		const tmpSym = freshTempSym(ctx, "actor", node.nodeType);
 		const tmpName = tmpSym.name;
 		const tmpDecl = makeVarDecl(tmpName, node, DeclKind.Const, loc);
 		tmpDecl.resolvedSym = tmpSym;
 		preStmts.push(tmpDecl);
-		const wiring = generateActorWiring(tmpName, tmpSym, actorName, dispatchSyms, dispatchNames, wireInfos, loc, node);
+		const wiring = generateActorWiring(tmpName, tmpSym, actor, loc, node);
 		for (const w of wiring) preStmts.push(w);
 		return makeIdentResolved(tmpSym, loc);
 	};
@@ -1074,14 +1056,14 @@ function extractActorNewExprs(stmt: Node, names: string[], dispatchSyms: Symbol[
 
 // ===== Wire actor creation after `new ActorType()` in any statement list =====
 
-function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], ctx: TransformContext): Node[] {
+function wireActorInStmts(stmts: Node[], actors: ActorLowered[], ctx: TransformContext): Node[] {
 	const out: Node[] = [];
 	for (const stmt of stmts) {
 		// Recurse into nested blocks first
-		wireActorInNode(stmt, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		wireActorInNode(stmt, actors, ctx);
 		// Extract `new ActorType()` from non-VarDecl-initializer positions into temp vars.
 		// e.g. `actors.push(new Counter())` → `const _a0 = new Counter(); _a0.pid = ...; actors.push(_a0);`
-		const preStmts = extractActorNewExprs(stmt, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+		const preStmts = extractActorNewExprs(stmt, actors, ctx);
 		for (const ps of preStmts) out.push(ps);
 		out.push(stmt);
 		// After VarDecl with `new ActorType()`, inject pid wiring
@@ -1090,17 +1072,9 @@ function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[]
 			if (vd.initializer != null && vd.initializer.kind == NodeKind.NewExpr) {
 				const ne = vd.initializer.data as NewExprData;
 				if (ne.newCallee.kind == NodeKind.Identifier) {
-					const id = ne.newCallee.data as IdentifierData;
-					let actorName = "";
-					for (const n of names) {
-						if (n == id.name) actorName = n;
-					}
-					if (actorName != "") {
-						// Pass stmt.resolvedSym so the wiring stmts reference the
-						// var via its mangled name (top-level vars get a module
-						// suffix; bare `makeIdent(name)` would emit the unmangled
-						// form and the C compiler would see an undeclared identifier).
-						const wiring = generateActorWiring(vd.declName, stmt.resolvedSym, actorName, dispatchSyms, dispatchNames, wireInfos, stmt.location, vd.initializer);
+					const actor = loweredActorOf(actors, ne);
+					if (actor != null) {
+						const wiring = generateActorWiring(vd.declName, stmt.resolvedSym, actor, stmt.location, vd.initializer);
 						for (const w of wiring) out.push(w);
 					}
 				}
@@ -1112,30 +1086,25 @@ function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[]
 
 // ===== Recursively walk into nodes that contain statement lists =====
 
-function exprHasActorNew(expr: Node, names: string[]): boolean {
+function exprHasActorNew(expr: Node, actors: ActorLowered[]): boolean {
 	if (expr == null) return false;
 	if (expr.kind == NodeKind.NewExpr) {
 		const ne = expr.data as NewExprData;
-		if (ne.newCallee.kind == NodeKind.Identifier) {
-			const id = ne.newCallee.data as IdentifierData;
-			for (const n of names) {
-				if (n == id.name) return true;
-			}
-		}
+		if (ne.newCallee.kind == NodeKind.Identifier && loweredActorOf(actors, ne) != null) return true;
 	}
 	const hits: Node[] = [];
 	mapExprChildren(expr, (child: Node): Node => {
-		if (exprHasActorNew(child, names)) hits.push(child);
+		if (exprHasActorNew(child, actors)) hits.push(child);
 		return child;
 	});
 	return hits.length > 0;
 }
 
-function wireActorInNode(node: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], ctx: TransformContext): void {
+function wireActorInNode(node: Node, actors: ActorLowered[], ctx: TransformContext): void {
 	match (node.kind) {
 		NodeKind.FunctionDecl => {
 			const fd = node.data as FunctionDeclData;
-			if (fd.fnBody != null) wireActorInNode(fd.fnBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			if (fd.fnBody != null) wireActorInNode(fd.fnBody, actors, ctx);
 		},
 		NodeKind.ExportDecl => {
 			// `export function foo() { const w = new Actor(); }` — drill into the
@@ -1144,73 +1113,73 @@ function wireActorInNode(node: Node, names: string[], dispatchSyms: Symbol[], di
 			// skipped, leaving the actor pid uninitialized and SEND a no-op.
 			const ed = node.data as ExportDeclData;
 			if (ed.exportedDecl != null) {
-				wireActorInNode(ed.exportedDecl, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+				wireActorInNode(ed.exportedDecl, actors, ctx);
 			}
 		},
 		NodeKind.BlockStmt => {
 			const bd = node.data as BlockStmtData;
-			bd.statements = wireActorInStmts(bd.statements, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			bd.statements = wireActorInStmts(bd.statements, actors, ctx);
 		},
 		NodeKind.IfStmt => {
 			const id = node.data as IfStmtData;
-			wireActorInNode(id.consequent, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-			if (id.alternate != null) wireActorInNode(id.alternate, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			wireActorInNode(id.consequent, actors, ctx);
+			if (id.alternate != null) wireActorInNode(id.alternate, actors, ctx);
 		},
 		NodeKind.WhileStmt => {
 			const wd = node.data as WhileStmtData;
-			wireActorInNode(wd.whileBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			wireActorInNode(wd.whileBody, actors, ctx);
 		},
 		NodeKind.DoWhileStmt => {
 			const dd = node.data as DoWhileStmtData;
-			wireActorInNode(dd.doBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			wireActorInNode(dd.doBody, actors, ctx);
 		},
 		NodeKind.ForOfStmt => {
 			const fd = node.data as ForOfStmtData;
-			wireActorInNode(fd.forOfBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			wireActorInNode(fd.forOfBody, actors, ctx);
 		},
 		NodeKind.ForStmt => {
 			const fd = node.data as ForStmtData;
-			wireActorInNode(fd.forBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			wireActorInNode(fd.forBody, actors, ctx);
 		},
 		NodeKind.TryCatchStmt => {
 			const td = node.data as TryCatchStmtData;
-			wireActorInNode(td.tryBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-			if (td.catchBody != null) wireActorInNode(td.catchBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-			if (td.finallyBody != null) wireActorInNode(td.finallyBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			wireActorInNode(td.tryBody, actors, ctx);
+			if (td.catchBody != null) wireActorInNode(td.catchBody, actors, ctx);
+			if (td.finallyBody != null) wireActorInNode(td.finallyBody, actors, ctx);
 		},
 		NodeKind.SwitchStmt => {
 			const sd = node.data as SwitchStmtData;
-			for (const c of sd.switchCases) wireActorInNode(c, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			for (const c of sd.switchCases) wireActorInNode(c, actors, ctx);
 		},
 		NodeKind.SwitchCase => {
 			const sc = node.data as SwitchCaseData;
-			sc.caseStmts = wireActorInStmts(sc.caseStmts, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			sc.caseStmts = wireActorInStmts(sc.caseStmts, actors, ctx);
 		},
 		NodeKind.TestDecl => {
 			const td = node.data as TestDeclData;
-			wireActorInNode(td.testBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+			wireActorInNode(td.testBody, actors, ctx);
 		},
 		NodeKind.ArrowFunction => {
 			const ad = node.data as ArrowFunctionData;
 			if (ad.arrowBody != null) {
-				if (ad.arrowBody.kind != NodeKind.BlockStmt && exprHasActorNew(ad.arrowBody, names)) {
+				if (ad.arrowBody.kind != NodeKind.BlockStmt && exprHasActorNew(ad.arrowBody, actors)) {
 					ad.arrowBody = makeBlock([makeReturn(ad.arrowBody, node.location)], node.location);
 				}
-				wireActorInNode(ad.arrowBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+				wireActorInNode(ad.arrowBody, actors, ctx);
 			}
 		},
 		NodeKind.FunctionExpr => {
 			const fe = node.data as FunctionExprData;
 			if (fe.funcExprBody != null) {
-				if (fe.funcExprBody.kind != NodeKind.BlockStmt && exprHasActorNew(fe.funcExprBody, names)) {
+				if (fe.funcExprBody.kind != NodeKind.BlockStmt && exprHasActorNew(fe.funcExprBody, actors)) {
 					fe.funcExprBody = makeBlock([makeReturn(fe.funcExprBody, node.location)], node.location);
 				}
-				wireActorInNode(fe.funcExprBody, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+				wireActorInNode(fe.funcExprBody, actors, ctx);
 			}
 		},
 		_ => {
 			forEachChild(node, (child: Node): void => {
-				wireActorInNode(child, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+				wireActorInNode(child, actors, ctx);
 			});
 		},
 	};
@@ -1218,12 +1187,12 @@ function wireActorInNode(node: Node, names: string[], dispatchSyms: Symbol[], di
 
 // ===== Top-level: wire actors at all scopes + inject poll at exit =====
 
-function rewriteAndInjectPoll(program: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], ctx: TransformContext): Node {
+function rewriteAndInjectPoll(program: Node, actors: ActorLowered[], ctx: TransformContext): Node {
 	if (program.kind != NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
 
 	// Recursively wire actor creation at all scope levels
-	pd.programStmts = wireActorInStmts(pd.programStmts, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+	pd.programStmts = wireActorInStmts(pd.programStmts, actors, ctx);
 
 	// Drain all actor mailboxes at exit
 	const exitLoc = program.location;
@@ -1331,7 +1300,7 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 				fnName: implNativeName,
 				params: md.methodParams,
 				fnParamTypes: md.methodParamTypes,
-				fnBody: wrapImplBodyWithShareRelease(md.methodBody, md.methodParams, m.nodeType != null ? m.nodeType.typeChildren : null, implVoid, ctx, actorNode.location),
+				fnBody: wrapImplBodyWithShareRelease(md.methodBody, m, m.nodeType != null ? m.nodeType.typeChildren : null, implVoid, ctx, actorNode.location),
 				fnFlags: "async",
 				fnReturnType: md.methodReturnType,
 				fnDefaults: [],
@@ -1353,11 +1322,10 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 			implNode.typeExprs = m.typeExprs;
 			implNode.paramLocations = m.paramLocations;
 			implNode.paramSyms = m.paramSyms;
-			const implSym = makeSymbol(implNativeName, SymbolKind.Function,
-				implType != null ? implType : noneType(), false);
+			const implSym = mintSym(ctx, SymbolKind.Function, implNativeName, implType != null ? implType : noneType());
 			implSym.nativeName = implNativeName;
-			implSym.state = SymbolState.Checked;
 			implNode.resolvedSym = implSym;
+			recordActorImpl(ctx, m, implSym);
 			extracted.push(implNode);
 
 			// Mark as extracted so emitActorMethods (Phase B) skips _impl creation.
@@ -1380,11 +1348,8 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 // ===== Entry Point =====
 
 export function lowerActor(program: Node, ctx: TransformContext): Node {
-	const names: string[] = [];
-	const dispatchSyms: Symbol[] = [];
-	const dispatchNames: string[] = [];
-	const wireInfos: ActorWireInfo[] = [];
-	const expanded = expandActorDecls(program, names, dispatchSyms, dispatchNames, wireInfos, ctx);
-	if (names.length == 0) return expanded;
-	return rewriteAndInjectPoll(expanded, names, dispatchSyms, dispatchNames, wireInfos, ctx);
+	const actors: ActorLowered[] = [];
+	const expanded = expandActorDecls(program, actors, ctx);
+	if (actors.length == 0) return expanded;
+	return rewriteAndInjectPoll(expanded, actors, ctx);
 }
