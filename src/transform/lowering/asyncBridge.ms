@@ -27,22 +27,22 @@ import { TransformContext, mintSym } from "../context";
 import {
 	makeTypedIdentResolved, makeVarDecl, makeExprStmt, makeReturn,
 	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeWhile, makeBool, makeNumber, makeString,
-	makeAssign, makeBinary, makeTryCatch, makeCatchSym, makeContinue, syntheticToken, extractBodyStmts, collectDeclNames, runtimeRef,
+	makeAssign, makeBinary, makeTryCatch, makeCatchSym, makeContinue, syntheticToken, extractBodyStmts, runtimeRef,
 } from "../util";
-import { NameSet, createNameSet, nameSetAdd } from "../context";
+import { createSymSet, symSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
-import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
+import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
 import { stmtCountAfter } from "../testUtil";
 
 // ===== Variable Type Collection =====
-// Walk body to collect variable name → Type BEFORE rewriting. Used to set nodeType
+// Walk body to collect binding → Type BEFORE rewriting. Used to set nodeType
 // on hoisted locals so lambda lifting creates correctly typed env struct fields.
 
-interface VarTypeInfo { name: string; varType: Type; varSym: Symbol | null; }
+interface VarTypeInfo { varType: Type; varSym: Symbol; }
 
 function collectVarTypes(node: Node, result: VarTypeInfo[]): void {
 	if (node == null || isFuncBoundary(node)) return;
-	if (node.kind == NodeKind.VariableDecl) {
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null) {
 		const d = node.data as VariableDeclData;
 		let varType = node.nodeType;
 		if (varType == null && d.initializer != null && d.initializer.nodeType != null) {
@@ -52,24 +52,17 @@ function collectVarTypes(node: Node, result: VarTypeInfo[]): void {
 			varType = node.resolvedSym.symbolType;
 		}
 		if (varType != null) {
-			result.push({ name: d.declName, varType, varSym: node.resolvedSym });
+			result.push({ varType, varSym: node.resolvedSym });
 		}
 	}
 	forEachChild(node, (child: Node): void => { collectVarTypes(child, result); });
 }
 
-function findVarType(entries: VarTypeInfo[], name: string): Type {
+function findVarType(entries: VarTypeInfo[], sym: Symbol): Type {
 	for (const e of entries) {
-		if (e.name == name) return e.varType;
+		if (e.varSym == sym) return e.varType;
 	}
 	return null as unknown as Type;
-}
-
-function findVarSym(entries: VarTypeInfo[], name: string): Symbol | null {
-	for (const e of entries) {
-		if (e.name == name) return e.varSym;
-	}
-	return null;
 }
 
 // Promise<T> from inner type, or Promise<void> if null
@@ -287,7 +280,7 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 		let pi = 0;
 		while (pi < sc.items.length) {
 			if (sc.items[pi].isYield && sc.items[pi].nextState == i) {
-				if (sc.items[pi].yieldVarName != "") prevIdx = pi;
+				if (sc.items[pi].yieldVarSym != null) prevIdx = pi;
 				else voidPrevIdx = pi;
 			}
 			pi = pi + 1;
@@ -303,8 +296,7 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 		}
 		if (prevIdx >= 0) {
 			const prevYfSym = yieldFutureSym(yfs, prevIdx);
-			const varSym = sc.items[prevIdx].yieldVarSym;
-			if (varSym == null) throw new Error(`internal: the binding '${sc.items[prevIdx].yieldVarName}' of an await reached the async state machine without its symbol`);
+			const varSym = sc.items[prevIdx].yieldVarSym!;
 			let varType = sc.items[prevIdx].yieldVarType;
 			// Defensive: if yieldVarType is still a Promise wrapper, extract inner type
 			if (varType != null && isAwaitable(varType)) varType = awaitedType(varType);
@@ -443,9 +435,9 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	const varTypes: VarTypeInfo[] = [];
 	collectVarTypes(body, varTypes);
 
-	// 2. Collect local variable names for hoisting
-	const nc: NameSet = createNameSet();
-	collectDeclNames(body, nc, false);
+	// 2. Collect the locals for hoisting
+	const locals = createSymSet();
+	collectStateLocals(body, ctx, locals);
 
 	const stateSym = mintSym(ctx, SymbolKind.Variable, "$state", numberType());
 	setFlag(stateSym, SymbolFlag.Mutable);
@@ -472,8 +464,8 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 
 	// 5. Patch yieldVarType from collected varTypes (nodeType may be cleared by transforms)
 	for (let si = 0; si < sc.items.length; si += 1) {
-		if (sc.items[si].isYield && sc.items[si].yieldVarName != "") {
-			const collected = findVarType(varTypes, sc.items[si].yieldVarName);
+		if (sc.items[si].isYield && sc.items[si].yieldVarSym != null) {
+			const collected = findVarType(varTypes, sc.items[si].yieldVarSym!);
 			if (collected != null) {
 				// Collected type may be Promise<T> from async call return type — extract T
 				sc.items[si].yieldVarType = isAwaitable(collected) ? awaitedType(collected) : collected;
@@ -482,21 +474,21 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	}
 
 	// 6. Convert the declarations of the locals that outlive a state to assignments
-	const lifted = localsSpanningStates(sc, nc);
+	const lifted = localsSpanningStates(sc, locals);
 	// Also add yielded-future locals ($yf0, $yf1, ...) to the hoisted set
 	// with typed future types (Promise<T> from the yield variable type)
 	const yfs: YieldFuture[] = [];
 	for (let si = 0; si < sc.items.length; si += 1) {
-		convertDeclsToAssigns(sc.items[si].stmts, lifted, ctx, loc);
+		convertDeclsToAssigns(sc.items[si].stmts, lifted, loc);
 		if (sc.items[si].isYield) {
 			const yfName = "$yf" + si;
-			nameSetAdd(lifted, yfName);
 			// Set $yf type to Promise<T> where T = yield variable type
 			const yfVarType = sc.items[si].yieldVarType;
 			const yfFutType = promiseTypeFor(yfVarType);
 			const yfSym = mintSym(ctx, SymbolKind.Variable, yfName, yfFutType);
+			symSetAdd(lifted, yfSym);
 			yfs.push({ state: si, sym: yfSym });
-			varTypes.push({ name: yfName, varType: yfFutType, varSym: yfSym });
+			varTypes.push({ varType: yfFutType, varSym: yfSym });
 		}
 	}
 
@@ -562,14 +554,14 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 
 	// Hoisted locals: let a; let b; let $yf0; let $yf1; ...
 	// Set nodeType from original declarations so lambda lifting creates typed env fields.
-	for (const localName of lifted.items) {
-		const origType = findVarType(varTypes, localName);
+	for (const sym of lifted.items) {
+		const origType = findVarType(varTypes, sym);
 		const defaultInit = (origType != null) ? makeDefaultValue(origType, loc) : makeNull(loc);
-		const localDecl = makeVarDecl(localName, defaultInit, DeclKind.Let, loc);
+		const localDecl = makeVarDecl(sym.name, defaultInit, DeclKind.Let, loc);
 		if (origType != null) {
 			localDecl.nodeType = origType;
 		}
-		localDecl.resolvedSym = findVarSym(varTypes, localName);
+		localDecl.resolvedSym = sym;
 		outerStmts.push(localDecl);
 	}
 
