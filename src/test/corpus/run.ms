@@ -182,17 +182,8 @@ function ccUsable(cc: string, flags: string = ""): boolean {
 	const r = runCapture(cc + (flags == "" ? "" : " " + flags) + " " + winPath(src) + " -o " + winPath(bin));
 	return r.exitCode == 0 && exists(bin);
 }
-// Windows has no single driver that both accepts the runtime's header surface
-// and links the ASan runtime: scoop's clang is an MSVC target with no MinGW
-// headers behind it (pthread.h not found), scoop's MinGW gcc ships no libasan
-// (ld: cannot find -lasan), and zig cc's Windows link step leaves
-// __asan_version_mismatch_check_v8 undefined. Measured working combination
-// (2026-09-28, scoop llvm 23 + scoop MinGW 16): clang driving the mingw
-// target — headers resolve through the gcc installation it detects — with the
-// MSVC-ABI clang_rt.asan runtime renamed into the windows-gnu resource
-// layout behind a local -resource-dir shim, and the runtime DLL on PATH when
-// the cell runs. The probe below must catch a planted stack-use-after-scope:
-// a driver that links but does not detect is not a usable SAN lane.
+// Keep the Windows-GNU resource names local: Scoop LLVM 23 ships these
+// compiler-rt libraries under the MSVC filenames (measured 2026-09-30).
 const SAN_SHIM = OUT_DIR + "asan-shim/";
 let SAN_WIN_LIBS = "";
 
@@ -224,8 +215,16 @@ function sanWindowsClang(): string {
 	const cr = runCapture("clang " + flags + " -fsanitize=address -pthread " + winPath(pdir + "uaf.c") + " -o " + winPath(bin));
 	if (cr.exitCode != 0 || !exists(bin)) { return ""; }
 	shellOut("copy /Y \"" + winPath(libs + "clang_rt.asan_dynamic-x86_64.dll") + "\" \"" + winPath(pdir) + "\"");
+	const cleanSrc = pdir + "control.c";
+	const cleanBin = pdir + "control.exe";
+	writeFile(cleanSrc, "#include <stdio.h>\nint main(void){volatile int a[2]={20,22};printf(\"asan-control=%d\\n\",a[0]+a[1]);return 0;}\n");
+	if (exists(cleanBin)) { remove(cleanBin); }
+	const cleanBuild = runCapture("clang " + flags + " -fsanitize=address -pthread " + winPath(cleanSrc) + " -o " + winPath(cleanBin));
+	if (cleanBuild.exitCode != 0 || !exists(cleanBin)) { return ""; }
+	const cleanRun = runCapture(winPath(cleanBin));
+	if (cleanRun.exitCode != 0 || cleanRun.output.trim() != "asan-control=42") { return ""; }
 	const rr = runCapture(winPath(bin));
-	if (!rr.output.contains("AddressSanitizer")) { return ""; }
+	if (rr.exitCode == 0 || !rr.output.contains("ERROR: AddressSanitizer: stack-use-after-scope")) { return ""; }
 	SAN_WIN_LIBS = libs;
 	return flags;
 }
