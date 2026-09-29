@@ -117,14 +117,11 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 		NodeKind.DecoratedDecl => {
 			const dd = node.data as DecoratedDeclData;
 			collectDeclLocal(ctx, dd.decoratedNode);
-			const declName = getDeclName(dd.decoratedNode);
-			if (declName != "") {
-				const sym = lookupSymbol(ctx.table, declName);
-				if (sym != null) {
-					const info = extractDecoratorInfo(node);
-					if (info.nativeName != "") sym.nativeName = info.nativeName;
-					if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
-				}
+			const sym = declOfStatement(dd.decoratedNode).resolvedSym;
+			if (sym != null) {
+				const info = extractDecoratorInfo(node);
+				if (info.nativeName != "") sym.nativeName = info.nativeName;
+				if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
 			}
 		},
 		NodeKind.VariableDecl => {
@@ -1848,6 +1845,23 @@ test "overloaded @builtin routes to correct overload" {
 		// Primary (first len) should NOT have builtinKind
 		assert sym.builtinKind == "";
 		// Overload (second len) should have builtinKind
+		assert sym.overloads.length == 1;
+		if (sym.overloads.length > 0) {
+			assert sym.overloads[0].builtinKind == "LengthArr";
+		}
+	}
+}
+
+test "the local collect tags the decorated overload, not the same-named primary" {
+	const ctx = createContext();
+	const pr = parseSource("function len(s: string): number { return 0; }\n@builtin(\"LengthArr\") function len(arr: number[]): number { return 0; }");
+	assert pr.ok;
+	if (!pr.ok) return;
+	collectTopLevelLocal(ctx, pr.value);
+	const sym = lookupSymbol(ctx.table, "len");
+	assert sym != null;
+	if (sym != null) {
+		assert sym.builtinKind == "";
 		assert sym.overloads.length == 1;
 		if (sym.overloads.length > 0) {
 			assert sym.overloads[0].builtinKind == "LengthArr";
