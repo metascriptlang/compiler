@@ -1648,9 +1648,6 @@ function nullableEqJS(aField: Node, bField: Node, payload: Type, lctx: LiftCtx, 
 }
 
 function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx, loc: SourceLocation): Node {
-	if (isMaybeType(fieldType) && lctx.jsBackend) {
-		return nullableEqJS(aField, bField, unwrapMaybeType(fieldType), lctx, loc);
-	}
 	if (isMaybeType(fieldType)) {
 		const eqSym = opProcSym(ensureCarrierEq(fieldType, lctx, loc));
 		return makeCall(makeTypedIdentResolved(eqSym, null, loc), [aField, bField], loc);
@@ -1764,8 +1761,33 @@ function ensureStructEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
 
 function ensureCarrierEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
 	const carrierName = typeNameOf(t);
-	if (claimEq(carrierName + "Eq", lctx)) generateEq(carrierName, t, lctx, loc);
+	if (!claimEq(carrierName + "Eq", lctx)) return carrierName + "Eq";
+	if (lctx.jsBackend && isMaybeType(t)) {
+		generateNullableEqJS(carrierName, t, lctx, loc);
+	} else {
+		generateEq(carrierName, t, lctx, loc);
+	}
 	return carrierName + "Eq";
+}
+
+function generateNullableEqJS(
+	carrierName: string,
+	t: Type,
+	lctx: LiftCtx,
+	loc: SourceLocation,
+): void {
+	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
+	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
+	const a = makeTypedIdentResolved(aSym, null, loc);
+	const b = makeTypedIdentResolved(bSym, null, loc);
+	const compare = nullableEqJS(a, b, unwrapMaybeType(t), lctx, loc);
+	const body = makeBlock([makeReturn(compare, loc)], loc);
+	const names = [carrierName, carrierName];
+	const eqFn = makeFnDecl(carrierName + "Eq", [aSym, bSym], names, body, "", "boolean", loc);
+	setHookParamType(eqFn, 0, t);
+	setHookParamType(eqFn, 1, t);
+	markGeneratedOp(eqFn, carrierName + "Eq");
+	lctx.collector.push(eqFn);
 }
 
 // ===== Tuple Lifecycle Hooks (first-class value type) =====

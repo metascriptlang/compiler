@@ -21,7 +21,7 @@ import { TransformContext, PendingTupleOp } from "../context";
 import { hookPrototype, hookBaseCName } from "../../codegen/c/types";
 import { walkNode } from "../walker";
 import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
-import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
+import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, unwrapMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupSymbol } from "../../checker/symbol";
 import { resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
@@ -360,9 +360,11 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		const carrierName = carrierType != null ? typeNameOf(carrierType) : "";
 		const carriersAgree = !leftIsMaybe || !rightIsMaybe
 			|| typeNameOf(leftType) == typeNameOf(rightOperandType);
-		// The carrier is a C repr: js de-materializes a Maybe to the value itself,
-		// so there is no carrier to compare and no generated Eq body to call.
-		if (!ctx.jsBackend && (leftIsMaybe || rightIsMaybe) && carrierType != null && carrierName != "" && carriersAgree) {
+		// js de-materializes a Maybe to the value itself: `===` already answers for a
+		// primitive payload, a value payload needs the carrier's Eq.
+		const routed = (leftIsMaybe || rightIsMaybe) && carrierType != null
+			&& (!ctx.jsBackend || isValueObject(unwrapMaybeType(carrierType)));
+		if (routed && carrierName != "" && carriersAgree) {
 			const eqLeft = leftIsMaybe ? d.left : makeMaybeCarrier(d.left, carrierType, loc);
 			const eqRight = rightIsMaybe ? d.right : makeMaybeCarrier(d.right, carrierType, loc);
 			registerCarrierEq(ctx, carrierType);

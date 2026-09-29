@@ -45,7 +45,7 @@ test "bug627: an absent nullable field equals only an absent one (JS)" {
 	const r = compileToJS(SRC);
 	assert r.ok;
 	if (r.ok) {
-		const shape = "(a.opt === b.opt) || (((a.opt !== null) && (b.opt !== null)) && ";
+		const shape = "(a === b) || (((a !== null) && (b !== null)) && ";
 		assert r.value.indexOf(shape, 0) >= 0, r.value;
 	}
 }
