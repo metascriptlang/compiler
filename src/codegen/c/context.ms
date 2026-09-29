@@ -176,6 +176,7 @@ export class CProc {
 	seenSinks: string[];   // tracks declared $sink_N_ temps (prevents duplicates)
 	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
 	indirectLocals: string[];  // locals pointing into union variant data — auto-deref as (*name)
+	indirectSyms: Cursor<Symbol>[];  // the symbols of indirectParams and indirectLocals
 	nestedTryStmts: CTryEntry[];
 	beforeRetNeeded: boolean;
 	suppressRaiseCheck: boolean;
@@ -206,6 +207,16 @@ export function isIndirectLocal(p: CProc, name: string): boolean {
 	return false;
 }
 
+// A reference that carries its symbol is indirect only when that binding is.
+export function isIndirectRef(p: CProc, sym: Symbol | null, name: string): boolean {
+	if (p == null) return false;
+	if (sym == null) return isIndirectParam(p, name) || isIndirectLocal(p, name);
+	for (const s of p.indirectSyms) {
+		if (s == sym) return true;
+	}
+	return false;
+}
+
 export function createProc(name: string, returnType: Type | null): CProc {
 	const topBlock = createBlock(0, false);
 	const blocks: CBlock[] = [];
@@ -222,6 +233,7 @@ export function createProc(name: string, returnType: Type | null): CProc {
 		seenSinks: [],
 		indirectParams: [],
 		indirectLocals: [],
+		indirectSyms: [],
 		nestedTryStmts: [],
 		beforeRetNeeded: false,
 		suppressRaiseCheck: false,

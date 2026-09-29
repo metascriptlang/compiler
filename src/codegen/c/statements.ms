@@ -411,6 +411,7 @@ function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 			else { emitStmtsLine(p, `${cType}* ${varName};`); }
 			emitStmtsLine(p, `${varName} = &(${initSnippet});`);
 			p.indirectLocals.push(d.declName);
+			if (node.resolvedSym != null) p.indirectSyms.push(node.resolvedSym);
 		} else {
 			const initSnippet = genExpr(g, p, d.initializer);
 			let finalInit = initSnippet;

@@ -9,6 +9,7 @@ import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString, addCGenError,
+	setLocalSymName,
 } from "./context";
 import { genExpr, refArrayDestroyFn, refArrayCellLabel, bareArrayTypeName } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
@@ -192,12 +193,15 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 		// Populate param names + pointer promotion (auto-deref via indirectParams)
 		const mutBits: int32 = sym != null ? sym.mutatedParams : 0;
 		for (let pi = 0; pi < d.params.length; pi += 1) {
+			const paramSym = node.paramSyms != null && pi < node.paramSyms.length ? node.paramSyms[pi] : null;
 			p.params.push(d.params[pi]);
 			scopeMangledParam(p, safeName(d.params[pi]));
+			if (paramSym != null) setLocalSymName(p, paramSym, safeName(d.params[pi]));
 			const isMutated = (mutBits & (1 << (pi as int32))) != 0;
 			const bodyPromote = pi < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(g.target, fnType.typeChildren[pi]) : shouldIndirectParam(g.target, fnType.typeChildren[pi], isMutated));
 			if (bodyPromote) {
 				p.indirectParams.push(d.params[pi]);
+				if (paramSym != null) p.indirectSyms.push(paramSym);
 			}
 		}
 		genStmt(g, p, d.fnBody);

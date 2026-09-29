@@ -13,6 +13,7 @@ import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
 	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError, addUnloweredError,
+	isIndirectRef,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, refArrayCellName, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
@@ -404,7 +405,7 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, arg
 }
 
 export function genArgCcgPtr(g: CGen, arg: string, argNode: Readonly<Node>, p: CProc, paramType: Type): string {
-	if (argNode.kind == NodeKind.Identifier && isIndirectParam(p, (argNode.data as IdentifierData).name)) {
+	if (argNode.kind == NodeKind.Identifier && isIndirectRef(p, argNode.resolvedSym, (argNode.data as IdentifierData).name)) {
 		// Indirect param: already a pointer — pass raw (reference patterns return snippet as-is)
 		return safeName((argNode.data as IdentifierData).name);
 	}
@@ -909,7 +910,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		} else {
 			// Reference parity (sym.loc.snippet): symbol-based resolution first.
 			// localNameMap fallback for DRC cleanup identifiers with noSym (avoids cascade).
-			const isIndirect = isIndirectParam(p, d.name) || isIndirectLocal(p, d.name);
+			const isIndirect = isIndirectRef(p, idSym, d.name);
 			const safe = safeName(d.name);
 			let cName = "";
 			const localSymName = lookupLocalSymName(p, idSym);
@@ -1720,9 +1721,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				// If the symbol is passed by pointer in C, use `->`; otherwise
 				// direct dot access. Three paths produce a pointer:
 				//   1. Reference type (Ref/Ptr/Borrow): isPointerType is true
-				//   2. Large value-type param: tracked via `isIndirectParam`
+				//   2. Large value-type param: tracked via `isIndirectRef`
 				//   3. Local hoisted via `&temp` for borrow: tracked via
-				//      `isIndirectLocal`
+				//      `isIndirectRef`
 				// Pointer-ness is asked of the DECLARED type (symbolType), never
 				// the flow-narrowed nodeType: narrowing selects which variant slot
 				// is read, it does not move the base into pointer storage — but a
@@ -1731,7 +1732,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				// not a pointer"). Field resolution uses the narrowed type above;
 				// access syntax uses where the value lives.
 				const ptrType = idSym != null && isPointerType(idSym.symbolType);
-					const indirect = isIndirectParam(p, rawName) || isIndirectLocal(p, rawName);
+					const indirect = isIndirectRef(p, idSym, rawName);
 					const acc2 = (ptrType || indirect) ? "->" : ".";
 					if (discSuffix != "") {
 						ctx.results.push(enumDiscriminantFromTag(g, p, node, declTy, `${cName}${acc2}${discSuffix}`));
@@ -1964,7 +1965,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		const inner = peekResult(ctx, cc, 0);
 		truncResults(ctx, cc);
 		const d = node.data as ExprStmtData;
-		if (d.expr.kind == NodeKind.Identifier && isIndirectParam(p, (d.expr.data as IdentifierData).name)) {
+		if (d.expr.kind == NodeKind.Identifier && isIndirectRef(p, d.expr.resolvedSym, (d.expr.data as IdentifierData).name)) {
 			// Indirect param: already a pointer — reference pattern returns raw snippet
 			ctx.results.push(safeName((d.expr.data as IdentifierData).name));
 		} else {
@@ -3269,7 +3270,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 
 // ===== Tests =====
 
-import { createCGen, createProc, sec, CSection, isIndirectParam, isIndirectLocal } from "./context";
+import { createCGen, createProc, sec, CSection } from "./context";
 import { CheckerContext } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
