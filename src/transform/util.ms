@@ -318,8 +318,10 @@ export function makeTryCatch(tryBody: Node, catchSym: Symbol, catchBody: Node, f
 	return n;
 }
 
-export function makeCatchSym(name: string): Symbol {
-	return makeSymbol(name, SymbolKind.Variable, null, true);
+export function makeCatchSym(ctx: TransformContext, name: string): Symbol {
+	const sym = mintSym(ctx, SymbolKind.Variable, name, null);
+	setFlag(sym, SymbolFlag.Mutable);
+	return sym;
 }
 
 export function makeTryFinally(tryBody: Node, finallyBody: Node, loc: SourceLocation): Node {

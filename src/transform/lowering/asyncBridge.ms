@@ -412,7 +412,7 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 	return current;
 }
 
-function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
+function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: TransformContext): Node {
 	if (body == null) return body;
 	if (body.kind != NodeKind.BlockStmt) return body;
 
@@ -491,12 +491,12 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// to its landing; the terminal re-raises `$curExc` out to the outer
 	// fail-catch below (asyncmacro tầng 2). Mirrors transformGeneratorFn.
 	const hasExc = hasExcLanding(sc);
-	const dispatchBody = wrapExcRouting(dispatch, sc, loc);
+	const dispatchBody = wrapExcRouting(dispatch, sc, ctx, loc);
 
 	// 7. Wrap in while(true) + try/catch
 	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
 	const tryBody = makeBlock([loop], loc);
-	const excSym = makeCatchSym("$e");
+	const excSym = makeCatchSym(ctx, "$e");
 	const failCall = makeExprStmt(
 		makeCall(
 			runtimeRef("msFutureFail", loc),
@@ -637,7 +637,7 @@ function completeAndReturn(stmt: Node, promiseType: Type | null, fnReturnInner: 
 }
 
 // Simple wrapper: async function with no await → wrap return value in msFutureComplete
-function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
+function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null, ctx: TransformContext): Node {
 	if (body == null) return body;
 	if (body.kind != NodeKind.BlockStmt) return body;
 
@@ -683,7 +683,7 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null): Node {
 	// A throw in the body must FAIL $retFut and return it — otherwise the throw
 	// escapes past the `return $retFut`, leaving the caller with an uncompleted /
 	// NULL future (→ msWaitForReady crash). Mirrors the with-await stepper catch.
-	const excSym = makeCatchSym("$e");
+	const excSym = makeCatchSym(ctx, "$e");
 	const failCall = makeExprStmt(
 		makeCall(
 			runtimeRef("msFutureFail", loc),
@@ -713,40 +713,40 @@ function getFnReturnInner(fnNode: Node): Type | null {
 	return null;
 }
 
-function rewriteAsyncFnBody(body: Node, fnReturnInner: Type | null): Node {
+function rewriteAsyncFnBody(body: Node, fnReturnInner: Type | null, ctx: TransformContext): Node {
 	if (body != null && body.kind != NodeKind.BlockStmt) {
 		throw "internal: async fn body reached asyncBridge un-normalized (expected BlockStmt)";
 	}
 	if (!containsYield(body)) {
-		return rewriteSimpleAsyncBody(body, fnReturnInner);
+		return rewriteSimpleAsyncBody(body, fnReturnInner, ctx);
 	}
-	return rewriteAwaitAsyncBody(body, fnReturnInner);
+	return rewriteAwaitAsyncBody(body, fnReturnInner, ctx);
 }
 
-function walkBridge(node: Node | null): void {
+function walkBridge(node: Node | null, ctx: TransformContext): void {
 	if (node == null) return;
 	match (node.kind) {
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
-			walkBridge(d.fnBody);
-			if (isWasAsync(node)) { d.fnBody = rewriteAsyncFnBody(d.fnBody, getFnReturnInner(node)); d.fnFlags = ""; }
+			walkBridge(d.fnBody, ctx);
+			if (isWasAsync(node)) { d.fnBody = rewriteAsyncFnBody(d.fnBody, getFnReturnInner(node), ctx); d.fnFlags = ""; }
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
-			walkBridge(d.methodBody);
-			if (isWasAsync(node)) { d.methodBody = rewriteAsyncFnBody(d.methodBody, getFnReturnInner(node)); d.methodFlags = ""; }
+			walkBridge(d.methodBody, ctx);
+			if (isWasAsync(node)) { d.methodBody = rewriteAsyncFnBody(d.methodBody, getFnReturnInner(node), ctx); d.methodFlags = ""; }
 		},
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
-			walkBridge(d.funcExprBody);
-			if (isWasAsync(node)) { d.funcExprBody = rewriteAsyncFnBody(d.funcExprBody, getFnReturnInner(node)); d.funcExprFlags = ""; }
+			walkBridge(d.funcExprBody, ctx);
+			if (isWasAsync(node)) { d.funcExprBody = rewriteAsyncFnBody(d.funcExprBody, getFnReturnInner(node), ctx); d.funcExprFlags = ""; }
 		},
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;
-			walkBridge(d.arrowBody);
-			if (isWasAsync(node)) { d.arrowBody = rewriteAsyncFnBody(d.arrowBody, getFnReturnInner(node)); d.arrowFlags = ""; }
+			walkBridge(d.arrowBody, ctx);
+			if (isWasAsync(node)) { d.arrowBody = rewriteAsyncFnBody(d.arrowBody, getFnReturnInner(node), ctx); d.arrowFlags = ""; }
 		},
-		_ => { forEachChild(node, (child: Node): void => { walkBridge(child); }); },
+		_ => { forEachChild(node, (child: Node): void => { walkBridge(child, ctx); }); },
 	};
 }
 
@@ -754,7 +754,7 @@ function walkBridge(node: Node | null): void {
 
 export function lowerAsyncBridge(program: Node, ctx: TransformContext): Node {
 	asyncNameCounter = 0;
-	walkBridge(program);
+	walkBridge(program, ctx);
 	return program;
 }
 

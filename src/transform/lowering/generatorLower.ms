@@ -749,9 +749,9 @@ export function hasExcLanding(sc: StateCollector): boolean {
 	return false;
 }
 
-export function wrapExcRouting(dispatch: Node, sc: StateCollector, loc: SourceLocation): Node {
+export function wrapExcRouting(dispatch: Node, sc: StateCollector, ctx: TransformContext, loc: SourceLocation): Node {
 	if (!hasExcLanding(sc)) return dispatch;
-	const caughtSym = makeCatchSym("$excCaught");
+	const caughtSym = makeCatchSym(ctx, "$excCaught");
 	return makeTryCatch(dispatch, caughtSym, buildExcRouting(sc, caughtSym, loc), null as unknown as Node, loc);
 }
 
@@ -915,7 +915,7 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType:
 
 // ===== Generator Function Transform =====
 
-function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, loc: SourceLocation): Node {
+function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, ctx: TransformContext, loc: SourceLocation): Node {
 	// 1. Collect all local variable names and their types
 	renameRepeatedBindingsInFrame(params, body, "$g");
 	const nc: NameSet = createNameSet();
@@ -954,7 +954,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	// wrap the dispatch in a try/catch that routes a raised state to its
 	// landing (reference closureiters exceptionTable + the wrapping except).
 	const hasExc = hasExcLanding(sc);
-	const dispatchBody = wrapExcRouting(dispatch, sc, loc);
+	const dispatchBody = wrapExcRouting(dispatch, sc, ctx, loc);
 
 	// 7. Wrap in while(true) { dispatch }
 	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
@@ -1009,19 +1009,19 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 
 // ===== Main Walk =====
 
-function walkGenerators(node: Node): void {
+function walkGenerators(node: Node, ctx: TransformContext): void {
 	match (node.kind) {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
-			for (const s of d.programStmts) { walkGenerators(s); }
+			for (const s of d.programStmts) { walkGenerators(s, ctx); }
 		},
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
-			for (const s of d.statements) { walkGenerators(s); }
+			for (const s of d.statements) { walkGenerators(s, ctx); }
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
-			walkGenerators(d.fnBody);
+			walkGenerators(d.fnBody, ctx);
 			if (isGeneratorFlag(d.fnFlags)) {
 				// Skip generic templates — only monomorphized instances should be lowered.
 				// Generic templates have unresolved type params that produce void in C.
@@ -1032,7 +1032,7 @@ function walkGenerators(node: Node): void {
 					const retType = fnType != null ? fnType.typeReturn : null;
 					d.fnBody = transformGeneratorFn(
 						d.params, d.fnParamTypes, d.fnBody,
-						d.fnFlags, d.fnReturnType, retType, node.location,
+						d.fnFlags, d.fnReturnType, retType, ctx, node.location,
 					);
 					d.fnFlags = "";
 				}
@@ -1040,37 +1040,37 @@ function walkGenerators(node: Node): void {
 		},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
-			walkGenerators(d.exportedDecl);
+			walkGenerators(d.exportedDecl, ctx);
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
-			for (const member of d.classBody) { walkGenerators(member); }
+			for (const member of d.classBody) { walkGenerators(member, ctx); }
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
-			walkGenerators(d.methodBody);
+			walkGenerators(d.methodBody, ctx);
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;
-			walkGenerators(d.decoratedNode);
+			walkGenerators(d.decoratedNode, ctx);
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			if (d.initializer != null) walkCheckFuncExpr(d.initializer);
+			if (d.initializer != null) walkCheckFuncExpr(d.initializer, ctx);
 		},
 		_ => {},
 	};
 }
 
 // Check FunctionExpr for generator flag
-function walkCheckFuncExpr(node: Node): void {
+function walkCheckFuncExpr(node: Node, ctx: TransformContext): void {
 	if (node.kind == NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
-		walkGenerators(d.funcExprBody);
+		walkGenerators(d.funcExprBody, ctx);
 		if (isGeneratorFlag(d.funcExprFlags)) {
 			d.funcExprBody = transformGeneratorFn(
 				d.funcExprParams, d.funcExprParamTypes, d.funcExprBody,
-				d.funcExprFlags, d.funcExprReturnType, node.nodeType != null ? node.nodeType.typeReturn : null, node.location,
+				d.funcExprFlags, d.funcExprReturnType, node.nodeType != null ? node.nodeType.typeReturn : null, ctx, node.location,
 			);
 			d.funcExprFlags = "";
 		}
@@ -1080,7 +1080,7 @@ function walkCheckFuncExpr(node: Node): void {
 // ===== Main Entry Point =====
 
 export function lowerGenerator(program: Node, ctx: TransformContext): Node {
-	walkGenerators(program);
+	walkGenerators(program, ctx);
 	for (const d of pendingSplitDiags) {
 		reportTransformError(ctx, d.message, d.loc);
 	}
