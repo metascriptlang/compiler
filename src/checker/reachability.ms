@@ -22,7 +22,7 @@ import {
 } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
-import { hasFlag, SymbolFlag, initFnName } from "./symbol";
+import { hasFlag, SymbolFlag } from "./symbol";
 import { isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
@@ -182,17 +182,6 @@ function walkBody(node: Node, modulePath: string): void {
 		walkBody(nd.newCallee, modulePath);
 		for (const arg of nd.newArguments) {
 			walkBody(arg, modulePath);
-		}
-		if (nd.newCallee.resolvedSym != null) {
-			const classSym = nd.newCallee.resolvedSym;
-			const ctorMod = classSym.modulePath != "" ? classSym.modulePath : modulePath;
-			let gi = node.nodeType;
-			if (gi != null && (gi.kind == TypeKind.Ref || gi.kind == TypeKind.Ptr) && gi.typeReturn != null) gi = gi.typeReturn;
-			if (gi != null && gi.kind == TypeKind.GenericInstance && gi.typeName != "" && gi.typeChildren.length > 0) {
-				const monoName = monoInstanceName(gi);
-				markAndWalk(ctorMod, monoName);
-				markAndWalk(ctorMod, initFnName(monoName));
-			}
 		}
 		markTypeInfoEdge(node, modulePath);
 		return;
@@ -444,11 +433,7 @@ function markInstanceCopy(generic: Symbol, name: string): void {
 
 function markClassInit(classDecl: Node, modulePath: string, className: string): void {
 	const entry = classDecl.resolvedSym != null ? lookupCtorDefaults(classDecl.resolvedSym, className) : null;
-	if (entry != null && entry.initSym != null) {
-		markSymAndWalk(entry.initSym, modulePath);
-		return;
-	}
-	markAndWalk(modulePath, initFnName(className));
+	if (entry != null && entry.initSym != null) markSymAndWalk(entry.initSym, modulePath);
 }
 
 function markRootDecl(decl: Node, modulePath: string): void {
