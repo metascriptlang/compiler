@@ -379,3 +379,5 @@ import "./bug614MethodSignatureChecksItsImplementation";
 import "./bug615ConstraintScanVisitsEachTypeOnce";
 import "./bug616MethodCallAddressReceiver";
 import "./bug617MethodCallAddressReceiverChecked";
+import "./bug626StructEqAcrossModules";
+import "./bug627NullableFieldEq";
