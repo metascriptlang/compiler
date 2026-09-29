@@ -26,7 +26,8 @@ async function read(): Promise<int32> { return (await nums())[1]; }
 console.log(\`\${await read()}\`);
 `);
 	assert js.indexOf("ERROR", 0) < 0;
-	assert js.contains("())[1]");
+	assert js.contains("(await nums");
+	assert js.contains("(), 1)");
 }
 
 test "E2E JS: an awaited receiver of a native-pattern method is parenthesized" {
