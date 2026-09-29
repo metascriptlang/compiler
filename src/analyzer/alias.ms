@@ -174,14 +174,10 @@ export function aliases(obj: Node, field: Node): AliasKind {
 				// Compare by symbol identity
 				const objSym = objNode.resolvedSym;
 				const fieldSym = fieldNode.resolvedSym;
-				if (objSym != null && fieldSym != null) {
-					if (objSym != fieldSym) return AliasKind.No;
-				} else {
-					// Fallback: compare by name
-					const objName = (objNode.data as IdentifierData).name;
-					const fieldName = (fieldNode.data as IdentifierData).name;
-					if (objName != fieldName) return AliasKind.No;
+				if (objSym == null || fieldSym == null) {
+					throw new Error(`internal: alias analysis reached '${(objNode.data as IdentifierData).name}' without its symbol`);
 				}
+				if (objSym != fieldSym) return AliasKind.No;
 			},
 			NodeKind.MemberExpr => {
 				// Compare field names
@@ -504,6 +500,7 @@ test "deepAliases: x in f(x) = true" {
 	const symX = makeTestSym("x");
 	attachSymToNodeAlias(dest, "x", symX);
 	attachSymToNodeAlias(call, "x", symX);
+	attachSymToNodeAlias(call, "f", makeTestSym("f"));
 	assert deepAliases(dest, call);
 }
 
@@ -514,6 +511,7 @@ test "deepAliases: x not in f(y) = false" {
 	const symY = makeTestSym("y");
 	attachSymToNodeAlias(dest, "x", symX);
 	attachSymToNodeAlias(call, "y", symY);
+	attachSymToNodeAlias(call, "f", makeTestSym("f"));
 	assert !deepAliases(dest, call);
 }
 

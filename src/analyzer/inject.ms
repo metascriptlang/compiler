@@ -1849,22 +1849,9 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as VariableDeclData;
 
-	// Prefer nodeType from checker (set on the VariableDecl during check pass)
-	// Fall back to symbol table lookup only if nodeType is absent
 	if (dctx.ctx.checkerCtx == null) return stmt;
-	let varType: Type | null = null;
-	if (stmt.nodeType != null) {
-		varType = stmt.nodeType;
-	} else {
-		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, d.declName);
-		// Only use symbol if it's a Variable/Parameter — avoid name collisions with extension methods
-		if (sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp || sym.symbolKind == SymbolKind.Parameter)) {
-			varType = sym.symbolType;
-		} else if (sym != null && sym.symbolKind == SymbolKind.Function) {
-			// Name collision: local variable shadowed by function — skip RC
-			return stmt;
-		}
-	}
+	const varType = stmt.nodeType != null ? stmt.nodeType
+		: (stmt.resolvedSym != null ? stmt.resolvedSym.symbolType : null);
 	if (varType == null) return stmt;
 
 	const rcInfo = classifyRc(varType, dctx);
@@ -2192,9 +2179,11 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 			const rc = sinkClassify(expr.nodeType, dctx);
 			return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 		}
-		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, name);
-		if (sym == null || sym.symbolType == null) return false;
-		const rc = sinkClassify(sym.symbolType, dctx);
+		if (expr.resolvedSym == null || expr.resolvedSym.symbolType == null) {
+			reportUntypedReturn(expr, dctx, "identifier '" + name + "'");
+			return false;
+		}
+		const rc = sinkClassify(expr.resolvedSym.symbolType, dctx);
 		// Only Ref types use msIncref. Strings/arrays use deep copy (handled by processReturn).
 		return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 	}
@@ -2206,19 +2195,7 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 			const rc = sinkClassify(expr.nodeType, dctx);
 			return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 		}
-		// Fallback: look up object type via symbol table (module-scope symbols only)
-		const md = expr.data as MemberExprData;
-		if (md.object.kind != NodeKind.Identifier) return false;
-		const objName = (md.object.data as IdentifierData).name;
-		const objSym = lookupSymbol(dctx.ctx.checkerCtx.table, objName);
-		if (objSym == null || objSym.symbolType == null) return false;
-		const objType = objSym.symbolType;
-		for (let fi = 0; fi < objType.typeNames.length && fi < objType.typeChildren.length; fi += 1) {
-			if (objType.typeNames[fi] == md.property) {
-				const rc = sinkClassify(objType.typeChildren[fi], dctx);
-				return rc.needsCleanup && rc.rcKind == RcKind.Ref;
-			}
-		}
+		reportUntypedReturn(expr, dctx, "member '" + (expr.data as MemberExprData).property + "'");
 		return false;
 	}
 	// ArrayAccess: use nodeType first, fallback to symbol lookup
@@ -2227,14 +2204,8 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 			const rc = sinkClassify(expr.nodeType, dctx);
 			return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 		}
-		const ad = expr.data as ArrayAccessData;
-		if (ad.array.kind != NodeKind.Identifier) return false;
-		const arrName = (ad.array.data as IdentifierData).name;
-		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, arrName);
-		if (sym == null || sym.symbolType == null) return false;
-		if (sym.symbolType.typeReturn == null) return false;
-		const elemRc = sinkClassify(sym.symbolType.typeReturn, dctx);
-		return elemRc.needsCleanup && elemRc.rcKind == RcKind.Ref;
+		reportUntypedReturn(expr, dctx, "element access");
+		return false;
 	}
 
 	// Unhandled return-expression NodeKind with Ref type silently misses incref —
@@ -2250,6 +2221,13 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 		}
 	}
 	return false;
+}
+
+function reportUntypedReturn(expr: Node, dctx: DrcContext, what: string): void {
+	dctx.ctx.checkerCtx.errors.push({
+		message: "internal: the returned " + what + " reached the analyzer without its type",
+		line: expr.location.line, column: expr.location.column, fatal: false,
+	});
 }
 
 function processThrow(stmt: Node, dctx: DrcContext): Node {
