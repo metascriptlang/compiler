@@ -22,7 +22,7 @@ import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, cr
 import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, initFnName } from "./symbol";
 import { isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion } from "./types";
-import { SymbolKind, Type, CallingConvention } from "../ast/node";
+import { SymbolKind, Symbol, Type, CallingConvention } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { dispatchEntryAt, dispatchOverridesFor } from "./context";
 
@@ -596,17 +596,13 @@ export function computeAliveSet(
 
 			// Root 2: Compiler-generated functions — always alive.
 			// Must match isDeclAlive exemptions in codegen/c/declarations.ms exactly:
-			// $prefix (lambda lifting), =prefix (operators), __prefix (builtinLower),
-			// DRC lifecycle suffixes, generic instantiations (__ in middle of name).
+			// $prefix without a traced routine symbol (DRC hooks), =prefix (operators),
+			// __prefix (builtinLower), DRC lifecycle suffixes, generic instantiations (__ in middle of name).
 			if (bare.kind == NodeKind.FunctionDecl) {
 				const fd2 = bare.data as FunctionDeclData;
 				const fn = fd2.fnName;
-				if (fn.length > 0 && fn.slice(0, 1) == "$") {
-					const isLifted = (fn.length >= 8 && fn.slice(0, 8) == "$lifted_")
-						|| (fn.length >= 4 && fn.slice(0, 4) == "$fn_");
-					if (!isLifted) {
-						walkBody(bare, modulePath);
-					}
+				if (fn.length > 0 && fn.slice(0, 1) == "$" && !isTracedRoutine(bare.resolvedSym)) {
+					walkBody(bare, modulePath);
 					continue;
 				}
 				if (isArraySeqHookName(fn)) {
@@ -713,6 +709,11 @@ function bakeableEmptyArrayLiteral(init: Readonly<Node>): boolean {
 	if (init.resolvedSym == null || init.resolvedSym.builtinKind != "BoxRefArray") return false;
 	if (cd.arguments.length != 1) return false;
 	return bakeableEmptyArrayLiteral(cd.arguments[0]);
+}
+
+// A routine reached only through its references; a DRC hook's references are injected later.
+export function isTracedRoutine(sym: Symbol | null): boolean {
+	return sym != null && sym.symbolKind == SymbolKind.Function && !hasFlag(sym, SymbolFlag.GeneratedOp);
 }
 
 export function isClosureThunkConv(node: Readonly<Node>): boolean {
