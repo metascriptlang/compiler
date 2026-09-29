@@ -84,6 +84,26 @@ export function nameSetIntersect(a: NameSet, b: NameSet): NameSet {
 	return result;
 }
 
+export class SymSet {
+	items: Symbol[];
+	index: HashSet<Symbol>;
+}
+
+export function createSymSet(): SymSet {
+	return { items: [], index: new HashSet<Symbol>() };
+}
+
+export function symSetContains(ss: SymSet, sym: Symbol | null): boolean {
+	return sym != null && ss.index.has(sym);
+}
+
+export function symSetAdd(ss: SymSet, sym: Symbol): void {
+	if (!ss.index.has(sym)) {
+		ss.index.add(sym);
+		ss.items.push(sym);
+	}
+}
+
 // Generate unique temp variable name: "$result_0", "$match_1", "$iter_2"
 export function freshTemp(ctx: TransformContext, prefix: string): string {
 	const n = ctx.tempCounter;
@@ -123,4 +143,18 @@ test "a name set keeps first-insertion order and ignores repeats" {
 	assert ns.items[1] == "a";
 	assert nameSetContains(ns, "a");
 	assert !nameSetContains(ns, "c");
+}
+
+test "a symbol set keys by identity, not by spelling, in first-insertion order" {
+	const a = makeSymbol("x", SymbolKind.Variable, null, false);
+	const b = makeSymbol("x", SymbolKind.Variable, null, false);
+	const ss = createSymSet();
+	symSetAdd(ss, b);
+	symSetAdd(ss, a);
+	symSetAdd(ss, b);
+	assert ss.items.length == 2;
+	assert ss.items[0] == b;
+	assert symSetContains(ss, a);
+	assert !symSetContains(ss, makeSymbol("x", SymbolKind.Variable, null, false));
+	assert !symSetContains(ss, null);
 }
