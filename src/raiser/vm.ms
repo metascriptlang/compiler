@@ -1486,6 +1486,12 @@ function asNum(val: RaiserValue): number {
 	return val.intVal;
 }
 
+function floatFitsSigned(f: float64, bits: int32): boolean {
+	if (bits == 64) return f >= -9223372036854775808.0 && f < 9223372036854775808.0;
+	const limit = Math.pow(2, (bits - 1) as float64);
+	return f > -limit - 1 && f < limit;
+}
+
 function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 	const src = getReg(vm, vm.baseReg + inst.b);
 	const cls = inst.c as RaiserConvClass;
@@ -1493,8 +1499,16 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 		setReg(vm, vm.baseReg + inst.a, raiserFloat(asNum(src)));
 		return;
 	}
-	const whole: int64 = src.kind == RaiserValueKind.Float ? (src.floatVal as int64) : src.intVal;
 	const bits = convClassBits(cls);
+	const signed = convClassSigned(cls);
+	if (src.kind == RaiserValueKind.Float && signed && !floatFitsSigned(src.floatVal, bits)) {
+		const hi: int64 = bits == 64
+			? 9223372036854775807
+			: ((1 as int64) << ((bits - 1) as int64)) - 1;
+		vmError(vm, `value ${src.floatVal} not in range ${-hi - 1} .. ${hi}`);
+		return;
+	}
+	const whole: int64 = src.kind == RaiserValueKind.Float ? (src.floatVal as int64) : src.intVal;
 	if (bits == 64) {
 		setReg(vm, vm.baseReg + inst.a, raiserInt(whole));
 		return;
@@ -1702,6 +1716,29 @@ test "halt returns constant" {
 		[raiserInt(42)]
 	));
 	assert vm.exitValue.intVal == 42;
+}
+
+function execConv(value: RaiserValue, cls: RaiserConvClass): RaiserVM {
+	return execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.Conv, 1, 0, cls as int32),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[value]
+	));
+}
+
+test "a float converted to a signed integer out of its range stops, as on C" {
+	assert execConv(raiserFloat(1e19), RaiserConvClass.I64).error.indexOf("not in range") >= 0;
+	const i8 = execConv(raiserFloat(128.0), RaiserConvClass.I8);
+	assert i8.error.indexOf("value 128 not in range -128 .. 127") >= 0;
+	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.I32).error.indexOf("not in range") >= 0;
+}
+
+test "a float in a signed integer's range converts by truncation" {
+	assert execConv(raiserFloat(127.9), RaiserConvClass.I8).exitValue.intVal == 127;
+	assert execConv(raiserFloat(-9.5), RaiserConvClass.I64).exitValue.intVal == -9;
 }
 
 test "add: 10 + 20 = 30" { assert execBinOp(RaiserOpcode.AddI64, 10, 20).exitValue.intVal == 30; }
