@@ -2481,6 +2481,17 @@ function typeofStr(g: CGen, s: string): string {
 // env is LAST parameter (Standard reference pattern).
 // No forward declarations — closure struct is self-contained.
 
+// A struct-typed NRVO out-temp must read as zero when the callee exits on an
+// exception without writing it; primitives and pointers carry no destructor.
+function nrvoTempNeedsZero(cType: string): boolean {
+	if (cType == "" || cType == "void" || cType == "void*") return false;
+	if (cType == "double" || cType == "float" || cType == "bool"
+		|| cType == "int32_t" || cType == "int64_t" || cType == "int16_t" || cType == "int8_t"
+		|| cType == "uint8_t" || cType == "uint16_t" || cType == "uint32_t" || cType == "uint64_t") return false;
+	if (cType.byteLength > 0 && cType.charAt(cType.byteLength - 1) == "*") return false;
+	return true;
+}
+
 function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Type, node: Readonly<Node>, ctx: ExprEvalCtx): void {
 	// Reference implementation pattern: extract environment and function pointers from closure pair
 	const envExpr = callee + ".env";
@@ -2495,6 +2506,7 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 		// NRVO: allocate temp, pass &tmp as first arg, read tmp after call
 		const cType = getTypeDesc(g, nrvoType);
 		const tmp = getTemp(p, cType);
+		if (nrvoTempNeedsZero(cType)) emitStmtsLine(p, `(${tmp.snippet}) = (${cType}){0};`);
 		const nrvoArg = "&" + tmp.snippet;
 		let fullArgs = "";
 		if (argsStr != "") {
@@ -2539,7 +2551,9 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 
 function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, calleeName: string, argsStr: string, retType: Type | null, funcType: Type | null): void {
 	if (retType != null && isNrvoReturnType(retType, funcType)) {
-		const tmp = getTemp(p, getTypeDesc(g, retType));
+		const cType = getTypeDesc(g, retType);
+		const tmp = getTemp(p, cType);
+		if (nrvoTempNeedsZero(cType)) emitStmtsLine(p, `(${tmp.snippet}) = (${cType}){0};`);
 		let nrvoArgs = "&" + tmp.snippet;
 		if (argsStr != "") nrvoArgs = `${nrvoArgs}, ${argsStr}`;
 		emitStmtsLine(p, `${calleeName}(${nrvoArgs});`);
