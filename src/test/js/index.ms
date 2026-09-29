@@ -8,3 +8,4 @@ import "./int64Literal";
 import "./awaitOperand";
 import "./concurrencyBoundary";
 import "./testSuspension";
+import "./accessCheck";

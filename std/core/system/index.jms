@@ -253,3 +253,28 @@ function msPowU64(a: uint64, b: uint64): uint64 {
 	}`);
 	unreachable;
 }
+
+// ===== Checked element access =====
+// The access lowering calls these; runtime/core/system.c holds the C twins, and
+// the corpus compares both backends' messages.
+
+@compilerFunc
+function msChkIndex(i: int64, len: int64): int64 {
+	@emit(`if (!(${i} >= 0 && ${i} < ${len})) throw new Error("index " + ${i} + " out of bounds (length " + ${len} + ")");
+	return ${i};`);
+	unreachable;
+}
+
+@compilerFunc
+function msArrayAt(a: unknown, i: int64): unknown {
+	@emit(`if (!(${i} >= 0 && ${i} < ${a}.length)) throw new Error("index " + ${i} + " out of bounds (length " + ${a}.length + ")");
+	return ${a}[${i}];`);
+	unreachable;
+}
+
+@compilerFunc
+function msChkArray(a: unknown, i: int64): unknown {
+	@emit(`if (!(${i} >= 0 && ${i} < ${a}.length)) throw new Error("index " + ${i} + " out of bounds (length " + ${a}.length + ")");
+	return ${a};`);
+	unreachable;
+}
