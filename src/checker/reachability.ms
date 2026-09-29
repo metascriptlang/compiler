@@ -153,8 +153,7 @@ function walkBody(node: Node, modulePath: string): void {
 			return;
 		}
 		if (sym != null) {
-			markSymAndWalk(sym, modulePath);
-			for (const overload of sym.overloads) markSymAndWalk(overload, modulePath);
+			markReferenced(sym, modulePath);
 		} else if (id.name.length > 0) {
 			// No resolvedSym: transform-generated or generic-instantiated identifiers.
 			// Try current module first, then use pre-built name index for cross-module.
@@ -240,13 +239,7 @@ function walkBody(node: Node, modulePath: string): void {
 		const md = node.data as MemberExprData;
 		walkBody(md.object, modulePath);
 		if (node.resolvedSym != null) {
-			const sym2 = node.resolvedSym;
-			const targetName2 = sym2.name;
-			if (sym2.modulePath != "" && sym2.modulePath != modulePath) {
-				markAndWalk(sym2.modulePath, targetName2);
-			} else {
-				markAndWalk(modulePath, targetName2);
-			}
+			markReferenced(node.resolvedSym, modulePath);
 		} else if (md.property != "") {
 			// No resolvedSym (generic instantiation clears it).
 			// Search all modules for the method — extension methods may be cross-module.
@@ -422,6 +415,11 @@ function markDispatchOverrides(dde: DispMethodEntry | null): void {
 		markAndWalk(ov.sym.modulePath, ov.sym.name);
 		markAndWalk(ov.classSym.modulePath, ov.classSym.name + "TypeInfo");
 	}
+}
+
+function markReferenced(sym: Symbol, modulePath: string): void {
+	markSymAndWalk(sym, modulePath);
+	for (const overload of sym.overloads) markSymAndWalk(overload, modulePath);
 }
 
 function markSymAndWalk(sym: Symbol, modulePath: string): void {
