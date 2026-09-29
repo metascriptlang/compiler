@@ -20,7 +20,7 @@ import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberEx
 import { TransformContext, PendingTupleOp } from "../context";
 import { hookPrototype, hookBaseCName } from "../../codegen/c/types";
 import { walkNode } from "../walker";
-import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral, receiverKind } from "../util";
+import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral, receiverKind, makeTypedIdentResolved } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, unwrapMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { sizedArrayHookName } from "../../analyzer/classify";
@@ -151,17 +151,10 @@ function registerStructEq(ctx: TransformContext, t: Type): void {
 
 // Build a call to an operator extension — resolves nativeName for extern operators.
 function makeExtOpCall(ext: ExtensionMethod, opName: string, left: Node, right: Node, loc: SourceLocation): Node {
-	let callName = opName;
-	if (ext.sym != null) {
-		if (ext.sym.nativeName != null && ext.sym.nativeName != "") {
-			callName = ext.sym.nativeName;
-		} else if (ext.sym.name != "") {
-			callName = ext.sym.name;
-		}
+	if (ext.sym == null) {
+		throw new Error(`internal: operator '${opName}' resolved to an extension without a symbol`);
 	}
-	const callIdent = makeIdent(callName, loc);
-	callIdent.resolvedSym = ext.sym;
-	const call = makeCall(callIdent, [left, right], loc);
+	const call = makeCall(makeTypedIdentResolved(ext.sym, null, loc), [left, right], loc);
 	const fnType = getExtFnType(ext);
 	if (fnType != null && fnType.typeReturn != null) call.nodeType = fnType.typeReturn;
 	return call;
@@ -184,10 +177,7 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 		const eqName = eqTypeName(ctx, leftType);
 		registerStructEq(ctx, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
-		const callee = makeIdent(eqName + "Eq", loc);
-		callee.nodeType = fnType;
-		callee.resolvedSym = hookPrototype(eqName + "Eq", fnType);
-		return makeCall(callee, [left, right], loc);
+		return makeCall(makeTypedIdentResolved(hookPrototype(eqName + "Eq", fnType), fnType, loc), [left, right], loc);
 	}
 	// Closure equality: a === b → a.fn === b.fn && a.env === b.env (reference parity)
 	if ((opName == "==" || opName == "===" || opName == "!=" || opName == "!==") && leftType.kind == TypeKind.Function) {
@@ -214,10 +204,7 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 		if (suffix != "") {
 			registerTupleOp(ctx, leftType, tName, suffix);
 			const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
-			const callee = makeIdent(tName + suffix, loc);
-			callee.nodeType = fnType;
-			callee.resolvedSym = hookPrototype(tName + suffix, fnType);
-			return makeCall(callee, [left, right], loc);
+			return makeCall(makeTypedIdentResolved(hookPrototype(tName + suffix, fnType), fnType, loc), [left, right], loc);
 		}
 	}
 	return null as unknown as Node;
@@ -252,17 +239,10 @@ function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
 	if (typeName == "" || isBuiltinOperand(t)) return node;
 	const ext = resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, op, [t]);
 	if (ext == null) return node;
-	let callName = op;
-	if (ext.sym != null) {
-		if (ext.sym.nativeName != null && ext.sym.nativeName != "") {
-			callName = ext.sym.nativeName;
-		} else if (ext.sym.name != "") {
-			callName = ext.sym.name;
-		}
+	if (ext.sym == null) {
+		throw new Error(`internal: operator '${op}' resolved to an extension without a symbol`);
 	}
-	const callIdent = makeIdent(callName, node.location);
-	callIdent.resolvedSym = ext.sym;
-	return makeCall(callIdent, [d.operand], node.location);
+	return makeCall(makeTypedIdentResolved(ext.sym, null, node.location), [d.operand], node.location);
 }
 
 function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
@@ -386,9 +366,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 			const eqRight = rightIsMaybe ? d.right : makeMaybeCarrier(d.right, carrierType, loc);
 			registerCarrierEq(ctx, carrierType);
 			const eqFnType = createFunction([carrierType, carrierType], ["x", "y"], booleanType());
-			const eqCallee = makeIdent(carrierName + "Eq", loc);
-			eqCallee.nodeType = eqFnType;
-			eqCallee.resolvedSym = hookPrototype(carrierName + "Eq", eqFnType);
+			const eqCallee = makeTypedIdentResolved(hookPrototype(carrierName + "Eq", eqFnType), eqFnType, loc);
 			const eqCall = makeCall(eqCallee, [eqLeft, eqRight], loc);
 			eqCall.nodeType = booleanType();
 			if (isNotEqual) return makeUnary("!", eqCall, loc);
@@ -444,10 +422,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		const eqName = eqTypeName(ctx, leftType);
 		registerStructEq(ctx, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
-		const callee = makeIdent(eqName + "Eq", loc);
-		callee.nodeType = fnType;
-		callee.resolvedSym = hookPrototype(eqName + "Eq", fnType);
-		return makeCall(callee, [d.left, d.right], loc);
+		return makeCall(makeTypedIdentResolved(hookPrototype(eqName + "Eq", fnType), fnType, loc), [d.left, d.right], loc);
 	}
 
 	// 6. Direct base operators for tuples (auto-generated ==, <, <=).
@@ -492,13 +467,14 @@ import { createTransformContextWithChecker } from "../context";
 import { parseInput, getStmts, firstExprKind } from "../testUtil";
 
 function makeOpExt(receiverType: string, opName: string): ExtensionMethod {
+	const fnType = createFunction([inferredType(), inferredType()], ["a", "b"], inferredType());
 	return {
 		methodName: opName,
 		receiverTypeName: receiverType,
 		sourcePath: "",
-		fnType: createFunction([inferredType(), inferredType()], ["a", "b"], inferredType()),
+		fnType,
 		isStatic: false,
-		sym: null,
+		sym: makeSymbol(opName, SymbolKind.Function, fnType, false),
 	};
 }
 
