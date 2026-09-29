@@ -199,8 +199,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	if (instanceAlreadyEmitted) return;
 	if (d.fnBody != null) {
 		const p = createProc(name, fnType.typeReturn);
-		const isActorDispatch = name.length > 9 && name.slice(name.length - 9, name.length) == "_dispatch";
-		p.suppressRaiseCheck = isDrcHookFn || isActorDispatch;
+		p.suppressRaiseCheck = isDrcHookFn || (sym != null && hasFlag(sym, SymbolFlag.NeverRaises));
 		if (nrvo) p.isNrvo = true;
 		// Populate param names + pointer promotion (auto-deref via indirectParams)
 		const mutBits: int32 = sym != null ? sym.mutatedParams : 0;

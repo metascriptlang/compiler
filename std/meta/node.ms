@@ -211,6 +211,7 @@ export enum SymbolFlag {
 	StateMachine,
 	ForVar, // for-of loop binding (reference: skForVar) — rebinding legal, value interior read-only
 	Borrow,
+	NeverRaises,
 }
 
 // ===== Symbol =====

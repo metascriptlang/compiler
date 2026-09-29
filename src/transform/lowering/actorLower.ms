@@ -726,6 +726,7 @@ function emitActorDispatch(d: ActorDeclData, name: string, actorType: Type, meth
 	fnNode.paramSyms = dispatchParamSyms;
 	const dispatchSym = mintSym(ctx, SymbolKind.Function, dispatchNativeName, dispatchType);
 	dispatchSym.nativeName = dispatchNativeName;
+	setFlag(dispatchSym, SymbolFlag.NeverRaises);
 	fnNode.resolvedSym = dispatchSym;
 	return fnNode;
 }
