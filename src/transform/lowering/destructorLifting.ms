@@ -21,10 +21,10 @@
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
 //   TypeInfo   TypeName_typeInfo                  — msTypeInfo for ORC runtime
 
-import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType } from "../../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey, requireOpByKey } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -32,7 +32,7 @@ import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
-import { CheckerContext } from "../../checker/context";
+import { CheckerContext, newSym } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
@@ -279,10 +279,10 @@ function clonePath(node: Node, loc: SourceLocation): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
-		const r = makeIdent(d.name, loc);
-		r.nodeType = node.nodeType;
-		r.resolvedSym = node.resolvedSym;
-		return r;
+		if (node.resolvedSym == null) {
+			throw new Error(`internal: hook body generation reached identifier '${d.name}' without its symbol`);
+		}
+		return makeTypedIdentResolved(node.resolvedSym, node.nodeType, loc);
 	}
 	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
@@ -386,6 +386,14 @@ function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: Node
 	};
 }
 
+function liftTempSym(lctx: LiftCtx, name: string, t: Type | null): Symbol {
+	const sym = lctx.checkerCtx != null
+		? newSym(lctx.checkerCtx, SymbolKind.Temp, name, t)
+		: makeSymbol(name, SymbolKind.Temp, t, false);
+	sym.state = SymbolState.Checked;
+	return sym;
+}
+
 // --- Inline element loop (reference parity: unrolled loops for elements) ---
 // Generates: var $i = 0; while ($i < arr.length) { fillBody(elem, arr[$i], ...); $i = $i + 1; }
 function genArrayLoop(hook: string, elemType: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
@@ -396,7 +404,9 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 	const ctr = lctx.tempCounter;
 	lctx.tempCounter = ctr + 1;
 	const counterName = "$i_" + ctr.toString();
+	const counterSym = liftTempSym(lctx, counterName, numberType());
 	const counterDecl = makeVarDecl(counterName, makeNumber(0, loc), DeclKind.Let, loc);
+	counterDecl.resolvedSym = counterSym;
 
 	// reference parity: set nodeType on result.
 	// Set nodeType on cloned array expressions so nativeLower can rewrite arr[i] → msXxxArrayAccess(arr, i).
@@ -404,9 +414,9 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 	const xClone = clonePath(xf, loc);
 	if (xClone.nodeType == null && arrType != null) { xClone.nodeType = arrType; }
 	const lenAccess = bound != null ? bound : makeMember(clonePath(xf, loc), "length", loc);
-	const cond = makeBinary(makeIdent(counterName, loc), "<", lenAccess, loc);
+	const cond = makeBinary(makeTypedIdentResolved(counterSym, null, loc), "<", lenAccess, loc);
 
-	const xi = makeArrayAccess(xClone, makeIdent(counterName, loc), loc);
+	const xi = makeArrayAccess(xClone, makeTypedIdentResolved(counterSym, null, loc), loc);
 	const bodyBuf = newBuf();
 	const visited: NameSet = createNameSet();
 
@@ -416,7 +426,7 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 	} else if (hook == "copy" || hook == "sink") {
 		const yClone = clonePath(yf, loc);
 		if (yClone.nodeType == null && yf.nodeType != null) { yClone.nodeType = yf.nodeType; }
-		const yi = makeArrayAccess(yClone, makeIdent(counterName, loc), loc);
+		const yi = makeArrayAccess(yClone, makeTypedIdentResolved(counterSym, null, loc), loc);
 		fillBody(hook, xi, yi, "", elemType, lctx, bodyBuf, visited, loc);
 	} else {
 		fillBody(hook, xi, xi, "", elemType, lctx, bodyBuf, visited, loc);
@@ -426,8 +436,8 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 
 	// $i = $i + 1
 	bodyBuf.items.push(makeExprStmt(makeAssign(
-		makeIdent(counterName, loc),
-		makeBinary(makeIdent(counterName, loc), "+", makeNumber(1, loc), loc),
+		makeTypedIdentResolved(counterSym, null, loc),
+		makeBinary(makeTypedIdentResolved(counterSym, null, loc), "+", makeNumber(1, loc), loc),
 		loc
 	), loc));
 
@@ -551,10 +561,12 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 				const oldName = "$old_" + ctr.toString();
 				const oldInit = clonePath(xf, loc);
 				if (oldInit.nodeType == null) oldInit.nodeType = xf.nodeType;
-				buf.items.push(makeVarDecl(oldName, oldInit, DeclKind.Let, loc));
+				const oldSym = liftTempSym(lctx, oldName, oldInit.nodeType);
+				const oldDecl = makeVarDecl(oldName, oldInit, DeclKind.Let, loc);
+				oldDecl.resolvedSym = oldSym;
+				buf.items.push(oldDecl);
 				buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
-				const oldRef = makeIdent(oldName, loc);
-				oldRef.nodeType = oldInit.nodeType;
+				const oldRef = makeTypedIdentResolved(oldSym, oldInit.nodeType, loc);
 				genCall(decrefFn, "destroy", oldRef, oldRef, buf, loc);
 			} else {
 				genCall(decrefFn, "destroy", clonePath(xf, loc), yf, buf, loc);
@@ -896,6 +908,7 @@ function isTaggedUnion(t: Type): boolean {
 function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
 	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union) return false;
 	const probe = newBuf();
+	const selfSym = makeSymbol("self", SymbolKind.Variable, null, false);
 	if (objType.kind == TypeKind.Union) {
 		if (!isTagCarriedUnion(objType)) return false;
 		if (isPrimitiveOnlyUnion(objType) && primitiveUnionStringIdx(objType) >= 0) return true;
@@ -903,12 +916,12 @@ function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): bool
 			const variant = inlineVariantStruct(objType.typeChildren[vi]);
 			if (isScalarVariant(objType.typeChildren[vi], variant)) {
 				const visited: NameSet = createNameSet();
-				fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), "v" + vi.toString(), objType.typeChildren[vi], lctx, probe, visited, loc);
+				fillBody("destroy", makeTypedIdentResolved(selfSym, null, loc), makeTypedIdentResolved(selfSym, null, loc), "v" + vi.toString(), objType.typeChildren[vi], lctx, probe, visited, loc);
 				if (probe.items.length > 0) return true;
 			} else if (variant != null && variant.typeNames != null) {
 				for (let fi = 0; fi < variant.typeNames.length; fi += 1) {
 					const visited: NameSet = createNameSet();
-					fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), variant.typeNames[fi], variant.typeChildren[fi], lctx, probe, visited, loc);
+					fillBody("destroy", makeTypedIdentResolved(selfSym, null, loc), makeTypedIdentResolved(selfSym, null, loc), variant.typeNames[fi], variant.typeChildren[fi], lctx, probe, visited, loc);
 					if (probe.items.length > 0) return true;
 				}
 			}
@@ -917,7 +930,7 @@ function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): bool
 	}
 	for (let i = 0; i < objType.typeNames.length; i += 1) {
 		const visited: NameSet = createNameSet();
-		fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), objType.typeNames[i], objType.typeChildren[i], lctx, probe, visited, loc);
+		fillBody("destroy", makeTypedIdentResolved(selfSym, null, loc), makeTypedIdentResolved(selfSym, null, loc), objType.typeNames[i], objType.typeChildren[i], lctx, probe, visited, loc);
 		if (probe.items.length > 0) return true;
 	}
 	return false;
@@ -1095,7 +1108,10 @@ function generateUnionArms(hook: string, typeName: string, objType: Type, s1: Sy
 		const blobName = "$blob_" + ctr.toString();
 		const blobInit = hookParamDeref(s1, loc);
 		blobInit.nodeType = objType;
-		buf.items.push(makeVarDecl(blobName, blobInit, DeclKind.Let, loc));
+		const blobSym = liftTempSym(lctx, blobName, objType);
+		const blobDecl = makeVarDecl(blobName, blobInit, DeclKind.Let, loc);
+		blobDecl.resolvedSym = blobSym;
+		buf.items.push(blobDecl);
 		const zeroDest = hookParamDeref(s1, loc);
 		zeroDest.nodeType = objType;
 		buf.items.push(makeExprStmt(makeAssign(zeroDest, makeNull(loc), loc), loc));
@@ -1103,7 +1119,7 @@ function generateUnionArms(hook: string, typeName: string, objType: Type, s1: Sy
 		const copyChain = buildVariantDispatch("copy", typeName, objType, s1, s2, false, lctx, loc);
 		if (copyChain != null) buf.items.push(copyChain);
 		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(requireOpByKey(objType, AttachedOp.AttachedDestructor), null, loc),
-			[makeHiddenAddr(makeIdent(blobName, loc), loc)], loc), loc));
+			[makeHiddenAddr(makeTypedIdentResolved(blobSym, null, loc), loc)], loc), loc));
 		return;
 	}
 
@@ -1937,9 +1953,10 @@ function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftC
 // Probe whether any tuple element emits cleanup (mirror typeNeedsHooks for structs).
 function tupleNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
 	const probe = newBuf();
+	const selfSym = makeSymbol("self", SymbolKind.Variable, null, false);
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
 		const visited: NameSet = createNameSet();
-		fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), "_" + i.toString(), t.typeChildren[i], lctx, probe, visited, loc);
+		fillBody("destroy", makeTypedIdentResolved(selfSym, null, loc), makeTypedIdentResolved(selfSym, null, loc), "_" + i.toString(), t.typeChildren[i], lctx, probe, visited, loc);
 		if (probe.items.length > 0) return true;
 	}
 	return false;
@@ -1985,7 +2002,8 @@ function sizedArrayNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): bool
 	const elem = t.typeReturn;
 	if (elem == null) return false;
 	const probe = newBuf();
-	fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), "", elem, lctx, probe, createNameSet(), loc);
+	const selfSym = makeSymbol("self", SymbolKind.Variable, null, false);
+	fillBody("destroy", makeTypedIdentResolved(selfSym, null, loc), makeTypedIdentResolved(selfSym, null, loc), "", elem, lctx, probe, createNameSet(), loc);
 	return probe.items.length > 0;
 }
 
