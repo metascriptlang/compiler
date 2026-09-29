@@ -13,6 +13,7 @@ import "./cases/typeAssertionMember";
 import "./cases/typeAssertionArray";
 import "./cases/typeAssertionNew";
 import "./cases/binaryMember";
+import "./cases/adjacentDecorated";
 import "./cases/binaryPrecedence";
 import "./cases/conditionalMember";
 import "./cases/unaryMember";
