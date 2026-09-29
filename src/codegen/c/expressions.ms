@@ -853,16 +853,6 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		const builtin = node.resolvedSym != null ? node.resolvedSym.builtinKind : "";
 		if (builtin == "NaN") { ctx.results.push("NAN"); return; }
 		if (builtin == "Infinity") { ctx.results.push("INFINITY"); return; }
-		// Auto-declare DRC sink temps on first use (zero-init for goto safety)
-		if (d.name.startsWith("$sink_") && p != null) {
-			let alreadySeen = false;
-			for (const s of p.seenSinks) { if (s == d.name) alreadySeen = true; }
-			if (!alreadySeen) {
-				p.seenSinks.push(d.name);
-				const cType = node.nodeType != null ? getTypeDesc(g, node.nodeType) : "void*";
-				emitProcLocalsLine(p, `  ${cType} ${safeName(d.name)} = {0};`);
-			}
-		}
 		// Ensure cross-module enum constants are emitted (Reference parity: enum definitions per module)
 		if (node.nodeType != null && node.nodeType.kind == TypeKind.Enum) {
 			getTypeDesc(g, node.nodeType);

@@ -173,7 +173,7 @@ export class CProc {
 	breakIdx: number;      // which block a 'break' exits
 	withinLoop: number;    // > 0 means inside a loop
 	params: string[];      // parameter names (mangled)
-	seenSinks: string[];   // tracks declared $sink_N_ temps (prevents duplicates)
+	hoistedTemps: string[];
 	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
 	indirectLocals: string[];  // locals pointing into union variant data — auto-deref as (*name)
 	indirectSyms: Cursor<Symbol>[];  // the symbols of indirectParams and indirectLocals
@@ -230,7 +230,7 @@ export function createProc(name: string, returnType: Type | null): CProc {
 		breakIdx: 0,
 		withinLoop: 0,
 		params: [],
-		seenSinks: [],
+		hoistedTemps: [],
 		indirectParams: [],
 		indirectLocals: [],
 		indirectSyms: [],
