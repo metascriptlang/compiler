@@ -12,7 +12,7 @@
 
 import {
 	Node, NodeKind, NodeData, Type, TypeKind,
-	CallExprData, IdentifierData, MemberExprData, NewExprData,
+	CallExprData, IdentifierData, NewExprData,
 	createNode,
 } from "../../ast/node";
 import { TransformContext } from "../context";
@@ -33,11 +33,7 @@ export function lowerRestParams(program: Node, ctx: TransformContext): Node {
 }
 
 function isConsoleLogCallee(callee: Node): boolean {
-	if (callee.kind != NodeKind.MemberExpr) return false;
-	const m = callee.data as MemberExprData;
-	if (m.property != "log") return false;
-	if (m.object.kind != NodeKind.Identifier) return false;
-	return (m.object.data as IdentifierData).name == "console";
+	return callee.resolvedSym != null && callee.resolvedSym.builtinKind == "Echo";
 }
 
 function makeArrayLit(elements: Node[], restType: Type, line: int32): Node {

@@ -1,10 +1,10 @@
 // Type Coercion Lowering — transforms String(x) → x.toString()
 // Follows reference type_coercion.zig
 
-import { Node, NodeKind, CallExprData, IdentifierData } from "../../ast/node";
+import { Node, NodeKind, CallExprData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeMember, makeCall } from "../util";
+import { makeMember, makeCall, callBuiltinKind } from "../util";
 import { firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -20,9 +20,7 @@ function lowerCoercionNode(node: Node): Node {
 	const d = node.data as CallExprData;
 
 	// Only transform String(x) with exactly 1 argument
-	if (d.callee.kind != NodeKind.Identifier) return node;
-	const calleeName = d.callee.data as IdentifierData;
-	if (calleeName.name != "String") return node;
+	if (callBuiltinKind(node) != "ToString") return node;
 	if (d.arguments.length != 1) return node;
 
 	const loc = node.location;

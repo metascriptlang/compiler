@@ -1,7 +1,7 @@
 // Transform Utilities — node-building helpers for AST transforms
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
-import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind, CallExprData, HiddenStdConvData } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
@@ -121,6 +121,12 @@ export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, l
 
 // Canonical name for auto-generated enum-to-string function (e.g., "Color_toString").
 // Used by enumToStringLower (generation), builtinLower + debugLower (call site rewriting).
+export function callBuiltinKind(call: Node): string {
+	if (call.resolvedSym != null && call.resolvedSym.builtinKind != "") return call.resolvedSym.builtinKind;
+	const callee = (call.data as CallExprData).callee;
+	return callee.resolvedSym != null ? callee.resolvedSym.builtinKind : "";
+}
+
 export function receiverKind(t: Type | null): TypeKind {
 	let cur = t;
 	let hops = 0;
