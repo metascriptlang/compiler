@@ -1971,7 +1971,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			emitStmtsLine(p, `${tmp} = ${inner};`);
 			const heldUnion = d.convExpr.nodeType.typeReturn;
 			const failArgs = heldUnion != null ? variantFailArgs(g, heldUnion, rvi) : "MS_EMPTY_STRING, MS_EMPTY_STRING";
-			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${rvi}) msRaiseFieldError(${failArgs}, (int64_t)${tmp}.value._tag);`);
+			if (!node.flags.has(NodeFlag.NoFieldCheck)) emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${rvi}) msRaiseFieldError(${failArgs}, (int64_t)${tmp}.value._tag);`);
 			ctx.results.push(`(${tmp}.present ? ${tmp}.value.v${rvi} : (${targetC})NULL)`);
 			return;
 		}
@@ -2031,7 +2031,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const tmp = `_mnarrow${g.labels}_`;
 			emitProcLocalsLine(p, `${srcC} ${tmp};`);
 			emitStmtsLine(p, `${tmp} = ${inner};`);
-			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${nvi}) msRaiseFieldError(${variantFailArgs(g, srcMaybe.typeReturn, nvi)}, (int64_t)${tmp}.value._tag);`);
+			if (!node.flags.has(NodeFlag.NoFieldCheck)) emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${nvi}) msRaiseFieldError(${variantFailArgs(g, srcMaybe.typeReturn, nvi)}, (int64_t)${tmp}.value._tag);`);
 			const strLitSet = node.flags.has(NodeFlag.ConvCheck) ? strLitPayload(d.convType) : null;
 			const slotRead = `${tmp}.value.v${nvi}`;
 			const payload = strLitSet != null ? `msStrLitConv(${slotRead}, ${strLitConvArgs(g, strLitSet)})` : slotRead;
