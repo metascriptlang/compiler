@@ -2160,6 +2160,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`((${targetType})&(${expr}))`);
 			return;
 		}
+		if (node.nodeType != null && isPointerType(node.nodeType)
+			&& srcType != null && srcType.kind == TypeKind.Span) {
+			ctx.results.push(`((${targetType})(${expr}).data)`);
+			return;
+		}
 		ctx.results.push(`((${targetType})${expr})`);
 		return;
 	}
