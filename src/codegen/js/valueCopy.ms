@@ -154,6 +154,11 @@ function buildCopyFn(gen: JSGenerator, t: Type, name: string): string {
 	return "function " + name + "(v) { if (v === null || v === undefined) return v; " + body + " }\n";
 }
 
+function isElementRead(n: Node): boolean {
+	const sym = n.resolvedSym;
+	return sym != null && (sym.name == "msArrayAt" || sym.name == "msSpanAt");
+}
+
 function isFreshRvalue(n: Node): boolean {
 	match (n.kind) {
 		NodeKind.NumberLiteral => { return true; },
@@ -161,7 +166,7 @@ function isFreshRvalue(n: Node): boolean {
 		NodeKind.BooleanLiteral => { return true; },
 		NodeKind.ArrayLiteral => { return true; },
 		NodeKind.ObjectLiteral => { return true; },
-		NodeKind.CallExpr => { return true; },
+		NodeKind.CallExpr => { return !isElementRead(n); },
 		NodeKind.NewExpr => { return true; },
 		NodeKind.MoveExpr => { return true; },
 		NodeKind.ArrowFunction => { return true; },

@@ -449,7 +449,7 @@ test "new expression" {
 
 test "array access" {
 	const js = genFromSource("const arr = [1]; arr[0];");
-	assert js == "const arr = [1];\nmsArrayAt(arr, 0);\n";
+	assert js == "const arr = [1];\narr[msChkIndex(0, arr.length)];\n";
 }
 
 test "std import emitted" {
