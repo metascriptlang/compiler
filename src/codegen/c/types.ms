@@ -156,6 +156,13 @@ export function getOpByKey(t: Type, op: AttachedOp): Symbol | null {
 	return _opSyms.get(opKey(t, op));
 }
 
+export function requireOpByKey(t: Type, op: AttachedOp): Symbol {
+	const key = opKey(t, op);
+	const sym = _opSyms.get(key);
+	if (sym == null) throw new Error(`internal: type-bound op ${key} is used before it was lifted`);
+	return sym;
+}
+
 export function aliasOpByKey(orig: Type, canon: Type, op: AttachedOp): void {
 	const sym = _opSyms.get(opKey(canon, op));
 	if (sym != null) recordOp(opKey(orig, op), sym, false);
