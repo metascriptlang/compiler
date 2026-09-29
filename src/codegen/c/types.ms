@@ -84,8 +84,7 @@ import { useHeader } from "./context";
 // destructorLifting sets AttachedDestructor on a per-Type-object instance (a throwaway built by
 // unwrapGenericInstance for mono types), so the op never reaches the canonical type codegen reads.
 // The ops therefore live in one GLOBAL table keyed by hook name: a generated hook's symbol is
-// registered before its body exists, references carry it, and `ensureTypeInfoDef` asks it whether
-// a monomorphized instance has a destroy hook.
+// registered before its body exists and references carry it.
 // Lives here (codegen) so destructorLifting — which already imports this module — can populate it
 // without an import cycle. Reset per build via `setGlobalHookOwners` to avoid cross-test bleed.
 let _hookSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
@@ -151,6 +150,10 @@ function recordOp(key: string, sym: Symbol, canon: boolean): void {
 
 export function setOpByKey(t: Type, op: AttachedOp, sym: Symbol): void {
 	recordOp(opKey(t, op), sym, true);
+}
+
+export function getOpByKey(t: Type, op: AttachedOp): Symbol | null {
+	return _opSyms.get(opKey(t, op));
 }
 
 export function aliasOpByKey(orig: Type, canon: Type, op: AttachedOp): void {
@@ -219,9 +222,6 @@ export function hookComplete(name: string, fnType: Type | null): Symbol {
 	const sym = hookPrototype(name, fnType);
 	sym.symbolType = fnType!;
 	return sym;
-}
-export function genHasDestroyHook(typeName: string): boolean {
-	return _hookSyms.get(typeName + "Destroy") != null;
 }
 
 export function procHeader(g: CGen, name: string, fnType: Type, paramNames: Readonly<string[]> | null, mutBits: int32, hookAbi: boolean): string {
@@ -928,6 +928,17 @@ export function isCompilerGenCName(g: CGen, cn: string): boolean {
 	return bare.length > 0 && bare.slice(0, 1) == "$";
 }
 
+function sharedTypeOp(g: CGen, className: string, objType: Type | null, op: AttachedOp, suffix: string): Symbol | null {
+	if (objType == null) {
+		if (lookupHookSym(className + suffix) != null) {
+			addCGenError(g, `internal: TypeInfo '${className}' reached codegen without its type, so its lifted ${suffix} op cannot be found`, 0, 0);
+		}
+		return null;
+	}
+	const opType = objType.kind == TypeKind.Ref && objType.typeReturn != null ? objType.typeReturn : objType;
+	return getOpByKey(opType, op);
+}
+
 export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | null): void {
 	// TypeInfo is DRC metadata — unused under --gc=manual (write-only in manual.h).
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
@@ -978,22 +989,20 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	const runtimeName = bareOrigin != "" ? mangle(bareOrigin) : className;
 	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.name = "${runtimeName}";`);
 	let destroyHook = "";
-	const destroySym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedDestructor) : null;
+	let destroySym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedDestructor) : null;
+	// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
+	// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
+	// objType resolved here. Read the op lifted for the instance's key instead.
+	if (destroySym == null && sharedName) destroySym = sharedTypeOp(g, className, objType, AttachedOp.AttachedDestructor, "Destroy");
 	if (destroySym != null) {
 		destroyHook = mangle(destroySym.name);
 		ensureDrcProto(g, destroyHook, destroySym);
-	} else if (sharedName && genHasDestroyHook(className)) {
-		// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
-		// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
-		// objType resolved here. Consult the global destroy-hook registry by hook name.
-		destroyHook = mangle(className + "Destroy");
-		ensureDrcProto(g, destroyHook, lookupHookSym(className + "Destroy"));
 	}
 	if (destroyHook.length > 0) {
 		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.destroyFn = (msDestroyProc)${destroyHook};`);
 	}
 	let traceSym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedTrace) : null;
-	if (traceSym == null && sharedName) traceSym = lookupHookSym(className + "Trace");
+	if (traceSym == null && sharedName) traceSym = sharedTypeOp(g, className, objType, AttachedOp.AttachedTrace, "Trace");
 	if (traceSym != null) {
 		const traceHook = mangle(traceSym.name);
 		ensureDrcProto(g, traceHook, traceSym);
@@ -1029,7 +1038,7 @@ export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type | null, cType: 
 		const hookSym = getAttachedOp(pointeeType, AttachedOp.AttachedDestructor);
 		if (hookSym != null) {
 			destroyHook = mangle(hookSym.name);
-			ensureDrcProto(g, destroyHook, lookupHookSym(hookSym.name));
+			ensureDrcProto(g, destroyHook, hookSym);
 		}
 	}
 	addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${cellName}TypeInfo;`);
@@ -1907,11 +1916,10 @@ export function ensureFutureThenBoxedInstance(g: CGen, innerType: Type, byRef: b
 	const name = (byRef ? "msFutureThenBoxedRef_" : "msFutureThenBoxed_") + mangle(innerDesc);
 	let drop = "MS_NO_DROP";
 	if (hasAsgnFlag(innerType)) {
-		const destroySym = getAttachedOp(innerType, AttachedOp.AttachedDestructor);
-		const hookName = destroySym != null ? destroySym.name : innerDesc + "Destroy";
-		const hook = destroySym != null ? destroySym : lookupHookSym(hookName);
+		const attached = getAttachedOp(innerType, AttachedOp.AttachedDestructor);
+		const hook = attached != null ? attached : getOpByKey(innerType, AttachedOp.AttachedDestructor);
 		if (hook != null) {
-			drop = mangle(hookName);
+			drop = mangle(hook.name);
 			ensureDrcProto(g, drop, hook);
 		}
 	}

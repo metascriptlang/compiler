@@ -215,6 +215,7 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 			const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 			const callee = makeIdent(tName + suffix, loc);
 			callee.nodeType = fnType;
+			callee.resolvedSym = hookPrototype(tName + suffix, fnType);
 			return makeCall(callee, [left, right], loc);
 		}
 	}
