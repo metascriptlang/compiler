@@ -381,3 +381,6 @@ import "./bug616MethodCallAddressReceiver";
 import "./bug617MethodCallAddressReceiverChecked";
 import "./bug626StructEqAcrossModules";
 import "./bug627NullableFieldEq";
+import "./bug628NullableStructEqJS";
+import "./bug629FixedArrayEq";
+import "./bug630FixedArrayEqSameType";
