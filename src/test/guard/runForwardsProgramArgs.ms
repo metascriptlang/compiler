@@ -1,12 +1,15 @@
 // `msc run <file> [args]` hands the program its arguments: a positional after the
 // file, everything after `--` verbatim, and an unknown flag is an error that names `--`.
 // On Raiser argv[0] is the file as given, and output streams in order with a child's.
+// `msc x <cmd>` runs a declared command on Raiser: argv[0] is the command name and its
+// exit status is msc's.
 //
 // WHY A SUBPROCESS: the observable is the built program's own argv, which the option
 // parser's unit tests cannot reach. The compiler under test is $MSC, else `./msc`.
 //
 // RED PRE-FIX: the program saw only its own path; `a` and `b c` were dropped. On Raiser
 // argv was msc's own command line, and console.log printed after the child's output.
+// `msc x` built the command to C and gave it the cached binary's path as argv[0].
 // GREEN POST-FIX: GUARD-OK.
 
 import { execFileResult, cwd, exit, env } from "std/process";
@@ -81,6 +84,21 @@ if (raiserArgv != "arg=echo0.ms|arg=a|arg=b c|") report(`raiser argv: ${raiserAr
 
 const order = tagged(runRaiser("order.ms", []));
 if (order != "line=A|arg=child|line=C|") report(`raiser output order around a child: ${order}`);
+
+ensureDir(`${dir}/pkg/tool`);
+ensureDir(`${dir}/app`);
+writeFile(`${dir}/pkg/build.ms`, "const config = { package: { name: \"greeter\", version: \"1.0.0\", bin: { \"greet\": \"tool/greet.ms\", \"fail3\": \"tool/fail3.ms\" } } };\nexport default config;\n");
+writeFile(`${dir}/pkg/tool/greet.ms`, "import { argv } from \"std/process\";\nfor (const a of argv) { console.log(\"arg=\" + a); }\n");
+writeFile(`${dir}/pkg/tool/fail3.ms`, "import { exit } from \"std/process\";\nexit(3);\n");
+writeFile(`${dir}/app/build.ms`, "const config = { package: { name: \"app\", version: \"1.0.0\" }, deps: { \"greeter\": \"file:../pkg\" } };\nexport default config;\n");
+
+const xGreet = execFileResult(msc, ["x", "greet", "a", "b c"], `${dir}/app`);
+const xArgs = tagged(xGreet.output);
+if (xGreet.exitCode != 0 || xArgs != "arg=greet|arg=a|arg=b c|") report(`msc x argv: exit ${xGreet.exitCode} ${xArgs}`);
+if (xGreet.output.includes("Built ")) report(`msc x printed a build line: ${xGreet.output}`);
+
+const xFail = execFileResult(msc, ["x", "fail3"], `${dir}/app`);
+if (xFail.exitCode != 3) report(`msc x exit status: ${xFail.exitCode}`);
 
 if (failed != 0) exit(1);
 console.log("GUARD-OK");
