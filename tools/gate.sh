@@ -68,6 +68,9 @@ answer either question. Putting one there needs a run that shows both outcomes.
 
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
 env:  GATE_WAIT_MAX seconds to wait for load <= cores (default 1800, 0 = do not wait)
+      GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers
+      MSCORPUS_BUILD_JOBS optional corpus build ceiling, kept across phases
+      these limits do not cap aggregate processes or compiler-internal parallelism
 ledger: one row per lane and per run (lane secs rc red known new flaky wait) appended to GATE_LEDGER (default ~/.metascript/gate.tsv)
         one row per selection decision (step secs kept total differ_c differ_js touched) appended to
         GATE_SELECT_LEDGER (default ~/.metascript/gate-select.tsv); step is tier-select, select,
@@ -77,6 +80,16 @@ USAGE
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'gate: %s\n' "$*" >&2; exit 2; }
+cap_jobs() {
+  local jobs=$1 cap
+  for cap in "$@"; do
+    [ -n "$cap" ] || continue
+    [[ "$cap" =~ ^[0-9]+$ ]] && [ "$cap" -gt 0 ] 2>/dev/null || die "worker limit must be a positive integer: '$cap'"
+    cap=$((10#$cap))
+    [ "$jobs" -le "$cap" ] || jobs=$cap
+  done
+  printf '%s\n' "$((10#$jobs))"
+}
 ledger_fmt() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 ledger() {
   [ -s "$GATE_LEDGER" ] || printf 'ts\ttree\tlane\tsecs\trc\tred\tknown\tnew\tflaky\twait\n' >"$GATE_LEDGER"
@@ -480,6 +493,23 @@ CASES
   if ! select_leaves_nothing san; then printf 'FAIL san runs when select keeps no program\n'; bad=1; fi
   rm -rf "$EMIT"
   select=$keep_select EMIT=$keep_emit
+  local jobs cap1 cap2 invalid rc
+  while IFS='|' read -r jobs cap1 cap2 want; do
+    got=$(cap_jobs "$jobs" "$cap1" "$cap2")
+    [ "$got" = "$want" ] || { printf 'FAIL worker caps %s/%s/%s: want "%s", got "%s"\n' "$jobs" "$cap1" "$cap2" "$want" "$got"; bad=1; }
+  done <<'CASES'
+32|||32
+32|3||3
+32|3|2|2
+32|3|64|3
+1|3|2|1
+32||2|2
+32|03|02|2
+CASES
+  for invalid in 0 -1 three 9223372036854775808; do
+    got=$(cap_jobs 32 "$invalid" 2>/dev/null); rc=$?
+    [ "$rc" -eq 2 ] && [ -z "$got" ] || { printf 'FAIL invalid worker cap %s: rc=%s, jobs="%s"\n' "$invalid" "$rc" "$got"; bad=1; }
+  done
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -578,6 +608,8 @@ if [ -z "$lanes" ]; then
 fi
 explain
 [ "$dry" -eq 0 ] || exit 0
+corpus_build_limit=${MSCORPUS_BUILD_JOBS:-}
+cap_jobs 1 "${GATE_PAR:-}" "$corpus_build_limit" >/dev/null
 
 if [ "$record" -eq 1 ]; then
   base=main
@@ -719,7 +751,7 @@ totals_of() {
 
 emit_side() {
   local jobs
-  jobs=$(share_of_cores 2)
+  jobs=$(cap_jobs "$(share_of_cores 2)" "${GATE_PAR:-}") || return $?
   mkdir -p "$2"
   awk '{ print NR, $0 }' | bounded env -u FORCE_COLOR GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$1"
 }
@@ -932,7 +964,7 @@ start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
 mkdir -p "$GATES_DIR" && : >"$GATES_DIR/$$"
 trap 'rm -f "$GATES_DIR/$$"' EXIT
-PAR=${GATE_PAR:-$(share_of_cores 5)}
+PAR=$(cap_jobs "${GATE_PAR:-$(share_of_cores 5)}") || exit $?
 rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
 [ "$lanes" = tools ] || admit
 
@@ -949,7 +981,7 @@ for phase in "${PHASES[@]}"; do
   for lane in $todo; do case "$lane" in corpus|san) heavy=$((heavy + 1)) ;; esac; done
   [ "$heavy" -ge 1 ] || heavy=1
   export MSCORPUS_BUILD_JOBS
-  MSCORPUS_BUILD_JOBS=$(share_of_cores "$heavy")
+  MSCORPUS_BUILD_JOBS=$(cap_jobs "$(share_of_cores "$heavy")" "${GATE_PAR:-}" "$corpus_build_limit") || exit $?
   select_pid=""
   case " $todo " in *" suite "*|*" tests "*)
     if [ "$select" -eq 1 ] && [ "$selected" -eq 0 ] && [ -x "$CAND" ]; then
