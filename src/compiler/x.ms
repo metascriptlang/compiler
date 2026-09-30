@@ -1,16 +1,13 @@
-import { exists, ensureDir, readFile, writeFile, chmod, readDir, remove, removeAll, rename } from "std/fs";
+import { exists, ensureDir, readFile, writeFile, chmod, readDir, remove, removeAll } from "std/fs";
 import { join } from "std/fs/path";
-import { execFile, env, exit } from "std/process";
-import { exeSuffix } from "./io";
+import { env } from "std/process";
 import { CliOptions } from "./options";
-import { depRoots, cmdBuildC } from "./compile";
+import { depRoots, cmdRunRaiser } from "./compile";
 import { loadBuildConfig } from "./buildConfig";
 import { binEntryFor, commandNameError } from "./package/bin";
-import { cacheRoot } from "./package/cache";
 import { shimFileName, shimContent, isShim, SHIM_MODE } from "./package/shim";
 import { cmdAdd } from "./package/add";
 import { findChar } from "../utils/string";
-import { dirEntryName, recordDirUse } from "../utils/lruDirs";
 import { error as errStyle, bold, cyan, dim } from "../utils/color";
 
 
@@ -21,10 +18,11 @@ export function globalManifestRoot(): string {
 	return join(home, ".metascript/global");
 }
 
-function isImmutableRoot(root: string): boolean {
-	const cache = cacheRoot();
-	if (cache == "") return false;
-	return root.length > cache.length && root.slice(0, cache.length) == cache;
+function dirEntryName(entry: string): string {
+	if (entry.length > 1 && entry.charAt(entry.length - 1) == "/") {
+		return entry.slice(0, entry.length - 1);
+	}
+	return entry;
 }
 
 function searchRoots(projectRoot: string): { keys: string[], values: string[] } {
@@ -54,12 +52,11 @@ function searchRoots(projectRoot: string): { keys: string[], values: string[] } 
 	return { keys, values };
 }
 
-export function declaredCommands(projectRoot: string): { commands: string[], packages: string[], roots: string[], entries: string[], versions: string[] } {
+export function declaredCommands(projectRoot: string): { commands: string[], packages: string[], roots: string[], entries: string[] } {
 	const commands: string[] = [];
 	const packages: string[] = [];
 	const roots: string[] = [];
 	const entries: string[] = [];
-	const versions: string[] = [];
 	const found = searchRoots(projectRoot);
 	let i = 0;
 	while (i < found.keys.length) {
@@ -74,13 +71,12 @@ export function declaredCommands(projectRoot: string): { commands: string[], pac
 					packages.push(pkgName);
 					roots.push(root);
 					entries.push(binEntryFor(depCfg.package, cmd));
-					versions.push(depCfg.package.version);
 				}
 			}
 		}
 		i = i + 1;
 	}
-	return { commands, packages, roots, entries, versions };
+	return { commands, packages, roots, entries };
 }
 
 export function projectShimDir(projectRoot: string): string {
@@ -223,21 +219,6 @@ export function cmdInstallGlobal(spec: string): boolean {
 	return syncShims(root, shimDir);
 }
 
-function packageKey(pkg: string, version: string, root: string): string {
-	const safePkg = pkg.replace("/", "-");
-	if (isImmutableRoot(root) && version != "") return `${safePkg}@${version}`;
-	return safePkg;
-}
-
-let tmpBuildSeq: int32 = 0;
-
-function tempBuildPath(binPath: string): string {
-	tmpBuildSeq = tmpBuildSeq + 1;
-	return `${binPath}.tmp${performance.now().toString()}.${tmpBuildSeq.toString()}`;
-}
-
-export const BIN_CACHE_CAP: int32 = 32;
-
 export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boolean {
 	const declared = declaredCommands(projectRoot);
 
@@ -297,15 +278,6 @@ export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boo
 		return false;
 	}
 
-	const cache = cacheRoot();
-	if (cache == "") {
-		console.log(`${errStyle("error")}: cannot locate ~/.metascript — set HOME`);
-		return false;
-	}
-	const key = packageKey(declared.packages[hit], declared.versions[hit], root);
-	const binDir = join(cache, join("bin", key));
-	const binPath = join(binDir, wantCmd + exeSuffix());
-
 	const forwarded: string[] = [];
 	let f = 1;
 	while (f < args.length) {
@@ -313,22 +285,8 @@ export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boo
 		f = f + 1;
 	}
 
-	if (!isImmutableRoot(root) || !exists(binPath)) {
-		ensureDir(binDir);
-		const depCfg = loadBuildConfig(join(root, "build.ms"), false);
-		const tmpPath = tempBuildPath(binPath);
-		opts.outputPath = tmpPath;
-		opts.projectRoot = root;
-		cmdBuildC(entryPath, opts, depCfg.resolve);
-		const moved = rename(tmpPath, binPath);
-		if (!moved.ok) {
-			remove(tmpPath);
-			console.log(`${errStyle("error")}: cannot finalize ${binPath}: ${moved.error.message}`);
-			return false;
-		}
-	}
-	recordDirUse(join(cache, "bin"), key, BIN_CACHE_CAP);
-
-	exit(execFile(binPath, forwarded));
+	opts.projectRoot = root;
+	opts.extraArgs = forwarded;
+	cmdRunRaiser(entryPath, opts, loadBuildConfig(join(root, "build.ms"), false).resolve, wantCmd);
 	return true;
 }
