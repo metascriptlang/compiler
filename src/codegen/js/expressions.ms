@@ -136,6 +136,9 @@ export function jsReferenceName(gen: JSGenerator, sym: Symbol | null, text: stri
 
 function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: string): string {
 	if (sym == null) return safeJsName(name);
+	if (gen.multiFile && sym.jsModulePath != "" && sym.modulePath != "" && sym.modulePath != gen.currentModulePath) {
+		return recordNeededImport(gen, sym.modulePath, safeJsName(name));
+	}
 	if (sym.nativeName != null && sym.nativeName != "") return safeJsName(name);
 	if (gen.multiFile) return jsMultiFileName(gen, sym, name, declared);
 	if (!gen.bundleMode && hasFlag(sym, SymbolFlag.Exported)) return safeJsName(name);
