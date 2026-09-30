@@ -13,7 +13,7 @@
 // kinds remain for JSON-related rewrites here.
 
 import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType } from "../../checker/types";
+import { peelTransparentInstance, isNumeric, createResult, createArray, createPrimitive, createRef, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType } from "../../checker/types";
 import { findExtension, requestEnumToString } from "../../checker/context";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -291,7 +291,7 @@ function rewriteZeroCopyBridge(node: Node): Node {
 	if (cd.arguments.length < 1) return node;
 	const receiver = cd.arguments[0];
 	const loc = node.location;
-	const targetType = createArray(createPrimitive(TypeKind.Uint8));
+	const targetType = createRef(createArray(createPrimitive(TypeKind.Uint8)));
 	return makeHiddenStdConv(receiver, targetType, loc);
 }
 

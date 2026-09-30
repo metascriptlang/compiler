@@ -1932,7 +1932,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// Zero-copy string → uint8[] bridge (same memory layout): string is a
 		// fat value (msString), arrays are pointers (msUint8Array*).
 		if (isByteViewConv(node)) {
-			ctx.results.push(`((${targetC}*)&(${inner}))`);
+			ctx.results.push(`((${targetC})&(${inner}))`);
 			return;
 		}
 		if (kind == NodeKind.HiddenSubConv && node.variantSlot > 0 && !isMaybeType(d.convType)

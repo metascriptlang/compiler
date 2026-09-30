@@ -573,7 +573,9 @@ export function makeHiddenStdConv(inner: Node, targetType: Type, loc: SourceLoca
 export function isByteViewConv(node: Readonly<Node>): boolean {
 	if (node.kind != NodeKind.HiddenStdConv) return false;
 	const d = node.data as HiddenStdConvData;
-	return d.convType.kind == TypeKind.Array && isStringLike(d.convExpr.nodeType);
+	const t = d.convType;
+	return t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array
+		&& isStringLike(d.convExpr.nodeType);
 }
 
 export function makeHiddenSubConv(inner: Node, targetType: Type, loc: SourceLocation): Node {
