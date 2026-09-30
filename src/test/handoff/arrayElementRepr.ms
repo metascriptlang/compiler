@@ -7,7 +7,7 @@
 // assignment site (var-decl, return, field, array element, ternary, arg) is covered
 // by one check.
 
-import { strictErrorCount } from "./helpers";
+import { hasError, strictErrorCount } from "./helpers";
 
 // ===== Rejected: element repr differs (int32 vs number) =====
 
@@ -43,18 +43,19 @@ test "scalar int32 → number widening is allowed (not a container)" {
 
 test "array storage: constant indexes respect sized bounds while dynamic indexes retain runtime checking" {
 	const cases = [
-		{ source: "function f(): int32 { let a: int32[4] = [1, 2, 3, 4]; return a[3]; }", errors: 0 },
-		{ source: "function f(): int32 { let a: int32[4] = [1, 2, 3, 4]; return a[4]; }", errors: 1 },
-		{ source: "function f(): int32 { let a: int32[4] = [1, 2, 3, 4]; return a[5]; }", errors: 1 },
-		{ source: "function f(): int32 { let a: int32[4] = [1, 2, 3, 4]; return a[-1]; }", errors: 1 },
-		{ source: "function f(): void { let a: int32[4] = [1, 2, 3, 4]; a[4] = 9; }", errors: 1 },
-		{ source: "function f(): string { let a: string[2] = [\"x\", \"y\"]; return a[2]; }", errors: 1 },
-		{ source: "function f(i: int32): int32 { let a: int32[4] = [1, 2, 3, 4]; return a[i]; }", errors: 0 },
-		{ source: "function f(): int32 { const a: int32[] = [1, 2, 3]; return a[5]; }", errors: 0 },
-		{ source: "function f(): int32 { let a: int32[1] = [7]; return a[0]; }", errors: 0 },
-		{ source: "function f(): int32 { let a: int32[1] = [7]; return a[1]; }", errors: 1 },
+		{ source: "function f(): int32 { let a: int32[4] = [1, 2, 3, 4]; return a[3]; }", errors: 0, needle: "" },
+		{ source: "function f(): int32 { let a: int32[4] = [1, 2, 3, 4]; return a[4]; }", errors: 1, needle: "index 4 out of bounds" },
+		{ source: "function f(): int32 { let a: int32[4] = [1, 2, 3, 4]; return a[5]; }", errors: 1, needle: "index 5 out of bounds" },
+		{ source: "function f(): int32 { let a: int32[4] = [1, 2, 3, 4]; return a[-1]; }", errors: 1, needle: "index -1 out of bounds" },
+		{ source: "function f(): void { let a: int32[4] = [1, 2, 3, 4]; a[4] = 9; }", errors: 1, needle: "index 4 out of bounds" },
+		{ source: "function f(): string { let a: string[2] = [\"x\", \"y\"]; return a[2]; }", errors: 1, needle: "index 2 out of bounds" },
+		{ source: "function f(i: int32): int32 { let a: int32[4] = [1, 2, 3, 4]; return a[i]; }", errors: 0, needle: "" },
+		{ source: "function f(): int32 { const a: int32[] = [1, 2, 3]; return a[5]; }", errors: 0, needle: "" },
+		{ source: "function f(): int32 { let a: int32[1] = [7]; return a[0]; }", errors: 0, needle: "" },
+		{ source: "function f(): int32 { let a: int32[1] = [7]; return a[1]; }", errors: 1, needle: "index 1 out of bounds" },
 	];
 	for (const item of cases) {
 		assert strictErrorCount(item.source) == item.errors, item.source;
+		if (item.errors == 1) assert hasError(item.source, item.needle), item.source;
 	}
 }
