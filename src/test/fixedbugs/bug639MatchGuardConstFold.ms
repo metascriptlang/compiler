@@ -26,14 +26,14 @@ function picked615(): int32 {
 	return picked;
 }
 
-test "bug615: guard consts cap at each level" {
+test "bug639: guard consts cap at each level" {
 	assert capped615(20000) == 12000;
 	assert capped615(7000) == 6000;
 	assert capped615(5) == 5;
 	assert picked615() == 6000;
 }
 
-test "bug615: every guard use of a module const folds, leaving only the definition" {
+test "bug639: every guard use of a module const folds, leaving only the definition" {
 	const src = `
 const FCAP615: int32 = 12000;
 const FNESTED615: int32 = FCAP615 / 2;
