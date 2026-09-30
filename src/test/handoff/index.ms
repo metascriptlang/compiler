@@ -84,6 +84,7 @@ import "./callableBoundaries";
 import "./callableRepresentation";
 import "./checkedReadErrors";
 import "./comptimeHostEffects";
+import "./comptimeMacroValues";
 import "./declarationBoundaries";
 import "./editorRecovery";
 import "./enumRelations";
