@@ -218,3 +218,11 @@ test "declaration boundaries: match arm returns follow the nearest value context
 		assert c.ok == item.accepted, item.name + (c.ok ? "" : ": " + c.error);
 	}
 }
+
+test "declaration boundaries: a wrong return in a statement match arm gets the diagnostic an if return gets" {
+	const inMatch = compileToCWithStd("function f(value: uint32): uint64 { match (value) { 0 => { return \"s\"; }, _ => {}, }; return 1; }");
+	const inIf = compileToCWithStd("function f(value: uint32): uint64 { if (value == 0) { return \"s\"; } return 1; }");
+	assert !inMatch.ok;
+	assert !inIf.ok;
+	assert inMatch.error == inIf.error, inMatch.error + " | " + inIf.error;
+}
