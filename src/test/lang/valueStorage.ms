@@ -428,3 +428,34 @@ test "valueStorage: a const Ptr<T> writes its pointee" {
 	p.a = 7;
 	assert owner.a == 7;
 }
+
+enum ByteVectorFlag { Changed, Paint }
+enum WordVectorFlag { Changed, Paint, C, D, E, F, G, H, High }
+interface ByteSetVectorOwner { bits: Vec<BitSet<ByteVectorFlag>>; }
+interface WordSetVectorOwner { bits: Vec<BitSet<WordVectorFlag>>; }
+
+test "valueStorage: replacing a nonempty byte-bitset vector preserves reusable field storage" {
+	const owner: ByteSetVectorOwner = { bits: [] };
+	const changed = (0 as BitSet<ByteVectorFlag>).incl(ByteVectorFlag.Changed);
+	for (let i: int32 = 0; i < 8; i++) { owner.bits.push(changed); }
+	assert owner.bits[7].has(ByteVectorFlag.Changed);
+	owner.bits = new Array(0);
+	assert owner.bits.length == 0;
+	owner.bits.push((0 as BitSet<ByteVectorFlag>).incl(ByteVectorFlag.Paint));
+	assert owner.bits.length == 1;
+	assert owner.bits[0].has(ByteVectorFlag.Paint);
+	assert !owner.bits[0].has(ByteVectorFlag.Changed);
+}
+
+test "valueStorage: replacing a nonempty word-bitset vector retains high ordinal bits" {
+	const owner: WordSetVectorOwner = { bits: [] };
+	const changed = (0 as BitSet<WordVectorFlag>).incl(WordVectorFlag.Changed);
+	for (let i: int32 = 0; i < 8; i++) { owner.bits.push(changed); }
+	assert owner.bits[7].has(WordVectorFlag.Changed);
+	owner.bits = new Array(0);
+	assert owner.bits.length == 0;
+	owner.bits.push((0 as BitSet<WordVectorFlag>).incl(WordVectorFlag.High));
+	assert owner.bits.length == 1;
+	assert owner.bits[0].has(WordVectorFlag.High);
+	assert !owner.bits[0].has(WordVectorFlag.Changed);
+}

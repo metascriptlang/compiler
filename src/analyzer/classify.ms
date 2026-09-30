@@ -87,7 +87,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	if (elem != null && elem.kind == TypeKind.Uint8) {
 		return makeRcInfo(RcKind.Array, "", "msArrayUint8Destroy", "msArrayUint8Copy", "msArrayUint8WasMoved", "msArrayUint8Sink", false);
 	}
-	if (elem == null || isPrimitiveKind(elem.kind)) {
+	if (elem == null || isPrimitiveKind(elem.kind) || elem.kind == TypeKind.Set) {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
 	if (elem.kind == TypeKind.String) {
