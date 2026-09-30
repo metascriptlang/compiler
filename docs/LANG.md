@@ -2062,6 +2062,7 @@ extern function ok<T>(val: T): Result<T, any>;
 | `@builtin("Name")` | function, method | Compiler intrinsic (inline codegen, no function call) | DONE (stub) |
 | `@compilerFunc` | extern function | The compiler may synthesize calls to this routine; its declaration is where they read their signature | DONE (2026-09-18) |
 | `@throws` | extern function | The routine raises by setting the runtime error flag instead of returning | DONE (2026-09-18) |
+| `@delegate` | body-less function, distinct type | Reuse the base function's implementation or expose the base's fields; see [Delegating a distinct](#delegating-a-distinct) | Verified on C and JS (2026-09-30) |
 | `@beforeReload` / `@afterReload` | module-level `(): void` function | Hot-reload lifecycle handler, run by `std/hcr` around a reload under `--hcr` (docs/HCR.md "Host runtime (S4)") | DONE on Windows x64 (2026-09-23) |
 | `@comptime` | block | Compile-time evaluation | PLANNED |
 | `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
@@ -3139,6 +3140,67 @@ extern class console {
 type UserId = distinct number;    // Nominal typing wrapper
 type Email = distinct string;     // Cannot assign string to Email
 ```
+
+#### Delegating a distinct
+
+`@delegate` opts a distinct type into selected behavior of its base without making
+the two types identical. It is a compiler intrinsic decorator, not a keyword,
+inheritance, an ownership borrow, or a runtime permission check.
+
+```ms
+struct Counter { value: int32; }
+function read(this c: Counter): int32 { return c.value; }
+function add(this ref c: Counter, by: int32): void { c.value += by; }
+
+type TaggedCounter = distinct Counter;
+@delegate function read(this c: TaggedCounter): int32;
+@delegate function add(this ref c: TaggedCounter, by: int32): void;
+@delegate type CounterFields = distinct Counter;
+
+const base: Counter = { value: 4 };
+let tagged = base as TaggedCounter;
+tagged.add(2);
+const fields = base as CounterFields;
+console.log(tagged.read() + "/" + fields.value);
+```
+
+The two forms are deliberately different:
+
+- **On a function:** declare the signature without a body. The compiler resolves
+  the same-named function using the distinct parameters' base types and uses that
+  implementation. A `this ref` parameter stays by-reference. Each function must
+  opt in separately; declaring one does not expose every base method.
+- **On a distinct type:** expose its base's fields through member access. This
+  does not automatically delegate the base's methods. Writes still follow the
+  receiver's mutability and value-copy rules.
+
+The decorator takes no arguments. A delegated function must have a distinct
+parameter and a matching base function; incompatible return types, a supplied
+body, an extern declaration, and a generic base function are refused. A phantom
+generic distinct whose base does not depend on its type parameter can delegate;
+the concrete base function is still not generic.
+
+The public spelling is `@delegate`; `@borrow` is not a compatibility alias.
+This does not rename `Handle.borrow` or other ownership-borrowing APIs.
+
+The intrinsic symbol is exported by the system prelude:
+`std/core/system/index.ms` for C and `std/core/system/index.jms` for JS, as
+`@builtin("delegate") export extern function delegate(): void;`. No import is
+needed. The declaration identifies a compiler intrinsic; a delegated call uses
+the selected base function, not a runtime call to `delegate()`.
+Go-to-definition on the decorator resolves to that prelude declaration.
+
+Measured on 2026-09-30 with the `msc-delegate` candidate in `wt/std-solana`:
+
+| Surface | Command / request | Observed result |
+|---|---|---|
+| Example above | `msc-delegate run example.ms`; JS build plus Node | Both print `6/4`; the copied `tagged` value changes, `base` does not |
+| Function/type forms, phantom generics, nested distincts, ref receivers, value copies | `src/test/corpus/programs/661-borrowDistinct.ms` on C and JS | Both print `key=42/42/42 dot=21/3/maker/5 generic=42/42 fields=21/5 ref=8 copy=5/5` |
+| Definition of function/type decorators and their generic variants | Native LSP `textDocument/definition` | All four resolve to `std/core/system/index.ms:61`, the `delegate` declaration |
+
+This measurement did not run a Solana binary or an editor client; navigation was
+exercised through the actual language-server protocol. The filename of corpus 661
+retains its historical spelling.
 
 #### Reading a distinct thunk
 
