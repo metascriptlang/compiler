@@ -123,8 +123,7 @@ function wrapSpanCoercions(node: Node): Node {
 			const formal = fnType.typeChildren[i];
 			if (formal != null && formal.kind == TypeKind.Span && formal.typeReturn != null) {
 				const arg = cd.arguments[i];
-				if (arg != null && arg.kind != NodeKind.HiddenStdConv && arg.kind != NodeKind.HiddenSubConv
-						&& arg.nodeType != null && !isSpanValued(arg.nodeType)) {
+				if (arg != null && arg.nodeType != null && !isSpanValued(arg.nodeType)) {
 					cd.arguments[i] = makeHiddenStdConv(arg, formal, arg.location);
 				}
 			}
@@ -139,8 +138,7 @@ function wrapSpanAssign(node: Node): Node {
 	if (bd.operator != "=") return node;
 	if (bd.left.nodeType == null || bd.left.nodeType.kind != TypeKind.Span || bd.left.nodeType.typeReturn == null) return node;
 	const rhs = bd.right;
-	if (rhs != null && rhs.kind != NodeKind.HiddenStdConv && rhs.kind != NodeKind.HiddenSubConv
-			&& rhs.nodeType != null && !isSpanValued(rhs.nodeType)) {
+	if (rhs != null && rhs.nodeType != null && !isSpanValued(rhs.nodeType)) {
 		bd.right = makeHiddenStdConv(rhs, bd.left.nodeType, rhs.location);
 	}
 	return node;
@@ -152,8 +150,7 @@ function wrapSpanDeclInit(node: Node): Node {
 	if (declType == null || declType.kind != TypeKind.Span || declType.typeReturn == null) return node;
 	const vd = node.data as VariableDeclData;
 	const init = vd.initializer;
-	if (init != null && init.kind != NodeKind.HiddenStdConv && init.kind != NodeKind.HiddenSubConv
-			&& init.nodeType != null && !isSpanValued(init.nodeType)) {
+	if (init != null && init.nodeType != null && !isSpanValued(init.nodeType)) {
 		vd.initializer = makeHiddenStdConv(init, declType, init.location);
 	}
 	return node;
@@ -178,8 +175,7 @@ function wrapSpanObjectFields(node: Node): Node {
 						const fieldType = children[ni];
 						if (fieldType != null && fieldType.kind == TypeKind.Span && fieldType.typeReturn != null) {
 							const prop = d.properties[i];
-							if (prop != null && prop.kind != NodeKind.HiddenStdConv && prop.kind != NodeKind.HiddenSubConv
-									&& prop.nodeType != null && !isSpanValued(prop.nodeType)) {
+							if (prop != null && prop.nodeType != null && !isSpanValued(prop.nodeType)) {
 								d.properties[i] = makeHiddenStdConv(prop, fieldType, prop.location);
 							}
 						}
