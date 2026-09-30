@@ -1,4 +1,4 @@
-// bug636 — a Raiser program's `argv` was msc's own command line
+// bug644 — a Raiser program's `argv` was msc's own command line
 //
 // Symptom:    `msc run tool.ms --target=raiser a "b c"` printed msc, run,
 //             tool.ms, --target=raiser, a, b c from `for (const a of argv)`.
@@ -16,13 +16,13 @@ import { createContext, load, execute } from "../../raiser/context";
 import { unboxString } from "../../raiser/marshal";
 import { argv } from "std/process";
 
-function bug636Ready(): void {
+function bug644Ready(): void {
 	_resetHostRegistryForTests();
 	_resetBridgeStateForTests();
 	ensureHostTableLoaded();
 }
 
-function bug636Module(): RaiserModule {
+function bug644Module(): RaiserModule {
 	const code: RaiserInstruction[] = [
 		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
 		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
@@ -30,10 +30,10 @@ function bug636Module(): RaiserModule {
 	return makeTestModule(code, [raiserString("msProcessArgv")]);
 }
 
-function bug636Run(programArgv: string[] | null): string[] {
+function bug644Run(programArgv: string[] | null): string[] {
 	const ctx = createContext();
 	ctx.programArgv = programArgv;
-	load(ctx, bug636Module());
+	load(ctx, bug644Module());
 	const out: string[] = [];
 	if (!execute(ctx)) { out.push(ctx.lastError); return out; }
 	if (ctx.lastResult.kind != RaiserValueKind.Array) { out.push("not an array"); return out; }
@@ -46,29 +46,29 @@ function bug636Run(programArgv: string[] | null): string[] {
 	return out;
 }
 
-test "bug636: a program reads the argv its run was given" {
-	bug636Ready();
-	const got = bug636Run(["tool/cli.ms", "a", "b c"]);
+test "bug644: a program reads the argv its run was given" {
+	bug644Ready();
+	const got = bug644Run(["tool/cli.ms", "a", "b c"]);
 	assert got.length == 3;
 	assert got[0] == "tool/cli.ms";
 	assert got[1] == "a";
 	assert got[2] == "b c";
 }
 
-test "bug636: an empty program argv is empty, not the host's" {
-	bug636Ready();
-	assert bug636Run([]).length == 0;
+test "bug644: an empty program argv is empty, not the host's" {
+	bug644Ready();
+	assert bug644Run([]).length == 0;
 }
 
-test "bug636: a run without a program argv still sees the host argv" {
-	bug636Ready();
-	const got = bug636Run(null);
+test "bug644: a run without a program argv still sees the host argv" {
+	bug644Ready();
+	const got = bug644Run(null);
 	assert got.length == argv.length;
 }
 
-test "bug636: the program argv does not outlive its host call" {
-	bug636Ready();
-	bug636Run(["x.ms", "a"]);
+test "bug644: the program argv does not outlive its host call" {
+	bug644Ready();
+	bug644Run(["x.ms", "a"]);
 	assert activeProgramArgv() == null;
-	assert bug636Run(null).length == argv.length;
+	assert bug644Run(null).length == argv.length;
 }
