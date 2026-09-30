@@ -15,6 +15,7 @@ import { hasErrors, CheckerError, CheckerContext } from "../checker/context";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { expandMacros } from "../compiler/meta/expand";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
+import { refuseSpanByteCastOnJs } from "../checker/spanByteCast";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { transformForNative } from "../transform/native/index";
@@ -550,6 +551,7 @@ function emitJSTwoPhase(graph: ModuleGraph, entryFilter: MapEntry[] | null, cano
 
 		if (isEntryPath(canonEntries, modPath)) {
 			refuseSyncAwaitOnJs(ctx, expanded);
+			refuseSpanByteCastOnJs(ctx, expanded);
 			if (hasErrors(ctx)) {
 				let msg = `ERROR: check [${modPath}]:`;
 				for (const err of ctx.errors) {

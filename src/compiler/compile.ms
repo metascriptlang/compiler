@@ -29,6 +29,7 @@ import { computeAliveSet } from "../checker/reachability";
 import { inferRaises, resetRaises } from "../checker/raises";
 import { collectFreestandingAsync, collectWritableModuleBindings, freestandingAsyncLoc, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
+import { refuseSpanByteCastOnJs } from "../checker/spanByteCast";
 import { getSimpleTypeDesc, sealHookSyms, opCName } from "../codegen/c/types";
 import { sealRuntimeProcs } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
@@ -1477,6 +1478,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		if (mod == null) continue;
 		if (!(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
 			refuseSyncAwaitOnJs(unitCtxs[ui], unitPrograms[ui]);
+			refuseSpanByteCastOnJs(unitCtxs[ui], unitPrograms[ui]);
 			exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 		}
 		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
@@ -3642,6 +3644,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		const mod = findModule(graph, modPath);
 		if (!(stdRoot != "" && modPath.startsWith(stdRoot))) {
 			refuseSyncAwaitOnJs(ctx, unitPrograms[ui]);
+			refuseSpanByteCastOnJs(ctx, unitPrograms[ui]);
 			exitOnCheckerErrors(ctx, modPath, mod != null ? mod.rawSource : "");
 		}
 		const transformed = transformProgram(unitPrograms[ui], ctx, true);
