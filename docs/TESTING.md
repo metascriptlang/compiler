@@ -175,6 +175,20 @@ lines), and ALL determinism obligations live on the program:
   SAN were not exercised for these entries. The `e8431cc9` land selector
   picked two unrelated known-red programs, so its green verdict is not
   evidence that the newly added corpus entries ran.
+  Follow-up Windows VM measurement with the retained ESM gate compiler
+  (compiler key `2f1a29cdbb3a5d21d8ab012b43184341e34b45b2`): direct
+  `msc run <entry> --target=raiser` runs of all thirteen installed semantic
+  successor entries matched their exact stdout, **13 pass / 0 fail**; the
+  staged integer-width variant printed `widths -128 2 24464 32767 -1`.
+  This clears the six previously observed VM consumer failures on that
+  candidate, not the remaining unregistered families or remote integration.
+  No new native full-gate, SAN or thin-LTO claim accompanies this VM slice.
+  On landed ESM base `cd52b8e1`, seven changed checker/runtime owner files
+  passed **112/112 native tests** via
+  `msc test <owner> --tests-in-dir --target=c --emit-jobs=1`; the directory
+  selector excluded compiler dependency tests, so this is not a full-suite
+  verdict. The strengthened generic-module consumer also ran natively with
+  `1 r0 3`. Mandatory unregistered owners still require their own proof.
 - **Write RC-stress shapes deliberately**: churn in loops, values relayed
   through calls then dropped unread, throw/catch unwinding mid-build,
   refcounted values held across await. The plain lane asserts behavior;
