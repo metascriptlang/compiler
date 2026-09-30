@@ -2856,7 +2856,7 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 		baseArgs.push(isVar ? createVar(arg) : arg);
 	}
 	if (!hasDistinct) {
-		addError(ctx, `@borrow '${name}' has no distinct parameter, so there is nothing to borrow`, at.line, at.column);
+		addError(ctx, `@delegate '${name}' has no distinct parameter, so there is nothing to borrow`, at.line, at.column);
 		return;
 	}
 	const shown = `${name}(${baseArgs.map((t: Type): string => typeDisplayName(t)).join(", ")})`;
@@ -2886,21 +2886,21 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 		}
 	}
 	if (best == null) {
-		addError(ctx, `@borrow '${name}': no ${shown} to borrow from`, at.line, at.column);
+		addError(ctx, `@delegate '${name}': no ${shown} to borrow from`, at.line, at.column);
 		return;
 	}
 	if (ambiguous) {
-		addError(ctx, `@borrow '${name}': more than one ${shown} to borrow from`, at.line, at.column);
+		addError(ctx, `@delegate '${name}': more than one ${shown} to borrow from`, at.line, at.column);
 		return;
 	}
 	if (hasGenericParams(best.symbolType) && !hasFlag(best, SymbolFlag.Borrow)) {
-		addError(ctx, `@borrow '${name}' cannot borrow from a generic function: its base type must not mention a type parameter`, at.line, at.column);
+		addError(ctx, `@delegate '${name}' cannot borrow from a generic function: its base type must not mention a type parameter`, at.line, at.column);
 		return;
 	}
 	const own = fnType.typeReturn;
 	const theirs = best.symbolType.typeReturn;
 	if (!sameType(peelDistinctReturn(own), peelDistinctReturn(theirs))) {
-		addError(ctx, `@borrow '${name}' returns '${typeDisplayName(own)}' but ${shown} returns '${typeDisplayName(theirs)}'`, at.line, at.column);
+		addError(ctx, `@delegate '${name}' returns '${typeDisplayName(own)}' but ${shown} returns '${typeDisplayName(theirs)}'`, at.line, at.column);
 		return;
 	}
 	sym.borrowedFrom = best;

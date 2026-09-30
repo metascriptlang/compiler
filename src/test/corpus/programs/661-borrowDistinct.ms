@@ -1,23 +1,23 @@
 // @stdout: key=42/42/42 dot=21/3/maker/5 generic=42/42 fields=21/5 ref=8 copy=5/5
-// note: a function or a distinct type marked @borrow takes its base's implementation: a borrowed method runs the base function through method and call syntax, a borrowed dot reads and writes the base's fields on a copy of the value, a generic borrow and a borrow through a distinct of a distinct reach the same base, a ref receiver borrows a ref base; a distinct value stored or pushed is a copy of its base. Same output on every backend.
+// note: a function or a distinct type marked @delegate takes its base's implementation: a delegated method runs the base function through method and call syntax, delegated field access reads and writes the base's fields on a copy of the value, generic delegation and delegation through a distinct of a distinct reach the same base, a ref receiver delegates to a ref base; a distinct value stored or pushed is a copy of its base. Same output on every backend.
 
 struct Account { address: uint64; lamports: uint64; name: string; }
 function key(this a: Account): uint64 { return a.address * 2; }
 function bump(this ref a: Account, by: uint64): void { a.lamports += by; }
 
 type Signer = distinct Account;
-@borrow function key(this s: Signer): uint64;
-@borrow function bump(this ref s: Signer, by: uint64): void;
+@delegate function key(this s: Signer): uint64;
+@delegate function bump(this ref s: Signer, by: uint64): void;
 
-@borrow type Payer = distinct Account;
+@delegate type Payer = distinct Account;
 
 type Owned<T> = distinct Account;
 type Mutable<T> = distinct Owned<T>;
-@borrow function key<T>(this o: Owned<T>): uint64;
-@borrow function key<T>(this m: Mutable<T>): uint64;
+@delegate function key<T>(this o: Owned<T>): uint64;
+@delegate function key<T>(this m: Mutable<T>): uint64;
 
-@borrow type Shared<T> = distinct Account;
-@borrow type Exclusive<T> = distinct Shared<T>;
+@delegate type Shared<T> = distinct Account;
+@delegate type Exclusive<T> = distinct Shared<T>;
 
 struct Vault { amount: uint64; }
 

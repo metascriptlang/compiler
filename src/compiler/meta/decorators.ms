@@ -5,7 +5,7 @@ import {
 	BlockStmtData, VariableDeclData, ArrowFunctionData, CallExprData, IdentifierData,
 	ConstructorDeclData, ExprStmtData, BinaryExprData, MemberExprData,
 } from "../../ast/node";
-import { markUsedIn, CheckerContext, Severity, addError, createContext } from "../../checker/context";
+import { markUsedIn, CheckerContext, Severity, addError, createContext, sgSortRecords } from "../../checker/context";
 import { lookupSymbol, makeSymbol, hasFlag, classDeclNodeOf, SymbolFlag, ScopeKind } from "../../checker/symbol";
 import { findExportedSymbol } from "../../checker/context";
 import { findChar } from "../../utils/string";
@@ -18,6 +18,7 @@ import { lookupModuleCtx } from "../../checker/instantiate";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { fieldInitAssignment } from "../../transform/lowering/ctorLower";
 import { parseSource } from "../../parser/statements/validation";
+import { sgQueryAtPosition } from "../../checker/suggest";
 import { callMacroEngineCompiler, callMacroBodyPreparer, setMacroDeclModulePath, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import {
 	clearObjectHeap, clearArrayHeap, RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap,
@@ -353,7 +354,7 @@ function runDecorators(ctx: CheckerContext, decorators: Node[], target: Node, pl
 		const dec = decorators[i];
 		if (dec.kind != NodeKind.MacroInvocation) continue;
 		const md = dec.data as MacroInvocationData;
-		if (isIntrinsicDecorator(ctx, md.macroName)) continue;
+		if (isIntrinsicDecorator(ctx, md.macroName, dec)) continue;
 		if (plan == null || current == null || !decoratorPositionValid(current)) {
 			addError(ctx, "Decorators are not valid here", dec.location.line, dec.location.column);
 			continue;
@@ -906,6 +907,30 @@ function insertStaticInitBlocks(plan: ClassPlan): void {
 registerApplyDecorators(applyDecorators);
 registerDecoratorDefers(decoratorRewritesStmt);
 registerApplyDecoratedStmt(applyDecoratedStmt);
+
+test "intrinsic decorator definitions survive function and distinct wrapper consumption" {
+	const pr = parseSource("@builtin(\"delegate\") export extern function delegate(): void;\nstruct Data { value: int32; }\nfunction read(this data: Data): int32 { return data.value; }\ntype Wrapped = distinct Data;\n@delegate function read(this data: Wrapped): int32;\n@delegate type Fields = distinct Data;\n");
+	assert pr.ok;
+	const ctx = createContext();
+	ctx.modulePath = "/delegate-navigation.ms";
+	collectTopLevel(ctx, pr.value);
+	applyDecorators(ctx, pr.value);
+	sgSortRecords(ctx.symRecords);
+	const declaration = lookupSymbol(ctx.table, "delegate");
+	assert declaration != null;
+	const routine = sgQueryAtPosition(ctx, 5, 3);
+	assert routine != null;
+	assert routine.sym == declaration;
+	assert routine.modulePath == "/delegate-navigation.ms";
+	assert routine.location.line == 1;
+	const fields = sgQueryAtPosition(ctx, 6, 3);
+	assert fields != null;
+	assert fields.sym == declaration;
+	assert fields.modulePath == "/delegate-navigation.ms";
+	assert fields.location.line == 1;
+	assert sgQueryAtPosition(ctx, 5, 1) == null;
+	assert sgQueryAtPosition(ctx, 5, 10) == null;
+}
 
 test "an intrinsic member wrapper is consumed into the method symbol before the apply pass" {
 	const pr = parseSource("class Calc {\n\t@builtin(\"CalcLoud\") loud(): int32 { return 1; }\n\tn: int32 = 1;\n}\n");

@@ -43,8 +43,8 @@ export class Error {
 @builtin("compilerFunc")
 export extern function compilerFunc(): void;
 
-@builtin("borrow")
-export extern function borrow(): void;
+@builtin("delegate")
+export extern function delegate(): void;
 
 @compilerFunc
 function msFieldError(head: string, actual: string): never {

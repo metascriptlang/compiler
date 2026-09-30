@@ -288,20 +288,20 @@ function markBorrow(ctx: CheckerContext, dd: DecoratedDeclData, sym: Symbol): vo
 
 function borrowDecorator(decorators: Node[]): Node {
 	for (const dec of decorators) {
-		if (dec.kind == NodeKind.MacroInvocation && (dec.data as MacroInvocationData).macroName == "borrow") return dec;
+		if (dec.kind == NodeKind.MacroInvocation && (dec.data as MacroInvocationData).macroName == "delegate") return dec;
 	}
 	return decorators[0];
 }
 
 function borrowMisuse(dd: DecoratedDeclData): string {
-	if ((borrowDecorator(dd.decorators).data as MacroInvocationData).macroArgs.length > 0) return "@borrow takes no arguments";
+	if ((borrowDecorator(dd.decorators).data as MacroInvocationData).macroArgs.length > 0) return "@delegate takes no arguments";
 	let decl = dd.decoratedNode;
 	if (decl.kind == NodeKind.ExportDecl) decl = (decl.data as ExportDeclData).exportedDecl;
 	if (decl.kind == NodeKind.TypeAliasDecl) return "";
-	if (decl.kind != NodeKind.FunctionDecl) return "@borrow applies to a function or a distinct type";
+	if (decl.kind != NodeKind.FunctionDecl) return "@delegate applies to a function or a distinct type";
 	const fd = decl.data as FunctionDeclData;
-	if (fd.fnFlags.indexOf("extern", 0) >= 0) return "@borrow cannot bind an extern function; it takes the implementation of its base function";
-	if (fd.fnFlags.indexOf("overload", 0) < 0) return `@borrow takes the body of the base function: declare '${fd.fnName}' without one`;
+	if (fd.fnFlags.indexOf("extern", 0) >= 0) return "@delegate cannot bind an extern function; it takes the implementation of its base function";
+	if (fd.fnFlags.indexOf("overload", 0) < 0) return `@delegate takes the body of the base function: declare '${fd.fnName}' without one`;
 	return "";
 }
 
