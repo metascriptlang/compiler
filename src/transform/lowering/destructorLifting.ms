@@ -1507,6 +1507,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, emitTypeInf
 				return;
 			}
 			if (sym.symbolKind == SymbolKind.Class
+				|| sym.symbolKind == SymbolKind.Actor
 				|| sym.symbolKind == SymbolKind.Interface) {
 				isClassOrInterface = true;
 				if (refType == null) refType = sym.symbolType;
@@ -2473,7 +2474,7 @@ function ensureHooksByName(typeName: string, lctx: LiftCtx, loc: SourceLocation,
 		// TypeAlias-to-Ref: ensureHooks' category resolver handles it (same skip path).
 		const objType = unwrapRef(sym.symbolType);
 		if (objType == null) return;
-		const refType = (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Interface)
+		const refType = (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor || sym.symbolKind == SymbolKind.Interface)
 			? sym.symbolType
 			: null as unknown as Type;
 		ensureHooks(typeName, objType, refType, true, lctx, loc);
