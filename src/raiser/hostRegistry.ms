@@ -90,6 +90,7 @@ export function hostRegistrySize(): number {
 
 let _activeObjectHeap: RaiserObjectHeap | null = null;
 let _activeArrayHeap: RaiserArrayHeap | null = null;
+let _activeProgramArgv: string[] | null = null;
 
 export function setActiveHostHeaps(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap): void {
 	_activeObjectHeap = objHeap;
@@ -104,12 +105,21 @@ export function activeHostArrayHeap(): RaiserArrayHeap | null {
 	return _activeArrayHeap;
 }
 
+export function setActiveProgramArgv(programArgv: string[] | null): void {
+	_activeProgramArgv = programArgv;
+}
+
+export function activeProgramArgv(): string[] | null {
+	return _activeProgramArgv;
+}
+
 // Test-only: reset state between test runs.
 export function _resetHostRegistryForTests(): void {
 	_registry.entries.length = 0;
 	_registry.initialized = false;
 	_activeObjectHeap = null;
 	_activeArrayHeap = null;
+	_activeProgramArgv = null;
 }
 
 // --- Tests ---
@@ -183,4 +193,18 @@ test "active host heaps publish and read back" {
 	setActiveHostHeaps(oh, ah);
 	assert activeHostObjectHeap() != null;
 	assert activeHostArrayHeap() != null;
+}
+
+test "active program argv publishes, reads back and resets" {
+	_resetHostRegistryForTests();
+	assert activeProgramArgv() == null;
+	setActiveProgramArgv(["tool.ms", "a"]);
+	const got = activeProgramArgv();
+	assert got != null;
+	if (got != null) {
+		assert got.length == 2;
+		assert got[1] == "a";
+	}
+	_resetHostRegistryForTests();
+	assert activeProgramArgv() == null;
 }

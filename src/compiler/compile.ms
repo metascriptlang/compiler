@@ -3515,9 +3515,9 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 
 // ===== Raiser (Bytecode VM) Run =====
 
-export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
+export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), argv0: string = ""): void {
 	const t0 = performance.now();
-	const config = buildResolverConfig(Target.Raiser, defaultResolveSection());
+	const config = buildResolverConfig(Target.Raiser, resolveSection, platform, opts.projectRoot);
 	const graph = loadAndCheckGraph(filePath, config, opts);
 
 	const modules: RaiserModuleInput[] = [];
@@ -3571,18 +3571,12 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 
 	const ctx = createRaiserContext();
 	ctx.gcMode = "orc";
+	const programArgv: string[] = [argv0 != "" ? argv0 : filePath];
+	for (const a of opts.extraArgs) programArgv.push(a);
+	ctx.programArgv = programArgv;
+	ctx.printSink = (text: string): void => { console.log(text); };
 	raiserLoad(ctx, raiserMod);
 	const ranOk = raiserExecute(ctx);
-
-	if (ctx.lastOutput.length > 0) {
-		// Print captured output (strip trailing newline for clean display)
-		const lastOut = ctx.lastOutput;
-		if (lastOut.byteLength > 0 && lastOut.byteSlice(lastOut.byteLength - 1, lastOut.byteLength) == "\n") {
-			console.log(lastOut.byteSlice(0, lastOut.byteLength - 1));
-		} else {
-			console.log(lastOut);
-		}
-	}
 
 	if (!ranOk) {
 		if (ctx.lastError != "") {

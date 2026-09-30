@@ -21,7 +21,7 @@ import {
 import { orcCollectCycles } from "./orc";
 import { copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
-import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap } from "./hostRegistry";
+import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink } from "./marshal";
 
 // --- VM State ---
@@ -147,6 +147,7 @@ export interface RaiserVM {
 	diagEndColumn: number;
 	hostCallsRestricted: boolean;
 	hostPolicySource: string;
+	programArgv: string[] | null;   // what the program's `argv` reads; null leaves the host's own argv visible
 }
 
 // Initial register file size. The slots array grows on demand via
@@ -205,7 +206,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const futures: RaiserFutures = { items: futureItems };
 	const sched: RaiserSched = { strands, futures, nextStrandId: 1 };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "" };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -1645,11 +1646,14 @@ function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 	// VM's heaps active when it resumes.
 	const prevObjHeap = activeHostObjectHeap();
 	const prevArrHeap = activeHostArrayHeap();
+	const prevArgv = activeProgramArgv();
 	setActiveHostHeaps(vm.objectHeap, vm.arrayHeap);
+	setActiveProgramArgv(vm.programArgv);
 	const result = fn(args);
 	if (prevObjHeap != null && prevArrHeap != null) {
 		setActiveHostHeaps(prevObjHeap, prevArrHeap);
 	}
+	setActiveProgramArgv(prevArgv);
 
 	const dst = getReg(vm, base + inst.a);
 	vmIncref(vm, result);

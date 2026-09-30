@@ -389,3 +389,4 @@ import "./bug632NullableValueIsMaybe";
 import "./bug633GenericTypeNeedsArguments";
 import "./bug634JsNarrowingIsChecked";
 import "./bug635OverloadCallUsesItsWinner";
+import "./bug636RaiserProgramArgv";
