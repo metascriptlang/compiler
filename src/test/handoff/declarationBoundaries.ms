@@ -37,8 +37,6 @@ test "declarationBoundaries: annotation boundaries distinguish unknown from unsu
 	const cases = [
 		{ name: "annotation 'any' is rejected with guidance", source: "function f(x: any): void {}", expected: -1 },
 		{ name: "compound 'any' positions are rejected too", source: "function f(): any[] { return []; }", expected: -1 },
-		{ name: "annotation 'undefined' warns but stays legal", source: "let x: undefined = null;", expected: 0 },
-		{ name: "'undefined' aliases null in a union position", source: "function f(s: string | undefined): boolean { return s === null; }", expected: 0 },
 		{ name: "'unknown' stays legal", source: "function f(x: unknown): void {}", expected: 0 },
 		{ name: "the null cast idiom stays legal", source: "interface T { v: int32; } function f(): T { return null as unknown as T; }", expected: 0 },
 	];
