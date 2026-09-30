@@ -132,7 +132,7 @@ export function cmdRun(filePath: string, opts: CliOptions): void {
 	if (opts.showTime) printTiming("compiled", t0);
 	// execFile bypasses the shell — no cmd.exe path-parsing quirks, forward
 	// slashes accepted natively by CreateProcess.
-	const runCode = execFile(tmpBin);
+	const runCode = execFile(tmpBin, opts.extraArgs);
 	// Show update notice before exit — cmdRun terminates here, bypassing
 	// main()'s post-command hook.
 	maybeShowUpdateNotice();

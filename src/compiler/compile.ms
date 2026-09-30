@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec, execFile, execFileCapture, argv, platform, cwd } from "std/process";
+import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd } from "std/process";
 import { watch, nextChanges, msIoRunOnce, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile } from "std/fs";
 import { writeStderr } from "std/io";
@@ -3393,14 +3393,14 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	}
 	const entryJs = `${tree.outRoot}/${entryRel}`;
 	if (opts.verbose) verboseLog(`exec node ${entryJs}`);
-	const r = exec(`node ${entryJs}`);
-	if (r.ok) {
-		if (r.value != "") console.log(r.value);
-		exit(0);
+	const node = findOnPath("node");
+	if (node == "") {
+		console.log(`${error("error")}: msc run --target=js needs node on PATH`);
+		exit(1);
 	}
-	if (r.error.output != "") console.log(r.error.output);
-	if (r.error.errorOutput != "") console.log(r.error.errorOutput);
-	exit(r.error.exitCode != 0 ? r.error.exitCode : 1);
+	const forwarded: string[] = [entryJs];
+	for (const arg of opts.extraArgs) { forwarded.push(arg); }
+	exit(execFile(node, forwarded));
 }
 
 // ===== Test (JS backend) =====

@@ -118,14 +118,8 @@ export function resolveTargetSizes(targetOs: string, cpuTarget: string): TargetI
 	return t;
 }
 
-export function parseArgs(): CliOptions {
-	// argv[0] = executable, argv[1] = script (or command when self-hosted binary)
-	// When run via `msc run src/compiler/main.ms compile foo.ms`:
-	//   argv[0]=msc, argv[1]=src/compiler/main.ms, argv[2]=compile, argv[3]=foo.ms
-	// When compiled to binary `msc compile foo.ms`:
-	//   argv[0]=msc, argv[1]=compile, argv[2]=foo.ms
-
-	const opts: CliOptions = {
+function newCliOptions(): CliOptions {
+	return {
 		command: "",
 		inputFile: "",
 		target: Target.C,
@@ -170,6 +164,16 @@ export function parseArgs(): CliOptions {
 		projectRoot: "",
 		extraArgs: [],
 	};
+}
+
+export function parseArgs(): CliOptions {
+	// argv[0] = executable, argv[1] = script (or command when self-hosted binary)
+	// When run via `msc run src/compiler/main.ms compile foo.ms`:
+	//   argv[0]=msc, argv[1]=src/compiler/main.ms, argv[2]=compile, argv[3]=foo.ms
+	// When compiled to binary `msc compile foo.ms`:
+	//   argv[0]=msc, argv[1]=compile, argv[2]=foo.ms
+
+	const opts = newCliOptions();
 
 	if (argv.length < 2) return opts;
 
@@ -181,11 +185,38 @@ export function parseArgs(): CliOptions {
 
 	if (argv.length <= argStart) return opts;
 
-	// Parse all args — positional args become command then inputFile
+	const parsed = applyArgs(opts, argv, argStart);
+	if (!parsed.ok) {
+		console.log(error("error") + ": " + parsed.error);
+		exit(1);
+	}
+
+	// opts.lto stays "" here when no --lto= was given: the default depends on
+	// which compiler resolves (LTO capability is a compiler/target property),
+	// and the compiler is not known until resolveCC runs. resolveLto (cc.ms),
+	// called right after resolveCC, turns "" into thin/off per capability.
+
+	// Seeded last because backend/os/gc/mode are only final once every switch has
+	// been read; `seed` skips names the user already set, so -d: still wins
+	// (Nim reaches the same precedence by seeding first — condsyms.nim:34 before
+	// commands.nim:703).
+	const backendName = opts.target == Target.JS ? "js" : (opts.target == Target.Raiser ? "raiser" : "c");
+	initDefines(opts.defines, backendName, opts.targetOs, buildCpu(opts.targetOs, opts.cpuTarget), opts.gcMode, opts.mode);
+	if (opts.showDefines) {
+		console.log(formatDefines(opts.defines));
+		exit(0);
+	}
+
+	opts.targetInfo = resolveTargetSizes(opts.targetOs, opts.cpuTarget);
+
+	return opts;
+}
+
+export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Result<void, string> {
 	let positionalIdx = 0;
 	let i = argStart;
-	while (i < argv.length) {
-		const arg = argv[i];
+	while (i < args.length) {
+		const arg = args[i];
 		if (opts.command == "x" && positionalIdx >= 1) {
 			if (opts.inputFile == "") {
 				opts.inputFile = arg;
@@ -195,6 +226,10 @@ export function parseArgs(): CliOptions {
 			positionalIdx += 1;
 			i += 1;
 			continue;
+		}
+		if (arg == "--" && opts.command == "run") {
+			for (let j = i + 1; j < args.length; j += 1) { opts.extraArgs.push(args[j]); }
+			break;
 		}
 		if (arg == "--help" || arg == "-h") {
 			opts.command = "help";
@@ -239,9 +274,7 @@ export function parseArgs(): CliOptions {
 		} else if (arg.startsWith("--os=")) {
 			const osVal = arg.slice(5, arg.length);
 			if (osVal != "bare" && osVal != "solana" && osVal != "wasm" && osVal != "emcc" && osVal != "linux" && osVal != "macos" && osVal != "windows" && osVal != "darwin" && osVal != "freebsd" && osVal != "ios" && osVal != "android") {
-				console.log(`error: unknown --os target: "${osVal}"`);
-				console.log(`  Valid targets: bare, solana, wasm, emcc, linux, macos, windows, ios, android`);
-				return opts;
+				return Result.err(`unknown --os target: "${osVal}"\n  Valid targets: bare, solana, wasm, emcc, linux, macos, windows, ios, android`);
 			}
 			opts.targetOs = osVal;
 		} else if (arg.startsWith("--cpu=")) {
@@ -347,31 +380,13 @@ export function parseArgs(): CliOptions {
 			// Package manager commands: pass unknown flags through
 			opts.extraArgs.push(arg);
 		} else {
-			console.log(error("error") + ": unknown option '" + bold(arg) + "'");
-			exit(1);
+			const hint = opts.command == "run" && opts.inputFile != ""
+				? `; to pass it to the program write: msc run <file> -- ${arg}` : "";
+			return Result.err(`unknown option '${arg}'${hint}`);
 		}
 		i += 1;
 	}
-
-	// opts.lto stays "" here when no --lto= was given: the default depends on
-	// which compiler resolves (LTO capability is a compiler/target property),
-	// and the compiler is not known until resolveCC runs. resolveLto (cc.ms),
-	// called right after resolveCC, turns "" into thin/off per capability.
-
-	// Seeded last because backend/os/gc/mode are only final once every switch has
-	// been read; `seed` skips names the user already set, so -d: still wins
-	// (Nim reaches the same precedence by seeding first — condsyms.nim:34 before
-	// commands.nim:703).
-	const backendName = opts.target == Target.JS ? "js" : (opts.target == Target.Raiser ? "raiser" : "c");
-	initDefines(opts.defines, backendName, opts.targetOs, buildCpu(opts.targetOs, opts.cpuTarget), opts.gcMode, opts.mode);
-	if (opts.showDefines) {
-		console.log(formatDefines(opts.defines));
-		exit(0);
-	}
-
-	opts.targetInfo = resolveTargetSizes(opts.targetOs, opts.cpuTarget);
-
-	return opts;
+	return Result.ok(null);
 }
 
 export function testsShardOf(spec: string): int32[] {
@@ -437,4 +452,73 @@ test "buildCpu: --cpu wins, wasm and emcc are wasm32, solana is sbf" {
 	assert buildCpu("wasm", "") == "wasm32";
 	assert buildCpu("emcc", "") == "wasm32";
 	assert buildCpu("solana", "") == "sbf";
+}
+
+function parseForTest(args: string[]): CliOptions {
+	const opts = newCliOptions();
+	applyArgs(opts, args, 0);
+	return opts;
+}
+
+test "run: positionals after the file are the program's arguments" {
+	const opts = parseForTest(["run", "cli.ms", "a", "b c"]);
+	assert opts.command == "run";
+	assert opts.inputFile == "cli.ms";
+	assert opts.extraArgs.length == 2;
+	assert opts.extraArgs[0] == "a" && opts.extraArgs[1] == "b c";
+}
+
+test "run: a known msc flag after the file stays msc's" {
+	const opts = parseForTest(["run", "cli.ms", "--target=js", "a", "--release"]);
+	assert opts.target == Target.JS;
+	assert opts.mode == MODE_RELEASE;
+	assert opts.extraArgs.length == 1 && opts.extraArgs[0] == "a";
+}
+
+test "run: -- hands everything after it to the program verbatim" {
+	const opts = parseForTest(["run", "cli.ms", "--release", "--", "--foo", "--release", "--", "-x", "y"]);
+	assert opts.mode == MODE_RELEASE;
+	assert opts.extraArgs.length == 5;
+	assert opts.extraArgs[0] == "--foo" && opts.extraArgs[1] == "--release";
+	assert opts.extraArgs[2] == "--" && opts.extraArgs[3] == "-x" && opts.extraArgs[4] == "y";
+}
+
+test "run: -- before any file leaves the file to build.ms" {
+	const opts = parseForTest(["run", "--", "a"]);
+	assert opts.inputFile == "";
+	assert opts.extraArgs.length == 1 && opts.extraArgs[0] == "a";
+}
+
+test "run: an unknown flag after the file is an error that names --" {
+	const opts = newCliOptions();
+	const r = applyArgs(opts, ["run", "cli.ms", "--foo"], 0);
+	assert !r.ok;
+	if (!r.ok) {
+		assert r.error == "unknown option '--foo'; to pass it to the program write: msc run <file> -- --foo";
+	}
+	assert opts.extraArgs.length == 0;
+}
+
+test "an unknown flag outside run is an error without the -- hint" {
+	const opts = newCliOptions();
+	const r = applyArgs(opts, ["build", "cli.ms", "--foo"], 0);
+	assert !r.ok;
+	if (!r.ok) { assert r.error == "unknown option '--foo'"; }
+}
+
+test "-- does not change other commands: a package command still takes flags through" {
+	const opts = parseForTest(["add", "pkg", "--dev", "x"]);
+	assert opts.extraArgs.length == 2 && opts.extraArgs[0] == "--dev";
+}
+
+test "x forwards everything after the tool name, flags included" {
+	const opts = parseForTest(["x", "tool", "--foo", "a", "--"]);
+	assert opts.inputFile == "tool";
+	assert opts.extraArgs.length == 3 && opts.extraArgs[0] == "--foo" && opts.extraArgs[2] == "--";
+}
+
+test "an unknown --os target is an error result, not a silent stop" {
+	const opts = newCliOptions();
+	const r = applyArgs(opts, ["build", "a.ms", "--os=plan9"], 0);
+	assert !r.ok;
 }
