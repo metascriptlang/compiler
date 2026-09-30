@@ -1593,9 +1593,6 @@ function genArrayType(g: CGen, t: Type): string {
 	// getTypeDesc(elem) kept for its emission side-effect (element typedef) + the data[] type.
 	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : getTypeDesc(g, t.typeReturn);
 
-	// Single source for the name: arrayCTypeName reproduces the legacy inline rule exactly
-	// (verified zero-divergence across the full self-host). destructorLifting routes the
-	// per-type walker name through the same arrayCTypeName, so the two can never drift.
 	const arrTypeName = arrayCTypeName(t);
 	typeCacheSet(g.typeCache, key, arrTypeName);
 
@@ -1635,11 +1632,6 @@ export function getArrayTypeName(elemType: string): string {
 	return mangle(elemType) + "Array";
 }
 
-// Element's C type NAME (no emission) — mirrors EVERY name-producing branch of getTypeDesc
-// using the SAME building blocks (getSimpleTypeDesc / mangle / monoTypeKey / tupleTypeName),
-// so arrayCTypeName agrees with getTypeDesc for any element that appears in a value array.
-// Verified complete: a build-wide name-equality check found zero divergences from the legacy
-// inline rule across the whole self-host. If a new element kind is added, re-run that check.
 function elemArrayCName(elem: Type): string {
 	const simple = getSimpleTypeDesc(elem);
 	if (simple != "") return simple;
@@ -1650,8 +1642,8 @@ function elemArrayCName(elem: Type): string {
 		const sr = setRepr(elem);
 		if (sr != null) return elemArrayCName(sr);
 	}
-	if (elem.kind == TypeKind.Enum) return mangle(elem.typeName);
-	if (elem.kind == TypeKind.EnumLiteral) return (elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Enum) ? mangle(elem.typeReturn.typeName) : "int32_t";
+	if (elem.kind == TypeKind.Enum) return resolvedTypeCName(elem, true);
+	if (elem.kind == TypeKind.EnumLiteral) return (elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Enum) ? resolvedTypeCName(elem.typeReturn, true) : "int32_t";
 	if (elem.kind == TypeKind.Tuple) return tupleTypeName(elem);
 	if (elem.kind == TypeKind.Array) return arrayCTypeName(elem);
 	if ((elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr || elem.kind == TypeKind.Var) && elem.typeReturn != null) return elemArrayCName(elem.typeReturn) + "*";
@@ -1663,7 +1655,7 @@ function elemArrayCName(elem: Type): string {
 	}
 	if (elem.kind == TypeKind.GenericInstance) return monoInstanceName(elem);
 	if (elem.kind == TypeKind.Struct) {
-		return isAnonTypeName(elem.typeName) ? anonTypeName(elem) : mangle(elem.typeName);
+		return isAnonTypeName(elem.typeName) ? anonTypeName(elem) : resolvedTypeCName(elem, true);
 	}
 	return "void*";
 }
