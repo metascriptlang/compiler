@@ -14,6 +14,7 @@ import "./cases/typeAssertionArray";
 import "./cases/typeAssertionNew";
 import "./cases/binaryMember";
 import "./cases/adjacentDecorated";
+import "./cases/adjacentAsync";
 import "./cases/binaryPrecedence";
 import "./cases/conditionalMember";
 import "./cases/unaryMember";
