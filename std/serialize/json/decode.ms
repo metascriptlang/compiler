@@ -124,7 +124,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 					const names: Node[] = [];
 					for (let mi = 0; mi < ftype.enumMembers.length; mi = mi + 1) {
 						const ov: number = ftype.enumValues.length == ftype.enumMembers.length ? ftype.enumValues[mi] : mi;
-						ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+						ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
 						names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ftype.enumMembers[mi] });
 					}
 					vKeyNodes.push(fname);
@@ -337,7 +337,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 				const names: Node[] = [];
 				for (let mi = 0; mi < elemType.enumMembers.length; mi = mi + 1) {
 					const ov: number = elemType.enumValues.length == elemType.enumMembers.length ? elemType.enumValues[mi] : mi;
-					ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+					ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
 					names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: elemType.enumMembers[mi] });
 				}
 				keyNodes.push(fname);
@@ -501,7 +501,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			const names: Node[] = [];
 			for (let mi = 0; mi < ftype.enumMembers.length; mi = mi + 1) {
 				const ov: number = ftype.enumValues.length == ftype.enumMembers.length ? ftype.enumValues[mi] : mi;
-				ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+				ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
 				names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ftype.enumMembers[mi] });
 			}
 			keyNodes.push(fname);
@@ -702,7 +702,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 					const names: Node[] = [];
 					for (let mi = 0; mi < ftype.enumMembers.length; mi = mi + 1) {
 						const ov: number = ftype.enumValues.length == ftype.enumMembers.length ? ftype.enumValues[mi] : mi;
-						ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+						ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
 						names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ftype.enumMembers[mi] });
 					}
 					vKeyNodes.push(fname);
@@ -864,7 +864,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				const names: Node[] = [];
 				for (let mi = 0; mi < optMember.enumMembers.length; mi = mi + 1) {
 					const ov: number = optMember.enumValues.length == optMember.enumMembers.length ? optMember.enumValues[mi] : mi;
-					ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+					ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
 					names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: optMember.enumMembers[mi] });
 				}
 				keyNodes.push(fname);
@@ -961,7 +961,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				const names: Node[] = [];
 				for (let mi = 0; mi < ec.enumMembers.length; mi = mi + 1) {
 					const ov: number = ec.enumValues.length == ec.enumMembers.length ? ec.enumValues[mi] : mi;
-					ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+					ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
 					names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ec.enumMembers[mi] });
 				}
 				keyNodes.push(fname);
@@ -1111,7 +1111,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			const names: Node[] = [];
 			for (let mi = 0; mi < fcore.enumMembers.length; mi = mi + 1) {
 				const ov: number = fcore.enumValues.length == fcore.enumMembers.length ? fcore.enumValues[mi] : mi;
-				ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+				ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
 				names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fcore.enumMembers[mi] });
 			}
 			keyNodes.push(fname);
