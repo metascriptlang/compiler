@@ -53,6 +53,12 @@ queue. An empty registry file is a running gate whose gate.sh predates the queue
 it is waited for like any other. A registry file that does not parse stops the
 run and names the file.
 
+The build lane builds the candidate with the worktree builder, then rebuilds it with
+itself and compares the two link response files (objects and link flags, output path
+ignored); equal means a fixed point, otherwise the newer one becomes the candidate and
+is rebuilt once more. Still unequal after three generations is the red
+"self-host: no fixed point after 3 generations".
+
 A GREEN run whose build lane produced the candidate for the clean src and std tree
 of HEAD makes that candidate the worktree builder ./msc (the old one stays as
 msc.prev, the tree key goes to msc.key); a failed swap prints "builder not
@@ -324,7 +330,9 @@ GATE_SELECT_LEDGER=${GATE_SELECT_LEDGER:-$HOME/.metascript/gate-select.tsv}
 reds_of() {
   local lane=$1 log=$2 rc=$3
   case "$lane" in
-    build) [ "$rc" -eq 0 ] || echo "build" ;;
+    build)
+      sed -n 's/^FAIL \(self-host: .*[^)]\)\( ([^)]*)\)\{0,1\}$/\1/p' "$log"
+      [ "$rc" -eq 0 ] || grep -q '^FAIL self-host: ' "$log" || echo "build" ;;
     boundary) sed -n 's/^FAIL  \(.*\)  expected=.*$/\1/p; s/^boundary: setup step failed: \(.*\) (root .*$/setup: \1/p' "$log" ;;
     tools) sed -nE 's/^FAIL (.*): (bash -n|self-test|check)$/\1/p' "$log" ;;
     suite|tests)
@@ -455,6 +463,99 @@ share_of_cores() {
   w=$(( $(cores) / g / $1 ))
   [ "$w" -ge 1 ] || w=1
   echo "$w"
+}
+
+rsp_norm() { sed -E 's#[/\\]+boot[0-9]+([/\\]+msc)#\1#g' "$1"; }
+
+rsp_diff() {
+  local only_a only_b
+  only_a=$(comm -23 <(rsp_norm "$1" | sort) <(rsp_norm "$2" | sort) | grep -c .)
+  only_b=$(comm -13 <(rsp_norm "$1" | sort) <(rsp_norm "$2" | sort) | grep -c .)
+  if [ "$only_b" -gt "$only_a" ]; then only_a=$only_b; fi
+  if [ "$only_a" -eq 0 ] && ! cmp -s <(rsp_norm "$1") <(rsp_norm "$2"); then only_a=1; fi
+  echo "$only_a"
+}
+
+self_host_boot() {
+  local cand=$1 ccflag=$2 dir ext="" n gen diffs rc
+  dir=$(dirname "$cand")
+  case "$cand" in *.exe) ext=.exe ;; esac
+  [ -f "${cand}_link.rsp" ] || { say "FAIL self-host: gen1 wrote no link response file"; return 1; }
+  for n in 2 3; do
+    gen="$dir/boot$n/msc$ext"
+    rm -rf "$dir/boot$n"; mkdir -p "$dir/boot$n"
+    env -u NO_COLOR -u FORCE_COLOR "$cand" build src/index.ms --gc=drc --danger $ccflag --output="$gen"; rc=$?
+    if [ "$rc" -ne 0 ]; then rm -rf "$dir/boot$n"; say "FAIL self-host: gen$n build failed (exit $rc)"; return 1; fi
+    if [ ! -f "${gen}_link.rsp" ]; then rm -rf "$dir/boot$n"; say "FAIL self-host: gen$n wrote no link response file"; return 1; fi
+    diffs=$(rsp_diff "${cand}_link.rsp" "${gen}_link.rsp")
+    if [ "$diffs" -eq 0 ]; then
+      say "gate: self-host gen$n = gen$((n - 1)) (fixed point)"
+      rm -rf "$dir/boot$n"; return 0
+    fi
+    if [ "$n" -eq 3 ]; then
+      rm -rf "$dir/boot$n"
+      say "FAIL self-host: no fixed point after 3 generations ($diffs link inputs differ)"
+      return 1
+    fi
+    say "gate: self-host gen$n differs from gen$((n - 1)) in $diffs link inputs, building gen$((n + 1))"
+    rm -f "$cand" "${cand}_link.rsp" "${cand%.exe}.pdb"
+    mv "$gen" "$cand" && mv "${gen}_link.rsp" "${cand}_link.rsp" || { say "FAIL self-host: cannot promote gen$n"; return 1; }
+    [ ! -e "${gen%.exe}.pdb" ] || mv "${gen%.exe}.pdb" "${cand%.exe}.pdb"
+    rm -rf "$dir/boot$n"
+  done
+}
+
+boot_self_test() {
+  local bad=0 d cand got rc
+  d=$(mktemp -d) || return 1
+  cand="$d/out/gate/msc.exe"
+  mkdir -p "$d/out/gate"
+  cat >"$d/fake" <<FAKE
+#!/bin/bash
+D=$d
+n=\$(( \$(cat \$D/count) + 1 )); echo \$n >\$D/count
+[ ! -e \$D/fail.\$n ] || exit 3
+out=""; for a; do case \$a in --output=*) out=\${a#--output=} ;; esac; done
+mkdir -p "\$(dirname "\$out")"
+{ cat "\$0"; echo "# gen\$n"; } >"\$out"; chmod +x "\$out"
+{ cat \$D/rsp.\$n; echo "-Wl,--out=\$out"; } >"\${out}_link.rsp"
+: >"\${out%.exe}.pdb"
+FAKE
+  setup() {
+    rm -rf "$d/out" "$d"/rsp.* "$d"/fail.*; mkdir -p "$d/out/gate"
+    { cat "$d/fake"; echo "# gen1"; } >"$cand"; chmod +x "$cand"; echo 1 >"$d/count"
+    printf 'a.o\nb.o\n' >"$d/rsp.1"; { cat "$d/rsp.1"; echo "-Wl,--out=$cand"; } >"${cand}_link.rsp"
+    : >"${cand%.exe}.pdb"
+  }
+  left() { find "$d/out" -type f | sed "s#$d/out/gate/##" | sort | paste -sd, -; }
+  setup; printf 'a.o\nb.o\n' >"$d/rsp.2"
+  got=$(self_host_boot "$cand" "--cc=x"); rc=$?
+  { [ "$rc" -eq 0 ] && [[ "$got" == *"gen2 = gen1 (fixed point)"* ]] && [ "$(tail -1 "$cand")" = "# gen1" ] && [ "$(cat "$d/count")" = 2 ] \
+    && [ "$(left)" = "msc.exe,msc.exe_link.rsp,msc.pdb" ]; } || { printf 'FAIL boot: fixed point at gen2: rc=%s left=%s out "%s"\n' "$rc" "$(left)" "$got"; bad=1; }
+  setup; printf 'a.o\nc.o\n' >"$d/rsp.2"; cp "$d/rsp.2" "$d/rsp.3"
+  got=$(self_host_boot "$cand" ""); rc=$?
+  { [ "$rc" -eq 0 ] && [[ "$got" == *"gen2 differs from gen1 in 1 link inputs, building gen3"* ]] && [[ "$got" == *"gen3 = gen2 (fixed point)"* ]] \
+    && [ "$(tail -1 "$cand")" = "# gen2" ] && grep -q '^c.o$' "${cand}_link.rsp" && [ "$(left)" = "msc.exe,msc.exe_link.rsp,msc.pdb" ]; } \
+    || { printf 'FAIL boot: fixed point at gen3: rc=%s left=%s out "%s"\n' "$rc" "$(left)" "$got"; bad=1; }
+  setup; printf 'a.o\nc.o\n' >"$d/rsp.2"; printf 'a.o\nd.o\n' >"$d/rsp.3"
+  got=$(self_host_boot "$cand" ""); rc=$?
+  { [ "$rc" -eq 1 ] && [[ "$got" == *"FAIL self-host: no fixed point after 3 generations (1 link inputs differ)"* ]] && [ "$(left)" = "msc.exe,msc.exe_link.rsp,msc.pdb" ]; } \
+    || { printf 'FAIL boot: no fixed point: rc=%s left=%s out "%s"\n' "$rc" "$(left)" "$got"; bad=1; }
+  printf '%s\n' "$got" >"$d/log"
+  got=$(reds_of build "$d/log" 1 | paste -sd'|' -)
+  [ "$got" = "self-host: no fixed point after 3 generations" ] || { printf 'FAIL boot: reds_of build: got "%s"\n' "$got"; bad=1; }
+  setup; touch "$d/fail.2"
+  got=$(self_host_boot "$cand" ""); rc=$?
+  { [ "$rc" -eq 1 ] && [[ "$got" == *"FAIL self-host: gen2 build failed (exit 3)"* ]] && [ "$(left)" = "msc.exe,msc.exe_link.rsp,msc.pdb" ]; } \
+    || { printf 'FAIL boot: failing gen2: rc=%s left=%s out "%s"\n' "$rc" "$(left)" "$got"; bad=1; }
+  printf '%s\n' "$got" >"$d/log"
+  got=$(reds_of build "$d/log" 1 | paste -sd'|' -)
+  [ "$got" = "self-host: gen2 build failed" ] || { printf 'FAIL boot: reds_of gen2 failure: got "%s"\n' "$got"; bad=1; }
+  printf 'compile error\n' >"$d/log"
+  got=$(reds_of build "$d/log" 1 | paste -sd'|' -)
+  [ "$got" = "build" ] || { printf 'FAIL boot: reds_of plain build failure: got "%s"\n' "$got"; bad=1; }
+  rm -rf "$d"
+  return $bad
 }
 
 adopt_self_test() {
@@ -755,6 +856,7 @@ CASES
   done
   queue_self_test || bad=1
   adopt_self_test || bad=1
+  boot_self_test || bad=1
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -1171,10 +1273,16 @@ run_guard_lane() {
   return $rc
 }
 
+build_lane() {
+  env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
+  self_host_boot "$CAND" "$CC_FLAG"
+}
+
 lane_body() {
   local lane=$1 log="$OUT/$1.log" rc t0=$SECONDS
-  [ "$lane" != build ] || rm -f "$CAND.key"
+  [ "$lane" != build ] || rm -f "$CAND.key" "${CAND}_link.rsp"
   case "$lane" in
+    build) with_slot bounded build_lane >"$log" 2>&1; rc=$? ;;
     tools) bounded run_tools_lane >"$log" 2>&1; rc=$? ;;
     tests|suite) bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
     guard) bounded run_guard_lane >"$log" 2>&1; rc=$? ;;
