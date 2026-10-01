@@ -24,7 +24,7 @@ import {
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey } from "../codegen/c/types";
 import { hasFlag, SymbolFlag } from "./symbol";
-import { hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag } from "./types";
+import { hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { lookupCtorDefaults } from "./instantiate";
@@ -295,6 +295,13 @@ function markTypeInfoEdge(node: Node, modulePath: string): void {
 	markTypeInfoOf(node.nodeType);
 }
 
+function markTypeInfoHooks(t: Type, modulePath: string): void {
+	const destroy = getAttachedOp(t, AttachedOp.AttachedDestructor);
+	if (destroy != null) markReferenced(destroy, modulePath);
+	const trace = getAttachedOp(t, AttachedOp.AttachedTrace);
+	if (trace != null) markReferenced(trace, modulePath);
+}
+
 function markRematerializedMemberTypeInfo(conv: Type | null): void {
 	if (conv == null || conv.kind == TypeKind.Union) return;
 	const member = unwrapPointerLikeForVariant(conv);
@@ -352,6 +359,7 @@ function markTypeInfoOf(type: Type | null): void {
 		markAndWalk(home, tiName);
 	}
 	if (t.kind != TypeKind.Struct) return;
+	markTypeInfoHooks(t, t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : home);
 	let bt = t.typeExtra;
 	let depth = 0;
 	while (bt != null && depth < 64) {
