@@ -2918,11 +2918,11 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 		}
 	}
 	if (best == null) {
-		addError(ctx, `@delegate '${name}': no ${shown} to borrow from`, at.line, at.column);
+		addError(ctx, `@delegate '${name}': no ${shown} to delegate to`, at.line, at.column);
 		return;
 	}
 	if (ambiguous) {
-		addError(ctx, `@delegate '${name}': more than one ${shown} to borrow from`, at.line, at.column);
+		addError(ctx, `@delegate '${name}': more than one ${shown} to delegate to`, at.line, at.column);
 		return;
 	}
 	if (hasGenericParams(best.symbolType) && !hasFlag(best, SymbolFlag.Borrow)) {
