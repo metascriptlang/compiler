@@ -1,0 +1,156 @@
+import {
+	Discriminator,
+	ProgramError,
+	Pubkey,
+	System,
+	accountDiscriminator,
+	failWith,
+	mutable,
+	owned,
+	program,
+	signer,
+	writable,
+} from "./index";
+import { HostAccount, run } from "./host";
+
+
+export struct Counter {
+	value: uint64;
+	owner: Pubkey;
+}
+
+export function discriminator(this typeof Counter): Discriminator {
+	return @comptime { return accountDiscriminator("Counter"); };
+}
+
+function keyOf(seed: uint8): Pubkey {
+	let key = Pubkey.zero();
+	key.bytes[0] = seed;
+	return key;
+}
+
+function counterBytes(tag: Discriminator, value: uint8, length: int32): uint8[] {
+	const bytes: uint8[] = [];
+	for (let i = 0; i < 8; i++) { bytes.push(tag.bytes[i]); }
+	bytes.push(value);
+	while (bytes.length < length) { bytes.push(0); }
+	return bytes;
+}
+
+function holder(
+	seed: uint8,
+	owner: Pubkey,
+	bytes: uint8[],
+	signer: boolean,
+	writable: boolean,
+): HostAccount {
+	return {
+		key: keyOf(seed),
+		owner: owner,
+		lamports: 1000,
+		data: bytes,
+		signer: signer,
+		writable: writable,
+		executable: false,
+	};
+}
+
+function codeOf<T>(result: Result<T, ProgramError>): void {
+	if (!result.ok) { failWith(result.error); }
+}
+
+function signerEntry(): void { codeOf(signer(0)); }
+function writableEntry(): void { codeOf(writable(0)); }
+function missingEntry(): void { codeOf(signer(3)); }
+function systemProgramEntry(): void { codeOf(program<System>(0)); }
+function ownedEntry(): void { codeOf(owned<Counter>(0)); }
+
+function bumpEntry(): void {
+	const counter = mutable<Counter>(0);
+	if (!counter.ok) {
+		failWith(counter.error);
+		return;
+	}
+	const at = counter.value.data();
+	at.value = at.value + 1;
+}
+
+function twiceEntry(): void {
+	codeOf(mutable<Counter>(0));
+	codeOf(mutable<Counter>(1));
+}
+
+function programKey(): Pubkey { return keyOf(200); }
+
+function counterTag(): Discriminator {
+	return Counter.discriminator();
+}
+
+test "a signer verifier refuses an unsigned account with Anchor's AccountNotSigner" {
+	const unsigned = [holder(1, keyOf(9), [], false, true)];
+	assert run(programKey(), unsigned, [], signerEntry).result ==
+		ProgramError.accountNotSigner().code;
+	const signed = [holder(1, keyOf(9), [], true, false)];
+	assert run(programKey(), signed, [], signerEntry).result == 0;
+}
+
+test "a writable verifier refuses a read-only account with ConstraintMut" {
+	const readOnly = [holder(1, keyOf(9), [], false, false)];
+	assert run(programKey(), readOnly, [], writableEntry).result ==
+		ProgramError.constraintMut().code;
+}
+
+test "a missing account is AccountNotEnoughKeys" {
+	const one = [holder(1, keyOf(9), [], true, true)];
+	assert run(programKey(), one, [], missingEntry).result ==
+		ProgramError.accountNotEnoughKeys().code;
+}
+
+test "a program verifier checks the key, then that it is executable" {
+	let wrong = holder(1, keyOf(9), [], false, false);
+	assert run(programKey(), [wrong], [], systemProgramEntry).result ==
+		ProgramError.invalidProgramId().code;
+	let system = holder(1, keyOf(9), [], false, false);
+	system.key = Pubkey.systemProgram();
+	assert run(programKey(), [system], [], systemProgramEntry).result ==
+		ProgramError.invalidProgramExecutable().code;
+	system.executable = true;
+	assert run(programKey(), [system], [], systemProgramEntry).result == 0;
+}
+
+test "an owned verifier checks owner, discriminator presence, discriminator, then size" {
+	const tag = counterTag();
+	const foreign = [holder(1, keyOf(9), counterBytes(tag, 0, 48), false, false)];
+	assert run(programKey(), foreign, [], ownedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	const empty = [holder(1, programKey(), [1, 2], false, false)];
+	assert run(programKey(), empty, [], ownedEntry).result ==
+		ProgramError.accountDiscriminatorNotFound().code;
+	const other = accountDiscriminator("Other");
+	const mismatched = [holder(1, programKey(), counterBytes(other, 0, 48), false, false)];
+	assert run(programKey(), mismatched, [], ownedEntry).result ==
+		ProgramError.accountDiscriminatorMismatch().code;
+	const short = [holder(1, programKey(), counterBytes(tag, 0, 20), false, false)];
+	assert run(programKey(), short, [], ownedEntry).result ==
+		ProgramError.accountDidNotDeserialize().code;
+	const good = [holder(1, programKey(), counterBytes(tag, 0, 48), false, false)];
+	assert run(programKey(), good, [], ownedEntry).result == 0;
+}
+
+test "a mutable account writes through its data in place" {
+	const accounts = [holder(1, programKey(), counterBytes(counterTag(), 41, 48), false, true)];
+	assert run(programKey(), accounts, [], bumpEntry).result == 0;
+	assert accounts[0].data[8] == 42;
+	const readOnly = [holder(1, programKey(), counterBytes(counterTag(), 41, 48), false, false)];
+	assert run(programKey(), readOnly, [], bumpEntry).result == ProgramError.constraintMut().code;
+}
+
+test "one account passed twice cannot be mutable twice" {
+	const same = holder(1, programKey(), counterBytes(counterTag(), 0, 48), false, true);
+	const accounts = [same, same];
+	assert run(programKey(), accounts, [], twiceEntry).result ==
+		ProgramError.accountBorrowFailed().code;
+	const other = holder(2, programKey(), counterBytes(counterTag(), 0, 48), false, true);
+	const distinctTwo = [same, other];
+	assert run(programKey(), distinctTwo, [], twiceEntry).result == 0;
+}
