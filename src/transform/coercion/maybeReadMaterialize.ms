@@ -89,7 +89,7 @@ function narrowAssertedCarrier(node: Node): Node {
 	const payload = unwrapMaybeType(carrier);
 	if (!isTagCarriedUnion(payload)) return node;
 	const checked = node.flags.has(NodeFlag.ConvCheck);
-	if (!isMaybeType(target)) {
+	if (!isMaybeType(target) && unwrapRefNullUnion(target) == null) {
 		if (!checked) return node;
 		const val = makeMember(inner, "value", node.location);
 		val.nodeType = payload;
