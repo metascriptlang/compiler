@@ -52,6 +52,7 @@ setup() {
   cat >"$R/tools/gate.sh" <<'EOF'
 #!/usr/bin/env bash
 if [ "$1" = --inert ]; then exit "$(cat "$LQ_TEST/inert" 2>/dev/null || echo 0)"; fi
+[ "$1" = --tree-key ] && exit 0
 name=$(git symbolic-ref --short HEAD)
 printf '%s head=%s files=%s\n' "$name" "$(git rev-parse --short HEAD)" "$(git ls-tree --name-only HEAD | grep -v '^tools$' | paste -sd, -)" >>"$LQ_TEST/gates.log"
 v=$(cat verdict 2>/dev/null || echo green)
