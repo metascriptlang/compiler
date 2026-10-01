@@ -23,12 +23,14 @@ export enum BuildStatus {
 
 export interface LowerClaims {
 	typeInfos: string[];
+	owners: string[];
 	hooks: Symbol[];
 	ops: KeyedOp[];
 }
 
 export function sameClaims(a: LowerClaims, b: LowerClaims): boolean {
 	if (a.typeInfos.join(",") != b.typeInfos.join(",")) return false;
+	if (a.owners.join(",") != b.owners.join(",")) return false;
 	if (a.hooks.length != b.hooks.length) return false;
 	for (let i = 0; i < a.hooks.length; i += 1) {
 		if (a.hooks[i].name != b.hooks[i].name) return false;

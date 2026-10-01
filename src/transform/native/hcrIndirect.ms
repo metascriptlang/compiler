@@ -9,6 +9,7 @@ export struct HcrImport {
 export struct HcrIndirectModule {
 	moduleId: string;
 	symbols: string[];
+	generated: string[];
 	typeInfos: string[];
 	typeKeys: string[];
 	abiKey: string;

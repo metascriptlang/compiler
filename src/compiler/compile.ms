@@ -28,7 +28,7 @@ import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
 import { collectFreestandingAsync, collectWritableModuleBindings, freestandingAsyncLoc, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
-import { getSimpleTypeDesc, sealHookSyms } from "../codegen/c/types";
+import { getSimpleTypeDesc, sealHookSyms, opCName } from "../codegen/c/types";
 import { sealRuntimeProcs } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
@@ -41,7 +41,7 @@ import { HcrImport, HcrIndirectModule, lowerHcrIndirection } from "../transform/
 import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet, NameSet } from "../transform/context";
-import { setGlobalHookOwners, useHookOwners, typeInfoOwnerMark, typeInfoOwnersFrom, replayTypeInfoOwners } from "../transform/lowering/destructorLifting";
+import { setGlobalHookOwners, hookOwnerMark, hookOwnersFrom, replayHookOwners, typeInfoOwnerMark, typeInfoOwnersFrom, replayTypeInfoOwners } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, preludePackStamp, tryLoadPreludeDeps, setStdGraphDepsSnapshot, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
@@ -572,8 +572,6 @@ interface A2Job {
 	opts: CliOptions;
 	stdPath: string;
 	hcrSlot: int32;
-	hcrModules: HcrIndirectModule[];
-	sharedHookOwners: NameSet;
 	fsAsyncHits: FsAsyncHit[];
 	timers: A2Timers;
 	diagnostics: ModuleError[];
@@ -616,6 +614,7 @@ function programWithInstances(program: Node, instances: Node[] | null): Node {
 function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.ran = true;
 	const typeInfoMark = typeInfoOwnerMark();
+	const ownerMark = hookOwnerMark();
 	const hookMark = hookSymMark();
 	const keyedOpMark = opMark();
 	const opts = job.opts;
@@ -654,7 +653,6 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 		}
 	}
 	const hcrSlot = job.hcrSlot;
-	if (opts.isHcr) useHookOwners(hcrSlot >= 0 ? createNameSet() : job.sharedHookOwners);
 	const _tx0 = performance.now();
 	const transformed = transformProgram(comptimeResolved, ctx, false);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
@@ -670,7 +668,6 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 	job.timers.native = job.timers.native + (performance.now() - _tn0);
 	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
-	const hcrResult = hcrSlot >= 0 ? lowerHcrIndirection(hcrLifted, job.hcrModules[hcrSlot], job.hcrModules) : hcrLifted;
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 		else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
@@ -679,7 +676,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	ctx.targetInfo = opts.targetInfo;
 	const _ta0 = performance.now();
 	const preAnErrors = ctx.errors.length;
-	const analyzed = analyzeProgram(hcrResult, ctx);
+	const analyzed = analyzeProgram(hcrLifted, ctx);
 	if (ctx.errors.length > preAnErrors) {
 		for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
 			const e = ctx.errors[ei];
@@ -692,7 +689,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 	job.timers.lower = job.timers.lower + (performance.now() - _tl0);
 	truncateErrors(ctx, errBase);
-	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), hooks: hookSymsFrom(hookMark), ops: opsFrom(keyedOpMark) };
+	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), owners: hookOwnersFrom(ownerMark), hooks: hookSymsFrom(hookMark), ops: opsFrom(keyedOpMark) };
 	return nativeLowered;
 }
 
@@ -702,6 +699,48 @@ interface ModuleEmissionJob {
 	ctx: CheckerContext;
 	modPath: string;
 	weight: int32;
+}
+
+function completeHcrTables(jobs: ModuleEmissionJob[], paths: string[], modules: HcrIndirectModule[], aliveSet: AliveSet, facts: CEmissionFacts, cloneInputs: boolean): void {
+	for (const path of paths) facts.hcrModules.add(path);
+	for (const info of facts.typeInfoOrder) {
+		const slot = paths.indexOf(info.owner);
+		if (slot >= 0) modules[slot].typeInfos.push(info.cName);
+	}
+	for (const job of jobs) {
+		const slot = paths.indexOf(job.modPath);
+		if (slot < 0) continue;
+		for (const stmt of (job.program.data as ProgramData).programStmts) {
+			const op = stmt.kind == NodeKind.FunctionDecl ? stmt.resolvedSym : null;
+			if (op == null) continue;
+			const users = aliveSet.foreignOps.get(op);
+			if (users == null) continue;
+			for (const user of users) {
+				if (!paths.includes(user)) {
+					printDiag(`${error("error")}: internal: HCR core module '${user}' calls '${op.name}', which module '${job.modPath}' generates in its reloadable image`);
+					throw new Error(BUILD_STOPPED);
+				}
+			}
+			modules[slot].symbols.push(opCName(op));
+			modules[slot].generated.push(opCName(op));
+		}
+	}
+	const keys: HashMap<string, string> = new HashMap<string, string>();
+	for (let i = 0; i < modules.length; i += 1) {
+		if (modules[i].generated.length > 0) modules[i].abiKey = hashContent(modules[i].abiKey + "|generated:" + modules[i].generated.join(","));
+		keys.set(modules[i].moduleId, modules[i].abiKey);
+	}
+	for (let i = 0; i < modules.length; i += 1) {
+		for (let j = 0; j < modules[i].imports.length; j += 1) {
+			modules[i].imports[j].abiKey = keys.get(modules[i].imports[j].moduleId) ?? modules[i].imports[j].abiKey;
+		}
+	}
+	for (const job of jobs) {
+		const slot = paths.indexOf(job.modPath);
+		if (slot < 0) continue;
+		if (cloneInputs) job.program = cloneNodeKeepSem(job.program);
+		job.program = lowerHcrIndirection(job.program, modules[slot], modules);
+	}
 }
 
 class ModuleEmissionResult {
@@ -1893,6 +1932,7 @@ function hcrIndirectModules(abi: HcrCandidateAbi): Result<HcrIndirectModule[], s
 		modules.push({
 			moduleId: manifest.moduleId,
 			symbols,
+			generated: [],
 			typeInfos: [],
 			typeKeys: [],
 			abiKey: hcrExportKey(manifest),
@@ -2096,7 +2136,7 @@ interface WatchRun {
 
 function openWatch(entryPath: string, opts: CliOptions, resolveSection: ResolveSection): WatchRun {
 	if (!opts.isHcr) {
-		printDiag(`${error("error")}: --watch needs --hcr: only per-module HCR images keep a module's lowering independent of the others`);
+		printDiag(`${error("error")}: --watch needs --hcr: warm rebuilds are verified against cold builds only for HCR module images`);
 		exit(1);
 	}
 	const replay: string[][] = opts.watchReplay != "" ? readReplay(opts.watchReplay) : [];
@@ -2448,8 +2488,6 @@ setGlobalHookOwners(sharedHookOwners);
 			opts,
 			stdPath: config.stdPath,
 			hcrSlot: hcrModulePaths.indexOf(modPath) as int32,
-			hcrModules,
-			sharedHookOwners,
 			fsAsyncHits,
 			timers: a2t,
 			diagnostics: [],
@@ -2457,7 +2495,7 @@ setGlobalHookOwners(sharedHookOwners);
 			typeInstances: modPath == firstModule ? typeRows : [],
 			cloneInput: session.keep,
 			ran: false,
-			claims: { typeInfos: [], hooks: [], ops: [] },
+			claims: { typeInfos: [], owners: [], hooks: [], ops: [] },
 		};
 		let nativeLowered: Node;
 		if (session.keep) {
@@ -2476,6 +2514,7 @@ setGlobalHookOwners(sharedHookOwners);
 				const claims = session.lowerClaims.get(modPath);
 				if (claims != null) {
 					replayTypeInfoOwners(claims.typeInfos);
+					replayHookOwners(claims.owners);
 					replayHookSyms(claims.hooks);
 					replayOps(claims.ops);
 				}
@@ -2600,6 +2639,7 @@ setGlobalHookOwners(sharedHookOwners);
 		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
 		emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath, weight: p.program.location.endLine });
 	}
+	if (opts.isHcr) completeHcrTables(emissionJobs, hcrModulePaths, hcrModules, aliveSet, emissionFacts, session.keep);
 	const emitStart = performance.now();
 	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
 	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr ? entryPath : "");

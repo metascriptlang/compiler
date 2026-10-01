@@ -59,8 +59,18 @@ export function setGlobalHookOwners(owners: NameSet): void {
 	resetHookSyms();
 }
 
-export function useHookOwners(owners: NameSet): void {
-	_globalHookOwners = owners;
+export function hookOwnerMark(): int32 {
+	return _globalHookOwners.items.length as int32;
+}
+
+export function hookOwnersFrom(mark: int32): string[] {
+	const taken: string[] = [];
+	for (let i = mark; i < _globalHookOwners.items.length; i += 1) taken.push(_globalHookOwners.items[i]);
+	return taken;
+}
+
+export function replayHookOwners(names: string[]): void {
+	for (const name of names) nameSetAdd(_globalHookOwners, name);
 }
 
 export function typeInfoOwnerMark(): int32 {
