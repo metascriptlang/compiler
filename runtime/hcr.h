@@ -48,30 +48,30 @@ static inline const char* msHcrImageFailure(void) { return msHcrImageFailureText
 static inline void* msHcrImageNull(void) { return NULL; }
 static inline int32_t msHcrImageIsNull(void* value) { return value == NULL ? 1 : 0; }
 static inline uint64_t msHcrImageAddress(void* value) { return (uint64_t)(uintptr_t)value; }
-static inline void* msHcrImageCallHandover(void* raw, void* state) { return ((void* (*)(void*))raw)(state); }
 static inline void msHcrImageCallInit(void* raw) { ((void (*)(void))raw)(); }
 static inline int32_t msHcrImageCallProbe(void* raw) { return ((int32_t (*)(void))raw)(); }
 static inline void msHcrImageCallLaunch(void* raw, const char* dir, const char* stem) {
 	((void (*)(const char*, const char*))raw)(dir, stem);
 }
 
-typedef struct MsHcrHandle {
-	void* const* current;
-	uint32_t slotCount;
-	void* const* old;
-	uint32_t oldCount;
-	void* const* staged;
-	uint32_t stagedCount;
-} MsHcrHandle;
+typedef struct MsHcrCell {
+	void* current;
+} MsHcrCell;
 
-MsHcrHandle* msHcrHandle(const char* moduleId);
-void msHcrPublish(const char* moduleId, void* const* table, uint32_t slotCount);
+static inline void* msHcrVariableStorage(const MsHcrCell* cell) { return cell->current; }
+
+MsHcrCell* msHcrBind(const char* moduleId, const char* symbol, const char* key);
+int32_t msHcrModuleBegin(const char* moduleId);
+void msHcrRegisterFunction(const char* moduleId, const char* symbol, const char* key, void* address);
+int32_t msHcrRegisterVariable(const char* moduleId, const char* symbol, const char* key, size_t size, void** out);
 void msHcrStageBegin(void);
 void msHcrStageEnd(void);
 int32_t msHcrStaged(const char* moduleId);
 void msHcrCommit(const char* moduleId);
 void msHcrRollback(const char* moduleId);
 void msHcrDiscard(const char* moduleId);
+void msHcrFinalize(const char* moduleId);
+int32_t msHcrInvokeInit(void* raw);
 void* msHcrTypeInfo(const char* moduleId, const char* typeName);
 void msHcrRestoreTypeInfos(const char* moduleId);
 void msHcrCoreInit(void);

@@ -22,7 +22,7 @@ import { firstExprKindAfter } from "../testUtil";
 // ===== Main Entry Point =====
 
 export function lowerConstFold(program: Node, ctx: TransformContext): Node {
-	walkNode(program, foldNode);
+	walkNode(program, ctx.preserveModuleConstants ? foldReloadableNode : foldNode);
 	return program;
 }
 
@@ -35,6 +35,17 @@ function foldNode(node: Node): Node {
 		NodeKind.TypeAssertion => foldConstantExpression(node),
 		NodeKind.HiddenStdConv => foldConstantExpression(node),
 		_ => node,
+	};
+}
+
+function foldReloadableNode(node: Node): Node {
+	match (node.kind) {
+		NodeKind.Identifier | NodeKind.TypeAssertion | NodeKind.HiddenStdConv => { return node; },
+		NodeKind.MemberExpr => {
+			const d = node.data as MemberExprData;
+			return d.object.kind == NodeKind.StringLiteral && d.property == "code" ? foldMember(node) : node;
+		},
+		_ => { return foldNode(node); },
 	};
 }
 

@@ -9,8 +9,16 @@ extern function msHcrLaunchDir(): string;
 extern function msHcrLaunchStem(): string;
 extern function msHcrStageBegin(): void;
 extern function msHcrStageEnd(): void;
-extern function msHcrStaged(moduleId: cstring): int32;
 extern function msHcrCommit(moduleId: cstring): void;
+extern function msHcrDiscard(moduleId: cstring): void;
+extern function msHcrFinalize(moduleId: cstring): void;
+extern function msHcrCallInitStatus(raw: Ptr<void>): int32;
+extern function msHcrListCount(raw: Ptr<void>): int32;
+extern function msHcrListItem(raw: Ptr<void>, index: int32): string;
+extern function msHcrBindingCount(raw: Ptr<void>): int32;
+extern function msHcrBindingOwner(raw: Ptr<void>, index: int32): string;
+extern function msHcrBindingName(raw: Ptr<void>, index: int32): string;
+extern function msHcrBindingKey(raw: Ptr<void>, index: int32): string;
 extern function msHcrCallText(raw: Ptr<void>): string;
 extern function msHcrImportCount(raw: Ptr<void>): int32;
 extern function msHcrImportId(raw: Ptr<void>, index: int32): string;
@@ -27,8 +35,6 @@ extern function msHcrFailureText(): string;
 extern function msHcrImageExt(): string;
 extern function hcrIsNull(value: Ptr<void>): int32 from "msHcrImageIsNull";
 extern function hcrNull(): Ptr<void> from "msHcrImageNull";
-extern function hcrCallHandover(raw: Ptr<void>, state: Ptr<void>): Ptr<void> from "msHcrImageCallHandover";
-extern function hcrCallInit(raw: Ptr<void>): void from "msHcrImageCallInit";
 extern function hcrCallStatus(raw: Ptr<void>): int32 from "msHcrImageCallProbe";
 extern function msHcrRollback(moduleId: cstring): void;
 extern function msHcrRestoreTypeInfos(moduleId: cstring): void;
@@ -38,12 +44,14 @@ extern function msReportOrphanFailures(): int32;
 interface HcrImage {
 	handle: Ptr<void>;
 	moduleId: string;
-	key: string;
 	importIds: string[];
-	importKeys: string[];
+	symbolNames: string[];
+	symbolKeys: string[];
+	bindOwners: string[];
+	bindNames: string[];
+	bindKeys: string[];
 	typeNames: string[];
 	typeKeys: string[];
-	state: Ptr<void>;
 }
 
 interface HcrModule {
@@ -120,22 +128,37 @@ function symbolOf(image: Ptr<void>, name: string): Ptr<void> {
 	return hcrSymbol(image, name);
 }
 
+function emptyImage(handle: Ptr<void>): HcrImage {
+	return { handle, moduleId: "", importIds: [], symbolNames: [], symbolKeys: [],
+		bindOwners: [], bindNames: [], bindKeys: [], typeNames: [], typeKeys: [] };
+}
+
 function describe(handle: Ptr<void>): HcrImage {
 	const idRaw = symbolOf(handle, "HcrModuleId000");
-	const keyRaw = symbolOf(handle, "HcrAbiKey000");
+	const functionsRaw = symbolOf(handle, "HcrFunctions000");
+	const variablesRaw = symbolOf(handle, "HcrVariables000");
+	const bindingsRaw = symbolOf(handle, "HcrBindings000");
 	const importsRaw = symbolOf(handle, "HcrImports000");
 	const typeKeysRaw = symbolOf(handle, "HcrTypeKeys000");
-	const image: HcrImage = { handle, moduleId: "", key: "", importIds: [], importKeys: [], typeNames: [], typeKeys: [], state: hcrNull() };
-	if (hcrIsNull(idRaw) != 0 || hcrIsNull(keyRaw) != 0 || hcrIsNull(importsRaw) != 0 || hcrIsNull(typeKeysRaw) != 0) return image;
+	const image = emptyImage(handle);
+	if (hcrIsNull(idRaw) != 0 || hcrIsNull(functionsRaw) != 0 || hcrIsNull(variablesRaw) != 0
+		|| hcrIsNull(bindingsRaw) != 0 || hcrIsNull(importsRaw) != 0 || hcrIsNull(typeKeysRaw) != 0) return image;
 	image.moduleId = msHcrCallText(idRaw);
-	image.key = msHcrCallText(keyRaw);
-	const count = msHcrImportCount(importsRaw);
-	for (let i: int32 = 0; i < count; i += 1) {
-		image.importIds.push(msHcrImportId(importsRaw, i));
-		image.importKeys.push(msHcrImportKey(importsRaw, i));
+	for (let i: int32 = 0; i < msHcrListCount(importsRaw); i += 1) image.importIds.push(msHcrListItem(importsRaw, i));
+	for (let i: int32 = 0; i < msHcrImportCount(functionsRaw); i += 1) {
+		image.symbolNames.push(msHcrImportId(functionsRaw, i));
+		image.symbolKeys.push(msHcrImportKey(functionsRaw, i));
 	}
-	const typeCount = msHcrImportCount(typeKeysRaw);
-	for (let i: int32 = 0; i < typeCount; i += 1) {
+	for (let i: int32 = 0; i < msHcrImportCount(variablesRaw); i += 1) {
+		image.symbolNames.push(msHcrImportId(variablesRaw, i));
+		image.symbolKeys.push(msHcrImportKey(variablesRaw, i));
+	}
+	for (let i: int32 = 0; i < msHcrBindingCount(bindingsRaw); i += 1) {
+		image.bindOwners.push(msHcrBindingOwner(bindingsRaw, i));
+		image.bindNames.push(msHcrBindingName(bindingsRaw, i));
+		image.bindKeys.push(msHcrBindingKey(bindingsRaw, i));
+	}
+	for (let i: int32 = 0; i < msHcrImportCount(typeKeysRaw); i += 1) {
 		image.typeNames.push(msHcrImportId(typeKeysRaw, i));
 		image.typeKeys.push(msHcrImportKey(typeKeysRaw, i));
 	}
@@ -144,7 +167,7 @@ function describe(handle: Ptr<void>): HcrImage {
 
 function copyLoad(source: string): HcrLoad {
 	const dir = `${copyRoot}/${generation}`;
-	const empty: HcrImage = { handle: hcrNull(), moduleId: "", key: "", importIds: [], importKeys: [], typeNames: [], typeKeys: [], state: hcrNull() };
+	const empty = emptyImage(hcrNull());
 	if (msHcrMakeDir(dir) == 0) return { image: empty, failure: `cannot load ${source} (${msHcrFailureText()})` };
 	const copy = `${dir}/${baseName(source)}`;
 	if (msHcrCopyImage(source, copy) == 0) return { image: empty, failure: `cannot load ${source} (${msHcrFailureText()})` };
@@ -201,11 +224,6 @@ function required(image: HcrImage, name: string): Ptr<void> {
 	return raw;
 }
 
-function handover(image: HcrImage, state: Ptr<void>): Ptr<void> {
-	const raw = symbolOf(image.handle, "_hcr_handover");
-	if (hcrIsNull(raw) != 0) return hcrNull();
-	return hcrCallHandover(raw, state);
-}
 
 function sweepEndedRuns(root: string): void {
 	const own = `${msHcrProcessId()}`;
@@ -237,9 +255,14 @@ export function start(): int32 {
 	const failure = discover("", entryPath(), order);
 	if (failure != "") fatal(failure);
 	started = true;
-	for (const item of order) item.module.image.state = handover(item.image, hcrNull());
-	for (const item of order) hcrCallInit(required(item.image, "DatInit000"));
-	for (const item of order) hcrCallInit(required(item.image, "Init000"));
+	const mismatch = bindingMismatch([]);
+	if (mismatch != "") fatal(mismatch);
+	for (const item of order) {
+		if (msHcrCallInitStatus(required(item.image, "DatInit000")) != 0) fatal(`data initialization of module '${item.module.moduleId}' threw`);
+	}
+	for (const item of order) {
+		if (msHcrCallInitStatus(required(item.image, "Init000")) != 0) fatal(`initialization of module '${item.module.moduleId}' threw`);
+	}
 	msDrainUntilIdle();
 	return msReportOrphanFailures() != 0 ? 1 : 0;
 }
@@ -265,19 +288,51 @@ function effectiveImage(moduleId: string, candidates: HcrCandidate[]): HcrImage 
 	return module != null ? module.image : null;
 }
 
-function keyMismatch(candidates: HcrCandidate[]): string {
+function bindingMismatch(candidates: HcrCandidate[]): string {
 	for (const module of modules) {
 		const image = effectiveImage(module.moduleId, candidates);
 		if (image == null) continue;
-		for (let i = 0; i < image.importIds.length; i += 1) {
-			const target = effectiveImage(image.importIds[i], candidates);
-			if (target == null) return `module '${module.moduleId}' imports '${image.importIds[i]}', which is not loaded`;
-			if (target.key != image.importKeys[i]) {
-				return `module '${module.moduleId}' was built against another export ABI of '${image.importIds[i]}'; rebuild it`;
+		for (let i = 0; i < image.bindOwners.length; i += 1) {
+			const target = effectiveImage(image.bindOwners[i], candidates);
+			if (target == null) return `module '${module.moduleId}' binds '${image.bindOwners[i]}::${image.bindNames[i]}', whose image is not loaded`;
+			const at = target.symbolNames.indexOf(image.bindNames[i]);
+			if (at < 0 || target.symbolKeys[at] != image.bindKeys[i]) {
+				return `module '${module.moduleId}' binds an incompatible '${image.bindOwners[i]}::${image.bindNames[i]}'; rebuild it`;
 			}
 		}
 	}
 	return "";
+}
+
+function resetVariables(candidates: HcrCandidate[]): string[] {
+	const reset: string[] = [];
+	for (const item of candidates) {
+		if (item.isNew) continue;
+		const previous = item.module.image;
+		for (let i = 0; i < item.image.symbolNames.length; i += 1) {
+			if (!item.image.symbolKeys[i].startsWith("v:")) continue;
+			const name = item.image.symbolNames[i];
+			const at = previous.symbolNames.indexOf(name);
+			if (at >= 0 && previous.symbolKeys[at] != item.image.symbolKeys[i]) reset.push(`${item.module.moduleId}::${name}`);
+		}
+	}
+	return reset;
+}
+
+function visitInitialization(moduleId: string, candidates: HcrCandidate[], visited: HashSet<string>, order: HcrCandidate[]): void {
+	if (visited.has(moduleId)) return;
+	visited.add(moduleId);
+	const image = effectiveImage(moduleId, candidates);
+	if (image == null) return;
+	for (const dependency of image.importIds) visitInitialization(dependency, candidates, visited, order);
+	for (const item of candidates) if (item.module.moduleId == moduleId) order.push(item);
+}
+
+function initializationOrder(candidates: HcrCandidate[]): HcrCandidate[] {
+	const visited = new HashSet<string>();
+	const order: HcrCandidate[] = [];
+	for (const item of candidates) visitInitialization(item.module.moduleId, candidates, visited, order);
+	return order;
 }
 
 function changedType(item: HcrCandidate): string {
@@ -356,7 +411,7 @@ function performReload(): ReloadResult {
 		return result(ReloadKind.NoChange, [], "");
 	}
 
-	const mismatch = keyMismatch(candidates);
+	const mismatch = bindingMismatch(candidates);
 	if (mismatch != "") {
 		release(candidates);
 		forgetAfter(known);
@@ -375,19 +430,6 @@ function performReload(): ReloadResult {
 		}
 	}
 
-	const states: Ptr<void>[] = [];
-	for (const item of candidates) {
-		const previous = item.isNew ? hcrNull() : item.module.image.state;
-		const state = handover(item.image, previous);
-		if (hcrIsNull(state) != 0 && hcrIsNull(previous) == 0) {
-			release(candidates);
-			forgetAfter(known);
-			bundleIdentity = bundle;
-			return result(ReloadKind.RestartRequired, [item.module.moduleId],
-				`the lifted state layout of module '${item.module.moduleId}' changed`);
-		}
-		states.push(state);
-	}
 
 	const quiesceFailed = failingHandler("HcrBeforeReload000", known);
 	if (quiesceFailed != "") {
@@ -397,41 +439,58 @@ function performReload(): ReloadResult {
 		return result(ReloadKind.Rejected, [quiesceFailed], `the before-reload handler of module '${quiesceFailed}' threw`);
 	}
 
+	const reset = resetVariables(candidates);
 	msHcrStageBegin();
-	for (const item of candidates) hcrCallInit(required(item.image, "DatInit000"));
+	let dataFailed = "";
+	for (const item of candidates) {
+		if (msHcrCallInitStatus(required(item.image, "DatInit000")) != 0) {
+			dataFailed = item.module.moduleId;
+			break;
+		}
+	}
 	msHcrStageEnd();
+	if (dataFailed != "") {
+		for (const item of candidates) {
+			msHcrDiscard(item.module.moduleId);
+			msHcrRestoreTypeInfos(item.module.moduleId);
+		}
+		release(candidates);
+		forgetAfter(known);
+		bundleIdentity = bundle;
+		return result(ReloadKind.Rejected, [dataFailed], `data initialization of module '${dataFailed}' threw`);
+	}
 	const names: string[] = [];
-	const committed: boolean[] = [];
 	const previousImages: HcrImage[] = [];
 	const previousIdentities: uint64[] = [];
-	for (let i = 0; i < candidates.length; i += 1) {
-		const item = candidates[i];
-		const staged = msHcrStaged(item.module.moduleId) != 0;
-		if (staged) msHcrCommit(item.module.moduleId);
-		committed.push(staged);
+	for (const item of candidates) {
+		msHcrCommit(item.module.moduleId);
 		previousImages.push(item.module.image);
 		previousIdentities.push(item.module.identity);
 		item.module.image = item.image;
-		item.module.image.state = states[i];
 		item.module.identity = item.identity;
 		item.module.failedIdentity = 0;
 		names.push(item.module.moduleId);
 	}
-	for (const item of candidates) {
-		if (item.isNew) hcrCallInit(required(item.image, "Init000"));
+	let initFailed = "";
+	for (const item of initializationOrder(candidates)) {
+		if (msHcrCallInitStatus(required(item.image, "Init000")) != 0) {
+			initFailed = item.module.moduleId;
+			break;
+		}
 	}
 	bundleIdentity = bundle;
-
-	const resumeFailed = failingHandler("HcrAfterReload000", modules.length);
-	if (resumeFailed == "") return result(ReloadKind.Reloaded, names, "");
+	const resumeFailed = initFailed == "" ? failingHandler("HcrAfterReload000", modules.length) : initFailed;
+	if (resumeFailed == "") {
+		for (const item of candidates) msHcrFinalize(item.module.moduleId);
+		return result(ReloadKind.Reloaded, names, reset.length > 0 ? "reset variables: " + reset.join(", ") : "");
+	}
 	for (let i = 0; i < candidates.length; i += 1) {
 		const item = candidates[i];
-		if (item.isNew) continue;
-		if (committed[i]) msHcrRollback(item.module.moduleId);
-		msHcrRestoreTypeInfos(item.module.moduleId);
+		msHcrRollback(item.module.moduleId);
 		item.module.image = previousImages[i];
 		item.module.identity = previousIdentities[i];
 	}
+	forgetAfter(known);
 	return result(ReloadKind.Rejected, [resumeFailed],
-		`the after-reload handler of module '${resumeFailed}' threw; rolled back ${names.join(",")}`);
+		`the ${initFailed != "" ? "initializer" : "after-reload handler"} of module '${resumeFailed}' threw; rolled back ${names.join(",")}`);
 }

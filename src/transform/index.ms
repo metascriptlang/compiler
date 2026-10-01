@@ -102,9 +102,10 @@ import { lowerActorPre, lowerActor } from "./lowering/actorLower";
 import { resolveRuntimeIdents } from "./lowering/runtimeIdentResolve";
 import { lowerEnumToString } from "./native/enumToStringLower";
 
-export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean): Node {
+export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, preserveModuleConstants: boolean = false): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
+	ctx.preserveModuleConstants = preserveModuleConstants;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	let result = eraseBrandTypes(program);
 	result = lowerBorrow(result, ctx);

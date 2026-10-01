@@ -26,6 +26,17 @@ import { SymbolKind, Type, CallingConvention } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { dispatchEntryAt, dispatchOverridesFor } from "./context";
 
+export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {
+	if (aliveSet.entries.length == 0) return true;
+	const name = (node.data as FunctionDeclData).fnName;
+	const isLiftedClosure = name.startsWith("$lifted_") || name.startsWith("$fn_");
+	if (isLiftedClosure) return aliveSetHas(aliveSet, modulePath, name);
+	if (name.startsWith("$")) return true;
+	if (name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy")
+		|| name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved") || name.endsWith("RefCellTrace")) return true;
+	return aliveSetHas(aliveSet, modulePath, name);
+}
+
 // ===== Global Name Index =====
 // Pre-built name→modulePath index for O(1) cross-module lookup.
 // Replaces the O(n*m) linear scan of all modules for unresolved identifiers.

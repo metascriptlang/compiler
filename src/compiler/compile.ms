@@ -4,7 +4,7 @@ import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd 
 import { watch, nextChanges, msIoRunOnce, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile } from "std/fs";
 import { writeStderr } from "std/io";
-import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
+import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isStaticExtensionSym, Severity } from "../checker/context";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
@@ -37,7 +37,7 @@ import { refineTypes } from "../transform/typeRefine";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
-import { HcrImport, HcrIndirectModule, lowerHcrIndirection } from "../transform/native/hcrIndirect";
+import { HcrIndirectModule, hcrFunctions, lowerHcrIndirection } from "../transform/native/hcrIndirect";
 import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet, NameSet } from "../transform/context";
@@ -49,7 +49,7 @@ import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
 import { drainPendingInstances, distinctInstances } from "../checker/instantiate";
-import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTablesFingerprint, collectTypeInstanceRows, moduleTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
+import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, collectTypeInstanceRows, moduleTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { hookSymMark, hookSymsFrom, replayHookSyms } from "../codegen/c/types";
 import { GenericTypeInstRow, addGenericTypeInstRow } from "../parser/context";
 import { dbLower } from "./transam/index";
@@ -69,7 +69,7 @@ import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
-import { HcrAbiExport, HcrModuleAbi, HcrReloadDecision, HcrReloadKind, HcrReloadReason, buildHcrModuleAbi, classifyHcrReload, createHcrAbiExport, hcrAbiFingerprint, hcrExportKey, hcrLayoutKey, hcrReloadDiagnostic, hcrSignatureKey, parseHcrAbiBundle, serializeHcrAbiBundle } from "./hcrAbi";
+import { HcrAbiExport, HcrModuleAbi, HcrReloadDecision, HcrReloadKind, HcrReloadReason, buildHcrModuleAbi, classifyHcrReload, createHcrAbiExport, hcrAbiFingerprint, hcrLayoutKey, hcrReloadDiagnostic, hcrSignatureKey, parseHcrAbiBundle, serializeHcrAbiBundle } from "./hcrAbi";
 import { VERSION } from "./usage";
 
 // Header-inline disk cache injection (loader can't import ./cache directly —
@@ -655,7 +655,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const hcrSlot = job.hcrSlot;
 	if (opts.isHcr) useHookOwners(hcrSlot >= 0 ? createNameSet() : job.sharedHookOwners);
 	const _tx0 = performance.now();
-	const transformed = transformProgram(comptimeResolved, ctx, false);
+	const transformed = transformProgram(comptimeResolved, ctx, false, hcrSlot >= 0);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	const nativeCtx = createTransformContextWithChecker(ctx);
@@ -668,8 +668,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const _tn0 = performance.now();
 	const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 	job.timers.native = job.timers.native + (performance.now() - _tn0);
-	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
-	const hcrResult = hcrSlot >= 0 ? lowerHcrIndirection(hcrLifted, job.hcrModules[hcrSlot], job.hcrModules) : hcrLifted;
+	const hcrResult = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx, job.hcrModules[hcrSlot].moduleId) : nativeTransformed;
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 		else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
@@ -1566,9 +1565,7 @@ function hcrFunctionSlot(info: ExportedSymInfo, fn: Symbol): string {
 
 function appendHcrFunctionExport(exports: HcrAbiExport[], moduleId: string, info: ExportedSymInfo, fn: Symbol): Result<void, string> {
 	if (hasFlag(fn, SymbolFlag.OverloadSig) || hasFlag(fn, SymbolFlag.Borrow)) return Result.ok(null);
-	if (hasGenericParams(fn.symbolType)) {
-		return Result.err(`HCR ABI cannot represent generic export '${moduleId}::${info.name}'`);
-	}
+	if (hasGenericParams(fn.symbolType)) return Result.ok(null);
 	exports.push(createHcrAbiExport(moduleId, hcrFunctionSymbol(info, fn), hcrSignatureKey(fn.symbolType), hcrFunctionSlot(info, fn)));
 	return Result.ok(null);
 }
@@ -1646,10 +1643,6 @@ function buildHcrCandidateAbi(
 			const dependencyId = hcrModuleId(imported.sourcePath, root, stdPath);
 			if (dependencyId == "") continue;
 			dependencies.push(dependencyId);
-			const shared = hcrSharedVariable(imported.sourcePath, imported.names);
-			if (shared != "") {
-				return Result.err(`HCR cannot share exported variable '${dependencyId}::${shared}' with module '${moduleId}' across module images; export a function that reads it instead`);
-			}
 		}
 		const exports = hcrModuleExports(moduleId, modPath);
 		if (!exports.ok) return Result.err(exports.error);
@@ -1668,33 +1661,6 @@ function buildHcrCandidateAbi(
 	return Result.ok({ candidate, modulePaths });
 }
 
-function hcrSharedVariable(sourcePath: string, names: string[]): string {
-	const moduleExports = findModuleExports(graphRegistry, sourcePath);
-	if (moduleExports == null) return "";
-	for (const name of names) {
-		for (const info of moduleExports.symbols) {
-			if (info.name == name && info.sym.modulePath == sourcePath && info.sym.symbolKind == SymbolKind.Variable) return name;
-		}
-	}
-	return "";
-}
-
-function hcrForeignSymbols(modPath: string): HashSet<string> {
-	const foreign = new HashSet<string>();
-	const moduleExports = findModuleExports(graphRegistry, modPath);
-	if (moduleExports == null) return foreign;
-	for (const info of moduleExports.symbols) {
-		if (info.sym.modulePath != modPath || info.sym.symbolKind != SymbolKind.Function) continue;
-		addHcrForeignSymbol(foreign, info, info.sym);
-		for (const ov of info.sym.overloads) addHcrForeignSymbol(foreign, info, ov);
-	}
-	return foreign;
-}
-
-function addHcrForeignSymbol(foreign: HashSet<string>, info: ExportedSymInfo, fn: Symbol): void {
-	const isBinding = fn.exportName == "" && (fn.nativeName != "" || hasFlag(fn, SymbolFlag.ImportC));
-	if (info.name == "main" || isBinding) foreign.add(hcrFunctionSymbol(info, fn));
-}
 
 function pushDispatcherJob(cJobs: ModuleCompileJob[], oSlots: string[][], key: string, source: string, flags: string, opts: CliOptions): void {
 	const fp = moduleCompileFp(source, fullCompileCmd(opts.ccCompiler, opts.mode, flags, opts.ccBinary));
@@ -1879,38 +1845,54 @@ function hcrReloadHandlers(program: Node | null, flag: SymbolFlag): string[] {
 	return names;
 }
 
-function hcrRootFunctions(modulePaths: string[]): string[] {
+function hcrRootFunctions(modules: HcrIndirectModule[], processed: ProcessedModule[]): string[] {
 	const roots: string[] = [];
-	for (const modPath of modulePaths) {
-		const moduleExports = findModuleExports(graphRegistry, modPath);
-		if (moduleExports == null) continue;
-		for (const info of moduleExports.symbols) {
-			if (info.sym.modulePath != modPath || info.sym.symbolKind != SymbolKind.Function) continue;
-			roots.push(modPath + ":" + info.name);
+	for (const module of modules) {
+		for (const unit of processed) {
+			if (unit.modPath != module.modulePath) continue;
+			for (const stmt of (unit.program.data as ProgramData).programStmts) {
+				const fn = exportedFunctionOf(stmt);
+				if (fn == null || fn.resolvedSym == null) continue;
+				roots.push(unit.modPath + ":" + (fn.data as FunctionDeclData).fnName);
+			}
 		}
 	}
 	return roots;
+}
+
+function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[], aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>): void {
+	const owners = new HashMap<string, string>();
+	for (const module of modules) {
+		for (const unit of processed) {
+			if (unit.modPath != module.modulePath) continue;
+			for (const fn of hcrFunctions(unit.program, aliveSet, unit.modPath, facts)) {
+				if (!owners.has(fn.symbol) || fn.sourcePath == unit.modPath) owners.set(fn.symbol, module.moduleId);
+			}
+		}
+	}
+	for (const module of modules) {
+		for (const unit of processed) {
+			if (unit.modPath != module.modulePath) continue;
+			unit.program = lowerHcrIndirection(cloneNodeKeepSem(unit.program), module, modules, owners, aliveSet, facts);
+		}
+	}
 }
 
 function hcrIndirectModules(abi: HcrCandidateAbi): Result<HcrIndirectModule[], string> {
 	const modules: HcrIndirectModule[] = [];
 	for (let i = 0; i < abi.candidate.length; i += 1) {
 		const manifest = abi.candidate[i];
-		const foreign = hcrForeignSymbols(abi.modulePaths[i]);
-		const symbols: string[] = [];
-		for (const item of manifest.exports) symbols.push(foreign.has(item.symbol) ? "" : item.symbol);
-		const imports: HcrImport[] = [];
+		const imports: string[] = [];
 		for (const dependency of manifest.dependencies) {
 			const target = hcrManifestById(abi.candidate, dependency);
 			if (target == null) return Result.err(`HCR module '${manifest.moduleId}' imports '${dependency}', which has no ABI manifest`);
-			imports.push({ moduleId: dependency, abiKey: hcrExportKey(target) });
+			imports.push(dependency);
 		}
 		modules.push({
 			moduleId: manifest.moduleId,
-			symbols,
+			modulePath: abi.modulePaths[i],
 			typeInfos: [],
 			typeKeys: [],
-			abiKey: hcrExportKey(manifest),
 			imports,
 			beforeReload: [],
 			afterReload: [],
@@ -2451,16 +2433,16 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	const ownerFingerprints: HashMap<string, string> = new HashMap<string, string>();
 	if (session.keep) {
 		if (opts.isHcr) {
-			const tablesNow = hcrTablesFingerprint(hcrModules) + projectTypesFingerprint(session, hcrModulePaths);
+			const typesNow = hcrTypeRegistryFingerprint(hcrModules) + projectTypesFingerprint(session, hcrModulePaths);
 			let greenHcrModule = false;
 			for (const path of hcrModulePaths) {
 				if (!session.check.rechecked.has(path)) greenHcrModule = true;
 			}
-			if (session.hcrTablesFingerprint != "" && session.hcrTablesFingerprint != tablesNow && greenHcrModule) {
-				session.staleReason = "the HCR export tables changed";
+			if (session.hcrTypeRegistryFingerprint != "" && session.hcrTypeRegistryFingerprint != typesNow && greenHcrModule) {
+				session.staleReason = "the project type layouts changed";
 				return BuildStatus.Stale;
 			}
-			session.hcrTablesFingerprint = tablesNow;
+			session.hcrTypeRegistryFingerprint = typesNow;
 		}
 		for (const cm of checkedMods) {
 			let fingerprint = instancesFingerprint(session, instancesByOwner.get(cm.modPath));
@@ -2565,11 +2547,12 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		throw new Error(BUILD_STOPPED);
 	}
 
+
 	const tB = performance.now();
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
-	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths, hcrRootFunctions(hcrModulePaths));
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths, hcrRootFunctions(hcrModules, processed));
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
 	transformedPaths = [];
@@ -2632,6 +2615,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
 		if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) emissionFacts.hcrCoreUnits.add(p.modPath);
 	}
+	if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts);
 	const emissionJobs: ModuleEmissionJob[] = [];
 	for (const p of processed) {
 		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
@@ -3037,7 +3021,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const macroExpanded = expandMacros(monoed, ctx);
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		const transformed = transformProgram(comptimeResolved, ctx, false);
+		const transformed = transformProgram(comptimeResolved, ctx, false, opts.isHcr && modPath == filePath);
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
@@ -3045,7 +3029,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		nativeCtx.objChecks = opts.mode != MODE_DANGER;
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
-		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx, replaceExt(entryName(filePath), "")) : nativeTransformed;
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;

@@ -2,142 +2,357 @@
 #include "runtime/hcrEngine.h"
 #include "runtime/types.h"
 #include "runtime/hcrTls.h"
+#include <stddef.h>
 #include <string.h>
 
 #if defined(_WIN32) && defined(MS_HCR_CORE)
 uint32_t msHcrTlsIndex;
 #endif
 
+typedef struct MsHcrStorage {
+	struct MsHcrStorage* next;
+	max_align_t data[];
+} MsHcrStorage;
+
+typedef struct MsHcrModule MsHcrModule;
+
 typedef struct MsHcrEntry {
-	struct MsHcrEntry* next;
-	char* moduleId;
-	MsHcrHandle handle;
+	struct MsHcrEntry* hashNext;
+	struct MsHcrEntry* moduleNext;
+	MsHcrModule* module;
+	char* symbol;
+	char* key;
+	uint64_t hash;
+	MsHcrCell cell;
+	void* candidate;
+	void* saved;
+	MsHcrStorage* storage;
+	MsHcrStorage* candidateStorage;
+	MsHcrStorage* savedStorage;
+	size_t size;
+	int active;
+	int candidateActive;
+	int savedActive;
 } MsHcrEntry;
+
+struct MsHcrModule {
+	MsHcrModule* next;
+	char* id;
+	MsHcrEntry* entries;
+	MsHcrStorage* retired;
+	int active;
+	int savedActive;
+	int phase;
+};
 
 typedef struct MsHcrTypeEntry {
 	struct MsHcrTypeEntry* next;
-	char* key;
-	char* moduleId;
+	MsHcrModule* module;
+	char* name;
 	msTypeInfo info;
 	msTypeInfo saved;
+	int created;
+	int exposed;
 } MsHcrTypeEntry;
 
-static MsHcrEntry* msHcrEntries = NULL;
+static MsHcrModule* msHcrModules[256];
+static MsHcrEntry** msHcrEntries = NULL;
+static size_t msHcrEntryCount = 0;
+static size_t msHcrBucketCount = 0;
 static MsHcrTypeEntry* msHcrTypes = NULL;
 static int msHcrStaging = 0;
 static char* msHcrDir = NULL;
 static char* msHcrStem = NULL;
 
+static void msHcrFail(const char* moduleId, const char* reason) {
+	fprintf(stderr, "HCR: module '%s': %s\n", moduleId != NULL ? moduleId : "<null>", reason);
+	abort();
+}
+
+static void* msHcrAllocate(size_t size) {
+	void* result = calloc(1, size);
+	if (result == NULL) msHcrFail(NULL, "cannot allocate registry storage");
+	return result;
+}
+
+static void msHcrText(const char* text, const char* what) {
+	if (text == NULL || *text == '\0') msHcrFail(text, what);
+}
+
 static char* msHcrCopy(const char* text, const char* what) {
+	if (text == NULL) msHcrFail(NULL, what);
 	size_t length = strlen(text);
-	char* copy = (char*)malloc(length + 1);
-	if (copy == NULL) {
-		fprintf(stderr, "HCR: cannot allocate the %s '%s'\n", what, text);
-		abort();
-	}
+	char* copy = (char*)msHcrAllocate(length + 1);
 	memcpy(copy, text, length + 1);
 	return copy;
 }
 
-MsHcrHandle* msHcrHandle(const char* moduleId) {
-	for (MsHcrEntry* entry = msHcrEntries; entry != NULL; entry = entry->next) {
-		if (strcmp(entry->moduleId, moduleId) == 0) return &entry->handle;
+static uint64_t msHcrHash(uint64_t hash, const char* text) {
+	for (const unsigned char* p = (const unsigned char*)text; *p != 0; ++p) {
+		hash = (hash ^ *p) * UINT64_C(1099511628211);
 	}
-	MsHcrEntry* entry = (MsHcrEntry*)calloc(1, sizeof(MsHcrEntry));
-	if (entry == NULL) {
-		fprintf(stderr, "HCR: cannot allocate the handle of module '%s'\n", moduleId);
-		abort();
-	}
-	entry->moduleId = msHcrCopy(moduleId, "handle of module");
-	entry->next = msHcrEntries;
-	msHcrEntries = entry;
-	return &entry->handle;
+	return hash * UINT64_C(1099511628211);
 }
 
-void msHcrPublish(const char* moduleId, void* const* table, uint32_t slotCount) {
-	MsHcrHandle* handle = msHcrHandle(moduleId);
-	if (msHcrStaging) {
-		handle->staged = table;
-		handle->stagedCount = slotCount;
-		return;
+static MsHcrModule* msHcrModule(const char* moduleId) {
+	msHcrText(moduleId, "missing module identity");
+	size_t bucket = (size_t)(msHcrHash(UINT64_C(14695981039346656037), moduleId) & 255);
+	for (MsHcrModule* module = msHcrModules[bucket]; module != NULL; module = module->next) {
+		if (strcmp(module->id, moduleId) == 0) return module;
 	}
-	handle->slotCount = slotCount;
-	handle->current = table;
+	MsHcrModule* module = (MsHcrModule*)msHcrAllocate(sizeof(MsHcrModule));
+	module->id = msHcrCopy(moduleId, "missing module identity");
+	module->next = msHcrModules[bucket];
+	msHcrModules[bucket] = module;
+	return module;
+}
+
+static void msHcrGrow(void) {
+	size_t count = msHcrBucketCount == 0 ? 256 : msHcrBucketCount * 2;
+	if (count < msHcrBucketCount || count > SIZE_MAX / sizeof(MsHcrEntry*)) {
+		msHcrFail(NULL, "symbol registry size overflow");
+	}
+	MsHcrEntry** buckets = (MsHcrEntry**)msHcrAllocate(count * sizeof(MsHcrEntry*));
+	for (size_t i = 0; i < msHcrBucketCount; ++i) {
+		MsHcrEntry* entry = msHcrEntries[i];
+		while (entry != NULL) {
+			MsHcrEntry* next = entry->hashNext;
+			size_t bucket = (size_t)entry->hash & (count - 1);
+			entry->hashNext = buckets[bucket];
+			buckets[bucket] = entry;
+			entry = next;
+		}
+	}
+	free(msHcrEntries);
+	msHcrEntries = buckets;
+	msHcrBucketCount = count;
+}
+
+static MsHcrEntry* msHcrEntry(const char* moduleId, const char* symbol, const char* key) {
+	msHcrText(symbol, "missing C symbol name");
+	msHcrText(key, "missing symbol contract key");
+	if ((key[0] != 'f' && key[0] != 'v') || key[1] != ':' || key[2] == '\0') {
+		msHcrFail(moduleId, "malformed symbol kind or contract key");
+	}
+	MsHcrModule* module = msHcrModule(moduleId);
+	uint64_t hash = msHcrHash(msHcrHash(msHcrHash(UINT64_C(14695981039346656037), moduleId), symbol), key);
+	if (msHcrBucketCount == 0) msHcrGrow();
+	size_t bucket = (size_t)hash & (msHcrBucketCount - 1);
+	for (MsHcrEntry* entry = msHcrEntries[bucket]; entry != NULL; entry = entry->hashNext) {
+		if (entry->hash == hash && entry->module == module && strcmp(entry->symbol, symbol) == 0 && strcmp(entry->key, key) == 0) return entry;
+	}
+	if (msHcrEntryCount >= msHcrBucketCount - msHcrBucketCount / 4) {
+		msHcrGrow();
+		bucket = (size_t)hash & (msHcrBucketCount - 1);
+	}
+	MsHcrEntry* entry = (MsHcrEntry*)msHcrAllocate(sizeof(MsHcrEntry));
+	entry->module = module;
+	entry->symbol = msHcrCopy(symbol, "missing C symbol name");
+	entry->key = msHcrCopy(key, "missing symbol contract key");
+	entry->hash = hash;
+	entry->hashNext = msHcrEntries[bucket];
+	msHcrEntries[bucket] = entry;
+	entry->moduleNext = module->entries;
+	module->entries = entry;
+	++msHcrEntryCount;
+	return entry;
+}
+
+MsHcrCell* msHcrBind(const char* moduleId, const char* symbol, const char* key) {
+	return &msHcrEntry(moduleId, symbol, key)->cell;
+}
+
+int32_t msHcrModuleBegin(const char* moduleId) {
+	MsHcrModule* module = msHcrModule(moduleId);
+	if (module->phase != 0) msHcrFail(moduleId, "module registration already pending");
+	if (msHcrStaging) {
+		module->phase = 1;
+		return module->active ? 0 : 1;
+	}
+	if (module->active) msHcrFail(moduleId, "accepted module registration requires staging");
+	module->active = 1;
+	return 1;
+}
+
+static void msHcrRegistration(MsHcrEntry* entry, char kind) {
+	MsHcrModule* module = entry->module;
+	if (entry->key[0] != kind) msHcrFail(module->id, "registration kind does not match the contract key");
+	if (msHcrStaging) {
+		if (module->phase != 1) msHcrFail(module->id, "registration requires a staged module begin");
+		if (entry->candidateActive) msHcrFail(module->id, "symbol registered twice in one candidate");
+	} else {
+		if (!module->active || module->phase != 0) msHcrFail(module->id, "registration requires an initial module begin");
+		if (entry->active) msHcrFail(module->id, "symbol registered twice in the accepted image");
+	}
+}
+
+void msHcrRegisterFunction(const char* moduleId, const char* symbol, const char* key, void* address) {
+	if (address == NULL) msHcrFail(moduleId, "cannot register a null function address");
+	MsHcrEntry* entry = msHcrEntry(moduleId, symbol, key);
+	msHcrRegistration(entry, 'f');
+	if (msHcrStaging) {
+		entry->candidate = address;
+		entry->candidateActive = 1;
+	} else {
+		entry->cell.current = address;
+		entry->active = 1;
+	}
+}
+
+int32_t msHcrRegisterVariable(const char* moduleId, const char* symbol, const char* key, size_t size, void** out) {
+	if (out == NULL || size == 0 || size > SIZE_MAX - offsetof(MsHcrStorage, data)) {
+		msHcrFail(moduleId, "invalid variable storage size or output pointer");
+	}
+	MsHcrEntry* entry = msHcrEntry(moduleId, symbol, key);
+	msHcrRegistration(entry, 'v');
+	if (entry->size != 0 && entry->size != size) msHcrFail(moduleId, "variable size changed without a changed contract key");
+	entry->size = size;
+	int fresh = !entry->active;
+	MsHcrStorage* storage = entry->storage;
+	if (fresh) storage = (MsHcrStorage*)msHcrAllocate(offsetof(MsHcrStorage, data) + size);
+	*out = (void*)storage->data;
+	if (msHcrStaging) {
+		entry->candidate = *out;
+		entry->candidateStorage = storage;
+		entry->candidateActive = 1;
+	} else {
+		entry->storage = storage;
+		entry->cell.current = *out;
+		entry->active = 1;
+	}
+	return fresh ? 1 : 0;
 }
 
 void msHcrStageBegin(void) {
-	for (MsHcrTypeEntry* entry = msHcrTypes; entry != NULL; entry = entry->next) entry->saved = entry->info;
+	if (msHcrStaging) msHcrFail(NULL, "nested staging is invalid");
+	for (size_t i = 0; i < 256; ++i) {
+		for (MsHcrModule* module = msHcrModules[i]; module != NULL; module = module->next) {
+			if (module->phase != 0) msHcrFail(module->id, "previous transaction has not been resolved");
+		}
+	}
+	for (MsHcrTypeEntry* entry = msHcrTypes; entry != NULL; entry = entry->next) {
+		entry->saved = entry->info;
+		entry->created = 0;
+		entry->exposed = 0;
+	}
 	msHcrStaging = 1;
 }
 
-void msHcrStageEnd(void) { msHcrStaging = 0; }
+void msHcrStageEnd(void) {
+	if (!msHcrStaging) msHcrFail(NULL, "staging was not begun");
+	msHcrStaging = 0;
+}
 
-int32_t msHcrStaged(const char* moduleId) { return msHcrHandle(moduleId)->staged != NULL ? 1 : 0; }
+int32_t msHcrStaged(const char* moduleId) {
+	return msHcrModule(moduleId)->phase == 1 ? 1 : 0;
+}
 
 void msHcrCommit(const char* moduleId) {
-	MsHcrHandle* handle = msHcrHandle(moduleId);
-	if (handle->staged == NULL) {
-		fprintf(stderr, "HCR: module '%s' has no staged table to commit\n", moduleId);
-		abort();
+	MsHcrModule* module = msHcrModule(moduleId);
+	if (msHcrStaging || module->phase != 1) msHcrFail(moduleId, "commit requires completed module staging");
+	module->savedActive = module->active;
+	for (MsHcrEntry* entry = module->entries; entry != NULL; entry = entry->moduleNext) {
+		entry->saved = entry->cell.current;
+		entry->savedStorage = entry->storage;
+		entry->savedActive = entry->active;
+		entry->cell.current = entry->candidateActive ? entry->candidate : entry->saved;
+		entry->storage = entry->candidateActive ? entry->candidateStorage : entry->savedStorage;
+		entry->active = entry->candidateActive;
+		entry->candidate = NULL;
+		entry->candidateStorage = NULL;
+		entry->candidateActive = 0;
 	}
-	handle->old = handle->current;
-	handle->oldCount = handle->slotCount;
-	handle->slotCount = handle->stagedCount;
-	handle->current = handle->staged;
-	handle->staged = NULL;
-	handle->stagedCount = 0;
+	for (MsHcrTypeEntry* entry = msHcrTypes; entry != NULL; entry = entry->next) {
+		if (entry->module == module && entry->created) entry->exposed = 1;
+	}
+	module->active = 1;
+	module->phase = 2;
+}
+
+static void msHcrRetire(MsHcrModule* module, MsHcrStorage* storage) {
+	if (storage == NULL) return;
+	storage->next = module->retired;
+	module->retired = storage;
+}
+
+static void msHcrAcceptTypeSnapshots(MsHcrModule* module) {
+	for (MsHcrTypeEntry* entry = msHcrTypes; entry != NULL; entry = entry->next) {
+		if (entry->module != module) continue;
+		entry->saved = entry->info;
+		entry->created = 0;
+		entry->exposed = 0;
+	}
 }
 
 void msHcrRollback(const char* moduleId) {
-	MsHcrHandle* handle = msHcrHandle(moduleId);
-	if (handle->old == NULL) {
-		fprintf(stderr, "HCR: module '%s' has no previous table to roll back to\n", moduleId);
-		abort();
+	MsHcrModule* module = msHcrModule(moduleId);
+	if (msHcrStaging || module->phase != 2) msHcrFail(moduleId, "rollback requires a committed module");
+	for (MsHcrEntry* entry = module->entries; entry != NULL; entry = entry->moduleNext) {
+		if (entry->storage != entry->savedStorage) msHcrRetire(module, entry->storage);
+		entry->cell.current = entry->saved;
+		entry->storage = entry->savedStorage;
+		entry->active = entry->savedActive;
+		entry->saved = NULL;
+		entry->savedStorage = NULL;
+		entry->savedActive = 0;
 	}
-	handle->slotCount = handle->oldCount;
-	handle->current = handle->old;
-	handle->old = NULL;
-	handle->oldCount = 0;
+	msHcrRestoreTypeInfos(moduleId);
+	msHcrAcceptTypeSnapshots(module);
+	module->active = module->savedActive;
+	module->savedActive = 0;
+	module->phase = 0;
 }
 
 void msHcrDiscard(const char* moduleId) {
-	MsHcrHandle* handle = msHcrHandle(moduleId);
-	handle->staged = NULL;
-	handle->stagedCount = 0;
+	MsHcrModule* module = msHcrModule(moduleId);
+	if (module->phase == 2) msHcrFail(moduleId, "cannot discard a committed module; roll it back");
+	if (module->phase == 0) return;
+	for (MsHcrEntry* entry = module->entries; entry != NULL; entry = entry->moduleNext) {
+		if (entry->candidateStorage != entry->storage) free(entry->candidateStorage);
+		entry->candidate = NULL;
+		entry->candidateStorage = NULL;
+		entry->candidateActive = 0;
+	}
+	msHcrRestoreTypeInfos(moduleId);
+	msHcrAcceptTypeSnapshots(module);
+	module->phase = 0;
 }
 
+void msHcrFinalize(const char* moduleId) {
+	MsHcrModule* module = msHcrModule(moduleId);
+	if (msHcrStaging || module->phase != 2) msHcrFail(moduleId, "finalize requires a committed module");
+	for (MsHcrEntry* entry = module->entries; entry != NULL; entry = entry->moduleNext) {
+		if (entry->savedStorage != entry->storage) msHcrRetire(module, entry->savedStorage);
+		entry->saved = NULL;
+		entry->savedStorage = NULL;
+		entry->savedActive = 0;
+	}
+	msHcrAcceptTypeSnapshots(module);
+	module->savedActive = 0;
+	module->phase = 0;
+}
+
+int32_t msHcrInvokeInit(void* raw) { return msHcrCallInitStatus(raw); }
+
 void* msHcrTypeInfo(const char* moduleId, const char* typeName) {
-	size_t moduleLength = strlen(moduleId);
-	size_t typeLength = strlen(typeName);
-	char* key = (char*)malloc(moduleLength + typeLength + 2);
-	if (key == NULL) {
-		fprintf(stderr, "HCR: cannot allocate the TypeInfo key '%s::%s'\n", moduleId, typeName);
-		abort();
-	}
-	memcpy(key, moduleId, moduleLength);
-	key[moduleLength] = ':';
-	memcpy(key + moduleLength + 1, typeName, typeLength + 1);
+	msHcrText(typeName, "missing TypeInfo name");
+	MsHcrModule* module = msHcrModule(moduleId);
 	for (MsHcrTypeEntry* entry = msHcrTypes; entry != NULL; entry = entry->next) {
-		if (strcmp(entry->key, key) == 0) {
-			free(key);
-			return &entry->info;
-		}
+		if (entry->module == module && strcmp(entry->name, typeName) == 0) return &entry->info;
 	}
-	MsHcrTypeEntry* entry = (MsHcrTypeEntry*)calloc(1, sizeof(MsHcrTypeEntry));
-	if (entry == NULL) {
-		fprintf(stderr, "HCR: cannot allocate the TypeInfo '%s'\n", key);
-		abort();
-	}
-	entry->key = key;
-	entry->moduleId = msHcrCopy(moduleId, "TypeInfo owner");
+	MsHcrTypeEntry* entry = (MsHcrTypeEntry*)msHcrAllocate(sizeof(MsHcrTypeEntry));
+	entry->module = module;
+	entry->name = msHcrCopy(typeName, "missing TypeInfo name");
+	entry->created = msHcrStaging;
 	entry->next = msHcrTypes;
 	msHcrTypes = entry;
 	return &entry->info;
 }
 
 void msHcrRestoreTypeInfos(const char* moduleId) {
+	MsHcrModule* module = msHcrModule(moduleId);
 	for (MsHcrTypeEntry* entry = msHcrTypes; entry != NULL; entry = entry->next) {
-		if (strcmp(entry->moduleId, moduleId) == 0) entry->info = entry->saved;
+		if (entry->module == module && !(entry->created && entry->exposed)) entry->info = entry->saved;
 	}
 }
 

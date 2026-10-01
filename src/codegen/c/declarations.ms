@@ -18,39 +18,12 @@ import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { isBakeableAggregateConst } from "../../checker/reachability";
+import { isBakeableAggregateConst, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 // genGenericTypeInsts lives in index.ms for the same reason.
 
 // ===== genDecl — main declaration dispatcher =====
 
-// DCE: check if a function declaration is alive (reachable).
-// Empty aliveSet means no DCE filtering (DCE disabled).
-function isDeclAlive(g: CGen, node: Readonly<Node>): boolean {
-	if (g.aliveSet.entries.length == 0) return true;
-	const d = node.data as FunctionDeclData;
-	const name = d.fnName;
-	// Compiler-generated functions: always alive.
-	// These use synthetic identifiers without resolvedSym, so the reachability walker can't trace them.
-	// Prefixes: $lifted_, $Env_ (lambda lifting), =copy/=dup (operators),
-	//           __ (builtinLower: __jsonParse_*, __jsonStringify_*)
-	// Suffixes: _destroy, _trace, _copy, _sink, _wasMoved, _dup (destructorLifting)
-	// Lambda-lifted closures ($lifted_/$fn_) ARE traceable by name: a live parent's body
-	// references the closure pair `{ fn: $lifted_x }` as an Identifier, so reachability marks
-	// live ones via the parent's walkBody. Gate ONLY these on the alive set so orphaned closures
-	// of un-instantiated generic templates (T=unknown env/body that won't compile) are dropped.
-	// Other $-prefixed functions ($Env_*Destroy etc. DRC hooks) are referenced by DRC-injected
-	// code the walker can't trace — keep them unconditionally alive.
-	const isLiftedClosure = (name.length >= 8 && name.slice(0, 8) == "$lifted_")
-		|| (name.length >= 4 && name.slice(0, 4) == "$fn_");
-	if (isLiftedClosure) return aliveSetHas(g.aliveSet, g.modulePath, name);
-	if (name.length > 0 && name.slice(0, 1) == "$") return true;
-	const sym = node.resolvedSym;
-	const isSeqHookSuffix = name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
-		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved") || name.endsWith("RefCellTrace");
-	if (isSeqHookSuffix) return true;
-	return aliveSetHas(g.aliveSet, g.modulePath, name);
-}
 
 
 // Array sequence hooks are generated per-module (each module that uses sequence gets its own).
@@ -70,7 +43,7 @@ export function genDecl(g: CGen, node: Readonly<Node>, exported: boolean): void 
 
 	match (node.kind) {
 		NodeKind.FunctionDecl => {
-			if (!isDeclAlive(g, node)) return;
+			if (!functionDeclIsAlive(g.aliveSet, g.modulePath, node)) return;
 			genFunctionDecl(g, node, exported);
 		},
 		NodeKind.EnumDecl => { genEnumDecl(g, node); },

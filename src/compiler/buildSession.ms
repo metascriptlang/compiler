@@ -40,7 +40,7 @@ export class BuildSession {
 	lowerFingerprints: HashMap<string, string>;
 	lowerDiagnostics: HashMap<string, ModuleError[]>;
 	lowerClaims: HashMap<string, LowerClaims>;
-	hcrTablesFingerprint: string;
+	hcrTypeRegistryFingerprint: string;
 	staleReason: string;
 	moduleCount: int32;
 	lastBuilt: boolean;
@@ -56,7 +56,7 @@ export function createBuildSession(keep: boolean): BuildSession {
 		lowerFingerprints: new HashMap<string, string>(),
 		lowerDiagnostics: new HashMap<string, ModuleError[]>(),
 		lowerClaims: new HashMap<string, LowerClaims>(),
-		hcrTablesFingerprint: "",
+		hcrTypeRegistryFingerprint: "",
 		staleReason: "",
 		moduleCount: 0,
 		lastBuilt: false,
@@ -143,12 +143,10 @@ export function instancesFingerprint(session: BuildSession, instances: Node[] | 
 	return joined;
 }
 
-export function hcrTablesFingerprint(modules: HcrIndirectModule[]): string {
+export function hcrTypeRegistryFingerprint(modules: HcrIndirectModule[]): string {
 	let out = "";
 	for (const m of modules) {
-		out = out + m.moduleId + "|" + m.abiKey + "|" + m.symbols.join(",") + "|" + m.typeInfos.join(",") + "|" + m.typeKeys.join(",");
-		for (const imp of m.imports) out = out + "|" + imp.moduleId + "=" + imp.abiKey;
-		out = out + "|" + m.beforeReload.join(",") + "|" + m.afterReload.join(",") + "\n";
+		out = out + m.moduleId + "|" + m.typeInfos.join(",") + "|" + m.typeKeys.join(",") + "\n";
 	}
 	return out;
 }
