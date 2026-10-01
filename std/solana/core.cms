@@ -28,6 +28,7 @@ extern function msSolCopy(destination: uint64, source: uint64, length: uint64): 
 extern function msSolFill(destination: uint64, value: uint8, length: uint64): void;
 extern function msSolLog64(a: uint64, b: uint64, c: uint64, d: uint64, e: uint64): void;
 extern function msSolLogPubkey(address: uint64): void;
+extern function msSolLogData(address: uint64, length: uint64): void;
 extern function msSolLogComputeUnits(): void;
 extern function msSolRemainingComputeUnits(): uint64;
 extern function msSolStringAddress(text: string): uint64;
@@ -1072,4 +1073,71 @@ export function expectAddress(actual: Pubkey, expected: Pubkey): Result<void, Pr
 export function expectHasOne(actual: Pubkey, expected: Pubkey): Result<void, ProgramError> {
 	if (actual != expected) { return Result.err(ProgramError.constraintHasOne()); }
 	return Result.ok(null);
+}
+
+export struct EventWriter {
+	address: uint64;
+	capacity: uint64;
+	cursor: uint64;
+}
+
+export function eventWriter(capacity: uint64, discriminator: Readonly<Span<uint8>>): EventWriter {
+	const address = msSolAlloc(capacity);
+	for (let i = 0; i < 8; i++) { msSolStoreU8(address + (i as uint64), discriminator[i]); }
+	return { address: address, capacity: capacity, cursor: 8 };
+}
+
+function advanced(writer: EventWriter, width: uint64): EventWriter {
+	return { ...writer, cursor: writer.cursor + width };
+}
+
+export function u8(this writer: EventWriter, value: uint8): EventWriter {
+	msSolStoreU8(writer.address + writer.cursor, value);
+	return advanced(writer, 1);
+}
+
+export function u16(this writer: EventWriter, value: uint16): EventWriter {
+	msSolStoreU16(writer.address + writer.cursor, value);
+	return advanced(writer, 2);
+}
+
+export function u32(this writer: EventWriter, value: uint32): EventWriter {
+	msSolStoreU32(writer.address + writer.cursor, value);
+	return advanced(writer, 4);
+}
+
+export function u64(this writer: EventWriter, value: uint64): EventWriter {
+	msSolStoreU64(writer.address + writer.cursor, value);
+	return advanced(writer, 8);
+}
+
+export function i8(this writer: EventWriter, value: int8): EventWriter {
+	return writer.u8(value as uint8);
+}
+export function i16(this writer: EventWriter, value: int16): EventWriter {
+	return writer.u16(value as uint16);
+}
+export function i32(this writer: EventWriter, value: int32): EventWriter {
+	return writer.u32(value as uint32);
+}
+export function i64(this writer: EventWriter, value: int64): EventWriter {
+	return writer.u64(value as uint64);
+}
+
+export function bool(this writer: EventWriter, value: boolean): EventWriter {
+	return writer.u8(value ? 1 : 0);
+}
+
+export function pubkey(this writer: EventWriter, value: Pubkey): EventWriter {
+	storePubkey(value, writer.address + writer.cursor);
+	return advanced(writer, 32);
+}
+
+export function finish(this writer: EventWriter): uint64 {
+	msSolLogData(writer.address, writer.cursor);
+	return writer.cursor;
+}
+
+export function logData(bytes: Bytes): void {
+	msSolLogData(bytes.address, bytes.length);
 }
