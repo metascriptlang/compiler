@@ -313,7 +313,7 @@ function isZigCC(cc: string): boolean {
 
 let _hasCppCompile = false;
 
-function isCppFile(path: string): boolean {
+export function isCppFile(path: string): boolean {
 	if (path.endsWith(".cpp")) return true;
 	if (path.endsWith(".cxx")) return true;
 	if (path.endsWith(".cc"))  return true;
@@ -677,6 +677,37 @@ function runCc(command: ToolCommand, args: string[]): Result<string, ProcessErro
 	return execFileCapture(command.path, args);
 }
 
+export struct ObjectCompileArgs {
+	command: ToolCommand;
+	lead: string[];
+	trail: string[];
+}
+
+export function objectCompileArgs(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): Result<ObjectCompileArgs, ProcessError> {
+	const resolved = compilerCommand(ccOption, ccBinary, isCpp);
+	if (!resolved.ok) return Result.err(resolved.error);
+	const command = resolved.value;
+	const lead: string[] = [];
+	for (const arg of command.args) lead.push(arg);
+	lead.push(isCpp ? "-std=c++17" : "-std=gnu11");
+	const modeArgs = appendParsedFlags(command.path, lead, modeFlags(mode));
+	if (!modeArgs.ok) return Result.err(modeArgs.error);
+	const trail: string[] = [];
+	const flags = appendParsedFlags(command.path, trail, extraFlags);
+	if (!flags.ok) return Result.err(flags.error);
+	return Result.ok({ command, lead, trail });
+}
+
+export function objectCompileKey(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): string {
+	const parts = objectCompileArgs(ccOption, ccBinary, isCpp, mode, extraFlags);
+	if (!parts.ok) return `unresolved ${parts.error.message} ${extraFlags}`;
+	let key = quoteCcArg(parts.value.command.path);
+	for (const arg of parts.value.lead) key = `${key} ${quoteCcArg(arg)}`;
+	key = `${key} |`;
+	for (const arg of parts.value.trail) key = `${key} ${quoteCcArg(arg)}`;
+	return key;
+}
+
 // Compile a .c file to a native binary.
 // Returns Result.ok on exit-code 0; Result.err carries gcc/clang stderr.
 export function compileC(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
@@ -707,14 +738,11 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 // Returns Result.ok on exit-code 0; Result.err carries gcc/clang stderr.
 export function compileCFile(cFile: string, oFile: string, dependencyFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
 	ensureDir(dirname(oFile));
-	const isCpp = isCppFile(cFile);
-	const resolved = compilerCommand(ccOption, ccBinary, isCpp);
-	if (!resolved.ok) return Result.err(resolved.error);
-	const command = resolved.value;
-	const args = command.args;
-	args.push(isCpp ? "-std=c++17" : "-std=gnu11");
-	const modeArgs = appendParsedFlags(command.path, args, modeFlags(mode));
-	if (!modeArgs.ok) return Result.err(modeArgs.error);
+	const parts = objectCompileArgs(ccOption, ccBinary, isCppFile(cFile), mode, extraFlags);
+	if (!parts.ok) return Result.err(parts.error);
+	const command = parts.value.command;
+	const args: string[] = [];
+	for (const arg of parts.value.lead) args.push(arg);
 	const rtDir = resolveRuntime();
 	if (rtDir != "") args.push(`-iquote${dirname(dirname(rtDir))}`);
 	const tmp = `${oFile}.tmp.${performance.now()}`;
@@ -732,8 +760,7 @@ export function compileCFile(cFile: string, oFile: string, dependencyFile: strin
 	args.push(cFile);
 	args.push("-o");
 	args.push(tmp);
-	const flags = appendParsedFlags(command.path, args, extraFlags);
-	if (!flags.ok) return Result.err(flags.error);
+	for (const arg of parts.value.trail) args.push(arg);
 	const r = runCc(command, args);
 	if (!r.ok) {
 		remove(tmp);
@@ -831,4 +858,16 @@ test "a cross build without --cpu targets x86_64, --cpu names the triple's cpu" 
 	const abi = other == "linux" ? "linux-gnu" : "windows-gnu";
 	assert crossTargetFlag(other, "", true) == `-target x86_64-${abi}`;
 	assert crossTargetFlag(other, "arm64", true) == `-target aarch64-${abi}`;
+}
+
+test "the object cache key names every argument compileCFile passes but the file names" {
+	const parts = objectCompileArgs(0, "clang -fno-pie", true, 2, "-DVALUE=\"a b\" -Ivendor");
+	assert parts.ok;
+	const key = objectCompileKey(0, "clang -fno-pie", true, 2, "-DVALUE=\"a b\" -Ivendor");
+	assert key.startsWith(quoteCcArg(parts.value.command.path));
+	for (const arg of parts.value.lead) assert key.indexOf(quoteCcArg(arg), 0) >= 0;
+	for (const arg of parts.value.trail) assert key.indexOf(quoteCcArg(arg), 0) >= 0;
+	assert key.indexOf("-std=c++17", 0) >= 0;
+	assert key != objectCompileKey(0, "clang -fno-pie", false, 2, "-DVALUE=\"a b\" -Ivendor");
+	assert key != objectCompileKey(0, "clang -fno-pie", true, 2, "-DVALUE=a b -Ivendor");
 }

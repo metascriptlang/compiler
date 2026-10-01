@@ -60,11 +60,11 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
+import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto } from "./cc";
 import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -1053,7 +1053,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				let probeFlags = allFlags;
 				if (upFlag != "") probeFlags = appendFlag(probeFlags, upFlag);
 				if (customFlags != "") probeFlags = appendFlag(probeFlags, customFlags);
-				const probeKey = fullCompileCmd(ccOption, mode, probeFlags, ccBinary);
+				const probeKey = fullCompileCmd(ccOption, mode, probeFlags, ccBinary, isCppFile(fullPath));
 				const dependencyFile = nativeDepFile(fullPath, probeKey);
 				const dependenciesKnown = nativeDependenciesKnown(fullPath, probeKey);
 				const probeFp = computeFingerprint(fullPath, probeKey);
@@ -1122,7 +1122,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			printDiag(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
 			stopBuild();
 		}
-		const compileCmd = fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary);
+		const compileCmd = fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary, isCppFile(j.fullPath));
 		registerNativeDependencies(j.fullPath, compileCmd);
 		if (j.dependenciesKnown) {
 			writeCompileCache(j.oFile, j.fp);
@@ -1150,6 +1150,8 @@ interface ModuleCompileJob {
 	modPath: string;
 	flags: string;
 	fp: string;
+	baseFp: string;
+	depFile: string;
 	slot: number;
 }
 
@@ -1162,12 +1164,12 @@ function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: n
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
 		futures.push(spawn(() => {
-			let r = compileCFile(j.cFile, j.oFile, "", j.flags, mode, ccOption, ccBinary);
+			let r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary);
 			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn EAGAIN
 				// under fork pressure). One retry absorbs it; real compile errors
 				// have a nonzero exitCode and are not retried.
-				r = compileCFile(j.cFile, j.oFile, "", j.flags, mode, ccOption, ccBinary);
+				r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary);
 			}
 			if (r.ok) return 0;
 			printDiag(r.error.errorOutput != "" ? r.error.errorOutput : `${r.error.command}: ${r.error.message}`);
@@ -1666,7 +1668,7 @@ function pushDispatcherJob(cJobs: ModuleCompileJob[], oSlots: string[][], key: s
 	const fp = moduleCompileFp(source, fullCompileCmd(opts.ccCompiler, opts.mode, flags, opts.ccBinary));
 	writeCSource(key, fp, source);
 	oSlots.push([]);
-	cJobs.push({ cFile: stableCFileFp(key, fp), oFile: stableOFileFp(key, fp), modPath: "", flags, fp: "", slot: oSlots.length - 1 });
+	cJobs.push({ cFile: stableCFileFp(key, fp), oFile: stableOFileFp(key, fp), modPath: "", flags, fp: "", baseFp: "", depFile: "", slot: oSlots.length - 1 });
 }
 
 function moduleOutputFor(outputs: CModuleOutput[], modPath: string): CModuleOutput | null {
@@ -2704,7 +2706,8 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 			const upFlag = userProjectFlag(p.modPath, opts.projectRoot, resolveRuntimeDir());
 			if (upFlag != "") modFlags = appendFlag(modFlags, upFlag);
 			const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, modFlags, opts.ccBinary);
-			const modFp = moduleCompileFp(cCode, compileCmd);
+			const baseFp = moduleCompileFp(cCode, compileCmd);
+			const modFp = moduleObjectFp(p.modPath, baseFp);
 			const oFile = stableOFileFp(p.modPath, modFp);
 
 			if (isCCodeCached(p.modPath, modFp)) {
@@ -2714,11 +2717,11 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 				// Write only .c source BEFORE compile (always — debuggable).
 				// Defer fingerprint (.cfp) until after successful compile so a
 				// failed zig cc doesn't leave a false cache hit for the next run.
-				writeCSource(p.modPath, modFp, cCode);
-				const cFile = stableCFileFp(p.modPath, modFp);
+				writeCSource(p.modPath, baseFp, cCode);
+				const cFile = stableCFileFp(p.modPath, baseFp);
 				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 				oSlots.push([]);
-				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, slot: oSlots.length - 1 });
+				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), slot: oSlots.length - 1 });
 				modulesRecompiled = modulesRecompiled + 1;
 				recompiledModulePaths.push(p.modPath);
 			}
@@ -2829,8 +2832,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		const cj = cJobs[cji];
 		const code = cCodes[cji];
 		if (code == 0) {
-			if (cj.fp != "") writeCompileFingerprintFp(cj.modPath, cj.fp);
-			oSlots[cj.slot] = [cj.oFile];
+			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile];
 		} else if (cj.modPath == "") {
 			printDiag(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
 			throw new Error(BUILD_STOPPED);
@@ -3121,7 +3123,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const upFlag = userProjectFlag(p.modPath, opts.projectRoot, resolveRuntimeDir());
 		if (upFlag != "") testModFlags = appendFlag(testModFlags, upFlag);
 		const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, testModFlags, opts.ccBinary);
-		const modFp = moduleCompileFp(cCode, compileCmd);
+		const baseFp = moduleCompileFp(cCode, compileCmd);
+		const modFp = moduleObjectFp(p.modPath, baseFp);
 		const oFile = stableOFileFp(p.modPath, modFp);
 
 		if (isCCodeCached(p.modPath, modFp)) {
@@ -3129,11 +3132,11 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
 		} else {
 			// Same as main path — defer fingerprint until success.
-			writeCSource(p.modPath, modFp, cCode);
-			const cFile = stableCFileFp(p.modPath, modFp);
+			writeCSource(p.modPath, baseFp, cCode);
+			const cFile = stableCFileFp(p.modPath, baseFp);
 			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 			oSlots.push([]);
-			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, slot: oSlots.length - 1 });
+			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), slot: oSlots.length - 1 });
 		}
 		compiled = compiled + 1;
 		p.program = null as unknown as Node;
@@ -3156,7 +3159,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	writeCSource("_test_dispatch", dispFp, dispatcher);
 	const dispFile = stableCFileFp("_test_dispatch", dispFp);
 	oSlots.push([]);
-	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
+	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", baseFp: "", depFile: "", slot: oSlots.length - 1 });
 
 	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 	let testFailed = false;
@@ -3165,8 +3168,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const cj = cJobs[cji];
 		const code = cCodes[cji];
 		if (code == 0) {
-			if (cj.fp != "") writeCompileFingerprintFp(cj.modPath, cj.fp);
-			oSlots[cj.slot] = [cj.oFile];
+			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile];
 		} else if (cj.modPath == "") {
 			printDiag(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
 			testFailed = true;
