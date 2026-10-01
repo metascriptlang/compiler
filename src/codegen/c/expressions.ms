@@ -2425,7 +2425,7 @@ function litFieldPrimitiveUnion(node: Readonly<Node>, key: string): Type | null 
 // present-gate (typeof null === "object", TS parity); everything else folds to
 // a constant from the static type.
 function genTypeofExpr(g: CGen, opNode: Readonly<Node>, opC: string): string {
-	const t = opNode != null ? opNode.nodeType : null;
+	const t = opNode != null && opNode.nodeType != null ? peelTransparentInstance(opNode.nodeType) : null;
 	// All-strlit unions are msString-carried — no _tag to switch on.
 	if (t != null && isTagCarriedUnion(t)) {
 		return typeofTagSwitch(g, t, opC);
@@ -3131,13 +3131,14 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 	// helper expects. The `&`-prefix convention takes the address of a value-array
 	// receiver to form that pointer; for a Ref the address-of and the implied deref
 	// cancel (the Ref IS the pointer), so pass the receiver through unchanged.
-	const recvIsRefArray = args.length > 0 && args[0].nodeType != null
-		&& args[0].nodeType.kind == TypeKind.Ref && args[0].nodeType.typeReturn != null
-		&& args[0].nodeType.typeReturn.kind == TypeKind.Array;
+	const recvT = args.length > 0 && args[0].nodeType != null ? peelTransparentInstance(args[0].nodeType) : null;
+	const recvIsRefArray = recvT != null
+		&& recvT.kind == TypeKind.Ref && recvT.typeReturn != null
+		&& recvT.typeReturn.kind == TypeKind.Array;
 
 	// Array type suffix: ms_array_X → ms_array_X_number/_string/_ref
-	if (args.length > 0 && args[0].nodeType != null) {
-		const recvType = recvIsRefArray ? args[0].nodeType.typeReturn : args[0].nodeType;
+	if (recvT != null) {
+		const recvType = recvIsRefArray ? recvT.typeReturn : recvT;
 		if (recvType.kind == TypeKind.Array) {
 			if (cName.length >= 9 && cName.slice(0, 9) == "ms_array_") {
 				if (recvType.typeReturn != null) {
