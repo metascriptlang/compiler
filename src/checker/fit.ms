@@ -389,6 +389,32 @@ export function rejectBigIntMix(ctx: CheckerContext, op: string, leftType: Type 
 	return true;
 }
 
+function mixesNumericOperands(op: string): boolean {
+	return op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "**"
+		|| op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%="
+		|| op == "<" || op == ">" || op == "<=" || op == ">=" || op == "==" || op == "!=" || op == "===" || op == "!==";
+}
+
+function isFloatOperand(t: Type | null): boolean {
+	return t != null && (isFloatType(t) || t.kind == TypeKind.Number);
+}
+
+export function rejectLossyIntFloatMix(ctx: CheckerContext, op: string, left: Node, right: Node, leftType: Type | null, rightType: Type | null): boolean {
+	if (!mixesNumericOperands(op)) return false;
+	const intLeft = isIntegerType(leftType) && isFloatOperand(rightType);
+	const intRight = isIntegerType(rightType) && isFloatOperand(leftType);
+	if (!intLeft && !intRight) return false;
+	const intSide = intLeft ? left : right;
+	const intType = (intLeft ? leftType : rightType) as Type;
+	const floatType = (intLeft ? rightType : leftType) as Type;
+	const target = floatType.kind == TypeKind.Number ? numberType() : float64Type();
+	if (!numericConvRefuses(intType, target) || isFittingNumericConstant(intSide, target)) return false;
+	addError(ctx, "operator '" + op + "' would convert the " + typeDisplayName(intType) + " operand to " + typeDisplayName(target)
+		+ " implicitly, which " + numericRefusalReason(intType, target) + " — write an explicit 'as " + typeDisplayName(target) + "' on it",
+		intSide.location.line, intSide.location.column);
+	return true;
+}
+
 export function checkBitwiseOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): void {
 	if (reportBitSetMismatch(ctx, op, leftType, rightType, node)) return;
 	const leftInt = leftType != null && isBitwiseAllowed(leftType);

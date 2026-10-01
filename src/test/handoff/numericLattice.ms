@@ -12,6 +12,8 @@ function errorOf(body: string): string {
 
 const id = "let id: int64 = 9007199254740993;\n";
 
+const total = "let total: int64 = 9007199254740993;\nlet n: number = 0.5;\n";
+
 test "numeric lattice: an unsigned integer widens into a signed slot whose range holds it" {
 	assert ok("const u: uint8 = 3;\nconst i: int16 = u;\nconst j: int32 = u;\nconst k: int64 = u;\nconsole.log(i, j, k);\n");
 	assert ok("const u: uint16 = 40000;\nconst i: int32 = u;\nconsole.log(i);\n");
@@ -104,4 +106,18 @@ test "numeric lattice: a non-numeric overload mismatch stays plain" {
 	const e = errorOf("function g(x: string): string { return x; }\nfunction g(x: boolean): string { return \"b\"; }\nlet n: int32 = 5;\nconst s = g(n);\n");
 	assert e.contains("first mismatch at position 1: expected 'string', got 'int32'"), e;
 	assert !e.contains("as float32"), e;
+}
+
+test "numeric lattice: a 64-bit integer beside a float in an operator is refused" {
+	assert hasError(total + "const avg = total + n;\n", "operator '+' would convert the int64 operand to number implicitly, which may lose integer precision above 2^53 — write an explicit 'as number' on it");
+	assert hasError(total + "const big = total > n;\n", "operator '>' would convert the int64 operand to number");
+	assert hasError(total + "const same = n == total;\n", "operator '==' would convert the int64 operand to number");
+	assert hasError(total + "n += total;\n", "operator '+=' would convert the int64 operand to number");
+	assert hasError("let u: uint64 = 5;\nlet f: float64 = 1.5;\nconst r = u * f;\n", "operator '*' would convert the uint64 operand to float64");
+}
+
+test "numeric lattice: an exact integer or an explicit conversion mixes with a float" {
+	assert ok("let i: int32 = 7;\nlet n: number = 0.5;\nconst r = i * n;\nconsole.log(r, i < n);\n");
+	assert ok("let n: number = 0.5;\nconst r = n + 5000000000;\nconsole.log(r);\n");
+	assert errorCount(total + "const avg = total as number + n;\n") == 0;
 }
