@@ -460,6 +460,8 @@ cmd_land() {
     say "gate: $cmd"
     (cd "$w" && bash -c "$cmd") >&2 || die "land: gate '$cmd' failed"
   done
+  [ "$(git -C "$w" rev-parse HEAD)" = "$new" ] && [ -z "$(git -C "$w" status --porcelain --untracked-files=no)" ] \
+    || die "land: the worktree moved during the gate (HEAD was $(git -C "$w" rev-parse --short "$new"), now $(git -C "$w" rev-parse --short HEAD)$([ -z "$(git -C "$w" status --porcelain --untracked-files=no)" ] || printf ', with uncommitted edits')); the verdict covers neither; land again"
   while :; do
     moved=$(git -C "$MAIN" rev-parse "$BASE")
     if [ "$moved" != "$old" ]; then
