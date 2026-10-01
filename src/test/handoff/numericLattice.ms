@@ -84,6 +84,12 @@ test "numeric lattice: exact arguments flow" {
 	assert errorCount(id + "function save(x: number): number { return x; }\nconst r = save(id as number);\n") == 0;
 }
 
+test "numeric lattice: an out argument must be exactly the out type" {
+	assert hasError("function f(out r: number): void { r = 1.5; }\nlet x: int64 = 0;\nf(x);\n", "an out parameter of type number is written in place, so the variable must be number, not int64");
+	assert hasError("function f(out r: int32): void { r = 7; }\nlet x: number = 0;\nf(x);\n", "the variable must be int32, not number");
+	assert errorCount("function f(out r: number): void { r = 1.5; }\nlet x: number = 0;\nf(x);\nconsole.log(x);\n") == 0;
+}
+
 test "numeric lattice: a sink parameter keeps the lattice" {
 	assert hasError("extern function takes(sink v: number): void from \"&abs\";\nlet x: int64 = 9007199254740993;\ntakes(x);\n", "implicit int64 → number conversion in 'takes' arg 0 may lose integer precision above 2^53");
 }

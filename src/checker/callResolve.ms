@@ -1679,6 +1679,12 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				} else {
 					const refusal = writeRefusal(lvArg, true);
 					if (refusal != "") addError(ctx, refusal, lvArg.location.line, lvArg.location.column);
+					const written = paramType.typeReturn;
+					if (written != null && argTypes[pi] != null && needsStdConv(argTypes[pi], written)) {
+						addError(ctx, "'" + getCalleeName(d.callee) + "' " + argLabel(pi, hasReceiver) + ": an out parameter of type " + typeDisplayName(written)
+							+ " is written in place, so the variable must be " + typeDisplayName(written) + ", not " + typeDisplayName(argTypes[pi])
+							+ " — declare it as " + typeDisplayName(written) + " and convert after the call", lvArg.location.line, lvArg.location.column);
+					}
 				}
 			}
 			if (needsStdConv(argTypes[pi], paramType) || addressAtC) {
