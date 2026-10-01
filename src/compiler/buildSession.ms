@@ -127,9 +127,9 @@ function typeShape(session: BuildSession, t: Type | null): string {
 
 function foldTypes(session: BuildSession, node: Node, h: number): number {
 	let acc = h;
-	if (node.nodeType != null) acc = mix(acc, taHashString(typeShape(session, node.nodeType)));
+	if (node.nodeType != null) acc = mix(acc, taHashString(typeShape(session, node.nodeType)) as number);
 	const sym = node.resolvedSym;
-	if (sym != null) acc = mix(acc, taHashString(sym.name + "|" + sym.modulePath + "|" + String(sym.disamb) + "|" + typeShape(session, sym.symbolType)));
+	if (sym != null) acc = mix(acc, taHashString(sym.name + "|" + sym.modulePath + "|" + String(sym.disamb) + "|" + typeShape(session, sym.symbolType)) as number);
 	const children: Node[] = [];
 	forEachChild(node, (child: Node): void => { children.push(child); });
 	for (const child of children) acc = foldTypes(session, child, acc);

@@ -63,7 +63,7 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 		// Existing file — check if content changed
 		if (store.files[idx].source == source) return false;
 		store.files[idx].source = source;
-		store.files[idx].sourceHash = taHashString(source);
+		store.files[idx].sourceHash = taHashString(source) as number;
 		return true;
 	}
 	// New file
@@ -72,7 +72,7 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 	const entry: TaFileEntry = {
 		filePath,
 		source,
-		sourceHash: taHashString(source),
+		sourceHash: taHashString(source) as number,
 		fileId,
 		durability: TaDurability.Low,
 	};

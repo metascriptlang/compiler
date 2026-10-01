@@ -3655,6 +3655,6 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 
 	// C-target parity: the program's exit code becomes msc's own.
 	if (ctx.lastResult.kind == RaiserValueKind.Int) {
-		exit(ctx.lastResult.intVal);
+		exit(ctx.lastResult.intVal as int32);
 	}
 }
