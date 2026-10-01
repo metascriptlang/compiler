@@ -1,4 +1,4 @@
-import { Node, NodeKind, bindSym } from "std/meta";
+import { Node, NodeKind, bindSym, getImpl } from "std/meta";
 import { instructionDiscriminator } from "./discriminator";
 import {
 	argBool,
@@ -13,6 +13,15 @@ import {
 	argU64,
 	argU8,
 	argsFit,
+	exclusiveWritable,
+	mutableAccount,
+	ownedAccount,
+	programAccount,
+	signer,
+	systemAccount,
+	unchecked,
+	writable,
+	writableSigner,
 } from "./core";
 
 export macro instruction(): Node {
@@ -178,6 +187,203 @@ export macro args(): Node {
 			column: shape.column,
 			properties: values,
 			keys: shape.typExprFieldNames,
+			keyLocations: [],
+		}],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+export macro accounts(): Node {
+	const shape = getTypeArg();
+	if (shape.kind !== NodeKind.TypeObject) {
+		error("accounts<T>(): T must be a struct of the instruction's accounts", shape);
+	}
+	const decl = getImpl(bindSym(shape.typExprTypeName))!;
+	const line = shape.line;
+	const column = shape.column;
+	const values: Node[] = [];
+	let field = 0;
+	while (field < decl.interfaceFields.length) {
+		const written = decl.interfaceFieldTypes[field];
+		const open = written.indexOf("<");
+		const base = open < 0 ? written : written.slice(0, open);
+		const inner = open < 0 ? "" : written.slice(open + 1, written.length - 1);
+		const index: Node = {
+			kind: NodeKind.NumberLiteral,
+			line: line,
+			column: column,
+			value: field as number,
+			isFloat: false,
+			intVal: field as int64,
+			outOfRangeText: "",
+			isBitPattern: false,
+		};
+		let callee: Node | null = null;
+		let extra: Node[] = [];
+		if (base == "Signer") { callee = bindSym("signer"); }
+		if (base == "WritableSigner") { callee = bindSym("writableSigner"); }
+		if (base == "Writable") { callee = bindSym("writable"); }
+		if (base == "SystemAccount") { callee = bindSym("systemAccount"); }
+		if (base == "Account") { callee = bindSym("unchecked"); }
+		const typeName: Node = {
+			kind: NodeKind.Identifier,
+			line: line,
+			column: column,
+			name: inner,
+		};
+		if (base == "Program") {
+			callee = bindSym("programAccount");
+			extra = [{
+				kind: NodeKind.CallExpr,
+				line: line,
+				column: column,
+				callee: {
+					kind: NodeKind.MemberExpr,
+					line: line,
+					column: column,
+					object: typeName,
+					property: "id",
+					isOptional: false,
+				},
+				arguments: [],
+				isDirectCall: false,
+				resolvedOverloadIdx: -1,
+			}];
+		}
+		if (base == "Owned" || base == "Mutable") {
+			callee = base == "Owned" ? bindSym("ownedAccount") : bindSym("mutableAccount");
+			const discriminator: Node = {
+				kind: NodeKind.CallExpr,
+				line: line,
+				column: column,
+				callee: {
+					kind: NodeKind.MemberExpr,
+					line: line,
+					column: column,
+					object: {
+						kind: NodeKind.CallExpr,
+						line: line,
+						column: column,
+						callee: {
+							kind: NodeKind.MemberExpr,
+							line: line,
+							column: column,
+							object: typeName,
+							property: "discriminator",
+							isOptional: false,
+						},
+						arguments: [],
+						isDirectCall: false,
+						resolvedOverloadIdx: -1,
+					},
+					property: "word",
+					isOptional: false,
+				},
+				arguments: [],
+				isDirectCall: false,
+				resolvedOverloadIdx: -1,
+			};
+			const size: Node = {
+				kind: NodeKind.TypeAssertion,
+				line: line,
+				column: column,
+				asExpr: {
+					kind: NodeKind.SizeofExpr,
+					line: line,
+					column: column,
+					sizeofType: inner,
+				},
+				asType: "uint64",
+			};
+			extra = [discriminator, size];
+		}
+		let check: Node | null = null;
+		if (callee != null) {
+			check = {
+				kind: NodeKind.CallExpr,
+				line: line,
+				column: column,
+				callee: callee!,
+				arguments: [index].concat(extra),
+				isDirectCall: false,
+				resolvedOverloadIdx: -1,
+			};
+		}
+		if (base == "External" || base == "ExternalMutable") {
+			check = {
+				kind: NodeKind.CallExpr,
+				line: line,
+				column: column,
+				callee: {
+					kind: NodeKind.MemberExpr,
+					line: line,
+					column: column,
+					object: typeName,
+					property: "verify",
+					isOptional: false,
+				},
+				arguments: [index],
+				isDirectCall: false,
+				resolvedOverloadIdx: -1,
+			};
+			if (base == "ExternalMutable") {
+				check = {
+					kind: NodeKind.CallExpr,
+					line: line,
+					column: column,
+					callee: bindSym("exclusiveWritable"),
+					arguments: [{
+						kind: NodeKind.TryExpr,
+						line: line,
+						column: column,
+						tryArg: check!,
+						hasCatch: false,
+						catchVal: check!,
+					}],
+					isDirectCall: false,
+					resolvedOverloadIdx: -1,
+				};
+			}
+		}
+		if (check == null) {
+			error("accounts<T>(): field '" + decl.interfaceFields[field] + "' has type '" +
+				written + "'; use Signer, WritableSigner, Writable, SystemAccount, Account, " +
+				"Program<P>, " +
+				"Owned<T>, Mutable<T>, External<T> or ExternalMutable<T>", shape);
+		}
+		values.push({
+			kind: NodeKind.TypeAssertion,
+			line: line,
+			column: column,
+			asExpr: {
+				kind: NodeKind.TryExpr,
+				line: line,
+				column: column,
+				tryArg: check!,
+				hasCatch: false,
+				catchVal: check!,
+			},
+			asType: written,
+		});
+		field = field + 1;
+	}
+	return {
+		kind: NodeKind.CallExpr,
+		line: line,
+		column: column,
+		callee: { kind: NodeKind.Identifier, line: line, column: column, name: "readArgs" },
+		arguments: [{
+			kind: NodeKind.BooleanLiteral,
+			line: line,
+			column: column,
+			boolValue: true,
+		}, {
+			kind: NodeKind.ObjectLiteral,
+			line: line,
+			column: column,
+			properties: values,
+			keys: decl.interfaceFields,
 			keyLocations: [],
 		}],
 		isDirectCall: false,
