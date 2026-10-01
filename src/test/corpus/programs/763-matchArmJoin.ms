@@ -1,11 +1,11 @@
 // Parity program — a match expression joins its arm types even when the
-// surrounding context supplies an expected type: an int64 first arm and a
-// float64 second arm yield a number, not the first arm's int64.
+// surrounding context supplies an expected type: an int32 first arm and a
+// float64 second arm yield a number, not the first arm's int32.
 //
 // @stdout: 0.5 0.5 0.5|7 7 7
 // @exit: 0
 
-interface V { kind: int32; intVal: int64; floatVal: number; }
+interface V { kind: int32; intVal: int32; floatVal: number; }
 
 function unboxMatch(v: V): number {
 	return match (v.kind) {
