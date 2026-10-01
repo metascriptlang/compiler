@@ -887,8 +887,8 @@ admit() {
 lane_cmd() {
   case "$1" in
     build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
-    boundary) printf '%s run src/test/nativeBuildBoundary.ms --target=raiser %s' "$CAND" "$CAND" ;;
-    hcr) printf 'MSC=%s %s run src/test/hcr/run.ms --target=raiser' "$CAND" "$CAND" ;;
+    boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s' "$CAND" "$CAND" ;;
+    hcr) printf 'MSC=%s %s run --target=raiser src/test/hcr/run.ms' "$CAND" "$CAND" ;;
     corpus) printf '%s%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     fmt) printf '%s run src/test/fmt/run.ms' "$BUILDER" ;;
@@ -896,17 +896,19 @@ lane_cmd() {
 }
 
 run_tools_lane() {
-  local p rc=0
+  local p rc=0 queue=0
   while IFS=$'\t' read -r _ p; do
     [ -f "$p" ] || continue
     case "$p" in
       *.sh)
         if ! bash -n "$p"; then printf 'FAIL %s: bash -n\n' "$p"; rc=1
         elif [ "$p" = tools/gate.sh ] && ! bash "$p" --self-test; then printf 'FAIL %s: self-test\n' "$p"; rc=1
-        fi ;;
+        fi
+        case "$p" in tools/wt.sh | tools/landQueue.sh | tools/landQueueTest.sh) queue=1 ;; esac ;;
       *.ms) "$BUILDER" check "$p" || { printf 'FAIL %s: check\n' "$p"; rc=1; } ;;
     esac
   done < <(awk -F'\t' '$1=="tools"' "$OUT/why")
+  if [ "$queue" -eq 1 ] && ! bash tools/landQueueTest.sh; then printf 'FAIL %s: self-test\n' tools/landQueueTest.sh; rc=1; fi
   return $rc
 }
 
@@ -1157,7 +1159,7 @@ run_guard_lane() {
   local i n=${GATE_GUARD_SHARDS:-$PAR} rc=0 part
   for ((i = 0; i < n; i++)); do
     part="$OUT/guard.$i.part"
-    (with_slot env -u FORCE_COLOR NO_COLOR=1 GUARD_SHARD="$i/$n" MSC="$CAND" "$CAND" run src/test/guard/run.ms --target=raiser >"$part" 2>&1; echo $? >"$part.rc") &
+    (with_slot env -u FORCE_COLOR NO_COLOR=1 GUARD_SHARD="$i/$n" MSC="$CAND" "$CAND" run --target=raiser src/test/guard/run.ms >"$part" 2>&1; echo $? >"$part.rc") &
   done
   wait
   for ((i = 0; i < n; i++)); do

@@ -44,19 +44,24 @@ typedef struct {
 /* Mask to extract actual capacity from cap field */
 #define MS_CAP_MASK (~(MS_STRLIT_FLAG | MS_ASCII_CHECKED | MS_ASCII_FLAG))
 
+/* msStringIsAscii fills the ASCII bits of a payload other threads may be reading:
+   every read of cap on a payload this thread does not own exclusively goes through here. */
+#define msStrCapLoad(p) __atomic_load_n(&(p)->cap, __ATOMIC_RELAXED)
+
 /* Empty string */
 #define MS_EMPTY_STRING ((msString){0, NULL})
 
 /* ===== Literal Support ===== */
 
-#define msIsLiteral(s) ((s).p == NULL || ((s).p->cap & MS_STRLIT_FLAG) != 0)
+#define msIsLiteral(s) ((s).p == NULL || (msStrCapLoad((s).p) & MS_STRLIT_FLAG) != 0)
 
 /* ===== ASCII Fast Path ===== */
 /* Check and cache whether a string is pure ASCII. O(n) first call, O(1) after. */
 static inline bool msStringIsAscii(msString s) {
 	if (s.p == NULL || s.len == 0) return true;
-	if (s.p->cap & MS_ASCII_CHECKED) {
-		return (s.p->cap & MS_ASCII_FLAG) != 0;
+	const int64_t cap = msStrCapLoad(s.p);
+	if (cap & MS_ASCII_CHECKED) {
+		return (cap & MS_ASCII_FLAG) != 0;
 	}
 	/* Scan once, cache result */
 	const unsigned char* p = (const unsigned char*)s.p->data;
@@ -67,7 +72,7 @@ static inline bool msStringIsAscii(msString s) {
 	/* Cache the result. Relaxed atomic OR: concurrent readers may race to fill
 	   the cache with the same answer; a plain RMW would be a torn-write hazard
 	   against another reader's fill. Mutators are single-owner and never run
-	   concurrently with reads, so only the read-side fill needs the atomic. */
+	   concurrently with reads; readers load cap through msStrCapLoad. */
 	__atomic_fetch_or(&s.p->cap, MS_ASCII_CHECKED | (ascii ? MS_ASCII_FLAG : 0), __ATOMIC_RELAXED);
 	return ascii;
 }
@@ -167,7 +172,7 @@ static inline void msStringAppend(msString* dest, msString src) {
 	msStrPayload* p = dest->p;
 	if (p == NULL) { msStringAppendSlow(dest, src); return; }
 	int64_t cap = p->cap;
-	int64_t scap = src.p->cap;
+	int64_t scap = msStrCapLoad(src.p);
 	/* one branch: bitwise-or folds literal | alias | unchecked src | no room */
 	if (((cap & MS_STRLIT_FLAG) != 0) | (p == src.p) |
 	    ((scap & MS_ASCII_CHECKED) == 0) |
@@ -251,7 +256,7 @@ extern const msString msCharTable[128];
    out of line — including the flag-computing path, which must stay one place. */
 static inline msString msStringCharAt(msString s, int64_t idx) {
 	if (s.p != NULL && (uint64_t)idx < (uint64_t)s.len) {
-		const int64_t cap = s.p->cap;
+		const int64_t cap = msStrCapLoad(s.p);
 		if ((cap & (MS_ASCII_CHECKED | MS_ASCII_FLAG)) == (MS_ASCII_CHECKED | MS_ASCII_FLAG)) {
 			return msCharTable[(unsigned char)s.p->data[idx]];
 		}

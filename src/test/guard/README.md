@@ -26,9 +26,9 @@ exact counts, e.g. `tests/arc/tarcmisc.nim`).
 ## Running
 
 ```bash
-msc run src/test/guard/run.ms --target=raiser              # both gc modes (drc + orc)
-GUARD_GC=drc msc run src/test/guard/run.ms --target=raiser
-MSC=./msc msc run src/test/guard/run.ms --target=raiser    # a specific compiler
+msc run --target=raiser src/test/guard/run.ms              # both gc modes (drc + orc)
+GUARD_GC=drc msc run --target=raiser src/test/guard/run.ms
+MSC=./msc msc run --target=raiser src/test/guard/run.ms    # a specific compiler
 ```
 
 Pass = clean exit, no `DOUBLE-DESTROY`, all declared balances hold.

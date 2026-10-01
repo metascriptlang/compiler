@@ -1038,6 +1038,9 @@ const w = a as Wire;            // a: Align | null — the same conversion as `c
 const a2 = w as Align | null;   // tag test (holds a string?), then membership; null passes
 const s = w as string;          // tag test
 const b = text as Align;        // text: string — membership test
+
+class Row { value: int32; }
+const r = slot as Row | null;   // slot: number | Row | null — a Row converts, null stays null
 ```
 
 - Widening into a union or a nullable union is the assignment's conversion; a string-literal
@@ -1046,12 +1049,33 @@ const b = text as Align;        // text: string — membership test
   membership. A failed test exits 1 with the same line on C and JS:
   `Error: member 'string' is not accessible for type 'number | string' using 'number'`, or
   `Error: invalid union conversion: "middle" is not Align`.
+- A class member converts the same way, to `Row` or to `Row | null`, from a bare union
+  (`number | Row`) or a nullable one (`number | Row | null`); any other member stops with
+  `Error: member 'Row' is not accessible for type 'number | Row' using 'number'`.
+- JS holds no tag, so it tests a class member with `instanceof`, and only when no other member
+  of the union could hold an instance of that class: the other members must be primitives or
+  classes unrelated to it by inheritance. Any other union converts on JS without a test, while
+  C still tests the stored tag.
 - `--danger` drops the membership test and the tag test of a bare union, as it drops bound checks;
-  the tag test of a nullable union (`Wire as Align | null`) stays.
+  the tag test of a nullable union (`Wire as Align | null`, `number | Row | null as Row | null`)
+  stays.
 
 Measured on tree `2d72bcc3` plus this change: corpus `649`–`654` on C drc/orc/danger, JS and ESM,
 `fixedbugs/bug602`. Not covered: the Raiser VM tests no conversion, and JS tests the tag only for a
 string, number or boolean member.
+
+Class members, measured on tree `af10d638` plus the class-member change (`number | Row | null`,
+`number | Row`, `Row | Other | null`, `Base | Child | null`): the held value and null convert to
+the same result on C drc/orc, JS and Raiser (corpus `656`, `fixedbugs/bug603`; Raiser cannot run
+`Base | Child`, it does not evaluate `super`). A wrong member stops with the message above on C
+drc/orc/release and throws an Error with the same text on JS (corpus `657`, `658`, guard
+`asClassMemberChecked`); under `--danger` the nullable union still stops and a bare union does not
+(exit 139 on `number | Row` as `Row`). Before the change `a as Row | null` from a union did not
+compile on C, and JS passed every class member. Not covered: the Raiser VM accepts the wrong
+member at the `as` and fails at the next field read (`expected an object, got value kind Float`);
+`Base | Child | null` as `Child | null` raises on C for a `Base` value and passes it on JS
+(`Vundefined`), as do `Row | int32[]`, `Row | Named` (an interface) and `Row | Box<int32>` on JS;
+a tuple or function member was not probed.
 
 ### Discriminated Union Types
 

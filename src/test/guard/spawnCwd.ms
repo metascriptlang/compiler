@@ -21,7 +21,7 @@ let failed = 0;
 
 for (const target of ["c", "raiser"]) {
 	env.set("SPAWN_CWD_TARGET", target);
-	const r = execFileCapture(msc, ["run", probe, `--target=${target}`]);
+	const r = execFileCapture(msc, ["run", `--target=${target}`, probe]);
 	const out = r.ok ? r.value : r.error.output + r.error.errorOutput;
 	if (!out.includes("SPAWN-CWD-OK")) {
 		console.log(`GUARD-FAIL ${target}: ${out}`);

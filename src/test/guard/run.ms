@@ -1,4 +1,4 @@
-// nim-guard runner: msc run src/test/guard/run.ms --target=raiser, from the recompiler root.
+// nim-guard runner: msc run --target=raiser src/test/guard/run.ms, from the recompiler root.
 //
 // Each *.ms here is a probe that exercises ONE Nim-derived invariant. It is
 // built with the DRC ledger (-DMS_DRC_LEDGER, a test-only instrumentation that
@@ -13,6 +13,8 @@
 //   // GUARD-TEST-BALANCE <MangledType>  run the file under `msc test` with the ledger and assert the balance there
 //   // GUARD-CHECK-FAIL <substr>         build MUST fail and the log MUST carry every substr
 //   // GUARD-JS                          also build --target=js + node-run; pass = exit 0 + GUARD-OK printed
+//   // GUARD-TSAN                        also build --gc=drc --sanitize=thread --cc=clang + run; pass = exit 0 +
+//                                        GUARD-OK printed + no ThreadSanitizer report (unscored without the toolchain)
 //   // GUARD-OS <os>                     one [<os>] lane instead: build --os=<os>; with GUARD-CHECK-FAIL the
 //                                        build must fail with every tag, else it must link (nothing is run)
 // The double-destroy abort needs no directive — it is name-agnostic.
@@ -68,6 +70,8 @@ const HAS_NODE = cmdExists("node");
 let fails = 0;
 let passes = 0;
 const unscoredOs: string[] = [];
+const unscoredTsan: string[] = [];
+let tsanProbed = 0;
 
 function ok(tag: string): void {
 	passes = passes + 1;
@@ -163,6 +167,7 @@ interface Probe {
 	testBalance: string[];
 	checkfails: string[];
 	wantJs: boolean;
+	wantTsan: boolean;
 	os: string;
 }
 
@@ -194,6 +199,7 @@ function parseDirectives(probe: Probe, src: string): void {
 		}
 		if (line.startsWith(CHECK)) probe.checkfails.push(line.slice(CHECK.length, line.length));
 		if (line.startsWith("// GUARD-JS")) probe.wantJs = true;
+		if (line.startsWith("// GUARD-TSAN")) probe.wantTsan = true;
 		if (line.startsWith(OS)) probe.os = firstWord(line.slice(OS.length, line.length));
 	}
 }
@@ -214,7 +220,7 @@ function discoverProbes(): Probe[] {
 	for (const name of names) {
 		const probe: Probe = {
 			name, path: `${GUARD_DIR}/${name}.ms`,
-			balance: [], balanceOrc: [], testBalance: [], checkfails: [], wantJs: false, os: "",
+			balance: [], balanceOrc: [], testBalance: [], checkfails: [], wantJs: false, wantTsan: false, os: "",
 		};
 		parseDirectives(probe, readFileOr(probe.path, ""));
 		probes.push(probe);
@@ -380,6 +386,45 @@ function runJsLane(probe: Probe): void {
 	ok(tag);
 }
 
+function tsanToolchain(): boolean {
+	if (tsanProbed == 0) {
+		const src = `${WORK}/tsanHello.ms`;
+		writeFile(src, `console.log("hi");\n`);
+		const r = execFileResult(MSC, ["build", src, "--gc=drc", "--sanitize=thread", "--cc=clang", `--output=${BIN_DIR}/tsanHello`], WORK);
+		tsanProbed = succeeded(r) ? 1 : 2;
+	}
+	return tsanProbed == 1;
+}
+
+function runTsanLane(probe: Probe): void {
+	const tag = `${probe.name} [tsan]`;
+	const bin = `${BIN_DIR}/${probe.name}.tsan`;
+	const b = buildProbe(probe, "tsan", ["build", probe.path, "--gc=drc", "--sanitize=thread", "--cc=clang", `--output=${bin}`], `${LOG_DIR}/${probe.name}.tsan.build`);
+	if (!succeeded(b)) {
+		if (!tsanToolchain()) {
+			unscoredTsan.push(tag);
+			return;
+		}
+		const errs = firstErrorLines(both(b));
+		fail(tag, `build error${errs == "" ? "" : ": " + errs}`);
+		return;
+	}
+	const exe = binExecutable(bin);
+	if (exe == "") {
+		fail(tag, `build reported success but no binary at ${bin}`);
+		return;
+	}
+	const run = execFileResult(exe, []);
+	const merged = both(run);
+	writeFile(`${LOG_DIR}/${probe.name}.tsan.out`, merged);
+	const race = firstLineContaining(merged, "WARNING: ThreadSanitizer");
+	if (race != "" || !succeeded(run) || !merged.contains("GUARD-OK")) {
+		fail(tag, race != "" ? race : status(run));
+		return;
+	}
+	ok(tag);
+}
+
 // Test bodies go through the analyzer's TestDecl arm; without it every owned
 // value in a test leaks and `msc test` runs with other memory semantics than
 // `msc build`.
@@ -487,6 +532,7 @@ function main(): void {
 		}
 		for (const gc of modes) runGcLane(probe, gc);
 		if (probe.wantJs) runJsLane(probe);
+		if (probe.wantTsan) runTsanLane(probe);
 		if (probe.testBalance.length > 0) runTestLane(probe);
 	}
 	if (SHARD_INDEX > 0) {
@@ -506,6 +552,9 @@ function main(): void {
 	preludeGate("preludeMacroCycle", "pmc", `${GUARD_DIR}/fixtures/preludeMacroCycle/gi`, "preludeMacroCycleProbe",
 		"macro-emitted declaration never reached the entry module", "", "");
 
+	if (unscoredTsan.length > 0) {
+		console.log(`nim-guard: !! ${unscoredTsan.length} GUARD-TSAN cell(s) unscored on this host (no clang TSan): ${unscoredTsan.join(", ")}`);
+	}
 	if (unscoredOs.length > 0) {
 		console.log(`nim-guard: !! ${unscoredOs.length} GUARD-OS cell(s) unscored on this host (no toolchain): ${unscoredOs.join(", ")}`);
 	}

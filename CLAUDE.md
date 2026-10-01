@@ -25,7 +25,7 @@ msc test src/utils/string.ms          # one file (+ its deps)
 msc run src/test/corpus/run.ms                 # parity (C↔JS) + RSS
 MSCORPUS_SAN=1 msc run src/test/corpus/run.ms  # ASan + DRC ledger
 MSCORPUS_FILTER=leak msc run src/test/corpus/run.ms   # substring subset
-msc run src/test/guard/run.ms --target=raiser   # lifecycle guards (proven-red)
+msc run --target=raiser src/test/guard/run.ms   # lifecycle guards (proven-red)
 
 MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms   # exact subset; recipe + traps: docs/TESTING.md
 
@@ -42,9 +42,9 @@ msc build src/index.ms --gc=drc --danger --output=msc
 msc build src/index.ms --gc=drc --danger --lto=off --output=msc
 
 # Sync to ~/.metascript/ so downstream projects pick it up via $PATH
-./msc run tools/syncLocalBinary.ms --target=raiser            # full sync
-./msc run tools/syncLocalBinary.ms --target=raiser check      # dry-run
-./msc run tools/syncLocalBinary.ms --target=raiser no-binary  # support trees only
+./msc run --target=raiser tools/syncLocalBinary.ms            # full sync
+./msc run --target=raiser tools/syncLocalBinary.ms check      # dry-run
+./msc run --target=raiser tools/syncLocalBinary.ms no-binary  # support trees only
 
 bash tools/editor-plugin/build.sh --install   # after grammar/highlights edits
 ```

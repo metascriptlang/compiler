@@ -1015,7 +1015,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Extension resolution for method calls.
 		if (ctx.extensionRegistry != null) {
 			const me = d.callee.data as MemberExprData;
-			const objType = me.object.nodeType;
+			const objType = me.object.nodeType != null ? peelTransparentInstance(me.object.nodeType) : null;
 			const isNamespaceQualified = me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Module;
 			if (objType != null && !isNamespaceQualified) {
 				const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
@@ -3464,7 +3464,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		const projected = narrowUnionToVariant(d.object, d.object.nodeType!);
 		if (projected != null as unknown as Node) d.object = projected;
 	}
-	const objType = d.object.nodeType;
+	const objType = d.object.nodeType != null ? peelTransparentInstance(d.object.nodeType) : null;
 	if (objType == null) return inferredType();
 	if (objType.kind == TypeKind.Never) {
 		addError(ctx, `Property '${d.property}' does not exist on type 'never': the conditions that lead here leave no value for the object`, node.location.line, node.location.column);

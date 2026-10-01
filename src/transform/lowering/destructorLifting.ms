@@ -158,7 +158,7 @@ function unwrapGenericInstance(gi: Type): { mangledName: string, body: Type } {
 	if (gi == null || gi.kind != TypeKind.GenericInstance) {
 		return { mangledName: "", body: null as unknown as Type };
 	}
-	if (isAwaitable(gi)) {
+	if (isAwaitable(gi) || peelTransparentInstance(gi) != gi) {
 		return { mangledName: "", body: null as unknown as Type };
 	}
 	// Lazy-instantiate body when encountering nested generics. Outer instantiation

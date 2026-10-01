@@ -321,7 +321,7 @@ rejected before codegen with `HCR cannot share exported variable '<id>::<name>' 
 failed the link with `undefined symbol`.
 
 On 2026-09-23, Windows 11 x64 with zig 0.16.0, the S3b branch rebased on `f9ce6c7b`,
-`MSC=out/msc-s3b2.exe out/msc-s3b2.exe run src/test/hcr/run.ms --target=raiser` printed
+`MSC=out/msc-s3b2.exe out/msc-s3b2.exe run --target=raiser src/test/hcr/run.ms` printed
 `ok   hcrModuleAbi`, `ok   hcrIndirect` and `ok   hcrWindowsReload`. The host loaded `logic`, `shapes` and `app`
 from `g1`, then published `g2/module.logic.dll` built after a body edit; the app image was
 not reloaded:
@@ -486,7 +486,7 @@ and a `Square` built in generation 1 was kept alive:
 
 On 2026-09-24, Windows 11 x64, tree `8e86371d` with candidate `out/msc-s5b.exe` built from the
 compiler sources of `7d8b5c42`,
-`MSC=out/msc-s5b.exe out/msc-s5b.exe run src/test/hcr/run.ms --target=raiser` printed `ok` for
+`MSC=out/msc-s5b.exe out/msc-s5b.exe run --target=raiser src/test/hcr/run.ms` printed `ok` for
 all four cases, with these lines from `hcrEngine`:
 
 ```

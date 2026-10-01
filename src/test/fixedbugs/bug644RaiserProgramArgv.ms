@@ -1,6 +1,6 @@
 // bug644 — a Raiser program's `argv` was msc's own command line
 //
-// Symptom:    `msc run tool.ms --target=raiser a "b c"` printed msc, run,
+// Symptom:    `msc run --target=raiser tool.ms a "b c"` printed msc, run,
 //             tool.ms, --target=raiser, a, b c from `for (const a of argv)`.
 // Root cause: the msProcessArgv host bridge returned the host process argv.
 // Fix:        the VM carries the program's argv and publishes it to the bridge

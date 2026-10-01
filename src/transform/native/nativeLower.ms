@@ -214,6 +214,7 @@ function getArrayMacroName(elemType: Type | null, boundChecks: boolean): string 
 	const ref = boundChecks ? "msRefArrayAccess" : "msRefArrayAccessUnchecked";
 	const value = boundChecks ? "msArrayAccess" : "msArrayAccessUnchecked";
 	if (elemType == null) return ref;
+	elemType = peelTransparentInstance(elemType);
 	if (elemType.kind == TypeKind.Uint8) return value;
 	if (isNumeric(elemType)) return value;
 	if (elemType.kind == TypeKind.String) return value;
@@ -236,6 +237,7 @@ function getArrayMacroName(elemType: Type | null, boundChecks: boolean): string 
 // and nested ref-arrays keep their own families.
 export function evictHelperName(nativeName: string, elemType: Type | null): string {
 	if (elemType == null) return "";
+	elemType = peelTransparentInstance(elemType);
 	const bare = elemType.kind == TypeKind.Union ? unwrapRefNullUnion(elemType) : elemType;
 	if (bare == null) return "";
 	if (bare.kind != TypeKind.Ref && bare.kind != TypeKind.Ptr && !isUnknownType(bare)) return "";
