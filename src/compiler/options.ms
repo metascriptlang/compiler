@@ -212,11 +212,23 @@ export function parseArgs(): CliOptions {
 	return opts;
 }
 
+function isMscOption(arg: string): boolean {
+	return arg.startsWith("-") && applyArgs(newCliOptions(), [arg], 0).ok;
+}
+
 export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Result<void, string> {
 	let positionalIdx = 0;
 	let i = argStart;
 	while (i < args.length) {
 		const arg = args[i];
+		if (opts.command == "run" && opts.inputFile != "") {
+			if (opts.extraArgs.length == 0 && isMscOption(arg)) {
+				return Result.err(`'${arg}' after ${opts.inputFile} is an msc option; put it before the file: msc run ${arg} ${opts.inputFile}`);
+			}
+			opts.extraArgs.push(arg);
+			i += 1;
+			continue;
+		}
 		if (opts.command == "x" && positionalIdx >= 1) {
 			if (opts.inputFile == "") {
 				opts.inputFile = arg;
@@ -226,10 +238,6 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 			positionalIdx += 1;
 			i += 1;
 			continue;
-		}
-		if (arg == "--" && opts.command == "run") {
-			for (let j = i + 1; j < args.length; j += 1) { opts.extraArgs.push(args[j]); }
-			break;
 		}
 		if (arg == "--help" || arg == "-h") {
 			opts.command = "help";
@@ -380,9 +388,7 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 			// Package manager commands: pass unknown flags through
 			opts.extraArgs.push(arg);
 		} else {
-			const hint = opts.command == "run" && opts.inputFile != ""
-				? `; to pass it to the program write: msc run <file> -- ${arg}` : "";
-			return Result.err(`unknown option '${arg}'${hint}`);
+			return Result.err(`unknown option '${arg}'`);
 		}
 		i += 1;
 	}
@@ -468,45 +474,51 @@ test "run: positionals after the file are the program's arguments" {
 	assert opts.extraArgs[0] == "a" && opts.extraArgs[1] == "b c";
 }
 
-test "run: a known msc flag after the file stays msc's" {
-	const opts = parseForTest(["run", "cli.ms", "--target=js", "a", "--release"]);
+test "run: msc options go before the file and stay msc's" {
+	const opts = parseForTest(["run", "--target=js", "--release", "cli.ms", "a"]);
 	assert opts.target == Target.JS;
 	assert opts.mode == MODE_RELEASE;
 	assert opts.extraArgs.length == 1 && opts.extraArgs[0] == "a";
 }
 
-test "run: -- hands everything after it to the program verbatim" {
-	const opts = parseForTest(["run", "cli.ms", "--release", "--", "--foo", "--release", "--", "-x", "y"]);
-	assert opts.mode == MODE_RELEASE;
+test "run: everything after the first program argument is the program's, flags and -- included" {
+	const opts = parseForTest(["run", "cli.ms", "a", "--release", "--target=js", "--", "-x"]);
+	assert opts.target == Target.C;
+	assert opts.mode != MODE_RELEASE;
 	assert opts.extraArgs.length == 5;
-	assert opts.extraArgs[0] == "--foo" && opts.extraArgs[1] == "--release";
-	assert opts.extraArgs[2] == "--" && opts.extraArgs[3] == "-x" && opts.extraArgs[4] == "y";
+	assert opts.extraArgs[1] == "--release" && opts.extraArgs[2] == "--target=js";
+	assert opts.extraArgs[3] == "--" && opts.extraArgs[4] == "-x";
 }
 
-test "run: -- before any file leaves the file to build.ms" {
-	const opts = parseForTest(["run", "--", "a"]);
-	assert opts.inputFile == "";
-	assert opts.extraArgs.length == 1 && opts.extraArgs[0] == "a";
+test "run: a flag msc does not know goes to the program even right after the file" {
+	const opts = parseForTest(["run", "cli.ms", "--foo", "b"]);
+	assert opts.extraArgs.length == 2 && opts.extraArgs[0] == "--foo";
 }
 
-test "run: an unknown flag after the file is an error that names --" {
+test "run: an msc option right after the file is an error that says to move it before the file" {
 	const opts = newCliOptions();
-	const r = applyArgs(opts, ["run", "cli.ms", "--foo"], 0);
+	const r = applyArgs(opts, ["run", "cli.ms", "--target=raiser", "a"], 0);
 	assert !r.ok;
 	if (!r.ok) {
-		assert r.error == "unknown option '--foo'; to pass it to the program write: msc run <file> -- --foo";
+		assert r.error == "'--target=raiser' after cli.ms is an msc option; put it before the file: msc run --target=raiser cli.ms";
 	}
+	assert opts.target == Target.C;
 	assert opts.extraArgs.length == 0;
 }
 
-test "an unknown flag outside run is an error without the -- hint" {
+test "run: -d: right after the file is an msc option too" {
+	const r = applyArgs(newCliOptions(), ["run", "cli.ms", "-d:foo"], 0);
+	assert !r.ok;
+}
+
+test "an unknown flag outside run is an error" {
 	const opts = newCliOptions();
 	const r = applyArgs(opts, ["build", "cli.ms", "--foo"], 0);
 	assert !r.ok;
 	if (!r.ok) { assert r.error == "unknown option '--foo'"; }
 }
 
-test "-- does not change other commands: a package command still takes flags through" {
+test "a package command still takes flags through" {
 	const opts = parseForTest(["add", "pkg", "--dev", "x"]);
 	assert opts.extraArgs.length == 2 && opts.extraArgs[0] == "--dev";
 }
