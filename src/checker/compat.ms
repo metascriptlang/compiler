@@ -665,9 +665,16 @@ function integerWidth(t: Type): int32 {
 	};
 }
 
+export function intRangeContained(source: Type, target: Type): boolean {
+	if (isUnsignedIntegerType(source) != isUnsignedIntegerType(target)) {
+		return isUnsignedIntegerType(source) && integerWidth(target) > integerWidth(source);
+	}
+	return integerWidth(source) <= integerWidth(target);
+}
+
 export function refusesIntConv(source: Type, target: Type): boolean {
 	if (!isIntegerType(source) || !isIntegerType(target) || source.kind == target.kind) return false;
-	return isUnsignedIntegerType(source) != isUnsignedIntegerType(target) || integerWidth(source) > integerWidth(target);
+	return !intRangeContained(source, target);
 }
 
 // Repr comparison for ONE slot (param or return) of a function signature.

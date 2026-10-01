@@ -97,6 +97,7 @@ import "./macroConverterBoundary";
 import "./macroDiagnostics";
 import "./macroExpansionBoundary";
 import "./macroReflection";
+import "./numericLattice";
 import "./pointerSlotRelation";
 import "./preludeExportOwnership";
 import "./storageMutability";

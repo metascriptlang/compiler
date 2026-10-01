@@ -5,11 +5,10 @@
 //             overload `ov(x: uint32)` took an int32 variable.
 //
 // Root cause: fitNode wrapped a narrowing integer in a silent conversion, relateCallArgs and the overload
-//             relation (typeRelation's int widening by rank) admitted int32 → uint32 and uint8 → int32.
+//             relation (typeRelation's int widening by rank) admitted int32 → uint32.
 //
-// Fix:        an integer converts implicitly only to a type of the same signedness that holds its whole
-//             range, as the reference's handleRange table (sigmatch tyInt8..tyUInt64); an integer literal
-//             that fits still converts, anything else needs `as`.
+// Fix:        an integer converts implicitly only to a type whose range holds every value of the source;
+//             an integer literal that fits still converts, anything else needs `as`.
 
 import { errorCount, hasError } from "../handoff/helpers";
 
@@ -18,8 +17,8 @@ test "bug541: a signed value into an unsigned declaration or assignment is refus
 	assert hasError("const a: int16 = -2;\nlet g: uint16 = 0;\ng = a;\n", "implicit int16 → uint16 conversion changes signedness");
 }
 
-test "bug541: an unsigned value into a wider signed slot is refused" {
-	assert hasError("const u: uint8 = 3;\nconst i: int32 = u;\n", "implicit uint8 → int32 conversion changes signedness");
+test "bug541: an unsigned value into a wider signed slot widens implicitly" {
+	assert errorCount("const u: uint8 = 3;\nconst i: int32 = u;\n") == 0;
 }
 
 test "bug541: a narrowing argument is refused" {
