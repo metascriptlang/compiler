@@ -42,9 +42,11 @@ function parseStatementCore(state: ParserState): NodeResult {
 	if (token.kind == TokenKind.Async) {
 		if (peek(state, 1).kind == TokenKind.Function) {
 			const asyncFn = try parseFunctionDecl(state);
+			stampEnd(state, asyncFn);
 			return Result.ok(attachComments(state, asyncFn));
 		}
 		const asyncExpr = try parseExprStmt(state);
+		stampEnd(state, asyncExpr);
 		return Result.ok(attachComments(state, asyncExpr));
 	}
 
