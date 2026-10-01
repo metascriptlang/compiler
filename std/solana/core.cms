@@ -939,3 +939,114 @@ export function readArgs<T>(fits: boolean, value: T): Result<T, ProgramError> {
 	if (!fits) { return Result.err(ProgramError.instructionDidNotDeserialize()); }
 	return Result.ok(value);
 }
+
+export struct Pda<T> {
+	account: Mutable<T>;
+	bump: uint8;
+}
+
+function initialized(
+	payer: WritableSigner,
+	target: Writable,
+	space: uint64,
+	discriminator: uint64,
+	signer: Seeds,
+): Result<Account, ProgramError> {
+	const funding = payer as Account;
+	const created = target as Account;
+	if (funding.key() == created.key()) {
+		return Result.err(ProgramError.tryingToInitPayerAsProgramAccount());
+	}
+	const _made = try createProgramAccount(funding, created, space, programId(), signer);
+	msSolStoreU64(created.address + 88, discriminator);
+	return claimExclusive(created);
+}
+
+export function create<T>(
+	payer: WritableSigner,
+	target: Writable,
+	signer: Seeds,
+): Result<Mutable<T>, ProgramError> {
+	const space = 8 + (sizeof(T) as uint64);
+	const created = try initialized(payer, target, space, T.discriminator().word(), signer);
+	return Result.ok(created as Mutable<T>);
+}
+
+export function createPda<T>(
+	payer: WritableSigner,
+	target: Writable,
+	seeds: Seeds,
+): Result<Pda<T>, ProgramError> {
+	const found = try seeds.findProgramAddress(programId());
+	if (found.key != (target as Account).key()) {
+		return Result.err(ProgramError.constraintSeeds());
+	}
+	const space = 8 + (sizeof(T) as uint64);
+	const signer = seeds.withBump(found.bump);
+	const created = try initialized(payer, target, space, T.discriminator().word(), signer);
+	return Result.ok({ account: created as Mutable<T>, bump: found.bump });
+}
+
+export function pda<T>(account: Mutable<T>, seeds: Seeds): Result<Pda<T>, ProgramError> {
+	const found = try seeds.findProgramAddress(programId());
+	if (found.key != account.key()) { return Result.err(ProgramError.constraintSeeds()); }
+	return Result.ok({ account: account, bump: found.bump });
+}
+
+export function pdaWithBump<T>(
+	account: Mutable<T>,
+	seeds: Seeds,
+	bump: uint8,
+): Result<Pda<T>, ProgramError> {
+	const derived = seeds.withBump(bump).createProgramAddress(programId());
+	if (!derived.ok || derived.value != account.key()) {
+		return Result.err(ProgramError.constraintSeeds());
+	}
+	return Result.ok({ account: account, bump: bump });
+}
+
+export function close<T>(account: Mutable<T>, refund: Writable): Result<uint64, ProgramError> {
+	const target = account as Account;
+	const destination = refund as Account;
+	if (target.key() == destination.key()) { return Result.err(ProgramError.constraintClose()); }
+	const moved = target.lamports();
+	const total = destination.lamports() + moved;
+	if (total < moved) { return Result.err(ProgramError.arithmeticOverflow()); }
+	destination.setLamports(total);
+	target.setLamports(0);
+	target.assign(Pubkey.systemProgram());
+	const _emptied = try target.resize(0);
+	return Result.ok(moved);
+}
+
+export function realloc<T>(
+	account: Mutable<T>,
+	space: uint64,
+	payer: WritableSigner,
+): Result<uint64, ProgramError> {
+	const target = account as Account;
+	const funding = payer as Account;
+	const current = target.dataLength();
+	if (space > current && space - current > 10240) {
+		return Result.err(ProgramError.accountReallocExceedsLimit());
+	}
+	const required = minimumBalance(space);
+	const held = target.lamports();
+	if (required > held) {
+		const _funded = try transfer(funding, target, required - held, Seeds.none());
+	} else if (held > required) {
+		target.setLamports(required);
+		funding.setLamports(funding.lamports() + (held - required));
+	}
+	return target.resize(space);
+}
+
+export function expectAddress(actual: Pubkey, expected: Pubkey): Result<void, ProgramError> {
+	if (actual != expected) { return Result.err(ProgramError.constraintAddress()); }
+	return Result.ok(null);
+}
+
+export function expectHasOne(actual: Pubkey, expected: Pubkey): Result<void, ProgramError> {
+	if (actual != expected) { return Result.err(ProgramError.constraintHasOne()); }
+	return Result.ok(null);
+}
