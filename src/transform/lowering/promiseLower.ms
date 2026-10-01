@@ -227,7 +227,13 @@ function lowerPromiseAll(node: Node, loc: SourceLocation): Node {
 	const innerT = elementPromise != null ? awaitedType(elementPromise) : null;
 	const typedFn = promiseAllFnForInner(innerT);
 	if (typedFn == "") return node;  // void-returning: falls through to generic msPromiseAll
-	const typedCall = makeCall(runtimeRef(typedFn, loc), cd.arguments, loc);
+	const typedCallee = runtimeRef(typedFn, loc);
+	const typedSym = typedCallee.resolvedSym;
+	if (typedSym.builtinKind != "" && typedSym.builtinKind != "PromiseAllFor") {
+		throw new Error(`internal: typed Promise.all '${typedFn}' is already the builtin '${typedSym.builtinKind}'`);
+	}
+	typedSym.builtinKind = "PromiseAllFor";
+	const typedCall = makeCall(typedCallee, cd.arguments, loc);
 	typedCall.nodeType = node.nodeType;
 	return typedCall;
 }

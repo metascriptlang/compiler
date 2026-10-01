@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef } from "../../checker/types";
+import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -16,7 +16,7 @@ import {
 	isIndirectRef,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, refArrayCellName, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
@@ -75,15 +75,6 @@ function crossModuleCtorParamTypes(sym: Symbol): Type[] {
 function ctorParamTypes(entry: CtorEntry | null, classSym: Symbol | null): Type[] {
 	if (entry != null && entry.fnType != null) return entry.fnType.typeChildren;
 	return crossModuleCtorParamTypes(classSym!);
-}
-
-import { getArrayTypeName } from "./types";
-
-export function bareArrayTypeName(g: CGen, arrCType: string): string {
-	if (!arrCType.endsWith("Array")) return arrCType;
-	const elemCName = arrCType.slice(0, arrCType.length - 5);
-	const bare = bareTypeName(g, elemCName);
-	return bare == elemCName ? arrCType : getArrayTypeName(bare);
 }
 
 function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string): void {
@@ -2779,12 +2770,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	if (magic == CallMagic.BoxRefArray && cd.arguments.length >= 1 && cd.arguments[0].nodeType != null && node.nodeType != null) {
 		const arrCType = getTypeDesc(g, cd.arguments[0].nodeType);
 		const cellCType = getTypeDesc(g, node.nodeType);
-		const elemT = cd.arguments[0].nodeType.typeReturn;
-		const destroyFn = refArrayDestroyFn(elemT, arrCType);
-		const cellName = refArrayCellName(cd.arguments[0].nodeType);
-		ensureDrcProto(g, destroyFn, null);
-		ensureRefArrayCellTypeInfo(g, cellName, refArrayCellLabel(destroyFn, bareArrayTypeName(g, arrCType)), destroyFn);
-		const tiArg = (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
+		const tiArg = ensureRefArrayCellTypeInfo(g, cd.arguments[0].nodeType);
 		const valTmp = getTemp(p, arrCType);
 		emitStmtsLine(p, `${valTmp.snippet} = ${argsStr};`);
 		const cellTmp = getTemp(p, cellCType);
@@ -2943,7 +2929,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// awaitedType.
 	let finalCallee = callee;
 	if (cd.arguments.length >= 1 && cd.arguments[0].nodeType != null
-		&& callee.startsWith("msPromiseAllFor_msFuture_")) {
+		&& cd.callee.resolvedSym != null && cd.callee.resolvedSym.builtinKind == "PromiseAllFor") {
 		let argArrType = cd.arguments[0].nodeType!;
 		if (argArrType.kind == TypeKind.Ref && argArrType.typeReturn != null) argArrType = argArrType.typeReturn;
 		const elementPromise = argArrType.typeReturn;
@@ -3188,41 +3174,6 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 //   number[]  → ms_array_number_from(count, (double)e1, ...)
 //   string[]  → ms_string_array_new_with(count, e1, ...)
 //   other[]   → temp + ms_array_push_ref pattern
-
-// Two destroyer families. Pointer-payload elements (string / void*-ref / closure)
-// share a GENERIC runtime destroyer regardless of the typed arrCType — e.g.
-// string[][]'s element is a typed ref-to-array whose arrCType (msStringArraystar_Array)
-// has no per-type walker, so it must use msRefArrayDestroy.
-export function refArrayDestroyFn(elemT: Type | null, arrCType: string): string {
-	if (elemT == null) return "msNumberArrayDestroy";
-	return match (elemT.kind) {
-		TypeKind.String => "msStringArrayDestroy",
-		// Actor-handle elements are DRC-exempt (classify.ms classifyArray) — free the
-		// pointer buffer only, never per-element decref, else shared actors double-free.
-		TypeKind.Ref | TypeKind.Ptr => (elemT.sym != null && elemT.sym.symbolKind == SymbolKind.Actor)
-			? "msNumberArrayDestroy"
-			: (isAtomicRef(elemT) ? "msAtomicRefArrayDestroy" : "msRefArrayDestroy"),
-		TypeKind.Function => "msClosureArrayDestroy",
-		// Managed VALUE element (struct / union / generic-instance / distinct-over-those):
-		// the array TYPE's per-type <Name>ArrayDestroy walker (NIM-REF AN-24), selected once
-		// via arrayElementNeedsCleanup — the whole value-struct family in ONE place, no
-		// per-kind enumeration. Else (primitive / nested-array / tuple) free-only,
-		// with the msRefArray fallback for void*-collapsed payloads.
-		_ => arrayElementNeedsCleanup(elemT)
-			? arrCType + "Destroy"
-			: (arrCType == "msRefArray" ? "msRefArrayDestroy" : "msNumberArrayDestroy"),
-	};
-}
-
-// Free-only msRefArray cells (actor elements) get their OWN weak TypeInfo
-// symbol: "msRefArrayRefCell" is ONE weak symbol program-wide, but destroyFn was
-// per-module first-ensure-wins + cross-module last-DatInit-wins — a module mixing
-// counted and inert element families scrambled the shared cell's destroyer.
-export function refArrayCellLabel(destroyFn: string, arrCType: string): string {
-	if (destroyFn == "msNumberArrayDestroy" && arrCType == "msRefArray") return "msPtrArrayRefCell";
-	if (destroyFn == "msAtomicRefArrayDestroy" && arrCType == "msRefArray") return "msAtomicArrayRefCell";
-	return arrCType + "RefCell";
-}
 
 function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 	const d = node.data as ArrayLiteralData;

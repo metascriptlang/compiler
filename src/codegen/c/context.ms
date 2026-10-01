@@ -583,15 +583,30 @@ export function nameSetAdd(ns: NameSet, name: string): void {
 
 // ===== AliveSet — global DCE reachability (Standard reference parity) =====
 
+export class CTypeInfoDemand {
+	cell: Type;
+	key: string;
+	owner: string;
+	cName: string = "";
+	destroy: Symbol;
+	trace: Symbol | null = null;
+}
+
 export class AliveSet {
 	entries: string[];       // "modulePath:symbolName" keys
 	_set: HashSet<string>;       // O(1) lookup mirror
 	_modules: HashSet<string>;   // O(1) module-level lookup
 	_syms: HashSet<Symbol>;
+	typeInfos: CTypeInfoDemand[];
+	typeInfoKeys: HashSet<string>;
+	foreignOps: HashMap<Symbol, string[]>;
 }
 
 export function createAliveSet(): AliveSet {
-	return { entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>(), _syms: new HashSet<Symbol>() };
+	return {
+		entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
+		typeInfos: [], typeInfoKeys: new HashSet<string>(), foreignOps: new HashMap<Symbol, string[]>(),
+	};
 }
 
 export function aliveSetAddSym(aliveSet: AliveSet, sym: Symbol): void {
@@ -636,6 +651,9 @@ export function aliveSetModuleCount(aliveSet: Readonly<AliveSet>): int32 {
 export class CEmissionFacts {
 	genericOwners: HashMap<string, string> = new HashMap<string, string>();
 	skippedTypeInfos: HashSet<string> = new HashSet<string>();
+	typeInfos: HashMap<string, CTypeInfoDemand> = new HashMap<string, CTypeInfoDemand>();
+	typeInfoOrder: CTypeInfoDemand[] = [];
+	hcrModules: HashSet<string> = new HashSet<string>();
 }
 
 export interface DeferredStructDef {

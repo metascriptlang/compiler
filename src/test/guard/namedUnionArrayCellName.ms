@@ -8,7 +8,7 @@
 // path>ArrayRefCell`: no declaration can name them, the path differs per host.
 //
 // RED MEANS a cell leaked or double-freed, or its runtime name picked up the
-// module qualifier again; run /trace-nim on refArrayCellLabel (codegen/c/expressions.ms)
+// module qualifier again; run /trace-nim on refArrayCellLabel (codegen/c/types.ms)
 // for the named cell.
 //
 // GUARD-BALANCE NuPodArrayRefCell

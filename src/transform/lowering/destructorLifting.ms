@@ -24,8 +24,8 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType } from "../../checker/types";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey, requireOpByKey } from "../../codegen/c/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createRef, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup } from "../../checker/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
@@ -95,11 +95,6 @@ function claimGlobalTypeInfo(typeName: string): void {
 
 // ===== Lift Context (reference TLiftCtx) =====
 
-interface SeqElemEntry {
-	name: string;
-	elemType: Type;
-}
-
 class LiftCtx {
 	checkerCtx: CheckerContext;  // borrowed — do NOT store full TransformContext (causes double-free)
 	tempCounter: number;
@@ -109,9 +104,8 @@ class LiftCtx {
 	collector: Node[];
 	cyclicCache: NameSet;     // types confirmed cyclic
 	nonCyclicCache: NameSet;  // types confirmed non-cyclic
-	neededSeqHooks: NameSet;  // array hook families needed (e.g., "msStringArray", "msRefArray")
-	seqElemTypes: SeqElemEntry[];  // per-type array elem types (for generating per-type hooks)
-	refCellTraces: SeqElemEntry[];
+	seqTypes: Type[];
+	refCellTraces: Type[];
 	scannedTypes: HashSet<Type>;
 	arrayRootEpochs: HashMap<Type, int32>;
 	jsBackend: boolean;
@@ -444,35 +438,39 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 	buf.items.push(makeWhile(cond, makeBlock(bodyBuf.items, loc), loc));
 }
 
-// Register a sequence's element type for per-type walker generation. The walker name is the
-// array's C type name from `arrayCTypeName` — the SAME single source codegen (genArrayType)
-// uses — so the transform-generated walker and the codegen box-site reference can never
-// drift, for every element kind (struct/tuple/enum/generic/nested/…). Built-in families
-// (msStringArray/msRefArray/…) are runtime/fixed-block provided; only per-type names get a
-// seqElemTypes entry. Shared by `arrayOp` (call-site element use) and `scanTypeForArrays`.
-function registerSeqElement(elem: Type, lctx: LiftCtx): void {
-	const distinctInner = distinctBody(elem);
-	if (distinctInner != null) {
-		registerSeqElement(distinctInner, lctx);
-		return;
+function runtimeCellDestroy(elem: Type | null, canon: Type): string {
+	if (elem == null) return "msNumberArrayDestroy";
+	if (elem.kind == TypeKind.String) return "msStringArrayDestroy";
+	if (elem.kind == TypeKind.Function) return "msClosureArrayDestroy";
+	if (elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr) {
+		if (elem.sym != null && elem.sym.symbolKind == SymbolKind.Actor) return "msNumberArrayDestroy";
+		return isAtomicRef(elem) ? "msAtomicRefArrayDestroy" : "msRefArrayDestroy";
 	}
-	const transparentElem = peelTransparentInstance(elem);
-	if (transparentElem != elem) { registerSeqElement(transparentElem, lctx); return; }
-	if ((elem.kind == TypeKind.Distinct || elem.kind == TypeKind.Alias) && elem.typeReturn != null) {
-		// distinct shares its base layout → reuse the base type's per-type walker
-		registerSeqElement(elem.typeReturn, lctx);
-		return;
+	const family = arrayCTypeName(canon);
+	if (family == "msRefArray") return "msRefArrayDestroy";
+	if (family == "msStringArray" && arrayElementNeedsCleanup(elem)) return "msStringArrayDestroy";
+	if (family == "msClosureArray" && arrayElementNeedsCleanup(elem)) return "msClosureArrayDestroy";
+	return "msNumberArrayDestroy";
+}
+
+function registerArrayOps(arrT: Type, lctx: LiftCtx): void {
+	if (hasGenericParams(arrT)) return;
+	const elem = arrayOpElement(arrT.typeReturn);
+	const cell = createRef(arrT);
+	if (getOpByKey(cell, AttachedOp.AttachedDestructor) != null) return;
+	const canon = elem == arrT.typeReturn ? arrT : createArray(elem);
+	let cellDestroy: Symbol = attachedOpSym(runtimeCellDestroy(elem, canon), AttachedOp.AttachedDestructor);
+	if (!isRuntimeArrayFamily(canon)) {
+		const seqName = arrayCTypeName(canon);
+		for (const hook of ["destroy", "copy", "sink", "wasMoved"]) {
+			opPrototype(canon, attachedOpOf(hook), seqName + hookSuffix(hook), lctx.checkerCtx);
+		}
+		lctx.seqTypes.push(canon);
+		const pointerElem = elem != null && (elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr || elem.kind == TypeKind.String || elem.kind == TypeKind.Function);
+		if (!pointerElem && elem != null && arrayElementNeedsCleanup(elem)) cellDestroy = requireOpByKey(canon, AttachedOp.AttachedDestructor);
 	}
-	const seqName = arrayCTypeName(createArray(elem));
-	nameSetAdd(lctx.neededSeqHooks, seqName);
-	if (seqName != "msStringArray" && seqName != "msRefArray" && seqName != "msNumberArray"
-		&& seqName != "msUint8Array" && seqName != "msClosureArray") {
-		lctx.seqElemTypes.push({ name: seqName, elemType: elem });
-	}
-	// Nested array element may itself need a per-type inner hook (e.g. Vec<Cell>[] → CellArray).
-	if (elem.kind == TypeKind.Array && elem.typeReturn != null && !isPrimitiveKind(elem.typeReturn.kind)) {
-		registerSeqElement(elem.typeReturn, lctx);
-	}
+	bindOpByKey(cell, AttachedOp.AttachedDestructor, cellDestroy);
+	if (elem != null && elem.kind == TypeKind.Array) registerArrayOps(elem, lctx);
 }
 
 function elemNeedsLoop(elem: Type | null): boolean {
@@ -489,17 +487,7 @@ function elemNeedsLoop(elem: Type | null): boolean {
 function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const needsElemLoop = elemNeedsLoop(elem);
 	const isU8Elem = elem != null && elem.kind == TypeKind.Uint8;
-	// Unwrap GenericInstance element so it enters the Struct branch below.
-	// Mirrors codegen (types.ms:582-620): monomorphized struct is addressable by its
-	// mangled typeName (e.g., `OrderedMapEntry__int32_ref_Symbol`).
-	let elemResolved = elem;
-	if (needsElemLoop && elem != null && elem.kind == TypeKind.GenericInstance) {
-		const unwrapped = unwrapGenericInstance(elem);
-		if (unwrapped.mangledName != "") elemResolved = unwrapped.body;
-	}
-	if (needsElemLoop && elemResolved != null) {
-		registerSeqElement(elemResolved, lctx);
-	}
+	if (needsElemLoop && elem != null) registerArrayOps(createArray(elem), lctx);
 	match (hook) {
 		"destroy" => {
 			if (needsElemLoop) { genArrayLoop("destroy", elem, xf, yf, lctx, buf, loc); }
@@ -2165,10 +2153,12 @@ function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 
 // ===== Standalone Array Lifecycle Hooks (reference parity: reference sequence op) =====
 
-function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayType: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	const buf = newBuf();
+function generateArrayHook(hook: string, arrayType: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const elemType = arrayType.typeReturn!;
 	const isUnary = hook == "destroy" || hook == "wasMoved";
 	const isTrace = hook == "trace";
+	const sym = requireOpByKey(isTrace ? createRef(arrayType) : arrayType, attachedOpOf(hook));
+	const buf = newBuf();
 	const hookParamT = hook == "destroy" ? arrayType : createPtr(arrayType);
 	const secondT = isTrace ? createPtr(voidType()) : arrayType;
 	const s1 = makeSymbol(isUnary || isTrace ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
@@ -2212,159 +2202,67 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 		arrayOp(hook, elemType, destNode, srcNode, lctx, buf, loc);
 	}
 
-	const suffix = hookSuffix(hook);
-
-	let fnNode: Node | null = null;
-	if (isUnary) {
-		fnNode = makeFnDecl(seqName + suffix, [s1], [seqName], makeBlock(buf.items, loc), "", "void", loc);
-	} else {
-		fnNode = makeFnDecl(seqName + suffix, [s1, s2], [seqName, isTrace ? "void*" : seqName], makeBlock(buf.items, loc), "", "void", loc);
-	}
-
-	// Set param types based on hook kind.
-	// Arrays are 16 bytes < pointer introduction threshold, so markPointerParams won't handle them.
-	// destroy: by-value (no Ptr wrap)
-	// wasMoved: by-pointer (Ptr wrap)
-	// copy/sink: dest by-pointer, src by-value
-	if (fnNode.nodeType != null && fnNode.nodeType.typeChildren != null) {
-		if (hook == "destroy") {
-			let pi = 0;
-			while (pi < fnNode.nodeType.typeChildren.length) {
-				fnNode.nodeType.typeChildren[pi] = arrayType;
-				pi += 1;
-			}
-		} else if (hook == "wasMoved") {
-			fnNode.nodeType.typeChildren[0] = createPtr(arrayType);
-		} else {
-			// copy/sink: dest → Ptr<Array>, src stays arrayType
-			fnNode.nodeType.typeChildren[0] = createPtr(arrayType);
-			if (fnNode.nodeType.typeChildren.length > 1) {
-				fnNode.nodeType.typeChildren[1] = secondT;
-			}
-		}
-	}
-	markLifecycleOp(fnNode, seqName + suffix, hook);
-	if (fnNode.resolvedSym != null && fnNode.resolvedSym.symbolType != null) {
-		const symType = fnNode.resolvedSym.symbolType;
-		if (symType.typeChildren != null) {
-			if (hook == "destroy") {
-				let pi = 0;
-				while (pi < symType.typeChildren.length) {
-					symType.typeChildren[pi] = arrayType;
-					pi += 1;
-				}
-			} else if (hook == "wasMoved") {
-				symType.typeChildren[0] = createPtr(arrayType);
-			} else {
-				symType.typeChildren[0] = createPtr(arrayType);
-				if (symType.typeChildren.length > 1) {
-					symType.typeChildren[1] = secondT;
-				}
-			}
-		}
-	}
-
+	const params = isUnary ? [s1] : [s1, s2];
+	const paramTypes = isUnary ? [sym.name] : [sym.name, isTrace ? "void*" : sym.name];
+	const fnNode = makeFnDecl(sym.name, params, paramTypes, makeBlock(buf.items, loc), "", "void", loc);
+	const fnType = fnNode.nodeType!;
+	fnType.typeChildren[0] = hookParamT;
+	if (!isUnary) fnType.typeChildren[1] = secondT;
+	sym.symbolType = fnType;
+	sym.state = SymbolState.Checked;
+	sym.declNode = fnNode;
+	fnNode.resolvedSym = sym;
 	lctx.collector.push(fnNode);
 }
 
 function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
-	if (nameSetContains(lctx.neededSeqHooks, "msStringArray") && !nameSetContains(lctx.generated, "msStringArray") && !isGloballyOwned("msStringArray")) {
-		nameSetAdd(lctx.generated, "msStringArray");
-		claimGlobal("msStringArray");
-		const strElemType = stringType();
-		const strArrayType = createArray(strElemType);
-		generateArrayHook("copy", "msStringArray", strElemType, strArrayType, lctx, loc);
-		generateArrayHook("sink", "msStringArray", strElemType, strArrayType, lctx, loc);
-		generateArrayHook("wasMoved", "msStringArray", strElemType, strArrayType, lctx, loc);
-	}
-
-	if (nameSetContains(lctx.neededSeqHooks, "msRefArray") && !nameSetContains(lctx.generated, "msRefArray") && !isGloballyOwned("msRefArray")) {
-		nameSetAdd(lctx.generated, "msRefArray");
-		claimGlobal("msRefArray");
-		const refElemType = createPrimitive(TypeKind.Ref);
-		const refArrayType = createArray(refElemType);
-		generateArrayHook("copy", "msRefArray", refElemType, refArrayType, lctx, loc);
-		generateArrayHook("sink", "msRefArray", refElemType, refArrayType, lctx, loc);
-		generateArrayHook("wasMoved", "msRefArray", refElemType, refArrayType, lctx, loc);
-	}
-
-	for (const cell of lctx.refCellTraces) {
-		const traceName = cell.name + "Trace";
-		if (!nameSetContains(lctx.generated, traceName) && !isGloballyOwned(traceName)) {
-			nameSetAdd(lctx.generated, traceName);
-			claimGlobal(traceName);
-			generateArrayHook("trace", cell.name, cell.elemType, createArray(cell.elemType), lctx, loc);
-		}
-	}
-
-	// Per-type value struct element arrays (reference parity: each sequence gets its own hooks)
+	let ti = 0;
 	let wi = 0;
-	while (wi < lctx.seqElemTypes.length) {
-		const entry = lctx.seqElemTypes[wi];
-		wi += 1;
-		if (!nameSetContains(lctx.generated, entry.name) && !isGloballyOwned(entry.name)) {
-			nameSetAdd(lctx.generated, entry.name);
-			claimGlobal(entry.name);
-			const arrType = createArray(entry.elemType);
-			generateArrayHook("destroy", entry.name, entry.elemType, arrType, lctx, loc);
-			generateArrayHook("copy", entry.name, entry.elemType, arrType, lctx, loc);
-			generateArrayHook("sink", entry.name, entry.elemType, arrType, lctx, loc);
-			generateArrayHook("wasMoved", entry.name, entry.elemType, arrType, lctx, loc);
+	while (ti < lctx.refCellTraces.length || wi < lctx.seqTypes.length) {
+		if (ti < lctx.refCellTraces.length) {
+			generateArrayHook("trace", lctx.refCellTraces[ti], lctx, loc);
+			ti += 1;
+			continue;
 		}
+		const arrT = lctx.seqTypes[wi];
+		wi += 1;
+		for (const hook of ["destroy", "copy", "sink", "wasMoved"]) generateArrayHook(hook, arrT, lctx, loc);
 	}
 }
 
 // ===== Scan for Array Types =====
 
 function registerRefCellTrace(arrT: Type, lctx: LiftCtx): void {
-	const elem = arrT.typeReturn;
-	if (elem == null || !elemNeedsLoop(elem) || !isCyclicType(elem, lctx, createNameSet())) return;
-	lctx.refCellTraces.push({ name: refArrayCellName(arrT), elemType: elem });
+	const elem = arrayOpElement(arrT.typeReturn);
+	if (elem == null || hasGenericParams(arrT) || !elemNeedsLoop(elem) || !isCyclicType(elem, lctx, createNameSet())) return;
+	const canon = elem == arrT.typeReturn ? arrT : createArray(elem);
+	const cell = createRef(canon);
+	if (getOpByKey(cell, AttachedOp.AttachedTrace) != null) return;
+	opPrototype(cell, AttachedOp.AttachedTrace, refArrayCellName(canon) + "Trace", lctx.checkerCtx);
+	lctx.refCellTraces.push(canon);
 }
 
-function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: NameSet, anonSeen: Type[]): void {
-	if (t == null) return;
-	if (t.typeName != "" && nameSetContains(visited, t.typeName)) return;
-	if (t.typeName != "") nameSetAdd(visited, t.typeName);
-	if (t.typeName == "" && t.kind == TypeKind.Struct) {
-		for (const seen of anonSeen) {
-			if (seen == t) return;
-		}
-		anonSeen.push(t);
-	}
+function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: HashSet<Type>): void {
+	if (t == null || visited.has(t)) return;
+	visited.add(t);
 	if (t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array) {
 		registerRefCellTrace(t.typeReturn, lctx);
 	}
 	if (t.kind == TypeKind.Array) {
-		const elem = t.typeReturn;
-		if (elem != null && !isPrimitiveKind(elem.kind)) {
-			// Unwrap GenericInstance to its mangled struct body so the per-type
-			// <Name>ArrayDestroy walker name matches arrayOp + codegen (else a generic
-			// struct element array misregisters as msRefArray → undeclared walker).
-			let elemResolved = elem;
-			if (elem.kind == TypeKind.GenericInstance) {
-				const unwrapped = unwrapGenericInstance(elem);
-				if (unwrapped.mangledName != "") elemResolved = unwrapped.body;
-			}
-			registerSeqElement(elemResolved, lctx);
-		}
+		if (t.typeReturn != null) registerArrayOps(t, lctx);
 		return;
 	}
 	if (t.typeChildren != null) {
-		for (const child of t.typeChildren) {
-			scanTypeForArrays(child, lctx, visited, anonSeen);
-		}
+		for (const child of t.typeChildren) scanTypeForArrays(child, lctx, visited);
 	}
-	if (t.typeReturn != null) {
-		scanTypeForArrays(t.typeReturn, lctx, visited, anonSeen);
-	}
+	if (t.typeReturn != null) scanTypeForArrays(t.typeReturn, lctx, visited);
 }
 
 function scanRootForArrays(root: Type, lctx: LiftCtx): void {
 	const epoch = instantiatedBodyCount();
 	const seen = lctx.arrayRootEpochs.get(root);
 	if (seen != null && seen == epoch) return;
-	scanTypeForArrays(root, lctx, createNameSet(), []);
+	scanTypeForArrays(root, lctx, new HashSet<Type>());
 	if (instantiatedBodyCount() == epoch) lctx.arrayRootEpochs.set(root, epoch);
 }
 
@@ -2535,8 +2433,7 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 		if (t.kind == TypeKind.Array
 			|| (t.kind == TypeKind.Ref && t.typeReturn != null
 				&& t.typeReturn.kind == TypeKind.Array)) {
-			const arrVisited: NameSet = createNameSet();
-			scanTypeForArrays(t, lctx, arrVisited, []);
+			scanTypeForArrays(t, lctx, new HashSet<Type>());
 		}
 		// A bare tuple local (reassigned or dropped) needs the same named hooks, but
 		// fillBody only emits them for tuples that appear as a struct field — pre-register
@@ -2632,8 +2529,7 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		collector: [],
 		cyclicCache: createNameSet(),
 		nonCyclicCache: createNameSet(),
-		neededSeqHooks: createNameSet(),
-		seqElemTypes: [],
+		seqTypes: [],
 		refCellTraces: [],
 		scannedTypes: new HashSet<Type>(),
 		arrayRootEpochs: new HashMap<Type, int32>(),

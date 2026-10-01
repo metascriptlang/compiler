@@ -95,16 +95,12 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	}
 	// Nested array elements (e.g. string[][]) — inner arrays are value-type structs.
 	// Reference: forallElements recursively calls fillBody per element.
-	if (elem.kind == TypeKind.Array) {
-		const n = arrayCTypeName(t);
-		return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
-	}
+	if (elem.kind == TypeKind.Array) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
 	if (elem.kind == TypeKind.Tuple) {
 		if (!classifyType(elem, ctx).needsCleanup) {
 			return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 		}
-		const n = arrayCTypeName(t);
-		return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
+		return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
 	}
 	// Named struct/union elements — use hasAsgnFlag to decide if per-type hooks
 	// are needed. Reference parity: fillBody checks tfHasAsgn regardless of
@@ -123,19 +119,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		// Without this, arrays of a mono'd generic struct (Entry__string[]) misclassify as non-RC
 		// → no per-element destroy → leak on field-reassign/scope-exit.
 		const bodyAsgn = elem.kind == TypeKind.GenericInstance && elem.typeReturn != null && hasAsgnFlag(elem.typeReturn);
-		if (hasAsgnFlag(structElem) || bodyAsgn) {
-			// Mangled name for GenericInstance so array hook names match
-			// destructorLifting's emitted per-element hooks (unwrapGenericInstance)
-			// and codegen's struct name (types.ms:582-588).
-			let elemName = "";
-			if (elem.kind == TypeKind.GenericInstance) {
-				elemName = monoInstanceName(elem);
-			} else {
-				elemName = elem.typeName != "" ? elem.typeName : structElem.typeName;
-			}
-			const n = elemName + "Array";
-			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
-		}
+		if (hasAsgnFlag(structElem) || bodyAsgn) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
 		// POD elements: no per-element hooks, but the seq payload is still owned —
 		// Nim lifts =destroy/=copy for every tySequence regardless of element
 		// triviality (liftdestructors fillSeqOp). The generic macros size the
@@ -144,10 +128,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	}
 	if (elem.kind == TypeKind.Union && elem.typeName == "" && unwrapRefNullUnion(elem) == null
 			&& !isAllStringLiteralUnion(elem)) {
-		if (anonUnionOwnsRc(elem, ctx)) {
-			const n = arrayCTypeName(t);
-			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
-		}
+		if (anonUnionOwnsRc(elem, ctx)) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
 	// Ref/Ptr elements (class arrays) — msRefArray (all pointers are void*)
@@ -159,8 +140,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		// Ref-array elements keep their per-type struct (codegen elemIsRefArray, types.ms:1270)
 		// instead of collapsing to msRefArray, so the hooks must match that name.
 		if (elem.kind == TypeKind.Ref && elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Array) {
-			const n = arrayCTypeName(t);
-			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
+			return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
 		}
 		if (isAtomicRef(elem)) {
 			return makeRcInfo(RcKind.Named, "", "msArrayAtomicRefDestroy", "msArrayAtomicRefCopy", "msArrayRefWasMoved", "msArrayAtomicRefCopy", true);

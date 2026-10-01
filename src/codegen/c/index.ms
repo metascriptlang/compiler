@@ -20,6 +20,8 @@ import { mangleModuleName } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
 import { emitIncludeDirectives } from "./context";
+import { emitOwnedTypeInfos, refArrayCellName } from "./types";
+import { collectModuleTypeInfoDemands } from "../../checker/reachability";
 
 // ===== generateCModule — one module's C code (no dispatcher) =====
 //
@@ -76,6 +78,16 @@ export function prepareCModuleEmission(program: Node, ctx: CheckerContext, modul
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) registerDeclCName(g, stmt);
 	for (const stmt of pd.programStmts) genDecl(g, stmt, false);
+	registerTypeInfoDemands(aliveSet, facts);
+}
+
+function registerTypeInfoDemands(demands: AliveSet, facts: CEmissionFacts): void {
+	for (const info of demands.typeInfos) {
+		if (facts.typeInfos.has(info.key)) continue;
+		info.cName = refArrayCellName(info.cell.typeReturn!);
+		facts.typeInfos.set(info.key, info);
+		facts.typeInfoOrder.push(info);
+	}
 }
 
 export function generateCModule(program: Node, ctx: CheckerContext, modulePath: string, aliveSet: AliveSet, isTestBuild: boolean, isHcr: boolean, facts: CEmissionFacts | null = null): string {
@@ -89,6 +101,7 @@ export function generateCModuleOutput(program: Node, ctx: CheckerContext, module
 	if (preparedFacts == null) {
 		const localFacts = new CEmissionFacts();
 		prepareCModuleEmission(program, ctx, modulePath, aliveSet, localFacts);
+		if (program != null && program.kind == NodeKind.Program) registerTypeInfoDemands(collectModuleTypeInfoDemands(program, modulePath), localFacts);
 		preparedFacts = localFacts;
 	}
 	return generatePreparedCModuleOutput(program, ctx, modulePath, aliveSet, isTestBuild, isHcr, preparedFacts);
@@ -165,6 +178,7 @@ export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Read
 			genDecl(g, stmt, false);
 		}
 	}
+	emitOwnedTypeInfos(g);
 
 	// Emit test table (test builds only — after all TestDecl nodes processed)
 	emitTestTable(g);

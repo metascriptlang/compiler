@@ -11,10 +11,10 @@ import {
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, aliveSetHasDecl, internString, addCGenError,
 	setLocalSymName,
 } from "./context";
-import { genExpr, refArrayDestroyFn, refArrayCellLabel, bareArrayTypeName } from "./expressions";
+import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, refArrayCellName, isCompilerGenCName, isNilableValueType, ensureDrcProto, procHeader, isTypeBoundOp } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -35,19 +35,7 @@ function isDeclAlive(g: CGen, node: Readonly<Node>): boolean {
 	// $-prefixed functions without a traced routine symbol ($Env_*Destroy etc. DRC hooks) are
 	// referenced by DRC-injected code the walker can't trace — keep them unconditionally alive.
 	if (name.length > 0 && name.slice(0, 1) == "$" && !isTracedRoutine(sym)) return true;
-	const isSeqHookSuffix = name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
-		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved") || name.endsWith("RefCellTrace");
-	if (isSeqHookSuffix) return true;
 	return aliveSetHasDecl(g.aliveSet, g.modulePath, name, sym);
-}
-
-
-// Array sequence hooks are generated per-module (each module that uses sequence gets its own).
-// They need static linkage to avoid duplicate symbols at link time.
-function isArraySeqHook(name: string): boolean {
-	if (name.slice(0, 13) == "msStringArray" || name.slice(0, 10) == "msRefArray") return true;
-	return name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
-		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved");
 }
 
 
@@ -781,14 +769,10 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	const d = node.data as VariableDeclData;
 	if (g.aliveSet.entries.length > 0 && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
 	const arrCType = cType.slice(0, cType.length - 1);
-	const destroyFn = refArrayDestroyFn(arrT.typeReturn, arrCType);
-	const cellName = refArrayCellName(arrT);
-	ensureDrcProto(g, destroyFn, null);
-	ensureRefArrayCellTypeInfo(g, cellName, refArrayCellLabel(destroyFn, bareArrayTypeName(g, arrCType)), destroyFn);
-	// ensureRefArrayCellTypeInfo is a no-op under --gc=manual (types.ms), so the cell
-	// symbol does not exist there - take the null slot like msBoxRefArray does.
-	const tiSlot = (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
-	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { 1 << 30, -1, ${tiSlot}, 0 }, { 0, NULL } };`);
+	const typeInfo = ensureRefArrayCellTypeInfo(g, arrT);
+	const viaRegistry = isHcrImageModule(g, g.modulePath);
+	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { 1 << 30, -1, ${viaRegistry ? "NULL" : typeInfo}, 0 }, { 0, NULL } };`);
+	if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${varName}_konst_.h.type = ${typeInfo};`);
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
 	nameSetAdd(g.declaredGlobals, varName);
 	return true;

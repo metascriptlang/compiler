@@ -11,6 +11,7 @@ import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
 import {
 	AliveSet,
+	CTypeInfoDemand,
 	createAliveSet,
 	aliveSetAdd,
 	aliveSetAddSym,
@@ -21,10 +22,10 @@ import {
 	aliveSetModuleCount,
 } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
-import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
+import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey } from "../codegen/c/types";
 import { hasFlag, SymbolFlag } from "./symbol";
-import { hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion } from "./types";
-import { SymbolKind, Symbol, Type, CallingConvention } from "../ast/node";
+import { hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag } from "./types";
+import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { lookupCtorDefaults } from "./instantiate";
 import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
@@ -126,6 +127,7 @@ function visitedAdd(key: string): void {
 // ===== Module-level state (avoids closure capture of value-type arrays/structs) =====
 
 let _aliveSet: AliveSet = createAliveSet();
+let _singleModule = "";
 
 // ===== Core Walker =====
 
@@ -144,7 +146,8 @@ function walkBody(node: Node, modulePath: string): void {
 	// Identifier — mark its declaration alive
 	if (k == NodeKind.Identifier) {
 		const sym = node.resolvedSym;
-		if (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp)) {
+		if (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp) && sym.modulePath == "") {
+			noteOpUse(sym, modulePath);
 			markAndWalk(modulePath, sym.name);
 			const hookMod = nameIndexLookup(sym.name);
 			if (hookMod != "" && hookMod != modulePath) {
@@ -159,6 +162,12 @@ function walkBody(node: Node, modulePath: string): void {
 	// CallExpr — walk callee and arguments
 	if (k == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
+		const magic = cd.callee.resolvedSym != null ? cd.callee.resolvedSym.builtinKind : "";
+		if (magic == "BoxRefArray" && cd.arguments.length > 0 && cd.arguments[0].nodeType != null) {
+			markRefArrayCell(cd.arguments[0].nodeType, modulePath);
+		} else if (magic == "PromiseAllFor" && node.nodeType != null) {
+			markPromiseAllResult(node.nodeType, modulePath);
+		}
 		walkBody(cd.callee, modulePath);
 		for (const arg of cd.arguments) {
 			walkBody(arg, modulePath);
@@ -217,19 +226,37 @@ function walkBody(node: Node, modulePath: string): void {
 	walkChildrenGeneric(node, modulePath);
 }
 
-// Allocation site → <T>TypeInfo edge. The emitted allocation references the
-// type's TypeInfo global, whose initializer references <T>Destroy/<T>Trace —
-// the only AST path to ref-type hooks (msDecref dispatches through TypeInfo
-// at runtime, so no direct call site exists). Mirrors codegen's on-demand
-// TypeInfo emission: mark only when the TypeInfo decl really exists.
-// Array sequence hooks (msStringArray*/msRefArray*/…ArrayDestroy etc.) are
-// per-module static helpers whose demand arises inside codegen (cell TypeInfos
-// name them directly, no AST edge exists). Keep them rooted; the linker strips
-// unreferenced static functions, so dead ones cost nothing. Mirror of
-// isArraySeqHook in codegen/c/declarations.ms — keep in lock-step.
-function isArraySeqHookName(fn: string): boolean {
-	return fn.endsWith("ArrayDestroy") || fn.endsWith("ArrayCopy") ||
-		fn.endsWith("ArraySink") || fn.endsWith("ArrayWasMoved") || fn.endsWith("RefCellTrace");
+function markRefArrayCell(arrT: Type, modulePath: string): void {
+	const key = refArrayCellKey(arrT);
+	if (_aliveSet.typeInfoKeys.has(key)) return;
+	const destroy = refArrayCellOp(arrT, AttachedOp.AttachedDestructor);
+	if (destroy == null) throw new Error(`internal: ref-array cell ${key} is boxed in ${modulePath} before its destroy op was lifted`);
+	const trace = refArrayCellOp(arrT, AttachedOp.AttachedTrace);
+	let owner = _singleModule != "" ? _singleModule : modulePath;
+	if (_singleModule == "") {
+		if (destroy.modulePath != "") owner = destroy.modulePath;
+		if (trace != null) {
+			if (destroy.modulePath != "" && destroy.modulePath != trace.modulePath) {
+				throw new Error(`internal: ref-array cell ${key} has its destroy op in ${destroy.modulePath} and its trace op in ${trace.modulePath}`);
+			}
+			owner = trace.modulePath;
+		}
+	}
+	_aliveSet.typeInfoKeys.add(key);
+	const demand: CTypeInfoDemand = { cell: createRef(arrT), key, owner, cName: "", destroy, trace };
+	_aliveSet.typeInfos.push(demand);
+	aliveSetAddModule(_aliveSet, owner);
+	markReferenced(destroy, owner);
+	if (trace != null) markReferenced(trace, owner);
+}
+
+function markPromiseAllResult(resultType: Type, modulePath: string): void {
+	let collected = awaitedType(resultType);
+	if (collected != null && collected.kind == TypeKind.Ref && collected.typeReturn != null) collected = collected.typeReturn;
+	if (collected == null || collected.kind != TypeKind.Array || collected.typeReturn == null) return;
+	const elem = collected.typeReturn;
+	if (elem.kind != TypeKind.Struct || elem.typeName == "" || !hasAsgnFlag(elem)) return;
+	markReferenced(requireOpByKey(createArray(elem), AttachedOp.AttachedDestructor), modulePath);
 }
 
 // Union narrow/project sites make codegen emit variant Copy/Destroy calls by
@@ -259,6 +286,11 @@ function markUnionHookEdges(t: Type): void {
 	}
 }
 
+// Allocation site → <T>TypeInfo edge. The emitted allocation references the
+// type's TypeInfo global, whose initializer references <T>Destroy/<T>Trace —
+// the only AST path to ref-type hooks (msDecref dispatches through TypeInfo
+// at runtime, so no direct call site exists). Mirrors codegen's on-demand
+// TypeInfo emission: mark only when the TypeInfo decl really exists.
 function markTypeInfoEdge(node: Node, modulePath: string): void {
 	markTypeInfoOf(node.nodeType);
 }
@@ -373,7 +405,29 @@ function markDispatchOverrides(dde: DispMethodEntry | null): void {
 	}
 }
 
+function opHome(sym: Symbol, user: string): string {
+	if (sym.modulePath != "") return sym.modulePath;
+	let home = "";
+	let di = _symDeclHead.get(sym) ?? -1;
+	while (di >= 0) {
+		if (_declPaths[di] == user) return user;
+		if (home == "") home = _declPaths[di];
+		di = _symDeclNext[di];
+	}
+	return home;
+}
+
+function noteOpUse(sym: Symbol, user: string): void {
+	if (!hasFlag(sym, SymbolFlag.GeneratedOp)) return;
+	const home = opHome(sym, user);
+	if (home == "" || home == user) return;
+	const users = _aliveSet.foreignOps.get(sym);
+	if (users == null) _aliveSet.foreignOps.set(sym, [user]);
+	else if (!users.includes(user)) users.push(user);
+}
+
 function markReferenced(sym: Symbol, modulePath: string): void {
+	noteOpUse(sym, modulePath);
 	markSymAndWalk(sym, modulePath);
 	for (const overload of sym.overloads) markSymAndWalk(overload, modulePath);
 }
@@ -631,10 +685,6 @@ export function computeAliveSet(
 					walkBody(bare, modulePath);
 					continue;
 				}
-				if (isArraySeqHookName(fn)) {
-					walkBody(bare, modulePath);
-					continue;
-				}
 				if (bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
 					markSymAndWalk(bare.resolvedSym, modulePath);
 					continue;
@@ -679,9 +729,13 @@ export function computeAliveSet(
 	}
 
 	markImportedModulesAlive(graph);
+	return takeReachability();
+}
 
+function takeReachability(): AliveSet {
 	const result = _aliveSet;
 	_aliveSet = createAliveSet();
+	_singleModule = "";
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
 	_nameIndex = new HashMap<string, string>();
@@ -695,6 +749,25 @@ export function computeAliveSet(
 	_instDeclHead = new HashMap<Symbol, int32>();
 	_instDeclNext = [];
 	return result;
+}
+
+export function collectModuleTypeInfoDemands(program: Node, modulePath: string): AliveSet {
+	_aliveSet = createAliveSet();
+	_visitedSet = new HashSet<string>();
+	_visitedSyms = new HashSet<Symbol>();
+	_singleModule = modulePath;
+	nameIndexBuild([program], [modulePath]);
+	declIndexBuild([program], [modulePath]);
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const decl = topDecl(stmt);
+		if (decl != null && decl.nodeType != null && hasGenericParams(decl.nodeType)) continue;
+		walkBody(stmt, modulePath);
+	}
+	const walked = takeReachability();
+	const demands = createAliveSet();
+	demands.typeInfos = walked.typeInfos;
+	demands.typeInfoKeys = walked.typeInfoKeys;
+	return demands;
 }
 
 // Check if a statement is a side-effecting top-level statement (not a declaration)
