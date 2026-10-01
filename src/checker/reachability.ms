@@ -24,7 +24,7 @@ import {
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey } from "../codegen/c/types";
 import { hasFlag, SymbolFlag } from "./symbol";
-import { hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp } from "./types";
+import { hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { lookupCtorDefaults } from "./instantiate";
@@ -315,8 +315,8 @@ function markRematerializedMemberTypeInfo(conv: Type | null): void {
 }
 
 function markTypeInfoOf(type: Type | null): void {
-	let t = type;
-	if (t == null) return;
+	if (type == null) return;
+	let t = peelTransparentInstance(type);
 	const nullableRef = unwrapRefNullUnion(t);
 	if (nullableRef != null) t = nullableRef;
 	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) {
