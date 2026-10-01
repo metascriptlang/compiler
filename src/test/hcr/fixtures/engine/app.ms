@@ -30,8 +30,7 @@ function report(label: string): void {
 	reload();
 	const outcome = lastReload();
 	const names = outcome.modules.length > 0 ? " " + outcome.modules.join(",") : "";
-	const reason = outcome.reason != "" ? ` (${outcome.reason})` : "";
-	console.log(`HCR-ENGINE ${label}: ${reloadKindName(outcome.kind)}${names}${reason}`);
+	console.log(`HCR-ENGINE ${label}: ${reloadKindName(outcome.kind)}${names}`);
 }
 
 function inspect(label: string): void {
@@ -73,17 +72,20 @@ show("after rollback");
 inspect("probe after rollback");
 probe = null;
 
+place("g2", image("lifecycle"));
+place("g2", BUNDLE);
+report("handler recovery");
+
 place("g3", image("logic"));
 place("g3", BUNDLE);
 report("added export, app not rebuilt");
-show("after rejection");
+show("after added export");
 
 place("g4", image("logic"));
 place("g4", BUNDLE);
-report("state layout changed");
-show("after layout rejection");
+report("added global");
+show("after added global");
 
-place("g1", image("logic"));
 place("g6", image("lifecycle"));
 place("g6", BUNDLE);
 report("class layout changed");

@@ -22,10 +22,10 @@ function seenAfterWrite(w: FsWatch, root: string, name: string): boolean {
 mkdir("tree");
 mkdir("tree/sub");
 const missing = watch("missing");
-console.log(`WATCH missing: ${missing.ok ? "opened" : missing.error.message}`);
+console.log(`WATCH missing opened: ${missing.ok}`);
 const opened = watch("tree");
 if (!opened.ok) {
-	console.log(`WATCH open: ${opened.error.message}`);
+	console.log("WATCH tree opened: false");
 } else {
 	const w = opened.value;
 	console.log(`WATCH write before the first wait: ${seenAfterWrite(w, "tree", "first.ms")}`);
