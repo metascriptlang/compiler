@@ -10,7 +10,7 @@ import {
 	ArrowFunctionData, FunctionExprData,
 	TypeAssertionData, ConditionalExprData,
 	SpreadExprData, NewExprData, MoveExprData,
-	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, createNodeAt,
+	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
@@ -20,7 +20,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym } from "../../transform/util";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, uniqueClassInUnion } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -689,11 +689,8 @@ export function emitTypeAssertion(gen: JSGenerator, node: Node): void {
 		emitNode(gen, d.asExpr);
 		return;
 	}
-	const classRef = createNodeAt(NodeKind.Identifier, { name: target.name } as IdentifierData, node.location);
-	classRef.resolvedSym = target;
-	classRef.nodeType = target.symbolType;
 	emit(gen, "((v) => (v == null || v instanceof ");
-	emitNode(gen, classRef);
+	emitNode(gen, classReference(target, node.location));
 	emit(gen, ") ? v : (() => { throw new Error(\"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + escapeJSString(target.name) + "\"); })())(");
 	emitNode(gen, d.asExpr);
 	emit(gen, ")");
@@ -720,11 +717,25 @@ function openTagTest(gen: JSGenerator, member: Type, union: Type, pass: string):
 	emit(gen, "((v) => (" + pass + "typeof v === \"" + typeofTagOf(member) + "\") ? v : (() => { throw new Error(\"member '" + escapeJSString(typeDisplayName(member)) + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + typeof v + \"'\"); })())(");
 }
 
+function classReference(sym: Symbol, location: SourceLocation): Node {
+	const classRef = createNodeAt(NodeKind.Identifier, { name: sym.name } as IdentifierData, location);
+	classRef.resolvedSym = sym;
+	classRef.nodeType = sym.symbolType;
+	return classRef;
+}
+
+function openClassTest(gen: JSGenerator, cls: Symbol, member: Type, union: Type, pass: string, location: SourceLocation): void {
+	emit(gen, "((v) => (" + pass + "v instanceof ");
+	emitNode(gen, classReference(cls, location));
+	emit(gen, ") ? v : (() => { throw new Error(\"member '" + escapeJSString(typeDisplayName(member)) + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + typeof v + \"'\"); })())(");
+}
+
 function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData): boolean {
 	const t = node.nodeType;
 	if (t == null) return false;
-	const nullable = isMaybeType(t);
-	const payload = nullable && t.typeReturn != null ? t.typeReturn : t;
+	const refMember = t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : null;
+	const nullable = isMaybeType(t) || refMember != null;
+	const payload = isMaybeType(t) && t.typeReturn != null ? t.typeReturn : refMember != null ? refMember : t;
 	const pass = nullable ? "v == null || " : "";
 	const union = assertedUnion(d);
 	if (payload.kind != TypeKind.String && isStringLike(payload)) {
@@ -742,6 +753,13 @@ function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData
 		return true;
 	}
 	if (union == null) return false;
+	const cls = uniqueClassInUnion(union, payload);
+	if (cls != null) {
+		openClassTest(gen, cls, payload, union, pass, node.location);
+		emitNode(gen, d.asExpr);
+		emit(gen, ")");
+		return true;
+	}
 	if (payload.kind != TypeKind.String && payload.kind != TypeKind.Number && payload.kind != TypeKind.Boolean) return false;
 	openTagTest(gen, payload, union, pass);
 	emitNode(gen, d.asExpr);
