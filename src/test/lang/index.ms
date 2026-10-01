@@ -37,6 +37,7 @@ import "./lexicalIdentity";
 import "./macroConverterValues";
 import "./macroFlowExpansion";
 import "./macroHiddenConversions";
+import "./macroLiteralValues";
 import "./nullableInstantiation";
 import "./numericRepresentation";
 import "./receiverViews";
