@@ -52,3 +52,16 @@ function size613<T>(a: T[]): int32 { return a.length as int32; }
 test "bug613: the former decorator spelling is refused" {
 	assert !compiles613("@borrow function key(this s: Signer613): uint64;");
 }
+
+test "bug613: a missing base names delegation, not borrowing" {
+	const result = compileToCWithStd(`
+struct Account613 { address: uint64; }
+type Signer613 = distinct Account613;
+@delegate function tag(this s: Signer613): uint64;
+`);
+	assert !result.ok;
+	if (!result.ok) {
+		assert result.error.indexOf("no tag(Account613) to delegate to", 0) >= 0, result.error;
+		assert result.error.indexOf("borrow", 0) < 0, result.error;
+	}
+}
