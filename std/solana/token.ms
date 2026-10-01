@@ -786,10 +786,10 @@ when (testBuild) {
 			executable: true,
 		};
 		return [
-			holderOf(1, Pubkey.tokenProgram(), []),
-			holderOf(2, Pubkey.tokenProgram(), []),
+			holderOf(1, Pubkey.tokenProgram(), mintData(7, 500, 6)),
+			holderOf(2, Pubkey.tokenProgram(), tokenAccountData(1, 3, 0, 1)),
 			{ ...holderOf(3, keyOf(0), []), signer: true, writable: false },
-			{ ...holderOf(4, keyOf(0), []), signer: true },
+			{ ...holderOf(4, keyOf(0), tokenAccountData(1, 3, 900, 1)), signer: true },
 			{ ...holderOf(0, keyOf(0), []), writable: false, executable: true },
 			program,
 		];
