@@ -90,3 +90,15 @@ test "a value struct read through the read helper is copied" {
 	assert result.ok;
 	assert result.value.contains("msValCopy_");
 }
+
+test "a span element passed to an out parameter is a checked cell of the view's base" {
+	const result = compileToJS("function set(out v: int32): void { v = 1; } function f(xs: Span<int32>, i: int32): void { set(xs[i]); }");
+	assert result.ok;
+	assert result.value.contains("msSpanCell(xs, i)");
+}
+
+test "an array element passed to an out parameter is a checked cell" {
+	const result = compileToJS("function set(out v: int32): void { v = 1; } function f(xs: int32[], i: int32): void { set(xs[i]); }");
+	assert result.ok;
+	assert result.value.contains("msArrayCell(xs, i)");
+}
