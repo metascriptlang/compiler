@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -329,7 +329,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	source = peelTransparentInstance(source);
 	target = peelTransparentInstance(target);
 	if (isReadonlyView(source) && !isReadonlyView(target)
-			&& (target.kind == TypeKind.Ref || target.kind == TypeKind.Array)) return false;
+			&& (target.kind == TypeKind.Ref || target.kind == TypeKind.Array || target.kind == TypeKind.Span)) return false;
 
 	// Never is the bottom type — assignable TO everything. After exhaustive
 	// narrowing (all union variants handled), the residual type is never.
@@ -807,6 +807,10 @@ function objectShapeTarget(source: Type | null, target: Type | null): Type | nul
 // the wrong slots, "got A, expected B" reads like a compiler bug. Name the field
 // that moved. Empty string when the plain message already explains the rejection.
 export function explainStructuralPrefix(source: Type | null, target: Type | null): string {
+	if (dropsReadonlyView(source, target)) {
+		return " — a read-only view never converts back to the mutable type: declare the parameter "
+			+ typeDisplayName(createReadonlyView(target)) + ", or copy it with [...x]";
+	}
 	const shapeTarget = objectShapeTarget(source, target);
 	const s0 = skipModifier(source);
 	const t0 = skipModifier(shapeTarget);
@@ -907,7 +911,8 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 	if (dstInner != null) dst = dstInner;
 	if (!isReadonlyView(src) || isReadonlyView(dst)) return false;
 	if (src.kind == TypeKind.Union && dst.kind != TypeKind.Union) return false;
-	return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Array || dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union
+	return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Array || dst.kind == TypeKind.Span
+		|| dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union
 		|| dst.kind == TypeKind.Unknown;
 }
 

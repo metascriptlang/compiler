@@ -24,7 +24,8 @@ export function wtf8Cached(s: string): uint8[] {
 }
 
 // Fresh mutable copy — the cache entry must never escape.
-export function asBytes(this s: string): Readonly<uint8[]> {
+@builtin("AsBytes")
+export function asBytes(this s: string): Readonly<Span<uint8>> {
 	const c = wtf8Cached(s);
 	@emit(`return ${c}.slice();`);
 	unreachable;
@@ -42,6 +43,10 @@ export function asString(this arr: Readonly<uint8[]>): string {
 	}
 	return r;`);
 	unreachable;
+}
+
+export function asString(this view: Readonly<Span<uint8>>): string {
+	return view.slice(0).asString();
 }
 
 export function byteLength(this s: string): int32 {

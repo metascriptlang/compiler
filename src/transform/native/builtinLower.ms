@@ -13,7 +13,7 @@
 // kinds remain for JSON-related rewrites here.
 
 import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, isNumeric, createResult, createArray, createPrimitive, createRef, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase } from "../../checker/types";
+import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase } from "../../checker/types";
 import { findExtension, requestEnumToString } from "../../checker/context";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -246,7 +246,7 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	}
 
 	if (builtinKind == "AsBytes") {
-		return rewriteZeroCopyBridge(node);
+		return ctx.jsBackend ? node : rewriteZeroCopyBridge(node);
 	}
 
 	if (builtinKind == "ResultOk") {
@@ -283,18 +283,15 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	return node;
 }
 
-// Zero-copy string → uint8[] borrow: rewrite call to a HiddenStdConv, which
-// isByteViewConv reads as a bit-cast view (DRC skips destroy on the result).
 // The reverse direction (AsString) is NOT intercepted: a borrow escaping the
 // array's scope dangles (bug065), so the call falls through to the plain extern
 // msAsString — a copying kernel (cstrToNimstr shape) returning a fresh owned string.
 function rewriteZeroCopyBridge(node: Node): Node {
 	const cd = node.data as CallExprData;
 	if (cd.arguments.length < 1) return node;
-	const receiver = cd.arguments[0];
-	const loc = node.location;
-	const targetType = createRef(createArray(createPrimitive(TypeKind.Uint8)));
-	return makeHiddenStdConv(receiver, targetType, loc);
+	const view = node.nodeType;
+	if (view == null || view.kind != TypeKind.Span) return node;
+	return makeHiddenStdConv(cd.arguments[0], view, node.location);
 }
 
 function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext): Node {

@@ -1565,7 +1565,8 @@ export function isLockedRef(t: Type | null): boolean {
 
 export function isReadonlyView(t: Type | null): boolean {
 	if (t == null) return false;
-	if (t.kind != TypeKind.Ref && t.kind != TypeKind.Array && t.kind != TypeKind.Struct && t.kind != TypeKind.Union
+	if (t.kind != TypeKind.Ref && t.kind != TypeKind.Array && t.kind != TypeKind.Span
+		&& t.kind != TypeKind.Struct && t.kind != TypeKind.Union
 		&& t.kind != TypeKind.Unknown) return false;
 	return t.typeFlags.has(TypeFlag.IsReadonly);
 }
@@ -1648,7 +1649,7 @@ export function createReadonlyView(t: Type | null): Type {
 	if (t == null) return null as unknown as Type;
 	if (isReadonlyView(t)) return t;
 	if (t.readonlyView != null) return t.readonlyView;
-	const viewable = t.kind == TypeKind.Array || t.kind == TypeKind.Unknown || (t.kind == TypeKind.Ref && !isAtomicRef(t))
+	const viewable = t.kind == TypeKind.Array || t.kind == TypeKind.Unknown || t.kind == TypeKind.Span || (t.kind == TypeKind.Ref && !isAtomicRef(t))
 		|| ((t.kind == TypeKind.Struct || t.kind == TypeKind.Union) && structCarriesRef(t, 0));
 	if (!viewable) return t;
 	const c = copyTypeShallow(t);
@@ -3773,6 +3774,7 @@ function typeDisplayNameInner(t: Type | null): string {
 	}
 	if (t.kind == TypeKind.Set) return "BitSet<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Borrow && t.typeReturn != null) return "Borrow<" + typeDisplayName(t.typeReturn) + ">";
+	if (t.kind == TypeKind.Span && t.typeReturn != null) return "Span<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Var && t.typeReturn != null) return "out " + typeDisplayName(t.typeReturn);
 	if (isMaybeType(t) && t.typeReturn != null) return typeDisplayName(t.typeReturn) + " | null";
 	const shape = namelessObjectShape(t);

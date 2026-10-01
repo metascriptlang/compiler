@@ -1,9 +1,9 @@
 // Transform Utilities — node-building helpers for AST transforms
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
-import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, HiddenStdConvData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike } from "../checker/types";
+import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
 import { lookupHookSym } from "../codegen/c/types";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
@@ -572,14 +572,6 @@ export function makeHiddenStdConv(inner: Node, targetType: Type, loc: SourceLoca
 	const n = createNode(NodeKind.HiddenStdConv, { convExpr: inner, convType: targetType }, syntheticToken(loc));
 	n.nodeType = targetType;
 	return n;
-}
-
-export function isByteViewConv(node: Readonly<Node>): boolean {
-	if (node.kind != NodeKind.HiddenStdConv) return false;
-	const d = node.data as HiddenStdConvData;
-	const t = d.convType;
-	return t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array
-		&& isStringLike(d.convExpr.nodeType);
 }
 
 export function makeHiddenSubConv(inner: Node, targetType: Type, loc: SourceLocation): Node {

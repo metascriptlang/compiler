@@ -2,11 +2,11 @@
 
 @include("runtime/core/string.h");
 
-// ===== Zero-Copy Bridge (string → uint8[]) =====
+// ===== Zero-Copy Bridge (string → Readonly<Span<uint8>>) =====
 
-/** Returns the string's underlying bytes as a uint8 array (zero-copy). */
+/** Returns a read-only view of the string's underlying bytes (zero-copy); `[...s.asBytes()]` copies them. */
 @builtin("AsBytes")
-export extern function asBytes(this s: string): Readonly<uint8[]> from "msAsBytes";
+export extern function asBytes(this s: string): Readonly<Span<uint8>> from "msAsBytes";
 
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
 export function byteLength(this s: string): int32 {

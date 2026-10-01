@@ -24,7 +24,7 @@ import { useHeader } from "./context";
 import { GcMode, dispatchOverridesFor, dispatchEntryFor } from "../../checker/context";
 import { lookupCtorDefaults, CtorEntry } from "../../checker/instantiate";
 import { monoBaseName } from "../../monomorphize/registry";
-import { isRuntimeProcSym, isByteViewConv } from "../../transform/util";
+import { isRuntimeProcSym } from "../../transform/util";
 
 // Constructor parameter types for a class symbol, reachable cross-module.
 // Same-module the class symbol carries its ClassDecl directly; imported symbols
@@ -1978,12 +1978,6 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		truncResults(ctx, cc);
 		const d = node.data as HiddenStdConvData;
 		const targetC = getTypeDesc(g, d.convType);
-		// Zero-copy string → uint8[] bridge (same memory layout): string is a
-		// fat value (msString), arrays are pointers (msUint8Array*).
-		if (isByteViewConv(node)) {
-			ctx.results.push(`((${targetC})&(${inner}))`);
-			return;
-		}
 		if (kind == NodeKind.HiddenSubConv && node.variantSlot > 0 && !isMaybeType(d.convType)
 			&& unwrapRefNullUnion(d.convType) != null && d.convExpr.nodeType != null && isMaybeType(d.convExpr.nodeType)) {
 			const rvi = node.variantSlot - 1;

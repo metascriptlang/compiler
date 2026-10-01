@@ -1458,6 +1458,8 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 			predicateSentinel.kind = TypeKind.None;
 			predicateSentinel.typeName = isAssertion ? `asserts:${paramName}` : paramName;
 			predicateSentinel.typeReturn = targetType;
+		} else if (sym.builtinKind != "") {
+			returnType = resolveAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column);
 		} else {
 			returnType = resolveReturnAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column);
 		}

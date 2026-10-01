@@ -1621,6 +1621,9 @@ function genSpanType(g: CGen, t: Type): string {
 
 	if (typeCacheHas(g.typeCache, key)) return typeCacheGet(g.typeCache, key);
 	typeCacheSet(g.typeCache, key, name);
+	const structKey = "span:" + name;
+	if (typeCacheHas(g.typeCache, structKey)) return name;
+	typeCacheSet(g.typeCache, structKey, name);
 
 	ensureForwardDecl(g, name);
 	const b = sec(g, CSection.Types);

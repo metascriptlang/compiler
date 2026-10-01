@@ -16,7 +16,7 @@ import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } f
 import { TransformContext, createTransformContext, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdent, makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
-	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, makeFnDecl, runtimeRef, isByteViewConv,
+	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, makeFnDecl, runtimeRef,
 } from "../transform/util";
 import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -1875,9 +1875,6 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// accesses through it (d.field) won't be recognized as borrows, allowing
 	// field-level moves that corrupt the aliased parent object.
 	let isCursor = false;
-	if (d.initializer != null && isByteViewConv(d.initializer)) {
-		isCursor = true;
-	}
 	// Union variant narrowing: `const d = node.data as Variant` borrows from parent node.
 	// In C, codegen emits a pointer into the union — DRC must not destroy the alias.
 	if (d.initializer != null && d.initializer.kind == NodeKind.TypeAssertion) {
