@@ -16,7 +16,7 @@ import { RaiserOpcode, RaiserConvClass, raiserABC } from "../../raiser/bytecode"
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
-import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType } from "../../checker/types";
+import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
@@ -783,7 +783,8 @@ function typeofValueKinds(variant: Type, tag: string): int32[] {
 
 function compileTypeof(s: RaiserCompState, operand: Node): int32 {
 	const valReg = compileExpr(s, operand);
-	const variants = typeofVariants(operand.nodeType);
+	const opType = operand.nodeType != null ? peelTransparentInstance(operand.nodeType) : null;
+	const variants = typeofVariants(opType);
 	const kinds: int32[] = [];
 	const tags: string[] = [];
 	for (const variant of variants) {
@@ -807,7 +808,7 @@ function compileTypeof(s: RaiserCompState, operand: Node): int32 {
 		}
 	}
 	const dest = allocReg(s);
-	const fallback = tags.length > 0 ? tags[tags.length - 1] : typeofTagOf(operand.nodeType);
+	const fallback = tags.length > 0 ? tags[tags.length - 1] : typeofTagOf(opType);
 	emitLoadConst(s, dest, raiserString(fallback));
 	const zeroReg = allocReg(s);
 	const isKind = allocReg(s);
