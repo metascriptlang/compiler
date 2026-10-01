@@ -1,6 +1,6 @@
 // Pipeline boundary test: unlike c/*.ms, this must span candidate compiler processes to observe persistent native caches.
 import { argv, cwd, env, execFileCapture, exit, platform } from "std/process";
-import { chmod, ensureDir, exists, remove, removeAll, writeFile } from "std/fs";
+import { appendFile, chmod, copyFile, ensureDir, exists, readFile, remove, removeAll, writeFile } from "std/fs";
 
 const windows = platform == "windows";
 
@@ -96,7 +96,7 @@ function waitForNextSecond(): void {
 	while (performance.now() < until) {}
 }
 
-function build(dir: string, label: string, output: string = "probe", flags: string[] = [], cc: string = ""): number {
+function build(dir: string, label: string, output: string = "probe", flags: string[] = [], cc: string = "", exe: string = compiler): number {
 	const args: string[] = ["build", "main.ms"];
 	if (cc != "") {
 		args.push(`--cc=${cc}`);
@@ -105,7 +105,27 @@ function build(dir: string, label: string, output: string = "probe", flags: stri
 	}
 	args.push(`--output=${output}`);
 	for (const f of flags) args.push(f);
-	return command(dir, label, compiler, args).code;
+	return command(dir, label, exe, args).code;
+}
+
+function twinCompiler(): string {
+	const stem = compiler.endsWith(".exe") ? compiler.slice(0, compiler.length - 4) : compiler;
+	const twin = windows ? `${stem}Twin.exe` : `${stem}Twin`;
+	need(copyFile(compiler, twin).ok, `copy ${compiler} to ${twin}`);
+	need(appendFile(twin, "\n").ok, `append to ${twin}`);
+	if (!windows) need(chmod(twin, 493).ok, `chmod ${twin}`);
+	return twin;
+}
+
+function recompiledObjects(dir: string, label: string): string {
+	const log = readFile(`${dir}/${label}.log`);
+	if (!log.ok) return "no log";
+	let n = 0;
+	for (const line of log.value.split("\n")) {
+		const compileLine = line.indexOf("  cc ", 0) >= 0 || line.indexOf("  @compile ", 0) >= 0;
+		if (compileLine && line.indexOf(" → ", 0) >= 0 && line.indexOf("cached", 0) < 0) n = n + 1;
+	}
+	return `${n}`;
 }
 
 function value(dir: string, output: string = "probe"): string {
@@ -167,6 +187,16 @@ function runCompileCache(): void {
 	put(`${nested}/deep.h`, "#define DEEP 33\n");
 	need(build(nested, "header-change", "probe2") == 0, "nested header change");
 	record("transitively included header edit", "33", value(nested, "probe2"));
+
+	const twinned = includedFixture("twin", "static inline int probeValue(void) { return 44; }\n");
+	waitForNextSecond();
+	need(build(twinned, "first") == 0, "twin first build");
+	const twin = twinCompiler();
+	const twinBuilt = build(twinned, "twin", "probe2", ["--verbose"], "", twin);
+	remove(twin);
+	need(twinBuilt == 0, "twin build");
+	record("a compiler one byte apart reuses every object", "0", recompiledObjects(twinned, "twin"));
+	record("twin build output", "44", value(twinned, "probe2"));
 }
 
 function runLinkCache(): void {
