@@ -139,7 +139,7 @@ function readonlyRootType(target: Node): Type | null {
 }
 
 function reportReadonlyWrite(ctx: CheckerContext, ro: Type, verb: string, line: int32, column: int32): void {
-	addError(ctx, "cannot " + verb + " " + typeDisplayName(ro) + " — a read-only view: a spawn thunk borrows what it captures, and Readonly<T> never converts back to T (PARALOCK E24)", line, column);
+	addError(ctx, "cannot " + verb + " " + typeDisplayName(ro) + " — a read-only view never converts back to the mutable type (PARALOCK E24)", line, column);
 }
 
 function writeThroughGraphBackedge(target: Node): boolean {
