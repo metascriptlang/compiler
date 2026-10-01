@@ -18,9 +18,13 @@ function curriedCaptureMakeTriple(x: int32): (y: int32) => (z: int32) => (w: int
 
 type Opaque = unknown;
 
-interface Cell {
+class Cell {
 	id: number;
 	fn: () => void;
+	constructor(id: number) {
+		this.id = id;
+		this.fn = () => {};
+	}
 }
 
 interface Kit {
@@ -31,7 +35,7 @@ interface Kit {
 function kit(): Kit {
 	return {
 		make: (n: number): Opaque => {
-			const c: Cell = { id: n, fn: () => {} };
+			const c = new Cell(n);
 			return c as unknown as Opaque;
 		},
 		readId: (c: Opaque): number => (c as unknown as Cell).id,

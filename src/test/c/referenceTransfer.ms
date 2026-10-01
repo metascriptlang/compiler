@@ -22,7 +22,7 @@ struct Transfer {
 
 test "casts and assertions preserve borrowed versus owned reference provenance" {
 	const result = compileToC(`
-interface Thing { value: int32; }
+class Thing { value: int32 = 0; }
 interface Box { p: Thing | null; q: Thing; }
 extern function makeThing(): Thing from "makeThing";
 export function returnField(b: Box): Thing { return b.q as unknown as Thing; }

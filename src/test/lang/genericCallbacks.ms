@@ -2,7 +2,7 @@ interface CallbackResult { value: float64; }
 
 function propertyValue<T>(props: { value: T }): T { return props.value; }
 
-function callbackValue<T>(props: { pick: (value: T) => float64 }): float64 { return props.pick(0 as unknown as T); }
+function callbackValue<T>(props: { pick: (value: T) => float64 }): float64 { return props.pick(0 as T); }
 
 function renderItems<T>(props: { each: () => T[]; pick: (value: T) => float64 }): CallbackResult {
 	return { value: props.pick(props.each()[0]) };

@@ -104,9 +104,9 @@ test "callableBoundaries: static receivers do not shift explicit parameter modif
 
 test "callableBoundaries: stacked ownership modifiers preserve the underlying relation" {
 	const cases = [
-		{ name: "an unknown value pushes into an array of unknown", source: "\nextern function opaque(): unknown from \"NULL\";\nextern function keep(sink v: unknown): void from \"keep\";\nextern function keepInt(sink v: int32): void from \"keepInt\";\nfunction make(): unknown { return opaque(); }\nconst items: unknown[] = [];\nitems.push(make());\n", expected: 0 },
-		{ name: "an unknown value passes a sink unknown parameter", source: "\nextern function opaque(): unknown from \"NULL\";\nextern function keep(sink v: unknown): void from \"keep\";\nextern function keepInt(sink v: int32): void from \"keepInt\";\nfunction make(): unknown { return opaque(); }\nkeep(make());\n", expected: 0 },
-		{ name: "an unknown value still needs a cast for a sink int32 parameter", source: "\nextern function opaque(): unknown from \"NULL\";\nextern function keep(sink v: unknown): void from \"keep\";\nextern function keepInt(sink v: int32): void from \"keepInt\";\nfunction make(): unknown { return opaque(); }\nkeepInt(make());\n", expected: -1 },
+		{ name: "an unknown value pushes into an array of unknown", source: "\nclass Box { n: int32 = 0; }\nextern function keep<T>(sink v: T): void from \"keep\";\nextern function keepInt(sink v: int32): void from \"keepInt\";\nfunction make(): unknown { return new Box(); }\nconst items: unknown[] = [];\nitems.push(make());\n", expected: 0 },
+		{ name: "an unknown value passes a sink unknown parameter", source: "\nclass Box { n: int32 = 0; }\nextern function keep<T>(sink v: T): void from \"keep\";\nextern function keepInt(sink v: int32): void from \"keepInt\";\nfunction make(): unknown { return new Box(); }\nkeep(make());\n", expected: 0 },
+		{ name: "an unknown value still needs a cast for a sink int32 parameter", source: "\nclass Box { n: int32 = 0; }\nextern function keep<T>(sink v: T): void from \"keep\";\nextern function keepInt(sink v: int32): void from \"keepInt\";\nfunction make(): unknown { return new Box(); }\nkeepInt(make());\n", expected: -1 },
 	];
 	for (const item of cases) {
 		const result = compileToC(item.source);
