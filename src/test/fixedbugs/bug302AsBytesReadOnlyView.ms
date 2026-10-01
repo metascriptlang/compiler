@@ -17,7 +17,7 @@ function cError(body: string): string {
 }
 
 test "bug302: an index write through asBytes() is refused" {
-	assert cError(`const b = s.asBytes(); b[0] = 65;`).includes("cannot write through Readonly<uint8[]>");
+	assert cError(`const b = s.asBytes(); b[0] = 65;`).includes("cannot write through Readonly<Span<uint8>>");
 }
 
 test "bug302: a mutating method through asBytes() is refused" {
@@ -33,7 +33,7 @@ test "bug302: the JS backend refuses the same write" {
 		function main(): void { const s: string = "hello"; const b = s.asBytes(); b[0] = 74; console.log(s); }
 		main();
 	` }], "test/main.ms");
-	assert out.includes("cannot write through Readonly<uint8[]>"), out.slice(0, 300);
+	assert out.includes("cannot write through Readonly<Span<uint8>>"), out.slice(0, 300);
 }
 
 test "bug302: reads through the view see the bytes and a sliced copy is mutable" {
