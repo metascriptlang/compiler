@@ -4,9 +4,9 @@
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { peelTransparentInstance, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView } from "./types";
-import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, innermostFunctionScope, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
-import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor } from "./context";
+import { peelTransparentInstance, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType } from "./types";
+import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
+import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -18,6 +18,7 @@ import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { callExpandMacroInvocation, callEvalComptimeBlock } from "./checkerCallbacks";
 import { findChar, splitTopLevel, fitsInt64Decimal, int64ToDecimal } from "../utils/string";
+import { basename } from "std/fs/path";
 import { findCallTypeArg } from "../parser/context";
 import { markConsumedName, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { forEachChild } from "../ast/visitor";
@@ -352,6 +353,66 @@ function isLocalToFunction(ctx: CheckerContext, name: string, sym: Symbol): bool
 	return false;
 }
 
+function routineFlags(decl: Node | null): string {
+	let d = decl;
+	while (d != null && d.kind == NodeKind.DecoratedDecl) {
+		d = (d.data as DecoratedDeclData).decoratedNode;
+	}
+	if (d == null) return "";
+	return match (d.kind) {
+		NodeKind.FunctionDecl => (d.data as FunctionDeclData).fnFlags,
+		NodeKind.MethodDecl => (d.data as MethodDeclData).methodFlags,
+		NodeKind.ArrowFunction => (d.data as ArrowFunctionData).arrowFlags,
+		NodeKind.FunctionExpr => (d.data as FunctionExprData).funcExprFlags,
+		_ => "",
+	};
+}
+
+function routineSuspends(fn: Symbol | null): boolean {
+	if (fn == null) return false;
+	return hasFlag(fn, SymbolFlag.Async) || isGeneratorFlags(routineFlags(fn.declNode));
+}
+
+function capturesView(ctx: CheckerContext, name: string, sym: Symbol): boolean {
+	if (!isFrameValue(sym)) return false;
+	const nameId = getIdentId(ctx.table.identCache, name);
+	let crossed = false;
+	let scope = ctx.table.current;
+	while (scope != null && scope.symbols.get(nameId) != sym) {
+		if (scope.scopeKind == ScopeKind.Function) crossed = true;
+		scope = scope.parent;
+	}
+	if (scope == null) return false;
+	const suspended = !crossed && sym.symbolKind == SymbolKind.Parameter &&
+		routineSuspends(ctx.currentFunction);
+	return (crossed || suspended) && isViewType(sym.symbolType);
+}
+
+function viewTypeText(t: Type | null): string {
+	if (t == null || t.typeReturn == null) return typeDisplayName(t);
+	return match (t.kind) {
+		TypeKind.Array => `Vec<${viewTypeText(t.typeReturn)}>`,
+		TypeKind.Span => `Span<${viewTypeText(t.typeReturn)}>`,
+		_ => typeDisplayName(t),
+	};
+}
+
+function viewCaptureRefusal(ctx: CheckerContext, name: string, sym: Symbol): string {
+	const t = sym.symbolType;
+	const shown = t.kind == TypeKind.Var && t.typeReturn != null ? t.typeReturn : t;
+	const decl = sym.declNode;
+	const at = decl != null && decl.kind == NodeKind.VariableDecl
+		? (decl.data as VariableDeclData).nameLocation
+		: sym.location;
+	const file = basename(ctx.modulePath);
+	const where = at != null ? `${file}(${at.line}, ${at.column})` : file;
+	const hint = t.kind == TypeKind.Var && shown.kind == TypeKind.Ref
+		? `drop the parameter modifier: a ${viewTypeText(shown)} is already shared by reference`
+		: "return the value instead";
+	return `'${name}' is of type <${viewTypeText(shown)}> which cannot be captured` +
+		` as it would violate memory safety, declared here: ${where}; ${hint}`;
+}
+
 function typeLiteralAgainstPayload(ctx: CheckerContext, node: Node, expectedType: Type | null): boolean {
 	if (expectedType == null || !isMaybeType(expectedType) || expectedType.typeReturn == null) return false;
 	checkExprInner(ctx, node, expectedType.typeReturn);
@@ -606,11 +667,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				addError(ctx, "a static initializer cannot read the " + what + " '" + d.name + "' — a class declared in a function body initializes its statics once, before any call runs", node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
 			}
-			if (isFrameValue(sym) && sym.symbolType != null
-					&& (sym.symbolType.kind == TypeKind.Span || sym.symbolType.kind == TypeKind.Borrow)
-					&& isCapturedAcross(ctx.table, d.name, sym, innermostFunctionScope(ctx.table))) {
-				addError(ctx, "'" + d.name + "' is a " + typeDisplayName(sym.symbolType) + " view and cannot be captured by a closure: the closure can outlive the memory it views — pass it as an argument, or capture a copy made with [...x]", node.location.line, node.location.column);
-				node.nodeType = errorType(); return;
+			if (capturesView(ctx, d.name, sym)) {
+				const useAt = node.location;
+				addError(ctx, viewCaptureRefusal(ctx, d.name, sym), useAt.line, useAt.column);
 			}
 			// PARALOCK Phase 1 R2/E3: affine-Promise bindings are single-use.
 			// Reuse check is keyed by symbolConsumeKey (name + declaration site) so

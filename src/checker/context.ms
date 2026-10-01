@@ -931,6 +931,11 @@ export function isGenericFn(flags: string): boolean {
 	return findFlagSegment(flags, "gen:") != "";
 }
 
+export function isGeneratorFlags(flags: string): boolean {
+	return findFlagSegment(flags, "generator") == "generator" ||
+		findFlagSegment(flags, "async_generator") == "async_generator";
+}
+
 // Cross-module generic monomorphization: a method must carry its body (declNode)
 // across module boundaries when its signature still mentions unresolved generic
 // params — its own <T> (static generic) OR the enclosing generic class seen through

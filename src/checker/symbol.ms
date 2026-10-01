@@ -263,15 +263,6 @@ export function isCapturedAcross(table: SymbolTable, name: string, sym: Symbol, 
 	return true;
 }
 
-export function innermostFunctionScope(table: SymbolTable): Cursor<Scope> {
-	let scope = table.current;
-	while (scope != null) {
-		if (scope.scopeKind == ScopeKind.Function) return scope;
-		scope = scope.parent;
-	}
-	return null as unknown as Cursor<Scope>;
-}
-
 export function lookupSymbolInDefiningScope(table: SymbolTable, definer: string, name: string): Symbol {
 	const definerId = getIdentId(table.identCache, definer);
 	let scope = table.current;
