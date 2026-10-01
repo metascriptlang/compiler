@@ -1069,8 +1069,8 @@ Class members, measured on tree `af10d638` plus the class-member change (`number
 the same result on C drc/orc, JS and Raiser (corpus `656`, `fixedbugs/bug603`; Raiser cannot run
 `Base | Child`, it does not evaluate `super`). A wrong member stops with the message above on C
 drc/orc/release and throws an Error with the same text on JS (corpus `657`, `658`, guard
-`asClassMemberChecked`); under `--danger` the nullable union still stops and a bare union does not
-(exit 139 on `number | Row` as `Row`). Before the change `a as Row | null` from a union did not
+`asClassMemberChecked`). Under `--danger` neither the nullable nor the bare union stops (exit 139 on
+`number | Row | null` as `Row | null` and on `number | Row` as `Row`, measured on this branch). Before the change `a as Row | null` from a union did not
 compile on C, and JS passed every class member. Not covered: the Raiser VM accepts the wrong
 member at the `as` and fails at the next field read (`expected an object, got value kind Float`);
 `Base | Child | null` as `Child | null` raises on C for a `Base` value and passes it on JS
