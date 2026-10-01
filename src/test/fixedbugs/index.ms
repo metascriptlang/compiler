@@ -407,3 +407,4 @@ import "./bug670RefParamDerefUnderAutoDeref";
 import "./bug614ParamShadowedByLocal";
 import "./bug615AliasNarrowingCast";
 import "./bug643NominalArrayIdentity";
+import "./bug644VecOfStructCopies";
