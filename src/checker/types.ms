@@ -2147,6 +2147,7 @@ export function float64Type(): Type { return getSysType(TypeKind.Float64); }
 export function destrPositionalElemType(srcType: Type | null, i: int32): Type | null {
 	let bt = srcType;
 	if (bt == null) return null;
+	bt = peelTransparentInstance(bt);
 	if ((bt.kind == TypeKind.Ref || bt.kind == TypeKind.Var) && bt.typeReturn != null) bt = bt.typeReturn;
 	if (bt.kind == TypeKind.Tuple && bt.typeChildren != null && i < bt.typeChildren.length) return bt.typeChildren[i];
 	if ((bt.kind == TypeKind.Array || bt.kind == TypeKind.SizedArray) && bt.typeReturn != null) return bt.typeReturn;
@@ -2156,6 +2157,7 @@ export function destrPositionalElemType(srcType: Type | null, i: int32): Type | 
 export function destrNamedFieldType(srcType: Type | null, fieldName: string): Type | null {
 	let bt = srcType;
 	if (bt == null) return null;
+	bt = peelTransparentInstance(bt);
 	if ((bt.kind == TypeKind.Ref || bt.kind == TypeKind.Var) && bt.typeReturn != null) bt = bt.typeReturn;
 	if (bt.kind != TypeKind.Struct) return null;
 	for (let fi = 0; fi < bt.typeNames.length; fi += 1) {
@@ -2167,6 +2169,7 @@ export function destrNamedFieldType(srcType: Type | null, fieldName: string): Ty
 export function destrHasRuntimeLength(srcType: Type | null): boolean {
 	let bt = srcType;
 	if (bt == null) return false;
+	bt = peelTransparentInstance(bt);
 	if ((bt.kind == TypeKind.Ref || bt.kind == TypeKind.Var) && bt.typeReturn != null) bt = bt.typeReturn;
 	return bt.kind == TypeKind.Array || bt.kind == TypeKind.SizedArray;
 }
@@ -2187,6 +2190,7 @@ export function destrDefaultedType(derived: Type | null): Type | null {
 export function destrRestElemType(srcType: Type | null): Type | null {
 	let bt = srcType;
 	if (bt == null) return null;
+	bt = peelTransparentInstance(bt);
 	if ((bt.kind == TypeKind.Ref || bt.kind == TypeKind.Var) && bt.typeReturn != null) bt = bt.typeReturn;
 	if (bt.kind == TypeKind.Array && bt.typeReturn != null) return bt;
 	if (bt.kind == TypeKind.SizedArray && bt.typeReturn != null) return createArray(bt.typeReturn);
@@ -2197,6 +2201,7 @@ export function destrObjectRestNames(srcType: Type | null, taken: string[]): str
 	const names: string[] = [];
 	let bt = srcType;
 	if (bt == null) return names;
+	bt = peelTransparentInstance(bt);
 	if ((bt.kind == TypeKind.Ref || bt.kind == TypeKind.Var) && bt.typeReturn != null) bt = bt.typeReturn;
 	if (bt.kind != TypeKind.Struct) return names;
 	for (const fieldName of bt.typeNames) {
