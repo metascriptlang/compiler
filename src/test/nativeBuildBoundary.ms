@@ -82,6 +82,20 @@ function fixture(name: string, directives: string, native: string, header: strin
 	return dir;
 }
 
+function includedFixture(name: string, header: string): string {
+	const dir = `${root}/${name}`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, "@include(\"./value.h\");\nextern function probeValue(): int32;\nconsole.log(probeValue());\n");
+	put(`${dir}/value.h`, header);
+	return dir;
+}
+
+function waitForNextSecond(): void {
+	const until = performance.now() + 2000;
+	while (performance.now() < until) {}
+}
+
 function build(dir: string, label: string, output: string = "probe", flags: string[] = [], cc: string = ""): number {
 	const args: string[] = ["build", "main.ms"];
 	if (cc != "") {
@@ -134,6 +148,25 @@ function runCompileCache(): void {
 	env.delete("MSC_NO_GLOBAL_CACHE");
 	need(uncached == 0, "uncached control");
 	record("uncached diagnostic control", "22", value(header, "probe2"));
+
+	const included = includedFixture("included", "#define VALUE 11\nstatic inline int probeValue(void) { return VALUE; }\n");
+	waitForNextSecond();
+	need(build(included, "baseline") == 0, "included baseline");
+	need(value(included) == "11", "included baseline value");
+	put(`${included}/value.h`, "#define VALUE 22\nstatic inline int probeValue(void) { return VALUE; }\n");
+	need(build(included, "header-change") == 0, "included header change");
+	record("module-included header edit", "22", value(included));
+	need(build(included, "new-output", "probe2") == 0, "included new output");
+	record("module-included header edit bypassing project cache", "22", value(included, "probe2"));
+
+	const nested = includedFixture("nested", "#include \"deep.h\"\nstatic inline int probeValue(void) { return DEEP; }\n");
+	put(`${nested}/deep.h`, "#define DEEP 11\n");
+	waitForNextSecond();
+	need(build(nested, "baseline") == 0, "nested baseline");
+	need(value(nested) == "11", "nested baseline value");
+	put(`${nested}/deep.h`, "#define DEEP 33\n");
+	need(build(nested, "header-change", "probe2") == 0, "nested header change");
+	record("transitively included header edit", "33", value(nested, "probe2"));
 }
 
 function runLinkCache(): void {
