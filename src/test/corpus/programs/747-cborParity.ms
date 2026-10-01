@@ -17,7 +17,7 @@ function check(name: string, ok: boolean): boolean {
 
 function roundInt(n: int64): boolean {
 	const r = decode(encode(cborInt(n)));
-	return r.ok && asNumber(r.value) == n;
+	return r.ok && asInt64(r.value) == n;
 }
 
 function main(): void {
