@@ -28,7 +28,7 @@ import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, forgetInstances, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults } from "./instantiate";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
 import { isBuiltinDirective } from "./decoratorHelpers";
-import { declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants } from "./types";
+import { declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance } from "./types";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
@@ -1364,7 +1364,7 @@ function iterableElemType(t: Type | null): Type {
 	if (t == null) return inferredType();
 	// reference array: see through Ref<Array> to the value array's element type so
 	// for..of takes the direct array-iteration path, not the implicit toItems iterator.
-	let it = t;
+	let it = peelTransparentInstance(t);
 	if (it.kind == TypeKind.Ref && it.typeReturn != null
 			&& (it.typeReturn.kind == TypeKind.Array || it.typeReturn.kind == TypeKind.SizedArray || it.typeReturn.kind == TypeKind.Span)) {
 		it = it.typeReturn;
