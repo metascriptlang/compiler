@@ -154,6 +154,8 @@ function bigConvert(inner: Node, srcK: TypeKind, dstK: TypeKind, loc: SourceLoca
 	let r = inner;
 	if (bits > 0) {
 		r = numberOf(asN(!isSignedNarrowKind(dstK), bits, inner, loc), loc);
+	} else if (dstK == TypeKind.Float32) {
+		r = makeCall(runtimeRef(srcK == TypeKind.Uint64 ? "msUint64ToFloat32" : "msInt64ToFloat32", loc), [inner], loc);
 	} else if (isFloatKind(dstK)) {
 		r = numberOf(inner, loc);
 	} else {

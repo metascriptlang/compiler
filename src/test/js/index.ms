@@ -9,3 +9,4 @@ import "./awaitOperand";
 import "./concurrencyBoundary";
 import "./testSuspension";
 import "./accessCheck";
+import "./float32";

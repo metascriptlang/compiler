@@ -43,6 +43,7 @@ import { lowerIntConvJS, injectRangeChecksJS } from "./coercion/intConvJS";
 import { lowerNumberBitwiseOperands } from "./native/intCheckInject";
 import { lowerIntArithJS } from "./coercion/intArithJS";
 import { lowerAccessJS } from "./coercion/accessJS";
+import { lowerFloat32JS } from "./coercion/float32JS";
 import { lowerBigIntJS } from "./coercion/bigIntJS";
 import { refuseUnfoldedSizeofJS } from "./coercion/sizeofJS";
 import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
@@ -201,6 +202,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (jsBackend) { result = lowerNumberBitwiseOperands(result, ctx); }
 	if (jsBackend) { result = injectRangeChecksJS(result, ctx); }
 	if (jsBackend) { result = lowerBigIntJS(result, ctx); }
+	if (jsBackend) { result = lowerFloat32JS(result, ctx); }
 	if (jsBackend) { result = lowerIntArithJS(result, ctx); }
 	if (jsBackend) { result = lowerIntConvJS(result, ctx); }
 	if (jsBackend) { result = lowerAccessJS(result, ctx); }
