@@ -193,6 +193,12 @@ function walkBody(node: Node, modulePath: string): void {
 		return;
 	}
 
+	if (k == NodeKind.VariableDecl && node.nodeType != null && node.nodeType.kind == TypeKind.Ref
+			&& node.nodeType.typeReturn != null && node.nodeType.typeReturn.kind == TypeKind.Array
+			&& isBakeableAggregateConst(node)) {
+		markRefArrayCell(node.nodeType.typeReturn, modulePath);
+	}
+
 	if (k == NodeKind.HiddenSubConv && node.variantSlot > 0) {
 		markRematerializedMemberTypeInfo((node.data as HiddenStdConvData).convType);
 		walkChildrenGeneric(node, modulePath);
