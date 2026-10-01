@@ -227,6 +227,37 @@ function msPowU32(a: uint32, b: uint32): uint32 {
 	unreachable;
 }
 
+// ===== 64-bit integer to float32 =====
+
+@compilerFunc
+function msInt64ToFloat32(a: int64): float32 {
+	@emit(`const n = Number(${a});
+	if (n <= 9007199254740992 && n >= -9007199254740992) return Math.fround(n);
+	const neg = ${a} < 0n;
+	const m = neg ? -${a} : ${a};
+	const shift = BigInt(m.toString(2).length - 24);
+	let q = m >> shift;
+	const rest = m - (q << shift);
+	const half = 1n << (shift - 1n);
+	if (rest > half || (rest === half && (q & 1n) === 1n)) q = q + 1n;
+	const r = Number(q) * 2 ** Number(shift);
+	return neg ? -r : r;`);
+	unreachable;
+}
+
+@compilerFunc
+function msUint64ToFloat32(a: uint64): float32 {
+	@emit(`const n = Number(${a});
+	if (n <= 9007199254740992) return Math.fround(n);
+	const shift = BigInt(${a}.toString(2).length - 24);
+	let q = ${a} >> shift;
+	const rest = ${a} - (q << shift);
+	const half = 1n << (shift - 1n);
+	if (rest > half || (rest === half && (q & 1n) === 1n)) q = q + 1n;
+	return Number(q) * 2 ** Number(shift);`);
+	unreachable;
+}
+
 @compilerFunc
 function msPowI64(a: int64, b: int64): int64 {
 	@emit(`if (${b} < 0n) throw new Error("value " + ${b} + " not in range 0 .. 9223372036854775807");
