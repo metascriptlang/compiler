@@ -11,7 +11,7 @@
 // homogeneous and generics cannot express `T[keyof T]`. Mixed-shape objects
 // must read fields directly. entries() needs tuple element types — follow-up.
 
-import { Node, NodeKind } from "std/meta";
+import { Node, NodeKind, getTypeImpl, sameType } from "std/meta";
 
 export class Object {
 	// Return type is fixed by the emitted literal: string[].
@@ -83,13 +83,8 @@ export macro hashOf(t: Node): Node {
 }
 
 export macro objectKeysOf(t: Node): Node {
-	// Peel Ref<Struct> (TypeGeneric) to the shape node — same peel the JSON
-	// encoder applies before reading typExprFieldNames. Macro bodies are not
-	// deeply type-checked, which is what allows walking the type-AST fields.
-	let tt = t.nodeType;
-	if (tt.kind == NodeKind.TypeGeneric) {
-		tt = tt.typExprArgs[0];
-	}
+	const tt = getTypeImpl(t);
+	if (tt == null) error("Object.keys: type implementation is unavailable", t);
 	if (tt.kind != NodeKind.TypeObject) {
 		error("Object.keys: expected an object type (interface/struct/class) — primitives and arrays have no field shape", t);
 	}
@@ -110,25 +105,23 @@ export macro objectKeysOf(t: Node): Node {
 }
 
 export macro objectValuesOf(t: Node): Node {
-	let tt = t.nodeType;
-	if (tt.kind == NodeKind.TypeGeneric) {
-		tt = tt.typExprArgs[0];
-	}
+	const tt = getTypeImpl(t);
+	if (tt == null) error("Object.values: type implementation is unavailable", t);
 	if (tt.kind != NodeKind.TypeObject) {
 		error("Object.values: expected an object type (interface/struct/class) — primitives and arrays have no field shape", t);
 	}
 	const fields = tt.typExprFieldNames;
 	const types = tt.typExprFieldTypes;
 	const vals: Node[] = [];
-	let uniform: string = "";
+	let uniform: Node | null = null;
 	let mixed = false;
 	let i = 0;
 	while (i < fields.length) {
 		if (types[i].kind != NodeKind.Identifier) {
 			mixed = true;
-		} else if (uniform == "") {
-			uniform = types[i].name;
-		} else if (uniform != types[i].name) {
+		} else if (uniform == null) {
+			uniform = types[i];
+		} else if (!sameType(uniform, types[i])) {
 			mixed = true;
 		}
 		vals.push({

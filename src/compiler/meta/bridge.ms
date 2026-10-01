@@ -62,11 +62,8 @@ import {
 	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
-// V3 — peel Union-backed generics (Result<T,E>, Option<T>) so codec macros see
-// substituted variants + disc info. Lazy-instantiate pattern from destructorLifting.
-import { instantiateGenericBody, isMaybeType } from "../../checker/types";
+import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { genericParamsOf } from "../../checker/types";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -99,23 +96,6 @@ export function mkNull(loc: SourceLocation): Node {
 
 // ===== mapTypeToAst — Type → Node tree =====
 //
-// Mirrors reference's `mapTypeToAstX` (vmdeps.nim:100-336). Converts compiler-
-// internal Type to a Node tree representing the type as AST, so macros can walk
-// type info using existing AST primitives (TypeObject, TypeGeneric, etc.).
-//
-// Default mode is "getTypeImpl" equivalent: full implementation expand,
-// recursion through named types, no alias peeling. (4 explicit view modes
-// deferred to V2 — current API exposes via node.nodeType field after bridge
-// integration.)
-//
-// V1 progress (Phase A1):
-//   Day 1 — atomic types (primitives) — DONE
-//   Day 2 — Struct (Interface/Class/Struct) — pending
-//   Day 3 — Array, SizedArray, Span — pending
-//   Day 4 — GenericInstance, GenericParam — pending
-//   Day 5 — cycle handling (recursion gate + identity dedup) — pending
-//   Week 2 — Union, Ref/modifiers, bridge integration — pending
-//   Week 3 — decorators, cross-module — pending
 
 // Map a primitive TypeKind to its source-spelling name. Returns "" for non-primitive.
 function atomicTypeName(t: Type): string {
@@ -152,10 +132,10 @@ function atomicTypeNode(name: string, loc: SourceLocation): Node {
 
 // Recurse mapTypeToAst across an array of Types. Single chokepoint for child-type
 // expansion — threads the visited stack so cycles are detected uniformly.
-function mapTypes(types: Type[], loc: SourceLocation, visited: Type[]): Node[] {
+function mapTypes(types: Type[], loc: SourceLocation, visited: Type[], impl: boolean): Node[] {
 	const out: Node[] = [];
 	for (const t of types) {
-		out.push(mapTypeToAstWith(t, loc, visited));
+		out.push(mapTypeToAstWith(t, loc, visited, impl, !impl));
 	}
 	return out;
 }
@@ -193,11 +173,11 @@ function collectFieldDecorators(t: Type): Node[][] {
 // Reads parallel arrays t.typeNames (field names) + t.typeChildren (field types).
 // Decorators (V2): per-field decorator nodes come from the class Symbol;
 // a type without one (interface, anon struct) gets empty arrays.
-function structToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+function structToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	if (t.sym != null && hasFlag(t.sym, SymbolFlag.Forward)) return atomicTypeNode(t.typeName, loc);
 	return createNodeAt(NodeKind.TypeObject, {
 		typExprFieldNames: t.typeNames,
-		typExprFieldTypes: mapTypes(t.typeChildren, loc, visited),
+		typExprFieldTypes: mapTypes(t.typeChildren, loc, visited, impl),
 		typExprIndexKey: null as unknown as Node,
 		typExprIndexValue: null as unknown as Node,
 		typExprFieldDecorators: collectFieldDecorators(t),
@@ -209,36 +189,32 @@ function structToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 // Size encoding: SizedArray reads t.typeValue. Array and Span emit -1
 // (unsized sentinel — see node.ms:357). Array vs Span distinction is
 // intentionally lost in the AST per plan.
-function arrayToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+function arrayToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	const size: number = t.kind == TypeKind.SizedArray
 		? t.typeValue as number
 		: -1;
 	return createNodeAt(NodeKind.TypeArray, {
-		typExprElement: mapTypeToAstWith(t.typeReturn, loc, visited),
+		typExprElement: mapTypeToAstWith(t.typeReturn, loc, visited, impl, !impl),
 		typExprSize: size,
 	}, loc);
 }
 
-function functionToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+function functionToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	const names: string[] = [];
 	for (const n of t.typeNames) names.push(n);
 	return createNodeAt(NodeKind.TypeFunction, {
-		typExprParams: mapTypes(t.typeChildren, loc, visited),
+		typExprParams: mapTypes(t.typeChildren, loc, visited, impl),
 		typExprReturn: t.typeReturn != null
-			? mapTypeToAstWith(t.typeReturn, loc, visited)
-			: atomicTypeNode("void", loc),
+			? mapTypeToAstWith(t.typeReturn, loc, visited, impl, !impl)
+			: mapTypeToAstWith(voidType(), loc, visited, impl, !impl),
 		typExprParamNames: names,
 	}, loc);
 }
 
-// Build a TypeGeneric node for a GenericInstance (e.g., Container<int32>).
-// Surfaces the generic structure to macros (base name + type args) rather than
-// expanding the instantiated body. Codec macros typically introspect the type
-// parameters; the concrete body is reachable separately via the base symbol.
-function setToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+function setToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	return createNodeAt(NodeKind.TypeGeneric, {
 		typExprBase: atomicTypeNode("BitSet", loc),
-		typExprArgs: [mapTypeToAstWith(t.typeReturn, loc, visited)],
+		typExprArgs: [mapTypeToAstWith(t.typeReturn, loc, visited, impl, !impl)],
 	}, loc);
 }
 
@@ -263,38 +239,27 @@ function enumLiteralToAst(t: Type, loc: SourceLocation): Node {
 	}, loc);
 }
 
-function tupleToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+function tupleToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	return createNodeAt(NodeKind.TypeGeneric, {
 		typExprBase: atomicTypeNode("tuple", loc),
-		typExprArgs: mapTypes(t.typeChildren, loc, visited),
+		typExprArgs: mapTypes(t.typeChildren, loc, visited, impl),
 	}, loc);
 }
 
-function genericToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+function genericToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	return createNodeAt(NodeKind.TypeGeneric, {
 		typExprBase: atomicTypeNode(nameOrDefault(t, "<anon-generic>"), loc),
-		typExprArgs: mapTypes(t.typeChildren, loc, visited),
+		typExprArgs: mapTypes(t.typeChildren, loc, visited, impl),
 	}, loc);
 }
 
-// V3 — Union-backed generics (Result<T,E>, Option<T>) get peeled
-// so codec macros see substituted variants + disc info instead of opaque
-// TypeGeneric. Non-Union-backed generics (Container<T>, Map<K,V>, Promise<T>)
-// fall through to standard genericToAst.
-//
-// Lazy-instantiate pattern from src/transform/lowering/destructorLifting.ms:128 —
-// idempotent (gated on typeReturn === null), proven elsewhere in compiler.
-function genericInstanceToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
-	if (t.typeExtra != null && t.typeExtra.kind == TypeKind.Union) {
-		if (t.typeReturn == null) {
-			const decl = genericParamsOf(t);
-			if (decl != "") instantiateGenericBody(t, decl);
-		}
-		if (t.typeReturn != null && t.typeReturn.kind == TypeKind.Union) {
-			return unionToAst(t.typeReturn, loc, visited);
-		}
+function genericInstanceToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
+	if (impl || (t.typeExtra != null && t.typeExtra.kind == TypeKind.Union)) {
+		if (t.typeReturn == null) instantiateGenericBody(t, genericParamsOf(t));
+		if (t.typeReturn != null) return mapTypeToAstWith(t.typeReturn, loc, visited, impl);
+		if (impl) throw new Error(`getTypeImpl: no concrete generic body for '${t.typeName}'`);
 	}
-	return genericToAst(t, loc, visited);
+	return genericToAst(t, loc, visited, impl);
 }
 
 // Build a TypeUnion node for `A | B | C` types. typeChildren holds the variant
@@ -313,11 +278,11 @@ function genericInstanceToAst(t: Type, loc: SourceLocation, visited: Type[]): No
 // the surface union the user wrote, not {value, present}. Leaking the carrier
 // made codec macros treat nullable fields as nested structs and emit garbage C.
 // The literal is contextually typed by the formal, like unionToAst below.
-function maybeToUnionAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+function maybeToUnionAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	return createNodeAt(NodeKind.TypeUnion, {
 		typExprMembers: [
-			mapTypeToAstWith(t.typeReturn, loc, visited),
-			atomicTypeNode("null", loc),
+			mapTypeToAstWith(t.typeReturn, loc, visited, impl, !impl),
+			mapTypeToAstWith(nullType(), loc, visited, impl, !impl),
 		],
 		discFieldName: "",
 		variantKeys: [],
@@ -325,7 +290,7 @@ function maybeToUnionAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 	}, loc);
 }
 
-function unionToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+function unionToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	let discField: string = "";
 	const variantKeys: string[] = [];
 	let discKind: string = "";
@@ -346,7 +311,7 @@ function unionToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
 		};
 	}
 	return createNodeAt(NodeKind.TypeUnion, {
-		typExprMembers: mapTypes(t.typeChildren, loc, visited),
+		typExprMembers: mapTypes(t.typeChildren, loc, visited, impl),
 		discFieldName: discField,
 		variantKeys,
 		discKind,
@@ -371,10 +336,10 @@ function modifierName(kind: TypeKind): string {
 // Build a TypeGeneric wrapper for ownership / pointer modifier types.
 // Output shape: TypeGeneric(Identifier("Ref"), [innerType]). Codec macros can
 // detect the modifier name via the base Identifier and walk the inner via args[0].
-function modifierToAst(t: Type, loc: SourceLocation, visited: Type[]): Node {
+function modifierToAst(t: Type, loc: SourceLocation, visited: Type[], impl: boolean): Node {
 	return createNodeAt(NodeKind.TypeGeneric, {
 		typExprBase: atomicTypeNode(modifierName(t.kind), loc),
-		typExprArgs: [mapTypeToAstWith(t.typeReturn, loc, visited)],
+		typExprArgs: [mapTypeToAstWith(t.typeReturn, loc, visited, impl, !impl)],
 	}, loc);
 }
 
@@ -386,37 +351,50 @@ function fallbackTypeName(t: Type, loc: SourceLocation): Node {
 // Aliases peel transparently. Already-visiting Types emit a name-only Identifier
 // to break the cycle (e.g., `Tree { children: Tree[] }` → outer Tree expands,
 // inner reference back to Tree hits the visited check and emits Identifier("Tree")).
-function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[]): Node {
-	if (t == null) return atomicTypeNode("<null>", loc);
+function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], impl: boolean, allowRecursion: boolean = true): Node {
+	if (t == null) {
+		if (impl) throw new Error(`getTypeImpl: missing child type at ${loc.line}:${loc.column}`);
+		return atomicTypeNode("<null>", loc);
+	}
 
 	const atomicName = atomicTypeName(t);
-	if (atomicName != "") return atomicTypeNode(atomicName, loc);
+	if (atomicName != "") {
+		const result = atomicTypeNode(atomicName, loc);
+		result.nodeType = t;
+		return result;
+	}
 
 	// Cycle break — emit name placeholder and stop descending.
 	// Pre-push check so Alias peel below also benefits (e.g., `type X = X`).
 	if (isVisiting(visited, t)) {
-		return atomicTypeNode(nameOrDefault(t, "<cycle>"), loc);
+		if (impl && (t.kind == TypeKind.Alias || t.typeName == "")) {
+			throw new Error(`getTypeImpl: unnamed or alias type cycle (${t.kind.toString()})`);
+		}
+		const result = atomicTypeNode(nameOrDefault(t, "<cycle>"), loc);
+		result.nodeType = t;
+		return result;
 	}
 
 	visited.push(t);
 	const result: Node = match (t.kind) {
 		TypeKind.Alias => t.typeReturn != null
-			? mapTypeToAstWith(t.typeReturn, loc, visited)
+			? mapTypeToAstWith(t.typeReturn, loc, visited, impl, allowRecursion)
 			: fallbackTypeName(t, loc),
 		// Maybe<T> is the checker's INTERNAL carrier for `T | null` — macros
 		// must see the surface union the user wrote, not {value, present}.
 		// Leaking the carrier made codec macros treat nullable fields as
 		// nested structs and emit garbage C (bug: JSON.parse<T> with a
 		// `string | null` field).
-		TypeKind.Struct when (isMaybeType(t) && t.typeReturn != null) => maybeToUnionAst(t, loc, visited),
-		TypeKind.Struct => structToAst(t, loc, visited),
-		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => arrayToAst(t, loc, visited),
-		TypeKind.Set => setToAst(t, loc, visited),
+		TypeKind.Struct when (isMaybeType(t) && t.typeReturn != null) => maybeToUnionAst(t, loc, visited, impl),
+		TypeKind.Struct => structToAst(t, loc, visited, impl),
+		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => arrayToAst(t, loc, visited, impl),
+		TypeKind.Set => setToAst(t, loc, visited, impl),
 		TypeKind.Enum => enumToAst(t, loc),
-		TypeKind.Tuple => tupleToAst(t, loc, visited),
-		TypeKind.GenericInstance => genericInstanceToAst(t, loc, visited),
+		TypeKind.Tuple => tupleToAst(t, loc, visited, impl),
+		TypeKind.GenericInstance when (impl && !allowRecursion) => genericToAst(t, loc, visited, impl),
+		TypeKind.GenericInstance => genericInstanceToAst(t, loc, visited, impl),
 		TypeKind.GenericParam => atomicTypeNode(nameOrDefault(t, "T"), loc),
-		TypeKind.Union => unionToAst(t, loc, visited),
+		TypeKind.Union => unionToAst(t, loc, visited, impl),
 		// Literal types — emit as their literal Node kind so consumers can
 		// distinguish a literal value from a type-name Identifier. Without
 		// this, `kind: "circle"` (StringLiteral type with typeName="circle")
@@ -428,39 +406,27 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[]):
 		TypeKind.BooleanLiteral => createNodeAt(NodeKind.BooleanLiteral, { boolValue: nameOrDefault(t, "") == "true" }, loc),
 		TypeKind.EnumLiteral => enumLiteralToAst(t, loc),
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Sink | TypeKind.Lent | TypeKind.Var | TypeKind.Distinct
-			=> modifierToAst(t, loc, visited),
-		TypeKind.Function => functionToAst(t, loc, visited),
+			=> modifierToAst(t, loc, visited, impl),
+		TypeKind.Function => functionToAst(t, loc, visited, impl),
 		_ => fallbackTypeName(t, loc),
 	};
 	visited.pop();
+	result.nodeType = t;
 	return result;
 }
 
 // Public entry — Type → Node tree.
 //
-// V1 progress (Phase A1):
-//   Day 1: atomic primitives → Identifier (DONE)
-//   Day 2: Struct → TypeObject (DONE)
-//   Day 3: Array, SizedArray, Span → TypeArray (DONE)
-//   Day 4: GenericInstance → TypeGeneric, GenericParam → Identifier (DONE)
-//   Day 5: Alias peel + identity-dedup cycle handling (DONE)
-//   Day 6: Union → TypeUnion (DONE)
-//   Day 7: Ref/Ptr/Sink/Lent/Var/Borrow/Distinct → TypeGeneric wrapper (DONE)
-//
-// Recursion gate (`inst && !allowRecursion && t.sym !== null`) deferred to V2 —
-// only relevant when exposing getTypeInst. Default V1 mode is always
-// allowRecursion=true (getTypeImpl-like for fields, getTypeInst-like for the
-// generic structure surfaced at GenericInstance).
-export function mapTypeToAst(t: Type | null, loc: SourceLocation): Node {
-	return mapTypeToAstWith(t, loc, []);
+export function mapTypeToAst(t: Type | null, loc: SourceLocation, impl: boolean = false): Node {
+	return mapTypeToAstWith(t, loc, [], impl);
 }
 
 // ===== Serialization helpers (write to RaiserValue) =====
 
-function serializeNodes(nodes: Node[], objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap): RaiserValue {
+function serializeNodes(nodes: Node[], objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, includeTypeAst: boolean = true): RaiserValue {
 	const handle = heapAllocArray(arrHeap);
 	for (const node of nodes) {
-		const v = nodeToValue(node, objHeap, arrHeap);
+		const v = nodeToValue(node, objHeap, arrHeap, includeTypeAst);
 		heapArrayPush(arrHeap, handle, v);
 	}
 	return raiserArray(handle);
@@ -491,18 +457,18 @@ function setBool(objHeap: RaiserObjectHeap, h: number, name: string, val: boolea
 	heapObjectSetField(objHeap, h, name, v);
 }
 
-function setNode(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, child: Node | null): void {
+function setNode(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, child: Node | null, includeTypeAst: boolean = true): void {
 	if (child == null) {
 		// Represent null Node fields as RaiserValue.Nil — readNode handles this on the way back
 		heapObjectSetField(objHeap, h, name, raiserNil());
 		return;
 	}
-	const v = nodeToValue(child, objHeap, arrHeap);
+	const v = nodeToValue(child, objHeap, arrHeap, includeTypeAst);
 	heapObjectSetField(objHeap, h, name, v);
 }
 
-function setNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, children: Node[]): void {
-	const v = serializeNodes(children, objHeap, arrHeap);
+function setNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, children: Node[], includeTypeAst: boolean = true): void {
+	const v = serializeNodes(children, objHeap, arrHeap, includeTypeAst);
 	heapObjectSetField(objHeap, h, name, v);
 }
 
@@ -603,7 +569,7 @@ export function stripMacroArgWrappers(node: Node): Node {
 	return n;
 }
 
-export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap): RaiserValue {
+export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, includeTypeAst: boolean = true): RaiserValue {
 	const node = stripMacroArgWrappers(nodeIn);
 	const handle = heapAllocObject(objHeap);
 	// Common fields: kind, line, column
@@ -1060,23 +1026,18 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		},
 
 		// === Type AST nodes (synthesized by mapTypeToAst, Day 8) ===
-		// NOTE: macros do NOT consume these directly via nodeToValue — the
-		// production macro path is `nodeToASTLiteral` in expand.ms (source-form
-		// inlining). These cases serve unit-test coverage of the heap path and
-		// keep nodeToValue complete for future heap-based consumers. When adding
-		// new type-AST kinds, ALSO update `addKindFields` in expand.ms.
 		NodeKind.TypeObject => {
 			const d = node.data as TypeObjectData;
 			setStrs(objHeap, arrHeap, handle, "typExprFieldNames", d.typExprFieldNames);
-			setNodes(objHeap, arrHeap, handle, "typExprFieldTypes", d.typExprFieldTypes);
-			setNode(objHeap, arrHeap, handle, "typExprIndexKey", d.typExprIndexKey);
-			setNode(objHeap, arrHeap, handle, "typExprIndexValue", d.typExprIndexValue);
+			setNodes(objHeap, arrHeap, handle, "typExprFieldTypes", d.typExprFieldTypes, false);
+			setNode(objHeap, arrHeap, handle, "typExprIndexKey", d.typExprIndexKey, false);
+			setNode(objHeap, arrHeap, handle, "typExprIndexValue", d.typExprIndexValue, false);
 			setNodeArrays(objHeap, arrHeap, handle, "typExprFieldDecorators", d.typExprFieldDecorators);
 			setStr(objHeap, handle, "typExprTypeName", d.typExprTypeName);
 		},
 		NodeKind.TypeArray => {
 			const d = node.data as TypeArrayData;
-			setNode(objHeap, arrHeap, handle, "typExprElement", d.typExprElement);
+			setNode(objHeap, arrHeap, handle, "typExprElement", d.typExprElement, false);
 			heapObjectSetField(objHeap, handle, "typExprSize", raiserInt(d.typExprSize as int64));
 		},
 		NodeKind.TypeUnion => {
@@ -1084,25 +1045,25 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			// + macro VM access path in src/compiler/meta/expand.ms.
 			// Update all 3 sites together when adding fields.
 			const d = node.data as TypeUnionData;
-			setNodes(objHeap, arrHeap, handle, "typExprMembers", d.typExprMembers);
+			setNodes(objHeap, arrHeap, handle, "typExprMembers", d.typExprMembers, false);
 			setStr(objHeap, handle, "discFieldName", d.discFieldName);
 			setStrs(objHeap, arrHeap, handle, "variantKeys", d.variantKeys);
 			setStr(objHeap, handle, "discKind", d.discKind);
 		},
 		NodeKind.TypeIntersection => {
 			const d = node.data as TypeIntersectionData;
-			setNodes(objHeap, arrHeap, handle, "typExprMembers", d.typExprMembers);
+			setNodes(objHeap, arrHeap, handle, "typExprMembers", d.typExprMembers, false);
 		},
 		NodeKind.TypeGeneric => {
 
 			const d = node.data as TypeGenericData;
-			setNode(objHeap, arrHeap, handle, "typExprBase", d.typExprBase);
-			setNodes(objHeap, arrHeap, handle, "typExprArgs", d.typExprArgs);
+			setNode(objHeap, arrHeap, handle, "typExprBase", d.typExprBase, false);
+			setNodes(objHeap, arrHeap, handle, "typExprArgs", d.typExprArgs, false);
 		},
 		NodeKind.TypeFunction => {
 			const d = node.data as TypeFunctionData;
-			setNodes(objHeap, arrHeap, handle, "typExprParams", d.typExprParams);
-			setNode(objHeap, arrHeap, handle, "typExprReturn", d.typExprReturn);
+			setNodes(objHeap, arrHeap, handle, "typExprParams", d.typExprParams, false);
+			setNode(objHeap, arrHeap, handle, "typExprReturn", d.typExprReturn, false);
 			setStrs(objHeap, arrHeap, handle, "typExprParamNames", d.typExprParamNames);
 		},
 
@@ -1140,23 +1101,14 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		_ => {},
 	};
 
-	// Day 8: emit `nodeType` field for nodes that have resolved type info.
-	// mapTypeToAst produces a synthesized Node tree (Identifier/TypeObject/etc.);
-	// nodeToValue recurses to serialize it. Synthesized nodes have
-	// `nodeType === null` (set by createNode in std/meta/node.ms:566), so the
-	// recursion terminates exactly one level deep.
-	//
-	// Forward-only: macros READ value.nodeType. Reverse path (valueToNode) ignores
-	// nodeType — checker re-resolves types on macro output, so round-trip
-	// asymmetry is intentional.
 	if (node.nodeType != null) {
-		const typeAst = mapTypeToAst(node.nodeType, node.location);
-		setNode(objHeap, arrHeap, handle, "nodeType", typeAst);
-	} else if (node.nodeTypeAst != null) {
-		// Mirror of nodeToASTLiteral's nodeTypeAst fallback (expand.ms) — the
-		// two serialization paths must stay in sync or a carrier node loses
-		// its type on whichever path lacks the fallback.
-		setNode(objHeap, arrHeap, handle, "nodeType", node.nodeTypeAst);
+		heapObjectSetField(objHeap, handle, "typeHandle", raiserInt(registerBoundType(node.nodeType) as int64));
+		if (includeTypeAst) {
+			const typeAst = mapTypeToAst(node.nodeType, node.location);
+			setNode(objHeap, arrHeap, handle, "nodeType", typeAst, false);
+		}
+	} else if (includeTypeAst && node.nodeTypeAst != null) {
+		setNode(objHeap, arrHeap, handle, "nodeType", node.nodeTypeAst, false);
 	}
 
 	// Day 9: emit `resolvedSym` for nodes the checker bound to a Symbol.
@@ -2842,6 +2794,16 @@ test "mapTypeToAst — self-aliased Type (`type X = X`) terminates via cycle bre
 	const out = mapTypeToAst(t, loc);
 	assert out.kind == NodeKind.Identifier;
 	assert (out.data as IdentifierData).name == "Loop";
+}
+
+test "mapTypeToAst — a self-aliased Type stops getTypeImpl with an internal error" {
+	const loc = makeLoc(1, 0);
+	const t = makePrimType(TypeKind.Alias);
+	t.typeName = "Loop";
+	t.typeReturn = t;
+	let threw = false;
+	try { mapTypeToAst(t, loc, true); } catch (e) { threw = true; }
+	assert threw;
 }
 
 test "mapTypeToAst — chained alias (A → B → int32) peels through both layers" {

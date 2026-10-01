@@ -4366,7 +4366,7 @@ export function engineNodeHasVirtualKey(recvType: Type | null, key: string): boo
 	if (flattenedLocationFieldType(recvType, key) != null) return true;
 	// bindSym bake splices Identifier literals carrying the bound-symbol handle;
 	// valueToNode consumes it — never a real Node field.
-	if (key == "symHandle") return true;
+	if (key == "symHandle" || key == "typeHandle") return true;
 	return engineNodeDataField(recvType, key).fieldType != null;
 }
 

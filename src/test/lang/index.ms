@@ -47,3 +47,4 @@ import "./suspensionEvaluation";
 import "./unionUpdates";
 import "./valueLocations";
 import "./valueStorage";
+import "./typeImplementationQuery";

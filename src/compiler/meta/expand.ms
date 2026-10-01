@@ -59,8 +59,7 @@ import { hasGenericParams } from "../../checker/types";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf } from "../../checker/callResolve";
-import { stillDecoratedMessage } from "./typeQuery";
-import { TypeKind } from "../../ast/node";
+import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
 import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
 import "./decorators";
@@ -70,7 +69,7 @@ import { RaiserContext } from "../../raiser/context";
 import { RaiserVM } from "../../raiser/vm";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
-import { valueToNode, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym } from "./bridge";
+import { valueToNode, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType } from "./bridge";
 import { ensureShaped } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
 import { addWarning } from "../../checker/context";
@@ -136,7 +135,7 @@ function lowerQuoteExpr(node: Node): Node {
 //
 // Implementation strategy: build an ObjectLiteralData with kind, line, column,
 // + the kind-specific fields. Recursive for child Node fields.
-function nodeToASTLiteral(node: Node | null, loc: SourceLocation): Node {
+function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst: boolean = true): Node {
 	if (node == null) return mkNull(loc);
 	node = stripMacroArgWrappers(node);
 	if (node == null) return mkNull(loc);
@@ -161,23 +160,17 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation): Node {
 	// Append kind-specific fields
 	addKindFields(node, keys, values, loc);
 
-	// Type introspection (SERIALIZE Phase A1): if the host node has resolved
-	// type info, synthesize the type AST and embed it as `nodeType` field.
-	// Macros read `value.nodeType.kind`, `value.nodeType.typExprFieldNames`, etc.
-	// Synthesized type-AST nodes have nodeType=null (createNode default), so
-	// recursion terminates one level deep.
-	//
-	// Fallback to nodeTypeAst (a Node-form type-AST cached during macro VM
-	// round-trip) when nodeType (the Type form) is null. This propagates
-	// type info through nested macro expansion chains where readNodeFromObject
-	// can reconstruct the type-AST as Node but not as Type. Fixes Bug 6.
 	if (node.nodeType != null) {
-		const typeAst = mapTypeToAst(node.nodeType, loc);
+		keys.push("typeHandle");
+		values.push(mkNumber(registerBoundType(node.nodeType), loc));
+		if (includeTypeAst) {
+			const typeAst = mapTypeToAst(node.nodeType, loc);
+			keys.push("nodeType");
+			values.push(nodeToASTLiteral(typeAst, loc, false));
+		}
+	} else if (includeTypeAst && node.nodeTypeAst != null) {
 		keys.push("nodeType");
-		values.push(nodeToASTLiteral(typeAst, loc));
-	} else if (node.nodeTypeAst != null) {
-		keys.push("nodeType");
-		values.push(nodeToASTLiteral(node.nodeTypeAst, loc));
+		values.push(nodeToASTLiteral(node.nodeTypeAst, loc, false));
 	}
 
 	// Symbol introspection: surface name + kind for nodes the checker bound
@@ -239,7 +232,7 @@ function addBoolField(keys: string[], values: Node[], name: string, val: boolean
 	values.push(mkBool(val, loc));
 }
 
-function addNodeField(keys: string[], values: Node[], name: string, val: Node | null, loc: SourceLocation): void {
+function addNodeField(keys: string[], values: Node[], name: string, val: Node | null, loc: SourceLocation, includeTypeAst: boolean = true): void {
 	guardChildFieldName(name);
 	keys.push(name);
 	// splice(expr) inside a quote body: emit the arg expression directly
@@ -247,15 +240,15 @@ function addNodeField(keys: string[], values: Node[], name: string, val: Node | 
 	if (_quoteSpliceActive && isSpliceCall(val)) {
 		values.push((val.data as CallExprData).arguments[0]);
 	} else {
-		values.push(nodeToASTLiteral(val, loc));
+		values.push(nodeToASTLiteral(val, loc, includeTypeAst));
 	}
 }
 
-function addNodeArrayField(keys: string[], values: Node[], name: string, arr: Node[], loc: SourceLocation): void {
+function addNodeArrayField(keys: string[], values: Node[], name: string, arr: Node[], loc: SourceLocation, includeTypeAst: boolean = true): void {
 	guardChildFieldName(name);
 	const elements: Node[] = [];
 	for (const child of arr) {
-		elements.push(nodeToASTLiteral(child, loc));
+		elements.push(nodeToASTLiteral(child, loc, includeTypeAst));
 	}
 	keys.push(name);
 	values.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
@@ -434,22 +427,22 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 	if (k == NodeKind.TypeObject) {
 		const d = node.data as TypeObjectData;
 		addStrArrayField(keys, values, "typExprFieldNames", d.typExprFieldNames, loc);
-		addNodeArrayField(keys, values, "typExprFieldTypes", d.typExprFieldTypes, loc);
-		if (d.typExprIndexKey != null) addNodeField(keys, values, "typExprIndexKey", d.typExprIndexKey, loc);
-		if (d.typExprIndexValue != null) addNodeField(keys, values, "typExprIndexValue", d.typExprIndexValue, loc);
+		addNodeArrayField(keys, values, "typExprFieldTypes", d.typExprFieldTypes, loc, false);
+		if (d.typExprIndexKey != null) addNodeField(keys, values, "typExprIndexKey", d.typExprIndexKey, loc, false);
+		if (d.typExprIndexValue != null) addNodeField(keys, values, "typExprIndexValue", d.typExprIndexValue, loc, false);
 		addNodeArrayArrayField(keys, values, "typExprFieldDecorators", d.typExprFieldDecorators, loc);
 		addStrField(keys, values, "typExprTypeName", d.typExprTypeName, loc);
 		return;
 	}
 	if (k == NodeKind.TypeArray) {
 		const d = node.data as TypeArrayData;
-		addNodeField(keys, values, "typExprElement", d.typExprElement, loc);
+		addNodeField(keys, values, "typExprElement", d.typExprElement, loc, false);
 		addNumField(keys, values, "typExprSize", d.typExprSize, loc);
 		return;
 	}
 	if (k == NodeKind.TypeUnion) {
 		const d = node.data as TypeUnionData;
-		addNodeArrayField(keys, values, "typExprMembers", d.typExprMembers, loc);
+		addNodeArrayField(keys, values, "typExprMembers", d.typExprMembers, loc, false);
 		// V3 disc metadata — bridge populates for match-type DUs; empty for TS-style.
 		addStrField(keys, values, "discFieldName", d.discFieldName, loc);
 		addStrArrayField(keys, values, "variantKeys", d.variantKeys, loc);
@@ -458,19 +451,19 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 	}
 	if (k == NodeKind.TypeIntersection) {
 		const d = node.data as TypeIntersectionData;
-		addNodeArrayField(keys, values, "typExprMembers", d.typExprMembers, loc);
+		addNodeArrayField(keys, values, "typExprMembers", d.typExprMembers, loc, false);
 		return;
 	}
 	if (k == NodeKind.TypeGeneric) {
 		const d = node.data as TypeGenericData;
-		addNodeField(keys, values, "typExprBase", d.typExprBase, loc);
-		addNodeArrayField(keys, values, "typExprArgs", d.typExprArgs, loc);
+		addNodeField(keys, values, "typExprBase", d.typExprBase, loc, false);
+		addNodeArrayField(keys, values, "typExprArgs", d.typExprArgs, loc, false);
 		return;
 	}
 	if (k == NodeKind.TypeFunction) {
 		const d = node.data as TypeFunctionData;
-		addNodeArrayField(keys, values, "typExprParams", d.typExprParams, loc);
-		addNodeField(keys, values, "typExprReturn", d.typExprReturn, loc);
+		addNodeArrayField(keys, values, "typExprParams", d.typExprParams, loc, false);
+		addNodeField(keys, values, "typExprReturn", d.typExprReturn, loc, false);
 		addStrArrayField(keys, values, "typExprParamNames", d.typExprParamNames, loc);
 		return;
 	}
@@ -1512,22 +1505,15 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 					addError(ctx, `Macro '${macroName}': getTypeImpl cannot resolve type '${typeName}' in the macro's module scope`, node.location.line, node.location.column);
 					return node;
 				}
-				// Peel the Ref/Alias wrapper: the caller asked about a TYPE, so hand back
-				// its implementation (TypeObject) rather than the Ref<T> that a VALUE of
-				// that type would carry. `nodeType` is the opposite case and keeps Ref.
-				let t = sym.symbolType;
-				let guard = 0;
-				while (t != null && guard < 4
-						&& (t.kind == TypeKind.Ref || t.kind == TypeKind.Alias)
-						&& t.typeReturn != null) {
-					t = t.typeReturn;
-					guard = guard + 1;
-				}
+				const t = peelToImpl(sym.symbolType, declCtx);
+				if (t == null) return node;
+				const implementation = mapTypeToAst(t, node.location, true);
+				implementation.nodeType = sym.symbolType;
 				// Assert to Node so flat reads on the spliced literal resolve through the
 				// NodeData unique-field-name rule; a bare literal would type as its own
 				// anonymous struct and expose only the keys it happens to carry.
 				return createNodeAt(NodeKind.TypeAssertion, {
-					asExpr: nodeToASTLiteral(mapTypeToAst(t, node.location), node.location),
+					asExpr: nodeToASTLiteral(implementation, node.location, false),
 					asType: "Node",
 				}, node.location);
 			}
@@ -1551,16 +1537,12 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 				addError(ctx, `Macro '${macroName}': getTypeArg() cannot resolve type '${typeArg}' at the call site`, node.location.line, node.location.column);
 				return node;
 			}
-			let at = argSym.symbolType;
-			let aguard = 0;
-			while (at != null && aguard < 4
-					&& (at.kind == TypeKind.Ref || at.kind == TypeKind.Alias)
-					&& at.typeReturn != null) {
-				at = at.typeReturn;
-				aguard = aguard + 1;
-			}
+			const at = peelToImpl(argSym.symbolType, ctx);
+			if (at == null) return node;
+			const implementation = mapTypeToAst(at, node.location, true);
+			implementation.nodeType = argSym.symbolType;
 			return createNodeAt(NodeKind.TypeAssertion, {
-				asExpr: nodeToASTLiteral(mapTypeToAst(at, node.location), node.location),
+				asExpr: nodeToASTLiteral(implementation, node.location, false),
 				asType: "Node",
 			}, node.location);
 		}
