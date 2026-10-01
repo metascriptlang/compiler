@@ -48,7 +48,7 @@ test "bug610: every slot of the struct type refuses another struct" {
 	const field = error610("const a: A610 = { code: 7 }; const h: H610 = { p: a };");
 	assert field.indexOf("Type 'A610' is not assignable to type 'P610'", 0) >= 0, field;
 	const elem = error610("const a: A610 = { code: 7 }; const ps: P610[] = [a];");
-	assert elem.indexOf("Type 'A610' is not assignable to element type 'P610'", 0) >= 0, elem;
+	assert elem.indexOf("Type 'A610' is not assignable to type 'P610'", 0) >= 0, elem;
 	const nullable = error610("const a: A610 = { code: 7 }; const p: P610 | null = a;");
 	assert nullable.indexOf("Type 'A610' is not assignable to type 'P610 | null'", 0) >= 0, nullable;
 	const reassign = error610("const a: A610 = { code: 7 }; let p: P610 = { code: 1 }; p = a;");
