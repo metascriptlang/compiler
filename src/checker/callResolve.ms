@@ -1550,6 +1550,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 		} else {
 			continue;
 		}
+		paramType = peelTransparentInstance(paramType);
 		if (argTypes[pi] == null || argTypes[pi] == null) continue;
 		const foreignVarargs = hasRest && pi >= restParamIdx && node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ImportC);
 		const formal: Type = skipModifier(paramType) ?? paramType;
@@ -1589,8 +1590,9 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			// not directly assignable to Maybe<T> — we want a struct literal.
 			// Generic-containing formals never wrap here — deferred to the
 			// post-binding reconciliation (Nim implicitConv, sigmatch.nim:2179).
+			const argHeld = peelTransparentInstance(argTypes[pi]);
 			if (isMaybeType(paramType) && paramType.typeReturn != null
-					&& !isMaybeType(argTypes[pi])
+					&& !isMaybeType(argHeld)
 					&& (args[pi].kind == NodeKind.NullLiteral
 						|| argTypes[pi].kind == TypeKind.Null
 						|| isAssignable(argTypes[pi], paramType.typeReturn))) {
@@ -1600,7 +1602,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			// `A | null` meeting `A | B | null`. Same reason the wrap above
 			// lives here: an argument never reaches fitNode, so the carrier
 			// widening has to be applied at this site too.
-			if (isMaybeType(paramType) && isMaybeType(argTypes[pi])) {
+			if (isMaybeType(paramType) && isMaybeType(peelTransparentInstance(argTypes[pi]))) {
 				const widenedArg = widenMaybePayload(args[pi], paramType, argTypes[pi]);
 				if (widenedArg != null as unknown as Node) {
 					args[pi] = widenedArg;
