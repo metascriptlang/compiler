@@ -1158,3 +1158,15 @@ export function transferLamportsSigned(
 ): Result<uint64, ProgramError> {
 	return transfer(from, to as Account, lamports, signer);
 }
+
+export function asSigner(this proof: WritableSigner): Signer {
+	return (proof as Account) as Signer;
+}
+
+export function asWritable(this proof: WritableSigner): Writable {
+	return (proof as Account) as Writable;
+}
+
+export function asWritable<T>(this proof: Mutable<T>): Writable {
+	return (proof as Account) as Writable;
+}
