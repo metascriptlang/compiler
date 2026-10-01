@@ -459,3 +459,42 @@ test "valueStorage: replacing a nonempty word-bitset vector retains high ordinal
 	assert owner.bits[0].has(WordVectorFlag.High);
 	assert !owner.bits[0].has(WordVectorFlag.Changed);
 }
+
+enum AggregateVectorFlag {
+	F0, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, F13, F14, F15,
+	F16, F17, F18, F19, F20, F21, F22, F23, F24, F25, F26, F27, F28, F29, F30, F31,
+	F32, F33, F34, F35, F36, F37, F38, F39, F40, F41, F42, F43, F44, F45, F46, F47,
+	F48, F49, F50, F51, F52, F53, F54, F55, F56, F57, F58, F59, F60, F61, F62, F63,
+	F64,
+}
+
+function returnedAggregateSetVector(): Vec<BitSet<AggregateVectorFlag>> {
+	const value = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F0).incl(AggregateVectorFlag.F64);
+	let values: Vec<BitSet<AggregateVectorFlag>> = [];
+	values.push(value);
+	return values;
+}
+
+test "valueStorage: returned aggregate-bitset vectors preserve independent value copies" {
+	const original = returnedAggregateSetVector();
+	let copied = original;
+	copied[0] = copied[0].excl(AggregateVectorFlag.F0);
+	assert original[0].has(AggregateVectorFlag.F0);
+	assert original[0].has(AggregateVectorFlag.F64);
+	assert !copied[0].has(AggregateVectorFlag.F0);
+	assert copied[0].has(AggregateVectorFlag.F64);
+	copied = new Array(0);
+	assert original[0].has(AggregateVectorFlag.F0);
+}
+
+test "valueStorage: nested aggregate-bitset vector copies retain independent inner buffers" {
+	const inner = returnedAggregateSetVector();
+	const original: Vec<Vec<BitSet<AggregateVectorFlag>>> = [inner];
+	let copied = original;
+	copied[0][0] = copied[0][0].excl(AggregateVectorFlag.F64);
+	assert original[0][0].has(AggregateVectorFlag.F64);
+	assert !copied[0][0].has(AggregateVectorFlag.F64);
+	assert copied[0][0].has(AggregateVectorFlag.F0);
+	copied = new Array(0);
+	assert original[0][0].has(AggregateVectorFlag.F64);
+}

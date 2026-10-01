@@ -1747,6 +1747,9 @@ export function getArrayTypeName(elemType: string): string {
 	return mangle(elemType) + "Array";
 }
 
+// Element's C type NAME (no emission) — mirrors EVERY name-producing branch of getTypeDesc
+// using the SAME building blocks (getSimpleTypeDesc / mangle / monoTypeKey / tupleTypeName),
+// so arrayCTypeName agrees with getTypeDesc for any element that appears in a value array.
 function elemArrayCName(elem: Type): string {
 	const simple = getSimpleTypeDesc(elem);
 	if (simple != "") return simple;
@@ -1761,6 +1764,7 @@ function elemArrayCName(elem: Type): string {
 	if (elem.kind == TypeKind.EnumLiteral) return (elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Enum) ? resolvedTypeCName(elem.typeReturn, true) : "int32_t";
 	if (elem.kind == TypeKind.Tuple) return tupleTypeName(elem);
 	if (elem.kind == TypeKind.Array) return arrayCTypeName(elem);
+	if (elem.kind == TypeKind.SizedArray && elem.typeReturn != null) return sizedArrayCName(elem, elemArrayCName(elem.typeReturn));
 	if ((elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr || elem.kind == TypeKind.Var) && elem.typeReturn != null) return elemArrayCName(elem.typeReturn) + "*";
 	if (elem.kind == TypeKind.Function) return "msClosure";
 	if (elem.kind == TypeKind.Union) {
@@ -1813,11 +1817,15 @@ export function getArrayContentType(arrTypeName: string): string {
 
 // ===== Sized Array (Stack) =====
 
+function sizedArrayCName(t: Type, elemType: string): string {
+	return `msSizedArray_${mangle(elemType)}_${t.typeValue}`;
+}
+
 function genSizedArrayType(g: CGen, t: Type): string {
 	const elemType = getTypeDesc(g, t.typeReturn);
 	const size = t.typeValue;
 	const key = typeKey(t);
-	const name = `msSizedArray_${mangle(elemType)}_${size}`;
+	const name = sizedArrayCName(t, elemType);
 
 	if (typeCacheHas(g.typeCache, key)) return typeCacheGet(g.typeCache, key);
 	typeCacheSet(g.typeCache, key, name);
