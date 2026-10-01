@@ -14,6 +14,14 @@ export function Number(v: float64): float64 {
 	return v;
 }
 
+export function Number(v: int64): float64 {
+	return v as float64;
+}
+
+export function Number(v: uint64): float64 {
+	return v as float64;
+}
+
 export function isNaN(this typeof Number, x: float64): boolean {
 	return x != x;
 }
