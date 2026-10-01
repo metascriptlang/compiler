@@ -1,6 +1,7 @@
 // @exit: 1
 // @stdout: narrowed row N
 // @xfail(danger): --danger elides the union narrowing check, so the read of the other member is undefined behaviour
+// @skip-js: node exits 1 with the same "member 'string' is not accessible" line but wraps it in its own uncaught-error report, and parity compares merged stdout+stderr (sibling of 653)
 // @xfail(raiser): the Raiser has no union narrowing check; the read yields the other member and prints V with exit 0
 function pick(k: int32): number | string | null {
 	if (k == 0) return 1;
