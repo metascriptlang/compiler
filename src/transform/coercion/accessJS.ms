@@ -22,7 +22,7 @@ function rewriteAccess(node: Node, ctx: TransformContext): Node {
 	return node;
 }
 
-function indexedType(arr: Node): Type | null {
+export function indexedType(arr: Node): Type | null {
 	if (arr.nodeType == null) return null;
 	let t = peelTransparentInstance(arr.nodeType);
 	if (t.kind == TypeKind.Ref && t.typeReturn != null) t = peelTransparentInstance(t.typeReturn);

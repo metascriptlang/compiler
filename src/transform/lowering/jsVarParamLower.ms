@@ -6,7 +6,8 @@ import {
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { mapChildren } from "../walker";
-import { makeIdentResolved, makeNumber, makeString, makeArrayAccess, makeAssign, makeExprStmt } from "../util";
+import { makeIdentResolved, makeNumber, makeString, makeArrayAccess, makeAssign, makeExprStmt, makeCall, runtimeRef } from "../util";
+import { indexedType } from "../coercion/accessJS";
 
 let boxedSyms: Symbol[] = [];
 let fnStack: Node[] = [];
@@ -141,9 +142,12 @@ function pairize(arg: Node): Node {
 	}
 	if (inner.kind == NodeKind.ArrayAccess) {
 		const ad = inner.data as ArrayAccessData;
+		const indexed = indexedType(ad.array);
 		const cont = rw(unwrapAddr(ad.array));
 		cont.nodeType = null;
-		return pairLit(cont, rw(ad.index), inner);
+		if (indexed == null) return pairLit(cont, rw(ad.index), inner);
+		const cellOf = indexed.kind == TypeKind.Span ? "msSpanCell" : "msArrayCell";
+		return makeCall(runtimeRef(cellOf, inner.location), [cont, rw(ad.index)], inner.location);
 	}
 	if (inner.kind == NodeKind.HiddenDeref) {
 		const cell = cellLit(rw((inner.data as HiddenDerefData).expr), inner);
