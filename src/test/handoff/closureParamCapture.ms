@@ -306,3 +306,56 @@ console.log(read());
 		assert acceptedOnBothBackends(c.src), c.name;
 	}
 }
+
+function envFieldKinds(prog: Node, fieldName: string): TypeKind[] {
+	const kinds: TypeKind[] = [];
+	const pd = prog.data as ProgramData;
+	for (const stmt of pd.programStmts) {
+		if (stmt.kind != NodeKind.InterfaceDecl) continue;
+		const id = stmt.data as InterfaceDeclData;
+		if (id.interfaceName.length == 0 || id.interfaceName.charAt(0) != "$") continue;
+		const kind = envFieldKind(stmt, fieldName);
+		if (kind != TypeKind.Pending) kinds.push(kind);
+	}
+	return kinds;
+}
+
+test "a captured value Vec is copied into every env that holds it, never addressed" {
+	const cases = [
+		{ name: "param read by an escaping arrow", field: "v", src: `
+function make(v: Vec<int32>): () => int32 {
+	return (): int32 => v[1];
+}
+` },
+		{ name: "param read by a closure made per loop iteration", field: "v", src: `
+function perIteration(v: Vec<int32>): (() => int32)[] {
+	let fs: (() => int32)[] = [];
+	for (let i: int32 = 0; i < 2; i++) { fs.push((): int32 => v[i]); }
+	return fs;
+}
+` },
+		{ name: "param read two closures deep", field: "v", src: `
+function nested(v: Vec<int32>): int32 {
+	const outer = (): int32 => {
+		const inner = (): int32 => v[0];
+		return inner();
+	};
+	return outer();
+}
+` },
+		{ name: "module-level loop binding read by a closure", field: "row", src: `
+const rows: Vec<Vec<int32>> = [[1, 2], [3, 4]];
+let fs: (() => int32)[] = [];
+for (const row of rows) { fs.push((): int32 => row[0]); }
+` },
+	];
+	for (const c of cases) {
+		const prog = fullPipeline(c.src);
+		assert prog != null, c.name;
+		const kinds = envFieldKinds(prog, c.field);
+		assert kinds.length > 0, c.name;
+		for (const kind of kinds) {
+			assert kind == TypeKind.Array, c.name;
+		}
+	}
+}
