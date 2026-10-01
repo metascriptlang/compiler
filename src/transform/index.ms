@@ -131,7 +131,6 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);
 	if (jsBackend) { result = lowerResultConstructors(result); }
-	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);
@@ -171,6 +170,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerBigIntOps(result, ctx); }
 	if (!jsBackend) { result = lowerStringOps(result, ctx); }
 	result = lowerSubscript(result, ctx);
+	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
 	if (!jsBackend) { result = spanLower(result, ctx); }
 	if (!jsBackend) { result = spanParamExpand(result, ctx); }
 	result = lowerConditionalExpr(result, ctx);
