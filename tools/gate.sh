@@ -652,17 +652,19 @@ lane_cmd() {
 }
 
 run_tools_lane() {
-  local p rc=0
+  local p rc=0 queue=0
   while IFS=$'\t' read -r _ p; do
     [ -f "$p" ] || continue
     case "$p" in
       *.sh)
         if ! bash -n "$p"; then printf 'FAIL %s: bash -n\n' "$p"; rc=1
         elif [ "$p" = tools/gate.sh ] && ! bash "$p" --self-test; then printf 'FAIL %s: self-test\n' "$p"; rc=1
-        fi ;;
+        fi
+        case "$p" in tools/wt.sh | tools/landQueue.sh | tools/landQueueTest.sh) queue=1 ;; esac ;;
       *.ms) "$BUILDER" check "$p" || { printf 'FAIL %s: check\n' "$p"; rc=1; } ;;
     esac
   done < <(awk -F'\t' '$1=="tools"' "$OUT/why")
+  if [ "$queue" -eq 1 ] && ! bash tools/landQueueTest.sh; then printf 'FAIL %s: self-test\n' tools/landQueueTest.sh; rc=1; fi
   return $rc
 }
 
