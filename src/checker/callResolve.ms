@@ -20,7 +20,7 @@ import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
-import { Scope, SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
+import { SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
 import { unionHasMemberOfKind, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isFloatType, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
@@ -1213,12 +1213,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		}
 		const calleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
 		if (ai == 0 && calleeSym != null && calleeSym.builtinKind == "PromiseSpawn") ctx.pendingSpawnThunk = true;
-		const lockedSection = ai == 1 && isLockedSectionCallee(d.callee);
-		const savedBoundary = ctx.readonlyBoundary;
-		if (lockedSection) ctx.readonlyBoundary = null as unknown as Cursor<Scope>;
 		callCheckExpr(ctx, d.arguments[ai], paramExpected);
 		ctx.pendingSpawnThunk = false;
-		if (lockedSection) ctx.readonlyBoundary = savedBoundary;
 		let argType = d.arguments[ai].nodeType;
 		const bindsTypeParam = _isGenericCall && _formal != null && hasGenericParams(_formal);
 		// Tier 1: narrow direct enum member access to its EnumLiteral form for call checking.
@@ -3385,12 +3381,6 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 function hasThisParam(sym: Symbol): boolean {
 	return sym.symbolType != null && sym.symbolType.typeNames != null
 		&& sym.symbolType.typeNames.length > 0 && sym.symbolType.typeNames[0] == "this";
-}
-
-function isLockedSectionCallee(callee: Node): boolean {
-	if (callee == null || callee.kind != NodeKind.Identifier) return false;
-	const name = (callee.data as IdentifierData).name;
-	return name == "lockedUpdate" || name == "lockedRead";
 }
 
 function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
