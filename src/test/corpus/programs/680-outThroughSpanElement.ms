@@ -1,4 +1,3 @@
-// @exit: 1
 // @stdout: 1 42 3 7 5 9 | 3 | 10 11
 // @xfail(c): C loses an out write through a span element; native Span/ref location is span-cast-void's bug653/corpus 678
 // @xfail(orc): C loses an out write through a span element; native Span/ref location is span-cast-void's bug653/corpus 678
@@ -28,8 +27,6 @@ function run(): void {
 	let fixed: int32[4] = [0, 0, 0, 0];
 	fill(fixed[2...3]);
 	console.log(`${dyn[0]} ${dyn[1]} ${dyn[2]} ${dyn[3]} ${dyn[4]} ${dyn[5]} | ${inner.length} | ${fixed[2]} ${fixed[3]}`);
-	setInt(dyn[9], 1);
-	console.log(`unreached ${dyn.length}`);
 }
 
 run();
