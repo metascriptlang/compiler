@@ -10,7 +10,7 @@
 
 import { Type, TypeKind, TypeFlag, NodeFlag } from "../../ast/node";
 import { NewExprData, CallExprData, Node } from "../../ast/node";
-import { distinctBody } from "../../checker/types";
+import { distinctBody, setRepr } from "../../checker/types";
 import { emit, emitNode, emitJoinedNodes, JSGenerator } from "./emit";
 import { valueCopyFnName } from "./valueCopy";
 
@@ -28,13 +28,16 @@ function registryFor(gen: JSGenerator): void {
 	}
 }
 
-// The struct or tuple a key compares through, or null when the key is a
-// primitive or a reference (the native Map already compares those like `==`).
 function valueKeyShape(t: Type | null): Type | null {
 	if (t == null) return null;
 	if (t.kind == TypeKind.Struct && t.typeFlags.has(TypeFlag.IsMaybe)) return valueKeyShape(t.typeReturn);
 	if (t.kind == TypeKind.Struct && t.typeFlags.has(TypeFlag.IsStruct)) return t;
 	if (t.kind == TypeKind.Tuple) return t;
+	if (t.kind == TypeKind.SizedArray) return t;
+	if (t.kind == TypeKind.Set) {
+		const repr = setRepr(t);
+		return repr != null && repr.kind == TypeKind.SizedArray ? repr : null;
+	}
 	if (t.kind == TypeKind.GenericInstance && t.typeReturn != null) return valueKeyShape(t.typeReturn);
 	return null;
 }
@@ -57,6 +60,9 @@ function admitsNaN(t: Type | null): boolean {
 function shapeKey(t: Type): string {
 	const shape = valueKeyShape(t);
 	if (shape == null) return "p";
+	if (shape.kind == TypeKind.SizedArray) {
+		return "A:" + shape.typeValue.toString() + "(" + (shape.typeReturn != null ? shapeKey(shape.typeReturn) : "p") + ")";
+	}
 	let key = shape.kind == TypeKind.Tuple ? "T(" : "S:" + shape.typeName + "(";
 	let i = 0;
 	while (i < shape.typeChildren.length) {
@@ -97,6 +103,13 @@ function keyFnName(gen: JSGenerator, shape: Type): string {
 	const name = "msValueKey_" + identFromKey(key);
 	keyKeys.push(key);
 	keyNames.push(name);
+	if (shape.kind == TypeKind.SizedArray) {
+		const part = partExpr(gen, shape.typeReturn, "v[j]");
+		const body = "let key = \"[\"; for (let j = 0; j < " + shape.typeValue.toString()
+			+ "; j++) { key += (j > 0 ? \",\" : \"\") + " + part + "; } return key + \"]\";";
+		gen.staticSlots.push("function " + name + "(v) { if (v === null || v === undefined) return \"u\"; const rt = msValueKeys(); " + body + " }\n");
+		return name;
+	}
 	let parts = "";
 	let j = 0;
 	while (j < shape.typeChildren.length) {
@@ -224,7 +237,7 @@ export function emitCollectionNew(gen: JSGenerator, node: Node): boolean {
 		return true;
 	}
 	useRuntime(gen);
-	const copy = valueCopyFnName(gen, keyType);
+	const copy = valueCopyFnName(gen, shape);
 	emit(gen, "new (msValueKeys()." + (isMap ? "ValueMap" : "ValueSet") + ")(" + keyFnName(gen, shape) + ", " + (copy != "" ? copy : "null"));
 	if (d.newArguments.length > 0) {
 		emit(gen, ", ");
@@ -249,7 +262,7 @@ export function emitCollectionFromPairs(gen: JSGenerator, node: Node): boolean {
 	const shape = valueKeyShape(keyType);
 	if (shape != null) {
 		useRuntime(gen);
-		const copy = valueCopyFnName(gen, keyType);
+		const copy = valueCopyFnName(gen, shape);
 		emit(gen, "new (msValueKeys().ValueMap)(" + keyFnName(gen, shape) + ", " + (copy != "" ? copy : "null") + ", ");
 	} else if (admitsNaN(keyType)) {
 		emit(gen, "new " + floatCollection(gen, "Map") + "(");

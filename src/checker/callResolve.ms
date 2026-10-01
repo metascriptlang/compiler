@@ -3071,7 +3071,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		scopeDepths.push(exts[di].scopeDepth);
 		di = di + 1;
 	}
-	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths, recvRelations);
+	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths, recvRelations, exts);
 	if (idx == -2) {
 		// Tiebreaker: an exact receiver beats a widening one — `this uint8[]`
 		// wins over `this number[]` on a uint8[] object instead of tying.
@@ -3215,10 +3215,9 @@ function receiverRelation(formal: Type, objType: Type | null): TypeRelation {
 
 // Resolve overloads with inheritance penalty.
 function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type[],
-	argTypes: Type[], scopeDepths: number[], recvRelations: TypeRelation[]): number {
+	argTypes: Type[], scopeDepths: number[], recvRelations: TypeRelation[], exts: ExtensionMethod[]): number {
 	let bestIdx = -1;
 	let bestScore = emptyCandidateScore();
-	let bestType: Type | null = null;
 	let ambiguous = false;
 	let i = 0;
 	while (i < candidates.length) {
@@ -3251,14 +3250,12 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 		if (bestIdx == -1) {
 			bestIdx = i;
 			bestScore = score;
-			bestType = candidates[i];
 			ambiguous = false;
 		} else {
-			const cmp = cmpCandidates(score, bestScore, candidates[i], bestType);
+			const cmp = cmpCandidates(score, bestScore, getExtFnType(exts[i]), getExtFnType(exts[bestIdx]));
 			if (cmp > 0) {
 				bestIdx = i;
 				bestScore = score;
-				bestType = candidates[i];
 				ambiguous = false;
 			} else if (cmp == 0) {
 				ambiguous = true;

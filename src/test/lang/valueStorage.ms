@@ -498,3 +498,41 @@ test "valueStorage: nested aggregate-bitset vector copies retain independent inn
 	copied = new Array(0);
 	assert original[0][0].has(AggregateVectorFlag.F64);
 }
+
+test "valueStorage: equal aggregate-bitset map keys overwrite and delete one entry" {
+	const first = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F0).incl(AggregateVectorFlag.F64);
+	const equal = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F64).incl(AggregateVectorFlag.F0);
+	const map: HashMap<BitSet<AggregateVectorFlag>, int32> = new HashMap();
+	map.set(first, 17);
+	map.set(equal, 23);
+	assert map.size == 1;
+	const found = map.get(first);
+	assert found != null;
+	if (found != null) { assert found == 23; }
+	assert map.delete(equal);
+	assert !map.has(first);
+}
+
+test "valueStorage: equal aggregate-bitset set members occupy one slot" {
+	const first = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F0).incl(AggregateVectorFlag.F64);
+	const equal = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F64).incl(AggregateVectorFlag.F0);
+	const set: HashSet<BitSet<AggregateVectorFlag>> = new HashSet();
+	set.add(first);
+	set.add(equal);
+	assert set.size == 1;
+	assert set.delete(equal);
+	assert !set.has(first);
+}
+
+struct AggregateBitSetKey { bits: BitSet<AggregateVectorFlag>; id: int32; }
+
+test "valueStorage: struct keys compare aggregate-bitset fields by their values" {
+	const first = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F0).incl(AggregateVectorFlag.F64);
+	const equal = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F64).incl(AggregateVectorFlag.F0);
+	const map: HashMap<AggregateBitSetKey, int32> = new HashMap();
+	map.set({ bits: first, id: 7 }, 17);
+	const found = map.get({ bits: equal, id: 7 });
+	assert found != null;
+	if (found != null) { assert found == 17; }
+	assert !map.has({ bits: equal, id: 8 });
+}

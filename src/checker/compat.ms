@@ -2056,6 +2056,17 @@ test "complexDisambiguation deeper type wins" {
 	assert cmp > 0;
 }
 
+test "complexDisambiguation set receiver beats bare generic receiver" {
+	const gp = createGenericParam("E");
+	const fnSet = createFunction([createBitSet(gp)], ["value"], createPrimitive(TypeKind.Int64));
+	const fnBare = createFunction([gp], ["value"], createPrimitive(TypeKind.Int64));
+	const a = emptyCandidateScore();
+	a.genericMatches = 1;
+	const b = emptyCandidateScore();
+	b.genericMatches = 1;
+	assert cmpCandidates(a, b, fnSet, fnBare) > 0;
+}
+
 test "complexDisambiguation per-param contradiction returns 0" {
 	// f<T,U>(x: T[], y: U) vs f<T,U>(x: T, y: U[])
 	// param 0 favors A (deeper), param 1 favors B (deeper) → contradiction → 0
