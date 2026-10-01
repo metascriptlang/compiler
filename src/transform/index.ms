@@ -39,7 +39,8 @@ import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerVoidBind } from "./desugar/voidBindLower";
 import { lowerObjectLiteralComplete } from "./coercion/objectLiteralComplete";
 import { lowerStringLengthJS } from "./coercion/stringLengthJS";
-import { lowerIntConvJS } from "./coercion/intConvJS";
+import { lowerIntConvJS, injectRangeChecksJS } from "./coercion/intConvJS";
+import { lowerNumberBitwiseOperands } from "./native/intCheckInject";
 import { lowerIntArithJS } from "./coercion/intArithJS";
 import { lowerBigIntJS } from "./coercion/bigIntJS";
 import { refuseUnfoldedSizeofJS } from "./coercion/sizeofJS";
@@ -75,6 +76,7 @@ import { lowerLambda } from "./lowering/lambdaLifting";
 import { lowerCallHoist } from "./lowering/callHoist";
 import { lowerRvalueBridge } from "./lowering/rvalueLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
+import { lowerBorrow } from "./lowering/borrowLower";
 import { lowerMethodToFunction } from "./lowering/methodToFunction";
 import { lowerCtorInit } from "./lowering/ctorLower";
 import { lowerStaticInit } from "./lowering/staticLower";
@@ -105,6 +107,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	ctx.jsBackend = jsBackend;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	let result = eraseBrandTypes(program);
+	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
 	result = jsBackend ? lowerPowerAssert(result, ctx) : result;
 	result = lowerDefer(result, ctx);
@@ -128,7 +131,6 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);
 	if (jsBackend) { result = lowerResultConstructors(result); }
-	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);
@@ -168,6 +170,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerBigIntOps(result, ctx); }
 	if (!jsBackend) { result = lowerStringOps(result, ctx); }
 	result = lowerSubscript(result, ctx);
+	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
 	if (!jsBackend) { result = spanLower(result, ctx); }
 	if (!jsBackend) { result = spanParamExpand(result, ctx); }
 	result = lowerConditionalExpr(result, ctx);
@@ -194,6 +197,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// mangled as a module global. The 64-bit pass runs first so the width
 	// passes below never see the nodes it consumed.
 	if (jsBackend) { result = refuseUnfoldedSizeofJS(result, ctx); }
+	if (jsBackend) { result = lowerNumberBitwiseOperands(result, ctx); }
+	if (jsBackend) { result = injectRangeChecksJS(result, ctx); }
 	if (jsBackend) { result = lowerBigIntJS(result, ctx); }
 	if (jsBackend) { result = lowerIntConvJS(result, ctx); }
 	if (jsBackend) { result = lowerIntArithJS(result, ctx); }

@@ -37,3 +37,4 @@ import "./promiseThenTyped";
 import "./buildIsolation";
 import "./aggregateLifecycle";
 import "./referenceTransfer";
+import "./sliceBounds";

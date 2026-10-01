@@ -43,7 +43,7 @@ import {
 } from "../../raiser/value";
 import {
 	HostCapability, registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized,
-	activeHostObjectHeap, activeHostArrayHeap,
+	activeHostObjectHeap, activeHostArrayHeap, activeProgramArgv,
 } from "../../raiser/hostRegistry";
 import {
 	unboxString, unboxInt, unboxFloat, unboxBool,
@@ -293,8 +293,15 @@ function _bridgeMsProcessArgv(args: RaiserValue[]): RaiserValue {
 	if (heapOrNull == null) return raiserNil();
 	const heap: RaiserArrayHeap = heapOrNull;
 	const h = heapAllocArray(heap);
-	for (const a of argv) {
-		heapArrayPush(heap, h, boxString(a));
+	const program = activeProgramArgv();
+	if (program != null) {
+		for (const a of program) {
+			heapArrayPush(heap, h, boxString(a));
+		}
+	} else {
+		for (const a of argv) {
+			heapArrayPush(heap, h, boxString(a));
+		}
 	}
 	return raiserArray(h);
 }

@@ -11,14 +11,14 @@
 // - Stack-promoted literals: HiddenStdConv(ArrayLiteral, Span<T>) → SizedArray temp on stack
 
 import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, Type, TypeKind } from "../../ast/node";
-import { createSizedArray, createPtr, peelToStructOrUnion } from "../../checker/types";
+import { createSizedArray, createPtr, createPrimitive, peelToStructOrUnion } from "../../checker/types";
 import { takesAddressAtCArg, nonNullMemberOfNullable } from "../../checker/compat";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary, makeCall, makeIdent,
 	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
-	makeConditional, makeNull, makeHiddenStdConv, runtimeRef,
+	makeConditional, makeNull, makeHiddenStdConv, runtimeRef, overloadWinner,
 } from "../util";
 
 export function spanLower(program: Node, ctx: TransformContext): Node {
@@ -89,11 +89,11 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 }
 
 function calleeFnType(node: Node): Type {
-	if (node.resolvedSym != null && node.resolvedSym.symbolType != null) {
-		const t = node.resolvedSym.symbolType;
-		if (t.kind == TypeKind.Function) return t;
-	}
 	const cd = node.data as CallExprData;
+	if (node.resolvedSym != null) {
+		const t = overloadWinner(node.resolvedSym, cd.resolvedOverloadIdx).symbolType;
+		if (t != null && t.kind == TypeKind.Function) return t;
+	}
 	if (cd.callee != null && cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {
 		return cd.callee.nodeType;
 	}
@@ -234,11 +234,10 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 		dataExpr.nodeType = createPtr(resultType.typeReturn);
 	}
 
-	// len = end - start (exclusive ..) or (end - start) + 1 (inclusive ...)
-	let lenExpr = makeBinary(endExpr, "-", startExpr, loc);
-	if (bd.operator == "...") {
-		lenExpr = makeBinary(lenExpr, "+", makeNumber(1, loc), loc);
-	}
+	const endExclusive = bd.operator == "..." ? makeBinary(endExpr, "+", makeNumber(1, loc), loc) : endExpr;
+	const sourceLen = arrType.kind == TypeKind.SizedArray ? makeNumber(arrType.typeValue, loc) : makeMember(d.array, "len", loc);
+	const lenExpr = makeCall(runtimeRef("msSliceLen", loc), [startExpr, endExclusive, sourceLen], loc);
+	lenExpr.nodeType = createPrimitive(TypeKind.Int64);
 
 	return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], resultType, loc);
 }

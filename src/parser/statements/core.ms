@@ -87,6 +87,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 			decorators,
 			decoratedNode: decl,
 		}, token);
+		stampEnd(state, node);
 		return Result.ok(attachComments(state, node));
 	}
 

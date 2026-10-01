@@ -5,16 +5,16 @@
  * readFile/writeFile re-exported from std/fs for backward compatibility.
  */
 
-@import("node:process", { argv, exit, cwd });
+@import("node:process", { exit, cwd });
 @import("node:child_process", { execSync, spawnSync });
 @import("node:fs", { existsSync, readdirSync });
 
-export extern const argv: string[];
 export extern function exit(code: number): void;
 export extern function cwd(): string;
 extern class process {
 	static extern platform: string;
 	static extern arch: string;
+	static extern argv: string[];
 }
 extern function execSync(cmd: string): string;
 extern function spawnSync(cmd: string, args: string[], options: SpawnOpts): SpawnResult;
@@ -26,6 +26,11 @@ interface SpawnResult { status: number; }
 
 // Re-export from fs (Result-returning)
 export { readFile, writeFile } from "../fs/index";
+
+// Node reports [node, script, ...args]; the C backend reports [argv0, ...args].
+// Dropping node's own executable makes index 0 the program on both.
+const nodeArgv: string[] = process.argv;
+export const argv: string[] = nodeArgv.slice(1);
 
 // Platform identifier — normalize Node's "win32" to our "windows" so MS code
 // sees the same values across backends.

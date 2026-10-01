@@ -43,6 +43,9 @@ export class Error {
 @builtin("compilerFunc")
 export extern function compilerFunc(): void;
 
+@builtin("delegate")
+export extern function delegate(): void;
+
 @compilerFunc
 function msFieldError(head: string, actual: string): never {
 	@emit(`throw new Error(${head} + ${actual} + "'");`);
@@ -104,6 +107,40 @@ export template `>=`<T>(a: T, b: T): boolean { return b <= a; }
 // ===== Checked integer division, modulo and power =====
 // The operator lowering calls these (runtime/core/checkedArith.h on C); their
 // bodies are emitted whole so the integer operators inside are not lowered again.
+
+@compilerFunc
+function msCheckRangeI8(v: float64, lo: float64, hi: float64): float64 {
+	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) throw new Error("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msCheckRangeI16(v: float64, lo: float64, hi: float64): float64 {
+	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) throw new Error("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msCheckRangeI32(v: float64, lo: float64, hi: float64): float64 {
+	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) throw new Error("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
+	return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msToInt32(v: float64): int32 {
+	@emit(`return ${v} | 0;`);
+	unreachable;
+}
+
+@compilerFunc
+function msCheckRangeI64(v: float64): float64 {
+	@emit(`if (!(${v} >= -9223372036854775808 && ${v} < 9223372036854775808)) throw new Error("value " + ${v} + " not in range -9223372036854775808 .. 9223372036854775807");
+	return ${v};`);
+	unreachable;
+}
 
 @compilerFunc
 function msDivI32(a: int32, b: int32): int32 {

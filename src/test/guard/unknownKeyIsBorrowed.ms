@@ -1,35 +1,16 @@
-// nim-guard: `unknown` is a BORROWED handle — containers keyed by it own nothing
+// nim-guard: a Map keyed by `unknown` keeps its keys alive and releases each once
 //
-// INVARIANT (Nim): `pointer` is the untraced top type. Nim's ARC/ORC never
-//   emits =destroy/=copy for it, and `Table[pointer, V]` therefore keeps a raw
-//   address whose lifetime belongs to whoever created it. Nim splits exactly
-//   here: `options.nim:90-99` SomePointer (ptr/pointer/ref/proc/cstring) uses
-//   nil-as-sentinel with no wrapper, while value types get one.
-// NIM-REF CK-46, AN-11 — `unknown` = `void*`
-//   (getTypeDesc:713), classified `noRcInfo` beside Ptr because "pointer is
-//   RC-inert, may hold foreign handles". Verdict there: DIVERGE-INTENTIONAL.
+// INVARIANT (Nim): `unknown` is the managed top, `RootRef` (NIM-REF CK-46, AN-11) — a
+//   `Table[RootRef, V]` counts its keys like any `ref`. Before 2026-09-28 `unknown` was
+//   RC-inert (`pointer`) and this guard pinned a map that only borrowed its keys; the
+//   file keeps its name, the invariant is the counted one.
 //
-// WHAT IT PROTECTS: `hash(this u: unknown)` was added so `Map<unknown, V>` could
-//   key on reference identity (neon's render layer: `type HostNode = unknown`,
-//   and reconcileArrays builds a `Map<HostNode, number>` index). Because the key
-//   is RC-inert, **the map does not keep it alive** — a key whose only owner
-//   went out of scope is dangling, and reading it back yields whatever reused
-//   the memory. That is correct-by-design here (the host tree owns its nodes,
-//   exactly Nim's "foreign handle" case), but it is load-bearing and invisible:
-//   nothing in the type or the API says the key is borrowed.
+// WHAT IT PROTECTS: neon keys a `Map<HostNode, number>` on reference identity
+//   (`hash(this u: unknown)`). Every key must survive storage, retrieval and heavy
+//   allocation churn, and the map's own count must be released exactly once.
 //
-// This guard pins the SAFE half of that contract — a key that IS still owned
-//   must survive storage, retrieval and heavy allocation churn, and the map must
-//   not finalize a handle it never owned. It deliberately does NOT assert what a
-//   dropped key reads back as; that value is undefined and pinning it would
-//   enshrine UB.
-//
-// RED MEANS one of:
-//   - the ledger aborts with DOUBLE-DESTROY → something started destroying a
-//     borrowed `unknown` handle, i.e. `unknown` is no longer RC-inert;
-//   - the value assertions fail → an owned key stopped surviving the container.
-//   Either way row 57's classification moved. Run /trace-nim on `unknown`'s
-//   classify arm (transform/classify) before "fixing" anything here.
+// RED MEANS DOUBLE-DESTROY (a key released twice) or a value assertion (a key lost
+//   while stored). Run /trace-nim on `unknown`'s classify arm and the Map hooks.
 // Run by src/test/guard/run.ms with -DMS_DRC_LEDGER (drc + orc).
 
 class Handle {

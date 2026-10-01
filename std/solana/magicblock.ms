@@ -117,22 +117,72 @@ export function delegate(accounts: DelegationAccounts, seeds: Seeds, bump: uint8
 	return closeBuffer(accounts.payer, accounts.buffer);
 }
 
-function scheduleCommit(payer: Account, committed: Account, magicContextAccount: Account, discriminant: uint32): Result<uint64, ProgramError> {
+function scheduleCommit(
+	payer: Account,
+	committed: Span<Account>,
+	magicContextAccount: Account,
+	feeVault: Account | null,
+	discriminant: uint32,
+): Result<uint64, ProgramError> {
 	if (!payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
-	const instruction = Instruction.forProgram(Pubkey.magicProgram(), 3, 4);
+	const prefix: uint64 = feeVault === null ? 2 : 3;
+	const instruction = Instruction.forProgram(
+		Pubkey.magicProgram(),
+		prefix + (committed.length as uint64),
+		4,
+	);
 	instruction.addAccount(payer, payer.isWritable(), true);
 	instruction.addWritable(magicContextAccount);
-	instruction.addAccount(committed, committed.isWritable(), committed.isSigner());
+	if (feeVault !== null) { instruction.addWritable(feeVault); }
+	for (const account of committed) {
+		instruction.addAccount(account, account.isWritable(), account.isSigner());
+	}
 	instruction.appendU32(discriminant);
 	return instruction.invoke();
 }
 
 export function commit(payer: Account, committed: Account, magicContextAccount: Account): Result<uint64, ProgramError> {
-	return scheduleCommit(payer, committed, magicContextAccount, 1);
+	const accounts: Account[1] = [committed];
+	return scheduleCommit(payer, accounts, magicContextAccount, null, 1);
+}
+
+export function commit(
+	payer: Account,
+	committed: Span<Account>,
+	magicContextAccount: Account,
+): Result<uint64, ProgramError> {
+	return scheduleCommit(payer, committed, magicContextAccount, null, 1);
+}
+
+export function commit(
+	payer: Account,
+	committed: Span<Account>,
+	magicContextAccount: Account,
+	feeVault: Account,
+): Result<uint64, ProgramError> {
+	return scheduleCommit(payer, committed, magicContextAccount, feeVault, 1);
 }
 
 export function commitAndUndelegate(payer: Account, committed: Account, magicContextAccount: Account): Result<uint64, ProgramError> {
-	return scheduleCommit(payer, committed, magicContextAccount, 2);
+	const accounts: Account[1] = [committed];
+	return scheduleCommit(payer, accounts, magicContextAccount, null, 2);
+}
+
+export function commitAndUndelegate(
+	payer: Account,
+	committed: Span<Account>,
+	magicContextAccount: Account,
+): Result<uint64, ProgramError> {
+	return scheduleCommit(payer, committed, magicContextAccount, null, 2);
+}
+
+export function commitAndUndelegate(
+	payer: Account,
+	committed: Span<Account>,
+	magicContextAccount: Account,
+	feeVault: Account,
+): Result<uint64, ProgramError> {
+	return scheduleCommit(payer, committed, magicContextAccount, feeVault, 2);
 }
 
 export function isUndelegateCallback(data: Bytes): boolean {
@@ -170,22 +220,43 @@ export function undelegate(delegated: Account, buffer: Account, payer: Account, 
 	return delegated.data().copyFrom(buffer.data());
 }
 
-export function scheduleTask(payer: Account, taskId: uint64, intervalMillis: uint64, iterations: uint64, target: Account, targetData: Bytes, targetProgram: Pubkey): Result<uint64, ProgramError> {
+function scheduled(
+	payer: Account,
+	taskId: uint64,
+	intervalMillis: uint64,
+	iterations: uint64,
+	task: Instruction,
+): Result<uint64, ProgramError> {
 	if (!payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
-	const instruction = Instruction.forProgram(Pubkey.magicProgram(), 2, 128 + targetData.length);
+	const instruction = Instruction.forProgram(
+		Pubkey.magicProgram(),
+		1 + task.accountLength(),
+		36 + task.encodedLength(),
+	);
 	instruction.addWritableSigner(payer);
-	instruction.addAccount(target, target.isWritable(), false);
+	instruction.addAccountsOf(task);
 	instruction.appendU32(6);
 	instruction.appendU64(taskId);
 	instruction.appendU64(intervalMillis);
 	instruction.appendU64(iterations);
 	instruction.appendU64(1);
-	instruction.appendPubkey(targetProgram);
-	instruction.appendU64(1);
-	instruction.appendPubkey(target.key());
-	instruction.appendU8(0);
-	instruction.appendU8(1);
-	instruction.appendU64(targetData.length);
-	instruction.appendBytes(targetData);
+	instruction.appendInstruction(task);
 	return instruction.invoke();
+}
+
+export function scheduleTask(payer: Account, taskId: uint64, intervalMillis: uint64, iterations: uint64, target: Account, targetData: Bytes, targetProgram: Pubkey): Result<uint64, ProgramError> {
+	const task = Instruction.forProgram(targetProgram, 1, targetData.length);
+	task.addWritable(target);
+	task.appendBytes(targetData);
+	return scheduled(payer, taskId, intervalMillis, iterations, task);
+}
+
+export function scheduleTask(
+	payer: Account,
+	taskId: uint64,
+	intervalMillis: uint64,
+	iterations: uint64,
+	task: Instruction,
+): Result<uint64, ProgramError> {
+	return scheduled(payer, taskId, intervalMillis, iterations, task);
 }

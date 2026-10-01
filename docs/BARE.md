@@ -104,6 +104,192 @@ Read `<mangled>` out of the generated `_dispatch.c` (`out/<mode>/.cache/_dispatc
 
 **`--gc=manual` is not usable here yet**: it fails to compile three prelude modules (`std/core/websocket/state.ms`, `std/net/index.cms`, `std/core/websocket/client.cms`). Underlying C error not yet captured. Until that is fixed, custom-host wasm runs on the default GC.
 
+## Stylus proof tooling — Arbitrum Sepolia
+
+The independent consumer is `examples/onchainCounter/arbitrumProof.mjs`; run it with
+`--help` after `npm ci --ignore-scripts` in that directory. Its Solidity consumer is
+`counterCaller.sol`, not a replacement implementation of the MetaScript counter.
+
+Browser-wallet signing uses `cast`, rather than handing key material to the deployment
+tool. Packaging follows the upstream
+[deployment prelude](https://github.com/OffchainLabs/cargo-stylus/blob/v0.6.3/main/src/deploy/mod.rs).
+`cargo stylus check --wasm-file` is necessary but not byte-for-byte deployment evidence:
+its [compression path](https://github.com/OffchainLabs/cargo-stylus/blob/v0.6.3/main/src/project.rs)
+normalizes WASM and strips custom sections. The consumer separately checks activation
+of the exact bytes it will deploy. Already-active code is a version observation, not an
+invented activation transaction.
+
+Measured 2026-09-27 in `wt/std-arbitrum`, with tooling additions over baseline tree
+`b32f9dd9267ebcf6665bfa99ed4f7a15218590c7`:
+
+```text
+node examples/onchainCounter/arbitrumProof.mjs doctor
+chainId: 421614; stylusVersion: 3
+solc: 0.8.30; callerCreationBytes: 3725
+cargo-stylus: 0.6.3; cast: 1.5.1-stable
+```
+
+Nine unsigned smoke checks passed: execution of the packaging prelude in local EVM
+with exact Brotli round-trip; Solidity constructor/immutable binding; rejection of a
+non-Sepolia RPC, invalid WASM, simulation-only/forged completion, a missing simulation,
+a changed artifact and a nonexistent receipt; and recognition of the real ArbWasm
+unactivated-code error. The local EVM checks executed no counter methods. Receipt and
+activation-status rejection checks used the public Sepolia RPC.
+
+**Not verified by these checks:** browser-wallet signing, execution of the MetaScript
+WASM, Nitro counter behavior, public deployment, cross-transaction persistence, or
+rollback. A simulation result is not a confirmed-transaction proof. The transaction
+verifier re-fetches receipts, checks deployed bytes and reads counter state at receipt
+blocks; successful L2 receipts do not establish L1 finality. Other target claims in
+this document were not re-audited by this tooling run.
+
+### MetaScript counter in Nitro — measured 2026-09-28
+
+The generic target is `--os=bare --cpu=wasm32 --gc=manual --app=lib`, not
+`--os=wasm` or a chain-specific compiler target. The ordinary LLVM Clang/wasm-ld
+toolchain emits the contract; no Rust contract or WASI host is involved.
+
+On source tree `aa2a89d6118531a64f7a4b4be98102df1e3d1973` (based on landed
+`a363a27c`), Clang 22.1.1 and cargo-stylus 0.6.3:
+
+```sh
+./out/arbitrumProbe/mscFinal build examples/onchainCounter/arbitrum.ms \
+  --os=bare --cpu=wasm32 --gc=manual --app=lib \
+  --cc=/opt/homebrew/opt/llvm/bin/clang --release \
+  --output=out/arbitrumProbe/counterFinal.wasm
+node examples/onchainCounter/arbitrumProof.mjs prepare \
+  out/arbitrumProbe/counterFinal.wasm \
+  0x1234567890123456789012345678901234567890 \
+  out/arbitrumProbe/nitroFinalProof.json
+node examples/onchainCounter/arbitrumProof.mjs simulate \
+  out/arbitrumProbe/nitroFinalProof.json
+```
+
+The address above is a simulation sender with a balance override, not an approved
+wallet. `mscFinal` was self-hosted from this tree with `--gc=drc --danger --cc=clang`.
+The old provisioned builder rejected `NaN`/`Infinity` in the current compiler sources;
+bootstrapping used the fixing session's newer builder, then one candidate-built
+self-host. Nothing was synced to `~/.metascript`.
+
+Observed:
+
+```text
+Built 14 module(s) → out/arbitrumProbe/counterFinal.wasm
+WASM: 9047 bytes; exact packaged code: 2967 bytes
+SHA-256: 1d8d2f8c18e49138be0e812abbdb7176e43beb4ab6c17a4f70be0ab32b9f1154
+code hash: 0xe75ae214693a32cf82e07392b50bbadac7d20461bc75544bf023963d53cca935
+Sepolia block: 313448260; Stylus version: 3
+activation fee: 51356019610341 wei
+simulation.passed: true; finalValue: 1000000
+confirmed.complete: false; confirmed.transactions: 0
+```
+
+`CounterSimulation` executed CREATE, activation and the real MetaScript WASM through
+`CounterCaller`: `0 → 7 → 12`, Solidity `msg.sender`, exact custom-error payloads,
+write-then-revert rollback, malformed ABI and domain rejection, and the upper boundary.
+All calls were inside one Nitro `eth_call`; this proves child-frame rollback, not
+cross-transaction persistence or a public deployment. The earlier bootstrap-stage
+artifact also passed the same consumer; the final artifact was checked separately,
+not assumed equivalent from a successful build.
+
+Additional focused checks: scalar WASM `probeAdd` returned `5`, `0`, `42` for
+`(2,3)`, `(UINT64_MAX,1)`, `(40,2)`; freestanding heap sort matched expected order
+for 16 count/pattern combinations plus three-byte records; allocation alignment,
+linear-memory growth, realloc preservation, calloc overflow and overlapping memmove
+passed in WASM. Shared domain tests passed 300/300 on C and 63/63 on JS including
+transitive dependency tests. The separate Solana adapter built 15 modules without C
+errors and passed the eight local LiteSVM simulation scenarios recorded by its probe;
+those simulations do not establish committed Solana state.
+
+Still unverified: browser-wallet signing, confirmed testnet deployment and calls
+across separate transactions. No corpus, gate, full lane, land or installed-binary
+sync ran for this measurement.
+
+### Unchanged Solana math demo on Stylus — measured 2026-09-28
+
+The external demo `~/metascript/talks/solana-meetup/demo/math.ms` ran unchanged:
+source SHA-256 `643e8e79672df06618539efc54215c21a0c3e7af6612c83aaea83e44e548c5bd`.
+On tree `579d5e55759b4afca161087dee2858095db7869b`, the console runner generated
+an entry module importing that source and `std/arbitrum`, then built it with the
+generic bare-wasm flags. No `--os=arbitrum` or compiler recognition of a chain
+define was added. This is explicit library-adapter selection, not yet a generic
+package/profile selected by `-d:arbitrum`.
+
+```sh
+node examples/onchainCounter/arbitrumConsole.mjs \
+  "$HOME/metascript/talks/solana-meetup/demo/math.ms" \
+  out/arbitrumProbe/mathNitroProof \
+  --msc out/arbitrumProbe/mscFinal \
+  --cc /opt/homebrew/opt/llvm/bin/clang
+```
+
+Use a fresh output directory; the runner refuses to overwrite an existing proof.
+The script checks the source hash before and after execution. It uses
+`eth_simulateV1` to deploy, activate and invoke the program twice, recording the
+actual event payloads returned by Nitro. The default PublicNode Sepolia endpoint
+was measured working. The official Sepolia endpoint rejected this simulation
+request with an internal error; neither endpoint exposed `debug_traceCall`.
+No automatic fallback or mock logging is used.
+
+The host maps string console output to anonymous EVM events with UTF-8 data and
+zero topics, using the documented
+[`emit_log` host ABI](https://github.com/OffchainLabs/stylus-sdk-c/blob/main/include/hostio.h).
+It does not buffer output into the contract return value. Event transport differs
+from Solana syscall logs; decoded line content is identical.
+
+Observed:
+
+```text
+Native == LiteSVM == Nitro invocation 1 == Nitro invocation 2: all 18 lines
+FAILED lines: 0
+WASM: 5402 bytes; exact packaged code: 2256 bytes
+WASM SHA-256: a0b2691aa84bf5551c1a611144eef6278a6dff88b311e2f70435574c794f4ea9
+Base block: 0x12af14ee; simulated block: 0x12af14ef; Stylus version: 3
+SVM: 4044 CU; Nitro invocation gas: 42761, 33083
+```
+
+Those resource units are not comparable benchmarks. All arithmetic checks,
+including integer division and int64 multiplication, passed; compile-time
+factorial, Fibonacci, primes and squares output matched as well. The demo's
+printed “0 CU” and “200k CU” text is preserved Solana-oriented prose, not a measured
+Arbitrum cost claim. Empty strings, UTF-8 text and multiple string arguments also
+matched their expected events on two Nitro invocations.
+
+Scope: local unsigned LiteSVM plus real public Nitro simulation with balance/nonce
+overrides; no wallet, signature, broadcast or persisted deployment. The runner's
+`passed` records successful execution, not arbitrary program correctness; the math
+consumer additionally compared every output line and rejected `FAILED`.
+
+**Known unimplemented boundary:** runtime formatting of default `number` values.
+`console.log("value", 42)` linked the numeric formatter and failed on missing
+`__multi3`. A temporary wide-multiply builtin got past linking, after which official
+Stylus validation failed with `No implementation for floating point operation
+RelOp(F64, Eq) in user`. That experiment was reverted; no partial numeric-formatting
+fix or soft-float implementation is included. This does not affect the unchanged
+math demo, whose runtime console arguments are strings. Do not generalize the
+18-line proof to floating-point programs.
+
+The companion `~/metascript/talks/solana-meetup/demo/abt.sh` now presents the
+same source → build → execute flow as that directory's `demo.sh`. On tooling
+tree `e0dc768d2c2329568ea4d43e50c86c97244f3750`, running `./abt.sh --math` and
+`./abt.sh` directly, with no environment overrides, exited 0:
+
+```text
+math: 5400-byte WASM; 18 matching events in each invocation; gas 42761, 33083
+hello: 2566-byte WASM; ["hello solana"] in each invocation; gas 31213, 21921
+```
+
+The math results were compared against every line of the saved native/LiteSVM
+comparison; the original source SHA-256 above still matched. The shell wrapper
+pins the tested worktree compiler, not the unsynced installed binary. Its
+local README owns replacement-toolchain instructions. `arbitrumConsole.mjs
+--demo` changes presentation only: identical repeat output is summarized,
+while both complete results remain in the proof file.
+
+The user chose this no-faucet simulation for the video instead of public
+transactions. It still needs network access to the RPC; it is not an offline
+localnet, and these runs establish no persisted public deployment.
+
 ## Phase 1: `--gc=manual` (No RC, malloc available) — DONE
 
 DRC injection is skipped. RC operations are no-ops. Allocation still uses malloc (libc available). Generated C code is identical to `--gc=orc` — only the linked runtime header differs.

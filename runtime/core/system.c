@@ -109,25 +109,39 @@ void msTestErrorFlag(void) {
 	exit(1);
 }
 
-void msFutureRaiseFrom(msFutureBase* f) {
+void msRaiseAwaitedError(void* err) {
 	msErr = true;
+	msCurrException = err != NULL ? (msException*)err : (msException*)msMakeError(msStringFromCStr("noproc"));
+	msErrPayload = (void*)msCurrException;
+}
+
+void msFutureRaiseFrom(msFutureBase* f) {
 	if (f != NULL) {
 		atomic_store_explicit(&f->errorObserved, true, memory_order_relaxed);
 		msClearOrphanFailure(f);
 	}
 	void* err = (f != NULL) ? f->error : NULL;
-	if (err != NULL) {
-		msCurrException = (msException*)err;
-		f->error = NULL;
-	} else {
-		msCurrException = (msException*)msMakeError(msStringFromCStr("noproc"));
-	}
-	msErrPayload = (void*)msCurrException;
+	if (f != NULL) f->error = NULL;
+	msRaiseAwaitedError(err);
 }
 
 _Noreturn void msRaiseIndexError(int64_t idx, int64_t len) {
 	fprintf(stderr, "Error: index %lld out of bounds (length %lld)\n",
 		(long long)idx, (long long)len);
+	exit(1);
+}
+
+_Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target) {
+	const msTypeInfo* t = msHeader(p)->type;
+	fprintf(stderr, "Error: invalid object conversion: %s is not %s\n",
+		(t != NULL && t->name != NULL) ? t->name : "<untyped>",
+		target->name != NULL ? target->name : "<untyped>");
+	exit(1);
+}
+
+_Noreturn void msRaiseSliceError(int64_t start, int64_t end, int64_t len) {
+	fprintf(stderr, "Error: slice %lld..%lld out of bounds (length %lld)\n",
+		(long long)start, (long long)end, (long long)len);
 	exit(1);
 }
 
@@ -161,6 +175,29 @@ _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected) {
 	fprintf(stderr, "Error: invalid union conversion: value holds member %lld, target expects %lld\n",
 		(long long)tag, (long long)expected);
 	exit(1);
+}
+
+_Noreturn void msRaiseStrLitError(msString s, msString target) {
+	fprintf(stderr, "Error: invalid union conversion: \"%.*s\" is not %.*s\n", (int)s.len, s.p != NULL ? s.p->data : "",
+		(int)target.len, target.p != NULL ? target.p->data : "");
+	exit(1);
+}
+
+msString msStrLitConv(msString s, msString members, msString target) {
+	const char* list = members.p != NULL ? members.p->data : "";
+	const char* text = s.p != NULL ? s.p->data : "";
+	int64_t i = 0;
+	while (i < members.len) {
+		int64_t n = 0;
+		while (i < members.len && list[i] != ':') {
+			n = n * 10 + (list[i] - '0');
+			i += 1;
+		}
+		i += 1;
+		if (n == s.len && i + n <= members.len && memcmp(list + i, text, (size_t)n) == 0) return s;
+		i += n;
+	}
+	msRaiseStrLitError(s, target);
 }
 
 _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag) {

@@ -509,8 +509,9 @@ function isEffectNode(n: Node): boolean {
 	return n.kind == NodeKind.BinaryExpr && isAssignOp((n.data as BinaryExprData).operator);
 }
 
-function isAssignOp(op: string): boolean {
-	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=";
+export function isAssignOp(op: string): boolean {
+	if (op == "==" || op == "!=" || op == "===" || op == "!==" || op == "<=" || op == ">=") return false;
+	return op.endsWith("=");
 }
 
 export function hasEffect(n: Node): boolean {

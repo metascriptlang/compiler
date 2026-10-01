@@ -4,7 +4,7 @@
 // Must run AFTER optionalChain so obj?.prop ?? fallback is already lowered.
 
 import { Node, NodeKind, BinaryExprData, MemberExprData, TypeAssertionData, TypeKind, DeclKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
-import { isMaybeType, unwrapMaybeType, isNumeric, isBoolType, isStringLike, unknownType } from "../../checker/types";
+import { isMaybeType, unwrapMaybeType, isNumeric, isBoolType, isStringLike, unknownType, createPtr, voidType } from "../../checker/types";
 import { fitJoinedBranch, nullishPayloadType } from "../../checker/fit";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocks } from "../walker";
@@ -41,7 +41,7 @@ function nullishPresence(left: Node, loc: SourceLocation, ctx: TransformContext)
 		checked = asUnknown(left, loc);
 	} else if (left.nodeType != null && isStringLike(left.nodeType)) {
 		checked = makeMember(left, "p", loc);
-		checked.nodeType = unknownType();
+		checked.nodeType = createPtr(voidType());
 	}
 	return makeBinary(checked, "!==", makeNull(loc), loc);
 }

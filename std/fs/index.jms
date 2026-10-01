@@ -40,7 +40,10 @@ interface Stats {
 
 // node system errors carry the POSIX name in `code` (`err.errno` is the
 // libuv value and differs per platform, so it is not the portable key).
-interface NodeError { code: string; }
+function nodeErrorCode(e: Error): string {
+	@emit(`return typeof ${e}.code === "string" ? ${e}.code : "";`);
+	unreachable;
+}
 
 // Path utilities (pure MetaScript — shared across backends)
 export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";
@@ -49,7 +52,7 @@ export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from
 // 0 = unmapped, which makes the caller fall through to the same
 // writeFailed/readFailed fallback the C twin uses when errno is 0.
 function errnoOf(e: Error): number {
-	const code = (e as unknown as NodeError).code;
+	const code = nodeErrorCode(e);
 	return match (code) {
 		"ENOENT" => 2,
 		"EACCES" => 13,

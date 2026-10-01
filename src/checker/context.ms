@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { TargetInfo, hostTargetInfo, isPointerShapedForUnknown, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
+import { TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -603,7 +603,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	}
 	// `unknown` receiver: the catch-all — binds only what an `unknown` argument may
 	if (isUnresolvedType(receiverType)) return true;
-	if (receiverType.kind == TypeKind.Unknown) return isPointerShapedForUnknown(objType);
+	if (receiverType.kind == TypeKind.Unknown) return unknownRefusal(objType) == UnknownRefusal.None;
 	// Array methods are Ref-agnostic: T[] (Ref<Array>) and Vec<T> (value Array) share
 	// one element-typed method set. Unwrap the Ref<Array> envelope on both sides so
 	// matching compares element types; codegen dispatches &value vs ptr on the receiver.
@@ -640,14 +640,15 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	if (recvNominal != null && objNominal != null) return sameInstanceArgs(recvT, objT);
 	// Name-based matching for well-known types and monomorphized generics.
 	// Monomorphized types have names like "Map__string,string" — match base name "Map".
-	if (ext.receiverTypeName != "") {
+	const recvName = receiverType.kind == TypeKind.Ptr ? typeNameOf(receiverType) : ext.receiverTypeName;
+	if (recvName != "") {
 		const objName = typeNameOf(objType);
-		if (ext.receiverTypeName == objName) return true;
+		if (recvName == objName) return true;
 		// Check base name for monomorphized generics: "Map__string,string" → "Map"
 		const sepPos = findChar(objName, "_");
 		if (sepPos > 0 && sepPos + 1 < objName.length && objName.charAt(sepPos + 1) == "_") {
 			const baseName = objName.slice(0, sepPos);
-			if (ext.receiverTypeName == baseName) return true;
+			if (recvName == baseName) return true;
 		}
 		// Type-alias fallback: typeNameOf returns the canonical primitive name
 		// (e.g. "string" for `type Buffer = string`), losing the alias. The alias
@@ -656,7 +657,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		// `s.method()` resolves extensions registered against the alias name.
 		if (objType.sym != null
 				&& objType.sym.symbolKind == SymbolKind.TypeAlias
-				&& ext.receiverTypeName == objType.sym.name) return true;
+				&& recvName == objType.sym.name) return true;
 		// Nominal mismatch: both have names but they differ → not a match.
 		// Prevents structural false positives (reference: sameObjectTypes uses a.id == b.id).
 		if (objName != "") return false;
@@ -666,8 +667,14 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 }
 
 function instanceArgs(t: Type): Type[] | null {
-	const s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	const s = addressed(t);
 	return s.kind == TypeKind.GenericInstance ? s.typeChildren : null;
+}
+
+function addressed(t: Type): Type {
+	let s = t;
+	if ((s.kind == TypeKind.Var || s.kind == TypeKind.Ptr) && s.typeReturn != null) s = s.typeReturn;
+	return s.kind == TypeKind.Ref && s.typeReturn != null ? s.typeReturn : s;
 }
 
 function sameInstanceArgs(recv: Type, obj: Type): boolean {
@@ -682,8 +689,7 @@ function sameInstanceArgs(recv: Type, obj: Type): boolean {
 }
 
 function nominalTypeSym(t: Type): Symbol | null {
-	let s = t;
-	if (s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
+	let s = addressed(t);
 	if (s.kind == TypeKind.GenericInstance && s.typeExtra != null) {
 		s = s.typeExtra;
 		if (s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
@@ -962,7 +968,13 @@ export function getExtReceiverType(flags: string): string {
 	const rest = seg.slice(4, seg.length);
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
-	return receiverBaseName(rest.slice(colonPos + 1, rest.length));
+	return receiverBaseName(varPointeeText(rest.slice(colonPos + 1, rest.length)));
+}
+
+function varPointeeText(typeText: string): string {
+	const t = typeText.trim();
+	const rest = t.startsWith("Var") ? t.slice(3, t.length).trim() : "";
+	return rest.startsWith("<") && rest.endsWith(">") ? rest.slice(1, rest.length - 1) : t;
 }
 
 export function receiverBaseName(typeText: string): string {
@@ -1778,6 +1790,13 @@ test "getExtReceiverType" {
 	assert getExtReceiverType("ext:s:string") == "string";
 	assert getExtReceiverType("async|ext:self:Array") == "Array";
 	assert getExtReceiverType("") == "";
+}
+
+test "getExtReceiverType names a Var<T> receiver T, as `this ref x: T`" {
+	assert getExtReceiverType("ext:p:Var<Pet>") == "Pet";
+	assert getExtReceiverType("ext:p:Var < uint8 >") == "uint8";
+	assert getExtReceiverType("ext:v:Variant<T>") == "Variant";
+	assert getExtReceiverType("ext:p:Ptr<Pet>") == "Ptr";
 }
 
 test "isStaticExtensionFlag" {

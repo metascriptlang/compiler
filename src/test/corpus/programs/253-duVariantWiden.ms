@@ -1,6 +1,6 @@
 // Parity program — variant values widening into a structural DU union at
 // every fit position (bug099): var init, reassign, plain call arg, return,
-// Result.ok generic inference. Heap-string payloads churned in a loop so the
+// a generic call argument under explicit type arguments. Heap-string payloads churned in a loop so the
 // SAN ledger sees real copy/destroy traffic on the widen path; the aliased
 // case reads the source AFTER the widen to pin copy (not move) semantics.
 
@@ -37,7 +37,7 @@ function decode(i: int32): Result<Entry, string> {
 		return Result.err("negative");
 	}
 	const t: Tag = mkTag(i);
-	return Result.ok(t);
+	return Result.ok<Entry, string>(t);
 }
 
 function main(): void {

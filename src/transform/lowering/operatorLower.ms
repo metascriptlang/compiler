@@ -18,11 +18,12 @@
 
 import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
-import { hookPrototype } from "../../codegen/c/types";
+import { hookPrototype, hookBaseCName } from "../../codegen/c/types";
 import { walkNode } from "../walker";
 import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral } from "../util";
-import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
+import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, unwrapMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
+import { sizedArrayHookName } from "../../analyzer/classify";
 import { lookupSymbol } from "../../checker/symbol";
 import { resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
 
@@ -84,8 +85,22 @@ function isStructInstance(t: Type): boolean {
 	return nominal != null && nominal.kind == TypeKind.Struct;
 }
 
-function eqTypeName(t: Type, typeName: string): string {
-	return t.kind == TypeKind.GenericInstance ? monoInstanceName(t) : typeName;
+function hasValueEq(t: Type): boolean {
+	return isValueObject(t) || t.kind == TypeKind.SizedArray;
+}
+
+function sizedArrayOperandsAgree(ctx: TransformContext, leftType: Type, right: Node): boolean {
+	if (leftType.kind != TypeKind.SizedArray) return true;
+	const rt = resolveType(ctx, right);
+	if (rt == null) return false;
+	const peeled = peelThrough(rt, PEEL_ALIAS);
+	return peelTransparentInstance(peeled != null ? peeled : rt).kind == TypeKind.SizedArray;
+}
+
+function eqTypeName(ctx: TransformContext, t: Type): string {
+	if (t.kind == TypeKind.GenericInstance) return monoInstanceName(t);
+	if (t.kind == TypeKind.SizedArray) return sizedArrayHookName(t);
+	return hookBaseCName(t.typeName, t, ctx.checkerCtx);
 }
 
 
@@ -122,19 +137,15 @@ function makeMaybeCarrier(payload: Node, carrierType: Type, loc: SourceLocation)
 	return makeTypedObjectLiteral(["value", "present"], [payload, makeBool(true, loc)], carrierType, loc);
 }
 
-// Register a struct/interface == use for later on-demand Eq generation by destructorLifting.
-function registerStructEq(ctx: TransformContext, typeName: string, t: Type): void {
-	// ensureEq resolves the name in the CONSUMING module's scope; a struct whose
-	// name was never imported there is invisible to it, so route it through the
-	// carrier channel, which generates from the Type instead.
-	if (ctx.checkerCtx != null && lookupSymbol(ctx.checkerCtx.table, typeName) == null) {
+function registerStructEq(ctx: TransformContext, t: Type): void {
+	if (t.kind == TypeKind.GenericInstance) {
 		registerCarrierEq(ctx, t);
 		return;
 	}
-	for (const n of ctx.pendingStructEqs) {
-		if (n == typeName) return;
+	for (const pending of ctx.pendingValueEqs) {
+		if (pending == t) return;
 	}
-	ctx.pendingStructEqs.push(typeName);
+	ctx.pendingValueEqs.push(t);
 }
 
 // Build a call to an operator extension — resolves nativeName for extern operators.
@@ -169,8 +180,8 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 	}
 	// Auto-generated == for interfaces (=== same as == for value types)
 	if ((opName == "==" || opName == "===") && isValueObject(leftType)) {
-		const eqName = eqTypeName(leftType, typeName);
-		registerStructEq(ctx, eqName, leftType);
+		const eqName = eqTypeName(ctx, leftType);
+		registerStructEq(ctx, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 		const callee = makeIdent(eqName + "Eq", loc);
 		callee.nodeType = fnType;
@@ -301,7 +312,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	const hasNullRight = isNullExpr(d.right);
 	if (isNullEqOp && (hasNullLeft || hasNullRight)) {
 		const valueType = hasNullLeft ? resolveType(ctx, d.right) : leftType;
-		if (valueType != null && isValueObject(valueType)) {
+		if (valueType != null && hasValueEq(valueType)) {
 			return makeBool(isNotEqual, loc);
 		}
 		// Maybe<T>: x !== null → x.present, x === null → !x.present
@@ -363,9 +374,12 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		const carrierName = carrierType != null ? typeNameOf(carrierType) : "";
 		const carriersAgree = !leftIsMaybe || !rightIsMaybe
 			|| typeNameOf(leftType) == typeNameOf(rightOperandType);
-		// The carrier is a C repr: js de-materializes a Maybe to the value itself,
-		// so there is no carrier to compare and no generated Eq body to call.
-		if (!ctx.jsBackend && (leftIsMaybe || rightIsMaybe) && carrierType != null && carrierName != "" && carriersAgree) {
+		// js de-materializes a Maybe to the value itself: `===` already answers for a
+		// primitive payload, a value payload needs the carrier's Eq.
+		const routed = (leftIsMaybe || rightIsMaybe) && carrierType != null
+			&& (!ctx.jsBackend || hasValueEq(unwrapMaybeType(carrierType))
+				|| unwrapMaybeType(carrierType).kind == TypeKind.Tuple);
+		if (routed && carrierName != "" && carriersAgree) {
 			const eqLeft = leftIsMaybe ? d.left : makeMaybeCarrier(d.left, carrierType, loc);
 			const eqRight = rightIsMaybe ? d.right : makeMaybeCarrier(d.right, carrierType, loc);
 			registerCarrierEq(ctx, carrierType);
@@ -423,9 +437,10 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 
 	// 5. Direct base operators for value-type objects (auto-generated ==).
 	// === is the same as == for value types (no reference identity distinction).
-	if ((opName == "==" || opName == "===") && isValueObject(leftType)) {
-		const eqName = eqTypeName(leftType, typeName);
-		registerStructEq(ctx, eqName, leftType);
+	if ((opName == "==" || opName == "===") && hasValueEq(leftType)
+		&& sizedArrayOperandsAgree(ctx, leftType, d.right)) {
+		const eqName = eqTypeName(ctx, leftType);
+		registerStructEq(ctx, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 		const callee = makeIdent(eqName + "Eq", loc);
 		callee.nodeType = fnType;

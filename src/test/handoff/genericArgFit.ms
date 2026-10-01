@@ -33,7 +33,7 @@ test "T bound through an array element rejects a bad scalar" {
 }
 
 test "an int64 argument after an int32 binding is rejected" {
-	const src = "function pick<T>(a: T, b: T): T { return a; }\nconst w: int64 = 5;\nconst c = pick(1, w);";
+	const src = "function pick<T>(a: T, b: T): T { return a; }\nconst v: int32 = 1;\nconst w: int64 = 5;\nconst c = pick(v, w);";
 	assert hasError(src, "Argument type mismatch in 'pick' arg 1: got int64, expected int32");
 }
 

@@ -21,7 +21,7 @@ import {
 import { orcCollectCycles } from "./orc";
 import { copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
-import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap } from "./hostRegistry";
+import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink } from "./marshal";
 
 @include("runtime/promise/dispatch.h");
@@ -161,6 +161,7 @@ export interface RaiserVM {
 	diagEndColumn: number;
 	hostCallsRestricted: boolean;
 	hostPolicySource: string;
+	programArgv: string[] | null;   // what the program's `argv` reads; null leaves the host's own argv visible
 }
 
 // Initial register file size. The slots array grows on demand via
@@ -221,7 +222,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const timers: RaiserTimers = { items: timerItems };
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1 };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "" };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), unwinding: false, savedIp: -1, diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -1555,6 +1556,12 @@ function asNum(val: RaiserValue): number {
 	return val.intVal;
 }
 
+function floatFitsSigned(f: float64, bits: int32): boolean {
+	if (bits == 64) return f >= -9223372036854775808.0 && f < 9223372036854775808.0;
+	const limit = Math.pow(2, (bits - 1) as float64);
+	return f > -limit - 1 && f < limit;
+}
+
 function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 	const src = getReg(vm, vm.baseReg + inst.b);
 	const cls = inst.c as RaiserConvClass;
@@ -1562,8 +1569,16 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 		setReg(vm, vm.baseReg + inst.a, raiserFloat(asNum(src)));
 		return;
 	}
-	const whole: int64 = src.kind == RaiserValueKind.Float ? (src.floatVal as int64) : src.intVal;
 	const bits = convClassBits(cls);
+	const signed = convClassSigned(cls);
+	if (src.kind == RaiserValueKind.Float && signed && !floatFitsSigned(src.floatVal, bits)) {
+		const hi: int64 = bits == 64
+			? 9223372036854775807
+			: ((1 as int64) << ((bits - 1) as int64)) - 1;
+		vmError(vm, `value ${src.floatVal} not in range ${-hi - 1} .. ${hi}`);
+		return;
+	}
+	const whole: int64 = src.kind == RaiserValueKind.Float ? (src.floatVal as int64) : src.intVal;
 	if (bits == 64) {
 		setReg(vm, vm.baseReg + inst.a, raiserInt(whole));
 		return;
@@ -1700,11 +1715,14 @@ function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 	// VM's heaps active when it resumes.
 	const prevObjHeap = activeHostObjectHeap();
 	const prevArrHeap = activeHostArrayHeap();
+	const prevArgv = activeProgramArgv();
 	setActiveHostHeaps(vm.objectHeap, vm.arrayHeap);
+	setActiveProgramArgv(vm.programArgv);
 	const result = fn(args);
 	if (prevObjHeap != null && prevArrHeap != null) {
 		setActiveHostHeaps(prevObjHeap, prevArrHeap);
 	}
+	setActiveProgramArgv(prevArgv);
 
 	const dst = getReg(vm, base + inst.a);
 	vmIncref(vm, result);
@@ -1777,6 +1795,29 @@ test "halt returns constant" {
 		[raiserInt(42)]
 	));
 	assert vm.exitValue.intVal == 42;
+}
+
+function execConv(value: RaiserValue, cls: RaiserConvClass): RaiserVM {
+	return execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.Conv, 1, 0, cls as int32),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[value]
+	));
+}
+
+test "a float converted to a signed integer out of its range stops, as on C" {
+	assert execConv(raiserFloat(1e19), RaiserConvClass.I64).error.indexOf("not in range") >= 0;
+	const i8 = execConv(raiserFloat(128.0), RaiserConvClass.I8);
+	assert i8.error.indexOf("value 128 not in range -128 .. 127") >= 0;
+	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.I32).error.indexOf("not in range") >= 0;
+}
+
+test "a float in a signed integer's range converts by truncation" {
+	assert execConv(raiserFloat(127.9), RaiserConvClass.I8).exitValue.intVal == 127;
+	assert execConv(raiserFloat(-9.5), RaiserConvClass.I64).exitValue.intVal == -9;
 }
 
 test "add: 10 + 20 = 30" { assert execBinOp(RaiserOpcode.AddI64, 10, 20).exitValue.intVal == 30; }

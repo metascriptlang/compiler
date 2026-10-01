@@ -17,7 +17,8 @@ import {
 } from "./value";
 import { RaiserModule, makeTestModule } from "./module";
 import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx } from "./bytecode";
-import { execModule, vmDumpStack, vmOrphanFailures } from "./vm";
+import { createVM, execLoop, vmDumpStack, vmOrphanFailures } from "./vm";
+import { RaiserPrintSink } from "./marshal";
 
 // --- Context ---
 
@@ -31,6 +32,8 @@ export interface RaiserContext {
 	lastError: string;
 	gcMode: string;
 	orphanFailures: string[];   // futures that failed with nobody reading them
+	programArgv: string[] | null;   // the program's `argv`; null leaves the host's own argv visible
+	printSink: RaiserPrintSink | null;
 }
 
 export function createContext(): RaiserContext {
@@ -41,7 +44,7 @@ export function createContext(): RaiserContext {
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const orphanFailures: string[] = [];
-	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap, lastError: "", gcMode: "arena", orphanFailures };
+	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap, lastError: "", gcMode: "arena", orphanFailures, programArgv: null, printSink: null };
 }
 
 export function load(ctx: RaiserContext, mod: RaiserModule): void {
@@ -51,7 +54,10 @@ export function load(ctx: RaiserContext, mod: RaiserModule): void {
 
 export function execute(ctx: RaiserContext): boolean {
 	if (!ctx.hasModule) return false;
-	const vm = execModule(ctx.mod, ctx.gcMode);
+	const vm = createVM(ctx.mod, ctx.gcMode);
+	vm.programArgv = ctx.programArgv;
+	vm.printSink = ctx.printSink;
+	execLoop(vm);
 	ctx.lastResult = vm.exitValue;
 	ctx.lastOutput = vm.output;
 	ctx.arrayHeap = vm.arrayHeap;

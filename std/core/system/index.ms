@@ -57,56 +57,59 @@ export extern function compilerFunc(): void;
 @builtin("throws")
 export extern function throws(): void;
 
+@builtin("delegate")
+export extern function delegate(): void;
+
 @compilerFunc @throws
 extern function msAssertFail(msg: cstring, file: cstring, line: int32): void from "msAssertFail";
 
 @compilerFunc @throws
-extern function msAwaitSlotResult(slot: unknown): unknown from "msAwaitSlotResult";
+extern function msAwaitSlotResult(slot: Ptr<void>): Ptr<void> from "msAwaitSlotResult";
 
 @throws
 extern function msAbortThrow(): void from "msAbortThrow";
 
 @compilerFunc
-extern function msFutureCompleteT(fut: unknown, sink value: unknown): void from "msFutureCompleteT";
+extern function msFutureCompleteT(fut: Ptr<void>, sink value: Ptr<void>): void from "msFutureCompleteT";
 
 @compilerFunc
-extern function msGenericArrayPush(arr: unknown, sink value: unknown): void from "msGenericArrayPush";
+extern function msGenericArrayPush(arr: Ptr<void>, sink value: Ptr<void>): void from "msGenericArrayPush";
 
 @compilerFunc @builtin("SpawnInto")
-extern function msSpawnInto(sink fut: unknown, fn: unknown): unknown;
+extern function msSpawnInto(sink fut: Ptr<void>, fn: Ptr<void>): Ptr<void>;
 
 @compilerFunc @builtin("FutureCreateInline")
-extern function msFutureCreateInline(): unknown;
+extern function msFutureCreateInline(): Ptr<void>;
 
 @compilerFunc @builtin("WaitForStruct")
-extern function msWaitForStruct(fut: unknown): unknown;
+extern function msWaitForStruct(fut: Ptr<void>): Ptr<void>;
 
 @compilerFunc @builtin("FutureThenBoxed")
-extern function msFutureThenBoxed(input: unknown, onFulfilled: unknown): unknown;
+extern function msFutureThenBoxed(input: Ptr<void>, onFulfilled: Ptr<void>): Ptr<void>;
 
 @compilerFunc @builtin("BoxStruct")
-extern function msBoxStruct(val: unknown): unknown;
+extern function msBoxStruct(val: Ptr<void>): Ptr<void>;
 
 @compilerFunc @builtin("SinkBoxStruct")
-extern function msSinkBoxStruct(val: unknown): unknown;
+extern function msSinkBoxStruct(val: Ptr<void>): Ptr<void>;
 
 @compilerFunc @builtin("UnboxStruct")
-extern function msUnboxStruct(box: unknown): unknown;
+extern function msUnboxStruct(box: Ptr<void>): Ptr<void>;
 
 @compilerFunc @builtin("BoxRefArray")
-extern function msBoxRefArray(arr: unknown): unknown;
+extern function msBoxRefArray(arr: Ptr<void>): Ptr<void>;
 
 @compilerFunc @builtin("BoxArc")
-extern function msBoxArc(val: unknown): unknown;
+extern function msBoxArc(val: Ptr<void>): Ptr<void>;
 
 @compilerFunc @builtin("BoxLocked")
-extern function msBoxLocked(val: unknown): unknown;
+extern function msBoxLocked(val: Ptr<void>): Ptr<void>;
 
 @compilerFunc @builtin("StringConcatArr")
 extern function msStringConcatArr(count: int32, ...parts: string[]): string;
 
 @compilerFunc @builtin("StringAppendArr")
-extern function msStringAppendArr(dest: unknown, count: int32, ...parts: string[]): void;
+extern function msStringAppendArr(dest: Ptr<void>, count: int32, ...parts: string[]): void;
 
 @compilerFunc @builtin("StringArrayFromArr")
 extern function msStringArrayFromArr(count: int32, ...parts: string[]): string[];
@@ -115,22 +118,22 @@ extern function msStringArrayFromArr(count: int32, ...parts: string[]): string[]
 extern function msNumberArrayFrom(count: int32, ...values: float64[]): float64[];
 
 @compilerFunc
-extern function msMsgCompleteDouble(fut: unknown, sink val: float64): void from "msMsgCompleteDouble";
+extern function msMsgCompleteDouble(fut: Ptr<void>, sink val: float64): void from "msMsgCompleteDouble";
 
 @compilerFunc
-extern function msMsgCompleteInt32(fut: unknown, sink val: int32): void from "msMsgCompleteInt32";
+extern function msMsgCompleteInt32(fut: Ptr<void>, sink val: int32): void from "msMsgCompleteInt32";
 
 @compilerFunc
-extern function msMsgCompleteInt64(fut: unknown, sink val: int64): void from "msMsgCompleteInt64";
+extern function msMsgCompleteInt64(fut: Ptr<void>, sink val: int64): void from "msMsgCompleteInt64";
 
 @compilerFunc
-extern function msMsgCompleteBool(fut: unknown, sink val: boolean): void from "msMsgCompleteBool";
+extern function msMsgCompleteBool(fut: Ptr<void>, sink val: boolean): void from "msMsgCompleteBool";
 
 @compilerFunc
-extern function msMsgCompletePtr(fut: unknown, sink val: unknown): void from "msMsgCompletePtr";
+extern function msMsgCompletePtr(fut: Ptr<void>, sink val: Ptr<void>): void from "msMsgCompletePtr";
 
 @compilerFunc
-extern function msMsgCompleteString(fut: unknown, sink val: string): void from "msMsgCompleteString";
+extern function msMsgCompleteString(fut: Ptr<void>, sink val: string): void from "msMsgCompleteString";
 
 extern function codePointString(cp: int64): string from "msStringFromCodePoint";
 

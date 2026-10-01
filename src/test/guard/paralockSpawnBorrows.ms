@@ -1,9 +1,10 @@
 // nim-guard: the spawn write ban must not eat the shapes the model allows
 //
-// INVARIANT (PARALOCK Amendment L, §5.3 + §9.2 E20/E147): a plain captured ref
-//   is a BORROW and reading through it is legal — Principle 5 exists to keep
-//   that zero-copy. And a write inside a lockedUpdate / lockedRead callback is
-//   the sanctioned form of shared mutable state (I22), not an evasion of E24.
+// INVARIANT (PARALOCK Amendment L §5.3 + §9.2 E20, Amendment N): a plain
+//   captured ref is a BORROW and reading through it is legal — Principle 5
+//   exists to keep that zero-copy. And a write to the payload of a Locked<T>
+//   inside its lockedUpdate callback is the sanctioned form of shared mutable
+//   state (I22), not an evasion of E24.
 //
 // WHAT IT CATCHES: an over-firing write ban. paralockSpawnWrites.ms only proves
 //   the rule still rejects; nothing there goes red when the rule starts
@@ -14,12 +15,10 @@
 //
 // RED MEANS: either a legal borrow now fails to compile (the write ban lost its
 //   read/write distinction, or it started rejecting a ref merely passed to a
-//   callee), or the Locked exemption stopped applying and the model has no
+//   callee), or the Locked payload stopped being writable and the model has no
 //   spelling left for shared mutable state inside a thunk.
 
 interface Counter { n: int32; }
-
-interface Table { items: int32[]; }
 
 function readOnly(c: Readonly<Counter>): int32 {
 	return c.n;
@@ -39,16 +38,16 @@ function borrowThroughCallee(): int32 {
 	return await f;
 }
 
-// 3 — write under the lock: E147's exemption.
+// 3 — write under the lock: the payload is the one writable location.
+struct Hits { n: int32; }
 function writeUnderLock(): int32 {
-	const t: Table = { items: [] };
-	const gate = new Locked<int32>(0);
+	const cell = new Locked<Hits>({ n: 0 });
 	const f = spawn(() => {
-		lockedUpdate(gate, (v: int32): int32 => { t.items.push(9); return v + 1; });
+		lockedUpdate(cell, (h: Hits): Hits => { return { n: h.n + 1 }; });
 		return 0;
 	});
 	const done = await f;
-	return t.items.length + done;
+	return lockedRead(cell, (h: Hits): int32 => h.n) + done;
 }
 
 // 4 — a POD struct copy is the thunk's own value: writing it touches nothing shared.

@@ -77,6 +77,7 @@ export enum TypeFlag {
 	IsReadonly,           // read-only view of a Ref or Array: no write reaches through it and it never converts back to the mutable type (PARALOCK E24)
 	PtrIntroduced,        // Ptr<T> introduced by pointer-param introduction, not user-declared
 	HasGenericParam,
+	BorrowDot,
 }
 
 // ===== Attached Lifecycle Ops =====
@@ -209,6 +210,7 @@ export enum SymbolFlag {
 	AfterReload,
 	StateMachine,
 	ForVar, // for-of loop binding (reference: skForVar) — rebinding legal, value interior read-only
+	Borrow,
 }
 
 // ===== Symbol =====
@@ -243,6 +245,7 @@ export class Symbol {
 	itemModule: int32;     // Identity within one compilation: the owning module's index and the ordinal of this symbol in it
 	item: int32;
 	instantiatedFrom: Symbol | null;
+	borrowedFrom: Symbol | null;
 }
 
 // ===== Node Flags (Standard parity: TNodeFlags) =====
@@ -269,6 +272,8 @@ export enum NodeFlag {
 	WhenPicked,    // parser: statement spliced in from the selected branch of a `when` chain
 	ExplicitDeref, // parser: HiddenDeref written as `x[]` — the checker validates the pointer, fmt prints it back
 	CommaWritten,  // parser: a comma was written after this match case
+	ObjCheck,      // checker: this TypeAssertion is an object down-conversion checked at run time
+	ConvCheck,     // checker: this conversion narrows to a union member or into a string-literal union, tested at run time
 }
 
 // ===== Node Kind Enum =====

@@ -20,7 +20,7 @@ test "T inferred through an inline anon-object literal instantiates" {
 }
 
 function inferFnField<T>(props: { pick: (x: T) => number }): number {
-	return props.pick(0 as unknown as T);
+	return props.pick(0 as T);
 }
 
 test "T inside a function-typed field of the literal binds and runs" {

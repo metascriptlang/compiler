@@ -182,18 +182,15 @@ operation to save you from a side effect you were just told about.
 ### Running one — `msc x`
 
 `msc x <command> [args…]` resolves the command against every dependency the project can see
-(`file:` deps, `msc.lock`, then the global manifest), builds the entry and executes it.
+(`file:` deps, `msc.lock`, then the global manifest) and runs the entry on Raiser from source.
 **Everything after the command name belongs to the command**, including flags — `msc x greet
---release` passes `--release` to `greet`. The command's exit status is the exit status of `msc x`.
+--release` passes `--release` to `greet`. The command's `argv` is `[<command name as declared>, …args]`
+and its exit status is the exit status of `msc x`.
 
 - `msc x` with no argument lists the declared commands.
 - Two packages declaring one name is not an error until you run it: `msc x greeter:greet` picks one.
-- A registry/git command is built once into `~/.metascript/cache/bin/<pkg>@<version>/<command>`
-  and executed from there afterwards; a `file:` command is rebuilt on every run, because its
-  source can change under you. The build lands through a temp file and an atomic rename — two
-  concurrent first runs cannot hand each other a half-written binary — and the cache holds at
-  most 32 package directories (`BIN_CACHE_CAP`, `src/compiler/x.ms`), evicting the
-  least-recently-used; an evicted command simply rebuilds on its next run.
+- Nothing is built or cached: there is no binary under `~/.metascript/cache/bin/`, and a `file:`
+  dependency's edits show on the next run.
 
 Measured end to end (2026-09-22, clean scratch consumer): `msc x greet Son` → `hello v1, Son`;
 after changing the package to 2.0.0 with different output, the same invocation prints the new

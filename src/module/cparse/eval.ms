@@ -191,7 +191,7 @@ function evalPrimary(es: CConstEvalState): int32 {
 		const name = tok.stringVal;
 		next(es);
 		if (es.constants.has(name)) {
-			return es.constants.get(name) as unknown as int32;
+			return es.constants.get(name)! as int32;
 		}
 		// Unknown identifier in const expr context — not necessarily an error
 		// (could be a macro that expanded to nothing, or a forward ref)

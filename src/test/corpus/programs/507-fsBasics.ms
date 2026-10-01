@@ -1,24 +1,24 @@
 // @xfail(raiser): error: Property 'sort' does not exist on type 'Array'
-// @xfail(esm): tree emit: std/process argv module-global never imported into the referencing module
 // @ledger-slack(msStringArrayRefCell): 2
 // std/process argv module-init allocates 2 string arrays never destroyed at
 // exit — TESTGAP T6 (probed: bare `import { argv }` program shows 2/0).
 // Parity program — std fs I/O floor: write → stat → read roundtrip, append,
 // copy, lines roundtrip, dir tree (ensureDir/readDir/rename/remove/removeAll),
 // and the Result error path (readFile of a missing path → IoErrorKind).
-// Workdir derives from basename(argv[0]) so concurrent lane cells (c/orc/
-// danger) never collide; paths are never printed — output stays byte-equal.
+// Workdir derives from the last two segments of argv[0] so concurrent lane
+// cells (c/orc/danger, and the js bundle beside the esm tree entry) never
+// collide; paths are never printed — output stays byte-equal.
 
 import { argv } from "std/process";
 import {
 	readFile, writeFile, appendFile, copyFile, readLines, writeLines,
 	exists, isFile, isDir, fileSize, mkdir, readDir, rename, remove,
-	removeAll, ensureDir, basename,
+	removeAll, ensureDir, basename, dirname,
 } from "std/fs";
 import { IoErrorKind } from "std/io/errors";
 
 function main(): void {
-	const dir = "/tmp/mscorpus507-" + basename(argv[0]);
+	const dir = "/tmp/mscorpus507-" + basename(dirname(argv[0])) + "-" + basename(argv[0]);
 	const ra = removeAll(dir);
 	if (!ra.ok) { console.log("preclean=fail"); return; }
 	const md = mkdir(dir);

@@ -45,8 +45,8 @@ test "bug023: Result<T[], E> instantiates as single-wrap Array, not Array<Array<
 		assert out.contains("int32_tArray value");
 		// The whole `Result<int32[], string>` mono type name must NOT carry a
 		// nested array marker either (e.g. `_arr_arr_`).
-		assert !out.contains("Result__arr_arr_int32");
-		assert out.contains("Result__arr_int32_string");
+		assert !out.contains("__arr_arr_int32");
+		assert out.contains("Result_") && out.contains("__arr_int32_string");
 	}
 }
 
@@ -71,6 +71,6 @@ test "bug023: Result<T[][], E> intentionally double-wraps (user-written nested a
 		const out = c.value;
 		// User asked for T[][], so int32_tArrayArray IS the correct output here.
 		assert out.contains("int32_tArrayArray value");
-		assert out.contains("Result__arr_arr_int32_string");
+		assert out.contains("Result_") && out.contains("__arr_arr_int32_string");
 	}
 }

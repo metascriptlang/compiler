@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, opProcSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion } from "../../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -679,6 +679,9 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		TypeKind.Ptr => {
 			defaultOp(hook, xf, yf, buf, loc);
 		},
+		TypeKind.Unknown => {
+			refOp(hook, xf, yf, fieldName, true, false, lctx, buf, loc);
+		},
 		TypeKind.Function => {
 			if (hook == "copy") {
 				genCopyRef("msClosureCopy", xf, yf, fieldName, buf, loc);
@@ -730,9 +733,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		TypeKind.Union => {
 			const refInner = unwrapRefNullUnion(fieldType);
 			if (refInner != null) {
-				// `unknown` is pointer-top and outside reference counting, so the store
-				// side never increfs it; decref here would free a value nobody owned.
-				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Unknown
+				if (refInner.kind == TypeKind.Ptr
 					|| (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor)) {
 					defaultOp(hook, xf, yf, buf, loc);
 				} else {
@@ -1638,11 +1639,26 @@ function payloadUnionEqExpr(aField: Node, bField: Node, u: Type, lctx: LiftCtx, 
 	return acc;
 }
 
+function nullableEqJS(aField: Node, bField: Node, payload: Type, lctx: LiftCtx, loc: SourceLocation): Node {
+	const aPresent = makeBinary(clonePath(aField, loc), "!==", makeNull(loc), loc);
+	const bPresent = makeBinary(clonePath(bField, loc), "!==", makeNull(loc), loc);
+	const payloadEq = fieldEqExpr(clonePath(aField, loc), clonePath(bField, loc), payload, lctx, loc);
+	const bothEqual = makeBinary(makeBinary(aPresent, "&&", bPresent, loc), "&&", payloadEq, loc);
+	return makeBinary(makeBinary(aField, "===", bField, loc), "||", bothEqual, loc);
+}
+
 function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx, loc: SourceLocation): Node {
-	// For nested value-type objects, call their _eq function — ensure it exists (on-demand, like tuples below)
+	if (isMaybeType(fieldType)) {
+		const eqSym = opProcSym(ensureCarrierEq(fieldType, lctx, loc));
+		return makeCall(makeTypedIdentResolved(eqSym, null, loc), [aField, bField], loc);
+	}
 	if (fieldType.kind == TypeKind.Struct && fieldType.typeName != "") {
-		ensureEq(fieldType.typeName, lctx, loc);
-		return makeCall(makeTypedIdentResolved(opProcSym(fieldType.typeName + "Eq"), null, loc), [aField, bField], loc);
+		const eqSym = opProcSym(ensureStructEq(fieldType, lctx, loc));
+		return makeCall(makeTypedIdentResolved(eqSym, null, loc), [aField, bField], loc);
+	}
+	if (fieldType.kind == TypeKind.SizedArray) {
+		const eqSym = opProcSym(ensureSizedArrayEq(fieldType, lctx, loc));
+		return makeCall(makeTypedIdentResolved(eqSym, null, loc), [aField, bField], loc);
 	}
 	// Tuple fields are C structs — `===` would emit an invalid struct comparison.
 	// Route to the generated msTuple_<hash>Eq (field-by-field), ensuring it exists.
@@ -1741,17 +1757,79 @@ function ensureInstanceEq(mangledName: string, body: Type, lctx: LiftCtx, loc: S
 	generateEq(mangledName, body, lctx, loc);
 }
 
-function ensureEq(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
-	if (!claimEq(typeName + "Eq", lctx)) return;
+function ensureStructEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
+	const cName = hookCName(t.typeName, t, lctx);
+	if (claimEq(cName + "Eq", lctx)) generateEq(cName, t, lctx, loc);
+	return cName + "Eq";
+}
 
-	const sym = lookupSymbol(lctx.checkerCtx.table, typeName);
-	if (sym == null) return;
-	// For value-type structs and interfaces (not classes — classes use reference equality)
-	if (sym.symbolKind == SymbolKind.Class) return;
-	const eqType = unwrapRef(sym.symbolType);
-	if (eqType.kind != TypeKind.Struct) return;
+function ensureSizedArrayEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
+	const name = sizedArrayHookName(t);
+	if (claimEq(name + "Eq", lctx)) generateSizedArrayEq(name, t, lctx, loc);
+	return name + "Eq";
+}
 
-	generateEq(typeName, eqType, lctx, loc);
+function generateSizedArrayEq(name: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const elem = t.typeReturn;
+	if (elem == null) throw new Error(`internal: fixed array '${name}' has no element type`);
+	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
+	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
+	const counter = "$i_" + lctx.tempCounter.toString();
+	lctx.tempCounter = lctx.tempCounter + 1;
+	const ai = makeArrayAccess(makeTypedIdentResolved(aSym, t, loc), makeIdent(counter, loc), loc);
+	const bi = makeArrayAccess(makeTypedIdentResolved(bSym, t, loc), makeIdent(counter, loc), loc);
+	ai.nodeType = elem;
+	bi.nodeType = elem;
+	const differs = makeUnary("!", fieldEqExpr(ai, bi, elem, lctx, loc), loc);
+	const next = makeBinary(makeIdent(counter, loc), "+", makeNumber(1, loc), loc);
+	const step = makeBlock([
+		makeIf(differs, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc),
+		makeExprStmt(makeAssign(makeIdent(counter, loc), next, loc), loc),
+	], loc);
+	const length = makeNumber(t.typeValue as number, loc);
+	const bound = makeBinary(makeIdent(counter, loc), "<", length, loc);
+	const buf: Node[] = [
+		makeVarDecl(counter, makeNumber(0, loc), DeclKind.Let, loc),
+		makeWhile(bound, step, loc),
+		makeReturn(makeBool(true, loc), loc),
+	];
+	const body = makeBlock(buf, loc);
+	const eqFn = makeFnDecl(name + "Eq", [aSym, bSym], [name, name], body, "", "boolean", loc);
+	setHookParamType(eqFn, 0, t);
+	setHookParamType(eqFn, 1, t);
+	markGeneratedOp(eqFn, name + "Eq");
+	lctx.collector.push(eqFn);
+}
+
+function ensureCarrierEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
+	const carrierName = typeNameOf(t);
+	if (!claimEq(carrierName + "Eq", lctx)) return carrierName + "Eq";
+	if (lctx.jsBackend && isMaybeType(t)) {
+		generateNullableEqJS(carrierName, t, lctx, loc);
+	} else {
+		generateEq(carrierName, t, lctx, loc);
+	}
+	return carrierName + "Eq";
+}
+
+function generateNullableEqJS(
+	carrierName: string,
+	t: Type,
+	lctx: LiftCtx,
+	loc: SourceLocation,
+): void {
+	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
+	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
+	const a = makeTypedIdentResolved(aSym, null, loc);
+	const b = makeTypedIdentResolved(bSym, null, loc);
+	const compare = nullableEqJS(a, b, unwrapMaybeType(t), lctx, loc);
+	const body = makeBlock([makeReturn(compare, loc)], loc);
+	const names = [carrierName, carrierName];
+	const eqFn = makeFnDecl(carrierName + "Eq", [aSym, bSym], names, body, "", "boolean", loc);
+	setHookParamType(eqFn, 0, t);
+	setHookParamType(eqFn, 1, t);
+	markGeneratedOp(eqFn, carrierName + "Eq");
+	lctx.collector.push(eqFn);
 }
 
 // ===== Tuple Lifecycle Hooks (first-class value type) =====
@@ -2473,8 +2551,12 @@ function liftComparisons(ctx: TransformContext, lctx: LiftCtx, loc: SourceLocati
 			};
 		}
 	}
-	for (const structName of ctx.pendingStructEqs) {
-		ensureEq(structName, lctx, loc);
+	for (const valueType of ctx.pendingValueEqs) {
+		if (valueType.kind == TypeKind.SizedArray) {
+			ensureSizedArrayEq(valueType, lctx, loc);
+		} else {
+			ensureStructEq(valueType, lctx, loc);
+		}
 	}
 	for (const carrierType of ctx.pendingCarrierEqs) {
 		if (carrierType.kind == TypeKind.GenericInstance) {
@@ -2484,10 +2566,8 @@ function liftComparisons(ctx: TransformContext, lctx: LiftCtx, loc: SourceLocati
 				continue;
 			}
 		}
-		const carrierName = typeNameOf(carrierType);
-		if (carrierName == "") continue;
-		if (!claimEq(carrierName + "Eq", lctx)) continue;
-		generateEq(carrierName, carrierType, lctx, loc);
+		if (typeNameOf(carrierType) == "") continue;
+		ensureCarrierEq(carrierType, lctx, loc);
 	}
 }
 

@@ -286,7 +286,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Semicolon) {
 		advance(state); // consume ;
 		fnBody = createNode(NodeKind.BlockStmt, { statements: [] }, fnToken);
-		fnFlagsFinal = flags == "" ? "overload" : (flags + " overload");
+		fnFlagsFinal = flags == "" ? "overload" : `${flags}|overload`;
 	} else {
 		fnBody = try callBlockParser(state);
 		fnBody = prependParamPatterns(fnBody, fnPatterns, fnParamLocs);

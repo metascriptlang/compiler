@@ -50,7 +50,13 @@ static inline msRefHeader* msHeader(void* p) {
 
 #ifdef MSOS_BARE
 
-#ifdef MSOS_SOLANA
+#if defined(MS_FREESTANDING_LIBC)
+
+void* msArenaAlloc(size_t size);
+void* msArenaRealloc(void* old, size_t old_size, size_t new_size);
+void msArenaReset(void);
+
+#elif defined(MSOS_SOLANA)
 
 #define MS_SOLANA_HEAP_START 0x300000000ULL
 #ifndef MS_SOLANA_HEAP_SIZE
@@ -116,8 +122,9 @@ static inline void* msArenaAlloc(size_t size) {
     return p;
 }
 
-#endif /* MSOS_SOLANA */
+#endif
 
+#ifndef MS_FREESTANDING_LIBC
 static inline void* msArenaRealloc(void* old, size_t old_size, size_t new_size) {
     void* p = msArenaAlloc(new_size);
     if (p && old && old_size > 0) {
@@ -131,6 +138,7 @@ static inline void* msArenaRealloc(void* old, size_t old_size, size_t new_size) 
 static inline void msArenaReset(void) { msSolanaCurrentContext()->arenaPosition = sizeof(msSolanaContext); }
 #else
 static inline void msArenaReset(void) { _ms_arena_pos = 0; }
+#endif
 #endif
 
 static inline void* msAlloc(size_t size) {
@@ -281,6 +289,14 @@ static inline void* _ms_manual_calloc(size_t n, size_t size) {
 #define realloc(p, s) _ms_manual_realloc((p), (s))
 #define free(p)       ((void)(p))
 
+#elif defined(MS_FREESTANDING_LIBC)
+
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <math.h>
+
 #elif defined(MSOS_BARE)
 
 /* Freestanding: system headers available but malloc/free redirected to arena */
@@ -391,6 +407,8 @@ static inline void msPrintln(msString s) {
         ((uint64_t (*)(const char*, uint64_t))MS_SOL_LOG_STATIC_SYSCALL_MURMUR3)(s.p->data, (uint64_t)s.len);
     }
 }
+#elif defined(MS_FREESTANDING_LIBC)
+void msPrintln(msString s);
 #else
 static inline void msPrintln(msString s) {
     if (s.p != NULL && s.len > 0) {
@@ -487,6 +505,11 @@ _Noreturn static inline void msRaiseIndexError(int64_t idx, int64_t len) {
     __builtin_trap();
 }
 
+_Noreturn static inline void msRaiseSliceError(int64_t start, int64_t end, int64_t len) {
+    (void)start; (void)end; (void)len;
+    __builtin_trap();
+}
+
 _Noreturn static inline void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
     (void)val; (void)lo; (void)hi;
     __builtin_trap();
@@ -524,6 +547,12 @@ _Noreturn static inline void msRaiseRangeErrorF(double val, int64_t lo, int64_t 
 #define msSizedArrayAccessUnchecked(a, i, n) ((a).data[(int64_t)(i)])
 #define msSpanAccessUnchecked(a, i) ((a).data[(int64_t)(i)])
 
+static inline int64_t msSliceLen(int64_t start, int64_t end, int64_t len) {
+    if (end != start && (start < 0 || end < start || end > len)) msRaiseSliceError(start, end, len);
+    return end - start;
+}
+#define msSliceLenUnchecked(start, end, len) ((int64_t)(end) - (int64_t)(start))
+
 #define msStringCharAccess(s, i) msStringCharAt((s), (i))
 
 #define msVariantAccess(u, slot, head, labels) (*({ \
@@ -531,6 +560,12 @@ _Noreturn static inline void msRaiseRangeErrorF(double val, int64_t lo, int64_t 
     if ((int64_t)__vu->_tag != (int64_t)(slot)) __builtin_trap(); \
     __vu; \
 }))
+
+#define msVariantAccessVal(u, slot, head, labels) ({ \
+    __typeof__(u) __vv = (u); \
+    if ((int64_t)__vv._tag != (int64_t)(slot)) __builtin_trap(); \
+    __vv; \
+})
 
 /* ===== Range-Checked Integer Casts ===== */
 static inline int8_t   msCheckRangeI8(double v, int64_t lo, int64_t hi)  { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (int8_t)v; }

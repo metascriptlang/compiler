@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec, execFile, execFileCapture, argv, platform, cwd } from "std/process";
+import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd } from "std/process";
 import { watch, nextChanges, msIoRunOnce, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile } from "std/fs";
 import { writeStderr } from "std/io";
@@ -661,6 +661,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const nativeCtx = createTransformContextWithChecker(ctx);
 	nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 	nativeCtx.boundChecks = opts.mode != MODE_DANGER;
+	nativeCtx.objChecks = opts.mode != MODE_DANGER;
 	const _tr0 = performance.now();
 	const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 	job.timers.refine = job.timers.refine + (performance.now() - _tr0);
@@ -1118,6 +1119,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		const j = jobs[ci];
 		const code = exitCodes[ci];
 		if (code != 0) {
+
 			printDiag(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
 			stopBuild();
 		}
@@ -1453,6 +1455,13 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 // Platform-specific runtime compile — dispatch + selectors + pool + fs.
 function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string, opts: CliOptions): string[] {
+	if (opts.targetOs == "bare" && opts.cpuTarget == "wasm32") {
+		return processCompileDirectives(
+			"runtime/freestanding/libc.c", ".", includePaths, allFlags,
+			opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose,
+			opts.targetOs, opts.projectRoot, resolveRuntimeDir(),
+		);
+	}
 	if (opts.targetOs == "bare" || opts.targetOs == "solana") return [];
 
 	let rtFiles = "";
@@ -1540,7 +1549,7 @@ function hcrFunctionSlot(info: ExportedSymInfo, fn: Symbol): string {
 
 
 function appendHcrFunctionExport(exports: HcrAbiExport[], moduleId: string, info: ExportedSymInfo, fn: Symbol): Result<void, string> {
-	if (hasFlag(fn, SymbolFlag.OverloadSig)) return Result.ok(null);
+	if (hasFlag(fn, SymbolFlag.OverloadSig) || hasFlag(fn, SymbolFlag.Borrow)) return Result.ok(null);
 	if (hasGenericParams(fn.symbolType)) {
 		return Result.err(`HCR ABI cannot represent generic export '${moduleId}::${info.name}'`);
 	}
@@ -2270,7 +2279,10 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 		if (opts.targetOs == "windows") suffix = dynLib ? ".dll" : ".exe";
 		if (opts.appMode == "staticlib") suffix = ".a";
 		if (opts.targetOs == "solana") suffix = ".so";
-		if (opts.targetOs == "wasm") suffix = ".wasm";
+		if (opts.targetOs == "wasm" ||
+			(opts.targetOs == "bare" && opts.cpuTarget == "wasm32" && opts.appMode != "staticlib")) {
+			suffix = ".wasm";
+		}
 		if (opts.targetOs == "emcc") suffix = ".js";  // emcc outputs .js + .wasm pair
 		outBinary = outDir + "/" + replaceExt(basename(entryPath), "") + suffix;
 	}
@@ -2989,6 +3001,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 		nativeCtx.boundChecks = opts.mode != MODE_DANGER;
+		nativeCtx.objChecks = opts.mode != MODE_DANGER;
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
@@ -3394,14 +3407,14 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	}
 	const entryJs = `${tree.outRoot}/${entryRel}`;
 	if (opts.verbose) verboseLog(`exec node ${entryJs}`);
-	const r = exec(`node ${entryJs}`);
-	if (r.ok) {
-		if (r.value != "") console.log(r.value);
-		exit(0);
+	const node = findOnPath("node");
+	if (node == "") {
+		console.log(`${error("error")}: msc run --target=js needs node on PATH`);
+		exit(1);
 	}
-	if (r.error.output != "") console.log(r.error.output);
-	if (r.error.errorOutput != "") console.log(r.error.errorOutput);
-	exit(r.error.exitCode != 0 ? r.error.exitCode : 1);
+	const forwarded: string[] = [entryJs];
+	for (const arg of opts.extraArgs) { forwarded.push(arg); }
+	exit(execFile(node, forwarded));
 }
 
 // ===== Test (JS backend) =====
@@ -3516,9 +3529,9 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 
 // ===== Raiser (Bytecode VM) Run =====
 
-export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
+export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), argv0: string = ""): void {
 	const t0 = performance.now();
-	const config = buildResolverConfig(Target.Raiser, defaultResolveSection());
+	const config = buildResolverConfig(Target.Raiser, resolveSection, platform, opts.projectRoot);
 	const graph = loadAndCheckGraph(filePath, config, opts);
 
 	const modules: RaiserModuleInput[] = [];
@@ -3572,18 +3585,12 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 
 	const ctx = createRaiserContext();
 	ctx.gcMode = "orc";
+	const programArgv: string[] = [argv0 != "" ? argv0 : filePath];
+	for (const a of opts.extraArgs) programArgv.push(a);
+	ctx.programArgv = programArgv;
+	ctx.printSink = (text: string): void => { console.log(text); };
 	raiserLoad(ctx, raiserMod);
 	const ranOk = raiserExecute(ctx);
-
-	if (ctx.lastOutput.length > 0) {
-		// Print captured output (strip trailing newline for clean display)
-		const lastOut = ctx.lastOutput;
-		if (lastOut.byteLength > 0 && lastOut.byteSlice(lastOut.byteLength - 1, lastOut.byteLength) == "\n") {
-			console.log(lastOut.byteSlice(0, lastOut.byteLength - 1));
-		} else {
-			console.log(lastOut);
-		}
-	}
 
 	if (!ranOk) {
 		if (ctx.lastError != "") {

@@ -11,7 +11,7 @@ import {
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString, addCGenError,
 } from "./context";
 import { genExpr, refArrayDestroyFn, refArrayCellLabel, bareArrayTypeName } from "./expressions";
-import { genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
+import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
 import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, refArrayCellName, isCompilerGenCName, isNilableValueType, ensureDrcProto, procHeader } from "./types";
 import { genTestDeclNode } from "./test";
@@ -125,7 +125,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 
 	// Tier 1: body-less overload signature — typecheck-only, skip codegen emission entirely.
 	// The implementation (same name, no 'overload' flag) emits the actual C function.
-	if (sym != null && hasFlag(sym, SymbolFlag.OverloadSig)) return;
+	if (sym != null && (hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.Borrow))) return;
 
 	// Module-qualified name (Standard reference implementation parity)
 	const isMain = d.fnName == "main";
@@ -740,6 +740,10 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 			add(sec(g, CSection.ModuleInit), stmts);
 		}
 		addLine(sec(g, CSection.ModuleInit), `  ${varName} = ${initSnippet};`);
+		emitCallRaiseCheck(p, d.initializer);
+		const check = readProcStmts(p);
+		clearProcBuffers(p);
+		if (check.length > 0) add(sec(g, CSection.ModuleInit), check);
 	}
 }
 

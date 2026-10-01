@@ -1,0 +1,25 @@
+export struct Handle<T> { ptr: Ptr<void>; }
+
+export function retain<T>(this typeof Handle, x: T): Handle<T> {
+	return { ptr: x as Ptr<void> };
+}
+
+export function borrow<T>(this typeof Handle, x: T): Handle<T> {
+	return { ptr: x as Ptr<void> };
+}
+
+export function at<T>(this typeof Handle, p: Ptr<void>): Handle<T> {
+	return { ptr: p };
+}
+
+export function value<T>(this h: Handle<T>): T {
+	return h.ptr as T;
+}
+
+export function take<T>(this h: Handle<T>): T {
+	return h.ptr as T;
+}
+
+export function retain<T>(this h: Handle<T>): void {}
+
+export function release<T>(this h: Handle<T>): void {}

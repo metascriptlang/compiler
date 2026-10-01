@@ -326,7 +326,7 @@ function readMacroArgOne(ctx: PPContext, tok: CToken, readRest: boolean): CToken
 	return [head.next, tok]; // [arg tokens, rest]
 }
 
-function readMacroArgs(ctx: PPContext, tok: CToken, mac: Macro): MacroArg[][] {
+function readMacroArgs(ctx: PPContext, tok: CToken, mac: Macro): MacroArg[] {
 	// Returns [args, rest-token] encoded as array
 	const args: MacroArg[] = [];
 	tok = tok.next; // skip (
@@ -348,8 +348,7 @@ function readMacroArgs(ctx: PPContext, tok: CToken, mac: Macro): MacroArg[][] {
 			tok = r[1];
 		}
 	}
-	if (tok.stringVal == ")") tok = tok.next;
-	return [args, [{ name: tok.stringVal }] as unknown as MacroArg[]] as unknown as MacroArg[][];
+	return args;
 }
 
 // ===== Parameter Substitution =====
@@ -507,8 +506,7 @@ function expandMacro(tok: CToken, ctx: PPContext): CToken[] {
 	// Function-like macro — needs ( after name
 	if (tok.next.stringVal != "(") return [null as unknown as CToken, tok];
 
-	const argsResult = readMacroArgs(ctx, tok.next, mac);
-	const args = argsResult[0] as unknown as MacroArg[];
+	const args = readMacroArgs(ctx, tok.next, mac);
 
 	// Re-walk from tok to find the closing ) (simpler than decoding readMacroArgs' rest)
 	let rest = tok.next.next; // skip name (

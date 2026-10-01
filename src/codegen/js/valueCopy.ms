@@ -11,6 +11,7 @@ import {
 	ArrayAccessData, BinaryExprData, ConditionalExprData, HiddenDerefData, MemberExprData, SpreadExprData, TypeAssertionData,
 } from "../../ast/node";
 import { isViewBinding } from "../../checker/symbol";
+import { distinctBody } from "../../checker/types";
 import { emit, emitNode, JSGenerator, jsTypedArrayName } from "./emit";
 
 let ownerGen: JSGenerator | null = null;
@@ -48,6 +49,8 @@ export function needsValueCopy(t: Type | null): boolean {
 // The runtime representation a JS value of static type `t` actually has:
 // Maybe<T> carriers are erased to `T | null` (see needsValueCopy).
 function jsValueRepr(t: Type | null): Type | null {
+	const base = distinctBody(t);
+	if (base != null) return jsValueRepr(base);
 	if (t != null && t.kind == TypeKind.Struct && t.typeFlags.has(TypeFlag.IsMaybe)) {
 		return t.typeReturn;
 	}

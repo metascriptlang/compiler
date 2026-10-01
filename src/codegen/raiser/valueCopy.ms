@@ -1,12 +1,15 @@
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
+import { distinctBody } from "../../checker/types";
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserString, raiserFloat, raiserBool, raiserNil } from "../../raiser/value";
 import { peelToRepr, unwrapRef } from "../../checker/types";
 import { RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrapNil } from "./context";
 
 function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
-	if (valueType != null && (valueType.kind == TypeKind.Alias || valueType.kind == TypeKind.Distinct)) {
+	const base = distinctBody(valueType);
+	if (base != null) return copyPlan(s, base);
+	if (valueType != null && valueType.kind == TypeKind.Alias) {
 		return copyPlan(s, valueType.typeReturn);
 	}
 	if (valueType == null) return -1;

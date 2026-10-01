@@ -7,13 +7,13 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { peelToStructOrUnion, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
+import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
 import { markUsedIn, CheckerContext, findExtension, getExtTypeName, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
-import { isAssignable as isAssignableCheck } from "./compat";
+import { isAssignable as isAssignableCheck, isValueStructDecl } from "./compat";
 import { monoBaseName, monoTypeKey } from "../monomorphize/registry";
 
 function anyHasGenericParams(types: Type[]): boolean {
@@ -871,6 +871,11 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		"cstring" => cstringType(),
 		_ => {
 			const sym = lookupSymbol(ctx.table, trimmed);
+			if (sym != null && line > 0 && isGenericTypeDecl(sym)) {
+				const count = splitTopLevel(declGenericParams(sym.declNode), ",").length;
+				addError(ctx, `generic type '${trimmed}' requires ${count} type argument(s)`, line, col);
+				return errorType();
+			}
 			if (sym != null) {
 				markUsedIn(ctx, sym);
 				// Demand-driven: ensure shaped before using
@@ -885,6 +890,13 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			return emitUnresolvedTypeRef(ctx, trimmed, line, col, "");
 		},
 	};
+}
+
+function isGenericTypeDecl(sym: Symbol): boolean {
+	const k = sym.symbolKind;
+	const isTypeDecl = k == SymbolKind.Class || k == SymbolKind.Interface || k == SymbolKind.Struct
+		|| k == SymbolKind.TypeAlias || k == SymbolKind.Actor;
+	return isTypeDecl && sym.declNode != null && declGenericParams(sym.declNode) != "";
 }
 
 // Emit error for unresolved type name and return TypeRef for recovery.
@@ -1458,6 +1470,9 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	if (predicateSentinel != null) {
 		fnType.typeExtra = predicateSentinel;
 	}
+	if (d.fnFlags.indexOf("extern", 0) >= 0 && !ctx.modulePath.endsWith(".jms")) {
+		refuseUnknownAtCBoundary(ctx, d.fnName, paramTypes, returnType, node);
+	}
 
 	// Set minArity for functions with default parameters (Reference parity: count non-null defaults)
 	let defCount = 0;
@@ -1533,6 +1548,24 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 
 function hookWritesItsReceiver(name: string): boolean {
 	return name == "onCopy" || name == "onMove" || name == "onMoved" || name == "onTrace";
+}
+
+function holdsUnknown(t: Type | null): boolean {
+	const bare = t != null ? skipModifier(t) : null;
+	if (bare == null) return false;
+	if (bare.kind == TypeKind.Varargs) return false;
+	if (bare.kind == TypeKind.Union) return isUnknownType(unwrapRefNullUnion(bare));
+	return isUnknownType(bare);
+}
+
+function refuseUnknownAtCBoundary(ctx: CheckerContext, name: string, paramTypes: Type[], returnType: Type, node: Node): void {
+	let spot = "";
+	for (let i = 0; i < paramTypes.length && spot == ""; i += 1) {
+		if (holdsUnknown(paramTypes[i])) spot = "parameter " + (i + 1).toString();
+	}
+	if (spot == "" && holdsUnknown(returnType)) spot = "return type";
+	if (spot == "") return;
+	addError(ctx, "extern '" + name + "' " + spot + ": unknown holds managed objects, a C function sees raw addresses — declare it Ptr<void>", node.location.line, node.location.column);
 }
 
 function refuseHookReceiverByValue(ctx: CheckerContext, node: Node, paramTypes: Type[]): void {
@@ -1704,6 +1737,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.typeNames = mergedNames;
 	target.typeChildren = mergedTypes;
 	target.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
+	if (sym.symbolType.kind == TypeKind.Struct && parentTypes.length == 1 && isValueStructDecl(parentTypes[0])) target.typeExtra = parentTypes[0];
 	for (const pt of mergedTypes) { propagateToOwner(target, pt); }
 	node.nodeType = sym.symbolType;
 	// Record each OWN interface field DEF for symbol graph (inherited fields
@@ -1729,6 +1763,9 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	if (sym == null) return;
 	node.resolvedSym = sym;
 	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.aliasName.length, sym, sym.symbolType, SymbolKind.TypeAlias, d.aliasName, "", true);
+	if (hasFlag(sym, SymbolFlag.Borrow) && !d.aliasIsDistinct) {
+		addError(ctx, `only a distinct type can borrow its base's fields: type ${d.aliasName} = distinct …`, d.nameLocation.line, d.nameLocation.column);
+	}
 
 	if (d.aliasType == "" && d.discriminantName == "") {
 		return;
@@ -1825,6 +1862,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		const distType = createDistinct(resolved);
 		distType.typeName = d.aliasName;
 		if (resolved.kind == TypeKind.Function) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BrandWiden);
+		if (hasFlag(sym, SymbolFlag.Borrow)) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BorrowDot);
 		assignType(sym.symbolType, distType);
 		node.nodeType = sym.symbolType;
 	} else if ((hasGenericAlias ? declaredByAnotherSymbol(resolved, sym) : resolved.sym != null)

@@ -1924,10 +1924,10 @@ function sgGetSymbolDetail(ctx: CheckerContext, name: string): string {
 	return sgTypeToString(sym.symbolType);
 }
 
-function sgCollectClassChildren(cd: ClassDeclData): SgDocumentSymbol[] {
+function sgCollectClassChildren(members: Node[]): SgDocumentSymbol[] {
 	const children: SgDocumentSymbol[] = [];
-	for (let i = 0; i < cd.classBody.length; i = i + 1) {
-		const member = cd.classBody[i];
+	for (let i = 0; i < members.length; i = i + 1) {
+		const member = members[i];
 		if (member == null) continue;
 		if (member.kind == NodeKind.MethodDecl) {
 			const md = member.data as MethodDeclData;
@@ -2047,14 +2047,14 @@ function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentS
 	}
 	if (node.kind == NodeKind.ClassDecl) {
 		const cd = node.data as ClassDeclData;
-		const children = sgCollectClassChildren(cd);
+		const children = sgCollectClassChildren(cd.classBody);
 		const item: SgDocumentSymbol = { name: cd.className, kind: SymbolKind.Class, location: node.location, detail: cd.classExtends, isMutable: false, children };
 		result.push(item);
 		return;
 	}
 	if (node.kind == NodeKind.ActorDecl) {
 		const ad = node.data as ActorDeclData;
-		const children = sgCollectClassChildren(ad as unknown as ClassDeclData);
+		const children = sgCollectClassChildren(ad.actorBody);
 		const item: SgDocumentSymbol = { name: ad.actorName, kind: SymbolKind.Actor, location: node.location, detail: "", isMutable: false, children };
 		result.push(item);
 		return;

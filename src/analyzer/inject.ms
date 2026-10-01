@@ -215,7 +215,9 @@ function processAssertionWrapper(node: Node, dctx: DrcContext, mode: DrcMode): N
 }
 
 function isReprCast(node: Node, dctx: DrcContext): boolean {
-	const operand = (node.data as TypeAssertionData).asExpr;
+	const operand = node.kind == NodeKind.TypeAssertion
+		? (node.data as TypeAssertionData).asExpr
+		: (node.data as HiddenStdConvData).convExpr;
 	if (operand == null || operand.nodeType == null || node.nodeType == null) return false;
 	return sinkClassify(operand.nodeType, dctx).needsCleanup != sinkClassify(node.nodeType, dctx).needsCleanup;
 }
@@ -232,6 +234,7 @@ function returnMode(arg: Node, dctx: DrcContext): DrcMode {
 			if (isReprCast(n, dctx)) return DrcMode.Consumed;
 			n = (n.data as TypeAssertionData).asExpr;
 		} else if (n.kind == NodeKind.HiddenStdConv || n.kind == NodeKind.HiddenSubConv) {
+			if (n.kind == NodeKind.HiddenStdConv && isReprCast(n, dctx)) return DrcMode.Consumed;
 			n = (n.data as HiddenStdConvData).convExpr;
 		} else {
 			n = null;
@@ -249,6 +252,10 @@ function processConvWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 			return passCopyToSink(node, dctx);
 		}
 		return node;
+	}
+	if (mode == DrcMode.SinkArg && node.kind == NodeKind.HiddenStdConv && isReprCast(node, dctx)) {
+		cv.convExpr = processNode(cv.convExpr, dctx, DrcMode.Normal);
+		return passCopyToSink(node, dctx);
 	}
 	cv.convExpr = processNode(cv.convExpr, dctx, mode);
 	return node;
@@ -2038,18 +2045,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 
 	// Member assignment: obj.field = expr
 	if (bd.left.kind == NodeKind.MemberExpr) {
-		let rcInfo = classifyMemberFieldRc(bd.left, dctx);
-		// Fallback: if LHS nodeType is null (checker didn't propagate), infer from RHS.
-		// Without this, field assignments like table.current = scope get no RC treatment,
-		// causing premature frees and dangling references.
-		// IMPORTANT: skip fallback if LHS is explicitly Ptr<T> — Ptr fields are borrows
-		// and must NOT get RC treatment. The RHS may be Ref<T> (owned) being assigned
-		// to a Ptr<T> (borrowed) field, but the field doesn't own a reference.
-		const lhsIsNonOwning = bd.left.nodeType != null
-			&& (bd.left.nodeType.kind == TypeKind.Ptr || bd.left.nodeType.kind == TypeKind.Cursor);
-		if (!rcInfo.needsCleanup && !lhsIsNonOwning && bd.right.nodeType != null) {
-			rcInfo = classifyRc(bd.right.nodeType, dctx);
-		}
+		const rcInfo = classifyMemberFieldRc(bd.left, dctx);
 		if (!rcInfo.needsCleanup) return stmt;
 		bd.left = stabilizeLocation(bd.left, dctx);
 		bd.right = processNode(bd.right, dctx, DrcMode.SinkArg);

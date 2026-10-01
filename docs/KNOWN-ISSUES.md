@@ -335,10 +335,15 @@ For a value type that meant hashing the ADDRESS: two sets equal by value hashed 
 every `HashMap<BitSet<E>, V>` lookup missed silently while `size` still counted the inserts. The
 emitted C showed it plainly as `hash__…_u3(&s)`.
 
-The same rule already applied to an `unknown` PARAMETER (`isPointerShapedForUnknown`, the error
-`cannot pass value type … as unknown — no void* representation`); it now applies to an extension
-RECEIVER too, and only when another candidate remains, so every single-candidate call is
-unchanged. Structs are still hashed by address where no better candidate exists.
+One rule governs an `unknown` PARAMETER and an extension RECEIVER, `unknownRefusal`
+(`src/checker/types.ms`). A struct `s: S` passed to an `unknown` parameter is refused with
+`cannot hold the value type S as unknown — only objects (class or interface instances) are
+unknown`. A value-typed receiver never
+binds the catch-all, even as the only candidate: with only `tag(this u: unknown)` declared,
+`p.tag()` on a struct is `Property 'tag' does not exist on type 'P'`. A struct hashes by value:
+equal `{ x: int32 }` and nested `{ p: P; f: number }` values hash equally, different ones do not.
+Measured 2026-09-29 on C: the message on main tree `80d320e9`, the receiver and the hashes on that
+tree and on the installed `013853dd` alike.
 
 ## L22. `new X<A<B>>` — a `>>` closing two type-argument lists types the instance as `Inferred` (LIVE, measured 2026-09-13)
 
@@ -390,7 +395,7 @@ corpus lane 504-hashContainers [js]          exit=0
 Kept as a numbered entry because the retraction is the useful record: a single-variant probe on a
 known-broken path produced a confident wrong claim about a whole backend surface.
 
-## L26. An enum member literal bound as a generic parameter is passed as `unknown` (LIVE, measured 2026-09-13)
+## L26. An enum member literal bound as a generic parameter is passed as `unknown` (FIXED; the repro runs on C and JS, 2026-09-29)
 
 ```
 function keep<T>(x: T): T { const y: T = x; return y; }
@@ -401,6 +406,10 @@ keep(7); keep([1, 2])     right
 
 The inferred `T` is the `EnumLiteral` kind, which `injectConcreteTypeSyms` does not know, so the
 body's `T` re-resolves to `unknown`. Belongs to the generic argument-fit list.
+
+Measured 2026-09-29: `console.log(keep(E.B) == E.B)` prints `true` on C and JS with main tree
+`80d320e9`, and on C with the installed `013853dd`; so do a bare `keep(E.B);`, `keep(E.C)` into a
+`const` and `[keep(E.A), keep(E.B)]`. Not found: the commit that fixed it, and a test that pins it.
 
 ## L27. A default (`-O0`) gen-1 build of the compiler segfaults checking or testing the compiler (LIVE, measured 2026-09-13)
 
@@ -899,7 +908,7 @@ critical section, and main in `msAwaitSlotWait → msPoolHelpOne` running a help
 reproduced on 2026-09-19. To chase it, loop the cell until it hangs, then sample every thread of
 the program binary, not the `sh -c` wrapper.
 
-## L56. `closureCallMarker` builds a `Token` one field short (LIVE, measured 2026-09-19)
+## L56. `closureCallMarker` builds a `Token` one field short (FIXED; `8fff4d62`, and the checker refuses the shape, 2026-09-29)
 
 `src/transform/native/closureCallMarker.ms` has 6 sites that build `{ kind, value, line, column } as
 unknown as Token`, while `Token` (`std/meta/token.ms`) also has `rawValue`. The cast reinterprets
@@ -907,6 +916,12 @@ the smaller literal, so the emitted C reads `rawValue` past the end of the stack
 nothing wrong today by accident. `syntheticToken()` builds a complete token and is the replacement.
 `as unknown as <T>` is safe only while both layouts are equal; the same cast in the checker's
 `sizeof` fold silently broke when the literal type gained fields.
+
+Since `8fff4d62` the sites build their token with `createToken`, and the checker refuses the shape
+itself: `{ kind: 0, value: "", line: 0, column: 0 } as unknown as Token` is `cannot check a
+conversion from unknown to Token — only a non-generic class has a runtime identity; …` on C and JS
+with main tree `80d320e9`, where the installed `013853dd` built it and printed `0`. `null as unknown
+as Token` stays legal.
 
 ## L57. `src/test/index.ms` does not type-check and runs in no gate lane (LIVE, measured 2026-09-19)
 

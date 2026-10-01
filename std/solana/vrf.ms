@@ -1,5 +1,6 @@
 import {
 	Account,
+	AccountMeta,
 	Bytes,
 	Instruction,
 	ProgramError,
@@ -43,10 +44,21 @@ export function vrfBaseQueue(this typeof Pubkey): Pubkey {
 	return key;
 }
 
-export function requestRandomness(accounts: RandomnessRequest, callerSeed: Pubkey, callbackDiscriminator: uint64, callbackAccount: Account, callbackArguments: Bytes): Result<uint64, ProgramError> {
+function requested(
+	accounts: RandomnessRequest,
+	callerSeed: Pubkey,
+	callbackDiscriminator: uint64,
+	callbackAccounts: Span<AccountMeta>,
+	callbackArguments: Bytes,
+): Result<uint64, ProgramError> {
 	const identity = try Seeds.empty(1).addText("identity").findProgramAddress(programId());
 	if (!identity.key.equals(accounts.programIdentity.key())) { return Result.err(ProgramError.invalidSeeds()); }
-	const instruction = Instruction.forProgram(Pubkey.vrfProgram(), 5, 128 + callbackArguments.length);
+	const metaCount = callbackAccounts.length as uint64;
+	const instruction = Instruction.forProgram(
+		Pubkey.vrfProgram(),
+		5,
+		92 + 34 * metaCount + callbackArguments.length,
+	);
 	instruction.addWritableSigner(accounts.payer);
 	instruction.addReadonlySigner(accounts.programIdentity);
 	instruction.addWritable(accounts.oracleQueue);
@@ -57,13 +69,40 @@ export function requestRandomness(accounts: RandomnessRequest, callerSeed: Pubke
 	instruction.appendPubkey(programId());
 	instruction.appendU32(8);
 	instruction.appendU64(callbackDiscriminator);
-	instruction.appendU32(1);
-	instruction.appendPubkey(callbackAccount.key());
-	instruction.appendU8(0);
-	instruction.appendU8(1);
+	instruction.appendU32(metaCount as uint32);
+	for (const meta of callbackAccounts) {
+		instruction.appendAccountMeta(meta);
+	}
 	instruction.appendU32(callbackArguments.length as uint32);
 	instruction.appendBytes(callbackArguments);
 	return instruction.invokeSigned(Seeds.empty(2).addText("identity").addU8(identity.bump));
+}
+
+export function requestRandomness(accounts: RandomnessRequest, callerSeed: Pubkey, callbackDiscriminator: uint64, callbackAccount: Account, callbackArguments: Bytes): Result<uint64, ProgramError> {
+	const callbackAccounts: AccountMeta[1] = [AccountMeta.writable(callbackAccount.key())];
+	return requested(
+		accounts,
+		callerSeed,
+		callbackDiscriminator,
+		callbackAccounts,
+		callbackArguments,
+	);
+}
+
+export function requestRandomness(
+	accounts: RandomnessRequest,
+	callerSeed: Pubkey,
+	callbackDiscriminator: uint64,
+	callbackAccounts: Span<AccountMeta>,
+	callbackArguments: Bytes,
+): Result<uint64, ProgramError> {
+	return requested(
+		accounts,
+		callerSeed,
+		callbackDiscriminator,
+		callbackAccounts,
+		callbackArguments,
+	);
 }
 
 export function verifyVrfCallback(identity: Account): Result<uint64, ProgramError> {

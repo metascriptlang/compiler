@@ -110,7 +110,7 @@ export function createPrimitive(kind: TypeKind): Type {
 	// bigint is a managed primitive like string, but its ordinal sits past the
 	// _sysTypes bound, so the flag cannot be stamped on a shared instance — an
 	// owner that never sees HasAsgn on the field gets no scope destroy at all.
-	if (kind == TypeKind.BigInt) { t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn); }
+	if (kind == TypeKind.BigInt || kind == TypeKind.Unknown) { t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn); }
 	return t;
 }
 
@@ -937,7 +937,8 @@ export function duVariantIndexOfType(unionType: Type | null, variantType: Type |
 export function primitiveMemberIndexInUnion(formal: Type, exprType: Type): int32 {
 	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return -1;
 	const ek = exprType.kind;
-	if (ek == TypeKind.Struct || ek == TypeKind.Union || ek == TypeKind.Null) return -1;
+	const stringCarried = isAllStringLiteralUnion(exprType);
+	if (ek == TypeKind.Struct || (ek == TypeKind.Union && !stringCarried) || ek == TypeKind.Null) return -1;
 	let allStrLit = true;
 	for (const child of formal.typeChildren) {
 		if (child == null || child.kind == TypeKind.Null) return -1;
@@ -948,7 +949,9 @@ export function primitiveMemberIndexInUnion(formal: Type, exprType: Type): int32
 	let vi: int32 = 0;
 	for (const child of formal.typeChildren) {
 		let hit = child == exprType;
-		if (!hit && child.kind != TypeKind.Struct && child.kind != TypeKind.Ref) {
+		if (!hit && stringCarried) {
+			hit = child.kind == TypeKind.String;
+		} else if (!hit && child.kind != TypeKind.Struct && child.kind != TypeKind.Ref) {
 			hit = child.kind == ek
 				|| (child.kind == TypeKind.String && ek == TypeKind.StringLiteral);
 		}
@@ -1009,8 +1012,6 @@ export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
 
 // `A | null` meeting `A | B | null`: the same subtyping one level down, under
 // the Maybe carrier. Returns the payload's slot in the wider union, or -1.
-// A union payload widening into a wider union has no single slot to stamp and
-// is refused here rather than guessed.
 export function maybePayloadWidenSlot(source: Type | null, target: Type | null): int32 {
 	if (source == null || target == null) return -1;
 	if (!isMaybeType(source) || !isMaybeType(target)) return -1;
@@ -1018,7 +1019,7 @@ export function maybePayloadWidenSlot(source: Type | null, target: Type | null):
 	const wide = target.typeReturn;
 	if (narrow == null || wide == null) return -1;
 	if (wide.kind != TypeKind.Union || wide.typeChildren == null) return -1;
-	if (narrow.kind == TypeKind.Union) return -1;
+	if (narrow.kind == TypeKind.Union && !isAllStringLiteralUnion(narrow)) return -1;
 	if (unwrapRefNullUnion(wide) != null) return -1;
 	return variantIndexInUnion(wide, unwrapRef(narrow));
 }
@@ -1469,7 +1470,10 @@ export function createMaybeType(inner: Type): Type {
 	const key = maybeCacheKey(inner);
 	let i = 0;
 	while (i < _maybeCacheNames.length) {
-		if (_maybeCacheNames[i] == key) return _maybeCache[i];
+		if (_maybeCacheNames[i] == key) {
+			if (maybePayloadIs(_maybeCache[i], inner)) return _maybeCache[i];
+			break;
+		}
 		i += 1;
 	}
 	const t = emptyType();
@@ -1481,10 +1485,31 @@ export function createMaybeType(inner: Type): Type {
 	t.typeReturn = inner;    // store inner type for unwrapping
 	propagateToOwner(t, inner);
 	if (!_queryCachesReadOnly) {
-		_maybeCache.push(t);
-		_maybeCacheNames.push(key);
+		if (i < _maybeCacheNames.length) {
+			_maybeCache[i] = t;
+		} else {
+			_maybeCache.push(t);
+			_maybeCacheNames.push(key);
+		}
 	}
 	return t;
+}
+
+function maybePayloadIs(cached: Type, inner: Type): boolean {
+	return sameDeclarationsIn(cached.typeReturn, inner, 0);
+}
+
+function sameDeclarationsIn(a: Type | null, b: Type | null, depth: int32): boolean {
+	if (a == null || b == null || a == b || depth > 4) return true;
+	if (a.sym != null && b.sym != null) return a.sym == b.sym;
+	if (a.kind == TypeKind.GenericInstance && a.typeExtra != null && b.typeExtra != null
+		&& !sameDeclarationsIn(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra), depth + 1)) return false;
+	if (!sameDeclarationsIn(a.typeReturn, b.typeReturn, depth + 1)) return false;
+	const n = a.typeChildren.length < b.typeChildren.length ? a.typeChildren.length : b.typeChildren.length;
+	for (let i = 0; i < n; i += 1) {
+		if (!sameDeclarationsIn(a.typeChildren[i], b.typeChildren[i], depth + 1)) return false;
+	}
+	return true;
 }
 
 export function createRef(inner: Type | null): Type {
@@ -1540,7 +1565,8 @@ export function isLockedRef(t: Type | null): boolean {
 
 export function isReadonlyView(t: Type | null): boolean {
 	if (t == null) return false;
-	if (t.kind != TypeKind.Ref && t.kind != TypeKind.Array && t.kind != TypeKind.Struct && t.kind != TypeKind.Union) return false;
+	if (t.kind != TypeKind.Ref && t.kind != TypeKind.Array && t.kind != TypeKind.Struct && t.kind != TypeKind.Union
+		&& t.kind != TypeKind.Unknown) return false;
 	return t.typeFlags.has(TypeFlag.IsReadonly);
 }
 
@@ -1622,7 +1648,7 @@ export function createReadonlyView(t: Type | null): Type {
 	if (t == null) return null as unknown as Type;
 	if (isReadonlyView(t)) return t;
 	if (t.readonlyView != null) return t.readonlyView;
-	const viewable = t.kind == TypeKind.Array || (t.kind == TypeKind.Ref && !isAtomicRef(t))
+	const viewable = t.kind == TypeKind.Array || t.kind == TypeKind.Unknown || (t.kind == TypeKind.Ref && !isAtomicRef(t))
 		|| ((t.kind == TypeKind.Struct || t.kind == TypeKind.Union) && structCarriesRef(t, 0));
 	if (!viewable) return t;
 	const c = copyTypeShallow(t);
@@ -1857,6 +1883,13 @@ export function distinctBody(t: Type | null): Type | null {
 	return distinctInstanceRepr(t);
 }
 
+export function borrowedDotBase(t: Type | null): Type | null {
+	if (t == null) return null;
+	const wrapper = t.kind == TypeKind.GenericInstance ? t.typeExtra : t;
+	if (wrapper == null || wrapper.kind != TypeKind.Distinct || !wrapper.typeFlags.has(TypeFlag.BorrowDot)) return null;
+	return distinctBody(t);
+}
+
 export function distinctCallTarget(t: Type | null): Type | null {
 	const body = distinctBody(t);
 	return body != null && body.kind == TypeKind.Function ? body : null;
@@ -1893,6 +1926,7 @@ export function builtinGenericParams(name: string): string {
 		"Result" => "T,E",
 		"Promise" => "T",
 		"Iterator" => "T",
+		"IteratorResult" => "T",
 		"Arc" => "T",
 		"Locked" => "T",
 		_ => "",
@@ -2017,7 +2051,7 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	const innerBase = isRefWrapped ? baseType.typeReturn : baseType;
 	if (innerBase.kind == TypeKind.Distinct || innerBase.kind == TypeKind.Error || isUnresolvedType(innerBase)) return;
 	// Split declared param names (e.g. "K,V" → ["K", "V"])
-	const paramNames = splitTopLevel(declaredParams, ",");
+	const paramNames = splitTopLevel(genericParamNamesOf(declaredParams), ",");
 	if (paramNames.length == 0 || paramNames.length > gi.typeChildren.length) return;
 	const names: string[] = [];
 	const args: Type[] = [];
@@ -2059,6 +2093,13 @@ export function getSysType(kind: TypeKind): Type {
 // Thin wrappers over getSysType for backward compatibility + readability.
 
 export function numberType(): Type { return getSysType(TypeKind.Number); }
+
+export function literalBase(t: Type): Type {
+	if (t.kind == TypeKind.StringLiteral) return stringType();
+	if (t.kind == TypeKind.BooleanLiteral) return booleanType();
+	if (t.kind == TypeKind.EnumLiteral && t.typeReturn != null) return t.typeReturn;
+	return t;
+}
 export function stringType(): Type { return getSysType(TypeKind.String); }
 export function booleanType(): Type { return getSysType(TypeKind.Boolean); }
 export function voidType(): Type { return getSysType(TypeKind.Void); }
@@ -2530,6 +2571,8 @@ export function isMaybeWrappable(t: Type | null): boolean {
 	if (t.kind == TypeKind.String) return true;
 	if (t.kind == TypeKind.StringLiteral) return true;
 	if (isAllStringLiteralUnion(t)) return true;
+	if (t.kind == TypeKind.SizedArray || t.kind == TypeKind.Tuple || t.kind == TypeKind.Array) return true;
+	if (t.kind == TypeKind.GenericInstance) return t.typeExtra != null && isStructType(t.typeExtra);
 	return false;
 }
 
@@ -2554,6 +2597,103 @@ export function isPointerShapedForUnknown(t: Type | null): boolean {
 		TypeKind.None | TypeKind.Inferred => false,
 		_ => false,
 	};
+}
+
+export enum UnknownRefusal { None, Address, Value, Builtin }
+
+export function unknownRefusal(t: Type | null): UnknownRefusal {
+	if (t == null) return UnknownRefusal.None;
+	const inner = skipModifier(t);
+	if (inner == null) return UnknownRefusal.None;
+	const held = inner.kind == TypeKind.Union ? unwrapRefNullUnion(inner) : inner;
+	if (held == null) return UnknownRefusal.Value;
+	if (held.kind == TypeKind.Ref && !isClassOrInterfaceObject(held)) return UnknownRefusal.Builtin;
+	return match (held.kind) {
+		TypeKind.Unknown | TypeKind.Null | TypeKind.Ref | TypeKind.GenericParam | TypeKind.Error | TypeKind.Never => UnknownRefusal.None,
+		TypeKind.Ptr | TypeKind.Borrow | TypeKind.CString => UnknownRefusal.Address,
+		_ => UnknownRefusal.Value,
+	};
+}
+
+function isClassOrInterfaceObject(ref: Type): boolean {
+	if (isAtomicRef(ref) || getBuiltinKind(ref) != "") return false;
+	if (ref.sym != null && ref.sym.symbolKind == SymbolKind.Actor) return false;
+	const body = ref.typeReturn;
+	return body != null && (body.kind == TypeKind.Struct || body.kind == TypeKind.GenericInstance);
+}
+
+export enum ObjConv { None, Checked, BadTarget }
+
+export function objectConversion(src: Type | null, target: Type | null): ObjConv {
+	const s = heldObjectOrUnknown(src);
+	const t = heldTarget(target);
+	if (s == null || t == null) return ObjConv.None;
+	if (isUnknownType(t) || t.kind == TypeKind.Ptr || t.kind == TypeKind.Borrow) return ObjConv.None;
+	const checkable = isRuntimeCheckedClass(t);
+	if (isUnknownType(s)) return checkable ? ObjConv.Checked : ObjConv.BadTarget;
+	if (!checkable || isClassOrSubclass(s, t)) return ObjConv.None;
+	return ObjConv.Checked;
+}
+
+function heldTarget(t: Type | null): Type | null {
+	const bare = t != null ? skipModifier(t) : null;
+	if (bare == null) return null;
+	return bare.kind == TypeKind.Union ? unwrapRefNullUnion(bare) : bare;
+}
+
+function heldObjectOrUnknown(t: Type | null): Type | null {
+	const held = heldTarget(t);
+	if (held == null) return null;
+	if (isUnknownType(held)) return held;
+	if (held.kind != TypeKind.Ref || held.typeReturn == null) return null;
+	const body = held.typeReturn;
+	return body.kind == TypeKind.Struct || body.kind == TypeKind.GenericInstance ? held : null;
+}
+
+function isRuntimeCheckedClass(t: Type): boolean {
+	const body = t.kind == TypeKind.Ref ? t.typeReturn : null;
+	return body != null && body.kind == TypeKind.Struct && body.sym != null && body.sym.symbolKind == SymbolKind.Class;
+}
+
+function isClassOrSubclass(sub: Type, sup: Type): boolean {
+	const supSym = sup.typeReturn != null ? sup.typeReturn.sym : null;
+	if (supSym == null) return false;
+	let cur: Type | null = sub.kind == TypeKind.Ref ? sub.typeReturn : sub;
+	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		if (cur.sym == supSym) return true;
+		const base: Type | null = cur.typeExtra;
+		cur = base != null && base.kind == TypeKind.Ref ? base.typeReturn : base;
+	}
+	return false;
+}
+
+export function smuggledIntoUnknown(src: Type | null, target: Type | null): Type | null {
+	const s = src != null ? skipModifier(src) : null;
+	const t = target != null ? skipModifier(target) : null;
+	if (s == null || t == null) return null;
+	const tHeld = t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
+	if (isUnknownType(tHeld)) return unknownRefusal(s) != UnknownRefusal.None ? s : null;
+	const sHeld = s.kind == TypeKind.Union ? unwrapRefNullUnion(s) : s;
+	if (isUnknownType(sHeld)) return unknownRefusal(t) != UnknownRefusal.None ? t : null;
+	if (s.kind != TypeKind.Function || t.kind != TypeKind.Function) return null;
+	const inReturn = smuggledIntoUnknown(s.typeReturn, t.typeReturn);
+	if (inReturn != null) return inReturn;
+	for (let i = 0; i < s.typeChildren.length && i < t.typeChildren.length; i += 1) {
+		const inParam = smuggledIntoUnknown(s.typeChildren[i], t.typeChildren[i]);
+		if (inParam != null) return inParam;
+	}
+	return null;
+}
+
+export function unknownRefusalText(t: Type | null, what: UnknownRefusal): string {
+	const shown = typeDisplayName(t);
+	if (what == UnknownRefusal.Address) {
+		return "cannot hold the raw address " + shown + " as unknown — unknown holds objects; keep a C address as Ptr<void>";
+	}
+	if (what == UnknownRefusal.Builtin) {
+		return "cannot hold " + shown + " as unknown — unknown holds class and interface instances; keep it in a field of a class";
+	}
+	return "cannot hold the value type " + shown + " as unknown — only objects (class or interface instances) are unknown";
 }
 
 // unwrapRef — unwrap Ref<T> or Ptr<T> to get inner type (reference: skip pointer types).
@@ -2626,7 +2766,7 @@ export function arrayElementNeedsCleanup(elem: Type): boolean {
 	if (elem == null) return false;
 	if (elem.kind == TypeKind.String || elem.kind == TypeKind.Ref
 		|| elem.kind == TypeKind.Ptr || elem.kind == TypeKind.Function
-		|| elem.kind == TypeKind.BigInt) return true;
+		|| elem.kind == TypeKind.BigInt || elem.kind == TypeKind.Unknown) return true;
 	if (elem.kind == TypeKind.Distinct && elem.typeReturn != null) {
 		return arrayElementNeedsCleanup(elem.typeReturn);
 	}
@@ -3330,14 +3470,20 @@ export function getElementType(t: Type): Type {
 }
 
 export function typeParamConstraint(t: Type | null, name: string, depth: int32): Type | null {
+	return constraintScan(t, name, depth, new TypeVisitSet());
+}
+
+function constraintScan(t: Type | null, name: string, depth: int32, visited: TypeVisitSet): Type | null {
 	if (t == null || depth > 20) return null;
 	if (t.kind == TypeKind.GenericParam) return t.typeName == name ? t.typeExtra : null;
-	const fromReturn = typeParamConstraint(t.typeReturn, name, depth + 1);
+	if (isDeclaredStruct(t) && !t.typeFlags.has(TypeFlag.HasGenericParam)) return null;
+	if (!typeVisitAdd(visited, t)) return null;
+	const fromReturn = constraintScan(t.typeReturn, name, depth + 1, visited);
 	if (fromReturn != null) return fromReturn;
-	const fromExtra = typeParamConstraint(t.typeExtra, name, depth + 1);
+	const fromExtra = constraintScan(t.typeExtra, name, depth + 1, visited);
 	if (fromExtra != null) return fromExtra;
 	for (const c of t.typeChildren) {
-		const fromChild = typeParamConstraint(c, name, depth + 1);
+		const fromChild = constraintScan(c, name, depth + 1, visited);
 		if (fromChild != null) return fromChild;
 	}
 	return null;
@@ -3474,7 +3620,6 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind == TypeKind.Enum
 		|| kind == TypeKind.EnumLiteral
 		|| kind == TypeKind.Never
-		|| kind == TypeKind.Unknown
 		|| kind == TypeKind.Char
 		|| kind == TypeKind.CString
 		|| kind == TypeKind.StringLiteral
@@ -3612,11 +3757,13 @@ function typeDisplayNameInner(t: Type | null): string {
 	// render the internal cell name. Print the spelling the user wrote.
 	if (isLockedRef(t)) return "Locked<" + typeDisplayName(lockedPayloadType(t)) + ">";
 	if (isReadonlyView(t)) return "Readonly<" + typeDisplayName(withoutReadonlyView(t)) + ">";
-	// A generic instance over a distinct body erases to its base name, so two
-	// different instantiations render identically ("expected X, got X"). Spell
-	// the type arguments the user wrote.
-	if (t.kind == TypeKind.GenericInstance && t.typeName != "" && t.typeChildren.length > 0
-		&& t.typeExtra != null && t.typeExtra.kind == TypeKind.Distinct) {
+	// A generic instance erases to its base name, so two different
+	// instantiations render identically ("expected X, got X"). Spell the type
+	// arguments the user wrote.
+	if (t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.GenericInstance) {
+		return typeDisplayName(t.typeReturn);
+	}
+	if (t.kind == TypeKind.GenericInstance && t.typeName != "" && t.typeChildren.length > 0) {
 		let argsText = "";
 		for (let ai = 0; ai < t.typeChildren.length; ai += 1) {
 			if (ai > 0) { argsText = argsText + ", "; }

@@ -36,7 +36,7 @@ test "bug520: a function of another signature is refused at declaration, assignm
 }
 
 test "bug520: a Result of another ok type is refused at a declaration" {
-	assert hasError("function mk(): Result<int32, string> { return Result.ok(5); }\nconst s: Result<string, string> = mk();\n", "Type 'Result' is not assignable to type 'Result'");
+	assert hasError("function mk(): Result<int32, string> { return Result.ok(5); }\nconst s: Result<string, string> = mk();\n", "Type 'Result<int32, string>' is not assignable to type 'Result<string, string>'");
 }
 
 test "bug520: bigint and number do not convert implicitly" {

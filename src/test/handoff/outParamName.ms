@@ -41,7 +41,7 @@ test "out modifier still parses (no regression)" {
 	const src = `
 type MyData = | { value: number } | { name: string };
 function setVal(out d: MyData): void {
-	d = { value: 42 } as unknown as MyData;
+	d = { value: 42 };
 }
 `;
 	const r = compileToC(src);

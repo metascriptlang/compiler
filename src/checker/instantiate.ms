@@ -8,7 +8,7 @@ import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNode
 import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
 import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks } from "./resolvePass";
-import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, openScope, Scope, ScopeKind } from "./symbol";
+import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
@@ -782,13 +782,14 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	instSym.declNode = cloned;
 	instSym.nameId = getIdentId(host.table.identCache, mangledName);
 	instSym.instantiatedFrom = sym;
+	if (hasFlag(sym, SymbolFlag.Borrow)) setFlag(instSym, SymbolFlag.Borrow);
 	cacheInstance(host, sym, instSym);
 	cloned.resolvedSym = instSym;
 
 	// Reference parity (semProcBody): check body in the DEFINING module's scope
 	// (for private helpers like mapRawGet), but with concrete type symbols injected so
 	// user types (Item, Foo, etc.) are visible during type annotation resolution.
-	if (cd.fnBody != null) {
+	if (cd.fnBody != null && !hasFlag(sym, SymbolFlag.Borrow)) {
 		const savedHost = bodyCtx.instantiatingCtx;
 		bodyCtx.instantiatingCtx = host;
 		const savedModulePath = bodyCtx.modulePath;

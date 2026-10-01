@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isUnresolvedType, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, inferredType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isUnknownType, isPrimitiveUnionMember } from "../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isPrimitiveUnionMember } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
 import { attachedOpSym } from "../transform/util";
@@ -172,17 +172,6 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		const unwrapped = createArray(elem.typeReturn);
 		return classifyArray(unwrapped, ctx);
 	}
-	// User-`unknown` elements (opaque handles = Nim seq[pointer], liftdestructors.nim:978
-	// tyPointer→defaultOp): entries arrive with NO rc share (classify says inert at every
-	// entry site), so hooks must be inert too — counted hooks decref refs the array never
-	// received (net −1 per death → UAF, the neon reconcile slab poison). Mirrors the Actor
-	// exemption above. `unknown|null` collapses to bare void* (NIM-REF CK-46).
-	{
-		const bareElem = elem.kind == TypeKind.Union ? unwrapRefNullUnion(elem) : elem;
-		if (bareElem != null && isUnknownType(bareElem)) {
-			return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
-		}
-	}
 	// Catch-all assumes void*-stride layout. Correct ONLY when the element
 	// is pointer-indirected (which the Ref/Ptr branch above already covers).
 	// Any TypeKind reaching this fallthrough with non-pointer layout is the
@@ -329,9 +318,6 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				// but Ptr is UNMANAGED — incref/decref on a raw pointer (e.g. a
 				// C-library allocation with no ms header) corrupts memory.
 				if (refInner.kind == TypeKind.Ptr) return noRcInfo();
-				// unknown | null: same bare-void* repr; unknown is a non-owning view
-				// (Nim parity: `pointer` is RC-inert) and may hold foreign handles.
-				if (isUnresolvedType(refInner)) return noRcInfo();
 				if (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor) return noRcInfo();
 				if (isAtomicRef(refInner)) return makeRcInfo(RcKind.Ref, "", "msAtomicDecref", "msAtomicIncref", "msPtrWasMoved", "", false);
 				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) {
@@ -372,6 +358,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 			const n = tupleTypeName(t);
 			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", false);
 		},
+		TypeKind.Unknown => makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false),
 		_ => noRcInfo(),
 	};
 }
@@ -415,6 +402,13 @@ test "Ptr | null → None (raw pointer, never refcounted)" {
 	assert !info.needsCleanup;
 }
 
+test "unknown | null → the same cyclic Ref as bare unknown" {
+	const ctx = createTransformContext();
+	const info = classifyType(createUnion([unknownType(), nullType()]), ctx);
+	assert info.rcKind == RcKind.Ref;
+	assert (info.destroyFn as Symbol).name == "msDecrefCyclic";
+}
+
 test "pure strlit union → String ops (msString repr)" {
 	const ctx = createTransformContext();
 	const u = createUnion([createStringLiteral("column"), createStringLiteral("row")]);
@@ -448,10 +442,11 @@ test "null → None" {
 	assert info.rcKind == RcKind.None;
 }
 
-test "unknown → None" {
+test "unknown → cyclic Ref, released through the header type" {
 	const ctx = createTransformContext();
-	const info = classifyType(inferredType(), ctx);
-	assert info.rcKind == RcKind.None;
+	const info = classifyType(unknownType(), ctx);
+	assert info.rcKind == RcKind.Ref;
+	assert (info.destroyFn as Symbol).name == "msDecrefCyclic";
 }
 
 test "int32 → None" {

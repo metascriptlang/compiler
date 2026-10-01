@@ -24,7 +24,10 @@
     "746-spawnStoredUnawaited": {"since":"22d2cb8f","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; [danger] cell TIMEOUT after 300s at load ~45 with every thread in msSpawnWorkerRun → write; a --danger build by the origin/main 24422bf5 compiler hung 3 of 48 runs under 60s at load ~20, 2026-09-25"}
   },
   "fmt": {},
-  "guard": {},
+  "guard": {
+    "moveIntoBorrowParam [drc]": {"since":"da675b66","note":"x is destroyed after look(move x) into a borrowing param: C prints '  +4z+' for 'a+++4z+'; card 2026-09-30-move-into-borrow-param-destroys-source.md, no owner; recorded on the person's call 2026-09-30"},
+    "moveIntoBorrowParam [orc]": {"since":"da675b66","note":"x is destroyed after look(move x) into a borrowing param: C prints '  +4z+' for 'a+++4z+'; card 2026-09-30-move-into-borrow-param-destroys-source.md, no owner; recorded on the person's call 2026-09-30"}
+  },
   "hcr": {},
   "san": {
     "704-macroExprHoist [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},

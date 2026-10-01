@@ -1,11 +1,12 @@
 // nim-guard: a spawn thunk may read what it borrows, never write it
 //
-// INVARIANT (PARALOCK Amendment L, §9.2 E24 + E147, I23): a value entering a
+// INVARIANT (PARALOCK Amendment L §9.2 E24, Amendment N, I23): a value entering a
 //   spawn thread is one of the four boundary verbs. A plain captured ref is a
 //   BORROW — legal because the parent joins before the lender dies — and a
 //   borrow is read-only. Writing through it is not a verb: mutable shared state
-//   has exactly one sanctioned form (I22, Locked<T>), reached through the
-//   lockedUpdate / lockedRead callback, which E147 exempts.
+//   has exactly one sanctioned form (I22, Locked<T>): the payload handed to the
+//   lockedUpdate callback. The callback does not open anything else
+//   (paralockLockedPayloadOnly.ms).
 //
 // WHAT IT CATCHES: the write ban silently dropped, or re-anchored back to
 //   `this` (the shape it had before Amendment L, when the identical write on a
@@ -29,8 +30,8 @@
 //   compile, the same E-cases error" no longer holds, and the C-versus-Raiser
 //   divergence is reachable from source again.
 //
-// The legal half — a read-only borrow, and a write inside a Locked critical
-// section — is pinned by paralockSpawnBorrows.ms, which must build and run.
+// The legal half — a read-only borrow, and a write to a Locked payload — is
+// pinned by paralockSpawnBorrows.ms, which must build and run.
 //
 // GUARD-CHECK-FAIL cannot write through Readonly<
 // GUARD-CHECK-FAIL PARALOCK E24

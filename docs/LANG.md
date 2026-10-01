@@ -15,37 +15,91 @@ MetaScript is a systems programming language with TypeScript syntax that compile
 | `never` | Unreachable (bottom type) | N/A |
 | `null` | Null value | `NULL` |
 | `undefined` | Alias of `null` (warns — prefer `null`) | `NULL` |
-| `unknown` | Top type — opaque until cast | `void*` |
+| `unknown` | Top type — a class or interface instance, counted; opaque until cast | `void*` |
 
 **There is no `any`.** `unknown` is the sole top type: opaque, readable only
 through an explicit cast. A native target has no dynamic member lookup, so an
 annotation promising one would be a promise the backend cannot keep — the
 checker rejects it and names the alternative.
 
-#### `unknown` vs `Ptr<void>` — same C repr, opposite intent
+#### `unknown`, `Ptr<void>`, `Handle<T>` — one construct per job
 
-Both compile to `void*`, so it is tempting to treat them as one thing. They are
-not, and picking the wrong one hides a real bug:
+| job | construct |
+|---|---|
+| an object whose type is not known yet, e.g. Neon's `HostNode`, a node its render host owns | `unknown` |
+| a raw address at a C boundary | `Ptr<void>` |
+| keep an object alive while C holds its address | `Handle<T>` from `std/ffi` |
 
-| | `unknown` | `Ptr<void>` |
+`unknown` is the managed top, the reference's `RootRef` and Swift's `AnyObject`:
+
+- It holds class and interface instances only. A value (number, string, struct, closure),
+  an array, a `Map`/`HashMap`, an `Arc`/`Locked` cell, an actor and a raw address (`Ptr`,
+  `Borrow`, `cstring`) are refused on every way in — slot, argument, return and
+  `x as unknown` alike (`src/checker/types.ms` `unknownRefusal`). An array or a map goes in
+  a field of a class. Arrays and maps are out because only an object header names the
+  destroy a type-erased release must run.
+- It owns what it holds: a store counts, a release goes through the header's type, and a
+  cycle through an `unknown` field is collected under `--gc=orc`.
+- Reads need a cast. `u as C` for a class `C` is tested at run time on C and JS, and so is
+  `base as Derived`: a wrong class stops the program with
+  `Error: invalid object conversion: <runtime class> is not C`, exit 1; `null` passes.
+  `--danger` drops this test, as it drops bound checks, and `--gc=manual` has no type
+  header to test. `u as C` has no unchecked spelling and `--danger` is its only switch; a
+  `Ptr<void>` read (`(u as Ptr<void>) as C`) is the one untested path, as below.
+  `instanceof` narrows an `unknown` on every backend and is never dropped.
+- Only a non-generic class is a cast target out of `unknown`. An interface or a generic
+  class instance has no run-time identity to test (JS erases `Box<number>` and
+  `Box<string>` to one class), so `u as I` is refused: make `I` a class, or keep the values
+  in a discriminated union.
+- `x as unknown as T` is two conversions, up then a tested down, never a reinterpret:
+  `i as unknown as K` for an `int32` is refused — write `i as K`. `null as unknown as T`
+  still works, because a `null` literal takes any type.
+- An `unknown` reaches an actor only by `move`, and a spawn thunk sees a captured one as
+  `Readonly<unknown>`, like every captured reference.
+
+`Ptr<void>` is an address the DRC never counts. A C `extern` may not name `unknown` in a
+parameter or a return — declare `Ptr<void>`. An object's address is `x as Ptr<void>`
+(uncounted) and back is `p as C` (untested, like every `Ptr` read). The rest parameter of an
+`extern` is the reference's untyped `{.varargs.}`: each argument reaches C as itself, so
+`printf(fmt, s, n)` passes `s` and `n`, not an array.
+
+`Handle<T>` (`std/ffi`) is a plain struct over the reference's `GC_ref`/`GC_unref`. The
+reference has only those two procs, so the retain/borrow/take surface is Swift's `Unmanaged`,
+the API already proven for C holding an object's address:
+
+| MetaScript | count | use |
 |---|---|---|
-| **Means** | "a value I must prove the type of before I touch it" | "a raw machine address" |
-| **Reads** (`x.field`, `x()`, `x + 1`) | rejected by the checker — narrow with `as` first | allowed where pointer arithmetic / FFI expects it |
-| **What flows in** | anything pointer-shaped (`Ref`, `Ptr`, `null`, `cstring`, another `unknown`); value types (`number`, a bare struct) are rejected — box them or pass a `Ref` | whatever the FFI/`malloc` boundary hands back |
-| **Use for** | the `null as unknown as T` nullable-field idiom; opaque handles crossing an API you re-narrow at the other end | C interop, allocator return values, deliberately untyped memory |
+| `Handle.retain(x)` | +1 | `x` stays alive while C holds `h.ptr` |
+| `Handle.borrow(x)` | none | C borrows while the owner outlives it, e.g. an object passing itself as a callback context |
+| `h.ptr` / `Handle.at<T>(p)` | none | to C as `Ptr<void>` and back |
+| `h.value()` | the caller's own reference | read the object |
+| `h.take()` | the +1 comes back as the caller's reference | end the hand-off |
+| `h.retain()` / `h.release()` | +1 / −1 | pair them with `defer` |
 
-Rule of thumb: reach for `Ptr<void>` **only** at an `extern`/FFI boundary or when
-you genuinely mean "an address." Everywhere else the opaque value wants
-`unknown`, because the checker's narrow-before-use discipline is the whole point
-— `Ptr<void>` gives you none of it (`p.field` compiles and reads garbage).
+A `Handle` is copied freely; a second `release` is a use-after-free and a missing one is a
+leak, both caught by the ledger and SAN lanes. On JS `h.ptr` is the object and the counts do
+nothing. The retained form is `Handle.retain(x)` and the read is `h.value()`, not
+`new Handle(x)` and a `h.value` getter: a struct has no constructor or getter, and a class
+would make every handle a heap object. `using h = …` was dropped because `defer h.release()`
+already does the same job.
 
-`unknown` is **not** a universal top type in the TypeScript sense. TS `unknown`
-accepts every value because every JS value is already boxed; MS keeps values
-unboxed for native speed, so a value type has no `void*` form to reinterpret and
-is rejected on the way in. The discipline TS `unknown` actually buys —
-can't-touch-until-narrowed — is preserved in full; only the "literally any value
-fits" part is traded away, on purpose. If you need to hold "one of several
-concrete types," that is a discriminated union or a generic, not `unknown`.
+Measured on tree `09e272c1`: corpus `643`–`648` on C drc/orc/danger, JS and ESM (SAN clean),
+`bug599`–`bug601`, guards `unknownFieldCycleCollects` and `handleKeepsObjectForC` (a real C
+file keeps the address; red with the retain or the release removed). Not measured: a
+`--gc=manual` build of a conversion. Not covered yet: C `extern class` values are not refused
+into `unknown` (the checker cannot tell a C extern class from a JS one declared in a shared
+`.ms`), and the Raiser VM neither tests a conversion nor loads `std/ffi`.
+
+Measured 2026-09-29 on tree `80d320e9`, C and JS: `(u as Ptr<void>) as B` passes an `A` untested
+while `u as B` stops with `A is not B`. A conversion or an `instanceof` whose target class the
+program never constructs runs on C too (`u as B` stops with `A is not B`, `base instanceof
+Derived` is `false`; corpus `655` on C drc/orc/danger, JS and ESM); before it both were an
+internal error on C.
+
+**`unknown` is not a universal top type in the TypeScript sense**:
+TS `unknown` accepts every value because every JS value is already boxed, while MS keeps
+values unboxed. If you need "one of several concrete types," that is a discriminated union
+or a generic, not `unknown`.
 
 **`undefined` is accepted as an alias of `null`** for TypeScript
 backward-compatibility, and warns so the code can be migrated to `null`. MS has
@@ -972,6 +1026,33 @@ type Extended = IUser & { role: string };
 struct SuperUser = IUser & { role: string; };
 ```
 
+#### `as` between a union and its members
+
+`x as T` converts; it never reads one representation as another.
+
+```ms
+type Align = "auto" | "center" | "stretch";
+type Wire = number | string | null;
+
+const w = a as Wire;            // a: Align | null — the same conversion as `const w: Wire = a`
+const a2 = w as Align | null;   // tag test (holds a string?), then membership; null passes
+const s = w as string;          // tag test
+const b = text as Align;        // text: string — membership test
+```
+
+- Widening into a union or a nullable union is the assignment's conversion; a string-literal
+  union takes the union's `string` slot, so `const w: Wire = a` compiles too.
+- Narrowing to a member tests the tag, and narrowing a string into a string-literal union tests
+  membership. A failed test exits 1 with the same line on C and JS:
+  `Error: member 'string' is not accessible for type 'number | string' using 'number'`, or
+  `Error: invalid union conversion: "middle" is not Align`.
+- `--danger` drops the membership test and the tag test of a bare union, as it drops bound checks;
+  the tag test of a nullable union (`Wire as Align | null`) stays.
+
+Measured on tree `2d72bcc3` plus this change: corpus `649`–`654` on C drc/orc/danger, JS and ESM,
+`fixedbugs/bug602`. Not covered: the Raiser VM tests no conversion, and JS tests the tag only for a
+string, number or boolean member.
+
 ### Discriminated Union Types
 
 MetaScript supports two flavors of discriminated unions, both lowered to a tagged C union (`_tag` + variant payloads):
@@ -1353,6 +1434,10 @@ function process(): void {
 
     if (error) return;         // defer still runs
 }
+
+// Pair a Handle's +1 with its release (std/ffi)
+const h = Handle.retain(view);
+defer h.release();
 ```
 
 ### Match Expression
@@ -2067,6 +2152,7 @@ extern function ok<T>(val: T): Result<T, any>;
 | `@builtin("Name")` | function, method | Compiler intrinsic (inline codegen, no function call) | DONE (stub) |
 | `@compilerFunc` | extern function | The compiler may synthesize calls to this routine; its declaration is where they read their signature | DONE (2026-09-18) |
 | `@throws` | extern function | The routine raises by setting the runtime error flag instead of returning | DONE (2026-09-18) |
+| `@delegate` | body-less function, distinct type | Reuse the base function's implementation or expose the base's fields; see [Delegating a distinct](#delegating-a-distinct) | Verified on C and JS (2026-09-30) |
 | `@beforeReload` / `@afterReload` | module-level `(): void` function | Hot-reload lifecycle handler, run by `std/hcr` around a reload under `--hcr` (docs/HCR.md "Host runtime (S4)") | DONE on Windows x64 (2026-09-23) |
 | `@comptime` | block | Compile-time evaluation | PLANNED |
 | `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
@@ -2996,7 +3082,7 @@ Used for high-performance scenarios where heap allocation is undesirable. These 
 - **Allocation**: Stack (within a C struct).
 - **Size**: Fixed at compile-time (must be a constant).
 - **Behavior**: Passed by value (struct copy) unless passed to a `Span<T>`.
-- **Constant index**: an integer literal outside `0..N-1` is a compile error in every build mode, `--danger` included (`index 5 out of bounds for 'int32[4]' (0..3)`, measured 2026-09-27); a variable index is checked at run time, and not at all under `--danger`.
+- **Constant index**: an integer literal, or a `const` (module or local) whose initializer folds to one, outside `0..N-1` is a compile error in every build mode, `--danger` included (`index 5 out of bounds for 'int32[4]' (0..3)`, measured 2026-09-27); a variable index is checked at run time, and not at all under `--danger`.
 - **Usage**:
   ```typescript
   const buffer: uint8[1024] = [0]; // Stack-allocated 1KB buffer
@@ -3144,6 +3230,67 @@ extern class console {
 type UserId = distinct number;    // Nominal typing wrapper
 type Email = distinct string;     // Cannot assign string to Email
 ```
+
+#### Delegating a distinct
+
+`@delegate` opts a distinct type into selected behavior of its base without making
+the two types identical. It is a compiler intrinsic decorator, not a keyword,
+inheritance, an ownership borrow, or a runtime permission check.
+
+```ms
+struct Counter { value: int32; }
+function read(this c: Counter): int32 { return c.value; }
+function add(this ref c: Counter, by: int32): void { c.value += by; }
+
+type TaggedCounter = distinct Counter;
+@delegate function read(this c: TaggedCounter): int32;
+@delegate function add(this ref c: TaggedCounter, by: int32): void;
+@delegate type CounterFields = distinct Counter;
+
+const base: Counter = { value: 4 };
+let tagged = base as TaggedCounter;
+tagged.add(2);
+const fields = base as CounterFields;
+console.log(tagged.read() + "/" + fields.value);
+```
+
+The two forms are deliberately different:
+
+- **On a function:** declare the signature without a body. The compiler resolves
+  the same-named function using the distinct parameters' base types and uses that
+  implementation. A `this ref` parameter stays by-reference. Each function must
+  opt in separately; declaring one does not expose every base method.
+- **On a distinct type:** expose its base's fields through member access. This
+  does not automatically delegate the base's methods. Writes still follow the
+  receiver's mutability and value-copy rules.
+
+The decorator takes no arguments. A delegated function must have a distinct
+parameter and a matching base function; incompatible return types, a supplied
+body, an extern declaration, and a generic base function are refused. A phantom
+generic distinct whose base does not depend on its type parameter can delegate;
+the concrete base function is still not generic.
+
+The public spelling is `@delegate`; `@borrow` is not a compatibility alias.
+This does not rename `Handle.borrow` or other ownership-borrowing APIs.
+
+The intrinsic symbol is exported by the system prelude:
+`std/core/system/index.ms` for C and `std/core/system/index.jms` for JS, as
+`@builtin("delegate") export extern function delegate(): void;`. No import is
+needed. The declaration identifies a compiler intrinsic; a delegated call uses
+the selected base function, not a runtime call to `delegate()`.
+Go-to-definition on the decorator resolves to that prelude declaration.
+
+Measured on 2026-09-30 with the `msc-delegate` candidate in `wt/std-solana`:
+
+| Surface | Command / request | Observed result |
+|---|---|---|
+| Example above | `msc-delegate run example.ms`; JS build plus Node | Both print `6/4`; the copied `tagged` value changes, `base` does not |
+| Function/type forms, phantom generics, nested distincts, ref receivers, value copies | `src/test/corpus/programs/661-borrowDistinct.ms` on C and JS | Both print `key=42/42/42 dot=21/3/maker/5 generic=42/42 fields=21/5 ref=8 copy=5/5` |
+| Definition of function/type decorators and their generic variants | Native LSP `textDocument/definition` | All four resolve to `std/core/system/index.ms:61`, the `delegate` declaration |
+
+This measurement did not run a Solana binary or an editor client; navigation was
+exercised through the actual language-server protocol. The filename of corpus 661
+retains its historical spelling.
 
 #### Reading a distinct thunk
 

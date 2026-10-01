@@ -398,7 +398,8 @@ program compiled and every lookup silently missed, because `hash()` takes no arg
 overload scoring could not separate the five `hash` declarations and the `unknown` catch-all won
 and folded the variable's ADDRESS. Two equal sets therefore hashed differently. The rule that
 already governs an `unknown` PARAMETER now governs an extension RECEIVER as well: a value-typed
-receiver drops the `void*` catch-all when another candidate exists. Measured after: equal sets
+receiver never binds the `unknown` catch-all, even as the only candidate (`unknownRefusal`,
+measured in `docs/KNOWN-ISSUES.md` L21c). Measured after: equal sets
 hash equally on all three bands, and `HashMap<BitSet<E>, string>` stores and reads back.
 
 Hashing is a C-side surface. The JS backend has no `hash` for any type at all (`n.hash()` on an

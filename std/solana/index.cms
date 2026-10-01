@@ -1,4 +1,5 @@
 @include("runtime/solana/solana.h");
+@compile("runtime/solana/host.c");
 
 extern function msSolAccountCount(): uint64;
 extern function msSolAccountAt(index: uint64): uint64;
@@ -28,6 +29,10 @@ extern function msSolTryFindProgramAddress(seeds: uint64, seedCount: uint64, pro
 extern function msSolInvokeSigned(instruction: uint64, accountInfos: uint64, accountInfoCount: uint64, signers: uint64, signerCount: uint64): uint64;
 extern function msSolGetClock(out: uint64): uint64;
 extern function msSolGetRent(out: uint64): uint64;
+extern function msSolSetReturnData(data: Span<uint8>): void;
+extern function msSolGetReturnData(data: uint64, length: uint64, programId: uint64): uint64;
+
+const MAX_RETURN_DATA: uint64 = 1024;
 
 export struct Pubkey {
 	word0: uint64;
@@ -65,6 +70,12 @@ export struct Instruction {
 	dataCapacity: uint64;
 }
 
+export struct AccountMeta {
+	key: Pubkey;
+	writable: boolean;
+	signer: boolean;
+}
+
 export struct Clock {
 	slot: uint64;
 	epochStartTimestamp: int64;
@@ -73,12 +84,18 @@ export struct Clock {
 	unixTimestamp: int64;
 }
 
+export struct ReturnData {
+	program: Pubkey;
+	data: Bytes;
+}
+
 function builtinError(index: uint64): ProgramError {
 	const error: ProgramError = { code: index << 32 };
 	return error;
 }
 
 export function custom(this typeof ProgramError, code: uint32): ProgramError {
+	if (code == 0) { return builtinError(1); }
 	const error: ProgramError = { code: code as uint64 };
 	return error;
 }
@@ -412,7 +429,7 @@ export function withBump(this seeds: Seeds, bump: uint8): Seeds {
 
 export function findProgramAddress(this seeds: Seeds, program: Pubkey): Result<ProgramAddress, ProgramError> {
 	const count = seeds.seedCount();
-	if (count > seeds.capacity || count > 16) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
+	if (count > seeds.capacity || count > 15) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
 	const out = msSolAlloc(33);
 	const status = msSolTryFindProgramAddress(seeds.address + 8, count, storedPubkey(program), out, out + 32);
 	if (status != 0) { return Result.err(ProgramError.invalidSeeds()); }
@@ -543,6 +560,59 @@ export function appendText(this instruction: Instruction, value: string): Instru
 	return instruction;
 }
 
+export function writable(this typeof AccountMeta, key: Pubkey): AccountMeta {
+	return { key: key, writable: true, signer: false };
+}
+
+export function readonly(this typeof AccountMeta, key: Pubkey): AccountMeta {
+	return { key: key, writable: false, signer: false };
+}
+
+export function appendAccountMeta(this instruction: Instruction, meta: AccountMeta): Instruction {
+	instruction.appendPubkey(meta.key);
+	instruction.appendU8(flagByte(meta.signer));
+	return instruction.appendU8(flagByte(meta.writable));
+}
+
+export function accountLength(this instruction: Instruction): uint64 {
+	return msSolLoadU64(instruction.address + 16);
+}
+
+export function encodedLength(this instruction: Instruction): uint64 {
+	return 48 + 34 * instruction.accountLength() + msSolLoadU64(instruction.address + 32);
+}
+
+export function addAccountsOf(this instruction: Instruction, inner: Instruction): Instruction {
+	const count = inner.accountLength();
+	for (let index: uint64 = 0; index < count; index++) {
+		const found: Account = { address: msSolLoadU64(infosAddress(inner) + index * 56) - 8 };
+		instruction.addAccount(found, found.isWritable(), found.isSigner());
+	}
+	return instruction;
+}
+
+export function appendInstruction(this instruction: Instruction, inner: Instruction): Instruction {
+	if (msSolLoadU64(inner.address + 40) != 0) {
+		msSolStoreU64(instruction.address + 40, 1);
+		return instruction;
+	}
+	instruction.appendPubkey(loadPubkey(msSolLoadU64(inner.address)));
+	const count = inner.accountLength();
+	instruction.appendU64(count);
+	for (let index: uint64 = 0; index < count; index++) {
+		const meta = metasAddress(inner) + index * 16;
+		instruction.appendPubkey(loadPubkey(msSolLoadU64(meta)));
+		instruction.appendU8(msSolLoadU8(meta + 9));
+		instruction.appendU8(msSolLoadU8(meta + 8));
+	}
+	const payload: Bytes = {
+		address: payloadAddress(inner),
+		length: msSolLoadU64(inner.address + 32),
+	};
+	instruction.appendU64(payload.length);
+	return instruction.appendBytes(payload);
+}
+
 export function invokeSigned(this instruction: Instruction, signer: Seeds): Result<uint64, ProgramError> {
 	if (msSolLoadU64(instruction.address + 40) != 0) { return Result.err(ProgramError.invalidArgument()); }
 	let signers: uint64 = 0;
@@ -638,6 +708,20 @@ export function clock(): Clock {
 	return value;
 }
 
+export function setReturnData(data: Span<uint8>): void {
+	msSolSetReturnData(data);
+}
+
+export function returnData(): ReturnData | null {
+	const out = msSolAlloc(32 + MAX_RETURN_DATA);
+	const length = msSolGetReturnData(out + 32, MAX_RETURN_DATA, out);
+	if (length == 0) { return null; }
+	return {
+		program: loadPubkey(out),
+		data: { address: out + 32, length: Math.min(length, MAX_RETURN_DATA) },
+	};
+}
+
 export function logU64(value: uint64): void {
 	msSolLog64(0, 0, 0, 0, value);
 }
@@ -652,4 +736,60 @@ export function logComputeUnits(): void {
 
 export function remainingComputeUnits(): uint64 {
 	return msSolRemainingComputeUnits();
+}
+
+test "custom error 0 is not the success code" {
+	const customZero: uint64 = 4294967296;
+	assert ProgramError.custom(0).code == customZero;
+	assert ProgramError.custom(7).code == 7;
+}
+
+function hostProgram(): Pubkey {
+	const word0: uint64 = 0x5f177da80e773981;
+	const word1: uint64 = 0xcc7e4cc36654a356;
+	const word2: uint64 = 0xa237eeb4918a8dcb;
+	const word3: uint64 = 0x94b3c98f5b0ff65d;
+	return { word0: word0, word1: word1, word2: word2, word3: word3 };
+}
+
+function byteSeeds(count: uint64): Seeds {
+	let seeds = Seeds.empty(count);
+	for (let index: uint64 = 0; index < count; index++) {
+		seeds = seeds.addU8(index as uint8);
+	}
+	return seeds;
+}
+
+test "findProgramAddress finds the address and bump the runtime finds" {
+	const word0: uint64 = 0x5bbef3568cc31bd5;
+	const word1: uint64 = 0xb66374bcbfd8ecfb;
+	const word2: uint64 = 0x883424f155a9d409;
+	const word3: uint64 = 0x142077d63f0a9d66;
+	const identity: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
+	const found = Seeds.empty(1).addText("identity").findProgramAddress(hostProgram());
+	assert found.ok;
+	if (found.ok) {
+		assert found.value.bump == 255;
+		assert found.value.key.equals(identity);
+	}
+}
+
+test "findProgramAddress skips bumps whose address is on the curve" {
+	const word0: uint64 = 0x5ea6a552d1419250;
+	const word1: uint64 = 0x8c23c9e819ea60d7;
+	const word2: uint64 = 0xe0f59dbed6d4270a;
+	const word3: uint64 = 0x34a4af1cc0b7ce81;
+	const derived: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
+	const found = byteSeeds(15).findProgramAddress(hostProgram());
+	assert found.ok;
+	if (found.ok) {
+		assert found.value.bump == 249;
+		assert found.value.key.equals(derived);
+	}
+}
+
+test "findProgramAddress refuses a sixteenth caller seed" {
+	const found = byteSeeds(16).findProgramAddress(hostProgram());
+	assert !found.ok;
+	if (!found.ok) { assert found.error.code == ProgramError.maxSeedLengthExceeded().code; }
 }

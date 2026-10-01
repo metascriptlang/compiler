@@ -1,4 +1,4 @@
-import { Node, NodeKind, TypeKind, Type, SourceLocation, HiddenStdConvData, TypeAssertionData, MemberExprData, BinaryExprData, HiddenDerefData, ArrayAccessData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, TypeKind, Type, SourceLocation, HiddenStdConvData, TypeAssertionData, MemberExprData, BinaryExprData, HiddenDerefData, ArrayAccessData } from "../../ast/node";
 import { narrowUnionToVariant, isSlotUnion, projectTagUnionMember } from "../../checker/fit";
 import { isMaybeType, typeDisplayName, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType } from "../../checker/types";
 import { requestEnumToString } from "../../checker/context";
@@ -78,12 +78,12 @@ function lowerUnionInstanceof(node: Node): Node {
 	return anyMember == null ? makeBool(false, loc) : anyMember;
 }
 
-function checkedProjectionSource(n: Node): Type | null {
+function checkedProjectionSource(n: Node, anySource: boolean = false): Type | null {
 	if (n == null || n.kind != NodeKind.HiddenSubConv || n.variantSlot <= 0) return null;
 	const d = n.data as HiddenStdConvData;
 	if (d.convType.kind == TypeKind.Union || isMaybeType(d.convType)) return null;
 	const ut = d.convExpr.nodeType;
-	if (ut == null || isMaybeType(ut) || !isSlotUnion(ut) || !isLocation(d.convExpr)) return null;
+	if (ut == null || isMaybeType(ut) || !isSlotUnion(ut) || (!anySource && !isLocation(d.convExpr))) return null;
 	return ut;
 }
 
@@ -126,29 +126,30 @@ export function checkVariantReads(program: Node, ctx: TransformContext): Node {
 
 function guardReads(node: Node, ctx: TransformContext): void {
 	if (node == null) return;
-	if (node.kind == NodeKind.TypeAssertion) {
+	if (node.kind == NodeKind.TypeAssertion && !node.flags.has(NodeFlag.ConvCheck)) {
 		const cast = (node.data as TypeAssertionData).asExpr;
-		if (cast != null && cast.kind == NodeKind.HiddenSubConv) {
+		if (cast != null && cast.kind == NodeKind.HiddenSubConv && !cast.flags.has(NodeFlag.ConvCheck)) {
 			forEachChild(cast, (c: Node): void => guardReads(c, ctx));
 			return;
 		}
 	}
 	if (node.kind == NodeKind.MemberExpr) {
 		const md = node.data as MemberExprData;
-		guardProjection(md.object, md.property, ctx);
+		guardProjection(md.object, md.property, ctx, false);
 	}
-	guardProjection(node, "", ctx);
+	guardProjection(node, "", ctx, node.flags.has(NodeFlag.ConvCheck));
 	forEachChild(node, (c: Node): void => guardReads(c, ctx));
 }
 
-function guardProjection(p: Node, field: string, ctx: TransformContext): void {
-	const ut = checkedProjectionSource(p);
+function guardProjection(p: Node, field: string, ctx: TransformContext, anySource: boolean): void {
+	const ut = checkedProjectionSource(p, anySource);
 	if (ut == null) return;
 	const d = p.data as HiddenStdConvData;
 	const loc = p.location;
 	const u = d.convExpr;
 	const labels = memberLabels(ut).join("|");
-	const access = makeCall(runtimeRef("msVariantAccess", loc), [u, makeNumber(p.variantSlot - 1, loc), makeString(accessHead(field, p, ut), loc), makeString(labels, loc)], loc);
+	const check = isLocation(u) ? "msVariantAccess" : "msVariantAccessVal";
+	const access = makeCall(runtimeRef(check, loc), [u, makeNumber(p.variantSlot - 1, loc), makeString(accessHead(field, p, ut), loc), makeString(labels, loc)], loc);
 	access.nodeType = ut;
 	d.convExpr = access;
 }

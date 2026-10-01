@@ -966,17 +966,20 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStrs(objHeap, arrHeap, handle, "interfaceFields", d.interfaceFields);
 			setStrs(objHeap, arrHeap, handle, "interfaceFieldTypes", d.interfaceFieldTypes);
 			setStrs(objHeap, arrHeap, handle, "interfaceExtends", d.interfaceExtends);
+			setStr(objHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
 			setStr(objHeap, handle, "className", d.className);
 			setStr(objHeap, handle, "classExtends", d.classExtends);
 			setNodes(objHeap, arrHeap, handle, "classBody", d.classBody);
+			setStr(objHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.ActorDecl => {
 			const d = node.data as ActorDeclData;
 			setStr(objHeap, handle, "actorName", d.actorName);
 			setNodes(objHeap, arrHeap, handle, "actorBody", d.actorBody);
+			setStr(objHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.PropertyDecl => {
 			const d = node.data as PropertyDeclData;
@@ -1759,34 +1762,42 @@ function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap
 			const interfaceName = readStr(objHeap, h, "interfaceName");
 			const interfaceFields = readStrs(objHeap, arrHeap, h, "interfaceFields");
 			const interfaceFieldTypes = readStrs(objHeap, arrHeap, h, "interfaceFieldTypes");
-			return createNodeAt(NodeKind.InterfaceDecl, {
+			const decl = createNodeAt(NodeKind.InterfaceDecl, {
 				interfaceName, interfaceFields, interfaceFieldTypes,
 				interfaceExtends: readStrs(objHeap, arrHeap, h, "interfaceExtends"),
 				nameLocation: loc,
 			}, loc);
+			decl.typeArg = readStr(objHeap, h, "typeArg");
+			return decl;
 		},
 		NodeKind.StructDecl => {
 			const interfaceName = readStr(objHeap, h, "interfaceName");
 			const interfaceFields = readStrs(objHeap, arrHeap, h, "interfaceFields");
 			const interfaceFieldTypes = readStrs(objHeap, arrHeap, h, "interfaceFieldTypes");
-			return createNodeAt(NodeKind.StructDecl, {
+			const decl = createNodeAt(NodeKind.StructDecl, {
 				interfaceName, interfaceFields, interfaceFieldTypes,
 				interfaceExtends: readStrs(objHeap, arrHeap, h, "interfaceExtends"),
 				nameLocation: loc,
 			}, loc);
+			decl.typeArg = readStr(objHeap, h, "typeArg");
+			return decl;
 		},
 		NodeKind.ClassDecl => {
 			const className = readStr(objHeap, h, "className");
 			const classExtends = readStr(objHeap, h, "classExtends");
 			const classBody = readNodes(objHeap, arrHeap, h, "classBody", loc);
-			return createNodeAt(NodeKind.ClassDecl, {
+			const decl = createNodeAt(NodeKind.ClassDecl, {
 				className, classExtends, classBody, nameLocation: loc,
 			}, loc);
+			decl.typeArg = readStr(objHeap, h, "typeArg");
+			return decl;
 		},
 		NodeKind.ActorDecl => {
 			const actorName = readStr(objHeap, h, "actorName");
 			const actorBody = readNodes(objHeap, arrHeap, h, "actorBody", loc);
-			return createNodeAt(NodeKind.ActorDecl, { actorName, actorBody, nameLocation: loc }, loc);
+			const decl = createNodeAt(NodeKind.ActorDecl, { actorName, actorBody, nameLocation: loc }, loc);
+			decl.typeArg = readStr(objHeap, h, "typeArg");
+			return decl;
 		},
 		NodeKind.PropertyDecl => {
 			const propName = readStr(objHeap, h, "propName");
@@ -3228,6 +3239,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		itemModule: -1 as int32,
 		item: 0 as int32,
 		instantiatedFrom: null,
+		borrowedFrom: null,
 	};
 }
 
@@ -3364,6 +3376,30 @@ test "round-trip StructDecl keeps interfaceExtends" {
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
 	assert d.interfaceExtends.length == 1;
+}
+
+test "round-trip keeps the generic params of an interface, a struct, a class and an actor" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 1);
+	const iface = createNode(NodeKind.InterfaceDecl, {
+		interfaceName: "Box", interfaceFields: ["v"], interfaceFieldTypes: ["T"],
+		interfaceExtends: [] as string[], nameLocation: loc,
+	}, synthToken(loc));
+	iface.typeArg = "T";
+	const strukt = createNode(NodeKind.StructDecl, {
+		interfaceName: "Cell", interfaceFields: ["v"], interfaceFieldTypes: ["T"],
+		interfaceExtends: [] as string[], nameLocation: loc,
+	}, synthToken(loc));
+	strukt.typeArg = "T:number";
+	const cls = createNode(NodeKind.ClassDecl, { className: "Pair", classExtends: "", classBody: [] as Node[], nameLocation: loc }, synthToken(loc));
+	cls.typeArg = "A,B:number";
+	const act = createNode(NodeKind.ActorDecl, { actorName: "Worker", actorBody: [] as Node[], nameLocation: loc }, synthToken(loc));
+	act.typeArg = "M";
+	assert valueToNode(nodeToValue(iface, objH, arrH), objH, arrH, loc).typeArg == "T";
+	assert valueToNode(nodeToValue(strukt, objH, arrH), objH, arrH, loc).typeArg == "T:number";
+	assert valueToNode(nodeToValue(cls, objH, arrH), objH, arrH, loc).typeArg == "A,B:number";
+	assert valueToNode(nodeToValue(act, objH, arrH), objH, arrH, loc).typeArg == "M";
 }
 
 test "round-trip TypeAliasDecl keeps aliasGenericParams" {

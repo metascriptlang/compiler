@@ -29,7 +29,7 @@ const b121 = `
 function takesNum(x: number): number { return x * 2.0; }
 function viaReturn(v: int64): number { return v; }
 function b121(): void {
-	const raw: int64 = 3;
+	let raw: int64 = 3;
 	const viaDecl: number = raw;
 	console.log(viaDecl + viaReturn(raw) + takesNum(raw));
 }

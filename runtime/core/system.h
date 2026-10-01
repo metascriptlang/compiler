@@ -496,6 +496,7 @@ static inline void* msBoxStruct(const void* val, size_t size) {
 
 /* Bounds check failure — prints error and exits */
 _Noreturn void msRaiseIndexError(int64_t idx, int64_t len);
+_Noreturn void msRaiseSliceError(int64_t start, int64_t end, int64_t len);
 
 /* Concurrent Map/Set access detected — unrecoverable (Go fatal model: a detected
    race means memory may already be corrupt, so unwinding past it is unsafe). */
@@ -536,6 +537,12 @@ _Noreturn void msMapFatal(msString msg);
 #define msSizedArrayAccessUnchecked(a, i, n) ((a).data[(int64_t)(i)])
 #define msSpanAccessUnchecked(a, i) ((a).data[(int64_t)(i)])
 
+static inline int64_t msSliceLen(int64_t start, int64_t end, int64_t len) {
+	if (end != start && (start < 0 || end < start || end > len)) msRaiseSliceError(start, end, len);
+	return end - start;
+}
+#define msSliceLenUnchecked(start, end, len) ((int64_t)(end) - (int64_t)(start))
+
 /* String char access — TypeScript s[i] parity (character-indexed) */
 #define msStringCharAccess(s, i) msStringCharAt((s), (i))
 
@@ -547,12 +554,29 @@ _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi);
 _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi);
 _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected);
 _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag);
+_Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target);
+_Noreturn void msRaiseStrLitError(msString s, msString target);
+msString msStrLitConv(msString s, msString members, msString target);
+
+static inline void* msObjDownConv(void* p, const msTypeInfo* target) {
+	if (p != NULL && !msIsInstance(p, target)) msRaiseObjectConversionError(p, target);
+	return p;
+}
+
+static inline void msFfiRetain(void* p) { msIncrefCyclic(p); }
+static inline void msFfiRelease(void* p) { msDecrefCyclic(p); }
 
 #define msVariantAccess(u, slot, head, labels) (*({ \
 	__typeof__(u)* __vu = &(u); \
 	if ((int64_t)__vu->_tag != (int64_t)(slot)) msRaiseFieldError((head), (labels), (int64_t)__vu->_tag); \
 	__vu; \
 }))
+
+#define msVariantAccessVal(u, slot, head, labels) ({ \
+	__typeof__(u) __vv = (u); \
+	if ((int64_t)__vv._tag != (int64_t)(slot)) msRaiseFieldError((head), (labels), (int64_t)__vv._tag); \
+	__vv; \
+})
 
 /* Converting a double outside the destination's range, NaN included, is
    undefined in C (C11 6.3.1.4): the bounds are tested on the double first. */

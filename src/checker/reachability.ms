@@ -6,7 +6,7 @@
 
 import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, HiddenStdConvData,
 	ExportDeclData, IdentifierData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
-	CallExprData, MemberExprData, NewExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
+	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
 import {
@@ -198,6 +198,19 @@ function walkBody(node: Node, modulePath: string): void {
 
 	if (k == NodeKind.HiddenSubConv && node.variantSlot > 0) {
 		markRematerializedMemberTypeInfo((node.data as HiddenStdConvData).convType);
+		walkChildrenGeneric(node, modulePath);
+		return;
+	}
+
+	if (k == NodeKind.TypeAssertion && node.flags.has(NodeFlag.ObjCheck)) {
+		markTypeInfoEdge(node, modulePath);
+		walkChildrenGeneric(node, modulePath);
+		return;
+	}
+
+	if (k == NodeKind.BinaryExpr && (node.data as BinaryExprData).operator == "instanceof") {
+		const rhs = (node.data as BinaryExprData).right;
+		markTypeInfoOf(rhs.resolvedSym != null ? rhs.resolvedSym.symbolType : rhs.nodeType);
 		walkChildrenGeneric(node, modulePath);
 		return;
 	}

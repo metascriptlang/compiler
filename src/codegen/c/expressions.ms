@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, isUnknownType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef } from "../../checker/types";
+import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -109,6 +109,32 @@ function resolveSinkLent(t: Type | null): Type | null {
 
 function variantSlotAccess(u: Type, vi: number): string {
 	return inlineVariantStruct(u.typeChildren[vi]) != null ? "." : "->";
+}
+
+function strLitPayload(t: Type): Type | null {
+	const payload = isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
+	return payload.kind != TypeKind.String && isStringLike(payload) ? payload : null;
+}
+
+function memberDisplayName(m: Type): string {
+	return m.kind == TypeKind.Ref && m.typeReturn != null ? typeDisplayName(m.typeReturn) : typeDisplayName(m);
+}
+
+function variantFailArgs(g: CGen, u: Type, slot: int32): string {
+	const labels: string[] = [];
+	for (const m of u.typeChildren) labels.push(memberDisplayName(m));
+	const unionName = u.sym != null && u.sym.name != "" ? u.sym.name : labels.join(" | ");
+	const head = `member '${slot < labels.length ? labels[slot] : "?"}' is not accessible for type '${unionName}' using '`;
+	const joined = labels.join("|");
+	return `${msStringPoolRef(internString(g.stringPool, head), cStringByteLen(head))}, ${msStringPoolRef(internString(g.stringPool, joined), cStringByteLen(joined))}`;
+}
+
+function strLitConvArgs(g: CGen, set: Type): string {
+	const literals: Type[] = set.kind == TypeKind.StringLiteral ? [set] : set.typeChildren;
+	let members = "";
+	for (const lit of literals) members += `${lit.typeName.byteLength}:${lit.typeName}`;
+	const name = set.sym != null && set.sym.name != "" ? set.sym.name : typeDisplayName(set);
+	return `${msStringPoolRef(internString(g.stringPool, members), cStringByteLen(members))}, ${msStringPoolRef(internString(g.stringPool, name), cStringByteLen(name))}`;
 }
 
 function literalDiscriminantOf(u: Type): string {
@@ -1753,6 +1779,43 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		truncResults(ctx, cc);
 		const d = node.data as TypeAssertionData;
 
+		if (node.flags.has(NodeFlag.ObjCheck) && node.nodeType != null) {
+			const checkedRef = node.nodeType.kind == TypeKind.Union ? unwrapRefNullUnion(node.nodeType) : node.nodeType;
+			const checkedClass = checkedRef != null && checkedRef.kind == TypeKind.Ref ? checkedRef.typeReturn : null;
+			if (checkedClass == null || checkedClass.kind != TypeKind.Struct) {
+				addCGenError(g, "internal: checked conversion `as " + d.asType + "` has no class target at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
+				ctx.results.push("MS_NIL");
+				return;
+			}
+			if (checkedClass.sym == null || !hasFlag(checkedClass.sym!, SymbolFlag.ImportC)) {
+				const cName = getTypeDesc(g, checkedClass);
+				ensureTypeInfoDef(g, cName, checkedClass);
+				ctx.results.push(`((${getTypeDesc(g, node.nodeType)})msObjDownConv((void*)(${expr}), &${cName}TypeInfo))`);
+				return;
+			}
+		}
+
+		const strLitTarget = node.nodeType != null && node.flags.has(NodeFlag.ConvCheck) ? strLitPayload(node.nodeType) : null;
+		if (strLitTarget != null && node.nodeType != null) {
+			const from = d.asExpr != null ? d.asExpr.nodeType : null;
+			if (!isMaybeType(node.nodeType) && from != null && !isMaybeType(from) && isStringLike(from)) {
+				ctx.results.push(`msStrLitConv(${expr}, ${strLitConvArgs(g, strLitTarget)})`);
+				return;
+			}
+			if (isMaybeType(node.nodeType) && from != null && isMaybeType(from) && from.typeReturn != null && isStringLike(from.typeReturn)) {
+				const targetC = getTypeDesc(g, node.nodeType);
+				g.labels += 1;
+				const tmp = `_mconv${g.labels}_`;
+				emitProcLocalsLine(p, `${getTypeDesc(g, from)} ${tmp};`);
+				emitStmtsLine(p, `${tmp} = ${expr};`);
+				ctx.results.push(`(${tmp}.present ? (${targetC}){.value=msStrLitConv(${tmp}.value, ${strLitConvArgs(g, strLitTarget)}), .present=true} : (${targetC}){0})`);
+				return;
+			}
+			addCGenError(g, "internal: checked `as " + d.asType + "` into a string-literal union reached codegen from " + (from != null ? typeDisplayName(from) : "an untyped value") + " at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
+			ctx.results.push("MS_NIL");
+			return;
+		}
+
 		// Identity cast — src and target have the same C type. Fires at the top
 		// so it short-circuits every downstream case (Union narrow, Union wrap,
 		// nilable reinterpret, fallback cast). Common after monomorphization and
@@ -1837,6 +1900,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// Value types (structs) can't be directly C-cast. Use pointer reinterpret.
 		if (node.nodeType != null && isNilableValueType(node.nodeType)
 			&& d.asExpr != null && d.asExpr.nodeType != null && isNilableValueType(d.asExpr.nodeType)) {
+			const fromCarrier = d.asExpr.nodeType;
+			if (isMaybeType(node.nodeType) && isMaybeType(fromCarrier) && node.nodeType.typeReturn != null && fromCarrier.typeReturn != null
+				&& getTypeDesc(g, node.nodeType.typeReturn) != getTypeDesc(g, fromCarrier.typeReturn)) {
+				addCGenError(g, "internal: `as " + d.asType + "` from " + typeDisplayName(fromCarrier) + " to " + typeDisplayName(node.nodeType) + " reached codegen as a reinterpret of one carrier as another at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
+				ctx.results.push("MS_NIL");
+				return;
+			}
 			ctx.results.push(`(*(${targetType}*)&(${expr}))`);
 			return;
 		}
@@ -1883,27 +1953,6 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				return;
 			}
 		}
-		// A flow-narrowed `unknown` keeps its declared void* repr in C, so the
-		// deref the narrow implies needs the pointer cast spelled out. The
-		// narrowed type rides the deref node when the operand is an assertion
-		// (`(u as Box).n`), the operand itself otherwise.
-		let declOperand: Readonly<Node> | null = hd.expr;
-		while (declOperand != null && declOperand.kind == NodeKind.TypeAssertion) {
-			declOperand = (declOperand.data as TypeAssertionData).asExpr;
-		}
-		if (declOperand != null && declOperand.resolvedSym != null) {
-			const declT = declOperand.resolvedSym.symbolType;
-			let narrowed = hd.expr.nodeType != null ? hd.expr.nodeType : node.nodeType;
-			if (declT != null && declT.kind == TypeKind.Unknown
-					&& narrowed != null && narrowed.kind != TypeKind.Unknown) {
-				const nDesc = getTypeDesc(g, narrowed);
-				if (nDesc != "void*" && nDesc != "void") {
-					const castDesc = isPointerType(narrowed) ? nDesc : nDesc + "*";
-					ctx.results.push(`(*(${castDesc})${inner})`);
-					return;
-				}
-			}
-		}
 		ctx.results.push(`(*${inner})`);
 		return;
 	}
@@ -1943,7 +1992,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const tmp = `_mnarrow${g.labels}_`;
 			emitProcLocalsLine(p, `${srcC} ${tmp};`);
 			emitStmtsLine(p, `${tmp} = ${inner};`);
-			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${rvi}) msRaiseVariantError(${tmp}.value._tag, ${rvi});`);
+			const heldUnion = d.convExpr.nodeType.typeReturn;
+			const failArgs = heldUnion != null ? variantFailArgs(g, heldUnion, rvi) : "MS_EMPTY_STRING, MS_EMPTY_STRING";
+			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${rvi}) msRaiseFieldError(${failArgs}, (int64_t)${tmp}.value._tag);`);
 			ctx.results.push(`(${tmp}.present ? ${tmp}.value.v${rvi} : (${targetC})NULL)`);
 			return;
 		}
@@ -1981,7 +2032,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// would hand refcounting a tagged slot to free, so it takes a zeroed union.
 		const srcMaybe = d.convExpr.nodeType;
 		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && isMaybeType(d.convType)
-			&& d.convType.typeReturn != null && d.convType.typeReturn.kind == TypeKind.Union
+			&& d.convType.typeReturn != null && isTagCarriedUnion(d.convType.typeReturn)
 			&& srcMaybe != null && isMaybeType(srcMaybe)) {
 			const wvi = projSlot - 1;
 			const payloadC = getTypeDesc(g, d.convType.typeReturn);
@@ -2003,8 +2054,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const tmp = `_mnarrow${g.labels}_`;
 			emitProcLocalsLine(p, `${srcC} ${tmp};`);
 			emitStmtsLine(p, `${tmp} = ${inner};`);
-			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${nvi}) msRaiseVariantError(${tmp}.value._tag, ${nvi});`);
-			ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${tmp}.value.v${nvi}, .present=true} : (${targetC}){0})`);
+			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${nvi}) msRaiseFieldError(${variantFailArgs(g, srcMaybe.typeReturn, nvi)}, (int64_t)${tmp}.value._tag);`);
+			const strLitSet = node.flags.has(NodeFlag.ConvCheck) ? strLitPayload(d.convType) : null;
+			const slotRead = `${tmp}.value.v${nvi}`;
+			const payload = strLitSet != null ? `msStrLitConv(${slotRead}, ${strLitConvArgs(g, strLitSet)})` : slotRead;
+			ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${payload}, .present=true} : (${targetC}){0})`);
 			return;
 		}
 		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && d.convType.kind != TypeKind.Union) {
@@ -3154,20 +3208,15 @@ export function refArrayDestroyFn(elemT: Type | null, arrCType: string): string 
 		// Managed VALUE element (struct / union / generic-instance / distinct-over-those):
 		// the array TYPE's per-type <Name>ArrayDestroy walker (NIM-REF AN-24), selected once
 		// via arrayElementNeedsCleanup — the whole value-struct family in ONE place, no
-		// per-kind enumeration. Else (primitive / nested-array / tuple / Unknown) free-only,
+		// per-kind enumeration. Else (primitive / nested-array / tuple) free-only,
 		// with the msRefArray fallback for void*-collapsed payloads.
-		// User-`unknown` element (Nim seq[pointer]): entries carry no rc share —
-		// free-only, never msRefArrayDestroy (net −1/death → UAF). Mirrors Actor arm;
-		// must agree with classifyArray's inert arm. Peel `unknown|null` (bare void*).
-		_ => (isUnknownType(elemT.kind == TypeKind.Union ? unwrapRefNullUnion(elemT) : elemT))
-			? "msNumberArrayDestroy"
-			: (arrayElementNeedsCleanup(elemT)
-				? arrCType + "Destroy"
-				: (arrCType == "msRefArray" ? "msRefArrayDestroy" : "msNumberArrayDestroy")),
+		_ => arrayElementNeedsCleanup(elemT)
+			? arrCType + "Destroy"
+			: (arrCType == "msRefArray" ? "msRefArrayDestroy" : "msNumberArrayDestroy"),
 	};
 }
 
-// Free-only msRefArray cells (unknown / actor elements) get their OWN weak TypeInfo
+// Free-only msRefArray cells (actor elements) get their OWN weak TypeInfo
 // symbol: "msRefArrayRefCell" is ONE weak symbol program-wide, but destroyFn was
 // per-module first-ensure-wins + cross-module last-DatInit-wins — a module mixing
 // counted and inert element families scrambled the shared cell's destroyer.

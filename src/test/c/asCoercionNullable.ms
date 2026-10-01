@@ -95,7 +95,7 @@ function main(): void {
 	const c = compileToC(src);
 	assert c.ok;
 	assert !c.value.contains("*(Maybe_p1*)&");
-	assert c.value.contains("msRaiseVariantError");
+	assert c.value.contains("msRaiseFieldError");
 }
 
 test "E2E C: dropping only null needs no variant check" {
@@ -107,5 +107,5 @@ function main(): void {
 `;
 	const c = compileToC(src);
 	assert c.ok;
-	assert !c.value.contains("msRaiseVariantError");
+	assert !c.value.contains("msRaiseFieldError");
 }

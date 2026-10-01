@@ -10,7 +10,7 @@ import {
 	ArrowFunctionData, FunctionExprData,
 	TypeAssertionData, ConditionalExprData,
 	SpreadExprData, NewExprData, MoveExprData,
-	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData,
+	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, createNodeAt,
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
@@ -20,6 +20,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym } from "../../transform/util";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -135,6 +136,9 @@ export function jsReferenceName(gen: JSGenerator, sym: Symbol | null, text: stri
 
 function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: string): string {
 	if (sym == null) return safeJsName(name);
+	if (gen.multiFile && sym.jsModulePath != "" && sym.modulePath != "" && sym.modulePath != gen.currentModulePath) {
+		return recordNeededImport(gen, sym.modulePath, safeJsName(name));
+	}
 	if (sym.nativeName != null && sym.nativeName != "") return safeJsName(name);
 	if (gen.multiFile) return jsMultiFileName(gen, sym, name, declared);
 	if (!gen.bundleMode && hasFlag(sym, SymbolFlag.Exported)) return safeJsName(name);
@@ -679,7 +683,76 @@ export function emitNewExpr(gen: JSGenerator, node: Node): void {
 
 export function emitTypeAssertion(gen: JSGenerator, node: Node): void {
 	const d = node.data as TypeAssertionData;
+	if (node.flags.has(NodeFlag.ConvCheck) && emitCheckedNarrowing(gen, node, d)) return;
+	const target = checkedConversionTarget(node);
+	if (target == null) {
+		emitNode(gen, d.asExpr);
+		return;
+	}
+	const classRef = createNodeAt(NodeKind.Identifier, { name: target.name } as IdentifierData, node.location);
+	classRef.resolvedSym = target;
+	classRef.nodeType = target.symbolType;
+	emit(gen, "((v) => (v == null || v instanceof ");
+	emitNode(gen, classRef);
+	emit(gen, ") ? v : (() => { throw new Error(\"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + escapeJSString(target.name) + "\"); })())(");
 	emitNode(gen, d.asExpr);
+	emit(gen, ")");
+}
+
+function namedTypeDisplay(t: Type): string {
+	if (t.sym != null && t.sym.name != "") return t.sym.name;
+	if (t.kind != TypeKind.Union) return typeDisplayName(t);
+	const names: string[] = [];
+	for (const m of t.typeChildren) names.push(m.kind == TypeKind.Ref && m.typeReturn != null ? typeDisplayName(m.typeReturn) : typeDisplayName(m));
+	return names.join(" | ");
+}
+
+function assertedUnion(d: TypeAssertionData): Type | null {
+	let from = d.asExpr;
+	if (from.kind == NodeKind.HiddenSubConv) from = (from.data as HiddenStdConvData).convExpr;
+	const fromType = from.nodeType;
+	if (fromType == null) return null;
+	const union = isMaybeType(fromType) && fromType.typeReturn != null ? fromType.typeReturn : fromType;
+	return isTagCarriedUnion(union) ? union : null;
+}
+
+function openTagTest(gen: JSGenerator, member: Type, union: Type, pass: string): void {
+	emit(gen, "((v) => (" + pass + "typeof v === \"" + typeofTagOf(member) + "\") ? v : (() => { throw new Error(\"member '" + escapeJSString(typeDisplayName(member)) + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + typeof v + \"'\"); })())(");
+}
+
+function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData): boolean {
+	const t = node.nodeType;
+	if (t == null) return false;
+	const nullable = isMaybeType(t);
+	const payload = nullable && t.typeReturn != null ? t.typeReturn : t;
+	const pass = nullable ? "v == null || " : "";
+	const union = assertedUnion(d);
+	if (payload.kind != TypeKind.String && isStringLike(payload)) {
+		const literals: Type[] = payload.kind == TypeKind.StringLiteral ? [payload] : payload.typeChildren;
+		const tests: string[] = [];
+		for (const lit of literals) tests.push("v === \"" + escapeJSString(lit.typeName) + "\"");
+		emit(gen, "((v) => (" + pass + tests.join(" || ") + ") ? v : (() => { throw new Error(\"invalid union conversion: \" + JSON.stringify(v) + \" is not " + escapeJSString(namedTypeDisplay(payload)) + "\"); })())(");
+		let stringSlot: Type | null = null;
+		if (union != null) {
+			for (const m of union.typeChildren) if (m.kind == TypeKind.String) stringSlot = m;
+		}
+		if (union != null && stringSlot != null) openTagTest(gen, stringSlot, union, pass);
+		emitNode(gen, d.asExpr);
+		emit(gen, union != null && stringSlot != null ? "))" : ")");
+		return true;
+	}
+	if (union == null) return false;
+	if (payload.kind != TypeKind.String && payload.kind != TypeKind.Number && payload.kind != TypeKind.Boolean) return false;
+	openTagTest(gen, payload, union, pass);
+	emitNode(gen, d.asExpr);
+	emit(gen, ")");
+	return true;
+}
+
+function checkedConversionTarget(node: Node): Symbol | null {
+	if (!node.flags.has(NodeFlag.ObjCheck) || node.nodeType == null) return null;
+	const t = node.nodeType.kind == TypeKind.Union ? unwrapRefNullUnion(node.nodeType) : node.nodeType;
+	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn.sym : null;
 }
 
 // ===== Move Expression (no-op in JS) =====

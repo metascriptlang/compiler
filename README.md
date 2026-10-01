@@ -80,6 +80,7 @@ curl -fsSL https://metascriptlang.org/install.sh | sh   # or a release archive f
 
 msc run hello.ms                               # build and run natively
 msc build hello.ms --release --output=hello    # optimized binary
+msc build hello.ms --danger --output=hello     # fastest; drops index, slice and integer range checks, so an out-of-range index is undefined behaviour
 msc build hello.ms --os=windows --release      # cross-compile from any host
 msc build hello.ms --os=linux --release
 msc build hello.ms --os=emcc                   # browser wasm
