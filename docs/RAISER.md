@@ -11,7 +11,7 @@ Raiser is MetaScript's statically typed bytecode VM. It covers what the C backen
 | 3 | Embeddable scripting / sandboxed eval | the `context.ms` API exists; nothing outside the compiler uses it |
 | 4 | Game-logic scripting on a client that cannot ship native code: the Lua / AngelScript niche, logic above the render loop, not the loop | not built |
 
-`msc run <file> --target=raiser` also runs whole checked programs, multi-module, for tooling. The measured consumer is the Ion project generator: a typed manifest resolves a graph, emits an Xcode project, builds an app and runs its window smoke with no native manifest-evaluation fallback (not re-run here).
+`msc run --target=raiser <file>` also runs whole checked programs, multi-module, for tooling. The measured consumer is the Ion project generator: a typed manifest resolves a graph, emits an Xcode project, builds an app and runs its window smoke with no native manifest-evaluation fallback (not re-run here).
 
 Non-goals: a JIT, competing with browser engines, a 60 fps render loop, a large stdlib of its own. The thesis is that a dynamic-language JIT exists mostly to infer types at runtime; MetaScript types are resolved at compile time, so `int32 + int32` is already a typed opcode and an interpreter can close much of the gap without one.
 
@@ -76,7 +76,7 @@ Measured 2026-09-19 with `msc` v0.2.55 (`~/.metascript/BUILD` `bce99dbf`), each 
 | `substring` | unbridged: warning, then `Unknown host function` | correct |
 | `Promise.all`, `sleepAsync` | unbridged | correct |
 | `new Set<int32>()` then `add` | `attempt to access a nil address` in `Set_add__int32`, after `msMapFatal` unbridged warnings | correct |
-| `msc run src/index.ms --target=raiser` (the whole compiler) | 16 type errors before codegen: `Undefined variable 'fetch'` ×14, `'Buffer'` ×1, `byteLength` arity ×1 | — |
+| `msc run --target=raiser src/index.ms` (the whole compiler) | 16 type errors before codegen: `Undefined variable 'fetch'` ×14, `'Buffer'` ×1, `byteLength` arity ×1 | — |
 
 The three wrong results on strands and exceptions have compiler inbox cards dated 2026-09-19. Codegen-side gaps (`new Array<T>(n)`, `extends`, `static`, `out`) are listed in `src/codegen/raiser/CLAUDE.md`.
 

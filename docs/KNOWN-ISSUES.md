@@ -140,7 +140,7 @@ Gates (snapshot `8506c8ff` + L1/L4/L2): probes 15/15 expected outcomes (subset/o
 **Fix:** `src/codegen/raiser/expressions.ms` `compileUpdateExpr` — LoadField/StoreField and LoadIndex/StoreIndex branches, prefix returns the stored value, postfix the old one. Tests in `src/codegen/raiser/rgen.ms` (1472/1472).
 
 **Problem:** The Raiser bytecode compiler handles `i++` on a plain local only; `o.n++` and `arr[i]++` fall through to `cannot compile update target: unsupported by the Raiser bytecode compiler`.
-**Repro (measured 2026-09-08):** `const o: Counter = { n: 0 }; o.n++;` under `msc run x.ms --target=raiser` → the error above, HEAD `3adfe8a1`. `--target=c` is fine.
+**Repro (measured 2026-09-08):** `const o: Counter = { n: 0 }; o.n++;` under `msc run --target=raiser x.ms` → the error above, HEAD `3adfe8a1`. `--target=c` is fine.
 **Severity:** loud. Tier-1 gap in `src/codegen/raiser/expressions.ms` (`compileUpdateExpr` fallback).
 **Workaround:** spell it `o.n = o.n + 1`.
 
@@ -388,7 +388,7 @@ container works on both backends:
 
 ```
 msc build m.ms --target=js && node m.js      2,first,true      (HashMap<BitSet<E>, string>)
-msc run  m.ms --target=js                    ReferenceError: HashMap is not defined
+msc run --target=js m.ms                    ReferenceError: HashMap is not defined
 corpus lane 504-hashContainers [js]          exit=0
 ```
 
@@ -806,7 +806,7 @@ const h: Headers = { names: [], values: [] };
 put(h);
 console.log(h.names.length);
 
-msc run main.ms --target=js → ReferenceError: hdrs is not defined
+msc run --target=js main.ms → ReferenceError: hdrs is not defined
 ```
 
 The bundle calls `hdrs.setHeader(...)` inside the emitted function and never binds `hdrs`.
