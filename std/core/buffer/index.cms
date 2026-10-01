@@ -352,10 +352,10 @@ export function writeDoubleBE(this buf: Buffer, value: number, offset: number): 
 // --- Write 64-bit ---
 
 when (!bare && !solana) {
-	export function writeBigUInt64LE(this buf: Buffer, value: bigint, offset: number): number { return msBufferWriteUint64LE(buf, msBigIntToInt64(BigInt.asUintN(64, value)), offset); }
-	export function writeBigUInt64BE(this buf: Buffer, value: bigint, offset: number): number { return msBufferWriteUint64BE(buf, msBigIntToInt64(BigInt.asUintN(64, value)), offset); }
-	export function writeBigInt64LE(this buf: Buffer, value: bigint, offset: number): number { return msBufferWriteInt64LE(buf, msBigIntToInt64(BigInt.asIntN(64, value)), offset); }
-	export function writeBigInt64BE(this buf: Buffer, value: bigint, offset: number): number { return msBufferWriteInt64BE(buf, msBigIntToInt64(BigInt.asIntN(64, value)), offset); }
+	export function writeBigUInt64LE(this buf: Buffer, value: bigint, offset: number): number { return msBufferWriteUint64LE(buf, msBigIntToInt64(BigInt.asUintN(64, value)), offset) as number; }
+	export function writeBigUInt64BE(this buf: Buffer, value: bigint, offset: number): number { return msBufferWriteUint64BE(buf, msBigIntToInt64(BigInt.asUintN(64, value)), offset) as number; }
+	export function writeBigInt64LE(this buf: Buffer, value: bigint, offset: number): number { return msBufferWriteInt64LE(buf, msBigIntToInt64(BigInt.asIntN(64, value)), offset) as number; }
+	export function writeBigInt64BE(this buf: Buffer, value: bigint, offset: number): number { return msBufferWriteInt64BE(buf, msBigIntToInt64(BigInt.asIntN(64, value)), offset) as number; }
 }
 
 // --- Byte Swap / Reverse (in-place mutation) ---
