@@ -68,7 +68,8 @@ function literalElemType(el: Node): Type | null {
 	if (el.kind != NodeKind.SpreadExpr) return el.nodeType;
 	let src = (el.data as SpreadExprData).spreadArg.nodeType;
 	if (src != null && src.kind == TypeKind.Ref && src.typeReturn != null) src = src.typeReturn;
-	if (src != null && (src.kind == TypeKind.Array || src.kind == TypeKind.SizedArray) && src.typeReturn != null) return src.typeReturn;
+	if (src != null && (src.kind == TypeKind.Array || src.kind == TypeKind.SizedArray || src.kind == TypeKind.Span)
+			&& src.typeReturn != null) return src.typeReturn;
 	return el.nodeType;
 }
 
