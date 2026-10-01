@@ -419,3 +419,4 @@ Each row is a workaround the toolkit carries until the compiler card closes. Pay
 | `enum E: uint8` does not parse | account fields store `uint8` and expose the enum through an extension | `2026-10-01-enum-storage-width` |
 | A write through `Readonly<Ptr<T>>` is accepted | `Owned<T>.data()` still returns `Readonly<Ptr<T>>`; the type documents the contract, the checker does not hold it | `2026-10-01-readonly-ptr-write-accepted` |
 | Converting into a proof type is not restricted to its module | proofs come only from the verifiers by convention; review is the guard | `2026-10-01-proof-conversion-outside-module` |
+| On JS, `(x as uint32) << n` with `x: uint8` shifts in the `uint8` width (`1` where C gives `256`) | widen into a typed local first, then shift (`Pubkey.toBase58`) | `2026-10-01-js-shift-after-widening-cast-keeps-narrow-width` |
