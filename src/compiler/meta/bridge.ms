@@ -82,6 +82,10 @@ export function mkNumber(val: number, loc: SourceLocation): Node {
 	return createNode(NodeKind.NumberLiteral, { value: val, isFloat: val % 1 != 0, intVal: val as int64 }, synthToken(loc));
 }
 
+function mkInt(val: int64, loc: SourceLocation): Node {
+	return createNode(NodeKind.NumberLiteral, { value: val as number, isFloat: false, intVal: val }, synthToken(loc));
+}
+
 export function mkString(val: string, loc: SourceLocation): Node {
 	return createNode(NodeKind.StringLiteral, { value: val }, synthToken(loc));
 }
@@ -441,23 +445,23 @@ function serializeStrings(strs: string[], arrHeap: RaiserArrayHeap): RaiserValue
 	return raiserArray(handle);
 }
 
-function setNums(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, nums: number[]): void {
+function setNums(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, nums: number[]): void {
 	const handle = heapAllocArray(arrHeap);
 	for (const n of nums) heapArrayPush(arrHeap, handle, raiserFloat(n));
 	heapObjectSetField(objHeap, h, name, raiserArray(handle));
 }
 
-function setStr(objHeap: RaiserObjectHeap, h: number, name: string, val: string): void {
+function setStr(objHeap: RaiserObjectHeap, h: int64, name: string, val: string): void {
 	const v = raiserString(val);
 	heapObjectSetField(objHeap, h, name, v);
 }
 
-function setBool(objHeap: RaiserObjectHeap, h: number, name: string, val: boolean): void {
+function setBool(objHeap: RaiserObjectHeap, h: int64, name: string, val: boolean): void {
 	const v = raiserBool(val);
 	heapObjectSetField(objHeap, h, name, v);
 }
 
-function setNode(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, child: Node | null, includeTypeAst: boolean = true): void {
+function setNode(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, child: Node | null, includeTypeAst: boolean = true): void {
 	if (child == null) {
 		// Represent null Node fields as RaiserValue.Nil — readNode handles this on the way back
 		heapObjectSetField(objHeap, h, name, raiserNil());
@@ -467,17 +471,17 @@ function setNode(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number,
 	heapObjectSetField(objHeap, h, name, v);
 }
 
-function setNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, children: Node[], includeTypeAst: boolean = true): void {
+function setNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, children: Node[], includeTypeAst: boolean = true): void {
 	const v = serializeNodes(children, objHeap, arrHeap, includeTypeAst);
 	heapObjectSetField(objHeap, h, name, v);
 }
 
-function setStrs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, strs: string[]): void {
+function setStrs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, strs: string[]): void {
 	const v = serializeStrings(strs, arrHeap);
 	heapObjectSetField(objHeap, h, name, v);
 }
 
-function setLocs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, locs: SourceLocation[]): void {
+function setLocs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, locs: SourceLocation[]): void {
 	const outer = heapAllocArray(arrHeap);
 	for (const l of locs) {
 		const lh = heapAllocObject(objHeap);
@@ -491,7 +495,7 @@ function setLocs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number,
 // V2 — serialize Node[][] as an array-of-arrays. Each inner array becomes a
 // heap array containing serialized Node values; the outer array contains
 // references to those inner arrays.
-function setNodeArrays(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, arrays: Node[][]): void {
+function setNodeArrays(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, arrays: Node[][]): void {
 	const outerHandle = heapAllocArray(arrHeap);
 	for (const inner of arrays) {
 		const innerVal = serializeNodes(inner, objHeap, arrHeap);
@@ -1127,29 +1131,29 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 
 // ===== Deserialization helpers (read from RaiserValue) =====
 
-function readStr(objHeap: RaiserObjectHeap, h: number, name: string): string {
+function readStr(objHeap: RaiserObjectHeap, h: int64, name: string): string {
 	const v = heapObjectGetField(objHeap, h, name);
 	if (v.kind == RaiserValueKind.String) return v.strVal;
 	return "";
 }
 
-function readInt(objHeap: RaiserObjectHeap, h: number, name: string): number {
+function readInt(objHeap: RaiserObjectHeap, h: int64, name: string): number {
 	const v = heapObjectGetField(objHeap, h, name);
 	return match (v.kind) {
-		RaiserValueKind.Int | RaiserValueKind.Bool => v.intVal,
+		RaiserValueKind.Int | RaiserValueKind.Bool => v.intVal as number,
 		RaiserValueKind.Float => v.floatVal,
 		_ => 0,
 	};
 }
 
-function readFloat(objHeap: RaiserObjectHeap, h: number, name: string): number {
+function readFloat(objHeap: RaiserObjectHeap, h: int64, name: string): number {
 	const v = heapObjectGetField(objHeap, h, name);
 	if (v.kind == RaiserValueKind.Float) return v.floatVal;
-	if (v.kind == RaiserValueKind.Int) return v.intVal + 0.0;
+	if (v.kind == RaiserValueKind.Int) return v.intVal as float64;
 	return 0.0;
 }
 
-function readBool(objHeap: RaiserObjectHeap, h: number, name: string): boolean {
+function readBool(objHeap: RaiserObjectHeap, h: int64, name: string): boolean {
 	// Accept both Bool kind and Int kind (0/1) as boolean — aligns with
 	// the project convention used by unboxBool (raiser/marshal.ms:50),
 	// truthiness check (raiser/value.ms:80), and readInt (this file:1023+).
@@ -1161,13 +1165,13 @@ function readBool(objHeap: RaiserObjectHeap, h: number, name: string): boolean {
 	return false;
 }
 
-function readNode(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, fallbackLoc: SourceLocation): Node {
+function readNode(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, fallbackLoc: SourceLocation): Node {
 	const v = heapObjectGetField(objHeap, h, name);
 	if (v.kind == RaiserValueKind.Nil) return null as unknown as Node;
 	return valueToNode(v, objHeap, arrHeap, fallbackLoc);
 }
 
-function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, fallbackLoc: SourceLocation): Node[] {
+function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, fallbackLoc: SourceLocation): Node[] {
 	const v = heapObjectGetField(objHeap, h, name);
 	const result: Node[] = [];
 	if (v.kind != RaiserValueKind.Array) return result;
@@ -1182,19 +1186,19 @@ function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: numbe
 	return result;
 }
 
-function readNums(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string): number[] {
+function readNums(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string): number[] {
 	const v = heapObjectGetField(objHeap, h, name);
 	const result: number[] = [];
 	if (v.kind != RaiserValueKind.Array) return result;
 	const len = heapArrayLen(arrHeap, v.intVal);
 	for (let i = 0; i < len; i++) {
 		const elem = heapArrayGet(arrHeap, v.intVal, i);
-		result.push(elem.kind == RaiserValueKind.Float ? elem.floatVal : (elem.kind == RaiserValueKind.Int ? elem.intVal + 0.0 : 0.0));
+		result.push(elem.kind == RaiserValueKind.Float ? elem.floatVal : (elem.kind == RaiserValueKind.Int ? elem.intVal as float64 : 0.0));
 	}
 	return result;
 }
 
-function readStrs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string): string[] {
+function readStrs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string): string[] {
 	const v = heapObjectGetField(objHeap, h, name);
 	const result: string[] = [];
 	if (v.kind != RaiserValueKind.Array) return result;
@@ -1213,7 +1217,7 @@ function readStrs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number
 	return result;
 }
 
-function readLocs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string): SourceLocation[] {
+function readLocs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string): SourceLocation[] {
 	const v = heapObjectGetField(objHeap, h, name);
 	const result: SourceLocation[] = [];
 	if (v.kind != RaiserValueKind.Array) return result;
@@ -1230,7 +1234,7 @@ function readLocs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number
 	return result;
 }
 
-function readLoc(objHeap: RaiserObjectHeap, h: number): SourceLocation {
+function readLoc(objHeap: RaiserObjectHeap, h: int64): SourceLocation {
 	const loc = makeLoc(readInt(objHeap, h, "line") as int32, readInt(objHeap, h, "column") as int32);
 	const el = readInt(objHeap, h, "endLine");
 	if (el > 0) {
@@ -1242,7 +1246,7 @@ function readLoc(objHeap: RaiserObjectHeap, h: number): SourceLocation {
 
 // ===== valueToNode: RaiserValue → AST Node =====
 
-function readNodeArrays(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: number, name: string, fallbackLoc: SourceLocation): Node[][] {
+function readNodeArrays(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, name: string, fallbackLoc: SourceLocation): Node[][] {
 	const v = heapObjectGetField(objHeap, h, name);
 	const result: Node[][] = [];
 	if (v.kind != RaiserValueKind.Array) return result;
@@ -1269,7 +1273,7 @@ function readNodeArrays(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: 
 
 export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
 	return match (val.kind) {
-		RaiserValueKind.Int => mkNumber(val.intVal, fallbackLoc),
+		RaiserValueKind.Int => mkInt(val.intVal, fallbackLoc),
 		RaiserValueKind.Float => mkNumber(val.floatVal, fallbackLoc),
 		RaiserValueKind.Bool => mkBool(val.intVal != 0, fallbackLoc),
 		RaiserValueKind.String => mkString(val.strVal, fallbackLoc),
@@ -1318,7 +1322,7 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 	};
 }
 
-function deserializeObjectLiteral(handle: number, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): Node {
+function deserializeObjectLiteral(handle: int64, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): Node {
 	const obj = objHeap.objects[handle];
 	const keys: string[] = [];
 	const values: Node[] = [];
@@ -1332,7 +1336,7 @@ function deserializeObjectLiteral(handle: number, objHeap: RaiserObjectHeap, arr
 // Reconstruct a Node from a serialized heap object.
 // MAINTENANCE: This is the exact mirror of nodeToValue above. Field names MUST match.
 // When you add a field to nodeToValue, add the corresponding read here.
-function readNodeFromObject(h: number, kind: NodeKind, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
+function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
 	const loc = readLoc(objHeap, h);
 	return match (kind) {
 		// === Literals ===
@@ -1927,7 +1931,7 @@ test "NumberLiteral serialization" {
 	const val = nodeToValue(node, objHeap, arrHeap);
 	assert val.kind == RaiserValueKind.Object;
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-	assert kindVal.intVal == (NodeKind.NumberLiteral as number);
+	assert kindVal.intVal == (NodeKind.NumberLiteral as int64);
 	const numVal = heapObjectGetField(objHeap, val.intVal, "value");
 	assert numVal.kind == RaiserValueKind.Int;
 	assert numVal.intVal == 42;
@@ -1954,7 +1958,7 @@ test "StringLiteral serialization" {
 	const val = nodeToValue(node, objHeap, arrHeap);
 	assert val.kind == RaiserValueKind.Object;
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-	assert kindVal.intVal == (NodeKind.StringLiteral as number);
+	assert kindVal.intVal == (NodeKind.StringLiteral as int64);
 	const strVal = heapObjectGetField(objHeap, val.intVal, "value");
 	assert strVal.strVal == "hello";
 }
@@ -1967,7 +1971,7 @@ test "BooleanLiteral serialization" {
 	const val = nodeToValue(node, objHeap, arrHeap);
 	assert val.kind == RaiserValueKind.Object;
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-	assert kindVal.intVal == (NodeKind.BooleanLiteral as number);
+	assert kindVal.intVal == (NodeKind.BooleanLiteral as int64);
 	const bVal = heapObjectGetField(objHeap, val.intVal, "boolValue");
 	assert bVal.intVal == 1;
 }
@@ -1980,7 +1984,7 @@ test "Identifier serialization" {
 	const val = nodeToValue(node, objHeap, arrHeap);
 	assert val.kind == RaiserValueKind.Object;
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-	assert kindVal.intVal == (NodeKind.Identifier as number);
+	assert kindVal.intVal == (NodeKind.Identifier as int64);
 	const nameVal = heapObjectGetField(objHeap, val.intVal, "name");
 	assert nameVal.strVal == "foo";
 }
@@ -2001,11 +2005,11 @@ test "BinaryExpr serialization" {
 	const leftVal = heapObjectGetField(objHeap, val.intVal, "left");
 	assert leftVal.kind == RaiserValueKind.Object;
 	const leftKind = heapObjectGetField(objHeap, leftVal.intVal, "kind");
-	assert leftKind.intVal == (NodeKind.NumberLiteral as number);
+	assert leftKind.intVal == (NodeKind.NumberLiteral as int64);
 	const rightVal = heapObjectGetField(objHeap, val.intVal, "right");
 	assert rightVal.kind == RaiserValueKind.Object;
 	const rightKind = heapObjectGetField(objHeap, rightVal.intVal, "kind");
-	assert rightKind.intVal == (NodeKind.NumberLiteral as number);
+	assert rightKind.intVal == (NodeKind.NumberLiteral as int64);
 }
 
 // ===== Round-trip tests (Phase A3) =====
@@ -3042,7 +3046,7 @@ test "nodeToValue — Node with primitive nodeType emits Identifier under \"node
 	// And its kind is NodeKind.Identifier.
 	const kindVal = heapObjectGetField(objH, typeFieldVal.intVal, "kind");
 	assert kindVal.kind == RaiserValueKind.Int;
-	assert kindVal.intVal == NodeKind.Identifier as number;
+	assert kindVal.intVal == NodeKind.Identifier as int64;
 }
 
 test "nodeToValue — Node with null nodeType skips emitting the field" {
@@ -3069,7 +3073,7 @@ test "nodeToValue — Node with Struct nodeType emits TypeObject with field info
 	const typeFieldVal = heapObjectGetField(objH, v.intVal, "nodeType");
 	assert typeFieldVal.kind == RaiserValueKind.Object;
 	const kindVal = heapObjectGetField(objH, typeFieldVal.intVal, "kind");
-	assert kindVal.intVal == NodeKind.TypeObject as number;
+	assert kindVal.intVal == NodeKind.TypeObject as int64;
 }
 
 test "nodeToValue — TypeObject heap dispatch emits typExprFieldDecorators array (V2)" {
@@ -3127,7 +3131,7 @@ test "nodeToValue — self-referential nodeType (Tree) terminates via cycle brea
 	const typeFieldVal = heapObjectGetField(objH, v.intVal, "nodeType");
 	assert typeFieldVal.kind == RaiserValueKind.Object;
 	const kindVal = heapObjectGetField(objH, typeFieldVal.intVal, "kind");
-	assert kindVal.intVal == NodeKind.TypeObject as number;
+	assert kindVal.intVal == NodeKind.TypeObject as int64;
 }
 
 test "valueToNode — drops nodeType field (forward-only design)" {
@@ -3219,7 +3223,7 @@ test "nodeToValue — Node with resolvedSym emits { name, symbolKind } object" {
 	assert nameVal.strVal == "myVar";
 	const kindVal = heapObjectGetField(objH, symVal.intVal, "symbolKind");
 	assert kindVal.kind == RaiserValueKind.Int;
-	assert kindVal.intVal == SymbolKind.Variable as number;
+	assert kindVal.intVal == SymbolKind.Variable as int64;
 }
 
 test "nodeToValue — Node without resolvedSym skips emitting the field" {
@@ -3242,7 +3246,7 @@ test "nodeToValue — different SymbolKinds preserved correctly" {
 	const v = nodeToValue(ident, objH, arrH);
 	const symVal = heapObjectGetField(objH, v.intVal, "resolvedSym");
 	const kindVal = heapObjectGetField(objH, symVal.intVal, "symbolKind");
-	assert kindVal.intVal == SymbolKind.Function as number;
+	assert kindVal.intVal == SymbolKind.Function as int64;
 }
 
 test "valueToNode — drops resolvedSym field (forward-only design)" {
@@ -3285,11 +3289,11 @@ test "nodeToValue — child Nodes' resolvedSym cascades through dispatch" {
 	const leftSym = heapObjectGetField(objH, leftVal.intVal, "resolvedSym");
 	assert leftSym.kind == RaiserValueKind.Object;
 	const leftKind = heapObjectGetField(objH, leftSym.intVal, "symbolKind");
-	assert leftKind.intVal == SymbolKind.Variable as number;
+	assert leftKind.intVal == SymbolKind.Variable as int64;
 	const rightVal = heapObjectGetField(objH, v.intVal, "right");
 	const rightSym = heapObjectGetField(objH, rightVal.intVal, "resolvedSym");
 	const rightKind = heapObjectGetField(objH, rightSym.intVal, "symbolKind");
-	assert rightKind.intVal == SymbolKind.Function as number;
+	assert rightKind.intVal == SymbolKind.Function as int64;
 }
 
 test "ObjectLiteral keyLocations survive the node→value→node round-trip" {

@@ -593,7 +593,7 @@ function readStrings(arrHeap: RaiserArrayHeap, v: RaiserValue): string[] {
 	if (v.kind != RaiserValueKind.Array) return out;
 	const len = heapArrayLen(arrHeap, v.intVal) as int32;
 	for (let i = 0; i < len; i += 1) {
-		out.push(heapArrayGet(arrHeap, v.intVal, i as number).strVal);
+		out.push(heapArrayGet(arrHeap, v.intVal, i).strVal);
 	}
 	return out;
 }
@@ -603,7 +603,7 @@ function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, v: Raise
 	if (v.kind != RaiserValueKind.Array) return out;
 	const len = heapArrayLen(arrHeap, v.intVal) as int32;
 	for (let i = 0; i < len; i += 1) {
-		const item = heapArrayGet(arrHeap, v.intVal, i as number);
+		const item = heapArrayGet(arrHeap, v.intVal, i);
 		if (item.kind == RaiserValueKind.Nil) continue;
 		out.push(valueToNode(item, objHeap, arrHeap, loc));
 	}

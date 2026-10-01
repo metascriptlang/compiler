@@ -47,16 +47,16 @@ export function raiserString(s: string): RaiserValue {
 	return { kind: RaiserValueKind.String, intVal: 0, floatVal: 0.0, strVal: s };
 }
 
-export function raiserArray(handle: number): RaiserValue {
-	return { kind: RaiserValueKind.Array, intVal: handle as int64, floatVal: 0.0, strVal: "" };
+export function raiserArray(handle: int64): RaiserValue {
+	return { kind: RaiserValueKind.Array, intVal: handle, floatVal: 0.0, strVal: "" };
 }
 
-export function raiserObject(handle: number): RaiserValue {
-	return { kind: RaiserValueKind.Object, intVal: handle as int64, floatVal: 0.0, strVal: "" };
+export function raiserObject(handle: int64): RaiserValue {
+	return { kind: RaiserValueKind.Object, intVal: handle, floatVal: 0.0, strVal: "" };
 }
 
-export function raiserFuture(handle: number): RaiserValue {
-	return { kind: RaiserValueKind.Future, intVal: handle as int64, floatVal: 0.0, strVal: "" };
+export function raiserFuture(handle: int64): RaiserValue {
+	return { kind: RaiserValueKind.Future, intVal: handle, floatVal: 0.0, strVal: "" };
 }
 
 // --- Deep copy (avoids pointer aliasing) ---
@@ -71,12 +71,12 @@ export function copyValueInto(dst: RaiserValue, src: RaiserValue): void {
 // --- Accessors ---
 
 export function raiserToInt(v: RaiserValue): number {
-	return v.intVal;
+	return v.intVal as number;
 }
 
 export function raiserToFloat(v: RaiserValue): number {
 	if (v.kind == RaiserValueKind.Float) return v.floatVal;
-	return v.intVal + 0.0;
+	return v.intVal as float64;
 }
 
 export function raiserToBool(v: RaiserValue): boolean {
@@ -201,22 +201,22 @@ export interface RaiserArrayData {
 	items: RaiserValue[];
 	rc: int32;
 	color: int32;
-	viewOff: number;
-	viewLen: number;
+	viewOff: int64;
+	viewLen: int32;
 }
 
 export interface RaiserArrayHeap {
 	arrays: RaiserArrayData[];
-	freeList: number[];
+	freeList: int64[];
 }
 
 export function createArrayHeap(): RaiserArrayHeap {
 	const arrays: RaiserArrayData[] = [];
-	const freeList: number[] = [];
+	const freeList: int64[] = [];
 	return { arrays, freeList };
 }
 
-export function heapAllocArray(heap: RaiserArrayHeap): number {
+export function heapAllocArray(heap: RaiserArrayHeap): int64 {
 	if (heap.freeList.length > 0) {
 		const reused = heap.freeList[heap.freeList.length - 1];
 		heap.freeList.length = heap.freeList.length - 1;
@@ -237,7 +237,7 @@ export function heapAllocArray(heap: RaiserArrayHeap): number {
 
 // A view (a slice) owns no elements: its only item is the plain array it
 // views, which keeps that array alive through RC, the collector and copyGraph.
-export function heapAllocView(heap: RaiserArrayHeap, base: RaiserValue, off: number, len: number): number {
+export function heapAllocView(heap: RaiserArrayHeap, base: RaiserValue, off: int64, len: int32): int64 {
 	const handle = heapAllocArray(heap);
 	heapArrayPush(heap, handle, base);
 	heap.arrays[handle].viewOff = off;
@@ -245,22 +245,22 @@ export function heapAllocView(heap: RaiserArrayHeap, base: RaiserValue, off: num
 	return handle;
 }
 
-export function heapArrayIsView(heap: RaiserArrayHeap, handle: number): boolean {
+export function heapArrayIsView(heap: RaiserArrayHeap, handle: int64): boolean {
 	return heap.arrays[handle].viewOff >= 0;
 }
 
-export function heapArrayLen(heap: RaiserArrayHeap, handle: number): number {
+export function heapArrayLen(heap: RaiserArrayHeap, handle: int64): int32 {
 	const data = heap.arrays[handle];
 	return data.viewOff >= 0 ? data.viewLen : data.items.length;
 }
 
-export function heapArrayGet(heap: RaiserArrayHeap, handle: number, index: number): RaiserValue {
+export function heapArrayGet(heap: RaiserArrayHeap, handle: int64, index: int64): RaiserValue {
 	const data = heap.arrays[handle];
 	if (data.viewOff >= 0) return heap.arrays[data.items[0].intVal].items[data.viewOff + index];
 	return data.items[index];
 }
 
-export function heapArraySet(heap: RaiserArrayHeap, handle: number, index: number, val: RaiserValue): void {
+export function heapArraySet(heap: RaiserArrayHeap, handle: int64, index: int64, val: RaiserValue): void {
 	const data = heap.arrays[handle];
 	if (data.viewOff >= 0) {
 		copyValueInto(heap.arrays[data.items[0].intVal].items[data.viewOff + index], val);
@@ -270,7 +270,7 @@ export function heapArraySet(heap: RaiserArrayHeap, handle: number, index: numbe
 	copyValueInto(data.items[index], val);
 }
 
-export function heapArrayPush(heap: RaiserArrayHeap, handle: number, val: RaiserValue): void {
+export function heapArrayPush(heap: RaiserArrayHeap, handle: int64, val: RaiserValue): void {
 	// Deep copy to avoid pointer aliasing (register values are shared objects)
 	const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal, strVal: val.strVal };
 	heap.arrays[handle].items.push(copy);
@@ -278,10 +278,10 @@ export function heapArrayPush(heap: RaiserArrayHeap, handle: number, val: Raiser
 
 // The only shrink primitive on the heap: truncate drops references (arena
 // regime — no per-value RC), extend pads with nil copies.
-export function heapArraySetLen(heap: RaiserArrayHeap, handle: number, newLen: number): void {
+export function heapArraySetLen(heap: RaiserArrayHeap, handle: int64, newLen: int64): void {
 	const items = heap.arrays[handle].items;
 	if (newLen < items.length) {
-		items.setLength(newLen);
+		items.setLength(newLen as number);
 	} else {
 		while (items.length < newLen) {
 			const nilCopy: RaiserValue = { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0, strVal: "" };
@@ -356,16 +356,16 @@ export interface RaiserObjectData {
 
 export interface RaiserObjectHeap {
 	objects: RaiserObjectData[];
-	freeList: number[];
+	freeList: int64[];
 }
 
 export function createStructHeap(): RaiserObjectHeap {
 	const objects: RaiserObjectData[] = [];
-	const freeList: number[] = [];
+	const freeList: int64[] = [];
 	return { objects, freeList };
 }
 
-export function heapAllocObject(heap: RaiserObjectHeap): number {
+export function heapAllocObject(heap: RaiserObjectHeap): int64 {
 	if (heap.freeList.length > 0) {
 		const reused = heap.freeList[heap.freeList.length - 1];
 		heap.freeList.length = heap.freeList.length - 1;
@@ -382,12 +382,12 @@ export function heapAllocObject(heap: RaiserObjectHeap): number {
 	return idx;
 }
 
-export function heapObjectFieldCount(heap: RaiserObjectHeap, handle: number): number {
+export function heapObjectFieldCount(heap: RaiserObjectHeap, handle: int64): int32 {
 	const obj = heap.objects[handle];
 	return obj.fields.length;
 }
 
-export function heapObjectFieldNameAt(heap: RaiserObjectHeap, handle: number, index: number): string {
+export function heapObjectFieldNameAt(heap: RaiserObjectHeap, handle: int64, index: int64): string {
 	const obj = heap.objects[handle];
 	if (index < 0 || index >= obj.fields.length) return "";
 	return obj.fields[index].name;
@@ -405,13 +405,13 @@ test "heapObjectFieldNameAt/ValueAt follow insertion order" {
 	assert heapObjectFieldValueAt(heap, h, 9).kind == RaiserValueKind.Nil;
 }
 
-export function heapObjectFieldValueAt(heap: RaiserObjectHeap, handle: number, index: number): RaiserValue {
+export function heapObjectFieldValueAt(heap: RaiserObjectHeap, handle: int64, index: int64): RaiserValue {
 	const obj = heap.objects[handle];
 	if (index < 0 || index >= obj.fields.length) return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0, strVal: "" };
 	return obj.fields[index].value;
 }
 
-export function heapObjectGetField(heap: RaiserObjectHeap, handle: number, name: string): RaiserValue {
+export function heapObjectGetField(heap: RaiserObjectHeap, handle: int64, name: string): RaiserValue {
 	const obj = heap.objects[handle];
 	for (const field of obj.fields) {
 		if (field.name == name) {
@@ -422,7 +422,7 @@ export function heapObjectGetField(heap: RaiserObjectHeap, handle: number, name:
 	return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0, strVal: "" };
 }
 
-export function heapObjectSetField(heap: RaiserObjectHeap, handle: number, name: string, val: RaiserValue): void {
+export function heapObjectSetField(heap: RaiserObjectHeap, handle: int64, name: string, val: RaiserValue): void {
 	const obj = heap.objects[handle];
 	// Check if field already exists
 	for (const field of obj.fields) {
@@ -462,7 +462,7 @@ export function rcDecref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, va
 	}
 }
 
-function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: number): void {
+function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
 	const data = arrHeap.arrays[handle];
 	for (const item of data.items) {
 		rcDecref(arrHeap, objHeap, item);
@@ -471,7 +471,7 @@ function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, han
 	arrHeap.freeList.push(handle);
 }
 
-function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: number): void {
+function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
 	const data = objHeap.objects[handle];
 	for (const field of data.fields) {
 		rcDecref(arrHeap, objHeap, field.value);
@@ -488,17 +488,17 @@ function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, ha
 // Future handles index the VM-wide future table, so both cross unchanged.
 
 export interface RaiserCopyMap {
-	arrSrc: number[];
-	arrDst: number[];
-	objSrc: number[];
-	objDst: number[];
+	arrSrc: int64[];
+	arrDst: int64[];
+	objSrc: int64[];
+	objDst: int64[];
 }
 
 export function createCopyMap(): RaiserCopyMap {
-	const arrSrc: number[] = [];
-	const arrDst: number[] = [];
-	const objSrc: number[] = [];
-	const objDst: number[] = [];
+	const arrSrc: int64[] = [];
+	const arrDst: int64[] = [];
+	const objSrc: int64[] = [];
+	const objDst: int64[] = [];
 	return { arrSrc, arrDst, objSrc, objDst };
 }
 
@@ -707,17 +707,17 @@ test "rc object destroy decrefs field refs" {
 // --- Object field convenience accessors ---
 // These let the host read typed config fields from a VM result object.
 
-export function heapObjectGetString(heap: RaiserObjectHeap, handle: number, field: string): string {
+export function heapObjectGetString(heap: RaiserObjectHeap, handle: int64, field: string): string {
 	const val = heapObjectGetField(heap, handle, field);
 	return val.strVal;
 }
 
-export function heapObjectGetInt(heap: RaiserObjectHeap, handle: number, field: string): number {
+export function heapObjectGetInt(heap: RaiserObjectHeap, handle: int64, field: string): number {
 	const val = heapObjectGetField(heap, handle, field);
-	return val.intVal;
+	return val.intVal as number;
 }
 
-export function heapObjectGetObjectHandle(heap: RaiserObjectHeap, handle: number, field: string): number {
+export function heapObjectGetObjectHandle(heap: RaiserObjectHeap, handle: int64, field: string): int64 {
 	const val = heapObjectGetField(heap, handle, field);
 	if (val.kind == RaiserValueKind.Object) return val.intVal;
 	return -1;

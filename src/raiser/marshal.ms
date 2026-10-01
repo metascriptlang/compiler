@@ -35,7 +35,7 @@ export function unboxString(v: RaiserValue): string {
 
 export function unboxInt(v: RaiserValue): number {
 	return match (v.kind) {
-		RaiserValueKind.Int | RaiserValueKind.Bool => v.intVal,
+		RaiserValueKind.Int | RaiserValueKind.Bool => v.intVal as number,
 		RaiserValueKind.Float => v.floatVal,
 		_ => 0,
 	};
@@ -43,7 +43,7 @@ export function unboxInt(v: RaiserValue): number {
 
 export function unboxFloat(v: RaiserValue): number {
 	if (v.kind == RaiserValueKind.Float) return v.floatVal;
-	if (v.kind == RaiserValueKind.Int) return v.intVal;
+	if (v.kind == RaiserValueKind.Int) return v.intVal as number;
 	return 0.0;
 }
 
