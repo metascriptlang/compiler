@@ -474,7 +474,7 @@ function cloneDefaultNode(node: Node): Node {
 	// Prelude defaults are parsed but not semchecked — infer type from kind
 	if (clone.nodeType == null) {
 		match (clone.kind) {
-			NodeKind.NumberLiteral => { clone.nodeType = isNodeIntLit(clone) ? int32Type() : float64Type(); },
+			NodeKind.NumberLiteral => { clone.nodeType = !isNodeIntLit(clone) ? float64Type() : (literalFitsInType(clone, int32Type(), false) ? int32Type() : createPrimitive(TypeKind.Int64)); },
 			NodeKind.BigIntLiteral => { clone.nodeType = createPrimitive(TypeKind.Int64); },
 			NodeKind.StringLiteral => { clone.nodeType = stringType(); },
 			NodeKind.BooleanLiteral => { clone.nodeType = booleanType(); },

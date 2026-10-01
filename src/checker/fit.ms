@@ -11,7 +11,7 @@ import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, clo
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
-import { int64ToDecimal } from "../utils/string";
+import { int64ToDecimal, uint64ToDecimal } from "../utils/string";
 
 // ===== Operator Inference =====
 
@@ -638,6 +638,12 @@ export function literalFitsInType(node: Node, target: Type, negated: boolean): b
 	};
 }
 
+export function wideOperandLiteralSlot(operand: Node): Type | null {
+	if (!isNodeIntLit(operand) || literalFitsInType(operand, createPrimitive(TypeKind.Int64), false)) return null;
+	const wide = createPrimitive(TypeKind.Uint64);
+	return literalFitsInType(operand, wide, false) ? wide : null;
+}
+
 export function isFittingIntLiteral(expr: Node, target: Type): boolean {
 	if (isNodeIntLit(expr)) return literalFitsInType(expr, target, false);
 	if (expr.kind == NodeKind.UnaryExpr) {
@@ -658,17 +664,37 @@ function isFoldedIntegerConstant(expr: Node): boolean {
 	return isUntypedIntegerConstant(expr, 0);
 }
 
-export function untypedIntegerLiteralType(node: Node): Type {
+export function untypedIntegerLiteralType(ctx: CheckerContext, node: Node, negated: boolean): Type {
 	const wide = createPrimitive(TypeKind.Int64);
-	if (literalFitsInType(node, int32Type(), false) || !literalFitsInType(node, wide, false)) return int32Type();
+	if (literalFitsInType(node, int32Type(), negated)) return int32Type();
+	if (literalFitsInType(node, wide, negated)) return wide;
+	const d = node.data as NumberLiteralData;
+	if (d.outOfRangeText == "") {
+		const text = uint64ToDecimal(d.intVal as uint64);
+		addError(ctx, negated
+			? "number out of range: '-" + text + "' is below the int64 minimum -9223372036854775808"
+			: "number out of range: '" + text + "' — an integer literal without a declared type is at most int64; declare the type that holds it (e.g. 'const x: uint64 = " + text + "')",
+			node.location.line, node.location.column);
+	}
 	return wide;
 }
 
-export function exactConstantType(expr: Node, t: Type | null): Type | null {
+export function exactConstantType(ctx: CheckerContext, expr: Node, t: Type | null): Type | null {
 	if (t == null || !isIntegerType(t) || !isFoldedIntegerConstant(expr)) return t;
 	const exact = exactUntypedInteger(expr, 0);
-	if (exact == null || integerValueFits(integerValueOf(exact), t)) return t;
+	if (exact == null) {
+		if (overflowsInt64Here(expr)) addError(ctx, "over- or underflow: this constant expression does not fit int64", expr.location.line, expr.location.column);
+		return t;
+	}
+	if (integerValueFits(integerValueOf(exact), t)) return t;
 	return createPrimitive(TypeKind.Int64);
+}
+
+function overflowsInt64Here(expr: Node): boolean {
+	if (expr.kind != NodeKind.BinaryExpr) return false;
+	const d = expr.data as BinaryExprData;
+	if (d.operator != "+" && d.operator != "-" && d.operator != "*") return false;
+	return exactUntypedInteger(d.left, 0) != null && exactUntypedInteger(d.right, 0) != null;
 }
 
 export function fitIntegerConstant(ctx: CheckerContext, expr: Node, exprType: Type | null, formal: Type | null): Node {

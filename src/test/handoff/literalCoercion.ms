@@ -5,7 +5,8 @@
 // Reference parity: standard reference's integer literal and range handling.
 
 import { TypeKind } from "../../ast/node";
-import { checkSource, strictErrorCount, warningCount, hasError } from "./helpers";
+import { checkSource, strictErrorCount, warningCount, hasError, errorCount } from "./helpers";
+import { compileToC, compileToJS } from "../helpers";
 import { lookupSymbol } from "../../checker/symbol";
 
 // ===== A: Variable declaration coercion =====
@@ -253,4 +254,33 @@ test "narrowing number to int8 assignment" {
 test "same type no conversion" {
 	const src = "const a: int32 = 1 as int32;\nconst x: int32 = a;";
 	assert strictErrorCount(src) == 0;
+}
+
+function ok(body: string): boolean {
+	return compileToC(body).ok && compileToJS(body).ok;
+}
+
+test "an integer literal past int32 is int64 and keeps its value" {
+	assert ok("const x = 5000000000;\nlet y = 4000000000;\nconst z = -9223372036854775808;\nconsole.log(x, y + 1, z);\n");
+	assert hasError("const x = 5000000000;\nconst a: int32 = x;\n", "cannot convert 5000000000 to int32");
+}
+
+test "an overload picks the width the literal needs" {
+	const overloads = "function show(v: int32): string { return \"32\"; }\nfunction show(v: int64): boolean { return true; }\n";
+	assert errorCount(overloads + "const wide: boolean = show(5000000000);\nconst narrow: string = show(5);\n") == 0;
+}
+
+test "a literal-only expression folds exactly in 64 bits" {
+	assert ok("const x = 100000 * 100000;\nconst big: int64 = 100000 * 100000;\nconst m = 2147483647 + 1;\nconsole.log(x, big, m);\n");
+	assert hasError("const w: int32 = 100000 * 100000;\n", "cannot convert 10000000000 to int32");
+	assert errorCount("const y = 10 + 20;\nconst s: int8 = y;\n") == 0;
+}
+
+test "an untyped integer past int64 is refused at compile time" {
+	assert hasError("const x = 18446744073709551615;\n", "number out of range: '18446744073709551615'");
+	assert hasError("const x = 9223372036854775807 + 1;\n", "over- or underflow");
+}
+
+test "a literal past int64 beside a uint64 operand is uint64" {
+	assert ok("const W: uint64 = 18446744073709551615;\nconsole.log(W == 18446744073709551615, 18446744073709551615 != W, W - 18446744073709551614);\n");
 }

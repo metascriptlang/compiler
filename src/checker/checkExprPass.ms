@@ -29,7 +29,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -412,11 +412,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						node.nodeType = child; return;
 					}
 				}
-				if (isNodeIntLit(node)) { node.nodeType = untypedIntegerLiteralType(node); return; }
+				if (isNodeIntLit(node)) { node.nodeType = untypedIntegerLiteralType(ctx, node, false); return; }
 				node.nodeType = float64Type(); return;
 			} else {
 				// Default inference: integer literals → int32 (int64 past its range), float literals → float64
-				if (isNodeIntLit(node)) { node.nodeType = untypedIntegerLiteralType(node); return; }
+				if (isNodeIntLit(node)) { node.nodeType = untypedIntegerLiteralType(ctx, node, false); return; }
 				node.nodeType = float64Type(); return;
 			}
 		},
@@ -658,7 +658,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (d.operator != "=") addError(ctx, "a destructuring pattern can only be assigned with '='", d.left.location.line, d.left.location.column);
 				checkAssignTarget(ctx, d.left);
 			} else {
-				checkExpr(ctx, d.left, null);
+				checkExpr(ctx, d.left, wideOperandLiteralSlot(d.left));
 			}
 			let leftType = d.left.nodeType;
 			if (isAsgn) {
@@ -705,7 +705,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						d.left.location.line, d.left.location.column);
 				}
 			}
-			const rightExpected = d.operator == "=" ? leftType : (d.operator == "??" ? nullishArmExpected(expectedType) : null);
+			const rightExpected = d.operator == "=" ? leftType : (d.operator == "??" ? nullishArmExpected(expectedType) : wideOperandLiteralSlot(d.right));
 			const rhsGuarded = d.operator == "&&" || d.operator == "||" || d.operator == "??";
 			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth + 1;
 			checkExpr(ctx, d.right, rightExpected);
@@ -1074,7 +1074,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (checkBinaryOperands(ctx, d.operator, effLeft!, effRight!, node)) { node.nodeType = errorType(); return; }
 			const nullishJoined = d.operator == "??" ? fitNullishArms(ctx, d, effLeft, effRight, expectedType) : null;
 			if (nullishJoined != null) { node.nodeType = nullishJoined; return; }
-			node.nodeType = exactConstantType(node, inferBinaryOp(d.operator, effLeft!, effRight!));
+			node.nodeType = exactConstantType(ctx, node, inferBinaryOp(d.operator, effLeft!, effRight!));
 			if (d.operator == "??" && node.nodeType != null && isMaybeType(node.nodeType)) {
 				d.right = fitJoinedBranch(ctx, d.right, node.nodeType);
 			}
@@ -1088,6 +1088,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& unaryExpected != null && isIntegerType(unaryExpected)) {
 				checkNegatedIntLiteral(ctx, d.operand, unaryExpected);
 				node.nodeType = unaryExpected;
+				return;
+			}
+			if (d.unaryOp == "-" && isNodeIntLit(d.operand) && unaryExpected == null) {
+				reportLiteralRange(ctx, d.operand);
+				d.operand.nodeType = untypedIntegerLiteralType(ctx, d.operand, true);
+				node.nodeType = d.operand.nodeType;
 				return;
 			}
 			checkExpr(ctx, d.operand, unaryExpected);
