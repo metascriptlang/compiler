@@ -870,3 +870,72 @@ export function read<T>(this proof: ExternalMutable<T>): Result<T, ProgramError>
 	return T.decode((proof as Account).data());
 }
 
+
+export function selectInstruction<E>(table: Readonly<Span<uint8>>): Result<E, ProgramError> {
+	const data = instructionData();
+	if (data.length < 8) { return Result.err(ProgramError.instructionMissing()); }
+	const count = table.length / 8;
+	for (let member = 0; member < count; member++) {
+		let same = true;
+		for (let b = 0; b < 8; b++) {
+			const byte = msSolLoadU8(data.address + (b as uint64));
+			if (byte != table[member * 8 + b]) { same = false; }
+		}
+		if (same) { return Result.ok((member as int32) as E); }
+	}
+	return Result.err(ProgramError.instructionFallbackNotFound());
+}
+
+function argumentAddress(offset: uint64, width: uint64): uint64 {
+	const data = instructionData();
+	if (data.length < 8 || offset + width > data.length - 8) { return 0; }
+	return data.address + 8 + offset;
+}
+
+export function argsFit(length: uint64): boolean {
+	const data = instructionData();
+	return data.length >= 8 && data.length - 8 >= length;
+}
+
+export function argU8(offset: uint64): uint8 {
+	const at = argumentAddress(offset, 1);
+	return at == 0 ? 0 : msSolLoadU8(at);
+}
+
+export function argU16(offset: uint64): uint16 {
+	const at = argumentAddress(offset, 2);
+	return at == 0 ? 0 : msSolLoadU16(at);
+}
+
+export function argU32(offset: uint64): uint32 {
+	const at = argumentAddress(offset, 4);
+	return at == 0 ? 0 : msSolLoadU32(at);
+}
+
+export function argU64(offset: uint64): uint64 {
+	const at = argumentAddress(offset, 8);
+	return at == 0 ? 0 : msSolLoadU64(at);
+}
+
+export function argI8(offset: uint64): int8 { return argU8(offset) as int8; }
+export function argI16(offset: uint64): int16 { return argU16(offset) as int16; }
+export function argI32(offset: uint64): int32 { return argU32(offset) as int32; }
+export function argI64(offset: uint64): int64 { return argU64(offset) as int64; }
+
+export function argBool(offset: uint64): boolean {
+	return argU8(offset) == 1;
+}
+
+export function argBoolValid(offset: uint64): boolean {
+	return argU8(offset) <= 1;
+}
+
+export function argPubkey(offset: uint64): Pubkey {
+	const at = argumentAddress(offset, 32);
+	return at == 0 ? Pubkey.zero() : loadPubkey(at);
+}
+
+export function readArgs<T>(fits: boolean, value: T): Result<T, ProgramError> {
+	if (!fits) { return Result.err(ProgramError.instructionDidNotDeserialize()); }
+	return Result.ok(value);
+}
