@@ -4,7 +4,23 @@
 // Storing `&param` instead makes the env point into a frame the closure outlives.
 
 import { fullPipeline } from "./helpers";
+import { compileToC, compileToJS } from "../helpers";
 import { Node, NodeKind, ProgramData, InterfaceDeclData, TypeKind } from "../../ast/node";
+
+const VIEW_CAPTURE = "cannot be captured as it would violate memory safety";
+
+function refusedWith(r: Result<string, string>, needle: string): boolean {
+	if (r.ok) return false;
+	return r.error.indexOf(needle) >= 0;
+}
+
+function refusedOnBothBackends(src: string, needle: string): boolean {
+	return refusedWith(compileToC(src), needle) && refusedWith(compileToJS(src), needle);
+}
+
+function acceptedOnBothBackends(src: string): boolean {
+	return compileToC(src).ok && compileToJS(src).ok;
+}
 
 function findEnvDecl(prog: Node): Node {
 	const pd = prog.data as ProgramData;
@@ -53,4 +69,240 @@ test "an array param captured by an escaping closure is not stored as a pointer 
 	const env = findEnvDecl(prog);
 	assert env != null;
 	assert envFieldKind(env, "xs") != TypeKind.Ptr;
+}
+
+test "a view-typed binding named inside a closure is refused at the use on C and JS" {
+	const cases = [
+		{ name: "ref param read by an arrow", src: `
+function f(ref n: int32): int32 {
+	const read = (): int32 => n + 1;
+	return read();
+}
+let k: int32 = 41;
+console.log(f(k));
+` },
+		{ name: "ref param written by an arrow", src: `
+function f(ref n: int32): void {
+	const bump = (): void => { n = n + 1; };
+	bump();
+}
+let k: int32 = 40;
+f(k);
+console.log(k);
+` },
+		{ name: "out param written by an arrow", src: `
+function f(out n: int32): void {
+	const set = (): void => { n = 9; };
+	n = 1;
+	set();
+}
+let k: int32 = 0;
+f(out k);
+console.log(k);
+` },
+		{ name: "ref param written by a function expression", src: `
+function f(ref n: int32): void {
+	const bump = function (): void { n = n + 5; };
+	bump();
+}
+let k: int32 = 1;
+f(k);
+console.log(k);
+` },
+		{ name: "ref param written two closures deep", src: `
+function f(ref n: int32): void {
+	const outer = (): void => {
+		const inner = (): void => { n = n + 3; };
+		inner();
+	};
+	outer();
+}
+let k: int32 = 1;
+f(k);
+console.log(k);
+` },
+		{ name: "ref param written by a nested function declaration", src: `
+function f(ref n: int32): void {
+	function inner(): void { n = n + 3; }
+	inner();
+}
+let k: int32 = 1;
+f(k);
+console.log(k);
+` },
+		{ name: "ref receiver written by an arrow", src: `
+struct S { n: int32; }
+function bump(this ref x: S): int32 {
+	const f = (): void => { x.n = x.n + 1; };
+	f();
+	return x.n;
+}
+let v: S = { n: 10 };
+console.log(v.bump());
+` },
+		{ name: "Span param read by an arrow", src: `
+function f(xs: Span<int32>): int32 {
+	const read = (): int32 => xs[1];
+	return read();
+}
+let v: int32[] = [1, 4];
+console.log(f(v));
+` },
+		{ name: "Span local read by an escaping arrow", src: `
+function mk(): () => int32 {
+	let a: int32[] = [1, 2, 3];
+	const sp: Span<int32> = a;
+	return (): int32 => sp[2];
+}
+console.log(mk()());
+` },
+		{ name: "Span param copied into a local first", src: `
+function f(xs: Span<int32>): () => int32 {
+	const s2: Span<int32> = xs;
+	return (): int32 => s2[0];
+}
+let v: int32[] = [6, 4];
+console.log(f(v)());
+` },
+		{ name: "struct holding a Span read by an arrow", src: `
+struct Chunk { view: Span<int32>; tag: int32; }
+function f(c: Chunk): int32 {
+	const read = (): int32 => c.view[1] + c.tag;
+	return read();
+}
+let v: int32[] = [1, 4];
+const c: Chunk = { view: v, tag: 10 };
+console.log(f(c));
+` },
+	];
+	for (const c of cases) {
+		assert refusedOnBothBackends(c.src, VIEW_CAPTURE), c.name;
+	}
+}
+
+test "a view-typed parameter used in an async or generator body is refused on C and JS" {
+	const cases = [
+		{ name: "ref param of an async function", src: `
+async function addNow(ref g: int32[]): Promise<void> {
+	g.push(5);
+}
+async function main(): Promise<void> {
+	let v: int32[] = [1];
+	await addNow(v);
+	console.log(v.length);
+}
+main();
+` },
+		{ name: "ref param of a generator", src: `
+function* gen(ref g: int32[]): Iterator<int32> {
+	g.push(10);
+	yield 1;
+}
+let v: int32[] = [];
+for (const x of gen(v)) { console.log(x); }
+` },
+		{ name: "Span param of a generator", src: `
+function* gen(xs: Span<int32>): Iterator<int32> {
+	yield xs[0];
+}
+let v: int32[] = [3, 4];
+for (const x of gen(v)) { console.log(x); }
+` },
+	];
+	for (const c of cases) {
+		assert refusedOnBothBackends(c.src, VIEW_CAPTURE), c.name;
+	}
+}
+
+test "the view-capture refusal names the declaration and the remedy" {
+	const shared = `function f(ref g: int32[]): int32 {
+	const read = (): int32 => g[1];
+	return read();
+}
+let v: int32[] = [1, 4];
+console.log(f(v));
+`;
+	assert refusedOnBothBackends(shared, "'g' is of type <int32[]> which " + VIEW_CAPTURE +
+		", declared here: e2e.ms(1, 16); drop the parameter modifier: " +
+		"a int32[] is already shared by reference");
+	const scalar = `function f(ref n: int32): int32 {
+	const read = (): int32 => n;
+	return read();
+}
+let k: int32 = 41;
+console.log(f(k));
+`;
+	assert refusedOnBothBackends(scalar, "'n' is of type <int32> which " + VIEW_CAPTURE +
+		", declared here: e2e.ms(1, 16); return the value instead");
+	const local = `function mk(): () => int32 {
+	let a: int32[] = [1, 2, 3];
+	const sp: Span<int32> = a;
+	return (): int32 => sp[2];
+}
+console.log(mk()());
+`;
+	assert refusedOnBothBackends(local, "'sp' is of type <Span<int32>> which " + VIEW_CAPTURE +
+		", declared here: e2e.ms(3, 8); return the value instead");
+}
+
+test "bindings that are not views stay capturable and views stay usable in their own body" {
+	const cases = [
+		{ name: "for-of binding captured per iteration", src: `
+function run(): int32 {
+	const src: Vec<int32> = [1, 2, 3];
+	let fs: (() => int32)[] = [];
+	for (const x of src) { fs.push((): int32 => x); }
+	let s: int32 = 0;
+	for (const f of fs) { s = s + f(); }
+	return s;
+}
+console.log(run());
+` },
+		{ name: "rest param captured by an escaping arrow", src: `
+function mk(...args: string[]): () => int32 {
+	return (): int32 => args.length as int32;
+}
+console.log(mk("a", "bb")());
+` },
+		{ name: "unused ref param of an async function", src: `
+async function later(ref g: int32[]): Promise<int32> {
+	return 3;
+}
+async function main(): Promise<void> {
+	let v: int32[] = [1];
+	console.log(await later(v));
+}
+main();
+` },
+		{ name: "ref param used in its own for-of body", src: `
+function f(ref g: int32[], src: int32[]): void {
+	for (const x of src) { g.push(x * 2); }
+}
+let v: int32[] = [];
+f(v, [1, 2, 3]);
+console.log(v.length);
+` },
+		{ name: "Span param and Span local used in their own body", src: `
+function sum(xs: Span<int32>): int32 {
+	let t: int32 = 0;
+	for (const x of xs) { t = t + x; }
+	const local: Span<int32> = xs;
+	return t + local[0];
+}
+let v: int32[] = [1, 2, 3];
+console.log(sum(v));
+` },
+		{ name: "module-level Span read inside a closure", src: `
+const backing: int32[] = [5, 6];
+const top: Span<int32> = backing;
+function read(): int32 {
+	const at = (): int32 => top[1];
+	return at();
+}
+console.log(read());
+` },
+	];
+	for (const c of cases) {
+		assert acceptedOnBothBackends(c.src), c.name;
+	}
 }
