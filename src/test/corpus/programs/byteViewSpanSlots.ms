@@ -65,8 +65,12 @@ function churn(): int32 {
 	return acc;
 }
 
+function grown(text: string): string {
+	const own = copied(text);
+	own.push(100);
+	return `${own.length} ${bump(own)}`;
+}
+
 const text = "abc";
 const top: Readonly<Span<uint8>> = text.asBytes();
-const own = copied(text);
-own.push(100);
-console.log(`byte view span slots ${sum(text.asBytes())} ${sum((text.asBytes()))} ${typedLocal(text)} ${assigned(text)} ${fieldLength(text)} ${at(top, 0)} ${at(fresh().asBytes(), 0)} ${at(text.asBytes(), 0)} ${own.length} ${bump(own)} ${text} | ${churn()}`);
+console.log(`byte view span slots ${sum(text.asBytes())} ${sum((text.asBytes()))} ${typedLocal(text)} ${assigned(text)} ${fieldLength(text)} ${at(top, 0)} ${at(fresh().asBytes(), 0)} ${at(text.asBytes(), 0)} ${grown(text)} ${text} | ${churn()}`);
