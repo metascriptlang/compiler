@@ -27,15 +27,15 @@ backend and DRC/ORC runtime.
 | Capability | State |
 |---|---|
 | `--hcr` and module-global state lifting | Implemented |
-| Structural hash rejecting changed `_GlobalState` layout | Implemented |
-| Single-image POSIX `dlopen` host | Re-pinned by `examples/hcrProbe/run.sh` (2026-09-22, run, not read): body-only reload preserves lifted state (same `_GlobalState` pointer, `PROBE PASS`), layout change + truncated image rejected loud, current stays live. Executes via `--os=linux --cc=zig` cross-build + WSL: this Windows host's toolchains ship no `dlfcn.h` |
-| Single-image Windows `LoadLibrary` host | Implemented by `examples/hcrProbe/hostWindows.ms`, guarded by `src/test/hcr/run.ms` (`hcrWindowsReload`): body-only reload preserves lifted state; layout and bad-image candidates fail loud while current stays callable |
+| Per-symbol state cells | Windows x64 and Linux x64: `hcrRegistryVariables` checks add/remove/reintroduce state, selective integer/string resets, initializer rollback/recovery and preserved values |
+| POSIX `dlopen` probe host | Native Linux `examples/hcrProbe/run.sh`: stable count storage, calls 10→40→30, added variable accepted, corrupt image rejected and current call returns 40 |
+| Windows `LoadLibrary` probe host | `hcrWindowsReload` now accepts an added variable while preserving count storage; corrupt images leave current callable |
 | Per-module native object cache | Implemented by generated-C fingerprints; `src/test/hcr/run.ms` proves a body-only edit recompiles only the changed module |
 | Per-module shared libraries | Windows x64 and Linux x64: a non-reloadable `<stem>.core.<ext>` (runtime, std, registry) plus one image per project module, guarded by `src/test/hcr/run.ms` (`hcrIndirect`): the unrebuilt app calls a reloaded `logic` image. macOS link flags exist and have never run |
-| Cross-module vtable calls | Lowered by `src/transform/native/hcrIndirect.ms` and replaced at runtime by publishing a reloaded image's table, guarded by `src/test/hcr/run.ms` (`hcrIndirect`) |
-| Full transactional current/old/candidate module registry | Windows x64 (`LoadLibrary`) and Linux x64 (`dlopen`): `std/hcr` in the core image discovers, copy-loads and reloads module images, stages tables and commits or rolls them back, guarded by `src/test/hcr/run.ms` (`hcrEngine`); macOS never run |
-| `@beforeReload` / `@afterReload` lifecycle handlers | Windows x64 and Linux x64, guarded by `hcrEngine`: leaf-to-root, before on the old generation, after on the new one; a throwing after-handler rolls the transaction back |
-| TypeInfo across reloads | Windows x64 and Linux x64, guarded by `hcrEngine`: one TypeInfo per class for the process, restored when a reload rolls back; a changed class, interface or struct layout answers `RestartRequired` |
+| Cross-module symbol cells | Windows x64 and Linux x64: `hcrIndirect`, `hcrSharedVariable` and `hcrRegistryGeneric` check unchanged callers, exported state/consts and private dependencies of concrete instances |
+| Transactional registry | Windows x64 and Linux x64: `hcrEngine` and `hcrRegistryVariables` check staging, publish, rollback and recovery. Existing shared-value mutations are not undone |
+| `@beforeReload` / `@afterReload` handlers | Windows x64 and Linux x64 checked by `hcrEngine`: old handlers quiesce, new handlers resume; a throw restores publication |
+| TypeInfo across reloads | Windows x64 and Linux x64 checked by `hcrEngine`: stable class identity/method dispatch, restored metadata after rollback; incompatible class layout still requires restart |
 | Watch build (`msc build --hcr --watch`) | Windows x64 (`ReadDirectoryChangesW`) and Linux x64 (inotify): rebuilds after each source save through a kept build session, guarded by `src/test/hcr/run.ms` (`hcrWatchWarm`: the C of a warm build equals a cold build's at every step of a replayed edit sequence, including constructor defaults, removed overrides and generic hook instances). macOS has no file-watch backend: `std/fs/watch` aborts with `file watching has no backend for this platform yet` |
 | `msc run app.ms --hcr` | Windows x64 and Linux x64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
 | iOS and automated deploy loops | Not implemented |
@@ -45,6 +45,24 @@ On 2026-09-27, tree `565df01d46c8`, `MSC=./msc ./msc run src/test/hcr/run.ms --t
 printed `ok` for twelve cases on Windows 11 x64 (zig; `hcrCoreLinkClang` skipped) and for
 twelve on WSL Ubuntu x64 with a gcc-built compiler of the same tree (`hcrWindowsReload` runs on
 Windows only).
+
+Registry cutover, 2026-10-01, Windows x64, candidate `mscRegistry.exe`: sixteen focused
+consumer cases passed, zero failed. The three new registry cases also fail on the old compiler
+with its matching `std`/`runtime`: exported variables and generic exports are refused; the
+eight-generation state program answers `RestartRequired` instead of accepting additions.
+Measured source/fixture tree: `f2440d43f9bf197f5d0982826fcee0573c1ed8d6` (`68f9b701`).
+Commands: `MSC=./mscRegistry.exe msc run out/registrySmoke/registryCases.ms --target=raiser`,
+the boundary/adjacent harnesses in the same directory, and the matching old-control harnesses.
+Those harnesses only selected permanent cases from `src/test/hcr/run.ms` and were removed
+after proof; the indexed runner and fixtures retain the behavior matrix.
+Linux x64: the three registry cases and `hcrIndirect`/`hcrEngine` passed; the native POSIX
+probe printed `PROBE PASS` with 10→40→30→40 and one stable count address. The Linux candidate
+was bootstrapped with clang; a gcc bootstrap attempt failed on pre-existing anonymous-pointer
+emission incompatibilities and is not counted as a registry failure or a passing build.
+Native POSIX script uses gcc. The Windows-to-Linux script retains zig but was not rerun.
+The origin/main crash investigation, full gate, macOS, new Linux watch timing and call cost
+are not covered by these proofs.
+
 
 Implementation anchors: `src/transform/native/hcrLift.ms` `liftHcrState`,
 `src/compiler/cache.ms` `moduleCompileFp` / `isCCodeCached`, `runtime/hcr.h`,
@@ -57,12 +75,13 @@ Implementation anchors: `src/transform/native/hcrLift.ms` `liftHcrState`,
 MetaScript uses **cooperative indirection**, not debugger-driven binary patching:
 
 - persistent data lives outside reloadable code;
-- calls crossing a reload boundary use a module function table;
-- private and same-module calls remain direct;
+- functions and variables crossing a reload boundary resolve stable symbol cells;
+- calls inside the emitted unit remain direct, including private functions;
 - the host publishes a replacement only after load, validation and initialization succeed.
 
 **Data is permanent; code is transient.** Everything is gated by `--hcr`; a normal build
-pays no vtable cost and must remain output-identical.
+pays no cell-indirection cost. The off-mode consumer was checked on C and JS; broader output
+identity is not claimed by that control.
 
 The contract is platform-neutral; the artifact pipeline is not. Each supported target uses
 its native object format, linker, loader, generation-retention rules and, where required,
@@ -91,21 +110,111 @@ Rejected foundations:
 - Raiser as the primary Neon runtime: suitable for logic-only eval, not the native render
   path.
 
+### Per-symbol registry (selected 2026-09-30)
+
+The previous module-grained representation caused the gaps measured on this arc: adding a
+variable required restart, exported variables could not cross images, private state could not
+be reached by a moved instance, and adding an export invalidated every unrebuilt dependent.
+The old evidence below records the trigger; the registry pins above record the cutover.
+
+Measured on 2026-09-29, Windows x64, `mscB2.exe` (compiler sources of `c4db5a18`, tree std of
+`1c67043b`), probe `out/pc/cst` (`msc run app.ms --hcr`, the app rewrites `logic.ms` and calls
+`reload()`): `const SPEED = 5` → `7` printed `start 501`, `reloaded logic 702` (the new value,
+because `constFold` inlines numeric and boolean module consts at every use), while
+`const TITLE = "ab"` → `"abcd"` printed `start 201`, `reloaded logic 202` (the old value: the
+string const is lifted state and its initializer ran only on first load). That discrepancy
+is pinned by the registry's numeric/string exported-constant edit consumer.
+
+How the references answer the same questions. "read" = code or documentation read this
+session; nothing in this table was run except the MetaScript column.
+
+| question | Nim (read: `lib/nimhcr.nim`, `compiler/cgen.nim`, `ccgstmts.nim`, `ccgexprs.nim`, `sighashes.nim`) | C / C++ / Rust / Zig (read) | Flutter, Erlang | MetaScript before cutover (run) | registry contract |
+|---|---|---|---|---|---|
+| where state lives | one heap allocation per global, `hcrRegisterGlobal(module, name, size)`; the global becomes a pointer (`genGlobalVarDecl`) | cr.h: byte copy of the `.state` section (`CR_STATE`); subsecond: "Globals are tracked across patches"; RCC++: objects serialize themselves, shared state in the host-owned `SystemTable` (`ObjectInterfacePerModule.h`); VS C++ Hot Reload: "Most changes to global or static data" unsupported | Flutter: "Global variables and static fields are treated as state"; Erlang: no module variables, state lives in processes | one `_GlobalState` per module | one registry cell per variable, keyed by module, name and type |
+| add a variable | allowed: "new globals can be introduced when reloading"; its initializer runs because registration returns `true` | subsecond: "You may add new globals at runtime"; cr.h default `CR_UNSAFE` accepts a grown section by size only | — | restart (layout hash) | allowed; only its initializer runs |
+| change a variable's type | the key is name + owner chain (`hashNonProc`), and an existing entry is returned whatever `size` is passed: the new code overruns the old allocation | subsecond: "renames are considered to be _new_ globals", layout change: "the program will crash"; cr.h `CR_UNSAFE`: size must fit | — | restart | fresh typed storage; incompatible surviving bindings reject |
+| edit an initializer | not re-run; a `const` is re-copied on every load (`genConstDefinition`: "the constant is reloadable & updatable") | subsecond: "Changes to static initializers will not be observed" | Flutter: "`const` fields are treated like aliases instead of state" | numeric/boolean const visible, string const ignored (above) | a `const` whose initializer folds to a literal is re-assigned on every load; everything else keeps its value |
+| which functions another image can call | every proc: `hcrRegisterProc` / `hcrGetProc` by module and name | Zig #5260: "each reference to a global declaration is indirect, through the table of offsets"; subsecond: "detouring function calls through a jump table"; Live++: "linking it against existing code" | Erlang: fully qualified calls switch to the current module version | exported functions only | every function the image emits |
+| form of the indirection | x86 jump instructions in executable memory; own TODO "ARM support for the trampolines" | Zig and subsecond: a data table | — | data: `handle->current[k]` | data: one cell per symbol, no executable writes |
+| consistency at bind | none (`HcrGetSigHash` only answers "has it changed") | Live++ and VS: structural changes refused | — | one ABI key per module: any export change rejects unrebuilt dependents | per bound symbol: signature key for functions, type key for variables |
+| removed symbol | global freed (`cleanupGlobal` → `dealloc`), proc entry dropped | subsecond: destructors of globals "will never be called" | — | n/a (layout change) | retired: storage and value kept until restart |
+
+Decision:
+
+- **One core-owned registry.** Identity includes module, C symbol and signature/type contract.
+  Old contract versions remain distinct, so an old binding never reinterprets new storage.
+  This extends the existing TypeInfo identity idiom rather than making reloadable images own
+  persistent data. Registration/binding lookup is hashed; reads/calls do not perform lookup.
+- **Images describe themselves per symbol.** Each image lists what it publishes (symbol,
+  signature or type key) and what it binds from other modules (module, symbol, key); the
+  engine checks every bind of the post-transaction image set before anything is published and
+  names the image and symbol that must be rebuilt. This replaces the per-module
+  `HcrAbiKey000` comparison and the manifest slot order; `HcrImports000` keeps only the edges
+  that order initialization and handlers.
+- **A caller binds what it uses.** The native transform lists, per unit, the other project
+  modules' functions and variables its C references (moved generic instances included) and
+  resolves those cells in `DatInit000`; calls inside a module stay direct. A reference the list
+  misses cannot link, because an image links against core only.
+- **Variables.** Registration is get-or-create; initialization follows dependency order.
+  Pre-commit discard frees only fresh, uninitialized storage. After publication, rollback
+  retains rejected storage/images because a callback may have escaped. A removed or replaced
+  value also remains retained; reintroducing its name allocates fresh storage. Same-key value
+  mutations are not undone. These boundaries are checked by `hcrRegistryVariables`.
+- **C representation stays typed.** `liftHcrState` uses a one-field `StructDecl` per variable
+  and the normal emitter spells its type. This reuses the old typed-field idiom without a
+  whole-module layout: nested `Ptr`/`Ref` modifiers collapse in our C type representation, so a
+  bare pointer-to-pointer would not represent a variable slot. The wrapper's field is the value;
+  no hand-written C type table or pointer-depth rule is added to the emitter.
+- **Init runs on every load.** `Init000` runs for every candidate after commit, not only for a
+  new module: a statement runs on first load only, an initializer when its cell is new, a const
+  alias always. An initializer that throws rolls back like a throwing after-handler. Nim does the
+  same through `if (hcrRegisterGlobal(...)) { init }` inside `Init000` (`ccgstmts.nim`).
+- **Replaced:** `_GlobalState`, `_MS_STRUCT_HASH`, `_hcr_handover` and the engine's handover
+  step; `hcrSharedVariable`; module slot tables. Kept: TypeInfo registry and `HcrTypeKeys000`
+  (class layouts still restart), transactions, handlers, generations.
+
+Rejected:
+
+- **Extending module tables to private functions:** adding any function would change the table
+  every dependent indexes, so a private helper added to `logic` would force `app` to rebuild.
+- **Slot indices kept stable by the compiler across builds** (append-only in the `.hcrabi`
+  bundle): ties an image's meaning to the bundle's history, the dependency "Images describe
+  themselves" rejected for the ABI key.
+- **An append-only `_GlobalState`** (cr.h `CR_UNSAFE` style): inserting, reordering or removing
+  a variable shifts every later field, and it still gives other images nothing to bind.
+
+Selected type-change contract: give that variable a fresh cell and initializer, retain the old
+value, and name the reset in `lastReload().reason`. A surviving caller bound to the previous
+type makes the transaction `Rejected`, naming the caller and symbol to rebuild. Integer and
+string type changes, and incompatible imported bindings, are separate checked variants.
+
+Not decided here: what a function value taken before a reload calls (code identity, next
+step), and whether non-standard dependencies reload.
+
+Not verified: the per-call cost (a cell is two dependent loads against three for
+`handle->current[k]`, read from the emitted macros, not timed); how Live++ keeps globals (its
+documentation does not say); whether Zig's issue #5260 design is what ships.
+
 ## Runtime invariants
 
+Automatic safe-point detection, old-image purge and rebinding long-lived function values are
+not claimed. Those remain explicit application lifecycle responsibilities.
+
+
 1. **Off means absent.** `--hcr` off emits no HCR ABI or indirect calls.
-2. **Calls select a generation deliberately.** Cross-module calls enter the current module
-   table. A direct call already executing old module code stays old until it returns.
+2. **Calls select a generation deliberately.** Cross-image calls enter the current symbol
+   cell. A direct call already executing old module code stays old until it returns.
 3. **Publication is transactional.** The loader holds `current`, `old` and an unpublished
    `candidate`. Candidate failure leaves current callable.
-4. **Old is the rollback generation.** A successful publish rotates current to old. Old is
-   retained until the next verified safe point.
-5. **A third generation requires quiescence.** If a reloadable frame, thread, timer or raw
-   callback can still reach old code, reload fails loud instead of unloading live code.
-6. **Persistent references are indirect.** Hosts, registries and long-lived callbacks hold
-   stable vtable handles, never raw pointers into a reloadable image.
-7. **State compatibility is strict today.** Any persistent-state structural-hash change
-   requires restart. Append compatibility and migration are separate future mechanisms.
+4. **Old remains available.** Rollback restores the previous publication; accepted and
+   exposed rejected generations remain mapped until restart.
+5. **No speculative purge.** Repeated reloads retain old code/storage rather than freeing
+   memory that a frame or callback might still reach. Purging requires a separate safe-point proof.
+6. **Callback code identity is explicit.** Cross-image bindings use stable cells; a function
+   value already taken may still name old code. Re-register long-lived callbacks in handlers.
+7. **Variable and object compatibility are distinct.** Adding/removing module variables is
+   allowed; a changed variable type resets that value only, subject to surviving binding checks.
+   A class/interface/struct layout change still requires restart.
 8. **TypeInfo identity survives accepted reloads.** Live DRC objects can retain TypeInfo
    pointers and destructor dispatch; unchanged layouts require stable addresses and an
    atomic function-table update.
@@ -274,9 +383,9 @@ the standard-library modules, the registry (`runtime/hcr.c`) and a core dispatch
 image per project module: the entry becomes `D/module.dll`, every other module
 `D/module.<id>.dll`. Core exports all its symbols through an import library
 (`D/module.core.lib`); a module image links against it and imports nothing from another
-module image, so its only cross-image edges are the handle tables, the TypeInfo registry and
-the core runtime. Each image exports `DatInit000`, `Init000` and, when it lifts state,
-`_hcr_handover`; its `DatInit000` first calls the idempotent `msHcrCoreInit()`, which runs the
+module image, so its cross-image edges are symbol cells, the TypeInfo registry and core.
+Each image exports initialization and publish/bind metadata; `DatInit000` registers storage
+and functions and first calls the idempotent `msHcrCoreInit()`, which runs the
 standard-library inits once. A module id `core` is rejected, because it would collide with
 the core image name.
 

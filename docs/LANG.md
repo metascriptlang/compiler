@@ -2328,41 +2328,47 @@ and the next `message()` runs the new code. `examples/hcrApp/` is this program.
 | `NoChange` | no image changed since the last call |
 | `Reloaded` | the changed images are loaded, initialized and published |
 | `Pending` | an image cannot be loaded yet (the linker is still writing it); retried when it changes |
-| `Rejected` | a candidate failed, or an after-reload handler threw; the running code is unchanged |
+| `Rejected` | an incompatible binding, initializer failure or handler failure prevented publication; old code remains callable |
 | `RestartRequired` | the change cannot apply to live state (below); `lastReload().reason` names what changed |
 
 What a reload keeps and what it refuses:
 
-- **Module-level variables keep their values.** Their initializers ran at first load and do
-  not run again, so editing `let count = 0` to `let count = 5` leaves the live `count` alone.
-  Adding, removing or retyping a module-level variable answers `RestartRequired`.
+- **Module-level state is per variable.** Same-name, same-type values survive reload, so
+  editing `let count = 0` to `let count = 5` does not overwrite the running counter. New
+  variables initialize; removed values are retained until restart; reintroduced names start
+  fresh. A changed variable type initializes that variable alone and names the reset in
+  `lastReload().reason`. An unchanged image still bound to the old type makes the reload
+  `Rejected` and must be rebuilt.
+- **Literal const aliases update.** Numeric and string const edits were checked across an
+  unchanged caller image. Ordinary effectful `const` initialization remains state: its
+  initializer does not run again merely because the image reloaded.
 - **Types keep their layout.** Method bodies reload and live objects run the new methods; a
   field added, removed or retyped in a class, interface or struct, a base class included,
   answers `RestartRequired`. So does an edit that makes the program use a runtime or
   standard-library routine it did not use before.
-- **New code is reached through another module.** A call into an imported module goes through
-  that module's table and sees the reload; a call inside one module stays direct. A loop
-  written in the entry module keeps running the entry module's code from the start, so
-  reloadable logic belongs in modules it imports.
-- **Two exports cannot cross images**, and are compile errors under `--hcr`: an exported
-  variable another project module reads (`HCR cannot share exported variable 'logic::LIMIT'
-  with module 'app' across module images; export a function that reads it instead`), and a
-  generic exported function (`HCR ABI cannot represent generic export 'logic::pick'`).
+- **New code is reached through symbol bindings.** Cross-image function calls and variable
+  accesses use the current cell; same-unit calls stay direct. A loop already running in the
+  entry image remains on that generation, so reloadable logic belongs in imported modules.
+- **Project exports can cross images.** Exported state and concrete generic instances are
+  supported, including private helpers/state that an instance needs from its home module.
+  Compatibility is checked per used symbol; adding an unused export does not reject callers.
 - **`@beforeReload` / `@afterReload`** mark module-level `(): void` functions that run around
   a reload, leaf module first: before-handlers on the old code, after-handlers on the new
-  code. A throwing after-handler rolls the reload back and answers `Rejected`. Callbacks
-  handed to native code or other threads are re-registered here.
+  code. A throwing initializer or after-handler restores function publication and TypeInfo and
+  answers `Rejected`; mutations to already shared state are not undone. Callbacks handed to
+  native code or other threads still need explicit re-registration in these handlers.
 - **A program that never imports `std/hcr` is refused by `msc run --hcr`**: nothing would call
   `reload()`, so `error: app.ms never imports std/hcr, …` stops the build and the watch waits
   for the save that adds the import.
-- **Without `--hcr` none of this exists**: no tables, no lifted state, no host. `reload` is a
+- **Without `--hcr` none of this exists**: no cells, no lifted state, no host. `reload` is a
   macro, and without `--hcr` it expands to `ReloadKind.NoChange` at compile time: the same
   source builds for production, and the loop's `reload()` costs no call there. `--hcr` defines
   `hcr` for `when`.
 
-Windows x64 and Linux x64 run the whole loop (`src/test/hcr/run.ms`). macOS has no
-file-watch backend yet and has never run it; iOS is not implemented. Architecture, measured
-latency and the rejected designs: [`HCR.md`](HCR.md).
+The registry cutover was checked on Windows x64 with sixteen focused cases in
+`src/test/hcr/run.ms`, including off-mode C/JS consumers, and on Linux x64 with five native
+registry/engine cases plus the POSIX probe. New Linux watch timing, macOS watch and iOS remain
+unverified/unimplemented respectively. Architecture, measurements and limits: [`HCR.md`](HCR.md).
 
 ## Strings and Characters
 
