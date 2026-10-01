@@ -48,6 +48,7 @@ void msSolHostSetClock(uint64_t slot, uint64_t epochStart, uint64_t epoch, uint6
 void msSolHostLog(uint64_t address, uint64_t length);
 void msSolHostLog64(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e);
 void msSolHostLogPubkey(uint64_t address);
+void msSolHostLogData(uint64_t address, uint64_t length);
 void msSolHostLogComputeUnits(void);
 uint64_t msSolHostRemainingComputeUnits(void);
 void msSolHostCopy(uint64_t destination, uint64_t source, uint64_t length);
@@ -196,6 +197,11 @@ static inline void msSolLogPubkey(uint64_t address) {
     ((void (*)(uint64_t))0x7ef088caULL)(address);
 }
 
+static inline void msSolLogData(uint64_t address, uint64_t length) {
+    uint64_t slice[2] = { address, length };
+    ((void (*)(uint64_t, uint64_t))0x7317b434ULL)((uint64_t)slice, 1);
+}
+
 static inline void msSolLogComputeUnits(void) {
     ((void (*)(void))0x52ba5096ULL)();
 }
@@ -260,6 +266,10 @@ static inline void msSolLog64(uint64_t a, uint64_t b, uint64_t c, uint64_t d, ui
 
 static inline void msSolLogPubkey(uint64_t address) {
     msSolHostLogPubkey(address);
+}
+
+static inline void msSolLogData(uint64_t address, uint64_t length) {
+    msSolHostLogData(address, length);
 }
 
 static inline void msSolLogComputeUnits(void) {

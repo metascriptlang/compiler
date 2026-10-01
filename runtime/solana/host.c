@@ -179,6 +179,28 @@ void msSolHostLogPubkey(uint64_t address) {
     msSolHostRecordLog(line);
 }
 
+void msSolHostLogData(uint64_t address, uint64_t length) {
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const uint8_t* bytes = (const uint8_t*)address;
+    size_t encodedLength = (size_t)((length + 2) / 3 * 4);
+    char* line = (char*)malloc(encodedLength + 15);
+    if (line == NULL) abort();
+    memcpy(line, "Program data: ", 14);
+    size_t at = 14;
+    for (uint64_t index = 0; index < length; index += 3) {
+        uint32_t group = (uint32_t)bytes[index] << 16;
+        if (index + 1 < length) group |= (uint32_t)bytes[index + 1] << 8;
+        if (index + 2 < length) group |= bytes[index + 2];
+        line[at++] = alphabet[(group >> 18) & 63];
+        line[at++] = alphabet[(group >> 12) & 63];
+        line[at++] = index + 1 < length ? alphabet[(group >> 6) & 63] : '=';
+        line[at++] = index + 2 < length ? alphabet[group & 63] : '=';
+    }
+    line[at] = 0;
+    msSolHostRecordLog(line);
+    free(line);
+}
+
 void msSolHostLogComputeUnits(void) {
     char line[96];
     snprintf(line, sizeof(line), "Program consumption: %llu units remaining", (unsigned long long)MS_SOL_HOST_COMPUTE_BUDGET);
