@@ -2905,7 +2905,7 @@ export function isViewType(t: Type | null): boolean {
 function holdsView(t: Type | null, seen: TypeVisitSet): boolean {
 	if (t == null || !typeVisitAdd(seen, t)) return false;
 	return match (t.kind) {
-		TypeKind.Var | TypeKind.Span => true,
+		TypeKind.Var | TypeKind.Span | TypeKind.Borrow => true,
 		TypeKind.Sink | TypeKind.Alias | TypeKind.Cursor => holdsView(t.typeReturn, seen),
 		TypeKind.Distinct | TypeKind.Array | TypeKind.SizedArray => holdsView(t.typeReturn, seen),
 		TypeKind.Ref => holdsView(t.typeReturn, seen),
