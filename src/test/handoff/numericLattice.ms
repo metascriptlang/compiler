@@ -5,6 +5,11 @@ function ok(body: string): boolean {
 	return compileToC(body).ok && compileToJS(body).ok;
 }
 
+function errorOf(body: string): string {
+	const r = compileToC(body);
+	return r.ok ? "" : r.error;
+}
+
 const id = "let id: int64 = 9007199254740993;\n";
 
 test "numeric lattice: an unsigned integer widens into a signed slot whose range holds it" {
@@ -81,4 +86,16 @@ test "numeric lattice: exact arguments flow" {
 
 test "numeric lattice: a sink parameter keeps the lattice" {
 	assert hasError("extern function takes(sink v: number): void from \"&abs\";\nlet x: int64 = 9007199254740993;\ntakes(x);\n", "implicit int64 → number conversion in 'takes' arg 0 may lose integer precision above 2^53");
+}
+
+test "numeric lattice: an overload no-match names the numeric reason" {
+	const e = errorOf("function f(x: float32): string { return \"f\"; }\nfunction f(x: string): string { return x; }\nlet n: int32 = 5;\nconst s = f(n);\n");
+	assert e.contains("first mismatch at position 1: expected 'float32', got 'int32'"), e;
+	assert e.contains("may lose integer precision above 2^24; write an explicit 'as float32'"), e;
+}
+
+test "numeric lattice: a non-numeric overload mismatch stays plain" {
+	const e = errorOf("function g(x: string): string { return x; }\nfunction g(x: boolean): string { return \"b\"; }\nlet n: int32 = 5;\nconst s = g(n);\n");
+	assert e.contains("first mismatch at position 1: expected 'string', got 'int32'"), e;
+	assert !e.contains("as float32"), e;
 }
