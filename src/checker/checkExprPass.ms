@@ -1938,9 +1938,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					}
 				}
 			}
-			if (srcType != null && isSlotUnion(srcType) && (targetType.kind != TypeKind.Union || isStrLitSet(targetType))
-				&& !isUnresolvedType(targetType) && tagUnionMemberSlot(srcType, targetType) >= 0) {
-				node.data = { asExpr: checkedProjection(d.asExpr, srcType, targetType), asType: d.asType };
+			const nullableMember = targetType.kind == TypeKind.Union ? unwrapRefNullUnion(targetType) : null;
+			const projectedMember = nullableMember != null ? nullableMember : targetType;
+			if (srcType != null && isSlotUnion(srcType) && (targetType.kind != TypeKind.Union || isStrLitSet(targetType) || nullableMember != null)
+				&& !isUnresolvedType(targetType) && tagUnionMemberSlot(srcType, projectedMember) >= 0) {
+				node.data = { asExpr: checkedProjection(d.asExpr, srcType, projectedMember), asType: d.asType };
 				node.nodeType = isReadonlyView(srcType) ? propagateReadonlyView(targetType) : targetType;
 				node.flags = node.flags.incl(NodeFlag.ConvCheck);
 				return;

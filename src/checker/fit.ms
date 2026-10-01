@@ -1194,7 +1194,9 @@ export function isStrLitSet(t: Type | null): boolean {
 }
 
 function assertionPayload(t: Type): Type {
-	return isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
+	if (isMaybeType(t) && t.typeReturn != null) return t.typeReturn;
+	const held = unwrapRefNullUnion(t);
+	return held != null ? held : t;
 }
 
 export function assertionNarrows(srcType: Type, target: Type): boolean {
