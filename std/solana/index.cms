@@ -1,6 +1,13 @@
 @include("runtime/solana/solana.h");
 @compile("runtime/solana/host.c");
 
+export * from "./pubkey";
+export * from "./error";
+export * from "./discriminator";
+
+import { Pubkey, pubkeyOf } from "./pubkey";
+import { ProgramError } from "./error";
+
 extern function msSolAccountCount(): uint64;
 extern function msSolAccountAt(index: uint64): uint64;
 extern function msSolInstructionData(): uint64;
@@ -34,13 +41,6 @@ extern function msSolGetReturnData(data: uint64, length: uint64, programId: uint
 
 const MAX_RETURN_DATA: uint64 = 1024;
 
-export struct Pubkey {
-	word0: uint64;
-	word1: uint64;
-	word2: uint64;
-	word3: uint64;
-}
-
 export struct Bytes {
 	address: uint64;
 	length: uint64;
@@ -48,10 +48,6 @@ export struct Bytes {
 
 export struct Account {
 	address: uint64;
-}
-
-export struct ProgramError {
-	code: uint64;
 }
 
 export struct ProgramAddress {
@@ -89,96 +85,24 @@ export struct ReturnData {
 	data: Bytes;
 }
 
-function builtinError(index: uint64): ProgramError {
-	const error: ProgramError = { code: index << 32 };
-	return error;
-}
-
-export function custom(this typeof ProgramError, code: uint32): ProgramError {
-	if (code == 0) { return builtinError(1); }
-	const error: ProgramError = { code: code as uint64 };
-	return error;
-}
-
-export function invalidArgument(this typeof ProgramError): ProgramError { return builtinError(2); }
-export function invalidInstructionData(this typeof ProgramError): ProgramError { return builtinError(3); }
-export function invalidAccountData(this typeof ProgramError): ProgramError { return builtinError(4); }
-export function accountDataTooSmall(this typeof ProgramError): ProgramError { return builtinError(5); }
-export function insufficientFunds(this typeof ProgramError): ProgramError { return builtinError(6); }
-export function incorrectProgramId(this typeof ProgramError): ProgramError { return builtinError(7); }
-export function missingRequiredSignature(this typeof ProgramError): ProgramError { return builtinError(8); }
-export function accountAlreadyInitialized(this typeof ProgramError): ProgramError { return builtinError(9); }
-export function uninitializedAccount(this typeof ProgramError): ProgramError { return builtinError(10); }
-export function notEnoughAccountKeys(this typeof ProgramError): ProgramError { return builtinError(11); }
-export function maxSeedLengthExceeded(this typeof ProgramError): ProgramError { return builtinError(13); }
-export function invalidSeeds(this typeof ProgramError): ProgramError { return builtinError(14); }
-export function illegalOwner(this typeof ProgramError): ProgramError { return builtinError(18); }
-export function invalidRealloc(this typeof ProgramError): ProgramError { return builtinError(20); }
-export function invalidAccountOwner(this typeof ProgramError): ProgramError { return builtinError(23); }
-export function arithmeticOverflow(this typeof ProgramError): ProgramError { return builtinError(24); }
-export function immutable(this typeof ProgramError): ProgramError { return builtinError(25); }
-export function incorrectAuthority(this typeof ProgramError): ProgramError { return builtinError(26); }
-
 export function failWith(error: ProgramError): void {
 	msSolSetResult(error.code);
 }
 
 function loadPubkey(address: uint64): Pubkey {
-	const key: Pubkey = {
-		word0: msSolLoadU64(address),
-		word1: msSolLoadU64(address + 8),
-		word2: msSolLoadU64(address + 16),
-		word3: msSolLoadU64(address + 24),
-	};
-	return key;
+	const at = address as Ptr<Pubkey>;
+	return at[];
 }
 
 function storePubkey(key: Pubkey, address: uint64): void {
-	msSolStoreU64(address, key.word0);
-	msSolStoreU64(address + 8, key.word1);
-	msSolStoreU64(address + 16, key.word2);
-	msSolStoreU64(address + 24, key.word3);
+	const at = address as Ptr<Pubkey>;
+	at[] = key;
 }
 
 function storedPubkey(key: Pubkey): uint64 {
 	const address = msSolAlloc(32);
 	storePubkey(key, address);
 	return address;
-}
-
-export function zero(this typeof Pubkey): Pubkey {
-	const key: Pubkey = { word0: 0, word1: 0, word2: 0, word3: 0 };
-	return key;
-}
-
-export function systemProgram(this typeof Pubkey): Pubkey {
-	return Pubkey.zero();
-}
-
-export function clockSysvar(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0xc974c71817d5a706;
-	const word1: uint64 = 0xb65e1d6998635628;
-	const word2: uint64 = 0x5c6d4b9ba3b85e8b;
-	const word3: uint64 = 0x215b5573;
-	const key: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
-	return key;
-}
-
-export function slotHashesSysvar(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0xaf0a2f1917d5a706;
-	const word1: uint64 = 0x7acc77fbe365f2c6;
-	const word2: uint64 = 0x133bbed029c582da;
-	const word3: uint64 = 0x2055002d6e;
-	const key: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
-	return key;
-}
-
-export function equals(this key: Pubkey, other: Pubkey): boolean {
-	return key.word0 == other.word0 && key.word1 == other.word1 && key.word2 == other.word2 && key.word3 == other.word3;
-}
-
-export function isZero(this key: Pubkey): boolean {
-	return key.word0 == 0 && key.word1 == 0 && key.word2 == 0 && key.word3 == 0;
 }
 
 export function programId(): Pubkey {
@@ -745,11 +669,7 @@ test "custom error 0 is not the success code" {
 }
 
 function hostProgram(): Pubkey {
-	const word0: uint64 = 0x5f177da80e773981;
-	const word1: uint64 = 0xcc7e4cc36654a356;
-	const word2: uint64 = 0xa237eeb4918a8dcb;
-	const word3: uint64 = 0x94b3c98f5b0ff65d;
-	return { word0: word0, word1: word1, word2: word2, word3: word3 };
+	return pubkeyOf("9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu");
 }
 
 function byteSeeds(count: uint64): Seeds {
@@ -761,11 +681,7 @@ function byteSeeds(count: uint64): Seeds {
 }
 
 test "findProgramAddress finds the address and bump the runtime finds" {
-	const word0: uint64 = 0x5bbef3568cc31bd5;
-	const word1: uint64 = 0xb66374bcbfd8ecfb;
-	const word2: uint64 = 0x883424f155a9d409;
-	const word3: uint64 = 0x142077d63f0a9d66;
-	const identity: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
+	const identity = pubkeyOf("FLtPrptzq3LRxEv7uX39Hrfuw5mS9Uwc5yaMQdeThWeX");
 	const found = Seeds.empty(1).addText("identity").findProgramAddress(hostProgram());
 	assert found.ok;
 	if (found.ok) {
@@ -775,11 +691,7 @@ test "findProgramAddress finds the address and bump the runtime finds" {
 }
 
 test "findProgramAddress skips bumps whose address is on the curve" {
-	const word0: uint64 = 0x5ea6a552d1419250;
-	const word1: uint64 = 0x8c23c9e819ea60d7;
-	const word2: uint64 = 0xe0f59dbed6d4270a;
-	const word3: uint64 = 0x34a4af1cc0b7ce81;
-	const derived: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
+	const derived = pubkeyOf("6RWy3mtB7rxdHcS6tgrBqmtuUQ8tTjg5JHaK9g458kYj");
 	const found = byteSeeds(15).findProgramAddress(hostProgram());
 	assert found.ok;
 	if (found.ok) {

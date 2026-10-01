@@ -5,6 +5,7 @@ import {
 	Instruction,
 	ProgramError,
 	Pubkey,
+	pubkeyOf,
 	Seeds,
 	programId,
 } from "./index";
@@ -18,30 +19,15 @@ export struct RandomnessRequest {
 }
 
 export function vrfProgram(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0x2bfdf1c877686407;
-	const word1: uint64 = 0x195debea5cf3b99e;
-	const word2: uint64 = 0x65b5075cc49ea23f;
-	const word3: uint64 = 0x7ff7ac27b1a71bf2;
-	const key: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
-	return key;
+	return @comptime { return pubkeyOf("Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz"); };
 }
 
 export function vrfEphemeralQueue(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0xe72b76e2a0c1b945;
-	const word1: uint64 = 0x1ad65f750aba11f0;
-	const word2: uint64 = 0x59ed4b84b93d038f;
-	const word3: uint64 = 0xa7ca288880053bf2;
-	const key: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
-	return key;
+	return @comptime { return pubkeyOf("5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc"); };
 }
 
 export function vrfBaseQueue(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0xb5447cdcf067f2b0;
-	const word1: uint64 = 0x0d394dea4b36c402;
-	const word2: uint64 = 0xca40e1dfb422917d;
-	const word3: uint64 = 0xf28e0b1ce8f45b5d;
-	const key: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
-	return key;
+	return @comptime { return pubkeyOf("Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh"); };
 }
 
 function requested(

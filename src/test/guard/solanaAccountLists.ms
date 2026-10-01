@@ -15,7 +15,9 @@ import { scheduleTask } from "std/solana/magicblock";
 import { RandomnessRequest, requestRandomness } from "std/solana/vrf";
 
 function key(word: uint64): Pubkey {
-	return { word0: word, word1: 0, word2: 0, word3: 0 };
+	let made = Pubkey.zero();
+	made.bytes[0] = (word & 255) as uint8;
+	return made;
 }
 
 function request(): Result<RandomnessRequest, ProgramError> {

@@ -69,30 +69,6 @@ export enum ExtensionType {
 	PermissionedBurn = 28,
 }
 
-export function tokenProgram(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0x93a165d7e1f6dd06;
-	const word1: uint64 = 0xac79ebce46e1cbd9;
-	const word2: uint64 = 0x91375b5fed85b41c;
-	const word3: uint64 = 0xa900ff7e85f58c3a;
-	return { word0: word0, word1: word1, word2: word2, word3: word3 };
-}
-
-export function token2022Program(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0xde8f75eee1f6dd06;
-	const word1: uint64 = 0xdacd6ce4bc5d4218;
-	const word2: uint64 = 0x270db9834dfc1ab6;
-	const word3: uint64 = 0xfc8ba1d828f9bdfe;
-	return { word0: word0, word1: word1, word2: word2, word3: word3 };
-}
-
-export function associatedTokenProgram(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0xf189244e8f25978c;
-	const word1: uint64 = 0x830d8e1429103dbb;
-	const word2: uint64 = 0x8410ffda99135a0b;
-	const word3: uint64 = 0x59f8e9dbd87b8e04;
-	return { word0: word0, word1: word1, word2: word2, word3: word3 };
-}
-
 function isTokenProgram(program: Pubkey): boolean {
 	return program.equals(Pubkey.tokenProgram()) || program.equals(Pubkey.token2022Program());
 }
@@ -403,7 +379,20 @@ export function createAssociatedTokenIdempotent(
 
 when (testBuild) {
 	function keyOf(word: uint64): Pubkey {
-		return { word0: word, word1: 0, word2: 0, word3: 0 };
+		let key = Pubkey.zero();
+		for (let index = 0; index < 8; index++) {
+			key.bytes[index] = ((word >> ((index * 8) as uint64)) & 255) as uint8;
+		}
+		return key;
+	}
+
+	function wordAt(key: Pubkey, word: int32): uint64 {
+		let value: uint64 = 0;
+		for (let index = word * 8 + 7; index >= word * 8; index--) {
+			const byte: uint64 = key.bytes[index] as uint64;
+			value = (value << 8) | byte;
+		}
+		return value;
 	}
 
 	function pushU64(bytes: uint8[], value: uint64): void {
@@ -418,10 +407,7 @@ when (testBuild) {
 	}
 
 	function pushKey(bytes: uint8[], key: Pubkey): void {
-		pushU64(bytes, key.word0);
-		pushU64(bytes, key.word1);
-		pushU64(bytes, key.word2);
-		pushU64(bytes, key.word3);
+		for (let index = 0; index < 32; index++) { bytes.push(key.bytes[index]); }
 	}
 
 	function pushZeros(bytes: uint8[], count: int32): void {
@@ -495,7 +481,7 @@ when (testBuild) {
 			const authority = mint.mintAuthority;
 			logU64(mint.supply);
 			logU64(mint.decimals as uint64);
-			if (authority !== null) { logU64(authority.word0); }
+			if (authority !== null) { logU64(wordAt(authority, 0)); }
 			if (mint.freezeAuthority === null) { logU64(0); }
 			return Result.ok(0);
 		}
@@ -505,7 +491,7 @@ when (testBuild) {
 			logU64(tokens.amount);
 			logU64((tokens.state as int32) as uint64);
 			if (tokens.delegate === null && tokens.nativeReserve === null) { logU64(0); }
-			if (closer !== null) { logU64(closer.word0); }
+			if (closer !== null) { logU64(wordAt(closer, 0)); }
 			return Result.ok(0);
 		}
 		if (op == 2) {
@@ -712,7 +698,7 @@ when (testBuild) {
 		assert classic.ok;
 		if (classic.ok) {
 			assert classic.value.bump == 255;
-			assert classic.value.key.word0 == tokenWord0 && classic.value.key.word3 == tokenWord3;
+			assert wordAt(classic.value.key, 0) == tokenWord0 && wordAt(classic.value.key, 3) == tokenWord3;
 		}
 		const extendedWord0: uint64 = 0xc080ac8fa7881df3;
 		const extendedWord3: uint64 = 0x08b979898d73f9d3;
@@ -721,7 +707,7 @@ when (testBuild) {
 		if (extended.ok) {
 			const found = extended.value.key;
 			assert extended.value.bump == 254;
-			assert found.word0 == extendedWord0 && found.word3 == extendedWord3;
+			assert wordAt(found, 0) == extendedWord0 && wordAt(found, 3) == extendedWord3;
 		}
 	}
 }
