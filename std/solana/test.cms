@@ -13,6 +13,13 @@ import {
 	instructionDiscriminator,
 	readArgs,
 	selectInstruction,
+	Seeds,
+	close,
+	create,
+	createPda,
+	pda,
+	realloc,
+	writableSigner,
 } from "./index";
 import { HostAccount, run } from "./host";
 import { args, instruction } from "./macro";
@@ -224,4 +231,132 @@ test "dispatch refuses short data, an unknown instruction and short or invalid a
 	const badBool = instructionBytes("Make", makeTail(7, 2, 5, 41));
 	assert run(programKey(), none, badBool, dispatchEntry).result ==
 		ProgramError.instructionDidNotDeserialize().code;
+}
+
+function counterSeeds(): Seeds {
+	return Seeds.empty(1).addText("counter");
+}
+
+function createEntry(): void {
+	const result = createStep();
+	codeOf(result);
+}
+
+function createStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const counter = try create<Counter>(payer, target, Seeds.none());
+	const at = counter.data();
+	at.value = 5;
+	return Result.ok(0);
+}
+
+function createPdaEntry(): void {
+	const result = createPdaStep();
+	codeOf(result);
+}
+
+function createPdaStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const made = try createPda<Counter>(payer, target, counterSeeds());
+	const at = made.account.data();
+	at.value = made.bump as uint64;
+	return Result.ok(0);
+}
+
+function verifyPdaEntry(): void {
+	const result = verifyPdaStep();
+	codeOf(result);
+}
+
+function verifyPdaStep(): Result<uint64, ProgramError> {
+	const found = try pda(try mutable<Counter>(0), counterSeeds());
+	return Result.ok(found.bump as uint64);
+}
+
+function closeEntry(): void {
+	const result = closeStep();
+	codeOf(result);
+}
+
+function closeStep(): Result<uint64, ProgramError> {
+	return close(try mutable<Counter>(0), try writable(1));
+}
+
+function reallocEntry(): void {
+	const result = reallocStep();
+	codeOf(result);
+}
+
+function reallocStep(): Result<uint64, ProgramError> {
+	return realloc(try mutable<Counter>(0), 148, try writableSigner(1));
+}
+
+function wallet(seed: uint8, lamports: uint64): HostAccount {
+	let account = holder(seed, Pubkey.systemProgram(), [], true, true);
+	account.lamports = lamports;
+	return account;
+}
+
+function blank(key: Pubkey): HostAccount {
+	return {
+		key: key,
+		owner: Pubkey.systemProgram(),
+		lamports: 0,
+		data: [],
+		signer: true,
+		writable: true,
+		executable: false,
+	};
+}
+
+test "create allocates through the System program and writes Anchor's discriminator" {
+	const accounts = [wallet(1, 10000000), blank(keyOf(2))];
+	assert run(programKey(), accounts, [], createEntry).result == 0;
+	assert accounts[1].owner == programKey();
+	assert accounts[1].data.length == 48;
+	assert accounts[1].lamports > 0 && accounts[0].lamports == 10000000 - accounts[1].lamports;
+	const tag = counterTag();
+	for (let i = 0; i < 8; i++) { assert accounts[1].data[i] == tag.bytes[i]; }
+	assert accounts[1].data[8] == 5;
+	const twice = [wallet(1, 10000000), wallet(1, 10000000)];
+	assert run(programKey(), twice, [], createEntry).result ==
+		ProgramError.tryingToInitPayerAsProgramAccount().code;
+}
+
+test "createPda accepts only the canonical address and records its bump" {
+	const derived = counterSeeds().findProgramAddress(programKey());
+	assert derived.ok;
+	if (derived.ok) {
+		const accounts = [wallet(1, 10000000), blank(derived.value.key)];
+		assert run(programKey(), accounts, [], createPdaEntry).result == 0;
+		assert accounts[1].data[8] == derived.value.bump;
+		const verified = [accounts[1]];
+		assert run(programKey(), verified, [], verifyPdaEntry).result == 0;
+	}
+	const wrong = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), wrong, [], createPdaEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+test "close refunds every lamport, hands the account to the System program and empties it" {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
+	counter.lamports = 700;
+	let refund = wallet(2, 50);
+	const accounts = [counter, refund];
+	assert run(programKey(), accounts, [], closeEntry).result == 0;
+	assert accounts[0].lamports == 0 && accounts[1].lamports == 750;
+	assert accounts[0].owner == Pubkey.systemProgram() && accounts[0].data.length == 0;
+	const self = [counter, counter];
+	assert run(programKey(), self, [], closeEntry).result == ProgramError.constraintClose().code;
+}
+
+test "realloc grows the data with zeros and tops up rent from the payer" {
+	let counter = holder(1, programKey(), counterBytes(counterTag(), 9, 48), false, true);
+	counter.lamports = 1;
+	const accounts = [counter, wallet(2, 10000000)];
+	assert run(programKey(), accounts, [], reallocEntry).result == 0;
+	assert accounts[0].data.length == 148 && accounts[0].data[147] == 0;
+	assert accounts[0].lamports > 1 && accounts[1].lamports == 10000001 - accounts[0].lamports;
 }
