@@ -42,6 +42,16 @@ after another, and compare every red against src/test/known-red.json.
   --route        read paths on stdin, print "lane<TAB>path" for each lane a path picks
   --self-test    check the routing table and the red parsers against fixed cases
 
+One gate at a time runs per machine: a run with any lane besides tools, and
+--select, queues first-come first-served in ~/.metascript/gates and starts when
+every gate ahead of it has finished or died. It names the gate it waits behind
+about once a minute; the wait is not capped by GATE_WAIT_MAX and shows in the
+ledger wait column. Only the running gate counts when worker slots are split.
+--dry-run, a tools-only run and the --emit-one children of a running gate never
+queue. An empty registry file is a running gate whose gate.sh predates the queue;
+it is waited for like any other. A registry file that does not parse stops the
+run and names the file.
+
 Every path that is not inert and not under tools/ gets build and suite; a rule
 only adds lanes to that floor. The tests lane compiles its tiers with the
 candidate, so a pin there tests the change rather than the previous compiler.
@@ -67,7 +77,7 @@ never known, and never known-now-green — a program that fails half the time ca
 answer either question. Putting one there needs a run that shows both outcomes.
 
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
-env:  GATE_WAIT_MAX seconds to wait for load <= cores (default 1800, 0 = do not wait)
+env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (default 1800, 0 = do not wait)
       GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers
       MSCORPUS_BUILD_JOBS optional corpus build ceiling, kept across phases
       these limits do not cap aggregate processes or compiler-internal parallelism
@@ -320,6 +330,158 @@ program_keys() {
     END { for (p in key) if (!(p in outside)) print p " " key[p] }'
 }
 
+cores() { sysctl -n hw.ncpu 2>/dev/null || nproc; }
+
+GATES_DIR="${HOME:-$USERPROFILE}/.metascript/gates"
+QUEUE_POLL=2
+
+queue_write() { printf '%s %s %s\n' "$MY_TICKET" "$1" "$(basename "$TOP")" >"$GATES_DIR/.w.$$" && mv -f "$GATES_DIR/.w.$$" "$GATES_DIR/$$"; }
+
+queue_scan() {
+  local f p t s n rows="" left ahead_pid ahead_name
+  Q_MAX=0 Q_HOLDERS=0 Q_FIRST="" Q_AHEAD=0 Q_BEHIND="" Q_BEHIND_PID=""
+  for f in "$GATES_DIR"/.w.* "$GATES_DIR"/.m.*; do
+    [ -e "$f" ] || continue
+    kill -0 "${f##*.}" 2>/dev/null || rm -rf "$f"
+  done
+  for f in "$GATES_DIR"/*; do
+    [ -e "$f" ] || continue
+    p=${f##*/}
+    [[ "$p" =~ ^[0-9]+$ ]] || die "gate queue: unexpected file $f"
+    kill -0 "$p" 2>/dev/null || { rm -f "$f"; continue; }
+    if [ -e "$f" ] && [ ! -s "$f" ]; then Q_HOLDERS=$((Q_HOLDERS + 1)); Q_BEHIND_PID=$p Q_BEHIND="a gate.sh without the queue"; continue; fi
+    if ! IFS=' ' read -r t s n <"$f" 2>/dev/null; then [ -e "$f" ] || continue; die "gate queue: unparseable registry file $f"; fi
+    [[ "$t" =~ ^[0-9]+$ ]] && { [ "$s" = wait ] || [ "$s" = hold ]; } && [ -n "$n" ] || die "gate queue: unparseable registry file $f"
+    [ "$t" -le "$Q_MAX" ] || Q_MAX=$t
+    if [ "$s" = hold ]; then Q_HOLDERS=$((Q_HOLDERS + 1)); Q_BEHIND_PID=$p Q_BEHIND=$n; else rows="$rows$t $p $n"$'\n'; fi
+  done
+  [ -n "$rows" ] || return 0
+  rows=$(printf '%s' "$rows" | sort -k1,1n -k2,2n)
+  Q_FIRST=$(awk 'NR == 1 { print $2 }' <<<"$rows")
+  left=$(awk -v p="$$" '$2 == p { exit } { n++; l = $2 " " $3 } END { print n + 0, l }' <<<"$rows")
+  read -r Q_AHEAD ahead_pid ahead_name <<<"$left"
+  if [ "$Q_HOLDERS" -eq 0 ] && [ "$Q_AHEAD" -gt 0 ]; then Q_BEHIND_PID=$ahead_pid Q_BEHIND=$ahead_name; fi
+  return 0
+}
+
+queue_lock() {
+  local m tmp="$GATES_DIR/.m.$$" try
+  for try in 1 2; do
+    rm -rf "$tmp"; mkdir -p "$tmp/$$" || die "gate queue: cannot create $tmp"
+    mv -T "$tmp" "$GATES_DIR/.lock" 2>/dev/null && return 0
+    rm -rf "$tmp"
+    for m in "$GATES_DIR/.lock"/*; do
+      [ -e "$m" ] || continue
+      m=${m##*/}
+      [[ "$m" =~ ^[0-9]+$ ]] || die "gate queue: unexpected entry $GATES_DIR/.lock/$m"
+      ! kill -0 "$m" 2>/dev/null || return 1
+      rmdir "$GATES_DIR/.lock/$m" 2>/dev/null
+    done
+    rmdir "$GATES_DIR/.lock" 2>/dev/null
+  done
+  return 1
+}
+
+queue_acquire() {
+  local t0=$SECONDS shown=-60
+  mkdir -p "$GATES_DIR" || die "cannot create $GATES_DIR"
+  queue_scan; MY_TICKET=$((Q_MAX + 1))
+  queue_write wait || die "gate queue: cannot write $GATES_DIR/$$"
+  while :; do
+    queue_scan
+    if [ "$Q_HOLDERS" -eq 0 ] && [ "$Q_FIRST" = "$$" ] && queue_lock; then queue_write hold || die "gate queue: cannot write $GATES_DIR/$$"; break; fi
+    if [ $((SECONDS - t0 - shown)) -ge 60 ]; then
+      shown=$((SECONDS - t0))
+      say "gate: queued behind ${Q_BEHIND:-another gate} (pid ${Q_BEHIND_PID:-?}), $Q_AHEAD waiting ahead, ${shown}s"
+    fi
+    sleep "$QUEUE_POLL"
+  done
+  ADMIT_WAITED=$((${ADMIT_WAITED:-0} + SECONDS - t0))
+  [ "$shown" -lt 0 ] || say "gate: left the queue after $((SECONDS - t0))s"
+}
+
+queue_release() {
+  rm -f "$GATES_DIR/$$"
+  rmdir "$GATES_DIR/.lock/$$" 2>/dev/null && rmdir "$GATES_DIR/.lock" 2>/dev/null
+  return 0
+}
+
+live_gates() {
+  queue_scan
+  [ "$Q_HOLDERS" -ge 1 ] || Q_HOLDERS=1
+  echo "$Q_HOLDERS"
+}
+
+share_of_cores() {
+  local g w
+  g=$(live_gates) || exit $?
+  w=$(( $(cores) / g / $1 ))
+  [ "$w" -ge 1 ] || w=1
+  echo "$w"
+}
+
+queue_self_test() {
+  local bad=0 keep_dir=$GATES_DIR keep_poll=$QUEUE_POLL out h w w2 a i got rc home pids=""
+  GATES_DIR=$(mktemp -d) || return 1
+  out="$GATES_DIR.out" QUEUE_POLL=0.2
+  fake() { printf '%s %s fake\n' "$3" "$2" >"$GATES_DIR/$1"; }
+  live() { sleep 120 >/dev/null 2>&1 & LIVE=$!; pids="$pids $LIVE"; }
+  settle() { rm -rf "$GATES_DIR"/* "$GATES_DIR"/.lock; }
+  seen() { for ((i = 0; i < 100; i++)); do grep -q "$1" "$2" 2>/dev/null && return 0; sleep 0.2; done; return 1; }
+  held() { for ((i = 0; i < 50; i++)); do grep -q ' hold ' "$GATES_DIR/$$" 2>/dev/null && return 0; sleep 0.2; done; return 1; }
+  queue_acquire >"$out"
+  { [[ "$(<"$GATES_DIR/$$")" == "1 hold "* ]] && [ -d "$GATES_DIR/.lock/$$" ] && [ ! -s "$out" ]; } || { printf 'FAIL queue: acquire when free\n'; bad=1; }
+  queue_release
+  { [ ! -e "$GATES_DIR/$$" ] && [ ! -e "$GATES_DIR/.lock" ]; } || { printf 'FAIL queue: release leaves the file or the lock\n'; bad=1; }
+  live; h=$LIVE; fake "$h" hold 1; mkdir -p "$GATES_DIR/.lock/$h"
+  ( queue_acquire >"$out" ) & a=$!
+  seen "behind fake" "$out"
+  { [ "$(cut -d' ' -f2 "$GATES_DIR/$$")" = wait ] && kill -0 "$a" 2>/dev/null && grep -q "behind fake (pid $h)" "$out"; } || { printf 'FAIL queue: wait while a live holder exists\n'; bad=1; }
+  kill "$h"; wait "$h" 2>/dev/null
+  held || { printf 'FAIL queue: no reclaim from a dead holder\n'; bad=1; }
+  { [ -d "$GATES_DIR/.lock/$$" ] && [ ! -e "$GATES_DIR/.lock/$h" ] && [ ! -e "$GATES_DIR/$h" ]; } || { printf 'FAIL queue: dead holder left its marker or file\n'; bad=1; }
+  wait "$a"; queue_release; settle
+  live; h=$LIVE; live; w=$LIVE; fake "$h" hold 1; mkdir -p "$GATES_DIR/.lock/$h"; fake "$w" wait 2
+  ( queue_acquire >"$out" ) & a=$!
+  seen "behind fake" "$out"
+  [ "$(cut -d' ' -f1 "$GATES_DIR/$$")" = 3 ] || { printf 'FAIL queue: ticket after two live gates: got "%s"\n' "$(<"$GATES_DIR/$$")"; bad=1; }
+  kill "$h"; wait "$h" 2>/dev/null
+  sleep 2
+  { [ "$(cut -d' ' -f2 "$GATES_DIR/$$")" = wait ] && [ ! -d "$GATES_DIR/.lock/$$" ]; } || { printf 'FAIL queue: FIFO, took the lock ahead of an older waiter\n'; bad=1; }
+  kill "$w"; wait "$w" 2>/dev/null
+  held || { printf 'FAIL queue: FIFO, did not start once the older waiter was gone\n'; bad=1; }
+  wait "$a"; queue_release; settle
+  live; h=$LIVE; live; w=$LIVE; live; w2=$LIVE; fake "$h" hold 1; fake "$w" wait 2; fake "$w2" wait 3
+  got="$(live_gates) $(share_of_cores 1) $(cores)"
+  [ "$got" = "1 $(cores) $(cores)" ] || { printf 'FAIL queue: waiters counted by live_gates/share_of_cores: got "%s"\n' "$got"; bad=1; }
+  settle; fake "$w" wait 1; fake "$w2" wait 2
+  [ "$(live_gates)" = 1 ] || { printf 'FAIL queue: live_gates with waiters only\n'; bad=1; }
+  fake "$h" hold 3; fake "$w" hold 1
+  [ "$(live_gates)" = 2 ] || { printf 'FAIL queue: live_gates with two holders\n'; bad=1; }
+  settle; printf 'junk\n' >"$GATES_DIR/$h"
+  got=$( (queue_scan) 2>&1 ); rc=$?
+  { [ "$rc" -eq 2 ] && [[ "$got" == *"$GATES_DIR/$h"* ]]; } || { printf 'FAIL queue: junk registry file: rc=%s, got "%s"\n' "$rc" "$got"; bad=1; }
+  : >"$GATES_DIR/$h"; fake "$w" hold 1
+  got=$( (live_gates) 2>&1 ); rc=$?
+  { [ "$rc" -eq 0 ] && [ "$got" = 2 ]; } || { printf 'FAIL queue: a pre-queue gate (empty file) is not a holder: rc=%s, got "%s"\n' "$rc" "$got"; bad=1; }
+  settle; : >"$GATES_DIR/$h"
+  ( queue_acquire >"$out" ) & a=$!
+  seen "behind a gate.sh without the queue (pid $h)" "$out" || { printf 'FAIL queue: no wait behind a pre-queue gate\n'; bad=1; }
+  kill "$h"; wait "$h" 2>/dev/null
+  held || { printf 'FAIL queue: no start once the pre-queue gate died\n'; bad=1; }
+  wait "$a"; queue_release
+  settle; : >"$GATES_DIR/notapid"
+  got=$( (queue_scan) 2>&1 ); rc=$?
+  { [ "$rc" -eq 2 ] && [[ "$got" == *"$GATES_DIR/notapid"* ]]; } || { printf 'FAIL queue: foreign file in the registry: rc=%s\n' "$rc"; bad=1; }
+  home=$(mktemp -d)
+  GATE_EMIT_DIR="$home/e" HOME="$home" USERPROFILE="$home" bash "$TOP/tools/gate.sh" --emit-one true 1 x "$home/x.ms" >/dev/null 2>&1
+  { [ -d "$home/e/1" ] && [ ! -e "$home/.metascript" ]; } || { printf 'FAIL queue: --emit-one touched the queue or did not run\n'; bad=1; }
+  kill $pids 2>/dev/null
+  rm -rf "$home" "$GATES_DIR" "$out"
+  GATES_DIR=$keep_dir QUEUE_POLL=$keep_poll
+  return $bad
+}
+
 self_test() {
   local bad=0 cases got want log
   cases=$(cat <<'CASES'
@@ -510,6 +672,7 @@ CASES
     got=$(cap_jobs 32 "$invalid" 2>/dev/null); rc=$?
     [ "$rc" -eq 2 ] && [ -z "$got" ] || { printf 'FAIL invalid worker cap %s: rc=%s, jobs="%s"\n' "$invalid" "$rc" "$got"; bad=1; }
   done
+  queue_self_test || bad=1
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -624,7 +787,6 @@ cand_key=""
 CC_FLAG=""
 [ "$(uname -s)" = Darwin ] && command -v clang >/dev/null 2>&1 && CC_FLAG="--cc=clang"
 
-cores() { sysctl -n hw.ncpu 2>/dev/null || nproc; }
 load1() {
   if [ -r /proc/loadavg ]; then cut -d' ' -f1 /proc/loadavg; else sysctl -n vm.loadavg | awk '{print $2}'; fi
 }
@@ -861,26 +1023,10 @@ need_cand() {
 
 fmt_secs() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
 
-GATES_DIR="${HOME:-$USERPROFILE}/.metascript/gates"
-
-live_gates() {
-  local f n=0
-  for f in "$GATES_DIR"/*; do
-    [ -e "$f" ] || continue
-    if kill -0 "${f##*/}" 2>/dev/null; then n=$((n + 1)); else rm -f "$f"; fi
-  done
-  [ "$n" -ge 1 ] || n=1
-  echo "$n"
-}
-
-share_of_cores() {
-  local w=$(( $(cores) / $(live_gates) / $1 ))
-  [ "$w" -ge 1 ] || w=1
-  echo "$w"
-}
-
 if [ "$select_only" -eq 1 ]; then
   need_cand select
+  trap queue_release EXIT
+  queue_acquire
   select=1 selected=0 select_label=corpus
   select_programs
   [ "$selected" -eq 0 ] || cat "$EMIT/only.corpus"
@@ -962,8 +1108,8 @@ PHASES=("tools build" "boundary suite hcr tests fmt" "corpus guard" "san")
 
 start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
-mkdir -p "$GATES_DIR" && : >"$GATES_DIR/$$"
-trap 'rm -f "$GATES_DIR/$$"' EXIT
+trap queue_release EXIT
+[ "$lanes" = tools ] || queue_acquire
 PAR=$(cap_jobs "${GATE_PAR:-$(share_of_cores 5)}") || exit $?
 rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
 [ "$lanes" = tools ] || admit
