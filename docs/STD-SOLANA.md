@@ -428,3 +428,4 @@ Each row is a workaround the toolkit carries until the compiler card closes. Pay
 | A macro re-exported through an `export *` hub is not expanded | programs import `instruction` and `args` from `std/solana/macro`, not from `std/solana` | `2026-10-01-macro-through-export-star-hub-is-not-expanded` |
 | A user macro named like a directive (`emit`) is silently dropped | the event macro is `emitEvent<E>(value)`, not Anchor's `emit` | `2026-10-01-macro-named-like-a-directive-is-silently-dropped` |
 | Indexing an array field through a `this ref` receiver emits `.` on a pointer in C | `BorshReader` reads its bytes through value-parameter helpers | `2026-10-01-array-field-through-ref-receiver-emits-dot` |
+| Names used only in a macro type argument or a `@comptime` block are reported "imported but never used" | none; the warnings are expected in std/solana programs | `2026-10-01-names-used-only-at-compile-time-reported-unused` |
