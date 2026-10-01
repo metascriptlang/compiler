@@ -805,31 +805,55 @@ export function systemAccount(index: int32): Result<SystemAccount, ProgramError>
 	return Result.ok(found as SystemAccount);
 }
 
-export function program<P>(index: int32): Result<Program<P>, ProgramError> {
-	const found = try present(index);
-	if (found.key() != P.id()) { return Result.err(ProgramError.invalidProgramId()); }
-	if (!found.isExecutable()) { return Result.err(ProgramError.invalidProgramExecutable()); }
-	return Result.ok(found as Program<P>);
-}
-
 export function unchecked(index: int32): Result<Account, ProgramError> {
 	return present(index);
 }
 
-export function owned<T>(index: int32): Result<Owned<T>, ProgramError> {
+export function programAccount(index: int32, id: Pubkey): Result<Account, ProgramError> {
 	const found = try present(index);
-	const failure = programDataFailure(found, T.discriminator().word(), sizeof(T) as uint64);
+	if (found.key() != id) { return Result.err(ProgramError.invalidProgramId()); }
+	if (!found.isExecutable()) { return Result.err(ProgramError.invalidProgramExecutable()); }
+	return Result.ok(found);
+}
+
+export function ownedAccount(
+	index: int32,
+	discriminator: uint64,
+	size: uint64,
+): Result<Account, ProgramError> {
+	const found = try present(index);
+	const failure = programDataFailure(found, discriminator, size);
 	if (failure.code != 0) { return Result.err(failure); }
+	return Result.ok(found);
+}
+
+export function exclusiveWritable(found: Account): Result<Account, ProgramError> {
+	if (!found.isWritable()) { return Result.err(ProgramError.constraintMut()); }
+	return claimExclusive(found);
+}
+
+export function mutableAccount(
+	index: int32,
+	discriminator: uint64,
+	size: uint64,
+): Result<Account, ProgramError> {
+	const found = try ownedAccount(index, discriminator, size);
+	return exclusiveWritable(found);
+}
+
+export function program<P>(index: int32): Result<Program<P>, ProgramError> {
+	const found = try programAccount(index, P.id());
+	return Result.ok(found as Program<P>);
+}
+
+export function owned<T>(index: int32): Result<Owned<T>, ProgramError> {
+	const found = try ownedAccount(index, T.discriminator().word(), sizeof(T) as uint64);
 	return Result.ok(found as Owned<T>);
 }
 
 export function mutable<T>(index: int32): Result<Mutable<T>, ProgramError> {
-	const found = try present(index);
-	const failure = programDataFailure(found, T.discriminator().word(), sizeof(T) as uint64);
-	if (failure.code != 0) { return Result.err(failure); }
-	if (!found.isWritable()) { return Result.err(ProgramError.constraintMut()); }
-	const claimed = try claimExclusive(found);
-	return Result.ok(claimed as Mutable<T>);
+	const found = try mutableAccount(index, T.discriminator().word(), sizeof(T) as uint64);
+	return Result.ok(found as Mutable<T>);
 }
 
 export function external<T>(index: int32): Result<External<T>, ProgramError> {
@@ -849,8 +873,7 @@ export function externalMutable<T>(index: int32): Result<ExternalMutable<T>, Pro
 	}
 	const decoded = T.decode(found.data());
 	if (!decoded.ok) { return Result.err(decoded.error); }
-	if (!found.isWritable()) { return Result.err(ProgramError.constraintMut()); }
-	const claimed = try claimExclusive(found);
+	const claimed = try exclusiveWritable(found);
 	return Result.ok(claimed as ExternalMutable<T>);
 }
 
