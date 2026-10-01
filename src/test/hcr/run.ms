@@ -341,6 +341,57 @@ function watchWarm(): void {
 	console.log("ok   hcrWatchWarm");
 }
 
+function arrayOwner(): void {
+	const tag = "hcrArrayOwner";
+	const ext = sharedLibraryExt();
+	const exe = platform == "windows" ? "host.exe" : "host";
+	const sources = ["app.ms", "first.ms", "second.ms", "logic.ms", "logicEdit.ms"];
+	const dir = freshDir(`${TMP}/arrayOwner`);
+	for (const f of sources) copy(`${FIXTURES}/arrayOwner/${f}`, `${dir}/${f}`);
+	copy(STD_HOST, `${dir}/host.cms`);
+	put(`${dir}/replay.txt`, "logicEdit.ms logic.ms\n");
+	const watched = msc(dir, ["build", "app.ms", "--hcr", "--watch-replay=replay.txt", `--output=run/module${ext}`]);
+	const statuses: string[] = [];
+	for (const line of lines(both(watched))) {
+		if (line.startsWith("watch: build ")) statuses.push(line);
+	}
+	if (!succeeded(watched) || statuses.length != 2 || statuses[0].contains(" failed ") || statuses[1].contains(" failed ")) {
+		console.log(both(watched));
+		failWith(tag, "the warm replay of modules sharing another module's struct arrays did not build");
+	}
+	need(tag, partialRecheck(statuses[1]), `the edit of logic did not stay warm: ${statuses[1]}`);
+	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
+	const warm = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
+	need(tag, succeeded(warm) && lines(both(warm)).includes("HCR-ARRAY first 40"), `the replayed images ran: ${both(warm)}`);
+
+	const cold = freshDir(`${TMP}/arrayOwnerCold`);
+	for (const f of sources) copy(`${FIXTURES}/arrayOwner/${f}`, `${cold}/${f}`);
+	copy(`${FIXTURES}/arrayOwner/logicEdit.ms`, `${cold}/logic.ms`);
+	mustBuild(tag, cold, ["build", "app.ms", "--hcr", `--output=run/module${ext}`], "the cold HCR build of the edited state failed");
+	const coldRun = execFileResult(`${dir}/${exe}`, ["run", "module"], cold);
+	need(tag, succeeded(coldRun) && lines(both(coldRun)).includes("HCR-ARRAY first 40"), `the cold images ran: ${both(coldRun)}`);
+
+	const reloaded = freshDir(`${TMP}/arrayOwnerReload`);
+	for (const f of sources) copy(`${FIXTURES}/arrayOwner/${f}`, `${reloaded}/${f}`);
+	mustBuild(tag, reloaded, ["build", "app.ms", "--hcr", `--output=g1/module${ext}`], "the first generation did not build");
+	copy(`${FIXTURES}/arrayOwner/logicEdit.ms`, `${reloaded}/logic.ms`);
+	mustBuild(tag, reloaded, ["build", "app.ms", "--hcr", `--output=g2/module${ext}`], "the edited generation did not build");
+	ensureDir(`${reloaded}/run`);
+	for (const image of [`module${ext}`, `module.core${ext}`, `module.first${ext}`, `module.second${ext}`, `module.logic${ext}`, `module${ext}.hcrabi`]) {
+		copy(`${reloaded}/g1/${image}`, `${reloaded}/run/${image}`);
+	}
+	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], reloaded);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-ARRAY ")) seen.push(line);
+	}
+	if (!succeeded(ran) || seen.join("\n") != ["HCR-ARRAY first 20", "HCR-ARRAY reloaded 40"].join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "reloading logic did not keep the other modules' struct array operations");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 // ---- hcrIndirect: cross-module calls lowered through module tables ----
 
 interface Emitted {
@@ -770,5 +821,6 @@ moduleAbi();
 firstWarmBuild();
 localNames();
 watchWarm();
+arrayOwner();
 coreLinkClang();
 indirect();
