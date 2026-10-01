@@ -3,20 +3,20 @@ import { argv, exit } from "std/process";
 @include("runtime/hcr.h");
 @include("./hostCalls.h");
 
-extern function hcrOpen(path: cstring): unknown from "msHcrImageOpen";
-extern function hcrSymbol(handle: unknown, name: cstring): unknown from "msHcrImageSymbol";
-extern function hcrIsNull(value: unknown): int32 from "msHcrImageIsNull";
-extern function hcrCallHandover(raw: unknown, state: unknown): unknown from "msHcrImageCallHandover";
-extern function hcrCallInit(raw: unknown): void from "msHcrImageCallInit";
-extern function hcrCallProbe(raw: unknown): int32 from "msHcrImageCallProbe";
-extern function hcrNull(): unknown from "msHcrImageNull";
-extern function hcrFixtureCore(): unknown from "hcrFixtureCore";
+extern function hcrOpen(path: cstring): Ptr<void> from "msHcrImageOpen";
+extern function hcrSymbol(handle: Ptr<void>, name: cstring): Ptr<void> from "msHcrImageSymbol";
+extern function hcrIsNull(value: Ptr<void>): int32 from "msHcrImageIsNull";
+extern function hcrCallHandover(raw: Ptr<void>, state: Ptr<void>): Ptr<void> from "msHcrImageCallHandover";
+extern function hcrCallInit(raw: Ptr<void>): void from "msHcrImageCallInit";
+extern function hcrCallProbe(raw: Ptr<void>): int32 from "msHcrImageCallProbe";
+extern function hcrNull(): Ptr<void> from "msHcrImageNull";
+extern function hcrFixtureCore(): Ptr<void> from "hcrFixtureCore";
 extern function hcrImageExt(): string from "hcrFixtureImageExt";
-extern function hcrFixtureCallName(raw: unknown, name: cstring): void from "hcrFixtureCallName";
-extern function hcrFixtureCallNameInt(raw: unknown, name: cstring): int32 from "hcrFixtureCallNameInt";
-extern function hcrFixtureImportMatches(imports: unknown, moduleId: cstring, key: unknown): int32 from "hcrFixtureImportMatches";
+extern function hcrFixtureCallName(raw: Ptr<void>, name: cstring): void from "hcrFixtureCallName";
+extern function hcrFixtureCallNameInt(raw: Ptr<void>, name: cstring): int32 from "hcrFixtureCallNameInt";
+extern function hcrFixtureImportMatches(imports: Ptr<void>, moduleId: cstring, key: Ptr<void>): int32 from "hcrFixtureImportMatches";
 
-function required(handle: unknown, name: string): unknown {
+function required(handle: Ptr<void>, name: string): Ptr<void> {
 	const raw = hcrSymbol(handle, name);
 	if (hcrIsNull(raw) != 0) {
 		console.log("HCR-HOST missing symbol " + name);
@@ -25,7 +25,7 @@ function required(handle: unknown, name: string): unknown {
 	return raw;
 }
 
-function open(path: string): unknown {
+function open(path: string): Ptr<void> {
 	const image = hcrOpen(path);
 	if (hcrIsNull(image) != 0) {
 		console.log("HCR-HOST cannot load " + path);
@@ -34,13 +34,13 @@ function open(path: string): unknown {
 	return image;
 }
 
-function handover(image: unknown, state: unknown): unknown {
+function handover(image: Ptr<void>, state: Ptr<void>): Ptr<void> {
 	const raw = hcrSymbol(image, "_hcr_handover");
 	if (hcrIsNull(raw) != 0) return hcrNull();
 	return hcrCallHandover(raw, state);
 }
 
-function probe(entry: unknown, generation: string): void {
+function probe(entry: Ptr<void>, generation: string): void {
 	const symbols = ["hcrIndirectValue", "hcrShapeValue", "hcrErrorValue", "hcrTickValue"];
 	for (const symbol of symbols) {
 		const value = hcrCallProbe(required(entry, symbol));
@@ -58,9 +58,9 @@ function imageModuleId(name: string): string {
 	return name == `module${ext}` ? "app" : name.substring("module.".length, name.length - ext.length);
 }
 
-const images: unknown[] = [];
+const images: Ptr<void>[] = [];
 const names: string[] = [];
-const states: unknown[] = [];
+const states: Ptr<void>[] = [];
 const reloads: string[] = [];
 let inReloads = false;
 for (let i = 1; i < argv.length; i += 1) {
@@ -89,7 +89,7 @@ if (hcrIsNull(core) != 0) {
 	exit(1);
 }
 
-function keysMatch(candidate: unknown, moduleId: string): boolean {
+function keysMatch(candidate: Ptr<void>, moduleId: string): boolean {
 	const key = required(candidate, "HcrAbiKey000");
 	let matches = true;
 	for (let i = 0; i < images.length; i += 1) {

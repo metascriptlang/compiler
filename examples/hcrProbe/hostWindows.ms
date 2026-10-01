@@ -3,15 +3,15 @@ import { writeStderr } from "std/io";
 
 @include("runtime/hcr.h");
 
-extern function hcrOpen(path: cstring): unknown from "msHcrImageOpen";
-extern function hcrSymbol(handle: unknown, name: cstring): unknown from "msHcrImageSymbol";
-extern function hcrClose(handle: unknown): int32 from "msHcrImageClose";
+extern function hcrOpen(path: cstring): Ptr<void> from "msHcrImageOpen";
+extern function hcrSymbol(handle: Ptr<void>, name: cstring): Ptr<void> from "msHcrImageSymbol";
+extern function hcrClose(handle: Ptr<void>): int32 from "msHcrImageClose";
 extern function hcrLastError(): uint32 from "msHcrImageLastError";
-extern function hcrIsNull(value: unknown): int32 from "msHcrImageIsNull";
-extern function hcrAddress(value: unknown): uint64 from "msHcrImageAddress";
-extern function hcrCallHandover(raw: unknown, state: unknown): unknown from "msHcrImageCallHandover";
-extern function hcrCallInit(raw: unknown): void from "msHcrImageCallInit";
-extern function hcrCallProbe(raw: unknown): int32 from "msHcrImageCallProbe";
+extern function hcrIsNull(value: Ptr<void>): int32 from "msHcrImageIsNull";
+extern function hcrAddress(value: Ptr<void>): uint64 from "msHcrImageAddress";
+extern function hcrCallHandover(raw: Ptr<void>, state: Ptr<void>): Ptr<void> from "msHcrImageCallHandover";
+extern function hcrCallInit(raw: Ptr<void>): void from "msHcrImageCallInit";
+extern function hcrCallProbe(raw: Ptr<void>): int32 from "msHcrImageCallProbe";
 
 enum HcrFailureKind {
 	Load,
@@ -26,20 +26,20 @@ struct HcrFailure {
 }
 
 struct HcrImage {
-	handle: unknown;
-	handover: unknown;
-	datInit: unknown;
-	init: unknown;
-	probe: unknown;
+	handle: Ptr<void>;
+	handover: Ptr<void>;
+	datInit: Ptr<void>;
+	init: Ptr<void>;
+	probe: Ptr<void>;
 }
 
 struct HcrModule {
 	image: HcrImage;
-	state: unknown;
+	state: Ptr<void>;
 	path: string;
 }
 
-function isNull(value: unknown): boolean {
+function isNull(value: Ptr<void>): boolean {
 	return hcrIsNull(value) != 0;
 }
 
@@ -90,7 +90,7 @@ function loadInitial(path: string): Result<HcrModule, HcrFailure> {
 	const resolved = resolveImage(path);
 	if (!resolved.ok) return Result.err(resolved.error);
 	const image = resolved.value;
-	const state = hcrCallHandover(image.handover, null as unknown);
+	const state = hcrCallHandover(image.handover, null as Ptr<void>);
 	if (isNull(state)) {
 		hcrClose(image.handle);
 		return Result.err(layoutFailure());
@@ -100,7 +100,7 @@ function loadInitial(path: string): Result<HcrModule, HcrFailure> {
 	return Result.ok({ image: image, state: state, path: path });
 }
 
-function loadCandidate(path: string, oldState: unknown): Result<HcrModule, HcrFailure> {
+function loadCandidate(path: string, oldState: Ptr<void>): Result<HcrModule, HcrFailure> {
 	const resolved = resolveImage(path);
 	if (!resolved.ok) return Result.err(resolved.error);
 	const image = resolved.value;
@@ -144,7 +144,7 @@ if (!initial.ok) {
 	exit(1);
 }
 let current = initial.value;
-const oldHandles: unknown[] = [];
+const oldHandles: Ptr<void>[] = [];
 console.log("HCR-PROBE loaded " + current.path + " state=" + hcrAddress(current.state).toString());
 printCall(current);
 
