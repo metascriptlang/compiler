@@ -1141,3 +1141,20 @@ export function finish(this writer: EventWriter): uint64 {
 export function logData(bytes: Bytes): void {
 	msSolLogData(bytes.address, bytes.length);
 }
+
+export function transferLamports(
+	from: WritableSigner,
+	to: Writable,
+	lamports: uint64,
+): Result<uint64, ProgramError> {
+	return transfer(from as Account, to as Account, lamports, Seeds.none());
+}
+
+export function transferLamportsSigned(
+	from: Account,
+	to: Writable,
+	lamports: uint64,
+	signer: Seeds,
+): Result<uint64, ProgramError> {
+	return transfer(from, to as Account, lamports, signer);
+}
