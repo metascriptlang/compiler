@@ -1,8 +1,8 @@
-// bug613 — `new Box<int32>(…)` ran the generic class's own constructor on JS
+// bug657 — `new Box<int32>(…)` ran the generic class's own constructor on JS
 //
 // Symptom:    a generic class whose constructor calls a generic function over its own `T`
 //             (`put(self, x)`, `put(this, x)`, `this.put(x)`, `identity(v)`) printed on C but threw
-//             `ReferenceError: put__… is not defined` on JS (pinned by corpus 1018).
+//             `ReferenceError: put__… is not defined` on JS (pinned by corpus 1027).
 // Root cause: a class instance was only a name in `typeInstCache`; its ClassDecl and the `new`
 //             callee kept the generic's symbol, so JS emitted `new Box__…` and ran the generic
 //             body, whose calls name instances that are never made. C named the instance from the
@@ -31,7 +31,7 @@ const header = `class Box<T> {
 function put<T>(b: Box<T>, x: T): void { b.items.push(x); }
 `;
 
-test "bug613: new of a generic class constructs its instance, declared before the construction" {
+test "bug657: new of a generic class constructs its instance, declared before the construction" {
 	const js = emitted(header + "const b = new Box<int32>([1, 2]);\nconsole.log(b.items.length);\n");
 	assert js.indexOf("ERROR", 0) < 0;
 	const name = constructedClass(js, 0);
@@ -41,7 +41,7 @@ test "bug613: new of a generic class constructs its instance, declared before th
 	assert decl < js.indexOf("new " + name);
 }
 
-test "bug613: each type argument list constructs its own instance and a repeated one reuses it" {
+test "bug657: each type argument list constructs its own instance and a repeated one reuses it" {
 	const js = emitted(header + "const a = new Box<int32>([1]);\nconst s = new Box<string>([\"x\"]);\nconst c = new Box<int32>([2]);\nconsole.log(a.items.length, s.items.length, c.items.length);\n");
 	assert js.indexOf("ERROR", 0) < 0;
 	const first = constructedClass(js, 0);

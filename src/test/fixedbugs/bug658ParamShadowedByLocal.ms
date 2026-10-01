@@ -1,4 +1,4 @@
-// bug614 — a parameter read after a block local of its spelling read the local
+// bug658 — a parameter read after a block local of its spelling read the local
 //
 // Symptom:    on C, `function f(s: int32) { { const s = 1000; … } return s; }`
 //             returned 1000: every read of the parameter after the shadowing
@@ -55,16 +55,16 @@ function b614ArrowParam(): int32 {
 	return f(30);
 }
 
-test "bug614: a parameter read after a loop-block shadow keeps its value" {
+test "bug658: a parameter read after a loop-block shadow keeps its value" {
 	assert b614LoopBlock(7, 2) == 2007;
 }
-test "bug614: a parameter read after an if-block shadow keeps its value" {
+test "bug658: a parameter read after an if-block shadow keeps its value" {
 	assert b614IfBlock("outer") == "inner/outer";
 }
-test "bug614: a struct parameter passed by pointer is not the shadow's storage" {
+test "bug658: a struct parameter passed by pointer is not the shadow's storage" {
 	const big: B614Big = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
 	assert b614LargeStruct(big, true) == 49;
 }
-test "bug614: an arrow parameter read after a shadow keeps its value" {
+test "bug658: an arrow parameter read after a shadow keeps its value" {
 	assert b614ArrowParam() == 35;
 }
