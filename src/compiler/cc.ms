@@ -403,10 +403,14 @@ export function crossTargetFlag(targetOs: string, cpuTarget: string, useZig: boo
 
 export function modeFlags(mode: number): string {
 	return match (mode) {
-		2 => " -O3 -w -DNDEBUG",
-		1 => " -O2 -w -DNDEBUG",
-		_ => " -O0 -g",
+		2 => " -O3 -w -DNDEBUG -ffp-contract=off",
+		1 => " -O2 -w -DNDEBUG -ffp-contract=off",
+		_ => " -O0 -g -ffp-contract=off",
 	};
+}
+
+test "every build mode keeps a*b+c as two roundings" {
+	for (const mode of [0, 1, 2]) assert modeFlags(mode).indexOf("-ffp-contract=off") >= 0;
 }
 
 // -- LTO capability + strategy --
