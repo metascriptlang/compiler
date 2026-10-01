@@ -9,7 +9,7 @@
 // side effect only), and once bound, `argv` was `[node, script, ...args]`.
 // GREEN POST-FIX: GUARD-OK.
 
-import { execFileResult, cwd, exit, env } from "std/process";
+import { execFileResult, cwd, exit, env, platform } from "std/process";
 import { writeFile, ensureDir, removeAll } from "std/fs";
 
 const root = cwd();
@@ -47,7 +47,8 @@ if (!out.includes("argc=3\n")) report(`argc, want [script, a, b c]: ${all}`);
 if (!out.includes("arg=a\narg=b c\n")) report(`args after the script: ${all}`);
 if (!out.includes("script=true\n")) report(`argv[0] is not the emitted script: ${all}`);
 if (!out.includes("cwd=true\n")) report(`cwd from std/process: ${all}`);
-if (!out.includes("eol=1\n")) report(`extern const from a sibling module: ${all}`);
+const eolLength = platform == "windows" ? 2 : 1;
+if (!out.includes(`eol=${eolLength}\n`)) report(`extern const from a sibling module: ${all}`);
 
 if (failed != 0) exit(1);
 console.log("GUARD-OK");
