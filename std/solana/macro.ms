@@ -1,5 +1,5 @@
 import { Node, NodeKind, bindSym, getImpl } from "std/meta";
-import { instructionDiscriminator } from "./discriminator";
+import { eventDiscriminator, instructionDiscriminator } from "./discriminator";
 import {
 	argBool,
 	argBoolValid,
@@ -13,6 +13,7 @@ import {
 	argU64,
 	argU8,
 	argsFit,
+	eventWriter,
 	exclusiveWritable,
 	mutableAccount,
 	ownedAccount,
@@ -388,5 +389,135 @@ export macro accounts(): Node {
 		}],
 		isDirectCall: false,
 		resolvedOverloadIdx: -1,
+	};
+}
+
+export macro emitEvent(value: Node): Node {
+	const shape = getTypeArg();
+	if (shape.kind !== NodeKind.TypeObject) {
+		error("emitEvent<E>(value): E must be the event struct", shape);
+	}
+	if (value.kind !== NodeKind.Identifier) {
+		error("emitEvent<E>(value): pass the event as a local variable", value);
+	}
+	const line = value.line;
+	const column = value.column;
+	const discriminator = eventDiscriminator(shape.typExprTypeName);
+	const bytes: Node[] = [];
+	let b = 0;
+	while (b < 8) {
+		const byte = discriminator.bytes[b];
+		bytes.push({
+			kind: NodeKind.NumberLiteral,
+			line: line,
+			column: column,
+			value: byte as number,
+			isFloat: false,
+			intVal: byte as int64,
+			outOfRangeText: "",
+			isBitPattern: false,
+		});
+		b = b + 1;
+	}
+	const methods: string[] = [];
+	let total = 8;
+	let field = 0;
+	while (field < shape.typExprFieldNames.length) {
+		const written = shape.typExprFieldTypes[field];
+		let typeName = "";
+		if (written.kind === NodeKind.Identifier) { typeName = written.name; }
+		if (written.kind === NodeKind.TypeObject) { typeName = written.typExprTypeName; }
+		let method = "";
+		let width = 0;
+		if (typeName == "uint8") { method = "u8"; width = 1; }
+		if (typeName == "int8") { method = "i8"; width = 1; }
+		if (typeName == "boolean") { method = "bool"; width = 1; }
+		if (typeName == "uint16") { method = "u16"; width = 2; }
+		if (typeName == "int16") { method = "i16"; width = 2; }
+		if (typeName == "uint32") { method = "u32"; width = 4; }
+		if (typeName == "int32") { method = "i32"; width = 4; }
+		if (typeName == "uint64") { method = "u64"; width = 8; }
+		if (typeName == "int64") { method = "i64"; width = 8; }
+		if (typeName == "Pubkey") { method = "pubkey"; width = 32; }
+		if (method == "") {
+			error("emitEvent<E>(value): field '" + shape.typExprFieldNames[field] +
+				"' is not fixed-size plain data (sized integer, boolean or Pubkey)", shape);
+		}
+		methods.push(method);
+		total = total + width;
+		field = field + 1;
+	}
+	let chain: Node = {
+		kind: NodeKind.CallExpr,
+		line: line,
+		column: column,
+		callee: bindSym("eventWriter"),
+		arguments: [{
+			kind: NodeKind.NumberLiteral,
+			line: line,
+			column: column,
+			value: total as number,
+			isFloat: false,
+			intVal: total as int64,
+			outOfRangeText: "",
+			isBitPattern: false,
+		}, {
+			kind: NodeKind.TypeAssertion,
+			line: line,
+			column: column,
+			asExpr: { kind: NodeKind.ArrayLiteral, line: line, column: column, elements: bytes },
+			asType: "uint8[8]",
+		}],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+	let at = 0;
+	while (at < methods.length) {
+		chain = {
+			kind: NodeKind.CallExpr,
+			line: line,
+			column: column,
+			callee: {
+				kind: NodeKind.MemberExpr,
+				line: line,
+				column: column,
+				object: chain,
+				property: methods[at],
+				isOptional: false,
+			},
+			arguments: [{
+				kind: NodeKind.MemberExpr,
+				line: line,
+				column: column,
+				object: { kind: NodeKind.Identifier, line: line, column: column, name: value.name },
+				property: shape.typExprFieldNames[at],
+				isOptional: false,
+			}],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		};
+		at = at + 1;
+	}
+	return {
+		kind: NodeKind.TypeAssertion,
+		line: line,
+		column: column,
+		asExpr: {
+			kind: NodeKind.CallExpr,
+			line: line,
+			column: column,
+			callee: {
+				kind: NodeKind.MemberExpr,
+				line: line,
+				column: column,
+				object: chain,
+				property: "finish",
+				isOptional: false,
+			},
+			arguments: [],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		},
+		asType: "uint64",
 	};
 }
