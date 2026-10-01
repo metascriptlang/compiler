@@ -592,7 +592,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		// === Literals ===
 		NodeKind.NumberLiteral => {
 			const d = node.data as NumberLiteralData;
-			const v = d.isFloat ? raiserFloat(d.value) : raiserInt(d.value as int64);
+			const v = d.isFloat ? raiserFloat(d.value) : raiserInt(literalBits(d));
 			heapObjectSetField(objHeap, handle, "value", v);
 			setBool(objHeap, handle, "isBitPattern", d.isBitPattern);
 			setStr(objHeap, handle, "outOfRangeText", d.outOfRangeText);
@@ -1333,6 +1333,11 @@ function deserializeObjectLiteral(handle: int64, objHeap: RaiserObjectHeap, arrH
 	return createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc);
 }
 
+function literalBits(d: NumberLiteralData): int64 {
+	if ((d.intVal as float64) == d.value || (d.intVal < 0 && d.value > 0)) return d.intVal;
+	return d.value as int64;
+}
+
 // Reconstruct a Node from a serialized heap object.
 // MAINTENANCE: This is the exact mirror of nodeToValue above. Field names MUST match.
 // When you add a field to nodeToValue, add the corresponding read here.
@@ -1341,13 +1346,14 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 	return match (kind) {
 		// === Literals ===
 		NodeKind.NumberLiteral => {
-			// Float-ness is the stored register KIND, not a property of the
-			// magnitude: recomputing it as `value % 1 !== 0` turns a round-tripped
-			// 8.0 into an integer literal, so the wire silently rewrites the node
-			// it was asked to carry.
 			const raw = heapObjectGetField(objHeap, h, "value");
 			const value = readFloat(objHeap, h, "value");
-			return createNodeAt(NodeKind.NumberLiteral, { value, isFloat: raw.kind == RaiserValueKind.Float, intVal: value as int64, isBitPattern: readBool(objHeap, h, "isBitPattern"), outOfRangeText: readStr(objHeap, h, "outOfRangeText") }, loc);
+			const declared = heapObjectGetField(objHeap, h, "isFloat");
+			const isFloat = declared.kind == RaiserValueKind.Nil ? raw.kind == RaiserValueKind.Float : readBool(objHeap, h, "isFloat");
+			const exact = heapObjectGetField(objHeap, h, "intVal");
+			const bits = exact.kind == RaiserValueKind.Int ? exact.intVal : (raw.kind == RaiserValueKind.Int ? raw.intVal : value as int64);
+			const intVal = isFloat ? value as int64 : bits;
+			return createNodeAt(NodeKind.NumberLiteral, { value, isFloat, intVal, isBitPattern: readBool(objHeap, h, "isBitPattern"), outOfRangeText: readStr(objHeap, h, "outOfRangeText") }, loc);
 		},
 		NodeKind.StringLiteral => {
 			return createNodeAt(NodeKind.StringLiteral, { value: readStr(objHeap, h, "value") }, loc);
@@ -2023,6 +2029,36 @@ test "round-trip NumberLiteral" {
 	assert back.kind == NodeKind.NumberLiteral;
 	const d = back.data as NumberLiteralData;
 	assert d.value == 42;
+}
+
+test "round-trip NumberLiteral keeps an integer past 2^53 exact" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const orig = createNode(NodeKind.NumberLiteral, { value: 9007199254740993 as number, isFloat: false, intVal: 9007199254740993 as int64 }, synthToken(makeLoc(1, 0)));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, orig.location);
+	const d = back.data as NumberLiteralData;
+	assert !d.isFloat;
+	assert d.intVal == 9007199254740993;
+}
+
+test "round-trip NumberLiteral keeps an integral float a float" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const orig = createNode(NodeKind.NumberLiteral, { value: 8.0, isFloat: true, intVal: 0 as int64 }, synthToken(makeLoc(1, 0)));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, orig.location);
+	assert (back.data as NumberLiteralData).isFloat;
+}
+
+test "a NumberLiteral object that declares an integer is read as that integer" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const val = nodeToValue(mkNumber(0, makeLoc(1, 0)), objH, arrH);
+	heapObjectSetField(objH, val.intVal, "value", raiserFloat(9007199254740992.0));
+	heapObjectSetField(objH, val.intVal, "isFloat", raiserBool(false));
+	heapObjectSetField(objH, val.intVal, "intVal", raiserInt(9007199254740993));
+	const d = valueToNode(val, objH, arrH, makeLoc(1, 0)).data as NumberLiteralData;
+	assert !d.isFloat;
+	assert d.intVal == 9007199254740993;
 }
 
 test "round-trip StringLiteral" {
