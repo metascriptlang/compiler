@@ -694,11 +694,12 @@ Three entry points, and picking the wrong one is the usual mistake:
 |---|---|---|
 | an argument Node with a type | `arg.nodeType` | the type-AST of that VALUE — class/interface arrives **Ref-wrapped**, so peel `TypeGeneric → typExprArgs[0]` |
 | a type the MACRO knows by name | `getTypeImpl(Style)` | that type's implementation, Ref already peeled — `TypeObject` directly; resolved when the body is baked |
+| a typed value or reflected field type | `getTypeImpl(value)` | the concrete implementation; Ref/Alias/generic wrappers are expanded at the query root, while nested generic field types retain their identity and can be queried separately |
 | a type the CALLER picked: `m<T>(...)` | `getTypeArg()` | the call site's `<T>`, resolved in the CALL SITE scope, Ref peeled |
-| a bound symbol (`bindSym`, either mode) | `getType(s)` / `getTypeImpl(s)` | the symbol's type-AST at macro run time, `getType` keeps Ref, `getTypeImpl` peels it; a class declared later in the module is resolved on demand and answers with its full shape; no type → compile error `node has no type`; a `null` node → `null` |
+| a bound symbol (`bindSym`, either mode) | `getType(s)` / `getTypeImpl(s)` | syntax view / implementation view of its checked type; the implementation AST retains the original type identity; no type → compile error `node has no type`; a `null` node → `null` |
 | a bound symbol | `getImpl(s)` | a copy of its declaration (`ClassDecl`, `FunctionDecl`, …), `null` when the symbol has none; not a symbol → `node is not a symbol`; a `null` node → `null` |
 | a type written as a string (`propType`, a param type) | `resolveType("A \| null")` | the type-AST the checker resolves for that annotation at the expansion site |
-| a type-AST from any query above | `typeKind(t)` | the `TypeKind` behind the rendered AST — a class is `Ref` via `getType` and `Struct` via `getTypeImpl`, an enum `Enum`, `int32` `Int32`, a function `Function`; no type handle → `node carries no type` |
+| a type-AST from any query above | `typeKind(t)` | the original checked `TypeKind`, independent of the rendered AST shape; `getTypeImpl` can render a `TypeObject` while retaining a Ref or GenericInstance identity; no type handle → `node carries no type` |
 | two type-ASTs | `sameType(a, b)` | the checker's type identity (`resolveType("int32")` twice → true, against `"string"` → false); a non-type node → `sameType needs two type nodes` |
 | a bound symbol | `symKind(s)` | its `SymbolKind` (`Class`, `Enum`, `Function`, …); not a symbol → `node is not a symbol` |
 
@@ -717,10 +718,19 @@ macro body the checker deliberately views it as `Node`, since that is what the V
 wire actually carries. Flat reads (`.typExprFieldNames`, `.discFieldName`, …)
 resolve through the same unique-field-name rule as reads on the node itself.
 
-`getTypeImpl(T)` resolves `T` in the **macro's declaring module** scope, not the
-call site's, and is baked into the macro body once at compile time — so it is for
-types the macro knows by name (a framework's own interface), not for per-call-site
-generics. Unresolvable names are a compile error naming the macro.
+`getTypeImpl(Name)` resolves a declaration known by name in the **macro's declaring
+module** and is baked into the body. `getTypeImpl(value)` queries each typed argument,
+including concrete generic instances. Unresolvable names are a compile error naming
+the macro.
+
+Measured 2026-10-01 on the frozen array/implementation-query candidate over `35a64f3f`,
+shared machine: `msc test src/test/lang/typeImplementationQuery.ms` on C and ORC
+reported `Tests 306 passed (306)`; `--target=js` reported `Tests 69 passed (69)`.
+The old compiler refused the pin with nine type errors. A standalone consumer ran
+with identical output on C/DRC, C/ORC, JS and Raiser, covering two generic argument
+types, six alias layers, named queries and independently queried recursive fields;
+heterogeneous `Object.values` was rejected. These measurements do not certify the
+whole name-to-symbol migration, HCR ownership, generic std equality/dump or the full gate.
 
 Why it exists: a macro whose argument is a bare object literal —
 `createStyles({ box: {...} })` — gets NO type from `arg.nodeType`, because the
