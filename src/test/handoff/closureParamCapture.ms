@@ -1,7 +1,4 @@
 // A captured parameter is COPIED into the closure env, never addressed.
-// Nim lambdalifting.nim:216 newAsgnStmt — capture through a parameter is the one
-// case that generates an assignment; illegalCapture only rejects views and result.
-// Storing `&param` instead makes the env point into a frame the closure outlives.
 
 import { fullPipeline } from "./helpers";
 import { compileToC, compileToJS } from "../helpers";
@@ -173,6 +170,23 @@ function f(c: Chunk): int32 {
 let v: int32[] = [1, 4];
 const c: Chunk = { view: v, tag: 10 };
 console.log(f(c));
+` },
+		{ name: "Borrow param read by an escaping arrow", src: `
+struct Big { a: int32; b: int32; c: int32; d: int32; }
+function mk(b: Borrow<Big>): () => int32 {
+	return (): int32 => b.a + b.d;
+}
+let src: Big[] = [{ a: 1, b: 2, c: 3, d: 4 }];
+console.log(mk(src[0])());
+` },
+		{ name: "Borrow local read by an escaping arrow", src: `
+struct Big { a: int32; b: int32; c: int32; d: int32; }
+function mk(xs: Big[]): () => int32 {
+	const item: Borrow<Big> = xs[0];
+	return (): int32 => item.a;
+}
+let src: Big[] = [{ a: 1, b: 2, c: 3, d: 4 }];
+console.log(mk(src)());
 ` },
 	];
 	for (const c of cases) {
