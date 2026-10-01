@@ -21,7 +21,8 @@ export function snakeCase(name: string): string {
 			const endsAcronym = i > 0 && isUpper(name.charCodeAt(i - 1)) &&
 				i + 1 < name.length && isLowerOrDigit(name.charCodeAt(i + 1));
 			if (afterLower || endsAcronym) { text += "_"; }
-			text += String.fromCharCode(code + 32);
+			const lowercase = "abcdefghijklmnopqrstuvwxyz";
+			text += lowercase.slice(code - 65, code - 64);
 		} else {
 			text += name.slice(i, i + 1);
 		}
