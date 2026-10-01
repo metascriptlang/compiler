@@ -25,8 +25,8 @@ import {
 	Signer,
 	Writable,
 } from "./index";
-import { HostAccount, run } from "./host";
-import { accounts, args, instruction } from "./macro";
+import { HostAccount, logs, run } from "./host";
+import { accounts, args, emitEvent, instruction } from "./macro";
 
 
 export struct Counter {
@@ -405,4 +405,27 @@ test "accounts<T>() verifies each field by its proof type, in declaration order"
 	const short = [owner, counter];
 	assert run(programKey(), short, [], bumpAccountsEntry).result ==
 		ProgramError.accountNotEnoughKeys().code;
+}
+
+export struct Made {
+	amount: uint64;
+	maker: Pubkey;
+	done: boolean;
+}
+
+function emitEntry(): void {
+	const made: Made = { amount: 1234, maker: keyOf(7), done: true };
+	emitEvent<Made>(made);
+}
+
+test "emitEvent logs Anchor's event discriminator and the Borsh fields as Program data" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], emitEntry).result == 0;
+	const expected = "Program data: " +
+		"8FsHQdtzMuDSBAAAAAAAAAcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ==";
+	let found = false;
+	for (const line of logs()) {
+		if (line == expected) { found = true; }
+	}
+	assert found;
 }
