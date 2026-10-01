@@ -597,7 +597,8 @@ export function getSimpleTypeDesc(t: Type): string {
 
 export function isPointerType(t: Type): boolean {
 	if (t == null) return false;
-	const inner = skipModifier(t);
+	let inner = skipModifier(t);
+	if (inner != null) inner = skipModifier(peelTransparentInstance(inner));
 	if (inner == null) return false;
 	// Union(Ref<T>, Null) collapses to T* in C — same C representation as Ref<T>.
 	if (inner.kind == TypeKind.Union && unwrapRefNullUnion(inner) != null) return true;
@@ -1536,6 +1537,8 @@ export function getArrayTypeName(elemType: string): string {
 function elemArrayCName(elem: Type): string {
 	const simple = getSimpleTypeDesc(elem);
 	if (simple != "") return simple;
+	const transparent = peelTransparentInstance(elem);
+	if (transparent != elem) return elemArrayCName(transparent);
 	if ((elem.kind == TypeKind.Distinct || elem.kind == TypeKind.Alias) && elem.typeReturn != null) return elemArrayCName(elem.typeReturn);
 	if (elem.kind == TypeKind.Set) {
 		const sr = setRepr(elem);
