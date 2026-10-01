@@ -291,6 +291,22 @@ export function slice<T>(this arr: T[], start: number, end: number = 90071992547
 	return out;
 }
 
+/** Copies a range of a byte view into a new owned array, like `Uint8Array.prototype.slice`. */
+export function slice(this view: Readonly<Span<uint8>>, start: number, end: number = 9007199254740991): uint8[] {
+	const n = view.length;
+	let lo = start < 0 ? n + start : start;
+	let hi = end < 0 ? n + end : end;
+	if (lo < 0) { lo = 0; }
+	if (hi > n) { hi = n; }
+	const out: uint8[] = [];
+	let i = lo;
+	while (i < hi) {
+		out.push(view[i]);
+		i = i + 1;
+	}
+	return out;
+}
+
 /** Returns the index of the first occurrence of a value, or -1 if absent. */
 export function indexOf<T>(this arr: T[], value: T): number {
 	const n = arr.length;
@@ -311,6 +327,20 @@ export function includes<T>(this arr: T[], value: T): boolean {
 		i = i + 1;
 	}
 	return false;
+}
+
+export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
+	const n = view.length;
+	let i = 0;
+	while (i < n) {
+		if (view[i] == value) return i;
+		i = i + 1;
+	}
+	return -1;
+}
+
+export function includes(this view: Readonly<Span<uint8>>, value: uint8): boolean {
+	return view.indexOf(value) >= 0;
 }
 
 /** Counts occurrences of a value. */
@@ -382,3 +412,7 @@ export function concat<T>(this arr: T[], other: T[]): T[] {
 /** Returns the byte array as a string (zero-copy). */
 @builtin("AsString")
 export extern function asString(this arr: Readonly<uint8[]>): string from "msAsString";
+
+export function asString(this view: Readonly<Span<uint8>>): string {
+	return view.slice(0).asString();
+}

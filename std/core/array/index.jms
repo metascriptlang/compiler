@@ -22,7 +22,10 @@ export function at<T>(this arr: T[], idx: number): T {
 }
 export extern function indexOf<T>(this arr: T[], value: T): number from "#.indexOf(#)";
 export extern function includes<T>(this arr: T[], value: T): boolean from "#.includes(#)";
+export extern function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number from "#.indexOf(#)";
+export extern function includes(this view: Readonly<Span<uint8>>, value: uint8): boolean from "#.includes(#)";
 export extern function slice<T>(this arr: T[], start: number, end: number = 9007199254740991): T[] from "#.slice(#, #)";
+export extern function slice(this view: Readonly<Span<uint8>>, start: number, end: number = 9007199254740991): uint8[] from "Array.from(#.slice(#, #))";
 export extern function concat<T>(this arr: T[], other: T[]): T[] from "#.concat(#)";
 export extern function reverse<T>(this arr: T[]): void from "#.reverse()";
 // Typed overloads mirroring index.cms — bare native sort() is LEXICOGRAPHIC,

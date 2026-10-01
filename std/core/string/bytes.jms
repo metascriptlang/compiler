@@ -45,6 +45,10 @@ export function asString(this arr: Readonly<uint8[]>): string {
 	unreachable;
 }
 
+export function asString(this view: Readonly<Span<uint8>>): string {
+	return view.slice(0).asString();
+}
+
 export function byteLength(this s: string): int32 {
 	return wtf8Cached(s).length;
 }
