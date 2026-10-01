@@ -39,6 +39,7 @@ after another, and compare every red against src/test/known-red.json.
   --reds <lane> <log>  print the failure names the gate reads out of a lane log
   --inert <from> <to>  exit 0 when every path changed from..to picks no lane
   --select       print the corpus programs whose emitted C or JS differs from the merge base
+  --tree-key <rev>  print the key of the src and std tree at <rev> (what msc.key holds)
   --route        read paths on stdin, print "lane<TAB>path" for each lane a path picks
   --self-test    check the routing table and the red parsers against fixed cases
 
@@ -51,6 +52,12 @@ ledger wait column. Only the running gate counts when worker slots are split.
 queue. An empty registry file is a running gate whose gate.sh predates the queue;
 it is waited for like any other. A registry file that does not parse stops the
 run and names the file.
+
+A GREEN run whose build lane produced the candidate for the clean src and std tree
+of HEAD makes that candidate the worktree builder ./msc (the old one stays as
+msc.prev, the tree key goes to msc.key); a failed swap prints "builder not
+refreshed" and changes neither verdict nor exit code. --tree-key <rev> prints
+the key for any rev, which tools/wt.sh land compares with msc.key.
 
 Every path that is not inert and not under tools/ gets build and suite; a rule
 only adds lanes to that floor. The tests lane compiles its tiers with the
@@ -176,6 +183,35 @@ tree_key() {
   t=$({ git ls-tree "$1" src/ | grep -v $'\tsrc/test$'; git ls-tree "$1" std; } 2>/dev/null)
   [ -n "$t" ] && printf '%s\n' "$t" | git hash-object --stdin
 }
+refresh_builder() {
+  local src=$1 dest=$2 key=$3 tmp="$2.new" prev="${2%.exe}.prev"
+  cp "$src" "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; say "gate: builder not refreshed: cannot copy $src to $tmp"; return 1; }
+  if [ -e "$dest" ]; then
+    rm -f "$prev"
+    mv "$dest" "$prev" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; say "gate: builder not refreshed: cannot move $dest aside"; return 1; }
+  fi
+  mv "$tmp" "$dest" 2>/dev/null || {
+    rm -f "$tmp" 2>/dev/null; [ ! -e "$prev" ] || mv "$prev" "$dest" 2>/dev/null
+    say "gate: builder not refreshed: cannot move the new builder to $dest"; return 1
+  }
+  printf '%s\n' "$key" >"${dest%.exe}.key" 2>/dev/null || { say "gate: builder not refreshed: cannot write ${dest%.exe}.key"; return 1; }
+  say "gate: builder refreshed: $dest is the candidate for tree ${key:0:12} (previous kept as ${prev##*/})"
+}
+
+adopt_builder() {
+  local verdict=$1 ran=$2 dest="$TOP/msc"
+  [ "$verdict" = GREEN ] || return 0
+  case " $ran " in *" build "*) ;; *) return 0 ;; esac
+  [ -n "$cand_key" ] && [ "$(cat "$CAND.key" 2>/dev/null)" = "$cand_key" ] || return 0
+  [ -z "$(git -C "$TOP" status --porcelain -- src std)" ] && [ "$(cd "$TOP" && tree_key HEAD)" = "$cand_key" ] || return 0
+  [ ! -e "$TOP/msc.exe" ] || dest="$TOP/msc.exe"
+  if [ "$(cat "$TOP/msc.key" 2>/dev/null)" = "$cand_key" ]; then
+    say "gate: builder already current for tree ${cand_key:0:12}"
+    return 0
+  fi
+  refresh_builder "$CAND" "$dest" "$cand_key" || return 0
+}
+
 differ_c() { awk -F'\t' '$2 != $6 || $4 != 0 || $8 != 0 { print $1 }'; }
 
 list_programs() {
@@ -271,6 +307,7 @@ emit_one() {
 }
 
 if [ "${1:-}" = --emit-one ]; then emit_one "${2:?}" "${3:?}" "${4:?}" "${5:?}"; exit 0; fi
+if [ "${1:-}" = --tree-key ]; then tree_key "${2:?--tree-key needs a rev}"; exit $?; fi
 
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git checkout"
 cd "$TOP" || die "cannot enter $TOP"
@@ -418,6 +455,50 @@ share_of_cores() {
   w=$(( $(cores) / g / $1 ))
   [ "$w" -ge 1 ] || w=1
   echo "$w"
+}
+
+adopt_self_test() {
+  local bad=0 d got saveTOP=$TOP saveCAND=$CAND savekey=${cand_key-} g="git -c user.name=t -c user.email=t@t"
+  d=$(mktemp -d) || return 1
+  TOP="$d/wt"; CAND="$d/wt/out/gate/msc.exe"
+  mkdir -p "$TOP/src" "$TOP/std" "$TOP/out/gate"
+  printf 'a\n' >"$TOP/src/a.ms"; printf 'b\n' >"$TOP/std/b.ms"
+  (cd "$TOP" && git init -q . && $g add -A src std && $g commit -qm x) >/dev/null 2>&1
+  local k; k=$(cd "$TOP" && tree_key HEAD)
+  got=$(cd "$TOP" && bash "$saveTOP/tools/gate.sh" --tree-key HEAD)
+  [ -n "$k" ] && [ "$got" = "$k" ] || { printf 'FAIL adopt: --tree-key "%s" is not tree_key "%s"\n' "$got" "$k"; bad=1; }
+  got=$(cd "$saveTOP" && bash tools/gate.sh --tree-key HEAD)
+  [ "$got" = "$(tree_key HEAD)" ] || { printf 'FAIL adopt: --tree-key HEAD differs from tree_key in the real checkout\n'; bad=1; }
+  reset() { rm -rf "$TOP"/msc "$TOP"/msc.exe "$TOP"/msc.key "$TOP"/msc.prev "$TOP"/msc.new; printf 'old\n' >"$TOP/msc"; printf 'new\n' >"$CAND"; printf '%s\n' "$k" >"$CAND.key"; cand_key=$k; }
+  reset; adopt_builder GREEN " tools build suite" >/dev/null
+  { [ "$(cat "$TOP/msc")" = new ] && [ "$(cat "$TOP/msc.prev")" = old ] && [ "$(cat "$TOP/msc.key")" = "$k" ] && [ ! -e "$TOP/msc.new" ]; } \
+    || { printf 'FAIL adopt: GREEN with a matching key did not swap (msc=%s prev=%s)\n' "$(cat "$TOP/msc" 2>&1)" "$(cat "$TOP/msc.prev" 2>&1)"; bad=1; }
+  printf 'newer\n' >"$CAND"; rm -f "$TOP/msc.key"; adopt_builder GREEN " build" >/dev/null
+  { [ "$(cat "$TOP/msc")" = newer ] && [ "$(cat "$TOP/msc.prev")" = new ]; } || { printf 'FAIL adopt: .prev was not rotated\n'; bad=1; }
+  got=$(adopt_builder GREEN " build"); printf 'x\n' >"$CAND"
+  adopt_builder GREEN " build" >/dev/null
+  { [ "$(cat "$TOP/msc")" = newer ] && [[ "$got" == *"already current"* ]]; } || { printf 'FAIL adopt: swapped although msc.key already equals the key: "%s"\n' "$got"; bad=1; }
+  reset; adopt_builder RED " build" >/dev/null
+  { [ "$(cat "$TOP/msc")" = old ] && [ ! -e "$TOP/msc.key" ]; } || { printf 'FAIL adopt: adopted on RED\n'; bad=1; }
+  reset; adopt_builder GREEN " tools" >/dev/null
+  { [ "$(cat "$TOP/msc")" = old ] && [ ! -e "$TOP/msc.key" ]; } || { printf 'FAIL adopt: adopted when the build lane did not run\n'; bad=1; }
+  reset; printf 'other\n' >"$CAND.key"; adopt_builder GREEN " build" >/dev/null
+  [ "$(cat "$TOP/msc")" = old ] || { printf 'FAIL adopt: adopted a candidate whose key does not match\n'; bad=1; }
+  reset; cand_key=""; adopt_builder GREEN " build" >/dev/null
+  [ "$(cat "$TOP/msc")" = old ] || { printf 'FAIL adopt: adopted although the tree was dirty at the start\n'; bad=1; }
+  reset; printf 'dirty\n' >>"$TOP/src/a.ms"; adopt_builder GREEN " build" >/dev/null
+  [ "$(cat "$TOP/msc")" = old ] || { printf 'FAIL adopt: adopted although src is dirty now\n'; bad=1; }
+  (cd "$TOP" && git checkout -q -- src/a.ms)
+  reset; rm -f "$CAND"; mkdir "$TOP/msc.new"
+  got=$(adopt_builder GREEN " build"); rc=$?
+  { [ "$rc" -eq 0 ] && [[ "$got" == "gate: builder not refreshed: "* ]] && [ "$(cat "$TOP/msc")" = old ]; } \
+    || { printf 'FAIL adopt: failure path: rc=%s, out "%s"\n' "$rc" "$got"; bad=1; }
+  rm -rf "$TOP/msc.new"; reset; mv "$TOP/msc" "$TOP/msc.exe"
+  adopt_builder GREEN " build" >/dev/null
+  { [ "$(cat "$TOP/msc.exe")" = new ] && [ "$(cat "$TOP/msc.prev")" = old ]; } || { printf 'FAIL adopt: msc.exe naming\n'; bad=1; }
+  TOP=$saveTOP CAND=$saveCAND cand_key=$savekey
+  rm -rf "$d"
+  return $bad
 }
 
 queue_self_test() {
@@ -673,6 +754,7 @@ CASES
     [ "$rc" -eq 2 ] && [ -z "$got" ] || { printf 'FAIL invalid worker cap %s: rc=%s, jobs="%s"\n' "$invalid" "$rc" "$got"; bad=1; }
   done
   queue_self_test || bad=1
+  adopt_self_test || bad=1
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -1236,4 +1318,5 @@ fi
 
 say "gate: $verdict ($(printf '%s' "$ran" | sed 's/^ //; s/ /, /g')) $(fmt_secs $((SECONDS - start)))${blocked:+ · not run on this host:$blocked}"
 ledger total $((SECONDS - start)) "$([ "$verdict" = GREEN ] && echo 0 || echo 1)" "$red_sum" "$((red_sum - new_sum))" "$new_sum" "$flaky_sum" "$ADMIT_WAITED"
-[ "$verdict" = GREEN ]
+if [ "$verdict" = GREEN ]; then adopt_builder GREEN "$ran"; exit 0; fi
+exit 1
