@@ -1,4 +1,4 @@
-// HCR runner: msc run src/test/hcr/run.ms --target=raiser, from the recompiler root.
+// HCR runner: msc run --target=raiser src/test/hcr/run.ms, from the recompiler root.
 // Env: MSC=<path to msc> (default: ./msc, else installed msc).
 import { execFileResult, ExecFileResult, exit, env, cwd, platform } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, removeAll, copyFile } from "std/fs";
@@ -657,7 +657,7 @@ function runCommand(): void {
 	copy(`${FIXTURES}/run/app.ms`, `${dir}/app.ms`);
 	copy(`${FIXTURES}/indirect/logic.ms`, `${dir}/logic.ms`);
 	copy(`${FIXTURES}/indirect/logicBodyEdit.ms`, `${dir}/edit.txt`);
-	const ran = msc(dir, ["run", "app.ms", "--hcr"]);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
 		if (line.startsWith("HCR-RUN ")) seen.push(line);

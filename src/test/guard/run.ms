@@ -1,4 +1,4 @@
-// nim-guard runner: msc run src/test/guard/run.ms --target=raiser, from the recompiler root.
+// nim-guard runner: msc run --target=raiser src/test/guard/run.ms, from the recompiler root.
 //
 // Each *.ms here is a probe that exercises ONE Nim-derived invariant. It is
 // built with the DRC ledger (-DMS_DRC_LEDGER, a test-only instrumentation that

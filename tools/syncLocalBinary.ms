@@ -2,7 +2,7 @@
 // projects pick them up via $PATH.
 //
 // Run from a clean worktree of main, with the msc you just built:
-//   ./msc run tools/syncLocalBinary.ms --target=raiser [check] [no-binary]
+//   ./msc run --target=raiser tools/syncLocalBinary.ms [check] [no-binary]
 // check prints what would change; no-binary syncs the support trees only.
 // Env: MSC_INSTALL_DIR overrides the destination.
 import { argv, cwd, env, execFileResult, exit, platform } from "std/process";
