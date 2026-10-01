@@ -401,6 +401,7 @@ import "./bug634JsNarrowingIsChecked";
 import "./bug635OverloadCallUsesItsWinner";
 import "./bug636RefOperatorPassesALocation";
 import "./bug643NominalArrayIdentity";
+import "./bug638NullishIntoWiderUnion";
 import "./bug644RaiserProgramArgv";
 import "./bug656BareParamAliasKeepsItsName";
 import "./bug675ReadonlyPtrIsAView";
