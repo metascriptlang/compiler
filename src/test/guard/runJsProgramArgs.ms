@@ -1,4 +1,4 @@
-// `msc run <file> --target=js [args]` hands the program `argv = [script, ...args]`, the
+// `msc run --target=js <file> [args]` hands the program `argv = [script, ...args]`, the
 // same shape the native backend gives (`[binary, ...args]`), and a module that imports an
 // `extern const` bound by an `@import` in another module reaches that binding.
 //
@@ -39,7 +39,7 @@ writeFile(`${dir}/echo.ms`, [
 	"",
 ].join("\n"));
 
-const r = execFileResult(msc, ["run", "echo.ms", "--target=js", "a", "b c"], dir);
+const r = execFileResult(msc, ["run", "--target=js", "echo.ms", "a", "b c"], dir);
 const out = r.output;
 const all = `${out}${r.errorOutput}`;
 if (r.exitCode != 3) report(`exit code ${r.exitCode}, want 3 from std/process exit: ${all}`);

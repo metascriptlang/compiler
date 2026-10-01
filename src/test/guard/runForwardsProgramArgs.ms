@@ -1,5 +1,5 @@
-// `msc run <file> [args]` hands the program its arguments: a positional after the
-// file, everything after `--` verbatim, and an unknown flag is an error that names `--`.
+// `msc run [options] <file> [args]` hands the program everything after the file, flags and
+// `--` included; an msc option right after the file is an error that says to move it.
 // On Raiser argv[0] is the file as given, and output streams in order with a child's.
 // `msc x <cmd>` runs a declared command on Raiser: argv[0] is the command name and its
 // exit status is msc's.
@@ -31,7 +31,7 @@ removeAll(dir);
 ensureDir(dir);
 writeFile(`${dir}/echo.ms`, "import { argv } from \"std/process\";\nfor (let i = 1; i < argv.length; i += 1) { console.log(\"arg=\" + argv[i]); }\n");
 writeFile(`${dir}/echo0.ms`, "import { argv } from \"std/process\";\nfor (const a of argv) { console.log(\"arg=\" + a); }\n");
-writeFile(`${dir}/order.ms`, `import { execFile } from "std/process";\nconsole.log("line=A");\nexecFile("${msc}", ["run", "echo.ms", "--target=raiser", "child"]);\nconsole.log("line=C");\n`);
+writeFile(`${dir}/order.ms`, `import { execFile } from "std/process";\nconsole.log("line=A");\nexecFile("${msc}", ["run", "--target=raiser", "echo.ms", "child"]);\nconsole.log("line=C");\n`);
 
 function runEcho(args: string[]): string {
 	const all: string[] = ["run", "echo.ms"];
@@ -52,19 +52,19 @@ function lines(out: string): string {
 const positional = lines(runEcho(["a", "b c"]));
 if (positional != "arg=a|arg=b c|") report(`positionals after the file: ${positional}`);
 
-const dashed = lines(runEcho(["--", "--foo", "--release", "--", "x"]));
-if (dashed != "arg=--foo|arg=--release|arg=--|arg=x|") report(`after --: ${dashed}`);
+const passed = lines(runEcho(["a", "--release", "--", "--foo"]));
+if (passed != "arg=a|arg=--release|arg=--|arg=--foo|") report(`flags and -- after a program argument: ${passed}`);
 
-const known = lines(runEcho(["--release", "a"]));
-if (known != "arg=a|") report(`a known msc flag after the file: ${known}`);
+const unknownFirst = lines(runEcho(["--foo", "x"]));
+if (unknownFirst != "arg=--foo|arg=x|") report(`a flag msc does not know right after the file: ${unknownFirst}`);
 
-const unknown = runEcho(["--foo"]);
-if (!unknown.includes("exit 1") || !unknown.includes("msc run <file> -- --foo")) {
-	report(`unknown flag after the file: ${unknown}`);
+const misplaced = runEcho(["--release", "a"]);
+if (!misplaced.includes("exit 1") || !misplaced.includes("put it before the file: msc run --release echo.ms")) {
+	report(`an msc option right after the file: ${misplaced}`);
 }
 
 function runRaiser(file: string, args: string[]): string {
-	const all: string[] = ["run", file, "--target=raiser"];
+	const all: string[] = ["run", "--target=raiser", file];
 	for (const a of args) { all.push(a); }
 	const r = execFileResult(msc, all, dir);
 	if (r.exitCode != 0) return `exit ${r.exitCode}: ${r.output}${r.errorOutput}`;
