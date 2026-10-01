@@ -2809,6 +2809,34 @@ export function arrayElementNeedsCleanup(elem: Type): boolean {
 	return false;
 }
 
+export function isCountedRef(t: Type | null): boolean {
+	if (t == null || isPrimitiveKind(t.kind)) return false;
+	return match (t.kind) {
+		TypeKind.BigInt | TypeKind.Unknown => true,
+		TypeKind.Ref => t.sym == null || t.sym.symbolKind != SymbolKind.Actor,
+		TypeKind.GenericInstance => {
+			if (isAwaitable(t)) return true;
+			const body = distinctBody(t);
+			if (body != null) return isCountedRef(body);
+			const peeled = peelTransparentInstance(t);
+			return peeled != t && isCountedRef(peeled);
+		},
+		TypeKind.Distinct | TypeKind.Sink => isCountedRef(t.typeReturn),
+		TypeKind.Union => {
+			const inner = unwrapRefNullUnion(t);
+			return inner != null && inner.kind != TypeKind.Ptr
+				&& (inner.sym == null || inner.sym.symbolKind != SymbolKind.Actor);
+		},
+		_ => false,
+	};
+}
+
+export function isUncountedPtrElement(elem: Type | null): boolean {
+	if (elem == null) return false;
+	const bare = elem.kind == TypeKind.Union ? unwrapRefNullUnion(elem) : elem;
+	return bare != null && bare.kind == TypeKind.Ptr && !isCountedRef(bare.typeReturn);
+}
+
 export function propagateToOwner(parent: Type, child: Type): void {
 	if (child != null && child.typeFlags.has(TypeFlag.HasAsgn)) {
 		parent.typeFlags = parent.typeFlags.incl(TypeFlag.HasAsgn);

@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isPrimitiveUnionMember } from "../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isPrimitiveUnionMember, isCountedRef, isUncountedPtrElement } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
 import { attachedOpSym } from "../transform/util";
@@ -138,6 +138,9 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 			const n = arrayCTypeName(t);
 			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
 		}
+		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
+	}
+	if (isUncountedPtrElement(elem)) {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
 	// Ref/Ptr elements (class arrays) — msRefArray (all pointers are void*)
@@ -561,6 +564,42 @@ test "ptr → None (unmanaged)" {
 	const info = classifyType(createPtr(stringType()), ctx);
 	assert info.rcKind == RcKind.None;
 	assert !info.needsCleanup;
+}
+
+test "array of Ptr<void> → inert Array hooks" {
+	const ctx = createTransformContext();
+	const info = classifyType(createArray(createPtr(voidType())), ctx);
+	assert info.rcKind == RcKind.Array;
+	assert (info.destroyFn as Symbol).name == "msArrayDestroy";
+	assert (info.copyFn as Symbol).name == "msArrayCopy";
+}
+
+test "array of nullable Ptr<void> → inert Array hooks" {
+	const ctx = createTransformContext();
+	const info = classifyType(createArray(createUnion([createPtr(voidType()), nullType()])), ctx);
+	assert info.rcKind == RcKind.Array;
+	assert (info.destroyFn as Symbol).name == "msArrayDestroy";
+}
+
+test "array of Ptr to a counted ref → Ref hooks" {
+	const ctx = createTransformContext();
+	const leaf = createStruct("PtrLeaf", ["x"], [numberType()], false);
+	const info = classifyType(createArray(createPtr(createRef(leaf))), ctx);
+	assert (info.destroyFn as Symbol).name == "msArrayRefDestroy";
+}
+
+test "isCountedRef agrees with classifyType's Ref arms" {
+	const ctx = createTransformContext();
+	const leaf = createStruct("CountedLeaf", ["x"], [numberType()], false);
+	const samples: Type[] = [
+		createRef(leaf), unknownType(), createPrimitive(TypeKind.BigInt), stringType(), numberType(),
+		createPtr(voidType()), createPtr(createRef(leaf)), createUnion([createRef(leaf), nullType()]),
+		createUnion([createPtr(createRef(leaf)), nullType()]), createFunction([], [], voidType()),
+		createStruct("CountedToken", ["value"], [stringType()], false), createArray(numberType()),
+	];
+	for (const t of samples) {
+		assert isCountedRef(t) == (classifyType(t, ctx).rcKind == RcKind.Ref);
+	}
 }
 
 test "call is fresh" { assert isFreshExpr(NodeKind.CallExpr); }

@@ -14,7 +14,7 @@
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
 import { Node, NodeKind, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, createNode, makeLoc } from "../../ast/node";
-import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, isUnknownType, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
+import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, isUnknownType, isUncountedPtrElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext, createTransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -238,6 +238,7 @@ function getArrayMacroName(elemType: Type | null, boundChecks: boolean): string 
 export function evictHelperName(nativeName: string, elemType: Type | null): string {
 	if (elemType == null) return "";
 	elemType = peelTransparentInstance(elemType);
+	if (isUncountedPtrElement(elemType)) return "";
 	const bare = elemType.kind == TypeKind.Union ? unwrapRefNullUnion(elemType) : elemType;
 	if (bare == null) return "";
 	if (bare.kind != TypeKind.Ref && bare.kind != TypeKind.Ptr && !isUnknownType(bare)) return "";

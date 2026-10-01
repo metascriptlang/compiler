@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef } from "../../checker/types";
+import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUncountedPtrElement } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -3190,7 +3190,7 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 // string[][]'s element is a typed ref-to-array whose arrCType (msStringArraystar_Array)
 // has no per-type walker, so it must use msRefArrayDestroy.
 export function refArrayDestroyFn(elemT: Type | null, arrCType: string): string {
-	if (elemT == null) return "msNumberArrayDestroy";
+	if (elemT == null || isUncountedPtrElement(elemT)) return "msNumberArrayDestroy";
 	return match (elemT.kind) {
 		TypeKind.String => "msStringArrayDestroy",
 		// Actor-handle elements are DRC-exempt (classify.ms classifyArray) — free the
@@ -3210,7 +3210,7 @@ export function refArrayDestroyFn(elemT: Type | null, arrCType: string): string 
 	};
 }
 
-// Free-only msRefArray cells (actor elements) get their OWN weak TypeInfo
+// Free-only msRefArray cells (actor and uncounted Ptr elements) get their OWN weak TypeInfo
 // symbol: "msRefArrayRefCell" is ONE weak symbol program-wide, but destroyFn was
 // per-module first-ensure-wins + cross-module last-DatInit-wins — a module mixing
 // counted and inert element families scrambled the shared cell's destroyer.
