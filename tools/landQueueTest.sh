@@ -40,7 +40,7 @@ trap 'stop_runner; if [ "$FAIL" -eq 0 ]; then rm -rf "$T"; else printf "landQueu
 
 setup() {
   stop_runner
-  rm -rf "$T/ws" "$T/ctl" "$T/fakebin"; mkdir -p "$T/ws/.wt" "$T/ctl" "$T/fakebin"
+  rm -rf "$T/ws" "$T/ctl" "$T/fakebin" "$T/decoy" "$T/decoy-wt"; mkdir -p "$T/ws/.wt" "$T/ctl" "$T/fakebin"
   export LQ_TEST=$T/ctl MSC_LAND_QUEUE=$T/ws/queue MSC_WT_TOOL=$WT
   export MSC_LAND_QUEUE_IDLE=${IDLE:-2} MSC_LAND_QUEUE_POLL=1 MSC_LAND_QUEUE_BUSY_POLL=1 MSC_LAND_QUEUE_BUSY_MAX=${BUSY_MAX:-0} MSC_LAND_QUEUE_WAIT_POLL=1
   unset MSC_WT_ROOT WT_CARD_ROOT WT_WORKTREE_ROOT WT_BASE CLAUDE_PROJECT_DIR
@@ -75,8 +75,9 @@ mkwt() {
 }
 
 setverdict() { printf '%s\n' "$2" >"$T/ws/.wt/wt-$1/verdict"; git -C "$T/ws/.wt/wt-$1" commit -qam "verdict $2"; }
-enqueue() { (cd "$T/ws/.wt/wt-$1" && bash "$WT" land "$1" --async) >"$T/ctl/enq.$1" 2>&1; }
-waitfor() { (cd "$T/ws/.wt/wt-$1" && bounded "${2:-60}" bash "$WT" land "$1" --wait) >"$T/ctl/wait.$1" 2>&1; echo $?; }
+sbwt() { env -u WT_CWD -u CLAUDE_PROJECT_DIR bash "$WT" "$@"; }
+enqueue() { (cd "$T/ws/.wt/wt-$1" && sbwt land "$1" --async) >"$T/ctl/enq.$1" 2>&1; }
+waitfor() { (cd "$T/ws/.wt/wt-$1" && bounded "${2:-60}" sbwt land "$1" --wait) >"$T/ctl/wait.$1" 2>&1; echo $?; }
 runner_down() { local i; for i in $(seq 1 ${1:-30}); do [ -d "$T/ws/queue/runner.lock" ] || return 0; sleep 0.5; done; return 1; }
 onmain() { git -C "$R" ls-tree --name-only main | grep -qx "$1"; }
 
@@ -138,8 +139,8 @@ check "S6 runner log shows retries" '[ "$(grep -c "y: retry" "$MSC_LAND_QUEUE/ru
 
 echo "== S7 enqueue with no name from inside the worktree; hyphen names do not collide"
 setup; mkwt alias; mkwt fix-alias
-(cd "$T/ws/.wt/wt-fix-alias" && bash "$WT" land --async) >"$T/ctl/enq.fix-alias" 2>&1
-(cd "$T/ws/.wt/wt-alias" && bash "$WT" land alias --async) >"$T/ctl/enq.alias" 2>&1
+(cd "$T/ws/.wt/wt-fix-alias" && sbwt land --async) >"$T/ctl/enq.fix-alias" 2>&1
+(cd "$T/ws/.wt/wt-alias" && sbwt land alias --async) >"$T/ctl/enq.alias" 2>&1
 r1=$(waitfor fix-alias); r2=$(waitfor alias)
 check "S7 both landed" '[ "$r1" = 0 ] && [ "$r2" = 0 ] && onmain alias.txt && onmain fix-alias.txt'
 
@@ -177,7 +178,7 @@ echo "== S12 Windows busy check (tasklist on PATH)"
 setup; BUSY_MAX=3; export MSC_LAND_QUEUE_BUSY_MAX=3
 printf '#!/usr/bin/env bash\necho "Image Name   PID"\necho "=========== ===="\necho "msc.exe      1234"\n' >"$T/fakebin/tasklist"; chmod +x "$T/fakebin/tasklist"
 mkwt w
-(export PATH=$T/fakebin:$PATH; cd "$T/ws/.wt/wt-w" && bash "$WT" land w --async) >/dev/null 2>&1
+(export PATH=$T/fakebin:$PATH; cd "$T/ws/.wt/wt-w" && sbwt land w --async) >/dev/null 2>&1
 rw=$(waitfor w 60)
 check "S12 waited on msc.exe, then gated anyway" '[ "$rw" = 0 ] && grep -q "w: machine busy 3s, gating anyway" "$MSC_LAND_QUEUE/runner.log"'
 export MSC_LAND_QUEUE_BUSY_MAX=0
@@ -203,6 +204,18 @@ touch "$LQ_TEST/release"
 rq=$(waitfor q 60)
 check "S14 neither commit on main" '! onmain late.txt && ! onmain q.txt'
 check "S14 red names the moved worktree" '[ "$rq" = 1 ] && grep -q "worktree moved during the gate" "$MSC_LAND_QUEUE/q.red"'
+
+echo "== S15 a caller's WT_CWD and CLAUDE_PROJECT_DIR do not steer the sandbox"
+setup; mkwt o
+D=$T/decoy
+git init -q -b main "$D"; git -C "$D" config user.email t@t; git -C "$D" config user.name t
+echo d >"$D/d.txt"; git -C "$D" add -A; git -C "$D" commit -qm decoy
+git -C "$D" worktree add -q -b wt/o "$T/decoy-wt" main
+echo o >"$T/decoy-wt/o.txt"; git -C "$T/decoy-wt" add -A; git -C "$T/decoy-wt" commit -qm "add o in decoy"
+decoy_main=$(git -C "$D" rev-parse main)
+(export WT_CWD=$T/decoy-wt CLAUDE_PROJECT_DIR=$T/decoy-wt; enqueue o; waitfor o >"$T/ctl/ro")
+check "S15 sandbox o landed" '[ "$(cat "$T/ctl/ro")" = 0 ] && onmain o.txt'
+check "S15 decoy main untouched" '[ "$(git -C "$D" rev-parse main)" = "$decoy_main" ] && [ ! -e "$D/o.txt" ]'
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
