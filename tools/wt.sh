@@ -394,18 +394,40 @@ sync_main_path() {
   main_index --add --cacheinfo "$mode,$blob,$p"
 }
 
+queued_for() {
+  local qd=$1 name=$2 kinds=${3:-item run} k f
+  for k in $kinds; do
+    for f in "$qd"/*."$k"; do
+      [ -e "$f" ] && grep -qx "name=$name" "$f" && printf '%s\n' "$f"
+    done
+  done
+  return 0
+}
+
 cmd_land() {
-  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1 async=0 qd item
+  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1 async=0 wait=0 qd item name
   while [ $# -gt 0 ]; do
     case "$1" in
       --also) also+=("${2:?--also needs a command}"); shift ;;
       --no-gate) gate=0 ;;
       --async) async=1 ;;
+      --wait) wait=1 ;;
       *) target=$1 ;;
     esac
     shift
   done
-  if [ -n "$target" ]; then w=$(resolve_target "$target") || exit 1; else w=$(git rev-parse --show-toplevel); fi
+  if [ -n "$target" ]; then w=$(resolve_target "$target") || exit 1; else w=$(git -C "$WT_CURRENT" rev-parse --show-toplevel); fi
+  name=$(git -C "$w" symbolic-ref -q --short HEAD)
+  case "$name" in wt/*) name=${name#wt/} ;; *) die "land: $w is not on a wt/<name> branch" ;; esac
+  qd=${MSC_LAND_QUEUE:-$HOME/metascript/.wt/queue}
+  if [ "$wait" -eq 1 ]; then
+    while [ ! -e "$qd/$name.done" ] && [ ! -e "$qd/$name.red" ]; do
+      [ -n "$(queued_for "$qd" "$name")" ] || die "land: nothing queued for $name and no result in $qd"
+      sleep "${MSC_LAND_QUEUE_WAIT_POLL:-30}"
+    done
+    if [ -e "$qd/$name.done" ]; then say "land-queue: $name landed — $(cat "$qd/$name.done")"; exit 0; fi
+    say "land-queue: $name RED, $BASE untouched:"; cat "$qd/$name.red" >&2; exit 1
+  fi
   [ "$w" != "$MAIN" ] || die "land: run from a worktree, not the main checkout"
   [ "$(git -C "$MAIN" symbolic-ref -q HEAD)" = "refs/heads/$BASE" ] || die "land: the main checkout is not on $BASE"
   [ -z "$(git -C "$w" status --porcelain --untracked-files=no)" ] || die "land: $w has uncommitted changes to tracked files"
@@ -418,13 +440,15 @@ cmd_land() {
   [ "$new" != "$old" ] || die "land: nothing to land"
   git -C "$w" merge-base --is-ancestor "$old" "$new" || die "land: HEAD does not descend from $BASE"
   if [ "$async" -eq 1 ]; then
-    qd=${MSC_LAND_QUEUE:-$HOME/metascript/.wt/queue}
     mkdir -p "$qd"
-    rm -f "$qd/$target.red"
-    item="$qd/$(date +%s%N)-$target.item"
-    printf 'name=%s\nworktree=%s\n' "$target" "$w" >"$item"
+    [ -z "$(queued_for "$qd" "$name" run)" ] || die "land: $name is landing now; wait with: wt.sh land $name --wait"
+    queued_for "$qd" "$name" item | while IFS= read -r p; do rm -f "$p"; done
+    rm -f "$qd/$name.done" "$qd/$name.red" "$qd/$name.land.log"
+    item="$qd/$(date +%s)-$$.item"
+    printf 'name=%s\nworktree=%s\n' "$name" "$w" >"$item.tmp" && mv "$item.tmp" "$item"
     (nohup bash "$MAIN/tools/landQueue.sh" >/dev/null 2>&1 &)
-    say "land: $target queued ($(ls "$qd"/*.item 2>/dev/null | wc -l | tr -d ' ') pending) — the runner gates it when the machine is free; $BASE moves only on green; gate log lands in $qd/$target.gate.log"
+    say "land: $name queued ($(ls "$qd"/*.item 2>/dev/null | wc -l | tr -d ' ') pending) — the runner rebases, gates and lands it in turn; $BASE moves only on green; log $qd/$name.land.log"
+    say "land: wait for the verdict in the background with: ~/nerdtools/claude/tools/wt.sh land $name --wait"
     exit 0
   fi
   if [ "$gate" -eq 1 ]; then
@@ -463,11 +487,12 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
 }
 
 wt_context_extra() {
-  local qd=${MSC_LAND_QUEUE:-$HOME/metascript/.wt/queue} n r
+  local qd=${MSC_LAND_QUEUE:-$HOME/metascript/.wt/queue} n g r
   [ -d "$qd" ] || return 0
   n=$(ls "$qd"/*.item 2>/dev/null | wc -l | tr -d ' ')
+  g=$(cat "$qd"/*.run 2>/dev/null | sed -n 's/^name=//p' | paste -sd, -)
   r=$(cd "$qd" 2>/dev/null && ls -- *.red 2>/dev/null | sed 's/\.red$//' | paste -sd, -)
-  if [ "$n" -gt 0 ] || [ -n "$r" ]; then say "land-queue: $n pending${r:+ · RED: $r}"; fi
+  if [ "$n" -gt 0 ] || [ -n "$g" ] || [ -n "$r" ]; then say "land-queue: ${g:+landing $g · }$n pending${r:+ · RED: $r}"; fi
 }
 
 cmd_context() {
