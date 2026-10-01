@@ -79,7 +79,9 @@ static msStrPayload* reallocPayload0(msStrPayload* old, int64_t oldCap, int64_t 
    may live in .rodata. */
 
 static inline bool msStrKnownAscii(const msStrPayload* p) {
-	return p != NULL && (p->cap & MS_ASCII_CHECKED) != 0 && (p->cap & MS_ASCII_FLAG) != 0;
+	if (p == NULL) return false;
+	const int64_t cap = msStrCapLoad(p);
+	return (cap & MS_ASCII_CHECKED) != 0 && (cap & MS_ASCII_FLAG) != 0;
 }
 
 /* Answer for the SOURCE of an append without writing to it: the cached bit when
@@ -89,7 +91,8 @@ static inline bool msStrKnownAscii(const msStrPayload* p) {
    its cached bit. */
 static inline bool msStrScanAscii(const msStrPayload* p, int64_t len) {
 	if (p == NULL || len == 0) return true;
-	if ((p->cap & MS_ASCII_CHECKED) != 0) return (p->cap & MS_ASCII_FLAG) != 0;
+	const int64_t cap = msStrCapLoad(p);
+	if ((cap & MS_ASCII_CHECKED) != 0) return (cap & MS_ASCII_FLAG) != 0;
 	for (int64_t i = 0; i < len; i++) {
 		if ((unsigned char)p->data[i] >= 0x80) return false;
 	}
@@ -242,7 +245,7 @@ void msStringAssign(msString* a, msString b) {
 		memcpy(a->p->data, b.p->data, b.len + 1);
 		msStrInvalidateAscii(a->p);
 		if (msStrKnownAscii(b.p)) msStrMarkAscii(a->p);
-		else if (b.p != NULL && (b.p->cap & MS_ASCII_CHECKED) != 0) msStrMarkNonAscii(a->p);
+		else if (b.p != NULL && (msStrCapLoad(b.p) & MS_ASCII_CHECKED) != 0) msStrMarkNonAscii(a->p);
 	}
 }
 
@@ -1342,7 +1345,7 @@ int64_t msStringParseInt(msString s) {
 
 int64_t msStringCapacity(msString s) {
 	if (s.p == NULL) return 0;
-	return s.p->cap & MS_CAP_MASK;
+	return msStrCapLoad(s.p) & MS_CAP_MASK;
 }
 
 /* ===== In-Place Operations (Standard reference patterns) ===== */
