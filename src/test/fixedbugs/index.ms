@@ -380,6 +380,7 @@ import "./bug599UnknownHoldsObjectsOnly";
 import "./bug600UnknownIsManagedTop";
 import "./bug601ObjectDownConversion";
 import "./bug602AsConversion";
+import "./bug603AsClassMemberFromUnion";
 import "./bug610ValueStructIsNominal";
 import "./bug611TryConvertsSameShapedStructError";
 import "./bug612MaybeCacheKeepsItsPayload";
