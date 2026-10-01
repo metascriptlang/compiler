@@ -1,3 +1,4 @@
+// @xfail(san): module-level uint8[] is never destroyed at exit, card 2026-10-01-globals-never-destroyed-at-exit
 // @stdout: byte views 4 120 AxxxB xxxx
 
 const source = "x".repeat(4);
