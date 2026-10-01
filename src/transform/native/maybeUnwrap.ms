@@ -21,7 +21,7 @@
 // codegen's emitNullLiteral, so construction needs no rewrite — only the reads above.
 
 import { Node, NodeKind, MemberExprData, ObjectLiteralData } from "../../ast/node";
-import { isMaybeType } from "../../checker/types";
+import { isMaybeType, peelTransparentInstance } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeNull } from "../util";
@@ -36,7 +36,7 @@ function unwrapMaybeNode(node: Node): Node {
 	const loc = node.location;
 
 	// 1. Maybe wrapper object literal `{ value: x, present: true }` → inner value x
-	if (node.kind == NodeKind.ObjectLiteral && node.nodeType != null && isMaybeType(node.nodeType)) {
+	if (node.kind == NodeKind.ObjectLiteral && node.nodeType != null && isMaybeType(peelTransparentInstance(node.nodeType))) {
 		const d = node.data as ObjectLiteralData;
 		if (d.keys.length == 2 && d.keys[0] == "value" && d.keys[1] == "present") {
 			return d.properties[0];
@@ -46,7 +46,7 @@ function unwrapMaybeNode(node: Node): Node {
 	// 2/3. Reads on a Maybe-typed object collapse to native null semantics.
 	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
-		if (d.object != null && d.object.nodeType != null && isMaybeType(d.object.nodeType)) {
+		if (d.object != null && d.object.nodeType != null && isMaybeType(peelTransparentInstance(d.object.nodeType))) {
 			// x.present → x !== null
 			if (d.property == "present") {
 				const cmp = makeBinary(d.object, "!==", makeNull(loc), loc);

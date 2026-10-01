@@ -10,7 +10,7 @@
 // Conservative syntactic heuristic — no type info needed.
 
 import { Node, NodeKind, IfStmtData, WhileStmtData, DoWhileStmtData, ConditionalExprData, TypeKind } from "../../ast/node";
-import { isStructType, isMaybeType, unwrapRefNullUnion } from "../../checker/types";
+import { isStructType, isMaybeType, unwrapRefNullUnion, peelTransparentInstance } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeMember, makeNumber, makeBool, makeNull, makeUnary } from "../util";
@@ -53,31 +53,32 @@ function truthifyNode(node: Node): Node {
 // Wrap a condition for C boolean context.
 // Type-aware checks first (reference parity), then syntactic fallback.
 function wrapTruthiness(cond: Node): Node {
+	const ct = cond.nodeType != null ? peelTransparentInstance(cond.nodeType) : null;
 	// Type-aware: boolean-typed nodes need no wrapping.
 	// BooleanLiteral covers disc re-reads on narrowed bool-disc DU variants
 	// (`ok: BooleanLiteral` injected by resolvePass) — same C repr as boolean.
-	if (cond.nodeType != null && (cond.nodeType.kind == TypeKind.Boolean
-		|| cond.nodeType.kind == TypeKind.BooleanLiteral)) return cond;
+	if (ct != null && (ct.kind == TypeKind.Boolean
+		|| ct.kind == TypeKind.BooleanLiteral)) return cond;
 	// Maybe<T> in boolean context → .present
-	if (cond.nodeType != null && isMaybeType(cond.nodeType)) {
+	if (ct != null && isMaybeType(ct)) {
 		return makeMember(cond, "present", cond.location);
 	}
 	// bigint → `!!b`. The inner `!` is what bigIntOpLower turns into msBigIntIsZero
 	// on C; on js the double negation is already the native truthiness of 0n.
-	if (cond.nodeType != null && cond.nodeType.kind == TypeKind.BigInt) {
+	if (ct != null && ct.kind == TypeKind.BigInt) {
 		return makeUnary("!", makeUnary("!", cond, cond.location), cond.location);
 	}
 	// Non-nullable value types → always true (Reference: rejects objects in boolean context)
-	if (cond.nodeType != null && isStructType(cond.nodeType)) return makeBool(true, cond.location);
+	if (ct != null && isStructType(ct)) return makeBool(true, cond.location);
 	// Arrays → len > 0
-	if (cond.nodeType != null && cond.nodeType.kind == TypeKind.Array) {
+	if (ct != null && ct.kind == TypeKind.Array) {
 		return makeBinary(makeMember(cond, "len", cond.location), ">", makeNumber(0, cond.location), cond.location);
 	}
 	// Ref values and nullable-pointer unions (Ref/Ptr/unknown | null — the Maybe
 	// split leaves pointers unwrapped) → null-sentinel check; without this arm
 	// both shapes fell into the string byteLength fallback below.
-	if (cond.nodeType != null && (cond.nodeType.kind == TypeKind.Ref
-			|| unwrapRefNullUnion(cond.nodeType) != null)) {
+	if (ct != null && (ct.kind == TypeKind.Ref
+			|| unwrapRefNullUnion(ct) != null)) {
 		return makeBinary(cond, "!==", makeNull(cond.location), cond.location);
 	}
 	if (isAlreadyBoolean(cond)) return cond;

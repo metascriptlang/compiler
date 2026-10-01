@@ -16,7 +16,7 @@
 // LHS before the assignment node is visited — undo it there.
 
 import { Node, NodeKind, NodeFlag, TypeKind, BinaryExprData, MemberExprData, ArrayAccessData, OutExprData, HiddenStdConvData, TypeAssertionData, Type } from "../../ast/node";
-import { isMaybeType, unwrapMaybeType, isTagCarriedUnion, unwrapRefNullUnion } from "../../checker/types";
+import { isMaybeType, unwrapMaybeType, isTagCarriedUnion, unwrapRefNullUnion, peelTransparentInstance } from "../../checker/types";
 import { projectTagUnionMember, narrowMaybePayload, checkedProjection } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -36,20 +36,21 @@ function isAssignOp(op: string): boolean {
 function declaredMaybeOf(node: Node): Type | null {
 	if (node.kind == NodeKind.Identifier) {
 		const sym = node.resolvedSym;
-		if (sym != null && sym.symbolType != null && isMaybeType(sym.symbolType)) return sym.symbolType;
+		const st = sym != null && sym.symbolType != null ? peelTransparentInstance(sym.symbolType) : null;
+		if (st != null && isMaybeType(st)) return st;
 		return null;
 	}
 	if (node.kind == NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
 		if (d.object == null || d.object.nodeType == null) return null;
-		let ot = d.object.nodeType as Type | null;
+		let ot = peelTransparentInstance(d.object.nodeType) as Type | null;
 		while (ot != null && (ot.kind == TypeKind.Ref || ot.kind == TypeKind.Ptr || ot.kind == TypeKind.Var) && ot.typeReturn != null) {
 			ot = ot.typeReturn;
 		}
 		if (ot == null || ot.typeNames == null) return null;
 		for (let i = 0; i < ot.typeNames.length; i += 1) {
 			if (ot.typeNames[i] == d.property) {
-				const ft = i < ot.typeChildren.length ? ot.typeChildren[i] : null;
+				const ft = i < ot.typeChildren.length && ot.typeChildren[i] != null ? peelTransparentInstance(ot.typeChildren[i]) : null;
 				if (ft != null && isMaybeType(ft)) return ft;
 				return null;
 			}
@@ -59,9 +60,10 @@ function declaredMaybeOf(node: Node): Type | null {
 	if (node.kind == NodeKind.ArrayAccess) {
 		const d = node.data as ArrayAccessData;
 		if (d.array == null || d.array.nodeType == null) return null;
-		const at = d.array.nodeType;
+		const at = peelTransparentInstance(d.array.nodeType);
 		if (at.kind != TypeKind.Array || at.typeReturn == null) return null;
-		if (isMaybeType(at.typeReturn)) return at.typeReturn;
+		const et = peelTransparentInstance(at.typeReturn);
+		if (isMaybeType(et)) return et;
 		return null;
 	}
 	return null;
@@ -117,7 +119,8 @@ function visitMaybeRead(node: Node, project: boolean): Node {
 	}
 	if (node.kind == NodeKind.TypeAssertion) return project ? narrowAssertedCarrier(node) : node;
 	if (node.kind != NodeKind.Identifier && node.kind != NodeKind.MemberExpr && node.kind != NodeKind.ArrayAccess) return node;
-	const nt = node.nodeType;
+	const ntRaw = node.nodeType;
+	const nt = ntRaw != null ? peelTransparentInstance(ntRaw) : null;
 	if (nt == null || nt.kind == TypeKind.Null) return node;
 	if (isMaybeType(nt)) {
 		if (!project) return node;
@@ -126,7 +129,7 @@ function visitMaybeRead(node: Node, project: boolean): Node {
 		node.nodeType = declared;
 		const narrowed = narrowMaybePayload(node, declared, nt);
 		if (narrowed != null as unknown as Node) return narrowed;
-		node.nodeType = nt;
+		node.nodeType = ntRaw;
 		return node;
 	}
 	const carrier = declaredMaybeOf(node);
