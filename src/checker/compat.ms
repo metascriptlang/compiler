@@ -918,7 +918,14 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 }
 
 export function sameNominal(a: Type, b: Type): boolean {
-	if (a.sym != null && b.sym != null) return a.sym == b.sym;
+	if (a.sym != null && b.sym != null) {
+		if (a.sym == b.sym) return true;
+		return a.sym.modulePath != "" && a.sym.modulePath == b.sym.modulePath
+			&& a.sym.name == b.sym.name && a.sym.symbolKind == b.sym.symbolKind
+			&& a.sym.location.line > 0
+			&& a.sym.location.line == b.sym.location.line
+			&& a.sym.location.column == b.sym.location.column;
+	}
 	return a.typeName != "" && a.typeName == b.typeName;
 }
 
