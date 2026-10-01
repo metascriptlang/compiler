@@ -1056,12 +1056,12 @@ const r = slot as Row | null;   // slot: number | Row | null — a Row converts,
   of the union could hold an instance of that class: the other members must be primitives or
   classes unrelated to it by inheritance. Any other union converts on JS without a test, while
   C still tests the stored tag.
-- `--danger` drops the membership test and the tag test of a bare union, as it drops bound checks;
-  the tag test of a nullable union (`Wire as Align | null`, `number | Row | null as Row | null`)
-  stays.
+- `--danger` drops the membership test and the tag test, of a bare and of a nullable union
+  (`Wire as Align | null`, `number | Row | null as Row | null`) alike, as it drops bound checks.
 
 Measured on tree `2d72bcc3` plus this change: corpus `649`–`654` on C drc/orc/danger, JS and ESM,
-`fixedbugs/bug602`. Not covered: the Raiser VM tests no conversion, and JS tests the tag only for a
+`fixedbugs/bug602`. The nullable tag test under `--danger`: corpus `674`, and `mk(0) as Align | null`
+on tree `60b63319` prints the error in debug and `--release` and passes under `--danger`. Not covered: the Raiser VM tests no conversion, and JS tests the tag only for a
 string, number or boolean member.
 
 Class members, measured on tree `af10d638` plus the class-member change (`number | Row | null`,
