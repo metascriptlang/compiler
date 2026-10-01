@@ -315,7 +315,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	source = peelTransparentInstance(source);
 	target = peelTransparentInstance(target);
 	if (isReadonlyView(source) && !isReadonlyView(target)
-			&& (target.kind == TypeKind.Ref || target.kind == TypeKind.Array)) return false;
+			&& (target.kind == TypeKind.Ref || target.kind == TypeKind.Array || target.kind == TypeKind.Span)) return false;
 
 	// Never is the bottom type — assignable TO everything. After exhaustive
 	// narrowing (all union variants handled), the residual type is never.
@@ -875,7 +875,8 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 	if (dstInner != null) dst = dstInner;
 	if (!isReadonlyView(src) || isReadonlyView(dst)) return false;
 	if (src.kind == TypeKind.Union && dst.kind != TypeKind.Union) return false;
-	return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Array || dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union;
+	return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Array || dst.kind == TypeKind.Span
+		|| dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union;
 }
 
 export function sameNominal(a: Type, b: Type): boolean {
