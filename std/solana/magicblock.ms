@@ -9,7 +9,7 @@ import {
 	assignTo,
 	createAccount,
 	createProgramAccount,
-} from "./index";
+} from "./core";
 
 export struct DelegationAccounts {
 	payer: Account;

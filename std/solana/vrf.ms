@@ -8,7 +8,7 @@ import {
 	pubkeyOf,
 	Seeds,
 	programId,
-} from "./index";
+} from "./core";
 
 export struct RandomnessRequest {
 	payer: Account;
@@ -65,7 +65,7 @@ function requested(
 }
 
 export function requestRandomness(accounts: RandomnessRequest, callerSeed: Pubkey, callbackDiscriminator: uint64, callbackAccount: Account, callbackArguments: Bytes): Result<uint64, ProgramError> {
-	const callbackAccounts: AccountMeta[1] = [AccountMeta.writable(callbackAccount.key())];
+	const callbackAccounts: AccountMeta[1] = [AccountMeta.writableKey(callbackAccount.key())];
 	return requested(
 		accounts,
 		callerSeed,

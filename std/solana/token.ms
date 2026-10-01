@@ -6,10 +6,10 @@ import {
 	ProgramError,
 	Pubkey,
 	Seeds,
-} from "./index";
+} from "./core";
 
 when (testBuild) {
-	import { account, failWith, instructionData, logU64 } from "./index";
+	import { account, failWith, instructionData, logU64 } from "./core";
 	import { HostAccount, invocations, logs, run } from "./host";
 }
 

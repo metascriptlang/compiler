@@ -32,9 +32,9 @@ function request(): Result<RandomnessRequest, ProgramError> {
 
 function vrfList(args: Bytes): Result<uint64, ProgramError> {
 	const metas: AccountMeta[3] = [
-		AccountMeta.writable(key(11)),
-		AccountMeta.readonly(key(12)),
-		AccountMeta.writable(key(13)),
+		AccountMeta.writableKey(key(11)),
+		AccountMeta.readonlyKey(key(12)),
+		AccountMeta.writableKey(key(13)),
 	];
 	return requestRandomness(try request(), key(99), 6, metas, args);
 }

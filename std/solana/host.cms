@@ -13,7 +13,7 @@ import {
 	logU64,
 	transfer,
 	writableAccount,
-} from "./index";
+} from "./core";
 
 extern function msSolHostInput(size: uint64): uint64;
 extern function msSolHostEnter(input: uint64): void;
