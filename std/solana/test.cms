@@ -10,8 +10,12 @@ import {
 	program,
 	signer,
 	writable,
+	instructionDiscriminator,
+	readArgs,
+	selectInstruction,
 } from "./index";
 import { HostAccount, run } from "./host";
+import { args, instruction } from "./macro";
 
 
 export struct Counter {
@@ -153,4 +157,71 @@ test "one account passed twice cannot be mutable twice" {
 	const other = holder(2, programKey(), counterBytes(counterTag(), 0, 48), false, true);
 	const distinctTwo = [same, other];
 	assert run(programKey(), distinctTwo, [], twiceEntry).result == 0;
+}
+
+export enum CounterOp {
+	Make,
+	TakeAll,
+}
+
+export struct MakeArgs {
+	seed: uint64;
+	flag: boolean;
+	receiver: Pubkey;
+}
+
+function make(): Result<uint64, ProgramError> {
+	const made = try args<MakeArgs>();
+	const flag: uint32 = made.flag ? 1 : 0;
+	const last: uint32 = made.receiver.bytes[31] as uint32;
+	return Result.err(ProgramError.custom((made.seed as uint32) * 10 + flag + last));
+}
+
+function dispatch(): Result<uint64, ProgramError> {
+	return match (try instruction<CounterOp>()) {
+		CounterOp.Make => make(),
+		CounterOp.TakeAll => Result.ok(2),
+	};
+}
+
+function dispatchEntry(): void { codeOf(dispatch()); }
+
+function instructionBytes(name: string, tail: uint8[]): uint8[] {
+	const discriminator = instructionDiscriminator(name);
+	const bytes: uint8[] = [];
+	for (let i = 0; i < 8; i++) { bytes.push(discriminator.bytes[i]); }
+	for (const byte of tail) { bytes.push(byte); }
+	return bytes;
+}
+
+function makeTail(seed: uint8, flag: uint8, last: uint8, length: int32): uint8[] {
+	const tail: uint8[] = [seed, 0, 0, 0, 0, 0, 0, 0, flag];
+	for (let i = 0; i < 31; i++) { tail.push(0); }
+	tail.push(last);
+	while (tail.length > length) { tail.pop(); }
+	return tail;
+}
+
+test "instruction dispatch reads Anchor discriminators and Borsh arguments" {
+	const none: HostAccount[] = [];
+	const makeData = instructionBytes("Make", makeTail(7, 1, 5, 41));
+	const made = run(programKey(), none, makeData, dispatchEntry);
+	assert made.result == ProgramError.custom(76).code;
+	const taken = run(programKey(), none, instructionBytes("TakeAll", []), dispatchEntry);
+	assert taken.result == 0;
+}
+
+test "dispatch refuses short data, an unknown instruction and short or invalid arguments" {
+	const none: HostAccount[] = [];
+	const short: uint8[] = [1, 2, 3];
+	assert run(programKey(), none, short, dispatchEntry).result ==
+		ProgramError.instructionMissing().code;
+	assert run(programKey(), none, instructionBytes("Other", []), dispatchEntry).result ==
+		ProgramError.instructionFallbackNotFound().code;
+	const truncated = instructionBytes("Make", makeTail(7, 1, 5, 40));
+	assert run(programKey(), none, truncated, dispatchEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
+	const badBool = instructionBytes("Make", makeTail(7, 2, 5, 41));
+	assert run(programKey(), none, badBool, dispatchEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
 }
