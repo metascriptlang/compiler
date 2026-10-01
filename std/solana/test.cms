@@ -20,9 +20,13 @@ import {
 	pda,
 	realloc,
 	writableSigner,
+	Mutable,
+	Program,
+	Signer,
+	Writable,
 } from "./index";
 import { HostAccount, run } from "./host";
-import { args, instruction } from "./macro";
+import { accounts, args, instruction } from "./macro";
 
 
 export struct Counter {
@@ -359,4 +363,46 @@ test "realloc grows the data with zeros and tops up rent from the payer" {
 	assert run(programKey(), accounts, [], reallocEntry).result == 0;
 	assert accounts[0].data.length == 148 && accounts[0].data[147] == 0;
 	assert accounts[0].lamports > 1 && accounts[1].lamports == 10000001 - accounts[0].lamports;
+}
+
+export struct BumpAccounts {
+	owner: Signer;
+	counter: Mutable<Counter>;
+	refund: Writable;
+	systemProgram: Program<System>;
+}
+
+function bumpAccountsStep(): Result<uint64, ProgramError> {
+	const x = try accounts<BumpAccounts>();
+	const at = x.counter.data();
+	at.value = at.value + 1;
+	return Result.ok(0);
+}
+
+function bumpAccountsEntry(): void { codeOf(bumpAccountsStep()); }
+
+function systemProgramAccount(): HostAccount {
+	let account = holder(9, keyOf(0), [], false, false);
+	account.key = Pubkey.systemProgram();
+	account.executable = true;
+	return account;
+}
+
+test "accounts<T>() verifies each field by its proof type, in declaration order" {
+	const owner = holder(1, keyOf(9), [], true, false);
+	const counter = holder(2, programKey(), counterBytes(counterTag(), 3, 48), false, true);
+	const refund = wallet(3, 0);
+	const accounts = [owner, counter, refund, systemProgramAccount()];
+	assert run(programKey(), accounts, [], bumpAccountsEntry).result == 0;
+	assert accounts[1].data[8] == 4;
+	const unsignedOwner = holder(1, keyOf(9), [], false, false);
+	const unsigned = [unsignedOwner, counter, refund, systemProgramAccount()];
+	assert run(programKey(), unsigned, [], bumpAccountsEntry).result ==
+		ProgramError.accountNotSigner().code;
+	const notProgram = [owner, counter, refund, wallet(4, 0)];
+	assert run(programKey(), notProgram, [], bumpAccountsEntry).result ==
+		ProgramError.invalidProgramId().code;
+	const short = [owner, counter];
+	assert run(programKey(), short, [], bumpAccountsEntry).result ==
+		ProgramError.accountNotEnoughKeys().code;
 }
