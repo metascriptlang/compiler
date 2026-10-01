@@ -27,11 +27,11 @@ import { compileToC, compileToJS } from "../helpers";
 
 const b121 = `
 function takesNum(x: number): number { return x * 2.0; }
-function viaReturn(v: int64): number { return v; }
+function viaReturn(v: int64): number { return v as number; }
 function b121(): void {
 	let raw: int64 = 3;
-	const viaDecl: number = raw;
-	console.log(viaDecl + viaReturn(raw) + takesNum(raw));
+	const viaDecl: number = raw as number;
+	console.log(viaDecl + viaReturn(raw) + takesNum(raw as number));
 }
 b121();
 `;

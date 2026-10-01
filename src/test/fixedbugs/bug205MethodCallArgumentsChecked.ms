@@ -24,11 +24,11 @@ function errorOf(body: string): string {
 }
 
 test "bug205: a plain call narrowing its argument is refused" {
-	assert errorOf("plainAt(\"xy\", pf);").indexOf("narrowing") >= 0;
+	assert errorOf("plainAt(\"xy\", pf);").indexOf("drops the fractional part of 1.5") >= 0;
 }
 
 test "bug205: an extension call narrowing its argument is refused" {
-	assert errorOf("\"xy\".extAt(pf);").indexOf("narrowing") >= 0;
+	assert errorOf("\"xy\".extAt(pf);").indexOf("drops the fractional part of 1.5") >= 0;
 }
 
 test "bug205: an extension call with a mismatched argument is refused" {
@@ -36,11 +36,11 @@ test "bug205: an extension call with a mismatched argument is refused" {
 }
 
 test "bug205: a class method call narrowing its argument is refused" {
-	assert errorOf("new C().at(pf);").indexOf("narrowing") >= 0;
+	assert errorOf("new C().at(pf);").indexOf("drops the fractional part of 1.5") >= 0;
 }
 
 test "bug205: an overloaded extension call narrowing its argument is refused" {
-	assert errorOf("\"xy\".pick(pf);").indexOf("narrowing") >= 0;
+	assert errorOf("\"xy\".pick(pf);").indexOf("drops the fractional part of 1.5") >= 0;
 }
 
 test "bug205: method-form calls with matching arguments compile" {

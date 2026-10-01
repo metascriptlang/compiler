@@ -5,6 +5,8 @@ function ok(body: string): boolean {
 	return compileToC(body).ok && compileToJS(body).ok;
 }
 
+const id = "let id: int64 = 9007199254740993;\n";
+
 test "numeric lattice: an unsigned integer widens into a signed slot whose range holds it" {
 	assert ok("const u: uint8 = 3;\nconst i: int16 = u;\nconst j: int32 = u;\nconst k: int64 = u;\nconsole.log(i, j, k);\n");
 	assert ok("const u: uint16 = 40000;\nconst i: int32 = u;\nconsole.log(i);\n");
@@ -25,4 +27,58 @@ test "numeric lattice: an integer conversion that can change a value needs as" {
 	assert hasError("const n: int32 = -1;\nconst u: uint32 = n;\n", "-1 is outside [0, 4294967295]");
 	assert hasError("const u: uint64 = 5;\nconst i: int64 = u;\n", "may exceed the target's maximum");
 	assert hasError("const n: int32 = 300;\nconst b: int8 = n;\n", "300 is outside [-128, 127]");
+}
+
+test "numeric lattice: an integer the float's mantissa holds widens into it" {
+	assert ok("const a: int16 = 300;\nconst f: float32 = a;\nconst g: float64 = a;\nconst n: number = a;\nconsole.log(f, g, n);\n");
+	assert ok("const u: uint16 = 60000;\nconst f: float32 = u;\nconsole.log(f);\n");
+	assert ok("const b: int32 = 16777216;\nconst n: number = b;\nconsole.log(n);\n");
+	assert ok("const u: uint32 = 4000000000;\nconst n: number = u;\nconsole.log(n);\n");
+}
+
+test "numeric lattice: a float widens and aliases within the float family" {
+	assert ok("const f: float32 = 0.5;\nconst d: float64 = f;\nconst n: number = f;\nconsole.log(d, n);\n");
+	assert ok("const n: number = 0.5;\nconst d: float64 = n;\nconst m: number = d;\nconsole.log(d, m);\n");
+}
+
+test "numeric lattice: an integer too wide for the float's mantissa is refused" {
+	assert hasError("const n: int32 = 16777217;\nconst f: float32 = n;\n", "cannot hold 16777217 exactly (float32 has a 24-bit mantissa)");
+	assert hasError("const u: uint32 = 4294967295;\nconst f: float32 = u;\n", "cannot hold 4294967295 exactly (float32 has a 24-bit mantissa)");
+	assert hasError("const b: int64 = 9007199254740993;\nconst n: number = b;\n", "cannot hold 9007199254740993 exactly (a double has a 53-bit mantissa)");
+	assert hasError("const u: uint64 = 9007199254740993;\nconst f: float64 = u;\n", "cannot hold 9007199254740993 exactly (a double has a 53-bit mantissa)");
+	assert hasError("function t(x: float32): float32 { return x; }\nconst n: int32 = 16777217;\nconst r = t(n);\n",
+		"implicit int32 → float32 conversion in 't' arg 0 cannot hold 16777217 exactly (float32 has a 24-bit mantissa)");
+}
+
+test "numeric lattice: a float into an integer or a narrower float is refused" {
+	assert hasError("const d: float64 = 0.1;\nconst f: float32 = d;\n", "cannot hold 0.1 exactly (float32 has a 24-bit mantissa)");
+	assert hasError("const n: number = 0.1;\nconst f: float32 = n;\n", "cannot hold 0.1 exactly (float32 has a 24-bit mantissa)");
+	assert hasError("const d: float64 = 1.5;\nconst i: int32 = d;\n", "drops the fractional part of 1.5");
+	assert hasError("const f: float32 = 1.5;\nconst i: int32 = f;\n", "drops the fractional part of 1.5");
+}
+
+test "numeric lattice: a literal and a fitting constant flow where a value is refused" {
+	assert errorCount("const f: float32 = 0.5;\nconst i: int32 = 3;\nconst K = 3;\nconst j: int32 = K;\nconst U = 5;\nfunction t(x: float32): float32 { return x; }\nconsole.log(f, i, j, t(7), t(2.5), t(U));\n") == 0;
+}
+
+test "numeric lattice: a 64-bit integer argument into a number parameter is refused at every call form" {
+	const says = "implicit int64 → number conversion in ";
+	assert hasError(id + "function save(x: number): void {}\nsave(id);\n", says + "'save' arg 0 may lose integer precision above 2^53 — write an explicit 'as number'");
+	assert hasError(id + "class C { f(x: number): void {} }\nnew C().f(id);\n", says + "'f' arg 0");
+	assert hasError(id + "function ext(this s: string, x: number): void {}\n\"a\".ext(id);\n", says + "'ext' arg 0");
+	assert hasError(id + "const m = new Map<string, number>();\nm.set(\"a\", id);\n", says + "'set' arg 1");
+	assert hasError("let u: uint64 = 5;\nfunction g(x: float64): void {}\ng(u);\n", "implicit uint64 → float64 conversion in 'g' arg 0");
+}
+
+test "numeric lattice: a union slot names the numeric member it refuses" {
+	assert hasError(id + "const u: number | string = id;\n", "implicit int64 → number conversion into 'number | string' may lose integer precision above 2^53");
+}
+
+test "numeric lattice: exact arguments flow" {
+	assert ok("let a: int32 = 7;\nlet b: uint32 = 8;\nconst K = 9;\nfunction save(x: number): number { return x; }\nconsole.log(save(a), save(b), save(K));\n");
+	assert errorCount(id + "function save(x: number): number { return x; }\nconst r = save(id as number);\n") == 0;
+}
+
+test "numeric lattice: a sink parameter keeps the lattice" {
+	assert hasError("extern function takes(sink v: number): void from \"&abs\";\nlet x: int64 = 9007199254740993;\ntakes(x);\n", "implicit int64 → number conversion in 'takes' arg 0 may lose integer precision above 2^53");
 }

@@ -164,17 +164,17 @@ interface SinkNumbers { wide: int64; small: int32; byte: uint8; }
 test "numericRepresentation: sink arguments convert numeric payloads before native collection storage" {
 	const source: SinkNumbers = { wide: 1, small: 2, byte: 3 };
 	const numbers: number[] = [];
-	numbers.push(source.wide);
+	numbers.push(source.wide as number);
 	numbers.push(source.small);
 	numbers.push(source.byte);
 	const doubles: float64[] = [];
-	doubles.push(source.wide);
+	doubles.push(source.wide as float64);
 	const labels: string[] = ["zero", "one", "two", "three", "four"];
 	assert labels[numbers[0]] == "one";
 	assert numbers[1] + numbers[2] == 5;
 	assert doubles[0] + 0.5 == 1.5;
 	const map = new Map<string, number>();
 	const other: SinkNumbers = { wide: 4, small: 2, byte: 3 };
-	map.set("key", other.wide);
+	map.set("key", other.wide as number);
 	assert labels[map.get("key")!] == "four";
 }

@@ -29,7 +29,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, intLiteralExactInFloat } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -394,10 +394,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				} else {
 					node.nodeType = float64Type(); return;
 				}
-			} else if (expectedType != null && (expectedType.kind == TypeKind.Float64 || expectedType.kind == TypeKind.Float32)) {
-				node.nodeType = expectedType; return;
-			} else if (expectedType != null && expectedType.kind == TypeKind.Number) {
-				node.nodeType = numberType(); return;
+			} else if (expectedType != null && (expectedType.kind == TypeKind.Float64 || expectedType.kind == TypeKind.Float32
+					|| expectedType.kind == TypeKind.Number)) {
+				if (isNodeIntLit(node) && !intLiteralExactInFloat(node, expectedType)) {
+					node.nodeType = untypedIntegerLiteralType(ctx, node, false); return;
+				}
+				node.nodeType = expectedType.kind == TypeKind.Number ? numberType() : expectedType; return;
 			} else if (expectedType != null && expectedType.kind == TypeKind.Union) {
 				// Mirror the StringLiteral/BooleanLiteral arms below: a numeric
 				// member of the expected union types the literal, so `width: 400.0`
@@ -407,8 +409,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					if (isIntegerType(child) && literalFitsInType(node, child, false)) {
 						node.nodeType = child; return;
 					}
-					if (child.kind == TypeKind.Float64 || child.kind == TypeKind.Float32
-						|| child.kind == TypeKind.Number) {
+					if ((child.kind == TypeKind.Float64 || child.kind == TypeKind.Float32 || child.kind == TypeKind.Number)
+						&& (!isNodeIntLit(node) || intLiteralExactInFloat(node, child))) {
 						node.nodeType = child; return;
 					}
 				}

@@ -4,13 +4,13 @@
 
 import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { convertsImplicitly, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
+import { convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
-import { constantLiteralOf, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
+import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
 import { int64ToDecimal, uint64ToDecimal } from "../utils/string";
 
 // ===== Operator Inference =====
@@ -644,6 +644,10 @@ export function wideOperandLiteralSlot(operand: Node): Type | null {
 	return literalFitsInType(operand, wide, false) ? wide : null;
 }
 
+export function intLiteralExactInFloat(lit: Node, target: Type): boolean {
+	return intExactInMantissa((lit.data as NumberLiteralData).intVal as uint64, mantissaBitsOf(target));
+}
+
 export function isFittingIntLiteral(expr: Node, target: Type): boolean {
 	if (isNodeIntLit(expr)) return literalFitsInType(expr, target, false);
 	if (expr.kind == NodeKind.UnaryExpr) {
@@ -735,10 +739,20 @@ function foldedIntFits(value: int64, target: Type): boolean {
 	};
 }
 
-export function reportIntConv(ctx: CheckerContext, expr: Node, from: Type, to: Type, site: string): void {
-	const what = isUnsignedIntegerType(from) != isUnsignedIntegerType(to) ? "changes signedness" : "narrows";
-	addError(ctx, "implicit " + typeDisplayName(from) + " → " + typeDisplayName(to) + " conversion" + site + " " + what
-		+ " — write an explicit 'as " + typeDisplayName(to) + "'", expr.location.line, expr.location.column);
+export function reportNumericConv(ctx: CheckerContext, expr: Node, from: Type, to: Type, site: string): void {
+	addError(ctx, "implicit " + typeDisplayName(from) + " → " + typeDisplayName(to) + " conversion" + site + " "
+		+ numericRefusalReason(from, to) + " — write an explicit 'as " + typeDisplayName(to) + "'",
+		expr.location.line, expr.location.column);
+}
+
+export function reportNumericConvConstAware(ctx: CheckerContext, expr: Node, from: Type, to: Type, site: string): void {
+	const what = constantRefusal(expr, from, ownedValueSlot(to));
+	if (what == "") {
+		reportNumericConv(ctx, expr, from, to, site);
+		return;
+	}
+	addError(ctx, "implicit " + typeDisplayName(from) + " → " + typeDisplayName(to) + " conversion" + site + " " + what,
+		expr.location.line, expr.location.column);
 }
 
 // The parser decides this on the digits: at the boundary the double in `value`
@@ -1449,23 +1463,12 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 		convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 		return convNode;
 	}
-	// A float reaching an integer slot drops its fractional part, and at the
-	// field / element / return positions there is no annotation beside the
-	// value to warn the reader — so the cut has to be the programmer's word,
-	// spelled `as intN`. An integral literal still flows implicitly because
-	// nothing is lost, which is the line zig draws with "fractional component
-	// prevents float value from coercion".
-	if ((isFloatType(exprType) || exprType.kind == TypeKind.Number)
-		&& isIntegerType(formal)
-		&& !isIntegralNumberLiteral(expr)) {
-		addError(ctx, "implicit " + typeDisplayName(exprType) + " → " + typeDisplayName(formal)
-			+ " narrowing drops the fractional part — write an explicit 'as " + typeDisplayName(formal) + "'",
-			expr.location.line, expr.location.column);
-		return expr;
-	}
-	if (refusesIntConv(exprType, formal) && !isFittingIntLiteral(expr, formal)) {
-		reportIntConv(ctx, expr, exprType, formal, "");
-		return expr;
+	if (numericConvRefuses(exprType, formal)) {
+		if (!isFittingNumericConstant(expr, formal)) {
+			reportNumericConvConstAware(ctx, expr, exprType, formal, "");
+			return expr;
+		}
+		return wrapInConv(expr, formal);
 	}
 	// Narrowing integer conversion: wrap in HiddenStdConv
 	if (isNarrowingIntConv(exprType, formal) || refusesIntConv(exprType, formal)) {
@@ -1490,8 +1493,23 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — memory layout differs (pointer vs scalar, array element, shared field, or function signature repr); a raw cast would reinterpret, not convert (convert explicitly or declare a converter to '" + typeDisplayName(formal) + "')", expr.location.line, expr.location.column);
 		return expr;
 	}
-	if (slotRefuses(exprType, formal)) reportNotAssignable(ctx, expr, exprType, formal);
+	if (slotRefuses(exprType, formal)) {
+		const numericMember = refusingNumericMember(exprType, formal);
+		if (numericMember != null) {
+			reportNumericConvConstAware(ctx, expr, exprType, numericMember, " into '" + typeDisplayName(formal) + "'");
+		} else {
+			reportNotAssignable(ctx, expr, exprType, formal);
+		}
+	}
 	return expr;
+}
+
+function refusingNumericMember(exprType: Type, formal: Type): Type | null {
+	if (!isNumeric(exprType) || formal.kind != TypeKind.Union || formal.typeChildren == null) return null;
+	for (const member of formal.typeChildren) {
+		if (member != null && isNumeric(member) && numericConvRefuses(exprType, member)) return member;
+	}
+	return null;
 }
 
 export function slotRefuses(exprType: Type, formal: Type): boolean {
@@ -1511,15 +1529,171 @@ function reportNotAssignable(ctx: CheckerContext, expr: Node, exprType: Type, fo
 	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + explainStructuralPrefix(exprType, formal), expr.location.line, expr.location.column);
 }
 
-// A float literal whose value has no fractional part converts exactly, so it
-// keeps flowing into an integer slot. The magnitude guard keeps the round-trip
-// itself well defined; anything past it cannot fit an integer slot anyway.
-export function isIntegralNumberLiteral(expr: Node): boolean {
-	if (expr.kind != NodeKind.NumberLiteral) return false;
-	const v = (expr.data as NumberLiteralData).value;
-	if (v > 9007199254740991.0 || v < -9007199254740991.0) return false;
+function doubleFitsIntTarget(v: number, target: Type): boolean {
+	return match (target.kind) {
+		TypeKind.Int8   => v >= -128 && v < 128,
+		TypeKind.Int16  => v >= -32768 && v < 32768,
+		TypeKind.Int32  => v >= -2147483648 && v < 2147483648,
+		TypeKind.Int64  => v >= -9223372036854775808.0 && v < 9223372036854775808.0,
+		TypeKind.Uint8  => v >= 0 && v < 256,
+		TypeKind.Uint16 => v >= 0 && v < 65536,
+		TypeKind.Uint32 => v >= 0 && v < 4294967296,
+		TypeKind.Uint64 => v >= 0 && v < 18446744073709551616.0,
+		_ => false,
+	};
+}
+
+const DOUBLES_ALL_INTEGRAL_FROM: number = 4503599627370496.0;
+const FLOAT32_MAX: number = 3.4028234663852886e38;
+
+function isFloatSlot(t: Type): boolean {
+	return t.kind == TypeKind.Float32 || t.kind == TypeKind.Float64 || t.kind == TypeKind.Number;
+}
+
+function ownedValueSlot(t: Type): Type {
+	if ((t.kind == TypeKind.Sink || t.kind == TypeKind.Lent) && t.typeReturn != null) return ownedValueSlot(t.typeReturn);
+	return t;
+}
+
+function doubleFitsInt(v: number, target: Type): boolean {
+	if (!doubleFitsIntTarget(v, target)) return false;
+	if (v >= DOUBLES_ALL_INTEGRAL_FROM || v <= -DOUBLES_ALL_INTEGRAL_FROM) return true;
 	const truncated = v as int64;
-	return (truncated as float64) == v;
+	const back = truncated as float64;
+	return back == v;
+}
+
+function roundedToFloat32(v: number): number {
+	const narrowed = v as float32;
+	const widened = narrowed as float64;
+	return widened;
+}
+
+function doubleExactInFloat32(v: number): boolean {
+	return v != v || roundedToFloat32(v) == v;
+}
+
+function intExactInMantissa(magnitude: uint64, mantissaBits: int32): boolean {
+	let rest = magnitude;
+	if (rest == 0) return true;
+	while ((rest & 1) == 0) rest = rest >> 1;
+	return (rest >> (mantissaBits as uint64)) == 0;
+}
+
+function constHoldsFloat(folded: Node): boolean {
+	const t = folded.nodeType;
+	if (t != null && isIntegerType(t)) return false;
+	if (t != null && isFloatSlot(t)) return true;
+	return (folded.data as NumberLiteralData).isFloat;
+}
+
+function constFloatValue(folded: Node): number {
+	const v = (folded.data as NumberLiteralData).value;
+	return folded.nodeType != null && folded.nodeType.kind == TypeKind.Float32 ? roundedToFloat32(v) : v;
+}
+
+function constIsUnsignedHigh(folded: Node): boolean {
+	return (folded.data as NumberLiteralData).intVal < 0 && folded.nodeType != null && isUnsignedIntegerType(folded.nodeType);
+}
+
+function constIntMagnitude(folded: Node): uint64 {
+	const v = (folded.data as NumberLiteralData).intVal;
+	return v >= 0 || constIsUnsignedHigh(folded) ? v as uint64 : 0 - (v as uint64);
+}
+
+function mantissaBitsOf(target: Type): int32 {
+	return target.kind == TypeKind.Float32 ? 24 : 53;
+}
+
+function mantissaText(target: Type): string {
+	return target.kind == TypeKind.Float32 ? "float32 has a 24-bit mantissa" : "a double has a 53-bit mantissa";
+}
+
+function foldedNumber(expr: Node): Node {
+	const folded = constantLiteralOf(expr, 0);
+	if (folded == null || folded.kind != NodeKind.NumberLiteral) return null as unknown as Node;
+	return folded;
+}
+
+export function isFittingNumericConstant(expr: Node, target: Type): boolean {
+	if (isFittingIntLiteral(expr, target)) return true;
+	const slot = ownedValueSlot(target);
+	return isFloatSlot(slot) && isUntypedConstant(expr, 0) && constantExactInFloat(expr, slot);
+}
+
+function constantExactInFloat(expr: Node, target: Type): boolean {
+	const folded = foldedNumber(expr);
+	if (folded == null) return false;
+	if (constHoldsFloat(folded)) return target.kind != TypeKind.Float32 || doubleExactInFloat32(constFloatValue(folded));
+	return intExactInMantissa(constIntMagnitude(folded), mantissaBitsOf(target));
+}
+
+function intConstFitsInt(folded: Node, target: Type): boolean {
+	if (constIsUnsignedHigh(folded)) return target.kind == TypeKind.Uint64;
+	return foldedIntFits((folded.data as NumberLiteralData).intVal, target);
+}
+
+function intTargetRangeText(target: Type): string {
+	return match (target.kind) {
+		TypeKind.Int8   => "[-128, 127]",
+		TypeKind.Int16  => "[-32768, 32767]",
+		TypeKind.Int32  => "[-2147483648, 2147483647]",
+		TypeKind.Int64  => "[-9223372036854775808, 9223372036854775807]",
+		TypeKind.Uint8  => "[0, 255]",
+		TypeKind.Uint16 => "[0, 65535]",
+		TypeKind.Uint32 => "[0, 4294967295]",
+		_ => "[0, 18446744073709551615]",
+	};
+}
+
+function floatValueText(v: number): string {
+	const text = "" + v;
+	return text.indexOf(".") < 0 && text.indexOf("e") < 0 && text.indexOf("N") < 0 && text.indexOf("I") < 0 ? text + ".0" : text;
+}
+
+function declaredConstantName(expr: Node): string {
+	if ((expr.kind == NodeKind.Identifier || expr.kind == NodeKind.MemberExpr) && expr.resolvedSym != null) return expr.resolvedSym.name;
+	return "";
+}
+
+function constantRefusal(expr: Node, from: Type, target: Type): string {
+	const asTarget = "an explicit 'as " + typeDisplayName(target) + "'";
+	const folded = foldedNumber(expr);
+	if (folded == null) return "";
+	if (constHoldsFloat(folded)) {
+		const v = constFloatValue(folded);
+		const text = floatValueText(v);
+		if (isIntegerType(target)) {
+			if (v != v) return "cannot represent NaN — write " + asTarget;
+			if (!doubleFitsIntTarget(v, target)) return text + " is outside " + intTargetRangeText(target) + " — write " + asTarget;
+			if (!doubleFitsInt(v, target)) return "drops the fractional part of " + text + " — write " + asTarget;
+			const spelled = expr.kind == NodeKind.NumberLiteral ? "write " + int64ToDecimal(v as int64) + ", or " : "write ";
+			return "takes the float " + text + ", and a float never becomes an integer implicitly — " + spelled + asTarget;
+		}
+		if (target.kind != TypeKind.Float32) return "";
+		if (v > FLOAT32_MAX || v < -FLOAT32_MAX) return text + " is outside the float32 range (±3.4028235e38) — write " + asTarget;
+		if (!doubleExactInFloat32(v)) return "cannot hold " + text + " exactly (" + mantissaText(target) + ") — write " + asTarget;
+		return typedConstantRefusal(expr, from, target, text);
+	}
+	const d = folded.data as NumberLiteralData;
+	const text = constIsUnsignedHigh(folded) ? uint64ToDecimal(d.intVal as uint64) : int64ToDecimal(d.intVal);
+	if (isIntegerType(target)) {
+		if (!intConstFitsInt(folded, target)) return text + " is outside " + intTargetRangeText(target) + " — write " + asTarget;
+		return typedConstantRefusal(expr, from, target, text);
+	}
+	if (!isFloatSlot(target)) return "";
+	if (!intExactInMantissa(constIntMagnitude(folded), mantissaBitsOf(target))) {
+		return "cannot hold " + text + " exactly (" + mantissaText(target) + ") — write " + asTarget;
+	}
+	return typedConstantRefusal(expr, from, target, text);
+}
+
+function typedConstantRefusal(expr: Node, from: Type, target: Type, text: string): string {
+	if (isUntypedConstant(expr, 0)) return "";
+	const name = declaredConstantName(expr);
+	const subject = name != "" ? "'" + name + "' is declared " + typeDisplayName(from) : "the constant is typed " + typeDisplayName(from);
+	return numericRefusalReason(from, target) + " — " + subject + ", so its type decides, not its value " + text
+		+ "; write an explicit 'as " + typeDisplayName(target) + "'" + (name != "" ? ", or declare '" + name + "' without a type" : "");
 }
 
 // Walk through TypeAssertion chain to check if core expression is NullLiteral.

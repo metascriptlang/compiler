@@ -24,5 +24,5 @@ test "bug555: a folded constant expression outside the slot's range stays refuse
 
 test "bug555: an expression over a typed const keeps the const's type" {
 	assert errorCount("const k: int32 = 5;\nconst U: uint32 = k * 2;\n") == 1;
-	assert errorCount("const u: uint8 = 3;\nconst I: int32 = u + 1;\n") == 1;
+	assert errorCount("const u: uint8 = 3;\nconst I: int32 = u + 1;\n") == 0;
 }
