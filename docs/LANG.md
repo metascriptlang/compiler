@@ -954,6 +954,19 @@ function longest<T extends { length: number }>(a: T, b: T): T { ... }
 // Default type parameters
 type Result<T, E = Error> = { ok: true; value: T } | { ok: false; error: E };
 ```
+**Declaration identity across module checks.** Re-reading a generic declaration must not turn
+it into a different type. This matters when a generic class method calls another module's
+generic method: `Shelf<Item>.put` can call `Map<string, Item>.set` without a spurious
+“got `Map<string, Item>`, expected `Map<string, Item>`” error.
+The checker uses the existing source-declaration identity convention (`sameNominal` in
+`src/checker/compat.ms`); equal names in different modules remain different declarations.
+
+Measured 2026-09-30 with the identity-fix candidate: `msc-idfix run smoke.ms` on C and
+`--target=js` both printed `H-identity 1` after constructing a cross-module `Shelf<Item>`,
+inserting one item and reading its map size. Pins `bug163`, `bug565`, `bug580` and `bug572`
+cover the nullable-set variant, same-name module boundaries and invariant type arguments.
+Full corpus and downstream deployment were not revalidated by this measurement.
+
 
 A generic parameter is always a type. A value parameter (a "const generic") is refused by the parser:
 
