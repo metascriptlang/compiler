@@ -20,6 +20,7 @@ import {
 	pda,
 	realloc,
 	writableSigner,
+	transferLamports,
 	Mutable,
 	Program,
 	Signer,
@@ -428,4 +429,21 @@ test "emitEvent logs Anchor's event discriminator and the Borsh fields as Progra
 		if (line == expected) { found = true; }
 	}
 	assert found;
+}
+
+function payEntry(): void {
+	const result = payStep();
+	codeOf(result);
+}
+
+function payStep(): Result<uint64, ProgramError> {
+	return transferLamports(try writableSigner(0), try writable(1), 300);
+}
+
+test "transferLamports moves lamports through the System program" {
+	const accounts = [wallet(1, 1000), wallet(2, 5)];
+	assert run(programKey(), accounts, [], payEntry).result == 0;
+	assert accounts[0].lamports == 700 && accounts[1].lamports == 305;
+	const poor = [wallet(1, 100), wallet(2, 5)];
+	assert run(programKey(), poor, [], payEntry).result != 0;
 }
