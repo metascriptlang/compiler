@@ -24,12 +24,12 @@
 // direct name assignment (pre-checker ASTs in unit tests).
 
 import {
-	Node, NodeKind, DeclKind, TypeKind, TypeFlag, SourceLocation, Symbol,
+	Node, NodeKind, DeclKind, Type, TypeKind, TypeFlag, SourceLocation, Symbol,
 	FunctionDeclData, ReturnStmtData, CallExprData, ConditionalExprData,
 	IdentifierData, BlockStmtData, IfStmtData, BinaryExprData,
 	ClassDeclData, MethodDeclData, MemberExprData,
 	WhileStmtData, ContinueStmtData,
-	VariableDeclData, ArrowFunctionData, FunctionExprData,
+	VariableDeclData, ArrowFunctionData, FunctionExprData, OutExprData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { noneType, peelToStruct } from "../../checker/types";
@@ -130,13 +130,21 @@ function lowerClassMethods(node: Node, ctx: TransformContext): Node {
 function lowerSelfTailCalls(body: Node, name: string, sym: Symbol | null, params: string[], paramSyms: Symbol[] | null, loc: SourceLocation, ctx: TransformContext): Node {
 	const statementized = statementizeTailPositions(body, name, sym, ctx);
 	if (!hasTailCall(statementized, name, sym)) return statementized;
+	const forwarded = forwardedVarSlots(statementized, name, sym, params, paramSyms);
+	if (forwarded == null) return statementized;
 
 	const localSyms: (Symbol | null)[] = [];
 	const shadowDecls: Node[] = [];
 	const activationDecls: Node[] = [];
 	if (paramSyms != null) {
 		const readSyms: (Symbol | null)[] = [];
-		for (const ps of paramSyms) {
+		for (let pi = 0; pi < paramSyms.length; pi += 1) {
+			const ps = paramSyms[pi];
+			if (forwarded[pi]) {
+				localSyms.push(null);
+				readSyms.push(null);
+				continue;
+			}
 			const ls = freshOwnedSym(ctx, "tcp", ps.symbolType);
 			const decl = makeVarDecl(ls.name, makeIdentResolved(ps, loc), DeclKind.Let, loc);
 			decl.resolvedSym = ls;
@@ -161,7 +169,7 @@ function lowerSelfTailCalls(body: Node, name: string, sym: Symbol | null, params
 	const bodyStmts = extractBodyStmts(statementized);
 	const newStmts: Node[] = activationDecls;
 	for (let i = 0; i < bodyStmts.length; i += 1) {
-		newStmts.push(transformStmt(bodyStmts[i], name, sym, params, localSyms, ctx));
+		newStmts.push(transformStmt(bodyStmts[i], name, sym, params, localSyms, forwarded, ctx));
 	}
 
 	const whileBody = makeBlock(newStmts, loc);
@@ -173,6 +181,50 @@ function lowerSelfTailCalls(body: Node, name: string, sym: Symbol | null, params
 	}
 	outerStmts.push(whileNode);
 	return makeBlock(outerStmts, loc);
+}
+
+// A var parameter is the caller's location, never a value the loop can carry.
+// A slot every self tail call refills with the parameter itself keeps it as is
+// (Reference: putArgInto maps a var formal straight to its argument); any other
+// argument there would rebind the location, so the routine stays recursive.
+function forwardedVarSlots(body: Node, fnName: string, fnSym: Symbol | null, params: string[], paramSyms: Symbol[] | null): boolean[] | null {
+	const forwarded: boolean[] = [];
+	const fnType = fnSym != null ? fnSym.symbolType : null;
+	for (let i = 0; i < params.length; i += 1) {
+		let t: Type | null = null;
+		if (paramSyms != null && i < paramSyms.length) t = paramSyms[i].symbolType;
+		forwarded.push(t != null && t.kind == TypeKind.Var);
+	}
+	if (paramSyms == null && fnType != null && fnType.kind == TypeKind.Function) {
+		for (const t of fnType.typeChildren) { if (t != null && t.kind == TypeKind.Var) return null; }
+	}
+	const calls: Node[] = [];
+	collectTailCalls(body, fnName, fnSym, calls);
+	for (const call of calls) {
+		const args = (call.data as CallExprData).arguments;
+		for (let i = 0; i < forwarded.length; i += 1) {
+			if (!forwarded[i]) continue;
+			if (i >= args.length || !denotesParam(args[i], paramSyms![i])) return null;
+		}
+	}
+	return forwarded;
+}
+
+function denotesParam(arg: Node, ps: Symbol): boolean {
+	let n = arg;
+	if (n.kind == NodeKind.OutExpr) n = (n.data as OutExprData).outArg;
+	return n != null && n.kind == NodeKind.Identifier && n.resolvedSym == ps;
+}
+
+function collectTailCalls(stmt: Node, fnName: string, fnSym: Symbol | null, out: Node[]): void {
+	if (stmt == null) return;
+	if (stmt.kind == NodeKind.ReturnStmt) {
+		const rd = stmt.data as ReturnStmtData;
+		if (isTailCallExpr(rd.argument, fnName, fnSym)) out.push(rd.argument!);
+		return;
+	}
+	if (tailOpaque(stmt)) return;
+	forEachChild(stmt, (c: Node): void => collectTailCalls(c, fnName, fnSym, out));
 }
 
 function capturedByNestedFunction(n: Node, sym: Symbol, nested: boolean = false): boolean {
@@ -320,47 +372,35 @@ function tailOpaque(stmt: Node): boolean {
 		isFuncBoundary(stmt);
 }
 
-function transformStmt(stmt: Node, fnName: string, fnSym: Symbol | null, params: string[], localSyms: (Symbol | null)[], ctx: TransformContext): Node {
+function transformStmt(stmt: Node, fnName: string, fnSym: Symbol | null, params: string[], localSyms: (Symbol | null)[], forwarded: boolean[], ctx: TransformContext): Node {
 	return match (stmt.kind) {
 		NodeKind.ReturnStmt => {
 			const rd = stmt.data as ReturnStmtData;
 			if (isTailCallExpr(rd.argument, fnName, fnSym)) {
-				return buildTailCallReplacement(rd.argument!, params, localSyms, stmt.location, ctx);
+				return buildTailCallReplacement(rd.argument!, params, localSyms, forwarded, stmt.location, ctx);
 			}
 			return stmt;
 		},
 		_ => {
 			if (tailOpaque(stmt)) return stmt;
-			mapChildren(stmt, (c: Node): Node => transformStmt(c, fnName, fnSym, params, localSyms, ctx));
+			mapChildren(stmt, (c: Node): Node => transformStmt(c, fnName, fnSym, params, localSyms, forwarded, ctx));
 			return stmt;
 		},
 	};
 }
 
-// Transform a block body (recurse into statements)
-function transformBody(body: Node, fnName: string, fnSym: Symbol | null, params: string[], localSyms: (Symbol | null)[], ctx: TransformContext): Node {
-	return match (body.kind) {
-		NodeKind.BlockStmt => {
-			const bd = body.data as BlockStmtData;
-			let i = 0;
-			while (i < bd.statements.length) {
-				bd.statements[i] = transformStmt(bd.statements[i], fnName, fnSym, params, localSyms, ctx);
-				i += 1;
-			}
-			return body;
-		},
-		_ => transformStmt(body, fnName, fnSym, params, localSyms, ctx),
-	};
-}
-
 // Build replacement for tail call: temp vars for args, reassign loop locals, continue
-function buildTailCallReplacement(callExpr: Node, params: string[], localSyms: (Symbol | null)[], loc: SourceLocation, ctx: TransformContext): Node {
+function buildTailCallReplacement(callExpr: Node, params: string[], localSyms: (Symbol | null)[], forwarded: boolean[], loc: SourceLocation, ctx: TransformContext): Node {
 	const cd = callExpr.data as CallExprData;
 	const stmts: Node[] = [];
 
 	// 1. Evaluate all arguments into temps (avoid order-of-evaluation issues)
-	const tempSyms: Symbol[] = [];
+	const tempSyms: (Symbol | null)[] = [];
 	for (let i = 0; i < cd.arguments.length && i < params.length; i += 1) {
+		if (forwarded[i]) {
+			tempSyms.push(null);
+			continue;
+		}
 		const argType = cd.arguments[i].nodeType != null ? cd.arguments[i].nodeType : noneType();
 		const sym = freshTempSym(ctx, "tc", argType);
 		tempSyms.push(sym);
@@ -371,9 +411,11 @@ function buildTailCallReplacement(callExpr: Node, params: string[], localSyms: (
 
 	// 2. Reassign loop-carried locals from temps
 	for (let j = 0; j < tempSyms.length; j += 1) {
+		const ts = tempSyms[j];
+		if (ts == null) continue;
 		const ls = localSyms[j];
 		const target = ls != null ? makeIdentResolved(ls, loc) : makeIdent(params[j], loc);
-		const assignExpr = makeAssign(target, makeIdentResolved(tempSyms[j], loc), loc);
+		const assignExpr = makeAssign(target, makeIdentResolved(ts, loc), loc);
 		stmts.push(makeExprStmt(assignExpr, loc));
 	}
 
@@ -401,6 +443,15 @@ function shadowedParamCount(input: string): number {
 	}
 	return -1;
 }
+function lowersToLoop(input: string): boolean {
+	const result = parseInput(input);
+	if (!result.ok) return false;
+	checkProgram(result.value);
+	for (const stmt of getStmts(lowerTailCall(result.value, makeCtx()))) {
+		if (stmt.kind == NodeKind.FunctionDecl) return holdsLoweredLoop((stmt.data as FunctionDeclData).fnBody);
+	}
+	return false;
+}
 test "non-recursive unchanged" { assert firstStmtKindAfter("function foo(x: number): number { return x + 1; }", lowerTailCall) == NodeKind.FunctionDecl; }
 
 test "simple passthrough" { assert stmtCountAfter("const x = 1;", lowerTailCall) == 1; }
@@ -415,4 +466,14 @@ test "arrow function unchanged" { assert firstStmtKindAfter("const f = (x: numbe
 
 test "a parameter the body never reads still gets a loop-carried local" {
 	assert shadowedParamCount("function f(n: int32, k: int32): int32 { if (n == 0) return 0; return f(n - 1, 5); }") == 2;
+}
+
+test "a ref parameter every tail call passes back stays the parameter" {
+	const src = "function f(ref acc: int32, n: int32): void { if (n == 0) return; acc = acc + n; return f(acc, n - 1); }";
+	assert lowersToLoop(src);
+	assert shadowedParamCount(src) == 1;
+}
+
+test "a tail call that passes another location to a ref parameter stays recursive" {
+	assert !lowersToLoop("function f(ref a: int32, ref b: int32, n: int32): void { if (n == 0) return; a = a + n; return f(b, a, n - 1); }");
 }
