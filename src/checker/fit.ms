@@ -674,6 +674,11 @@ export function intLiteralExactInFloat(lit: Node, target: Type): boolean {
 	return intExactInMantissa((lit.data as NumberLiteralData).intVal as uint64, mantissaBitsOf(target));
 }
 
+export function literalAdoptsFloat32(lit: Node): boolean {
+	if (lit.kind != NodeKind.NumberLiteral) return false;
+	return (lit.data as NumberLiteralData).isFloat || (isNodeIntLit(lit) && intLiteralExactInFloat(lit, createPrimitive(TypeKind.Float32)));
+}
+
 export function isFittingIntLiteral(expr: Node, target: Type): boolean {
 	if (isNodeIntLit(expr)) return literalFitsInType(expr, target, false);
 	if (expr.kind == NodeKind.UnaryExpr) {

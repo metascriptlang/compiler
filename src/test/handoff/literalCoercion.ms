@@ -284,3 +284,16 @@ test "an untyped integer past int64 is refused at compile time" {
 test "a literal past int64 beside a uint64 operand is uint64" {
 	assert ok("const W: uint64 = 18446744073709551615;\nconsole.log(W == 18446744073709551615, 18446744073709551615 != W, W - 18446744073709551614);\n");
 }
+
+test "a literal beside a float32 operand is float32" {
+	assert ok("let x: float32 = 3;\nconst r: float32 = x / 1000.0;\nconst s: float32 = 0.42 * x;\nconst t: float32 = x * 2;\nconsole.log(r, s, t, x < 0.7);\n");
+	assert errorCount("let x: float32 = 3;\nconst r: float32 = x * 16777217;\n") > 0;
+}
+
+test "an integer literal picks a float overload that holds it, an integer one first" {
+	const g = "function g(x: float32): string { return \"f32\"; }\nfunction g(x: string): string { return x; }\n";
+	assert ok(g + "console.log(g(2));\n");
+	assert hasError(g + "g(16777217);\n", "No matching overload");
+	const f = "function f(x: int64): boolean { return true; }\nfunction f(x: float64): string { return \"f64\"; }\n";
+	assert errorCount(f + "const picked: boolean = f(5);\n") == 0;
+}
