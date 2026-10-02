@@ -32,6 +32,7 @@ import {
 	instructionData,
 	ProgramAddress,
 	Bytes,
+	borshBuffer,
 } from "./index";
 import { HostAccount, logs, run } from "./host";
 import { accounts, args, emitEvent, instruction } from "./macro";
@@ -574,4 +575,24 @@ test "accounts<T>() verifies a Delegated<T> field like delegated<T>()" {
 	const undelegated = delegatedCounter(counterAddress().key, programKey(), bytes);
 	assert run(programKey(), [owner, undelegated], [], claimEntry).result ==
 		ProgramError.accountOwnedByWrongProgram().code;
+}
+
+test "borshBuffer writes Borsh little-endian fields and refuses a write past its capacity" {
+	const written = borshBuffer(14).u64(0x0102030405060708).bool(true).i32(-2).u8(9).written();
+	assert written.ok;
+	if (written.ok) {
+		const view = written.value;
+		assert view.length == 14;
+		const expected: uint8[] = [8, 7, 6, 5, 4, 3, 2, 1, 1, 254, 255, 255, 255, 9];
+		for (let index = 0; index < 14; index++) {
+			const byte = view.readU8(index as uint64);
+			assert byte.ok && byte.value == expected[index];
+		}
+	}
+	const keyed = borshBuffer(32).pubkey(keyOf(7)).written();
+	assert keyed.ok && keyed.value.length == 32;
+	const over = borshBuffer(8).u64(1).u8(2).written();
+	assert !over.ok;
+	const after = borshBuffer(8).u64(1).u8(2).u8(3).written();
+	assert !after.ok;
 }
