@@ -32,6 +32,7 @@ typedef struct MsHcrEntry {
 	size_t size;
 	int active;
 	int candidateActive;
+	int candidateForwards;
 	int savedActive;
 } MsHcrEntry;
 
@@ -186,17 +187,20 @@ static void msHcrRegistration(MsHcrEntry* entry, char kind) {
 	}
 }
 
-void msHcrRegisterFunction(const char* moduleId, const char* symbol, const char* key, void* address) {
+MsHcrCell* msHcrRegisterFunction(const char* moduleId, const char* symbol, const char* key, void* address, int32_t forwards) {
 	if (address == NULL) msHcrFail(moduleId, "cannot register a null function address");
 	MsHcrEntry* entry = msHcrEntry(moduleId, symbol, key);
 	msHcrRegistration(entry, 'f');
 	if (msHcrStaging) {
 		entry->candidate = address;
 		entry->candidateActive = 1;
+		entry->candidateForwards = forwards;
 	} else {
 		entry->cell.current = address;
+		if (forwards && entry->cell.entry == NULL) entry->cell.entry = address;
 		entry->active = 1;
 	}
+	return &entry->cell;
 }
 
 int32_t msHcrRegisterVariable(const char* moduleId, const char* symbol, const char* key, size_t size, void** out) {
@@ -256,11 +260,13 @@ void msHcrCommit(const char* moduleId) {
 		entry->savedStorage = entry->storage;
 		entry->savedActive = entry->active;
 		entry->cell.current = entry->candidateActive ? entry->candidate : entry->saved;
+		if (entry->candidateActive && entry->candidateForwards && entry->cell.entry == NULL) entry->cell.entry = entry->candidate;
 		entry->storage = entry->candidateActive ? entry->candidateStorage : entry->savedStorage;
 		entry->active = entry->candidateActive;
 		entry->candidate = NULL;
 		entry->candidateStorage = NULL;
 		entry->candidateActive = 0;
+		entry->candidateForwards = 0;
 	}
 	for (MsHcrTypeEntry* entry = msHcrTypes; entry != NULL; entry = entry->next) {
 		if (entry->module == module && entry->created) entry->exposed = 1;
@@ -312,6 +318,7 @@ void msHcrDiscard(const char* moduleId) {
 		entry->candidate = NULL;
 		entry->candidateStorage = NULL;
 		entry->candidateActive = 0;
+		entry->candidateForwards = 0;
 	}
 	msHcrRestoreTypeInfos(moduleId);
 	msHcrAcceptTypeSnapshots(module);

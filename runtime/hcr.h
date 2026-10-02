@@ -56,13 +56,18 @@ static inline void msHcrImageCallLaunch(void* raw, const char* dir, const char* 
 
 typedef struct MsHcrCell {
 	void* current;
+	void* entry;
 } MsHcrCell;
 
 static inline void* msHcrVariableStorage(const MsHcrCell* cell) { return cell->current; }
+static inline int32_t msHcrMoved(const MsHcrCell* cell, void* self) {
+	return cell != NULL && cell->current != NULL && cell->current != self ? 1 : 0;
+}
+static inline void* msHcrFunctionValue(const MsHcrCell* cell) { return cell->entry != NULL ? cell->entry : cell->current; }
 
 MsHcrCell* msHcrBind(const char* moduleId, const char* symbol, const char* key);
 int32_t msHcrModuleBegin(const char* moduleId);
-void msHcrRegisterFunction(const char* moduleId, const char* symbol, const char* key, void* address);
+MsHcrCell* msHcrRegisterFunction(const char* moduleId, const char* symbol, const char* key, void* address, int32_t forwards);
 int32_t msHcrRegisterVariable(const char* moduleId, const char* symbol, const char* key, size_t size, void** out);
 void msHcrStageBegin(void);
 void msHcrStageEnd(void);

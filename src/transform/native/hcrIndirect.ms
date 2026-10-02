@@ -1,8 +1,9 @@
-import { Node, NodeKind, ProgramData, FunctionDeclData, IdentifierData, MemberExprData, createNode, SourceLocation, SymbolKind, Type } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, BlockStmtData, IdentifierData, MemberExprData, ObjectLiteralData, createNode, SourceLocation, SymbolKind, Type, TypeKind } from "../../ast/node";
 import { exportedFunctionOf } from "../../checker/decoratorHelpers";
 import { hasGenericParams, createPtr, createStruct, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName } from "../../codegen/c/names";
+import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName } from "../../codegen/c/names";
+import { isNrvoReturnType } from "../../codegen/c/types";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
 import { walkNode } from "../walker";
 import { syntheticToken, makeHiddenDeref, makeTypedIdent, makeMember, makeCall, runtimeRef } from "../util";
@@ -24,6 +25,7 @@ export struct HcrFunction {
 	symbol: string;
 	key: string;
 	sourcePath: string;
+	forwards: boolean;
 }
 
 export function hcrFunctions(program: Node, aliveSet: Readonly<AliveSet>, modulePath: string, facts: Readonly<CEmissionFacts>): HcrFunction[] {
@@ -44,6 +46,7 @@ export function hcrFunctions(program: Node, aliveSet: Readonly<AliveSet>, module
 			symbol,
 			key: "f:" + hcrSignatureKey(sym != null ? sym.symbolType : fn.nodeType),
 			sourcePath: sym != null ? sym.modulePath : "",
+			forwards: sym != null && !d.fnName.startsWith("$"),
 		});
 	}
 	return functions;
@@ -70,13 +73,22 @@ export function lowerHcrIndirection(
 	for (const fn of functions) ownFunctions.add(fn.symbol);
 	const emitted: Node[] = [makeEmitStmt("/*INCLUDESECTION*/#include \"runtime/hcr.h\"", loc)];
 	const registrations: Node[] = [];
+	const selfCells = new HashMap<string, string>();
+	const entries = new HashMap<string, string>();
+	let selfSlot: int32 = 0;
 	let published = "";
 	for (const fn of functions) {
 		published = published + `${cString(fn.symbol)}, ${cString(fn.key)}, `;
-		registrations.push(makeEmitStmt(
-			`/*DATINITSECTION*/  msHcrRegisterFunction(${cString(own.moduleId)}, ${cString(fn.symbol)}, ${cString(fn.key)}, (void*)&${fn.symbol});`,
-			loc,
-		));
+		const register = `msHcrRegisterFunction(${cString(own.moduleId)}, ${cString(fn.symbol)}, ${cString(fn.key)}, (void*)&${fn.symbol}, ${fn.forwards ? 1 : 0})`;
+		if (!fn.forwards) {
+			registrations.push(makeEmitStmt(`/*DATINITSECTION*/  ${register};`, loc));
+			continue;
+		}
+		const cell = `_ms_hcr_self_${mangleModuleName(own.modulePath)}_${selfSlot}`;
+		selfSlot += 1;
+		selfCells.set(fn.symbol, cell);
+		emitted.push(makeEmitStmt(`/*VARSECTION*/static MsHcrCell* ${cell};`, loc));
+		registrations.push(makeEmitStmt(`/*DATINITSECTION*/  ${cell} = ${register};`, loc));
 	}
 	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* HcrModuleId000(void) { return ${cString(own.moduleId)}; }`, loc));
 	emitted.push(makeEmitStmt(`MS_HCR_EXPORT const char* const* HcrFunctions000(void) { static const char* const symbols[] = { ${published}NULL }; return symbols; }`, loc));
@@ -112,8 +124,30 @@ export function lowerHcrIndirection(
 			const data = fn.data as FunctionDeclData;
 			const symbol = mangledFunctionName(sym, data.fnName, sym != null ? sym.overloadIdx : 0);
 			if (!ownFunctions.has(symbol)) continue;
+			const cell = selfCells.get(symbol);
+			if (cell != null) forwardToCurrent(fn, symbol, cell);
 		}
 		pd.programStmts[i] = walkNode(pd.programStmts[i], (n: Node): Node => {
+			if (n.kind == NodeKind.ObjectLiteral) {
+				const target = closureFunction(n);
+				if (target == null) return n;
+				const sym = target.resolvedSym;
+				const symbol = mangledFunctionName(sym, referenceName(sym, referenceText(target)), sym.overloadIdx);
+				let cell = selfCells.get(symbol);
+				if (cell == null) {
+					const owner = owners.get(symbol);
+					if (owner == null || owner == own.moduleId) return n;
+					cell = bound.get(owner + "\n" + symbol + "\nf:" + hcrSignatureKey(sym.symbolType));
+					if (cell == null) throw new Error(`internal: '${owner}::${symbol}' taken as a value without an HCR binding`);
+				}
+				const value = `${cell}_value`;
+				if (!entries.has(cell)) {
+					entries.set(cell, value);
+					emitted.push(makeEmitStmt(`/*VARSECTION*/#define ${value} (msHcrFunctionValue(${cell}))`, loc));
+				}
+				(n.data as ObjectLiteralData).properties[0] = makeTypedIdent(value, target.nodeType, target.location);
+				return n;
+			}
 			if (n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr) return n;
 			const sym = n.resolvedSym;
 			if (sym == null) return n;
@@ -122,7 +156,7 @@ export function lowerHcrIndirection(
 				if (baseSym == null || baseSym.symbolKind != SymbolKind.Module) return n;
 			}
 			const isVariable = isModuleGlobalVar(sym);
-			const text = n.kind == NodeKind.Identifier ? (n.data as IdentifierData).name : (n.data as MemberExprData).property;
+			const text = referenceText(n);
 			const symbol = isVariable
 				? mangledGlobalName(sym, referenceName(sym, text))
 				: mangledFunctionName(sym, referenceName(sym, text), sym.overloadIdx);
@@ -180,6 +214,41 @@ export function lowerHcrIndirection(
 	for (const stmt of registrations) emitted.push(stmt);
 	pd.programStmts = emitted;
 	return program;
+}
+
+function referenceText(n: Node): string {
+	return n.kind == NodeKind.Identifier ? (n.data as IdentifierData).name : (n.data as MemberExprData).property;
+}
+
+function closureFunction(n: Node): Node | null {
+	if (!n.flags.has(NodeFlag.Closure)) return null;
+	const values = (n.data as ObjectLiteralData).properties;
+	if (values.length != 2 || values[1].kind != NodeKind.NullLiteral) return null;
+	const target = values[0];
+	const sym = target.resolvedSym;
+	if (sym == null || sym.symbolKind != SymbolKind.Function) return null;
+	if (target.kind == NodeKind.Identifier) return target;
+	if (target.kind != NodeKind.MemberExpr) return null;
+	const baseSym = (target.data as MemberExprData).object.resolvedSym;
+	return baseSym != null && baseSym.symbolKind == SymbolKind.Module ? target : null;
+}
+
+function forwardToCurrent(fn: Node, symbol: string, cell: string): void {
+	const d = fn.data as FunctionDeclData;
+	const fnType = fn.nodeType;
+	if (d.fnBody == null || d.fnBody.kind != NodeKind.BlockStmt || fnType == null || fnType.kind != TypeKind.Function) {
+		throw new Error(`internal: HCR function '${symbol}' has no body or function type to forward from`);
+	}
+	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
+	const args: string[] = nrvo ? ["__result"] : [];
+	for (const param of d.params) args.push(safeName(param));
+	const call = `((__typeof__(&${symbol}))${cell}->current)(${args.join(", ")})`;
+	const returnsValue = !nrvo && fnType.typeReturn != null && fnType.typeReturn.kind != TypeKind.Void;
+	const forward = returnsValue ? `return ${call};` : `{ ${call}; return; }`;
+	const block = d.fnBody.data as BlockStmtData;
+	const statements: Node[] = [makeEmitStmt(`if (msHcrMoved(${cell}, (void*)&${symbol})) ${forward}`, fn.location)];
+	for (const stmt of block.statements) statements.push(stmt);
+	block.statements = statements;
 }
 
 function handlerFunction(entry: string, handlers: string[]): string {
