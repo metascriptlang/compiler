@@ -785,6 +785,19 @@ function registryGeneric(): void {
 	]);
 }
 
+function functionValues(): void {
+	const tag = "hcrFunctionValues";
+	const dir = buildLogicGenerations(tag, "functionValues", ["logic.ms", "logicEdit.ms", "logicReset.ms"]);
+	runPrebuilt(tag, dir, ["logic", "support"], "HCR-FN", [
+		"HCR-FN g1: direct 1 held 1 table 1 rebound 1 local 1001 adder 102",
+		"HCR-FN g2: reloaded logic []",
+		"HCR-FN after g2: direct 2 held 2 fresh 2 table 2 rebound 2 local 2002 fresh-local 2002 adder 103 fresh-adder 203",
+		"HCR-FN state before reset: held-tick 10 direct-tick 20 snapshot 20",
+		"HCR-FN g3: reloaded logic [reset variables: logic.count]",
+		"HCR-FN after g3 reset: held-tick 0 direct-tick 0 held-tick 0 snapshot 300 held-version 3 rebound 3",
+	]);
+}
+
 // ---- hcrWindowsReload: single-image LoadLibrary reload, four generations ----
 
 function windowsReload(): void {
@@ -886,4 +899,5 @@ liftKinds();
 runCommand();
 registryVariables();
 registryGeneric();
+functionValues();
 if (platform == "windows") windowsReload();
