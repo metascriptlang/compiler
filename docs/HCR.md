@@ -753,6 +753,18 @@ in 3–4 ms, the settle waits 60 ms, the build takes 246–290 ms (front end and
 `reload()` figure above (0.45–0.56 s, 2026-09-24) was not measured again; the 2026-09-27 runs
 leave 100–180 ms between the end of the build and the visible line.
 
+2026-10-02, WSL Ubuntu x64 (24 cores, load 0.13), a compiler of `6dfd6e04` cross-built with
+`--os=linux --cc=zig --danger --lto=off`, `examples/hcrApp`, five saves by atomic rename: edit
+to visible 344–401 ms, watch build 290–333 ms. A warm build of the same app under
+`--watch-replay --time` (240–270 ms), with temporary probes around the image link: graph load
+and check 62 ms, phase A 10 ms, phase B 12 ms, `cc -c` 15 ms (parallel), the core image's
+link-cache check 23–24 ms, the `logic` image link 23–25 ms (gcc driver), the entry image's
+link-cache check 6 ms, the project cache write 12 ms. No single step holds the budget: <100 ms
+needs the settle (60 ms), the warm check, the link path and emission each cut. Tried and kept
+out, A/B on the same host: computing the link-cache input key once per build instead of per
+image (phase D unchanged, 70–90 ms both ways) and `-fuse-ld=lld` for image links (`logic` link
+23–25 ms both ways: a small image's link is the driver's startup).
+
 A writer that empties the file before writing it (`cat new > logic.ms` from Git Bash, whose fork
 takes more than the 60 ms settle) can let a build read the empty file. That build fails with
 `Cannot resolve module './logic'`, because the loader treats an empty module as a missing one (an
