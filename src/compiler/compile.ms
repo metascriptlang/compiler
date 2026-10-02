@@ -3256,6 +3256,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	if (opts.showTime) printTiming("compiled", t0);
 	if (opts.verbose) verboseLog("running tests");
 	const runCode = execFile(testBin);
+	if (platform == "windows" && runCode >= 0xC0000000) {
+		printDiag(`${error("error")}: test binary terminated with status 0x${runCode.toString(16).toUpperCase()}`);
+		exit(1);
+	}
 	if (runCode > 128) printDiag(`${error("error")}: test binary terminated by signal ${runCode - 128}`);
 	exit(runCode);
 }
