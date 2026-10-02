@@ -403,3 +403,4 @@ import "./bug636RefOperatorPassesALocation";
 import "./bug644RaiserProgramArgv";
 import "./bug656BareParamAliasKeepsItsName";
 import "./bug675ReadonlyPtrIsAView";
+import "./bug670RefParamDerefUnderAutoDeref";
