@@ -76,8 +76,7 @@ export function toBase58(this key: Pubkey): string {
 	for (let i = 0; i < 32; i++) {
 		let carry = key.bytes[i] as uint32;
 		for (let d = 0; d < used; d++) {
-			const digit: uint32 = digits[d] as uint32;
-			carry += digit << 8;
+			carry += (digits[d] as uint32) << 8;
 			digits[d] = (carry % 58) as uint8;
 			carry = carry / 58;
 		}
