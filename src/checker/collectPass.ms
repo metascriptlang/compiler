@@ -249,28 +249,23 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	const exportNameRejected = reportExportNameMisuse(ctx, dd);
 	const declName = getDeclName(dd.decoratedNode);
 	if (declName == "") return;
-	const sym = lookupSymbol(ctx.table, declName);
-	if (sym == null) return;
+	const named = lookupSymbol(ctx.table, declName);
+	if (named == null) return;
+	const sym = declaredSymbolOf(dd.decoratedNode, named);
 	const info = extractDecoratorInfo(node);
 	const handlerName = reloadHandlerExportName(ctx, dd, sym, declName);
 	const exportName = handlerName != "" ? handlerName : exportNameRejected ? "" : info.exportName;
-	// For overloaded functions, the new function was just pushed as the last overload.
-	// Set builtinKind on the correct symbol (not the primary).
-	// CRITICAL: must write directly through array index — intermediate variable creates a clone (DRC #25).
-	if (sym.overloads.length > 0) {
-		const idx = sym.overloads.length - 1;
-		if (info.builtinKind != "") sym.overloads[idx].builtinKind = info.builtinKind;
-		if (exportName != "") sym.overloads[idx].exportName = exportName;
-		if (info.throws) setFlag(sym.overloads[idx], SymbolFlag.Throws);
-		if (info.compilerFunc) registerCompilerFunc(ctx, sym.overloads[idx]);
-		if (info.borrow) markBorrow(ctx, dd, sym.overloads[idx]);
-	} else {
-		if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
-		if (exportName != "") sym.exportName = exportName;
-		if (info.throws) setFlag(sym, SymbolFlag.Throws);
-		if (info.compilerFunc) registerCompilerFunc(ctx, sym);
-		if (info.borrow) markBorrow(ctx, dd, sym);
-	}
+	if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
+	if (exportName != "") sym.exportName = exportName;
+	if (info.throws) setFlag(sym, SymbolFlag.Throws);
+	if (info.compilerFunc) registerCompilerFunc(ctx, sym);
+	if (info.borrow) markBorrow(ctx, dd, sym);
+}
+
+function declaredSymbolOf(decorated: Node, named: Symbol): Symbol {
+	const decl = declOfStatement(decorated);
+	if (decl.kind == NodeKind.FunctionDecl && decl.resolvedSym != null) return decl.resolvedSym;
+	return named.overloads.length > 0 ? named.overloads[named.overloads.length - 1] : named;
 }
 
 function markBorrow(ctx: CheckerContext, dd: DecoratedDeclData, sym: Symbol): void {
@@ -1461,12 +1456,9 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 	if (name != "") {
 		const sym = lookupSymbol(ctx.table, name);
 		if (sym != null) {
-			exportSym(ctx, sym);
-			// For overloaded functions, also mark the latest overload as exported.
-			// defineSymbol appends to overloads[], so last entry is the just-defined one.
-			if (sym.overloads.length > 0) {
-				exportSym(ctx, sym.overloads[sym.overloads.length - 1]);
-			}
+			if (!ctx.importSet.has(sym)) exportSym(ctx, sym);
+			const declared = declaredSymbolOf(d.exportedDecl, sym);
+			if (declared != sym) exportSym(ctx, declared);
 		}
 	}
 	if (d.exportedDecl.kind == NodeKind.ClassDecl) {
