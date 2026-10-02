@@ -104,6 +104,11 @@ function typeKey(t: Type): string {
 		for (const c of t.typeChildren) key = key + typeKey(c) + ",";
 		return key + ")";
 	}
+	if (t.kind == TypeKind.Set) {
+		const repr = setRepr(t);
+		if (repr != null) return "K:" + typeKey(repr);
+		if (t.typeValue > 0) return "K:" + t.typeValue.toString();
+	}
 	if (t.kind == TypeKind.Array && t.typeReturn != null) return "A:" + typeKey(t.typeReturn);
 	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) return "F:" + typeKey(t.typeReturn);
 	return "p" + (t.kind as int32).toString();
