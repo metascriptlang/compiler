@@ -218,10 +218,13 @@ The reference reloads every module but the main one and those marked non-reloada
 x64: `hcrFileDependency` answered `RestartRequired` ("the core image changed") on `bcdf6556` and
 reloads the dependency with its new body on the candidate; `hcrImageNameCollision` built three
 images into two files on `bcdf6556` (one overwritten) and stops on the candidate. Both pass on
-Linux x64 in the same WSL run. Known defect:
-in a graph with a dependency, the warm build emits the entry module's C without five unused
-generic-instance struct declarations the cold build wrote, so the entry image relinks and
-reloads beside the dependency (`reloaded greeter/index,app`).
+Linux x64 in the same WSL run. An edit of the dependency also reloaded the entry image
+(`reloaded greeter/index,app`) on `8cf8901c`: the prelude replays its own type instances
+(`UntypedTree<JsonValueData, string>`, `Map<number, string>`) into whichever module check asks
+for it first, so a cold build gave them to the entry module and a warm one did not. The
+prelude's rows now carry a flag and always join the shared rows (`collectTypeInstanceRows`'s
+first module); instances a module creates over its own types stay with it
+(`hcrNewInstance`). `hcrFileDependency` now expects `reloaded greeter/index` alone.
 
 Not verified: the per-call cost (a cell is two dependent loads against three for
 `handle->current[k]`, read from the emitted macros, not timed); how Live++ keeps globals (its
