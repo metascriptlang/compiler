@@ -261,7 +261,7 @@ function spanViewJS(src: Node, srcType: Type, loc: SourceLocation): Node | null 
 		return makeCall(runtimeRef("msSpanOf", loc), [borrowedJS(src, srcType)], loc);
 	}
 	if (srcType.kind == TypeKind.String) {
-		return makeCall(runtimeRef("msSpanOf", loc), [makeCall(runtimeRef("asBytes", loc), [src], loc)], loc);
+		return makeCall(runtimeRef("asBytes", loc), [src], loc);
 	}
 	return null;
 }
@@ -285,7 +285,7 @@ function lowerRangeAccessJS(node: Node): Node {
 	} else if (arrType.kind == TypeKind.Array || arrType.kind == TypeKind.SizedArray) {
 		slice = makeCall(runtimeRef("msSliceOf", loc), [borrowedJS(d.array, arrType), bd.left, endExclusive], loc);
 	} else if (arrType.kind == TypeKind.String) {
-		slice = makeCall(runtimeRef("msSliceOf", loc), [makeCall(runtimeRef("asBytes", loc), [d.array], loc), bd.left, endExclusive], loc);
+		slice = makeCall(runtimeRef("msSliceSpan", loc), [makeCall(runtimeRef("asBytes", loc), [d.array], loc), bd.left, endExclusive], loc);
 	}
 	if (slice == null) return node;
 	slice.nodeType = resultType;
