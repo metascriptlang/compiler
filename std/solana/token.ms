@@ -35,6 +35,17 @@ export struct Mint {
 	freezeAuthority: Pubkey | null;
 }
 
+export struct GroupMemberPointer {
+	authority: Pubkey | null;
+	memberAddress: Pubkey | null;
+}
+
+export struct TokenGroupMember {
+	mint: Pubkey;
+	group: Pubkey;
+	memberNumber: uint64;
+}
+
 export struct TokenAccount {
 	mint: Pubkey;
 	owner: Pubkey;
@@ -241,6 +252,30 @@ export function mintExtension(
 	const data = try withExtensions(account.data(), 82, 1);
 	if (extensionBase(kind) != 1) { return Result.err(ProgramError.invalidAccountData()); }
 	return extensionIn(data, kind);
+}
+
+function maybeNull(key: Pubkey): Pubkey | null {
+	if (key.isZero()) { return null; }
+	return key;
+}
+
+export function groupMemberPointer(this account: Account): Result<GroupMemberPointer, ProgramError> {
+	const bytes = try account.mintExtension(ExtensionType.GroupMemberPointer);
+	if (bytes.length != 64) { return Result.err(ProgramError.invalidArgument()); }
+	return Result.ok({
+		authority: maybeNull(try bytes.readPubkey(0)),
+		memberAddress: maybeNull(try bytes.readPubkey(32)),
+	});
+}
+
+export function tokenGroupMember(this account: Account): Result<TokenGroupMember, ProgramError> {
+	const bytes = try account.mintExtension(ExtensionType.TokenGroupMember);
+	if (bytes.length != 72) { return Result.err(ProgramError.invalidArgument()); }
+	return Result.ok({
+		mint: try bytes.readPubkey(0),
+		group: try bytes.readPubkey(32),
+		memberNumber: try bytes.readU64(64),
+	});
 }
 
 export function tokenAccountExtension(
@@ -606,6 +641,10 @@ when (testBuild) {
 	}
 
 	function mint2022Data(): uint8[] {
+		return memberMintData(keyOf(33), 64);
+	}
+
+	function memberMintData(authority: Pubkey, pointerLength: int32): uint8[] {
 		const bytes = mintData(5, 1, 0);
 		pushZeros(bytes, 83);
 		bytes.push(1);
@@ -613,9 +652,15 @@ when (testBuild) {
 		pushU16(bytes, 64);
 		pushZeros(bytes, 64);
 		pushU16(bytes, 22);
-		pushU16(bytes, 64);
-		pushKey(bytes, keyOf(33));
+		pushU16(bytes, pointerLength as uint64);
+		pushKey(bytes, authority);
 		pushKey(bytes, keyOf(44));
+		pushZeros(bytes, pointerLength - 64);
+		pushU16(bytes, 23);
+		pushU16(bytes, 72);
+		pushKey(bytes, keyOf(1));
+		pushKey(bytes, keyOf(55));
+		pushU64(bytes, 4242);
 		return bytes;
 	}
 
@@ -665,6 +710,21 @@ when (testBuild) {
 			const member = try holder.mintExtension(ExtensionType.GroupMemberPointer);
 			logU64(member.length);
 			logU64(try member.readU64(32));
+			return Result.ok(0);
+		}
+		if (op == 5) {
+			const pointer = try holder.groupMemberPointer();
+			const authority = pointer.authority;
+			const member = pointer.memberAddress;
+			if (authority === null) { logU64(0); } else { logU64(wordAt(authority, 0)); }
+			if (member !== null) { logU64(wordAt(member, 0)); }
+			return Result.ok(0);
+		}
+		if (op == 6) {
+			const member = try holder.tokenGroupMember();
+			logU64(wordAt(member.mint, 0));
+			logU64(wordAt(member.group, 0));
+			logU64(member.memberNumber);
 			return Result.ok(0);
 		}
 		const kind = op == 3 ? ExtensionType.TransferHook : ExtensionType.ImmutableOwner;
@@ -739,6 +799,25 @@ when (testBuild) {
 		assert resultOf(accounts, 4, readerEntry) == ProgramError.invalidAccountData().code;
 		const plain = single(Pubkey.token2022Program(), mintData(5, 1, 0));
 		assert resultOf(plain, 3, readerEntry) == ProgramError.custom(48).code;
+	}
+
+	test "groupMemberPointer and tokenGroupMember decode Token-2022's layouts" {
+		const accounts = single(Pubkey.token2022Program(), mint2022Data());
+		assert resultOf(accounts, 5, readerEntry) == 0;
+		assert logs()[0] == logged("0x21") && logs()[1] == logged("0x2c");
+		assert resultOf(accounts, 6, readerEntry) == 0;
+		assert logs()[0] == logged("0x1") && logs()[1] == logged("0x37");
+		assert logs()[2] == logged("0x1092");
+		const unset = single(Pubkey.token2022Program(), memberMintData(Pubkey.zero(), 64));
+		assert resultOf(unset, 5, readerEntry) == 0;
+		assert logs()[0] == logged("0x0") && logs()[1] == logged("0x2c");
+	}
+
+	test "a group member pointer of another length is refused, as bytemuck refuses it" {
+		const longer = single(Pubkey.token2022Program(), memberMintData(keyOf(33), 65));
+		assert resultOf(longer, 5, readerEntry) == ProgramError.invalidArgument().code;
+		const plain = single(Pubkey.tokenProgram(), mintData(5, 1, 0));
+		assert resultOf(plain, 6, readerEntry) == ProgramError.invalidAccountOwner().code;
 	}
 
 	function cpiStep(): Result<uint64, ProgramError> {
