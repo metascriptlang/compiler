@@ -19,7 +19,7 @@ The worked example is Anchor's escrow: `examples/escrow/layout.ms` (shared by pr
 | `std/solana/macro.ms` | C, SBF | `instruction<Op>()`, `args<T>()`, `accounts<T>()`, `emitEvent<E>(value)` |
 | `std/solana/token.ms` | C, SBF | Mint and token-account layouts, their verifiers, typed token CPIs, associated-account checks |
 | `std/solana/magicblock.ms` | C, SBF | MagicBlock: `delegate`, `commit`/`commitAndUndelegate` (one account, a list, a list through the fee vault), the `undelegate` callback, `scheduleTask` |
-| `std/solana/vrf.ms` | C, SBF | MagicBlock VRF: the scoped `requestRandomness` (one callback account or a list), `verifyVrfCallback` |
+| `std/solana/vrf.ms` | C, SBF | MagicBlock VRF: the scoped `requestRandomness` (one callback account or a list; paid by a signing wallet or by a program PDA signing with its seeds), `verifyVrfCallback` |
 | `std/solana/arithmetic.ms` | `when (solana)` | signed `/ % /= %=` through unsigned division |
 | `std/solana/idl.ms` | compile time | `anchorIdl<Op>(spec)`: the program's Anchor IDL as a string literal |
 | `std/solana/host.cms` | C, host | the simulator: builds the runtime's input buffer, runs an entry function, reads the accounts back, runs System, Token and Associated Token CPIs |
