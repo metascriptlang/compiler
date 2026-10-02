@@ -2558,7 +2558,7 @@ function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, calleeName: st
 
 enum CallMagic {
 	None,
-	StringConcatArr, StringArrayFromArr, StringAppendArr, NumberArrayFrom,
+	StringConcatArr, StringArrayFromArr, StringAppendArr,
 	BoxStruct, SinkBoxStruct, UnboxStruct, BoxRefArray, BoxArc,
 	BoxLocked, LockedLoad, LockedStore,
 	FutureCreateInline, SpawnInto, WaitForStruct, FutureThenBoxed,
@@ -2579,7 +2579,6 @@ function callMagicOf(sym: Symbol | null): CallMagic {
 		"StringConcatArr" => CallMagic.StringConcatArr,
 		"StringArrayFromArr" => CallMagic.StringArrayFromArr,
 		"StringAppendArr" => CallMagic.StringAppendArr,
-		"NumberArrayFrom" => CallMagic.NumberArrayFrom,
 		"BoxStruct" => CallMagic.BoxStruct,
 		"SinkBoxStruct" => CallMagic.SinkBoxStruct,
 		"UnboxStruct" => CallMagic.UnboxStruct,
@@ -2678,8 +2677,6 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		return;
 	}
 
-	// C varargs: msNumberArrayFrom(count, (double)(e1), ...) — va_arg reads 8 bytes for double
-	const isNumberArrayFrom = magic == CallMagic.NumberArrayFrom;
 	// Resolve callee's function type for parameter type checking. For
 	// closure-pair callees (post-lift IIFE), neither sym.symbolType nor
 	// cd.callee.nodeType holds the Function type (callee is an ObjectLiteral
@@ -2700,9 +2697,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	while (i < cc) {
 		if (i > 1) argsStr = argsStr + ", ";
 		let arg = peekResult(ctx, cc, i);
-		if (isNumberArrayFrom && i > 1) {
-			arg = `(double)(${arg})`;
-		} else if (hasParamTypes && magic == CallMagic.None) {
+		if (hasParamTypes && magic == CallMagic.None) {
 			const argIdx = i - 1;
 			if (argIdx < calleeType.typeChildren.length && argIdx < cd.arguments.length) {
 				const callMutBits: int32 = sym != null ? sym.mutatedParams : 0;
@@ -3254,7 +3249,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 	}
 
 	// Non-primitive: temp + push pattern
-	// (number/string arrays already lowered to msNumberArrayFrom/msStringArrayFromArr CallExpr by nativeLower)
+	// (string arrays already lowered to an msStringArrayFromArr CallExpr by nativeLower)
 	const isSizedArray = node.nodeType != null && node.nodeType.kind == TypeKind.SizedArray;
 	const tmp = getTemp(p, arrayTypeName);
 	const tmpName = tmp.snippet;

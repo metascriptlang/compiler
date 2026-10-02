@@ -337,12 +337,11 @@ function rewriteMemberExpr(node: Node): Node {
 }
 
 // ===== Array Literal Lowering =====
-// Rewrites typed array literals to variadic runtime calls:
-//   [1, 2, 3]  on number[]  →  CallExpr("msNumberArrayFrom", [3, 1, 2, 3])
+// Rewrites typed array literals to runtime calls:
 //   ["a", "b"] on string[]  →  CallExpr("msStringArrayFromArr", [2, "a", "b"])
 //                              (codegen rewrites to stack-local array + msStringArrayFromArr(arr, N)
 //                               — avoids variadic 16-byte struct ABI bug on aarch64-windows-gnu)
-// Other types (object[], ref[]) stay as ArrayLiteral for codegen's Temp+Push pattern.
+// Other types (number[], object[], ref[]) stay as ArrayLiteral for codegen's Temp+Push pattern.
 
 function rewriteArrayLiteral(node: Node): Node {
 	const d = node.data as ArrayLiteralData;
@@ -367,17 +366,6 @@ function rewriteArrayLiteral(node: Node): Node {
 	if (elemType == null) return node;
 
 	const loc = node.location;
-
-	// number[]/float64[] → msNumberArrayFrom(count, e1, e2, ...)
-	if (elemType.kind == TypeKind.Number || elemType.kind == TypeKind.Float64) {
-		const args: Node[] = [makeNumber(d.elements.length, loc)];
-		for (let i = 0; i < d.elements.length; i += 1) {
-			args.push(d.elements[i]);
-		}
-		const call = makeCall(runtimeRef("msNumberArrayFrom", loc), args, loc);
-		call.nodeType = node.nodeType;
-		return call;
-	}
 
 	// string[] → msStringArrayFromArr(count, e1, e2, ...)
 	if (elemType.kind == TypeKind.String) {
