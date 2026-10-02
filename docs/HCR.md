@@ -37,7 +37,8 @@ backend and DRC/ORC runtime.
 | `@beforeReload` / `@afterReload` handlers | Windows x64 and Linux x64 checked by `hcrEngine`: old handlers quiesce, new handlers resume; a throw restores publication |
 | TypeInfo across reloads | Windows x64 and Linux x64 checked by `hcrEngine`: stable class identity/method dispatch, restored metadata after rollback; incompatible class layout still requires restart |
 | Watch build (`msc build --hcr --watch`) | Windows x64 (`ReadDirectoryChangesW`) and Linux x64 (inotify): rebuilds after each source save through a kept build session, guarded by `src/test/hcr/run.ms` (`hcrWatchWarm`: the C of a warm build equals a cold build's at every step of a replayed edit sequence, including constructor defaults, removed overrides and generic hook instances). macOS has no file-watch backend: `std/fs/watch` aborts with `file watching has no backend for this platform yet` |
-| `msc run app.ms --hcr` | Windows x64 and Linux x64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
+| Function values across reloads | Windows x64, `hcrFunctionValues`: a named function's value taken before a reload, a private one, one stored in a module-level object and code of the old generation all reach the newest generation; a closure keeps its own body; a held function writes the new cell after a type reset |
+| `msc run --hcr app.ms` | Windows x64 and Linux x64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
 | iOS and automated deploy loops | Not implemented |
 | Neon Fast Refresh integration | Contract defined here; implementation belongs to the Neon repo |
 
@@ -188,8 +189,23 @@ value, and name the reset in `lastReload().reason`. A surviving caller bound to 
 type makes the transaction `Rejected`, naming the caller and symbol to rebuild. Integer and
 string type changes, and incompatible imported bindings, are separate checked variants.
 
-Not decided here: what a function value taken before a reload calls (code identity, next
-step), and whether non-standard dependencies reload.
+Selected function-value contract (2026-10-02): every published named function begins with
+`if (msHcrMoved(self, &F)) return current(args)`, so a call that lands on an older
+generation's body continues in the current one; a closure pair of a named function holds
+`msHcrFunctionValue(cell)`, the address of the first committed generation, which is the same
+value before and after a reload. Lifted lambdas and generated functions keep their generation:
+their names are positional. A changed signature is a new cell, so a held value of the old
+signature keeps the old body. Rejected paths: snapshot semantics with handler rebinding (a held
+`onFrame(update)` and old-generation calls stay old, and after a type reset a held function
+writes the retired cell, measured 2026-10-02: `held-tick 12, 13` against `snapshot 100`), and a
+per-function trampoline in the owner image (needs a cloned signature per function; the
+prologue reuses the existing cell and parameter names). Nim forwards only calls made through
+its trampoline and keeps same-module calls of old code on `_actual`; this contract also
+forwards those, as Dart and Live++ do. Measured: `hcrFunctionValues` red on `b5857d02`, green
+on the candidate, Windows x64. Not measured: the per-call cost of the prologue, Linux, raw C
+function pointers to a named function, `==` between function values.
+
+Not decided here: whether non-standard dependencies reload.
 
 Not verified: the per-call cost (a cell is two dependent loads against three for
 `handle->current[k]`, read from the emitted macros, not timed); how Live++ keeps globals (its
@@ -197,21 +213,23 @@ documentation does not say); whether Zig's issue #5260 design is what ships.
 
 ## Runtime invariants
 
-Automatic safe-point detection, old-image purge and rebinding long-lived function values are
-not claimed. Those remain explicit application lifecycle responsibilities.
+Automatic safe-point detection, old-image purge and rebuilding long-lived closures are not
+claimed. Those remain explicit application lifecycle responsibilities.
 
 
 1. **Off means absent.** `--hcr` off emits no HCR ABI or indirect calls.
 2. **Calls select a generation deliberately.** Cross-image calls enter the current symbol
-   cell. A direct call already executing old module code stays old until it returns.
+   cell, and a named function's body forwards to the current generation when it is not it. A
+   frame already executing old module code stays old until it returns.
 3. **Publication is transactional.** The loader holds `current`, `old` and an unpublished
    `candidate`. Candidate failure leaves current callable.
 4. **Old remains available.** Rollback restores the previous publication; accepted and
    exposed rejected generations remain mapped until restart.
 5. **No speculative purge.** Repeated reloads retain old code/storage rather than freeing
    memory that a frame or callback might still reach. Purging requires a separate safe-point proof.
-6. **Callback code identity is explicit.** Cross-image bindings use stable cells; a function
-   value already taken may still name old code. Re-register long-lived callbacks in handlers.
+6. **Function identity is the first generation.** A named function's value is the address of
+   its first committed generation and forwards; a closure keeps its own body. Re-create
+   long-lived closures in handlers.
 7. **Variable and object compatibility are distinct.** Adding/removing module variables is
    allowed; a changed variable type resets that value only, subject to surviving binding checks.
    A class/interface/struct layout change still requires restart.

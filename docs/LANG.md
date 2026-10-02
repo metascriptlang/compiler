@@ -2304,7 +2304,7 @@ user has not set. `msc --help-defines` lists everything currently defined.
 
 ## Hot Code Reload (`--hcr`)
 
-`msc run app.ms --hcr` builds the program as one native image per module, starts it under
+`msc run --hcr app.ms` builds the program as one native image per module, starts it under
 the host from `std/hcr`, and on every save rebuilds the module that changed while the
 program keeps running. New code takes effect where the program calls `reload()`, which it
 imports from `std/hcr` where it wants reloads to happen, once per pass of its main loop:
@@ -2346,16 +2346,23 @@ What a reload keeps and what it refuses:
   field added, removed or retyped in a class, interface or struct, a base class included,
   answers `RestartRequired`. So does an edit that makes the program use a runtime or
   standard-library routine it did not use before.
-- **New code is reached through symbol bindings.** Cross-image function calls and variable
-  accesses use the current cell; same-unit calls stay direct. A loop already running in the
-  entry image remains on that generation, so reloadable logic belongs in imported modules.
+- **A call to a named function runs its newest code.** That holds for a direct call, for a
+  call through a function value taken before the reload (`onFrame(update)`, a handler stored
+  in a table), and for a call made by code of an older generation. A function already
+  running finishes on the code it started with, so a loop that never returns stays on its
+  generation; reloadable logic belongs in the functions it calls.
+- **A closure keeps its own body.** An arrow function or lambda created before the reload
+  runs the code it was created with, over the environment it captured; the named functions it
+  calls are still the newest. Create it again in an `@afterReload` handler to pick up an edit
+  of its own body. A changed variable type resets that variable, and code of the old
+  generation still writing it directly writes the retired storage.
 - **Project exports can cross images.** Exported state and concrete generic instances are
   supported, including private helpers/state that an instance needs from its home module.
   Compatibility is checked per used symbol; adding an unused export does not reject callers.
 - **`@beforeReload` / `@afterReload`** mark module-level `(): void` functions that run around
   a reload, leaf module first: before-handlers on the old code, after-handlers on the new
   code. A throwing initializer or after-handler restores function publication and TypeInfo and
-  answers `Rejected`; mutations to already shared state are not undone. Callbacks handed to
+  answers `Rejected`; mutations to already shared state are not undone. Closures handed to
   native code or other threads still need explicit re-registration in these handlers.
 - **A program that never imports `std/hcr` is refused by `msc run --hcr`**: nothing would call
   `reload()`, so `error: app.ms never imports std/hcr, …` stops the build and the watch waits
