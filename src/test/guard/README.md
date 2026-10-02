@@ -82,3 +82,7 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
     type-arg → fused `msUnion` payloads) can't yet compile clean because of a
     separate union ctor-param proto/def indirection bug + generic-fn-over-union
     bug. Add that guard once those land (logged in neon `BUGS.md`).
+- **`solanaMemBuiltins.ms`** (`GUARD-OS solana`) — under `MSOS_SOLANA` the runtime maps
+  `memcpy`/`memset`/`memcmp`/`memmove` to the compiler builtins, so the SBF backend inlines
+  small ones and calls the platform's syscall-backed symbols for large ones (NIM-REF RT-22).
+  Proven RED on `36251885` (byte loops in `runtime/manual.h`).
