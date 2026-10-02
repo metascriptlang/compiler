@@ -19,7 +19,7 @@ function load(generation: string): void {
 	const result = change(generation, ["logic"]);
 	console.log(`HCR-VARS ${generation}: ${reloadKindName(result.kind)} ${result.modules.join(",")}`);
 	if (generation == "g5") {
-		console.log(`HCR-VARS reset report: count ${result.reason.contains("logic::count")} memo ${result.reason.contains("logic::memo")}`);
+		console.log(`HCR-VARS reset report: count ${result.reason.contains("logic.count")} memo ${result.reason.contains("logic.memo")}`);
 	}
 }
 

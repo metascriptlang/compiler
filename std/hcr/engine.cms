@@ -313,10 +313,15 @@ function resetVariables(candidates: HcrCandidate[]): string[] {
 			if (!item.image.symbolKeys[i].startsWith("v:")) continue;
 			const name = item.image.symbolNames[i];
 			const at = previous.symbolNames.indexOf(name);
-			if (at >= 0 && previous.symbolKeys[at] != item.image.symbolKeys[i]) reset.push(`${item.module.moduleId}::${name}`);
+			if (at >= 0 && previous.symbolKeys[at] != item.image.symbolKeys[i]) reset.push(`${item.module.moduleId}.${sourceName(name)}`);
 		}
 	}
 	return reset;
+}
+
+function sourceName(symbol: string): string {
+	const at = symbol.indexOf("__M");
+	return at > 0 ? symbol.substring(0, at) : symbol;
 }
 
 function visitInitialization(moduleId: string, candidates: HcrCandidate[], visited: HashSet<string>, order: HcrCandidate[]): void {
