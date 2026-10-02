@@ -727,6 +727,7 @@ export type Owned<T> = distinct Account;
 export type Mutable<T> = distinct Account;
 export type External<T> = distinct Account;
 export type ExternalMutable<T> = distinct Account;
+export type Delegated<T> = distinct Account;
 
 @delegate export function key(this proof: Signer): Pubkey;
 @delegate export function key(this proof: WritableSigner): Pubkey;
@@ -737,6 +738,7 @@ export type ExternalMutable<T> = distinct Account;
 @delegate export function key<T>(this proof: Mutable<T>): Pubkey;
 @delegate export function key<T>(this proof: External<T>): Pubkey;
 @delegate export function key<T>(this proof: ExternalMutable<T>): Pubkey;
+@delegate export function key<T>(this proof: Delegated<T>): Pubkey;
 
 @delegate export function lamports(this proof: Signer): uint64;
 @delegate export function lamports(this proof: WritableSigner): uint64;
@@ -746,6 +748,7 @@ export type ExternalMutable<T> = distinct Account;
 @delegate export function lamports<T>(this proof: Mutable<T>): uint64;
 @delegate export function lamports<T>(this proof: External<T>): uint64;
 @delegate export function lamports<T>(this proof: ExternalMutable<T>): uint64;
+@delegate export function lamports<T>(this proof: Delegated<T>): uint64;
 
 @delegate export function owner(this proof: Writable): Pubkey;
 @delegate export function owner<T>(this proof: External<T>): Pubkey;
@@ -753,6 +756,7 @@ export type ExternalMutable<T> = distinct Account;
 
 @delegate export function dataLength<T>(this proof: Owned<T>): uint64;
 @delegate export function dataLength<T>(this proof: Mutable<T>): uint64;
+@delegate export function dataLength<T>(this proof: Delegated<T>): uint64;
 
 function present(index: int32): Result<Account, ProgramError> {
 	if (index < 0 || index >= accountCount()) {
@@ -769,8 +773,17 @@ function claimExclusive(target: Account): Result<Account, ProgramError> {
 	return Result.ok(target);
 }
 
-function programDataFailure(target: Account, discriminator: uint64, size: uint64): ProgramError {
-	if (target.owner() != programId()) { return ProgramError.accountOwnedByWrongProgram(); }
+function delegationProgramId(): Pubkey {
+	return @comptime { return pubkeyOf("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"); };
+}
+
+function programDataFailure(
+	target: Account,
+	owner: Pubkey,
+	discriminator: uint64,
+	size: uint64,
+): ProgramError {
+	if (target.owner() != owner) { return ProgramError.accountOwnedByWrongProgram(); }
 	if (target.dataLength() < 8) { return ProgramError.accountDiscriminatorNotFound(); }
 	if (msSolLoadU64(target.address + 88) != discriminator) {
 		return ProgramError.accountDiscriminatorMismatch();
@@ -823,7 +836,18 @@ export function ownedAccount(
 	size: uint64,
 ): Result<Account, ProgramError> {
 	const found = try present(index);
-	const failure = programDataFailure(found, discriminator, size);
+	const failure = programDataFailure(found, programId(), discriminator, size);
+	if (failure.code != 0) { return Result.err(failure); }
+	return Result.ok(found);
+}
+
+export function delegatedAccount(
+	index: int32,
+	discriminator: uint64,
+	size: uint64,
+): Result<Account, ProgramError> {
+	const found = try present(index);
+	const failure = programDataFailure(found, delegationProgramId(), discriminator, size);
 	if (failure.code != 0) { return Result.err(failure); }
 	return Result.ok(found);
 }
@@ -857,6 +881,11 @@ export function mutable<T>(index: int32): Result<Mutable<T>, ProgramError> {
 	return Result.ok(found as Mutable<T>);
 }
 
+export function delegated<T>(index: int32): Result<Delegated<T>, ProgramError> {
+	const found = try delegatedAccount(index, T.discriminator().word(), sizeof(T) as uint64);
+	return Result.ok(found as Delegated<T>);
+}
+
 export function external<T>(index: int32): Result<External<T>, ProgramError> {
 	const found = try present(index);
 	if (!T.acceptsOwner(found.owner())) {
@@ -883,6 +912,10 @@ export function data<T>(this proof: Mutable<T>): Ptr<T> {
 }
 
 export function data<T>(this proof: Owned<T>): Readonly<Ptr<T>> {
+	return ((proof as Account).address + 96) as Ptr<T>;
+}
+
+export function data<T>(this proof: Delegated<T>): Readonly<Ptr<T>> {
 	return ((proof as Account).address + 96) as Ptr<T>;
 }
 
@@ -1027,6 +1060,24 @@ export function pdaWithBump<T>(
 		return Result.err(ProgramError.constraintSeeds());
 	}
 	return Result.ok({ account: account, bump: bump });
+}
+
+export function pda<T>(account: Delegated<T>, seeds: Seeds): Result<uint8, ProgramError> {
+	const found = try seeds.findProgramAddress(programId());
+	if (found.key != account.key()) { return Result.err(ProgramError.constraintSeeds()); }
+	return Result.ok(found.bump);
+}
+
+export function pdaWithBump<T>(
+	account: Delegated<T>,
+	seeds: Seeds,
+	bump: uint8,
+): Result<uint8, ProgramError> {
+	const derived = seeds.withBump(bump).createProgramAddress(programId());
+	if (!derived.ok || derived.value != account.key()) {
+		return Result.err(ProgramError.constraintSeeds());
+	}
+	return Result.ok(bump);
 }
 
 export function close<T>(account: Mutable<T>, refund: Writable): Result<uint64, ProgramError> {

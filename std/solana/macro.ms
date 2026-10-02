@@ -13,6 +13,7 @@ import {
 	argU64,
 	argU8,
 	argsFit,
+	delegatedAccount,
 	eventWriter,
 	exclusiveWritable,
 	mutableAccount,
@@ -252,8 +253,10 @@ export macro accounts(): Node {
 				resolvedOverloadIdx: -1,
 			}];
 		}
-		if (base == "Owned" || base == "Mutable") {
-			callee = base == "Owned" ? bindSym("ownedAccount") : bindSym("mutableAccount");
+		if (base == "Owned" || base == "Mutable" || base == "Delegated") {
+			callee = bindSym("ownedAccount");
+			if (base == "Mutable") { callee = bindSym("mutableAccount"); }
+			if (base == "Delegated") { callee = bindSym("delegatedAccount"); }
 			const discriminator: Node = {
 				kind: NodeKind.CallExpr,
 				line: line,
@@ -351,7 +354,7 @@ export macro accounts(): Node {
 			error("accounts<T>(): field '" + decl.interfaceFields[field] + "' has type '" +
 				written + "'; use Signer, WritableSigner, Writable, SystemAccount, Account, " +
 				"Program<P>, " +
-				"Owned<T>, Mutable<T>, External<T> or ExternalMutable<T>", shape);
+				"Owned<T>, Mutable<T>, Delegated<T>, External<T> or ExternalMutable<T>", shape);
 		}
 		values.push({
 			kind: NodeKind.TypeAssertion,
