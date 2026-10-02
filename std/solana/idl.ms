@@ -214,6 +214,19 @@ export macro anchorIdl(spec: Node): Node {
 			if (element == "int64") { idlType = "\"i64\""; }
 			if (element == "boolean") { idlType = "\"bool\""; }
 			if (element == "Pubkey") { idlType = "\"pubkey\""; }
+			if (element.startsWith("BitSet<") && element.endsWith(">")) {
+				const members = getImpl(bindSym(element.slice(7, element.length - 1)));
+				if (members == null || members!.kind != NodeKind.EnumDecl) {
+					error("anchorIdl: field '" + fields[f] + "' of '" + typeName + "' is a BitSet " +
+						"of an enum that is not visible where anchorIdl is called; import it there", spec);
+				}
+				const memberCount = members!.enumMembers.length;
+				idlType = "{\"array\":[\"u8\"," + ((memberCount + 7) / 8) + "]}";
+				if (memberCount <= 64) { idlType = "\"u64\""; }
+				if (memberCount <= 32) { idlType = "\"u32\""; }
+				if (memberCount <= 16) { idlType = "\"u16\""; }
+				if (memberCount <= 8) { idlType = "\"u8\""; }
+			}
 			if (idlType == "") {
 				const nested = getImpl(bindSym(element));
 				if (nested == null || nested!.kind == NodeKind.EnumDecl) {
@@ -270,6 +283,15 @@ export macro anchorIdl(spec: Node): Node {
 				if (element == "uint32" || element == "int32") { size = 4; align = 4; }
 				if (element == "uint64" || element == "int64") { size = 8; align = 8; }
 				if (element == "Pubkey") { size = 32; }
+				if (element.startsWith("BitSet<") && element.endsWith(">")) {
+					const members = getImpl(bindSym(element.slice(7, element.length - 1)))!;
+					const memberCount = members.enumMembers.length;
+					size = (memberCount + 7) / 8;
+					if (memberCount <= 64) { size = 8; align = 8; }
+					if (memberCount <= 32) { size = 4; align = 4; }
+					if (memberCount <= 16) { size = 2; align = 2; }
+					if (memberCount <= 8) { size = 1; align = 1; }
+				}
 				let packed = 0;
 				if (size == 0) {
 					let n = 0;
