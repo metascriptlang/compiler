@@ -1,8 +1,8 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd } from "std/process";
+import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env } from "std/process";
 import { watch, nextChanges, msIoRunOnce, FsWatch, FsChanges } from "std/fs/watch";
-import { exists, readFile, writeFile } from "std/fs";
+import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
 import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
@@ -44,7 +44,7 @@ import { createTransformContextWithChecker, createNameSet, NameSet } from "../tr
 import { setGlobalHookOwners, hookOwnerMark, hookOwnersFrom, replayHookOwners, typeInfoOwnerMark, typeInfoOwnersFrom, replayTypeInfoOwners } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
-import { registerPreludeStampFn, preludePackKey, preludePackStamp, tryLoadPreludeDeps, setStdGraphDepsSnapshot, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
+import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, tryLoadPreludeDeps, writePreludeDeps, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
@@ -459,7 +459,7 @@ function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config
 	if (_preludeSeedHit) noteStdGlobalImportModules(graph, provider, config);
 	if (!_preludeSeedHit) {
 		loadStdGlobalImportModules(graph, provider, config);
-		if (config.stdPath != "") captureStdGraphDeps(graph, preludePackKey(config.stdPath, backendExt));
+		if (config.stdPath != "") writeStdGraphDeps(graph, preludePackKey(config.stdPath, backendExt), preludePackStamp(config.stdPath));
 	}
 	loadExtraGlobalImportModules(graph, provider, config);
 }
@@ -506,12 +506,10 @@ function seedPreludeModules(graph: ModuleGraph, provider: SourceProvider, deps: 
 	return true;
 }
 
-// Capture the std closure (this graph's ENTIRE loadOrder — preludeModules
-// runs before the entry tree, so it is exactly the prelude closure) for the
-// deps writer. Element-wise copies: the graph outlives this function and
-// the snapshot outlives the graph — sharing arrays would couple their DRC
-// lifetimes for no gain.
-function captureStdGraphDeps(graph: ModuleGraph, key: string): void {
+// Write the std closure (this graph's ENTIRE loadOrder — preludeModules
+// runs before the entry tree, so it is exactly the prelude closure) to the
+// deps file the next build seeds from.
+function writeStdGraphDeps(graph: ModuleGraph, key: string, stamp: string): void {
 	const mods: DepsModuleRow[] = [];
 	for (const p of graph.loadOrder) {
 		const m = findModule(graph, p);
@@ -544,7 +542,7 @@ function captureStdGraphDeps(graph: ModuleGraph, key: string): void {
 		circulars.push({ fromPath: c.fromPath, toPath: c.toPath, cycle, importLine: c.importLine as int32, importNames });
 		ci = ci + 1;
 	}
-	setStdGraphDepsSnapshot({ mods, circulars }, key);
+	writePreludeDeps(key, stamp, { mods, circulars });
 }
 
 // Stored result of Phase A (transform all modules) for Phase B (DCE) and Phase C (codegen).
@@ -3722,4 +3720,31 @@ test "msc run --hcr needs the std/hcr engine in the program's graph" {
 	assert hcrHostMissesEngine(graph, "/std");
 	addModule(graph, createModule(canonicalModulePath("/std/hcr/engine.cms")));
 	assert !hcrHostMissesEngine(graph, "/std");
+}
+
+test "a prelude load seeds the std graph from the deps file the previous load wrote" {
+	const prevHome = env.get("HOME");
+	env.set("HOME", "out/test/preludeDepsHome");
+	try {
+		const config = createDefaultConfig(Backend.C, join(resolveRuntimeDir(), "std"));
+		remove(`${packRoot()}/${preludePackKey(config.stdPath, ".cms")}.deps`);
+		const fresh = createModuleGraph();
+		loadPreludeModules(fresh, createFileSystemProvider(), config, ".cms");
+		assert !_preludeSeedHit;
+		const seeded = createModuleGraph();
+		loadPreludeModules(seeded, createFileSystemProvider(), config, ".cms");
+		assert _preludeSeedHit;
+		assert seeded.loadOrder.join("\n") == fresh.loadOrder.join("\n");
+		for (const path of fresh.loadOrder) {
+			const a = findModule(fresh, path)!;
+			const b = findModule(seeded, path)!;
+			assert b.source == a.source;
+			assert b.imports.map((ie) => ie.sourcePath).join(",") == a.imports.map((ie) => ie.sourcePath).join(",");
+			assert b.preludeSpecifier == a.preludeSpecifier;
+			assert b.stdPrelude == a.stdPrelude;
+		}
+	} finally {
+		if (prevHome == "") env.delete("HOME");
+		else env.set("HOME", prevHome);
+	}
 }

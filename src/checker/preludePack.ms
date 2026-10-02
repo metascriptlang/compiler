@@ -505,20 +505,11 @@ export interface PreludeDepsSnapshot {
 	circulars: DepsCircularRow[];
 }
 
-// Set by compile.ms after a FRESH loadPreludeModules run; consumed by
-// writePreludePack (same fresh-prelude gate) to emit <key>.deps alongside
-// the .pk. Null when buildPreludeContext runs without the loader (LSP,
-// standalone checkProgram) — the deps write is then a no-op.
-let _depsSnapshot: PreludeDepsSnapshot | null = null;
-let _depsSnapshotKey = "";
-export function setStdGraphDepsSnapshot(s: PreludeDepsSnapshot | null, key: string): void {
-	_depsSnapshot = s;
-	_depsSnapshotKey = key;
-}
-
-function writePreludeDeps(root: string, key: string, stamp: string): void {
-	if (_depsSnapshot == null || _depsSnapshotKey != key) return;
-	const snap = _depsSnapshot;
+export function writePreludeDeps(key: string, stamp: string, snap: PreludeDepsSnapshot): void {
+	if (packDisabled()) return;
+	const root = packRoot();
+	ensureDir(root);
+	ensurePackMarker(root);
 	const lines: string[] = [`K\t${key}\t${stamp}`];
 	for (const m of snap.mods) {
 		lines.push(`G\t${escapeP(m.path)}`);
@@ -809,9 +800,6 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	if (packDebug) console.log(`[pack] bytes=${blob.byteLength} at ms=${performance.now() - _w0}`);
 	const okw = atomicWritePack(`${root}/${key}.pk`, blob);
 	if (packDebug) console.log(`[pack] write ok=${okw ? 1 : 0} total ms=${performance.now() - _w0}`);
-	// A2: the deps half rides the same gate (pack enabled, marker ensured).
-	// No-op without a loader snapshot (see setStdGraphDepsSnapshot).
-	writePreludeDeps(root, key, stamp);
 	_writeMs = _writeMs + (performance.now() - _w0);
 }
 
@@ -1609,7 +1597,7 @@ test "preludePack: deps snapshot roundtrip through the .deps file" {
 		// Snapshot with the awkward corners: empty name/alias lists, an
 		// import of the last G row, a circular record with a multi-hop
 		// cycle, and a path containing separator bytes (\t and ,).
-		setStdGraphDepsSnapshot({
+		writePreludeDeps(key, PK_STAMP, {
 			mods: [
 				{
 					path: "/std/core/a.ms",
@@ -1623,8 +1611,7 @@ test "preludePack: deps snapshot roundtrip through the .deps file" {
 			circulars: [
 				{ fromPath: "/std/core/a.ms", toPath: "/std/core/b.ms", cycle: ["/std/core/a.ms", "/std/core/b.ms", "/std/core/a.ms"], importLine: 3, importNames: ["z"] },
 			],
-		}, key);
-		writePreludePack(key, PK_STAMP, makeTestCtx());
+		});
 		const loaded = tryLoadPreludeDeps(key, PK_STAMP);
 		assert loaded != null;
 		assert loaded.mods.length == 2;
@@ -1646,14 +1633,9 @@ test "preludePack: deps snapshot roundtrip through the .deps file" {
 		assert loaded.circulars[0].cycle[2] == "/std/core/a.ms";
 		assert loaded.circulars[0].importLine == 3;
 		assert loaded.circulars[0].importNames[0] == "z";
+		assert tryLoadPreludeDeps(preludePackKey("deps-roundtrip-probe", ".other-backend"), PK_STAMP) == null;
 		remove(`${packRoot()}/${key}.deps`);
-		remove(`${packRoot()}/${key}.pk`);
-		const otherKey = preludePackKey("deps-roundtrip-probe", ".other-backend");
-		writePreludePack(otherKey, PK_STAMP, makeTestCtx());
-		assert tryLoadPreludeDeps(otherKey, PK_STAMP) == null;
-		remove(`${packRoot()}/${otherKey}.pk`);
 	} finally {
-		setStdGraphDepsSnapshot(null, "");
 		pkLeavePrivateCache(prevHome);
 	}
 }
@@ -1710,14 +1692,11 @@ test "preludePack: another compiler's deps file is a miss" {
 	const prevHome = pkEnterPrivateCache();
 	try {
 		const key = preludePackKey("deps-stamp-probe", ".depstest");
-		setStdGraphDepsSnapshot({ mods: [{ path: "/std/core/a.ms", imports: [] }], circulars: [] }, key);
-		writePreludePack(key, "compiler-a", makeTestCtx());
+		writePreludeDeps(key, "compiler-a", { mods: [{ path: "/std/core/a.ms", imports: [] }], circulars: [] });
 		assert tryLoadPreludeDeps(key, "compiler-a") != null;
 		assert tryLoadPreludeDeps(key, "compiler-b") == null;
 		remove(`${packRoot()}/${key}.deps`);
-		remove(`${packRoot()}/${key}.pk`);
 	} finally {
-		setStdGraphDepsSnapshot(null, "");
 		pkLeavePrivateCache(prevHome);
 	}
 }
