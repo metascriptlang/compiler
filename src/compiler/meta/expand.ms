@@ -1466,10 +1466,6 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			if (boundSym.symbolKind != SymbolKind.Macro) {
 				ensureShaped(boundSym, bindCtx);
 			}
-			if (hasGenericParams(boundSym.symbolType)) {
-				addError(ctx, `Macro '${macroName}': bindSym('${symName}') refers to a generic symbol — bind a concrete one (V1)`, node.location.line, node.location.column);
-				return node;
-			}
 			const bloc = node.location;
 			const bkeys: string[] = ["kind", "line", "column", "name", "symHandle"];
 			const bvalues: Node[] = [
@@ -1573,6 +1569,13 @@ interface MacroBuild {
 let _macroBuilds: HashMap<Symbol, MacroBuild[]> = new HashMap<Symbol, MacroBuild[]>();
 let _macroBuildsCtx: CheckerContext = null as unknown as CheckerContext;
 
+function errorsSince(ctx: CheckerContext, mark: int32): boolean {
+	for (let i = mark; i < ctx.errors.length; i += 1) {
+		if (ctx.errors[i].severity == Severity.Error) return true;
+	}
+	return false;
+}
+
 function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym: Symbol, macroName: string, decl: MacroDeclData, typeArg: string): CompiledMacro | null {
 	if (_macroBuildsCtx != ctx) {
 		_macroBuilds = new HashMap<Symbol, MacroBuild[]>();
@@ -1591,7 +1594,12 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	// body is shared by every call site, and getTypeArg() resolves per site.
 	let workBody = body;
 	if (typeArg != "") workBody = cloneNodeForCheck(body);
+	const bakeMark = ctx.errors.length;
 	bakeTypeIntrinsics(workBody, ctx, macroSym, macroName, typeArg);
+	if (errorsSince(ctx, bakeMark)) {
+		builds.push({ typeArg, compiled: null });
+		return null;
+	}
 	body = workBody;
 
 	const loc = body.location;
@@ -1707,9 +1715,10 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		}
 	}
 
+	const compileMark = ctx.errors.length;
 	const cm = getOrCompileMacro(ctx, regCtx, macroSym, d.macroName, decl, node.typeArg);
 	if (cm == null) {
-		addError(ctx, `Macro '${d.macroName}' evaluator unavailable`, node.location.line, node.location.column);
+		if (!errorsSince(ctx, compileMark)) addError(ctx, `Macro '${d.macroName}' evaluator unavailable`, node.location.line, node.location.column);
 		return node;
 	}
 	const vm = cm.vm;
