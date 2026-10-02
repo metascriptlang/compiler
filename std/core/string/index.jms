@@ -2,7 +2,7 @@
 // string = native JS string (docs/STRING-CONTRACT.md §3).
 
 import { wtf8Cached } from "./bytes";
-export { asBytes, asString, byteLength, byteAt, byteSlice } from "./bytes";
+export { asBytes, asString, byteLength, byteAt, byteSlice, byteIndexOf, byteLastIndexOf } from "./bytes";
 
 // ===== Operators =====
 
@@ -209,4 +209,4 @@ export function msStringByteAt(s: string, idx: int32): int32 {
 }
 
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
-export { byteIndexOf, byteLastIndexOf, startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase } from "./shared";
+export { startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase } from "./shared";

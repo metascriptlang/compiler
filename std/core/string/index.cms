@@ -125,5 +125,5 @@ export function fromCharCode(this typeof String, code: int32): string {
 /** Converts any value to its string representation. Delegates to .toString(). */
 @builtin("ToString")
 export extern function String<T>(val: T): string;
-export { asBytes, byteLength, byteAt, byteSlice } from "./bytes";
-export { byteIndexOf, byteLastIndexOf, startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase } from "./shared";
+export { asBytes, byteLength, byteAt, byteSlice, byteIndexOf, byteLastIndexOf } from "./bytes";
+export { startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase } from "./shared";
