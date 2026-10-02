@@ -31,6 +31,7 @@ import {
 	pubkeyOf,
 	instructionData,
 	ProgramAddress,
+	Bytes,
 } from "./index";
 import { HostAccount, logs, run } from "./host";
 import { accounts, args, emitEvent, instruction } from "./macro";
@@ -227,6 +228,32 @@ test "instruction dispatch reads Anchor discriminators and Borsh arguments" {
 	assert made.result == ProgramError.custom(76).code;
 	const taken = run(programKey(), none, instructionBytes("TakeAll", []), dispatchEntry);
 	assert taken.result == 0;
+}
+
+export struct UploadArgs {
+	index: uint16;
+	chunk: Bytes;
+}
+
+function uploadStep(): Result<uint64, ProgramError> {
+	const upload = try args<UploadArgs>();
+	const last = try upload.chunk.readU8(upload.chunk.length - 1);
+	const code = (upload.index as uint32) * 1000 + (upload.chunk.length as uint32) * 10;
+	return Result.err(ProgramError.custom(code + (last as uint32)));
+}
+
+function uploadEntry(): void { codeOf(uploadStep()); }
+
+test "args<T>() reads a trailing Bytes field as Borsh's length-prefixed bytes" {
+	const none: HostAccount[] = [];
+	const upload = instructionBytes("Upload", [3, 0, 4, 0, 0, 0, 9, 8, 7, 6]);
+	assert run(programKey(), none, upload, uploadEntry).result == ProgramError.custom(3046).code;
+	const short = instructionBytes("Upload", [3, 0, 5, 0, 0, 0, 9, 8, 7, 6]);
+	assert run(programKey(), none, short, uploadEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
+	const noLength = instructionBytes("Upload", [3, 0, 4, 0]);
+	assert run(programKey(), none, noLength, uploadEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
 }
 
 test "dispatch refuses short data, an unknown instruction and short or invalid arguments" {
