@@ -18,6 +18,8 @@ The worked example is Anchor's escrow: `examples/escrow/layout.ms` (shared by pr
 | `std/solana/core.cms` | C, SBF | syscalls, `Account`, `Bytes`, `Seeds`, `Instruction`, the proofs and verifiers, init/close/realloc, PDAs, dispatch and argument readers, events |
 | `std/solana/macro.ms` | C, SBF | `instruction<Op>()`, `args<T>()`, `accounts<T>()`, `emitEvent<E>(value)` |
 | `std/solana/token.ms` | C, SBF | Mint and token-account layouts, their verifiers, typed token CPIs, associated-account checks |
+| `std/solana/magicblock.ms` | C, SBF | MagicBlock: `delegate`, `commit`/`commitAndUndelegate` (one account, a list, a list through the fee vault), the `undelegate` callback, `scheduleTask` |
+| `std/solana/vrf.ms` | C, SBF | MagicBlock VRF: the scoped `requestRandomness` (one callback account or a list), `verifyVrfCallback` |
 | `std/solana/arithmetic.ms` | `when (solana)` | signed `/ % /= %=` through unsigned division |
 | `std/solana/idl.ms` | compile time | `anchorIdl<Op>(spec)`: the program's Anchor IDL as a string literal |
 | `std/solana/host.cms` | C, host | the simulator: builds the runtime's input buffer, runs an entry function, reads the accounts back, runs System, Token and Associated Token CPIs |
@@ -61,11 +63,12 @@ A verifier is the only way to get a proof, and a function that needs a property 
 | `Mutable<T>` | `mutable<T>(i)` | `#[account(mut)] AccountLoader<T>` | as `Owned<T>`, then writable (2000), then exclusive (builtin 12) |
 | `External<T>` | `external<T>(i)` | `InterfaceAccount<T>` | present, `T.acceptsOwner(owner)` (3007), `T.decode(data)` (3003) |
 | `ExternalMutable<T>` | `externalMutable<T>(i)` | `#[account(mut)] InterfaceAccount<T>` | as `External<T>`, then writable (2000), then exclusive (builtin 12) |
+| `Delegated<T>` | `delegated<T>(i)` | `UncheckedAccount` with `seeds`, then `T::try_deserialize` (MagicBlock `magic-actions` `UpdateLeaderboard`) | present, owner is the delegation program (3007), 8 bytes of data (3001), `T.discriminator()` (3002), `8 + sizeof(T)` bytes (3003); the address is checked by `pda`/`pdaWithBump` (2006) |
 
 - **Exclusive.** A `Mutable` or `ExternalMutable` proof claims its account: the runtime marks a duplicated account in the input buffer as a pointer to the first record, and the claim writes the first record's marker byte, so a second mutable proof for the same account, through any index, is `AccountBorrowFailed`. This is Pinocchio's borrow state, which lives in the same byte. Anchor 0.31.1 accepts the duplicate unless the program writes a constraint; two `Ptr<T>` into one account is how a player fights their own pet.
 - **Weakening.** `asSigner()` and `asWritable()` turn a `WritableSigner` (or a `Mutable<T>`) into the weaker proof a callee asks for. There is no conversion the other way.
 - **Constraints** that need more than the field's type are calls after `accounts<T>()`: `pda`/`pdaWithBump` (2006), `expectHasOne` (2001), `expectAddress` (2012), and in `token.ms` `expectAssociated` (3014), `expectTokenMint` (2014), `expectTokenOwner` (2015).
-- `Owned<T>.data()` is a read-only pointer, `Mutable<T>.data()` a writable one, both at offset 8 of the account data; `External<T>.read()` decodes the other program's layout (token layouts are packed, so they are read, not overlaid).
+- `Owned<T>.data()` and `Delegated<T>.data()` are read-only pointers, `Mutable<T>.data()` a writable one, all at offset 8 of the account data. A `Delegated<T>` is the last state the rollup committed to the base layer, and it is accepted only while delegated: an undelegated account is read as `Owned<T>`; `External<T>.read()` decodes the other program's layout (token layouts are packed, so they are read, not overlaid).
 
 ## 4. Account data
 
@@ -97,7 +100,7 @@ A MetaScript client compiles the program's layout module to JS and uses the same
 
 ## 8. Testing
 
-- **Host simulator** (`std/solana/host.cms` `run`). Serializes the accounts the way the runtime does, runs an entry function natively, reads the accounts back; System `CreateAccount`/`Assign`/`Transfer`/`Allocate`, Token `Transfer`/`MintTo`/`CloseAccount`/`TransferChecked` and Associated Token create are executed (`runtime/solana/host.c`), every other CPI is recorded. Verifier, dispatch, init/close/realloc, event and token pins: `std/solana/test.cms`, `std/solana/token.ms`; the escrow's: `examples/escrow/program.ms`.
+- **Host simulator** (`std/solana/host.cms` `run`). Serializes the accounts the way the runtime does, runs an entry function natively, reads the accounts back; System `CreateAccount`/`Assign`/`Transfer`/`Allocate`, Token `Transfer`/`MintTo`/`CloseAccount`/`TransferChecked` and Associated Token create are executed (`runtime/solana/host.c`), every other CPI is recorded. Verifier, dispatch, init/close/realloc, event and token pins: `std/solana/test.cms`, `std/solana/token.ms`; MagicBlock and VRF instruction bytes, checked against `ephemeral-rollups-sdk` (pinocchio `delegate.rs`, `utils.rs`), the VRF SDK and the validator's `process_schedule_commit.rs`: `std/solana/magicblock.ms`, `std/solana/vrf.ms`; the escrow's: `examples/escrow/program.ms`.
 - **LiteSVM** (`tools/solana`, `litesvm` 1.4.1, `@solana/kit` 8.2.0). `node tools/solana/escrow.mjs <escrow.so>` runs make, take, refund and a refused make against the real SPL Token and Associated Token programs. Measured on tree `cb9810dbe7c0` with `msc build examples/escrow/program.ms --os=solana` (platform-tools v1.57): make 44,817 CU, take 50,634 CU, refund 32,940 CU (after make 52,317 CU), make with a zero deposit `Custom(6000)` at 587 CU; every balance and closure assertion passed.
 
 ## 9. Compiler debt
@@ -117,7 +120,7 @@ Each row is a workaround the toolkit carries until the compiler card under `~/me
 | `export *` keeps one of a same-named overload set: an extension in a second module, or a static beside a same-named free function, is lost through a hub | proofs and verifiers live in `core.cms` beside `Account`; `AccountMeta` statics are `writableKey`/`readonlyKey` | `2026-10-01-export-star-drops-same-named-extension-of-second-module` |
 | An exported `@delegate` whose base is in another module has "no implementation" at the use | delegates sit in `core.cms` with `Account` | `2026-10-01-delegate-base-in-another-module` |
 | `msc test` on a module emits its uninstantiated generics (with `try` between generics, or instantiated from a type declared under `when (testBuild)`) | verifiers keep their generic part to `T.discriminator()` and `sizeof(T)`; proof tests live in `std/solana/test.cms` | `2026-10-01-msc-test-emits-uninstantiated-generic-with-try` |
-| A macro emitting a call to a generic function through `bindSym` crashes `msc` | `instruction<Op>()` and `args<T>()` emit plain identifiers for `selectInstruction` and `readArgs`, so a program imports both beside the macro | `2026-10-01-bindsym-of-a-generic-function-crashes-msc` |
+| A macro emitting a call to a generic function through `bindSym` crashes `msc` | `instruction<Op>()`, `args<T>()` and `accounts<T>()` emit plain identifiers for `selectInstruction` and `readArgs`, so a program imports both beside the macro | `2026-10-01-bindsym-of-a-generic-function-crashes-msc` |
 | A macro re-exported through an `export *` hub is not expanded | programs import `instruction` and `args` from `std/solana/macro`, not from `std/solana` | `2026-10-01-macro-through-export-star-hub-is-not-expanded` |
 | A user macro named like a directive (`emit`) is silently dropped | the event macro is `emitEvent<E>(value)`, not Anchor's `emit` | `2026-10-01-macro-named-like-a-directive-is-silently-dropped` |
 | Indexing an array field through a `this ref` receiver emits `.` on a pointer in C | `BorshReader` reads its bytes through value-parameter helpers | `2026-10-01-array-field-through-ref-receiver-emits-dot` |
