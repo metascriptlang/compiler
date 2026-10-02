@@ -3,6 +3,8 @@ import { eventDiscriminator, instructionDiscriminator } from "./discriminator";
 import {
 	argBool,
 	argBoolValid,
+	argBytes,
+	argBytesFit,
 	argI16,
 	argI32,
 	argI64,
@@ -106,9 +108,17 @@ export macro args(): Node {
 		if (typeName == "uint64") { width = 8; reader = bindSym("argU64"); }
 		if (typeName == "int64") { width = 8; reader = bindSym("argI64"); }
 		if (typeName == "Pubkey") { width = 32; reader = bindSym("argPubkey"); }
+		if (typeName == "Bytes") {
+			if (field != shape.typExprFieldNames.length - 1) {
+				error("args<T>(): Bytes field '" + shape.typExprFieldNames[field] +
+					"' must be the last field: Borsh prefixes it with its length", shape);
+			}
+			width = 4;
+			reader = bindSym("argBytes");
+		}
 		if (reader == null) {
 			error("args<T>(): field '" + shape.typExprFieldNames[field] +
-				"' is not fixed-size plain data (sized integer, boolean or Pubkey)", shape);
+				"' is not a sized integer, boolean, Pubkey or a last Bytes field", shape);
 		}
 		const at: Node = {
 			kind: NodeKind.NumberLiteral,
@@ -129,12 +139,12 @@ export macro args(): Node {
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
 		});
-		if (typeName == "boolean") {
+		if (typeName == "boolean" || typeName == "Bytes") {
 			checks.push({
 				kind: NodeKind.CallExpr,
 				line: shape.line,
 				column: shape.column,
-				callee: bindSym("argBoolValid"),
+				callee: typeName == "Bytes" ? bindSym("argBytesFit") : bindSym("argBoolValid"),
 				arguments: [at],
 				isDirectCall: false,
 				resolvedOverloadIdx: -1,

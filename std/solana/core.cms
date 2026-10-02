@@ -1015,6 +1015,21 @@ export function argPubkey(offset: uint64): Pubkey {
 	return at == 0 ? Pubkey.zero() : loadPubkey(at);
 }
 
+export function argBytesFit(offset: uint64): boolean {
+	if (!argsFit(offset + 4)) { return false; }
+	return argsFit(offset + 4 + (argU32(offset) as uint64));
+}
+
+export function argBytes(offset: uint64): Bytes {
+	if (!argBytesFit(offset)) {
+		const empty: Bytes = { address: 0, length: 0 };
+		return empty;
+	}
+	const length = argU32(offset) as uint64;
+	const view: Bytes = { address: argumentAddress(offset + 4, length), length: length };
+	return view;
+}
+
 export function readArgs<T>(fits: boolean, value: T): Result<T, ProgramError> {
 	if (!fits) { return Result.err(ProgramError.instructionDidNotDeserialize()); }
 	return Result.ok(value);

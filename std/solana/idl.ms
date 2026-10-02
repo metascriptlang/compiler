@@ -106,6 +106,7 @@ export macro anchorIdl(spec: Node): Node {
 				if (written == "int64") { idlType = "\"i64\""; }
 				if (written == "boolean") { idlType = "\"bool\""; }
 				if (written == "Pubkey") { idlType = "\"pubkey\""; }
+				if (written == "Bytes") { idlType = "\"bytes\""; }
 				if (idlType == "") {
 					error("anchorIdl: argument type '" + written + "' has no IDL type", spec);
 				}
