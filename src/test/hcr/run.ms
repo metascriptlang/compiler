@@ -922,30 +922,47 @@ function fsWatch(): void {
 	console.log("ok   hcrFsWatch");
 }
 
+const CASES: { name: string, run: () => void }[] = [
+	{ name: "hcrFsWatch", run: fsWatch },
+	{ name: "hcrModuleAbi", run: moduleAbi },
+	{ name: "hcrFirstWarmBuild", run: firstWarmBuild },
+	{ name: "hcrModuleLocalNames", run: localNames },
+	{ name: "hcrWatchWarm", run: watchWarm },
+	{ name: "hcrWatchGeneric", run: watchGeneric },
+	{ name: "hcrNewInstance", run: newInstance },
+	{ name: "hcrPrivateHelper", run: privateHelper },
+	{ name: "hcrSubdirModule", run: subdirModule },
+	{ name: "hcrReloadOff", run: reloadOff },
+	{ name: "hcrCoreLinkClang", run: coreLinkClang },
+	{ name: "hcrIndirect", run: indirect },
+	{ name: "hcrSharedVariable", run: sharedVariable },
+	{ name: "hcrEngine", run: engine },
+	{ name: "hcrAsyncLoop", run: asyncLoop },
+	{ name: "hcrLiftNames", run: liftNames },
+	{ name: "hcrLiftKinds", run: liftKinds },
+	{ name: "hcrRun", run: runCommand },
+	{ name: "hcrRegistryVariables", run: registryVariables },
+	{ name: "hcrRegistryGeneric", run: registryGeneric },
+	{ name: "hcrFunctionValues", run: functionValues },
+	{ name: "hcrFileDependency", run: fileDependency },
+	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
+	{ name: "hcrImageNameCollision", run: imageNameCollision },
+];
+if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
+
+const SHARD = (env.get("HCR_SHARD") == "" ? "0/1" : env.get("HCR_SHARD")).split("/");
+const SHARD_INDEX = SHARD[0].parseInt() as int32;
+const SHARD_COUNT = SHARD.length == 2 ? SHARD[1].parseInt() as int32 : 0;
+if (SHARD_COUNT < 1 || SHARD_INDEX < 0 || SHARD_INDEX >= SHARD_COUNT) {
+	console.log(`hcr: HCR_SHARD must be <index>/<count> with 0 <= index < count, got '${env.get("HCR_SHARD")}'`);
+	exit(2);
+}
+
 console.log(`hcr: compiler under test = ${MSC}`);
 ensureDir(TMP);
-fsWatch();
-moduleAbi();
-firstWarmBuild();
-localNames();
-watchWarm();
-watchGeneric();
-newInstance();
-privateHelper();
-subdirModule();
-reloadOff();
-coreLinkClang();
-indirect();
-sharedVariable();
-engine();
-asyncLoop();
-liftNames();
-liftKinds();
-runCommand();
-registryVariables();
-registryGeneric();
-functionValues();
-fileDependency();
-watchWarmDependency();
-imageNameCollision();
-if (platform == "windows") windowsReload();
+for (let i = 0; i < CASES.length; i++) {
+	if (i % SHARD_COUNT != SHARD_INDEX) continue;
+	const t0 = performance.now();
+	CASES[i].run();
+	console.log(`time ${CASES[i].name} ${Math.round((performance.now() - t0) / 1000)}s`);
+}
