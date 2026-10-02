@@ -22,7 +22,7 @@ struct Wide {
 	l: uint64;
 }
 struct Big {
-	bytes: uint8[4096];
+	bytes: uint8[1024];
 	tag: uint64;
 }
 function wide(seed: uint64): Wide {
@@ -31,14 +31,14 @@ function wide(seed: uint64): Wide {
 }
 function big(seed: uint64): Big {
 	let b: Big = { bytes: [], tag: seed };
-	b.bytes[seed % 4096] = 3;
+	b.bytes[seed % 1024] = 3;
 	return b;
 }
 function main(): void {
 	const seed = instructionData().length;
 	const x = big(seed);
 	let y = x;
-	y.bytes[(seed + 1) % 4096] = 5;
-	logU64(wide(seed).l + y.tag + (x.bytes[seed % 4096] as uint64) + (x == y ? 1 : 0));
+	y.bytes[(seed + 1) % 1024] = 5;
+	logU64(wide(seed).l + y.tag + (x.bytes[seed % 1024] as uint64) + (x == y ? 1 : 0));
 }
 main();
