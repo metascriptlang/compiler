@@ -2,7 +2,23 @@
 //
 // Invokes clang to compile generated C source into native binaries.
 
-import { exec, env, cmdExists, findOnPath, platform, exit, execFileCapture, processError, ProcessError, ProcessErrorKind } from "std/process";
+import {
+	exec,
+	env,
+	cmdExists,
+	findOnPath,
+	platform,
+	exit,
+	execFileCapture,
+	execFileResult,
+	nonZeroExit,
+	pipeError,
+	processError,
+	signalTerminated,
+	spawnFailed,
+	ProcessError,
+	ProcessErrorKind,
+} from "std/process";
 import { writeFile, ensureDir, exists, readDir, remove } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { writeStderr } from "std/io";
@@ -677,8 +693,32 @@ function appendParsedFlags(command: string, args: string[], flags: string): Resu
 	return Result.ok(null);
 }
 
+// Solana platform-tools LLVM prints a frame over 4,096 bytes as "Error: ..." on stderr and
+// exits 0; the program then overwrites the next frame at run time.
+function reportsSbfError(errorOutput: string): boolean {
+	for (const line of errorOutput.split("\n")) {
+		if (line.startsWith("Error: ")) return true;
+	}
+	return false;
+}
+
 function runCc(command: ToolCommand, args: string[]): Result<string, ProcessError> {
-	return execFileCapture(command.path, args);
+	if (!args.includes(SBF_TARGET)) return execFileCapture(command.path, args);
+	const run = execFileResult(command.path, args);
+	if (!run.started) return Result.err(spawnFailed(command.path, "fork/exec failed"));
+	if (!run.pipeOk) {
+		return Result.err(pipeError(command.path, "failed to drain stdout/stderr from child"));
+	}
+	if (run.signal != 0) {
+		return Result.err(signalTerminated(command.path, run.signal, run.output, run.errorOutput));
+	}
+	if (run.exitCode != 0) {
+		return Result.err(nonZeroExit(command.path, run.exitCode, run.output, run.errorOutput));
+	}
+	if (reportsSbfError(run.errorOutput)) {
+		return Result.err(nonZeroExit(command.path, 1, run.output, run.errorOutput));
+	}
+	return Result.ok(run.output);
 }
 
 export struct ObjectCompileArgs {
