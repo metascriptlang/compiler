@@ -25,8 +25,6 @@
   },
   "fmt": {},
   "guard": {
-    "moveIntoBorrowParam [drc]": {"since":"da675b66","note":"x is destroyed after look(move x) into a borrowing param: C prints '  +4z+' for 'a+++4z+'; card 2026-09-30-move-into-borrow-param-destroys-source.md, no owner; recorded on the person's call 2026-09-30"},
-    "moveIntoBorrowParam [orc]": {"since":"da675b66","note":"x is destroyed after look(move x) into a borrowing param: C prints '  +4z+' for 'a+++4z+'; card 2026-09-30-move-into-borrow-param-destroys-source.md, no owner; recorded on the person's call 2026-09-30"}
   },
   "hcr": {},
   "san": {
