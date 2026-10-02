@@ -25,6 +25,12 @@ import {
 	Program,
 	Signer,
 	Writable,
+	Delegated,
+	delegated,
+	pdaWithBump,
+	pubkeyOf,
+	instructionData,
+	ProgramAddress,
 } from "./index";
 import { HostAccount, logs, run } from "./host";
 import { accounts, args, emitEvent, instruction } from "./macro";
@@ -446,4 +452,99 @@ test "transferLamports moves lamports through the System program" {
 	assert accounts[0].lamports == 700 && accounts[1].lamports == 305;
 	const poor = [wallet(1, 100), wallet(2, 5)];
 	assert run(programKey(), poor, [], payEntry).result != 0;
+}
+
+function delegationProgramKey(): Pubkey {
+	return @comptime { return pubkeyOf("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"); };
+}
+
+function counterAddress(): ProgramAddress {
+	const derived = counterSeeds().findProgramAddress(programKey());
+	if (derived.ok) { return derived.value; }
+	return { key: Pubkey.zero(), bump: 0 };
+}
+
+function delegatedCounter(key: Pubkey, owner: Pubkey, bytes: uint8[]): HostAccount {
+	return { ...holder(1, owner, bytes, false, false), key: key };
+}
+
+function delegatedEntry(): void {
+	const found = delegated<Counter>(0);
+	if (!found.ok) {
+		failWith(found.error);
+		return;
+	}
+	if (found.value.data().value != 41) { failWith(ProgramError.invalidAccountData()); }
+}
+
+function delegatedPdaStep(): Result<uint8, ProgramError> {
+	const found = try delegated<Counter>(0);
+	const pinned = try instructionData().readU8(0);
+	if (pinned == 0) { return pda(found, counterSeeds()); }
+	return pdaWithBump(found, counterSeeds(), pinned);
+}
+
+function delegatedPdaEntry(): void { codeOf(delegatedPdaStep()); }
+
+test "a delegated verifier checks the delegation program as owner, then discriminator and size" {
+	const tag = counterTag();
+	const dlp = delegationProgramKey();
+	const undelegated = [holder(1, programKey(), counterBytes(tag, 41, 48), false, false)];
+	assert run(programKey(), undelegated, [], delegatedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	const empty = [holder(1, dlp, [1, 2], false, false)];
+	assert run(programKey(), empty, [], delegatedEntry).result ==
+		ProgramError.accountDiscriminatorNotFound().code;
+	const other = accountDiscriminator("Other");
+	const mismatched = [holder(1, dlp, counterBytes(other, 41, 48), false, false)];
+	assert run(programKey(), mismatched, [], delegatedEntry).result ==
+		ProgramError.accountDiscriminatorMismatch().code;
+	const short = [holder(1, dlp, counterBytes(tag, 41, 20), false, false)];
+	assert run(programKey(), short, [], delegatedEntry).result ==
+		ProgramError.accountDidNotDeserialize().code;
+	const good = [holder(1, dlp, counterBytes(tag, 41, 48), false, false)];
+	assert run(programKey(), good, [], delegatedEntry).result == 0;
+}
+
+test "a delegated account must sit at the program's PDA, with the canonical or the given bump" {
+	const bytes = counterBytes(counterTag(), 41, 48);
+	const dlp = delegationProgramKey();
+	const address = counterAddress();
+	const atPda = [delegatedCounter(address.key, dlp, bytes)];
+	const canonical: uint8[] = [0];
+	assert run(programKey(), atPda, canonical, delegatedPdaEntry).result == 0;
+	const elsewhere = [delegatedCounter(keyOf(7), dlp, bytes)];
+	assert run(programKey(), elsewhere, canonical, delegatedPdaEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const given: uint8[] = [address.bump];
+	assert run(programKey(), atPda, given, delegatedPdaEntry).result == 0;
+	const wrongBump: uint8[] = [address.bump - 1];
+	assert run(programKey(), atPda, wrongBump, delegatedPdaEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+export struct ClaimAccounts {
+	owner: Signer;
+	pet: Delegated<Counter>;
+}
+
+function claimStep(): Result<uint64, ProgramError> {
+	const x = try accounts<ClaimAccounts>();
+	const _bump = try pda(x.pet, counterSeeds());
+	return Result.ok(x.pet.data().value);
+}
+
+function claimEntry(): void {
+	const result = claimStep();
+	if (!result.ok) { failWith(result.error); }
+}
+
+test "accounts<T>() verifies a Delegated<T> field like delegated<T>()" {
+	const bytes = counterBytes(counterTag(), 41, 48);
+	const owner = holder(2, keyOf(9), [], true, false);
+	const pet = delegatedCounter(counterAddress().key, delegationProgramKey(), bytes);
+	assert run(programKey(), [owner, pet], [], claimEntry).result == 0;
+	const undelegated = delegatedCounter(counterAddress().key, programKey(), bytes);
+	assert run(programKey(), [owner, undelegated], [], claimEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
 }
