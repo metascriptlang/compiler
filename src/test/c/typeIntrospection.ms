@@ -699,7 +699,7 @@ main();
 
 test "E2E: typeKind sees enum, class ref, class impl, and primitive behind the rendered AST" {
 	const src = `
-import { Node, TypeKind, bindSym, getType, getTypeImpl, resolveType, typeKind } from "std/meta";
+import { Node, NodeKind, TypeKind, bindSym, getType, getTypeImpl, resolveType, typeKind } from "std/meta";
 
 enum Color { Red, Green }
 class Box { x: int32 = 0; }
@@ -714,7 +714,8 @@ macro probe(x: Node): Node {
 	if (b == null) error("Box null", x);
 	else if (typeKind(b) != TypeKind.Ref) error("Box not Ref", x);
 	if (bi == null) error("Box impl null", x);
-	else if (typeKind(bi) != TypeKind.Struct) error("Box impl not Struct", x);
+	else if (bi.kind != NodeKind.TypeObject) error("Box impl not rendered as TypeObject", x);
+	else if (typeKind(bi) != TypeKind.Ref) error("Box impl lost its Ref identity", x);
 	if (i == null) error("int32 null", x);
 	else if (typeKind(i) != TypeKind.Int32) error("int32 not Int32", x);
 	return x;
@@ -816,7 +817,7 @@ class Box { x: int32 = 0; }
 
 macro probe(x: Node): Node {
 	if (typeKind(getType(bindSym("Color"))) != TypeKind.Enum) error("Color not Enum", x);
-	else if (typeKind(getTypeImpl(bindSym("Box"))) != TypeKind.Struct) error("Box impl not Struct", x);
+	else if (typeKind(getTypeImpl(bindSym("Box"))) != TypeKind.Ref) error("Box impl lost its Ref identity", x);
 	else if (typeKind(resolveType("int32")) != TypeKind.Int32) error("int32 not Int32", x);
 	else if (symKind(bindSym("Box")) != SymbolKind.Class) error("Box not Class sym", x);
 	else if (!sameType(resolveType("int32"), resolveType("int32"))) error("int32 != int32", x);
