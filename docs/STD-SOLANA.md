@@ -23,7 +23,7 @@ The worked example is Anchor's escrow: `examples/escrow/layout.ms` (shared by pr
 | `std/solana/arithmetic.ms` | `when (solana)` | signed `/ % /= %=` through unsigned division |
 | `std/solana/idl.ms` | compile time | `anchorIdl<Op>(spec)`: the program's Anchor IDL as a string literal |
 | `std/solana/host.cms` | C, host | the simulator: builds the runtime's input buffer, runs an entry function, reads the accounts back, runs System, Token and Associated Token CPIs |
-| `std/solana/index.cms` / `index.ms` | C / JS | `std/solana` on chain is `core`; for a JS client it is the neutral modules |
+| `std/solana/index.cms` / `index.ms` | C / JS | `std/solana` on chain is `core` and the macros; for a JS client it is the neutral modules |
 
 ## 2. A program
 
@@ -109,19 +109,15 @@ Each row is a workaround the toolkit carries until the compiler card under `~/me
 
 | Gap | Workaround in std/solana | Card |
 |---|---|---|
-|---|---|---|
 | A module-level `const` initialized by a `@comptime` call is not folded under `--os=solana` (E02) | well-known program ids are static functions returning a `@comptime { … }` block | `2026-10-01-solana-module-const-from-comptime-call` |
 | Struct field decorators do not parse | `accounts<T>()` derives each check from the field's proof type; seeds, ATA and key constraints are calls after it (`pda`, `pdaWithBump`, `expectHasOne`, `expectAddress`, `expectAssociated`) | `2026-10-01-struct-field-decorators` |
 | `enum E: uint8` does not parse | account fields store `uint8` and expose the enum through an extension | `2026-10-01-enum-storage-width` |
-| A write through `Readonly<Ptr<T>>` is accepted | `Owned<T>.data()` still returns `Readonly<Ptr<T>>`; the type documents the contract, the checker does not hold it | `2026-10-01-readonly-ptr-write-accepted` |
+| A `this ref` call or a `ref` argument through `Readonly<Ptr<T>>` still writes; a field write through it is refused | `Owned<T>.data()` returns `Readonly<Ptr<T>>`; a mutating `this ref` call through it is caught by review, not by the checker | `2026-10-01-readonly-ptr-write-accepted` |
 | Converting into a proof type is not restricted to its module | proofs come only from the verifiers by convention; review is the guard | `2026-10-01-proof-conversion-outside-module` |
-| On JS, `(x as uint32) << n` with `x: uint8` shifts in the `uint8` width (`1` where C gives `256`) | widen into a typed local first, then shift (`Pubkey.toBase58`) | `2026-10-01-js-shift-after-widening-cast-keeps-narrow-width` |
 | `import { A } from "./a"` written before `export * from "./a"` drops `A` from the re-export | `std/solana/core.cms` puts its `export *` lines before its imports | `2026-10-01-export-star-after-import-drops-the-name` |
 | `export *` keeps one of a same-named overload set: an extension in a second module, or a static beside a same-named free function, is lost through a hub | proofs and verifiers live in `core.cms` beside `Account`; `AccountMeta` statics are `writableKey`/`readonlyKey` | `2026-10-01-export-star-drops-same-named-extension-of-second-module` |
 | An exported `@delegate` whose base is in another module has "no implementation" at the use | delegates sit in `core.cms` with `Account` | `2026-10-01-delegate-base-in-another-module` |
 | `msc test` on a module emits its uninstantiated generics (with `try` between generics, or instantiated from a type declared under `when (testBuild)`) | verifiers keep their generic part to `T.discriminator()` and `sizeof(T)`; proof tests live in `std/solana/test.cms` | `2026-10-01-msc-test-emits-uninstantiated-generic-with-try` |
 | A macro emitting a call to a generic function through `bindSym` crashes `msc` | `instruction<Op>()`, `args<T>()` and `accounts<T>()` emit plain identifiers for `selectInstruction` and `readArgs`, so a program imports both beside the macro | `2026-10-01-bindsym-of-a-generic-function-crashes-msc` |
-| A macro re-exported through an `export *` hub is not expanded | programs import `instruction` and `args` from `std/solana/macro`, not from `std/solana` | `2026-10-01-macro-through-export-star-hub-is-not-expanded` |
 | A user macro named like a directive (`emit`) is silently dropped | the event macro is `emitEvent<E>(value)`, not Anchor's `emit` | `2026-10-01-macro-named-like-a-directive-is-silently-dropped` |
-| Indexing an array field through a `this ref` receiver emits `.` on a pointer in C | `BorshReader` reads its bytes through value-parameter helpers | `2026-10-01-array-field-through-ref-receiver-emits-dot` |
 | Names used only in a macro type argument or a `@comptime` block are reported "imported but never used" | none; the warnings are expected in std/solana programs | `2026-10-01-names-used-only-at-compile-time-reported-unused` |
