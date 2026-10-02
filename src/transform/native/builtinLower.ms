@@ -13,8 +13,7 @@
 // kinds remain for JSON-related rewrites here.
 
 import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, inferredType, unwrapRef, typeNameOf, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase } from "../../checker/types";
-import { findExtension } from "../../checker/context";
+import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, inferredType, unwrapRef, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import {
@@ -159,15 +158,7 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		bcall.nodeType = stringType();
 		return bcall;
 	}
-	// Priority 1: user-defined toString extension → leave for extensionMethodLower
-	if (ctx.checkerCtx != null) {
-		const tn = typeNameOf(objType);
-		if (tn != "") {
-			const ext = findExtension(ctx.checkerCtx.extensionRegistry, tn, "toString");
-			if (ext != null) return callNode;
-		}
-	}
-	// Priority 2: compiler defaults
+	// A user-defined toString was bound by the checker; what reaches here has none.
 	const tk = objType.kind;
 	if (tk == TypeKind.Char && (callNode.data as CallExprData).arguments.length == 0) return charToString(obj, loc);
 	// Number/int/float → msNumberToStringRadix(value, radix) — radix defaults to 10.

@@ -76,15 +76,6 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	const inner = unwrapRef(t);
 	if ((inner.kind == TypeKind.Struct || inner.kind == TypeKind.Union) && inner.typeName != "") {
 		const typeName = inner.typeName;
-		// Priority 1: user-defined toString() extension method
-		if (ctx.checkerCtx != null && typeName != "JsonValue") {
-			const ext = findExtension(ctx.checkerCtx.extensionRegistry, typeName, "toString");
-			if (ext != null && ext.sym != null) {
-				const call = makeCall(makeTypedIdentResolved(ext.sym, null, loc), [arg], loc);
-				call.nodeType = stringType();
-				return call;
-			}
-		}
 		// JsonValue → "\x1b[35mJson \x1b[0m" + stringify(value)
 		if (typeName == "JsonValue" || typeName == "JsonValueData") {
 			return buildJsonValueDebug(arg, loc, ctx);
