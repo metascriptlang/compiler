@@ -114,7 +114,7 @@ function addFileDepRoots(deps: DepsSection, baseDir: string, roots: DepsSection,
 	}
 }
 
-export function depRoots(projectRoot: string): DepsSection {
+export function fileDepRoots(projectRoot: string): DepsSection {
 	const roots = defaultDepsSection();
 	if (projectRoot != "") {
 		const cfg = loadBuildConfig(join(projectRoot, "build.ms"), false);
@@ -123,6 +123,11 @@ export function depRoots(projectRoot: string): DepsSection {
 			addFileDepRoots(cfg.devDeps, projectRoot, roots);
 		}
 	}
+	return roots;
+}
+
+export function depRoots(projectRoot: string): DepsSection {
+	const roots = fileDepRoots(projectRoot);
 	const lockPath = projectRoot != "" ? join(projectRoot, "msc.lock") : "msc.lock";
 	const lock = readLockfile(lockPath);
 	if (lock.valid) {
@@ -2006,18 +2011,20 @@ function emitDirOf(opts: CliOptions): string {
 }
 
 interface WatchFeed {
-	watcher: FsWatch;
-	armed: boolean;
+	watchers: FsWatch[];
+	armed: boolean[];
 	batches: FsChanges[];
 }
 
 function pumpFeed(feed: WatchFeed, timeoutMs: int32): void {
-	if (!feed.armed) {
-		feed.armed = true;
+	for (let i = 0; i < feed.watchers.length; i += 1) {
+		if (feed.armed[i]) continue;
+		feed.armed[i] = true;
 		const target = feed;
-		nextChanges(target.watcher).then((changes: FsChanges): void => {
+		const slot = i;
+		nextChanges(target.watchers[slot]).then((changes: FsChanges): void => {
 			target.batches.push(changes);
-			target.armed = false;
+			target.armed[slot] = false;
 		});
 	}
 	msIoRunOnce(timeoutMs);
@@ -2113,13 +2120,22 @@ function openWatch(entryPath: string, opts: CliOptions, resolveSection: ResolveS
 	let feed: WatchFeed | null = null;
 	if (opts.watchReplay == "") {
 		const root = opts.projectRoot != "" ? opts.projectRoot : dirname(canonicalModulePath(entryPath));
-		const opened = watch(root, true);
-		if (!opened.ok) {
-			printDiag(`${error("error")}: --watch cannot watch ${root}: ${opened.error.message}`);
-			exit(1);
+		const roots: string[] = [root];
+		for (const depRoot of fileDepRoots(root).values) {
+			if (!isUnder(depRoot, root)) roots.push(depRoot);
 		}
-		feed = { watcher: opened.value, armed: false, batches: [] };
-		console.log(`watch: watching ${root}`);
+		const opened: WatchFeed = { watchers: [], armed: [], batches: [] };
+		for (const dir of roots) {
+			const watcher = watch(dir, true);
+			if (!watcher.ok) {
+				printDiag(`${error("error")}: --watch cannot watch ${dir}: ${watcher.error.message}`);
+				exit(1);
+			}
+			opened.watchers.push(watcher.value);
+			opened.armed.push(false);
+			console.log(`watch: watching ${dir}`);
+		}
+		feed = opened;
 	}
 	setRecoverableBuild(true);
 	return { entryPath, opts, resolveSection, session: createBuildSession(true), feed, replay, step: 0 };
