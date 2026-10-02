@@ -13,11 +13,21 @@ import {
 	System,
 	Writable,
 	WritableSigner,
+	createProgramAccount,
+	programId,
 	unchecked,
 } from "./core";
 
 when (testBuild) {
-	import { account, failWith, instructionData, logU64, readArgs } from "./core";
+	import {
+		account,
+		failWith,
+		instructionData,
+		logU64,
+		readArgs,
+		writable,
+		writableSigner,
+	} from "./core";
 	import { HostAccount, invocations, logs, run } from "./host";
 	import { accounts } from "./macro";
 }
@@ -297,6 +307,28 @@ function tokenInstruction(
 ): Result<Instruction, ProgramError> {
 	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
 	return Result.ok(Instruction.forProgram(program, accountCount, dataLength));
+}
+
+export function createMintPda(
+	payer: WritableSigner,
+	mint: Writable,
+	seeds: Seeds,
+	program: Pubkey,
+	decimals: uint8,
+	mintAuthority: Pubkey,
+	freezeAuthority: Pubkey | null,
+): Result<uint8, ProgramError> {
+	const target = mint as Account;
+	if ((payer as Account).key() == target.key()) {
+		return Result.err(ProgramError.tryingToInitPayerAsProgramAccount());
+	}
+	const found = try seeds.findProgramAddress(programId());
+	if (found.key != target.key()) { return Result.err(ProgramError.constraintSeeds()); }
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	const signer = seeds.withBump(found.bump);
+	const _created = try createProgramAccount(payer as Account, target, 82, program, signer);
+	const _initialized = try initializeMint2(program, target, decimals, mintAuthority, freezeAuthority);
+	return Result.ok(found.bump);
 }
 
 export function initializeMint2(
@@ -928,6 +960,67 @@ when (testBuild) {
 		const program = created.accounts[5];
 		assert program.key.equals(Pubkey.tokenProgram()) && !program.writable;
 		assert created.data.length == 1 && created.data[0] == 1;
+	}
+
+	function mintSeeds(): Seeds {
+		return Seeds.empty(1).addText("mint");
+	}
+
+	function mintPdaStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const program = op == 0 ? Pubkey.tokenProgram() : Pubkey.systemProgram();
+		const payer = try writableSigner(0);
+		const mint = try writable(1);
+		const bump = try createMintPda(payer, mint, mintSeeds(), program, 6, keyOf(7), null);
+		return Result.ok(bump as uint64);
+	}
+
+	function mintPdaEntry(): void {
+		const result = mintPdaStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function mintPdaAccounts(mintKey: Pubkey): HostAccount[] {
+		const payer: HostAccount = {
+			...holderOf(1, Pubkey.systemProgram(), []),
+			lamports: 10000000,
+			signer: true,
+		};
+		const mint: HostAccount = {
+			...holderOf(2, Pubkey.systemProgram(), []),
+			key: mintKey,
+			lamports: 0,
+		};
+		return [payer, mint];
+	}
+
+	function mintKey(): Pubkey {
+		const found = mintSeeds().findProgramAddress(keyOf(9));
+		if (found.ok) { return found.value.key; }
+		return Pubkey.zero();
+	}
+
+	test "createMintPda creates the mint at its PDA for the token program, then initializes it" {
+		const accounts = mintPdaAccounts(mintKey());
+		assert resultOf(accounts, 0, mintPdaEntry) == 0;
+		assert accounts[1].owner.equals(Pubkey.tokenProgram()) && accounts[1].data.length == 82;
+		assert accounts[1].lamports > 0;
+		const created = invocations()[0];
+		assert created.program.equals(Pubkey.systemProgram()) && created.data[0] == 0;
+		assert created.data[12] == 82 && created.signers == 1;
+		const initialized = invocations()[1];
+		assert initialized.program.equals(Pubkey.tokenProgram());
+		assert initialized.accounts.length == 1 && initialized.accounts[0].key.equals(mintKey());
+		assert initialized.data[0] == 20 && initialized.data[1] == 6 && initialized.data[2] == 7;
+		assert initialized.data[34] == 0;
+	}
+
+	test "createMintPda refuses another address and a program that is not a token program" {
+		assert resultOf(mintPdaAccounts(keyOf(3)), 0, mintPdaEntry) ==
+			ProgramError.constraintSeeds().code;
+		assert resultOf(mintPdaAccounts(mintKey()), 1, mintPdaEntry) ==
+			ProgramError.incorrectProgramId().code;
+		assert invocations().length == 0;
 	}
 
 	test "a CPI to a program that is not a token program is refused before it is sent" {
