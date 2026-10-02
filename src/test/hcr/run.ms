@@ -798,6 +798,37 @@ function functionValues(): void {
 	]);
 }
 
+function fileDependency(): void {
+	const tag = "hcrFileDependency";
+	const dir = freshDir(`${TMP}/fileDependency`);
+	for (const sub of ["app", "greeter"]) ensureDir(`${dir}/${sub}`);
+	for (const f of ["app/app.ms", "app/build.ms", "greeter/build.ms", "greeter/index.ms", "greeterEdit.ms"]) {
+		copy(`${FIXTURES}/fileDependency/${f}`, `${dir}/${f}`);
+	}
+	const ran = msc(`${dir}/app`, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-DEP ")) seen.push(line);
+	}
+	const want = ["HCR-DEP start hello v1", "HCR-DEP reloaded greeter true hello v2"];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "an edit of a file: dependency did not reload into the running app");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function imageNameCollision(): void {
+	const tag = "hcrImageNameCollision";
+	const dir = freshDir(`${TMP}/imageCollision`);
+	ensureDir(`${dir}/a`);
+	for (const f of ["app.ms", "a/b.ms", "a.b.ms"]) copy(`${FIXTURES}/imageCollision/${f}`, `${dir}/${f}`);
+	const r = msc(dir, ["build", "--hcr", `--output=out/collide/app${sharedLibraryExt()}`, "app.ms"]);
+	need(tag, !succeeded(r) && both(r).contains("both build the image 'a.b'"),
+		"two modules that map to one image name built instead of failing");
+	console.log(`ok   ${tag}`);
+}
+
 // ---- hcrWindowsReload: single-image LoadLibrary reload, four generations ----
 
 function windowsReload(): void {
@@ -900,4 +931,6 @@ runCommand();
 registryVariables();
 registryGeneric();
 functionValues();
+fileDependency();
+imageNameCollision();
 if (platform == "windows") windowsReload();
