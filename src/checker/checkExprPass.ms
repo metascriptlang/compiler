@@ -2571,9 +2571,8 @@ function subscriptOperandOf(receiver: Type | null): Type | null {
 }
 
 function declaresSubscript(ctx: CheckerContext, receiver: Type | null, op: string): boolean {
-	const t = subscriptOperandOf(receiver);
-	if (t == null || ctx.extensionRegistry == null) return false;
-	return findExtension(ctx.extensionRegistry, typeNameOf(t), op) != null;
+	if (receiver == null || subscriptOperandOf(receiver) == null || ctx.extensionRegistry == null) return false;
+	return filterExtsByReceiverType(findAllExtensionsByName(ctx.extensionRegistry, op), receiver).length > 0;
 }
 
 function rewriteAsMethodCall(ctx: CheckerContext, node: Node, receiver: Node, methodName: string, args: Node[]): Type {
