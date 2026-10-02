@@ -539,24 +539,47 @@ export function appendInstruction(this instruction: Instruction, inner: Instruct
 	return instruction.appendBytes(payload);
 }
 
-export function invokeSigned(this instruction: Instruction, signer: Seeds): Result<uint64, ProgramError> {
+function invokeWith(
+	instruction: Instruction,
+	signers: uint64,
+	signerCount: uint64,
+): Result<uint64, ProgramError> {
 	if (msSolLoadU64(instruction.address + 40) != 0) { return Result.err(ProgramError.invalidArgument()); }
-	let signers: uint64 = 0;
-	let signerCount: uint64 = 0;
-	if (signer.address != 0) {
-		const count = signer.seedCount();
-		if (count > signer.capacity) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
-		signers = msSolAlloc(16);
-		msSolStoreU64(signers, signer.address + 8);
-		msSolStoreU64(signers + 8, count);
-		signerCount = 1;
-	}
-	const status = msSolInvokeSigned(instruction.address, infosAddress(instruction), msSolLoadU64(instruction.address + 16), signers, signerCount);
+	const status = msSolInvokeSigned(
+		instruction.address,
+		infosAddress(instruction),
+		msSolLoadU64(instruction.address + 16),
+		signers,
+		signerCount,
+	);
 	if (status != 0) {
 		const failure: ProgramError = { code: status };
 		return Result.err(failure);
 	}
 	return Result.ok(status);
+}
+
+export function invokeSigned(this instruction: Instruction, signer: Seeds): Result<uint64, ProgramError> {
+	if (signer.address == 0) { return invokeWith(instruction, 0, 0); }
+	const one: Seeds[1] = [signer];
+	return instruction.invokeSigned(one);
+}
+
+export function invokeSigned(
+	this instruction: Instruction,
+	signers: Span<Seeds>,
+): Result<uint64, ProgramError> {
+	const table = msSolAlloc(16 * (signers.length as uint64));
+	let entry = table;
+	for (const signer of signers) {
+		if (signer.address == 0) { return Result.err(ProgramError.invalidArgument()); }
+		const count = signer.seedCount();
+		if (count > signer.capacity) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
+		msSolStoreU64(entry, signer.address + 8);
+		msSolStoreU64(entry + 8, count);
+		entry = entry + 16;
+	}
+	return invokeWith(instruction, table, signers.length as uint64);
 }
 
 export function invoke(this instruction: Instruction): Result<uint64, ProgramError> {
