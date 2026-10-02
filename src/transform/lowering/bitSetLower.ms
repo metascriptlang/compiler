@@ -312,7 +312,7 @@ function lowerArrayZero(node: Node, repr: Type): Node {
 
 // ===== dispatch =====
 
-function lowerCall(node: Node): Node {
+function lowerCall(node: Node, ctx: TransformContext): Node {
 	const d = node.data as CallExprData;
 	if (d.arguments.length == 0) return node;
 	const recv = d.arguments[0];
@@ -321,6 +321,7 @@ function lowerCall(node: Node): Node {
 	if (repr == null) return node;
 	const name = setOpName(d.callee);
 	if (name == "") return node;
+	if (ctx.keepBuiltinMemberCalls && name == "SetSize") return node;
 	if (repr.kind == TypeKind.SizedArray) return lowerArrayCall(node, name, recv, repr);
 	return lowerWordCall(node, name, recv, repr);
 }
@@ -342,8 +343,8 @@ function lowerBinary(node: Node): Node {
 	return node;
 }
 
-function lowerNode(node: Node): Node {
-	if (node.kind == NodeKind.CallExpr) return lowerCall(node);
+function lowerNode(node: Node, ctx: TransformContext): Node {
+	if (node.kind == NodeKind.CallExpr) return lowerCall(node, ctx);
 	if (node.kind == NodeKind.BinaryExpr) return lowerBinary(node);
 	if (node.kind == NodeKind.TypeAssertion) {
 		const repr = arrayRepr(node.nodeType);
@@ -449,5 +450,5 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 
 export function lowerBitSet(program: Node, ctx: TransformContext): Node {
 	walkExpandBlocks(program, expandStmt, ctx);
-	return walkNode(program, (n: Node): Node => { return lowerNode(n); });
+	return walkNode(program, (n: Node): Node => { return lowerNode(n, ctx); });
 }

@@ -16,7 +16,7 @@ import { RaiserOpcode, RaiserConvClass, raiserABC } from "../../raiser/bytecode"
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
-import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance } from "../../checker/types";
+import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
@@ -954,6 +954,66 @@ function emitCallArgs(s: RaiserCompState, dest: number, args: Node[]): void {
 	}
 }
 
+function emitIntConst(s: RaiserCompState, value: int64): int32 {
+	const reg = allocReg(s);
+	emitLoadConst(s, reg, raiserInt(value));
+	return reg;
+}
+
+function emitIntBinary(s: RaiserCompState, op: RaiserOpcode, left: int32, right: int32): int32 {
+	const reg = allocReg(s);
+	emitInst(s, raiserABC(op, reg, left, right));
+	return reg;
+}
+
+function emitNarrowU32(s: RaiserCompState, value: int32): int32 {
+	const reg = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.Move, reg, value, 0));
+	emitInst(s, raiserABC(RaiserOpcode.NarrowU, reg, 32, 0));
+	return reg;
+}
+
+function emitSetCard32(s: RaiserCompState, value: int32): int32 {
+	const one = emitIntConst(s, 1);
+	const two = emitIntConst(s, 2);
+	const four = emitIntConst(s, 4);
+	const twentyFour = emitIntConst(s, 24);
+	const mask1 = emitIntConst(s, 0x55555555);
+	const mask2 = emitIntConst(s, 0x33333333);
+	const mask4 = emitIntConst(s, 0x0F0F0F0F);
+	const multiplier = emitIntConst(s, 0x01010101);
+	const shifted1 = emitIntBinary(s, RaiserOpcode.ShiftRightU, value, one);
+	const paired = emitIntBinary(s, RaiserOpcode.BitAnd, shifted1, mask1);
+	let word = emitNarrowU32(s, emitIntBinary(s, RaiserOpcode.SubI64, value, paired));
+	const lowPairs = emitIntBinary(s, RaiserOpcode.BitAnd, word, mask2);
+	const shifted2 = emitIntBinary(s, RaiserOpcode.ShiftRightU, word, two);
+	const highPairs = emitIntBinary(s, RaiserOpcode.BitAnd, shifted2, mask2);
+	word = emitNarrowU32(s, emitIntBinary(s, RaiserOpcode.AddI64, lowPairs, highPairs));
+	const shifted4 = emitIntBinary(s, RaiserOpcode.ShiftRightU, word, four);
+	word = emitIntBinary(s, RaiserOpcode.BitAnd, emitIntBinary(s, RaiserOpcode.AddI64, word, shifted4), mask4);
+	word = emitNarrowU32(s, emitIntBinary(s, RaiserOpcode.MulI64, word, multiplier));
+	return emitIntBinary(s, RaiserOpcode.ShiftRightU, word, twentyFour);
+}
+
+function compileSetSizeCall(s: RaiserCompState, node: Node): int32 {
+	const d = node.data as CallExprData;
+	const value = compileExpr(s, d.arguments[0]);
+	const repr = setRepr(d.arguments[0].nodeType);
+	if (repr != null && repr.kind == TypeKind.SizedArray) {
+		let total = emitIntConst(s, 0);
+		for (let i = 0; i < repr.typeValue; i += 1) {
+			const word = allocReg(s);
+			emitInst(s, raiserABC(RaiserOpcode.LoadIndex, word, value, emitIntConst(s, i)));
+			total = emitIntBinary(s, RaiserOpcode.AddI64, total, emitSetCard32(s, word));
+		}
+		return total;
+	}
+	const low = emitSetCard32(s, value);
+	if (repr == null || repr.kind != TypeKind.Uint64) return low;
+	const high = emitIntBinary(s, RaiserOpcode.ShiftRightU, value, emitIntConst(s, 32));
+	return emitIntBinary(s, RaiserOpcode.AddI64, low, emitSetCard32(s, high));
+}
+
 function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 
@@ -979,10 +1039,15 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		return compileExitCall(s, node);
 	}
 
+	const builtinKind = callBuiltinKind(node);
+	if (builtinKind == "SetSize" && d.arguments.length == 1) {
+		return compileSetSizeCall(s, node);
+	}
+
 	// spawn(fn) / sleepAsync(ms) / waitFor(h) / Promise.resolve(v) — the async
 	// surface the VM owns as opcodes. Keyed on builtinKind (set from the @builtin
 	// decorator in std/core/promise), never on the name.
-	const asyncKind = asyncBuiltinKind(node);
+	const asyncKind = builtinKind;
 	if (asyncKind == "PromiseSpawn" && d.arguments.length == 1) {
 		const closureReg = compileExpr(s, d.arguments[0]);
 		const dest = allocReg(s);
@@ -1519,7 +1584,7 @@ function compileExitCall(s: RaiserCompState, node: Node): int32 {
 
 // spawn/waitFor/Promise.resolve carry @builtin on the extern; the kind lands
 // on the CallExpr for free functions and on the callee for the static method.
-function asyncBuiltinKind(node: Node): string {
+function callBuiltinKind(node: Node): string {
 	if (node.resolvedSym != null && node.resolvedSym.builtinKind != "") return node.resolvedSym.builtinKind;
 	const d = node.data as CallExprData;
 	if (d.callee.resolvedSym != null) return d.callee.resolvedSym.builtinKind;
