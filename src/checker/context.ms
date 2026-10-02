@@ -208,36 +208,29 @@ export function isExportedBy(ctx: CheckerContext, sym: Symbol): boolean {
 	return ctx.interfSet.has(sym);
 }
 
+function pushExport(ctx: CheckerContext, modulePath: string, exports: ExportedSymInfo[], covered: HashSet<Symbol>, sym: Symbol): void {
+	if (covered.has(sym)) return;
+	exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath, ctx, exportedNameOf(ctx, sym)));
+	covered.add(sym);
+	for (const ov of sym.overloads) covered.add(ov);
+}
+
 export function collectExports(ctx: CheckerContext, modulePath: string): ExportedSymInfo[] {
 	const exports: ExportedSymInfo[] = [];
-	const emitted = new HashSet<string>();
+	const covered = new HashSet<Symbol>();
 	for (const sym of ctx.table.current.symbols.values()) {
-		if (isExportedBy(ctx, sym)) {
-			const name = exportedNameOf(ctx, sym);
-			if (emitted.has(name)) continue;
-			exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath, ctx, name));
-			emitted.add(name);
-		}
+		if (isExportedBy(ctx, sym)) pushExport(ctx, modulePath, exports, covered, sym);
 	}
 	if (ctx.extensionRegistry != null) {
 		for (const ext of ctx.extensionRegistry.methods) {
 			const extSym = ext.sym;
-			if (extSym == null || !isExportedBy(ctx, extSym)) continue;
-			const name = exportedNameOf(ctx, extSym);
-			if (!emitted.has(name) || isStaticExtensionSym(extSym)) {
-				exports.push(buildExportInfo(extSym, ctx.extensionRegistry, modulePath, ctx, name));
-				emitted.add(name);
-			}
+			if (extSym != null && isExportedBy(ctx, extSym)) pushExport(ctx, modulePath, exports, covered, extSym);
 		}
 	}
 	let ii = 0;
 	while (ii < ctx.interf.length) {
 		const sym = ctx.interf[ii];
-		const name = exportedNameOf(ctx, sym);
-		if (!emitted.has(name) && sym.overloadIdx == 0) {
-			exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath, ctx, name));
-			emitted.add(name);
-		}
+		if (sym.overloadIdx == 0) pushExport(ctx, modulePath, exports, covered, sym);
 		ii = ii + 1;
 	}
 	return exports;

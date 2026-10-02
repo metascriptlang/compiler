@@ -4,7 +4,7 @@ import { inferredType, noneType, emptyType, createStruct, createEnum, createType
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -1320,6 +1320,21 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 	}
 }
 
+function reexportPastBinding(ctx: CheckerContext, bound: Symbol, expInfo: ExportedSymInfo, sourcePath: string, specifier: string, node: Node): void {
+	const sym = expInfo.sym;
+	if (sym == null) return;
+	const routines = sym.symbolKind == SymbolKind.Function && bound.symbolKind == SymbolKind.Function;
+	if (sym != bound && !routines && isExportedBy(ctx, bound)) {
+		if (ctx.importSet.has(bound)) {
+			addError(ctx, `export * from '${specifier}': '${expInfo.name}' is already exported from another module; re-export one of them by name`, node.location.line, node.location.column);
+		}
+		return;
+	}
+	if (sym != bound) noteImported(ctx, sym);
+	exportSymAs(ctx, sym, expInfo.name);
+	propagateImportedExtensions(ctx, expInfo.name, expInfo, sourcePath, sym);
+}
+
 export function collectExport(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ExportDeclData;
 
@@ -1344,7 +1359,11 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 					if (modExports != null) {
 						for (let si = 0; si < modExports.symbols.length; si += 1) {
 							const expInfo = modExports.symbols[si];
-							if (lookupLocal(ctx.table, expInfo.name) != null) continue;
+							const bound = lookupLocal(ctx.table, expInfo.name);
+							if (bound != null) {
+								reexportPastBinding(ctx, bound, expInfo, sourcePath, imp.importSource, node);
+								continue;
+							}
 							const preludeStarSym = sharedPreludeSym(ctx, expInfo.name, expInfo.name, expInfo);
 							if (preludeStarSym != null) {
 								defineSymbol(ctx.table, preludeStarSym);

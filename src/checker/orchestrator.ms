@@ -220,7 +220,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		if (fresh && mod.extraPrelude) promoteModuleIntoPrelude(baseCtx, ctx);
 		checked.push({ mod, ctx });
 		for (const e of collectExports(ctx, path)) {
-			if (!isStaticExtensionSym(e.sym)) mod.exportNames.push(e.name);
+			if (!isStaticExtensionSym(e.sym) && !hasExportName(mod, e.name)) mod.exportNames.push(e.name);
 		}
 	}
 	for (const c of checked) mirrorModuleErrors(c.mod, c.ctx);
