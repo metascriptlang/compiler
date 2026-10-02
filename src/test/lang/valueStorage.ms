@@ -536,3 +536,33 @@ test "valueStorage: struct keys compare aggregate-bitset fields by their values"
 	if (found != null) { assert found == 17; }
 	assert !map.has({ bits: equal, id: 8 });
 }
+
+test "valueStorage: conditional word-bitset storage is typed and lazy" {
+	let calls: int32 = 0;
+	const makeValue = (): BitSet<WordVectorFlag> => {
+		calls += 1;
+		return (0 as BitSet<WordVectorFlag>).incl(WordVectorFlag.High);
+	};
+	const selected = true ? (0 as BitSet<WordVectorFlag>) : makeValue();
+	assert selected.isEmpty();
+	assert calls == 0;
+}
+
+test "valueStorage: conditional aggregate-bitset storage is typed and lazy" {
+	let calls: int32 = 0;
+	const makeValue = (): BitSet<AggregateVectorFlag> => {
+		calls += 1;
+		return (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F64);
+	};
+	const selected = true ? (0 as BitSet<AggregateVectorFlag>) : makeValue();
+	assert selected.isEmpty();
+	assert calls == 0;
+}
+
+test "valueStorage: aggregate-bitset arrow bodies hoist inside their own scope" {
+	const makeBase = (): BitSet<AggregateVectorFlag> => (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F0);
+	const deferred = (): BitSet<AggregateVectorFlag> => makeBase().incl(AggregateVectorFlag.F64);
+	const value = deferred();
+	assert value.has(AggregateVectorFlag.F0);
+	assert value.has(AggregateVectorFlag.F64);
+}

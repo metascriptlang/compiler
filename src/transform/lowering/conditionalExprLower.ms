@@ -44,6 +44,7 @@ import { moveDoWhileTestIntoBody } from "./jumpRetarget";
 import { isLowerableSpreadLiteral, expandSpreadLiteral } from "../desugar/arraySpreadLower";
 import { spreadStructOf, expandObjectSpread } from "../desugar/objectSpreadLower";
 import { needsIntegerCompoundRewrite } from "../coercion/intArithJS";
+import { isImpureArrayOp } from "./bitSetLower";
 
 // ===== Hoist (top-down) =====
 
@@ -76,7 +77,9 @@ function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Nod
 		cd.ternaryCondition = hoistRaisingCalls(cd.ternaryCondition, hoisted, ctx);
 		const loc = expr.location;
 		const t = freshTempSym(ctx, "tern", expr.nodeType);
-		const letDecl = makeVarDecl(t.name, makeNull(loc), DeclKind.Let, loc);
+		const initial = makeNull(loc);
+		initial.nodeType = expr.nodeType;
+		const letDecl = makeVarDecl(t.name, initial, DeclKind.Let, loc);
 		letDecl.resolvedSym = t;
 		if (expr.nodeType != null) { letDecl.nodeType = expr.nodeType; }
 		hoisted.push(letDecl);
@@ -300,7 +303,9 @@ function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContex
 	hoisted.push(lhsDecl);
 
 	const resSym = freshTempSym(ctx, "scres", expr.nodeType);
-	const resDecl = makeVarDecl(resSym.name, makeNull(loc), DeclKind.Let, loc);
+	const initial = makeNull(loc);
+	initial.nodeType = expr.nodeType;
+	const resDecl = makeVarDecl(resSym.name, initial, DeclKind.Let, loc);
 	resDecl.resolvedSym = resSym;
 	if (expr.nodeType != null) { resDecl.nodeType = expr.nodeType; }
 	hoisted.push(resDecl);
@@ -319,8 +324,37 @@ function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContex
 // The expander runs ONCE per statement and its output is only re-walked into
 // BLOCKS — so the direct shapes must hoist from their ternary's CONDITION
 // themselves (the generated IfStmt is never re-expanded).
+function hasGuardedImpureArrayOp(node: Node, guarded: boolean = false): boolean {
+	if (node == null || isFunctionNode(node)) return false;
+	if (guarded && isImpureArrayOp(node)) return true;
+	if (node.kind == NodeKind.ConditionalExpr) {
+		const d = node.data as ConditionalExprData;
+		return hasGuardedImpureArrayOp(d.ternaryCondition, guarded)
+			|| hasGuardedImpureArrayOp(d.ternaryConsequent, true)
+			|| hasGuardedImpureArrayOp(d.ternaryAlternate, true);
+	}
+	if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (d.operator == "&&" || d.operator == "||") {
+			return hasGuardedImpureArrayOp(d.left, guarded)
+				|| hasGuardedImpureArrayOp(d.right, true);
+		}
+	}
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && hasGuardedImpureArrayOp(child, guarded)) found = true;
+	});
+	return found;
+}
+
 function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
-	if (ctx.jsBackend && !nodeHasPositionalNew(stmt)) {
+// On JS, ternaries and short-circuits are native and need no statement
+	// rewrite — UNLESS one holds a positional `new`, which cannot stay in a JS
+	// expression after newExprLower refused it, or a guarded impure array op
+	// (aggregate bitset receiver), which needs the full expansion so the
+	// receiver lands in a real scope. Gate the whole statement on both, so
+	// `const x = true ? 1 : 2` stays `(true ? 1 : 2)` on JS.
+	if (ctx.jsBackend && !nodeHasPositionalNew(stmt) && !hasGuardedImpureArrayOp(stmt)) {
 		if (stmt.kind == NodeKind.ExprStmt) {
 			const expr = (stmt.data as ExprStmtData).expr;
 			if (expr.kind == NodeKind.BinaryExpr) {
@@ -403,9 +437,14 @@ function lowerTernaryInVar(stmt: Node, ctx: TransformContext): Node[] {
 	const loc = stmt.location;
 	const result: Node[] = [];
 	cd.ternaryCondition = hoistRaisingCalls(cd.ternaryCondition, result, ctx);
-	const letDecl = makeVarDecl(vd.declName, makeNull(loc), DeclKind.Let, loc);
+	let tempType = stmt.nodeType;
+	if (tempType == null) tempType = vd.initializer.nodeType;
+	if (tempType == null && stmt.resolvedSym != null) tempType = stmt.resolvedSym.symbolType;
+	const initial = makeNull(loc);
+	initial.nodeType = tempType;
+	const letDecl = makeVarDecl(vd.declName, initial, DeclKind.Let, loc);
 	letDecl.resolvedSym = stmt.resolvedSym;
-	if (stmt.nodeType != null) { letDecl.nodeType = stmt.nodeType; }
+	letDecl.nodeType = tempType;
 	result.push(letDecl);
 	// A generic template body is unchecked until instantiation, so its decls
 	// carry no symbols here; only the instantiated copies do.

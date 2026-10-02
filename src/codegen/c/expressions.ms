@@ -819,6 +819,11 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				ctx.results.push("MS_FALSE");
 				return;
 			}
+			if (nk == TypeKind.Set) {
+				const cType = getTypeDesc(g, node.nodeType);
+				ctx.results.push(`(${cType}){0}`);
+				return;
+			}
 			// Union(Ref<T>, Null) / Union(Ptr<T>, Null) is a pointer at C level — emit NULL,
 			// not (T){0}. Must check before isNilableValueType (which returns true for Union).
 			if (unwrapRefNullUnion(node.nodeType) != null) {
