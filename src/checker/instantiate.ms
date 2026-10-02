@@ -894,11 +894,12 @@ function instanceFieldType(instStruct: Type, fieldName: string): Type | null {
 
 function instanceFieldInits(classData: ClassDeclData, names: string[], types: Type[], instStruct: Type, classSym: Symbol, ctx: CheckerContext, loc: SourceLocation): Node[] {
 	const fields: Node[] = [];
+	let initialized = 0;
 	for (const raw of classData.classBody) {
 		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
 		if (member == null || member.kind != NodeKind.PropertyDecl) continue;
 		const pd = member.data as PropertyDeclData;
-		if (pd.propIsStatic || pd.propInitializer == null) continue;
+		if (pd.propIsStatic) continue;
 		const fieldType = instanceFieldType(instStruct, pd.propName);
 		if (fieldType == null) {
 			addError(ctx, "internal: field '" + pd.propName + "' of generic class '" + classSym.name + "' has no slot in its instance '" + instStruct.typeName + "'", loc.line, loc.column);
@@ -908,8 +909,9 @@ function instanceFieldInits(classData: ClassDeclData, names: string[], types: Ty
 		replaceTypeVars(field, names, types);
 		field.nodeType = fieldType;
 		fields.push(field);
+		if (pd.propInitializer != null) initialized += 1;
 	}
-	if (fields.length == 0) return fields;
+	if (initialized == 0) return fields;
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
@@ -922,6 +924,7 @@ function instanceFieldInits(classData: ClassDeclData, names: string[], types: Ty
 	const errBefore = bodyCtx.errors.length;
 	for (const field of fields) {
 		const fpd = field.data as PropertyDeclData;
+		if (fpd.propInitializer == null) continue;
 		clearCheckerState(fpd.propInitializer);
 		callCheckExpr(bodyCtx, fpd.propInitializer, field.nodeType);
 		if (fpd.propInitializer.nodeType != null) {
