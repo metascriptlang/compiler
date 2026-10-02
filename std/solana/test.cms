@@ -607,9 +607,16 @@ export struct Gauge {
 	spare: uint16;
 }
 
+export enum GaugeMode {
+	Idle,
+	Hot,
+	Cold,
+}
+
 export struct Meter {
 	total: uint64;
 	gauges: Gauge[2];
+	modes: BitSet<GaugeMode>;
 	owner: Pubkey;
 	tags: uint8[3];
 }
@@ -631,7 +638,8 @@ test "anchorIdl describes nested structs as defined types and fixed arrays as ar
 		assert types.at(0).name.asString() == "Meter";
 		const gauges = types.at(0).type.fields.at(1).type.array;
 		assert gauges.at(0).defined.name.asString() == "Gauge" && gauges.at(1).asInt32() == 2;
-		const tags = types.at(0).type.fields.at(3).type.array;
+		assert types.at(0).type.fields.at(2).type.asString() == "u8";
+		const tags = types.at(0).type.fields.at(4).type.array;
 		assert tags.at(0).asString() == "u8" && tags.at(1).asInt32() == 3;
 		assert types.at(1).name.asString() == "Gauge";
 		assert types.at(1).serialization.asString() == "bytemuck";
