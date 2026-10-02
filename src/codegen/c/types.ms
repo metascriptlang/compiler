@@ -1956,12 +1956,12 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 	// the array typedef so the payload struct is complete for sizeof() inside the macro.
 	if (innerDesc == "int32_t") {
 		genArrayType(g, createArray(innerType));
-		emitPromiseAllInstance(g, "msFuture_int32", "int32_t", "int32_t", "int32_tArray", "int32_tArray__Content", "MS_COPY_SAME", "msNumberArrayDestroy");
+		emitPromiseAllInstance(g, "msFuture_int32", "int32_t", "int32_t", "int32_tArray", "int32_tArray__Content", "MS_COPY_SAME", "msNumberArrayDestroy", "int32_tArrayPallCell");
 		return "msPromiseAllFor_msFuture_int32";
 	}
 	if (innerDesc == "int64_t") {
 		genArrayType(g, createArray(innerType));
-		emitPromiseAllInstance(g, "msFuture_int64", "int64_t", "int64_t", "int64_tArray", "int64_tArray__Content", "MS_COPY_SAME", "msNumberArrayDestroy");
+		emitPromiseAllInstance(g, "msFuture_int64", "int64_t", "int64_t", "int64_tArray", "int64_tArray__Content", "MS_COPY_SAME", "msNumberArrayDestroy", "int64_tArrayPallCell");
 		return "msPromiseAllFor_msFuture_int64";
 	}
 
@@ -1983,7 +1983,9 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 		destroyFn = opCName(walker);
 		ensureDrcProto(g, destroyFn, walker);
 	}
-	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, "MS_COPY_BOXED_MOVE", destroyFn);
+	const bare = typeCacheGet(g.typeCache, "bare:" + innerDesc);
+	const cellName = (bare != "" ? getArrayTypeName(bare) : arrName) + "PallCell";
+	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, "MS_COPY_BOXED_MOVE", destroyFn, cellName);
 	return "msPromiseAllFor_" + futName;
 }
 
@@ -1992,7 +1994,7 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 // storage element `dstElem`). Guarded by #ifndef — idempotent across modules.
 // Pre-instantiated types (msFuture_double / msFuture_bool / msFuture_ptr in
 // combinator.h, msFuture_msString in system.h) are skipped at call sites.
-function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem: string, arrName: string, payloadName: string, copyStmt: string, destroyFn: string): void {
+function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem: string, arrName: string, payloadName: string, copyStmt: string, destroyFn: string, cellName: string): void {
 	const guard = "msPromiseAllFor_" + futName + "_DEFINED";
 	// Emit into GlobalVars (runs after Types + SeqTypes) so the array payload's
 	// full struct definition is visible to sizeof(payloadType) inside the macro
@@ -2000,7 +2002,7 @@ function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem:
 	const b = sec(g, CSection.GlobalVars);
 	addLine(b, "#ifndef " + guard);
 	addLine(b, "#define " + guard);
-	addLine(b, "MS_PROMISE_ALL_FOR(" + srcT + ", " + futName + ", " + dstElem + ", " + arrName + ", " + payloadName + ", " + copyStmt + ", " + destroyFn + ");");
+	addLine(b, "MS_PROMISE_ALL_FOR_NAMED(" + srcT + ", " + futName + ", " + dstElem + ", " + arrName + ", " + payloadName + ", " + copyStmt + ", " + destroyFn + ", \"" + cellName + "\");");
 	addLine(b, "#endif");
 	addNewline(b);
 }
