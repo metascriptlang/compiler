@@ -273,6 +273,12 @@ function msSpanAt(v: unknown, i: int64): unknown {
 }
 
 @compilerFunc
+function msSpanValues(v: unknown): unknown {
+	@emit(`return ${v}.base.slice(${v}.off, ${v}.off + ${v}.len);`);
+	unreachable;
+}
+
+@compilerFunc
 function msSpanCell(v: unknown, i: int64): unknown {
 	@emit(`if (!(${i} >= 0 && ${i} < ${v}.len)) throw new Error("index " + ${i} + " out of bounds (length " + ${v}.len + ")");
 	return [${v}.base, ${v}.off + Number(${i})];`);

@@ -1,4 +1,4 @@
-import { Node, NodeKind, ArrayAccessData, BinaryExprData, UpdateExprData, MemberExprData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, ArrayAccessData, BinaryExprData, UpdateExprData, MemberExprData, SpreadExprData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { addError } from "../../checker/context";
 import { peelTransparentInstance } from "../../checker/types";
@@ -13,6 +13,7 @@ export function lowerAccessJS(program: Node, ctx: TransformContext): Node {
 function rewriteAccess(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.ArrayAccess) return checkedAccess(node);
 	if (node.kind == NodeKind.MemberExpr) return spanLength(node);
+	if (node.kind == NodeKind.SpreadExpr) return spreadSpanValues(node);
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		if (isAssignOp(d.operator)) refuseReadOnlyPlace(d.left, ctx);
@@ -38,6 +39,13 @@ function isSpan(arr: Node): boolean {
 function spanLength(node: Node): Node {
 	const d = node.data as MemberExprData;
 	if (d.property == "length" && isSpan(d.object)) d.property = "len";
+	return node;
+}
+
+function spreadSpanValues(node: Node): Node {
+	const d = node.data as SpreadExprData;
+	if (!isSpan(d.spreadArg)) return node;
+	d.spreadArg = makeCall(runtimeRef("msSpanValues", node.location), [d.spreadArg], node.location);
 	return node;
 }
 
