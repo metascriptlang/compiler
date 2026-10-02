@@ -65,7 +65,7 @@ export function pubkey(this writer: BorshWriter, value: Pubkey): BorshWriter {
 	return writer;
 }
 
-function read(reader: BorshReader, width: int32): Result<uint64, BorshError> {
+function read(this ref reader: BorshReader, width: int32): Result<uint64, BorshError> {
 	if (reader.offset + width > reader.bytes.length) {
 		return Result.err(BorshError.UnexpectedEnd);
 	}
@@ -78,43 +78,43 @@ function read(reader: BorshReader, width: int32): Result<uint64, BorshError> {
 }
 
 export function u8(this ref reader: BorshReader): Result<uint8, BorshError> {
-	const value = try read(reader, 1);
+	const value = try reader.read(1);
 	reader.offset += 1;
 	return Result.ok(value as uint8);
 }
 
 export function u16(this ref reader: BorshReader): Result<uint16, BorshError> {
-	const value = try read(reader, 2);
+	const value = try reader.read(2);
 	reader.offset += 2;
 	return Result.ok(value as uint16);
 }
 
 export function u32(this ref reader: BorshReader): Result<uint32, BorshError> {
-	const value = try read(reader, 4);
+	const value = try reader.read(4);
 	reader.offset += 4;
 	return Result.ok(value as uint32);
 }
 
 export function u64(this ref reader: BorshReader): Result<uint64, BorshError> {
-	const value = try read(reader, 8);
+	const value = try reader.read(8);
 	reader.offset += 8;
 	return Result.ok(value);
 }
 
 export function i64(this ref reader: BorshReader): Result<int64, BorshError> {
-	const value = try read(reader, 8);
+	const value = try reader.read(8);
 	reader.offset += 8;
 	return Result.ok(value as int64);
 }
 
 export function bool(this ref reader: BorshReader): Result<boolean, BorshError> {
-	const value = try read(reader, 1);
+	const value = try reader.read(1);
 	if (value > 1) { return Result.err(BorshError.InvalidBool); }
 	reader.offset += 1;
 	return Result.ok(value == 1);
 }
 
-function keyAt(reader: BorshReader): Result<Pubkey, BorshError> {
+function keyAt(this ref reader: BorshReader): Result<Pubkey, BorshError> {
 	if (reader.offset + 32 > reader.bytes.length) {
 		return Result.err(BorshError.UnexpectedEnd);
 	}
@@ -124,7 +124,7 @@ function keyAt(reader: BorshReader): Result<Pubkey, BorshError> {
 }
 
 export function pubkey(this ref reader: BorshReader): Result<Pubkey, BorshError> {
-	const key = try keyAt(reader);
+	const key = try reader.keyAt();
 	reader.offset += 32;
 	return Result.ok(key);
 }
