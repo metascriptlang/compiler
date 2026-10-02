@@ -200,8 +200,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (jsBackend) { result = lowerNumberBitwiseOperands(result, ctx); }
 	if (jsBackend) { result = injectRangeChecksJS(result, ctx); }
 	if (jsBackend) { result = lowerBigIntJS(result, ctx); }
-	if (jsBackend) { result = lowerIntConvJS(result, ctx); }
 	if (jsBackend) { result = lowerIntArithJS(result, ctx); }
+	if (jsBackend) { result = lowerIntConvJS(result, ctx); }
 	// Definitions for the `EnumName_toString` calls the lowerings above emit
 	// (enum reverse index + `.toString()`). C injects the same functions at the
 	// tail of its native pipeline (transform/native/index.ms); JS has no native
