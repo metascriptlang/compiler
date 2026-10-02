@@ -86,3 +86,6 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   `memcpy`/`memset`/`memcmp`/`memmove` to the compiler builtins, so the SBF backend inlines
   small ones and calls the platform's syscall-backed symbols for large ones (NIM-REF RT-22).
   Proven RED on `36251885` (byte loops in `runtime/manual.h`).
+- **`solanaNumberArrayLiteral.ms`** (`GUARD-OS solana`) — a `number[]`/`float64[]` literal
+  fills its elements one by one, as every other scalar literal does; SBF has no C varargs
+  (NIM-REF TR-30). Proven RED on `36251885` (`undefined symbol: msNumberArrayFrom`).
