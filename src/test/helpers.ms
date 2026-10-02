@@ -247,7 +247,7 @@ export function compileTestBuildToJS(source: string): CompileResult {
 // ===== Project compilation (multiple source files with imports) =====
 
 // Compile project to C — same pipeline as compile.ms:
-// checkModuleGraph (2-phase) → computeAliveSet (global DCE) → per-module codegen
+// checkModuleGraph (2-phase) → per-module transform → computeAliveSet (post-transform DCE) → codegen
 export function compileProjectToC(entries: MapEntry[], entryPath: string): string {
 	resetBuildState();
 	// Map-provider keys must be canonical: loadModule canonicalizes every path and
@@ -297,7 +297,6 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		monoed_programs.push(monomorphizeProgram(unit.program, unit.ctx));
 		monoed_paths.push(unit.path);
 	}
-	const aliveSet = computeAliveSet(monoed_programs, monoed_paths, entryPath, false, graph);
 
 	// Full pipeline per module (same as compile.ms:358-411)
 	let combined = "";
@@ -322,6 +321,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		emissionContexts.push(ctx);
 		emissionPaths.push(modPath);
 	}
+	const aliveSet = computeAliveSet(emissionPrograms, emissionPaths, entryPath, false, graph);
 	const emissionFacts = new CEmissionFacts();
 	for (let i = 0; i < emissionPrograms.length; i += 1) {
 		prepareCModuleEmission(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, emissionFacts);
@@ -445,7 +445,6 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		monoed_programs.push(expandMacros(monomorphizeProgram(unit.program, unit.ctx), unit.ctx));
 		monoed_paths.push(unit.path);
 	}
-	const aliveSet = computeAliveSet(monoed_programs, monoed_paths, entryPath, false, graph);
 
 	let combined = "";
 	const moduleOutputs: CModuleOutput[] = [];
@@ -469,6 +468,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		emissionContexts.push(ctx);
 		emissionPaths.push(modPath);
 	}
+	const aliveSet = computeAliveSet(emissionPrograms, emissionPaths, entryPath, false, graph);
 	const emissionFacts = new CEmissionFacts();
 	for (let i = 0; i < emissionPrograms.length; i += 1) {
 		prepareCModuleEmission(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, emissionFacts);
