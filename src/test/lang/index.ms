@@ -51,6 +51,7 @@ import "./numericRepresentation";
 import "./receiverViews";
 import "./serializationVariants";
 import "./spawnThunkValues";
+import "./receiverText";
 import "./stringRepresentation";
 import "./suspendedBindings";
 import "./suspensionControl";
