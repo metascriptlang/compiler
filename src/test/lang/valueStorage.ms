@@ -566,3 +566,29 @@ test "valueStorage: aggregate-bitset arrow bodies hoist inside their own scope" 
 	assert value.has(AggregateVectorFlag.F0);
 	assert value.has(AggregateVectorFlag.F64);
 }
+
+struct WordSetZeroHolder { bits: BitSet<WordVectorFlag>; }
+struct AggregateSetZeroHolder { bits: BitSet<AggregateVectorFlag>; }
+
+test "valueStorage: word-bitset locations start at the zero value" {
+	let local: BitSet<WordVectorFlag>;
+	const holder: WordSetZeroHolder = {};
+	const values: Vec<BitSet<WordVectorFlag>> = new Array(3);
+	assert local.isEmpty();
+	assert holder.bits.isEmpty();
+	assert values[0].isEmpty();
+	assert values[2].isEmpty();
+}
+
+test "valueStorage: aggregate-bitset locations start at independent zero values" {
+	let local: BitSet<AggregateVectorFlag>;
+	const holder: AggregateSetZeroHolder = {};
+	let values: Vec<BitSet<AggregateVectorFlag>> = new Array(3);
+	assert local.isEmpty();
+	assert holder.bits.isEmpty();
+	assert values[0].isEmpty();
+	assert values[2].isEmpty();
+	values[0] = values[0].incl(AggregateVectorFlag.F64);
+	assert values[0].has(AggregateVectorFlag.F64);
+	assert values[1].isEmpty();
+}

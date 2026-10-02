@@ -14,7 +14,7 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync } from "./emit";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
-import { emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, nativeResultCopy } from "./valueCopy";
+import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
@@ -674,6 +674,16 @@ export function emitSpreadExpr(gen: JSGenerator, node: Node): void {
 export function emitNewExpr(gen: JSGenerator, node: Node): void {
 	if (emitCollectionNew(gen, node)) return;
 	const d = node.data as NewExprData;
+	const arrayType = arrayOf(node.nodeType);
+	if (arrayType != null && d.newArguments.length == 1) {
+		const zero = jsDefaultValue(arrayType.typeReturn);
+		if (zero != "") {
+			emit(gen, "Array.from({ length: ");
+			emitNode(gen, d.newArguments[0]);
+			emit(gen, " }, () => " + zero + ")");
+			return;
+		}
+	}
 	emit(gen, "new ");
 	emitNode(gen, d.newCallee);
 	emit(gen, "(");
