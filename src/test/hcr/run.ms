@@ -810,11 +810,25 @@ function fileDependency(): void {
 	for (const line of lines(both(ran))) {
 		if (line.startsWith("HCR-DEP ")) seen.push(line);
 	}
-	const want = ["HCR-DEP start hello v1", "HCR-DEP reloaded greeter true hello v2"];
+	const want = ["HCR-DEP start hello v1", "HCR-DEP reloaded greeter/index hello v2"];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
 		failWith(tag, "an edit of a file: dependency did not reload into the running app");
 	}
+	console.log(`ok   ${tag}`);
+}
+
+function watchWarmDependency(): void {
+	const tag = "hcrWatchWarmDependency";
+	const root = freshDir(`${TMP}/watchWarmDependency`);
+	for (const sub of ["app", "greeter"]) ensureDir(`${root}/${sub}`);
+	for (const f of ["app/app.ms", "app/build.ms", "greeter/build.ms", "greeter/index.ms", "greeterEdit.ms"]) {
+		copy(`${FIXTURES}/fileDependency/${f}`, `${root}/${f}`);
+	}
+	const steps: WatchStep[] = [
+		{ file: "../greeterEdit.ms", target: "../greeter/index.ms", warm: true, fails: false },
+	];
+	replayMatchesCold(tag, `${root}/app`, `${FIXTURES}/fileDependency/app`, ["../greeter/index.ms"], steps);
 	console.log(`ok   ${tag}`);
 }
 

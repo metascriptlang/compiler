@@ -14,7 +14,7 @@ let done = false;
 while (!done && performance.now() < deadline) {
 	const kind = reload();
 	if (kind == ReloadKind.Reloaded) {
-		console.log(`HCR-DEP reloaded greeter ${lastReload().modules.includes("greeter/index")} ${greet()}`);
+		console.log(`HCR-DEP reloaded ${lastReload().modules.join(",")} ${greet()}`);
 		done = true;
 	} else if (kind != ReloadKind.NoChange && kind != ReloadKind.Pending) {
 		console.log(`HCR-DEP ${reloadKindName(kind)} ${lastReload().reason}`);
