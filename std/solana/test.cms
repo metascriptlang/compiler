@@ -36,6 +36,7 @@ import {
 } from "./index";
 import { HostAccount, logs, run } from "./host";
 import { accounts, args, emitEvent, instruction } from "./macro";
+import { anchorIdl } from "./idl";
 
 
 export struct Counter {
@@ -595,4 +596,45 @@ test "borshBuffer writes Borsh little-endian fields and refuses a write past its
 	assert !over.ok;
 	const after = borshBuffer(8).u64(1).u8(2).u8(3).written();
 	assert !after.ok;
+}
+
+export enum GaugeOp {
+	Bump,
+}
+
+export struct Gauge {
+	level: uint16;
+	spare: uint16;
+}
+
+export struct Meter {
+	total: uint64;
+	gauges: Gauge[2];
+	owner: Pubkey;
+	tags: uint8[3];
+}
+
+test "anchorIdl describes nested structs as defined types and fixed arrays as arrays" {
+	const idl = anchorIdl<GaugeOp>({
+		name: "gauges",
+		address: "",
+		Bump: [BumpAccounts],
+		accounts: [Meter],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const types = parsed.value.types;
+		assert types.length() == 2;
+		assert types.at(0).name.asString() == "Meter";
+		const gauges = types.at(0).type.fields.at(1).type.array;
+		assert gauges.at(0).defined.name.asString() == "Gauge" && gauges.at(1).asInt32() == 2;
+		const tags = types.at(0).type.fields.at(3).type.array;
+		assert tags.at(0).asString() == "u8" && tags.at(1).asInt32() == 3;
+		assert types.at(1).name.asString() == "Gauge";
+		assert types.at(1).serialization.asString() == "bytemuck";
+		assert types.at(1).type.fields.at(1).type.asString() == "u16";
+	}
 }
