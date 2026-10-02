@@ -946,5 +946,6 @@ registryVariables();
 registryGeneric();
 functionValues();
 fileDependency();
+watchWarmDependency();
 imageNameCollision();
 if (platform == "windows") windowsReload();
