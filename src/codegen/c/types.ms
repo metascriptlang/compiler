@@ -1974,13 +1974,8 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 	// msSinkBoxStruct), so collect is MS_COPY_BOXED_MOVE: move the bits out of the
 	// box, free the shell — refs transfer to the slot, no per-type Copy hook.
 	genArrayType(g, createArray(innerType));
-	// Array typedefs and DRC hooks are emitted under the BARE struct name
-	// (UserArray / UserArrayDestroy), while the future struct + instance symbol
-	// carry the module-mangled name — mixing them up references types that no TU defines.
-	const bareBase = typeCacheGet(g.typeCache, "bare:" + innerDesc);
-	const baseDesc = bareBase != "" ? bareBase : innerDesc;
 	const futName = "msFuture_" + mangle(innerDesc);
-	const arrName = getArrayTypeName(baseDesc);
+	const arrName = arrayCTypeName(createArray(innerType));
 	const payloadName = getArrayContentType(arrName);
 	let destroyFn = "msNumberArrayDestroy";
 	if (innerType.kind == TypeKind.Struct && innerType.typeName != "" && hasAsgnFlag(innerType)) {
