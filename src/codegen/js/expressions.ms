@@ -628,7 +628,9 @@ export function emitArrowFunction(gen: JSGenerator, node: Node): void {
 		emitNode(gen, d.arrowBody);
 		emit(gen, ")");
 	} else {
-		emitNode(gen, d.arrowBody);
+		// Expression body is an implicit return: a captured value type must
+		// copy out (Nim's `result = expr` copies), or callers mutate the env.
+		emitCopyOnRead(gen, d.arrowBody);
 	}
 }
 
