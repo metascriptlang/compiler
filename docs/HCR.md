@@ -37,7 +37,8 @@ backend and DRC/ORC runtime.
 | `@beforeReload` / `@afterReload` handlers | Windows x64 and Linux x64 checked by `hcrEngine`: old handlers quiesce, new handlers resume; a throw restores publication |
 | TypeInfo across reloads | Windows x64 and Linux x64 checked by `hcrEngine`: stable class identity/method dispatch, restored metadata after rollback; incompatible class layout still requires restart |
 | Watch build (`msc build --hcr --watch`) | Windows x64 (`ReadDirectoryChangesW`) and Linux x64 (inotify): rebuilds after each source save through a kept build session, guarded by `src/test/hcr/run.ms` (`hcrWatchWarm`: the C of a warm build equals a cold build's at every step of a replayed edit sequence, including constructor defaults, removed overrides and generic hook instances). macOS has no file-watch backend: `std/fs/watch` aborts with `file watching has no backend for this platform yet` |
-| Function values across reloads | Windows x64, `hcrFunctionValues`: a named function's value taken before a reload, a private one, one stored in a module-level object and code of the old generation all reach the newest generation; a closure keeps its own body; a held function writes the new cell after a type reset |
+| Function values across reloads | Windows x64 and Linux x64, `hcrFunctionValues`: a named function's value taken before a reload, a private one, one stored in a module-level object and code of the old generation all reach the newest generation; a closure keeps its own body; a held function writes the new cell after a type reset |
+| Dependency reload | Windows x64 and Linux x64, `hcrFileDependency`: an edit of a `file:` dependency reloads its module image in the running app; `hcrImageNameCollision`: two modules mapping to one image name stop the build |
 | `msc run --hcr app.ms` | Windows x64 and Linux x64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
 | iOS and automated deploy loops | Not implemented |
 | Neon Fast Refresh integration | Contract defined here; implementation belongs to the Neon repo |
@@ -202,10 +203,25 @@ per-function trampoline in the owner image (needs a cloned signature per functio
 prologue reuses the existing cell and parameter names). Nim forwards only calls made through
 its trampoline and keeps same-module calls of old code on `_actual`; this contract also
 forwards those, as Dart and Live++ do. Measured: `hcrFunctionValues` red on `b5857d02`, green
-on the candidate, Windows x64. Not measured: the per-call cost of the prologue, Linux, raw C
-function pointers to a named function, `==` between function values.
+on the candidate, Windows x64; green on Linux x64 (WSL Ubuntu, a zig cross-built compiler of
+`5ef59610`, the whole hcr runner 23 ok). Not measured: the per-call cost of the prologue, raw C
+function pointers to a named function, `==` between function values (C rejects it on `main`
+too: inbox `2026-10-02-function-value-equality-c`).
 
-Not decided here: whether non-standard dependencies reload.
+Selected dependency contract (2026-10-02): a module of a `file:` dependency or of a locked git
+or registry dependency builds its own image, id `<package>/<path>`, exactly like a project
+module; std, the runtime and a module outside the project and its dependencies stay in the
+core image. `msc run --hcr` and `--watch` also watch each `file:` dependency's folder. Two
+modules whose ids map to one image name (`a/b.ms` and `a.b.ms`) stop the build and name both.
+The reference reloads every module but the main one and those marked non-reloadable
+(`isReloadable`, ccgtypes.nim:1235); a package is an ordinary module there. Measured on Windows
+x64: `hcrFileDependency` answered `RestartRequired` ("the core image changed") on `bcdf6556` and
+reloads the dependency with its new body on the candidate; `hcrImageNameCollision` built three
+images into two files on `bcdf6556` (one overwritten) and stops on the candidate. Both pass on
+Linux x64 in the same WSL run. Known defect:
+in a graph with a dependency, the warm build emits the entry module's C without five unused
+generic-instance struct declarations the cold build wrote, so the entry image relinks and
+reloads beside the dependency (`reloaded greeter/index,app`).
 
 Not verified: the per-call cost (a cell is two dependent loads against three for
 `handle->current[k]`, read from the emitted macros, not timed); how Live++ keeps globals (its

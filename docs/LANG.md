@@ -2359,6 +2359,12 @@ What a reload keeps and what it refuses:
 - **Project exports can cross images.** Exported state and concrete generic instances are
   supported, including private helpers/state that an instance needs from its home module.
   Compatibility is checked per used symbol; adding an unused export does not reject callers.
+- **Dependencies reload like the project.** A module of a `file:` dependency
+  (`deps: { "neon": "file:../neon" }` in `build.ms`) or of a locked package is its own image,
+  and `msc run --hcr` watches each `file:` dependency's folder, so saving a file there reloads
+  it into the running app. std and the runtime stay in the core image: an edit there answers
+  `RestartRequired`. Two modules whose paths map to one image name (`a/b.ms` and `a.b.ms`)
+  stop the build with an error naming both.
 - **`@beforeReload` / `@afterReload`** mark module-level `(): void` functions that run around
   a reload, leaf module first: before-handlers on the old code, after-handlers on the new
   code. A throwing initializer or after-handler restores function publication and TypeInfo and
@@ -2372,9 +2378,9 @@ What a reload keeps and what it refuses:
   source builds for production, and the loop's `reload()` costs no call there. `--hcr` defines
   `hcr` for `when`.
 
-The registry cutover was checked on Windows x64 with sixteen focused cases in
-`src/test/hcr/run.ms`, including off-mode C/JS consumers, and on Linux x64 with five native
-registry/engine cases plus the POSIX probe. New Linux watch timing, macOS watch and iOS remain
+On 2026-10-02 the whole `src/test/hcr/run.ms` passed on Linux x64 (WSL Ubuntu, 23 cases) and
+its function-value, dependency and image-name cases passed on Windows x64; the main gate
+checks the Windows run. Linux watch timing, macOS watch and iOS remain
 unverified/unimplemented respectively. Architecture, measurements and limits: [`HCR.md`](HCR.md).
 
 ## Strings and Characters
