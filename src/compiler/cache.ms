@@ -529,8 +529,12 @@ function getCompilerHash(ccOption: number, ccBinary: string): string {
 		version = r.ok ? r.value : r.error.errorOutput;
 	}
 	_compilerHashKey = name;
-	_compilerHash = hashContent(`${name}:${hashFile(path)}:${version}`);
+	_compilerHash = compilerIdentity(name, path, fileSize(path), modifiedTime(path), version);
 	return _compilerHash;
+}
+
+export function compilerIdentity(name: string, path: string, size: number, modified: number, version: string): string {
+	return hashContent(`${name}:${path}:${size}:${modified}:${version}`);
 }
 
 function buildCmdFingerprint(ccOption: number, ccBinary: string, mode: number, compileFlags: string): string {
@@ -1262,4 +1266,14 @@ test "header cache: MSC_NO_HEADER_CACHE disables both directions" {
 		env.delete("MSC_NO_HEADER_CACHE");
 	}
 	assert lookupHeaderInline(key) == "OUT-6";
+}
+
+test "the C compiler identity moves with its path, size, mtime and version" {
+	const base = compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000000, "0.16.0");
+	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000000, "0.16.0") == base;
+	assert compilerIdentity("zig cc", "/opt/zig2/zig", 177108480, 1700000000, "0.16.0") != base;
+	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108481, 1700000000, "0.16.0") != base;
+	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000001, "0.16.0") != base;
+	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000000, "0.16.1") != base;
+	assert compilerIdentity("clang", "/opt/zig/zig", 177108480, 1700000000, "0.16.0") != base;
 }
