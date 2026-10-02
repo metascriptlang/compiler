@@ -248,6 +248,34 @@ test "int8 unsigned shift reads the byte unsigned" {
 	assert result.value.contains("& 255");
 }
 
+test "int8 widened to uint32 keeps the unsigned view" {
+	const result = compileToJS("function f(a: int8): uint32 { return a as uint32; }");
+	assert result.ok;
+	assert result.value.contains(">>> 0");
+	assert !result.value.contains("<< 24");
+}
+
+test "a shift after a widening cast masks its count to the cast width" {
+	const result = compileToJS("function f(a: uint8, n: uint32): uint32 { return (a as uint32) << n; }");
+	assert result.ok;
+	assert !result.value.contains("& 7");
+	assert !result.value.contains("& 255");
+}
+
+test "an indexed operand widened to uint32 shifts at the cast width" {
+	const result = compileToJS("function f(d: uint8[], i: int32): uint32 { return (d[i] as uint32) << 8; }");
+	assert result.ok;
+	assert !result.value.contains("& 7");
+}
+
+test "int16 widened to uint32 shifts right unsigned at the cast width" {
+	const result = compileToJS("function f(a: int16, n: uint32): uint32 { return (a as uint32) >> n; }");
+	assert result.ok;
+	assert result.value.contains(">>>");
+	assert !result.value.contains("<< 16");
+	assert !result.value.contains("& 15");
+}
+
 test "uint8 postfix increment wraps and reads back the value before it" {
 	const result = compileToJS("function f(a: uint8): uint8 { let x = a; const b = x++; return b + x; }");
 	assert result.ok;
