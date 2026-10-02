@@ -52,8 +52,8 @@ import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
 import { drainPendingInstances, distinctInstances, placeInstance } from "../checker/instantiate";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, collectTypeInstanceRows, moduleTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
-import { hookSymMark, hookSymsFrom, replayHookSyms, opMark, opsFrom, replayOps } from "../codegen/c/types";
-import { GenericTypeInstRow, addGenericTypeInstRow, getParserDefines, setParserDefines } from "../parser/context";
+import { opMark, opsFrom, replayOps } from "../codegen/c/types";
+import { GenericTypeInstRow, addGenericTypeInstRow } from "../parser/context";
 import { dbLower } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig } from "./buildConfig";
@@ -623,7 +623,6 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.ran = true;
 	const typeInfoMark = typeInfoOwnerMark();
 	const ownerMark = hookOwnerMark();
-	const hookMark = hookSymMark();
 	const keyedOpMark = opMark();
 	const opts = job.opts;
 	const modPath = job.modPath;
@@ -697,7 +696,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 	job.timers.lower = job.timers.lower + (performance.now() - _tl0);
 	truncateErrors(ctx, errBase);
-	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), owners: hookOwnersFrom(ownerMark), hooks: hookSymsFrom(hookMark), ops: opsFrom(keyedOpMark) };
+	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), owners: hookOwnersFrom(ownerMark), hooks: [], ops: opsFrom(keyedOpMark) };
 	return nativeLowered;
 }
 
@@ -2713,7 +2712,6 @@ setGlobalHookOwners(sharedHookOwners);
 				if (claims != null) {
 					replayTypeInfoOwners(claims.typeInfos);
 					replayHookOwners(claims.owners);
-					replayHookSyms(claims.hooks);
 					replayOps(claims.ops);
 				}
 				const replay = session.lowerDiagnostics.get(modPath);

@@ -13,7 +13,7 @@ import { makeCtx } from "../transform/testUtil";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp } from "../ast/node";
 import { canFormAcycle } from "../transform/cycles";
 import { monoInstanceName } from "../monomorphize/registry";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, anonUnionCName, hashToBase36, typeKey, requireOpByKey, getOpByKey, hookPrototype, setOpByKey, resetHookSyms } from "../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, anonUnionCName, hashToBase36, typeKey, requireOpByKey, liftedOp, resetHookSyms } from "../codegen/c/types";
 
 // ===== RC Classification Kind =====
 
@@ -510,14 +510,10 @@ test "function → Closure" {
 
 function liftTestOps(t: Type, n: string): Type {
 	resetHookSyms();
-	const destroy = hookPrototype(n + "Destroy", null);
-	setFlag(destroy, SymbolFlag.DestroyOp);
-	const wasMoved = hookPrototype(n + "WasMoved", null);
-	setFlag(wasMoved, SymbolFlag.WasMovedOp);
-	setOpByKey(t, AttachedOp.AttachedDestructor, destroy);
-	setOpByKey(t, AttachedOp.AttachedAsgn, hookPrototype(n + "Copy", null));
-	setOpByKey(t, AttachedOp.AttachedWasMoved, wasMoved);
-	setOpByKey(t, AttachedOp.AttachedSink, hookPrototype(n + "Sink", null));
+	liftedOp(t, AttachedOp.AttachedDestructor, n + "Destroy", null);
+	liftedOp(t, AttachedOp.AttachedAsgn, n + "Copy", null);
+	liftedOp(t, AttachedOp.AttachedWasMoved, n + "WasMoved", null);
+	liftedOp(t, AttachedOp.AttachedSink, n + "Sink", null);
 	return t;
 }
 

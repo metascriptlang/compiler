@@ -16,9 +16,9 @@
 //   reference comparisons  — template `>` = y < x           → derived from <
 //   reference comparisons  — template `>=` = y <= x         → derived from <=
 
-import { Node, NodeKind, NodeFlag, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
-import { hookPrototype, hookBaseCName } from "../../codegen/c/types";
+import { liftedOp, hookBaseCName } from "../../codegen/c/types";
 import { walkNode } from "../walker";
 import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral, receiverKind, makeTypedIdentResolved } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, unwrapMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
@@ -177,7 +177,7 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 		const eqName = eqTypeName(ctx, leftType);
 		registerStructEq(ctx, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
-		return makeCall(makeTypedIdentResolved(hookPrototype(eqName + "Eq", fnType), fnType, loc), [left, right], loc);
+		return makeCall(makeTypedIdentResolved(liftedOp(leftType, AttachedOp.AttachedEq, eqName + "Eq", fnType), fnType, loc), [left, right], loc);
 	}
 	// Closure equality: a === b → a.fn === b.fn && a.env === b.env (reference parity)
 	if ((opName == "==" || opName == "===" || opName == "!=" || opName == "!==") && leftType.kind == TypeKind.Function) {
@@ -204,7 +204,8 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 		if (suffix != "") {
 			registerTupleOp(ctx, leftType, tName, suffix);
 			const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
-			return makeCall(makeTypedIdentResolved(hookPrototype(tName + suffix, fnType), fnType, loc), [left, right], loc);
+			const tupleOp = suffix == "Lt" ? AttachedOp.AttachedLt : suffix == "Le" ? AttachedOp.AttachedLe : AttachedOp.AttachedEq;
+			return makeCall(makeTypedIdentResolved(liftedOp(leftType, tupleOp, tName + suffix, fnType), fnType, loc), [left, right], loc);
 		}
 	}
 	return null as unknown as Node;
@@ -366,7 +367,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 			const eqRight = rightIsMaybe ? d.right : makeMaybeCarrier(d.right, carrierType, loc);
 			registerCarrierEq(ctx, carrierType);
 			const eqFnType = createFunction([carrierType, carrierType], ["x", "y"], booleanType());
-			const eqCallee = makeTypedIdentResolved(hookPrototype(carrierName + "Eq", eqFnType), eqFnType, loc);
+			const eqCallee = makeTypedIdentResolved(liftedOp(carrierType, AttachedOp.AttachedEq, carrierName + "Eq", eqFnType), eqFnType, loc);
 			const eqCall = makeCall(eqCallee, [eqLeft, eqRight], loc);
 			eqCall.nodeType = booleanType();
 			if (isNotEqual) return makeUnary("!", eqCall, loc);
@@ -422,7 +423,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		const eqName = eqTypeName(ctx, leftType);
 		registerStructEq(ctx, leftType);
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
-		return makeCall(makeTypedIdentResolved(hookPrototype(eqName + "Eq", fnType), fnType, loc), [d.left, d.right], loc);
+		return makeCall(makeTypedIdentResolved(liftedOp(leftType, AttachedOp.AttachedEq, eqName + "Eq", fnType), fnType, loc), [d.left, d.right], loc);
 	}
 
 	// 6. Direct base operators for tuples (auto-generated ==, <, <=).

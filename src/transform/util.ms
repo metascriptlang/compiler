@@ -3,10 +3,9 @@
 
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, setRepr } from "../checker/types";
-import { charType, isStringLike } from "../checker/types";
-import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
-import { lookupHookSym, requireOpByKey } from "../codegen/c/types";
+import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr } from "../checker/types";
+import { TransformContext, freshTempSym, mintSym } from "./context";
+import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
 import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
@@ -342,13 +341,12 @@ export function isRuntimeProcCall(node: Node, procName: string): boolean {
 export function runtimeRef(procName: string, loc: SourceLocation): Node {
 	return makeTypedIdentResolved(runtimeProcSym(procName), null, loc);
 }
-export function opProcSym(name: string): Symbol {
-	const hook = lookupHookSym(name);
-	return hook != null ? hook : runtimeProcSym(name);
+export function overloadWinner(set: Symbol, idx: number): Symbol {
+	return idx > 0 && idx - 1 < set.overloads.length ? set.overloads[idx - 1] : set;
 }
 
 export function attachedOpSym(name: string, op: AttachedOp): Symbol {
-	const sym = opProcSym(name);
+	const sym = runtimeProcSym(name);
 	if (op == AttachedOp.AttachedDestructor) setFlag(sym, SymbolFlag.DestroyOp);
 	else if (op == AttachedOp.AttachedWasMoved) setFlag(sym, SymbolFlag.WasMovedOp);
 	return sym;

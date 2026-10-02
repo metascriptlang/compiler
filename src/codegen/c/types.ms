@@ -84,12 +84,10 @@ import { useHeader } from "./context";
 // ===== Generated lifecycle hook symbols (attachedOps analog) =====
 // destructorLifting sets AttachedDestructor on a per-Type-object instance (a throwaway built by
 // unwrapGenericInstance for mono types), so the op never reaches the canonical type codegen reads.
-// The ops therefore live in one GLOBAL table keyed by hook name: a generated hook's symbol is
-// registered before its body exists and references carry it.
+// The ops therefore live in one GLOBAL table keyed by (op, canonical type): a generated hook's
+// symbol is registered before its body exists and references carry it.
 // Lives here (codegen) so destructorLifting — which already imports this module — can populate it
 // without an import cycle. Reset per build via `setGlobalHookOwners` to avoid cross-test bleed.
-let _hookSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
-let _hookSymOrder: Symbol[] = [];
 let _hookSymsSealed = false;
 
 export interface KeyedOp {
@@ -99,7 +97,7 @@ export interface KeyedOp {
 }
 
 let _opSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
-let _opKeyOfName: HashMap<string, string> = new HashMap<string, string>();
+let _opKeyOfSym: HashMap<Symbol, string> = new HashMap<Symbol, string>();
 let _opOrder: KeyedOp[] = [];
 let _canonOps: HashSet<Symbol> = new HashSet<Symbol>();
 
@@ -108,10 +106,8 @@ export function sealHookSyms(sealed: boolean): void {
 }
 
 export function resetHookSyms(): void {
-	_hookSyms = new HashMap<string, Symbol>();
-	_hookSymOrder = [];
 	_opSyms = new HashMap<string, Symbol>();
-	_opKeyOfName = new HashMap<string, string>();
+	_opKeyOfSym = new HashMap<Symbol, string>();
 	_opOrder = [];
 	_canonOps = new HashSet<Symbol>();
 }
@@ -170,19 +166,18 @@ function opKey(t: Type, op: AttachedOp): string {
 
 function recordOp(key: string, sym: Symbol, canon: boolean): void {
 	const held = _opSyms.get(key);
-	if (held != null && held.name != sym.name) {
+	if (held != null && held != sym && held.name != sym.name) {
 		throw new Error(`internal: type-bound op ${key} is both '${held.name}' and '${sym.name}'`);
 	}
 	if (canon) {
-		const identity = sym.modulePath != "" ? `${sym.modulePath}:${sym.name}:${sym.disamb}` : sym.name;
-		const heldKey = _opKeyOfName.get(identity);
+		const heldKey = _opKeyOfSym.get(sym);
 		if (heldKey != null && heldKey != key) {
 			throw new Error(`internal: generated op '${sym.name}' serves two types: ${heldKey} and ${key}`);
 		}
-		if (heldKey == null) _opKeyOfName.set(identity, key);
+		if (heldKey == null) _opKeyOfSym.set(sym, key);
 		_canonOps.add(sym);
 	}
-	if (held != null) return;
+	if (held == sym) return;
 	_opSyms.set(key, sym);
 	_opOrder.push({ key, sym, canon });
 }
@@ -228,16 +223,6 @@ export function aliasOpByKey(orig: Type, canon: Type, op: AttachedOp): void {
 	if (sym != null) recordOp(opKey(orig, op), sym, false);
 }
 
-export function checkOpByKey(t: Type, op: AttachedOp, name: string): void {
-	const byName = _hookSyms.get(name);
-	if (byName == null) return;
-	const key = opKey(t, op);
-	const byKey = _opSyms.get(key);
-	if (byKey == byName) return;
-	const held = byKey != null ? `'${byKey.name}'` : "nothing";
-	throw new Error(`internal: type-bound op ${key} holds ${held} where the hook table names '${name}'`);
-}
-
 export function opMark(): int32 {
 	return _opOrder.length as int32;
 }
@@ -252,42 +237,23 @@ export function replayOps(ops: KeyedOp[]): void {
 	for (const op of ops) recordOp(op.key, op.sym, op.canon);
 }
 
-export function hookSymMark(): int32 {
-	return _hookSymOrder.length as int32;
-}
-
-export function hookSymsFrom(mark: int32): Symbol[] {
-	const taken: Symbol[] = [];
-	for (let i = mark; i < _hookSymOrder.length; i += 1) taken.push(_hookSymOrder[i]);
-	return taken;
-}
-
-export function replayHookSyms(syms: Symbol[]): void {
-	for (const sym of syms) {
-		if (_hookSyms.get(sym.name) != null) continue;
-		_hookSyms.set(sym.name, sym);
-		_hookSymOrder.push(sym);
+// The op's symbol under (t, op), minted on first request with the generated C name; a later
+// request completes the prototype's type. The minted symbol belongs to no module: its name is the
+// final C name.
+export function liftedOp(t: Type, op: AttachedOp, name: string, fnType: Type | null): Symbol {
+	const key = opKey(t, op);
+	const held = _opSyms.get(key);
+	if (held != null) {
+		if (held.name != name) throw new Error(`internal: type-bound op ${key} is '${held.name}', requested as '${name}'`);
+		if (fnType != null) held.symbolType = fnType;
+		return held;
 	}
-}
-
-export function lookupHookSym(name: string): Symbol | null {
-	return _hookSyms.get(name);
-}
-
-export function hookPrototype(name: string, fnType: Type | null): Symbol {
-	const existing = _hookSyms.get(name);
-	if (existing != null) return existing;
-	if (_hookSymsSealed) throw new Error(`internal: DRC hook '${name}' first requested while C modules are emitted in parallel`);
+	if (_hookSymsSealed) throw new Error(`internal: type-bound op ${key} first requested while C modules are emitted in parallel`);
 	const sym = makeSymbol(name, SymbolKind.Function, fnType, false);
 	setFlag(sym, SymbolFlag.GeneratedOp);
-	_hookSyms.set(name, sym);
-	_hookSymOrder.push(sym);
-	return sym;
-}
-
-export function hookComplete(name: string, fnType: Type | null): Symbol {
-	const sym = hookPrototype(name, fnType);
-	sym.symbolType = fnType!;
+	if (op == AttachedOp.AttachedDestructor) setFlag(sym, SymbolFlag.DestroyOp);
+	else if (op == AttachedOp.AttachedWasMoved) setFlag(sym, SymbolFlag.WasMovedOp);
+	recordOp(key, sym, true);
 	return sym;
 }
 
@@ -319,7 +285,7 @@ export function procHeader(g: CGen, name: string, fnType: Type, paramNames: Read
 }
 
 export function ensureDrcProto(g: CGen, callee: string, sym: Symbol | null): void {
-	const hook = sym != null ? sym : lookupHookSym(callee);
+	const hook = sym;
 	if (hook == null || !hasFlag(hook, SymbolFlag.GeneratedOp)) return;
 	const fnType = hook.symbolType;
 	if (fnType == null || fnType.kind != TypeKind.Function) return;
@@ -1026,13 +992,8 @@ export function isCompilerGenCName(g: CGen, cn: string): boolean {
 	return bare.length > 0 && bare.slice(0, 1) == "$";
 }
 
-function sharedTypeOp(g: CGen, className: string, objType: Type | null, op: AttachedOp, suffix: string): Symbol | null {
-	if (objType == null) {
-		if (lookupHookSym(className + suffix) != null) {
-			addCGenError(g, `internal: TypeInfo '${className}' reached codegen without its type, so its lifted ${suffix} op cannot be found`, 0, 0);
-		}
-		return null;
-	}
+function sharedTypeOp(objType: Type | null, op: AttachedOp): Symbol | null {
+	if (objType == null) return null;
 	const opType = objType.kind == TypeKind.Ref && objType.typeReturn != null ? objType.typeReturn : objType;
 	return getOpByKey(opType, op);
 }
@@ -1093,7 +1054,7 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
 	// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
 	// objType resolved here. Read the op lifted for the instance's key instead.
-	if (destroySym == null && sharedName) destroySym = sharedTypeOp(g, className, objType, AttachedOp.AttachedDestructor, "Destroy");
+	if (destroySym == null && sharedName) destroySym = sharedTypeOp(objType, AttachedOp.AttachedDestructor);
 	if (destroySym != null) {
 		destroyHook = mangle(destroySym.name);
 		ensureDrcProto(g, destroyHook, destroySym);
@@ -1102,7 +1063,7 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.destroyFn = (msDestroyProc)${destroyHook};`);
 	}
 	let traceSym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedTrace) : null;
-	if (traceSym == null && sharedName) traceSym = sharedTypeOp(g, className, objType, AttachedOp.AttachedTrace, "Trace");
+	if (traceSym == null && sharedName) traceSym = sharedTypeOp(objType, AttachedOp.AttachedTrace);
 	if (traceSym != null) {
 		const traceHook = mangle(traceSym.name);
 		ensureDrcProto(g, traceHook, traceSym);
@@ -2228,7 +2189,7 @@ function genTupleType(g: CGen, t: Type): string {
 
 // ===== Tests =====
 
-import { createPrimitive, createStruct, createArray, createEnum, createRef , createTuple } from "../../checker/types";
+import { createPrimitive, createStruct, createArray, createEnum, createRef , createTuple, createFunction } from "../../checker/types";
 import { createCGen } from "./context";
 import { GcMode, addError } from "../../checker/context";
 test "the pointer threshold follows the target float width" {
@@ -2469,19 +2430,44 @@ test "anonymous type emits struct with hash name" {
 	assert result.length > 7;
 }
 
-test "a sealed hook table serves known hooks and refuses a new one" {
-	const known = hookPrototype("SealKnownDestroy", null);
-	sealHookSyms(true);
-	const again = hookPrototype("SealKnownDestroy", null);
+test "a lifted op is one symbol per op and canonical type, whichever spelling asks" {
+	resetHookSyms();
+	const body = createStruct("OneKeyed", ["v"], [createPrimitive(TypeKind.String)], false);
+	const proto = liftedOp(body, AttachedOp.AttachedEq, "OneKeyedEq", null);
+	const again = liftedOp(createStruct("OneKeyed", ["v"], [createPrimitive(TypeKind.String)], false), AttachedOp.AttachedEq, "OneKeyedEq", createFunction([body, body], ["x", "y"], createPrimitive(TypeKind.Boolean)));
+	assert again == proto;
+	assert proto.symbolType != null;
+	assert getOpByKey(body, AttachedOp.AttachedDestructor) == null;
+	assert isTypeBoundOp(proto);
+}
+
+test "a lifted op asked under another name for the same type is refused" {
+	resetHookSyms();
+	const t = createStruct("NamedOnce", ["v"], [createPrimitive(TypeKind.String)], false);
+	liftedOp(t, AttachedOp.AttachedDestructor, "NamedOnceDestroy", null);
 	let refused = "";
 	try {
-		hookPrototype("SealNewDestroy", null);
+		liftedOp(t, AttachedOp.AttachedDestructor, "OtherDestroy", null);
+	} catch (e) {
+		refused = e.message;
+	}
+	assert refused.contains("NamedOnceDestroy");
+}
+
+test "a sealed op table serves known ops and refuses a new one" {
+	resetHookSyms();
+	const known = liftedOp(createStruct("SealKnown", [], [], false), AttachedOp.AttachedDestructor, "SealKnownDestroy", null);
+	sealHookSyms(true);
+	const again = liftedOp(createStruct("SealKnown", [], [], false), AttachedOp.AttachedDestructor, "SealKnownDestroy", null);
+	let refused = "";
+	try {
+		liftedOp(createStruct("SealNew", [], [], false), AttachedOp.AttachedDestructor, "SealNewDestroy", null);
 	} catch (e) {
 		refused = e.message;
 	}
 	sealHookSyms(false);
 	assert again == known;
-	assert refused.contains("SealNewDestroy");
+	assert refused.contains("SealNew");
 }
 
 test "enum typedef follows the largest ordinal and a negative member" {

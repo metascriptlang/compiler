@@ -6,9 +6,8 @@
 
 import { Type, TypeKind, Symbol, Node, NodeKind, FunctionDeclData, CallingConvention } from "../../ast/node";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, addCGenError } from "./context";
-import { lookupHookSym, ensureDrcProto, procHeader } from "./types";
-import { mangledFunctionName } from "./names";
+import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd } from "./context";
+import { ensureDrcProto, procHeader } from "./types";
 
 // ===== DRC forward prototypes =====
 
@@ -57,10 +56,6 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 	// module's registry entry — by this point (codegen), all modules have been
 	// type-checked and the registry holds resolved types.
 	if (fnType == null || fnType.kind != TypeKind.Function) return;
-	if (sym == null && lookupHookSym(calleeName) != null) {
-		addCGenError(g, `internal: generated op '${calleeName}' is called without its symbol in ${g.modulePath}`, 0, 0);
-		return;
-	}
 	if (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp)) {
 		ensureDrcProto(g, calleeName, sym);
 		return;
