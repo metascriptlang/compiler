@@ -53,11 +53,14 @@ export function evalSourceFull(code: string): RaiserContext {
 // target. The build target's prelude (e.g. .jms's pure-MS startsWith via asBytes)
 // does not run in the VM. Cached — built once per process.
 let _raiserPreludeCtx: CheckerContext | null = null;
+let _raiserPreludeBuilding = false;
 function raiserPreludeCtx(): CheckerContext {
 	if (_raiserPreludeCtx == null) {
 		const root = resolveRuntimeDir();
 		const stdPath = root != "" ? join(root, "std") : "";
+		_raiserPreludeBuilding = true;
 		_raiserPreludeCtx = buildPreludeContext(stdPath, ".rms");
+		_raiserPreludeBuilding = false;
 	}
 	return _raiserPreludeCtx;
 }
@@ -166,7 +169,7 @@ function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMet
 }
 
 function engineBodyCtx(definingModulePath: string): CheckerContext | null {
-	if (_engine == null) return null;
+	if (_engine == null || _raiserPreludeBuilding) return null;
 	const outer = getComptimeOuterCtx();
 	if (outer == null || outer.registry == null || outer.graph == null) return null;
 	const mod = findModule(outer.graph, definingModulePath);
