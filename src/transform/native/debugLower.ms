@@ -72,7 +72,6 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 		return cond;
 	}
 	if (isSlotUnion(t) && !hasToStringExtension(t, ctx)) return ctx.jsBackend ? arg : buildUnionText(arg, t, "msUnionDebug_", (v: Node): Node => echoCoerceArg(v, loc, ctx), loc, ctx);
-	// Struct/Class/Union → check toString() extension first, then fall back to JSON debug format
 	const inner = unwrapRef(t);
 	if ((inner.kind == TypeKind.Struct || inner.kind == TypeKind.Union) && inner.typeName != "") {
 		const typeName = inner.typeName;

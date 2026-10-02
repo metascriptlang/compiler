@@ -158,7 +158,6 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		bcall.nodeType = stringType();
 		return bcall;
 	}
-	// A user-defined toString was bound by the checker; what reaches here has none.
 	const tk = objType.kind;
 	if (tk == TypeKind.Char && (callNode.data as CallExprData).arguments.length == 0) return charToString(obj, loc);
 	// Number/int/float → msNumberToStringRadix(value, radix) — radix defaults to 10.
