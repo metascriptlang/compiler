@@ -1198,7 +1198,7 @@ export function recordGenericTypeInstantiation(baseName: string, genericSym: Sym
 	const fieldTypesStr = declFieldTypesJoined(decl);
 
 	if (fieldNamesStr == "") {
-		addGenericTypeInst(instBase, typeArgKey, mangledName, "", "");
+		addGenericTypeInst(instBase, typeArgKey, mangledName, "", "", false);
 		return;
 	}
 
@@ -1208,7 +1208,7 @@ export function recordGenericTypeInstantiation(baseName: string, genericSym: Sym
 	const ftParts = splitTopLevel(fieldTypesStr, "|");
 
 	if (fnParts.length == 0) {
-		addGenericTypeInst(instBase, typeArgKey, mangledName, "", "");
+		addGenericTypeInst(instBase, typeArgKey, mangledName, "", "", false);
 		return;
 	}
 
@@ -1226,7 +1226,7 @@ export function recordGenericTypeInstantiation(baseName: string, genericSym: Sym
 		resultFieldTypes = resultFieldTypes + "|" + subType;
 	}
 
-	addGenericTypeInst(instBase, typeArgKey, mangledName, resultFieldNames, resultFieldTypes);
+	addGenericTypeInst(instBase, typeArgKey, mangledName, resultFieldNames, resultFieldTypes, false);
 }
 
 // ===== Resolve Helpers =====

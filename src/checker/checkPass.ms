@@ -3162,9 +3162,11 @@ function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude 
 	const ctorMark = ctorDefaultsMark();
 	const outerDispatch = startDispatchCapture();
 	const ctx = _graphPreludeFn != null ? _graphPreludeFn(stdPath, backendExt) : buildPreludeContext(stdPath, backendExt);
+	const typeInstances = takeGenericTypeInstsFrom(typeInstMark);
+	for (const row of typeInstances) row.prelude = true;
 	return {
 		ctx,
-		typeInstances: takeGenericTypeInstsFrom(typeInstMark),
+		typeInstances,
 		duVariants: duVariantsFrom(duMark),
 		ctorDefaults: ctorDefaultsFrom(ctorMark),
 		dispatch: endDispatchCapture(outerDispatch),

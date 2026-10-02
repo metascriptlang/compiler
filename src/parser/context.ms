@@ -469,10 +469,11 @@ interface GenericTypeInstStore {
 	typeArgKeys: string[];
 	fieldNames: string[];  // "|"-joined field names per entry
 	fieldTypes: string[];  // "|"-joined field types per entry
+	preludes: boolean[];
 }
 
 function createGenericTypeInstStore(): GenericTypeInstStore {
-	return { keys: [], baseNames: [], typeArgKeys: [], fieldNames: [], fieldTypes: [] };
+	return { keys: [], baseNames: [], typeArgKeys: [], fieldNames: [], fieldTypes: [], preludes: [] };
 }
 
 let _genericTypeInstStore: GenericTypeInstStore = createGenericTypeInstStore();
@@ -485,7 +486,7 @@ export function resetAllSideChannels(): void {
 	resetGenericTypeInsts();
 }
 
-export function addGenericTypeInst(baseName: string, typeArgKey: string, mangledName: string, fieldNamesJoined: string, fieldTypesJoined: string): void {
+export function addGenericTypeInst(baseName: string, typeArgKey: string, mangledName: string, fieldNamesJoined: string, fieldTypesJoined: string, prelude: boolean): void {
 	// Dedup: skip if same baseName + typeArgKey already exists
 	for (let i = 0; i < _genericTypeInstStore.keys.length; i += 1) {
 		if (_genericTypeInstStore.baseNames[i] == baseName && _genericTypeInstStore.typeArgKeys[i] == typeArgKey) return;
@@ -495,6 +496,7 @@ export function addGenericTypeInst(baseName: string, typeArgKey: string, mangled
 	_genericTypeInstStore.typeArgKeys.push(typeArgKey);
 	_genericTypeInstStore.fieldNames.push(fieldNamesJoined);
 	_genericTypeInstStore.fieldTypes.push(fieldTypesJoined);
+	_genericTypeInstStore.preludes.push(prelude);
 }
 
 export interface GenericTypeInstRow {
@@ -503,6 +505,7 @@ export interface GenericTypeInstRow {
 	typeArgKey: string;
 	fieldNames: string;
 	fieldTypes: string;
+	prelude: boolean;
 }
 
 export function genericTypeInstMark(): int32 {
@@ -513,7 +516,7 @@ export function takeGenericTypeInstsFrom(mark: int32): GenericTypeInstRow[] {
 	const rows: GenericTypeInstRow[] = [];
 	const store = _genericTypeInstStore;
 	for (let i = mark; i < store.keys.length; i += 1) {
-		rows.push({ key: store.keys[i], baseName: store.baseNames[i], typeArgKey: store.typeArgKeys[i], fieldNames: store.fieldNames[i], fieldTypes: store.fieldTypes[i] });
+		rows.push({ key: store.keys[i], baseName: store.baseNames[i], typeArgKey: store.typeArgKeys[i], fieldNames: store.fieldNames[i], fieldTypes: store.fieldTypes[i], prelude: store.preludes[i] });
 	}
 	while (store.keys.length > mark) {
 		store.keys.pop();
@@ -521,12 +524,13 @@ export function takeGenericTypeInstsFrom(mark: int32): GenericTypeInstRow[] {
 		store.typeArgKeys.pop();
 		store.fieldNames.pop();
 		store.fieldTypes.pop();
+		store.preludes.pop();
 	}
 	return rows;
 }
 
 export function addGenericTypeInstRow(row: GenericTypeInstRow): void {
-	addGenericTypeInst(row.baseName, row.typeArgKey, row.key, row.fieldNames, row.fieldTypes);
+	addGenericTypeInst(row.baseName, row.typeArgKey, row.key, row.fieldNames, row.fieldTypes, row.prelude);
 }
 
 export function getGenericTypeInstCount(): int32 {

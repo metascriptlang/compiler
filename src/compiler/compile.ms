@@ -2453,11 +2453,29 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	const firstModule = checkedMods.length > 0 ? checkedMods[0].modPath : "";
 	const typeRowsOf = new HashMap<string, GenericTypeInstRow[]>();
 	const sharedOrder: string[] = [];
+	const sharedFromReloadable: GenericTypeInstRow[] = [];
 	for (const path of graph.loadOrder) {
-		if (reloadable.includes(path) && path != firstModule) typeRowsOf.set(path, moduleTypeInstanceRows(session.check, path));
-		else sharedOrder.push(path);
+		if (!reloadable.includes(path) || path == firstModule) {
+			sharedOrder.push(path);
+			continue;
+		}
+		const own: GenericTypeInstRow[] = [];
+		for (const row of moduleTypeInstanceRows(session.check, path)) {
+			if (row.prelude) sharedFromReloadable.push(row);
+			else own.push(row);
+		}
+		typeRowsOf.set(path, own);
 	}
-	typeRowsOf.set(firstModule, collectTypeInstanceRows(session.check, sharedOrder));
+	const sharedRows = collectTypeInstanceRows(session.check, sharedOrder);
+	const sharedKeys = new HashSet<string>();
+	for (const row of sharedRows) sharedKeys.add(row.baseName + "|" + row.typeArgKey);
+	for (const row of sharedFromReloadable) {
+		const key = row.baseName + "|" + row.typeArgKey;
+		if (sharedKeys.has(key)) continue;
+		sharedKeys.add(key);
+		sharedRows.push(row);
+	}
+	typeRowsOf.set(firstModule, sharedRows);
 	const noTypeRows: GenericTypeInstRow[] = [];
 	const ownerFingerprints: HashMap<string, string> = new HashMap<string, string>();
 	if (session.keep) {
