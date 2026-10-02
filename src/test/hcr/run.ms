@@ -327,7 +327,7 @@ function subdirModule(): void {
 	copy(`${FIXTURES}/subdir/app.ms`, `${dir}/app.ms`);
 	copy(`${FIXTURES}/subdir/lib/util.ms`, `${dir}/lib/util.ms`);
 	copy(`${FIXTURES}/subdir/utilEdit.ms`, `${dir}/edit.txt`);
-	const ran = msc(dir, ["run", "app.ms", "--hcr"]);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
 		if (line.startsWith("HCR-SUB ")) seen.push(line);
@@ -344,7 +344,7 @@ function reloadsNewTypeEdit(tag: string, fixture: string, prefix: string, why: s
 	const dir = copyAppAndLib(fixture);
 	copy(`${dir}/app/logicTag.ms`, `${dir}/app/edit.txt`);
 	mustBuild(tag, `${dir}/app`, ["build", "app.ms", "--hcr", "--output=out/built/app"], why);
-	const ran = msc(`${dir}/app`, ["run", "app.ms", "--hcr"]);
+	const ran = msc(`${dir}/app`, ["run", "--hcr", "app.ms"]);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
 		if (line.startsWith(`${prefix} `)) seen.push(line);
@@ -661,7 +661,7 @@ function reloadOff(): void {
 	const tag = "hcrReloadOff";
 	const dir = freshDir(`${TMP}/reloadOff`);
 	copy(`${FIXTURES}/reloadOff/main.ms`, `${dir}/main.ms`);
-	for (const args of [["run", "main.ms"], ["run", "main.ms", "--target=js"]]) {
+	for (const args of [["run", "main.ms"], ["run", "--target=js", "main.ms"]]) {
 		const ran = msc(dir, args);
 		if (!succeeded(ran) || !both(ran).contains("reload without --hcr: no change")) {
 			console.log(both(ran));
