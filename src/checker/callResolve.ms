@@ -916,6 +916,10 @@ function evalCompileTimeCall(ctx: CheckerContext, node: Node, callType: Type): T
 }
 function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
+	if (d.callee == null) {
+		addError(ctx, "a call has a null callee (a macro returned a CallExpr without one)", node.location.line, node.location.column);
+		return errorType();
+	}
 	callCheckExpr(ctx, d.callee, null);
 	// Phase 5: super(args) call — type-check args against parent class
 	// constructor signature. resolveSuper set callee.resolvedSym to the parent
