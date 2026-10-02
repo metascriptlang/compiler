@@ -402,3 +402,4 @@ import "./bug635OverloadCallUsesItsWinner";
 import "./bug636RefOperatorPassesALocation";
 import "./bug644RaiserProgramArgv";
 import "./bug656BareParamAliasKeepsItsName";
+import "./bug675ReadonlyPtrIsAView";
