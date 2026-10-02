@@ -632,7 +632,7 @@ function cellInner(c: Cell, q: (p: string) => string): string {
 		return "node " + q(esmEntryJs(c)) + " > " + q(c.dir + "out.log") + " 2>&1";
 	}
 	if (c.lane == "raiser") {
-		return MSC_CMD + " run " + q(c.bin) + " --target=raiser > " + q(c.dir + "out.log") + " 2> " + q(c.dir + "err.log");
+		return MSC_CMD + " run --target=raiser " + q(c.bin) + " > " + q(c.dir + "out.log") + " 2> " + q(c.dir + "err.log");
 	}
 	if (c.spec.maxRssMb >= 0.0) {
 		// wintime prints the `time -l` RSS line to stderr, same as macOS.
