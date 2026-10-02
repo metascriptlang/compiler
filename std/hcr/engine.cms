@@ -47,6 +47,8 @@ interface HcrImage {
 	importIds: string[];
 	symbolNames: string[];
 	symbolKeys: string[];
+	variableSymbols: string[];
+	variableNames: string[];
 	bindOwners: string[];
 	bindNames: string[];
 	bindKeys: string[];
@@ -129,7 +131,7 @@ function symbolOf(image: Ptr<void>, name: string): Ptr<void> {
 }
 
 function emptyImage(handle: Ptr<void>): HcrImage {
-	return { handle, moduleId: "", importIds: [], symbolNames: [], symbolKeys: [],
+	return { handle, moduleId: "", importIds: [], symbolNames: [], symbolKeys: [], variableSymbols: [], variableNames: [],
 		bindOwners: [], bindNames: [], bindKeys: [], typeNames: [], typeKeys: [] };
 }
 
@@ -137,11 +139,12 @@ function describe(handle: Ptr<void>): HcrImage {
 	const idRaw = symbolOf(handle, "HcrModuleId000");
 	const functionsRaw = symbolOf(handle, "HcrFunctions000");
 	const variablesRaw = symbolOf(handle, "HcrVariables000");
+	const variableNamesRaw = symbolOf(handle, "HcrVariableNames000");
 	const bindingsRaw = symbolOf(handle, "HcrBindings000");
 	const importsRaw = symbolOf(handle, "HcrImports000");
 	const typeKeysRaw = symbolOf(handle, "HcrTypeKeys000");
 	const image = emptyImage(handle);
-	if (hcrIsNull(idRaw) != 0 || hcrIsNull(functionsRaw) != 0 || hcrIsNull(variablesRaw) != 0
+	if (hcrIsNull(idRaw) != 0 || hcrIsNull(functionsRaw) != 0 || hcrIsNull(variablesRaw) != 0 || hcrIsNull(variableNamesRaw) != 0
 		|| hcrIsNull(bindingsRaw) != 0 || hcrIsNull(importsRaw) != 0 || hcrIsNull(typeKeysRaw) != 0) return image;
 	image.moduleId = msHcrCallText(idRaw);
 	for (let i: int32 = 0; i < msHcrListCount(importsRaw); i += 1) image.importIds.push(msHcrListItem(importsRaw, i));
@@ -152,6 +155,10 @@ function describe(handle: Ptr<void>): HcrImage {
 	for (let i: int32 = 0; i < msHcrImportCount(variablesRaw); i += 1) {
 		image.symbolNames.push(msHcrImportId(variablesRaw, i));
 		image.symbolKeys.push(msHcrImportKey(variablesRaw, i));
+	}
+	for (let i: int32 = 0; i < msHcrImportCount(variableNamesRaw); i += 1) {
+		image.variableSymbols.push(msHcrImportId(variableNamesRaw, i));
+		image.variableNames.push(msHcrImportKey(variableNamesRaw, i));
 	}
 	for (let i: int32 = 0; i < msHcrBindingCount(bindingsRaw); i += 1) {
 		image.bindOwners.push(msHcrBindingOwner(bindingsRaw, i));
@@ -313,15 +320,16 @@ function resetVariables(candidates: HcrCandidate[]): string[] {
 			if (!item.image.symbolKeys[i].startsWith("v:")) continue;
 			const name = item.image.symbolNames[i];
 			const at = previous.symbolNames.indexOf(name);
-			if (at >= 0 && previous.symbolKeys[at] != item.image.symbolKeys[i]) reset.push(`${item.module.moduleId}.${sourceName(name)}`);
+			if (at >= 0 && previous.symbolKeys[at] != item.image.symbolKeys[i]) reset.push(`${item.module.moduleId}.${variableName(item.image, name)}`);
 		}
 	}
 	return reset;
 }
 
-function sourceName(symbol: string): string {
-	const at = symbol.indexOf("__M");
-	return at > 0 ? symbol.substring(0, at) : symbol;
+function variableName(image: HcrImage, symbol: string): string {
+	const at = image.variableSymbols.indexOf(symbol);
+	if (at < 0) fatal(`module '${image.moduleId}' lists variable ${symbol} without a source name`);
+	return image.variableNames[at];
 }
 
 function visitInitialization(moduleId: string, candidates: HcrCandidate[], visited: HashSet<string>, order: HcrCandidate[]): void {

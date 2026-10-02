@@ -23,6 +23,7 @@ interface HcrGlobal {
 	storageType: Type;
 	initNode: Node;
 	cName: string;
+	sourceName: string;
 	key: string;
 	pointer: Symbol;
 	fresh: Symbol;
@@ -71,9 +72,17 @@ export function liftHcrState(program: Node, ctx: TransformContext, moduleId: str
 		}
 	}
 	let entries = "";
-	for (const g of globals) entries = entries + `${cStringLiteral(g.cName)}, ${cStringLiteral(g.key)}, `;
+	let names = "";
+	for (const g of globals) {
+		entries = entries + `${cStringLiteral(g.cName)}, ${cStringLiteral(g.key)}, `;
+		names = names + `${cStringLiteral(g.cName)}, ${cStringLiteral(g.sourceName)}, `;
+	}
 	result.push(makeEmitStmt(
 		`MS_HCR_EXPORT const char* const* HcrVariables000(void) { static const char* const variables[] = { ${entries}NULL }; return variables; }`,
+		loc,
+	));
+	result.push(makeEmitStmt(
+		`MS_HCR_EXPORT const char* const* HcrVariableNames000(void) { static const char* const names[] = { ${names}NULL }; return names; }`,
 		loc,
 	));
 	for (const stmt of kept) result.push(rewriteGlobalRefs(stmt, bySymbol));
@@ -117,6 +126,7 @@ function extractGlobal(stmt: Node, ctx: TransformContext, index: int32): HcrGlob
 	return {
 		sym, declType: t, storageType, initNode: d.initializer,
 		cName: mangledGlobalName(sym, d.declName),
+		sourceName: d.declName,
 		key: "v:" + hcrSignatureKey(sym.symbolType),
 		pointer, fresh,
 		literalAlias: d.declKind == DeclKind.Const && isLiteralAlias(d.initializer),
