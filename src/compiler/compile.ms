@@ -1543,10 +1543,13 @@ function hcrBuildRoot(entryPath: string, projectRoot: string): string {
 	return root;
 }
 
-function hcrModuleId(modPath: string, root: string, stdPath: string): string {
+function hcrModuleId(modPath: string, root: string, stdPath: string, deps: DepsSection): string {
 	if (stdPath != "" && isUnder(modPath, stdPath)) return "";
-	if (!isUnder(modPath, root)) return "";
-	return replaceExt(relative(root, modPath), "");
+	if (isUnder(modPath, root)) return replaceExt(relative(root, modPath), "");
+	for (let i = 0; i < deps.keys.length; i += 1) {
+		if (isUnder(modPath, deps.values[i])) return `${deps.keys[i]}/${replaceExt(relative(deps.values[i], modPath), "")}`;
+	}
+	return "";
 }
 
 function hcrFunctionSymbol(info: ExportedSymInfo, fn: Symbol): string {
@@ -1630,19 +1633,27 @@ function buildHcrCandidateAbi(
 	stdPath: string,
 ): Result<HcrCandidateAbi, string> {
 	const root = hcrBuildRoot(entryPath, opts.projectRoot);
+	const deps = depRoots(opts.projectRoot != "" ? opts.projectRoot : root);
 	const cpu = opts.targetInfo.cpu != "" ? opts.targetInfo.cpu : "host";
 	const targetKey = `${opts.targetOs}:${cpu}:${opts.targetInfo.ptrSize}:${opts.targetInfo.floatSize}`;
 	const toolchainKey = `${VERSION}:${toolchainStamp()}:${getCompilerName(opts.ccCompiler, opts.ccBinary)}:${hashContent(compileFlags)}`;
 	const candidate: HcrModuleAbi[] = [];
 	const modulePaths: string[] = [];
+	const imageOwners = new HashMap<string, string>();
 	for (const modPath of graph.loadOrder) {
-		const moduleId = hcrModuleId(modPath, root, stdPath);
+		const moduleId = hcrModuleId(modPath, root, stdPath, deps);
 		if (moduleId == "") continue;
+		const imageName = moduleId.replaceAll("/", ".");
+		const owner = imageOwners.get(imageName);
+		if (owner != null) {
+			return Result.err(`HCR modules '${owner}' and '${modPath}' both build the image '${imageName}'; rename one of them`);
+		}
+		imageOwners.set(imageName, modPath);
 		const mod = findModule(graph, modPath);
 		if (mod == null) return Result.err(`HCR ABI module '${modPath}' is missing from the graph`);
 		const dependencies: string[] = [];
 		for (const imported of mod.imports) {
-			const dependencyId = hcrModuleId(imported.sourcePath, root, stdPath);
+			const dependencyId = hcrModuleId(imported.sourcePath, root, stdPath, deps);
 			if (dependencyId == "") continue;
 			dependencies.push(dependencyId);
 		}
