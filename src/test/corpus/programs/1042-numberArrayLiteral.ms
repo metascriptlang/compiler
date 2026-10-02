@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser std has no Array join, so the program stops at check: Property 'join' does not exist on type 'Array' (same on main a1b1368d)
 // @stdout: order 1,2,3|mixed 1.5,7,-2,0.25|wide 14,0.5|pushed 4 9.5|nested 2 1,2 3|field 3 6|loop 0,1,2
 // note: number[] and float64[] literals build element by element in source order, the same
 //   path every other scalar literal takes; before, they went through a variadic runtime

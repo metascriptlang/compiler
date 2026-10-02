@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM prints the heads line, then stops with 'attempt to access a nil address' in main (same on main a1b1368d)
 // @stdout: heads object=generic:Brand int=generic:Brand annotated=generic:Brand class=generic:Brand struct=generic:Brand wrapped=generic:Ref
 // note: a macro reads the type of its argument through `node.nodeType`. An instance of `type Brand<T> = T` is the name `Brand` over its body: typing reads through it, and the macro still sees the alias head, as Nim keeps the wrapper `getTypeInst` shows. The head must survive for an object, a number, a written annotation, a class and a value struct. The values below run through the same instances (member read and write, method call, parameter, field, array element, destructuring), so C and JS agree on the body while the head stays. A struct-literal body (`Wrapped<T>`) has never carried its name to a macro and prints the same either side.
 
