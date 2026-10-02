@@ -58,7 +58,7 @@ import { walkNode, mapChildren } from "../../transform/walker";
 import { hasGenericParams } from "../../checker/types";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
-import { rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf } from "../../checker/callResolve";
+import { rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
 import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
@@ -865,8 +865,6 @@ function hasUserMacroInvocation(node: Node | null, ctx: CheckerContext): boolean
 	const k = node.kind;
 
 	if (k == NodeKind.MacroInvocation) {
-		const d = node.data as MacroInvocationData;
-		if (isBuiltinDirective(d.macroName)) return false;
 		return invokedMacroSym(ctx, node) != null;
 	}
 
@@ -1666,8 +1664,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: int32): Node {
 	const d = node.data as MacroInvocationData;
 
-	// Built-in directives pass through unchanged
-	if (isBuiltinDirective(d.macroName)) return node;
+	if (isDirectiveInvocation(node)) return node;
 
 	// Not a known user macro — leave it alone (could be parsed but undefined)
 	const macroSym = invokedMacroSym(ctx, node);

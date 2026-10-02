@@ -27,7 +27,6 @@ import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveRetur
 import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, forgetInstances, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults } from "./instantiate";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
-import { isBuiltinDirective } from "./decoratorHelpers";
 import { declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance } from "./types";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
@@ -2286,7 +2285,7 @@ function importedStmtMacro(ctx: CheckerContext, call: Node): Symbol | null {
 	} else {
 		return null;
 	}
-	if (macroDeclOf(sym) == null || isBuiltinDirective(name)) return null;
+	if (macroDeclOf(sym) == null) return null;
 	const declModule = sym!.modulePath;
 	if (declModule == "" || declModule == ctx.modulePath || lookupModuleCtx(declModule) == null) return null;
 	return sym;

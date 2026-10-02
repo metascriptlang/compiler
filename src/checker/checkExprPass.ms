@@ -2161,7 +2161,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// Implementation parity: pragma/macro args are type-checked
 			const md = node.data as MacroInvocationData;
 			// reference parity: @emit backtick interpolation (reference emit processing)
-			if (md.macroName == "emit") {
+			if (md.macroName == "emit" && isDirectiveInvocation(node)) {
 				processEmitInterpolation(ctx, node);
 			}
 			// @import args are pure syntax (not evaluated) — skip type-checking
@@ -2809,7 +2809,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
-import { anyArgIsParametric, invokedMacroSym, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst } from "./callResolve";
+import { anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst } from "./callResolve";
 
 function createSyntheticToken(loc: SourceLocation): Token {
 	return createToken(TokenKind.Ident, "", loc.line);

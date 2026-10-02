@@ -22,6 +22,7 @@ import { isContextSensitive } from "./speculate";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
+import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
 import { unionHasMemberOfKind, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
@@ -335,10 +336,14 @@ export function macroDeclOf(sym: Symbol | null): MacroDeclData | null {
 
 export function invokedMacroSym(ctx: CheckerContext, node: Node): Symbol | null {
 	const bound = node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null;
-	const sym = bound || macroDeclOf(node.resolvedSym) != null
-		? node.resolvedSym
-		: lookupSymbol(ctx.table, (node.data as MacroInvocationData).macroName);
+	if (bound || macroDeclOf(node.resolvedSym) != null) return macroDeclOf(node.resolvedSym) != null ? node.resolvedSym : null;
+	if (isDirectiveInvocation(node)) return null;
+	const sym = lookupSymbol(ctx.table, (node.data as MacroInvocationData).macroName);
 	return macroDeclOf(sym) != null ? sym : null;
+}
+
+export function isDirectiveInvocation(node: Node): boolean {
+	return macroDeclOf(node.resolvedSym) == null && isBuiltinDirective((node.data as MacroInvocationData).macroName);
 }
 
 // True iff any arg's nodeType still carries a GenericParam — the marker
