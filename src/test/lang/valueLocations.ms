@@ -24,6 +24,7 @@ function firstByteOfSized(values: ByteLaid[2]): uint8 { return ((values as Span<
 function writeThroughSpanPointer(view: Span<ByteLaid>): void { const pointer = view as Ptr<ByteLaid>; pointer[].a = 9; pointer[1].b = 7; }
 struct WideValue { a: int64; b: int64; c: int64; d: int64; e: int64; }
 function peekThroughAddress(value: WideValue): int64 { const view = value as Ptr<WideValue>; return view[].a; }
+function appendThroughRef(ref text: string): void { text = text + "!"; text += "?"; text += "ab"; }
 let locationReads: int32 = 0;
 function selectedIndex(): int32 { locationReads++; return 1; }
 
@@ -477,4 +478,10 @@ test "valueLocations: a pointer variable has an address of its own" {
 	const view: Span<Ptr<StoredValue>> = slots;
 	const firstSlot = view as Ptr<Ptr<StoredValue>>;
 	assert firstSlot[][].n == 1;
+}
+
+test "valueLocations: a ref string parameter appends to the caller's string" {
+	let text = "hi";
+	appendThroughRef(text);
+	assert text == "hi!?ab";
 }
