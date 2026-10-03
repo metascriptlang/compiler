@@ -21,9 +21,9 @@ import { inlineHeaderImports, createFileSystemProvider } from "../module/loader"
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable } from "./compat";
-import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType } from "./types";
+import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType, findViewType, ownedAlternativeOf } from "./types";
 setConditionalAssignFn(isAssignable);
-import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, forgetInstances, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults } from "./instantiate";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
@@ -773,7 +773,21 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	if (node.flags.has(NodeFlag.StaticStorage)) {
 		checkStaticStorageDecl(ctx, node, d);
 	}
+	refuseStoredView(ctx, node, d, varType);
 	// `let x;` with no initializer → NOT marked → will warn on use
+}
+
+function refuseStoredView(ctx: CheckerContext, node: Node, d: VariableDeclData, varType: Type | null): void {
+	if (node.resolvedSym == null || varType == null) return;
+	if (!hasFlag(node.resolvedSym, SymbolFlag.Global)) {
+		refuseNestedView(ctx, "'" + d.declName + "'", varType, d.nameLocation.line, d.nameLocation.column);
+		return;
+	}
+	const view = findViewType(varType);
+	if (view == null) return;
+	addError(ctx, "'" + d.declName + "' lives for the whole program and cannot hold " + typeDisplayName(view)
+		+ ": a view borrows memory its source can free first — bind it inside a function, or store " + ownedAlternativeOf(view),
+		d.nameLocation.line, d.nameLocation.column);
 }
 
 function checkStaticStorageDecl(ctx: CheckerContext, node: Node, d: VariableDeclData): void {

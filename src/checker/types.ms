@@ -1671,6 +1671,51 @@ export function withoutReadonlyView(t: Type | null): Type {
 	return c;
 }
 
+export function isViewKind(t: Type | null): boolean {
+	return t != null && (t.kind == TypeKind.Span || t.kind == TypeKind.Borrow
+		|| t.kind == TypeKind.Lent || t.kind == TypeKind.Var);
+}
+
+// Struct and class fields are not descended: a field never holds a view (refused at its declaration).
+export function findViewType(t: Type | null): Type | null {
+	return findViewTypeAt(t, 0);
+}
+
+function findViewTypeAt(t: Type | null, depth: int32): Type | null {
+	if (t == null || depth > 8) return null;
+	if (isViewKind(t)) return t;
+	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Ref
+			|| t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias || t.kind == TypeKind.Sink) {
+		return findViewTypeAt(t.typeReturn, depth + 1);
+	}
+	if (t.kind == TypeKind.Tuple || t.kind == TypeKind.Union || t.kind == TypeKind.GenericInstance
+			|| t.kind == TypeKind.Varargs) {
+		for (const c of t.typeChildren) {
+			const v = findViewTypeAt(c, depth + 1);
+			if (v != null) return v;
+		}
+	}
+	return null;
+}
+
+export function nestedViewType(t: Type | null): Type | null {
+	let top = t;
+	if (top != null && top.kind == TypeKind.Union && top.typeChildren.length == 2) {
+		const a = top.typeChildren[0];
+		const b = top.typeChildren[1];
+		if (a != null && a.kind == TypeKind.Null) top = b;
+		else if (b != null && b.kind == TypeKind.Null) top = a;
+	}
+	if (top != null && top.kind == TypeKind.Var && top.typeReturn != null && top.typeReturn.kind == TypeKind.Span) top = top.typeReturn;
+	if (isViewKind(top)) return findViewType(top!.typeReturn);
+	return findViewType(top);
+}
+
+export function ownedAlternativeOf(view: Type): string {
+	const elem = view.typeReturn != null ? typeDisplayName(view.typeReturn) : "T";
+	return view.kind == TypeKind.Span ? "an owning " + elem + "[] (copy it with [...x])" : "a " + elem + " value";
+}
+
 // The T of a Locked<T> — the cell's third field. Null for anything else.
 export function lockedPayloadType(t: Type | null): Type {
 	if (!isLockedRef(t) || t.typeReturn == null) return null as unknown as Type;
