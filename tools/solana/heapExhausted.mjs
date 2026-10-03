@@ -61,7 +61,7 @@ check("the host simulator says the same thing",
 	readFileSync(new URL("../../runtime/solana/host.c", import.meta.url), "utf8")
 		.includes("the 32 KiB program heap is exhausted (asked %llu more bytes at %llu)"));
 
-async function run(op, count) {
+async function run(op, count, accounts = [program]) {
 	const message = pipe(
 		createTransactionMessage({ version: 0 }),
 		(m) => setTransactionMessageFeePayerSigner(payer, m),
@@ -69,7 +69,7 @@ async function run(op, count) {
 		(m) => appendTransactionMessageInstruction({ programAddress: address("ComputeBudget111111111111111111111111111111"), accounts: [], data: budget }, m),
 		(m) => appendTransactionMessageInstruction({
 			programAddress: program,
-			accounts: [{ address: program, role: AccountRole.READONLY }],
+			accounts: accounts.map((key) => ({ address: key, role: AccountRole.READONLY })),
 			data: new Uint8Array([op, count & 0xff, count >> 8]),
 		}, m),
 	);
@@ -112,6 +112,20 @@ function namedFailure(label, outcome) {
 	const [, kib, asked, position] = outcome.named;
 	check(`${label}: the log states the heap size (${kib} KiB)`, Number(kib) * 1024 === HEAP);
 	return { asked: BigInt(asked), position: BigInt(position) };
+}
+
+{
+	const name = "account table";
+	const others = [];
+	for (let seed = 0; seed < 30; seed++) others.push((await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(100 + seed))).address);
+	const listOf = (total) => Array.from({ length: total }, (_, at) => (at === 0 ? program : others[(at - 1) % others.length]));
+	const single = await run(OPS.request, 0);
+	check(`[${name}] one account runs and logs the heap position ${single.value}`, single.ok && single.value !== null);
+	for (const total of [2, 17, 64, 255]) {
+		const outcome = await run(OPS.request, 0, listOf(total));
+		check(`[${name}] ${total} accounts leave the heap position at ${single.value} (${outcome.ok ? "" : `${outcome.error}, `}${outcome.value})`,
+			outcome.ok && outcome.value === single.value);
+	}
 }
 
 {
