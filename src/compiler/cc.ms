@@ -2,9 +2,9 @@
 //
 // Invokes clang to compile generated C source into native binaries.
 
-import { exec, env, cmdExists, findOnPath, platform, exit, execFileCapture, processError, ProcessError, ProcessErrorKind } from "std/process";
+import { exec, env, cmdExists, findOnPath, platform, exit, execFileCapture, execFileResult, processError, ProcessError, ProcessErrorKind } from "std/process";
 import { writeFile, ensureDir, exists, readDir, remove } from "std/fs";
-import { join, dirname } from "std/fs/path";
+import { join, dirname, basename } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { CliOptions, MODE_DANGER, buildCpu } from "./options";
 import { renameReplace, atomicWriteFile, stopBuild } from "./io";
@@ -681,6 +681,173 @@ function runCc(command: ToolCommand, args: string[]): Result<string, ProcessErro
 	return execFileCapture(command.path, args);
 }
 
+// zig cc's own cache pass costs more than clang/lld on a small input: its `-###` plan run
+// directly gives the same output faster (WSL 2026-10-03: compile 64→40 ms, link 39→10 ms).
+export struct CcPlan {
+	exe: string;
+	args: string[];
+	input: string;
+	output: string;
+	outputStem: string;
+	deps: string;
+}
+
+export const NO_PLAN: CcPlan = { exe: "", args: [], input: "", output: "", outputStem: "", deps: "" };
+
+const PLAN_TAG = "msc-plan-";
+let _planDir = "";
+const _plans = new HashMap<string, CcPlan>();
+let _plansOn = false;
+
+export function useDriverPlans(on: boolean): void {
+	_plansOn = on;
+}
+
+function planDir(): string {
+	if (_planDir != "") return _planDir;
+	const temp = env.get("TEMP") != "" ? env.get("TEMP") : env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
+	_planDir = join(temp, "msc-plan");
+	ensureDir(_planDir);
+	return _planDir;
+}
+
+function isZigDriver(command: ToolCommand): boolean {
+	const name = basename(command.path).toLowerCase();
+	return (name == "zig" || name == "zig.exe") && command.args.length > 0 && (command.args[0] == "cc" || command.args[0] == "c++");
+}
+
+function withoutExtension(path: string): string {
+	const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+	const dot = path.lastIndexOf(".");
+	return dot > slash ? path.substring(0, dot) : path;
+}
+
+function planTokens(line: string): string[] {
+	const tokens: string[] = [];
+	const n = line.length;
+	let i = 0;
+	while (i < n) {
+		while (i < n && (line.charCodeAt(i) == 32 || line.charCodeAt(i) == 9 || line.charCodeAt(i) == 13)) i += 1;
+		if (i >= n) break;
+		if (line.charCodeAt(i) != 34) {
+			const start = i;
+			while (i < n && line.charCodeAt(i) != 32 && line.charCodeAt(i) != 9 && line.charCodeAt(i) != 13) i += 1;
+			tokens.push(line.substring(start, i));
+			continue;
+		}
+		i += 1;
+		const pieces: string[] = [];
+		let start = i;
+		while (i < n && line.charCodeAt(i) != 34) {
+			if (line.charCodeAt(i) == 92 && i + 1 < n) {
+				pieces.push(line.substring(start, i));
+				start = i + 1;
+				i += 2;
+				continue;
+			}
+			i += 1;
+		}
+		pieces.push(line.substring(start, i));
+		tokens.push(pieces.join(""));
+		i += 1;
+	}
+	return tokens;
+}
+
+function capturePlan(command: ToolCommand, argv: string[], isLink: boolean, input: string, output: string, outputStem: string, deps: string): CcPlan {
+	const r = execFileResult(command.path, argv);
+	if (!r.started || r.exitCode != 0 || r.signal != 0) return NO_PLAN;
+	const lines: string[] = [];
+	for (const raw of `${r.errorOutput}\n${r.output}`.split("\n")) {
+		const line = raw.trim();
+		const isPlanLine = isLink
+			? line.startsWith("ld.lld ") || line.startsWith("lld-link ")
+			: line.indexOf("\"-cc1\"", 0) >= 0;
+		if (isPlanLine) lines.push(line);
+	}
+	if (lines.length != 1) return NO_PLAN;
+	const tokens = planTokens(lines[0]);
+	if (tokens.length < 2) return NO_PLAN;
+	let inputs = 0;
+	let outputs = 0;
+	let depFiles = 0;
+	for (const token of tokens) {
+		if (token.indexOf(PLAN_TAG, 0) < 0) continue;
+		if (token == input) inputs += 1;
+		else if (token == output) outputs += 1;
+		else if (deps != "" && token == deps) depFiles += 1;
+		else if (!isLink && token == basename(input)) continue;
+		else if (outputStem != "" && token.indexOf(outputStem, 0) >= 0) continue;
+		else return NO_PLAN;
+	}
+	if (inputs != 1 || (!isLink && outputs != 1) || depFiles != (deps != "" ? 1 : 0)) return NO_PLAN;
+	const args: string[] = [];
+	for (let k = isLink ? 0 : 1; k < tokens.length; k += 1) args.push(tokens[k]);
+	return { exe: isLink ? command.path : tokens[0], args, input, output, outputStem, deps };
+}
+
+function planArgs(plan: Readonly<CcPlan>, inputs: string[], output: string, deps: string): string[] {
+	const args: string[] = [];
+	const realStem = withoutExtension(output);
+	for (const token of plan.args) {
+		if (token == plan.input) {
+			for (const input of inputs) args.push(input);
+		} else if (token == plan.output) {
+			args.push(output);
+		} else if (plan.deps != "" && token == plan.deps) {
+			args.push(deps);
+		} else if (plan.outputStem == "" && token == basename(plan.input)) {
+			args.push(basename(inputs[0]));
+		} else if (plan.outputStem != "" && token.indexOf(plan.outputStem, 0) >= 0) {
+			args.push(token.replaceAll(plan.outputStem, realStem));
+		} else {
+			args.push(token);
+		}
+	}
+	return args;
+}
+
+export function compilePlanFor(cFile: string, hasDeps: boolean, extraFlags: string, mode: number, ccOption: number, ccBinary: string): CcPlan {
+	const isCpp = isCppFile(cFile);
+	const parts = objectCompileArgs(ccOption, ccBinary, isCpp, mode, extraFlags);
+	if (!_plansOn || !parts.ok || !isZigDriver(parts.value.command)) return NO_PLAN;
+	const dir = planDir();
+	const input = join(dir, `${PLAN_TAG}input${isCpp ? ".cpp" : ".c"}`);
+	const output = join(dir, `${PLAN_TAG}output.o`);
+	const deps = hasDeps ? join(dir, `${PLAN_TAG}deps.d`) : "";
+	const argv = objectCompileArgv(parts.value, input, output, deps);
+	const key = `${parts.value.command.path}\n${argv.join("\n")}`;
+	const known = _plans.get(key);
+	if (known != null) return known;
+	if (!exists(input)) writeFile(input, "");
+	argv.push("-###");
+	const plan = capturePlan(parts.value.command, argv, false, input, output, "", deps);
+	_plans.set(key, plan);
+	return plan;
+}
+
+function linkPlanFor(command: ToolCommand, prefix: string[], flagArgs: string[], outBinary: string): CcPlan {
+	if (!_plansOn || !isZigDriver(command)) return NO_PLAN;
+	const dir = planDir();
+	const input = join(dir, `${PLAN_TAG}input.o`);
+	const stem = join(dir, `${PLAN_TAG}output`);
+	const output = `${stem}${outBinary.substring(withoutExtension(outBinary).length, outBinary.length)}`;
+	const argv: string[] = [];
+	for (const arg of prefix) argv.push(arg);
+	argv.push(input);
+	for (const arg of flagArgs) argv.push(arg);
+	argv.push("-o");
+	argv.push(output);
+	const key = `${command.path}\n${argv.join("\n")}`;
+	const known = _plans.get(key);
+	if (known != null) return known;
+	if (!exists(input)) writeFile(input, "");
+	argv.push("-###");
+	const plan = capturePlan(command, argv, true, input, output, stem, "");
+	_plans.set(key, plan);
+	return plan;
+}
+
 export struct ObjectCompileArgs {
 	command: ToolCommand;
 	lead: string[];
@@ -740,32 +907,45 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 
 // Compile a .c file to an object file only (-c flag, no linking).
 // Returns Result.ok on exit-code 0; Result.err carries gcc/clang stderr.
-export function compileCFile(cFile: string, oFile: string, dependencyFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
-	ensureDir(dirname(oFile));
-	const parts = objectCompileArgs(ccOption, ccBinary, isCppFile(cFile), mode, extraFlags);
-	if (!parts.ok) return Result.err(parts.error);
-	const command = parts.value.command;
+function objectCompileArgv(parts: ObjectCompileArgs, cFile: string, oFile: string, depFile: string): string[] {
 	const args: string[] = [];
-	for (const arg of parts.value.lead) args.push(arg);
+	for (const arg of parts.lead) args.push(arg);
 	const rtDir = resolveRuntime();
 	if (rtDir != "") args.push(`-iquote${dirname(dirname(rtDir))}`);
-	const tmp = `${oFile}.tmp.${performance.now()}`;
-	let depTmp = "";
-	if (dependencyFile != "") {
-		ensureDir(dirname(dependencyFile));
-		depTmp = `${dependencyFile}.tmp.${performance.now()}`;
+	if (depFile != "") {
 		args.push("-MMD");
 		args.push("-MF");
-		args.push(depTmp);
+		args.push(depFile);
 		args.push("-MT");
 		args.push("native");
 	}
 	args.push("-c");
 	args.push(cFile);
 	args.push("-o");
-	args.push(tmp);
-	for (const arg of parts.value.trail) args.push(arg);
-	const r = runCc(command, args);
+	args.push(oFile);
+	for (const arg of parts.trail) args.push(arg);
+	return args;
+}
+
+export function compileCFile(cFile: string, oFile: string, dependencyFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string, plan: Readonly<CcPlan> = NO_PLAN): Result<void, ProcessError> {
+	ensureDir(dirname(oFile));
+	const parts = objectCompileArgs(ccOption, ccBinary, isCppFile(cFile), mode, extraFlags);
+	if (!parts.ok) return Result.err(parts.error);
+	const command = parts.value.command;
+	const tmp = `${oFile}.tmp.${performance.now()}`;
+	let depTmp = "";
+	if (dependencyFile != "") {
+		ensureDir(dirname(dependencyFile));
+		depTmp = `${dependencyFile}.tmp.${performance.now()}`;
+	}
+	const args = objectCompileArgv(parts.value, cFile, tmp, depTmp);
+	let r: Result<string, ProcessError> = Result.err(processError(ProcessErrorKind.Unknown, command.path, "not run"));
+	let planned = false;
+	if (plan.exe != "") {
+		r = runCc({ path: plan.exe, args: [] }, planArgs(plan, [cFile], tmp, depTmp));
+		planned = r.ok;
+	}
+	if (!planned) r = runCc(command, args);
 	if (!r.ok) {
 		remove(tmp);
 		if (depTmp != "") remove(depTmp);
@@ -814,11 +994,13 @@ export function linkObjects(oFiles: string[], outBinary: string, extraFlags: str
 	const prefix = command.args;
 	const rtDir = resolveRuntime();
 	if (rtDir != "") prefix.push(`-iquote${dirname(dirname(rtDir))}`);
+	const flagArgs: string[] = [];
+	const flags = appendParsedFlags(command.path, flagArgs, extraFlags);
+	if (!flags.ok) return Result.err(flags.error);
+	if (!flagArgs.includes("-nostdlib") && !flagArgs.includes("-nodefaultlibs")) flagArgs.push("-lm");
 	const bulk: string[] = [];
 	for (const oFile of oFiles) bulk.push(oFile);
-	const flags = appendParsedFlags(command.path, bulk, extraFlags);
-	if (!flags.ok) return Result.err(flags.error);
-	if (!bulk.includes("-nostdlib") && !bulk.includes("-nodefaultlibs")) bulk.push("-lm");
+	for (const arg of flagArgs) bulk.push(arg);
 	const direct: string[] = [];
 	for (const arg of prefix) direct.push(arg);
 	for (const arg of bulk) direct.push(arg);
@@ -827,6 +1009,8 @@ export function linkObjects(oFiles: string[], outBinary: string, extraFlags: str
 
 	let r: Result<string, ProcessError>;
 	if (commandLength(command, direct) <= LINK_CMD_LIMIT) {
+		const plan = linkPlanFor(command, prefix, flagArgs, outBinary);
+		if (plan.exe != "" && runCc({ path: plan.exe, args: [] }, planArgs(plan, oFiles, outBinary, "")).ok) return Result.ok(null);
 		r = runCc(command, direct);
 	} else {
 		const rspPath = `${outBinary}_link.rsp`;
@@ -874,4 +1058,41 @@ test "the object cache key names every argument compileCFile passes but the file
 	assert key.indexOf("-std=c++17", 0) >= 0;
 	assert key != objectCompileKey(0, "clang -fno-pie", false, 2, "-DVALUE=\"a b\" -Ivendor");
 	assert key != objectCompileKey(0, "clang -fno-pie", true, 2, "-DVALUE=a b -Ivendor");
+}
+
+test "a driver plan line splits into quoted, escaped and bare arguments" {
+	const quoted = planTokens(" \"/opt/zig/zig\" \"-cc1\" \"-DQ=\\\"x y\\\"\" \"C:\\dir\\a.c\"\r");
+	assert quoted.length == 4;
+	assert quoted[0] == "/opt/zig/zig";
+	assert quoted[2] == "-DQ=\"x y\"";
+	assert quoted[3] == "C:\dir\a.c";
+	const bare = planTokens("ld.lld --eh-frame-hdr -shared -o /t/msc-plan-output.so /t/msc-plan-input.o -lc");
+	assert bare.length == 7;
+	assert bare[5] == "/t/msc-plan-input.o";
+}
+
+test "a link plan takes every object at the input's place and the output's stem in derived names" {
+	const plan: CcPlan = {
+		exe: "zig",
+		args: ["lld-link", "-OUT:/t/msc-plan-output.dll", "-PDB:/t/msc-plan-output.pdb", "/t/msc-plan-input.o", "-lc"],
+		input: "/t/msc-plan-input.o",
+		output: "/t/msc-plan-output.dll",
+		outputStem: "/t/msc-plan-output",
+		deps: "",
+	};
+	const args = planArgs(plan, ["a.o", "b.o"], "out/app.logic.dll", "");
+	assert args.join(" ") == "lld-link -OUT:out/app.logic.dll -PDB:out/app.logic.pdb a.o b.o -lc";
+}
+
+test "a compile plan renames the input, its main-file name, the object and the dependency file" {
+	const plan: CcPlan = {
+		exe: "/opt/zig/zig",
+		args: ["-cc1", "-main-file-name", "msc-plan-input.c", "-dependency-file", "/t/msc-plan-deps.d", "-o", "/t/msc-plan-output.o", "-x", "c", "/t/msc-plan-input.c"],
+		input: "/t/msc-plan-input.c",
+		output: "/t/msc-plan-output.o",
+		outputStem: "",
+		deps: "/t/msc-plan-deps.d",
+	};
+	const args = planArgs(plan, ["cache/logic.c"], "cache/logic.o.tmp.1", "cache/logic.d.tmp.1");
+	assert args.join(" ") == "-cc1 -main-file-name logic.c -dependency-file cache/logic.d.tmp.1 -o cache/logic.o.tmp.1 -x c cache/logic.c";
 }

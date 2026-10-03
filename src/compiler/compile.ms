@@ -60,7 +60,7 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto } from "./cc";
+import { compileCFile, compilePlanFor, useDriverPlans, NO_PLAN, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto } from "./cc";
 import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
@@ -1162,18 +1162,21 @@ interface ModuleCompileJob {
 // DISPATCH+JOIN for Phase C module compiles — same architecture as
 // processCompileDirectives: one spawn per job, number-typed futures (stderr
 // printed by the worker), join in input order on the main thread.
-function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string): number[] {
+const PLANNED_COMPILE_JOBS = 4;
+
+function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string, usePlans: boolean): number[] {
 	// Warm lazy cc detection globals on the main thread so workers only read.
 	getCompilerName(ccOption, ccBinary);
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
+		const plan = usePlans ? compilePlanFor(j.cFile, j.depFile != "", j.flags, mode, ccOption, ccBinary) : NO_PLAN;
 		futures.push(spawn(() => {
-			let r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary);
+			let r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary, plan);
 			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn EAGAIN
 				// under fork pressure). One retry absorbs it; real compile errors
 				// have a nonzero exitCode and are not retried.
-				r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary);
+				r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary, plan);
 			}
 			if (r.ok) return 0;
 			printDiag(r.error.errorOutput != "" ? r.error.errorOutput : `${r.error.command}: ${r.error.message}`);
@@ -2322,6 +2325,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	resolveTargetGcMode(opts);
 	resolveCC(opts);
 	resolveLto(opts);
+	useDriverPlans(session.keep && opts.isHcr);
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
@@ -2936,7 +2940,7 @@ setGlobalHookOwners(sharedHookOwners);
 	// (as before); module failures print and fall through to the linker so the
 	// serial path's behavior is preserved.
 	const tCl = performance.now();
-	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
+	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary, cJobs.length <= PLANNED_COMPILE_JOBS);
 	clangTime = performance.now() - tCl;
 	let moduleCompileFailed = false;
 	let cji = 0;
@@ -3275,7 +3279,7 @@ setGlobalHookOwners(sharedHookOwners);
 	oSlots.push([]);
 	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", baseFp: "", depFile: "", cacheKey: "", slot: oSlots.length - 1 });
 
-	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
+	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary, cJobs.length <= PLANNED_COMPILE_JOBS);
 	let testFailed = false;
 	let cji = 0;
 	while (cji < cJobs.length) {
