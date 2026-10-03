@@ -572,6 +572,36 @@ test "a dynamic field write is routed only through the setDynamicField declared 
 	assert dynamicWriteErrorsWith("function r(b: BoxB): number { return b.zzz; }") > 0;
 }
 
+function unionReceiverErrorsWith(mainSource: string): int32 {
+	const stdPath = join(resolveRuntimeDir(), "std");
+	const mainPath = "/src/main.ms";
+	const config = createDefaultConfig(backendOfExtension(".cms"), stdPath);
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/a.ms", entrySource: "export type Cell = { kind: \"a\", x: number } | { kind: \"b\", y: string } | { kind: \"c\" };\nexport function getDynamicField(this c: Cell, key: string): number { return 0; }\nexport function describe(this c: Cell): string { return \"cell\"; }" });
+	entries.push({ entryPath: mainPath, entrySource: "import { Cell, describe, getDynamicField } from \"./a\";\n" + mainSource });
+	const provider = createMapProvider(entries);
+	provider.useFileSystem = true;
+	const graph = createModuleGraph();
+	loadStdGlobalImportModules(graph, provider, config);
+	loadModule(graph, mainPath, provider, config, 1);
+	checkModuleGraph(graph, stdPath, ".cms");
+	const main = findModule(graph, moduleIdentity(mainPath, config, provider));
+	if (main == null) return -1;
+	let errors = 0;
+	for (const e of main.errors) {
+		if (e.severity == ErrorSeverity.Error) errors += 1;
+	}
+	return errors;
+}
+
+test "a union's extension and dynamic-field read reach only a receiver of that union, never a variant narrowed out of it" {
+	assert unionReceiverErrorsWith("function r(c: Cell): number { return c.zzz; }") == 0;
+	assert unionReceiverErrorsWith("function d(c: Cell): string { return c.describe(); }") == 0;
+	assert unionReceiverErrorsWith("function n(c: Cell): number { if (c.kind === \"a\") { const v = c.y; return 0; } return 0; }") > 0;
+	assert unionReceiverErrorsWith("function n(c: Cell): void { match (c.kind) { \"a\" => { const v = c.y; }, _ => {} }; }") > 0;
+	assert unionReceiverErrorsWith("function n(c: Cell): string { if (c.kind === \"a\") { return c.describe(); } return \"\"; }") > 0;
+}
+
 function aliasReceiverErrorWith(mainSource: string): string {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/a.ms", entrySource: "export type Hash = int64;\nexport function show(this h: Hash): string { return \"\"; }" });

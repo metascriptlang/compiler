@@ -597,6 +597,8 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	}
 	if (recvNominal != null && objNominal != null) return sameInstanceArgs(recvT, objT);
 	if (recvNominal != null || objNominal != null) return false;
+	const recvObj = addressed(recvT);
+	if (recvObj.kind == TypeKind.Union && recvObj.typeName != "") return sameType(recvObj, addressed(objT));
 	return typeRelation(addressed(withoutReadonlyView(recvT)), addressed(withoutReadonlyView(objT))) != TypeRelation.None;
 }
 
