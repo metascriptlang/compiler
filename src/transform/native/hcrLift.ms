@@ -108,7 +108,7 @@ function extractGlobal(stmt: Node, ctx: TransformContext, index: int32): HcrGlob
 	const node = unwrapDeclaration(stmt);
 	if (node == null || node.kind != NodeKind.VariableDecl) return null as unknown as HcrGlobal;
 	const d = node.data as VariableDeclData;
-	if (d.declName.length > 8 && d.declName.endsWith("TypeInfo")) return null as unknown as HcrGlobal;
+
 	const sym = node.resolvedSym;
 	if (sym == null) {
 		reportTransformError(ctx, `internal: HCR state lifting met module variable '${d.declName}' without a symbol`, node.location);

@@ -9,7 +9,7 @@ import { resetRaises } from "../checker/raises";
 import { resetDuVariantRegistry } from "../checker/types";
 import { resetDuHashes } from "../analyzer/classify";
 import { resetLinkState } from "../utils/linkState";
-import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
+import { resetLiftedOps } from "../transform/lowering/destructorLifting";
 import { ModuleError } from "../module/graph";
 import { monoTypeKey } from "../monomorphize/registry";
 import { HcrIndirectModule } from "../transform/native/hcrIndirect";
@@ -23,12 +23,10 @@ export enum BuildStatus {
 }
 
 export interface LowerClaims {
-	typeInfos: string[];
 	ops: KeyedOp[];
 }
 
 export function sameClaims(a: LowerClaims, b: LowerClaims): boolean {
-	if (a.typeInfos.join(",") != b.typeInfos.join(",")) return false;
 	if (a.ops.length != b.ops.length) return false;
 	for (let i = 0; i < a.ops.length; i += 1) {
 		if (a.ops[i].key != b.ops[i].key || a.ops[i].sym.name != b.ops[i].sym.name) return false;
@@ -95,7 +93,7 @@ export function resetBuildState(): void {
 	resetDuVariantRegistry();
 	resetDuHashes();
 	resetLinkState();
-	setGlobalHookOwners();
+	resetLiftedOps();
 }
 
 export function startSessionBuild(session: BuildSession): void {

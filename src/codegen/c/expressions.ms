@@ -17,7 +17,7 @@ import {
 	isIndirectRef,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, zeroInit, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
@@ -98,9 +98,6 @@ function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string): void 
 	emitStmtsLine(p, `${initName}(${tmp});`);
 }
 
-// Build a msAllocTyped/msAllocTypedUninit call expression. Under --gc=manual,
-// TypeInfo is not emitted so we pass NULL; otherwise we reference the type's
-// TypeInfo global.
 // Strip Sink/Lent ownership modifiers — codegen treats them as transparent wrappers.
 function resolveSinkLent(t: Type | null): Type | null {
 	if (t == null) return null;
@@ -312,21 +309,20 @@ function variantStructCName(g: CGen, unionType: Type, varIdx: number, unionName:
 	}
 	return `${unionName}_v${varIdx}`;}
 
-function genAllocCall(g: CGen, cType: string, fn: string): string {
-	const typeArg = (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) ? "NULL" : `&${cType}TypeInfo`;
-	return `(${cType}*)${fn}(sizeof(${cType}), ${typeArg})`;
+function genAllocCall(g: CGen, cType: string, infoType: Type | null, fn: string): string {
+	return `(${cType}*)${fn}(sizeof(${cType}), ${typeInfoRef(g, infoType)})`;
 }
 
 // Safe default — header + payload zero-initialised. Matches Nim nimNewObj.
-function genAllocTyped(g: CGen, cType: string): string {
-	return genAllocCall(g, cType, "msAllocTyped");
+function genAllocTyped(g: CGen, cType: string, infoType: Type | null): string {
+	return genAllocCall(g, cType, infoType, "msAllocTyped");
 }
 
 // Uninit opt-in: payload stays dirty. Emit ONLY at sites that provably write
 // every payload byte before the next read (e.g. new T(args) with
 // args.length === typeNames.length). Mirrors Nim nimNewObjUninit.
-function genAllocTypedUninit(g: CGen, cType: string): string {
-	return genAllocCall(g, cType, "msAllocTypedUninit");
+function genAllocTypedUninit(g: CGen, cType: string, infoType: Type | null): string {
+	return genAllocCall(g, cType, infoType, "msAllocTypedUninit");
 }
 
 // Pick safe alloc vs Uninit. Uninit requires both: (1) caller already proved
@@ -336,7 +332,7 @@ function genAllocTypedUninit(g: CGen, cType: string): string {
 function pickAllocExpr(g: CGen, cType: string, innerType: Type | null, argsCoverAllFields: boolean): string {
 	const hasBase = innerType != null && innerType.typeExtra != null;
 	const safeUninit = !hasBase && argsCoverAllFields;
-	return safeUninit ? genAllocTypedUninit(g, cType) : genAllocTyped(g, cType);
+	return safeUninit ? genAllocTypedUninit(g, cType, innerType) : genAllocTyped(g, cType, innerType);
 }
 
 // ===== Reference: argument passing for introduced pointers =====
@@ -1084,10 +1080,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 	}
 	if (kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
-		// DRC lifecycle hook reference (TypeInfo literal's destroyFn/traceFn fields).
-		// When the defining module's TypeInfo references hooks that live in another
-		// TU (consumer claimed hook ownership first via split-ownership design),
-		// emit extern forward prototypes so the linker resolves them.
+		// A generated operation owned by another TU needs an extern prototype here.
 		ensureDrcProto(g, d.name, node.resolvedSym);
 		const builtin = node.resolvedSym != null ? node.resolvedSym.builtinKind : "";
 		if (builtin == "NaN") { ctx.results.push("NAN"); return; }
@@ -1384,7 +1377,6 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				cName = genExpr(g, p, d.newCallee);
 				infoType = null as unknown as Type;
 			}
-			ensureTypeInfoDef(g, cName, infoType);
 			// Inline allocation + delegate to `<Class>_init(this, args)`. The ctor
 			// body lives at module top-level as `<Class>_init` (lifted by
 			// `methodToFunction` transform) — no `<Class>_new` wrapper exists any
@@ -1407,7 +1399,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			g.labels += 1;
 			const newTmp = `_new${g.labels}_`;
 			emitProcLocalsLine(p, `${cName}* ${newTmp};`);
-			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName)};`);
+			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName, infoType)};`);
 			if (ctorChildren == null && d.newArguments.length > 0) {
 				addCGenError(g, `internal: the constructor of '${bareTypeName(g, cName)}' has no parameter types for its arguments at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
@@ -1434,17 +1426,16 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		if (node.nodeType != null && node.nodeType.kind == TypeKind.Ref && node.nodeType.typeReturn != null) {
 			const innerType = node.nodeType.typeReturn;
 			const cType = getTypeDesc(g, innerType);
-			ensureTypeInfoDef(g, cType, innerType);
 			if (d.newArguments.length == 0) {
 				if (classHasInitFn(innerType)) {
 					g.labels += 1;
 					const tmp0 = `_new${g.labels}_`;
 					emitProcLocalsLine(p, `${cType}* ${tmp0};`);
-					emitStmtsLine(p, `${tmp0} = ${genAllocTyped(g, cType)};`);
+					emitStmtsLine(p, `${tmp0} = ${genAllocTyped(g, cType, innerType)};`);
 					emitClassInitCall(g, p, cType, tmp0);
 					ctx.results.push(tmp0);
 				} else {
-					ctx.results.push(`${genAllocTyped(g, cType)}`);
+					ctx.results.push(`${genAllocTyped(g, cType, innerType)}`);
 				}
 			} else {
 				pushUnloweredNew(g, ctx, node);
@@ -1474,13 +1465,11 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			return;
 		}
 		const calleeName = genExpr(g, p, d.newCallee);
-		// Ensure cross-module typeInfo is declared
-		ensureTypeInfo(g, calleeName);
 		ensureForwardDecl(g, calleeName);
 		// Constructor check already handled at top of NewExpr handler
 		if (d.newArguments.length == 0) {
 			// No-arg new without constructor: allocate with zero-init
-			ctx.results.push(`${genAllocTyped(g, calleeName)}`);
+			ctx.results.push(`${genAllocTyped(g, calleeName, node.nodeType)}`);
 		} else {
 			pushUnloweredNew(g, ctx, node);
 		}
@@ -1715,9 +1704,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				ctx.results.push("false");
 				return;
 			}
-			const cName = getTypeDesc(g, target);
-			ensureTypeInfoDef(g, cName, target);
-			ctx.results.push(`msIsInstance(${left}, &${cName}TypeInfo)`);
+			ctx.results.push(`msIsInstance(${left}, ${typeInfoRef(g, target)})`);
 			return;
 		}
 		const cOp = mapBinaryOp(g, d.operator);
@@ -2042,9 +2029,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				return;
 			}
 			if (checkedClass.sym == null || !hasFlag(checkedClass.sym!, SymbolFlag.ImportC)) {
-				const cName = getTypeDesc(g, checkedClass);
-				ensureTypeInfoDef(g, cName, checkedClass);
-				ctx.results.push(`((${getTypeDesc(g, node.nodeType)})msObjDownConv((void*)(${expr}), &${cName}TypeInfo))`);
+				ctx.results.push(`((${getTypeDesc(g, node.nodeType)})msObjDownConv((void*)(${expr}), ${typeInfoRef(g, checkedClass)}))`);
 				return;
 			}
 		}
@@ -2393,7 +2378,6 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					// relies on the field already being zero, so we must also require that
 					// no property in this literal is a bare NullLiteral.
 					const innerStruct = (node.nodeType != null && node.nodeType.kind == TypeKind.Ref) ? node.nodeType.typeReturn : node.nodeType;
-					ensureTypeInfoDef(g, cType, innerStruct);
 					emitProcLocalsLine(p, `${cType}* ${tmpName};`);
 					const fieldNames = (innerStruct != null && innerStruct.typeNames != null) ? innerStruct.typeNames : null as unknown as string[];
 					// Bare-NullLiteral keys are skipped by the assignment loop below and
@@ -2443,8 +2427,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					p.labels += 1;
 					const refTmp = `_ref${p.labels}_`;
 					emitProcLocalsLine(p, `${unionWrapName}* ${refTmp};`);
-					ensureTypeInfoDef(g, unionWrapName, unionWrapType);
-					emitStmtsLine(p, `${refTmp} = (${unionWrapName}*)msAllocTyped(sizeof(${unionWrapName}), &${unionWrapName}TypeInfo);`);
+					emitStmtsLine(p, `${refTmp} = (${unionWrapName}*)msAllocTyped(sizeof(${unionWrapName}), ${typeInfoRef(g, unionWrapType)});`);
 					emitStmtsLine(p, `${refTmp}->_tag = ${unionWrapIdx};`);
 					emitStmtsLine(p, `${refTmp}->v${unionWrapIdx} = ${tmpName};`);
 					ctx.results.push(refTmp);
@@ -2921,7 +2904,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		const pointeeType = cd.arguments[0].nodeType;
 		const cType = getTypeDesc(g, pointeeType);
 		const cellCType = getTypeDesc(g, node.nodeType);
-		const tiArg = ensureArcCellTypeInfo(g, pointeeType, cType);
+		const tiArg = ensureArcCellTypeInfo(g, pointeeType);
 		const valTmp = getTemp(p, cType);
 		emitStmtsLine(p, `${valTmp.snippet} = ${argsStr};`);
 		const cellTmp = getTemp(p, cellCType);
@@ -2942,7 +2925,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		const cellType = node.nodeType.typeReturn;
 		const cellCType = getTypeDesc(g, cellType);
 		const handleCType = getTypeDesc(g, node.nodeType);
-		const tiArg = ensureArcCellTypeInfo(g, cellType, cellCType);
+		const tiArg = ensureArcCellTypeInfo(g, cellType);
 		const cellTmp = getTemp(p, handleCType);
 		emitStmtsLine(p, `${cellTmp.snippet} = (${handleCType})msAllocArc(sizeof(${cellCType}), ${tiArg});`);
 		emitStmtsLine(p, `${cellTmp.snippet}->value = ${argList[0]};`);
@@ -3120,14 +3103,12 @@ function ensureMethodDispatcher(g: CGen, baseSym: Symbol, calleeName: string, ov
 		let recvInner = ov.symbolType.typeChildren[0];
 		const castC = getTypeDesc(g, recvInner);
 		if (recvInner.kind == TypeKind.Ref && recvInner.typeReturn != null) recvInner = recvInner.typeReturn;
-		const cInner = getTypeDesc(g, recvInner);
-		ensureTypeInfo(g, cInner);
 		const callArgs = fwdArgs == "" ? `(${castC})p0` : `(${castC})p0, ${fwdArgs}`;
 		const callStr = `${ovName}(${callArgs})`;
 		if (retC == "void") {
-			addLine(s, `  if (msIsInstance(p0, &${cInner}TypeInfo)) { ${callStr}; return; }`);
+			addLine(s, `  if (msIsInstance(p0, ${typeInfoRef(g, recvInner)})) { ${callStr}; return; }`);
 		} else {
-			addLine(s, `  if (msIsInstance(p0, &${cInner}TypeInfo)) return ${callStr};`);
+			addLine(s, `  if (msIsInstance(p0, ${typeInfoRef(g, recvInner)})) return ${callStr};`);
 		}
 	}
 	const baseArgs = fwdArgs == "" ? "p0" : "p0, " + fwdArgs;
@@ -3468,7 +3449,17 @@ test "postfix decrement" { assert exprSnippet("x--;") == "(x--)"; }
 
 test "prefix decrement" { assert exprSnippet("--x;") == "(--x)"; }
 
-test "simple new" { assert exprSnippet("new Foo();") == "(Foo*)msAllocTyped(sizeof(Foo), &FooTypeInfo)"; }
+test "a new expression whose type did not resolve is refused, not given a TypeInfo by name" {
+	const pr = parseSource("new Foo();");
+	assert pr.ok;
+	if (!pr.ok) return;
+	const stmt = (pr.value.data as ProgramData).programStmts[0];
+	const g = createCGen(null as unknown as CheckerContext, "");
+	const p = createProc("test", voidType());
+	genExpr(g, p, (stmt.data as ExprStmtData).expr);
+	assert g.errors.length == 1;
+	assert g.errors[0].message.contains("TypeInfo");
+}
 
 test "move identifier" { assert exprSnippet("move x;") == "x"; }
 

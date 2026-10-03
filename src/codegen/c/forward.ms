@@ -12,7 +12,7 @@ import { ensureDrcProto, procHeader } from "./types";
 // ===== DRC forward prototypes =====
 
 // DRC lifecycle suffixes — single source of truth for hook detection.
-const DRC_SUFFIXES: string[] = ["Destroy", "Copy", "Sink", "WasMoved", "Dup", "Eq", "Trace", "TypeInfo"];
+const DRC_SUFFIXES: string[] = ["Destroy", "Copy", "Sink", "WasMoved", "Dup", "Eq", "Trace"];
 
 function findSuffix(name: string, suffixes: string[]): string {
 	for (const suffix of suffixes) {

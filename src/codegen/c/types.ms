@@ -11,7 +11,7 @@ import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { CGen, CSection, CTypeInfoDemand, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError } from "./context";
+import { CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError } from "./context";
 import { SymbolFlag, hasFlag, makeSymbol, setFlag } from "../../checker/symbol";
 import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName } from "./names";
 import { CheckerContext, newSym } from "../../checker/context";
@@ -923,172 +923,82 @@ export function ensureForwardDecl(g: CGen, typeName: string): void {
 	addLine(sec(g, CSection.ForwardDecls), `#ifndef ${typeName}_DEFINED\ntypedef struct ${typeName} ${typeName};\n#endif`);
 }
 
-// Ensure msTypeInfo extern declaration exists for cross-module new expressions.
-// The owning module emits `msTypeInfo FooTypeInfo;` via destructorLifting (non-static linkage).
-// Consuming modules need `extern msTypeInfo FooTypeInfo;` to reference it.
-export function ensureTypeInfo(g: CGen, className: string): void {
-	// TypeInfo is DRC metadata — unused under --gc=manual (write-only in manual.h).
-	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
-	if (hcrTypeInfoRef(g, className)) return;
-	const key = "typeInfo:" + className;
-	if (typeCacheHas(g.forwTypeCache, key)) return;
-	typeCacheSet(g.forwTypeCache, key, className);
-	addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${className}TypeInfo;`);
+// ===== TypeInfo: one demand-driven emitter keyed by canonical type =====
+
+export function typeInfoSubject(type: Type | null): Type | null {
+	if (type == null) return null;
+	let t = peelTransparentInstance(type);
+	const nullableRef = unwrapRefNullUnion(t);
+	if (nullableRef != null) t = nullableRef;
+	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) {
+		if (t.typeReturn != null) t = t.typeReturn;
+		else if (t.typeChildren.length > 0 && t.typeChildren[0] != null) t = t.typeChildren[0];
+		else return null;
+	}
+	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeInfoSubject(t.typeReturn);
+	if (t.kind == TypeKind.GenericInstance) return t.typeName != "" ? t : null;
+	if (t.kind != TypeKind.Struct && t.kind != TypeKind.Union) return null;
+	return t;
 }
 
-// Ensure msTypeInfo exists for object literal allocation (new Foo()).
-// Reference parity (genTypeInfoV2): ownership-based deduplication.
-// The owning module (has InterfaceDecl/ClassDecl → in declaredThings) emits the definition.
-// Consuming modules emit extern. Compiler-generated types ($Env_*) are always local.
-//
-// Optional `objType` parameter wires the destroyFn field from the type's attachedOps.
-// destructorLifting registers the generated destroy hook's Symbol there
-// (setAttachedOp(type, AttachedDestructor, sym)). When the caller has the Type available, pass
-// it here so the TypeInfo gets `.destroyFn = (msDestroyProc)<mangled-destroy>;`. For
-// types where destructorLifting ALSO emits a full TypeInfo (e.g. user-declared
-// classes/interfaces with explicit InterfaceDecl), both paths assign the same value
-// → harmless duplicate. For compiler-generated types ($Env_*) where destructorLifting
-// only emits hooks (consumer path), this is the ONLY assignment, and missing it
-// causes the env's Promise / Ref / managed fields to leak (async fn pattern).
-// Compiler-generated type names appear in two spellings depending on the stage
-// that produced the string: checker-level "$Env_*" and pre-mangled "dollarEnv_*"
-// (destructorLifting works with the latter). The bare-origin map covers names
-// that went through mangledTypeName.
-export function isCompilerGenCName(g: CGen, cn: string): boolean {
-	if (cn.length == 0) return false;
-	if (cn.slice(0, 1) == "$") return true;
-	if (cn.startsWith("dollarEnv_")) return true;
-	const bare = typeCacheGet(g.typeCache, "bare:" + cn);
-	return bare.length > 0 && bare.slice(0, 1) == "$";
+export function typeInfoCName(subject: Type): string {
+	if (subject.kind == TypeKind.GenericInstance) return mangle(monoInstanceName(subject));
+	if (subject.kind == TypeKind.Union && subject.typeName == "") return anonUnionCName(subject);
+	if (isAnonTypeName(subject.typeName)) return anonTypeName(subject);
+	return resolvedTypeCName(subject, true);
 }
 
-function sharedTypeOp(objType: Type, op: AttachedOp): Symbol | null {
-	const opType = objType.kind == TypeKind.Ref && objType.typeReturn != null ? objType.typeReturn : objType;
-	return getOpByKey(opType, op);
+export function isPrivateTypeInfoSubject(subject: Type): boolean {
+	return subject.typeName.startsWith("$") || subject.typeName.startsWith("dollarEnv_");
 }
 
-export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | null): void {
-	// TypeInfo is DRC metadata — unused under --gc=manual (write-only in manual.h).
-	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
-	if (g.emissionFacts.skippedTypeInfos.has(className)) {
-		addCGenError(g, "internal: TypeInfo '" + className + "' demanded in " + g.modulePath + " but reachability marked it dead — missing edge in markTypeInfoEdge (src/checker/reachability.ms)", 0, 0);
-		return;
-	}
-	const defKey = "typeInfoDef:" + className;
-	if (typeCacheHas(g.forwTypeCache, defKey)) return;
-	typeCacheSet(g.forwTypeCache, defKey, className);
-	// Check if destructorLifting already generated it (via genTypeInfoVar)
-	const key = "typeInfo:" + className;
-	if (typeCacheHas(g.typeCache, key)) return;
-	// Ownership check (reference parity: genTypeInfoV2 routes to owning module).
-	// declaredThings has the mangled name if this module processed InterfaceDecl/ClassDecl/EnumDecl.
-	// Compiler-generated ($Env_*) and monomorphized generics (Map__K_V) are always local.
-	const isCompilerGen = isCompilerGenCName(g, className);
-	// Qualified named types (bare-map hit with a DIFFERENT bare origin) contain
-	// "__" from the module qualifier — only mono instances (bare-map identity
-	// or miss) count as generic here.
-	const bareOrigin = typeCacheGet(g.typeCache, "bare:" + className);
-	const isQualifiedNamed = bareOrigin != "" && bareOrigin != className;
-	const sharedName = (!isQualifiedNamed && className.indexOf("__", 0) >= 0) || className.startsWith("msAnon_");
-	// The declaring module owns the definition even when DCE dropped the decl
-	// arm (interface used only inside one function) — declaredThings alone
-	// misses that case and the extern would resolve to nothing.
-	let ownSym = objType != null ? objType.sym : null;
-	if (ownSym == null && objType != null && objType.typeReturn != null) ownSym = objType.typeReturn.sym;
-	const isDeclaringModule = ownSym != null && ownSym.modulePath == g.modulePath;
-	const isOwner = nameSetHas(g.declaredThings, className) || isCompilerGen || sharedName || isDeclaringModule;
-	if (isOwner && objType == null && sharedName) {
-		addCGenError(g, `internal: TypeInfo '${className}' reached codegen without its type`, 0, 0);
-		return;
-	}
-	if (!isOwner) {
-		ensureTypeInfo(g, className);
-		return;
-	}
-	// Owning module: emit definition + DatInit assignment.
-	// Generics and structural anonymous shapes use weak linkage — multiple modules may emit, linker deduplicates.
-	if (sharedName) {
-		addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${className}TypeInfo;`);
-	} else if (isCompilerGen) {
-		// $-generated types (lambda envs) are only ever referenced in the module
-		// that lifted them — static keeps same-named envs in sibling modules apart.
-		addLine(sec(g, CSection.GlobalVars), `static msTypeInfo ${className}TypeInfo;`);
-	} else if (!hcrTypeInfoRef(g, className)) {
-		addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${className}TypeInfo;`);
-	}
-	// Runtime-visible name keeps the pre-qualification spelling (mangled bare
-	// name) — the DRC ledger prints it and balance guards select rows by it.
-	const runtimeName = bareOrigin != "" ? mangle(bareOrigin) : className;
-	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.name = "${runtimeName}";`);
-	const shown = objType != null ? typeDisplayName(objType.kind == TypeKind.Ref && objType.typeReturn != null ? objType.typeReturn : objType) : "";
-	if (shown != "" && shown != runtimeName) addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.displayName = "${escapeCString(shown)}";`);
-	let destroyHook = "";
-	let destroySym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedDestructor) : null;
-	// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
-	// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
-	// objType resolved here. Read the op lifted for the instance's key instead.
-	if (destroySym == null && sharedName) destroySym = sharedTypeOp(objType!, AttachedOp.AttachedDestructor);
-	if (destroySym != null) {
-		destroyHook = mangle(destroySym.name);
-		ensureDrcProto(g, destroyHook, destroySym);
-	}
-	if (destroyHook.length > 0) {
-		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.destroyFn = (msDestroyProc)${destroyHook};`);
-	}
-	let traceSym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedTrace) : null;
-	if (traceSym == null && sharedName) traceSym = sharedTypeOp(objType!, AttachedOp.AttachedTrace);
-	if (traceSym != null) {
-		const traceHook = mangle(traceSym.name);
-		ensureDrcProto(g, traceHook, traceSym);
-		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.isCyclic = MS_TRUE;`);
-		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.traceFn = (msTraceProc)${traceHook};`);
-	}
-	const parent = objType != null && objType.kind == TypeKind.GenericInstance && runtimeClassSym(objType) != null ? classParentOf(objType) : null;
-	const parentBody = parent != null && parent.kind == TypeKind.Ref ? parent.typeReturn : parent;
-	if (parentBody != null && (parentBody.kind == TypeKind.GenericInstance || parentBody.kind == TypeKind.Struct)) {
-		const baseName = getTypeDesc(g, parentBody);
-		if (parentBody.kind == TypeKind.GenericInstance) ensureTypeInfoDef(g, baseName, parentBody);
-		else ensureTypeInfo(g, baseName);
-		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.base = &${baseName}TypeInfo;`);
-	}
+export function objectTypeInfoKey(subject: Type, modulePath: string): string {
+	const cName = typeInfoCName(subject);
+	return isPrivateTypeInfoSubject(subject) ? `obj|${modulePath}|${cName}` : `obj|${cName}`;
 }
 
-// TypeInfo for an Arc<T> heap cell; destroyFn runs the pointee's destructor on the
-// last atomic ref. Weak linkage (like the ref-array cell) so a box site in a lifted
-// module can emit it — ensureTypeInfoDef only defines in the declaring module, else an
-// undefined symbol. Returns the TypeInfo address, or "NULL" when no cleanup is needed.
-export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type | null, cType: string): string {
+export function arcCellKey(pointee: Type): string {
+	return "arc|" + opTypeKey(pointee);
+}
+
+export function arcCellName(pointee: Type): string {
+	return "msArcCell_" + hashToBase36(opTypeKey(pointee));
+}
+
+function typeInfoPointer(g: CGen, info: Readonly<CTypeInfoDemand>): string {
+	if (!info.moduleLocal && hcrTypeInfoRef(g, info.cName)) return `&${info.cName}TypeInfo`;
+	const forwKey = "typeInfo:" + info.cName;
+	if (!typeCacheHas(g.forwTypeCache, forwKey)) {
+		typeCacheSet(g.forwTypeCache, forwKey, info.cName);
+		addLine(sec(g, CSection.ForwardDecls), `${info.moduleLocal ? "static" : "extern"} msTypeInfo ${info.cName}TypeInfo;`);
+	}
+	return `&${info.cName}TypeInfo`;
+}
+
+function demandedTypeInfo(g: CGen, key: string, what: string): Readonly<CTypeInfoDemand> | null {
+	const info = g.emissionFacts.typeInfos.readonlyGet(key);
+	if (info == null) {
+		addCGenError(g, `internal: ${what} TypeInfo ${key} demanded in ${g.modulePath} without a reachability edge`, 0, 0);
+		return null;
+	}
+	return info;
+}
+
+export function typeInfoRef(g: CGen, type: Type | null): string {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
-	// The cell symbol must be a valid C identifier. A Ref/Ptr pointee's C spelling
-	// ends in `*` (e.g. `Box__M6…*`); a raw `cType + "Arc"` embeds the star and
-	// emits `msTypeInfo Box__M6…*ArcTypeInfo;` — not C. mangle is the established
-	// sanitizer (`*` → `star_`) and is the identity for identifier-safe spellings,
-	// so existing cells keep their names and weak cells still dedupe across modules.
-	const cellName = mangle(cType) + "Arc";
-	const tiRef = `&${cellName}TypeInfo`;
-	const key = "arcCell:" + cellName;
-	if (typeCacheHas(g.forwTypeCache, key)) return tiRef;
-	typeCacheSet(g.forwTypeCache, key, cellName);
-	let destroyHook = "";
-	// Wire destroyFn only when the pointee actually carries owned refs — the same
-	// predicate the ref-array cell uses to pick its walker (registerArrayOps).
-	// A POD pointee's hook function is dropped by reachability (no AST call edge
-	// exists — the analyzer injects no destroys for POD temps), so wiring the
-	// name is an undefined symbol at link. types.h documents destroyFn == NULL
-	// as the "no RC fields" convention; the destroy dispatch skips NULL.
-	if (pointeeType != null && hasDestructor(pointeeType) && arrayElementNeedsCleanup(pointeeType)) {
-		const hookSym = getAttachedOp(pointeeType, AttachedOp.AttachedDestructor);
-		if (hookSym != null) {
-			destroyHook = mangle(hookSym.name);
-			ensureDrcProto(g, destroyHook, hookSym);
-		}
+	const subject = typeInfoSubject(type);
+	if (subject == null) {
+		addCGenError(g, `internal: a TypeInfo was requested in ${g.modulePath} for a type that has none`, 0, 0);
+		return "NULL";
 	}
-	addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${cellName}TypeInfo;`);
-	addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.name = "${cellName}";`);
-	if (destroyHook.length > 0) {
-		addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.destroyFn = (msDestroyProc)${destroyHook};`);
-	}
-	return tiRef;
+	const info = demandedTypeInfo(g, objectTypeInfoKey(subject, g.modulePath), "object");
+	return info == null ? "NULL" : typeInfoPointer(g, info);
+}
+
+export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type): string {
+	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
+	const info = demandedTypeInfo(g, arcCellKey(pointeeType), "Arc cell");
+	return info == null ? "NULL" : typeInfoPointer(g, info);
 }
 
 export function refArrayCellKey(arrT: Type): string {
@@ -1120,22 +1030,12 @@ export function hcrTypeInfoRef(g: CGen, cName: string): boolean {
 export function ensureRefArrayCellTypeInfo(g: CGen, arrT: Type): string {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
 	const key = refArrayCellKey(arrT);
-	const info = g.emissionFacts.typeInfos.readonlyGet(key);
-	if (info == null) {
-		addCGenError(g, `internal: ref-array cell TypeInfo ${key} demanded in ${g.modulePath} without a reachability edge`, 0, 0);
-		return "NULL";
-	}
-	if (hcrTypeInfoRef(g, info.cName)) return `&${info.cName}TypeInfo`;
-	const forwKey = "typeInfo:" + info.cName;
-	if (!typeCacheHas(g.forwTypeCache, forwKey)) {
-		typeCacheSet(g.forwTypeCache, forwKey, info.cName);
-		addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${info.cName}TypeInfo;`);
-	}
-	return `&${info.cName}TypeInfo`;
+	const info = demandedTypeInfo(g, key, "ref-array cell");
+	return info == null ? "NULL" : typeInfoPointer(g, info);
 }
 
 function refArrayCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
-	const arrT = info.cell.typeReturn!;
+	const arrT = info.subject.typeReturn!;
 	const arrCType = getTypeDesc(g, arrT);
 	const elem = arrayOpElement(arrT.typeReturn);
 	if (arrCType == "msRefArray" && opCName(info.destroy) == "msNumberArrayDestroy") return "msPtrArrayRefCell";
@@ -1149,26 +1049,49 @@ function refArrayCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 	return (bare != "" ? getArrayTypeName(bare) : arrCType) + "RefCell";
 }
 
+function objectTypeInfoLabel(info: Readonly<CTypeInfoDemand>): string {
+	const t = info.subject;
+	if (t.kind == TypeKind.GenericInstance || t.sym == null || t.typeName.indexOf("__", 0) >= 0 || isAnonTypeName(t.typeName)) return info.cName;
+	return mangle(t.typeName);
+}
+
+function typeInfoLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
+	return match (info.kind) {
+		TypeInfoKind.RefArrayCell => refArrayCellLabel(g, info),
+		TypeInfoKind.Object => objectTypeInfoLabel(info),
+		TypeInfoKind.ArcCell => mangle(getTypeDesc(g, info.subject)) + "Arc",
+		TypeInfoKind.PromiseAllCell => info.cName,
+	};
+}
+
 export function emitOwnedTypeInfos(g: CGen): void {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
 	const viaRegistry = isHcrImageModule(g, g.modulePath);
 	for (const info of g.emissionFacts.typeInfoOrder) {
 		if (info.owner != g.modulePath) continue;
-		const destroyName = opCName(info.destroy);
-		ensureDrcProto(g, destroyName, info.destroy);
+		let destroyName = "NULL";
+		if (info.destroy != null) {
+			destroyName = opCName(info.destroy);
+			ensureDrcProto(g, destroyName, info.destroy);
+		}
 		let traceName = "NULL";
 		if (info.trace != null) {
 			traceName = opCName(info.trace);
 			ensureDrcProto(g, traceName, info.trace);
 		}
-		const fields = `.name = "${refArrayCellLabel(g, info)}", .isCyclic = ${info.trace != null ? "MS_TRUE" : "MS_FALSE"}, `
-			+ `.traceFn = (msTraceProc)${traceName}, .destroyFn = (msDestroyProc)${destroyName}, .flags = 0, .base = NULL`;
-		if (viaRegistry && !hcrTypeInfoRef(g, info.cName)) {
+		let baseRef = "NULL";
+		if (info.baseKey != "") {
+			const base = demandedTypeInfo(g, info.baseKey, "base class");
+			if (base != null) baseRef = typeInfoPointer(g, base);
+		}
+		const fields = `.name = "${typeInfoLabel(g, info)}", .isCyclic = ${info.trace != null ? "MS_TRUE" : "MS_FALSE"}, `
+			+ `.traceFn = (msTraceProc)${traceName}, .destroyFn = (msDestroyProc)${destroyName}, .flags = 0, .base = ${baseRef}`;
+		if (viaRegistry && !info.moduleLocal && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);
 			continue;
 		}
-		if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${info.cName}TypeInfo = (msTypeInfo){ ${fields} };`);
-		else addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${info.cName}TypeInfo = { ${fields} };`);
+		if (viaRegistry && !info.moduleLocal) addLine(sec(g, CSection.DatInit), `  ${info.cName}TypeInfo = (msTypeInfo){ ${fields} };`);
+		else addLine(sec(g, CSection.GlobalVars), `${info.moduleLocal ? "static " : ""}msTypeInfo ${info.cName}TypeInfo = { ${fields} };`);
 	}
 }
 
@@ -1398,7 +1321,7 @@ function genEnumType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 	typeCacheSet(g.typeCache, key, name);
 	if (t.typeName != "") {
-		typeCacheSet(g.typeCache, "cname:" + t.typeName, name);
+		typeCacheSet(g.typeCache, "decl:" + name, name);
 		typeCacheSet(g.typeCache, "bare:" + name, t.typeName);
 	}
 
@@ -1438,7 +1361,7 @@ function genObjectType(g: CGen, t: Type): string {
 	const cTypeName = name;
 	typeCacheSet(g.typeCache, key, cTypeName);
 	if (!isAnonTypeName(t.typeName) && t.typeName != "") {
-		typeCacheSet(g.typeCache, "cname:" + t.typeName, cTypeName);
+		typeCacheSet(g.typeCache, "decl:" + cTypeName, cTypeName);
 		typeCacheSet(g.typeCache, "bare:" + cTypeName, t.typeName);
 	}
 
@@ -1526,7 +1449,7 @@ function genUnionType(g: CGen, t: Type): string {
 	const name = (t.typeName.length > 0) ? typeIdentityName(g, t) : anonUnionCName(t);
 	typeCacheSet(g.typeCache, key, name);
 	if (t.typeName.length > 0) {
-		typeCacheSet(g.typeCache, "cname:" + t.typeName, name);
+		typeCacheSet(g.typeCache, "decl:" + name, name);
 		typeCacheSet(g.typeCache, "bare:" + name, t.typeName);
 	}
 	ensureForwardDecl(g, name);
@@ -1580,7 +1503,7 @@ function genUnionType(g: CGen, t: Type): string {
 			if (existing != "") {
 				canonical = existing;
 			} else if (variant.typeName != "" && !isAnonTypeName(variant.typeName)
-					&& typeCacheGet(g.typeCache, "cname:" + variant.typeName) != "") {
+					&& typeCacheHas(g.typeCache, "decl:" + structIdentityName(g, variant))) {
 				canonical = getTypeDesc(g, variant);
 			} else {
 				typeCacheSet(g.typeCache, varKey, varName);
@@ -2058,7 +1981,7 @@ function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem:
 }
 
 // Emit the MS_DEFINE_FUTURE_THEN_BOXED instance for a boxed value type and return its
-// name. The drop is the type's destructor hook, found the way ensureTypeInfoDef finds it.
+// name. The drop is the type's destructor hook.
 export function ensureFutureThenBoxedInstance(g: CGen, innerType: Type, byRef: boolean): string {
 	const innerDesc = getTypeDesc(g, innerType);
 	const name = (byRef ? "msFutureThenBoxedRef_" : "msFutureThenBoxed_") + mangle(innerDesc);
@@ -2471,11 +2394,18 @@ test "a sealed op table serves known ops and refuses a new one" {
 	assert refused.contains("SealNew");
 }
 
-test "a shared TypeInfo that reaches codegen without its type is an error" {
+test "a TypeInfo demanded without a reachability edge is an error naming the type" {
 	const g = createCGen(null as unknown as CheckerContext, "consumer.ms");
-	ensureTypeInfoDef(g, "msAnon_deadbeef", null);
+	const t = declaredHere(createStruct("Undemanded", ["v"], [createPrimitive(TypeKind.String)], true));
+	typeInfoRef(g, createRef(t));
 	assert g.errors.length == 1;
-	assert g.errors[0].message.contains("without its type");
+	assert g.errors[0].message.contains("without a reachability edge");
+}
+
+test "a TypeInfo requested for a type that has none is an error" {
+	const g = createCGen(null as unknown as CheckerContext, "consumer.ms");
+	typeInfoRef(g, createPrimitive(TypeKind.String));
+	assert g.errors.length == 1;
 }
 
 test "a hook base name comes from the type's own symbol, not from a table lookup by name" {

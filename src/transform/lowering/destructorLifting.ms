@@ -12,14 +12,13 @@
 //   cyclicType()           — cycle detection for ORC
 //   checkSelfAssignment()  — early return on dest === src
 //
-// Generates up to 6 hooks per type + TypeInfo:
+// Generates up to 6 hooks per type:
 //   =destroy   TypeName_destroy(self)            — cleanup RC fields
 //   =copy      TypeName_copy(dest, src)          — deep copy (assign + incref)
 //   =sink      TypeName_sink(dest, src)          — move (transfer ownership)
 //   =wasMoved  TypeName_wasMoved(self)           — zero RC handles after move
 //   =dup       TypeName_dup(src): TypeName       — clone (init + copy, return)
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
-//   TypeInfo   TypeName_typeInfo                  — msTypeInfo for ORC runtime
 
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet } from "../context";
@@ -41,34 +40,8 @@ import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
 import { sizedArrayHookName } from "../../analyzer/classify";
 
-// ===== Global TypeInfo Ownership Registry =====
-let _globalTypeInfoOwners: NameSet = createNameSet();
-
-export function setGlobalHookOwners(): void {
-	_globalTypeInfoOwners = createNameSet();
+export function resetLiftedOps(): void {
 	resetHookSyms();
-}
-
-export function typeInfoOwnerMark(): int32 {
-	return _globalTypeInfoOwners.items.length as int32;
-}
-
-export function typeInfoOwnersFrom(mark: int32): string[] {
-	const taken: string[] = [];
-	for (let i = mark; i < _globalTypeInfoOwners.items.length; i += 1) taken.push(_globalTypeInfoOwners.items[i]);
-	return taken;
-}
-
-export function replayTypeInfoOwners(names: string[]): void {
-	for (const name of names) nameSetAdd(_globalTypeInfoOwners, name);
-}
-
-function isTypeInfoGloballyOwned(typeName: string): boolean {
-	return nameSetContains(_globalTypeInfoOwners, typeName);
-}
-
-function claimGlobalTypeInfo(typeName: string): void {
-	nameSetAdd(_globalTypeInfoOwners, typeName);
 }
 
 // ===== Lift Context (reference TLiftCtx) =====
@@ -650,7 +623,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			if (resolvedName != "") {
 				// Reference parity: trace only emits for cyclic field types (defaultOp is no-op for trace)
 				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
-					// Field-recursion is a CONSUMER path — skip TypeInfo emission.
+					// Field-recursion is a CONSUMER path.
 					ensureHooks(resolvedName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(fieldType, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, buf, loc);
@@ -750,7 +723,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				stringOp(hook, xf, yf, fieldName, buf, loc);
 			} else if (fieldType.typeName != "") {
 				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
-					// Field-recursion is a CONSUMER path — skip TypeInfo emission.
+					// Field-recursion is a CONSUMER path.
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(fieldType, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, buf, loc);
@@ -1437,53 +1410,12 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 // ===== Ensure Type Hooks — unified entry (handles named class/interface,
 // named struct, anonymous struct, generic instance, union) =====
 //
-// Single dispatch replaces the old `ensureTypeHooks(typeName)` /
-// `ensureTypeHooksForType(objType, refType)` pair. Prior dual-path design had
-// a DRY violation that caused a race: Path B (walker-driven) could claim
-// global ownership for a named class (e.g. Symbol) before Path A
-// (ClassDecl-driven) emitted the `<T>TypeInfo` global, leaving link errors on
-// `msAllocTyped(sizeof(T), &TTypeInfo)` call sites. See
-// `docs/KNOWN-ISSUES.md` / memory `project_actor_toplevel_bug.md` for context.
-//
 // Contract:
 //   - `typeName` — required (anonymous types with typeName === "" can't name hooks; early return).
 //   - `objType` — the struct/union type whose fields the hooks walk.
 //   - `refType` — non-null iff caller already knows this is a Ref<Struct> (class/interface).
 //     When null, the function looks up the symbol by name and infers class/interface status.
-//   - Marks `lctx.generated` at the end of a successful emission, never before TypeInfo is emitted.
-
-// Emit a minimal msTypeInfo for a class/interface with no RC fields. Needed so
-// `msAllocTyped(sizeof(T), &TTypeInfo)` links; destroyFn / traceFn are null.
-function emitMinimalTypeInfo(cName: string, typeName: string, objType: Type, loc: SourceLocation, lctx: LiftCtx): void {
-	const keys = ["name", "cname", "isCyclic", "traceFn", "destroyFn"];
-	const vals = [makeString(typeName, loc), makeString(cName, loc), makeBool(false, loc), makeNull(loc), makeNull(loc)];
-	const baseTypeName = classBaseName(objType);
-	if (baseTypeName != "") {
-		keys.push("base");
-		vals.push(makeString(baseTypeName, loc));
-	}
-	keys.push("display");
-	vals.push(typeInfoDisplay(typeName, lctx, loc));
-	const obj = makeObjectLiteral(keys, vals, loc);
-	lctx.collector.push(makeVarDecl(typeName + "TypeInfo", obj, DeclKind.Const, loc));
-}
-
-// Emit the full msTypeInfo for a class/interface with RC fields. destroyFn
-// points to the generated <T>Destroy; traceFn points to <T>Trace iff cyclic.
-function emitFullTypeInfo(cName: string, typeName: string, objType: Type, hasCycles: boolean, lctx: LiftCtx, loc: SourceLocation): void {
-	const traceFn = hasCycles ? makeTypedIdentResolved(requireOpByKey(objType, AttachedOp.AttachedTrace), null, loc) : makeNull(loc);
-	const keys = ["name", "cname", "isCyclic", "traceFn", "destroyFn"];
-	const vals = [makeString(typeName, loc), makeString(cName, loc), makeBool(hasCycles, loc), traceFn, makeTypedIdentResolved(requireOpByKey(objType, AttachedOp.AttachedDestructor), null, loc)];
-	const baseTypeName = getBaseClass(typeName, lctx);
-	if (baseTypeName != "") {
-		keys.push("base");
-		vals.push(makeString(baseTypeName, loc));
-	}
-	keys.push("display");
-	vals.push(typeInfoDisplay(typeName, lctx, loc));
-	const obj = makeObjectLiteral(keys, vals, loc);
-	lctx.collector.push(makeVarDecl(typeName + "TypeInfo", obj, DeclKind.Const, loc));
-}
+//   - Marks `lctx.generated` at the end of a successful emission.
 
 function typeInfoDisplay(typeName: string, lctx: LiftCtx, loc: SourceLocation): Node {
 	const names: string[] = [];
@@ -1526,13 +1458,9 @@ function emitDup(typeName: string, cName: string, objType: Type, classType: Type
 	return sym;
 }
 
-// `emitTypeInfo` gates whether this call should push the `<T>TypeInfo`
-// global + init to the collector. Only the DEFINING module should emit —
-// consumer modules (walker-driven) still emit hooks (in the first-claimer
-// pattern) but skip TypeInfo to avoid duplicate-symbol link errors with
-// codegen's `ensureTypeInfoDef` path. processDecl passes `true`;
-// scanForAnonStructTypes / fillBody field-recursion pass `false`.
-function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type, emitTypeInfo: boolean, lctx: LiftCtx, loc: SourceLocation): void {
+// `declaring` is true when the call comes from the declaring module's own declaration:
+// a consumer module's walk leaves a foreign class's hooks to that module.
+function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type, declaring: boolean, lctx: LiftCtx, loc: SourceLocation): void {
 	// ----- Guards (order matches old ensureTypeHooks for perf parity) -----
 	if (typeName == "") return;
 	if (hasGenericParams(objType)) return;
@@ -1542,15 +1470,10 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 		aliasLiftedOps(orig, objType);
 		return;
 	}
-	// Global dedup. Split: hooks-owned blocks hook emission, TypeInfo-owned
-	// blocks TypeInfo emission. When defining module (emitTypeInfo=true) sees
-	// hooks-owned but !typeInfo-owned, it still needs to enter and emit the
-	// TypeInfo — that's the race the unified entry fixes. Otherwise skip.
-	const hooksOwned = hasLiftedOp(objType, AttachedOp.AttachedDestructor);
-	if (hooksOwned) {
+	if (hasLiftedOp(objType, AttachedOp.AttachedDestructor)) {
 		aliasLiftedOps(orig, objType);
+		return;
 	}
-	if (hooksOwned && (!emitTypeInfo || isTypeInfoGloballyOwned(cName))) return;
 	const declSym = lctx.checkerCtx != null ? lookupSymbol(lctx.checkerCtx.table, typeName) : null;
 	if (declSym != null && declSym.symbolKind == SymbolKind.TypeAlias
 		&& declSym.symbolType != null && declSym.symbolType.kind == TypeKind.Ref) return;
@@ -1584,21 +1507,13 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 
 	if (objType.kind == TypeKind.Distinct ? !hasAnyUserHook(typeName, lctx, objType) : objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union) return;
 
-	// Cross-module class/interface: defer to defining module. Consumer-path
-	// callers (emitTypeInfo=false) mark as seen locally and bail; the defining
-	// module's processDecl (emitTypeInfo=true) emits both hooks and TypeInfo.
-	if (isCrossModuleClass && !emitTypeInfo) {
+	if (isCrossModuleClass && !declaring) {
 		aliasLiftedOps(orig, objType);
 		nameSetAdd(lctx.generated, typeId);
 		return;
 	}
 
-	const shouldEmitHooks = !hooksOwned;
-	// Union covers `Ref<Union>` wrapped via TypeAlias (e.g. JsonValue) — see fixedbugs/bug037.
-	const isHeapAllocated = isClassOrInterface || objType.kind == TypeKind.Union;
-	const shouldEmitTypeInfo = emitTypeInfo && isHeapAllocated && !isTypeInfoGloballyOwned(cName);
-
-	// No RC fields → minimal TypeInfo only (for class/interface) and skip hooks.
+	// No RC fields → skip hooks for a class/interface.
 	// Exception (Nim parity, `produceSym` in liftdestructors.nim:1180): plain
 	// value-type Struct still emits empty-body hooks so container iteration
 	// (e.g. `HashSet__numberDestroy` calling `HashSetEntry__numberDestroy` per
@@ -1618,10 +1533,6 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 		const isPlainValueAggregate = !isClassOrInterface
 			&& (objType.kind == TypeKind.Struct || isTaggedUnion(objType));
 		if (!isPlainValueAggregate) {
-			if (shouldEmitTypeInfo) {
-				emitMinimalTypeInfo(cName, typeName, objType, loc, lctx);
-				claimGlobalTypeInfo(cName);
-			}
 			nameSetAdd(lctx.trivial, typeId);
 			return;
 		}
@@ -1630,59 +1541,34 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	const classType = isClassOrInterface ? refType : null;
 	let hasCycles = false;
 
-	if (shouldEmitHooks) {
-		const destroySym = generateHook("destroy",  typeName, cName, objType, classType, lctx, loc);
-		setOpByKey(objType, AttachedOp.AttachedDestructor, destroySym);
-		const copySym = generateHook("copy",     typeName, cName, objType, classType, lctx, loc);
-		setOpByKey(objType, AttachedOp.AttachedAsgn, copySym);
-		const sinkSym = generateHook("sink",     typeName, cName, objType, classType, lctx, loc);
-		setOpByKey(objType, AttachedOp.AttachedSink, sinkSym);
-		const wasMovedSym = generateHook("wasMoved", typeName, cName, objType, classType, lctx, loc);
-		setOpByKey(objType, AttachedOp.AttachedWasMoved, wasMovedSym);
-		setAttachedOp(objType, AttachedOp.AttachedDestructor, destroySym);
-		setAttachedOp(objType, AttachedOp.AttachedAsgn,       copySym);
-		setAttachedOp(objType, AttachedOp.AttachedSink,       sinkSym);
-		setAttachedOp(objType, AttachedOp.AttachedWasMoved,   wasMovedSym);
+	const destroySym = generateHook("destroy",  typeName, cName, objType, classType, lctx, loc);
+	setOpByKey(objType, AttachedOp.AttachedDestructor, destroySym);
+	const copySym = generateHook("copy",     typeName, cName, objType, classType, lctx, loc);
+	setOpByKey(objType, AttachedOp.AttachedAsgn, copySym);
+	const sinkSym = generateHook("sink",     typeName, cName, objType, classType, lctx, loc);
+	setOpByKey(objType, AttachedOp.AttachedSink, sinkSym);
+	const wasMovedSym = generateHook("wasMoved", typeName, cName, objType, classType, lctx, loc);
+	setOpByKey(objType, AttachedOp.AttachedWasMoved, wasMovedSym);
+	setAttachedOp(objType, AttachedOp.AttachedDestructor, destroySym);
+	setAttachedOp(objType, AttachedOp.AttachedAsgn,       copySym);
+	setAttachedOp(objType, AttachedOp.AttachedSink,       sinkSym);
+	setAttachedOp(objType, AttachedOp.AttachedWasMoved,   wasMovedSym);
 
-		const visited: NameSet = createNameSet();
-		hasCycles = isCyclicType(objType, lctx, visited);
-		if (hasCycles) {
-			const traceSym = generateHook("trace", typeName, cName, objType, classType, lctx, loc);
-			setOpByKey(objType, AttachedOp.AttachedTrace, traceSym);
-			setAttachedOp(objType, AttachedOp.AttachedTrace, traceSym);
-		}
-
-		const userDup = getUserDefinedHookSym(typeName, "dup", lctx, objType);
-		if (userDup != null) {
-			bindOpByKey(objType, AttachedOp.AttachedDup, userDup);
-			setAttachedOp(objType, AttachedOp.AttachedDup, userDup);
-		} else {
-			const dupSym = emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
-			setOpByKey(objType, AttachedOp.AttachedDup, dupSym);
-			setAttachedOp(objType, AttachedOp.AttachedDup, dupSym);
-		}
-		aliasLiftedOps(orig, objType);
-	} else if (shouldEmitTypeInfo) {
-		// Hooks live elsewhere but we still need hasCycles to populate TypeInfo.
-		const visited: NameSet = createNameSet();
-		hasCycles = isCyclicType(objType, lctx, visited);
+	const visited: NameSet = createNameSet();
+	hasCycles = isCyclicType(objType, lctx, visited);
+	if (hasCycles) {
+		const traceSym = generateHook("trace", typeName, cName, objType, classType, lctx, loc);
+		setOpByKey(objType, AttachedOp.AttachedTrace, traceSym);
+		setAttachedOp(objType, AttachedOp.AttachedTrace, traceSym);
 	}
 
-	if (shouldEmitTypeInfo) {
-		emitFullTypeInfo(cName, typeName, objType, hasCycles, lctx, loc);
-		claimGlobalTypeInfo(cName);
-	}
+	const dupSym = emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
+	setOpByKey(objType, AttachedOp.AttachedDup, dupSym);
+	setAttachedOp(objType, AttachedOp.AttachedDup, dupSym);
+	aliasLiftedOps(orig, objType);
 
 	nameSetAdd(lctx.generated, typeId);
 }
-
-// ===== (Removed: `ensureTypeHooks` and `ensureTypeHooksForType`.)
-//
-// Both old entry points replaced by the unified `ensureHooks(typeName, objType,
-// refType, emitTypeInfo, lctx, loc)` above. The old names lived here
-// historically but diverged — one emitted TypeInfo, the other didn't, and
-// the guard registry could race between them. See the block comment on
-// `ensureHooks` for the semantics.
 
 // ===== Auto-Generated == (reference parity: generic proc `==`*[T: tuple|object]) =====
 // Generates TypeName_eq(a, b): boolean with field-by-field comparison.
@@ -2417,9 +2303,7 @@ function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation
 }
 
 function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	refuseArrayOfHookedDistinct(t, lctx, loc);
-		// Consumer path — emitTypeInfo=false so we don't duplicate TypeInfo
-		// with the defining module's emission or codegen's ensureTypeInfoDef.
+		// Consumer path (declaring = false).
 		//
 		// Skip match-type variant structs (typeName like "Alias.Key") — their
 		// hooks are emitted via the parent Union's `<Union>_v<N>` helper
@@ -2494,7 +2378,7 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 
 // Look up the declared type's sym and dispatch to `ensureHooks`. Pulled out of
 // processDecl's match arms so all three decl kinds share one resolve+dispatch.
-// processDecl is the DEFINING-module path — passes emitTypeInfo=true.
+// processDecl is the DEFINING-module path — passes declaring = true.
 function namesAnotherType(sym: Symbol, objType: Type, typeName: string): boolean {
 	return sym.symbolKind == SymbolKind.TypeAlias
 		&& sym.symbolType.kind != TypeKind.Ref
@@ -2663,9 +2547,6 @@ export function liftDestructors(program: Node, ctx: TransformContext, withHooks:
 // ===== Tests =====
 
 function liftWithChecker(input: string): Node {
-	// Reset global registries for isolated test runs (both hooks + TypeInfo,
-	// matching setGlobalHookOwners so cross-test state doesn't leak).
-	_globalTypeInfoOwners = createNameSet();
 	resetHookSyms();
 	const pr = parseInput(input);
 	if (!pr.ok) return null as unknown as Node;
@@ -2698,7 +2579,6 @@ function generatedFnCount(input: string): number {
 
 // Run the full lower→lift pipeline so `===` in the source drives on-demand Eq generation.
 function liftWithCompare(input: string): Node {
-	_globalTypeInfoOwners = createNameSet();
 	resetHookSyms();
 	const pr = parseInput(input);
 	if (!pr.ok) return null as unknown as Node;
@@ -2724,8 +2604,8 @@ function hasGeneratedFn(input: string, fnSuffix: string): boolean {
 	return hasGeneratedFnIn(liftWithChecker(input), fnSuffix);
 }
 
-// Check if a TypeInfo variable was generated
-function hasTypeInfo(input: string, typeName: string): boolean {
+// A TypeInfo is demanded by an allocation site and emitted by codegen; the lifter declares none.
+function declaresTypeInfo(input: string, typeName: string): boolean {
 	const prog = liftWithChecker(input);
 	const pd = prog.data as ProgramData;
 	for (const stmt of pd.programStmts) {
@@ -2736,6 +2616,12 @@ function hasTypeInfo(input: string, typeName: string): boolean {
 	}
 	return false;
 }
+
+test "the lifter declares no TypeInfo for an interface with a managed field" { assert !declaresTypeInfo("interface Token { value: string; }", "Token"); }
+
+test "the lifter declares no TypeInfo for a primitive-only interface" { assert !declaresTypeInfo("interface Point { x: number; y: number; }", "Point"); }
+
+test "the lifter declares no TypeInfo for a primitive-only struct" { assert !declaresTypeInfo("struct Point { x: number; y: number; }", "Point"); }
 
 test "an alias spelling of an anonymous object type does not claim the structural type's hooks" { assert generatedFnCount("type Named = { name: string }; function f(a: Named[]): number { return a.length; } const xs: Named[] = [{ name: \"a\" }];") > 0; }
 
@@ -2764,13 +2650,6 @@ test "exported interface" { assert generatedFnCount("export interface Token { va
 test "no interfaces passthrough" { assert generatedFnCount("const x = 1;") == 0; }
 // =trace: Function fields are cyclic (closures capture refs)
 test "trace NOT generated for flat string" { assert !hasGeneratedFn("interface Token { value: string; }", "TokenTrace"); }
-// TypeInfo generated alongside hooks
-test "typeInfo generated" { assert hasTypeInfo("interface Token { value: string; }", "Token"); }
-
-// Interface is now Ref type — always needs typeInfo for msAllocTyped (even primitive-only)
-test "typeInfo generated for primitive-only interface" { assert hasTypeInfo("interface Point { x: number; y: number; }", "Point"); }
-// Struct (value type) with only primitives does NOT need typeInfo
-test "typeInfo NOT generated for primitive-only struct" { assert !hasTypeInfo("struct Point { x: number; y: number; }", "Point"); }
 // Inheritance: child with own hookable field + base both generate hooks
 test "inheritance generates parent hooks" {
 	const src = "interface Base { name: string; } class Child extends Base { extra: string; }";

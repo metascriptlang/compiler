@@ -43,7 +43,7 @@ import { HcrIndirectModule, hcrFunctions, lowerHcrIndirection } from "../transfo
 import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker } from "../transform/context";
-import { setGlobalHookOwners, typeInfoOwnerMark, typeInfoOwnersFrom, replayTypeInfoOwners } from "../transform/lowering/destructorLifting";
+import { resetLiftedOps } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, tryLoadPreludeDeps, writePreludeDeps, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
@@ -621,7 +621,6 @@ function programWithInstances(program: Node, instances: Node[] | null): Node {
 
 function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.ran = true;
-	const typeInfoMark = typeInfoOwnerMark();
 	const keyedOpMark = opMark();
 	const opts = job.opts;
 	const modPath = job.modPath;
@@ -695,7 +694,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 	job.timers.lower = job.timers.lower + (performance.now() - _tl0);
 	truncateErrors(ctx, errBase);
-	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), ops: opsFrom(keyedOpMark) };
+	job.claims = { ops: opsFrom(keyedOpMark) };
 	return nativeLowered;
 }
 
@@ -706,6 +705,7 @@ interface ModuleEmissionJob {
 	modPath: string;
 	weight: int32;
 }
+
 
 class ModuleEmissionResult {
 	slot: int32 = 0;
@@ -1894,29 +1894,6 @@ function linkHcrImages(
 	}
 }
 
-function hcrTypeInfoNames(program: Node | null, modPath: string): string[] {
-	const names: string[] = [];
-	if (program == null) return names;
-	const moduleName = mangleModuleName(modPath);
-	for (const stmt of (program.data as ProgramData).programStmts) {
-		let decl = stmt;
-		if (decl.kind == NodeKind.DecoratedDecl) {
-			const decorated = decl.data as DecoratedDeclData;
-			if (decorated.decoratedNode != null) decl = decorated.decoratedNode;
-		}
-		if (decl.kind == NodeKind.ExportDecl) {
-			const exported = decl.data as ExportDeclData;
-			if (exported.exportedDecl != null) decl = exported.exportedDecl;
-		}
-		let name = "";
-		if (decl.kind == NodeKind.ClassDecl) name = (decl.data as ClassDeclData).className;
-		else if (decl.kind == NodeKind.InterfaceDecl) name = (decl.data as InterfaceDeclData).interfaceName;
-		if (name == "" || name.startsWith("$") || name.indexOf("__", 0) >= 0) continue;
-		names.push(mangleQualified(name, moduleName));
-	}
-	return names;
-}
-
 function hcrTypeLayoutKeys(program: Node | null): string[] {
 	const pairs: string[] = [];
 	if (program == null) return pairs;
@@ -1983,7 +1960,7 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 	}
 	for (const info of facts.typeInfoOrder) {
 		for (const module of modules) {
-			if (info.owner == module.modulePath && !module.typeInfos.includes(info.cName)) module.typeInfos.push(info.cName);
+			if (info.owner == module.modulePath && !info.moduleLocal && !module.typeInfos.includes(info.cName)) module.typeInfos.push(info.cName);
 		}
 	}
 	for (const module of modules) {
@@ -2426,7 +2403,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 // Reference parity: global hook ownership registry shared across all modules.
 // First module to need a type's DRC hooks generates them; others get extern protos.
 // Before the graph check: enum toString ops register during checking, and this resets the op table.
-setGlobalHookOwners();
+resetLiftedOps();
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
 	applyGcMode(opts);
 	session.moduleCount = graph.loadOrder.length as int32;
@@ -2612,7 +2589,6 @@ setGlobalHookOwners();
 		const path = hcrModulePaths[i];
 		const checkedProgram = programByPath.has(path) ? programByPath.get(path) : null;
 		const program = session.keep && checkedProgram != null ? programWithInstances(checkedProgram, instancesByOwner.get(path)) : checkedProgram;
-		hcrModules[i].typeInfos = hcrTypeInfoNames(program, path);
 		hcrModules[i].typeKeys = hcrTypeLayoutKeys(program);
 		hcrModules[i].beforeReload = hcrReloadHandlers(program, SymbolFlag.BeforeReload);
 		hcrModules[i].afterReload = hcrReloadHandlers(program, SymbolFlag.AfterReload);
@@ -2690,7 +2666,7 @@ setGlobalHookOwners();
 			typeInstances: typeRowsOf.get(modPath) ?? noTypeRows,
 			cloneInput: session.keep,
 			ran: false,
-			claims: { typeInfos: [], ops: [] },
+			claims: { ops: [] },
 		};
 		let nativeLowered: Node;
 		if (session.keep) {
@@ -2699,7 +2675,7 @@ setGlobalHookOwners();
 				session.loweredCount = session.loweredCount + 1;
 				const previous = session.lowerClaims.get(modPath);
 				if (previous != null && !sameClaims(previous, job.claims)) {
-					session.staleReason = `the hooks or TypeInfos claimed by ${modPath} changed`;
+					session.staleReason = `the operations lifted by ${modPath} changed`;
 					return BuildStatus.Stale;
 				}
 				session.lowerClaims.set(modPath, job.claims);
@@ -2708,7 +2684,6 @@ setGlobalHookOwners();
 			} else {
 				const claims = session.lowerClaims.get(modPath);
 				if (claims != null) {
-					replayTypeInfoOwners(claims.typeInfos);
 					replayOps(claims.ops);
 				}
 				const replay = session.lowerDiagnostics.get(modPath);
@@ -3252,7 +3227,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
 // Reference parity: global hook ownership registry shared across all modules.
 // Before the graph check: enum toString ops register during checking, and this resets the op table.
-setGlobalHookOwners();
+resetLiftedOps();
 	const graph = loadAndCheckGraph(filePath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode));
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules

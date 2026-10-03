@@ -585,17 +585,27 @@ export function nameSetAdd(ns: NameSet, name: string): void {
 
 // ===== AliveSet — global DCE reachability (Standard reference parity) =====
 
+export enum TypeInfoKind {
+	Object,
+	RefArrayCell,
+	ArcCell,
+	PromiseAllCell,
+}
+
 export class CTypeInfoDemand {
-	cell: Type;
+	kind: TypeInfoKind;
+	subject: Type;
 	key: string;
 	owner: string;
 	cName: string = "";
-	destroy: Symbol;
+	destroy: Symbol | null;
 	trace: Symbol | null = null;
+	baseKey: string = "";
+	moduleLocal: boolean = false;
 }
 
 export class AliveSet {
-	computed: boolean;       // reachability ran: what it did not mark is dead, even when nothing was marked by name
+	enabled: boolean;        // false: DCE off, everything is alive
 	entries: string[];       // "modulePath:symbolName" keys
 	_set: HashSet<string>;       // O(1) lookup mirror
 	_modules: HashSet<string>;   // O(1) module-level lookup
@@ -606,7 +616,6 @@ export class AliveSet {
 }
 
 export function createAliveSet(): AliveSet {
-	enabled: boolean;        // false: DCE off, everything is alive
 	return {
 		enabled: false, entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
 		typeInfos: [], typeInfoKeys: new HashSet<string>(), foreignOps: new HashMap<Symbol, string[]>(),
@@ -654,7 +663,6 @@ export function aliveSetModuleCount(aliveSet: Readonly<AliveSet>): int32 {
 
 export class CEmissionFacts {
 	genericOwners: HashMap<string, string> = new HashMap<string, string>();
-	skippedTypeInfos: HashSet<string> = new HashSet<string>();
 	hcrCoreUnits: HashSet<string> = new HashSet<string>();
 	typeInfos: HashMap<string, CTypeInfoDemand> = new HashMap<string, CTypeInfoDemand>();
 	typeInfoOrder: CTypeInfoDemand[] = [];

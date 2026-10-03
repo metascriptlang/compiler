@@ -15,7 +15,7 @@ import {
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
-import { enumCTypeName, getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, hcrTypeInfoRef, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp, zeroInit, defineDeferredElements } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, typeInfoRef, ensureRefArrayCellTypeInfo, isHcrImageModule, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName, copiesInline, inlineDeclOf } from "./forward";
@@ -239,7 +239,7 @@ export function registerDeclCName(g: CGen, node: Readonly<Node>): void {
 	const sym = declTypeSym(n);
 	if (sym == null) return;
 	const cn = mangledTypeName(sym, sym.name);
-	typeCacheSet(g.typeCache, "cname:" + sym.name, cn);
+	typeCacheSet(g.typeCache, "decl:" + cn, cn);
 	typeCacheSet(g.typeCache, "bare:" + cn, sym.name);
 }
 
@@ -349,10 +349,8 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	// Check if struct type already declared (by genObjectType for generic instances)
 	const classKey = "object:" + name;
 	const typeAlreadyDeclared = nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, classKey);
-	// Always record ownership — declaredThings is the module's declaration claim,
-	// used by ensureTypeInfoDef to decide which module emits msTypeInfo definitions.
-	// The struct body emission below is separately guarded by typeAlreadyDeclared
-	// to avoid re-emitting the forward decl / struct body.
+	// The struct body emission below is guarded by typeAlreadyDeclared to avoid
+	// re-emitting the forward decl / struct body.
 	nameSetAdd(g.declaredThings, name);
 	genStaticFieldGlobals(g, d, node.resolvedSym);
 	const parent = node.nodeType != null ? classParentOf(node.nodeType) : null;
@@ -595,28 +593,13 @@ function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 
 function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	const d = node.data as VariableDeclData;
-	// Mangling policy for module-level `const`/`let`:
-	//
-	// - Regular vars: emit with module-qualified C name (`NAME__<moduleName>Oms`) so
-	//   two modules declaring same-named constants (e.g. `MAX_TIME` in cursors.ms and
-	//   varpartitions.ms) don't produce duplicate C globals at link time. Matches
-	//   what cross-module extern emission (`expressions.ms`) + identifier references
-	//   emit, so one mangled symbol per binary.
-	//
-	// - TypeInfo vars (name ending in "TypeInfo"): INTENTIONALLY bypass mangling and
-	//   use the raw `safeName`. These are emitted as `__attribute__((weak))` (see
-	//   `genTypeInfoVar`) so when module A defines `PointTypeInfo` and module B also
-	//   needs it (e.g. typeof lookup), the linker collapses the two weak definitions
-	//   into one symbol. Cross-module type identity relies on matching the raw name —
-	//   mangling would break that invariant.
-	//
-	// Detection is NAME-based (suffix match). Risk: a user-declared variable named
-	// e.g. `MyCustomTypeInfo` would also bypass mangling. Rare in practice (the suffix
-	// convention is ORC-internal); revisit if collision reports surface.
-	const nameLen = d.declName.length;
-	const isTypeInfo = nameLen > 8 && d.declName.slice(nameLen - 8, nameLen) == "TypeInfo";
+	// Mangling policy for module-level `const`/`let`: module-qualified C name
+	// (`NAME__<moduleName>Oms`) so two modules declaring same-named constants don't
+	// produce duplicate C globals at link time. Matches what cross-module extern
+	// emission (`expressions.ms`) + identifier references emit, so one mangled symbol
+	// per binary.
 	const isModuleSlot = isModuleGlobalVar(node.resolvedSym);
-	const varName = isTypeInfo || !isModuleSlot ? safeName(d.declName) : mangledGlobalName(node.resolvedSym, d.declName);
+	const varName = !isModuleSlot ? safeName(d.declName) : mangledGlobalName(node.resolvedSym, d.declName);
 	// Identifier references recompute the mangled name on demand via mangledGlobalName
 	// (see expressions.ms isModuleGlobalVar branch). We deliberately DO NOT write to
 	// sym.nativeName here: that field is an extern/FFI marker — codegen uses
@@ -624,24 +607,6 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	// (discoverCallExpr short-circuit), which would break closure calls on any
 	// module-level `let fn: (..) => T` variable.
 
-	// Detect TypeInfo vars from destructorLifting (ORC runtime RTTI)
-	if (isTypeInfo) {
-		// TypeInfo is DRC metadata — skip under --gc=manual (write-only, never read)
-		if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
-		if (g.aliveSet.computed && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) {
-			const skipBase = d.declName.slice(0, nameLen - 8);
-			if (g.preparingDeclarations) {
-				if (g.preparationFacts == null) return;
-				factSkipTypeInfo(g.preparationFacts, skipBase);
-				const skipCBase = typeInfoCBase(g, d, skipBase);
-				if (skipCBase != "") factSkipTypeInfo(g.preparationFacts, skipCBase);
-			}
-			return;
-		}
-		if (g.preparingDeclarations) return;
-		genTypeInfoVar(g, d, varName);
-		return;
-	}
 
 	if (g.preparingDeclarations) return;
 	const cType = getTypeDesc(g, node.nodeType);
@@ -776,11 +741,12 @@ function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, stati
 	const bakeStmts = readProcStmts(p);
 	clearProcBuffers(p);
 	if (!closuresOk || bakeLocals.length > 0 || bakeStmts.length > 0) return false;
-	addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${body}TypeInfo;`);
-	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${body} b; } ${varName}_konst_ = { { 1 << 30, -1, &${body}TypeInfo, 0 }, { ${braced} } };`);
+	const typeInfo = typeInfoRef(g, node.nodeType);
+	const viaRegistry = isHcrImageModule(g, g.modulePath);
+	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${body} b; } ${varName}_konst_ = { { 1 << 30, -1, ${viaRegistry ? "NULL" : typeInfo}, 0 }, { ${braced} } };`);
+	if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${varName}_konst_.h.type = ${typeInfo};`);
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
 	nameSetAdd(g.declaredGlobals, varName);
-	ensureTypeInfoDef(g, body, node.nodeType);
 	return true;
 }
 
@@ -802,103 +768,43 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	return true;
 }
 
-// ===== TypeInfo Variable (from destructorLifting) =====
-// Emits msTypeInfo declaration to GlobalVars and field assignments to DatInit.
-
-function typeInfoCBase(g: CGen, d: Readonly<VariableDeclData>, baseName: string): string {
-	if (d.initializer != null && d.initializer.kind == NodeKind.ObjectLiteral) {
-		const od = d.initializer.data as ObjectLiteralData;
-		for (let i = 0; i < od.keys.length; i += 1) {
-			const v = od.properties[i];
-			if (od.keys[i] == "cname" && v.kind == NodeKind.StringLiteral) return mangle((v.data as StringLiteralData).value);
-		}
-	}
-	return typeCacheGet(g.typeCache, "cname:" + baseName);
-}
-
-function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string): void {
-	// Extract base type name: strip "TypeInfo" suffix (8 chars)
-	const baseName = d.declName.slice(0, d.declName.length - 8);
-	const cBase = typeInfoCBase(g, d, baseName);
-	const infoName = (cBase != "") ? cBase + "TypeInfo" : varName;
-	// Mark as defined so ensureTypeInfoDef doesn't duplicate
-	typeCacheSet(g.forwTypeCache, "typeInfoDef:" + baseName, baseName);
-	if (cBase != "") {
-		typeCacheSet(g.forwTypeCache, "typeInfoDef:" + cBase, cBase);
-	}
-
-	// Non-static: other modules reference via extern for cross-module new.
-	// $-generated types never leave their module — static keeps same-named
-	// sibling-module envs apart.
-	const linkage = isCompilerGenCName(g, baseName) ? "static msTypeInfo " : "msTypeInfo ";
-	const viaRegistry = infoName.endsWith("TypeInfo") && hcrTypeInfoRef(g, infoName.slice(0, infoName.length - 8));
-	if (!viaRegistry) addLine(sec(g, CSection.GlobalVars), linkage + infoName + ";");
-
-	// Emit field assignments to DatInit (runs before user code)
-	if (d.initializer != null && d.initializer.kind == NodeKind.ObjectLiteral) {
-		const od = d.initializer.data as ObjectLiteralData;
-		const datInit = sec(g, CSection.DatInit);
-		const p = createProc("__datinit", null);
-
-		for (let i = 0; i < od.keys.length; i += 1) {
-			const key = od.keys[i];
-			if (key == "cname") {
-				continue;
-			} else if (key == "name") {
-				// name field: emit C string literal (const char*), not msString
-				addLine(datInit, `  ${infoName}.name = "${baseName}";`);
-			} else if (key == "destroyFn") {
-				// destroyFn: cast to msDestroyProc (void(*)(void*)) for C type safety
-				const val = genExpr(g, p, od.properties[i]);
-				if (val == "MS_NIL" || val == "NULL") {
-					addLine(datInit, `  ${infoName}.destroyFn = NULL;`);
-				} else {
-					addLine(datInit, `  ${infoName}.destroyFn = (msDestroyProc)${val};`);
-				}
-			} else if (key == "traceFn") {
-				// traceFn: cast to msTraceProc (void(*)(void*, void*)) for C type safety
-				const val = genExpr(g, p, od.properties[i]);
-				if (val == "MS_NIL" || val == "NULL") {
-					addLine(datInit, `  ${infoName}.traceFn = NULL;`);
-				} else {
-					addLine(datInit, `  ${infoName}.traceFn = (msTraceProc)${val};`);
-				}
-			} else if (key == "base") {
-				const bn = od.properties[i];
-				let rawBase = "";
-				if (bn.kind == NodeKind.StringLiteral) rawBase = (bn.data as StringLiteralData).value;
-				if (rawBase != "") {
-					const cParent = typeCacheGet(g.typeCache, "cname:" + rawBase);
-					const parentName = (cParent != "") ? cParent : rawBase;
-					ensureTypeInfo(g, parentName);
-					addLine(datInit, `  ${infoName}.base = &${parentName}TypeInfo;`);
-				}
-			} else if (key == "display") {
-				const entries = (od.properties[i].data as ArrayLiteralData).elements;
-				const displayName = infoName + "Display";
-				addLine(sec(g, CSection.GlobalVars), `static const msTypeInfo* ${displayName}[${entries.length}];`);
-				for (let slot = 0; slot < entries.length; slot += 1) {
-					if (slot == entries.length - 1) {
-						addLine(datInit, `  ${displayName}[${slot}] = &${infoName};`);
-					} else {
-						const rawName = (entries[slot].data as StringLiteralData).value;
-						const cName = typeCacheGet(g.typeCache, "cname:" + rawName);
-						const entryName = cName != "" ? cName : rawName;
-						ensureTypeInfo(g, entryName);
-						addLine(datInit, `  ${displayName}[${slot}] = &${entryName}TypeInfo;`);
-					}
-				}
-				addLine(datInit, `  ${infoName}.depth = ${entries.length - 1};`);
-				addLine(datInit, `  ${infoName}.display = ${displayName};`);
-			} else {
-				// isCyclic: use genExpr directly
-				const val = genExpr(g, p, od.properties[i]);
-				addLine(datInit, `  ${infoName}.${key} = ${val};`);
+function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Type | null): string {
+	match (init.kind) {
+		NodeKind.NumberLiteral => {
+			return formatCNumberLit(init.data as NumberLiteralData, init.nodeType);
+		},
+		NodeKind.BooleanLiteral => {
+			return cBoolLiteral((init.data as BooleanLiteralData).boolValue);
+		},
+		NodeKind.HiddenStdConv => {
+			return readonlyDataBracedInit(g, (init.data as HiddenStdConvData).convExpr, t);
+		},
+		NodeKind.ArrayLiteral => {
+			const ad = init.data as ArrayLiteralData;
+			const elemT = t != null && t.kind == TypeKind.SizedArray ? t.typeReturn : null;
+			let parts = "";
+			for (const e of ad.elements) {
+				const part = readonlyDataBracedInit(g, e, elemT);
+				if (part == "") return "";
+				parts = parts.length == 0 ? part : parts + ", " + part;
 			}
-		}
-	}
+			const arrayBraced = `{ ${parts} }`;
+			return t != null && t.kind == TypeKind.SizedArray ? `{ ${arrayBraced} }` : arrayBraced;
+		},
+		NodeKind.ObjectLiteral => {
+			const od = init.data as ObjectLiteralData;
+			let parts = "";
+			for (let i = 0; i < od.properties.length; i += 1) {
+				const part = readonlyDataBracedInit(g, od.properties[i], null);
+				if (part == "") return "";
+				const kv = `.${mangleFieldName(od.keys[i])} = ${part}`;
+				parts = parts.length == 0 ? kv : parts + ", " + kv;
+			}
+			return `{ ${parts} }`;
+		},
+		_ => { return ""; },
+	};
 }
-
 // isNrvoReturnType in types.ms (shared, Type-based NRVO detection)
 
 // ===== Tests =====
