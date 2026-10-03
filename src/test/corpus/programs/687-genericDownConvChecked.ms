@@ -36,7 +36,7 @@ function nullPasses(): string {
 function sum(): number {
 	const parked: unknown[] = [];
 	for (let i = 0; i < 100; i += 1) parked.push(new Box<number>(i));
-	let total = 0;
+	let total: number = 0;
 	for (const p of parked) total += (p as Box<number>).get();
 	return total;
 }
