@@ -131,7 +131,4 @@ import "./nullFirstTernaryArg";
 import "./fieldVisibility";
 import "./typeNameValue";
 import "./routineInterface";
-import "./enumConversionRange";
-import "./deferBlockCheck";
-import "./forOfPattern";
-import "./viewBorrows";
+import "./transformNodeTypes";
