@@ -29,7 +29,7 @@ function lowerNullishStmt(stmt: Node, ctx: TransformContext): Node[] {
 
 // ===== Visitor =====
 
-function asUnknown(n: Node, loc: SourceLocation): Node {
+export function asUnknown(n: Node, loc: SourceLocation): Node {
 	const checked = createNodeAt(NodeKind.TypeAssertion, { asExpr: n, asType: "unknown" } as TypeAssertionData, loc);
 	checked.nodeType = unknownType();
 	return checked;
