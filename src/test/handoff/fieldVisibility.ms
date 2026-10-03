@@ -107,3 +107,21 @@ test "fieldVisibility: as converts a struct only to itself, a distinct of it or 
 	assert refused;
 	assert errorsOf(lib, pre + "const b = d as P;\nconst t = p as T;\nconst back = t as P;\nconst lit = { x: 9 } as P;\nconst raw = { x: 5 };\nconst adopted = raw as P;\nconsole.log(b.x, back.x, lit.x, adopted.x);\n").length == 0;
 }
+
+test "fieldVisibility: a private method is called inside its class only, a protected member also from a subclass" {
+	const none = "export const unused = 0;\n";
+	const cls = "class P {\n\tprotected level: int32 = 1;\n\tprivate secret(): int32 { return 40; }\n\tprotected shared(): int32 { return 2 + this.secret(); }\n\tstatic peek(p: P): int32 { return p.secret(); }\n}\nclass Q extends P {\n\ttotal(): int32 { return this.level + 1; }\n\tviaParent(): int32 { const me: P = this; return me.shared(); }\n}\n";
+	assert errorsOf(none, cls + "const q = new Q();\nconsole.log(q.total(), q.viaParent(), P.peek(q));\n").length == 0;
+	let privateCall = false;
+	for (const m of diagnostics(none, cls + "console.log(new P().secret());\n")) { if (m.indexOf("'secret' is a private method") >= 0) privateCall = true; }
+	assert privateCall;
+	let protectedCall = false;
+	for (const m of diagnostics(none, cls + "console.log(new P().shared());\n")) { if (m.indexOf("'shared' is a protected method") >= 0) protectedCall = true; }
+	assert protectedCall;
+	let protectedField = false;
+	for (const m of diagnostics(none, cls + "console.log(new P().level);\n")) { if (m.indexOf("'level' is a protected field") >= 0) protectedField = true; }
+	assert protectedField;
+	let subclassPrivate = false;
+	for (const m of diagnostics(none, "class P { private secret(): int32 { return 40; } }\nclass Q extends P { peek(): int32 { return this.secret(); } }\n")) { if (m.indexOf("'secret' is a private method") >= 0) subclassPrivate = true; }
+	assert subclassPrivate;
+}
