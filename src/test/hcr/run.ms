@@ -918,6 +918,33 @@ function watchWarmDependency(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function typeInfoLocality(): void {
+	const tag = "hcrTypeInfoLocality";
+	const dir = freshDir(`${TMP}/typeInfoLocality`);
+	for (const f of readDir(`${FIXTURES}/typeInfoLocality`)) copy(`${FIXTURES}/typeInfoLocality/${f}`, `${dir}/${f}`);
+	const steps: WatchStep[] = [
+		{ file: "logicCell.ms", target: "logic.ms", warm: true, fails: false },
+		{ file: "logicClass.ms", target: "logic.ms", warm: false, fails: false },
+	];
+	replayMatchesCold(tag, dir, `${FIXTURES}/typeInfoLocality`, ["logic.ms"], steps);
+	const debug = `${dir}/out/debug`;
+	let app = "";
+	let logic = "";
+	for (const f of cFilesIn(`${debug}/watch0`)) {
+		if (f.startsWith("_")) continue;
+		if (f.endsWith("ZappOms.c")) app = f;
+		if (f.endsWith("ZlogicOms.c")) logic = f;
+	}
+	need(tag, app != "" && logic != "", "the watch replay emitted no C for app.ms or logic.ms");
+	const appFirst = read(`${debug}/watch0/${app}`);
+	for (let n = 1; n <= steps.length; n += 1) {
+		const label = `step ${n} (${steps[n - 1].file})`;
+		need(tag, read(`${debug}/watch${n}/${logic}`).contains("msHcrTypeInfo("), `${label}: logic.ms registers no TypeInfo`);
+		need(tag, read(`${debug}/watch${n}/${app}`) == appFirst, `${label} changed app.ms's C although only logic.ms changed`);
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function imageNameCollision(): void {
 	const tag = "hcrImageNameCollision";
 	const dir = freshDir(`${TMP}/imageCollision`);
@@ -1046,6 +1073,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFunctionValues", run: functionValues },
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
+	{ name: "hcrTypeInfoLocality", run: typeInfoLocality },
 	{ name: "hcrImageNameCollision", run: imageNameCollision },
 	{ name: "hcrArrayOwner", run: arrayOwner },
 ];
