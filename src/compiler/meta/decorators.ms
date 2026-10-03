@@ -1,3 +1,4 @@
+import { expansionOf, markExpansion } from "../../checker/visibility";
 import {
 	Node, NodeKind, SymbolKind, SourceLocation, Symbol, Type, TypeKind, createNodeAt,
 	ProgramData, ExportDeclData, ClassDeclData, ActorDeclData, DecoratedDeclData,
@@ -725,6 +726,8 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	plan.metaKeys = readStrings(arrHeap, heapObjectGetField(objHeap, h, "metaKeys"));
 	plan.metaValues = readNodes(objHeap, arrHeap, heapObjectGetField(objHeap, h, "metaValues"), loc);
 	const inits = readNodes(objHeap, arrHeap, heapObjectGetField(objHeap, h, "initializers"), loc);
+	const friends = isMacro ? expansionOf(ctx, target, sym.modulePath) : ([] as string[]);
+	for (const s of inits) markExpansion(ctx, s, friends);
 	for (const s of inits) {
 		if (info.kind == "class" || plan.activeInits == null) plan.staticInits.push(s);
 		else plan.activeInits.stmts.push(s);
@@ -734,6 +737,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	if (shape == shapeTransformer) {
 		const pd = target.data as PropertyDeclData;
 		pd.propInitializer = rv.kind == RaiserValueKind.Nil ? (null as unknown as Node) : valueToNode(rv, objHeap, arrHeap, loc);
+		markExpansion(ctx, target, friends);
 	} else if (shape == shapeNode && rv.kind != RaiserValueKind.Nil) {
 		const replacement = valueToNode(rv, objHeap, arrHeap, loc);
 		if (replacement == null || replacement.kind != target.kind) {
@@ -743,6 +747,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 			addError(ctx, `decorator '${name}' on ${article} ${want} must return ${article} ${want} or nothing, got ${got}`, loc.line, loc.column);
 		} else {
 			adoptReplacement(target, replacement);
+			markExpansion(ctx, replacement, friends);
 			outNode = replacement;
 		}
 	}

@@ -1178,7 +1178,8 @@ export class CheckerContext {
 	compilerFuncs: HashMap<string, Symbol>;       // @compilerFunc — name the compiler synthesizes a call under → its declared symbol
 	extensionRegistry: ExtensionRegistry;
 	macroConverters: MacroConverter[];              // in-scope compile-time converters, registration order
-	converterTargetTypes: HashMap<Symbol, Type>;    // converter symbol → target type resolved in the DECLARING module
+	converterTargetTypes: HashMap<Symbol, Type>;
+	expansionFriends: HashMap<Node, string[]>;    // converter symbol → target type resolved in the DECLARING module
 	runtimeConverters: Symbol[];
 	macroExpansionDepth: int32;                  // Phase B+ eager: recursion limit for macros that produce macros
 	jsxMacroArgDepth: int32;                     // JSX leak guard: >0 while checking a macro's args (JSX there is consumed, not leaked)
@@ -1257,6 +1258,7 @@ export function createContext(): CheckerContext {
 		extensionRegistry: createExtensionRegistry(),
 		macroConverters: [],
 		converterTargetTypes: new HashMap<Symbol, Type>(),
+		expansionFriends: new HashMap<Node, string[]>(),
 		runtimeConverters: [],
 		macroExpansionDepth: 0,
 		jsxMacroArgDepth: 0,

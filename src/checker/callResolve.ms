@@ -1,7 +1,7 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
-import { refusePrivateField, declaringSymOf, refuseHiddenMethodCall } from "./visibility";
+import { refusePrivateField, declaringSymOf, refuseHiddenMethodCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
@@ -1045,11 +1045,14 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				node.nodeType = errorType();
 				return errorType();
 			}
+			const friends = expansionOf(ctx, node, sym.modulePath);
+			const friendScope = befriend(ctx, friends);
 			let expandedValue = expanded;
 			const hoists = isHoistingSplice(ctx, node, expanded);
 			if (hoists) {
 				expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
 				if (expandedValue == null) {
+					unfriend(friendScope, friends);
 					ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 					node.nodeType = errorType();
 					return errorType();
@@ -1068,7 +1071,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// type inference for the parent (e.g., the VariableDecl declaring `x`).
 			// If the expanded result is itself a macro call, this recurses through
 			// checkCallExpr → eager expand again, bounded by macroExpansionDepth.
+			if (node.kind == NodeKind.SpliceMany) markExpansion(ctx, node, friends);
 			callCheckExpr(ctx, node, expectedType);
+			unfriend(friendScope, friends);
 			if (hoists) bindRefsToHoistedPrefix(node, expanded);
 			ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 			return node.nodeType;

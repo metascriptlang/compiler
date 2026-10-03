@@ -105,10 +105,40 @@ function grantsPrivateAccess(ctx: CheckerContext, owner: Symbol, protectedMember
 function befriends(ctx: CheckerContext, modulePath: string): boolean {
 	let scope: Scope | null = ctx.table.current;
 	while (scope != null) {
-		if (scope.friendModule != "" && scope.friendModule == modulePath) return true;
+		if (scope.friendModules.indexOf(modulePath) >= 0) return true;
 		scope = scope.parent;
 	}
 	return false;
+}
+
+export function befriend(ctx: CheckerContext, modules: string[]): Scope {
+	const scope: Scope = ctx.table.current;
+	for (const m of modules) scope.friendModules.push(m);
+	return scope;
+}
+
+export function unfriend(scope: Scope, modules: string[]): void {
+	for (let i = 0; i < modules.length; i += 1) scope.friendModules.pop();
+}
+
+const noFriends: string[] = [];
+
+export function expansionFriendsOf(ctx: CheckerContext, node: Node): string[] {
+	if (ctx.expansionFriends.size == 0) return noFriends;
+	const friends = ctx.expansionFriends.get(node);
+	return friends != null ? friends : noFriends;
+}
+
+export function markExpansion(ctx: CheckerContext, node: Node | null, friends: string[]): void {
+	if (node != null && friends.length > 0) ctx.expansionFriends.set(node, friends);
+}
+
+export function expansionOf(ctx: CheckerContext, origin: Node, macroModule: string): string[] {
+	const inherited = expansionFriendsOf(ctx, origin);
+	const friends: string[] = [];
+	for (const m of inherited) friends.push(m);
+	if (macroModule != "") friends.push(macroModule);
+	return friends;
 }
 
 function isProtectedMember(owner: Symbol, name: string): boolean {

@@ -836,7 +836,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		// symbols into scope so resolveAnnotation("Item") finds the user type during re-check.
 		// Without this, HashMap<string, Item[]> methods resolve "Item" to Unknown.
 		const callerScope = openInstanceScope(bodyCtx, dedup.names, dedup.types);
-		bodyCtx.table.current.friendModule = sym.modulePath;
+		bodyCtx.table.current.friendModules.push(sym.modulePath);
 		bodyCtx.table.current.privateAccess = methodOwnerClass(bodyCtx, sym);
 		const injectedSyms: Symbol[] = [];
 		for (const ct of dedup.types) {

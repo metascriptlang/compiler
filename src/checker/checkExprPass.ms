@@ -1,7 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
+import { refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
@@ -2269,11 +2269,14 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 					node.nodeType = errorType(); return;
 				}
+				const friends = expansionOf(ctx, node, macroSym.modulePath);
+				const friendScope = befriend(ctx, friends);
 				let expandedValue = expanded;
 				const hoists = isHoistingSplice(ctx, node, expanded);
 				if (hoists) {
 					expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
 					if (expandedValue == null) {
+						unfriend(friendScope, friends);
 						ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 						node.nodeType = errorType(); return;
 					}
@@ -2285,7 +2288,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.resolvedSym = null;
 				node.flags = 0 as BitSet<NodeFlag>;
 				node.variantSlot = 0;
+				if (node.kind == NodeKind.SpliceMany) markExpansion(ctx, node, friends);
 				checkExpr(ctx, node, expectedType);
+				unfriend(friendScope, friends);
 				if (hoists) bindRefsToHoistedPrefix(node, expanded);
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 				node.nodeType = node.nodeType; return;
