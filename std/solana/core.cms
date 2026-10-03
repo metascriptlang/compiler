@@ -47,6 +47,7 @@ extern function msSolLogData(address: uint64, length: uint64): void;
 extern function msSolLogComputeUnits(): void;
 extern function msSolRemainingComputeUnits(): uint64;
 extern function msSolWordsAddress(words: Span<uint64>): uint64 from "msSolSpanAddress";
+extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 extern function msSolGetClock(out: uint64): uint64;
 extern function msSolGetRent(out: uint64): uint64;
 extern function msSolSetReturnData(data: Span<uint8>): void;
@@ -74,7 +75,8 @@ export struct Clock {
 
 export struct ReturnData {
 	program: Pubkey;
-	data: Bytes;
+	length: uint64;
+	data: uint8[1024];
 }
 
 export function failWith(error: ProgramError): void {
@@ -84,12 +86,6 @@ export function failWith(error: ProgramError): void {
 function loadPubkey(address: uint64): Pubkey {
 	const at = msSolPointer(address) as Ptr<Pubkey>;
 	return at[];
-}
-
-function storedPubkey(key: Pubkey): uint64 {
-	const address = msSolAlloc(32);
-	storePubkey(key, address);
-	return address;
 }
 
 export function programId(): Pubkey {
@@ -440,14 +436,14 @@ export function createProgramAccountSeeded(
 }
 
 export function clock(): Clock {
-	const out = msSolAlloc(40);
-	const _status = msSolGetClock(out);
+	let words: uint64[5] = [];
+	const _status = msSolGetClock(msSolWordsAddress(words));
 	const value: Clock = {
-		slot: msSolLoadU64(out),
-		epochStartTimestamp: msSolLoadU64(out + 8) as int64,
-		epoch: msSolLoadU64(out + 16),
-		leaderScheduleEpoch: msSolLoadU64(out + 24),
-		unixTimestamp: msSolLoadU64(out + 32) as int64,
+		slot: words[0],
+		epochStartTimestamp: words[1] as int64,
+		epoch: words[2],
+		leaderScheduleEpoch: words[3],
+		unixTimestamp: words[4] as int64,
 	};
 	return value;
 }
@@ -457,13 +453,51 @@ export function setReturnData(data: Span<uint8>): void {
 }
 
 export function returnData(): ReturnData | null {
-	const out = msSolAlloc(32 + MAX_RETURN_DATA);
-	const length = msSolGetReturnData(out + 32, MAX_RETURN_DATA, out);
+	let found: ReturnData = { program: Pubkey.zero(), length: 0, data: [] };
+	const length = msSolGetReturnData(
+		msSolSpanAddress(found.data),
+		MAX_RETURN_DATA,
+		msSolSpanAddress(found.program.bytes),
+	);
 	if (length == 0) { return null; }
-	return {
-		program: loadPubkey(out),
-		data: { address: out + 32, length: Math.min(length, MAX_RETURN_DATA) },
-	};
+	found.length = Math.min(length, MAX_RETURN_DATA);
+	return found;
+}
+
+function returnDataAddress(
+	found: ReturnData,
+	offset: uint64,
+	width: uint64,
+): Result<uint64, ProgramError> {
+	if (offset > found.length || width > found.length - offset) {
+		return Result.err(ProgramError.accountDataTooSmall());
+	}
+	return Result.ok(msSolSpanAddress(found.data) + offset);
+}
+
+export function readU8(this found: ReturnData, offset: uint64): Result<uint8, ProgramError> {
+	const address = try returnDataAddress(found, offset, 1);
+	return Result.ok(msSolLoadU8(address));
+}
+
+export function readU16(this found: ReturnData, offset: uint64): Result<uint16, ProgramError> {
+	const address = try returnDataAddress(found, offset, 2);
+	return Result.ok(msSolLoadU16(address));
+}
+
+export function readU32(this found: ReturnData, offset: uint64): Result<uint32, ProgramError> {
+	const address = try returnDataAddress(found, offset, 4);
+	return Result.ok(msSolLoadU32(address));
+}
+
+export function readU64(this found: ReturnData, offset: uint64): Result<uint64, ProgramError> {
+	const address = try returnDataAddress(found, offset, 8);
+	return Result.ok(msSolLoadU64(address));
+}
+
+export function readPubkey(this found: ReturnData, offset: uint64): Result<Pubkey, ProgramError> {
+	const address = try returnDataAddress(found, offset, 32);
+	return Result.ok(loadPubkey(address));
 }
 
 export function logU64(value: uint64): void {
@@ -471,7 +505,7 @@ export function logU64(value: uint64): void {
 }
 
 export function logPubkey(key: Pubkey): void {
-	msSolLogPubkey(storedPubkey(key));
+	msSolLogPubkey(msSolSpanAddress(key.bytes));
 }
 
 export function logComputeUnits(): void {

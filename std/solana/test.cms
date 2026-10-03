@@ -604,9 +604,9 @@ function returnDataEntry(): void {
 	const found = returnData();
 	if (found === null) { failWith(ProgramError.custom(1)); return; }
 	if (!found.program.equals(programId())) { failWith(ProgramError.custom(2)); return; }
-	if (found.data.length != 3) { failWith(ProgramError.custom(3)); return; }
-	const first = found.data.readU8(0);
-	const last = found.data.readU8(2);
+	if (found.length != 3) { failWith(ProgramError.custom(3)); return; }
+	const first = found.readU8(0);
+	const last = found.readU8(2);
 	if (!first.ok || first.value != 7 || !last.ok || last.value != 9) { failWith(ProgramError.custom(4)); }
 }
 
@@ -616,12 +616,12 @@ function fullReturnDataEntry(): void {
 	setReturnData(big);
 	const found = returnData();
 	if (found === null) { failWith(ProgramError.custom(1)); return; }
-	if (found.data.length != 1024) { failWith(ProgramError.custom(3)); return; }
+	if (found.length != 1024) { failWith(ProgramError.custom(3)); return; }
 	for (let index = 0; index < 1024; index++) {
-		const byte = found.data.readU8(index as uint64);
+		const byte = found.readU8(index as uint64);
 		if (!byte.ok || byte.value != ((index * 7) & 0xff)) { failWith(ProgramError.custom(5)); return; }
 	}
-	const word = found.data.readU64(8);
+	const word = found.readU64(8);
 	if (!word.ok || word.value != 0x69625b544d463f38) { failWith(ProgramError.custom(6)); }
 }
 

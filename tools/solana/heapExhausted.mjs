@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
 	AccountRole,
@@ -5,13 +6,14 @@ import {
 	appendTransactionMessageInstruction,
 	createKeyPairSignerFromPrivateKeyBytes,
 	createTransactionMessage,
+	getAddressEncoder,
 	lamports,
 	pipe,
 	setTransactionMessageFeePayerSigner,
 	setTransactionMessageLifetimeUsingBlockhash,
 	signTransactionMessageWithSigners,
 } from "@solana/kit";
-import { LiteSVM } from "litesvm";
+import { Clock, LiteSVM } from "litesvm";
 
 const [programPath] = process.argv.slice(2);
 if (!programPath) {
@@ -77,9 +79,10 @@ async function run(op, count) {
 	const meta = failed ? result.meta() : result;
 	const logs = meta.logs();
 	const named = logs.map((line) => NAMED.exec(line)).find((found) => found !== undefined && found !== null) ?? null;
-	const found = logs.map((line) => LOGGED.exec(line)).filter((entry) => entry !== null).pop();
+	const found = logs.map((line) => LOGGED.exec(line)).filter((entry) => entry !== null);
 	return {
-		value: found === undefined ? null : BigInt(`0x${found[1]}`),
+		value: found.length === 0 ? null : BigInt(`0x${found[found.length - 1][1]}`),
+		first: found.length === 0 ? null : BigInt(`0x${found[0][1]}`),
 		ok: !failed,
 		error: failed ? result.err().toString() : "",
 		units: Number(meta.computeUnitsConsumed()),
@@ -166,6 +169,14 @@ function namedFailure(label, outcome) {
 {
 	const name = "reads";
 	const base = (await run(OPS.seeds, 1)).value;
+	const now = { slot: 123456789n, epochStartTimestamp: -5n, epoch: 7n, leaderScheduleEpoch: 8n, unixTimestamp: 1700000000n };
+	svm.setClock(new Clock(now.slot, now.epochStartTimestamp, now.epoch, now.leaderScheduleEpoch, now.unixTimestamp));
+	const wanted = (now.slot + now.epoch + now.leaderScheduleEpoch + now.unixTimestamp + now.epochStartTimestamp) & MASK;
+	const owner = Buffer.from(getAddressEncoder().encode(program));
+	const event = Buffer.concat([
+		createHash("sha256").update("event:Probed").digest().subarray(0, 8),
+		Buffer.from([7, 0, 0, 0, 0, 0, 0, 0]), owner, Buffer.from([1]),
+	]);
 	const sizes = [];
 	for (const [kind, op] of [["clock", OPS.clock], ["returnData", OPS.returnData], ["logKey", OPS.logKey], ["event", OPS.event]]) {
 		const positions = new Map();
@@ -176,6 +187,17 @@ function namedFailure(label, outcome) {
 			units.set(count, outcome.units);
 			check(`[${name}] ${count} ${kind} reads leave the heap position at ${base} (${outcome.ok ? `${outcome.units} CU, position ${outcome.value}` : outcome.error})`,
 				outcome.ok && outcome.value === base);
+			if (kind === "clock" && outcome.ok) {
+				check(`[${name}] ${count} clock reads sum every field the runtime holds`, outcome.first === ((wanted * BigInt(count)) & MASK));
+			}
+			if (kind === "logKey" && outcome.ok) {
+				check(`[${name}] ${count} logPubkey calls log the program's base58 ${count} times`,
+					outcome.logs.filter((line) => line === `Program log: ${program}`).length === count);
+			}
+			if (kind === "event" && outcome.ok) {
+				check(`[${name}] ${count} events log Anchor's discriminator and the Borsh fields, ${count} times`,
+					outcome.logs.filter((line) => line === `Program data: ${event.toString("base64")}`).length === count);
+			}
 		}
 		sizes.push(`${kind} ${Number(positions.get(20) - positions.get(1)) / 19} B ${Math.round((units.get(20) - units.get(1)) / 19)} CU`);
 	}

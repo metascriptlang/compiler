@@ -26,8 +26,8 @@ function ask(): Result<uint64, ProgramError> {
 	const answered = returnData();
 	if (answered === null) { return Result.err(ProgramError.invalidAccountData()); }
 	if (!answered.program.equals(programId())) { return Result.err(ProgramError.incorrectProgramId()); }
-	logU64(answered.data.length);
-	logU64(try answered.data.readU8(2));
+	logU64(answered.length);
+	logU64(try answered.readU8(2));
 	return Result.ok(0);
 }
 

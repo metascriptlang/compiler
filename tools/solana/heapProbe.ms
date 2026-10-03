@@ -112,22 +112,30 @@ struct Probed {
 
 function clockLoop(count: uint64): Result<uint64, ProgramError> {
 	let sum: uint64 = 0;
-	for (let index: uint64 = 0; index < count; index++) { sum = sum + clock().slot; }
+	for (let index: uint64 = 0; index < count; index++) {
+		const now = clock();
+		sum = sum + now.slot + now.epoch + now.leaderScheduleEpoch;
+		sum = sum + (now.unixTimestamp as uint64) + (now.epochStartTimestamp as uint64);
+	}
 	logU64(sum);
 	logU64(msSolAlloc(0));
 	return Result.ok(0);
 }
 
 function returnDataLoop(count: uint64): Result<uint64, ProgramError> {
-	let sum: uint64 = 0;
 	for (let index: uint64 = 0; index < count; index++) {
 		const payload: uint8[4] = [1, 2, 3, (index & 0xff) as uint8];
 		setReturnData(payload);
 		const found = returnData();
 		if (found === null) { return Result.err(ProgramError.invalidAccountData()); }
-		sum = sum + (try found.data.readU8(3)) as uint64;
+		if (!found.program.equals(programId()) || found.length != 4) {
+			return Result.err(ProgramError.invalidAccountData());
+		}
+		const word = try found.readU32(0);
+		if (word != (0x00030201 | (((index & 0xff) as uint32) << 24))) {
+			return Result.err(ProgramError.invalidAccountData());
+		}
 	}
-	logU64(sum);
 	logU64(msSolAlloc(0));
 	return Result.ok(0);
 }
