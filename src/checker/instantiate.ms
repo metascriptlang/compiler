@@ -8,7 +8,7 @@ import { methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
-import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks } from "./resolvePass";
+import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
@@ -863,6 +863,9 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 			} else {
 				instType.typeReturn = voidType();
 			}
+		}
+		if (cd.fnReturnType == "" && isLifecycleHookName(sym.name) && getExtReceiverType(cd.fnFlags) != "") {
+			refuseHookInferredReturn(bodyCtx, sym.name, cd.nameLocation, instType);
 		}
 		bodyCtx.inferredReturn = savedReturn;
 		bodyCtx.inferredReturnStmts = savedReturnStmts;
