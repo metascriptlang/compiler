@@ -1358,7 +1358,9 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
 		const u1 = userHookArg(hookSym, 0, s1, classType, loc);
-		if (isUnary) {
+		if (isTrace) {
+			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, makeIdentResolved(s2, loc)], loc), loc));
+		} else if (isUnary) {
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1], loc), loc));
 		} else {
 			const u2 = userHookArg(hookSym, 1, s2, classType, loc);
