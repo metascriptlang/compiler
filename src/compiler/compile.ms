@@ -50,9 +50,8 @@ import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
 import { drainPendingInstances, distinctInstances, placeInstance } from "../checker/instantiate";
-import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, collectTypeInstanceRows, moduleTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
+import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { opMark, opsFrom, replayOps } from "../codegen/c/types";
-import { GenericTypeInstRow, addGenericTypeInstRow } from "../parser/context";
 import { dbLower } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig } from "./buildConfig";
@@ -582,7 +581,6 @@ interface A2Job {
 	timers: A2Timers;
 	diagnostics: ModuleError[];
 	instances: Node[];
-	typeInstances: GenericTypeInstRow[];
 	cloneInput: boolean;
 	ran: boolean;
 	claims: LowerClaims;
@@ -629,7 +627,6 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	}
 	const errBase = ctx.errors.length;
 	if (opts.verbose) verboseLog(`transforming ${modPath}`);
-	for (const row of job.typeInstances) addGenericTypeInstRow(row);
 	const _tm0 = performance.now();
 	const monoed = monomorphizeProgram(program, ctx);
 	validateTypedAST(ctx, monoed);
@@ -2587,33 +2584,7 @@ resetLiftedOps();
 		hcrModules[i].beforeReload = hcrReloadHandlers(program, SymbolFlag.BeforeReload);
 		hcrModules[i].afterReload = hcrReloadHandlers(program, SymbolFlag.AfterReload);
 	}
-	const firstModule = checkedMods.length > 0 ? checkedMods[0].modPath : "";
-	const typeRowsOf = new HashMap<string, GenericTypeInstRow[]>();
-	const sharedOrder: string[] = [];
-	const sharedFromReloadable: GenericTypeInstRow[] = [];
-	for (const path of graph.loadOrder) {
-		if (!reloadable.includes(path) || path == firstModule) {
-			sharedOrder.push(path);
-			continue;
-		}
-		const own: GenericTypeInstRow[] = [];
-		for (const row of moduleTypeInstanceRows(session.check, path)) {
-			if (row.prelude) sharedFromReloadable.push(row);
-			else own.push(row);
-		}
-		typeRowsOf.set(path, own);
-	}
-	const sharedRows = collectTypeInstanceRows(session.check, sharedOrder);
-	const sharedKeys = new HashSet<string>();
-	for (const row of sharedRows) sharedKeys.add(row.baseName + "|" + row.typeArgKey);
-	for (const row of sharedFromReloadable) {
-		const key = row.baseName + "|" + row.typeArgKey;
-		if (sharedKeys.has(key)) continue;
-		sharedKeys.add(key);
-		sharedRows.push(row);
-	}
-	typeRowsOf.set(firstModule, sharedRows);
-	const noTypeRows: GenericTypeInstRow[] = [];
+
 	const ownerFingerprints: HashMap<string, string> = new HashMap<string, string>();
 	if (session.keep) {
 		if (opts.isHcr) {
@@ -2629,9 +2600,7 @@ resetLiftedOps();
 			session.hcrTypeRegistryFingerprint = typesNow;
 		}
 		for (const cm of checkedMods) {
-			let fingerprint = instancesFingerprint(session, instancesByOwner.get(cm.modPath));
-			const rows = typeRowsOf.get(cm.modPath);
-			if (rows != null && rows.length > 0) fingerprint = fingerprint + "#types:" + typeInstanceRowsFingerprint(rows);
+			const fingerprint = instancesFingerprint(session, instancesByOwner.get(cm.modPath));
 			ownerFingerprints.set(cm.modPath, fingerprint);
 			if (session.check.rechecked.has(cm.modPath) || !session.lowerFingerprints.has(cm.modPath)) continue;
 			if (session.lowerFingerprints.get(cm.modPath) != fingerprint) {
@@ -2657,7 +2626,7 @@ resetLiftedOps();
 			timers: a2t,
 			diagnostics: [],
 			instances: routed != null ? routed : [],
-			typeInstances: typeRowsOf.get(modPath) ?? noTypeRows,
+
 			cloneInput: session.keep,
 			ran: false,
 			claims: { ops: [] },

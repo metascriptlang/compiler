@@ -11,7 +11,6 @@
 
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core"; // side-effect: register sub-parsers
-import { resetAllSideChannels } from "../../parser/context";
 import { Node, NodeKind,
 	IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
@@ -365,14 +364,7 @@ function shapeList(nodes: Node[]): string {
 
 // Run source through fmt and assert AST shape is preserved.
 // Throws (via assert false) with a diff dump on mismatch.
-//
-// resetAllSideChannels() is called before each parse so that generic
-// declarations (stored in a side-channel keyed by name) are captured
-// freshly for each version. Without the reset, the comparator can't
-// notice if the formatted output dropped generic params on a class
-// or interface — both parses would query the same accumulated store.
 export function assertFmtPreservesAst(source: string): boolean {
-	resetAllSideChannels();
 	const parsedA = parseSource(source);
 	if (!parsedA.ok) {
 		console.log("INPUT FAILED TO PARSE: " + parsedA.error);
@@ -381,7 +373,6 @@ export function assertFmtPreservesAst(source: string): boolean {
 	}
 	const shapeA = astShape(parsedA.value);
 
-	resetAllSideChannels();
 	const formatted = fmt(source);
 	if (formatted === "") {
 		console.log("FMT FAILED");
@@ -389,7 +380,6 @@ export function assertFmtPreservesAst(source: string): boolean {
 		return false;
 	}
 
-	resetAllSideChannels();
 	const parsedB = parseSource(formatted);
 	if (!parsedB.ok) {
 		console.log("FORMATTED OUTPUT FAILED TO PARSE: " + parsedB.error);
@@ -431,7 +421,6 @@ export function assertFmtContains(source: string, expected: string): boolean {
 }
 
 export function assertFmtLossless(source: string): boolean {
-	resetAllSideChannels();
 	const formatted = fmt(source);
 	if (formatted === "") {
 		console.log("FMT FAILED");
@@ -449,14 +438,12 @@ export function assertFmtLossless(source: string): boolean {
 }
 
 export function assertFmtIdempotent(source: string): boolean {
-	resetAllSideChannels();
 	const once = fmt(source);
 	if (once === "") {
 		console.log("FMT FAILED");
 		console.log("source: " + source);
 		return false;
 	}
-	resetAllSideChannels();
 	const twice = fmt(once);
 	if (twice !== once) {
 		console.log("FMT NOT IDEMPOTENT");

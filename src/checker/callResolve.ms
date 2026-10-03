@@ -18,7 +18,7 @@ import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState } from "./instantiate";
 import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
-import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
+import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { forEachChild } from "../ast/visitor";
@@ -104,9 +104,8 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 		// `Ref<GenericInstance Map(string, Handler)>` from a `const m:
 		// Map<string, Handler> = ...` annotation) and pull the concrete
 		// type args out of `typeChildren`. Round-trip the names through
-		// `monoConcreteTypeName` so the parser-side
-		// `recordGenericTypeInstantiation` registry sees the same string
-		// form it would have if the user had written `<...>` explicitly.
+		// `monoConcreteTypeName` so the args carry the same string form
+		// they would have if the user had written `<...>` explicitly.
 		const giCtx = peelToGenericInstance(expectedType);
 		if (giCtx == null
 				|| giCtx.typeName != calleeName
@@ -127,7 +126,6 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 		addError(ctx, `Type '${typeDisplayName(bound)}' does not satisfy constraint '${typeDisplayName(constraint)}' for type parameter '${trimmedParamNames[pi]}' in '${calleeName}'`,
 			callee.location.line, callee.location.column);
 	}
-	recordGenericTypeInstantiation(calleeName, calleeSym, args, ctx);
 	const baseSym = calleeSym;
 	if (baseSym == null) return { type: calleeType, instance: null };
 	ensureShaped(baseSym, ctx);

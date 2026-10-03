@@ -1,7 +1,6 @@
 import { checkSource, strictErrorCount, warningCount } from "./helpers";
 import { compileToC, compileToCWithStd, compileToJS } from "../helpers";
 import { parseSource } from "../../parser/statements/validation";
-import { resetAllSideChannels } from "../../parser/context";
 import { checkProgramWithRegistry } from "../../checker/checkPass";
 import { getPreludeContext } from "../../checker/orchestrator";
 import { ExportRegistry, Severity } from "../../checker/context";
@@ -155,7 +154,6 @@ test "declaration boundaries: null aliases warn once without changing the accept
 
 function builtMatchErrors(source: string): int32 {
 	checkSource("const warm: int32 = 0;");
-	resetAllSideChannels();
 	const parsed = parseSource(source);
 	if (!parsed.ok) return -1;
 	const fn = (parsed.value.data as ProgramData).programStmts[0];

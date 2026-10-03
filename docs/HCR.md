@@ -777,7 +777,6 @@ reason printed (`watch: rebuilding from scratch: …`):
 |---|---|---|
 | HCR export tables and the shapes of project types | every image carries every image's slot and TypeInfo macros (`hcrIndirect.ms` `lowerHcrIndirection`) | `hcrTablesFingerprint`, `projectTypesFingerprint` |
 | generic function instances routed to the module | an instance is emitted in its owner's unit, usually a std module: one `Map<string, Item>` in a project module put 84 lines naming `Item` into `std/core/struct.c` | `instancesFingerprint` per owner |
-| generic type instances | `monoEmitTypeInstNodes` emits every one into the first module lowered | the first module's fingerprint |
 | hook symbols, hook and TypeInfo owners, type-bound operations | per-build global tables that lowering fills and emission reads (`codegen/c/types.ms` `_hookSyms` and `_opSyms`, `destructorLifting.ms` `_globalHookOwners` and `_globalTypeInfoOwners`) | recorded per lowering, replayed when it is reused, compared when it reruns |
 
 So body edits stay warm; an added or changed export, a new generic use over a project type or a

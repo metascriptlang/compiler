@@ -6,12 +6,10 @@
 
 import { Node, NodeKind } from "../ast/node";
 import { CheckerContext } from "../checker/context";
-import { resetGenericTypeInsts } from "../parser/context";
 
 export function monomorphizeProgram(program: Node, checkerCtx: CheckerContext): Node {
 	if (checkerCtx == null) return program;
 	if (program == null) return program;
 	if (program.kind != NodeKind.Program) return program;
-	resetGenericTypeInsts();
 	return program;
 }

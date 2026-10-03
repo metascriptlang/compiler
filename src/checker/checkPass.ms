@@ -28,8 +28,8 @@ import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveRetur
 import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances } from "./instantiate";
 import { CtorRow, ctorRoutineMark, ctorRoutinesFrom, replayCtorRoutines } from "./ctorRoutine";
-import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
-import { declGenericParams, symGenericParams, classParentOf, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView } from "./types";
+import { isBuiltinDirective } from "./decoratorHelpers";
+import { declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance } from "./types";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { bindContainerNames, bindModuleNames, releaseNames, paramSymbol } from "./bindNames";
@@ -3710,7 +3710,6 @@ function checkProgramCore(
 
 interface SharedPrelude {
 	ctx: CheckerContext;
-	typeInstances: GenericTypeInstRow[];
 	duVariants: Type[];
 	ctorRoutines: CtorRow[];
 	dispatch: DispatchRecords;
@@ -3735,7 +3734,6 @@ export function preludeContextFor(stdPath: string, backendExt: string): CheckerC
 }
 
 function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude {
-	const typeInstMark = genericTypeInstMark();
 	const duMark = duVariantMark();
 	const ctorMark = ctorRoutineMark();
 	const outerDispatch = startDispatchCapture();
@@ -3744,7 +3742,7 @@ function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude 
 	for (const row of typeInstances) row.prelude = true;
 	return {
 		ctx,
-		typeInstances,
+
 		duVariants: duVariantsFrom(duMark),
 		ctorRoutines: ctorRoutinesFrom(ctorMark),
 		dispatch: endDispatchCapture(outerDispatch),
@@ -3752,7 +3750,6 @@ function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude 
 }
 
 function replayPreludeContributions(shared: SharedPrelude): void {
-	for (const row of shared.typeInstances) addGenericTypeInstRow(row);
 	replayDuVariants(shared.duVariants);
 	replayCtorRoutines(shared.ctorRoutines);
 	replayDispatchRecords(shared.dispatch);

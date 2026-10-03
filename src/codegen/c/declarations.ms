@@ -21,7 +21,6 @@ import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStrin
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isBakeableAggregateConst, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
-// genGenericTypeInsts lives in index.ms for the same reason.
 
 // ===== genDecl — main declaration dispatcher =====
 

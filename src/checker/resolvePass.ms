@@ -8,16 +8,16 @@
 
 import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
+import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
-import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
+import { findCallTypeArg } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl } from "./compat";
 import { mintCtorRoutine } from "./ctorRoutine";
-import { buildTypeArgKeys, monoBaseName, monoInstanceNameOf, monoTypeKey } from "../monomorphize/registry";
+import { monoTypeKey } from "../monomorphize/registry";
 
 function anyHasGenericParams(types: Type[]): boolean {
 	for (const t of types) {
@@ -783,11 +783,10 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				}
 				return emitUnresolvedTypeRef(ctx, baseName, line, col, "");
 			}
-			// Concrete instantiation: record for codegen + produce concrete type.
+			// Concrete instantiation: produce the concrete type.
 			// Reference parity (handleGenericInvocation):
 			// both type annotations and `new` expressions go through the same
 			// instantiation path, producing the same concrete type.
-			recordGenericTypeInstantiation(baseName, genericSym, args, ctx);
 			// Build GenericInstance with structural type args
 			const baseSym2 = lookupTypeSym(ctx, writtenName);
 			if (baseSym2 != null) {
@@ -1180,109 +1179,6 @@ export function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 	return key;
 }
 
-// Find index of matching generic param for a given field type string.
-// Returns the param index, or -1 if no match. Uses only number locals (DRC-safe).
-function findGenericParamIdx(rawType: string, paramNames: string[]): number {
-	for (let i = 0; i < paramNames.length; i += 1) {
-		if (paramNames[i].trim() == rawType) return i;
-	}
-	return -1;
-}
-
-// Substitute all generic param names in a type string with concrete types.
-// Handles nested generics: "MapEntry<K, V>[]" with K=string, V=number → "MapEntry<string, number>[]"
-// Only replaces whole identifiers (not substrings): "Key" won't match param "K".
-function substituteGenericParamsInType(rawType: string, paramNames: string[], args: string[]): string {
-	let result = rawType;
-	for (let i = 0; i < paramNames.length; i += 1) {
-		if (i >= args.length) break;
-		const pname = paramNames[i].trim();
-		const arg = args[i].trim();
-		if (pname == "") continue;
-		// Replace whole-identifier occurrences of pname with arg
-		let buf = "";
-		let pos = 0;
-		while (pos < result.length) {
-			// Check if pname appears at pos as a whole identifier
-			let matched = false;
-			if (pos + pname.length <= result.length) {
-				const slice = result.slice(pos, pos + pname.length);
-				if (slice == pname) {
-					// Check boundaries: char before and after must not be alphanumeric/underscore
-					const before = pos > 0 ? result.charAt(pos - 1) : " ";
-					const after = pos + pname.length < result.length ? result.charAt(pos + pname.length) : " ";
-					const isWordBefore = (before >= "a" && before <= "z") || (before >= "A" && before <= "Z") || (before >= "0" && before <= "9") || before == "_";
-					const isWordAfter = (after >= "a" && after <= "z") || (after >= "A" && after <= "Z") || (after >= "0" && after <= "9") || after == "_";
-					if (!isWordBefore && !isWordAfter) {
-						buf = buf + arg;
-						pos = pos + pname.length;
-						matched = true;
-					}
-				}
-			}
-			if (!matched) {
-				buf = buf + result.charAt(pos);
-				pos = pos + 1;
-			}
-		}
-		result = buf;
-	}
-	return result;
-}
-
-// Record a generic type instantiation (e.g., Box<number>) for codegen
-// Looks up field names/types from parser side-channel, substitutes generic params -> concrete types
-// NOTE: Avoids all `let` string variables — only const strings + number let variables.
-// DRC generates msDecref instead of msStringDecref for let string locals in complex functions.
-export function recordGenericTypeInstantiation(baseName: string, genericSym: Symbol | null, args: string[], ctx: CheckerContext): void {
-	const argTypes: Type[] = [];
-	for (const arg of args) {
-		const trimmed = arg.trim();
-		if (trimmed == "") return;
-		const resolved = resolveAnnotation(trimmed, ctx, 0, 0);
-		if (isUnresolvedType(resolved)) return;
-		argTypes.push(resolved);
-	}
-	const typeArgKey = buildTypeArgKeys(argTypes).join("_");
-	const decl = genericSym != null ? genericSym.declNode : null;
-	const owner = genericSym != null ? genericSym.modulePath : "";
-	const instBase = monoBaseName(baseName, owner);
-	const mangledName = monoInstanceNameOf(baseName, owner, argTypes);
-
-	const fieldNamesStr = declFieldNamesJoined(decl);
-	const fieldTypesStr = declFieldTypesJoined(decl);
-
-	if (fieldNamesStr == "") {
-		addGenericTypeInst(instBase, typeArgKey, mangledName, "", "", false);
-		return;
-	}
-
-	// Split generic param names: "T,U" -> ["T", "U"]
-	const paramNames = splitTopLevel(genericParamNamesOf(declGenericParams(decl)), ",");
-	const fnParts = splitTopLevel(fieldNamesStr, "|");
-	const ftParts = splitTopLevel(fieldTypesStr, "|");
-
-	if (fnParts.length == 0) {
-		addGenericTypeInst(instBase, typeArgKey, mangledName, "", "", false);
-		return;
-	}
-
-	// Substitute generic params in field types (handles nested generics like MapEntry<K, V>[])
-	const firstRaw = ftParts.length > 0 ? ftParts[0].trim() : "";
-	const firstSub = substituteGenericParamsInType(firstRaw, paramNames, args);
-
-	let resultFieldNames = fnParts[0].trim();
-	let resultFieldTypes = firstSub;
-
-	for (let fi = 1; fi < fnParts.length; fi += 1) {
-		const rawType = fi < ftParts.length ? ftParts[fi].trim() : "";
-		const subType = substituteGenericParamsInType(rawType, paramNames, args);
-		resultFieldNames = resultFieldNames + "|" + fnParts[fi].trim();
-		resultFieldTypes = resultFieldTypes + "|" + subType;
-	}
-
-	addGenericTypeInst(instBase, typeArgKey, mangledName, resultFieldNames, resultFieldTypes, false);
-}
 
 // ===== Resolve Helpers =====
 
@@ -2686,12 +2582,6 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 
 import { createContext } from "./context";
 import { defineSymbol, makeSymbol } from "./symbol";
-import {
-	resetGenericTypeInsts, getGenericTypeInstCount, getGenericTypeInstBaseName,
-	getGenericTypeInstTypeArgKey, getGenericTypeInstMangledName,
-	getGenericTypeInstFieldNames, getGenericTypeInstFieldTypes,
-	findGenericTypeInstIdx,
-} from "../parser/context";
 
 function resolveWith(text: string): Type {
 	const ctx = createContext();
@@ -2856,43 +2746,21 @@ test "decorated function gets resolved" {
 	assert ret != null && ret.kind == TypeKind.Number;
 }
 
-test "Box<number> records instantiation" {
-	resetGenericTypeInsts();
+test "Box<number> resolves to a generic instance" {
 	const ctx = createContext();
 	declareGeneric(ctx, NodeKind.InterfaceDecl, "Box", "T", ["value"], ["T"]);
 	const t = resolveAnnotation("Box<number>", ctx, 0, 0);
 	assert t.kind == TypeKind.GenericInstance;
-	assert getGenericTypeInstCount() == 1;
-	assert getGenericTypeInstBaseName(0) == "Box";
-	assert getGenericTypeInstTypeArgKey(0) == "number";
-	assert getGenericTypeInstMangledName(0) == "Box__number";
-	assert getGenericTypeInstFieldNames(0) == "value";
-	assert getGenericTypeInstFieldTypes(0) == "number";
 }
 
-test "Pair<string, number> records instantiation" {
-	resetGenericTypeInsts();
+test "Pair<string, number> resolves to a generic instance" {
 	const ctx = createContext();
 	declareGeneric(ctx, NodeKind.InterfaceDecl, "Pair", "A,B", ["first", "second"], ["A", "B"]);
 	const t = resolveAnnotation("Pair<string, number>", ctx, 0, 0);
 	assert t.kind == TypeKind.GenericInstance;
-	const idx = findGenericTypeInstIdx("Pair", "string_number");
-	assert idx >= 0;
-	assert getGenericTypeInstFieldNames(idx) == "first|second";
-	assert getGenericTypeInstFieldTypes(idx) == "string|number";
-}
-
-test "dedup instantiation" {
-	resetGenericTypeInsts();
-	const ctx = createContext();
-	declareGeneric(ctx, NodeKind.InterfaceDecl, "Box", "T", ["value"], ["T"]);
-	resolveAnnotation("Box<number>", ctx, 0, 0);
-	resolveAnnotation("Box<number>", ctx, 0, 0);
-	assert getGenericTypeInstCount() == 1;
 }
 
 test "non-generic base falls through" {
-	resetGenericTypeInsts();
 	const ctx = createContext();
 	defineSymbol(ctx.table, makeSymbol("Foo", SymbolKind.Interface, createStruct("Foo", [], [], true), false));
 	const t = resolveAnnotation("Foo<number>", ctx, 0, 0);
@@ -2902,23 +2770,17 @@ test "non-generic base falls through" {
 }
 
 test "a declaration without parameters is not generic, whatever its name" {
-	resetGenericTypeInsts();
 	const ctx = createContext();
 	declareGeneric(ctx, NodeKind.ClassDecl, "Box", "", ["v"], ["int32"]);
 	const t = resolveAnnotation("Box<number>", ctx, 0, 0);
 	assert t.kind == TypeKind.Struct;
-	assert getGenericTypeInstCount() == 0;
 }
 
-test "generic class Container<T> records instantiation" {
-	resetGenericTypeInsts();
+test "generic class Container<T> resolves to a generic instance" {
 	const ctx = createContext();
 	declareGeneric(ctx, NodeKind.ClassDecl, "Container", "T", ["item", "count"], ["T", "number"]);
 	const t = resolveAnnotation("Container<string>", ctx, 0, 0);
 	assert t.kind == TypeKind.GenericInstance;
-	assert getGenericTypeInstCount() == 1;
-	assert getGenericTypeInstFieldNames(0) == "item|count";
-	assert getGenericTypeInstFieldTypes(0) == "string|number";
 }
 
 test "constraint stored on GenericParam typeExtra" {
@@ -2947,7 +2809,6 @@ test "no constraint leaves typeExtra null" {
 }
 
 test "constrained interface Box<T extends number>" {
-	resetGenericTypeInsts();
 	const ctx = createContext();
 	declareGeneric(ctx, NodeKind.InterfaceDecl, "Box", "T:number", ["value"], ["T"]);
 	const t = resolveAnnotation("Box<number>", ctx, 0, 0);

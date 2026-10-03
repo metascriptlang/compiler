@@ -6,7 +6,6 @@ import { readFile, readDir, exists, isDir } from "std/fs";
 import { env, exit } from "std/process";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { parseSource } from "../../parser/statements/validation";
-import { resetAllSideChannels } from "../../parser/context";
 import { formatNode } from "../../compiler/fmt/printer/index";
 import { defaultFormatOptions } from "../../compiler/fmt/options";
 import { checkLossless } from "../../compiler/fmt/lossless";
@@ -22,7 +21,6 @@ function collect(dir: string, out: string[]): void {
 }
 
 function format(source: string): Result<string, string> {
-	resetAllSideChannels();
 	const parsed = parseSource(source);
 	if (!parsed.ok) return Result.err("parse error: " + parsed.error);
 	const options = defaultFormatOptions();

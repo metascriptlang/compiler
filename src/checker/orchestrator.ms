@@ -18,15 +18,12 @@ import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
 import { instantiateProfile, instantiateTimings, lookupModuleCtx } from "./instantiate";
 import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbTypeCheck, TransAmDb } from "../compiler/transam/index";
-import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, resetGenericTypeInsts } from "../parser/context";
 import { opMark, opsFrom, replayOps, KeyedOp } from "../codegen/c/types";
 
 export class CheckSession {
 	db: TransAmDb | null;
 	checks: HashMap<string, CheckerContext>;
 	instances: HashMap<string, Node[]>;
-	typeInstances: HashMap<string, GenericTypeInstRow[]>;
-	preludeTypeInstances: GenericTypeInstRow[];
 	rechecked: HashSet<string>;
 	ops: HashMap<string, KeyedOp[]>;
 }
@@ -36,8 +33,6 @@ export function createCheckSession(): CheckSession {
 		db: null,
 		checks: new HashMap<string, CheckerContext>(),
 		instances: new HashMap<string, Node[]>(),
-		typeInstances: new HashMap<string, GenericTypeInstRow[]>(),
-		preludeTypeInstances: [],
 		rechecked: new HashSet<string>(),
 		ops: new HashMap<string, KeyedOp[]>(),
 	};
@@ -148,7 +143,6 @@ export function setGraphCheckTiming(on: boolean): void {
 // freestanding async gate) run inside this pass, long before applyGcMode.
 export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, config: ResolverConfig | null = null, session: CheckSession | null = null, strictDefs: boolean = false, strictNullChecks: boolean = false): ExportRegistry {
 	const kept: TransAmDb | null = session != null ? session.db : null;
-	if (session != null) resetGenericTypeInsts();
 	const _tpre0 = performance.now();
 	const resolverConfig = config != null ? config : createDefaultConfig(backendOfExtension(backendExt), stdPath);
 	const holdsPrelude = graphHoldsPrelude(graph);
@@ -171,8 +165,6 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	if (session != null) {
 		session.db = db;
 		session.rechecked = new HashSet<string>();
-		const preludeRows = takeGenericTypeInstsFrom(0);
-		if (kept == null) session.preludeTypeInstances = preludeRows;
 	}
 	dbBindGraph(db, graph);
 	const tBind = performance.now() - _tb0;
@@ -186,14 +178,12 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		const injectedIncludes = baseCtx.includeDirectives;
 		const injectedFlags = baseCtx.compilerFlags;
 		const _tm0 = performance.now();
-		const typeInstanceMark = genericTypeInstMark();
 		const opsMark0 = opMark();
 		const ctx = dbTypeCheck(db, path);
 		const fresh = session == null || session.checks.get(path) != ctx;
 		if (session != null && ctx != null && fresh) {
 			session.checks.set(path, ctx);
 			session.instances.set(path, ctx.generatedInstances);
-			session.typeInstances.set(path, takeGenericTypeInstsFrom(typeInstanceMark));
 			session.ops.set(path, opsFrom(opsMark0));
 			session.rechecked.add(path);
 		} else if (session != null && ctx != null) {

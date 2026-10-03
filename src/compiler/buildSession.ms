@@ -2,7 +2,6 @@ import { Node, Type, Symbol, SymbolKind } from "../ast/node";
 import { CModuleOutput } from "../codegen/c/index";
 import { forEachChild } from "../ast/visitor";
 import { CheckSession, createCheckSession } from "../checker/orchestrator";
-import { GenericTypeInstRow, takeGenericTypeInstsFrom, resetAllSideChannels } from "../parser/context";
 import { pendingInstanceKeyOf, resetInstantiationState } from "../checker/instantiate";
 import { resetDispatchRegistry } from "../checker/context";
 import { resetRaises } from "../checker/raises";
@@ -86,7 +85,6 @@ export function createBuildSession(keep: boolean): BuildSession {
 }
 
 export function resetBuildState(): void {
-	resetAllSideChannels();
 	resetInstantiationState();
 	resetDispatchRegistry();
 	resetRaises();
@@ -171,40 +169,6 @@ export function hcrTypeRegistryFingerprint(modules: HcrIndirectModule[]): string
 	return out;
 }
 
-export function collectTypeInstanceRows(check: CheckSession, loadOrder: string[]): GenericTypeInstRow[] {
-	const lists: GenericTypeInstRow[][] = [check.preludeTypeInstances];
-	for (const path of loadOrder) {
-		const created = check.typeInstances.get(path);
-		if (created != null) lists.push(created);
-	}
-	lists.push(takeGenericTypeInstsFrom(0));
-	return distinctTypeRows(lists);
-}
-
-export function moduleTypeInstanceRows(check: CheckSession, path: string): GenericTypeInstRow[] {
-	const created = check.typeInstances.get(path);
-	return created != null ? distinctTypeRows([created]) : [];
-}
-
-function distinctTypeRows(lists: GenericTypeInstRow[][]): GenericTypeInstRow[] {
-	const rows: GenericTypeInstRow[] = [];
-	const seen = new HashSet<string>();
-	for (const list of lists) {
-		for (const row of list) {
-			const key = row.baseName + "|" + row.typeArgKey;
-			if (seen.has(key)) continue;
-			seen.add(key);
-			rows.push(row);
-		}
-	}
-	return rows;
-}
-
-export function typeInstanceRowsFingerprint(rows: GenericTypeInstRow[]): string {
-	let out = "";
-	for (const row of rows) out = out + row.key + "|" + row.fieldNames + "|" + row.fieldTypes + ";";
-	return out;
-}
 
 function isTypeDeclaration(kind: SymbolKind): boolean {
 	return kind == SymbolKind.Class || kind == SymbolKind.Interface || kind == SymbolKind.TypeAlias

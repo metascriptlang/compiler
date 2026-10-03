@@ -1991,30 +1991,6 @@ export function genericParamNamesOf(params: string): string {
 	return names.join(",");
 }
 
-export function declFieldNamesJoined(decl: Node | null): string {
-	const d = peelDeclWrapper(decl);
-	if (d == null) return "";
-	if (d.kind == NodeKind.InterfaceDecl || d.kind == NodeKind.StructDecl) return (d.data as InterfaceDeclData).interfaceFields.join("|");
-	if (d.kind != NodeKind.ClassDecl) return "";
-	const names: string[] = [];
-	for (const m of (d.data as ClassDeclData).classBody) {
-		if (m.kind == NodeKind.PropertyDecl) names.push((m.data as PropertyDeclData).propName);
-	}
-	return names.join("|");
-}
-
-export function declFieldTypesJoined(decl: Node | null): string {
-	const d = peelDeclWrapper(decl);
-	if (d == null) return "";
-	if (d.kind == NodeKind.InterfaceDecl || d.kind == NodeKind.StructDecl) return (d.data as InterfaceDeclData).interfaceFieldTypes.join("|");
-	if (d.kind != NodeKind.ClassDecl) return "";
-	const types: string[] = [];
-	for (const m of (d.data as ClassDeclData).classBody) {
-		if (m.kind == NodeKind.PropertyDecl) types.push((m.data as PropertyDeclData).propType);
-	}
-	return types.join("|");
-}
-
 export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
 	const innerBase = unwrapRefBase(baseType);
 	return {
