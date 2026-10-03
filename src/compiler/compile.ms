@@ -64,7 +64,7 @@ import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, i
 import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp, writePchManifest, pchManifestCurrent } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -1195,9 +1195,13 @@ function pchFiles(cFile: string, flags: string, mode: number, ccOption: number, 
 	return [prefix, `${cacheDir()}/pch/${key}.h`, `${cacheDir()}/pch/${key}.pch`];
 }
 
+function currentPch(files: string[]): boolean {
+	return files.length == 3 && exists(files[2]) && pchManifestCurrent(`${files[2]}.deps`);
+}
+
 function existingPch(cFile: string, flags: string, mode: number, ccOption: number, ccBinary: string): string {
 	const files = pchFiles(cFile, flags, mode, ccOption, ccBinary);
-	return files.length == 3 && exists(files[2]) ? files[2] : "";
+	return currentPch(files) ? files[2] : "";
 }
 
 interface HcrWarmLink {
@@ -1220,9 +1224,12 @@ function ensurePchs(jobs: ModuleCompileJob[], mode: number, ccOption: number, cc
 	for (const j of jobs) {
 		if (j.modPath == "") continue;
 		const files = pchFiles(j.cFile, j.flags, mode, ccOption, ccBinary);
-		if (files.length != 3 || exists(files[2])) continue;
+		if (files.length != 3 || currentPch(files)) continue;
 		ensureDir(dirname(files[1]));
-		if (writeFile(files[1], files[0]).ok) buildPch(files[1], files[2], j.flags, mode, ccOption, ccBinary);
+		if (!writeFile(files[1], files[0]).ok) continue;
+		const depFile = `${files[2]}.${performance.now()}.d`;
+		if (buildPch(files[1], files[2], depFile, j.flags, mode, ccOption, ccBinary)) writePchManifest(depFile, `${files[2]}.deps`);
+		remove(depFile);
 	}
 }
 

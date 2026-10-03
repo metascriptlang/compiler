@@ -15,11 +15,11 @@
 
 import { env, platform, argv, cwd, execFileCapture, findOnPath } from "std/process";
 import { exists, isDir, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, changeStamp, remove, removeAll, readDir, ensureDir } from "std/fs";
-import { join, dirname, normalize } from "std/fs/path";
+import { join, dirname, normalize, isAbsolute } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace } from "./io";
-import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey } from "./cc";
+import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, buildPch } from "./cc";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 import { VERSION } from "./usage";
 
@@ -290,6 +290,31 @@ function parseDependencyFile(path: string): string[] {
 	}
 	if (current != "") result.push(current);
 	return result;
+}
+
+export function writePchManifest(depFile: string, manifest: string): boolean {
+	const tokens = parseDependencyFile(depFile);
+	let first = 0;
+	while (first < tokens.length && !tokens[first].endsWith(":")) first += 1;
+	if (first == tokens.length) first = -1;
+	let body = "";
+	for (let i = first + 1; i < tokens.length; i += 1) {
+		const path = isAbsolute(tokens[i]) ? tokens[i] : join(cwd(), tokens[i]);
+		body = body + `${path}\t${hashFile(path)}\n`;
+	}
+	if (body == "") return false;
+	return atomicWriteFile(manifest, body);
+}
+
+export function pchManifestCurrent(manifest: string): boolean {
+	const body = try readFile(manifest) catch "";
+	if (body == "") return false;
+	for (const line of body.split("\n")) {
+		if (line == "") continue;
+		const tab = line.indexOf("\t", 0);
+		if (tab <= 0 || hashFile(line.slice(0, tab)) != line.slice(tab + 1, line.length)) return false;
+	}
+	return true;
 }
 
 export function nativeDependenciesKnown(srcPath: string, compileCmd: string): boolean {
@@ -1336,6 +1361,26 @@ test "a file rewritten to the same size at once hashes to its new content" {
 	assert hashFile(path) == "absent";
 }
 
+test "a file written within the settle window is not remembered by its change stamp" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-settle-${performance.now()}.d`;
+	writeFile(path, "native: a.h\n");
+	hashFile(path);
+	dependencyPathsIn(path);
+	sourceIdentity(path);
+	assert _hashByStamp.get(path) == null;
+	assert _dependenciesByStamp.get(path) == null;
+	assert _sourceIdentityByStamp.get(path) == null;
+	remove(path);
+}
+
+test "a settled file is remembered by its change stamp" {
+	const path = join(resolveRuntimeDir(), "runtime/core/system.h");
+	assert settled(path);
+	hashFile(path);
+	assert _hashByStamp.get(path) != null;
+}
+
 test "a dependency file rewritten to the same size at once lists its new paths" {
 	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
 	const path = `${base}/msc-deps-stamp-${performance.now()}.d`;
@@ -1361,26 +1406,6 @@ test "a native source rewritten to the same size at once moves its fingerprint" 
 
 test "a link output rewritten to the same size at once is not taken as cached" {
 	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
-test "a file written within the settle window is not remembered by its change stamp" {
-	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
-	const path = `${base}/msc-settle-${performance.now()}.d`;
-	writeFile(path, "native: a.h\n");
-	hashFile(path);
-	dependencyPathsIn(path);
-	sourceIdentity(path);
-	assert _hashByStamp.get(path) == null;
-	assert _dependenciesByStamp.get(path) == null;
-	assert _sourceIdentityByStamp.get(path) == null;
-	remove(path);
-}
-
-test "a settled file is remembered by its change stamp" {
-	const path = join(resolveRuntimeDir(), "runtime/core/system.h");
-	assert settled(path);
-	hashFile(path);
-	assert _hashByStamp.get(path) != null;
-}
-
 	const output = `${base}/msc-link-output-${performance.now()}.bin`;
 	writeFile(output, "first");
 	writeLinkCache([], [], "-flags", output, output);
@@ -1622,4 +1647,19 @@ test "the C compiler identity moves with its path, size, mtime and version" {
 	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000001, "0.16.0") != base;
 	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000000, "0.16.1") != base;
 	assert compilerIdentity("clang", "/opt/zig/zig", 177108480, 1700000000, "0.16.0") != base;
+}
+
+test "a precompiled header goes stale when a header it includes changes in place" {
+	const dir = `out/test/pchManifest${performance.now()}`;
+	ensureDir(dir);
+	const inner = (value: string): string => `#ifndef INNER_H\n#define INNER_H\n#define INNER_VALUE ${value}\n#endif\n`;
+	writeFile(`${dir}/inner.h`, inner("41"));
+	writeFile(`${dir}/rt.h`, "#ifndef RT_H\n#define RT_H\n#include \"inner.h\"\nstatic inline int rtValue(void) { return INNER_VALUE; }\n#endif\n");
+	writeFile(`${dir}/prefix.h`, "#include \"rt.h\"\n");
+	assert buildPch(`${dir}/prefix.h`, `${dir}/prefix.pch`, `${dir}/prefix.pch.d`, `-iquote${dir}`, 0, 0, "");
+	assert writePchManifest(`${dir}/prefix.pch.d`, `${dir}/prefix.pch.deps`);
+	assert pchManifestCurrent(`${dir}/prefix.pch.deps`);
+	writeFile(`${dir}/inner.h`, inner("42"));
+	assert !pchManifestCurrent(`${dir}/prefix.pch.deps`);
+	assert !pchManifestCurrent(`${dir}/absent.pch.deps`);
 }

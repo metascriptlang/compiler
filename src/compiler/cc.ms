@@ -894,7 +894,7 @@ export function includePrefix(source: string): string {
 	return source.substring(0, end);
 }
 
-export function buildPch(header: string, pch: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): boolean {
+export function buildPch(header: string, pch: string, depFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): boolean {
 	const parts = objectCompileArgs(ccOption, ccBinary, false, mode, extraFlags);
 	if (!parts.ok || !isZigDriver(parts.value.command)) return false;
 	const args: string[] = [];
@@ -909,6 +909,9 @@ export function buildPch(header: string, pch: string, extraFlags: string, mode: 
 	args.push(header);
 	args.push("-o");
 	args.push(tmp);
+	args.push("-MD");
+	args.push("-MF");
+	args.push(depFile);
 	for (const arg of parts.value.trail) args.push(arg);
 	if (!runCc(parts.value.command, args).ok) {
 		remove(tmp);
@@ -1295,11 +1298,11 @@ test "a precompiled header zig serves from its cache after the header is rewritt
 	const source = `${dir}/use.c`;
 	writeFile(header, "#include <string.h>\n");
 	writeFile(source, "int size(void) { return (int)strlen(\"abc\"); }\n");
-	assert buildPch(header, `${dir}/first.pch`, "", 0, 0, "");
+	assert buildPch(header, `${dir}/first.pch`, `${dir}/first.pch.d`, "", 0, 0, "");
 	const nextSecond = (Math.floor(Date.now() / 1000) + 1) * 1000;
 	while (Date.now() < nextSecond) {}
 	writeFile(header, "#include <string.h>\n");
-	assert buildPch(header, `${dir}/second.pch`, "", 0, 0, "");
+	assert buildPch(header, `${dir}/second.pch`, `${dir}/second.pch.d`, "", 0, 0, "");
 	const parts = objectCompileArgs(0, "", false, 0, "");
 	assert parts.ok;
 	const args = objectCompileArgv(parts.value, source, `${dir}/use.o`, "");
