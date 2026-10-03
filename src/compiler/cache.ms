@@ -525,6 +525,7 @@ function ccContentIdentity(ccOption: number, ccBinary: string): string {
 }
 
 export function objectStoreKey(source: string, ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): string {
+	if (storeRoot() == "") return "";
 	const args = objectCompileArgsKey(ccOption, ccBinary, isCpp, mode, extraFlags);
 	return hashContent(`${STORE_FORMAT}\n${platform}\n${source}\n${ccContentIdentity(ccOption, ccBinary)}\n${args}`);
 }
