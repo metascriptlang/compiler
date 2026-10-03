@@ -3,12 +3,11 @@ import {
 	AccountMeta,
 	Bytes,
 	Instruction,
-	ProgramError,
-	Pubkey,
-	pubkeyOf,
 	Seeds,
 	programId,
 } from "./core";
+import { ProgramError } from "./error";
+import { Pubkey, pubkeyOf } from "./pubkey";
 
 when (testBuild) {
 	import { account, failWith, instructionData } from "./core";

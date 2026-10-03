@@ -6,8 +6,6 @@ import {
 	Instruction,
 	Program,
 	ProgramAddress,
-	ProgramError,
-	Pubkey,
 	Seeds,
 	Signer,
 	System,
@@ -17,6 +15,8 @@ import {
 	programId,
 	unchecked,
 } from "./core";
+import { ProgramError } from "./error";
+import { Pubkey } from "./pubkey";
 
 when (testBuild) {
 	import {

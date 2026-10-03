@@ -2,14 +2,13 @@ import {
 	Account,
 	Bytes,
 	Instruction,
-	ProgramError,
-	Pubkey,
-	pubkeyOf,
 	Seeds,
 	assignTo,
 	createAccount,
 	createProgramAccount,
 } from "./core";
+import { ProgramError } from "./error";
+import { Pubkey, pubkeyOf } from "./pubkey";
 
 when (testBuild) {
 	import { account, failWith, instructionData, programId } from "./core";

@@ -1,10 +1,6 @@
 @include("runtime/solana/solana.h");
 @compile("runtime/solana/host.c");
 
-export * from "./pubkey";
-export * from "./error";
-export * from "./discriminator";
-
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { ProgramError } from "./error";
 import { Discriminator } from "./discriminator";
