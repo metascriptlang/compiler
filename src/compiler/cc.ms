@@ -862,6 +862,39 @@ function linkPlanFor(command: ToolCommand, prefix: string[], flagArgs: string[],
 	return plan;
 }
 
+export function includePrefix(source: string): string {
+	let end = 0;
+	while (source.indexOf("#include", end) == end) {
+		const next = source.indexOf("\n", end);
+		if (next < 0) return source.substring(0, source.length);
+		end = next + 1;
+	}
+	return source.substring(0, end);
+}
+
+export function buildPch(header: string, pch: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): boolean {
+	const parts = objectCompileArgs(ccOption, ccBinary, false, mode, extraFlags);
+	if (!parts.ok || !isZigDriver(parts.value.command)) return false;
+	const args: string[] = [];
+	for (const arg of parts.value.lead) args.push(arg);
+	const rtDir = resolveRuntime();
+	if (rtDir != "") args.push(`-iquote${dirname(dirname(rtDir))}`);
+	const tmp = `${pch}.tmp.${performance.now()}`;
+	args.push("-x");
+	args.push("c-header");
+	args.push(header);
+	args.push("-o");
+	args.push(tmp);
+	for (const arg of parts.value.trail) args.push(arg);
+	if (!runCc(parts.value.command, args).ok) {
+		remove(tmp);
+		return false;
+	}
+	if (renameReplace(tmp, pch)) return true;
+	remove(tmp);
+	return false;
+}
+
 export struct ObjectCompileArgs {
 	command: ToolCommand;
 	lead: string[];
@@ -941,7 +974,7 @@ function objectCompileArgv(parts: ObjectCompileArgs, cFile: string, oFile: strin
 	return args;
 }
 
-export function compileCFile(cFile: string, oFile: string, dependencyFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string, plan: Readonly<CcPlan> = NO_PLAN): Result<void, ProcessError> {
+export function compileCFile(cFile: string, oFile: string, dependencyFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string, plan: Readonly<CcPlan> = NO_PLAN, pch: string = ""): Result<void, ProcessError> {
 	ensureDir(dirname(oFile));
 	const parts = objectCompileArgs(ccOption, ccBinary, isCppFile(cFile), mode, extraFlags);
 	if (!parts.ok) return Result.err(parts.error);
@@ -956,8 +989,17 @@ export function compileCFile(cFile: string, oFile: string, dependencyFile: strin
 	let r: Result<string, ProcessError> = Result.err(processError(ProcessErrorKind.Unknown, command.path, "not run"));
 	let planned = false;
 	if (plan.exe != "") {
-		r = runCc({ path: plan.exe, args: [] }, planArgs(plan, [cFile], tmp, depTmp));
-		planned = r.ok;
+		const direct = planArgs(plan, [cFile], tmp, depTmp);
+		if (pch != "") {
+			const withPch: string[] = [direct[0], "-include-pch", pch];
+			for (let k = 1; k < direct.length; k += 1) withPch.push(direct[k]);
+			r = runCc({ path: plan.exe, args: [] }, withPch);
+			planned = r.ok;
+		}
+		if (!planned) {
+			r = runCc({ path: plan.exe, args: [] }, direct);
+			planned = r.ok;
+		}
 	}
 	if (!planned) r = runCc(command, args);
 	if (!r.ok) {

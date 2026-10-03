@@ -60,11 +60,11 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, compilePlanFor, useDriverPlans, NO_PLAN, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto } from "./cc";
+import { compileCFile, compilePlanFor, useDriverPlans, NO_PLAN, includePrefix, buildPch, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto } from "./cc";
 import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -1164,19 +1164,44 @@ interface ModuleCompileJob {
 // printed by the worker), join in input order on the main thread.
 const PLANNED_COMPILE_JOBS = 4;
 
+function pchFiles(cFile: string, flags: string, mode: number, ccOption: number, ccBinary: string): string[] {
+	const text = readFile(cFile);
+	if (!text.ok) return [];
+	const prefix = includePrefix(text.value);
+	if (prefix == "") return [];
+	const key = hashContent(`${prefix}\n${fullCompileCmd(ccOption, mode, flags, ccBinary)}\n${objectStamp()}`);
+	return [prefix, `${cacheDir()}/pch/${key}.h`, `${cacheDir()}/pch/${key}.pch`];
+}
+
+function existingPch(cFile: string, flags: string, mode: number, ccOption: number, ccBinary: string): string {
+	const files = pchFiles(cFile, flags, mode, ccOption, ccBinary);
+	return files.length == 3 && exists(files[2]) ? files[2] : "";
+}
+
+function ensurePchs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string): void {
+	for (const j of jobs) {
+		if (j.modPath == "") continue;
+		const files = pchFiles(j.cFile, j.flags, mode, ccOption, ccBinary);
+		if (files.length != 3 || exists(files[2])) continue;
+		ensureDir(dirname(files[1]));
+		if (writeFile(files[1], files[0]).ok) buildPch(files[1], files[2], j.flags, mode, ccOption, ccBinary);
+	}
+}
+
 function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string, usePlans: boolean): number[] {
 	// Warm lazy cc detection globals on the main thread so workers only read.
 	getCompilerName(ccOption, ccBinary);
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
 		const plan = usePlans ? compilePlanFor(j.cFile, j.depFile != "", j.flags, mode, ccOption, ccBinary) : NO_PLAN;
+		const pch = usePlans ? existingPch(j.cFile, j.flags, mode, ccOption, ccBinary) : "";
 		futures.push(spawn(() => {
-			let r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary, plan);
+			let r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary, plan, pch);
 			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn EAGAIN
 				// under fork pressure). One retry absorbs it; real compile errors
 				// have a nonzero exitCode and are not retried.
-				r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary, plan);
+				r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary, plan, pch);
 			}
 			if (r.ok) return 0;
 			printDiag(r.error.errorOutput != "" ? r.error.errorOutput : `${r.error.command}: ${r.error.message}`);
@@ -2968,6 +2993,7 @@ setGlobalHookOwners(sharedHookOwners);
 		linkHcrImages(oSlots, moduleSlots, jobPaths, hcrCoreSlot, hcrImageSlots, hcrModulePaths, hcrModules, entryPath, outBinary, allFlags, opts);
 		if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
+		if (session.keep && cJobs.length <= PLANNED_COMPILE_JOBS) ensurePchs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (opts.showTime) printTiming("phase D (link images)", tLink);
 		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(` (+${hcrModulePaths.length} HCR images)`));
 		session.lastBuilt = true;
