@@ -22,7 +22,8 @@ import {
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringSym,
 	makeHiddenAddr, runtimeRef,
 } from "../util";
-import { rewriteEcho, buildStructToString, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
+import { rewriteEcho, buildStructToString, buildUnionToString, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
+import { isSlotUnion } from "../../checker/fit";
 import { charToString, stringifyCharOperand } from "./stringOpLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 import { tryLowerPromiseBuiltin, lowerNewPromise } from "../lowering/promiseLower";
@@ -194,6 +195,7 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		cond.nodeType = stringType();
 		return cond;
 	}
+	if (isSlotUnion(objType)) return ctx.jsBackend ? callNode : buildUnionToString(obj, objType, loc, ctx);
 	// Struct/Class → plain JSON string (reuses console.log's struct→string path)
 	const inner = unwrapRef(objType);
 	if (inner.kind == TypeKind.Struct && inner.typeName != "") {
