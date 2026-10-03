@@ -1330,3 +1330,41 @@ test "engine: element pointers compare by identity" {
 	assert ctx.error == "", ctx.error;
 	assert ctx.output == "true false\n";
 }
+
+test "engine: a ref scalar parameter writes the caller's variable" {
+	const ctx = evalOrcVM("function inc(ref n: int32): void { n = n + 1; n += 2; n++; } let k: int32 = 1; inc(k); console.log(`${k}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "5\n";
+}
+
+test "engine: an out parameter forwards to the caller's variable" {
+	const ctx = evalOrcVM("function setInt(out v: int32, n: int32): void { v = n; } function forward(out v: int32, n: int32): void { setInt(v, n); }"
+		+ " let a: int32 = 0; forward(a, 7); console.log(`${a}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "7\n";
+}
+
+test "engine: a ref string, element, field and class reference reach their storage" {
+	const ctx = evalOrcVM("class Box { v: int32 = 1; } struct H { n: int32; }"
+		+ " function shout(ref s: string): void { s += \"!\"; } function bump(ref v: int32): void { v++; }"
+		+ " function swap(ref b: Box): void { b = new Box(); b.v = 9; }"
+		+ " let t = \"hi\"; shout(t); let xs: int32[] = [1, 2]; bump(xs[1]); let h: H = { n: 4 }; bump(h.n);"
+		+ " let box = new Box(); swap(box); console.log(`${t} ${xs[1]} ${h.n} ${box.v}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "hi! 3 5 9\n";
+}
+
+test "engine: a scalar's address is written through" {
+	const ctx = evalOrcVM("let k: int32 = 1; const p = k as Ptr<int32>; p[] = 5; p[0] += 2; console.log(`${k} ${p[]}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "7 7\n";
+}
+
+test "engine: scalar pointers compare by location" {
+	const ctx = evalOrcVM("let xs: int32[] = [1, 2]; let k: int32 = 0; let m: int32 = 0;"
+		+ " const a = xs[0] as Ptr<int32>; const b = xs[1] as Ptr<int32>; const c = xs[0] as Ptr<int32>;"
+		+ " const p = k as Ptr<int32>; const q = m as Ptr<int32>; const r = k as Ptr<int32>;"
+		+ " console.log(`${a == b} ${a == c} ${p == q} ${p == r} ${a != b}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "false true false true true\n";
+}
