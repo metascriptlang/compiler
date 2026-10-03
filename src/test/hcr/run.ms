@@ -956,10 +956,23 @@ function fsWatch(): void {
 	for (const line of lines(both(ran))) {
 		if (line.startsWith("WATCH ")) seen.push(line);
 	}
-	const want = platform == "windows" || platform == "linux" ? [
+	const want = platform == "windows" ? [
 		"WATCH missing opened: false",
 		"WATCH write before the first wait: true",
 		"WATCH write in a subdirectory: true",
+		"WATCH a renamed save is reported closed: true",
+		"WATCH a missing file has no writer: true",
+		"WATCH a closed file proves no writer: true",
+		"WATCH after close: ended true",
+		"WATCH closed while waiting: ended true",
+	] : platform == "linux" ? [
+		"WATCH missing opened: false",
+		"WATCH write before the first wait: true",
+		"WATCH write in a subdirectory: true",
+		"WATCH a renamed save is reported closed: true",
+		"WATCH a closed write is reported closed: true",
+		"WATCH a missing file has no writer: true",
+		"WATCH a closed file proves no writer: false",
 		"WATCH after close: ended true",
 		"WATCH closed while waiting: ended true",
 	] : [
@@ -1014,6 +1027,7 @@ console.log(`hcr: compiler under test = ${MSC}`);
 ensureDir(TMP);
 for (let i = 0; i < CASES.length; i++) {
 	if (i % SHARD_COUNT != SHARD_INDEX) continue;
+	if (ONLY.length > 0 && !ONLY.includes(CASES[i].name)) continue;
 	const t0 = performance.now();
 	CASES[i].run();
 	console.log(`time ${CASES[i].name} ${Math.round((performance.now() - t0) / 1000)}s`);

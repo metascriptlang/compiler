@@ -76,6 +76,7 @@ int32_t msFsWatchOpen(msIoEngine* e, msString path);
 int32_t msFsWatchLastError(void);
 void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive);
 void msFsWatchClose(int32_t handle);
+int32_t msFsWriteSettled(msString path);
 #else
 #include <stdio.h>
 #include <stdlib.h>
@@ -87,6 +88,7 @@ static inline void msFsWatchUnsupported(void) {
 }
 static inline void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) { (void)e; (void)handle; (void)recursive; msFsWatchUnsupported(); return NULL; }
 static inline void msFsWatchClose(int32_t handle) { (void)handle; msFsWatchUnsupported(); }
+static inline int32_t msFsWriteSettled(msString path) { (void)path; return 1; }
 #endif
 
 /* ===== Event Loop Integration ===== */
@@ -157,6 +159,10 @@ static inline int32_t msFsWatchOpen_ms(msString path) {
 
 static inline void* msIoWatchNext_ms(int32_t handle, int32_t recursive) {
 	return msIoWatchNext(msGetIoEngine(), handle, recursive);
+}
+
+static inline int32_t msFsWriteSettled_ms(msString path) {
+	return msFsWriteSettled(path);
 }
 
 /* Poll engine + dispatcher together (for async server event loops) */

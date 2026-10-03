@@ -364,6 +364,18 @@ void msFsWatchClose(int32_t handle) {
 	CloseHandle((HANDLE)(intptr_t)handle);
 }
 
+int32_t msFsWriteSettled(msString path) {
+	int wideLen = MultiByteToWideChar(CP_UTF8, 0, path.p ? path.p->data : "", (int)path.len, NULL, 0);
+	WCHAR* wide = (WCHAR*)malloc(((size_t)wideLen + 1) * sizeof(WCHAR));
+	MultiByteToWideChar(CP_UTF8, 0, path.p ? path.p->data : "", (int)path.len, wide, wideLen);
+	wide[wideLen] = 0;
+	HANDLE file = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	free(wide);
+	if (file == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_SHARING_VIOLATION ? 0 : 1;
+	CloseHandle(file);
+	return 1;
+}
+
 static msString watchChanges(const char* buf, DWORD bytes, ULONG_PTR status) {
 	if (status == MS_FS_WATCH_STATUS_OVERFLOW || (status == 0 && bytes == 0)) return msStringNew("*", 1);
 	if (status != 0) return MS_EMPTY_STRING;
@@ -374,11 +386,12 @@ static msString watchChanges(const char* buf, DWORD bytes, ULONG_PTR status) {
 		const FILE_NOTIFY_INFORMATION* info = (const FILE_NOTIFY_INFORMATION*)(buf + offset);
 		int wideLen = (int)(info->FileNameLength / sizeof(WCHAR));
 		int utf8Len = WideCharToMultiByte(CP_UTF8, 0, info->FileName, wideLen, NULL, 0, NULL, NULL);
-		if (used + (size_t)utf8Len + 2 > cap) {
-			while (used + (size_t)utf8Len + 2 > cap) cap *= 2;
+		if (used + (size_t)utf8Len + 3 > cap) {
+			while (used + (size_t)utf8Len + 3 > cap) cap *= 2;
 			out = (char*)realloc(out, cap);
 		}
 		if (used > 0) out[used++] = '\n';
+		out[used++] = info->Action == FILE_ACTION_RENAMED_NEW_NAME ? 'w' : 'c';
 		WideCharToMultiByte(CP_UTF8, 0, info->FileName, wideLen, out + used, utf8Len, NULL, NULL);
 		for (int i = 0; i < utf8Len; i++) {
 			if (out[used + (size_t)i] == '\\') out[used + (size_t)i] = '/';
