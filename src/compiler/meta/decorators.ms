@@ -322,7 +322,7 @@ function applyToMembers(ctx: CheckerContext, plan: ClassPlan): void {
 			const dd = member.data as DecoratedDeclData;
 			const inner = dd.decoratedNode;
 			if (inner == null || memberCategory(inner) != category) continue;
-			recordFieldDecorators(planClassSymbol(ctx, plan), dd);
+			recordFieldDecorators(planClassSymbol(plan), dd);
 			const stmts: Node[] = [];
 			const inits: MemberInits = { fieldName: inner.kind == NodeKind.PropertyDecl ? (inner.data as PropertyDeclData).propName : "", isStatic: category == 0 || category == 2, stmts: stmts };
 			plan.activeInits = inits;
@@ -826,15 +826,15 @@ function injectIntoConstructor(plan: ClassPlan, stmts: Node[]): void {
 	body.statements = merged;
 }
 
-function planClassSymbol(ctx: CheckerContext, plan: ClassPlan): Symbol {
+function planClassSymbol(plan: ClassPlan): Symbol {
 	const sym = plan.classNode.resolvedSym;
-	if (sym != null) return sym;
-	return lookupSymbol(ctx.table, plan.className);
+	if (sym == null) throw new Error(`internal: class '${plan.className}' reached decorator application without its symbol`);
+	return sym;
 }
 
 function finishPlan(ctx: CheckerContext, plan: ClassPlan, after: Node[]): void {
 	if (plan.metaKeys.length > 0) {
-		const sym = planClassSymbol(ctx, plan);
+		const sym = planClassSymbol(plan);
 		if (sym != null) {
 			sym.metaKeys = plan.metaKeys;
 			sym.metaValues = plan.metaValues;
