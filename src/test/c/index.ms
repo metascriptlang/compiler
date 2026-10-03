@@ -46,3 +46,4 @@ import "./matchGuardConstFold";
 import "./literalUnionBranchJoin";
 import "./sizedArrayLiteral";
 import "./comptimeBlockStaticType";
+import "./arraySpliceEmit";
