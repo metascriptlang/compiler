@@ -1373,3 +1373,15 @@ test "engine: scalar pointers compare by location" {
 	assert ctx.error == "", ctx.error;
 	assert ctx.output == "false true true true\n";
 }
+
+test "engine: a write through a pointer past its element traps instead of writing element 0" {
+	const ctx = evalOrcVM("let bytes: uint8[] = [11, 22, 33]; const view: Span<uint8> = bytes; const p = view as Ptr<uint8>; p[1] = 66; console.log(`${bytes[0]} ${bytes[1]}`);");
+	assert ctx.error.includes("cannot index a pointer past the element it addresses on the Raiser VM"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: a struct pointer keeps its object through Ptr<void> on the vm" {
+	const ctx = evalOrcVM("struct S { n: int32; } let s: S = { n: 3 }; const raw = s as Ptr<void>; const p = raw as Ptr<S>; p[].n = 4; console.log(`${s.n}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "4\n";
+}
