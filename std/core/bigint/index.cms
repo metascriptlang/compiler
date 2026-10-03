@@ -23,40 +23,42 @@ when (!bare && !solana) {
 
 	// The operator forms are synthesized by src/transform/native/bigIntOpLower.ms
 	// and reach C as bare calls against the header above.
-	@compilerFunc
-	extern function msBigIntAdd(a: bigint, b: bigint): bigint;
-	@compilerFunc
-	extern function msBigIntSub(a: bigint, b: bigint): bigint;
-	@compilerFunc
-	extern function msBigIntMul(a: bigint, b: bigint): bigint;
-	@compilerFunc
-	extern function msBigIntDiv(a: bigint, b: bigint): bigint;
-	@compilerFunc
-	extern function msBigIntMod(a: bigint, b: bigint): bigint;
-	@compilerFunc
-	extern function msBigIntPow(a: bigint, b: bigint): bigint;
-	@compilerFunc
-	extern function msBigIntAnd(a: bigint, b: bigint): bigint;
-	@compilerFunc
-	extern function msBigIntOr(a: bigint, b: bigint): bigint;
-	@compilerFunc
-	extern function msBigIntXor(a: bigint, b: bigint): bigint;
-	@compilerFunc
-	extern function msBigIntShl(a: bigint, b: bigint): bigint;
-	@compilerFunc
-	extern function msBigIntShr(a: bigint, b: bigint): bigint;
-	@compilerFunc
-	extern function msBigIntNeg(a: bigint): bigint;
-	@compilerFunc
-	extern function msBigIntNot(a: bigint): bigint;
-	@compilerFunc
-	extern function msBigIntCmp(a: bigint, b: bigint): int32;
-	@compilerFunc
-	extern function msBigIntIsZero(a: bigint): boolean;
-	@compilerFunc
-	extern function msBigIntToInt64(a: bigint): int64;
-	@compilerFunc
-	extern function msBigIntToDebugString(a: bigint): string;
+	when (mscDeclaresRuntime) {
+		@compilerFunc
+		extern function msBigIntAdd(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntSub(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntMul(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntDiv(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntMod(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntPow(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntAnd(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntOr(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntXor(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntShl(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntShr(a: bigint, b: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntNeg(a: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntNot(a: bigint): bigint;
+		@compilerFunc
+		extern function msBigIntCmp(a: bigint, b: bigint): int32;
+		@compilerFunc
+		extern function msBigIntIsZero(a: bigint): boolean;
+		@compilerFunc
+		extern function msBigIntToInt64(a: bigint): int64;
+		@compilerFunc
+		extern function msBigIntToDebugString(a: bigint): string;
+	}
 	@compilerFunc
 	extern function msBigIntToString(b: bigint, radix: int32): string;
 	@compilerFunc

@@ -205,7 +205,6 @@ export function msStringHash(s: string): int32 {
 
 // .length on string → UTF-16 code units (LANG.md Index-Space Contract) = native.
 @compilerFunc
-@compilerFunc
 export function msStringLength(s: string): int32 {
 	@emit(`return ${s}.length;`);
 	unreachable;

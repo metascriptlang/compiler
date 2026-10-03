@@ -26,7 +26,6 @@ export function wtf8Cached(s: string): uint8[] {
 // Fresh mutable copy — the cache entry must never escape.
 @builtin("AsBytes")
 @compilerFunc
-@compilerFunc
 export function asBytes(this s: string): Readonly<Span<uint8>> {
 	const c = wtf8Cached(s);
 	@emit(`return { base: ${c}.slice(), off: 0, len: ${c}.length };`);
@@ -51,7 +50,6 @@ export function asString(this view: Readonly<Span<uint8>>): string {
 	return view.slice(0).asString();
 }
 
-@compilerFunc
 @compilerFunc
 export function byteLength(this s: string): int32 {
 	return wtf8Cached(s).length;

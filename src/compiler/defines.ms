@@ -20,7 +20,10 @@ export interface DefineTable {
 }
 
 export function createDefineTable(): DefineTable {
-	return { symbols: new HashMap<string, string>(), names: [], seeded: [] };
+	const t: DefineTable = { symbols: new HashMap<string, string>(), names: [] };
+	// std blocks the previous compiler cannot read sit under this symbol; the guards go one sync cycle after the compiler lands.
+	defineSymbol(t, "mscDeclaresRuntime", "true");
+	return t;
 }
 
 export function normalizeDefineName(name: string): string {
@@ -170,6 +173,11 @@ test "define: bare flag stores true" {
 	defineSymbol(t, "myFlag", "true");
 	assert isDefined(t, "myFlag");
 	assert definedValue(t, "myFlag") == "true";
+}
+
+test "define: a fresh table carries the compiler feature symbol" {
+	const t = createDefineTable();
+	assert isDefined(t, "mscDeclaresRuntime");
 }
 
 test "define: unknown flag is false, never an error" {
