@@ -52,6 +52,7 @@ import "./receiverViews";
 import "./serializationVariants";
 import "./spawnThunkValues";
 import "./receiverText";
+import "./receiverRelation";
 import "./overloadedSubscript";
 import "./stringRepresentation";
 import "./suspendedBindings";
