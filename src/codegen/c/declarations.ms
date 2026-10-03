@@ -591,11 +591,6 @@ function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 
 function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	const d = node.data as VariableDeclData;
-	// Mangling policy for module-level `const`/`let`: module-qualified C name
-	// (`NAME__<moduleName>Oms`) so two modules declaring same-named constants don't
-	// produce duplicate C globals at link time. Matches what cross-module extern
-	// emission (`expressions.ms`) + identifier references emit, so one mangled symbol
-	// per binary.
 	const isModuleSlot = isModuleGlobalVar(node.resolvedSym);
 	const varName = !isModuleSlot ? safeName(d.declName) : mangledGlobalName(node.resolvedSym, d.declName);
 	// Identifier references recompute the mangled name on demand via mangledGlobalName

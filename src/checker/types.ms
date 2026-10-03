@@ -2564,8 +2564,6 @@ export function tupleTypeName(t: Type | null): string {
 
 const BUILTIN_TYPE_NAMES: string[] = ["Result", "Promise", "Iterator", "IteratorResult", "BitSet"];
 
-// A name the compiler spells itself: it already encodes its owner and arguments, so it is its own
-// identity and carries no declaring symbol.
 export function isCompilerSpelledTypeName(name: string): boolean {
 	if (name.startsWith("$")) return true;
 	if (name.indexOf("__", 0) >= 0) return true;

@@ -1413,7 +1413,6 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 //   - `objType` — the struct/union type whose fields the hooks walk.
 //   - `refType` — non-null iff caller already knows this is a Ref<Struct> (class/interface).
 //     When null, the function looks up the symbol by name and infers class/interface status.
-//   - Marks `lctx.generated` at the end of a successful emission.
 
 function typeInfoDisplay(typeName: string, lctx: LiftCtx, loc: SourceLocation): Node {
 	const names: string[] = [];
@@ -1456,8 +1455,6 @@ function emitDup(typeName: string, cName: string, objType: Type, classType: Type
 	return sym;
 }
 
-// `declaring` is true when the call comes from the declaring module's own declaration:
-// a consumer module's walk leaves a foreign class's hooks to that module.
 function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type, declaring: boolean, lctx: LiftCtx, loc: SourceLocation): void {
 	// ----- Guards (order matches old ensureTypeHooks for perf parity) -----
 	if (typeName == "") return;
@@ -2373,7 +2370,6 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 
 // Look up the declared type's sym and dispatch to `ensureHooks`. Pulled out of
 // processDecl's match arms so all three decl kinds share one resolve+dispatch.
-// processDecl is the DEFINING-module path — passes declaring = true.
 function namesAnotherType(sym: Symbol, objType: Type, typeName: string): boolean {
 	return sym.symbolKind == SymbolKind.TypeAlias
 		&& sym.symbolType.kind != TypeKind.Ref
@@ -2599,7 +2595,6 @@ function hasGeneratedFn(input: string, fnSuffix: string): boolean {
 	return hasGeneratedFnIn(liftWithChecker(input), fnSuffix);
 }
 
-// A TypeInfo is demanded by an allocation site and emitted by codegen; the lifter declares none.
 function declaresTypeInfo(input: string, typeName: string): boolean {
 	const prog = liftWithChecker(input);
 	const pd = prog.data as ProgramData;

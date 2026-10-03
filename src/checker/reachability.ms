@@ -349,7 +349,6 @@ function walkChildrenGeneric(node: Node, modulePath: string): void {
 	});
 }
 
-// Walk every declaration a module's export list names (all overloads of the name).
 function walkNamedDecls(modulePath: string, name: string): void {
 	const key = modulePath + ":" + name;
 	if (visitedHas(key)) return;

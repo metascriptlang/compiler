@@ -923,8 +923,6 @@ export function ensureForwardDecl(g: CGen, typeName: string): void {
 	addLine(sec(g, CSection.ForwardDecls), `#ifndef ${typeName}_DEFINED\ntypedef struct ${typeName} ${typeName};\n#endif`);
 }
 
-// ===== TypeInfo: one demand-driven emitter keyed by canonical type =====
-
 export function typeInfoSubject(type: Type | null): Type | null {
 	if (type == null) return null;
 	let t = peelTransparentInstance(type);
