@@ -2068,7 +2068,9 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 					}
 				}
 			}
-			if (needsStdConv(argTypes[pi], paramType) || addressAtC) {
+			const carrierMeetsOpenNullable = isMaybeType(peelTransparentInstance(argTypes[pi]))
+				&& paramType.kind == TypeKind.Union && hasGenericParams(paramType);
+			if ((needsStdConv(argTypes[pi], paramType) && !carrierMeetsOpenNullable) || addressAtC) {
 				// Implementation parity: insert HiddenStdConv for numeric widening/narrowing OR Span coercion
 				const convType = paramType.kind == TypeKind.Sink && paramType.typeReturn != null ? paramType.typeReturn : paramType;
 				const convTok = createToken(TokenKind.Ident, "", args[pi].location.line);
