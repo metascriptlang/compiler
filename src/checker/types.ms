@@ -2272,6 +2272,33 @@ export function booleanLiteralValue(t: Type | null): boolean {
 // typeName = enum type name (e.g. "NodeKind").
 // typeNames[0] = specific member (e.g. "BinaryExpr").
 // typeReturn = back-reference to the underlying Enum Type for fast subtype checks.
+function enumOrdinalBounds(t: Type): int32[] {
+	const count = t.typeNames.length;
+	let low: int32 = 0;
+	let high: int32 = 0;
+	for (let i = 0; i < count; i += 1) {
+		const v: int32 = t.typeChildren != null && i < t.typeChildren.length && t.typeChildren[i] != null ? t.typeChildren[i].typeValue : i;
+		if (i == 0 || v < low) low = v;
+		if (i == 0 || v > high) high = v;
+	}
+	return [low, high];
+}
+
+export function enumStorageKind(t: Type): TypeKind {
+	if (t.sym != null && t.sym.symFlags.has(SymbolFlag.ImportC)) return TypeKind.Int32;
+	if (t.typeNames.length == 0) return TypeKind.Int32;
+	const bounds = enumOrdinalBounds(t);
+	if (bounds[0] < 0) return TypeKind.Int32;
+	if (bounds[1] < 256) return TypeKind.Uint8;
+	if (bounds[1] < 65536) return TypeKind.Uint16;
+	return TypeKind.Int32;
+}
+
+function enumStorageOf(t: Type): Type {
+	const e = t.kind == TypeKind.EnumLiteral && t.typeReturn != null ? t.typeReturn : t;
+	return createPrimitive(e.kind == TypeKind.Enum ? enumStorageKind(e) : TypeKind.Int32);
+}
+
 export function createEnumLiteral(enumType: Type, memberName: string): Type {
 	const t = emptyType();
 	t.kind = TypeKind.EnumLiteral;
@@ -4005,10 +4032,11 @@ function alignOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
 		return alignOfTypeAt(tg, t.typeChildren[0], depth);
 	}
+	if (t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral) return alignOfTypeAt(tg, enumStorageOf(t), depth);
 	return match (t.kind) {
 		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
 		TypeKind.Int16 | TypeKind.Uint16 => 2,
-		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum | TypeKind.EnumLiteral => 4,
+		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 => 4,
 		TypeKind.Number | TypeKind.Float64 => floatInt64Align(tg),
 		TypeKind.Int64 | TypeKind.Uint64 => floatInt64Align(tg),
 		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Function | TypeKind.Null => ps,
@@ -4070,10 +4098,11 @@ function sizeOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
 		return sizeOfTypeAt(tg, t.typeChildren[0], depth);
 	}
+	if (t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral) return sizeOfTypeAt(tg, enumStorageOf(t), depth);
 	return match (t.kind) {
 		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
 		TypeKind.Int16 | TypeKind.Uint16 => 2,
-		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum | TypeKind.EnumLiteral => 4,
+		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 => 4,
 		TypeKind.Number | TypeKind.Int64 | TypeKind.Uint64 | TypeKind.Float64 => 8,
 		TypeKind.String | TypeKind.StringLiteral => ps * 2,
 		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Null => ps,
@@ -4514,6 +4543,22 @@ test "sizeOfType primitives 64-bit" {
 	assert sizeOfType(tg, stringType()) == 16;
 	assert sizeOfType(tg, createArray(numberType())) == 16;
 	assert sizeOfType(tg, createPrimitive(TypeKind.Enum)) == 4;
+}
+
+test "an enum is stored in the narrowest width that holds its ordinals" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
+	assert sizeOfType(tg, createEnum("Two", ["A", "B"], null as unknown as number[])) == 1;
+	assert sizeOfType(tg, createEnum("Byte", ["A", "B"], [0, 255])) == 1;
+	assert sizeOfType(tg, createEnum("Word", ["A", "B"], [0, 300])) == 2;
+	assert alignOfType(tg, createEnum("Word", ["A", "B"], [0, 300])) == 2;
+	assert sizeOfType(tg, createEnum("Big", ["A", "B"], [0, 70000])) == 4;
+	assert sizeOfType(tg, createEnum("Signed", ["A", "B"], [-1, 0])) == 4;
+	assert sizeOfType(tg, createEnum("Unordered", ["Hi", "Lo"], [300, 1])) == 2;
+}
+
+test "an enum literal is sized by its enum" {
+	const tg: TargetInfo = { ptrSize: 8, floatSize: 8 };
+	assert sizeOfType(tg, createEnumLiteral(createEnum("Two", ["A", "B"], null as unknown as number[]), "A")) == 1;
 }
 
 test "sizeOfType primitives 32-bit" {

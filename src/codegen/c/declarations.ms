@@ -15,7 +15,7 @@ import {
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, hcrTypeInfoRef, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
+import { enumCTypeName, getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, hcrTypeInfoRef, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -250,7 +250,8 @@ function genEnumDecl(g: CGen, node: Readonly<Node>): void {
 
 	// Emit as typedef + #define constants (use explicit values if available)
 	const types = sec(g, CSection.Types);
-	addLine(types, "typedef int32_t " + name + ";");
+	const enumSym = declTypeSym(node);
+	addLine(types, `typedef ${enumCTypeName(enumSym != null ? enumSym.symbolType : node.nodeType)} ${name};`);
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
 		const val = (d.enumValues != null && i < d.enumValues.length) ? d.enumValues[i] : i;
 		addLine(types, `#define ${name}_${d.enumMembers[i]} (((${name})${val}))`);

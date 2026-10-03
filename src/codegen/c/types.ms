@@ -6,7 +6,7 @@
 
 import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { genericParamsOf } from "../../checker/types";
+import { genericParamsOf, enumStorageKind } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
@@ -1432,6 +1432,15 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 
 // ===== Enum Type Generation =====
 
+export function enumCTypeName(t: Type | null): string {
+	if (t == null || t.kind != TypeKind.Enum) return "int32_t";
+	return match (enumStorageKind(t)) {
+		TypeKind.Uint8 => "uint8_t",
+		TypeKind.Uint16 => "uint16_t",
+		_ => "int32_t",
+	};
+}
+
 function genEnumType(g: CGen, t: Type): string {
 	const name = typeIdentityName(g, t);
 	const key = typeKey(t);
@@ -1443,8 +1452,7 @@ function genEnumType(g: CGen, t: Type): string {
 
 	if (isImportedType(t)) { useImportedTypeHeader(g, t); return name; }
 
-	// Emit: typedef int32_t EnumName;
-	addLine(sec(g, CSection.Types), `typedef int32_t ${name};`);
+	addLine(sec(g, CSection.Types), `typedef ${enumCTypeName(t)} ${name};`);
 
 	// Emit enum constants (use explicit values from typeChildren if available)
 	for (let i = 0; i < t.typeNames.length; i += 1) {
@@ -2240,7 +2248,7 @@ test "enum emits typedef and defines" {
 	const result = getTypeDesc(g, createEnum("Color", ["Red", "Green", "Blue"], null as unknown as number[]));
 	assert result == "Color";
 	const types = extract(sec(g, CSection.Types));
-	assert types.contains("typedef int32_t Color");
+	assert types.contains("typedef uint8_t Color");
 	assert types.contains("Color_Red");
 	assert types.contains("Color_Green");
 	assert types.contains("Color_Blue");
@@ -2413,4 +2421,13 @@ test "a sealed hook table serves known hooks and refuses a new one" {
 	sealHookSyms(false);
 	assert again == known;
 	assert refused.contains("SealNewDestroy");
+}
+
+test "enum typedef follows the largest ordinal and a negative member" {
+	const g = createCGen(null as unknown as CheckerContext, "");
+	getTypeDesc(g, createEnum("Wide", ["Low", "High"], [0, 300]));
+	getTypeDesc(g, createEnum("Signed", ["Below", "Zero"], [-1, 0]));
+	const types = extract(sec(g, CSection.Types));
+	assert types.contains("typedef uint16_t Wide");
+	assert types.contains("typedef int32_t Signed");
 }
