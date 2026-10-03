@@ -44,3 +44,4 @@ import "./nominalArrayLayout";
 import "./vecOfStructCopies";
 import "./matchGuardConstFold";
 import "./literalUnionBranchJoin";
+import "./sizedArrayLiteral";
