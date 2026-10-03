@@ -29,6 +29,7 @@ import { spelled } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily } from "../../codegen/c/types";
 import { liftedOp } from "../../codegen/c/types";
 import { opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
+import { hasUnionEq } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
@@ -1618,6 +1619,10 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 	if (isPayloadUnion(fieldType)) {
 		return payloadUnionEqExpr(aField, bField, fieldType, lctx, loc);
 	}
+	if (!lctx.jsBackend && hasUnionEq(fieldType)) {
+		ensureUnionEq(fieldType, lctx, loc);
+		return makeCall(makeTypedIdentResolved(requireOpByKey(fieldType, AttachedOp.AttachedEq), null, loc), [aField, bField], loc);
+	}
 	// Array fields — arrays are C structs, can't use ==.
 	// JavaScript semantics: === is reference equality (same object).
 	// Compare data pointers — same backing store = same array.
@@ -1733,6 +1738,23 @@ function generateSizedArrayEq(name: string, t: Type, lctx: LiftCtx, loc: SourceL
 	setHookParamType(eqFn, 0, t);
 	setHookParamType(eqFn, 1, t);
 	liftOp(eqFn, t, t, AttachedOp.AttachedEq, name + "Eq");
+	lctx.collector.push(eqFn);
+}
+
+function ensureUnionEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
+	const cName = hookCName(t.typeName, t, lctx);
+	if (claimEq(t, AttachedOp.AttachedEq, lctx)) generateUnionEq(cName, t, lctx, loc);
+	return cName + "Eq";
+}
+
+function generateUnionEq(typeName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
+	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
+	const same = payloadUnionEqExpr(makeTypedIdentResolved(aSym, t, loc), makeTypedIdentResolved(bSym, t, loc), t, lctx, loc);
+	const eqFn = makeFnDecl(typeName + "Eq", [aSym, bSym], [typeName, typeName], makeBlock([makeReturn(same, loc)], loc), "", "boolean", loc);
+	setHookParamType(eqFn, 0, t);
+	setHookParamType(eqFn, 1, t);
+	liftOp(eqFn, t, t, AttachedOp.AttachedEq, typeName + "Eq");
 	lctx.collector.push(eqFn);
 }
 
@@ -2444,6 +2466,8 @@ function liftComparisons(ctx: TransformContext, lctx: LiftCtx, loc: SourceLocati
 	for (const valueType of ctx.pendingValueEqs) {
 		if (valueType.kind == TypeKind.SizedArray) {
 			ensureSizedArrayEq(valueType, lctx, loc);
+		} else if (valueType.kind == TypeKind.Union) {
+			ensureUnionEq(valueType, lctx, loc);
 		} else {
 			ensureStructEq(valueType, lctx, loc);
 		}

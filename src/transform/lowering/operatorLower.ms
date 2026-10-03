@@ -18,7 +18,7 @@
 
 import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
-import { liftedOp, hookBaseCName } from "../../codegen/c/types";
+import { liftedOp, hookBaseCName, hasUnionEq } from "../../codegen/c/types";
 import { walkNode } from "../walker";
 import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, makeTypedObjectLiteral, receiverKind, makeTypedIdentResolved } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, unwrapMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
@@ -89,6 +89,14 @@ function sizedArrayOperandsAgree(ctx: TransformContext, leftType: Type, right: N
 	if (rt == null) return false;
 	const peeled = peelThrough(rt, PEEL_ALIAS);
 	return peelTransparentInstance(peeled != null ? peeled : rt).kind == TypeKind.SizedArray;
+}
+
+function unionOperandsAgree(ctx: TransformContext, leftType: Type, right: Node): boolean {
+	const rt = resolveType(ctx, right);
+	if (rt == null) return false;
+	const peeled = peelThrough(rt, PEEL_ALIAS);
+	const other = peelTransparentInstance(peeled != null ? peeled : rt);
+	return other.kind == TypeKind.Union && other.typeName == leftType.typeName && other.sym == leftType.sym;
 }
 
 function eqTypeName(ctx: TransformContext, t: Type): string {
@@ -411,7 +419,14 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 
 	// 5. Direct base operators for value-type objects (auto-generated ==).
 	// === is the same as == for value types (no reference identity distinction).
-	if ((opName == "==" || opName == "===") && hasValueEq(leftType)
+	const unionEq = !ctx.jsBackend && hasUnionEq(leftType) && unionOperandsAgree(ctx, leftType, d.right);
+	if (unionEq && (opName == "!=" || opName == "!==")) {
+		const eqName = eqTypeName(ctx, leftType);
+		registerStructEq(ctx, leftType);
+		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
+		return makeUnary("!", makeCall(makeTypedIdentResolved(liftedOp(leftType, AttachedOp.AttachedEq, eqName + "Eq", fnType), fnType, loc), [d.left, d.right], loc), loc);
+	}
+	if ((opName == "==" || opName == "===") && (hasValueEq(leftType) || unionEq)
 		&& sizedArrayOperandsAgree(ctx, leftType, d.right)) {
 		const eqName = eqTypeName(ctx, leftType);
 		registerStructEq(ctx, leftType);

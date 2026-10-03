@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { spelled, genericParamsOf, nominalTypeKey, isNominalKind } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -987,6 +987,17 @@ export function promiseAllShape(inner: Type | null): PromiseAllShape {
 		TypeKind.Union => unwrapRefNullUnion(inner) != null ? PromiseAllShape.None : PromiseAllShape.Boxed,
 		_ => PromiseAllShape.Boxed,
 	};
+}
+
+export function hasUnionEq(t: Type): boolean {
+	if (t.kind != TypeKind.Union || t.typeName == "" || t.typeExtra != null || isStringLike(t)) return false;
+	if (unwrapRefNullUnion(t) != null) return false;
+	for (const m of t.typeChildren) {
+		if (m == null) return false;
+		if (isPrimitiveUnionMember(m) || m.kind == TypeKind.Ref || m.kind == TypeKind.Ptr) continue;
+		return false;
+	}
+	return true;
 }
 
 export function promiseAllCellKey(arrT: Type): string {
