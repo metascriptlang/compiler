@@ -22,6 +22,7 @@ Compiles the post-Phase-3 AST into Raiser bytecode: `parse → check → transfo
 - **Each module-level variable owns one VM global slot** — initializers run in dependency order, an imported module initializes once per project run, the entry module last.
 - **`CopyValue` gives arrays and structs value semantics** — every compiled function carries a flat copy-plan table, applied at assignment, argument, return and container-store boundaries; shared references and `Span` are preserved.
 - **An assignment into a location that already holds a struct or an array writes into that object** (`emitValueAssign`, NIM-REF CG-40) — an element, a field, a global or local binding, `p[]` and a `ref` parameter, so every pointer to the location keeps seeing it; an array takes the source length first; a parameter or a for-of binding is a view and rebinds; an empty location takes a copy.
+- **A pointer or `ref` to anything else is a location value** (`RegAddr`, `GlobalAddr`, `ElemAddr`, `FieldAddr`; the reference VM's `rkRegisterAddr` / `rkNodeAddr`, vm.nim:927-979): `HiddenAddr` takes it (`AddrReg` … `AddrField`), and `HiddenDeref`, `p[0]`, an assignment, `+=` and `++` go through it (`LoadDeref`, `StoreDeref`). `transformForRaiser` runs `insertVarParamDerefs` last, so a `ref`/`out` argument arrives as `HiddenAddr`; a host call still receives the value. A location keeps the array or object it points into alive under ORC (`heldHandle`).
 - **A spawned strand gets a graph copy of the parent's global slots** — globals are strand-local snapshots, not shared mutable state.
 - **Spread is lowered before bytecode generation** — each source is evaluated once; array insertion goes through the VM `push` builtin.
 - **Loops arrive lowered** — `for` and `for..of` go through the loop lowering C uses before lambda lifting, so a closure made in a loop body gets the env of its own iteration; a labelled `break` or `continue` jumps to the loop carrying the label. The native `for` / `for..of` compilation serves only the untransformed `rgen.ms` path.
@@ -36,9 +37,7 @@ Each probed on `msc run --target=raiser`:
 
 - `class … extends` — `cannot evaluate 'super' at comptime: symbol kind is Class`.
 - `static` members — `cannot evaluate '<Class>' at comptime: symbol kind is Class`.
-- `out` argument — `cannot compile node kind OutExpr`.
 - `for..of` over a string — `cannot evaluate 'msStringByteLength' at comptime: symbol kind is Function` (the VM has no string index either: `s[1]` stops with `expected an array, got value kind String`).
-- a write through a pointer or `ref` parameter to a value that is not a struct or an array (`ref n: int32`) — `cannot assign through a pointer or ref parameter at comptime` (it used to leave the caller's value unchanged).
 
 ## Tests
 
