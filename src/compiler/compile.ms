@@ -51,7 +51,7 @@ import { registrySrcPath, gitSrcPath } from "./package/cache";
 import { drainPendingInstances, distinctInstances, placeInstance } from "../checker/instantiate";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, collectTypeInstanceRows, moduleTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { hookSymMark, hookSymsFrom, replayHookSyms, opMark, opsFrom, replayOps } from "../codegen/c/types";
-import { GenericTypeInstRow, addGenericTypeInstRow } from "../parser/context";
+import { GenericTypeInstRow, addGenericTypeInstRow, getParserDefines, setParserDefines } from "../parser/context";
 import { dbLower } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig } from "./buildConfig";
@@ -61,7 +61,7 @@ import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
-import { defineIdentity } from "./defines";
+import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
 import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
@@ -395,12 +395,10 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	// Split the "graph load+check" phase: this block is the LOADER half
 	// (parse of every module in the closure — prelude tree included), the
 	// orchestrator PROFILE line covers the check half. Build-perf §1.
-	// Backend ext feeds the prelude pack KEY, so it must be known before the
-	// prelude loads (A2 seeds the graph from a key-named deps file).
 	const backendExt = config.extensions.length > 0 ? config.extensions[0] : ".cms";
 	const _gl0 = performance.now();
 	if (config.stdPath != "") {
-		loadPreludeModules(graph, provider, config, backendExt);
+		loadPreludeModules(graph, provider, config);
 	}
 	const _pl0 = performance.now();
 	const _r = loadModule(graph, entryPath, provider, config, 1);
@@ -450,16 +448,20 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 // writer.
 let _preludeSeedHit: boolean = false;
 
-function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig, backendExt: string): void {
+function preludeSeedKey(config: ResolverConfig): string {
+	return preludePackKey(config.stdPath, config.extensions.join(","));
+}
+
+function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
 	_preludeSeedHit = false;
 	if (config.stdPath != "") {
-		const deps = tryLoadPreludeDeps(preludePackKey(config.stdPath, backendExt), preludePackStamp(config.stdPath));
+		const deps = tryLoadPreludeDeps(preludeSeedKey(config), preludePackStamp(config.stdPath));
 		if (deps != null && seedPreludeModules(graph, provider, deps)) _preludeSeedHit = true;
 	}
 	if (_preludeSeedHit) noteStdGlobalImportModules(graph, provider, config);
 	if (!_preludeSeedHit) {
 		loadStdGlobalImportModules(graph, provider, config);
-		if (config.stdPath != "") writeStdGraphDeps(graph, preludePackKey(config.stdPath, backendExt), preludePackStamp(config.stdPath));
+		if (config.stdPath != "") writeStdGraphDeps(graph, preludeSeedKey(config), preludePackStamp(config.stdPath));
 	}
 	loadExtraGlobalImportModules(graph, provider, config);
 }
@@ -3944,12 +3946,12 @@ test "a prelude load seeds the std graph from the deps file the previous load wr
 	env.set("HOME", "out/test/preludeDepsHome");
 	try {
 		const config = createDefaultConfig(Backend.C, join(resolveRuntimeDir(), "std"));
-		remove(`${packRoot()}/${preludePackKey(config.stdPath, ".cms")}.deps`);
+		remove(`${packRoot()}/${preludeSeedKey(config)}.deps`);
 		const fresh = createModuleGraph();
-		loadPreludeModules(fresh, createFileSystemProvider(), config, ".cms");
+		loadPreludeModules(fresh, createFileSystemProvider(), config);
 		assert !_preludeSeedHit;
 		const seeded = createModuleGraph();
-		loadPreludeModules(seeded, createFileSystemProvider(), config, ".cms");
+		loadPreludeModules(seeded, createFileSystemProvider(), config);
 		assert _preludeSeedHit;
 		assert seeded.loadOrder.join("\n") == fresh.loadOrder.join("\n");
 		for (const path of fresh.loadOrder) {
@@ -3961,6 +3963,82 @@ test "a prelude load seeds the std graph from the deps file the previous load wr
 			assert b.stdPrelude == a.stdPrelude;
 		}
 	} finally {
+		if (prevHome == "") env.delete("HOME");
+		else env.set("HOME", prevHome);
+	}
+}
+
+test "the prelude pack key names every define a std when-block can read" {
+	const prevDefines = getParserDefines();
+	try {
+		const onChain = createDefineTable();
+		initDefines(onChain, "c", "solana", "sbf", "manual", 0);
+		const onHost = createDefineTable();
+		initDefines(onHost, "c", "linux", "amd64", "drc", 0);
+		const onHostFlagged = createDefineTable();
+		initDefines(onHostFlagged, "c", "linux", "amd64", "drc", 0);
+		applyDefineSwitch(onHostFlagged, "-d:probeFlag");
+		const onBare = createDefineTable();
+		initDefines(onBare, "c", "bare", "amd64", "manual", 0);
+
+		setParserDefines(onChain);
+		const chainKey = preludePackKey("/key/std", ".rms");
+		setParserDefines(onHost);
+		const hostKey = preludePackKey("/key/std", ".rms");
+		setParserDefines(onHostFlagged);
+		const flaggedKey = preludePackKey("/key/std", ".rms");
+		setParserDefines(onBare);
+		const bareKey = preludePackKey("/key/std", ".rms");
+		setParserDefines(onChain);
+		assert preludePackKey("/key/std", ".rms") == chainKey;
+
+		assert chainKey != hostKey;
+		assert hostKey != flaggedKey;
+		assert bareKey != hostKey;
+		assert bareKey != chainKey;
+	} finally {
+		setParserDefines(prevDefines);
+	}
+}
+
+test "a prelude load never seeds the std graph from a deps file written for another target" {
+	const prevHome = env.get("HOME");
+	const prevDefines = getParserDefines();
+	env.set("HOME", "out/test/preludeDepsHome");
+	try {
+		const config = createDefaultConfig(Backend.C, join(resolveRuntimeDir(), "std"));
+		const onChain = createDefineTable();
+		initDefines(onChain, "c", "solana", "sbf", "manual", 0);
+		const onHost = createDefineTable();
+		initDefines(onHost, "c", "linux", "amd64", "drc", 0);
+
+		setParserDefines(onHost);
+		remove(`${packRoot()}/${preludeSeedKey(config)}.deps`);
+		setParserDefines(onChain);
+		remove(`${packRoot()}/${preludeSeedKey(config)}.deps`);
+		const chainFresh = createModuleGraph();
+		loadPreludeModules(chainFresh, createFileSystemProvider(), config);
+		assert !_preludeSeedHit;
+
+		setParserDefines(onHost);
+		const hostFresh = createModuleGraph();
+		loadPreludeModules(hostFresh, createFileSystemProvider(), config);
+		assert !_preludeSeedHit;
+		assert hostFresh.loadOrder.length > chainFresh.loadOrder.length;
+
+		setParserDefines(onChain);
+		const chainSeeded = createModuleGraph();
+		loadPreludeModules(chainSeeded, createFileSystemProvider(), config);
+		assert _preludeSeedHit;
+		assert chainSeeded.loadOrder.join("\n") == chainFresh.loadOrder.join("\n");
+
+		setParserDefines(onHost);
+		const hostSeeded = createModuleGraph();
+		loadPreludeModules(hostSeeded, createFileSystemProvider(), config);
+		assert _preludeSeedHit;
+		assert hostSeeded.loadOrder.join("\n") == hostFresh.loadOrder.join("\n");
+	} finally {
+		setParserDefines(prevDefines);
 		if (prevHome == "") env.delete("HOME");
 		else env.set("HOME", prevHome);
 	}
