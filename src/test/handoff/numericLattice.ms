@@ -125,8 +125,9 @@ test "numeric lattice: an exact integer or an explicit conversion mixes with a f
 test "numeric lattice: a number goes into the one union member that holds it implicitly" {
 	assert errorCount("let h: int16 = 7;\nconst c: int32 | string = h;\nfunction t(v: int32 | string): void {}\nt(h);\n") == 0;
 	assert errorCount("let i: int32 = 3;\nconst a: number | string = i;\nlet f: float32 = 1.5;\nlet b: number | string = \"x\";\nb = f;\n") == 0;
-	assert hasError("let i: int32 = 3;\nconst a: int64 | number = i;\n", "implicit int32 conversion into 'int64 | number' fits both int64 and number — write an explicit 'as int64' or 'as number'");
-	assert hasError("let i: int32 = 3;\nfunction t(v: int64 | number): void {}\nt(i);\n", "fits both int64 and number");
+	assert errorCount("let i: int32 = 3;\nconst a: int64 | number = i;\nfunction t(v: int64 | number): void {}\nt(i);\n") == 0;
+	assert hasError("let s: int16 = 2;\nconst a: float32 | number = s;\n", "implicit int16 conversion into 'float32 | number' fits both float32 and number — write an explicit 'as float32' or 'as number'");
+	assert hasError("let u: uint8 = 1;\nfunction t(v: int64 | uint32): void {}\nt(u);\n", "fits both int64 and uint32");
 	assert hasError("let d: float64 = 0.1;\nconst f: float32 | string = d;\n", "may lose precision");
 }
 
