@@ -865,6 +865,7 @@ function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string)
 		const datInit = sec(g, CSection.DatInit);
 		const p = createProc("__datinit", null);
 
+		let hasBase = false;
 		for (let i = 0; i < od.keys.length; i += 1) {
 			const key = od.keys[i];
 			if (key == "cname") {
@@ -897,6 +898,8 @@ function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string)
 					const parentName = (cParent != "") ? cParent : rawBase;
 					ensureTypeInfo(g, parentName);
 					addLine(datInit, `  ${infoName}.base = &${parentName}TypeInfo;`);
+					addLine(datInit, `  msTypeFillDisplay(&${infoName}, &${parentName}TypeInfo);`);
+					hasBase = true;
 				}
 			} else {
 				// isCyclic: use genExpr directly
@@ -904,6 +907,7 @@ function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string)
 				addLine(datInit, `  ${infoName}.${key} = ${val};`);
 			}
 		}
+		if (!hasBase) addLine(datInit, `  msTypeFillDisplay(&${infoName}, NULL);`);
 	}
 }
 
