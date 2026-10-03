@@ -1166,6 +1166,35 @@ function fsWatch(): void {
 	console.log("ok   hcrFsWatch");
 }
 
+// ---- hcrInstanceofReload: the class display survives a module reload ----
+
+function instanceofReload(): void {
+	const tag = "hcrInstanceofReload";
+	const ext = sharedLibraryExt();
+	const exe = platform == "windows" ? "host.exe" : "host";
+	const sources = ["app.ms", "logic.ms", "logicEdit.ms"];
+	const dir = freshDir(`${TMP}/instanceof`);
+	for (const f of sources) copy(`${FIXTURES}/instanceof/${f}`, `${dir}/${f}`);
+	copy(STD_HOST, `${dir}/host.cms`);
+	put(`${dir}/replay.txt`, "logicEdit.ms logic.ms\n");
+	const watched = msc(dir, ["build", "app.ms", "--hcr", "--watch-replay=replay.txt", `--output=run/module${ext}`]);
+	if (!succeeded(watched)) {
+		console.log(both(watched));
+		failWith(tag, "the warm replay of the instanceof module did not build");
+	}
+	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
+	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-INST ")) seen.push(line);
+	}
+	if (!succeeded(ran) || seen.join("\n") != ["HCR-INST first 9", "HCR-INST reloaded 10"].join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "reloading logic did not keep the class instance tests exact");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFsWatch", run: fsWatch },
 	{ name: "hcrModuleAbi", run: moduleAbi },
