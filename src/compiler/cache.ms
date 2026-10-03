@@ -592,6 +592,11 @@ const PRE_VERSION = "version:";
 const PRE_OUTPUT = "output:";
 const PRE_CMDLINE = "cmdline:";
 const PRE_OUTHASH = "outputHash:";
+
+function outputIdentity(path: string): string {
+	const stamp = changeStamp(path);
+	return stamp != "" ? `stamp:${stamp}` : hashFile(path);
+}
 const PRE_DEP = "dep:";
 
 // Parse a line from the cache file. Returns value after prefix, or "" if no match.
@@ -684,7 +689,7 @@ export function projectCacheChanged(
 	if (storedCmd != currentCmd) return projectCacheMiss(cacheFile);
 
 	// Reference-aligned: check output binary modification (detect external tampering)
-	const currentOutputHash = hashFile(outputFile);
+	const currentOutputHash = outputIdentity(outputFile);
 	if (storedOutputHash != currentOutputHash) return projectCacheMiss(cacheFile);
 
 	if (storedDeps.length < depPaths.length) return projectCacheMiss(cacheFile);
@@ -734,7 +739,7 @@ export function writeProjectCache(
 	let content = `${PRE_VERSION}${CACHE_VERSION}\n`;
 	content = content + `${PRE_OUTPUT}${outputFile}\n`;
 	content = content + `${PRE_CMDLINE}${buildCmdFingerprint(ccOption, ccBinary, mode, flags)}\n`;
-	content = content + `${PRE_OUTHASH}${hashFile(outputFile)}\n`;
+	content = content + `${PRE_OUTHASH}${outputIdentity(outputFile)}\n`;
 	if (_cachedDepHashes.length == allDeps.length) {
 		for (const entry of _cachedDepHashes) content = content + `${PRE_DEP}${entry}\n`;
 	} else {
@@ -946,7 +951,7 @@ export function isLinkCached(oFiles: string[], externalInputs: string[], linkFla
 	if (storedCmd != linkFlags) return false;
 	if (storedOFiles != objectListKey(oFiles)) return false;
 	if (storedInputs != externalInputKey(externalInputs)) return false;
-	const currentOutputHash = hashFile(outputFile);
+	const currentOutputHash = outputIdentity(outputFile);
 	if (storedOutputHash != currentOutputHash) return false;
 	return true;
 }
@@ -956,7 +961,7 @@ export function writeLinkCache(oFiles: string[], externalInputs: string[], linkF
 	let content = `${PRE_LINKCMD}${linkFlags}\n`;
 	content = content + `${PRE_OFILES}${objectListKey(oFiles)}\n`;
 	content = content + `${PRE_LINKINPUTS}${externalInputKey(externalInputs)}\n`;
-	content = content + `${PRE_OUTHASH}${hashFile(outputFile)}\n`;
+	content = content + `${PRE_OUTHASH}${outputIdentity(outputFile)}\n`;
 	atomicWriteFile(linkCacheFile(image), content);
 }
 
@@ -1125,6 +1130,18 @@ test "a native source rewritten to the same size at once moves its fingerprint" 
 	writeFile(path, "int b;\n");
 	assert computeFingerprint(path, "cc") != before;
 	remove(path);
+}
+
+test "a link output rewritten to the same size at once is not taken as cached" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const output = `${base}/msc-link-output-${performance.now()}.bin`;
+	writeFile(output, "first");
+	writeLinkCache([], [], "-flags", output, output);
+	assert isLinkCached([], [], "-flags", output, output);
+	writeFile(output, "other");
+	assert !isLinkCached([], [], "-flags", output, output);
+	remove(output);
+	remove(linkCacheFile(output));
 }
 
 test "a runtime or vendor file edit moves the support-tree stamp" {
