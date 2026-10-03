@@ -23,7 +23,15 @@ const HEAP = 32 * 1024;
 const BUDGET = 1_400_000;
 const LARGEST_COUNT = 60_000;
 const NAMED = /std\/solana: the (\d+) KiB program heap is exhausted \(asked (\d+) more bytes at (\d+)\)/;
-const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5 };
+const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5, push: 6, literal: 7, pairs: 8, text: 9 };
+const MASK = 2n ** 64n - 1n;
+const SUMS = {
+	push: (n) => sum(n, (i) => (3n * i + 1n) * (i + 1n)),
+	literal: (n) => sum(n, (i) => 10n * i + 20n),
+	pairs: (n) => sum(n, (i) => 7n * i + 2n * i + 1n),
+	text: (n) => 2n * n + sum(n, () => 97n + 98n * 3n),
+};
+const LOGGED = /^Program log: 0x[0-9a-f]+, 0x[0-9a-f]+, 0x[0-9a-f]+, 0x[0-9a-f]+, 0x([0-9a-f]+)$/;
 
 const svm = new LiteSVM();
 const program = (await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(9))).address;
@@ -35,6 +43,12 @@ budget[0] = 2;
 new DataView(budget.buffer).setUint32(1, BUDGET, true);
 
 let failures = 0;
+
+function sum(count, term) {
+	let total = 0n;
+	for (let i = 0n; i < count; i++) total += term(i);
+	return total & MASK;
+}
 
 function check(what, condition) {
 	console.log(`${what}: ${condition ? "ok" : "FAILED"}`);
@@ -63,7 +77,9 @@ async function run(op, count) {
 	const meta = failed ? result.meta() : result;
 	const logs = meta.logs();
 	const named = logs.map((line) => NAMED.exec(line)).find((found) => found !== undefined && found !== null) ?? null;
+	const found = logs.map((line) => LOGGED.exec(line)).filter((entry) => entry !== null).pop();
 	return {
+		value: found === undefined ? null : BigInt(`0x${found[1]}`),
 		ok: !failed,
 		error: failed ? result.err().toString() : "",
 		units: Number(meta.computeUnitsConsumed()),
@@ -102,6 +118,25 @@ for (const [name, op] of Object.entries(OPS).filter(([, op]) => op <= OPS.cells)
 	if (first === null) continue;
 	check(`[${name}] ${first - 1} rounds still run`, (await run(op, first - 1)).ok);
 	const failed = namedFailure(`[${name}] ${first} rounds`, await run(op, first));
+	if (failed !== null) {
+		check(`[${name}] the request that failed did not fit (${failed.asked} bytes at ${failed.position})`,
+			failed.asked % 8n === 0n && failed.position + failed.asked > BigInt(HEAP) && failed.position <= BigInt(HEAP));
+	}
+}
+
+for (const [name, expected] of Object.entries(SUMS)) {
+	const op = OPS[name];
+	for (const count of [1, 3, 4, 5, 9, 17, 100, 250]) {
+		const outcome = await run(op, count);
+		check(`[${name}] ${count} elements grow and read back (${outcome.ok ? `${outcome.units} CU` : outcome.logs.find((line) => /Access violation|Overlapping copy|heap is exhausted/.test(line)) ?? outcome.error})`,
+			outcome.ok && outcome.value === expected(BigInt(count)));
+	}
+	const first = await firstFailure(op);
+	check(`[${name}] some count outgrows the heap`, first !== null);
+	if (first === null) continue;
+	const last = await run(op, first - 1);
+	check(`[${name}] ${first - 1} elements still run and read back`, last.ok && last.value === expected(BigInt(first - 1)));
+	const failed = namedFailure(`[${name}] ${first} elements`, await run(op, first));
 	if (failed !== null) {
 		check(`[${name}] the request that failed did not fit (${failed.asked} bytes at ${failed.position})`,
 			failed.asked % 8n === 0n && failed.position + failed.asked > BigInt(HEAP) && failed.position <= BigInt(HEAP));
