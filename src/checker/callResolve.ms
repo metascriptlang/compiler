@@ -895,6 +895,7 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 
 function compileTimeCallee(node: Node): Symbol | null {
 	const d = node.data as CallExprData;
+	if (d.callee == null) return null;
 	const set = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
 	if (set == null) return null;
 	const idx = d.resolvedOverloadIdx;
