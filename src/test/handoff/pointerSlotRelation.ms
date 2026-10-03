@@ -106,3 +106,97 @@ test "pointer slot relation: explicit dereference requires a typed value pointer
 	const c = compileToCWithStd(pre + "function f(): void { let arena: Value[1] = [{ n: 1 }]; const pointer = arena[0] as Ptr<Value>; pointer[].n = 4; const copied: Value = pointer[]; }");
 	assert c.ok, c.error;
 }
+
+test "pointerSlotRelation: a typed pointer fits an untyped pointer slot, the reverse needs a cast" {
+	const header = "extern struct Opaque;\n"
+		+ "extern function newOpaque(): Ptr<Opaque>;\n"
+		+ "extern function useOpaque(p: Ptr<Opaque>): void;\n"
+		+ "function erase(p: Ptr<void>): void {}\n";
+	const cases = [
+		{
+			name: "a typed pointer passes as an untyped pointer",
+			body: "erase(newOpaque());",
+			expected: 0,
+		},
+		{
+			name: "a typed pointer initializes an untyped pointer",
+			body: "const raw: Ptr<void> = newOpaque(); erase(raw);",
+			expected: 0,
+		},
+		{
+			name: "an untyped pointer is refused as a typed argument",
+			body: "const raw: Ptr<void> = newOpaque(); useOpaque(raw);",
+			expected: -1,
+		},
+		{
+			name: "an untyped pointer is refused by a typed declaration",
+			body: "const raw: Ptr<void> = newOpaque(); const typed: Ptr<Opaque> = raw;",
+			expected: -1,
+		},
+		{
+			name: "an untyped pointer passes as a typed pointer through a cast",
+			body: "const raw: Ptr<void> = newOpaque(); useOpaque(raw as Ptr<Opaque>);",
+			expected: 0,
+		},
+	];
+	for (const item of cases) {
+		const result = compileToC(header + item.body);
+		assert result.ok == (item.expected == 0), item.name + (result.ok ? "" : ": " + result.error);
+	}
+}
+
+function receiverProgram(declarations: string, body: string): string {
+	const result = compileToCWithStd(`
+struct Pet { hunger: uint16; name: string; }
+${declarations}
+function main(): int32 {
+	let arena: Pet[1] = [{ hunger: 10, name: "a" }];
+	const ptr = arena[0] as Ptr<Pet>;
+	let pet: Pet = { hunger: 10, name: "a" };
+	${body}
+	return 0;
+}
+process.exit(main());
+`);
+	return result.ok ? result.value : "error: " + result.error;
+}
+
+test "pointerSlotRelation: a method call refuses a value for a pointer receiver as the free call does" {
+	const declarations = "function feed(this p: Ptr<Pet>, n: uint16): uint16 { return p.hunger - n; }";
+	const methodForm = receiverProgram(declarations, "console.log(pet.feed(3));");
+	const freeForm = receiverProgram(declarations, "console.log(feed(pet, 3));");
+	const receiverMismatch = "Argument type mismatch in 'feed' receiver: got Pet, expected Ptr<Pet>";
+	const argumentMismatch = "Argument type mismatch in 'feed' arg 0: got Pet, expected Ptr<Pet>";
+	assert methodForm.contains(receiverMismatch), methodForm;
+	assert freeForm.contains(argumentMismatch), freeForm;
+}
+
+test "pointerSlotRelation: a method call on a Ptr<T> or Var<T> receiver lowers as the free call" {
+	const cases = [
+		{
+			name: "a struct pointee",
+			declarations: "function feed(this p: Ptr<Pet>, n: uint16): uint16 { "
+				+ "p.hunger = p.hunger - n; return p.hunger; }",
+			methodCall: "console.log(ptr.feed(3));",
+			freeCall: "console.log(feed(ptr, 3));",
+		},
+		{
+			name: "a Var receiver",
+			declarations: "function rename(this p: Var<Pet>, name: string): void { p.name = name; }",
+			methodCall: "pet.rename(\"b\"); console.log(pet.name);",
+			freeCall: "rename(pet, \"b\"); console.log(pet.name);",
+		},
+		{
+			name: "a primitive pointee",
+			declarations: "extern function cellPointer(): Ptr<int32>;\n"
+				+ "function bump(this p: Ptr<int32>, by: int32): int32 { p[] = p[] + by; return p[]; }",
+			methodCall: "const c = cellPointer(); console.log(c.bump(2));",
+			freeCall: "const c = cellPointer(); console.log(bump(c, 2));",
+		},
+	];
+	for (const item of cases) {
+		const methodForm = receiverProgram(item.declarations, item.methodCall);
+		assert !methodForm.startsWith("error:"), item.name + ": " + methodForm;
+		assert methodForm == receiverProgram(item.declarations, item.freeCall), item.name;
+	}
+}

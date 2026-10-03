@@ -34,10 +34,13 @@ test "slot relation: the argument relation governs every storage boundary" {
 		{ source: "Other", target: "Ptr<Value> | null", accepted: false },
 		{ source: "null", target: "Ptr<Value> | null", accepted: true },
 		{ source: "Ptr<Value> | null", target: "Ptr<Value> | null", accepted: true },
+		{ source: "Cell<int32>", target: "Cell<string>", accepted: false },
+		{ source: "Cell<int32>", target: "Cell<int32>", accepted: true },
 		{ source: "string", target: '"north" | "south"', accepted: false },
 	];
 	for (const pair of pairs) {
-		const pre = "class Box { n: int32 = 1; } struct Value { n: int32; } struct Other { s: string; }\n";
+		const pre = "class Box { n: int32 = 1; } struct Value { n: int32; } struct Other { s: string; }\n"
+			+ "class Cell<T> { v: T; constructor(v: T) { this.v = v; } }\n";
 		const declaration = "function f(value: " + pair.source + "): void { const slot: " + pair.target + " = value; }";
 		const assignment = "function f(value: " + pair.source + ", initial: " + pair.target + "): void { let slot: " + pair.target + " = initial; slot = value; }";
 		const returned = "function f(value: " + pair.source + "): " + pair.target + " { return value; }";

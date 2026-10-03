@@ -129,3 +129,37 @@ test "enum relation: unknown names are rejected after member and extension looku
 		assert item.accepted ? errors == 0 : errors > 0, item.expression;
 	}
 }
+
+test "enum relation: a member-typed formal admits only that member, beside a type parameter or alone" {
+	const pre = "enum K { A, B, C }\n"
+		+ "function tag<T>(x: T, k: K.A): T { return x; }\n"
+		+ "function handleA(k: K.A): int32 { return 1; }\n";
+	const cases = [
+		{
+			name: "the member itself fits beside a type parameter",
+			body: "console.log(tag(5, K.A));",
+			expected: 0,
+		},
+		{
+			name: "another member is refused beside a type parameter",
+			body: "console.log(tag(5, K.B));",
+			expected: -1,
+		},
+		{
+			name: "the member itself fits alone",
+			body: "console.log(handleA(K.A));",
+			expected: 0,
+		},
+		{
+			name: "another member is refused alone",
+			body: "console.log(handleA(K.B));",
+			expected: -1,
+		},
+	];
+	for (const item of cases) {
+		const c = compileToC(pre + item.body);
+		assert c.ok == (item.expected == 0), item.name + (c.ok ? "" : ": " + c.error);
+		const js = compileToJS(pre + item.body);
+		assert js.ok == (item.expected == 0), item.name + (js.ok ? "" : ": " + js.error);
+	}
+}

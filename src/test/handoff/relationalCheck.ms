@@ -93,6 +93,34 @@ test "boolean '==' int is rejected" {
 	assert hasError("const a = true;\nconst b: int32 = 1;\nconst c = a == b;", "operator '==' cannot be applied to types");
 }
 
+test "fixed array '==' fixed array of another length is rejected" {
+	const src = "const a: uint8[4] = [1, 2, 3, 4];\n"
+		+ "const b: uint8[3] = [1, 2, 3];\n"
+		+ "const c = a == b;";
+	assert hasError(src, "operator '==' cannot be applied to types");
+}
+
+test "fixed array '==' fixed array of another element type is rejected" {
+	const src = "const a: uint8[4] = [1, 2, 3, 4];\n"
+		+ "const b: uint16[4] = [1, 2, 3, 4];\n"
+		+ "const c = a == b;";
+	assert hasError(src, "operator '==' cannot be applied to types");
+}
+
+test "fixed array '==' array is rejected" {
+	const src = "const a: uint8[4] = [1, 2, 3, 4];\n"
+		+ "const b: uint8[] = [1, 2, 3, 4];\n"
+		+ "const c = a == b;";
+	assert hasError(src, "operator '==' cannot be applied to types");
+}
+
+test "fixed array '==' fixed array of one type is valid" {
+	const src = "const a: uint8[4] = [1, 2, 3, 4];\n"
+		+ "const b: uint8[4] = [1, 2, 3, 5];\n"
+		+ "const c = a == b;";
+	assert strictErrorCount(src) == 0;
+}
+
 test "instantiated generic body reports the bad operand at check time" {
 	const src = "struct S { m: int32; }\nfunction inc<T>(a: T): T { return a + 1; }\nconst s: S = { m: 1 };\nconst r = inc(s);";
 	assert hasError(src, "operator '+' cannot be applied to types");

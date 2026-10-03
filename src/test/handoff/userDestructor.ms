@@ -61,3 +61,21 @@ test "extension-method onDestroy is wired (registry retrieval, not name guess)" 
 	assert c.value.contains("ExtDestroy");
 	assert countSub(c.value, "onDestroy") >= 3;
 }
+
+function petHookSource(receiver: string): string {
+	return "struct Pet { hunger: uint16; name: string; }\n"
+		+ "function onDestroy(" + receiver + "): void {\n"
+		+ "console.log(\"destroy \" + self.name);\n"
+		+ "}\n"
+		+ "function use(): void { let a: Pet = { hunger: 1, name: \"y\" }; a.hunger = 2; }\n"
+		+ "use();";
+}
+
+test "user onDestroy on a Var<T> receiver is wired to T like one on a this ref receiver" {
+	const byRef = compileToC(petHookSource("this ref self: Pet"));
+	assert byRef.ok, byRef.error;
+	assert countSub(byRef.value, "onDestroy") >= 3;
+	const byVar = compileToC(petHookSource("this self: Var<Pet>"));
+	assert byVar.ok, byVar.error;
+	assert byVar.value == byRef.value;
+}
