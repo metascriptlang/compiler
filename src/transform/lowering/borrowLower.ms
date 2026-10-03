@@ -1,8 +1,7 @@
 import { Node, NodeKind, CallExprData, Symbol } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { overloadWinner } from "../util";
+import { hasFlag, overloadWinner, SymbolFlag } from "../../checker/symbol";
 
 function borrowTarget(sym: Symbol | null): Symbol | null {
 	if (sym == null || !hasFlag(sym, SymbolFlag.Borrow)) return null;

@@ -38,8 +38,9 @@ import { forEachChild } from "../../ast/visitor";
 import {
 	makeBool, makeBlock, makeWhile, makeVarDecl, makeIf, makeReturn,
 	makeIdent, makeIdentResolved, makeAssign, makeExprStmt, makeContinue,
-	extractBodyStmts, overloadWinner,
+	extractBodyStmts,
 } from "../util";
+import { overloadWinner } from "../../checker/symbol";
 import { lowerTernaryInReturn } from "./conditionalExprLower";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
