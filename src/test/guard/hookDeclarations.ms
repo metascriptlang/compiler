@@ -8,8 +8,8 @@
 // WHY A SUBPROCESS: the observable is the CLI verdict on C and on JS; the compiler under test is
 //   $MSC when the runner exports one, else `./msc` beside the recompiler root.
 //
-// RED MEANS: a declaration the reference refuses compiled, so its hook is accepted and never runs
-//   (or fails later in the C compiler), or a declaration the reference binds was refused.
+// RED MEANS: a declaration the reference refuses, or one that cannot run, was accepted (it failed
+//   later in the C compiler or never ran), or a declaration the reference binds was refused.
 
 import { execFileResult, cwd, exit, env } from "std/process";
 import { ensureDir, isFile, writeFile } from "std/fs";
@@ -87,6 +87,28 @@ refuse("onTrace with a tracer of another type", "signature for 'onTrace' is wron
 refuse("an onTrace method without the tracer", "signature for 'onTrace' is wrong: it takes the receiver and the tracer ('env: Ptr<void>'), 1 parameter declared", one(
 	"class N { id: int32 = 0; next: N | null = null; onTrace(): void { console.log(\"trace\"); } }\n" + cycle));
 
+const valueStruct = "struct S { id: int32; name: string; }\n";
+const useStruct = "const a: S = { id: 1, name: \"n\" };\nconsole.log(a.id.toString());\n";
+
+refuse("onDestroy with a second parameter", "signature for 'onDestroy' is wrong: it takes the receiver only, 2 parameters declared", one(
+	valueStruct + "function onDestroy(this x: S, extra: int32): void { console.log(\"destroy\"); }\n" + useStruct));
+
+refuse("onCopy with a source of another type", "signature for 'onCopy' is wrong: its second parameter is 'int32', the source value is the receiver's own type ('y: T')", one(
+	valueStruct + "function onCopy(this ref x: S, y: int32): void { console.log(\"copy\"); }\n" + useStruct));
+
+refuse("onDestroy that returns a value", "signature for 'onDestroy' is wrong: it returns 'int32', a hook returns nothing", one(
+	valueStruct + "function onDestroy(this x: S): int32 { console.log(\"destroy\"); return 1; }\n" + useStruct));
+
+refuse("onClone that returns another type", "signature for 'onClone' is wrong: it returns 'int32', a clone is a new value of the receiver's own type", one(
+	valueStruct + "function onClone(this x: S): int32 { return 1; }\n" + useStruct));
+
+refuse("onCopy on a class", "is a class, its values are shared by reference and never copied, moved or cloned by value, so the hook would never run", one(
+	"class K { id: int32 = 0; }\nfunction onCopy(this x: K, y: K): void { console.log(\"copy\"); }\nconst k = new K();\nconsole.log(k.id.toString());\n"));
+
+accept("every hook of a struct with the signature the reference binds", one(valueStruct
+	+ "function onDestroy(this x: S): void { }\nfunction onCopy(this ref x: S, y: S): void { }\nfunction onMove(this ref x: S, y: S): void { }\n"
+	+ "function onMoved(this ref x: S): void { }\nfunction onClone(this x: S): S { return x; }\n" + useStruct));
+
 function verdict(dir: string, target: string): string {
 	const args = target == "c" ? ["check", `${dir}/main.ms`] : ["check", `${dir}/main.ms`, "--target=js"];
 	const r = execFileResult(msc, args);
@@ -112,7 +134,7 @@ for (const c of cases) {
 		if (c.refused == "") {
 			if (!accepted) report(`[${target}] ${c.name}: refused: ${out}`);
 		} else if (accepted) {
-			report(`[${target}] ${c.name}: accepted, the reference refuses it`);
+			report(`[${target}] ${c.name}: accepted`);
 		} else if (!out.includes(c.refused)) {
 			report(`[${target}] ${c.name}: refused without the rule named (${c.refused}): ${out}`);
 		}

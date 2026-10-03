@@ -109,14 +109,14 @@ test "hook receivers: the shapes the reference accepts still compile" {
 	for (const owner of owners) {
 		expectAccepted(problems, "onDestroy", "this x: " + owner, owner);
 		expectAccepted(problems, "onDestroy", "this x: Readonly<" + owner + ">", owner);
-		expectAccepted(problems, "onClone", "this x: " + owner, owner);
-		expectAccepted(problems, "onClone", "this x: Readonly<" + owner + ">", owner);
 	}
+	expectAccepted(problems, "onClone", "this x: S", "S");
+	expectAccepted(problems, "onClone", "this x: Readonly<S>", "S");
 	for (const hook of ["onDestroy", "onCopy", "onMove", "onMoved", "onTrace"]) {
 		expectAccepted(problems, hook, "this ref x: S", "S");
 		expectAccepted(problems, hook, "this x: Var<S>", "S");
-		if (hook != "onDestroy") expectAccepted(problems, hook, "this x: C", "C");
 	}
+	expectAccepted(problems, "onTrace", "this x: C", "C");
 	assert problems.length == 0, problems.join("\n");
 	const generic = "struct B<T> { v: T; }\nclass G<T> { v: T; constructor(v: T) { this.v = v; } }\n"
 		+ "function onDestroy<T>(this x: B<T>): void { }\nfunction onDestroy<T>(this x: G<T>): void { }\n"

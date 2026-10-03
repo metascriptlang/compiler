@@ -35,6 +35,7 @@ test "hook declarations: a hook declared outside the module of its type is refus
 	const problems: string[] = [];
 	for (const hook of hooks) {
 		for (const owner of ["S", "C"]) {
+			if (owner == "C" && hook != "onDestroy" && hook != "onTrace") continue;
 			const main = "import { " + owner + " } from \"./lib\";\n" + hookSource(hook, receiverFor(hook, owner), owner);
 			const errors = checkProjectDiagnostics(project(library, main), "test/main.ms");
 			const label = hook + " on " + owner + ": ";
@@ -162,4 +163,57 @@ test "hook declarations: C and JS both refuse an onTrace without the tracer" {
 	const js = compileToJS(source);
 	assert !js.ok, "JS accepted an onTrace without the tracer";
 	assert js.error.indexOf("signature for 'onTrace' is wrong") >= 0, js.error;
+}
+
+test "hook declarations: a wrong parameter list is refused for every hook" {
+	const problems: string[] = [];
+	const wrong = "signature for '";
+	expectFault(problems, "onDestroy extra", "function onDestroy(this x: S, extra: int32): void { }\n", wrong + "onDestroy' is wrong: it takes the receiver only, 2 parameters declared");
+	expectFault(problems, "onMoved extra", "function onMoved(this ref x: S, extra: int32): void { }\n", wrong + "onMoved' is wrong: it takes the receiver only, 2 parameters declared");
+	expectFault(problems, "onClone extra", "function onClone(this x: S, extra: int32): S { return x; }\n", wrong + "onClone' is wrong: it takes the receiver only, 2 parameters declared");
+	expectFault(problems, "onCopy alone", "function onCopy(this ref x: S): void { }\n", wrong + "onCopy' is wrong: it takes the receiver and the source value ('y: T'), 1 parameter declared");
+	expectFault(problems, "onMove alone", "function onMove(this ref x: S): void { }\n", wrong + "onMove' is wrong: it takes the receiver and the source value ('y: T'), 1 parameter declared");
+	expectFault(problems, "onCopy three", "function onCopy(this ref x: S, y: S, z: S): void { }\n", wrong + "onCopy' is wrong: it takes the receiver and the source value ('y: T'), 3 parameters declared");
+	expectFault(problems, "onCopy y: int32", "function onCopy(this ref x: S, y: int32): void { }\n", wrong + "onCopy' is wrong: its second parameter is 'int32', the source value is the receiver's own type ('y: T')");
+	expectFault(problems, "onMove y: Var<S>", "function onMove(this ref x: S, y: Var<S>): void { }\n", wrong + "onMove' is wrong: its second parameter is 'out S'");
+	expectFault(problems, "onCopy y: another struct", "struct Other { id: int32; }\nfunction onCopy(this ref x: S, y: Other): void { }\n", wrong + "onCopy' is wrong: its second parameter is 'Other'");
+	expectFault(problems, "onDestroy method extra", "class T { onDestroy(extra: int32): void { } }\n", wrong + "onDestroy' is wrong: it takes the receiver only, 2 parameters declared");
+	expectAccepted(problems, "onCopy y: S", "function onCopy(this ref x: S, y: S): void { }\n");
+	expectAccepted(problems, "onCopy y: Readonly<S>", "function onCopy(this ref x: S, y: Readonly<S>): void { }\n");
+	expectAccepted(problems, "onDestroy method", "class T { onDestroy(): void { } }\n");
+	assert problems.length == 0, problems.join("\n");
+}
+
+test "hook declarations: a hook returns nothing and onClone returns its own type" {
+	const problems: string[] = [];
+	const wrong = "signature for '";
+	expectFault(problems, "onDestroy returns int32", "function onDestroy(this x: S): int32 { return 1; }\n", wrong + "onDestroy' is wrong: it returns 'int32', a hook returns nothing");
+	expectFault(problems, "onCopy returns S", "function onCopy(this ref x: S, y: S): S { return y; }\n", wrong + "onCopy' is wrong: it returns 'S', a hook returns nothing");
+	expectFault(problems, "onMoved returns boolean", "function onMoved(this ref x: S): boolean { return true; }\n", wrong + "onMoved' is wrong: it returns 'boolean', a hook returns nothing");
+	expectFault(problems, "onTrace returns int32", "function onTrace(this x: C, env: Ptr<void>): int32 { return 1; }\n", wrong + "onTrace' is wrong: it returns 'int32', a hook returns nothing");
+	expectFault(problems, "onClone returns void", "function onClone(this x: S): void { }\n", wrong + "onClone' is wrong: it returns 'void', a clone is a new value of the receiver's own type");
+	expectFault(problems, "onClone returns another struct", "struct Other { id: int32; }\nfunction onClone(this x: S): Other { return { id: 1 }; }\n", wrong + "onClone' is wrong: it returns 'Other', a clone is a new value of the receiver's own type");
+	expectFault(problems, "onDestroy method returns int32", "class T { onDestroy(): int32 { return 1; } }\n", wrong + "onDestroy' is wrong: it returns 'int32', a hook returns nothing");
+	expectFault(problems, "onDestroy inferred int32", "function onDestroy(this x: S) { return 1; }\n", wrong + "onDestroy' is wrong: it returns '");
+	expectAccepted(problems, "onDestroy inferred void", "function onDestroy(this x: S) { console.log(\"closed\"); }\n");
+	expectAccepted(problems, "onClone returns S", "function onClone(this x: S): S { return x; }\n");
+	assert problems.length == 0, problems.join("\n");
+}
+
+function classFault(hook: string, name: string): string {
+	return "signature for '" + hook + "' is wrong: '" + name + "' is a class, its values are shared by reference and never copied, moved or cloned by value, so the hook would never run";
+}
+
+test "hook declarations: a class takes no hook that copies, moves, resets or clones a value" {
+	const problems: string[] = [];
+	expectFault(problems, "onCopy on a class", "function onCopy(this x: C, y: C): void { }\n", classFault("onCopy", "C"));
+	expectFault(problems, "onMove on a class", "function onMove(this x: C, y: C): void { }\n", classFault("onMove", "C"));
+	expectFault(problems, "onMoved on a class", "function onMoved(this x: C): void { }\n", classFault("onMoved", "C"));
+	expectFault(problems, "onClone on a class", "function onClone(this x: C): C { return x; }\n", classFault("onClone", "C"));
+	expectFault(problems, "onCopy method on a class", "class T { onCopy(y: T): void { } }\n", classFault("onCopy", "T"));
+	expectFault(problems, "onClone method on a class", "class T { onClone(): T { return this; } }\n", classFault("onClone", "T"));
+	expectFault(problems, "onCopy on an interface", "interface I { id: int32; }\nfunction onCopy(this x: I, y: I): void { }\n", classFault("onCopy", "I"));
+	expectAccepted(problems, "onDestroy on a class", "function onDestroy(this x: C): void { }\n");
+	expectAccepted(problems, "onTrace on a class", "function onTrace(this x: C, env: Ptr<void>): void { }\n");
+	assert problems.length == 0, problems.join("\n");
 }

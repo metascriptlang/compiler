@@ -80,7 +80,8 @@ test "declarationBoundaries: lifecycle hooks require a writable receiver represe
 	const cases = [
 		{ name: "onCopy on a value struct receiver is refused at the declaration", source: "struct Res { h: int32; }\nfunction onCopy(this self: Res, src: Res): void { console.log(src.h.toString()); }\n", expected: -1 },
 		{ name: "onMoved on a value struct receiver is refused at the declaration", source: "struct Res { h: int32; }\nfunction onMoved(this self: Res): void { console.log(self.h.toString()); }\n", expected: -1 },
-		{ name: "a class receiver is a reference and keeps its onCopy", source: "class Obj { h: int32 = 0; }\nfunction onCopy(this self: Obj, src: Obj): void { self.h = src.h; }\n", expected: 0 },
+		{ name: "a class receiver is a reference: onCopy would never run and is refused", source: "class Obj { h: int32 = 0; }\nfunction onCopy(this self: Obj, src: Obj): void { self.h = src.h; }\n", expected: -1 },
+		{ name: "a class receiver keeps its onDestroy", source: "class Obj { h: int32 = 0; }\nfunction onDestroy(this self: Obj): void { console.log(self.h.toString()); }\n", expected: 0 },
 	];
 	for (const item of cases) {
 		const errors = strictErrorCount(item.source);
