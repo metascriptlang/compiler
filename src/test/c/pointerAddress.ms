@@ -9,8 +9,6 @@ test "pointerAddress: a const value's address is a read-only view" {
 	const prefix = "struct S { n: int32; }\nfunction main(): void { const s: S = { n: 1 }; const p = s as Ptr<S>; ";
 	assert cError(prefix + "console.log(`${p[].n}`); }\nmain();\n") == "compiled";
 	assert cError(prefix + "p[].n = 2; }\nmain();\n").includes("cannot write through Readonly<Ptr<S>>");
-	assert cError("function main(): void { const x: int32 = 7; const p = x as Ptr<int32>; p[] = 8; }\nmain();\n")
-		.includes("cannot write through Readonly<Ptr<int32>>");
 }
 
 test "pointerAddress: a value-type parameter's address is a read-only view" {
@@ -23,7 +21,15 @@ test "pointerAddress: a value-type parameter's address is a read-only view" {
 test "pointerAddress: an expression without a location has no address" {
 	assert cError("struct S { n: int32; }\nfunction mk(): S { return { n: 5 }; }\nconst p = mk() as Ptr<S>;\n")
 		.includes("expression has no address");
-	assert cError("const p = (1 + 2) as Ptr<void>;\n").includes("expression has no address");
+}
+
+test "pointerAddress: an integer is the address it holds, never its own location" {
+	const source = "struct Key { a: uint64; }\nfunction load(address: uint64): uint64 { const at = address as Ptr<uint64>; return at[]; }\n"
+		+ "function key(address: uint64): Key { const at = address as Ptr<Key>; return at[]; }\n"
+		+ "function past(address: uint64): Ptr<Key> { return (address + 96) as Ptr<Key>; }\n";
+	const c = compileToC(source);
+	assert c.ok, c.ok ? "" : c.error;
+	if (c.ok) assert !c.value.contains("&(address"), "an integer source must not have its address taken";
 }
 
 test "pointerAddress: a heap container's handle is not its elements" {
