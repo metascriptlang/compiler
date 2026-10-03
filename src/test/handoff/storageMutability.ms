@@ -295,3 +295,24 @@ test "an out argument written as `out b.val` reaches the field of a local" {
 	const cb = compileToCWithStd(bad);
 	assert !cb.ok && cb.error.contains("requires a variable"), cb.ok ? "accepted" : cb.error;
 }
+
+test "a ref or out parameter never escapes into a closure" {
+	const refused = [
+		"function twice(ref n: int32): void { const add = (): void => { n = n + 10; }; add(); }",
+		"function read(ref n: int32): () => int32 { return (): int32 => n; }",
+		"function fill(out v: int32): void { const set = (): void => { v = 1; }; set(); }",
+		"function grow(this ref n: int32): void { const f = (): int32 => n; n = f() + 1; }",
+	];
+	for (const body of refused) {
+		const c = compileToCWithStd(body);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/ref.ms", entrySource: body }], "test/ref.ms");
+		assert !c.ok && c.error.includes("which cannot be captured as it would violate memory safety"), body;
+		assert js.includes("which cannot be captured as it would violate memory safety"), body;
+	}
+	const source = `function twice(ref n: int32): void { const add = (k: int32): int32 => k + 10; n = add(add(n)); }
+let k: int32 = 1;
+twice(k);
+console.log(k);`;
+	const c = compileToCWithStd(source);
+	assert c.ok, c.ok ? "" : c.error;
+}
