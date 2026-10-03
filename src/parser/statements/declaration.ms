@@ -847,11 +847,23 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	const fieldTypes: string[] = [];
 	const fieldTypeExprs: Node[] = [];
 	const fieldLocations: SourceLocation[] = [];
+	const fieldVisibility: string[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
+		let visibility = "";
+		const modifier = current(state);
+		if ((modifier.kind == TokenKind.Private || modifier.kind == TokenKind.Public || modifier.kind == TokenKind.Protected)
+				&& isPropertyName(peek(state, 1))) {
+			if (modifier.kind != TokenKind.Private || nodeKind != NodeKind.StructDecl) {
+				return Result.err(`'${modifier.value}' cannot modify a field of ${keyword} at line ${modifier.line}: a ${keyword} field is visible wherever its type is${nodeKind == NodeKind.StructDecl ? ", unless it is marked 'private'" : ""}`);
+			}
+			visibility = "private";
+			advance(state);
+		}
 		const field = current(state);
 		if (!isPropertyName(field)) {
 			return Result.err(`Expected field name in ${keyword} at line ${field.line}`);
 		}
+		fieldVisibility.push(visibility);
 
 		fields.push(field.value);
 		fieldLocations.push(makeLocFromToken(field));
@@ -887,6 +899,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		interfaceExtends: extendsList,
 		// nameLoc (from nameToken) is preferred; fall back to keyword token for legacy callers.
 		nameLocation: nameLoc != null ? nameLoc : makeLocFromToken(token),
+		interfaceFieldVisibility: fieldVisibility,
 	}, token);
 	ifaceNode.typeArg = genericNames;
 	ifaceNode.typeExprs = fieldTypeExprs;
@@ -941,6 +954,7 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 			interfaceFieldTypes: [],
 			interfaceExtends: aliasExtends,
 			nameLocation: nameLoc,
+			interfaceFieldVisibility: [],
 		}, token);
 		aliasNode.typeArg = genericNames;
 		aliasNode.typeExprs = [];
