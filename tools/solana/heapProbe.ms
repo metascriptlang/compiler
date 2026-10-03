@@ -3,17 +3,23 @@
 import {
 	InstructionAccount,
 	ProgramError,
+	Pubkey,
 	account,
 	borshBuffer,
+	clock,
+	emitEvent,
 	failWith,
 	findProgramAddress,
 	instructionData,
 	invoke,
 	invokeList,
+	logPubkey,
 	logU64,
 	minimumBalance,
 	programAddress,
 	programId,
+	returnData,
+	setReturnData,
 	signed,
 } from "std/solana";
 
@@ -94,6 +100,48 @@ function rentLoop(count: uint64): Result<uint64, ProgramError> {
 	let sum: uint64 = 0;
 	for (let index: uint64 = 0; index < count; index++) { sum = sum + minimumBalance(index); }
 	logU64(sum);
+	logU64(msSolAlloc(0));
+	return Result.ok(0);
+}
+
+struct Probed {
+	amount: uint64;
+	owner: Pubkey;
+	done: boolean;
+}
+
+function clockLoop(count: uint64): Result<uint64, ProgramError> {
+	let sum: uint64 = 0;
+	for (let index: uint64 = 0; index < count; index++) { sum = sum + clock().slot; }
+	logU64(sum);
+	logU64(msSolAlloc(0));
+	return Result.ok(0);
+}
+
+function returnDataLoop(count: uint64): Result<uint64, ProgramError> {
+	let sum: uint64 = 0;
+	for (let index: uint64 = 0; index < count; index++) {
+		const payload: uint8[4] = [1, 2, 3, (index & 0xff) as uint8];
+		setReturnData(payload);
+		const found = returnData();
+		if (found === null) { return Result.err(ProgramError.invalidAccountData()); }
+		sum = sum + (try found.data.readU8(3)) as uint64;
+	}
+	logU64(sum);
+	logU64(msSolAlloc(0));
+	return Result.ok(0);
+}
+
+function logKeyLoop(count: uint64): Result<uint64, ProgramError> {
+	const key = programId();
+	for (let index: uint64 = 0; index < count; index++) { logPubkey(key); }
+	logU64(msSolAlloc(0));
+	return Result.ok(0);
+}
+
+function eventLoop(count: uint64): Result<uint64, ProgramError> {
+	const probed: Probed = { amount: 7, owner: programId(), done: true };
+	for (let index: uint64 = 0; index < count; index++) { emitEvent<Probed>(probed); }
 	logU64(msSolAlloc(0));
 	return Result.ok(0);
 }
@@ -192,6 +240,10 @@ function dispatch(): Result<uint64, ProgramError> {
 	if (op == 12) { return Result.ok(0); }
 	if (op == 13) { return limitCall(count); }
 	if (op == 14) { return rentLoop(count); }
+	if (op == 15) { return clockLoop(count); }
+	if (op == 16) { return returnDataLoop(count); }
+	if (op == 17) { return logKeyLoop(count); }
+	if (op == 18) { return eventLoop(count); }
 	return request(0 - count);
 }
 
