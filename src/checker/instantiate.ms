@@ -13,7 +13,7 @@ import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFla
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode } from "./context";
+import { CheckerContext, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode } from "./context";
 import { createContext } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceName, monoInstanceNameOf } from "../monomorphize/registry";
@@ -172,15 +172,10 @@ interface InstanceHook {
 
 let _instanceHooks: HashMap<string, InstanceHook> = new HashMap<string, InstanceHook>();
 let _hookScannedInstances: HashMap<Symbol, HashSet<string>> = new HashMap<Symbol, HashSet<string>>();
-const USER_HOOK_NAMES: string[] = ["onDestroy", "onCopy", "onMove", "onMoved", "onClone", "onTrace"];
 
 export function lookupInstanceHook(instanceName: string, methodName: string): Symbol | null {
 	const hook = _instanceHooks.get(instanceName + "." + methodName);
 	return hook != null ? hook.sym : null;
-}
-
-function isUserHookName(name: string): boolean {
-	return USER_HOOK_NAMES.includes(name);
 }
 
 function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, instanceName: string, names: string[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
@@ -188,7 +183,7 @@ function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, insta
 		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
 		if (member == null || member.kind != NodeKind.MethodDecl) continue;
 		const md = member.data as MethodDeclDataLocal;
-		if (md.methodIsStatic || !isUserHookName(md.methodName)) continue;
+		if (md.methodIsStatic || !isLifecycleHookName(md.methodName)) continue;
 		const hookSym = member.resolvedSym;
 		if (hookSym == null) {
 			addError(ctx, "internal: hook '" + md.methodName + "' of generic class instance '" + instanceName + "' has no symbol", loc.line, loc.column);
@@ -204,7 +199,7 @@ function instantiateExtensionHooks(genericSym: Symbol, instanceName: string, ins
 	const registry = pickBodyCtx(genericSym.modulePath, ctx).extensionRegistry;
 	if (registry == null) return true;
 	let settled = true;
-	for (const hookName of USER_HOOK_NAMES) {
+	for (const hookName of LIFECYCLE_HOOK_NAMES) {
 		const key = instanceName + "." + hookName;
 		const known = _instanceHooks.get(key);
 		if (known != null && known.owner == genericSym) continue;

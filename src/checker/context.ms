@@ -1004,13 +1004,24 @@ export function getExtReceiverName(flags: string): string {
 	return rest.slice(0, colonPos);
 }
 
-export function getExtReceiverType(flags: string): string {
+export const LIFECYCLE_HOOK_NAMES: string[] = ["onDestroy", "onCopy", "onMove", "onMoved", "onClone", "onTrace"];
+
+export function isLifecycleHookName(name: string): boolean {
+	return LIFECYCLE_HOOK_NAMES.includes(name);
+}
+
+export function getExtReceiverText(flags: string): string {
 	const seg = findFlagSegment(flags, "ext:");
 	if (seg == "") return "";
 	const rest = seg.slice(4, seg.length);
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
-	return receiverBaseName(varPointeeText(rest.slice(colonPos + 1, rest.length)));
+	return rest.slice(colonPos + 1, rest.length).trim();
+}
+
+export function getExtReceiverType(flags: string): string {
+	const text = getExtReceiverText(flags);
+	return text == "" ? "" : receiverBaseName(varPointeeText(text));
 }
 
 function varPointeeText(typeText: string): string {
@@ -1755,6 +1766,13 @@ test "getExtReceiverType names a Var<T> receiver T, as `this ref x: T`" {
 	assert getExtReceiverType("ext:p:Var < uint8 >") == "uint8";
 	assert getExtReceiverType("ext:v:Variant<T>") == "Variant";
 	assert getExtReceiverType("ext:p:Ptr<Pet>") == "Ptr";
+}
+
+test "getExtReceiverText keeps the receiver as it was written" {
+	assert getExtReceiverText("ext:p:Ptr<Pet>") == "Ptr<Pet>";
+	assert getExtReceiverText("async|ext:self: Var<Pet> |gen:T") == "Var<Pet>";
+	assert getExtReceiverText("sext:Pet") == "";
+	assert getExtReceiverText("") == "";
 }
 
 test "isStaticExtensionFlag" {

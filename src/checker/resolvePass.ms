@@ -9,9 +9,9 @@
 import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators } from "../ast/node";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
-import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
+import { peelToStructOrUnion, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
-import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls } from "./context";
+import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -1515,7 +1515,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 			}
 		}
 	}
-	refuseHookReceiverByValue(ctx, node, paramTypes);
+	refuseHookReceiver(ctx, node, paramTypes);
 
 	const retLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
 	// Type predicate detection: fnReturnType is `"<paramName> is <typeText>"`
@@ -1636,16 +1636,61 @@ function refuseUnknownAtCBoundary(ctx: CheckerContext, name: string, paramTypes:
 	addError(ctx, "extern '" + name + "' " + spot + ": unknown holds managed objects, a C function sees raw addresses — declare it Ptr<void>", node.location.line, node.location.column);
 }
 
-function refuseHookReceiverByValue(ctx: CheckerContext, node: Node, paramTypes: Type[]): void {
+function hookObjectName(t: Type): string {
+	const k = t.kind;
+	return k == TypeKind.Struct || k == TypeKind.GenericInstance || k == TypeKind.Distinct || k == TypeKind.Union ? t.typeName : "";
+}
+
+function hookReceiverShapes(hook: string): string {
+	const object = " (T a struct, a class or a generic instance of one)";
+	if (hook == "onDestroy") return "'this x: T', or for a struct also 'this ref x: T' and 'this x: Var<T>'" + object;
+	if (hook == "onClone") return "'this x: T'" + object;
+	return "'this ref x: T' or 'this x: Var<T>' for a struct, 'this x: T' for a class" + object;
+}
+
+function hookReceiverFault(hook: string, key: string, written: string, recv: Type): string {
+	let obj: Type = recv;
+	let byVar = false;
+	if (obj.kind == TypeKind.Var && obj.typeReturn != null) {
+		byVar = true;
+		obj = obj.typeReturn;
+	}
+	let byClass = false;
+	const readonlyView = isReadonlyView(obj);
+	if (obj.kind == TypeKind.Ref && obj.typeReturn != null && refWrapsNominal(obj)) {
+		byClass = true;
+		obj = obj.typeReturn;
+	}
+	if (obj.kind == TypeKind.Error) return "";
+	const display = byVar && !written.startsWith("Var") ? "ref " + written : written;
+	if (obj.kind == TypeKind.Ptr) return "'" + display + "' addresses the type, it is not the type the hook belongs to, so the hook would never run";
+	if (isMaybeType(obj) || unwrapRefNullUnion(obj) != null) return "'" + typeDisplayName(recv) + "' may be null, and a hook always receives the object itself";
+	const name = hookObjectName(obj);
+	if (name == "" && obj.kind != TypeKind.Alias) {
+		const shown = written == key ? typeDisplayName(recv) : display;
+		return "'" + shown + "' is not a type a hook can belong to, so the hook would never run";
+	}
+	if (name != key) return "'" + display + "' is not the type's own name, and a hook is found by the name its receiver is declared with, so the hook would never run";
+	if (byVar && byClass) return "'" + display + "' points at the class reference, and a class receiver already is the reference the hook writes through: take it as 'this x: " + name + "'";
+	if (hookWritesItsReceiver(hook)) {
+		if (readonlyView) return "'" + display + "' is a read-only view, and the hook has to write its receiver";
+		if (!byVar && !byClass) return "'" + display + "' is a value type, so 'this' would be a copy of the destination the hook has to write";
+	}
+	if (hook == "onClone" && byVar) return "'" + display + "' hands the hook the destination, and a clone is a new value made from a receiver taken by value";
+	return "";
+}
+
+function refuseHookReceiver(ctx: CheckerContext, node: Node, paramTypes: Type[]): void {
 	const d = node.data as FunctionDeclData;
-	if (!hookWritesItsReceiver(d.fnName) || paramTypes.length == 0 || getExtReceiverType(d.fnFlags) == "") return;
+	if (!isLifecycleHookName(d.fnName) || paramTypes.length == 0) return;
+	const key = getExtReceiverType(d.fnFlags);
+	if (key == "") return;
 	const recv = paramTypes[0];
 	if (recv == null || isUnresolvedType(recv)) return;
-	const k = recv.kind;
-	if (k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Var || k == TypeKind.GenericParam) return;
+	const fault = hookReceiverFault(d.fnName, key, getExtReceiverText(d.fnFlags), recv);
+	if (fault == "") return;
 	const loc = node.paramLocations != null && node.paramLocations.length > 0 && node.paramLocations[0] != null ? node.paramLocations[0] : node.location;
-	addError(ctx, "signature for '" + d.fnName + "' must take its receiver by reference: '" + typeDisplayName(recv)
-		+ "' is a value type, so 'this' would be a copy of the destination the hook has to write", loc.line, loc.column);
+	addError(ctx, "signature for '" + d.fnName + "' must take its receiver as " + hookReceiverShapes(d.fnName) + ": " + fault, loc.line, loc.column);
 }
 
 function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: string, line: int32, col: int32): void {
