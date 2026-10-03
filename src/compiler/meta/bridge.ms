@@ -1333,6 +1333,45 @@ function deserializeObjectLiteral(handle: int64, objHeap: RaiserObjectHeap, arrH
 	return createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc);
 }
 
+export interface WireRefusal {
+	message: string;
+	location: SourceLocation;
+}
+
+let _wireRefusals: WireRefusal[] = [];
+
+export function takeWireRefusals(): WireRefusal[] {
+	const taken = _wireRefusals;
+	_wireRefusals = [];
+	return taken;
+}
+
+const WIRE_INT_FLOOR: number = -9223372036854775808.0;
+const WIRE_UINT_CEILING: number = 18446744073709551616.0;
+const WIRE_INT_CEILING: number = 9223372036854775808.0;
+
+function contradictoryNumber(isFloat: boolean, raw: RaiserValue, exact: RaiserValue, value: number): string {
+	if (isFloat) {
+		return exact.kind == RaiserValueKind.Int ? "a NumberLiteral declares isFloat: true and intVal " + exact.intVal + ", and a float literal has no integer value — drop intVal, or set isFloat: false" : "";
+	}
+	if (raw.kind == RaiserValueKind.Float && (Math.floor(value) != value || value == Infinity || value == -Infinity)) {
+		return "a NumberLiteral declares isFloat: false, and its value " + value + " is not an integer — set isFloat: true, or give an integer value";
+	}
+	if (raw.kind == RaiserValueKind.Float && exact.kind != RaiserValueKind.Int && (value < WIRE_INT_FLOOR || value >= WIRE_UINT_CEILING)) {
+		return "a NumberLiteral declares isFloat: false, and its value " + value + " is outside the 64-bit integer range — set isFloat: true, or give intVal";
+	}
+	if (raw.kind != RaiserValueKind.Nil && exact.kind == RaiserValueKind.Int && (exact.intVal as float64) != value && ((exact.intVal as uint64) as float64) != value) {
+		return "a NumberLiteral declares intVal " + exact.intVal + " and value " + value + " — give both the same integer";
+	}
+	return "";
+}
+
+function wireInteger(raw: RaiserValue, exact: RaiserValue, value: number): int64 {
+	if (exact.kind == RaiserValueKind.Int) return exact.intVal;
+	if (raw.kind == RaiserValueKind.Int) return raw.intVal;
+	return value >= WIRE_INT_CEILING ? (value as uint64) as int64 : value as int64;
+}
+
 function literalBits(d: NumberLiteralData): int64 {
 	if ((d.intVal as float64) == d.value || (d.intVal < 0 && d.value > 0)) return d.intVal;
 	return d.value as int64;
@@ -1351,8 +1390,9 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const declared = heapObjectGetField(objHeap, h, "isFloat");
 			const isFloat = declared.kind == RaiserValueKind.Nil ? raw.kind == RaiserValueKind.Float : readBool(objHeap, h, "isFloat");
 			const exact = heapObjectGetField(objHeap, h, "intVal");
-			const bits = exact.kind == RaiserValueKind.Int ? exact.intVal : (raw.kind == RaiserValueKind.Int ? raw.intVal : value as int64);
-			const intVal = isFloat ? value as int64 : bits;
+			const contradiction = contradictoryNumber(isFloat, raw, exact, value);
+			if (contradiction != "") _wireRefusals.push({ message: contradiction, location: loc });
+			const intVal = isFloat || contradiction != "" ? 0 as int64 : wireInteger(raw, exact, value);
 			return createNodeAt(NodeKind.NumberLiteral, { value, isFloat, intVal, isBitPattern: readBool(objHeap, h, "isBitPattern"), outOfRangeText: readStr(objHeap, h, "outOfRangeText") }, loc);
 		},
 		NodeKind.StringLiteral => {
@@ -2059,6 +2099,60 @@ test "a NumberLiteral object that declares an integer is read as that integer" {
 	const d = valueToNode(val, objH, arrH, makeLoc(1, 0)).data as NumberLiteralData;
 	assert !d.isFloat;
 	assert d.intVal == 9007199254740993;
+	assert takeWireRefusals().length == 0;
+}
+
+function numberObject(objH: RaiserObjectHeap, arrH: RaiserArrayHeap, value: RaiserValue, isFloat: RaiserValue, intVal: RaiserValue): RaiserValue {
+	const val = nodeToValue(mkNumber(0, makeLoc(1, 0)), objH, arrH);
+	heapObjectSetField(objH, val.intVal, "value", value);
+	heapObjectSetField(objH, val.intVal, "isFloat", isFloat);
+	heapObjectSetField(objH, val.intVal, "intVal", intVal);
+	return val;
+}
+
+test "a NumberLiteral object that contradicts itself is refused on the wire" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const cases = [
+		{ obj: numberObject(objH, arrH, raiserFloat(3.5), raiserBool(false), raiserNil()), says: "declares isFloat: false, and its value 3.5 is not an integer" },
+		{ obj: numberObject(objH, arrH, raiserFloat(2.5), raiserBool(true), raiserInt(7)), says: "declares isFloat: true and intVal 7" },
+		{ obj: numberObject(objH, arrH, raiserInt(5), raiserBool(false), raiserInt(7)), says: "declares intVal 7 and value 5" },
+		{ obj: numberObject(objH, arrH, raiserFloat(1.0 / 0.0), raiserBool(false), raiserNil()), says: "is not an integer" },
+		{ obj: numberObject(objH, arrH, raiserFloat(1e30), raiserBool(false), raiserNil()), says: "is outside the 64-bit integer range" },
+	];
+	for (const c of cases) {
+		valueToNode(c.obj, objH, arrH, makeLoc(1, 0));
+		const refused = takeWireRefusals();
+		assert refused.length == 1;
+		assert refused[0].message.contains(c.says), refused[0].message;
+	}
+}
+
+test "a NumberLiteral object whose fields agree crosses the wire unrefused" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const agreeing = [
+		numberObject(objH, arrH, raiserFloat(18446744073709551615.0), raiserBool(false), raiserInt(-1)),
+		numberObject(objH, arrH, raiserFloat(5.0), raiserBool(false), raiserNil()),
+		numberObject(objH, arrH, raiserFloat(2.5), raiserBool(true), raiserNil()),
+		numberObject(objH, arrH, raiserInt(7), raiserBool(false), raiserInt(7)),
+		numberObject(objH, arrH, raiserFloat(1e300), raiserBool(true), raiserNil()),
+	];
+	for (const obj of agreeing) valueToNode(obj, objH, arrH, makeLoc(1, 0));
+	assert takeWireRefusals().length == 0;
+	const high = valueToNode(numberObject(objH, arrH, raiserFloat(18446744073709549568.0), raiserBool(false), raiserNil()), objH, arrH, makeLoc(1, 0)).data as NumberLiteralData;
+	assert (high.intVal as uint64) == 18446744073709549568;
+}
+
+test "round-trip NumberLiteral keeps a float past int64 a float with no integer value" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const orig = createNode(NodeKind.NumberLiteral, { value: 1e300, isFloat: true, intVal: 0 as int64 }, synthToken(makeLoc(1, 0)));
+	const d = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, orig.location).data as NumberLiteralData;
+	assert d.isFloat;
+	assert d.value == 1e300;
+	assert d.intVal == 0;
+	assert takeWireRefusals().length == 0;
 }
 
 test "round-trip StringLiteral" {

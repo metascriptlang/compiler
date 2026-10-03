@@ -26,7 +26,7 @@ import {
 	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectGetField,
 } from "../../raiser/value";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
-import { nodeToValue, valueToNode } from "./bridge";
+import { nodeToValue, valueToNode, takeWireRefusals } from "./bridge";
 import { forEachChild } from "../../ast/visitor";
 
 function rebaseLocations(node: Node, loc: SourceLocation): void {
@@ -745,6 +745,10 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 			adoptReplacement(target, replacement);
 			outNode = replacement;
 		}
+	}
+	for (const refusal of takeWireRefusals()) {
+		const at = refusal.location.line > 0 ? refusal.location : loc;
+		addError(ctx, `decorator '${name}': ${refusal.message}`, at.line, at.column);
 	}
 	clearObjectHeap(objHeap);
 	clearArrayHeap(arrHeap);

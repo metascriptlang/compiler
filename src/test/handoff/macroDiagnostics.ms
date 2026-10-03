@@ -18,6 +18,19 @@ test "macro diagnostics: rejection crosses frames once and cannot be caught" {
 	}
 }
 
+test "macro diagnostics: a number literal that contradicts itself is refused at the invocation" {
+	const header = 'import { Node, NodeKind } from "std/meta"; macro bad(node: Node): Node { ';
+	const cases = [
+		{ body: 'return { kind: NodeKind.NumberLiteral, line: node.line, column: node.column, value: 3.5, isFloat: false, intVal: 0, outOfRangeText: "", isBitPattern: false };', says: "Macro 'bad': a NumberLiteral declares isFloat: false, and its value 3.5 is not an integer" },
+		{ body: 'const n: int64 = 7; return { kind: NodeKind.NumberLiteral, line: node.line, column: node.column, value: 2.5, isFloat: true, intVal: n, outOfRangeText: "", isBitPattern: false };', says: "Macro 'bad': a NumberLiteral declares isFloat: true and intVal 7" },
+	];
+	for (const c of cases) {
+		const result = compileToCWithStd(header + c.body + ' } const value = bad(0);');
+		assert !result.ok, c.body;
+		assert result.error.contains(c.says), result.error;
+	}
+}
+
 test "macro diagnostics: nested helper errors and wrapper errors both survive compilation" {
 	const cases = [
 		{ body: 'function helper(n: Node): string { return "ok"; } macro use(n: Node): Node { const bad = n.missingField; const s = helper(n); return n; }', dependency: "missingField" },

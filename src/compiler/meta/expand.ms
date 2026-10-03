@@ -69,7 +69,7 @@ import { RaiserContext } from "../../raiser/context";
 import { RaiserVM } from "../../raiser/vm";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
-import { valueToNode, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType } from "./bridge";
+import { valueToNode, takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType } from "./bridge";
 import { ensureShaped } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
 import { addWarning } from "../../checker/context";
@@ -1792,6 +1792,10 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 
 	// Deserialize result
 	let result = valueToNode(vmCtx.lastResult, vmCtx.objectHeap, vmCtx.arrayHeap, node.location);
+	for (const refusal of takeWireRefusals()) {
+		const at = refusal.location.line > 0 ? refusal.location : node.location;
+		addError(ctx, `Macro '${d.macroName}': ${refusal.message}`, at.line, at.column);
+	}
 
 	// Reclaim VM heaps
 	clearObjectHeap(vmCtx.objectHeap);
