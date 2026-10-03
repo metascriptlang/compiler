@@ -38,6 +38,7 @@ import "./lexicalIdentity";
 import "./macroConverterValues";
 import "./macroFlowExpansion";
 import "./macroHiddenConversions";
+import "./matchDispatch";
 import "./nominalInstantiation";
 import "./nullableInstantiation";
 import "./numericRepresentation";
