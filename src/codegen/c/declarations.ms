@@ -132,7 +132,6 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 		|| (g.emissionFacts.genericOwners.has(name) && g.emissionFacts.genericOwners.readonlyGet(name) != g.modulePath));
 	if (isGenericInstance && !instanceAlreadyEmitted) g.emittedInstances.add(name);
 
-	// Non-exported functions get static prefix (Standard implementation parity)
 	// main() is never static — called from dispatcher
 	// Lifted functions (sym === null) are always static
 	// DRC lifecycle hooks need external linkage for cross-module access (reference parity).
@@ -141,7 +140,8 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	const exportPrefix = isExported && g.isHcr ? "MS_HCR_EXPORT " : "";
 	const hcrCoreCallable = sym != null && sym.modulePath != "" && g.emissionFacts.hcrCoreUnits.has(g.modulePath);
 	const isTypeBound = sym != null && isTypeBoundOp(sym);
-	const linkage = (isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance || isTypeBound || hcrCoreCallable) ? "" : "static ";
+	const isPublicLinkage = isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance || isTypeBound || hcrCoreCallable;
+	const linkage = isPublicLinkage ? "" : (sym != null ? "MS_LIB_PRIVATE " : "static ");
 	const prefix = exportPrefix + linkage;
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
