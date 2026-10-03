@@ -858,11 +858,9 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 		lowered.sysMsg = sysSym;
 	}
 
-	if (methods.length > 0) {
-		const dispatchNode = emitActorDispatch(d, name, actorType, methods, ctx, loc);
-		result.push(dispatchNode);
-		lowered.dispatch = dispatchNode.resolvedSym;
-	}
+	const dispatchNode = emitActorDispatch(d, name, actorType, methods, ctx, loc);
+	result.push(dispatchNode);
+	lowered.dispatch = dispatchNode.resolvedSym;
 	wireActorConstructor(stateClass, lowered, actorType, loc, ctx);
 
 	return result;
