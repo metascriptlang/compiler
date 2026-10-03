@@ -76,7 +76,7 @@ function dropCTypeRowsSince(mark: int32): void {
 // becomes garbage bytecode with no diagnostic (BUGS.md §2 row 9).
 let _pendingHelperErrors: CheckerError[] = [];
 
-// Check + refineTypes + transformForRaiser over a synthetic Program, ready for
+// Check + transformForRaiser over a synthetic Program, ready for
 // bytecode generation. Runs the inner pipeline destructively, so the caller must
 // pass a Program whose real-module decls are CLONED (never the canonical nodes).
 function transformForEngine(program: Node): Node {

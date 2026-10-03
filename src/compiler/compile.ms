@@ -35,7 +35,6 @@ import { sealRuntimeProcs } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
-import { refineTypes } from "../transform/typeRefine";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
@@ -567,7 +566,6 @@ interface A2Timers {
 	mono: number;
 	macro: number;
 	xform: number;
-	refine: number;
 	native: number;
 	analyze: number;
 	lower: number;
@@ -666,11 +664,8 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 	nativeCtx.boundChecks = opts.mode != MODE_DANGER;
 	nativeCtx.objChecks = opts.mode != MODE_DANGER;
-	const _tr0 = performance.now();
-	const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
-	job.timers.refine = job.timers.refine + (performance.now() - _tr0);
 	const _tn0 = performance.now();
-	const nativeTransformed = transformForNative(typeRefined, nativeCtx);
+	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	job.timers.native = job.timers.native + (performance.now() - _tn0);
 	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx, job.hcrModules[hcrSlot].moduleId) : nativeTransformed;
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
@@ -2537,7 +2532,7 @@ resetLiftedOps();
 
 
 	// PROFILE: sub-phase timings summed across all modules.
-	const a2t: A2Timers = { mono: 0, macro: 0, xform: 0, refine: 0, native: 0, analyze: 0, lower: 0 };
+	const a2t: A2Timers = { mono: 0, macro: 0, xform: 0, native: 0, analyze: 0, lower: 0 };
 
 	// Phase A1 — parse + check every module FIRST (no instance drain yet). A generic instance
 	// created during a later module's check is OWNED by its defining module (set in
@@ -2725,7 +2720,7 @@ resetLiftedOps();
 
 	if (opts.showTime) printTiming("phase A (parse+check+transform)", tA);
 	if (opts.showTime) {
-		console.log(`    mono=${a2t.mono}ms macro=${a2t.macro}ms xform=${a2t.xform}ms refine=${a2t.refine}ms native=${a2t.native}ms analyze=${a2t.analyze}ms lower=${a2t.lower}ms`);
+		console.log(`    mono=${a2t.mono}ms macro=${a2t.macro}ms xform=${a2t.xform}ms native=${a2t.native}ms analyze=${a2t.analyze}ms lower=${a2t.lower}ms`);
 	}
 
 	// Gate: stop before codegen if any type errors (standard compiler parity).
@@ -3287,8 +3282,7 @@ resetLiftedOps();
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 		nativeCtx.boundChecks = opts.mode != MODE_DANGER;
 		nativeCtx.objChecks = opts.mode != MODE_DANGER;
-		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
-		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
+		const nativeTransformed = transformForNative(transformed, nativeCtx);
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx, replaceExt(entryName(filePath), "")) : nativeTransformed;
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
@@ -3857,8 +3851,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 		const txCtx = createTransformContextWithChecker(modCtx);
 		txCtx.rangeChecks = opts.mode != MODE_DANGER;
-		const refined = refineTypes(comptimeResolved, txCtx, graphRegistry);
-		const transformed = transformForRaiser(refined, modCtx);
+		const transformed = transformForRaiser(comptimeResolved, modCtx);
 
 		const input: RaiserModuleInput = { modulePath: unitPaths[i], program: transformed };
 		modules.push(input);
