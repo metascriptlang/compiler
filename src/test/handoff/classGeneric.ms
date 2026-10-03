@@ -7,7 +7,7 @@
 
 import { TypeKind } from "../../ast/node";
 import { checkSource, fullPipeline, errorCount } from "./helpers";
-import { compileToC } from "../helpers";
+import { compileToC, compileToJS } from "../helpers";
 import { lookupSymbol } from "../../checker/symbol";
 
 test "checker: generic class method has this param" {
@@ -156,6 +156,56 @@ test "E2E C: two-param generic compiles" {
 	assert result.ok;
 	// C mangler converts "," to "X" and adds trailing "_"
 	assert result.value.indexOf("KV_") >= 0 && result.value.indexOf("__string") >= 0;
+}
+
+function boxInstances(c: string): string[] {
+	const names: string[] = [];
+	let at = c.indexOf("struct Box_", 0);
+	while (at >= 0) {
+		const end = c.indexOf(" ", at + 7);
+		const name = c.slice(at + 7, end);
+		if (c.slice(end, end + 2) == " {" && names.indexOf(name) < 0) names.push(name);
+		at = c.indexOf("struct Box_", at + 1);
+	}
+	return names;
+}
+
+function refusalOnBoth(source: string): string {
+	const c = compileToC(source);
+	const js = compileToJS(source);
+	if (c.ok || js.ok) return "";
+	return c.error;
+}
+
+const LITERAL_ARGUMENTS = "enum K { A, B }\n" +
+	"class Box<T> { v: T; constructor(v: T) { this.v = v; } }\n" +
+	"struct Pair<T> { a: T; b: T; }\n" +
+	"type Cell<T> = { v: T };\n";
+
+test "checker: a literal type argument is not interchangeable with its base type" {
+	const slots = [
+		"const p: Pair<K.A> = { a: K.A, b: K.A };\nconst q: Pair<K> = p;\n",
+		"const b = new Box<K.A>(K.A);\nconst c: Box<K> = b;\n",
+		"const c: Cell<\"x\"> = { v: \"x\" };\nconst d: Cell<string> = c;\n",
+	];
+	for (const slot of slots) {
+		const failure = refusalOnBoth(LITERAL_ARGUMENTS + slot);
+		assert failure.contains("not assignable"), slot + ": " + failure;
+	}
+}
+
+test "E2E C: a class instance is keyed by the enum member of its type argument" {
+	const header = "enum K { A, B }\nclass Box<T> { v: T; constructor(v: T) { this.v = v; } }\n";
+	const distinct = compileToC(header +
+		"const a = new Box<K.A>(K.A);\nconst b = new Box<K.B>(K.B);\n" +
+		"console.log(a.v == K.A, b.v == K.B);\n");
+	assert distinct.ok;
+	assert boxInstances(distinct.value).length == 2;
+	const repeated = compileToC(header +
+		"const a = new Box<K.A>(K.A);\nconst b = new Box<K.A>(K.A);\n" +
+		"console.log(a.v == K.A, b.v == K.A);\n");
+	assert repeated.ok;
+	assert boxInstances(repeated.value).length == 1;
 }
 
 // Regression test for the generic wrapper + Map.set monomorphize bug

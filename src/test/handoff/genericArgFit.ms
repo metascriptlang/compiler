@@ -1,6 +1,7 @@
 // Route 15c: Checker — a bound type param must accept every later argument
 
 import { strictErrorCount, hasError } from "./helpers";
+import { compileToC } from "../helpers";
 
 const EQ2 = "function eq2<T>(a: T, b: T): boolean { return a == b; }\n";
 const ID2 = "function id2<T>(a: T, b: T): T { return a; }\n";
@@ -49,6 +50,18 @@ test "sibling classes with no common binding are rejected" {
 
 test "an explicit type arg the arguments contradict is still rejected" {
 	assert hasError(CLASSES + "const c = pair<Dog>(dog, animal);", "Argument type mismatch in 'pair' arg 1: got Animal, expected Dog");
+}
+
+function errorOnC(source: string): string {
+	const c = compileToC(source);
+	return c.ok ? "" : c.error;
+}
+
+test "an explicit type arg of a static generic is checked against the arguments" {
+	const fromOk = errorOnC("const r = Result.ok<string, string>(5);");
+	assert fromOk.contains("Argument type mismatch in 'ok' arg 0: got int32, expected string");
+	const fromErr = errorOnC("const r = Result.err<string, string>(5);");
+	assert fromErr.contains("Argument type mismatch in 'err' arg 0: got int32, expected string");
 }
 
 // ===== Rejected: the same rule inside template expansion =====
