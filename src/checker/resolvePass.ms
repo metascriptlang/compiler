@@ -1710,7 +1710,13 @@ function hookTakes(hook: string): string {
 	return "the receiver only";
 }
 
-function hookSignatureFault(hook: string, paramTypes: Type[], returnType: Type | null): string {
+function hookParamFault(hook: string, paramTypes: Type[]): string {
+	if (hook != "onDestroy" && hook != "onTrace" && paramTypes.length > 0) {
+		const recv = paramTypes[0];
+		if (recv.kind == TypeKind.Ref && recv.typeReturn != null && refWrapsNominal(recv)) {
+			return "'" + typeDisplayName(recv) + "' is a class, its values are shared by reference and never copied, moved or cloned by value, so the hook would never run";
+		}
+	}
 	const want = hook == "onCopy" || hook == "onMove" || hook == "onTrace" ? 2 : 1;
 	if (paramTypes.length != want) {
 		return "it takes " + hookTakes(hook) + ", " + paramTypes.length.toString() + " parameter" + (paramTypes.length == 1 ? "" : "s") + " declared";
@@ -1727,23 +1733,41 @@ function hookSignatureFault(hook: string, paramTypes: Type[], returnType: Type |
 			return "its second parameter is '" + typeDisplayName(src) + "', the source value is the receiver's own type ('y: T')";
 		}
 	}
-	if (returnType == null || isUnresolvedType(returnType)) return "";
+	return "";
+}
+
+function hookReturnFault(hook: string, paramTypes: Type[], returnType: Type): string {
 	if (hook == "onClone") {
-		if (returnType.kind == TypeKind.Var || !sameType(hookObjectOf(paramTypes[0]), hookObjectOf(returnType))) return "it returns '" + typeDisplayName(returnType) + "', a clone is a new value of the receiver's own type";
+		if (returnType.kind == TypeKind.Var || !sameType(hookObjectOf(paramTypes[0]), hookObjectOf(returnType))) {
+			return "it returns '" + typeDisplayName(returnType) + "', a clone is a new value of the receiver's own type";
+		}
 		return "";
 	}
 	if (returnType.kind != TypeKind.Void) return "it returns '" + typeDisplayName(returnType) + "', a hook returns nothing";
 	return "";
 }
 
-function refuseHookSignature(ctx: CheckerContext, hook: string, at: SourceLocation, paramTypes: Type[], returnType: Type | null): void {
-	if (paramTypes.length == 0) return;
-	const recv = paramTypes[0];
-	if (recv == null || isUnresolvedType(recv)) return;
+function hookTypesAreResolved(paramTypes: Type[], returnType: Type | null): boolean {
+	if (paramTypes.length == 0) return false;
 	for (const t of paramTypes) {
-		if (t == null || isUnresolvedType(t)) return;
+		if (t == null || isUnresolvedType(t)) return false;
 	}
-	const fault = hookSignatureFault(hook, paramTypes, returnType);
+	return returnType == null || !isUnresolvedType(returnType);
+}
+
+function refuseHookSignature(ctx: CheckerContext, hook: string, at: SourceLocation, paramTypes: Type[], returnType: Type | null): void {
+	if (!hookTypesAreResolved(paramTypes, returnType)) return;
+	let fault = hookParamFault(hook, paramTypes);
+	if (fault == "" && returnType != null) fault = hookReturnFault(hook, paramTypes, returnType);
+	if (fault == "") return;
+	addError(ctx, "signature for '" + hook + "' is wrong: " + fault, at.line, at.column);
+}
+
+export function refuseHookInferredReturn(ctx: CheckerContext, hook: string, at: SourceLocation, fnType: Type): void {
+	const returnType = fnType.typeReturn;
+	if (returnType == null || !hookTypesAreResolved(fnType.typeChildren, returnType)) return;
+	if (hookParamFault(hook, fnType.typeChildren) != "") return;
+	const fault = hookReturnFault(hook, fnType.typeChildren, returnType);
 	if (fault == "") return;
 	addError(ctx, "signature for '" + hook + "' is wrong: " + fault, at.line, at.column);
 }
