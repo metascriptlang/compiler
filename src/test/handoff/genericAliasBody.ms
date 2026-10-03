@@ -40,6 +40,13 @@ function mentionsBoth(out: string, a: string, b: string): boolean {
 	return false;
 }
 
+function namesArrayAfter(out: string, struct: string): boolean {
+	for (const line of out.split("\n")) {
+		if (line.startsWith("struct " + struct + "__") && line.indexOf("Array { int64_t len", 0) > 0) return true;
+	}
+	return false;
+}
+
 // ===== Function body =====
 
 test "a generic alias over a function type accepts a matching arrow in a field" {
@@ -133,7 +140,7 @@ test "C treats an array of bare-parameter alias instances of a class as an array
 test "C names an array of bare-parameter alias instances of a struct after the struct" {
 	const out = emitC(TAGGED + OFFSET + "const pts: Tagged<Offset>[] = [{ x: 1, y: 2 }];\nconsole.log(pts[0].x);\n");
 	assert out.indexOf("error:", 0) < 0, out;
-	assert out.indexOf("OffsetArray { int64_t len", 0) >= 0, out;
+	assert namesArrayAfter(out, "Offset"), out;
 	assert !mentionsBoth(out, "Tagged", "Array"), out;
 }
 

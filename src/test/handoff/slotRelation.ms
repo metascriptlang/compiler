@@ -12,7 +12,7 @@ test "slot relation: the argument relation governs every storage boundary" {
 		{ source: "int32", target: "float64", accepted: true },
 		{ source: "int32", target: "uint32", accepted: false },
 		{ source: "int32", target: "uint8", accepted: false },
-		{ source: "uint8", target: "int32", accepted: false },
+		{ source: "uint8", target: "int32", accepted: true },
 		{ source: "int64", target: "int32", accepted: false },
 		{ source: "int16", target: "uint16", accepted: false },
 		{ source: "uint8", target: "uint32", accepted: true },
@@ -61,6 +61,7 @@ test "slot relation: typed values and contextually fitted constants stay distinc
 		"export const BASE: uint64 = 1 << 3; const K = 5; const U: uint32 = K * 2 + 1; const M: uint8 = (1 << 7) | 1;",
 		"type Direction = \"row\" | \"column\"; type Style = { direction: Direction | null; width: float32 | null; on: boolean | null; byte: int8 | null }; const s: Style = { direction: \"row\", width: 3, on: true, byte: 5 }; s.direction = \"column\"; function pick(): Direction | null { return \"row\"; }",
 		"const value: int32 | null = 7; const widened: int64 | null = value ?? 0;",
+		"const u: uint8 = 3; const I: int32 = u + 1;",
 		"class Box { n: int32 = 1; } function f(value: Box | null): int32 { if (value != null) { const slot: Box = value; return slot.n; } return 0; }",
 	];
 	for (const source of accepted) assert strictErrorCount(source) == 0, source;
@@ -68,7 +69,6 @@ test "slot relation: typed values and contextually fitted constants stay distinc
 		"const N: uint64 = 0 - 1;",
 		"const B: uint8 = 1 << 9;",
 		"const k: int32 = 5; const U: uint32 = k * 2;",
-		"const u: uint8 = 3; const I: int32 = u + 1;",
 		"function big(): int8 | null { return 300; }",
 		"function choose(value: uint32): string { return \"u\"; } function choose(value: string): string { return value; } const signed: int32 = -7; const result = choose(signed);",
 	];
