@@ -1,5 +1,6 @@
 // `msc run [options] <file> [args]` hands the program everything after the file, flags and
 // `--` included; an msc option right after the file is an error that says to move it.
+// Its stdout is the program's own: the build status line goes to stderr.
 // On Raiser argv[0] is the file as given, and output streams in order with a child's.
 // `msc x <cmd>` runs a declared command on Raiser: argv[0] is the command name and its
 // exit status is msc's.
@@ -10,6 +11,7 @@
 // RED PRE-FIX: the program saw only its own path; `a` and `b c` were dropped. On Raiser
 // argv was msc's own command line, and console.log printed after the child's output.
 // `msc x` built the command to C and gave it the cached binary's path as argv[0].
+// `msc run` printed "Built N module(s) → …" on stdout ahead of the program's output.
 // GREEN POST-FIX: GUARD-OK.
 
 import { execFileResult, cwd, exit, env } from "std/process";
@@ -48,6 +50,11 @@ function lines(out: string): string {
 	}
 	return kept;
 }
+
+const ownStdout = runEcho(["a"]);
+if (ownStdout != "arg=a\n") report(`msc run stdout carries more than the program's output: ${ownStdout}`);
+const ownJsStdout = execFileResult(msc, ["run", "--target=js", "echo.ms", "a"], dir).output;
+if (ownJsStdout != "arg=a\n") report(`msc run --target=js stdout carries more than the program's output: ${ownJsStdout}`);
 
 const positional = lines(runEcho(["a", "b c"]));
 if (positional != "arg=a|arg=b c|") report(`positionals after the file: ${positional}`);
