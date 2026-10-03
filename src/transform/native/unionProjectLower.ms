@@ -5,7 +5,7 @@ import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeBool, makeCall, makeConditional, makeTypedIdentResolved, makeMember, makeNumber, makeString, runtimeRef, enumToStringSym } from "../util";
+import { makeBinary, makeBool, makeCall, makeConditional, makeTypedIdentResolved, makeMember, makeNumber, makeString, runtimeRef, generatedRef, enumToStringSym } from "../util";
 
 export function projectNarrowedUnions(program: Node, ctx: TransformContext): Node {
 	walkNode(program, projectNode);
@@ -157,7 +157,7 @@ function guardProjection(p: Node, field: string, ctx: TransformContext, jsBacken
 	const u = d.convExpr;
 	const labels = memberLabels(ut).join("|");
 	const check = isLocation(u) ? "msVariantAccess" : "msVariantAccessVal";
-	const access = makeCall(runtimeRef(check, loc), [u, makeNumber(p.variantSlot - 1, loc), makeString(accessHead(field, p, ut), loc), makeString(labels, loc)], loc);
+	const access = makeCall(generatedRef(check, loc), [u, makeNumber(p.variantSlot - 1, loc), makeString(accessHead(field, p, ut), loc), makeString(labels, loc)], loc);
 	access.nodeType = ut;
 	d.convExpr = access;
 }

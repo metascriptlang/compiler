@@ -8,13 +8,13 @@
 import { Node, NodeKind, NodeFlag, TypeAssertionData, HiddenStdConvData, BinaryExprData, ExprStmtData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, makeMember, makeNumber, runtimeRef } from "../util";
+import { makeBinary, makeCall, makeMember, makeNumber, generatedRef } from "../util";
 import { createPrimitive, isWideningInt64Conv } from "../../checker/types";
 import { isFloatKind } from "./bigIntJS";
 import { rangeCheckHelper, makeRangeCheckFor } from "../native/rangeCheckInject";
-import { parseInput, makeCtx, getStmts, firstExprKindAfter } from "../testUtil";
+import { parseInput, makeJsCtx, getStmts, firstExprKindAfter } from "../testUtil";
 import { VariableDeclData } from "../../ast/node";
-import { checkProgram } from "../../checker/checkPass";
+import { checkProgramJs } from "../../checker/checkPass";
 
 export function lowerIntConvJS(program: Node, ctx: TransformContext): Node {
 	walkNode(program, materializeIntConv);
@@ -88,7 +88,7 @@ function materializeIntConv(node: Node): Node {
 }
 
 function numberOf64(inner: Node, kind: TypeKind, loc: SourceLocation): Node {
-	const result = makeCall(runtimeRef("Number", loc), [inner], loc);
+	const result = makeCall(generatedRef("Number", loc), [inner], loc);
 	result.nodeType = createPrimitive(kind);
 	return result;
 }
@@ -104,7 +104,7 @@ export function truncateTo(inner: Node, kind: TypeKind, loc: SourceLocation): No
 		TypeKind.Uint8 => makeBinary(inner, "&", makeNumber(255, loc), loc),
 		TypeKind.Uint16 => makeBinary(inner, "&", makeNumber(65535, loc), loc),
 		TypeKind.Uint32 => makeBinary(inner, ">>>", makeNumber(0, loc), loc),
-		TypeKind.Int64 | TypeKind.Uint64 => makeCall(makeMember(runtimeRef("Math", loc), "trunc", loc), [inner], loc),
+		TypeKind.Int64 | TypeKind.Uint64 => makeCall(makeMember(generatedRef("Math", loc), "trunc", loc), [inner], loc),
 		_ => inner,
 	};
 	result.nodeType = createPrimitive(kind);
@@ -125,8 +125,8 @@ export function isIntConvKind(kind: TypeKind): boolean {
 function castResult(input: string): Node | null {
 	const result = parseInput(input);
 	if (!result.ok) return null;
-	checkProgram(result.value);
-	lowerIntConvJS(result.value, makeCtx());
+	checkProgramJs(result.value);
+	lowerIntConvJS(result.value, makeJsCtx());
 	const found: Node[] = [];
 	walkNode(result.value, (n: Node): Node => {
 		if (n.kind == NodeKind.VariableDecl && (n.data as VariableDeclData).declName == "r") found.push((n.data as VariableDeclData).initializer);

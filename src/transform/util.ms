@@ -306,14 +306,22 @@ export function bindCompilerFuncs(declared: HashMap<string, Symbol>, identCache:
 export function runtimeProcSym(procName: string): Symbol {
 	const declared = _compilerFuncs.get(procName);
 	if (declared != null) return declared;
+	throw new Error(`internal: system module needs '${procName}'`);
+}
+
+export function generatedProcSym(procName: string): Symbol {
 	const existing = _runtimeSyms.get(procName);
 	if (existing != null) return existing;
-	if (_runtimeProcsSealed) throw new Error(`internal: runtime proc '${procName}' first requested while C modules are emitted in parallel`);
+	if (_runtimeProcsSealed) throw new Error(`internal: generated proc '${procName}' first requested while C modules are emitted in parallel`);
 	const sym = makeSymbol(procName, SymbolKind.Function, null, false);
 	setFlag(sym, SymbolFlag.ImportC);
 	if (_runtimeIdentCache != null) sym.nameId = getIdentId(_runtimeIdentCache, procName);
 	_runtimeSyms.set(procName, sym);
 	return sym;
+}
+
+export function generatedRef(procName: string, loc: SourceLocation): Node {
+	return makeTypedIdentResolved(generatedProcSym(procName), null, loc);
 }
 
 export function compilerFuncSym(procName: string): Symbol | null {
@@ -771,45 +779,52 @@ export function extractBodyStmts(body: Node): Node[] {
 	return result;
 }
 
-test "a runtime proc query mints no symbol" {
+test "a runtime proc is the declared symbol and an undeclared name is refused" {
 	const savedFuncs = _compilerFuncs;
 	const savedSyms = _runtimeSyms;
 	const savedCache = _runtimeIdentCache;
-	const cache = createIdentCache();
-	bindCompilerFuncs(new HashMap<string, Symbol>(), cache);
+	const declared = new HashMap<string, Symbol>();
+	const probe = makeSymbol("msProbeAccess", SymbolKind.Function, null, false);
+	declared.set("msProbeAccess", probe);
+	bindCompilerFuncs(declared, createIdentCache());
 	const other = makeSymbol("msOther", SymbolKind.Function, null, false);
-	assert !isRuntimeProcSym(other, "msProbeAccess");
 	const sameName = makeSymbol("msProbeAccess", SymbolKind.Function, null, false);
 	setFlag(sameName, SymbolFlag.ImportC);
-	sameName.nameId = getIdentId(cache, "msProbeAccess");
+	assert runtimeProcSym("msProbeAccess") == probe;
+	assert isRuntimeProcSym(probe, "msProbeAccess");
+	assert !isRuntimeProcSym(other, "msProbeAccess");
 	assert !isRuntimeProcSym(sameName, "msProbeAccess");
-	assert _runtimeSyms.size == 0;
-	const minted = runtimeProcSym("msProbeAccess");
-	assert isRuntimeProcSym(minted, "msProbeAccess");
-	assert !isRuntimeProcSym(sameName, "msProbeAccess");
-	assert _runtimeSyms.size == 1;
-	_compilerFuncs = savedFuncs;
-	_runtimeSyms = savedSyms;
-	_runtimeIdentCache = savedCache;
-}
-
-test "a sealed runtime proc table serves known procs and refuses a new one" {
-	const savedFuncs = _compilerFuncs;
-	const savedSyms = _runtimeSyms;
-	const savedCache = _runtimeIdentCache;
-	bindCompilerFuncs(new HashMap<string, Symbol>(), createIdentCache());
-	const known = runtimeProcSym("msSealKnown");
-	sealRuntimeProcs(true);
-	const again = runtimeProcSym("msSealKnown");
 	let refused = "";
 	try {
 		runtimeProcSym("msSealNew");
 	} catch (e) {
 		refused = e.message;
 	}
+	assert refused == "internal: system module needs 'msSealNew'";
+	assert _runtimeSyms.size == 0;
+	_compilerFuncs = savedFuncs;
+	_runtimeSyms = savedSyms;
+	_runtimeIdentCache = savedCache;
+}
+
+test "a generated proc is minted once per name and a sealed table refuses a new one" {
+	const savedFuncs = _compilerFuncs;
+	const savedSyms = _runtimeSyms;
+	const savedCache = _runtimeIdentCache;
+	bindCompilerFuncs(new HashMap<string, Symbol>(), createIdentCache());
+	const known = generatedProcSym("msGenKnown");
+	assert isRuntimeProcSym(known, "msGenKnown");
+	sealRuntimeProcs(true);
+	const again = generatedProcSym("msGenKnown");
+	let refused = "";
+	try {
+		generatedProcSym("msGenNew");
+	} catch (e) {
+		refused = e.message;
+	}
 	sealRuntimeProcs(false);
 	assert again == known;
-	assert refused.contains("msSealNew");
+	assert refused.contains("msGenNew");
 	_compilerFuncs = savedFuncs;
 	_runtimeSyms = savedSyms;
 	_runtimeIdentCache = savedCache;

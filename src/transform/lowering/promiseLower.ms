@@ -25,7 +25,7 @@
 import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind } from "../../ast/node";
 import { isAwaitable, awaitedType, unwrapRef } from "../../checker/types";
 import { TransformContext } from "../context";
-import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef, makeValueShareFn } from "../util";
+import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef, generatedProcSym, makeTypedIdentResolved } from "../util";
 
 // ===== Type-tag dispatch =====
 
@@ -229,7 +229,7 @@ function lowerPromiseAll(node: Node, loc: SourceLocation, ctx: TransformContext)
 	const innerT = elementPromise != null ? awaitedType(elementPromise) : null;
 	const typedFn = promiseAllFnForInner(innerT);
 	if (typedFn == "") return node;  // void-returning: falls through to generic msPromiseAll
-	const typedCallee = runtimeRef(typedFn, loc);
+	const typedCallee = makeTypedIdentResolved(generatedProcSym(typedFn), null, loc);
 	const typedSym = typedCallee.resolvedSym;
 	if (typedSym.builtinKind != "" && typedSym.builtinKind != "PromiseAllFor") {
 		throw new Error(`internal: typed Promise.all '${typedFn}' is already the builtin '${typedSym.builtinKind}'`);

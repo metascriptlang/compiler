@@ -33,7 +33,7 @@ import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, cloneIdent, runtimeRef, makeMember, makeArrayAccess, makeNumber, makeHiddenDeref, makeHiddenAddr, isRuntimeProcCall } from "../util";
+import { makeBinary, makeCall, cloneIdent, runtimeRef, makeMember, makeArrayAccess, makeNumber, makeHiddenDeref, makeHiddenAddr, isRuntimeProcCall, generatedRef } from "../util";
 import { truncateTo, isIntConvKind } from "./intConvJS";
 
 export function lowerIntArithJS(program: Node, ctx: TransformContext): Node {
@@ -230,7 +230,7 @@ function wrapsOnUint32(op: string): boolean {
 // already gone by the time any mask sees the result. Math.imul is an exact
 // 32-bit multiply; it answers signed, so the width mask still follows.
 function exactMul(left: Node, right: Node, loc: SourceLocation): Node {
-	return makeCall(makeMember(runtimeRef("Math", loc), "imul", loc), [left, right], loc);
+	return makeCall(makeMember(generatedRef("Math", loc), "imul", loc), [left, right], loc);
 }
 
 function compoundBaseOf(op: string): string {

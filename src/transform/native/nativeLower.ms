@@ -16,9 +16,10 @@
 import { Node, NodeKind, NodeFlag, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, SourceLocation, createNode, makeLoc } from "../../ast/node";
 import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, isUnknownType, isUncountedPtrElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
-import { TransformContext, createTransformContext } from "../context";
+import { TransformContext } from "../context";
+import { makeCtx } from "../testUtil";
 import { walkNode } from "../walker";
-import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef, makeTypedIdentResolved, makeArrayAccess, makeHiddenSubConv, isRuntimeProcCall } from "../util";
+import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef, generatedRef, makeTypedIdentResolved, makeArrayAccess, makeHiddenSubConv, isRuntimeProcCall } from "../util";
 import { checkVariantReads } from "./unionProjectLower";
 import { makeSymbol } from "../../checker/symbol";
 
@@ -180,26 +181,26 @@ function rewriteArrayAccess(node: Node, boundChecks: boolean): Node {
 	if (arrType.kind == TypeKind.Array) {
 		const elemType = arrType.typeReturn;
 		const macroName = getArrayMacroName(elemType, boundChecks);
-		const result = makeCall(runtimeRef(macroName, loc), [d.array, d.index], loc);
+		const result = makeCall(generatedRef(macroName, loc), [d.array, d.index], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
 
 	if (arrType.kind == TypeKind.SizedArray) {
 		const size = arrType.typeValue;
-		const result = makeCall(runtimeRef(boundChecks ? "msSizedArrayAccess" : "msSizedArrayAccessUnchecked", loc), [d.array, d.index, makeNumber(size, loc)], loc);
+		const result = makeCall(generatedRef(boundChecks ? "msSizedArrayAccess" : "msSizedArrayAccessUnchecked", loc), [d.array, d.index, makeNumber(size, loc)], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
 
 	if (arrType.kind == TypeKind.Span) {
-		const result = makeCall(runtimeRef(boundChecks ? "msSpanAccess" : "msSpanAccessUnchecked", loc), [d.array, d.index], loc);
+		const result = makeCall(generatedRef(boundChecks ? "msSpanAccess" : "msSpanAccessUnchecked", loc), [d.array, d.index], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
 
 	if (arrType.kind == TypeKind.String) {
-		const result = makeCall(runtimeRef("msStringCharAccess", loc), [d.array, d.index], loc);
+		const result = makeCall(generatedRef("msStringCharAccess", loc), [d.array, d.index], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
@@ -402,7 +403,7 @@ function testLocal(name: string, t: Type, loc: SourceLocation): Node {
 
 function loweredAccess(arrType: Type, boundChecks: boolean): Node {
 	const loc = makeLoc(1, 1);
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	ctx.boundChecks = boundChecks;
 	return rewriteAccess(makeArrayAccess(testLocal("xs", arrType, loc), makeNumber(0, loc), loc), ctx);
 }
@@ -429,7 +430,7 @@ test "span index is unchecked when bound checks are off" { assert isRuntimeProcC
 
 function loweredSliceLen(boundChecks: boolean): Node {
 	const loc = makeLoc(1, 1);
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	ctx.boundChecks = boundChecks;
 	const call = makeCall(runtimeRef("msSliceLen", loc), [makeNumber(1, loc), makeNumber(3, loc), makeNumber(4, loc)], loc);
 	return rewriteAccess(call, ctx);
@@ -441,7 +442,7 @@ test "a slice length is unchecked when bound checks are off" { assert isRuntimeP
 
 function loweredNarrowing(rangeChecks: boolean): Node {
 	const loc = makeLoc(1, 1);
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	ctx.rangeChecks = rangeChecks;
 	const narrowing = makeHiddenSubConv(testLocal("u", int32Type(), loc), int32Type(), loc);
 	narrowing.variantSlot = 1;
