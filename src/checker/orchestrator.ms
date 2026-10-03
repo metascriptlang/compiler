@@ -96,10 +96,6 @@ function loadGlobalImportModule(graph: ModuleGraph, provider: SourceProvider, co
 
 export function loadStdGlobalImportModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
 	for (const entry of defaultGlobalImports()) loadGlobalImportModule(graph, provider, config, entry, false);
-	noteStdGlobalImportModules(graph, provider, config);
-}
-
-export function noteStdGlobalImportModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
 	for (const mod of graph.modules) mod.stdPrelude = true;
 	for (const entry of defaultGlobalImports()) {
 		for (const candidate of resolveImportWithConfig(entry, "virtual:prelude", config)) {
