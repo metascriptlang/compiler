@@ -156,6 +156,23 @@ function returnDataLoop(count: uint64): Result<uint64, ProgramError> {
 	return Result.ok(0);
 }
 
+function fullReturnData(): Result<uint64, ProgramError> {
+	let big: uint8[1024] = [];
+	for (let index = 0; index < 1024; index++) { big[index] = ((index * 7) & 0xff) as uint8; }
+	setReturnData(big);
+	const found = returnData();
+	if (found === null) { return Result.err(ProgramError.invalidAccountData()); }
+	if (found.length != 1024 || !found.program.equals(programId())) {
+		return Result.err(ProgramError.invalidAccountData());
+	}
+	for (let index = 0; index < 1024; index++) {
+		const byte = try found.readU8(index as uint64);
+		if (byte != big[index]) { return Result.err(ProgramError.invalidAccountData()); }
+	}
+	logU64(msSolAlloc(0));
+	return Result.ok(0);
+}
+
 function logKeyLoop(count: uint64): Result<uint64, ProgramError> {
 	const key = programId();
 	for (let index: uint64 = 0; index < count; index++) { logPubkey(key); }
@@ -269,6 +286,7 @@ function dispatch(): Result<uint64, ProgramError> {
 	if (op == 17) { return logKeyLoop(count); }
 	if (op == 18) { return eventLoop(count); }
 	if (op == 19) { return wideList(count as int32); }
+	if (op == 20) { return fullReturnData(); }
 	return request(0 - count);
 }
 

@@ -25,7 +25,7 @@ const HEAP = 32 * 1024;
 const BUDGET = 1_400_000;
 const LARGEST_COUNT = 60_000;
 const NAMED = /std\/solana: the (\d+) KiB program heap is exhausted \(asked (\d+) more bytes at (\d+)\)/;
-const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5, push: 6, literal: 7, pairs: 8, text: 9, signed: 10, unsigned: 11, limits: 13, rent: 14, clock: 15, returnData: 16, logKey: 17, event: 18, wide: 19 };
+const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5, push: 6, literal: 7, pairs: 8, text: 9, signed: 10, unsigned: 11, limits: 13, rent: 14, clock: 15, returnData: 16, logKey: 17, event: 18, wide: 19, fullReturn: 20 };
 const MASK = 2n ** 64n - 1n;
 const SUMS = {
 	push: (n) => sum(n, (i) => (3n * i + 1n) * (i + 1n)),
@@ -208,6 +208,9 @@ function namedFailure(label, outcome) {
 		}
 		sizes.push(`${kind} ${Number(positions.get(20) - positions.get(1)) / 19} B ${Math.round((units.get(20) - units.get(1)) / 19)} CU`);
 	}
+	const full = await run(OPS.fullReturn, 0);
+	check(`[${name}] 1,024 bytes of return data come back whole, with the program that set them, and leave the heap position at ${base} (${full.ok ? `${full.units} CU` : full.error})`,
+		full.ok && full.value === base);
 	console.log(`[${name}] per call: ${sizes.join(", ")}`);
 }
 
