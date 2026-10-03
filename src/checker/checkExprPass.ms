@@ -960,6 +960,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					effLeft = rightType;
 				}
 			}
+			if (d.operator == "instanceof" && d.right.resolvedSym != null
+				&& d.right.resolvedSym.symbolKind == SymbolKind.Class && symGenericParams(d.right.resolvedSym) != "") {
+				addError(ctx, "instanceof cannot test the generic class " + d.right.resolvedSym.name + " without its type arguments — each instance has its own identity; read it with `as " + d.right.resolvedSym.name + "<…>`", d.right.location.line, d.right.location.column);
+			}
 			// Bitwise ops require integer operands (reference parity: no float overloads)
 			// Insert implicit number → int32 cast for C backend
 			if ((isUnknownType(effLeft) || isUnknownType(effRight))
