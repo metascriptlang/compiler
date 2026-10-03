@@ -79,6 +79,7 @@ function recordParamPrologue(s: Symbol): void {
 
 function sc(node: Node): Node {
 	if (node == null) return node;
+	if (node.kind == NodeKind.HiddenAddr) noteBoxedArg(node);
 	if (node.kind == NodeKind.FunctionDecl) {
 		fnStack.push(node);
 		mapChildren(node, sc);
@@ -159,6 +160,11 @@ function pairize(arg: Node): Node {
 
 function rw(node: Node): Node {
 	if (node == null) return node;
+	if (node.kind == NodeKind.HiddenAddr) {
+		const result = pairize(node);
+		result.nodeType = node.nodeType;
+		return result;
+	}
 	if (node.kind == NodeKind.CallExpr) {
 		const d = node.data as CallExprData;
 		const formals = calleeFormals(d);

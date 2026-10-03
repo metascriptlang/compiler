@@ -65,6 +65,8 @@ import { lowerTailCall } from "./lowering/tailCallLower";
 import { retargetJumps } from "./lowering/jumpRetarget";
 import { lowerParamReassign } from "./lowering/paramReassignLower";
 import { lowerJsVarParam } from "./lowering/jsVarParamLower";
+import { lowerJsPointers } from "./lowering/jsPointerLower";
+import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { lowerAwaitSpill } from "./lowering/awaitSpill";
 import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerGenerator } from "./lowering/generatorLower";
@@ -170,6 +172,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerOperators(result, ctx);
 	if (!jsBackend) { result = lowerBigIntOps(result, ctx); }
 	if (!jsBackend) { result = lowerStringOps(result, ctx); }
+	result = lowerPointerAddresses(result, ctx);
+	if (jsBackend) { result = lowerJsPointers(result, ctx); }
 	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
 	result = spanLower(result, ctx);
 	if (!jsBackend) { result = spanParamExpand(result, ctx); }
