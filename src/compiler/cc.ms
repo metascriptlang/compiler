@@ -880,6 +880,8 @@ export function buildPch(header: string, pch: string, extraFlags: string, mode: 
 	const rtDir = resolveRuntime();
 	if (rtDir != "") args.push(`-iquote${dirname(dirname(rtDir))}`);
 	const tmp = `${pch}.tmp.${performance.now()}`;
+	args.push("-Xclang");
+	args.push("-fno-pch-timestamp");
 	args.push("-x");
 	args.push("c-header");
 	args.push(header);
@@ -1157,4 +1159,27 @@ test "a Windows compile plan writes the object zig would have staged in its own 
 	const tokens = ["-cc1", "-object-file-name=C:/zig/tmp/7a1d-msc-plan-input.obj", "-o", "C:\\zig\\tmp\\7a1d-msc-plan-input.obj", "-x", "c", "C:/t/msc-plan-input.c"];
 	adoptDriverObject(tokens, "C:/t/msc-plan-input.c", "C:/t/msc-plan-output.o");
 	assert tokens.join(" ") == "-cc1 -object-file-name=C:/t/msc-plan-output.o -o C:/t/msc-plan-output.o -x c C:/t/msc-plan-input.c";
+}
+
+test "a precompiled header zig serves from its cache after the header is rewritten still loads" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const dir = `${base}/msc-pch-${performance.now()}`;
+	ensureDir(dir);
+	const header = `${dir}/prefix.h`;
+	const source = `${dir}/use.c`;
+	writeFile(header, "#include <string.h>\n");
+	writeFile(source, "int size(void) { return (int)strlen(\"abc\"); }\n");
+	assert buildPch(header, `${dir}/first.pch`, "", 0, 0, "");
+	const nextSecond = (Math.floor(Date.now() / 1000) + 1) * 1000;
+	while (Date.now() < nextSecond) {}
+	writeFile(header, "#include <string.h>\n");
+	assert buildPch(header, `${dir}/second.pch`, "", 0, 0, "");
+	const parts = objectCompileArgs(0, "", false, 0, "");
+	assert parts.ok;
+	const args = objectCompileArgv(parts.value, source, `${dir}/use.o`, "");
+	args.push("-include-pch");
+	args.push(`${dir}/second.pch`);
+	assert runCc(parts.value.command, args).ok;
+	for (const name of ["prefix.h", "use.c", "first.pch", "second.pch", "use.o"]) remove(`${dir}/${name}`);
+	remove(dir);
 }
