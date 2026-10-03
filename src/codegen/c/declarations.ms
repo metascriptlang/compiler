@@ -18,7 +18,6 @@ import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledG
 import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, typeInfoRef, ensureRefArrayCellTypeInfo, isHcrImageModule, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
-import { isDrcLifecycleName, copiesInline, inlineDeclOf } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isBakeableAggregateConst, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
@@ -123,13 +122,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
 
 	// DRC lifecycle hooks have fixed ABI — skip struct-aware promotion.
-	// Detection: (1) name pattern (TypeNameDestroy etc.) for user-named types;
-	// (2) GeneratedOp flag for compiler-synthesized hooks whose name clashes
-	// with the `ms*` runtime prefix exclusion in isDrcLifecycleName (e.g.
-	// anonymous structs emitted as `msAnon_<hash>Destroy`). markGeneratedOp
-	// only flags real lifecycle hooks, so the suffix re-check is unnecessary.
-	const isDrcHookFn = isDrcLifecycleName(name)
-		|| (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp));
+	const isDrcHookFn = sym != null && hasFlag(sym, SymbolFlag.GeneratedOp);
 	const protoMutBits: int32 = sym != null ? sym.mutatedParams : 0;
 
 	const instanceAlreadyEmitted = isGenericInstance && (g.emittedInstances.has(name)

@@ -58,14 +58,6 @@ function classHasInitFn(innerType: Type): boolean {
 	return decl != null && decl.kind == NodeKind.ClassDecl;
 }
 
-// Companion functions (ctor _init, DRC hooks) keep the checker-level bare
-// spelling; the C struct name is module-qualified. Reverse map registered by
-// the gen* emitters and registerDeclCName.
-function bareTypeName(g: CGen, cName: string): string {
-	const bare = typeCacheGet(g.typeCache, "bare:" + cName);
-	return bare != "" ? bare : cName;
-}
-
 function crossModuleCtorParamTypes(sym: Symbol): Type[] {
 	if (sym == null) return null as unknown as Type[];
 	let dn = sym.declNode;
@@ -1383,7 +1375,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
 			const initName = classInitCName(cName);
 			const ctorOwner = d.newCallee.resolvedSym.instantiatedFrom ?? d.newCallee.resolvedSym;
-			const ctorChildren = ctorParamTypes(lookupCtorDefaults(ctorOwner, bareTypeName(g, cName)), ctorOwner);
+			const ctorChildren = ctorParamTypes(lookupCtorDefaults(ctorOwner, d.newCallee.resolvedSym.name), ctorOwner);
 			const ctorProtoKey = "proto:" + initName;
 			if (ctorChildren != null && node.nodeType != null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
 				nameSetAdd(g.declaredProcs, ctorProtoKey);
@@ -1400,7 +1392,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			emitProcLocalsLine(p, `${cName}* ${newTmp};`);
 			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName, infoType)};`);
 			if (ctorChildren == null && d.newArguments.length > 0) {
-				addCGenError(g, `internal: the constructor of '${bareTypeName(g, cName)}' has no parameter types for its arguments at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+				addCGenError(g, `internal: the constructor of '${d.newCallee.resolvedSym.name}' has no parameter types for its arguments at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
 			let initArgs = newTmp;
 			for (let ai = 0; ai < d.newArguments.length; ai += 1) {
@@ -1503,7 +1495,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 		}
 		if (parentName != "") {
 			const parentInitName = classInitCName(parentName);
-			const parentEntry = lookupCtorDefaults(parentSym, bareTypeName(g, parentName));
+			const parentEntry = lookupCtorDefaults(parentSym, parentSym.name);
 			const parentChildren = ctorParamTypes(parentEntry, parentSym);
 			const parentProtoKey = "proto:" + parentInitName;
 			if (parentChildren == null && parentEntry != null && parentEntry.initSym != null) {
