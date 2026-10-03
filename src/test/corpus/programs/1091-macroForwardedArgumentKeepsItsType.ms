@@ -1,6 +1,6 @@
 // @stdout: int32 int32 string int32 int32
 // @exit: 0
-// note: a macro that passes its argument on to another macro leaves the second one able to ask for the argument's type. `getType`, `typeKind` and `sameType` read the checker type of the argument; the type used to be dropped when the first macro returned, so the second one failed with `node has no type` whenever it was reached through another macro. Direct, forwarded, forwarded twice, a string, and the first element of a forwarded list.
+// note: a macro that passes its argument on to another macro leaves the second one able to ask for the argument's type. `getType` and `typeKind` read the checker type of the argument; the type used to be dropped when the first macro returned, so the second one failed with `node has no type` whenever it was reached through another macro. Direct, forwarded, forwarded twice, a string, and the first element of a forwarded list.
 
 import { Node, NodeKind, TypeKind, bindSym, getType, typeKind } from "std/meta";
 

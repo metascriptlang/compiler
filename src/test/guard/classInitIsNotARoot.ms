@@ -1,7 +1,7 @@
 // A class constructor is emitted when the class is used, not because its C name is spelled
-// like an exported symbol. A module whose only export a program imports is a class nobody
-// constructs is not emitted; `new` of the class, a subclass of it in another module, and an
-// `@exportName` function nobody calls all still emit their definition.
+// like an exported symbol. A module whose only use is an import of a class nobody constructs is
+// not emitted; `new` of the class, a subclass of it in another module, and an `@exportName`
+// function nobody calls all still emit their definition.
 // NIM-REF CG-6 (only `exportc` roots a proc at its declaration, ccgexprs.nim nkProcDef branch),
 // CG-15 (emission on demand).
 //
