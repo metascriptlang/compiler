@@ -105,9 +105,8 @@ export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, 
 		declareLocal(s, paramName, reg);
 	}
 
-	// Methods receive `this` as the closure env, which compileClosureCall
-	// passes LAST → R[arity], after the declared params.
-	if (isMethod) {
+	const receiverIsParam = arity > 0 && params[0] == "this";
+	if (isMethod && !receiverIsParam) {
 		const thisReg = allocReg(s);
 		declareLocal(s, "this", thisReg);
 	}
