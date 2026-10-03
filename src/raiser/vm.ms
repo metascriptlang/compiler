@@ -1349,6 +1349,11 @@ function vmHandleAddrIndex(vm: RaiserVM, inst: RaiserInstruction): void {
 	if (vm.halted) return;
 	const idx = getReg(vm, vm.baseReg + inst.c).intVal;
 	if (!vmElemIndex(vm, handle, idx)) return;
+	const data = vm.arrayHeap.arrays[handle];
+	if (data.viewOff >= 0) {
+		setReg(vm, vm.baseReg + inst.a, raiserElemAddr(data.items[0].intVal, data.viewOff + idx));
+		return;
+	}
 	setReg(vm, vm.baseReg + inst.a, raiserElemAddr(handle, idx));
 }
 
