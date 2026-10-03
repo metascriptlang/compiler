@@ -38,5 +38,5 @@ test "an interface reinterpreted through unknown is refused" {
 	const src = "interface A { x: number; y: number; }\ninterface B { a: number; b: number; }\nfunction convert(a: A): B {\n\treturn a as unknown as B;\n}";
 	const result = compileToC(src);
 	assert !result.ok;
-	assert result.error.contains("only a non-generic class has a runtime identity");
+	assert result.error.contains("only a class has a runtime identity");
 }
