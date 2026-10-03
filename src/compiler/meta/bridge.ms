@@ -364,6 +364,10 @@ function fallbackTypeName(t: Type, loc: SourceLocation): Node {
 	return atomicTypeNode(nameOrDefault(t, "<unmapped-type>"), loc);
 }
 
+function isNamedNominalStruct(t: Type): boolean {
+	return t.kind == TypeKind.Struct && !isMaybeType(t) && t.sym != null && t.typeName != "";
+}
+
 // Internal dispatch — threads the `visited` stack for cycle detection.
 // Aliases peel transparently. Already-visiting Types emit a name-only Identifier
 // to break the cycle (e.g., `Tree { children: Tree[] }` → outer Tree expands,
@@ -379,6 +383,14 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], 
 		const result = atomicTypeNode(atomicName, loc);
 		result.nodeType = t;
 		return result;
+	}
+
+	// A shape unfolds only the type it was asked about: a named struct met inside
+	// another shape is its name, and a macro asks getTypeImpl of that node to unfold it.
+	if (impl && visited.length > 0 && isNamedNominalStruct(t)) {
+		const named = atomicTypeNode(t.typeName, loc);
+		named.nodeType = t;
+		return named;
 	}
 
 	// Cycle break — emit name placeholder and stop descending.
