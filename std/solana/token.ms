@@ -27,7 +27,6 @@ when (testBuild) {
 		failWith,
 		instructionData,
 		logU64,
-		readArgs,
 		writable,
 		writableSigner,
 	} from "./core";
