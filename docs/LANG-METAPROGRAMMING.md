@@ -4,7 +4,7 @@ Compile-time code execution and AST manipulation. Macros are **normal MetaScript
 
 ## Core Principle: `Node` is Compile-Time Only
 
-`Node` (from `std/meta`) is a **compile-time-only type** — like standard reference AST node implementations. Values of type `Node` exist only during compilation and are erased before codegen. Any `Node` remaining in the AST at codegen is a compile error.
+`Node` (from `std/meta`) is the type a macro receives and returns, and a macro runs only while compiling: the expansion reaches codegen, the macro does not. The type is an ordinary class, not a compile-time-only one: a program that calls `createNodeAt(NodeKind.NumberLiteral, …, makeLoc(7, 9))` and prints `n.location.line` builds and prints `7` on C and on `--target=js` (measured 2026-10-04 with the `wt/std-solana-lane-c` build), and the compiler itself holds `Node` values at run time, so a leftover `Node` is not refused at codegen. What holds is the cost: a program that uses `std/meta` only inside macro bodies emits nothing from it on C, on the host and on `--os=solana`, while a program that calls a `std/meta` function at run time emits the module (guard `src/test/guard/metaModuleEmitsNothing.ms`). The JS bundle still carries `std/meta` (22,978 of 179,511 bytes of `console.log(0)`, measured 2026-10-04): the JS backend has no dead-module elimination (NIM-REF CG-15). The rest of this section still describes the intended model; only this paragraph was re-measured.
 
 Multiple sources produce `Node` values — all follow the same rules:
 
@@ -707,6 +707,8 @@ Three entry points, and picking the wrong one is the usual mistake:
 | a type-AST from any query above | `typeKind(t)` | the original checked `TypeKind`, independent of the rendered AST shape; `getTypeImpl` can render a `TypeObject` while retaining a Ref or GenericInstance identity; no type handle → `node carries no type` |
 | two type-ASTs | `sameType(a, b)` | the checker's type identity (`resolveType("int32")` twice → true, against `"string"` → false); a non-type node → `sameType needs two type nodes` |
 | a bound symbol | `symKind(s)` | its `SymbolKind` (`Class`, `Enum`, `Function`, …); not a symbol → `node is not a symbol` |
+
+A node that a macro returns inside a call to another macro (`callee: bindSym("inner"), arguments: [value]`) arrives with its checker type, so the inner macro's `getType(value)`, `typeKind(value)` and `value.nodeType` answer as they do for an argument written at the call. Measured 2026-10-04 on C and `--target=js`: one macro deep, two deep, an expression (`n + 1`), a string, and an element of a forwarded list (`src/test/lang/typeImplementationQuery.ms`, corpus `1091-macroForwardedArgumentKeepsItsType`); before, `getType` failed with `node has no type` while `nodeType` still answered. A call that a macro returns keeps its explicit type arguments — `make<int32>(4)`, `holder.build<int32>()`, either under `try`, and `new Cell<int32>()` — and the re-check binds `T` from them (`src/test/lang/macroSourceForms.ms`, corpus `1090-macroForwardsExplicitTypeArguments`); before, `cannot instantiate: 'T'`. Not measured: a macro that builds such a call itself by setting `typeArg` in its return literal.
 
 ```ms
 export macro createStyles(sheet: Node): Node {
