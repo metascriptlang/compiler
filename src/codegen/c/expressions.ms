@@ -454,7 +454,7 @@ function emitTaggedUnionWrapAddr(p: CProc, unionName: string, varIdx: number, va
 	emitStmtsLine(p, `${tmpName}._tag = ${varIdx};`);
 	const valueRhs = withCast ? `(${varTypeCName})${snippet}` : snippet;
 	emitStmtsLine(p, `${tmpName}.v${varIdx} = ${valueRhs};`);
-	return "&" + tmpName;
+	return "(&" + tmpName + ")";
 }
 
 // Reference parity: standard address generation always operates on a named variable,
@@ -547,7 +547,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 			const tmpName = `_clit${p.labels}_`;
 			emitProcLocalsLine(p, `${cType} ${tmpName};`);
 			emitStmtsLine(p, `${tmpName} = (${cType})${snippet};`);
-			return "&" + tmpName;
+			return "(&" + tmpName + ")";
 		}
 	}
 	// Union variant wrapping: when passing a variant-typed temp where a union* is expected,
@@ -556,7 +556,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 	if (paramType != null && paramType.kind == TypeKind.Union && exprNode != null && exprNode.kind == NodeKind.ObjectLiteral) {
 		// Union-typed literal ⇒ ObjectLiteral emission already wrapped the snippet into the full union
 		if (exprNode.nodeType != null && exprNode.nodeType.kind == TypeKind.Union) {
-			return "&" + snippet;
+			return "(&" + snippet + ")";
 		}
 		const od = exprNode.data as ObjectLiteralData;
 		if (od.keys != null && od.keys.length > 0) {
@@ -632,7 +632,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 			const tmpName = `_clit${p.labels}_`;
 			emitProcLocalsLine(p, `${cType} ${tmpName};`);
 			emitStmtsLine(p, `${tmpName} = ${snippet};`);
-			return "&" + tmpName;
+			return "(&" + tmpName + ")";
 		}
 	}
 	// Union variant lvalue: when &local is taken and the local's type is a variant struct
@@ -646,10 +646,10 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 		const exprNT = exprNode.nodeType;
 		if (innerParam != null && innerParam.kind == TypeKind.Union && exprNT.kind == TypeKind.Struct) {
 			const unionCType = getTypeDesc(g, innerParam);
-			return `(${unionCType}*)&(${snippet})`;
+			return `((${unionCType}*)&(${snippet}))`;
 		}
 	}
-	return `&(${snippet})`;
+	return `(&(${snippet}))`;
 }
 
 // ===== Union Variant Index Matching =====
