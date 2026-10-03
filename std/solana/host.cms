@@ -57,6 +57,7 @@ export struct HostInvocation {
 	accounts: AccountMeta[];
 	data: uint8[];
 	signers: uint64;
+	signerSeeds: uint8[][][];
 }
 
 function storeKey(address: uint64, key: Pubkey): void {
@@ -208,14 +209,55 @@ export function invocations(): HostInvocation[] {
 		for (let offset: uint64 = 0; offset < dataLength; offset++) {
 			bytes.push(msSolLoadU8(dataAddress + offset));
 		}
+		const signerCount = msSolLoadU64(record + 64);
+		let cursor = msSolLoadU64(record + 72);
+		const signerSeeds: uint8[][][] = [];
+		for (let signer: uint64 = 0; signer < signerCount; signer++) {
+			const seedCount = msSolLoadU64(cursor);
+			cursor = cursor + 8;
+			const seeds: uint8[][] = [];
+			for (let seed: uint64 = 0; seed < seedCount; seed++) {
+				const length = msSolLoadU64(cursor);
+				cursor = cursor + 8;
+				const seedBytes: uint8[] = [];
+				for (let offset: uint64 = 0; offset < length; offset++) {
+					seedBytes.push(msSolLoadU8(cursor + offset));
+				}
+				cursor = cursor + length;
+				seeds.push(seedBytes);
+			}
+			signerSeeds.push(seeds);
+		}
 		found.push({
 			program: loadKey(record),
 			accounts: metaList,
 			data: bytes,
-			signers: msSolLoadU64(record + 64),
+			signers: signerCount,
+			signerSeeds: signerSeeds,
 		});
 	}
 	return found;
+}
+
+export function textBytes(text: string): uint8[] {
+	const bytes: uint8[] = [];
+	for (let index = 0; index < text.length; index++) {
+		bytes.push(text.charCodeAt(index) as uint8);
+	}
+	return bytes;
+}
+
+export function signerIs(call: HostInvocation, signer: int32, expected: uint8[][]): boolean {
+	if (signer >= call.signerSeeds.length) { return false; }
+	const actual = call.signerSeeds[signer];
+	if (actual.length != expected.length) { return false; }
+	for (let seed = 0; seed < actual.length; seed++) {
+		if (actual[seed].length != expected[seed].length) { return false; }
+		for (let offset = 0; offset < actual[seed].length; offset++) {
+			if (actual[seed][offset] != expected[seed][offset]) { return false; }
+		}
+	}
+	return true;
 }
 
 export function setClock(clock: Clock): void {
