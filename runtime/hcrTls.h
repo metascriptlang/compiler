@@ -9,7 +9,7 @@
 #endif
 #include <intrin.h>
 extern uint32_t msHcrTlsIndex;
-static inline char* msHcrTlsBase(uint32_t index) { return ((char**)__readgsqword(0x58))[index]; }
+static inline __attribute__((always_inline, no_sanitize("undefined"))) char* msHcrTlsBase(uint32_t index) { return ((char**)__readgsqword(0x58))[index]; }
 #endif
 
 #if defined(_WIN32) && defined(MS_HCR_MODULE)

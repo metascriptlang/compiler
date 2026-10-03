@@ -6,6 +6,7 @@
 import { Node, Type, Symbol } from "../../ast/node";
 import { CheckerContext, CheckerError, Severity } from "../../checker/context";
 import { TargetInfo, hostTargetInfo } from "../../checker/types";
+import { djb2, fingerprint, hashToHex } from "std/hash";
 
 
 // ===== CSection — C file output sections (standard reference parity) =====
@@ -656,6 +657,55 @@ export class CEmissionFacts {
 	typeInfos: HashMap<string, CTypeInfoDemand> = new HashMap<string, CTypeInfoDemand>();
 	typeInfoOrder: CTypeInfoDemand[] = [];
 	hcrModules: HashSet<string> = new HashSet<string>();
+	hcrTypeInfoOwners: HashMap<string, string> = new HashMap<string, string>();
+	trace: string = "";
+	writes: string[] | null = null;
+}
+
+function noteFactWrite(facts: CEmissionFacts, write: string): void {
+	const mixed = `${facts.trace}\n${write}`;
+	facts.trace = `${hashToHex(djb2(mixed))}${hashToHex(fingerprint(mixed))}`;
+	if (facts.writes != null) facts.writes.push(write);
+}
+
+export function factClaimGeneric(facts: CEmissionFacts, name: string, owner: string): void {
+	facts.genericOwners.set(name, owner);
+	noteFactWrite(facts, `g\t${name}\t${owner}`);
+}
+
+export function factSkipTypeInfo(facts: CEmissionFacts, name: string): void {
+	facts.skippedTypeInfos.add(name);
+	noteFactWrite(facts, `s\t${name}`);
+}
+
+export function factCoreUnit(facts: CEmissionFacts, modulePath: string): void {
+	facts.hcrCoreUnits.add(modulePath);
+	noteFactWrite(facts, `c\t${modulePath}`);
+}
+
+export function replayFactWrites(facts: CEmissionFacts, writes: string[]): void {
+	for (const write of writes) {
+		const fields = write.split("\t");
+		if (fields[0] == "g") factClaimGeneric(facts, fields[1], fields[2]);
+		else if (fields[0] == "s") factSkipTypeInfo(facts, fields[1]);
+		else if (fields[0] == "c") factCoreUnit(facts, fields[1]);
+	}
+}
+
+function aliveSymKey(sym: Readonly<Symbol>): string {
+	return `${sym.modulePath}:${sym.name}#${sym.disamb}.${sym.overloadIdx}`;
+}
+
+export function aliveSetFingerprint(aliveSet: AliveSet): string {
+	const entries: string[] = [];
+	for (const entry of aliveSet.entries) entries.push(entry);
+	aliveSet._syms.forEach((sym: Symbol): void => { entries.push(aliveSymKey(sym)); });
+	entries.sort();
+	for (const info of aliveSet.typeInfos) {
+		entries.push(`t\t${info.key}\t${info.owner}\t${aliveSymKey(info.destroy)}\t${info.trace != null ? aliveSymKey(info.trace) : ""}`);
+	}
+	const joined = entries.join("\n");
+	return `${hashToHex(djb2(joined))}${hashToHex(fingerprint(joined))}:${entries.length}`;
 }
 
 export interface DeferredStructDef {

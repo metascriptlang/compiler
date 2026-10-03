@@ -165,6 +165,26 @@ double msFsModifiedTime(msString path) {
 	return (double)st.st_mtime;
 }
 
+msString msFsChangeStamp(msString path) {
+	HANDLE file = CreateFileA(msStringToCString(path), FILE_READ_ATTRIBUTES,
+	                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+	                          FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	if (file == INVALID_HANDLE_VALUE) return MS_EMPTY_STRING;
+	BY_HANDLE_FILE_INFORMATION info;
+	FILE_BASIC_INFO basic;
+	BOOL ok = GetFileInformationByHandle(file, &info) &&
+	          GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof basic);
+	CloseHandle(file);
+	if (!ok || basic.ChangeTime.QuadPart == 0) return MS_EMPTY_STRING;
+	char buf[192];
+	int n = snprintf(buf, sizeof buf, "%lu:%lu.%lu:%lu.%lu:%lld:%lld",
+	                 (unsigned long)info.dwVolumeSerialNumber, (unsigned long)info.nFileIndexHigh,
+	                 (unsigned long)info.nFileIndexLow, (unsigned long)info.nFileSizeHigh,
+	                 (unsigned long)info.nFileSizeLow, (long long)basic.LastWriteTime.QuadPart,
+	                 (long long)basic.ChangeTime.QuadPart);
+	return msStringNew(buf, n);
+}
+
 /* ===== Directory ===== */
 
 double msFsMkdir(msString path) {

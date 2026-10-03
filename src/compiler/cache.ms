@@ -13,13 +13,13 @@
 //   writeJsonBuildInstructions   → writeProjectCache
 //   BuildCache                   → project cache file (key=value format)
 
-import { env, platform, argv, execFileCapture, findOnPath } from "std/process";
-import { exists, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, remove, removeAll, readDir, ensureDir } from "std/fs";
-import { join } from "std/fs/path";
+import { env, platform, argv, cwd, execFileCapture, findOnPath } from "std/process";
+import { exists, isDir, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, changeStamp, remove, removeAll, readDir, ensureDir } from "std/fs";
+import { join, dirname, normalize } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace } from "./io";
-import { getCompilerName, compilerInvocation, objectCompileKey } from "./cc";
+import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey } from "./cc";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 import { VERSION } from "./usage";
 
@@ -30,10 +30,23 @@ export function hashContent(s: string): string {	return `${hashToHex(djb2(s))}_$
 }
 
 // Hash a file's content. Returns "hash:byteLength" string.
-function hashFile(path: string): string {
+function hashFileContent(path: string): string {
 	if (!exists(path)) return "absent";
 	const src = try readFile(path) catch "";
 	return `${hashContent(src)}:${src.byteLength}`;
+}
+
+const _hashByStamp = new HashMap<string, string>();
+
+function hashFile(path: string): string {
+	const stamp = changeStamp(path);
+	if (stamp == "") return hashFileContent(path);
+	const known = _hashByStamp.get(path);
+	const prefix = `${stamp}|`;
+	if (known != null && known.startsWith(prefix)) return known.substring(prefix.length, known.length);
+	const hash = hashFileContent(path);
+	_hashByStamp.set(path, `${prefix}${hash}`);
+	return hash;
 }
 
 // ===== Toolchain Stamp =====
@@ -116,7 +129,6 @@ let _cacheDir = "";
 let _forceRebuild = false;
 let _nativeProjectDeps: string[] = [];
 let _nativeProjectDepSet: HashSet<string> = new HashSet<string>();
-let _headerHashes: HashMap<string, string> = new HashMap<string, string>();
 let _buildStartedSeconds: number = 0;
 
 // Initialize cache with build mode and force flag. Must be called before any cache operations.
@@ -134,7 +146,7 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 	_forceRebuild = forceRebuild;
 	_nativeProjectDeps = [];
 	_nativeProjectDepSet = new HashSet<string>();
-	_headerHashes = new HashMap<string, string>();
+	_dirNames = new HashMap<string, HashSet<string>>();
 	_buildStartedSeconds = Date.now() / 1000;
 	toolchainStamp();
 }
@@ -217,7 +229,23 @@ function nativeDependencyPaths(srcPath: string, compileCmd: string): string[] {
 	return dependencyPathsIn(nativeDepFile(srcPath, compileCmd));
 }
 
+const _dependenciesByStamp = new HashMap<string, string>();
+
 function dependencyPathsIn(path: string): string[] {
+	const stamp = changeStamp(path);
+	if (stamp == "") return parseDependencyFile(path);
+	const known = _dependenciesByStamp.get(path);
+	const prefix = `${stamp}|`;
+	if (known != null && known.startsWith(prefix)) {
+		const listed = known.substring(prefix.length, known.length);
+		return listed == "" ? [] : listed.split("\n");
+	}
+	const paths = parseDependencyFile(path);
+	_dependenciesByStamp.set(path, `${prefix}${paths.join("\n")}`);
+	return paths;
+}
+
+function parseDependencyFile(path: string): string[] {
 	const result: string[] = [];
 	if (!exists(path)) return result;
 	const content = try readFile(path) catch "";
@@ -323,10 +351,27 @@ export function fullCompileCmd(ccOption: number, mode: number, extraFlags: strin
 // fingerprint and collide in the global content-addressed cache (`~/.metascript/cache/objects/`).
 // Exported so parallel compile workers can compute per-item fingerprints explicitly
 // (avoids any shared module-state read-after-write races).
+const _sourceIdentityByStamp = new HashMap<string, string>();
+
+function sourceIdentity(path: string): string {
+	const stamp = changeStamp(path);
+	if (stamp == "") return readSourceIdentity(path);
+	const known = _sourceIdentityByStamp.get(path);
+	const prefix = `${stamp}|`;
+	if (known != null && known.startsWith(prefix)) return known.substring(prefix.length, known.length);
+	const identity = readSourceIdentity(path);
+	_sourceIdentityByStamp.set(path, `${prefix}${identity}`);
+	return identity;
+}
+
+function readSourceIdentity(path: string): string {
+	const src = try readFile(path) catch "";
+	return `${hashContent(src)}:${src.byteLength}`;
+}
+
 export function computeFingerprint(srcPath: string, compileCmd: string): string {
-	const src = try readFile(srcPath) catch "";
 	registerNativeProjectDep(srcPath);
-	let result = `${hashContent(src)}:${src.byteLength}:${compileCmd}:${VERSION}:${platform}:${objectStamp()}`;
+	let result = `${sourceIdentity(srcPath)}:${compileCmd}:${VERSION}:${platform}:${objectStamp()}`;
 	const deps = nativeDependencyPaths(srcPath, compileCmd);
 	if (deps.length == 0) return result + `:dependencies-unresolved:${srcPath}`;
 	for (const path of deps) {
@@ -360,15 +405,19 @@ export function publishFirstCompile(srcPath: string, compileCmd: string, oFile: 
 	return Result.ok(resolved);
 }
 
-// ===== Global Content-Addressed Cache =====
-//
-// Stores .o files keyed by fingerprint under ~/.metascript/cache/objects/.
-// Transparent wrapper around the local cache: second-chance lookup on local miss,
-// publish on successful compile. Safe across concurrent msc instances because
-// .o content is deterministic for a given fingerprint (tmp+rename atomic publish).
+// ===== Global Object Store =====
 
-// Return the shared global cache root (~/.metascript/cache), or "" if disabled
-// (opt-out) or HOME unknown.
+const STORE_FORMAT = "store4";
+
+struct StoreHit {
+	object: string;
+	deps: string[];
+}
+
+let _ccIdentity = "";
+let _ccIdentityName = "";
+let _dirNames: HashMap<string, HashSet<string>> = new HashMap<string, HashSet<string>>();
+
 function globalCacheRoot(): string {
 	if (env.get("MSC_NO_GLOBAL_CACHE") != "") return "";
 	const home = env.get("HOME");
@@ -377,75 +426,307 @@ function globalCacheRoot(): string {
 	return `${base}/.metascript/cache`;
 }
 
-// Return global cache dir, or "" if disabled (opt-out) or HOME unknown.
-function globalObjectsDir(): string {
+function storeRoot(): string {
 	const root = globalCacheRoot();
 	if (root == "") return "";
-	return `${root}/objects/${objectStamp()}`;
+	return `${root}/store`;
 }
 
-// Convert a fingerprint string into a flat filename hash (stable, collision-safe).
-function fingerprintKey(fp: string): string {
-	return hashContent(fp);
-}
-
-// Path for an entry in the global cache. Empty string means "cache disabled".
-function globalOPath(fp: string): string {
-	const dir = globalObjectsDir();
-	if (dir == "") return "";
-	return `${dir}/${fingerprintKey(fp)}.o`;
-}
-
-// On local miss, try to restore from global. Returns true if a valid entry was copied in.
-// Best-effort: any failure (permission, corrupt entry, disk error) falls through silently.
-// The restore lands via tmp+renameReplace: a concurrent linker reading the local
-// .o never sees the file disappear (which is what the old direct copy + the
-// caller-side remove-on-miss race produced).
-function tryRestoreFromGlobal(oFile: string, fp: string): boolean {
-	const src = globalOPath(fp);
-	if (src == "" || !exists(src)) return false;
-	// Size sanity: any real .o is >100 bytes. Truncated or empty = corrupt.
-	const size = fileSize(src);
-	if (size < 100) {
-		// Best-effort cleanup; ignore failure.
-		remove(src);
-		return false;
+function ccContentIdentity(ccOption: number, ccBinary: string): string {
+	const name = getCompilerName(ccOption, ccBinary);
+	if (_ccIdentityName == name) return _ccIdentity;
+	const command = compilerInvocation(ccOption, ccBinary);
+	if (!command.ok) return `unresolved:${name}:${command.error.message}`;
+	let path = command.value.path;
+	const found = findOnPath(path);
+	if (found != "") path = found;
+	const root = globalCacheRoot();
+	const modified = modifiedTime(path);
+	const memo = root == "" ? "" : `${root}/cc/${hashContent(`${path}:${fileSize(path)}:${modified}`)}`;
+	let identity = "";
+	if (memo != "" && exists(memo) && modifiedTime(memo) > modified) identity = try readFile(memo) catch "";
+	if (identity == "") {
+		const args = command.value.args;
+		args.push("--version");
+		const r = execFileCapture(path, args);
+		const version = r.ok ? r.value : r.error.errorOutput;
+		identity = hashContent(`${name}:${hashFile(path)}:${version}`);
+		if (memo != "" && modified < nowSeconds() - 1) {
+			ensureDir(`${root}/cc`);
+			atomicWriteFile(memo, identity);
+		}
 	}
+	_ccIdentityName = name;
+	_ccIdentity = identity;
+	return identity;
+}
+
+export function objectStoreKey(source: string, ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): string {
+	const args = objectCompileArgsKey(ccOption, ccBinary, isCpp, mode, extraFlags);
+	return hashContent(`${STORE_FORMAT}\n${platform}\n${source}\n${ccContentIdentity(ccOption, ccBinary)}\n${args}`);
+}
+
+export function nativeStoreSource(srcPath: string): string {
+	return `${absoluteSlashed(srcPath)}\n${hashFile(srcPath)}`;
+}
+
+export function moduleStoreSource(cCode: string): string {
+	return `${hashContent(cCode)}:${cCode.byteLength}`;
+}
+
+function absoluteSlashed(path: string): string {
+	const slashed = path.replaceAll("\\", "/");
+	const rooted = slashed.startsWith("/") || (slashed.length > 2 && slashed.charAt(1) == ":");
+	return normalize(rooted ? slashed : `${cwd()}/${slashed}`).replaceAll("\\", "/");
+}
+
+function foldName(name: string): string {
+	return platform == "windows" ? name.toLowerCase() : name;
+}
+
+function dirNames(dir: string): HashSet<string> {
+	const known = _dirNames.get(dir);
+	if (known != null) return known;
+	const names = new HashSet<string>();
+	if (exists(dir)) {
+		for (const entry of readDir(dir)) {
+			names.add(foldName(entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry));
+		}
+	}
+	_dirNames.set(dir, names);
+	return names;
+}
+
+function underAnyDir(path: string, dirs: string[]): boolean {
+	for (const dir of dirs) {
+		if (path.startsWith(`${dir}/`)) return true;
+	}
+	return false;
+}
+
+function headerRels(path: string, dirs: string[]): string[] {
+	const rels: string[] = [];
+	for (const dir of dirs) {
+		if (path.startsWith(`${dir}/`)) rels.push(path.slice(dir.length + 1, path.length));
+	}
+	if (rels.length > 0) return rels;
+	const at = path.lastIndexOf("/include/");
+	if (at < 0) return rels;
+	let tail = path.slice(at + 9, path.length);
+	while (tail != "") {
+		rels.push(tail);
+		const slash = tail.indexOf("/");
+		tail = slash < 0 ? "" : tail.slice(slash + 1, tail.length);
+	}
+	return rels;
+}
+
+function relTree(rels: string[]): HashMap<string, HashSet<string>> {
+	const tree = new HashMap<string, HashSet<string>>();
+	for (const rel of rels) {
+		let prefix = "";
+		let rest = rel;
+		while (rest != "") {
+			const slash = rest.indexOf("/");
+			const head = foldName(slash < 0 ? rest : rest.slice(0, slash));
+			let children = tree.get(prefix);
+			if (children == null) {
+				children = new HashSet<string>();
+				tree.set(prefix, children);
+			}
+			children.add(head);
+			prefix = prefix == "" ? head : `${prefix}/${head}`;
+			rest = slash < 0 ? "" : rest.slice(slash + 1, rest.length);
+		}
+	}
+	return tree;
+}
+
+function existingCandidates(dir: string, prefix: string, tree: HashMap<string, HashSet<string>>, rels: HashSet<string>, found: string[]): void {
+	const wanted = tree.get(prefix);
+	if (wanted == null) return;
+	const names = dirNames(dir);
+	for (const name of wanted) {
+		if (names.has(name)) {
+			const full = prefix == "" ? name : `${prefix}/${name}`;
+			if (rels.has(full)) found.push(full);
+			if (tree.get(full) != null && isDir(`${dir}/${name}`)) existingCandidates(`${dir}/${name}`, full, tree, rels, found);
+		}
+	}
+}
+
+function presenceSignature(searched: string[], rels: string[]): string {
+	const tree = relTree(rels);
+	const folded = new HashSet<string>();
+	for (const rel of rels) folded.add(foldName(rel));
+	let signature = "";
+	for (const dir of searched) {
+		const found: string[] = [];
+		existingCandidates(dir, "", tree, folded, found);
+		if (found.length == 0) continue;
+		found.sort();
+		signature = `${signature}s\t${dir}\t${found.join("|")}\n`;
+	}
+	return signature;
+}
+
+function searchedDirs(argDirs: string[], includers: string[], deps: string[]): string[] {
+	const dirs: string[] = [];
+	for (const dir of argDirs) dirs.push(absoluteSlashed(dir));
+	const searched: string[] = [];
+	for (const dir of dirs) {
+		if (!searched.includes(dir)) searched.push(dir);
+	}
+	for (const dir of includers) {
+		const slashed = absoluteSlashed(dir);
+		if (!searched.includes(slashed)) searched.push(slashed);
+	}
+	for (const path of deps) {
+		if (underAnyDir(path, dirs) && !searched.includes(dirname(path))) searched.push(dirname(path));
+	}
+	return searched;
+}
+
+function storeManifest(dependencyFile: string, source: string, argDirs: string[], includers: string[]): string {
+	const own = absoluteSlashed(source);
+	const deps: string[] = [];
+	const seen = new HashSet<string>();
+	for (const dep of dependencyPathsIn(dependencyFile)) {
+		const path = absoluteSlashed(dep);
+		if (path == own || seen.has(path)) continue;
+		seen.add(path);
+		deps.push(path);
+	}
+	const searched = searchedDirs(argDirs, includers, deps);
+	let text = `${STORE_FORMAT}\n`;
+	const rels: string[] = [];
+	const relSeen = new HashSet<string>();
+	for (const path of deps) {
+		for (const rel of headerRels(path, searched)) {
+			if (relSeen.has(rel)) continue;
+			relSeen.add(rel);
+			rels.push(rel);
+			text = `${text}r\t${rel}\n`;
+		}
+	}
+	for (const path of deps) {
+		const modified = modifiedTime(path);
+		if (modified < 0 || modified >= Math.floor(_buildStartedSeconds)) return "";
+		text = `${text}d\t${path}\t${hashFile(path)}\n`;
+	}
+	return `${text}${presenceSignature(searched, rels)}`;
+}
+
+function manifestDeps(text: string, argDirs: string[], includers: string[]): string[] | null {
+	const lines = text.split("\n");
+	if (lines[0] != STORE_FORMAT) return null;
+	const rels: string[] = [];
+	const deps: string[] = [];
+	let recorded = "";
+	for (let i = 1; i < lines.length; i++) {
+		if (lines[i] == "") continue;
+		const fields = lines[i].split("\t");
+		const width = match (fields[0]) {
+			"r" => 2,
+			"d" => 3,
+			"s" => 3,
+			_ => 0,
+		};
+		if (fields.length != width) return null;
+		match (fields[0]) {
+			"r" => {
+				rels.push(fields[1]);
+			},
+			"d" => {
+				if (hashFile(fields[1]) != fields[2]) return null;
+				deps.push(fields[1]);
+			},
+			_ => {
+				recorded = `${recorded}${lines[i]}\n`;
+			},
+		}
+	}
+	if (presenceSignature(searchedDirs(argDirs, includers, deps), rels) != recorded) return null;
+	return deps;
+}
+
+function storeHit(key: string, argDirs: string[], includers: string[]): StoreHit | null {
+	const root = storeRoot();
+	if (root == "" || key == "") return null;
+	const dir = `${root}/${key}`;
+	if (!exists(dir)) return null;
+	for (const entry of readDir(dir)) {
+		if (!entry.endsWith(".m")) continue;
+		const object = `${dir}/${entry.slice(0, entry.length - 2)}.o`;
+		if (!exists(object)) continue;
+		const text = try readFile(`${dir}/${entry}`) catch "";
+		const deps = manifestDeps(text, argDirs, includers);
+		if (deps != null) return { object, deps };
+	}
+	return null;
+}
+
+function copyIntoLocal(object: string, oFile: string): boolean {
+	const size = fileSize(object);
+	if (size < 100) return false;
+	ensureDir(dirname(oFile));
 	const tmp = `${oFile}.tmp.${performance.now()}`;
-	const copied = copyFile(src, tmp);
-	if (!copied.ok) return false;
-	// Verify size on the tmp copy before publishing it over the final path.
-	if (fileSize(tmp) != size) {
-		remove(tmp);
+	if (!copyFile(object, tmp).ok) return false;
+	if (fileSize(tmp) != size || !renameReplace(tmp, oFile)) {
+		tryRemoveFile(tmp);
 		return false;
 	}
-	if (!renameReplace(tmp, oFile)) {
-		remove(tmp);
-		return false;
-	}
-	// Write the local .fp sentinel so future runs hit the fast path.
-	atomicWriteFile(oFile + ".fp", fp);
 	return true;
 }
 
-// After a successful local compile, publish the .o to the global cache.
-// Atomic: write to a per-process tmp path + rename. The tmp suffix includes
-// performance.now() so two concurrent msc invocations compiling the same file never
-// share a tmp file (which would interleave bytes under "wb" truncate+write).
-// Best-effort: failures don't propagate; local cache still works.
-function populateGlobal(oFile: string, fp: string): void {
-	const dir = globalObjectsDir();
-	if (dir == "") return;
-	const dst = `${dir}/${fingerprintKey(fp)}.o`;
-	// If already populated by another process, skip.
-	if (exists(dst)) return;
+function writeDependencyFile(path: string, deps: string[]): void {
+	let text = "native:";
+	for (const dep of deps) text = `${text} ${dep.replaceAll(" ", "\\ ")}`;
+	ensureDir(dirname(path));
+	atomicWriteFile(path, `${text}\n`);
+}
+
+export function restoreNativeObject(srcPath: string, compileCmd: string, key: string, argDirs: string[]): string {
+	const hit = storeHit(key, argDirs, [dirname(srcPath)]);
+	if (hit == null) return "";
+	const deps: string[] = [srcPath];
+	for (const dep of hit.deps) deps.push(dep);
+	writeDependencyFile(nativeDepFile(srcPath, compileCmd), deps);
+	const fp = computeFingerprint(srcPath, compileCmd);
+	const oFile = stableOFileFp(srcPath, fp);
+	if (!copyIntoLocal(hit.object, oFile)) return "";
+	atomicWriteFile(`${oFile}.fp`, fp);
+	return oFile;
+}
+
+export function restoreModuleObject(modPath: string, baseFp: string, key: string, argDirs: string[]): string {
+	const hit = storeHit(key, argDirs, []);
+	if (hit == null) return "";
+	writeDependencyFile(moduleDepFile(modPath, baseFp), hit.deps);
+	const fp = moduleObjectFp(modPath, baseFp);
+	const oFile = stableOFileFp(modPath, fp);
+	if (!copyIntoLocal(hit.object, oFile)) return "";
+	writeCompileFingerprintFp(modPath, fp);
+	return oFile;
+}
+
+export function publishToStore(key: string, oFile: string, dependencyFile: string, source: string, dirs: string[], includers: string[]): void {
+	const root = storeRoot();
+	if (root == "" || key == "") return;
+	const manifest = storeManifest(dependencyFile, source, dirs, includers);
+	if (manifest == "") return;
+	const dir = `${root}/${key}`;
+	const stem = hashContent(manifest);
+	if (exists(`${dir}/${stem}.m`)) return;
 	ensureDir(dir);
-	const tmp = `${dst}.tmp.${performance.now()}`;
-	const copied = copyFile(oFile, tmp);
-	if (!copied.ok) return;
-	// Atomic swap. If it fails, clean up tmp.
-	const renamed = rename(tmp, dst);
-	if (!renamed.ok) remove(tmp);
+	const object = `${dir}/${stem}.o`;
+	const tmp = `${object}.tmp.${performance.now()}`;
+	if (!copyFile(oFile, tmp).ok) return;
+	if (!renameReplace(tmp, object)) {
+		tryRemoveFile(tmp);
+		return;
+	}
+	atomicWriteFile(`${dir}/${stem}.m`, manifest);
 }
 
 export function collectGlobalCache(): void {
@@ -453,6 +734,7 @@ export function collectGlobalCache(): void {
 	if (root == "") return;
 	const now = nowSeconds();
 	collectStaleEntries(`${root}/objects`, now);
+	collectStaleEntries(`${root}/store`, now);
 	collectStaleEntries(`${root}/headers`, now);
 }
 
@@ -465,33 +747,25 @@ function tryRemoveFile(path: string): void {
 
 // Check if cached .o is up-to-date.
 // Reference-aligned: addExternalFileToCompile — force bypass + tryRemoveFile on miss.
-// Second-chance lookup in the global content-addressed cache on local miss.
-// The global cache is content-addressed (hermetic fingerprint), so it's safe to
-// consult even under _forceRebuild — reading a byte-identical .o out of the
-// global cache is semantically equivalent to recompiling. Users who want a
-// truly-from-scratch clang run can set MSC_NO_GLOBAL_CACHE=1.
 // Caller is responsible for passing the exact same fingerprint to writeCompileCache
 // on the miss path — compute it once via computeFingerprint and thread it through.
 // NOTE: a miss must NOT remove the local .o. Another concurrent build may be
 // linking through it right now (the old remove-on-miss raced links into
 // FileNotFound); a miss only means "this build recompiles", and the fresh
 // object is published atomically over the stale one by the compile path.
-export function isCompileCached(oFile: string, fp: string, allowGlobalRestore: boolean): boolean {
+export function isCompileCached(oFile: string, fp: string): boolean {
 	const fpFile = oFile + ".fp";
 	if (!_forceRebuild && exists(oFile) && exists(fpFile)) {
 		const stored = try readFile(fpFile) catch "";
 		if (stored == fp) return true;
 	}
-	if (allowGlobalRestore && tryRestoreFromGlobal(oFile, fp)) return true;
 	return false;
 }
 
-// Write the fingerprint for a compiled .o. Also publishes to the global cache
-// (best-effort, silent on failure). Takes fingerprint explicitly so it's safe
-// to call from parallel workers without shared module state.
+// Write the fingerprint for a compiled .o. Takes fingerprint explicitly so it's
+// safe to call from parallel workers without shared module state.
 export function writeCompileCache(oFile: string, fp: string): void {
 	atomicWriteFile(oFile + ".fp", fp);
-	populateGlobal(oFile, fp);
 }
 
 // ===== Project-Level Cache (Layer 2) =====
@@ -546,6 +820,11 @@ const PRE_VERSION = "version:";
 const PRE_OUTPUT = "output:";
 const PRE_CMDLINE = "cmdline:";
 const PRE_OUTHASH = "outputHash:";
+
+function outputIdentity(path: string): string {
+	const stamp = changeStamp(path);
+	return stamp != "" ? `stamp:${stamp}` : hashFile(path);
+}
 const PRE_DEP = "dep:";
 
 // Parse a line from the cache file. Returns value after prefix, or "" if no match.
@@ -638,7 +917,7 @@ export function projectCacheChanged(
 	if (storedCmd != currentCmd) return projectCacheMiss(cacheFile);
 
 	// Reference-aligned: check output binary modification (detect external tampering)
-	const currentOutputHash = hashFile(outputFile);
+	const currentOutputHash = outputIdentity(outputFile);
 	if (storedOutputHash != currentOutputHash) return projectCacheMiss(cacheFile);
 
 	if (storedDeps.length < depPaths.length) return projectCacheMiss(cacheFile);
@@ -688,7 +967,7 @@ export function writeProjectCache(
 	let content = `${PRE_VERSION}${CACHE_VERSION}\n`;
 	content = content + `${PRE_OUTPUT}${outputFile}\n`;
 	content = content + `${PRE_CMDLINE}${buildCmdFingerprint(ccOption, ccBinary, mode, flags)}\n`;
-	content = content + `${PRE_OUTHASH}${hashFile(outputFile)}\n`;
+	content = content + `${PRE_OUTHASH}${outputIdentity(outputFile)}\n`;
 	if (_cachedDepHashes.length == allDeps.length) {
 		for (const entry of _cachedDepHashes) content = content + `${PRE_DEP}${entry}\n`;
 	} else {
@@ -726,20 +1005,12 @@ function moduleHeaderPaths(modPath: string, baseFp: string): string[] {
 	return result;
 }
 
-function headerHash(path: string): string {
-	const known = _headerHashes.get(path);
-	if (known != null) return known;
-	const hash = hashFile(path);
-	_headerHashes.set(path, hash);
-	return hash;
-}
-
 export function moduleObjectFp(modPath: string, baseFp: string): string {
 	if (!exists(moduleDepFile(modPath, baseFp))) return `${baseFp}:dependencies-unresolved`;
 	let result = baseFp;
 	for (const path of moduleHeaderPaths(modPath, baseFp)) {
 		registerNativeProjectDep(path);
-		result = `${result}:${path}=${headerHash(path)}`;
+		result = `${result}:${path}=${hashFile(path)}`;
 	}
 	return result;
 }
@@ -900,7 +1171,7 @@ export function isLinkCached(oFiles: string[], externalInputs: string[], linkFla
 	if (storedCmd != linkFlags) return false;
 	if (storedOFiles != objectListKey(oFiles)) return false;
 	if (storedInputs != externalInputKey(externalInputs)) return false;
-	const currentOutputHash = hashFile(outputFile);
+	const currentOutputHash = outputIdentity(outputFile);
 	if (storedOutputHash != currentOutputHash) return false;
 	return true;
 }
@@ -910,7 +1181,7 @@ export function writeLinkCache(oFiles: string[], externalInputs: string[], linkF
 	let content = `${PRE_LINKCMD}${linkFlags}\n`;
 	content = content + `${PRE_OFILES}${objectListKey(oFiles)}\n`;
 	content = content + `${PRE_LINKINPUTS}${externalInputKey(externalInputs)}\n`;
-	content = content + `${PRE_OUTHASH}${hashFile(outputFile)}\n`;
+	content = content + `${PRE_OUTHASH}${outputIdentity(outputFile)}\n`;
 	atomicWriteFile(linkCacheFile(image), content);
 }
 
@@ -1043,6 +1314,54 @@ test "object fingerprints fold in the support trees and never the msc binary" {
 	assert moduleCompileFp("int main(){}", "cc -O2").indexOf(objects, 0) >= 0;
 	assert moduleCompileFp("int main(){}", "cc -O2").indexOf(toolchainStamp(), 0) < 0;
 	assert toolchainStamp() == toolchainStamp();
+}
+
+test "a file rewritten to the same size at once hashes to its new content" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-hash-stamp-${performance.now()}.txt`;
+	writeFile(path, "first content");
+	const before = hashFile(path);
+	assert hashFile(path) == before;
+	writeFile(path, "other content");
+	assert hashFile(path) != before;
+	assert hashFile(path) == hashFileContent(path);
+	remove(path);
+	assert hashFile(path) == "absent";
+}
+
+test "a dependency file rewritten to the same size at once lists its new paths" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-deps-stamp-${performance.now()}.d`;
+	writeFile(path, "native: a.h b.h\n");
+	assert dependencyPathsIn(path).join(",") == "a.h,b.h";
+	assert dependencyPathsIn(path).join(",") == "a.h,b.h";
+	writeFile(path, "native: c.h d.h\n");
+	assert dependencyPathsIn(path).join(",") == "c.h,d.h";
+	remove(path);
+	assert dependencyPathsIn(path).length == 0;
+}
+
+test "a native source rewritten to the same size at once moves its fingerprint" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-native-stamp-${performance.now()}.c`;
+	writeFile(path, "int a;\n");
+	const before = computeFingerprint(path, "cc");
+	assert computeFingerprint(path, "cc") == before;
+	writeFile(path, "int b;\n");
+	assert computeFingerprint(path, "cc") != before;
+	remove(path);
+}
+
+test "a link output rewritten to the same size at once is not taken as cached" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const output = `${base}/msc-link-output-${performance.now()}.bin`;
+	writeFile(output, "first");
+	writeLinkCache([], [], "-flags", output, output);
+	assert isLinkCached([], [], "-flags", output, output);
+	writeFile(output, "other");
+	assert !isLinkCached([], [], "-flags", output, output);
+	remove(output);
+	remove(linkCacheFile(output));
 }
 
 test "a runtime or vendor file edit moves the support-tree stamp" {

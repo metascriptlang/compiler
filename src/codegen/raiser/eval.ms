@@ -25,6 +25,7 @@ import { moduleScopeSymbols, makeSymbolState } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
+import { genericTypeInstMark, takeGenericTypeInstsFrom } from "../../parser/context";
 import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, getMacroDeclModulePath, callComptimeHelperPreparer } from "../../compiler/meta/callbacks";
@@ -67,6 +68,10 @@ function raiserPreludeCtx(): CheckerContext {
 
 let _lastEngineCheckErrors: CheckerError[] = [];
 
+function dropCTypeRowsSince(mark: int32): void {
+	const _engineRows = takeGenericTypeInstsFrom(mark);
+}
+
 // On-demand helper compiles (ensureCompiledIntoEngine) run their own check pass
 // whose errors belong to no wrapper. Without this queue a type-broken helper
 // becomes garbage bytecode with no diagnostic (BUGS.md §2 row 9).
@@ -89,6 +94,7 @@ function transformForEngine(program: Node): Node {
 		&& outer.module != null
 		&& outer.preludeCtx != null;
 	const prevEngineMode = setEngineCheckMode(true);
+	const rowMark = genericTypeInstMark();
 	const checkerCtx = hasFullOuterCtx
 		? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
 		: checkProgram(program);
@@ -96,6 +102,7 @@ function transformForEngine(program: Node): Node {
 	const txCtx = createTransformContextWithChecker(checkerCtx);
 	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
 	const transformed = transformForRaiser(refined, checkerCtx);
+	dropCTypeRowsSince(rowMark);
 	setEngineCheckMode(prevEngineMode);
 	if (outer != null) {
 		outer.program = savedOuterProgram;
@@ -363,6 +370,15 @@ function evalOrcVM(code: string): RaiserVM {
 	return execModule(compileForOrc(code), "orc");
 }
 
+test "engine: an engine check leaves no C generic type rows to the module being checked" {
+	raiserPreludeCtx();
+	const pr = parseSource("const m = new Map<int16, uint8>(); m.set(1 as int16, 2 as uint8); const s = new HashSet<int16>();");
+	assert pr.ok;
+	const mark = genericTypeInstMark();
+	const _engineProgram = transformForEngine(pr.value);
+	assert takeGenericTypeInstsFrom(mark).length == 0;
+}
+
 test "engine: byteLength counts UTF-8 bytes independently from UTF-16 length" {
 	const ctx = evalOrcVM("const value = 'é😀'; console.log(value.byteLength); console.log(value.length);");
 	assert ctx.error == "";
@@ -381,6 +397,13 @@ test "engine: explicit exit coerces its number and aborts module initialization"
 	assert ctx.output == "before\n";
 	assert ctx.exitValue.kind == RaiserValueKind.Int;
 	assert ctx.exitValue.intVal == 7;
+}
+
+test "engine: for-of raises when its body changes the array length" {
+	const ctx = evalOrcVM("function run(mode: int32): string { const arr: int32[] = [1, 2, 3]; let seen = ''; try { for (const x of arr) { seen = seen + String(x) + ','; if (seen.length > 20) break; if (mode == 0) arr.push(x); if (mode == 1 && x == 1) { arr.push(9); continue; } if (mode == 2) { arr.push(9); break; } } } catch (e) { return 'raised after ' + seen; } return 'finished ' + seen; }"
+		+ " console.log(run(0)); console.log(run(1)); console.log(run(2)); console.log(run(3));");
+	assert ctx.error == "";
+	assert ctx.output == "raised after 1,\nraised after 1,\nfinished 1,\nfinished 1,2,3,\n";
 }
 
 test "engine: struct assignment preserves the source value" {

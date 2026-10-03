@@ -127,22 +127,27 @@ function moduleAbi(): void {
 
 	copy(`${FIXTURES}/logicBodyEdit.ms`, `${work}/logic.ms`);
 	const edit = mustBuild(tag, work, hcrBuild, "body-edit build failed");
-	let ccCount = 0;
-	let logicCompiled = false;
-	let appCompiled = false;
+	let supplied = 0;
+	let logicSupplied = false;
+	let appSupplied = false;
 	let appCached = false;
 	for (const line of lines(edit)) {
-		if (line.startsWith("    cc ")) {
-			ccCount = ccCount + 1;
-			if (line.contains("logic_x_ms")) logicCompiled = true;
-			if (line.contains("app_x_ms")) appCompiled = true;
-		}
 		const t = line.trim();
+		if (line.startsWith("    cc ")) {
+			supplied = supplied + 1;
+			if (line.contains("logic_x_ms")) logicSupplied = true;
+			if (line.contains("app_x_ms")) appSupplied = true;
+		}
+		if (line != t && t.startsWith("stored ")) {
+			supplied = supplied + 1;
+			if (t.endsWith("logic.ms")) logicSupplied = true;
+			if (t.endsWith("app.ms")) appSupplied = true;
+		}
 		if (line != t && t.startsWith("cached ") && t.endsWith("app.ms")) appCached = true;
 	}
-	need(tag, ccCount == 1, `body edit compiled ${ccCount} modules, expected 1`);
-	need(tag, logicCompiled, "logic object was not compiled");
-	need(tag, !appCompiled, "unchanged app object was compiled");
+	need(tag, supplied == 1, `body edit compiled or restored ${supplied} modules, expected 1`);
+	need(tag, logicSupplied, "logic object was neither compiled nor restored");
+	need(tag, !appSupplied, "unchanged app object was compiled or restored");
 	need(tag, appCached, "unchanged app object was not reported cached");
 	need(tag, exists(`${work}/module.hcr`), "linked HCR image missing");
 
@@ -285,6 +290,8 @@ function watchWarm(): void {
 		{ file: "boxCtor.ms", target: "box.ms", warm: true, fails: false },
 		{ file: "boxOverride.ms", target: "box.ms", warm: false, fails: false },
 		{ file: "boxNoHook.ms", target: "box.ms", warm: false, fails: false },
+		{ file: "logicStd.ms", target: "logic.ms", warm: true, fails: false },
+		{ file: "logicBody.ms", target: "logic.ms", warm: true, fails: false },
 	];
 	replayMatchesCold(tag, dir, `${FIXTURES}/watchWarm`, ["logic.ms", "view.ms", "shapes.ms", "box.ms"], steps);
 	console.log("ok   hcrWatchWarm");
@@ -691,29 +698,62 @@ function liftKinds(): void {
 function runCommand(): void {
 	const tag = "hcrRun";
 	if (noWatchBackend(tag)) return;
-	const dir = freshDir(`${TMP}/run`);
-	copy(`${FIXTURES}/run/app.ms`, `${dir}/app.ms`);
-	copy(`${FIXTURES}/indirect/logic.ms`, `${dir}/logic.ms`);
-	copy(`${FIXTURES}/indirect/logicBodyEdit.ms`, `${dir}/edit.txt`);
-	const copies = `${dir}/out/hcr/.hcr`;
-	const ended = `${copies}/999999998`;
-	const alive = `${copies}/${platform == "windows" ? "4" : "1"}`;
-	const foreign = `${copies}/notARun`;
-	for (const d of [`${ended}/core`, alive, foreign]) ensureDir(d);
-	for (const f of [`${ended}/core/app.core${sharedLibraryExt()}`, `${alive}/keep.txt`, `${foreign}/keep.txt`]) put(f, "x");
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	for (const via of [false, true]) {
+		const dir = freshDir(`${TMP}/run${via ? "Via" : ""}`);
+		copy(`${FIXTURES}/run/app.ms`, `${dir}/app.ms`);
+		if (via) {
+			copy(`${FIXTURES}/run/via.ms`, `${dir}/via.ms`);
+			put(`${dir}/app.ms`, read(`${dir}/app.ms`).replace(`from "./logic"`, `from "./via"`));
+		}
+		copy(`${FIXTURES}/indirect/logic.ms`, `${dir}/logic.ms`);
+		copy(`${FIXTURES}/indirect/logicBodyEdit.ms`, `${dir}/edit.txt`);
+		const copies = `${dir}/out/hcr/.hcr`;
+		const ended = `${copies}/999999998`;
+		const alive = `${copies}/${platform == "windows" ? "4" : "1"}`;
+		const foreign = `${copies}/notARun`;
+		for (const d of [`${ended}/core`, alive, foreign]) ensureDir(d);
+		for (const f of [`${ended}/core/app.core${sharedLibraryExt()}`, `${alive}/keep.txt`, `${foreign}/keep.txt`]) put(f, "x");
+		const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+		const seen: string[] = [];
+		for (const line of lines(both(ran))) {
+			if (line.startsWith("HCR-RUN ")) seen.push(line);
+		}
+		const want = ["HCR-RUN start value 10", "HCR-RUN reloaded logic value 73"];
+		if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+			console.log(both(ran));
+			env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+			failWith(tag, `msc run --hcr${via ? " (logic imported through via.ms)" : ""} did not rebuild the edited module alone into the running app`);
+		}
+		need(tag, !exists(ended), "the image copies of an ended run survived the next start");
+		need(tag, exists(`${alive}/keep.txt`), "the start removed the copies of a live process");
+		need(tag, exists(`${foreign}/keep.txt`), "the start removed a directory that is not a run");
+	}
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	console.log(`ok   ${tag}`);
+}
+
+function stepCrash(): void {
+	const tag = "hcrStepCrash";
+	const dir = freshDir(`${TMP}/stepCrash`);
+	for (const f of readDir(`${FIXTURES}/step`)) copy(`${FIXTURES}/step/${f}`, `${dir}/${f}`);
 	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
-		if (line.startsWith("HCR-RUN ")) seen.push(line);
+		if (line.startsWith("STEP ")) seen.push(line);
 	}
-	const want = ["HCR-RUN start value 10", "HCR-RUN reloaded logic value 73"];
+	const want = [
+		"STEP start 2",
+		"STEP rolled back logic fatal then 2",
+		"STEP rolled back logic fault then 2",
+		"STEP rolled back logic exception then 2",
+		"STEP reloaded 3",
+	];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
-		failWith(tag, "msc run --hcr did not rebuild the edited module into the running app");
+		failWith(tag, "a crash inside step() did not roll back to the previous generation and keep running");
 	}
-	need(tag, !exists(ended), "the image copies of an ended run survived the next start");
-	need(tag, exists(`${alive}/keep.txt`), "the start removed the copies of a live process");
-	need(tag, exists(`${foreign}/keep.txt`), "the start removed a directory that is not a run");
 	console.log(`ok   ${tag}`);
 }
 
@@ -893,6 +933,33 @@ function watchWarmDependency(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function typeInfoLocality(): void {
+	const tag = "hcrTypeInfoLocality";
+	const dir = freshDir(`${TMP}/typeInfoLocality`);
+	for (const f of readDir(`${FIXTURES}/typeInfoLocality`)) copy(`${FIXTURES}/typeInfoLocality/${f}`, `${dir}/${f}`);
+	const steps: WatchStep[] = [
+		{ file: "logicCell.ms", target: "logic.ms", warm: true, fails: false },
+		{ file: "logicClass.ms", target: "logic.ms", warm: false, fails: false },
+	];
+	replayMatchesCold(tag, dir, `${FIXTURES}/typeInfoLocality`, ["logic.ms"], steps);
+	const debug = `${dir}/out/debug`;
+	let app = "";
+	let logic = "";
+	for (const f of cFilesIn(`${debug}/watch0`)) {
+		if (f.startsWith("_")) continue;
+		if (f.endsWith("ZappOms.c")) app = f;
+		if (f.endsWith("ZlogicOms.c")) logic = f;
+	}
+	need(tag, app != "" && logic != "", "the watch replay emitted no C for app.ms or logic.ms");
+	const appFirst = read(`${debug}/watch0/${app}`);
+	for (let n = 1; n <= steps.length; n += 1) {
+		const label = `step ${n} (${steps[n - 1].file})`;
+		need(tag, read(`${debug}/watch${n}/${logic}`).contains("msHcrTypeInfo("), `${label}: logic.ms registers no TypeInfo`);
+		need(tag, read(`${debug}/watch${n}/${app}`) == appFirst, `${label} changed app.ms's C although only logic.ms changed`);
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function imageNameCollision(): void {
 	const tag = "hcrImageNameCollision";
 	const dir = freshDir(`${TMP}/imageCollision`);
@@ -966,10 +1033,23 @@ function fsWatch(): void {
 	for (const line of lines(both(ran))) {
 		if (line.startsWith("WATCH ")) seen.push(line);
 	}
-	const want = platform == "windows" || platform == "linux" ? [
+	const want = platform == "windows" ? [
 		"WATCH missing opened: false",
 		"WATCH write before the first wait: true",
 		"WATCH write in a subdirectory: true",
+		"WATCH a renamed save is reported closed: true",
+		"WATCH a missing file has no writer: true",
+		"WATCH a closed file proves no writer: true",
+		"WATCH after close: ended true",
+		"WATCH closed while waiting: ended true",
+	] : platform == "linux" ? [
+		"WATCH missing opened: false",
+		"WATCH write before the first wait: true",
+		"WATCH write in a subdirectory: true",
+		"WATCH a renamed save is reported closed: true",
+		"WATCH a closed write is reported closed: true",
+		"WATCH a missing file has no writer: true",
+		"WATCH a closed file proves no writer: false",
 		"WATCH after close: ended true",
 		"WATCH closed while waiting: ended true",
 	] : [
@@ -1002,11 +1082,13 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrLiftNames", run: liftNames },
 	{ name: "hcrLiftKinds", run: liftKinds },
 	{ name: "hcrRun", run: runCommand },
+	{ name: "hcrStepCrash", run: stepCrash },
 	{ name: "hcrRegistryVariables", run: registryVariables },
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
 	{ name: "hcrFunctionValues", run: functionValues },
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
+	{ name: "hcrTypeInfoLocality", run: typeInfoLocality },
 	{ name: "hcrImageNameCollision", run: imageNameCollision },
 	{ name: "hcrArrayOwner", run: arrayOwner },
 ];
@@ -1015,6 +1097,7 @@ if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsRe
 const SHARD = (env.get("HCR_SHARD") == "" ? "0/1" : env.get("HCR_SHARD")).split("/");
 const SHARD_INDEX = SHARD[0].parseInt() as int32;
 const SHARD_COUNT = SHARD.length == 2 ? SHARD[1].parseInt() as int32 : 0;
+const ONLY = env.get("HCR_ONLY") == "" ? [] as string[] : env.get("HCR_ONLY").split(",");
 if (SHARD_COUNT < 1 || SHARD_INDEX < 0 || SHARD_INDEX >= SHARD_COUNT) {
 	console.log(`hcr: HCR_SHARD must be <index>/<count> with 0 <= index < count, got '${env.get("HCR_SHARD")}'`);
 	exit(2);
@@ -1024,6 +1107,7 @@ console.log(`hcr: compiler under test = ${MSC}`);
 ensureDir(TMP);
 for (let i = 0; i < CASES.length; i++) {
 	if (i % SHARD_COUNT != SHARD_INDEX) continue;
+	if (ONLY.length > 0 && !ONLY.includes(CASES[i].name)) continue;
 	const t0 = performance.now();
 	CASES[i].run();
 	console.log(`time ${CASES[i].name} ${Math.round((performance.now() - t0) / 1000)}s`);

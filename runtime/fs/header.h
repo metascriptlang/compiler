@@ -58,6 +58,11 @@ double msFsFileSize(msString path);
 /* Last modification time in seconds since the epoch, or -1.0. */
 double msFsModifiedTime(msString path);
 
+/* Identity of a file's current content generation: device, file id, size, last-write and
+ * change time at the filesystem's full resolution. Empty when the file is absent or the
+ * filesystem keeps no change time, so a caller must then read the file. */
+msString msFsChangeStamp(msString path);
+
 /* Create directory (0755 on POSIX). Returns 1.0 on success or EEXIST, 0.0 on failure. */
 double msFsMkdir(msString path);
 

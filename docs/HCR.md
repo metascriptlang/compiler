@@ -37,6 +37,8 @@ backend and DRC/ORC runtime.
 | `@beforeReload` / `@afterReload` handlers | Windows x64 and Linux x64 checked by `hcrEngine`: old handlers quiesce, new handlers resume; a throw restores publication |
 | TypeInfo across reloads | Windows x64 and Linux x64 checked by `hcrEngine`: stable class identity/method dispatch, restored metadata after rollback; incompatible class layout still requires restart |
 | Watch build (`msc build --hcr --watch`) | Windows x64 (`ReadDirectoryChangesW`) and Linux x64 (inotify): rebuilds after each source save through a kept build session, guarded by `src/test/hcr/run.ms` (`hcrWatchWarm`: the C of a warm build equals a cold build's at every step of a replayed edit sequence, including constructor defaults, removed overrides and generic hook instances). macOS has no file-watch backend: `std/fs/watch` aborts with `file watching has no backend for this platform yet` |
+| Crash rollback (`step(body)`) | Windows x64 and Linux x64, `hcrStepCrash`: a fatal runtime error, a stack overflow, an access violation or segmentation fault and an uncaught exception inside `step` each revert the last accepted reload and the program keeps running on the previous generation; the crashed image is skipped until the next build. One level |
+| Old-generation purge | Not built: no accepted image is unloaded (see "Accepted generations stay loaded") |
 | Function values across reloads | Windows x64 and Linux x64, `hcrFunctionValues`: a named function's value taken before a reload, a private one, one stored in a module-level object and code of the old generation all reach the newest generation; a closure keeps its own body; a held function writes the new cell after a type reset |
 | Dependency reload | Windows x64 and Linux x64, `hcrFileDependency`: an edit of a `file:` dependency reloads its module image in the running app; `hcrImageNameCollision`: two modules mapping to one image name stop the build |
 | `msc run --hcr app.ms` | Windows x64 and Linux x64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
@@ -204,9 +206,17 @@ prologue reuses the existing cell and parameter names). Nim forwards only calls 
 its trampoline and keeps same-module calls of old code on `_actual`; this contract also
 forwards those, as Dart and Live++ do. Measured: `hcrFunctionValues` red on `b5857d02`, green
 on the candidate, Windows x64; green on Linux x64 (WSL Ubuntu, a zig cross-built compiler of
-`5ef59610`, the whole hcr runner 23 ok). Not measured: the per-call cost of the prologue, raw C
+`5ef59610`, the whole hcr runner 23 ok). Not measured: raw C
 function pointers to a named function, `==` between function values (C rejects it on `main`
 too: inbox `2026-10-02-function-value-equality-c`).
+
+Per-call cost, `examples/hcrBench` (50M calls of `x + 1`, Windows x64, zig, 2026-10-03, shared
+machine): at the default `-O0` a plain build takes 1.48 ns per same-module call and 1.51 ns per
+cross-module call; `--hcr` took 6.7 and 7.7–8.0 ns, and 3.3–3.6 and 3.6–3.9 ns once the cell
+reads, the prologue check and the Windows image TLS base were forced inline without UBSan checks.
+The rest at `-O0` is the prologue's loads and the `msErr` check after each call reaching core
+TLS. At `--release` a plain cross-module call takes 0.74 ns and an HCR one 1.07–1.09 ns; a
+same-module call is inlined away in a plain build and costs 0.47–0.62 ns under HCR.
 
 Selected dependency contract (2026-10-02): a module of a `file:` dependency or of a locked git
 or registry dependency builds its own image, id `<package>/<path>`, exactly like a project
@@ -226,8 +236,7 @@ prelude's rows now carry a flag and always join the shared rows (`collectTypeIns
 first module); instances a module creates over its own types stay with it
 (`hcrNewInstance`). `hcrFileDependency` now expects `reloaded greeter/index` alone.
 
-Not verified: the per-call cost (a cell is two dependent loads against three for
-`handle->current[k]`, read from the emitted macros, not timed); how Live++ keeps globals (its
+Not verified: how Live++ keeps globals (its
 documentation does not say); whether Zig's issue #5260 design is what ships.
 
 ## Runtime invariants
@@ -258,6 +267,11 @@ claimed. Those remain explicit application lifecycle responsibilities.
 9. **Never load the build output in place.** Copy a complete artifact to a generation path.
    A watcher observing an incomplete image retries that candidate without disturbing
    current.
+10. **A crash reverts one accepted reload.** `step(body)` runs the body under a guard; a fault,
+   fatal runtime error or uncaught exception reverts every module of the last accepted
+   transaction to the cells, storage and TypeInfo it replaced, re-runs the restored after-reload
+   handlers, and marks the crashed image's file identity so it is not loaded again. State the
+   crashed pass wrote stays as written; values its abandoned frames owned are leaked, not freed.
 
 ## Generation lifecycle
 
@@ -456,10 +470,15 @@ Three edges that a single image resolved by the linker needed a mechanism across
   Other Windows architectures fail at compile time with a named `#error`; ELF and Mach-O use
   native cross-library TLS.
 - **TypeInfo identity.** `instanceof` on a class from another module emitted `extern msTypeInfo
-  …TypeInfo`, which fails a split link. Every class and interface of a project module is
-  reached through `#define <C>TypeInfo (*_ms_hcr_tiN)`, resolved in DatInit from
-  `msHcrTypeInfo(owner, name)`: registered once by name and returned at the same address
-  across generations, as the reference registers type info in its registry.
+  …TypeInfo`, which fails a split link. The TypeInfo of a project module's class, interface
+  or boxed array cell is reached through `#define <C>TypeInfo (*_ms_hcr_ti_<C>)`, resolved
+  in DatInit from `msHcrTypeInfo(owner, name)`: registered once by name and returned at the
+  same address across generations, as the reference registers type info in its registry.
+  An image declares that pointer only when its own code uses the TypeInfo, as the reference
+  declares another module's type info only where it is used, so an edit that gives a module a
+  new type leaves its importers' C unchanged. Until 2026-10-03 every image declared every project TypeInfo, and an array edit
+  in `logic` reloaded `app` too (`hcrTypeInfoLocality`, red on the old compiler for an array
+  cell and for a class).
 - **DRC hooks.** A lifecycle operation has one definition, in the module whose lowering
   first needs it. Another project image that calls it reaches it through the owner's handle
   table: after DCE the owner appends every generated operation another image uses
@@ -566,7 +585,17 @@ The shape follows nimhcr (`lib/nimhcr.nim`: `hcrInit`, `recursiveDiscovery`, `in
   table of the transaction back and returns `Rejected`. cr.h also restores backed-up
   `.state`/`.bss` sections (`cr_plugin_sections_reload`). Lifted state holds DRC references,
   so restoring its bytes would corrupt reference counts, and lifted state is left as the new
-  code wrote it. Crash recovery through SEH stays out of scope.
+  code wrote it.
+- **A crash returns to the guard, never through the OS dispatcher.** `msHcrGuardRun` arms a guard
+  on the calling thread. POSIX catches SIGSEGV, SIGBUS, SIGILL, SIGFPE and SIGABRT on an
+  alternate stack and `siglongjmp`s back; Windows captures the guard's registers with
+  `RtlCaptureContext`, and its vectored handler copies them into the faulting context and
+  returns `EXCEPTION_CONTINUE_EXECUTION` (a stack overflow then re-arms the guard page with
+  `_resetstkoflw`). A fatal runtime error (`msRaiseIndexError` and the rest) reaches the
+  guard through `msFatalTrap` before it would exit. A guard is owned by one thread; a fault on
+  another thread ends the process as before. The guard state is a process-wide pointer plus the
+  owner's thread id: a vectored handler runs for every thread, and `core`'s TLS read from one
+  returned garbage on 2026-10-03. Like cr.h, nothing the crashed code held is released.
 - **Accepted generations stay loaded.** No accepted image is unloaded, as RCC++'s
   `RuntimeObjectSystem` never frees a module. Twenty extra generations of `logic` cost about
   70 KB of private memory each. Purging old generations needs proof that no frame or callback
@@ -753,6 +782,30 @@ in 3–4 ms, the settle waits 60 ms, the build takes 246–290 ms (front end and
 `reload()` figure above (0.45–0.56 s, 2026-09-24) was not measured again; the 2026-09-27 runs
 leave 100–180 ms between the end of the build and the visible line.
 
+2026-10-02, WSL Ubuntu x64 (24 cores, load 0.13), a compiler of `6dfd6e04` cross-built with
+`--os=linux --cc=zig --danger --lto=off`, `examples/hcrApp`, five saves by atomic rename: edit
+to visible 344–401 ms, watch build 290–333 ms. A warm build of the same app under
+`--watch-replay --time` (240–270 ms), with temporary probes around the image link: graph load
+and check 62 ms, phase A 10 ms, phase B 12 ms, `cc -c` 15 ms (parallel), the core image's
+link-cache check 23–24 ms, the `logic` image link 23–25 ms (gcc driver), the entry image's
+link-cache check 6 ms, the project cache write 12 ms. No single step holds the budget: <100 ms
+needs the settle (60 ms), the warm check, the link path and emission each cut. Tried and kept
+out, A/B on the same host: computing the link-cache input key once per build instead of per
+image (phase D unchanged, 70–90 ms both ways) and `-fuse-ld=lld` for image links (`logic` link
+23–25 ms both ways: a small image's link is the driver's startup).
+
+2026-10-03, same host, compilers of `9a36b5e6` and `3ab8bcec`, alternating runs. Every build
+re-parsed the std prelude closure to rediscover its imports (`graphLoad preludeMods` 47–62 ms,
+`seed=0`): the `.deps` file that seeds it was written only beside a `.pk` of the build's own
+backend, and a graph build checks its prelude in the graph and writes none. The loader now writes
+it: `preludeMods` 12.6–14.6 ms with `seed=1`, warm graph load and check 63–78 → 28.6–30.5 ms,
+warm build 246–271 → 209–236 ms (load 0.00); edit to visible 391–479 → 343–425 ms over 10 saves
+each (load 0.69–1.17). The `preludePack load=` figure every warm build prints is the first
+build's: the counters accumulate per process and the pack loads once. What remains of the 30 ms:
+reading and header-inlining 58 sources (about 13 ms), the entry tree (6 ms) and the check (8 ms).
+In a long-lived process the reference reprocesses only modules marked dirty
+(`compiler/pipelines.nim` `isDirty`); the watch session still rebuilds the graph from disk.
+
 A writer that empties the file before writing it (`cat new > logic.ms` from Git Bash, whose fork
 takes more than the 60 ms settle) can let a build read the empty file. That build fails with
 `Cannot resolve module './logic'`, because the loader treats an empty module as a missing one (an
@@ -906,8 +959,7 @@ except where noted:
 - unrecompiled `app` observes new behavior through the current vtable;
 - persistent state survives;
 - incomplete artifacts retry without disturbing current;
-- load/init failure preserves or restores current behavior (a candidate crash is out of scope,
-  "Host runtime (S4)");
+- load/init failure preserves or restores current behavior, a crash included (`hcrStepCrash`);
 - a layout change reports restart-required;
 - a live DRC object destroys exactly once through the accepted TypeInfo generation;
 - old code purges only after safe-point proof (not built: every accepted generation stays

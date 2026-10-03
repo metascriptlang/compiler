@@ -126,8 +126,8 @@ const CPUS: int32 = detectCpus();
 // cache went 93.1s serial, 19.4s at 16, 14.8s at 32, and 48 regressed into
 // build failures.
 //
-// RUN_SLOTS deliberately keeps its historical default of 4. Run cells are
-// whole processes under measurement and @maxrss asserts a bound on one; how
+// RUN_SLOTS deliberately keeps its historical default of 4 for assertsRss cells,
+// whole processes under measurement where @maxrss asserts a bound on one; how
 // many of them share the machine is a separate axis from how many BUILDS run,
 // and it should be changed on its own evidence, not as a side effect of this.
 // A probe at 4 vs 16 moved the two RSS cells in the `string` subset by less
@@ -143,6 +143,7 @@ function slotDefault(name: string, dflt: int32, cap: int32): int32 {
 }
 const BUILD_SLOTS = slotDefault("MSCORPUS_BUILD_JOBS", CPUS, CPUS);
 const RUN_SLOTS = slotDefault("MSCORPUS_JOBS", 4, CPUS);
+const FREE_RUN_SLOTS: int32 = BUILD_SLOTS / 2 > RUN_SLOTS ? BUILD_SLOTS / 2 : RUN_SLOTS;
 const SAN = envOr("MSCORPUS_SAN", "") == "1";
 // 8M ledger-set entries: ASan quarantines freed addresses (no reuse), so the
 // finalized-pointer set degrades to append-only under slab-off — the default
@@ -1001,6 +1002,16 @@ function activeCount(running: Cell[]): int32 {
 	return n;
 }
 
+function activeInPool(running: Cell[], rss: boolean): int32 {
+	let n = 0;
+	for (const c of running) { if (c.launched && !c.finished && assertsRss(c) == rss) { n = n + 1; } }
+	return n;
+}
+
+function assertsRss(c: Cell): boolean {
+	return isRssCell(c) && c.lane != "san";
+}
+
 // A cell whose sentinel never arrives is a HANG, and a hang must cost one loud
 // FAIL — not an eternally green-freeze of the whole run. The default is 100x
 // the slowest healthy cell (serial actor churn runs in seconds); the env knob
@@ -1049,11 +1060,25 @@ function settleCell(c: Cell, t: Tally, parityDone: Cell[]): void {
 	parityDone.push(c);
 }
 
-function waitForSlot(running: Cell[], t: Tally, parityDone: Cell[]): void {
+function launchQueued(running: Cell[], queued: Cell[], t: Tally, parityDone: Cell[]): void {
 	drain(running, t, parityDone);
-	while (activeCount(running) >= RUN_SLOTS) {
-		pollSleep("0.1", 100);
-		drain(running, t, parityDone);
+	let rssFree = RUN_SLOTS - activeInPool(running, true);
+	let otherFree = FREE_RUN_SLOTS - activeInPool(running, false);
+	let i = 0;
+	while (i < queued.length) {
+		const c = queued[i];
+		const rss = assertsRss(c);
+		if (rss && rssFree > 0) {
+			rssFree = rssFree - 1;
+		} else if (!rss && otherFree > 0) {
+			otherFree = otherFree - 1;
+		} else {
+			i = i + 1;
+			continue;
+		}
+		launchCell(c);
+		running.push(c);
+		queued.splice(i, 1);
 	}
 }
 
@@ -1073,7 +1098,7 @@ function main(): void {
 
 	progress("");
 	const mode = SAN ? "SAN lane (ASan + slab-off + DRC ledger, drc)" : "parity + RSS lanes";
-	progress("Corpus tier — " + specs.length + " programs, " + jobs.length + " builds, " + mode + " (msc=" + MSC + ", build slots=" + BUILD_SLOTS + ", run slots=" + RUN_SLOTS + ")");
+	progress("Corpus tier — " + specs.length + " programs, " + jobs.length + " builds, " + mode + " (msc=" + MSC + ", build slots=" + BUILD_SLOTS + ", run slots=" + RUN_SLOTS + " measured + " + FREE_RUN_SLOTS + " unmeasured)");
 
 	const t: Tally = { fails: 0, xfails: 0, xpasses: 0, passes: 0 };
 
@@ -1114,6 +1139,7 @@ function main(): void {
 	validateDirectives(specs, t);
 	progress("");
 	const running: Cell[] = [];
+	const queued: Cell[] = [];
 	const pendingSerial: Cell[] = [];
 	const parityDone: Cell[] = [];
 
@@ -1163,16 +1189,15 @@ function main(): void {
 		if (job.cell.spec.serial) {
 			pendingSerial.push(job.cell);
 		} else {
-			waitForSlot(running, t, parityDone);
-			launchCell(job.cell);
-			running.push(job.cell);
+			queued.push(job.cell);
 		}
+		launchQueued(running, queued, t, parityDone);
 	}
 
 	// drain the parallel tail
-	while (activeCount(running) > 0) {
+	while (queued.length > 0 || activeCount(running) > 0) {
 		pollSleep("0.1", 100);
-		drain(running, t, parityDone);
+		launchQueued(running, queued, t, parityDone);
 	}
 
 	// serial cells: one at a time on an otherwise idle machine

@@ -10,12 +10,12 @@ import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, aliveSetHasDecl, internString, addCGenError,
-	setLocalSymName,
+	setLocalSymName, factClaimGeneric, factSkipTypeInfo,
 } from "./context";
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, hcrTypeInfoRef, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -110,7 +110,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	if (g.preparingDeclarations) {
 		if (isGenericInstance && g.preparationFacts != null
 				&& (!g.preparationFacts.genericOwners.has(name) || sym.modulePath == g.modulePath)) {
-			g.preparationFacts.genericOwners.set(name, g.modulePath);
+			factClaimGeneric(g.preparationFacts, name, g.modulePath);
 		}
 		return;
 	}
@@ -615,9 +615,9 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 			const skipBase = d.declName.slice(0, nameLen - 8);
 			if (g.preparingDeclarations) {
 				if (g.preparationFacts == null) return;
-				g.preparationFacts.skippedTypeInfos.add(skipBase);
+				factSkipTypeInfo(g.preparationFacts, skipBase);
 				const skipCBase = typeInfoCBase(g, d, skipBase);
-				if (skipCBase != "") g.preparationFacts.skippedTypeInfos.add(skipCBase);
+				if (skipCBase != "") factSkipTypeInfo(g.preparationFacts, skipCBase);
 			}
 			return;
 		}
@@ -739,6 +739,7 @@ function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, stati
 	const d = node.data as VariableDeclData;
 	if (g.aliveSet.entries.length > 0 && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
 	const body = cType.slice(0, cType.length - 1);
+	if (isHcrImageModule(g, g.modulePath) && g.emissionFacts.hcrTypeInfoOwners.has(body)) return false;
 	const od = d.initializer.data as ObjectLiteralData;
 	const p = g.initProc;
 	let braced = "";
@@ -853,7 +854,8 @@ function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string)
 	// $-generated types never leave their module — static keeps same-named
 	// sibling-module envs apart.
 	const linkage = isCompilerGenCName(g, baseName) ? "static msTypeInfo " : "msTypeInfo ";
-	addLine(sec(g, CSection.GlobalVars), linkage + infoName + ";");
+	const viaRegistry = infoName.endsWith("TypeInfo") && hcrTypeInfoRef(g, infoName.slice(0, infoName.length - 8));
+	if (!viaRegistry) addLine(sec(g, CSection.GlobalVars), linkage + infoName + ";");
 
 	// Emit field assignments to DatInit (runs before user code)
 	if (d.initializer != null && d.initializer.kind == NodeKind.ObjectLiteral) {

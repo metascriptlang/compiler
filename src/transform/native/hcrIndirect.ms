@@ -112,20 +112,6 @@ export function lowerHcrIndirection(
 	if (own.beforeReload.length > 0) emitted.push(makeEmitStmt(handlerFunction("HcrBeforeReload000", own.beforeReload), loc));
 	if (own.afterReload.length > 0) emitted.push(makeEmitStmt(handlerFunction("HcrAfterReload000", own.afterReload), loc));
 
-	let typeSlot: int32 = 0;
-	for (const target of modules) {
-		for (const typeName of target.typeInfos) {
-			const pointer = `_ms_hcr_ti${typeSlot}`;
-			typeSlot += 1;
-			emitted.push(makeEmitStmt(`/*VARSECTION*/msTypeInfo* ${pointer};`, loc));
-			emitted.push(makeEmitStmt(`/*VARSECTION*/#define ${typeName}TypeInfo (*${pointer})`, loc));
-			emitted.push(makeEmitStmt(
-				`/*DATINITSECTION*/  ${pointer} = (msTypeInfo*)msHcrTypeInfo(${cString(target.moduleId)}, ${cString(typeName)});`,
-				loc,
-			));
-		}
-	}
-
 	const bound = new HashMap<string, string>();
 	const storageTypes = new HashMap<string, Type>();
 	let bindings = "";

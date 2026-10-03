@@ -481,6 +481,7 @@ self_host_boot() {
   dir=$(dirname "$cand")
   case "$cand" in *.exe) ext=.exe ;; esac
   [ -f "${cand}_link.rsp" ] || { say "FAIL self-host: gen1 wrote no link response file"; return 1; }
+  rm -f "$dir/gen3_link.rsp"
   for n in 2 3; do
     gen="$dir/boot$n/msc$ext"
     rm -rf "$dir/boot$n"; mkdir -p "$dir/boot$n"
@@ -493,8 +494,11 @@ self_host_boot() {
       rm -rf "$dir/boot$n"; return 0
     fi
     if [ "$n" -eq 3 ]; then
+      cp "${gen}_link.rsp" "$dir/gen3_link.rsp"
       rm -rf "$dir/boot$n"
       say "FAIL self-host: no fixed point after 3 generations ($diffs link inputs differ)"
+      comm -3 <(rsp_norm "${cand}_link.rsp" | sort) <(rsp_norm "$dir/gen3_link.rsp" | sort) | head -6 | sed 's/^/  /'
+      say "  gen2 inputs: ${cand}_link.rsp · gen3 inputs: $dir/gen3_link.rsp"
       return 1
     fi
     say "gate: self-host gen$n differs from gen$((n - 1)) in $diffs link inputs, building gen$((n + 1))"
@@ -539,7 +543,8 @@ FAKE
     || { printf 'FAIL boot: fixed point at gen3: rc=%s left=%s out "%s"\n' "$rc" "$(left)" "$got"; bad=1; }
   setup; printf 'a.o\nc.o\n' >"$d/rsp.2"; printf 'a.o\nd.o\n' >"$d/rsp.3"
   got=$(self_host_boot "$cand" ""); rc=$?
-  { [ "$rc" -eq 1 ] && [[ "$got" == *"FAIL self-host: no fixed point after 3 generations (1 link inputs differ)"* ]] && [ "$(left)" = "msc.exe,msc.exe_link.rsp,msc.pdb" ]; } \
+  { [ "$rc" -eq 1 ] && [[ "$got" == *"FAIL self-host: no fixed point after 3 generations (1 link inputs differ)"* ]] && [[ "$got" == *"d.o"* ]] \
+    && [[ "$got" == *"gen3 inputs: $d/out/gate/gen3_link.rsp"* ]] && [ "$(left)" = "gen3_link.rsp,msc.exe,msc.exe_link.rsp,msc.pdb" ]; } \
     || { printf 'FAIL boot: no fixed point: rc=%s left=%s out "%s"\n' "$rc" "$(left)" "$got"; bad=1; }
   printf '%s\n' "$got" >"$d/log"
   got=$(reds_of build "$d/log" 1 | paste -sd'|' -)

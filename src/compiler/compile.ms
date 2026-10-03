@@ -1,13 +1,13 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd } from "std/process";
-import { watch, nextChanges, msIoRunOnce, FsWatch, FsChanges } from "std/fs/watch";
-import { exists, readFile, writeFile } from "std/fs";
+import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env } from "std/process";
+import { watch, nextChanges, msIoRunOnce, writeSettled, FsWatch, FsChanges } from "std/fs/watch";
+import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
 import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isStaticExtensionSym, Severity } from "../checker/context";
-import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, CheckSession } from "../checker/orchestrator";
+import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
@@ -20,9 +20,9 @@ import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen
 import { takeRaiserCompileErrors } from "../codegen/raiser/context";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { RaiserValueKind } from "../raiser/value";
-import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
+import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
 import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
-import { aliveSetHasDecl, aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
+import { aliveSetHasDecl, aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
@@ -42,9 +42,9 @@ import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet, NameSet } from "../transform/context";
 import { setGlobalHookOwners, hookOwnerMark, hookOwnersFrom, replayHookOwners, typeInfoOwnerMark, typeInfoOwnersFrom, replayTypeInfoOwners } from "../transform/lowering/destructorLifting";
-import { createModuleGraph, findModule, addModule, createModule, ModuleGraph, Module, ModuleError, ErrorSeverity } from "../module/graph";
-import { canonicalModulePath, createFileSystemProvider, loadModule, SourceProvider, takeInlineHeaderTimings, registerHeaderCache } from "../module/loader";
-import { registerPreludeStampFn, preludePackStats } from "../checker/preludePack";
+import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
+import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
+import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, tryLoadPreludeDeps, writePreludeDeps, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
@@ -60,11 +60,11 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto } from "./cc";
+import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, objectSearchDirs, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto } from "./cc";
 import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -395,16 +395,18 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	// Split the "graph load+check" phase: this block is the LOADER half
 	// (parse of every module in the closure — prelude tree included), the
 	// orchestrator PROFILE line covers the check half. Build-perf §1.
+	// Backend ext feeds the prelude pack KEY, so it must be known before the
+	// prelude loads (A2 seeds the graph from a key-named deps file).
 	const backendExt = config.extensions.length > 0 ? config.extensions[0] : ".cms";
 	const _gl0 = performance.now();
 	if (config.stdPath != "") {
-		loadPreludeModules(graph, provider, config);
+		loadPreludeModules(graph, provider, config, backendExt);
 	}
 	const _pl0 = performance.now();
 	const _r = loadModule(graph, entryPath, provider, config, 1);
 	if (graphLoadTiming) {
 		const ih = takeInlineHeaderTimings();
-		console.log(`    graphLoad: preludeMods=${performance.now() - _gl0}ms entryTree=${performance.now() - _pl0}ms modules=${graph.loadOrder.length} inlineHeader=${ih.ms}ms/${ih.n}mods hits=${ih.hits}`);
+		console.log(`    graphLoad: preludeMods=${performance.now() - _gl0}ms entryTree=${performance.now() - _pl0}ms modules=${graph.loadOrder.length} seed=${_preludeSeedHit ? 1 : 0} inlineHeader=${ih.ms}ms/${ih.n}mods hits=${ih.hits}`);
 	}
 
 	reportGraphErrors(graph);
@@ -437,17 +439,110 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 
 // Load prelude modules (globalImports) into the module graph.
 // Extension resolved by the resolver based on target backend.
-function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
-	loadStdGlobalImportModules(graph, provider, config);
+//
+// BUILD-PERF Phase A2: on a warm key the graph is SEEDED from the deps pack
+// (<key>.deps, written next to the prelude pack). provideSource and
+// inlineHeaderImports still run per module — mod.source and header
+// diagnostics must stay byte-identical to the fresh path — only the
+// lex+parse+resolver-probe discovery of the std closure is skipped. Any
+// doubt (pack off, no snapshot, a source gone missing) falls back to the
+// fresh parse path below, which then re-captures the snapshot for the
+// writer.
+let _preludeSeedHit: boolean = false;
+
+function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig, backendExt: string): void {
+	_preludeSeedHit = false;
+	if (config.stdPath != "") {
+		const deps = tryLoadPreludeDeps(preludePackKey(config.stdPath, backendExt), preludePackStamp(config.stdPath));
+		if (deps != null && seedPreludeModules(graph, provider, deps)) _preludeSeedHit = true;
+	}
+	if (_preludeSeedHit) noteStdGlobalImportModules(graph, provider, config);
+	if (!_preludeSeedHit) {
+		loadStdGlobalImportModules(graph, provider, config);
+		if (config.stdPath != "") writeStdGraphDeps(graph, preludePackKey(config.stdPath, backendExt), preludePackStamp(config.stdPath));
+	}
 	loadExtraGlobalImportModules(graph, provider, config);
 }
 
-test "loading the std prelude into a graph computes no prelude pack key or stamp" {
-	const before = preludePackStats()[0];
-	const graph = createModuleGraph();
-	loadPreludeModules(graph, createFileSystemProvider(), createDefaultConfig(Backend.C, join(resolveRuntimeDir(), "std")));
-	assert graph.loadOrder.length > 0;
-	assert preludePackStats()[0] == before;
+// Replay a deps snapshot into the graph. All sources are provided UP FRONT —
+// the seed either builds the whole closure or leaves the graph untouched
+// (a half-seeded graph would poison the fresh fallback: modules already in
+// loadOrder). Header-inline runs exactly like the fresh path; module state
+// jumps straight to Ready (no importStack walk — no recursion happens).
+function seedPreludeModules(graph: ModuleGraph, provider: SourceProvider, deps: PreludeDepsSnapshot): boolean {
+	const sources: string[] = [];
+	let mi = 0;
+	while (mi < deps.mods.length) {
+		const raw = provideSource(provider, deps.mods[mi].path);
+		if (!raw.ok) return false;
+		sources.push(raw.value);
+		mi = mi + 1;
+	}
+	mi = 0;
+	while (mi < deps.mods.length) {
+		const row = deps.mods[mi];
+		const mod = createModule(row.path);
+		const headerErrors: ModuleError[] = [];
+		mod.rawSource = sources[mi];
+		mod.source = inlineHeaderImports(mod.rawSource, row.path, provider, true, headerErrors);
+		for (const he of headerErrors) mod.errors.push(he);
+		let ii = 0;
+		while (ii < row.imports.length) {
+			const imp = row.imports[ii];
+			mod.imports.push(createImportEntry(imp.names, imp.aliases, imp.sourcePath, imp.sourceSpecifier));
+			ii = ii + 1;
+		}
+		mod.state = ModuleState.Ready;
+		addModule(graph, mod);
+		graph.loadOrder.push(mod.path);
+		mi = mi + 1;
+	}
+	let ci = 0;
+	while (ci < deps.circulars.length) {
+		const c = deps.circulars[ci];
+		graph.circularDeps.push({ fromPath: c.fromPath, toPath: c.toPath, cycle: c.cycle, importLine: c.importLine, importNames: c.importNames });
+		ci = ci + 1;
+	}
+	return true;
+}
+
+// Write the std closure (this graph's ENTIRE loadOrder — preludeModules
+// runs before the entry tree, so it is exactly the prelude closure) to the
+// deps file the next build seeds from.
+function writeStdGraphDeps(graph: ModuleGraph, key: string, stamp: string): void {
+	const mods: DepsModuleRow[] = [];
+	for (const p of graph.loadOrder) {
+		const m = findModule(graph, p);
+		if (m == null) continue;
+		const imports: DepsImportRow[] = [];
+		let ii = 0;
+		while (ii < m.imports.length) {
+			const ie = m.imports[ii];
+			const names: string[] = [];
+			let ni = 0;
+			while (ni < ie.names.length) { names.push(ie.names[ni]); ni = ni + 1; }
+			const aliases: string[] = [];
+			let ai = 0;
+			while (ai < ie.aliases.length) { aliases.push(ie.aliases[ai]); ai = ai + 1; }
+			imports.push({ names, aliases, sourcePath: ie.sourcePath, sourceSpecifier: ie.sourceSpecifier });
+			ii = ii + 1;
+		}
+		mods.push({ path: p, imports });
+	}
+	const circulars: DepsCircularRow[] = [];
+	let ci = 0;
+	while (ci < graph.circularDeps.length) {
+		const c = graph.circularDeps[ci];
+		const cycle: string[] = [];
+		let yi = 0;
+		while (yi < c.cycle.length) { cycle.push(c.cycle[yi]); yi = yi + 1; }
+		const importNames: string[] = [];
+		let inmi = 0;
+		while (inmi < c.importNames.length) { importNames.push(c.importNames[inmi]); inmi = inmi + 1; }
+		circulars.push({ fromPath: c.fromPath, toPath: c.toPath, cycle, importLine: c.importLine as int32, importNames });
+		ci = ci + 1;
+	}
+	writePreludeDeps(key, stamp, { mods, circulars });
 }
 
 // Stored result of Phase A (transform all modules) for Phase B (DCE) and Phase C (codegen).
@@ -644,6 +739,16 @@ function emissionOverlapped(results: ModuleEmissionResult[]): boolean {
 		}
 	}
 	return false;
+}
+
+function copyModuleOutput(output: Readonly<CModuleOutput>): CModuleOutput {
+	const copy = new CModuleOutput();
+	copy.code = output.code;
+	copy.modulePath = output.modulePath;
+	copy.hasDatInit = output.hasDatInit;
+	copy.hasInit = output.hasInit;
+	copy.hasDeinit = output.hasDeinit;
+	return copy;
 }
 
 function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, workers: int32, isTestBuild: boolean, hcrEntry: string, emitter: ModuleEmitter = emitModuleJob): ModuleEmissionResult[] {
@@ -891,6 +996,7 @@ interface CompileJob {
 	fp: string;            // precomputed fingerprint; written post-compile
 	dependencyFile: string;
 	dependenciesKnown: boolean;
+	storeKey: string;
 }
 
 // Process @compile("foo.c") directives: compile each .c file to .o relative to module dir.
@@ -971,11 +1077,18 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 					const fileFlags = probeFlags;
 					const fp = probeFp;
 					const oFile = probeOFile;
-					if (isCompileCached(oFile, fp, dependenciesKnown)) {
+					if (isCompileCached(oFile, fp)) {
 						if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile} ${dim("(cached)")}`);
 						hitOFiles.push(oFile);
 					} else {
-						jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, dependenciesKnown });
+						const storeKey = objectStoreKey(nativeStoreSource(fullPath), ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags);
+						const stored = restoreNativeObject(fullPath, probeKey, storeKey, objectSearchDirs(ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags));
+						if (stored != "") {
+							if (verbose) verboseLog(`  @compile ${fullPath} → ${stored} ${dim("(stored)")}`);
+							hitOFiles.push(stored);
+						} else {
+							jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, dependenciesKnown, storeKey });
+						}
 					}
 				}
 			}
@@ -1032,12 +1145,15 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		}
 		const compileCmd = fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary, isCppFile(j.fullPath));
 		registerNativeDependencies(j.fullPath, compileCmd);
+		const dirs = objectSearchDirs(ccOption, ccBinary, isCppFile(j.fullPath), mode, j.fileFlags);
 		if (j.dependenciesKnown) {
 			writeCompileCache(j.oFile, j.fp);
+			publishToStore(j.storeKey, j.oFile, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
 			oFiles.push(j.oFile);
 		} else {
 			const published = publishFirstCompile(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds);
 			if (published.ok) {
+				publishToStore(j.storeKey, published.value, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
 				oFiles.push(published.value);
 			} else {
 				printDiag(`${error("error")}: @compile ${j.fullPath}: ${published.error}`);
@@ -1060,24 +1176,54 @@ interface ModuleCompileJob {
 	fp: string;
 	baseFp: string;
 	depFile: string;
+	cacheKey: string;
 	slot: number;
+	storeKey: string;
 }
 
 // DISPATCH+JOIN for Phase C module compiles — same architecture as
 // processCompileDirectives: one spawn per job, number-typed futures (stderr
 // printed by the worker), join in input order on the main thread.
-function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string): number[] {
+const PLANNED_COMPILE_JOBS = 4;
+
+function pchFiles(cFile: string, flags: string, mode: number, ccOption: number, ccBinary: string): string[] {
+	const text = readFile(cFile);
+	if (!text.ok) return [];
+	const prefix = includePrefix(text.value);
+	if (prefix == "") return [];
+	const key = hashContent(`${prefix}\n${fullCompileCmd(ccOption, mode, flags, ccBinary)}\n${objectStamp()}`);
+	return [prefix, `${cacheDir()}/pch/${key}.h`, `${cacheDir()}/pch/${key}.pch`];
+}
+
+function existingPch(cFile: string, flags: string, mode: number, ccOption: number, ccBinary: string): string {
+	const files = pchFiles(cFile, flags, mode, ccOption, ccBinary);
+	return files.length == 3 && exists(files[2]) ? files[2] : "";
+}
+
+function ensurePchs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string): void {
+	for (const j of jobs) {
+		if (j.modPath == "") continue;
+		const files = pchFiles(j.cFile, j.flags, mode, ccOption, ccBinary);
+		if (files.length != 3 || exists(files[2])) continue;
+		ensureDir(dirname(files[1]));
+		if (writeFile(files[1], files[0]).ok) buildPch(files[1], files[2], j.flags, mode, ccOption, ccBinary);
+	}
+}
+
+function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string, usePlans: boolean): number[] {
 	// Warm lazy cc detection globals on the main thread so workers only read.
 	getCompilerName(ccOption, ccBinary);
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
+		const plan = usePlans ? compilePlanFor(j.cFile, j.depFile != "", j.flags, mode, ccOption, ccBinary) : NO_PLAN;
+		const pch = usePlans ? existingPch(j.cFile, j.flags, mode, ccOption, ccBinary) : "";
 		futures.push(spawn(() => {
-			let r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary);
+			let r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary, plan, pch);
 			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn EAGAIN
 				// under fork pressure). One retry absorbs it; real compile errors
 				// have a nonzero exitCode and are not retried.
-				r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary);
+				r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary, plan, pch);
 			}
 			if (r.ok) return 0;
 			printDiag(r.error.errorOutput != "" ? r.error.errorOutput : `${r.error.command}: ${r.error.message}`);
@@ -1585,9 +1731,13 @@ function buildHcrCandidateAbi(
 
 function pushDispatcherJob(cJobs: ModuleCompileJob[], oSlots: string[][], key: string, source: string, flags: string, opts: CliOptions): void {
 	const fp = moduleCompileFp(source, fullCompileCmd(opts.ccCompiler, opts.mode, flags, opts.ccBinary));
+	if (isCCodeCached(key, fp)) {
+		oSlots.push([stableOFileFp(key, fp)]);
+		return;
+	}
 	writeCSource(key, fp, source);
 	oSlots.push([]);
-	cJobs.push({ cFile: stableCFileFp(key, fp), oFile: stableOFileFp(key, fp), modPath: "", flags, fp: "", baseFp: "", depFile: "", slot: oSlots.length - 1 });
+	cJobs.push({ cFile: stableCFileFp(key, fp), oFile: stableOFileFp(key, fp), modPath: "", flags, fp: "", baseFp: fp, depFile: "", cacheKey: key, slot: oSlots.length - 1, storeKey: "" });
 }
 
 function moduleOutputFor(outputs: CModuleOutput[], modPath: string): CModuleOutput | null {
@@ -1804,6 +1954,16 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 			if (info.owner == module.modulePath && !module.typeInfos.includes(info.cName)) module.typeInfos.push(info.cName);
 		}
 	}
+	for (const module of modules) {
+		for (const name of module.typeInfos) {
+			const claimed = facts.hcrTypeInfoOwners.readonlyGet(name);
+			if (claimed != null && claimed != module.moduleId) {
+				printDiag(`${error("error")}: internal: HCR TypeInfo '${name}' is owned by both '${claimed}' and '${module.moduleId}'`);
+				throw new Error(BUILD_STOPPED);
+			}
+			facts.hcrTypeInfoOwners.set(name, module.moduleId);
+		}
+	}
 	const owners = new HashMap<string, string>();
 	for (const module of modules) {
 		for (const unit of processed) {
@@ -1940,6 +2100,7 @@ interface WatchFeed {
 	watchers: FsWatch[];
 	armed: boolean[];
 	batches: FsChanges[];
+	batchRoots: string[];
 }
 
 function pumpFeed(feed: WatchFeed, timeoutMs: int32): void {
@@ -1950,6 +2111,7 @@ function pumpFeed(feed: WatchFeed, timeoutMs: int32): void {
 		const slot = i;
 		nextChanges(target.watchers[slot]).then((changes: FsChanges): void => {
 			target.batches.push(changes);
+			target.batchRoots.push(target.watchers[slot].root);
 			target.armed[slot] = false;
 		});
 	}
@@ -1962,13 +2124,47 @@ function isWatchedSource(path: string): boolean {
 	return p.endsWith(".ms") || p.endsWith(".cms") || p.endsWith(".h");
 }
 
-function changedSources(changes: FsChanges): string[] {
-	const sources: string[] = [];
-	for (const path of changes.paths) {
-		if (isWatchedSource(path)) sources.push(path);
-	}
-	return sources;
+interface PendingWrites {
+	shown: string[];
+	open: string[];
+	rescan: boolean;
+	ended: boolean;
 }
+
+function absorbBatches(feed: WatchFeed, pending: PendingWrites): void {
+	const queued = feed.batches;
+	const roots = feed.batchRoots;
+	feed.batches = [];
+	feed.batchRoots = [];
+	for (let i = 0; i < queued.length; i += 1) {
+		const changes = queued[i];
+		if (changes.ended) pending.ended = true;
+		if (changes.rescan) pending.rescan = true;
+		for (const path of changes.paths) {
+			if (!isWatchedSource(path)) continue;
+			if (!pending.shown.includes(path)) pending.shown.push(path);
+			const full = join(roots[i], path);
+			const at = pending.open.indexOf(full);
+			if (changes.closed.includes(path)) {
+				if (at >= 0) pending.open.splice(at, 1);
+			} else if (at < 0) {
+				pending.open.push(full);
+			}
+		}
+	}
+}
+
+function writesSettled(pending: PendingWrites): boolean {
+	const stillOpen: string[] = [];
+	for (const path of pending.open) {
+		if (!writeSettled(path)) stillOpen.push(path);
+	}
+	pending.open = stillOpen;
+	return stillOpen.length == 0;
+}
+
+const RESCAN_SETTLE_MS = 60;
+const WRITER_WAIT_LIMIT_MS = 500;
 
 function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
 	while (true) {
@@ -1976,25 +2172,27 @@ function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
 			if (stopped()) return false;
 			pumpFeed(feed, 50);
 		}
-		const queued = feed.batches;
-		feed.batches = [];
-		let rescan = false;
-		const sources: string[] = [];
-		for (const changes of queued) {
-			if (changes.ended) return false;
-			if (changes.rescan) rescan = true;
-			for (const path of changedSources(changes)) {
-				if (!sources.includes(path)) sources.push(path);
+		const pending: PendingWrites = { shown: [], open: [], rescan: false, ended: false };
+		absorbBatches(feed, pending);
+		if (pending.ended) return false;
+		if (!pending.rescan && pending.shown.length == 0) continue;
+		console.log(pending.rescan ? "watch: changed (rescan)" : `watch: changed ${pending.shown.join(" ")}`);
+		const start = performance.now();
+		while (true) {
+			const waited = performance.now() - start;
+			const settled = pending.rescan ? waited >= RESCAN_SETTLE_MS : writesSettled(pending);
+			if (settled) {
+				pumpFeed(feed, 0);
+				if (feed.batches.length == 0) break;
+			} else if (waited >= WRITER_WAIT_LIMIT_MS) {
+				console.log(`watch: ${pending.open.join(" ")} still open for writing after ${WRITER_WAIT_LIMIT_MS} ms, building anyway`);
+				break;
+			} else {
+				pumpFeed(feed, pending.rescan ? 20 : 2);
 			}
+			absorbBatches(feed, pending);
+			if (pending.ended) return false;
 		}
-		if (!rescan && sources.length == 0) continue;
-		console.log(rescan ? "watch: changed (rescan)" : `watch: changed ${sources.join(" ")}`);
-		const settle = performance.now();
-		while (performance.now() - settle < 60) pumpFeed(feed, 20);
-		for (const later of feed.batches) {
-			if (later.ended) return false;
-		}
-		feed.batches = [];
 		return true;
 	}
 }
@@ -2050,7 +2248,7 @@ function openWatch(entryPath: string, opts: CliOptions, resolveSection: ResolveS
 		for (const depRoot of fileDepRoots(root).values) {
 			if (!isUnder(depRoot, root)) roots.push(depRoot);
 		}
-		const opened: WatchFeed = { watchers: [], armed: [], batches: [] };
+		const opened: WatchFeed = { watchers: [], armed: [], batches: [], batchRoots: [] };
 		for (const dir of roots) {
 			const watcher = watch(dir, true);
 			if (!watcher.ok) {
@@ -2184,6 +2382,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	resolveTargetGcMode(opts);
 	resolveCC(opts);
 	resolveLto(opts);
+	useDriverPlans(session.keep && opts.isHcr);
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
@@ -2289,7 +2488,7 @@ setGlobalHookOwners(sharedHookOwners);
 		hcrModules = indirect.value;
 		for (const path of abi.value.modulePaths) hcrModulePaths.push(path);
 	}
-	const projectChanged = projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
+	const projectChanged = session.keep || projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 	const hcrBundleCurrent = hcrBuildAbi == null
 		|| (hcrBuildAbi.hadCurrent && hcrBundlesMatch(hcrBuildAbi.current, hcrBuildAbi.candidate));
 	const upToDate = session.keep ? lastBuilt && session.check.rechecked.size == 0 && hcrBundleCurrent : !projectChanged && hcrBundleCurrent;
@@ -2586,10 +2785,22 @@ setGlobalHookOwners(sharedHookOwners);
 	// Phase C: Codegen + compile each module
 	setConcurrentTypeQueries(true);
 	const emissionFacts = new CEmissionFacts();
+	const aliveKey = session.keep ? aliveSetFingerprint(aliveSet) : "";
 	for (const p of processed) {
 		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
-		prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
-		if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) emissionFacts.hcrCoreUnits.add(p.modPath);
+		const prepared = session.keep ? session.prepareMemos.get(p.modPath) : null;
+		if (prepared != null && prepared.program == p.program && prepared.alive == aliveKey && prepared.before == emissionFacts.trace) {
+			replayCModuleEmission(aliveSet, emissionFacts, prepared.writes);
+		} else {
+			const before = emissionFacts.trace;
+			emissionFacts.writes = [];
+			prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
+			const recorded = emissionFacts.writes;
+			const writes: string[] = recorded != null ? recorded : [];
+			emissionFacts.writes = null;
+			if (session.keep) session.prepareMemos.set(p.modPath, { program: p.program, alive: aliveKey, before, writes });
+		}
+		if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) factCoreUnit(emissionFacts, p.modPath);
 	}
 	if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts);
 	const emissionJobs: ModuleEmissionJob[] = [];
@@ -2599,7 +2810,42 @@ setGlobalHookOwners(sharedHookOwners);
 	}
 	const emitStart = performance.now();
 	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
-	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr ? entryPath : "");
+	const imagePaths: string[] = [];
+	for (const module of hcrModules) imagePaths.push(module.modulePath);
+	imagePaths.sort();
+	const emitKey = `${aliveKey}|${emissionFacts.trace}|${imagePaths.join(",")}`;
+	const freshJobs: ModuleEmissionJob[] = [];
+	const freshSlots: int32[] = [];
+	const reusedEmits = new HashSet<string>();
+	for (const job of emissionJobs) {
+		const memo = session.keep && emissionFacts.hcrCoreUnits.has(job.modPath) ? session.emitMemos.get(job.modPath) : null;
+		if (memo != null && memo.program == job.program && memo.key == emitKey) {
+			freshSlots.push(-1);
+			continue;
+		}
+		freshSlots.push(freshJobs.length as int32);
+		freshJobs.push({ slot: freshJobs.length as int32, program: job.program, ctx: job.ctx, modPath: job.modPath, weight: job.weight });
+	}
+	const freshResults = emitModulesBounded(freshJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr ? entryPath : "");
+	const emissionResults: ModuleEmissionResult[] = [];
+	for (let ei = 0; ei < emissionJobs.length; ei += 1) {
+		const job = emissionJobs[ei];
+		if (freshSlots[ei] >= 0) {
+			const fresh = freshResults[freshSlots[ei]];
+			fresh.slot = ei as int32;
+			emissionResults.push(fresh);
+			if (session.keep && emissionFacts.hcrCoreUnits.has(job.modPath) && fresh.completed && fresh.failure == "" && fresh.output.errors.length == 0) {
+				session.emitMemos.set(job.modPath, { program: job.program, key: emitKey, output: copyModuleOutput(fresh.output), compileCmd: "", baseFp: "" });
+			}
+			continue;
+		}
+		const reused = new ModuleEmissionResult();
+		reused.slot = ei as int32;
+		reused.output = copyModuleOutput(session.emitMemos.get(job.modPath)!.output);
+		reused.completed = true;
+		emissionResults.push(reused);
+		reusedEmits.add(job.modPath);
+	}
 	let codegenTime: float64 = performance.now() - emitStart;
 	if (opts.showTime) {
 		console.log(`    emit workers=${emitWidth} overlap=${emissionOverlapped(emissionResults)}`);
@@ -2680,13 +2926,24 @@ setGlobalHookOwners(sharedHookOwners);
 			const upFlag = userProjectFlag(p.modPath, opts.projectRoot, resolveRuntimeDir());
 			if (upFlag != "") modFlags = appendFlag(modFlags, upFlag);
 			const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, modFlags, opts.ccBinary);
-			const baseFp = moduleCompileFp(cCode, compileCmd);
+			const emitMemo = session.keep ? session.emitMemos.get(p.modPath) : null;
+			const reuseFp = emitMemo != null && reusedEmits.has(p.modPath) && emitMemo.compileCmd == compileCmd;
+			const baseFp = reuseFp ? emitMemo!.baseFp : moduleCompileFp(cCode, compileCmd);
+			if (emitMemo != null && !reuseFp && emitMemo.program == p.program) {
+				emitMemo.compileCmd = compileCmd;
+				emitMemo.baseFp = baseFp;
+			}
 			const modFp = moduleObjectFp(p.modPath, baseFp);
 			const oFile = stableOFileFp(p.modPath, modFp);
 
-			if (isCCodeCached(p.modPath, modFp)) {
+			const storeKey = isCCodeCached(p.modPath, modFp) ? "" : objectStoreKey(moduleStoreSource(cCode), opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags);
+			const stored = storeKey == "" ? "" : restoreModuleObject(p.modPath, baseFp, storeKey, objectSearchDirs(opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags));
+			if (storeKey == "") {
 				oSlots.push([oFile]);
 				if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
+			} else if (stored != "") {
+				oSlots.push([stored]);
+				if (opts.verbose) verboseLog(`  stored ${p.modPath}`);
 			} else {
 				// Write only .c source BEFORE compile (always — debuggable).
 				// Defer fingerprint (.cfp) until after successful compile so a
@@ -2695,7 +2952,7 @@ setGlobalHookOwners(sharedHookOwners);
 				const cFile = stableCFileFp(p.modPath, baseFp);
 				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 				oSlots.push([]);
-				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), slot: oSlots.length - 1 });
+				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: oSlots.length - 1, storeKey });
 				modulesRecompiled = modulesRecompiled + 1;
 				recompiledModulePaths.push(p.modPath);
 			}
@@ -2798,7 +3055,7 @@ setGlobalHookOwners(sharedHookOwners);
 	// (as before); module failures print and fall through to the linker so the
 	// serial path's behavior is preserved.
 	const tCl = performance.now();
-	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
+	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary, cJobs.length <= PLANNED_COMPILE_JOBS);
 	clangTime = performance.now() - tCl;
 	let moduleCompileFailed = false;
 	let cji = 0;
@@ -2806,7 +3063,13 @@ setGlobalHookOwners(sharedHookOwners);
 		const cj = cJobs[cji];
 		const code = cCodes[cji];
 		if (code == 0) {
-			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile];
+			const published = cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile;
+			if (cj.cacheKey != "") writeCompileFingerprintFp(cj.cacheKey, cj.baseFp);
+			if (cj.storeKey != "" && !driverPlansOn()) {
+				const dirs = objectSearchDirs(opts.ccCompiler, opts.ccBinary, false, opts.mode, cj.flags);
+				publishToStore(cj.storeKey, published, cj.depFile, cj.cFile, dirs, []);
+			}
+			oSlots[cj.slot] = [published];
 		} else if (cj.modPath == "") {
 			printDiag(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
 			throw new Error(BUILD_STOPPED);
@@ -2825,6 +3088,7 @@ setGlobalHookOwners(sharedHookOwners);
 		linkHcrImages(oSlots, moduleSlots, jobPaths, hcrCoreSlot, hcrImageSlots, hcrModulePaths, hcrModules, entryPath, outBinary, allFlags, opts);
 		if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
+		if (session.keep && cJobs.length <= PLANNED_COMPILE_JOBS) ensurePchs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (opts.showTime) printTiming("phase D (link images)", tLink);
 		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(` (+${hcrModulePaths.length} HCR images)`));
 		session.lastBuilt = true;
@@ -3111,7 +3375,7 @@ setGlobalHookOwners(sharedHookOwners);
 			const cFile = stableCFileFp(p.modPath, baseFp);
 			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 			oSlots.push([]);
-			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), slot: oSlots.length - 1 });
+			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: oSlots.length - 1, storeKey: "" });
 		}
 		compiled = compiled + 1;
 		p.program = null as unknown as Node;
@@ -3134,9 +3398,9 @@ setGlobalHookOwners(sharedHookOwners);
 	writeCSource("_test_dispatch", dispFp, dispatcher);
 	const dispFile = stableCFileFp("_test_dispatch", dispFp);
 	oSlots.push([]);
-	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", baseFp: "", depFile: "", slot: oSlots.length - 1 });
+	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", baseFp: "", depFile: "", cacheKey: "", slot: oSlots.length - 1, storeKey: "" });
 
-	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
+	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary, cJobs.length <= PLANNED_COMPILE_JOBS);
 	let testFailed = false;
 	let cji = 0;
 	while (cji < cJobs.length) {
@@ -3625,4 +3889,31 @@ test "msc run --hcr needs the std/hcr engine in the program's graph" {
 	assert hcrHostMissesEngine(graph, "/std");
 	addModule(graph, createModule(canonicalModulePath("/std/hcr/engine.cms")));
 	assert !hcrHostMissesEngine(graph, "/std");
+}
+
+test "a prelude load seeds the std graph from the deps file the previous load wrote" {
+	const prevHome = env.get("HOME");
+	env.set("HOME", "out/test/preludeDepsHome");
+	try {
+		const config = createDefaultConfig(Backend.C, join(resolveRuntimeDir(), "std"));
+		remove(`${packRoot()}/${preludePackKey(config.stdPath, ".cms")}.deps`);
+		const fresh = createModuleGraph();
+		loadPreludeModules(fresh, createFileSystemProvider(), config, ".cms");
+		assert !_preludeSeedHit;
+		const seeded = createModuleGraph();
+		loadPreludeModules(seeded, createFileSystemProvider(), config, ".cms");
+		assert _preludeSeedHit;
+		assert seeded.loadOrder.join("\n") == fresh.loadOrder.join("\n");
+		for (const path of fresh.loadOrder) {
+			const a = findModule(fresh, path)!;
+			const b = findModule(seeded, path)!;
+			assert b.source == a.source;
+			assert b.imports.map((ie) => ie.sourcePath).join(",") == a.imports.map((ie) => ie.sourcePath).join(",");
+			assert b.preludeSpecifier == a.preludeSpecifier;
+			assert b.stdPrelude == a.stdPrelude;
+		}
+	} finally {
+		if (prevHome == "") env.delete("HOME");
+		else env.set("HOME", prevHome);
+	}
 }

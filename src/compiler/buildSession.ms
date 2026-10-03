@@ -1,4 +1,5 @@
 import { Node, Type, Symbol, SymbolKind } from "../ast/node";
+import { CModuleOutput } from "../codegen/c/index";
 import { forEachChild } from "../ast/visitor";
 import { CheckSession, createCheckSession } from "../checker/orchestrator";
 import { GenericTypeInstRow, takeGenericTypeInstsFrom, resetAllSideChannels } from "../parser/context";
@@ -42,6 +43,21 @@ export function sameClaims(a: LowerClaims, b: LowerClaims): boolean {
 	return true;
 }
 
+export interface PrepareMemo {
+	program: Node;
+	alive: string;
+	before: string;
+	writes: string[];
+}
+
+export interface EmitMemo {
+	program: Node;
+	key: string;
+	output: CModuleOutput;
+	compileCmd: string;
+	baseFp: string;
+}
+
 export class BuildSession {
 	keep: boolean;
 	check: CheckSession;
@@ -55,6 +71,8 @@ export class BuildSession {
 	loweredCount: int32;
 	instanceFingerprints: HashMap<Node, string>;
 	typeShapes: HashMap<Type, string>;
+	prepareMemos: HashMap<string, PrepareMemo>;
+	emitMemos: HashMap<string, EmitMemo>;
 }
 
 export function createBuildSession(keep: boolean): BuildSession {
@@ -71,6 +89,8 @@ export function createBuildSession(keep: boolean): BuildSession {
 		loweredCount: 0,
 		instanceFingerprints: new HashMap<Node, string>(),
 		typeShapes: new HashMap<Type, string>(),
+		prepareMemos: new HashMap<string, PrepareMemo>(),
+		emitMemos: new HashMap<string, EmitMemo>(),
 	};
 }
 

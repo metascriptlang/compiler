@@ -34,6 +34,9 @@ extern function chmodSync(path: string, mode: int32): void;
 interface Stats {
 	size: number;
 	mtimeMs: number;
+	ctimeMs: number;
+	dev: number;
+	ino: number;
 	isFile: () => boolean;
 	isDirectory: () => boolean;
 }
@@ -213,6 +216,13 @@ export function fileSize(path: string): number {
 
 export function modifiedTime(path: string): number {
 	try { return Math.floor(statSync(path).mtimeMs / 1000); } catch (e) { return -1; }
+}
+
+export function changeStamp(path: string): string {
+	try {
+		const s = statSync(path);
+		return s.ctimeMs == 0 ? "" : `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
+	} catch (e) { return ""; }
 }
 
 // List directory entries. Directories have a trailing "/" marker.

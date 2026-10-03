@@ -2357,6 +2357,7 @@ and the next `message()` runs the new code. `examples/hcrApp/` is this program.
 | `Pending` | an image cannot be loaded yet (the linker is still writing it); retried when it changes |
 | `Rejected` | an incompatible binding, initializer failure or handler failure prevented publication; old code remains callable |
 | `RestartRequired` | the change cannot apply to live state (below); `lastReload().reason` names what changed |
+| `RolledBack` | only from `step()`: the newest code crashed and the previous generation runs again (below) |
 
 What a reload keeps and what it refuses:
 
@@ -2397,6 +2398,21 @@ What a reload keeps and what it refuses:
   code. A throwing initializer or after-handler restores function publication and TypeInfo and
   answers `Rejected`; mutations to already shared state are not undone. Closures handed to
   native code or other threads still need explicit re-registration in these handlers.
+- **`step(body)` keeps a crash from ending the program.** It calls `reload()`, then runs
+  `body`. A crash inside `body` — a segmentation fault or access violation, a stack overflow,
+  a fatal runtime error such as an index out of bounds, or an exception nobody caught — rolls
+  the last accepted reload back to the previous generation, runs its after-reload handlers,
+  and returns `RolledBack`; `lastReload().reason` names the crash. The crashed image is not
+  loaded again until the next save produces a new one. Work the crashed pass did before the
+  fault (heap changes, values it owned) is neither undone nor released. A crash with no
+  earlier generation to return to ends the program as it would without `step`.
+
+  ```typescript
+  while (true) {
+  	if (step(() => frame()) == ReloadKind.RolledBack) console.log(lastReload().reason);
+  	await sleepAsync(16);
+  }
+  ```
 - **A program that never imports `std/hcr` is refused by `msc run --hcr`**: nothing would call
   `reload()`, so `error: app.ms never imports std/hcr, …` stops the build and the watch waits
   for the save that adds the import.
@@ -2405,9 +2421,9 @@ What a reload keeps and what it refuses:
   source builds for production, and the loop's `reload()` costs no call there. `--hcr` defines
   `hcr` for `when`.
 
-On 2026-10-02 the whole `src/test/hcr/run.ms` passed on Linux x64 (WSL Ubuntu, 23 cases) and
-its function-value, dependency and image-name cases passed on Windows x64; the main gate
-checks the Windows run. Linux watch timing, macOS watch and iOS remain
+On 2026-10-03 the whole `src/test/hcr/run.ms` passed on Linux x64 (WSL Ubuntu, 25 cases,
+`hcrStepCrash` included); on Windows x64 17 of its 26 cases were run and passed (watch,
+crash rollback, registry, function values, dependencies); the gate runs the rest on Windows. Linux watch timing, macOS watch and iOS remain
 unverified/unimplemented respectively. Architecture, measurements and limits: [`HCR.md`](HCR.md).
 
 ## Strings and Characters

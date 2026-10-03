@@ -14,6 +14,7 @@ import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, CTypeInfoDemand, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet, addCGenError } from "./context";
 import { SymbolFlag, hasFlag, lookupSymbolReadonly, makeSymbol, setFlag } from "../../checker/symbol";
 import { mangle, mangledTypeName, mangledFunctionName, mangleQualified, mangleModuleName, mangleFieldName, safeName } from "./names";
+import { cStringLiteral } from "./literals";
 import { getGlobalTypeOwner, getGlobalTypeOwnerByShape, CheckerContext, newSym } from "../../checker/context";
 
 // Struct C-name resolution: a sym-less named struct (macro-wire / mono
@@ -967,6 +968,7 @@ export function ensureForwardDecl(g: CGen, typeName: string): void {
 export function ensureTypeInfo(g: CGen, className: string): void {
 	// TypeInfo is DRC metadata — unused under --gc=manual (write-only in manual.h).
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
+	if (hcrTypeInfoRef(g, className)) return;
 	const key = "typeInfo:" + className;
 	if (typeCacheHas(g.forwTypeCache, key)) return;
 	typeCacheSet(g.forwTypeCache, key, className);
@@ -1052,7 +1054,7 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 		// $-generated types (lambda envs) are only ever referenced in the module
 		// that lifted them — static keeps same-named envs in sibling modules apart.
 		addLine(sec(g, CSection.GlobalVars), `static msTypeInfo ${className}TypeInfo;`);
-	} else {
+	} else if (!hcrTypeInfoRef(g, className)) {
 		addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${className}TypeInfo;`);
 	}
 	// Runtime-visible name keeps the pre-qualification spelling (mangled bare
@@ -1132,6 +1134,20 @@ export function isHcrImageModule(g: CGen, modulePath: string): boolean {
 	return g.emissionFacts.hcrModules.has(modulePath);
 }
 
+export function hcrTypeInfoRef(g: CGen, cName: string): boolean {
+	if (!isHcrImageModule(g, g.modulePath)) return false;
+	const owner = g.emissionFacts.hcrTypeInfoOwners.readonlyGet(cName);
+	if (owner == null) return false;
+	const key = "hcrTypeInfo:" + cName;
+	if (typeCacheHas(g.forwTypeCache, key)) return true;
+	const pointer = `_ms_hcr_ti_${cName}`;
+	typeCacheSet(g.forwTypeCache, key, pointer);
+	addLine(sec(g, CSection.ForwardDecls), `static msTypeInfo* ${pointer};`);
+	addLine(sec(g, CSection.ForwardDecls), `#define ${cName}TypeInfo (*${pointer})`);
+	addLine(sec(g, CSection.DatInit), `  ${pointer} = (msTypeInfo*)msHcrTypeInfo(${cStringLiteral(owner)}, ${cStringLiteral(cName)});`);
+	return true;
+}
+
 export function ensureRefArrayCellTypeInfo(g: CGen, arrT: Type): string {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
 	const key = refArrayCellKey(arrT);
@@ -1140,6 +1156,7 @@ export function ensureRefArrayCellTypeInfo(g: CGen, arrT: Type): string {
 		addCGenError(g, `internal: ref-array cell TypeInfo ${key} demanded in ${g.modulePath} without a reachability edge`, 0, 0);
 		return "NULL";
 	}
+	if (hcrTypeInfoRef(g, info.cName)) return `&${info.cName}TypeInfo`;
 	const forwKey = "typeInfo:" + info.cName;
 	if (!typeCacheHas(g.forwTypeCache, forwKey)) {
 		typeCacheSet(g.forwTypeCache, forwKey, info.cName);
@@ -1177,6 +1194,10 @@ export function emitOwnedTypeInfos(g: CGen): void {
 		}
 		const fields = `.name = "${refArrayCellLabel(g, info)}", .isCyclic = ${info.trace != null ? "MS_TRUE" : "MS_FALSE"}, `
 			+ `.traceFn = (msTraceProc)${traceName}, .destroyFn = (msDestroyProc)${destroyName}, .flags = 0, .base = NULL`;
+		if (viaRegistry && !hcrTypeInfoRef(g, info.cName)) {
+			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);
+			continue;
+		}
 		if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${info.cName}TypeInfo = (msTypeInfo){ ${fields} };`);
 		else addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${info.cName}TypeInfo = { ${fields} };`);
 	}

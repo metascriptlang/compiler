@@ -59,11 +59,17 @@ typedef struct MsHcrCell {
 	void* entry;
 } MsHcrCell;
 
-static inline void* msHcrVariableStorage(const MsHcrCell* cell) { return cell->current; }
-static inline int32_t msHcrMoved(const MsHcrCell* cell, void* self) {
+#if defined(__GNUC__) || defined(__clang__)
+#define MS_HCR_CELL_READ static inline __attribute__((always_inline, no_sanitize("undefined")))
+#else
+#define MS_HCR_CELL_READ static inline
+#endif
+
+MS_HCR_CELL_READ void* msHcrVariableStorage(const MsHcrCell* cell) { return cell->current; }
+MS_HCR_CELL_READ int32_t msHcrMoved(const MsHcrCell* cell, void* self) {
 	return cell != NULL && cell->current != NULL && cell->current != self ? 1 : 0;
 }
-static inline void* msHcrFunctionValue(const MsHcrCell* cell) { return cell->entry != NULL ? cell->entry : cell->current; }
+MS_HCR_CELL_READ void* msHcrFunctionValue(const MsHcrCell* cell) { return cell->entry != NULL ? cell->entry : cell->current; }
 
 MsHcrCell* msHcrBind(const char* moduleId, const char* symbol, const char* key);
 int32_t msHcrModuleBegin(const char* moduleId);
@@ -74,6 +80,7 @@ void msHcrStageEnd(void);
 int32_t msHcrStaged(const char* moduleId);
 void msHcrCommit(const char* moduleId);
 void msHcrRollback(const char* moduleId);
+void msHcrRevert(const char* moduleId);
 void msHcrDiscard(const char* moduleId);
 void msHcrFinalize(const char* moduleId);
 int32_t msHcrInvokeInit(void* raw);

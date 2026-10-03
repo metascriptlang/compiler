@@ -7,6 +7,7 @@ extern function msFsWatchOpen_ms(path: string): int32;
 extern function msFsWatchLastError(): int32;
 extern function msIoWatchNext_ms(handle: int32, recursive: int32): Promise<string>;
 extern function msFsWatchClose(handle: int32): void;
+extern function msFsWriteSettled_ms(path: string): int32;
 export extern function msIoRunOnce(timeoutMs: int32): int32;
 
 const UNSUPPORTED = -2;
@@ -29,6 +30,7 @@ export class FsWatch {
 
 export struct FsChanges {
 	paths: string[];
+	closed: string[];
 	rescan: boolean;
 	ended: boolean;
 }
@@ -52,19 +54,33 @@ export function watch(path: string, recursive: boolean = true): Result<FsWatch, 
 }
 
 export async function nextChanges(w: FsWatch): Promise<FsChanges> {
-	if (!w.open) return { paths: [], rescan: false, ended: true };
+	if (!w.open) return { paths: [], closed: [], rescan: false, ended: true };
 	const raw = await w.armed;
 	if (raw == "") {
 		w.open = false;
-		return { paths: [], rescan: false, ended: true };
+		return { paths: [], closed: [], rescan: false, ended: true };
 	}
 	if (w.open) w.armed = msIoWatchNext_ms(w.handle, w.recursive ? 1 : 0);
-	if (raw == "*") return { paths: [], rescan: true, ended: false };
+	if (raw == "*") return { paths: [], closed: [], rescan: true, ended: false };
 	const paths: string[] = [];
-	for (const path of raw.split("\n")) {
+	const closed: string[] = [];
+	for (const line of raw.split("\n")) {
+		const path = line.substring(1, line.length);
 		if (!paths.includes(path)) paths.push(path);
+		const at = closed.indexOf(path);
+		if (line.startsWith("w")) {
+			if (at < 0) closed.push(path);
+		} else if (at >= 0) {
+			closed.splice(at, 1);
+		}
 	}
-	return { paths, rescan: false, ended: false };
+	return { paths, closed, rescan: false, ended: false };
+}
+
+// True when no writer can still hold the file: absent, or (Windows) openable while denying
+// writers. Linux cannot tell an open writer apart, so it answers false and reports closes in `closed`.
+export function writeSettled(path: string): boolean {
+	return msFsWriteSettled_ms(path) == 1;
 }
 
 export function closeWatch(w: FsWatch): void {

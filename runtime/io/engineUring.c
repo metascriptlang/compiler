@@ -505,6 +505,15 @@ void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
 	return fut;
 }
 
+int32_t msFsWriteSettled(msString path) {
+	char* name = (char*)malloc((size_t)path.len + 1);
+	if (path.len > 0) memcpy(name, path.p->data, (size_t)path.len);
+	name[path.len] = 0;
+	int absent = access(name, F_OK) != 0;
+	free(name);
+	return absent ? 1 : 0;
+}
+
 void msFsWatchClose(int32_t handle) {
 	if (handle < 0 || handle >= _msFsWatcherCount) return;
 	msFsWatcher* w = &_msFsWatchers[handle];
@@ -556,9 +565,10 @@ static int fsWatchComplete(msIoEngine* e, msIoRequest* req, int32_t res) {
 		char* rel = fsWatchJoin(dir, ev->name);
 		if (w->recursive && (ev->mask & IN_ISDIR) && (ev->mask & (IN_CREATE | IN_MOVED_TO))) fsWatchAddTree(w, rel);
 		size_t length = strlen(rel);
-		while (used + length + 2 > cap) cap *= 2;
+		while (used + length + 3 > cap) cap *= 2;
 		out = (char*)realloc(out, cap);
 		if (used > 0) out[used++] = '\n';
+		out[used++] = (!(ev->mask & IN_ISDIR) && (ev->mask & (IN_CLOSE_WRITE | IN_MOVED_TO))) ? 'w' : 'c';
 		memcpy(out + used, rel, length);
 		used += length;
 		free(rel);

@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, or all");
 	exit(2);
 }
 
@@ -92,10 +92,8 @@ function includedFixture(name: string, header: string): string {
 }
 
 function waitForNextSecond(): void {
-	const slept = windows
-		? execFileCapture("powershell", ["-NoProfile", "-Command", "Start-Sleep -Seconds 2"])
-		: execFileCapture("sleep", ["2"]);
-	need(slept.ok, "wait for the next second");
+	const until = performance.now() + 2000;
+	while (performance.now() < until) execFileCapture(compiler, ["--version"]);
 }
 
 function build(dir: string, label: string, output: string = "probe", flags: string[] = [], cc: string = "", exe: string = compiler): number {
@@ -125,7 +123,8 @@ function recompiledObjects(dir: string, label: string): string {
 	let n = 0;
 	for (const line of log.value.split("\n")) {
 		const compileLine = line.indexOf("  cc ", 0) >= 0 || line.indexOf("  @compile ", 0) >= 0;
-		if (compileLine && line.indexOf(" → ", 0) >= 0 && line.indexOf("cached", 0) < 0) n = n + 1;
+		const reused = line.indexOf("cached", 0) >= 0 || line.indexOf("(stored)", 0) >= 0;
+		if (compileLine && line.indexOf(" → ", 0) >= 0 && !reused) n = n + 1;
 	}
 	return `${n}`;
 }
@@ -435,11 +434,58 @@ function runComptimeCache(): void {
 	record("build with -d:tier=2", "two:", builtValue(defines, build(defines, "define-removed", "probe", ["-d:tier=2"])));
 }
 
+function runObjectStore(): void {
+	const first = includedFixture("store first", "static inline int probeValue(void) { return 55; }\n");
+	const second = includedFixture("store second", "static inline int probeValue(void) { return 55; }\n");
+	waitForNextSecond();
+	need(build(first, "first") == 0, "store first build");
+	need(build(second, "second", "probe", ["--verbose"]) == 0, "store second build");
+	record("a fresh directory compiles only its own module", "1", recompiledObjects(second, "second"));
+	record("a fresh directory build output", "55", value(second));
+
+	const edited = fixture("store header", "@compile(\"./native.c\");", "#include \"value.h\"\nint probeValue(void) { return VALUE; }\n", "#define VALUE 11\n");
+	waitForNextSecond();
+	need(build(edited, "baseline") == 0, "store header baseline");
+	need(value(edited) == "11", "store header baseline value");
+	removeAll(`${edited}/out`);
+	need(build(edited, "stored", "probe", ["--verbose"]) == 0, "store header reuse");
+	record("a stored object rebuilds nothing in its own directory", "0", recompiledObjects(edited, "stored"));
+	removeAll(`${edited}/out`);
+	put(`${edited}/value.h`, "#define VALUE 22\n");
+	record("a stored object after its header changed", "22", builtValue(edited, build(edited, "header-change")));
+
+	const shadowed = `${root}/store shadow`;
+	ensureDir(`${shadowed}/inc1`);
+	ensureDir(`${shadowed}/inc2`);
+	put(`${shadowed}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${shadowed}/api.h`, "int probeValue(void);\n");
+	put(`${shadowed}/main.ms`, "@include(\"./api.h\");\n@compile(\"./native.c\");\nextern function probeValue(): int32;\nconsole.log(probeValue());\n");
+	put(`${shadowed}/native.c`, "#include \"value.h\"\nint probeValue(void) { return VALUE; }\n");
+	put(`${shadowed}/inc2/value.h`, "#define VALUE 11\n");
+	const searched = ["--passC=-Iinc1 -Iinc2"];
+	waitForNextSecond();
+	need(build(shadowed, "baseline", "probe", searched) == 0, "store shadow baseline");
+	need(value(shadowed) == "11", "store shadow baseline value");
+	removeAll(`${shadowed}/out`);
+	put(`${shadowed}/inc1/value.h`, "#define VALUE 33\n");
+	record("a stored object after an earlier include dir gained its header", "33", builtValue(shadowed, build(shadowed, "shadow", "probe", searched)));
+
+	const tool = fixture("store-toolchain", "@compile(\"./native.c\");", "int probeValue(void) { return TOOL_VALUE; }\n");
+	const firstTool = writeWrapper(tool, 57);
+	waitForNextSecond();
+	need(build(tool, "first-toolchain", "probe", [], firstTool) == 0, "store first toolchain");
+	need(value(tool) == "57", "store first toolchain value");
+	removeAll(`${tool}/out`);
+	const secondTool = writeWrapper(tool, 59);
+	record("a stored object after the C compiler changed", "59", builtValue(tool, build(tool, "second-toolchain", "probe", [], secondTool)));
+}
+
 if (group == "argv" || group == "all") runArgv();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
 if (group == "audit" || group == "all") runAudit();
 if (group == "comptime-cache" || group == "all") runComptimeCache();
+if (group == "object-store" || group == "all") runObjectStore();
 
 let failures = 0;
 console.log(`root ${root}`);

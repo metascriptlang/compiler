@@ -4,8 +4,6 @@ Q=${MSC_LAND_QUEUE:-$HOME/metascript/.wt/queue}
 WT_TOOL=${MSC_WT_TOOL:-$HOME/nerdtools/claude/tools/wt.sh}
 IDLE=${MSC_LAND_QUEUE_IDLE:-600}
 POLL=${MSC_LAND_QUEUE_POLL:-20}
-BUSY_POLL=${MSC_LAND_QUEUE_BUSY_POLL:-60}
-BUSY_MAX=${MSC_LAND_QUEUE_BUSY_MAX:-7200}
 TRIES=${MSC_LAND_QUEUE_TRIES:-3}
 LOCK=$Q/runner.lock
 mkdir -p "$Q"
@@ -33,15 +31,22 @@ release() { owns && rm -rf "$LOCK"; }
 
 next_item() { ls "$Q"/*.item 2>/dev/null | sort | head -1; }
 
-busy() {
-  if command -v tasklist >/dev/null 2>&1; then
-    tasklist 2>/dev/null | awk 'NR>2 {print $1}' | grep -ixE 'msc(\.exe)?|msc\.cand|msc\.self|zig\.exe|cc1\.exe|cc1plus\.exe|clang\.exe' | grep -q .
-  else
-    pgrep -f 'tools/gate\.sh' >/dev/null 2>&1
-  fi
-}
-
 field() { sed -n "s/^$1=//p" "$2" | head -1; }
+
+recover_stranded() {
+  local run name
+  for run in "$Q"/*.run; do
+    [ -e "$run" ] || continue
+    name=$(field name "$run")
+    if [ -n "$name" ] && grep -qx "name=$name" "$Q"/*.item 2>/dev/null; then
+      log "$name: dropped the run a dead runner left, it is queued again"
+      rm -f "$run"
+    else
+      log "${name:-?}: queued again, a dead runner left it running"
+      mv "$run" "${run%.run}.item"
+    fi
+  done
+}
 
 finish() {
   local name=$1 verdict=$2 text=$3
@@ -51,7 +56,7 @@ finish() {
 }
 
 run_item() {
-  local item=$1 name worktree tries running waited rc
+  local item=$1 name worktree tries running rc
   name=$(field name "$item")
   worktree=$(field worktree "$item")
   tries=$(field tries "$item")
@@ -70,15 +75,9 @@ run_item() {
     rm -f "$running"
     return
   fi
-  waited=0
-  while busy; do
-    [ "$waited" -lt "$BUSY_MAX" ] || { log "$name: machine busy ${BUSY_MAX}s, gating anyway"; break; }
-    sleep "$BUSY_POLL"
-    waited=$((waited + BUSY_POLL))
-  done
   log "$name: land, try $tries"
   printf '\n===== %s try %s\n' "$(date '+%F %T')" "$tries" >>"$Q/$name.land.log"
-  (WT_CWD="$worktree" bash "$WT_TOOL" land "$name" >>"$Q/$name.land.log" 2>&1)
+  (WT_CWD="$worktree" bash "$WT_TOOL" land "$worktree" >>"$Q/$name.land.log" 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ]; then
     log "$name: $(tail -1 "$Q/$name.land.log")"
@@ -101,6 +100,7 @@ run_item() {
 claim || exit 0
 trap 'release; log "runner down"' EXIT
 log "runner up (pid $$)"
+recover_stranded
 idle_since=0
 while :; do
   owns || { trap - EXIT; log "lock lost to another runner, exiting"; exit 0; }

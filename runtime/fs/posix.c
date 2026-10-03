@@ -114,6 +114,24 @@ double msFsModifiedTime(msString path) {
 	return (double)st.st_mtime;
 }
 
+msString msFsChangeStamp(msString path) {
+	struct stat st;
+	if (stat(msStringToCString(path), &st) != 0) return MS_EMPTY_STRING;
+#if defined(__APPLE__)
+	long long mSec = (long long)st.st_mtimespec.tv_sec, mNsec = (long long)st.st_mtimespec.tv_nsec;
+	long long cSec = (long long)st.st_ctimespec.tv_sec, cNsec = (long long)st.st_ctimespec.tv_nsec;
+#else
+	long long mSec = (long long)st.st_mtim.tv_sec, mNsec = (long long)st.st_mtim.tv_nsec;
+	long long cSec = (long long)st.st_ctim.tv_sec, cNsec = (long long)st.st_ctim.tv_nsec;
+#endif
+	if (cSec == 0 && cNsec == 0) return MS_EMPTY_STRING;
+	char buf[192];
+	int n = snprintf(buf, sizeof buf, "%llu:%llu:%lld:%lld.%09lld:%lld.%09lld",
+	                 (unsigned long long)st.st_dev, (unsigned long long)st.st_ino, (long long)st.st_size,
+	                 mSec, mNsec, cSec, cNsec);
+	return msStringNew(buf, n);
+}
+
 /* ===== Directory ===== */
 
 double msFsMkdir(msString path) {
