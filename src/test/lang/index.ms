@@ -35,6 +35,7 @@ import "./functionCarriers";
 import "./generatorControl";
 import "./genericCallbacks";
 import "./lexicalIdentity";
+import "./macroCodecWitness";
 import "./macroConverterValues";
 import "./macroFlowExpansion";
 import "./macroHiddenConversions";
