@@ -25,8 +25,13 @@ test "byteViews: a byte view through an intermediate typed pointer is refused on
 }
 
 test "byteViews: a reinterpret between typed scalar pointers is refused on JS" {
-	assert refused("let n: uint32 = 258; const p = n as Ptr<uint32>; console.log((p as Ptr<uint8>)[0]);\n",
+	assert refused("let ns: uint32[] = [258]; const v: Span<uint32> = ns; const p = v as Ptr<uint32>; console.log((p as Ptr<uint8>)[0]);\n",
 		"cannot convert Ptr<uint32> to Ptr<uint8>");
+}
+
+test "byteViews: an integer is not a typed pointer on JS" {
+	assert refused("function load(address: uint64): uint64 { const at = address as Ptr<uint64>; return at[]; }\nconsole.log(load(8));\n",
+		"cannot convert uint64 to Ptr<uint64>");
 }
 
 test "byteViews: changing a span's element type is refused on JS" {
@@ -76,7 +81,7 @@ test "byteViews: a span of references is not a pointer to its objects on either 
 }
 
 test "byteViews: pointer arithmetic and ordering are refused on JS" {
-	const at = "let xs: uint8[] = [1, 2, 3]; let p = xs[0] as Ptr<uint8>; const q = xs[1] as Ptr<uint8>;\n";
+	const at = "let xs: uint8[] = [1, 2, 3]; let p = xs[0..3] as Ptr<uint8>; const q = xs[1..3] as Ptr<uint8>;\n";
 	assert refusedOp(at + "console.log((p + 1)[0]);\n", "cannot apply '+' to a pointer");
 	assert refusedOp(at + "console.log(q - p);\n", "cannot apply '-' to a pointer");
 	assert refusedOp(at + "console.log(p < q);\n", "cannot apply '<' to a pointer");
@@ -86,7 +91,7 @@ test "byteViews: pointer arithmetic and ordering are refused on JS" {
 }
 
 test "byteViews: pointer identity and the first element stay legal on JS" {
-	const out = js("let xs: uint8[] = [1, 2]; const p = xs[0] as Ptr<uint8>; const q = xs[0] as Ptr<uint8>;\nconsole.log(`${p == q} ${p[0]} ${p[]}`);\n");
+	const out = js("let xs: uint8[] = [1, 2]; const p = xs[0..2] as Ptr<uint8>; const q = xs[0..1] as Ptr<uint8>;\nconsole.log(`${p == q} ${p[0]} ${p[]}`);\n");
 	assert !out.startsWith("ERROR:"), out.slice(0, 300);
 }
 
