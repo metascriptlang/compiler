@@ -39,6 +39,7 @@ import "./macroCodecWitness";
 import "./macroConverterValues";
 import "./macroFlowExpansion";
 import "./macroHiddenConversions";
+import "./macroSourceForms";
 import "./matchDispatch";
 import "./nominalInstantiation";
 import "./nullableInstantiation";
