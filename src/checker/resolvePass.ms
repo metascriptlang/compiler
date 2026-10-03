@@ -1044,7 +1044,7 @@ export function fillForwardSymbol(ctx: CheckerContext, sym: Symbol): void {
 }
 
 export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
-	if (sym.state == SymbolState.Shaped || sym.state == SymbolState.Checked) {
+	if (sym.state == SymbolState.Shaped || sym.state == SymbolState.Checking || sym.state == SymbolState.Checked) {
 		// A primary can reach Shaped BEFORE later overloads are appended to it:
 		// one scope shared by several modules (the prelude context) resolves
 		// `set` when the FIRST module declaring it is resolved, and every later
