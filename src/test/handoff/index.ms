@@ -110,6 +110,7 @@ import "./numericConstants";
 import "./numericLattice";
 import "./paralockLicences";
 import "./pointerSlotRelation";
+import "./positionalNameBinding";
 import "./preludeExportOwnership";
 import "./raiserProgramArgv";
 import "./slotRelation";
