@@ -21,6 +21,7 @@ import "./multimod/main";
 import "./accessorContexts";
 import "./aliasRepresentation";
 import "./assertionEvaluation";
+import "./brandedStringIdentity";
 import "./byteArrayValueFit";
 import "./carrierEquality";
 import "./classCalls";
