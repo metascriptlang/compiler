@@ -558,16 +558,18 @@ function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 		}
 	}
 	// Other statements go to ModuleInit — use shared initProc for consistent temp counter
-	const p = g.initProc;
+	const atExit = node.flags.has(NodeFlag.GlobalDestroys);
+	const p = atExit ? g.deinitProc : g.initProc;
+	const target = atExit ? CSection.ModuleDeinit : CSection.ModuleInit;
 	genStmt(g, p, node);
 	const locals = readProcLocals(p);
 	const stmts = readProcStmts(p);
 	clearProcBuffers(p);
 	if (locals.length > 0) {
-		add(sec(g, CSection.ModuleInit), locals);
+		add(sec(g, target), locals);
 	}
 	if (stmts.length > 0) {
-		add(sec(g, CSection.ModuleInit), stmts);
+		add(sec(g, target), stmts);
 	}
 }
 

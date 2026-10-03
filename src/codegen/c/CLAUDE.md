@@ -6,7 +6,7 @@ Emits C source from the post-analyzer AST. Pipeline: `parse → check → transf
 
 ## Rules
 
-- **A C file is assembled from sections, never written in order** — `CSection` (`context.ms`): `Headers`, `ForwardDecls`, `Types`, `SeqTypes`, `ProcHeaders`, `StringPool`, `GlobalVars`, `Procs`, `DatInit`, `ModuleInit`; write with `addLine(sec(g, section), ...)` so forward declarations and ordering hold. `DatInit` runs before `ModuleInit`.
+- **A C file is assembled from sections, never written in order** — `CSection` (`context.ms`): `Headers`, `ForwardDecls`, `Types`, `SeqTypes`, `ProcHeaders`, `StringPool`, `GlobalVars`, `Procs`, `DatInit`, `ModuleInit`, `ModuleDeinit`; write with `addLine(sec(g, section), ...)` so forward declarations and ordering hold. `DatInit` runs before `ModuleInit`; `ModuleDeinit` becomes the module's `Deinit000`, which `MsDestroyGlobals` runs after the event loop drains.
 - **`CLoc` carries where a value lives** — `kind` (`CLocKind`: `None` = a free slot the callee fills, `Temp`, `LocalVar`, `GlobalVar`, `Param`, `Field`, `Expr`, `Proc`), `storage`, the C `snippet`, `isIndirect` (the backend introduced a pointer), `locType`.
 - **`CProc` carries the per-function state** — the block stack, the temp counter, break/loop depth, the `finally` and error-target stacks, indirect params and locals that auto-deref, and the per-name conflict counters that give every local a unique C name.
 - **Hoist what has side effects or is reused** — `getTemp(p, cType)` gives a local temp.

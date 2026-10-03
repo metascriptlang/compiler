@@ -1,5 +1,4 @@
-// @ledger-slack(VArrayRefCell): 1
-// note: named-pod-union-array. An array of a named union with no managed member (`type V = boolean | float64`) looped its element hooks and called V_Destroy/V_Copy, which the lifter never generates for a trivial union: the C compile failed with an undeclared function. Fix (3571dccd): a type without hooks is recorded trivial and its containers blit it. Module-level, local, class-field and copied arrays; the module-level cell survives exit (ledger slack).
+// note: named-pod-union-array. An array of a named union with no managed member (`type V = boolean | float64`) looped its element hooks and called V_Destroy/V_Copy, which the lifter never generates for a trivial union: the C compile failed with an undeclared function. Fix (3571dccd): a type without hooks is recorded trivial and its containers blit it. Module-level, local, class-field and copied arrays.
 
 type V = boolean | float64;
 

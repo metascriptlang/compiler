@@ -10,12 +10,12 @@ import {
 	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
 	readProcStmts, emitLineDir, getTemp, fillLocalName, lookupLocalSymName, setLocalSymName, pushBlock, popBlock,
-	CSection, addLine, sec, nameSetAdd, addCGenError, addUnloweredError,
+	CSection, addLine, sec, nameSetAdd, nameSetHas, addCGenError, addUnloweredError,
 } from "./context";
 import { genExpr, shimCallArg } from "./expressions";
 import { formatCNumber, formatCNumberLit } from "./literals";
 import { ensureCrossModuleProto } from "./forward";
-import { safeName, mangledGlobalName } from "./names";
+import { safeName, mangledGlobalName, isModuleGlobalVar } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
 
 // ===== blockLeaveActions — emit finally cleanup on break/continue/return =====
@@ -319,11 +319,25 @@ export function isComptimeOnlyVarDecl(node: Readonly<Node>): boolean {
 	return node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ComptimeNodeAlias);
 }
 
+function genNestedGlobalVar(g: CGen, p: CProc, node: Readonly<Node>, d: Readonly<VariableDeclData>): void {
+	const varName = mangledGlobalName(node.resolvedSym, d.declName);
+	if (!nameSetHas(g.declaredGlobals, varName)) {
+		addLine(sec(g, CSection.GlobalVars), `${getTypeDesc(g, node.nodeType)} ${varName};`);
+		nameSetAdd(g.declaredGlobals, varName);
+	}
+	if (d.initializer == null || d.initializer.kind == NodeKind.NullLiteral) return;
+	emitStmtsLine(p, `${varName} = ${genExpr(g, p, d.initializer)};`);
+}
+
 function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 	if (isComptimeOnlyVarDecl(node)) return;
 	const d = node.data as VariableDeclData;
 	if (p != null && node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.StaticLocal)) {
 		genStaticStorageVar(g, p, node, d);
+		return;
+	}
+	if (p != null && isModuleGlobalVar(node.resolvedSym)) {
+		genNestedGlobalVar(g, p, node, d);
 		return;
 	}
 	// Reference parity (fillLocalName + cpsLocals): all locals get unique C names and
