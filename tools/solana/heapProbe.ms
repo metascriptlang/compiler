@@ -1,17 +1,20 @@
 @include("runtime/solana/solana.h");
 
 import {
-	Instruction,
+	InstructionAccount,
 	ProgramError,
+	account,
+	borshBuffer,
 	failWith,
 	findProgramAddress,
 	instructionData,
+	invokeList,
 	logU64,
-	account,
 	programAddress,
 	programId,
 	signed,
 } from "std/solana";
+import { invoke } from "std/solana/invoke";
 
 extern function msSolAlloc(size: uint64): uint64;
 
@@ -27,53 +30,60 @@ function seedsLoop(count: uint64): Result<uint64, ProgramError> {
 
 function builderLoop(count: uint64): Result<uint64, ProgramError> {
 	for (let index: uint64 = 0; index < count; index++) {
-		const instruction = Instruction.forProgram(programId(), 1, 512);
-		instruction.appendU8(0);
+		const self = try account(0);
+		let storage: uint8[512] = [];
+		const _sent = try invoke(
+			programId(),
+			[InstructionAccount.readonly(self)],
+			borshBuffer(storage).u8(12).u8(0).u8(0),
+		);
 	}
-	logU64(count);
+	logU64(msSolAlloc(0));
 	return Result.ok(0);
-}
-
-function selfCall(): Result<Instruction, ProgramError> {
-	const self = try account(0);
-	const instruction = Instruction.forProgram(programId(), 1, 3);
-	instruction.addReadonly(self);
-	instruction.appendU8(12);
-	instruction.appendU8(0);
-	instruction.appendU8(0);
-	return Result.ok(instruction);
 }
 
 function signedLoop(count: uint64): Result<uint64, ProgramError> {
 	const program = programId();
 	const found = try findProgramAddress(["pet", program]);
 	for (let index: uint64 = 0; index < count; index++) {
-		const instruction = try selfCall();
-		const _sent = try signed(instruction.invoke(), ["pet", program, [found.bump]]);
+		const self = try account(0);
+		let storage: uint8[3] = [];
+		const _sent = try signed(
+			invoke(program, [InstructionAccount.readonly(self)], borshBuffer(storage).u8(12).u8(0).u8(0)),
+			["pet", program, [found.bump]],
+		);
 	}
 	logU64(msSolAlloc(0));
 	return Result.ok(0);
 }
 
 function limitCall(which: uint64): Result<uint64, ProgramError> {
-	const instruction = try selfCall();
+	const self = try account(0);
+	let storage: uint8[3] = [];
+	const call = borshBuffer(storage).u8(12).u8(0).u8(0);
+	const accounts: InstructionAccount[1] = [InstructionAccount.readonly(self)];
 	if (which == 0) {
-		return signed(instruction.invoke(), [
+		return signed(invokeList(programId(), accounts, call), [
 			[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
 		]);
 	}
 	if (which == 1) {
-		return signed(instruction.invoke(), [
+		return signed(invokeList(programId(), accounts, call), [
 			[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16],
 		]);
 	}
-	return signed(instruction.invoke(), ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+	return signed(invokeList(programId(), accounts, call), ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
 }
 
 function unsignedLoop(count: uint64): Result<uint64, ProgramError> {
 	for (let index: uint64 = 0; index < count; index++) {
-		const instruction = try selfCall();
-		const _sent = try instruction.invoke();
+		const self = try account(0);
+		let storage: uint8[3] = [];
+		const _sent = try invoke(
+			programId(),
+			[InstructionAccount.readonly(self)],
+			borshBuffer(storage).u8(12).u8(0).u8(0),
+		);
 	}
 	logU64(msSolAlloc(0));
 	return Result.ok(0);

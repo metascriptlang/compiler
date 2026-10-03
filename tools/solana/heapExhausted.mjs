@@ -132,31 +132,28 @@ function namedFailure(label, outcome) {
 }
 
 {
-	const name = "signing";
-	const rounds = [1, 2, 8, 20];
-	const plain = new Map();
-	const signed = new Map();
-	for (const count of rounds) {
-		plain.set(count, await run(OPS.unsigned, count));
-		signed.set(count, await run(OPS.signed, count));
-		check(`[${name}] ${count} CPIs run, unsigned and signed (${plain.get(count).units} and ${signed.get(count).units} CU)`,
-			plain.get(count).ok && signed.get(count).ok);
-		check(`[${name}] ${count} signed CPIs leave the heap where ${count} unsigned ones do (${signed.get(count).value})`,
-			signed.get(count).value === plain.get(count).value);
+	const name = "cpi";
+	const base = (await run(OPS.seeds, 1)).value;
+	const units = new Map();
+	for (const [kind, op] of [["unsigned", OPS.unsigned], ["signed", OPS.signed], ["builders", OPS.builders]]) {
+		for (const count of [1, 2, 8, 20, 40]) {
+			const outcome = await run(op, count);
+			units.set(`${kind}${count}`, outcome.units);
+			check(`[${name}] ${count} ${kind} CPIs run and leave the heap position at ${base} (${outcome.ok ? `${outcome.units} CU` : outcome.error})`,
+				outcome.ok && outcome.value === base);
+		}
 	}
-	const perCall = (signed.get(20).value - signed.get(1).value) / 19n;
-	check(`[${name}] a CPI takes ${perCall} bytes of the heap, all of it the instruction builder`,
-		perCall > 0n && perCall === (signed.get(8).value - signed.get(1).value) / 7n);
 	check(`[${name}] a signer of sixteen seeds is sent`, (await run(OPS.limits, 0)).ok);
 	for (const [count, what] of [[1, "seventeen seeds"], [2, "a seed of thirty-three bytes"]]) {
 		const refused = await run(OPS.limits, count);
 		check(`[${name}] a signer of ${what} fails the CPI (${refused.error})`,
 			!refused.ok && /MaxSeedLengthExceeded|Max seed length exceeded|Length of the seed is too long/i.test(`${refused.error}\n${refused.logs.join("\n")}`));
 	}
-	console.log(`[${name}] per CPI: ${perCall} heap bytes, ${Math.round((signed.get(20).units - signed.get(1).units) / 19)} CU signed, ${Math.round((plain.get(20).units - plain.get(1).units) / 19)} CU unsigned`);
+	const perCall = (kind) => Math.round((units.get(`${kind}20`) - units.get(`${kind}1`)) / 19);
+	console.log(`[${name}] per CPI: 0 heap bytes, ${perCall("signed")} CU signed, ${perCall("unsigned")} CU unsigned, ${perCall("builders")} CU with a 512-byte buffer`);
 }
 
-for (const [name, op] of Object.entries(OPS).filter(([, op]) => op > OPS.seeds && op <= OPS.cells)) {
+for (const [name, op] of Object.entries(OPS).filter(([name]) => name === "cells")) {
 	check(`[${name}] a single round runs`, (await run(op, 1)).ok);
 	const first = await firstFailure(op);
 	check(`[${name}] some count exhausts the heap`, first !== null);
