@@ -3207,6 +3207,7 @@ function copyTypeForSubst(t: Type): Type {
 	}
 	for (let ni = 0; ni < t.typeNames.length; ni += 1) {
 		result.typeNames.push("");
+	result.sym = t.sym;
 		result.typeNames[ni] = t.typeNames[ni];
 	}
 	for (let oi = 0; oi < t.attachedOps.length; oi += 1) {
