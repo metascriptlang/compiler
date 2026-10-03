@@ -28,6 +28,13 @@ test "E2E C: void function" {
 	assert c.value.contains("void noop__");
 }
 
+test "E2E C: a function named main is module-qualified like any other" {
+	const c = compileToC("function main(): void { }\nmain();");
+	assert c.ok;
+	assert c.value.contains("void main__");
+	assert !c.value.contains("void main_(");
+}
+
 test "E2E C: function returns expression" {
 	const src = "function square(x: number): number { return x * x; }\nconst r = square(5);";
 	const c = compileToC(src);

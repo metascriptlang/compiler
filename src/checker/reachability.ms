@@ -1,6 +1,6 @@
 // Global Dead Code Elimination — Reachability Analysis
 //
-// Computes an AliveSet of symbols by walking ASTs from roots (main, top-level
+// Computes an AliveSet of symbols by walking ASTs from roots (top-level
 // stmts, test decls, exported symbols).
 
 import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, HiddenStdConvData,
@@ -609,33 +609,11 @@ export function computeAliveSet(
 			if (stmt == null) continue;
 
 			// Unwrap DecoratedDecl (module-level @passC/@passL/... wrap the next
-			// decl) so name/kind roots below see the real decl — topDecl
-			// already unwraps; the root scan must too or a decorated `main` is
-			// invisible and the whole entry module goes dead.
+			// decl) so the kind roots below see the real decl.
 			let bare = stmt;
 			if (bare.kind == NodeKind.DecoratedDecl) {
 				const ddw = bare.data as DecoratedDeclData;
 				if (ddw.decoratedNode != null) bare = ddw.decoratedNode;
-			}
-
-			// Root 1: main() in entry module
-			if (modulePath == entryPath && bare.kind == NodeKind.FunctionDecl) {
-				const fd = bare.data as FunctionDeclData;
-				if (fd.fnName == "main") {
-					markRootDecl(bare, modulePath);
-					continue;
-				}
-			}
-			// Also check exported main under ExportDecl
-			if (modulePath == entryPath && bare.kind == NodeKind.ExportDecl) {
-				const ed = bare.data as ExportDeclData;
-				if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.FunctionDecl) {
-					const fd = ed.exportedDecl.data as FunctionDeclData;
-					if (fd.fnName == "main") {
-						markRootDecl(ed.exportedDecl, modulePath);
-						continue;
-					}
-				}
 			}
 
 			if (bare.kind == NodeKind.FunctionDecl) {
@@ -960,7 +938,7 @@ function bindIdentifiers(node: Node, name: string, sym: Symbol): void {
 }
 
 test "a generated op is alive through the symbol that references it" {
-	const parsed = parseSource("function main(): void { hookDestroy(); } function hookDestroy(): void {} function deadDestroy(): void {}");
+	const parsed = parseSource("hookDestroy(); function hookDestroy(): void {} function deadDestroy(): void {}");
 	assert parsed.ok;
 	if (!parsed.ok) return;
 	resetHookSyms();
@@ -971,13 +949,27 @@ test "a generated op is alive through the symbol that references it" {
 	const live = liftedOp(liveBody, AttachedOp.AttachedDestructor, "hookDestroy", null);
 	const dead = liftedOp(deadBody, AttachedOp.AttachedDestructor, "deadDestroy", null);
 	const stmts = (parsed.value.data as ProgramData).programStmts;
-	stmts[0].resolvedSym = makeSymbol("main", SymbolKind.Function, null, false);
 	stmts[1].resolvedSym = live;
 	stmts[2].resolvedSym = dead;
 	bindIdentifiers(stmts[0], "hookDestroy", live);
 	const alive = computeAliveSet([parsed.value], ["owner.ms"], "owner.ms", false, createModuleGraph());
 	assert aliveSetHasSym(alive, live);
 	assert !aliveSetHasSym(alive, dead);
+}
+
+test "a function named main is alive only through a reference" {
+	const parsed = parseSource("function main(): void {} function used(): void {} used();");
+	assert parsed.ok;
+	if (!parsed.ok) return;
+	const stmts = (parsed.value.data as ProgramData).programStmts;
+	const main = makeSymbol("main", SymbolKind.Function, null, false);
+	const used = makeSymbol("used", SymbolKind.Function, null, false);
+	stmts[0].resolvedSym = main;
+	stmts[1].resolvedSym = used;
+	bindIdentifiers(stmts[2], "used", used);
+	const alive = computeAliveSet([parsed.value], ["entry.ms"], "entry.ms", false, createModuleGraph());
+	assert aliveSetHasSym(alive, used);
+	assert !aliveSetHasSym(alive, main);
 }
 
 function importGraph(edges: string[][]): ModuleGraph {

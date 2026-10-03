@@ -97,7 +97,6 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	if (sym != null && hasFlag(sym, SymbolFlag.CompileTime)) return;
 
 	// Module-qualified name (Standard reference implementation parity)
-	const isMain = d.fnName == "main";
 	const isExternFn = (sym != null && hasFlag(sym, SymbolFlag.ImportC)) || d.fnFlags == "extern" || d.fnFlags.indexOf("extern", 0) >= 0;
 	const ovIdx = sym != null ? sym.overloadIdx : 0;
 	let name = mangledFunctionName(sym, d.fnName, ovIdx);
@@ -145,7 +144,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	const exportPrefix = isExported && g.isHcr ? "MS_HCR_EXPORT " : "";
 	const hcrCoreCallable = sym != null && sym.modulePath != "" && g.emissionFacts.hcrCoreUnits.has(g.modulePath);
 	const isTypeBound = sym != null && isTypeBoundOp(sym);
-	const isPublicLinkage = isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance || isTypeBound || hcrCoreCallable;
+	const isPublicLinkage = isExported || isExternFn || isDrcHookFn || isGenericInstance || isTypeBound || hcrCoreCallable;
 	const linkage = isPublicLinkage ? "" : (sym != null ? "MS_LIB_PRIVATE " : "static ");
 	const outOfLine = sym != null && hasFlag(sym, SymbolFlag.NoInline) ? "__attribute__((noinline)) " : "";
 	const prefix = inlineCopy ? "static inline " : exportPrefix + outOfLine + linkage;

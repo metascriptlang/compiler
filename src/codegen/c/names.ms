@@ -254,7 +254,7 @@ function symExternOrImportName(sym: Readonly<Symbol> | null, name: string): stri
 
 // ===== Symbol → C Name (Standard reference parity) =====
 // Single source of truth for function C names. Reads sym.modulePath.
-// extern functions use nativeName. main() stays main_. Others get module-qualified.
+// extern functions use nativeName. Others get module-qualified.
 
 // A reference to a module-level symbol is named after its declaration: the text at the use site may be
 // an import alias.
@@ -263,7 +263,6 @@ export function referenceName(sym: Symbol | null, text: string): string {
 }
 
 export function mangledFunctionName(sym: Symbol | null, name: string, overloadIdx: number): string {
-	if (name == "main") return safeName(name);
 	if (sym != null && sym.exportName != "") return sym.exportName;
 	const early = symExternOrImportName(sym, name);
 	if (early != "") return early;
@@ -481,6 +480,13 @@ test "a reference through an import alias names the global after its declaration
 
 test "mangledFunctionName main stays safe" {
 	assert mangledFunctionName(null, "main", 0) == "main_";
+}
+
+test "mangledFunctionName qualifies main by its module" {
+	const sym = makeSymbol("main", SymbolKind.Function, noneType(), false);
+	sym.modulePath = "src/app.ms";
+	assert mangledFunctionName(sym, "main", 0) != "main_";
+	assert mangledFunctionName(sym, "main", 0).startsWith("main__");
 }
 
 test "mangledFunctionName plain name no sym" {

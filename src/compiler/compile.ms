@@ -1634,15 +1634,13 @@ function hcrModuleId(modPath: string, root: string, stdPath: string, deps: DepsS
 	return "";
 }
 
-function hcrFunctionSymbol(info: ExportedSymInfo, fn: Symbol): string {
-	if (info.name == "main") return safeName(info.name);
+function hcrFunctionSymbol(fn: Symbol): string {
 	if (fn.exportName != "") return fn.exportName;
 	if (fn.nativeName != "") return fn.nativeName;
 	if (hasFlag(fn, SymbolFlag.ImportC)) return safeName(fn.name);
 	return mangleProcName(fn.name, mangleModuleName(fn.modulePath), fn.disamb);
 }
-function hcrFunctionSlot(info: ExportedSymInfo, fn: Symbol): string {
-	if (info.name == "main") return safeName(info.name);
+function hcrFunctionSlot(fn: Symbol): string {
 	if (fn.exportName != "") return fn.exportName;
 	if (fn.nativeName != "") return fn.nativeName;
 	if (hasFlag(fn, SymbolFlag.ImportC)) return safeName(fn.name);
@@ -1654,7 +1652,7 @@ function appendHcrFunctionExport(exports: HcrAbiExport[], moduleId: string, info
 	if (hasFlag(fn, SymbolFlag.OverloadSig) || hasFlag(fn, SymbolFlag.Borrow)) return Result.ok(null);
 	if (hasGenericParams(fn.symbolType) || hasFlag(fn, SymbolFlag.CompileTime)) return Result.ok(null);
 	if (fn.declNode != null && fn.declNode.kind == NodeKind.FunctionDecl && isGenericFn((fn.declNode.data as FunctionDeclData).fnFlags)) return Result.ok(null);
-	exports.push(createHcrAbiExport(moduleId, hcrFunctionSymbol(info, fn), hcrSignatureKey(fn.symbolType), hcrFunctionSlot(info, fn)));
+	exports.push(createHcrAbiExport(moduleId, hcrFunctionSymbol(fn), hcrSignatureKey(fn.symbolType), hcrFunctionSlot(fn)));
 	return Result.ok(null);
 }
 
@@ -1756,6 +1754,7 @@ function buildHcrCandidateAbi(
 	}
 	return Result.ok({ candidate, modulePaths });
 }
+
 
 
 function pushDispatcherJob(cJobs: ModuleCompileJob[], oSlots: string[][], key: string, source: string, flags: string, opts: CliOptions): void {
