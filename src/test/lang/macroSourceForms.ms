@@ -111,3 +111,81 @@ test "macro source forms: helper-built nodes retain operands across storage and 
 	assert sharedOperand(0) == 84;
 	assert transitiveOperands(0) == 84;
 }
+
+macro forwardResult(call: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: call.line,
+		column: call.column,
+		callee: { kind: NodeKind.Identifier, line: call.line, column: call.column, name: "resultCode" },
+		arguments: [call],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+macro forwardValue(call: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: call.line,
+		column: call.column,
+		callee: { kind: NodeKind.Identifier, line: call.line, column: call.column, name: "valueCode" },
+		arguments: [call],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+macro forwardCell(cell: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: cell.line,
+		column: cell.column,
+		callee: { kind: NodeKind.Identifier, line: cell.line, column: cell.column, name: "cellCode" },
+		arguments: [cell],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+class ExplicitHolder { seed: int32 = 4; }
+class ExplicitCell<T> { items: T[] = []; }
+
+function explicitFailure<T>(code: int32): Result<T, int32> { return Result.err(code); }
+function explicitBuild<T>(this holder: ExplicitHolder): Result<T, int32> { return Result.err(holder.seed); }
+function resultCode<U>(result: Result<U, int32>): int32 { return result.ok ? 1 : 2; }
+function valueCode(value: int32): int32 { return value; }
+function cellCode<U>(cell: ExplicitCell<U>): int32 { return cell.items.length; }
+
+function forwardedTry(): Result<int32, int32> {
+	return Result.ok(forwardValue(try explicitFailure<int32>(7)));
+}
+
+function forwardedExtensionTry(holder: ExplicitHolder): Result<int32, int32> {
+	return Result.ok(forwardValue(try holder.explicitBuild<int32>()));
+}
+
+test "macro source forms: the explicit type argument of a call a macro forwards is kept" {
+	assert forwardResult(explicitFailure<int32>(4)) == 2;
+}
+
+test "macro source forms: the explicit type argument of an extension call a macro forwards is kept" {
+	const holder = new ExplicitHolder();
+	assert forwardResult(holder.explicitBuild<int32>()) == 2;
+}
+
+test "macro source forms: the explicit type argument of a try call a macro forwards is kept" {
+	const failed = forwardedTry();
+	assert !failed.ok;
+	assert failed.error == 7;
+}
+
+test "macro source forms: the explicit type argument of a try extension call a macro forwards is kept" {
+	const failed = forwardedExtensionTry(new ExplicitHolder());
+	assert !failed.ok;
+	assert failed.error == 4;
+}
+
+test "macro source forms: the explicit type argument of a new expression a macro forwards is kept" {
+	assert forwardCell(new ExplicitCell<int32>()) == 0;
+}

@@ -326,6 +326,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		const d = node.data as CallExprData;
 		addNodeField(keys, values, "callee", d.callee, loc);
 		addNodeArrayField(keys, values, "arguments", d.arguments, loc);
+		addStrField(keys, values, "typeArg", node.typeArg, loc);
 		return;
 	}
 	if (k == NodeKind.MemberExpr) {
@@ -535,6 +536,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		const d = node.data as NewExprData;
 		addNodeField(keys, values, "newCallee", d.newCallee, loc);
 		addNodeArrayField(keys, values, "newArguments", d.newArguments, loc);
+		addStrField(keys, values, "typeArg", node.typeArg, loc);
 		return;
 	}
 	if (k == NodeKind.TryExpr) {
@@ -2322,6 +2324,21 @@ test "nodeToASTLiteral builds ObjectLiteral for Identifier" {
 	// Should have kind, line, column, name
 	assert d.keys.length == 4;
 	assert d.keys[3] == "name";
+}
+
+test "nodeToASTLiteral writes the explicit type arguments of a call" {
+	const loc = makeLoc(1, 0);
+	const callee = createNode(NodeKind.Identifier, { name: "make" }, synthToken(loc));
+	const call = createNode(NodeKind.CallExpr, {
+		callee, arguments: [], isDirectCall: true, resolvedOverloadIdx: 0,
+	}, synthToken(loc));
+	call.typeArg = "int32";
+	const d = nodeToASTLiteral(call, loc).data as ObjectLiteralData;
+	let found = "";
+	for (let i = 0; i < d.keys.length; i += 1) {
+		if (d.keys[i] == "typeArg") found = (d.properties[i].data as StringLiteralData).value;
+	}
+	assert found == "int32";
 }
 
 // Audit-fix regression tests — verify hasUserMacroInvocation detects macros

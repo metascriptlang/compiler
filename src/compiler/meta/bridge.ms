@@ -668,6 +668,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as CallExprData;
 			setNode(objHeap, arrHeap, handle, "callee", d.callee);
 			setNodes(objHeap, arrHeap, handle, "arguments", d.arguments);
+			setStr(objHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.MemberExpr => {
 			const d = node.data as MemberExprData;
@@ -733,6 +734,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as NewExprData;
 			setNode(objHeap, arrHeap, handle, "newCallee", d.newCallee);
 			setNodes(objHeap, arrHeap, handle, "newArguments", d.newArguments);
+			setStr(objHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.TryExpr => {
 			const d = node.data as TryExprData;
@@ -1473,9 +1475,11 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.CallExpr => {
 			const callee = readNode(objHeap, arrHeap, h, "callee", loc);
 			const args = readNodes(objHeap, arrHeap, h, "arguments", loc);
-			return createNodeAt(NodeKind.CallExpr, {
+			const call = createNodeAt(NodeKind.CallExpr, {
 				callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: 0,
 			}, loc);
+			call.typeArg = readStr(objHeap, h, "typeArg");
+			return call;
 		},
 		NodeKind.MemberExpr => {
 			const object = readNode(objHeap, arrHeap, h, "object", loc);
@@ -1554,7 +1558,9 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.NewExpr => {
 			const newCallee = readNode(objHeap, arrHeap, h, "newCallee", loc);
 			const newArguments = readNodes(objHeap, arrHeap, h, "newArguments", loc);
-			return createNodeAt(NodeKind.NewExpr, { newCallee, newArguments }, loc);
+			const created = createNodeAt(NodeKind.NewExpr, { newCallee, newArguments }, loc);
+			created.typeArg = readStr(objHeap, h, "typeArg");
+			return created;
 		},
 		NodeKind.TryExpr => {
 			const tryArg = readNode(objHeap, arrHeap, h, "tryArg", loc);
@@ -2256,6 +2262,44 @@ test "round-trip CallExpr with arguments" {
 	assert d.arguments.length == 2;
 	assert d.arguments[0].kind == NodeKind.StringLiteral;
 	assert d.arguments[1].kind == NodeKind.NumberLiteral;
+}
+
+test "round-trip CallExpr keeps its explicit type arguments" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const callee = createNode(NodeKind.Identifier, { name: "make" }, synthToken(loc));
+	const orig = createNode(NodeKind.CallExpr, {
+		callee, arguments: [mkNumber(4, loc)], isDirectCall: true, resolvedOverloadIdx: 0,
+	}, synthToken(loc));
+	orig.typeArg = "int32,string";
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	assert back.kind == NodeKind.CallExpr;
+	assert back.typeArg == "int32,string";
+}
+
+test "round-trip CallExpr without explicit type arguments keeps none" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const callee = createNode(NodeKind.Identifier, { name: "make" }, synthToken(loc));
+	const orig = createNode(NodeKind.CallExpr, {
+		callee, arguments: [], isDirectCall: true, resolvedOverloadIdx: 0,
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	assert back.typeArg == "";
+}
+
+test "round-trip NewExpr keeps its explicit type arguments" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const callee = createNode(NodeKind.Identifier, { name: "Cell" }, synthToken(loc));
+	const orig = createNode(NodeKind.NewExpr, { newCallee: callee, newArguments: [] }, synthToken(loc));
+	orig.typeArg = "int32";
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	assert back.kind == NodeKind.NewExpr;
+	assert back.typeArg == "int32";
 }
 
 test "round-trip MemberExpr" {
