@@ -1,19 +1,24 @@
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { checkProgramWithRegistry, preludeContextFor } from "../../checker/checkPass";
-import { ExportRegistry } from "../../checker/context";
-import { Node, NodeKind, Symbol, NewExprData, MemberExprData } from "../../ast/node";
+import { CheckerContext, ExportRegistry } from "../../checker/context";
+import { monomorphizeProgram } from "../../monomorphize/collect";
+import { Node, NodeKind, Symbol, NewExprData, MemberExprData, ProgramData } from "../../ast/node";
 import { Module, ModuleGraph } from "../../module/graph";
 import { forEachChild } from "../../ast/visitor";
 import { resetBuildState } from "../../compiler/buildSession";
 
-function checkedProgram(source: string): Node {
+function checkedUnit(source: string): { program: Node, ctx: CheckerContext } {
 	resetBuildState();
 	const prelude = preludeContextFor("", ".cms");
 	const pr = parseSource(source);
 	if (!pr.ok) throw new Error("internal: test source does not parse");
-	checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, prelude);
-	return pr.value;
+	const ctx = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, prelude);
+	return { program: pr.value, ctx };
+}
+
+function checkedProgram(source: string): Node {
+	return checkedUnit(source).program;
 }
 
 function instanceSyms(n: Node | null, out: Symbol[]): void {
@@ -55,5 +60,17 @@ test "instanceSymbolIdentity: the compiler-provided toString carries an item on 
 		toStringSyms(checkedProgram(source), found);
 		assert found.length == 1, `toString count ${found.length}: ${source}`;
 		assert found[0].item > 0, `toString item ${found[0].item}: ${source}`;
+	}
+}
+
+test "instanceSymbolIdentity: a generic type instance adds no declaration of its own to the program" {
+	const source = "interface UserBox<T> { v: T }\nstruct UserPair<A, B> { a: A; b: B }\nfunction userMake(): UserBox<number> { const p: UserPair<number, string> = { a: 1, b: \"x\" }; const b: UserBox<string> = { v: \"s\" }; return { v: p.a }; }";
+	const unit = checkedUnit(source);
+	const before = (unit.program.data as ProgramData).programStmts.length;
+	const mono = monomorphizeProgram(unit.program, unit.ctx);
+	const stmts = (mono.data as ProgramData).programStmts;
+	assert stmts.length == before, `statements ${before} -> ${stmts.length}`;
+	for (const stmt of stmts) {
+		if (stmt.kind == NodeKind.InterfaceDecl || stmt.kind == NodeKind.StructDecl) assert stmt.resolvedSym != null, "a declaration without a symbol";
 	}
 }
