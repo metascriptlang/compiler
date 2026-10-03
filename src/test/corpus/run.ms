@@ -126,7 +126,7 @@ const CPUS: int32 = detectCpus();
 // cache went 93.1s serial, 19.4s at 16, 14.8s at 32, and 48 regressed into
 // build failures.
 //
-// RUN_SLOTS deliberately keeps its historical default of 4 for isRssCell cells,
+// RUN_SLOTS deliberately keeps its historical default of 4 for assertsRss cells,
 // whole processes under measurement where @maxrss asserts a bound on one; how
 // many of them share the machine is a separate axis from how many BUILDS run,
 // and it should be changed on its own evidence, not as a side effect of this.
@@ -1004,8 +1004,12 @@ function activeCount(running: Cell[]): int32 {
 
 function activeInPool(running: Cell[], rss: boolean): int32 {
 	let n = 0;
-	for (const c of running) { if (c.launched && !c.finished && isRssCell(c) == rss) { n = n + 1; } }
+	for (const c of running) { if (c.launched && !c.finished && assertsRss(c) == rss) { n = n + 1; } }
 	return n;
+}
+
+function assertsRss(c: Cell): boolean {
+	return isRssCell(c) && c.lane != "san";
 }
 
 // A cell whose sentinel never arrives is a HANG, and a hang must cost one loud
@@ -1063,7 +1067,7 @@ function launchQueued(running: Cell[], queued: Cell[], t: Tally, parityDone: Cel
 	let i = 0;
 	while (i < queued.length) {
 		const c = queued[i];
-		const rss = isRssCell(c);
+		const rss = assertsRss(c);
 		if (rss && rssFree > 0) {
 			rssFree = rssFree - 1;
 		} else if (!rss && otherFree > 0) {
