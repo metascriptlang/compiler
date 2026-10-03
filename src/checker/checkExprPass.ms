@@ -11,7 +11,7 @@ import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, a
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
-	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView } from "./compat";
+	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType } from "./assignable";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
@@ -1968,6 +1968,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			checkExpr(ctx, d.asExpr, innerExpected);
 			reportConstCast(ctx, d.asExpr, targetType);
 			let srcType = d.asExpr.nodeType;
+			const operandType = srcType;
+			const operandNode = d.asExpr;
+			let viaConverter = false;
 			// Record type annotation position for LSP
 			resolveTypeExpr(node.typeExpr, ctx);
 			if (srcType != null && srcType.kind == TypeKind.Function && targetType.kind == TypeKind.Function) {
@@ -2010,6 +2013,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& !slotTakesValue(srcType, targetType)) {
 				const asCall = convertsWithoutRoutine(srcType, targetType) ? null : tryApplyConverter(ctx, d.asExpr, srcType, targetType);
 				if (asCall != null) {
+					viaConverter = true;
 					node.data = { asExpr: asCall, asType: d.asType };
 					d = node.data as TypeAssertionData;
 					srcType = asCall.nodeType;
@@ -2077,6 +2081,16 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				} else if (targetBare.kind == TypeKind.CString) {
 					addError(ctx, "cannot cast unknown to cstring — unknown holds objects, never a C string; keep a C string as cstring or Ptr<void>", asLoc.line, asLoc.column);
 				}
+			}
+			if (operandType != null && !viaConverter && !reportedErrorSince(ctx, operandMark)) {
+				const adopted = tryAdoptAnonStruct(ctx, operandNode, targetType, operandType);
+				if (adopted != null as unknown as Node) {
+					node.data = { asExpr: adopted, asType: d.asType };
+					node.nodeType = targetType;
+					return;
+				}
+				if (reportedErrorSince(ctx, operandMark)) return;
+				if (refuseUnrelatedStructAs(ctx, operandNode, operandType, targetType, asLoc.line, asLoc.column)) return;
 			}
 			const objConv = reportedErrorSince(ctx, operandMark) ? ObjConv.None : objectConversion(srcType, targetType);
 			if (objConv == ObjConv.BadTarget) {
@@ -2894,6 +2908,26 @@ function createSyntheticToken(loc: SourceLocation): Token {
 // Register callback at module load time
 registerCheckExpr((ctx: CheckerContext, node: Node, expectedType: Type | null): void => { checkExpr(ctx, node, expectedType); });
 
+
+function structBehindConversion(t: Type | null): Type | null {
+	let s = skipModifier(t) ?? t;
+	let depth = 0;
+	while (s != null && s.kind == TypeKind.Distinct && s.typeReturn != null && depth < 16) {
+		s = s.typeReturn;
+		depth += 1;
+	}
+	return s != null && s.kind == TypeKind.Struct ? s : null;
+}
+
+function refuseUnrelatedStructAs(ctx: CheckerContext, operand: Node, srcType: Type, targetType: Type, line: int32, column: int32): boolean {
+	if (operand.kind == NodeKind.ObjectLiteral) return false;
+	const target = structBehindConversion(targetType);
+	const source = structBehindConversion(srcType.kind == TypeKind.Ref && srcType.typeReturn != null ? srcType.typeReturn : srcType);
+	if (target == null || source == null || !isValueStructDecl(target)) return false;
+	if (sameNominal(source, target) || valueStructBaseDepth(source, target) > 0 || valueStructBaseDepth(target, source) > 0) return false;
+	addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + ": a struct converts only to itself, a distinct of it, or a struct it extends", line, column);
+	return true;
+}
 
 function refuseHiddenFieldInLiteral(ctx: CheckerContext, ownerSym: Symbol | null, key: string, value: Node, literal: Node, d: ObjectLiteralData, index: int32): void {
 	let line = literal.location.line;
