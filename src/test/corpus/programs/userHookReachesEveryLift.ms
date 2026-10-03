@@ -9,6 +9,7 @@ class Shared { id: int32 = 0; label: string = "s"; }
 type Fd = distinct int32;
 type Name = distinct string;
 struct Owner { fd: Fd; tag: string; }
+struct FdCell { fd: Fd; }
 
 let ran: string[] = [];
 
@@ -58,9 +59,9 @@ function inMapShared(): void {
 function distincts(): void {
 	const fd = open(7);
 	const owner: Owner = { fd: open(8), tag: "t" };
-	const fds: Fd[] = [open(9), open(10)];
+	const cells: FdCell[] = [{ fd: open(9) }, { fd: open(10) }];
 	const name = label("n" + owner.tag);
-	console.log("distincts " + owner.tag + fds.length.toString());
+	console.log("distincts " + owner.tag + cells.length.toString());
 }
 
 handles();

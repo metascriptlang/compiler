@@ -101,18 +101,32 @@ test "hook declarations: a struct with no managed field takes its hook at scope 
 	assert destroyCallsOf(g.value, "Slot") >= 1, "the scope exit never calls the destroy hook of a handle-only generic struct instance";
 }
 
-test "hook declarations: a distinct type takes its hook at scope exit, as a field and as an element" {
+test "hook declarations: a distinct type takes its hook at scope exit, as a local and as a field" {
 	const src = "type Fd = distinct int32;\n"
 		+ "function onDestroy(this x: Fd): void { console.log(\"closed\"); }\n"
 		+ "function open(n: int32): Fd { return n as Fd; }\n"
 		+ "struct Owner { fd: Fd; tag: string; }\n"
+		+ "struct Cell { fd: Fd; }\n"
 		+ "function local(): void { const a = open(1); console.log(\"local\"); }\n"
 		+ "function field(): void { const o: Owner = { fd: open(2), tag: \"t\" }; console.log(o.tag); }\n"
-		+ "function element(): void { const xs: Fd[] = [open(3), open(4)]; console.log(xs.length.toString()); }\n"
+		+ "function element(): void { const xs: Cell[] = [{ fd: open(3) }, { fd: open(4) }]; console.log(xs.length.toString()); }\n"
 		+ "local(); field(); element();\n";
 	const c = compileToC(src);
 	assert c.ok, c.error;
-	assert destroyCallsOf(c.value, "Fd") >= 4, "the destroy hook of a distinct type is not called from a local, a field and an element: " + destroyCallsOf(c.value, "Fd").toString();
+	assert destroyCallsOf(c.value, "Fd") >= 3, "the destroy hook of a distinct type is not called from a local, a field and a struct element: " + destroyCallsOf(c.value, "Fd").toString();
+}
+
+test "hook declarations: an array of a distinct type stays legal on JS and without a hook" {
+	const hooked = "type Fd = distinct int32;\n"
+		+ "function onDestroy(this x: Fd): void { console.log(\"closed\"); }\n"
+		+ "function open(n: int32): Fd { return n as Fd; }\n"
+		+ "function run(): void { const xs: Fd[] = [open(1), open(2)]; console.log(xs.length.toString()); }\n"
+		+ "run();\n";
+	const js = compileToJS(hooked);
+	assert js.ok, js.error;
+	const plain = "type Fd = distinct int32;\nfunction open(n: int32): Fd { return n as Fd; }\nfunction run(): void { const xs: Fd[] = [open(1), open(2)]; console.log(xs.length.toString()); }\nrun();\n";
+	const free = compileToC(plain);
+	assert free.ok, free.error;
 }
 
 function errorsOf(source: string): string[] {
@@ -195,6 +209,7 @@ test "hook declarations: a hook returns nothing and onClone returns its own type
 	expectFault(problems, "onClone returns another struct", "struct Other { id: int32; }\nfunction onClone(this x: S): Other { return { id: 1 }; }\n", wrong + "onClone' is wrong: it returns 'Other', a clone is a new value of the receiver's own type");
 	expectFault(problems, "onDestroy method returns int32", "class T { onDestroy(): int32 { return 1; } }\n", wrong + "onDestroy' is wrong: it returns 'int32', a hook returns nothing");
 	expectFault(problems, "onDestroy inferred int32", "function onDestroy(this x: S) { return 1; }\n", wrong + "onDestroy' is wrong: it returns '");
+	expectFault(problems, "generic onDestroy inferred int32", "struct B<T> { v: T; }\nfunction onDestroy<T>(this x: B<T>) { return 1; }\nfunction use(): void { const b: B<int32> = { v: 1 }; console.log(b.v.toString()); }\n", "signature for 'onDestroy' is wrong: it returns '");
 	expectAccepted(problems, "onDestroy inferred void", "function onDestroy(this x: S) { console.log(\"closed\"); }\n");
 	expectAccepted(problems, "onClone returns S", "function onClone(this x: S): S { return x; }\n");
 	assert problems.length == 0, problems.join("\n");

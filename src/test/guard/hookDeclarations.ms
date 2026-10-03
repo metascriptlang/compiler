@@ -40,20 +40,25 @@ interface Case {
 	files: Source[];
 	refused: string;
 	runs: string;
+	emitsC: boolean;
 }
 
 const cases: Case[] = [];
 
 function refuse(name: string, refused: string, files: Source[]): void {
-	cases.push({ name, files, refused, runs: "" });
+	cases.push({ name, files, refused, runs: "", emitsC: false });
 }
 
 function accept(name: string, files: Source[]): void {
-	cases.push({ name, files, refused: "", runs: "" });
+	cases.push({ name, files, refused: "", runs: "", emitsC: false });
+}
+
+function refuseOnC(name: string, refused: string, files: Source[]): void {
+	cases.push({ name, files, refused, runs: "", emitsC: true });
 }
 
 function runsOrc(name: string, printed: string, files: Source[]): void {
-	cases.push({ name, files, refused: "", runs: printed });
+	cases.push({ name, files, refused: "", runs: printed, emitsC: false });
 }
 
 function one(text: string): Source[] {
@@ -109,6 +114,16 @@ accept("every hook of a struct with the signature the reference binds", one(valu
 	+ "function onDestroy(this x: S): void { }\nfunction onCopy(this ref x: S, y: S): void { }\nfunction onMove(this ref x: S, y: S): void { }\n"
 	+ "function onMoved(this ref x: S): void { }\nfunction onClone(this x: S): S { return x; }\n" + useStruct));
 
+refuse("onDestroy whose inferred return is a value", "signature for 'onDestroy' is wrong: it returns 'int32', a hook returns nothing", one(
+	valueStruct + "function onDestroy(this x: S) { return 1; }\n" + useStruct));
+
+refuse("a generic onDestroy whose inferred return is a value", "signature for 'onDestroy' is wrong: it returns 'int32', a hook returns nothing", one(
+	"struct B<T> { v: T; }\nfunction onDestroy<T>(this x: B<T>) { return 1; }\nconst b: B<int32> = { v: 1 };\nconsole.log(b.v.toString());\n"));
+
+refuseOnC("an array of a distinct type with a hook", "an array of the distinct type 'Fd' would never run its lifecycle hooks", one(
+	"type Fd = distinct int32;\nfunction onDestroy(this x: Fd): void { console.log(\"close\"); }\nfunction open(n: int32): Fd { return n as Fd; }\n"
+	+ "function run(): void { const xs: Fd[] = [open(1), open(2)]; console.log(xs.length.toString()); }\nrun();\n"));
+
 function verdict(dir: string, target: string): string {
 	const args = target == "c" ? ["check", `${dir}/main.ms`] : ["check", `${dir}/main.ms`, "--target=js"];
 	const r = execFileResult(msc, args);
@@ -121,6 +136,13 @@ for (const c of cases) {
 	const dir = `${root}/out/guard/hookDeclarations/${slot}`;
 	ensureDir(dir);
 	for (const f of c.files) writeFile(`${dir}/${f.path}`, f.text);
+	if (c.emitsC) {
+		const r = execFileResult(msc, ["build", `${dir}/main.ms`, "--gc=drc", "--emit=c", `--output=${dir}/main.c`]);
+		const out = `${r.output}${r.errorOutput}`;
+		if (r.exitCode == 0) report(`[c] ${c.name}: accepted`);
+		else if (!out.includes(c.refused)) report(`[c] ${c.name}: refused without the rule named (${c.refused}): ${out}`);
+		continue;
+	}
 	if (c.runs != "") {
 		const r = execFileResult(msc, ["run", "--gc=orc", `${dir}/main.ms`]);
 		const out = `${r.output}${r.errorOutput}`;
