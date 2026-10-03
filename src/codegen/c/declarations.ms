@@ -14,7 +14,7 @@ import {
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, hcrTypeInfoRef, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -723,6 +723,7 @@ function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, stati
 	const d = node.data as VariableDeclData;
 	if (g.aliveSet.entries.length > 0 && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
 	const body = cType.slice(0, cType.length - 1);
+	if (isHcrImageModule(g, g.modulePath) && g.emissionFacts.hcrTypeInfoOwners.has(body)) return false;
 	const od = d.initializer.data as ObjectLiteralData;
 	const p = g.initProc;
 	let braced = "";
@@ -797,7 +798,8 @@ function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string)
 	// $-generated types never leave their module — static keeps same-named
 	// sibling-module envs apart.
 	const linkage = isCompilerGenCName(g, baseName) ? "static msTypeInfo " : "msTypeInfo ";
-	addLine(sec(g, CSection.GlobalVars), linkage + infoName + ";");
+	const viaRegistry = infoName.endsWith("TypeInfo") && hcrTypeInfoRef(g, infoName.slice(0, infoName.length - 8));
+	if (!viaRegistry) addLine(sec(g, CSection.GlobalVars), linkage + infoName + ";");
 
 	// Emit field assignments to DatInit (runs before user code)
 	if (d.initializer != null && d.initializer.kind == NodeKind.ObjectLiteral) {

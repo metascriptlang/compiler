@@ -1942,6 +1942,16 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 			if (info.owner == module.modulePath && !module.typeInfos.includes(info.cName)) module.typeInfos.push(info.cName);
 		}
 	}
+	for (const module of modules) {
+		for (const name of module.typeInfos) {
+			const claimed = facts.hcrTypeInfoOwners.readonlyGet(name);
+			if (claimed != null && claimed != module.moduleId) {
+				printDiag(`${error("error")}: internal: HCR TypeInfo '${name}' is owned by both '${claimed}' and '${module.moduleId}'`);
+				throw new Error(BUILD_STOPPED);
+			}
+			facts.hcrTypeInfoOwners.set(name, module.moduleId);
+		}
+	}
 	const owners = new HashMap<string, string>();
 	for (const module of modules) {
 		for (const unit of processed) {

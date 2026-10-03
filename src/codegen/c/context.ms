@@ -657,6 +657,7 @@ export class CEmissionFacts {
 	typeInfos: HashMap<string, CTypeInfoDemand> = new HashMap<string, CTypeInfoDemand>();
 	typeInfoOrder: CTypeInfoDemand[] = [];
 	hcrModules: HashSet<string> = new HashSet<string>();
+	hcrTypeInfoOwners: HashMap<string, string> = new HashMap<string, string>();
 	trace: string = "";
 	writes: string[] | null = null;
 }
