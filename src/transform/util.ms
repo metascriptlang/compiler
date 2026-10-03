@@ -3,7 +3,8 @@
 
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { isAffineAwaitable, createFunction, createClosureType, createStruct, createArray, createPtr, createVar, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, setRepr } from "../checker/types";
+import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, setRepr } from "../checker/types";
+import { charType, isStringLike } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { lookupHookSym, requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
@@ -356,7 +357,7 @@ export function cloneIdent(node: Node, loc: SourceLocation): Node {
 export function makeTypedIdentResolved(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.Identifier, { name: sym.name }, syntheticToken(loc));
 	n.resolvedSym = sym;
-	if (t != null) { n.nodeType = t; }
+	n.nodeType = t != null ? t : sym.symbolType;
 	return n;
 }
 
@@ -519,6 +520,16 @@ export function makeMember(obj: Node, prop: string, loc: SourceLocation): Node {
 	if (obj != null && obj.nodeType != null) {
 		if ((obj.nodeType.kind == TypeKind.Array || obj.nodeType.kind == TypeKind.String) && prop == "length") {
 			n.nodeType = int32Type();
+		} else if (obj.nodeType.kind == TypeKind.Ref && obj.nodeType.typeReturn != null && obj.nodeType.typeReturn.kind == TypeKind.Array && prop == "length") {
+			n.nodeType = int32Type();
+		} else if (obj.nodeType.kind == TypeKind.String && (prop == "byteLength" || prop == "unicodeLength")) {
+			n.nodeType = int32Type();
+		} else if ((obj.nodeType.kind == TypeKind.SizedArray || obj.nodeType.kind == TypeKind.Span) && prop == "length") {
+			n.nodeType = int32Type();
+		} else if ((obj.nodeType.kind == TypeKind.SizedArray || obj.nodeType.kind == TypeKind.Span) && prop == "data" && obj.nodeType.typeReturn != null) {
+			n.nodeType = obj.nodeType.typeReturn;
+		} else if (obj.nodeType.kind == TypeKind.Enum) {
+			n.nodeType = obj.nodeType;
 		} else if (isResult(obj.nodeType)) {
 			if (prop == "ok") { n.nodeType = booleanType(); }
 			else if (prop == "value" && getResultOkType(obj.nodeType) != null) { n.nodeType = getResultOkType(obj.nodeType); }
@@ -557,9 +568,12 @@ export function makeAssign(leftNode: Node, rightNode: Node, loc: SourceLocation)
 
 export function makeArrayAccess(obj: Node, idx: Node, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.ArrayAccess, { array: obj, index: idx }, syntheticToken(loc));
-	if (obj != null && obj.nodeType != null && obj.nodeType.kind == TypeKind.Array) {
-		if (obj.nodeType.typeReturn != null) {
-			n.nodeType = obj.nodeType.typeReturn;
+	if (obj != null && obj.nodeType != null) {
+		const ot = obj.nodeType;
+		if ((ot.kind == TypeKind.Array || ot.kind == TypeKind.SizedArray || ot.kind == TypeKind.Span) && ot.typeReturn != null) {
+			n.nodeType = ot.typeReturn;
+		} else if (ot.kind == TypeKind.String) {
+			n.nodeType = charType();
 		}
 	}
 	return n;
@@ -721,64 +735,6 @@ export function makeHiddenSubConv(inner: Node, targetType: Type, loc: SourceLoca
 // Collect variable declaration names in a function body. Stops at nested functions.
 // varOnly=true: only DeclKind.Var (for varHoist). varOnly=false: all decls (for generatorLower).
 // Handles: BlockStmt, IfStmt, WhileStmt, TryCatchStmt, DoWhileStmt, SwitchStmt/SwitchCase.
-
-export function collectDeclNames(node: Node, ns: NameSet, varOnly: boolean): void {
-	if (node == null) return;
-	match (node.kind) {
-		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
-		NodeKind.VariableDecl => {
-			const d = node.data as VariableDeclData;
-			if (!varOnly || d.declKind == DeclKind.Var) {
-				nameSetAdd(ns, d.declName);
-			}
-			collectDeclNames(d.initializer, ns, varOnly);
-		},
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			let i = 0;
-			while (i < d.statements.length) {
-				collectDeclNames(d.statements[i], ns, varOnly);
-				i += 1;
-			}
-		},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			collectDeclNames(d.consequent, ns, varOnly);
-			collectDeclNames(d.alternate, ns, varOnly);
-		},
-		NodeKind.WhileStmt => {
-			const d = node.data as WhileStmtData;
-			collectDeclNames(d.whileBody, ns, varOnly);
-		},
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			collectDeclNames(d.tryBody, ns, varOnly);
-			collectDeclNames(d.catchBody, ns, varOnly);
-			collectDeclNames(d.finallyBody, ns, varOnly);
-		},
-		NodeKind.DoWhileStmt => {
-			const d = node.data as DoWhileStmtData;
-			collectDeclNames(d.doBody, ns, varOnly);
-		},
-		NodeKind.SwitchStmt => {
-			const d = node.data as SwitchStmtData;
-			let si = 0;
-			while (si < d.switchCases.length) {
-				collectDeclNames(d.switchCases[si], ns, varOnly);
-				si += 1;
-			}
-		},
-		NodeKind.SwitchCase => {
-			const d = node.data as SwitchCaseData;
-			let ci = 0;
-			while (ci < d.caseStmts.length) {
-				collectDeclNames(d.caseStmts[ci], ns, varOnly);
-				ci += 1;
-			}
-		},
-		_ => {},
-	};
-}
 
 // ===== DeclKind Helpers =====
 

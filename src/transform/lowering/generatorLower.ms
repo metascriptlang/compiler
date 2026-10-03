@@ -38,7 +38,7 @@ import {
 	makeTryCatch, makeCatchSym, makeMoveExpr,
 	makeSwitch, makeSwitchCase, makeDefaultValue,
 } from "../util";
-import { numberType, createPtr, createPrimitive, hasDestructor, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
+import { int32Type, createPtr, createPrimitive } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { isOnceLoop, collectIterationDecls, routineSyms, refsAnySym } from "./lambdaLiftingDetect";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
@@ -318,7 +318,7 @@ function makeDoneResult(loc: SourceLocation, resultType: Type | null): Node {
 
 export function makeStateAssign(stateNum: number, loc: SourceLocation, stateSym: Symbol): Node {
 	return makeExprStmt(
-		makeAssign(makeTypedIdentResolved(stateSym, numberType(), loc), makeNumber(stateNum, loc), loc),
+		makeAssign(makeIdentResolved(stateSym, loc), makeNumber(stateNum, loc), loc),
 		loc,
 	);
 }
@@ -1049,7 +1049,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 
 	// Build IteratorResult<T> type for stamping yield/return literals
 	const iterResultType = buildIterResultType(returnNodeType);
-	const stateSym = makeSymbol("$state", SymbolKind.Variable, numberType(), true);
+	const stateSym = makeSymbol("$state", SymbolKind.Variable, int32Type(), true);
 	setFlag(stateSym, SymbolFlag.StateMachine);
 	const curExcSym = makeSymbol("$curExc", SymbolKind.Variable, null as unknown as Type, true);
 
