@@ -623,32 +623,8 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		return isAssignable(objElem, recvElem);
 	}
 	if (recvNominal != null && objNominal != null) return sameInstanceArgs(recvT, objT);
-	// Name-based matching for well-known types and monomorphized generics.
-	// Monomorphized types have names like "Map__string,string" — match base name "Map".
-	const recvName = receiverType.kind == TypeKind.Ptr ? typeNameOf(receiverType) : ext.receiverTypeName;
-	if (recvName != "") {
-		const objName = typeNameOf(objType);
-		if (recvName == objName) return true;
-		// Check base name for monomorphized generics: "Map__string,string" → "Map"
-		const sepPos = findChar(objName, "_");
-		if (sepPos > 0 && sepPos + 1 < objName.length && objName.charAt(sepPos + 1) == "_") {
-			const baseName = objName.slice(0, sepPos);
-			if (recvName == baseName) return true;
-		}
-		// Type-alias fallback: typeNameOf returns the canonical primitive name
-		// (e.g. "string" for `type Buffer = string`), losing the alias. The alias
-		// symbol is preserved on objType.sym (stamped by collectTypeAlias). Mirror
-		// the static fallback in checkExprPass.ms so instance method dispatch
-		// `s.method()` resolves extensions registered against the alias name.
-		if (objType.sym != null
-				&& objType.sym.symbolKind == SymbolKind.TypeAlias
-				&& recvName == objType.sym.name) return true;
-		// Nominal mismatch: both have names but they differ → not a match.
-		// Prevents structural false positives (reference: sameObjectTypes uses a.id == b.id).
-		if (objName != "") return false;
-		if (objType.kind == TypeKind.Ref && objType.typeReturn != null && objType.typeReturn.kind == TypeKind.Struct) return false;
-	}
-	return isAssignable(objType, receiverType);
+	if (recvNominal != null || objNominal != null) return false;
+	return sameType(addressed(recvT), addressed(objT));
 }
 
 function instanceArgs(t: Type): Type[] | null {
