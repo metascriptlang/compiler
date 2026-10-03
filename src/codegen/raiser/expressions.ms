@@ -708,7 +708,7 @@ function compileAddress(s: RaiserCompState, place: Node): int32 {
 }
 
 function refuseByteView(s: RaiserCompState, node: Node, source: Type | null, target: Type | null): int32 {
-	const refusal = byteViewRefusal(source, target);
+	const refusal = byteViewRefusal(source, target, true);
 	if (refusal == "") return -1;
 	const msg = refusal + " on the Raiser VM" + NO_BYTE_MEMORY;
 	queueRaiserCompileError(msg, node.location.line, node.location.column);
@@ -731,6 +731,8 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 
 	// Assignment: x = expr  or  arr[i] = expr
 	if (op == "=") {
+		const refusedTarget = refusePointerOp(s, d.left);
+		if (refusedTarget >= 0) return refusedTarget;
 		const assigned = compileValueAssign(s, d.left, d.right);
 		if (assigned >= 0) return assigned;
 		const through = derefTarget(s, d.left);
@@ -1057,6 +1059,8 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as BinaryExprData;
 	const op = d.operator;
 
+	const refusedTarget = refusePointerOp(s, d.left);
+	if (refusedTarget >= 0) return refusedTarget;
 	const through = derefTarget(s, d.left);
 	if (through != null) {
 		const ptrReg = compileExpr(s, through);
@@ -1509,6 +1513,8 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): int32 {
 	if (refusedOp >= 0) return refusedOp;
 	const d = node.data as UpdateExprData;
 
+	const refusedTarget = refusePointerOp(s, d.updateArg);
+	if (refusedTarget >= 0) return refusedTarget;
 	const through = derefTarget(s, d.updateArg);
 	if (through != null) {
 		const ptrReg = compileExpr(s, through);

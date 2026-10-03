@@ -22,8 +22,20 @@ function viewType(t: Type): Type | null {
 	return t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span ? t : null;
 }
 
-function pointerCastSupported(source: Type, target: Type): boolean {
+function heldAsObject(t: Type | null): boolean {
+	const b = castType(t);
+	return b != null && (b.kind == TypeKind.Struct || b.kind == TypeKind.SizedArray || b.kind == TypeKind.Tuple);
+}
+
+function isVoid(t: Type | null): boolean {
+	const b = castType(t);
+	return b != null && b.kind == TypeKind.Void;
+}
+
+function pointerCastSupported(source: Type, target: Type, vmObjects: boolean): boolean {
 	if (source.kind == TypeKind.Null || sameType(source, target)) return true;
+	if (vmObjects && source.kind == TypeKind.Ptr && target.kind == TypeKind.Ptr
+		&& ((isVoid(source.typeReturn) && heldAsObject(target.typeReturn)) || (heldAsObject(source.typeReturn) && isVoid(target.typeReturn)))) return true;
 	if (pointerAddressElement(source, target) != null) return true;
 	const srcView = viewType(source);
 	const destView = viewType(target);
@@ -52,13 +64,13 @@ function pointerCastSupported(source: Type, target: Type): boolean {
 		&& (samePointee(source.typeReturn, target) || samePointee(source.typeReturn, target.typeReturn));
 }
 
-export function byteViewRefusal(sourceType: Type | null, targetType: Type | null): string {
+export function byteViewRefusal(sourceType: Type | null, targetType: Type | null, vmObjects: boolean = false): string {
 	const source = castType(sourceType);
 	const dest = castType(targetType);
 	if (source == null || dest == null) return "";
 	if (source.kind != TypeKind.Ptr && dest.kind != TypeKind.Ptr && viewType(dest) == null) return "";
 	if (hasGenericParams(source) || hasGenericParams(dest)) return "";
-	if (pointerCastSupported(source, dest)) return "";
+	if (pointerCastSupported(source, dest, vmObjects)) return "";
 	return "cannot convert " + typeDisplayName(source) + " to " + typeDisplayName(dest);
 }
 
