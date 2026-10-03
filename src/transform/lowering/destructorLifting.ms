@@ -21,7 +21,7 @@
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
 
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState } from "../../ast/node";
-import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet } from "../context";
+import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext } from "../context";
 import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr } from "../../checker/types";
 import { hasTypeIdentity } from "../../checker/types";
@@ -2688,4 +2688,26 @@ test "class copy guard compares param idents not param slots" {
 
 test "value copy guard compares param pointers" {
 	assert copyGuardOperandKind("struct SWrap { data: string; }", "SWrapCopy") == NodeKind.Identifier;
+}
+
+test "the parameters of a lifted hook are minted with an owner ordinal" {
+	const prog = liftWithChecker("interface Wrap { data: string; }");
+	let checked = 0;
+	for (const stmt of (prog.data as ProgramData).programStmts) {
+		if (stmt.kind != NodeKind.FunctionDecl || !(stmt.data as FunctionDeclData).fnName.endsWith("Destroy")) continue;
+		assert stmt.paramSyms != null && stmt.paramSyms[0].item > 0;
+		checked += 1;
+	}
+	assert checked == 1;
+}
+
+test "a lifted symbol cannot be minted without a checker context" {
+	const lctx = newLiftCtx(createTransformContext(), false);
+	let refused = "";
+	try {
+		liftSym(lctx, SymbolKind.Variable, "self", null);
+	} catch (e) {
+		refused = e.message;
+	}
+	assert refused.contains("self");
 }
