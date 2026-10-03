@@ -101,12 +101,49 @@ __attribute__((weak, noreturn)) void abort(void) {
     __builtin_unreachable();
 }
 
+#define MS_SOL_LOG_STATIC_SYSCALL_MURMUR3 0x207559bdULL
+
+static inline uint64_t msSolanaPutText(char* line, uint64_t at, const char* text) {
+    while (*text) line[at++] = *text++;
+    return at;
+}
+
+static inline uint64_t msSolanaPutDecimal(char* line, uint64_t at, uint64_t value) {
+    char digits[20];
+    uint64_t count = 0;
+    do {
+        digits[count++] = (char)('0' + value % 10);
+        value /= 10;
+    } while (value != 0);
+    while (count != 0) line[at++] = digits[--count];
+    return at;
+}
+
+__attribute__((weak, noinline, noreturn)) void msSolanaHeapExhausted(uint64_t asked) {
+    char line[160];
+    if (asked <= UINT64_MAX - 7) asked = (asked + 7) & ~(uint64_t)7;
+    uint64_t at = msSolanaPutText(line, 0, "std/solana: the ");
+    at = msSolanaPutDecimal(line, at, MS_SOLANA_HEAP_SIZE / 1024);
+    at = msSolanaPutText(line, at, " KiB program heap is exhausted (asked ");
+    at = msSolanaPutDecimal(line, at, asked);
+    at = msSolanaPutText(line, at, " more bytes at ");
+    at = msSolanaPutDecimal(line, at, msSolanaCurrentContext()->arenaPosition);
+    at = msSolanaPutText(line, at, ")");
+    ((uint64_t (*)(const char*, uint64_t))MS_SOL_LOG_STATIC_SYSCALL_MURMUR3)(line, at);
+    abort();
+}
+
+_Static_assert(MS_SOLANA_HEAP_SIZE % 8 == 0, "the bump pointer stays 8-aligned, so room is a multiple of 8");
+
 static inline void* msArenaAlloc(size_t size) {
-    size = (size + 7) & ~(size_t)7;
     msSolanaContext* context = msSolanaCurrentContext();
-    if (context->arenaPosition + size > MS_SOLANA_HEAP_SIZE) return (void*)0;
-    void* p = (void*)(MS_SOLANA_HEAP_START + context->arenaPosition);
-    context->arenaPosition += size;
+    uint64_t position = context->arenaPosition;
+    if (size > MS_SOLANA_HEAP_SIZE - position) msSolanaHeapExhausted(size);
+    void* p = (char*)MS_SOLANA_HEAP_START + position;
+    /* Keeps the heap base in one register: LLVM folds it into every field offset
+       as a 16-byte lddw otherwise (+1.8 KB on the escrow, measured 2026-10-03). */
+    __asm__("" : "+r"(p));
+    context->arenaPosition = position + ((size + 7) & ~(size_t)7);
     return p;
 }
 
@@ -385,7 +422,6 @@ static inline void msExit(int32_t code) {
 /* ===== I/O ===== */
 #ifdef MSOS_SOLANA
 /* Solana: log via sol_log_ syscall (provided by Solana runtime) */
-#define MS_SOL_LOG_STATIC_SYSCALL_MURMUR3 0x207559bdULL
 static inline void msPrintln(msString s) {
     if (s.p != (void*)0 && s.len > 0) {
         ((uint64_t (*)(const char*, uint64_t))MS_SOL_LOG_STATIC_SYSCALL_MURMUR3)(s.p->data, (uint64_t)s.len);

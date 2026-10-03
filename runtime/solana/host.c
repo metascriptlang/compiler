@@ -53,8 +53,8 @@ static void msSolHostFault(uint64_t code, const char* text) {
 
 uint64_t msSolHostAlloc(uint64_t size) {
     msSolanaContext* context = msSolHostContext();
-    size = (size + 7) & ~(uint64_t)7;
-    if (context->arenaPosition + size > MS_SOL_HOST_HEAP_SIZE) {
+    if (size <= UINT64_MAX - 7) size = (size + 7) & ~(uint64_t)7;
+    if (size > MS_SOL_HOST_HEAP_SIZE - context->arenaPosition) {
         fprintf(stderr, "std/solana host: the 32 KiB program heap is exhausted (asked %llu more bytes at %llu)\n",
             (unsigned long long)size, (unsigned long long)context->arenaPosition);
         abort();
