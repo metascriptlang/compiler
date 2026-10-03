@@ -2008,6 +2008,8 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	const savedMatchDepth = ctx.matchExprDepth;
 	ctx.currentFunction = sym;
 	ctx.matchExprDepth = 0;
+	const compileTimeBody = sym != null && hasFlag(sym, SymbolFlag.CompileTime);
+	if (compileTimeBody) ctx.compileTimeBodyDepth = ctx.compileTimeBodyDepth + 1;
 	// Ref parity: trackProc — scope + param init
 	const savedBlock = ctx.initTracker.currentBlock;
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
@@ -2068,6 +2070,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	ctx.initTracker.currentBlock = savedBlock;
 	ctx.currentFunction = savedFunction;
 	ctx.matchExprDepth = savedMatchDepth;
+	if (compileTimeBody) ctx.compileTimeBodyDepth = ctx.compileTimeBodyDepth - 1;
 	// PROFILE: surface pathological per-function check times immediately.
 	const _fb1 = performance.now();
 	if (_slowTrace && _fb1 - _fb0 > 500) {

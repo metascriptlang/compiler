@@ -1,7 +1,8 @@
 import {
 	Node, NodeKind, SourceLocation, DeclKind, SymbolKind, SymbolFlag, Type, TypeKind, createNode,
 	BinaryExprData, UnaryExprData, VariableDeclData, PropertyDeclData, TypeAssertionData, HiddenStdConvData,
-	ArrayLiteralData, ObjectLiteralData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
+	NumberLiteralData, StringLiteralData, BooleanLiteralData,
+	MemberExprData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, SpreadExprData, HiddenDerefData,
 } from "../ast/node";
 import { isIntegerType, isFloatType, createPrimitive } from "./types";
 import { makeNumber, makeIntNumber, makeString, makeBool, syntheticToken } from "./literalNodes";
@@ -119,6 +120,52 @@ export function isUntypedConstant(expr: Node, depth: int32): boolean {
 	}
 	if (expr.kind == NodeKind.UnaryExpr) return isUntypedConstant((expr.data as UnaryExprData).operand, depth + 1);
 	return false;
+}
+
+export function isCompileTimeValue(expr: Node, depth: int32): boolean {
+	if (expr == null || depth > CONSTANT_CHAIN_LIMIT) return false;
+	return match (expr.kind) {
+		NodeKind.NumberLiteral => true,
+		NodeKind.StringLiteral => true,
+		NodeKind.BooleanLiteral => true,
+		NodeKind.BigIntLiteral => true,
+		NodeKind.NullLiteral => true,
+		NodeKind.Identifier => isCompileTimeBinding(expr, depth),
+		NodeKind.MemberExpr => readonlyStaticInitializer(expr) != null || isCompileTimeValue((expr.data as MemberExprData).object, depth),
+		NodeKind.ArrayAccess => isCompileTimeValue((expr.data as ArrayAccessData).array, depth) && isCompileTimeValue((expr.data as ArrayAccessData).index, depth),
+		NodeKind.ArrayLiteral => allCompileTimeValues((expr.data as ArrayLiteralData).elements, depth),
+		NodeKind.ObjectLiteral => allCompileTimeValues((expr.data as ObjectLiteralData).properties, depth),
+		NodeKind.SpreadExpr => isCompileTimeValue((expr.data as SpreadExprData).spreadArg, depth),
+		NodeKind.BinaryExpr => isCompileTimeValue((expr.data as BinaryExprData).left, depth) && isCompileTimeValue((expr.data as BinaryExprData).right, depth),
+		NodeKind.UnaryExpr => isCompileTimeValue((expr.data as UnaryExprData).operand, depth),
+		NodeKind.ConditionalExpr => isCompileTimeValue((expr.data as ConditionalExprData).ternaryCondition, depth)
+			&& isCompileTimeValue((expr.data as ConditionalExprData).ternaryConsequent, depth)
+			&& isCompileTimeValue((expr.data as ConditionalExprData).ternaryAlternate, depth),
+		NodeKind.TypeAssertion => isCompileTimeValue((expr.data as TypeAssertionData).asExpr, depth),
+		NodeKind.HiddenStdConv => isCompileTimeValue((expr.data as HiddenStdConvData).convExpr, depth),
+		NodeKind.HiddenSubConv => isCompileTimeValue((expr.data as HiddenStdConvData).convExpr, depth),
+		NodeKind.HiddenDeref => isCompileTimeValue((expr.data as HiddenDerefData).expr, depth),
+		_ => false,
+	};
+}
+
+function allCompileTimeValues(nodes: Node[], depth: int32): boolean {
+	for (const n of nodes) {
+		if (!isCompileTimeValue(n, depth)) return false;
+	}
+	return true;
+}
+
+function isCompileTimeBinding(ident: Node, depth: int32): boolean {
+	const sym = ident.resolvedSym;
+	if (sym == null) return false;
+	if (sym.symbolKind == SymbolKind.EnumMember) return true;
+	if (sym.symbolKind != SymbolKind.Variable || sym.symFlags.has(SymbolFlag.Mutable)) return false;
+	if (!sym.symFlags.has(SymbolFlag.Global) || sym.symFlags.has(SymbolFlag.StaticLocal)) return false;
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.VariableDecl) return false;
+	const d = decl.data as VariableDeclData;
+	return d.declKind == DeclKind.Const && isCompileTimeValue(d.initializer, depth + 1);
 }
 
 export function exactUntypedInteger(expr: Node, depth: int32): Node {

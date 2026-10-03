@@ -260,6 +260,7 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	if (info.throws) setFlag(sym, SymbolFlag.Throws);
 	if (info.compilerFunc) registerCompilerFunc(ctx, sym);
 	if (info.borrow) markBorrow(ctx, dd, sym);
+	if (info.compileTime && sym.symbolKind == SymbolKind.Function) setFlag(sym, SymbolFlag.CompileTime);
 }
 
 function declaredSymbolOf(decorated: Node, named: Symbol): Symbol {

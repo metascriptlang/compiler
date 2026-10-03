@@ -8,7 +8,8 @@ import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { writeRefusal } from "./assignable";
-import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
+import { callCheckStmt, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
+import { isCompileTimeValue } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
 import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
@@ -866,7 +867,52 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 	const _cc0 = performance.now();
 	const r = checkCallExprInner(ctx, node, expectedType);
 	_cceTime = _cceTime + (performance.now() - _cc0);
-	return r;
+	return evalCompileTimeCall(ctx, node, r);
+}
+
+function compileTimeCallee(node: Node): Symbol | null {
+	const d = node.data as CallExprData;
+	const set = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
+	if (set == null) return null;
+	const idx = d.resolvedOverloadIdx;
+	const winner = idx > 0 && idx - 1 < set.overloads.length ? set.overloads[idx - 1] : set;
+	return hasFlag(winner, SymbolFlag.CompileTime) ? winner : null;
+}
+
+function evalCompileTimeCall(ctx: CheckerContext, node: Node, callType: Type): Type {
+	if (node.kind != NodeKind.CallExpr || isEngineCheckMode() || ctx.compileTimeBodyDepth > 0) return callType;
+	const callee = compileTimeCallee(node);
+	if (callee == null) return callType;
+	const d = node.data as CallExprData;
+	const set = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
+	if (set.overloads.length > 0) {
+		addError(ctx, `'${callee.name}' is @comptime and overloaded; the compile-time evaluator keys routines by name and would run the wrong overload, so give each @comptime overload its own name`, node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
+	for (let i = 0; i < d.arguments.length; i += 1) {
+		const arg = d.arguments[i];
+		if (isCompileTimeValue(arg, 0)) continue;
+		addError(ctx, `'${callee.name}' is @comptime, so it runs while compiling: argument ${(i + 1).toString()} must be a literal or a module-level const built from literals`, arg.location.line, arg.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
+	const loc = node.location;
+	const body = createNodeAt(NodeKind.BlockStmt, { statements: [createNodeAt(NodeKind.ReturnStmt, { argument: cloneNodeForCheck(node) }, loc)] }, loc);
+	const errorsBefore = errorCount(ctx);
+	const value = callEvalComptimeBlock(createNodeAt(NodeKind.ComptimeBlock, { comptimeBody: body }, loc), ctx);
+	if (errorCount(ctx) > errorsBefore) {
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
+	node.kind = value.kind;
+	node.data = value.data;
+	node.nodeType = null as unknown as Type;
+	node.resolvedSym = null;
+	node.flags = 0 as BitSet<NodeFlag>;
+	node.variantSlot = 0;
+	callCheckExpr(ctx, node, callType);
+	return node.nodeType;
 }
 function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;

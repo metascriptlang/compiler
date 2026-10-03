@@ -1194,6 +1194,7 @@ export class CheckerContext {
 	modulePath: string;          // Implementation parity: source path for name mangling
 	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (reference suggest parity)
 	matchExprDepth: number;      // >0 when inside match expression block arm (return targets match, not function)
+	compileTimeBodyDepth: number;
 	matchArmExpected: Type | null;
 	initTracker: InitTracker;    // ref parity: TEffects.init — definite assignment tracking
 	affineTracker: AffineTracker; // PARALOCK Phase 1 — affine-Promise consumption tracking
@@ -1271,6 +1272,7 @@ export function createContext(): CheckerContext {
 		modulePath: "",
 		symRecords: [],
 		matchExprDepth: 0,
+		compileTimeBodyDepth: 0,
 		matchArmExpected: null,
 		initTracker: createInitTracker(),
 		affineTracker: createAffineTracker(),
