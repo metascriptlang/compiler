@@ -1,4 +1,5 @@
 import {
+	Account,
 	Delegated,
 	Discriminator,
 	Mutable,
@@ -12,8 +13,11 @@ import {
 	account,
 	accountDiscriminator,
 	accounts,
+	address,
 	args,
 	argU8,
+	bump,
+	constraint,
 	close,
 	create,
 	createPda,
@@ -21,12 +25,14 @@ import {
 	external,
 	externalMutable,
 	failWith,
+	hasOne,
 	instruction,
 	mutable,
 	owned,
 	pda,
 	pdaWithBump,
 	realloc,
+	seeds,
 	writable,
 	writableSigner,
 } from "std/solana";
@@ -50,6 +56,56 @@ export struct Everything {
 	rolled: Delegated<Pet>;
 	fresh: Writable;
 	systemProgram: Program<System>;
+}
+
+export struct Plain {
+	owner: WritableSigner;
+	target: Writable;
+	pet: Mutable<Pet>;
+}
+
+export struct Pinned {
+	owner: WritableSigner;
+	target: Writable;
+	@seeds("pet", owner) @bump(pet.bump) pet: Mutable<Pet>;
+}
+
+export struct Canonical {
+	owner: WritableSigner;
+	target: Writable;
+	@seeds("pet", owner) @bump pet: Mutable<Pet>;
+}
+
+export struct Related {
+	owner: WritableSigner;
+	target: Writable;
+	@hasOne(owner) pet: Mutable<Pet>;
+}
+
+export struct Conditioned {
+	owner: WritableSigner;
+	target: Writable;
+	@constraint(pet.points == 0) pet: Mutable<Pet>;
+}
+
+export struct Addressed {
+	payer: WritableSigner;
+	target: Writable;
+	pet: Mutable<Pet>;
+	peek: Owned<Pet>;
+	rolled: Delegated<Pet>;
+	fresh: Writable;
+	@address(Pubkey.systemProgram()) systemProgram: Account;
+}
+
+export struct Unaddressed {
+	payer: WritableSigner;
+	target: Writable;
+	pet: Mutable<Pet>;
+	peek: Owned<Pet>;
+	rolled: Delegated<Pet>;
+	fresh: Writable;
+	systemProgram: Account;
 }
 
 export struct Parameters {
@@ -93,6 +149,41 @@ function delegatedOne(): Result<uint64, ProgramError> {
 
 function everything(): Result<uint64, ProgramError> {
 	const x = try accounts<Everything>();
+	return Result.ok(x.pet.data().points);
+}
+
+function plain(): Result<uint64, ProgramError> {
+	const x = try accounts<Plain>();
+	return Result.ok(x.pet.data().points);
+}
+
+function pinned(): Result<uint64, ProgramError> {
+	const x = try accounts<Pinned>();
+	return Result.ok(x.pet.data().points);
+}
+
+function canonical(): Result<uint64, ProgramError> {
+	const x = try accounts<Canonical>();
+	return Result.ok(x.pet.data().points);
+}
+
+function related(): Result<uint64, ProgramError> {
+	const x = try accounts<Related>();
+	return Result.ok(x.pet.data().points);
+}
+
+function conditioned(): Result<uint64, ProgramError> {
+	const x = try accounts<Conditioned>();
+	return Result.ok(x.pet.data().points);
+}
+
+function unaddressed(): Result<uint64, ProgramError> {
+	const x = try accounts<Unaddressed>();
+	return Result.ok(x.pet.data().points);
+}
+
+function addressed(): Result<uint64, ProgramError> {
+	const x = try accounts<Addressed>();
 	return Result.ok(x.pet.data().points);
 }
 
@@ -189,6 +280,13 @@ function entry(): void {
 	if (op == 14) { result = selected(); }
 	if (op == 15) { result = externalMint(); }
 	if (op == 16) { result = externalToken(); }
+	if (op == 17) { result = plain(); }
+	if (op == 18) { result = pinned(); }
+	if (op == 19) { result = canonical(); }
+	if (op == 20) { result = related(); }
+	if (op == 21) { result = conditioned(); }
+	if (op == 22) { result = addressed(); }
+	if (op == 23) { result = unaddressed(); }
 	if (!result.ok) { failWith(result.error); }
 }
 entry();

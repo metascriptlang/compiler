@@ -52,27 +52,41 @@ const OPS = [
 	["instruction<Dispatch> (last)", 14],
 	["external<Mint>", 15],
 	["externalMutable<TokenAccount>", 16],
+	["accounts<3 fields>", 17],
+	["accounts<3 fields> + @seeds @bump(account.field)", 18],
+	["accounts<3 fields> + @seeds @bump", 19],
+	["accounts<3 fields> + @hasOne", 20],
+	["accounts<3 fields> + @constraint", 21],
+	["accounts<7 fields> + @address", 22],
+	["accounts<7 fields>, no @address", 23],
 ];
 
 // Totals of each op when this table was last set (LiteSVM 1.4.1, platform-tools v1.57); an op that costs more than FEW above its total fails.
 const BASELINE = {
 	"idle": 264,
-	"owned<Pet>": 372,
-	"mutable<Pet>": 381,
+	"owned<Pet>": 370,
+	"mutable<Pet>": 380,
 	"delegated<Pet>": 376,
 	"accounts<Everything>": 837,
-	"args<Parameters>": 534,
-	"createPda<Pet>": 3855,
-	"create<Pet>": 2059,
-	"pda (Mutable)": 3640,
-	"pdaWithBump (Mutable)": 2199,
+	"args<Parameters>": 536,
+	"createPda<Pet>": 3854,
+	"create<Pet>": 2061,
+	"pda (Mutable)": 3641,
+	"pdaWithBump (Mutable)": 2198,
 	"pda (Delegated)": 2128,
-	"pdaWithBump (Delegated)": 2187,
-	"realloc<Pet>": 644,
-	"close<Pet>": 546,
-	"instruction<Dispatch> (last)": 401,
-	"external<Mint>": 482,
-	"externalMutable<TokenAccount>": 493,
+	"pdaWithBump (Delegated)": 2189,
+	"realloc<Pet>": 643,
+	"close<Pet>": 547,
+	"instruction<Dispatch> (last)": 402,
+	"external<Mint>": 483,
+	"externalMutable<TokenAccount>": 510,
+	"accounts<3 fields>": 508,
+	"accounts<3 fields> + @seeds @bump(account.field)": 2229,
+	"accounts<3 fields> + @seeds @bump": 3685,
+	"accounts<3 fields> + @hasOne": 549,
+	"accounts<3 fields> + @constraint": 528,
+	"accounts<7 fields> + @address": 839,
+	"accounts<7 fields>, no @address": 782,
 };
 
 function u64(value) {
@@ -96,9 +110,13 @@ function discriminator(preimage) {
 }
 
 const PET_SIZE = 48;
-const petData = (length = 8 + PET_SIZE, tag = discriminator("account:Pet")) => {
+const petData = (length = 8 + PET_SIZE, tag = discriminator("account:Pet"), owner = null, bump = 0) => {
 	const data = new Uint8Array(length);
 	data.set(tag.subarray(0, Math.min(8, length)));
+	if (owner !== null && length >= 8 + PET_SIZE) {
+		data.set(encoder.encode(owner), 8);
+		data[8 + 40] = bump;
+	}
 	return data;
 };
 
@@ -146,7 +164,7 @@ async function run(path, op, setup = {}) {
 	put(mintAt, setup.mintOwner ?? TOKEN, setup.mintData ?? mintData());
 	put(tokenAt, setup.tokenOwner ?? TOKEN, setup.tokenData ?? tokenAccountData());
 	const pet = setup.pet ?? {};
-	put(pet.key ?? petKey, pet.owner ?? programSigner.address, pet.data ?? petData());
+	put(pet.key ?? petKey, pet.owner ?? programSigner.address, pet.data ?? petData(8 + PET_SIZE, discriminator("account:Pet"), payer.address, petBump));
 	put(setup.peekKey ?? peekKey, setup.peekOwner ?? programSigner.address, setup.peekData ?? petData());
 	const rolledAt = setup.rolledAt ?? rolledKey;
 	put(rolledAt, setup.rolledOwner ?? DELEGATION, petData());
@@ -187,6 +205,7 @@ function check(what, condition) {
 	if (!condition) failures++;
 }
 
+const DECORATED = new Set(OPS.filter(([name]) => name.startsWith("accounts<") && name !== "accounts<Everything>").map(([, op]) => op));
 const last = discriminator("global:last");
 const measured = new Map();
 const controlled = new Map();
@@ -195,7 +214,7 @@ for (const [name, op] of OPS) {
 	const outcome = await run(programPath, op, { prefix });
 	check(`[${name}] the instruction runs${outcome.ok ? "" : ` (${outcome.error})`}`, outcome.ok);
 	measured.set(name, outcome.units);
-	if (controlled !== null && controlPath) {
+	if (controlPath && !DECORATED.has(op)) {
 		const before = await run(controlPath, op, { prefix });
 		check(`[${name}] the control runs${before.ok ? "" : ` (${before.error})`}`, before.ok);
 		controlled.set(name, before.units);
@@ -207,6 +226,10 @@ const idleBefore = controlPath ? controlled.get("idle") : BASELINE.idle;
 console.log(`\n${"op".padEnd(32)}${"total".padStart(8)}${"check".padStart(8)}${(controlPath ? "control" : "baseline").padStart(9)}${"change".padStart(8)}`);
 for (const [name] of OPS) {
 	const cost = measured.get(name) - idle;
+	if (controlPath && !controlled.has(name)) {
+		console.log(`${name.padEnd(32)}${String(measured.get(name)).padStart(8)}${String(cost).padStart(8)}${"-".padStart(9)}${"-".padStart(8)}`);
+		continue;
+	}
 	const base = (controlPath ? controlled.get(name) - idleBefore : BASELINE[name] - BASELINE.idle);
 	console.log(`${name.padEnd(32)}${String(measured.get(name)).padStart(8)}${String(cost).padStart(8)}${String(base).padStart(9)}${String(cost - base).padStart(8)}`);
 }
@@ -220,7 +243,7 @@ if (!controlPath) {
 
 const code = (outcome) => /InstructionErrorCustom \{ code: (\d+) \}/.exec(outcome.error)?.[1] ?? outcome.error;
 const refuses = async (what, op, setup, expected) => {
-	for (const path of controlPath ? [programPath, controlPath] : [programPath]) {
+	for (const path of controlPath && !DECORATED.has(op) ? [programPath, controlPath] : [programPath]) {
 		const outcome = await run(path, op, setup);
 		const label = path === programPath ? "" : " (control)";
 		check(`${what}${label}: ${outcome.ok ? "accepted" : code(outcome)}, expected ${expected}`, !outcome.ok && code(outcome) === String(expected));
@@ -243,6 +266,17 @@ await refuses("accounts<T>: a Program field refuses another key", 4, { systemAt:
 await refuses("accounts<T>: a Program field refuses the System key off by its last byte", 4, { systemAt: flipped(SYSTEM, 31) }, 3008);
 await refuses("accounts<T>: a Program field refuses the System key off by its first byte", 4, { systemAt: flipped(SYSTEM, 0) }, 3008);
 await refuses("pda: an account that differs from the PDA in its last byte", 8, { pet: { key: flipped(petKey, 31) } }, 2006);
+await refuses("@seeds @bump(account.field): another stored bump", 18, { pet: { data: petData(8 + PET_SIZE, discriminator("account:Pet"), payer.address, petBump - 1) } }, 2006);
+await refuses("@seeds @bump(account.field): the account is not at the PDA", 18, { pet: { key: stranger } }, 2006);
+await refuses("@seeds @bump: the account is not at the canonical PDA", 19, { pet: { key: stranger } }, 2006);
+await refuses("@hasOne: the account names another owner", 20, { pet: { data: petData(8 + PET_SIZE, discriminator("account:Pet"), stranger, petBump) } }, 2001);
+{
+	const heavy = petData(8 + PET_SIZE, discriminator("account:Pet"), payer.address, petBump);
+	heavy[8 + 32] = 1;
+	await refuses("@constraint: the condition is false", 21, { pet: { data: heavy } }, 2003);
+}
+await refuses("@address: another key", 22, { systemAt: stranger }, 2012);
+await refuses("@address: the System key off by its last byte", 22, { systemAt: flipped(SYSTEM, 31) }, 2012);
 await refuses("createPda: the target is not the PDA of the seeds", 6, { target: stranger }, 2006);
 await refuses("pda: the account is not at the PDA of the seeds", 8, { pet: { key: stranger } }, 2006);
 await refuses("pdaWithBump: another bump", 9, { bump: petBump - 1 }, 2006);
