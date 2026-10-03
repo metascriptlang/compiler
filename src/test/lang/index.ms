@@ -62,3 +62,4 @@ import "./typeImplementationQuery";
 import "./parameterShadowing";
 import "./refParamDeref";
 import "./refParamWrites";
+import "./structFieldDecorators";

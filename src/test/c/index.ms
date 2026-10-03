@@ -28,6 +28,7 @@ import "./constFoldOrder";
 import "./bigintChecker";
 import "./rangeCheckPolicy";
 import "./nominalFit";
+import "./structFieldDecorators";
 import "./bitSetWidth";
 import "./bitSetAlgebra";
 import "./sizeofFold";
