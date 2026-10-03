@@ -936,7 +936,7 @@ function exportsCSymbol(node: Node): boolean {
 	}
 	if (decl.kind != NodeKind.FunctionDecl) return false;
 	const sym = decl.resolvedSym;
-	return sym != null && sym.exportName != "";
+	return sym != null && sym.exportName != "" && !hasFlag(sym, SymbolFlag.ClassInit);
 }
 
 // getDeclName imported from collectPass (single canonical copy)

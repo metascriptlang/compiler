@@ -140,6 +140,7 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 	const initSym = ctx.checkerCtx != null ? newSym(ctx.checkerCtx, SymbolKind.Function, initName, fnNode.nodeType) : makeSymbol(initName, SymbolKind.Function, fnNode.nodeType, false);
 	if (ctx.checkerCtx != null && classNode.resolvedSym != null) registerCtorInit(classNode.resolvedSym, className, ctorNode.nodeType != null ? ctorNode.nodeType : createFunction([], [], voidType()), initSym);
 	setFlag(initSym, SymbolFlag.Exported);
+	setFlag(initSym, SymbolFlag.ClassInit);
 	if (classNode.resolvedSym != null) initSym.exportName = classInitCName(mangledTypeName(classNode.resolvedSym, className));
 	initSym.location = ctorNode.location;
 	initSym.declNode = fnNode;
