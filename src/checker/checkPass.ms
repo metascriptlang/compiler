@@ -12,7 +12,7 @@ import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endD
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
-import { mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, collectTypeAlias,collectInterface, collectStruct, collectEnumDecl, collectClass, collectActor, collectExtern, collectFunction, collectMacro, defineOrError, registerConverter, getDeclName } from "./collectPass";
+import { mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, collectTypeAlias,collectInterface, collectStruct, collectEnumDecl, collectClass, collectActor, collectExtern, collectFunction, collectMacro, defineOrError, declSymbol, registerConverter, getDeclName } from "./collectPass";
 import { readFile } from "std/fs";
 import { env } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
@@ -31,6 +31,7 @@ import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addG
 import { declGenericParams, symGenericParams, classParentOf, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView } from "./types";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
+import { bindContainerNames, bindModuleNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
@@ -705,7 +706,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 			existing.symbolType = aliasType;
 			sym = existing;
 		} else {
-			sym = makeSymbol(d.declName, SymbolKind.Variable, aliasType, false);
+			sym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, aliasType, false);
 			defineOrError(ctx, sym, node);
 		}
 		setFlag(sym, SymbolFlag.ComptimeNodeAlias);
@@ -737,7 +738,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		const selfRefType = declType != null ? declType : signatureTypeOf(d.initializer, ctx, d.nameLocation);
 		const hoisted = lookupLocal(ctx.table, d.declName);
 		if (selfRefType != null && hoisted == null) {
-			preRegisteredSelfRefSym = makeSymbol(d.declName, SymbolKind.Variable, selfRefType, d.declKind != DeclKind.Const);
+			preRegisteredSelfRefSym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, selfRefType, d.declKind != DeclKind.Const);
 			defineOrError(ctx, preRegisteredSelfRefSym, node);
 		} else if (selfRefType != null && isUnresolvedType(hoisted.symbolType)) {
 			hoisted.symbolType = selfRefType;
@@ -802,7 +803,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		node.resolvedSym = existing;
 		sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.declName.length, existing, varType, SymbolKind.Variable, d.declName, "", true);
 	} else {
-		const newSym = makeSymbol(d.declName, SymbolKind.Variable, varType, d.declKind != DeclKind.Const);
+		const newSym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, varType, d.declKind != DeclKind.Const);
 		defineOrError(ctx, newSym, node);
 		node.resolvedSym = newSym;
 		sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.declName.length, newSym, varType, SymbolKind.Variable, d.declName, "", true);
@@ -1907,7 +1908,7 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 		// Destructured for-of: define symbols for each pattern element
 		defineForOfPatternBindings(ctx, d.forOfPattern, elemType, d.forOfIsConst, true);
 	} else {
-		const forSym = makeSymbol(d.forOfBinding, SymbolKind.Variable, elemType, !d.forOfIsConst);
+		const forSym = declSymbol(ctx, node, d.forOfBinding, SymbolKind.Variable, elemType, !d.forOfIsConst);
 		setFlag(forSym, SymbolFlag.ForVar);
 		defineSymbol(ctx.table, forSym);
 		node.resolvedSym = forSym;
@@ -1955,8 +1956,9 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 					const bound = hasDefault ? destrDefaultedType(derived) : derived;
 					if (hasDefault) checkExpr(ctx, apd.patternDefaults[i], bound);
 					if (bound != null) elem.nodeType = bound;
-					const elemSym = makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
-					definePatternBinding(ctx, elemSym, forVar);
+					const elemSym = declSymbol(ctx, elem, id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
+					if (forVar) setFlag(elemSym, SymbolFlag.ForVar);
+					defineSymbol(ctx.table, elemSym);
 					elem.resolvedSym = elemSym;
 					markInitialized(ctx.initTracker, id.name);
 				}
@@ -1970,8 +1972,9 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 						if (derived == null && iterType != null && iterType.kind != TypeKind.Inferred && iterType.kind != TypeKind.Error && iterType.kind != TypeKind.None) {
 							addError(ctx, `rest element '${id.name}' requires an array source`, elem.location.line, elem.location.column);
 						}
-						const restSym = makeSymbol(id.name, SymbolKind.Variable, derived != null ? derived : inferredType(), !isConst);
-						definePatternBinding(ctx, restSym, forVar);
+						const restSym = declSymbol(ctx, inner, id.name, SymbolKind.Variable, derived != null ? derived : inferredType(), !isConst);
+						if (forVar) setFlag(restSym, SymbolFlag.ForVar);
+						defineSymbol(ctx.table, restSym);
 						inner.resolvedSym = restSym;
 						markInitialized(ctx.initTracker, id.name);
 					}
@@ -2009,8 +2012,9 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 						if (restType == null && iterType != null && iterType.kind != TypeKind.Inferred && iterType.kind != TypeKind.Error && iterType.kind != TypeKind.None) {
 							addError(ctx, `object rest '${restId.name}' requires a source with remaining named fields`, prop.location.line, prop.location.column);
 						}
-						const objRestSym = makeSymbol(restId.name, SymbolKind.Variable, restType != null ? restType : inferredType(), !isConst);
-						definePatternBinding(ctx, objRestSym, forVar);
+						const objRestSym = declSymbol(ctx, inner, restId.name, SymbolKind.Variable, restType != null ? restType : inferredType(), !isConst);
+						if (forVar) setFlag(objRestSym, SymbolFlag.ForVar);
+						defineSymbol(ctx.table, objRestSym);
 						inner.resolvedSym = objRestSym;
 						markInitialized(ctx.initTracker, restId.name);
 					}
@@ -2026,8 +2030,9 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 				const bound = p.propDefault != null ? destrDefaultedType(derived) : derived;
 				if (p.propDefault != null) checkExpr(ctx, p.propDefault, bound);
 				if (bound != null) p.propAlias.nodeType = bound;
-				const aliasSym = makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
-				definePatternBinding(ctx, aliasSym, forVar);
+				const aliasSym = declSymbol(ctx, p.propAlias, id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
+				if (forVar) setFlag(aliasSym, SymbolFlag.ForVar);
+				defineSymbol(ctx.table, aliasSym);
 				p.propAlias.resolvedSym = aliasSym;
 				markInitialized(ctx.initTracker, id.name);
 			}
@@ -2048,7 +2053,7 @@ function checkForInStmt(ctx: CheckerContext, node: Node): void {
 	const affineSnap = saveConsumeState(ctx.affineTracker);
 	const outerSpawnKeys = collectVisibleSpawnKeys(ctx.table.current);
 	const saved = enterLoopScope(ctx);
-	const forInSym = makeSymbol(d.forInBinding, SymbolKind.Variable, inferredType(), !d.forInIsConst);
+	const forInSym = declSymbol(ctx, node, d.forInBinding, SymbolKind.Variable, inferredType(), !d.forInIsConst);
 	setFlag(forInSym, SymbolFlag.ForVar);
 	defineSymbol(ctx.table, forInSym);
 	markInitialized(ctx.initTracker, d.forInBinding);
@@ -2431,7 +2436,7 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 			const errSym = lookupSymbol(ctx.table, "Error");
 			const catchType = (errSym != null && errSym.symbolType != null) ? errSym.symbolType : inferredType();
 			node.nodeType = catchType;
-			const catchSym = makeSymbol(d.catchName, SymbolKind.Variable, catchType, false);
+			const catchSym = declSymbol(ctx, node, d.catchName, SymbolKind.Variable, catchType, false);
 			node.resolvedSym = catchSym;
 			defineSymbol(ctx.table, catchSym);
 			// Catch param is always initialized (exception runtime provides it)
@@ -2663,6 +2668,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	// PARALOCK Phase 1: snapshot affine tracker so affine Promise consumption state
 	// doesn't leak across function body boundaries.
 	const affineSnap = saveConsumeState(ctx.affineTracker);
+	const boundNames = bindContainerNames(ctx, params, body);
 	openScope(ctx.table, ScopeKind.Function);
 	let i = 0;
 	for (const param of params) {
@@ -2680,8 +2686,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 			const at = (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) ? paramLocs[i] : body.location;
 			addError(ctx, "a destructured parameter needs a type annotation", at.line, at.column);
 		}
-		if (defaults != null && i < defaults.length && defaults[i] != null) checkDefaultInParamScope(ctx, defaults[i], paramType);
-		const paramSym = makeSymbol(param, SymbolKind.Parameter, paramType, false);
+		const paramSym = paramSymbol(ctx, body, i, param, SymbolKind.Parameter, paramType);
 		// Set declaration location for go-to-definition
 		if (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) {
 			paramSym.location = paramLocs[i];
@@ -2711,6 +2716,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		}
 	}
 	closeScope(ctx.table);
+	releaseNames(ctx, boundNames);
 	// Restore init tracking state
 	restoreInitState(ctx.initTracker, initSnap);
 	// PARALOCK Phase 1: restore affine tracker (erases this function's consumed set)
@@ -2839,8 +2845,10 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	resolveDeclarations(ctx, program);
 	const _c2 = performance.now();
 	bindFlowGraph(program);  // Phase 1: build the CFG (unused by checker yet — Phase 2 will query)
+	const moduleNames = bindModuleNames(ctx, program);
 	const _c3 = performance.now();
 	checkProgramBody(ctx, program);
+	releaseNames(ctx, moduleNames);
 	reportConverterCycles(ctx);
 	const _c4 = performance.now();
 	if (ctx.modulePath != "") reportUnusedSymbols(ctx, program);

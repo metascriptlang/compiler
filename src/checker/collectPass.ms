@@ -387,7 +387,7 @@ function exportNameMisuse(md: MacroInvocationData, decorated: Node): string {
 
 // ===== Define + Error Helper =====
 
-function declSymbol(ctx: CheckerContext, node: Node, name: string, kind: SymbolKind, symType: Type | null, mutable: boolean): Symbol {
+export function declSymbol(ctx: CheckerContext, node: Node, name: string, kind: SymbolKind, symType: Type | null, mutable: boolean): Symbol {
 	const adopted = ctx.adoptedDecls.get(node);
 	if (adopted == null) return makeSymbol(name, kind, symType, mutable);
 	ctx.adoptedDecls.delete(node);

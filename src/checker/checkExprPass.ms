@@ -10,6 +10,7 @@ import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcros
 import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, findExtension } from "./context";
 import { innermostFunctionScope } from "./symbol";
 import { extDeclaresReceiver } from "./context";
+import { addFatalError } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -33,6 +34,7 @@ import {
 	saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState,
 } from "./initTracker";
 import { callInstantiateGeneric } from "./checkerCallbacks";
+import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
@@ -658,6 +660,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (sym == null) {
 					addError(ctx, `Undefined variable '${d.name}'` + callLaterDeclarationNote(d.name), node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
+			}
+			const positional = ctx.boundIdents.get(node);
+			if (positional != null && positional != sym) {
+				addFatalError(ctx, `internal: '${d.name}' is bound to one declaration by position and resolves to another here`, node.location.line, node.location.column);
 			}
 			// Demand-driven: ensure the symbol's signature is resolved before using its type
 			ensureShaped(sym, ctx);
@@ -2788,8 +2794,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	sym.declNode = fnNode;
 	if (isAsync) setFlag(sym, SymbolFlag.Async);
 	ctx.currentFunction = sym;
-	const savedCtorExits = ctx.ctorExits;
-	ctx.ctorExits = null;
+	const boundNames = bindContainerNames(ctx, params, body);
 	openScope(ctx.table, ScopeKind.Function);
 	const savedBoundary = ctx.readonlyBoundary;
 	if (ctx.pendingSpawnThunk) {
@@ -2806,7 +2811,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 			// Contextual fallback: untyped param inherits expected param type
 			pType = ctxParamTypes[pi];
 		}
-		const paramSym = makeSymbol(p, SymbolKind.Parameter, pType, false);
+		const paramSym = paramSymbol(ctx, body, pi, p, SymbolKind.Parameter, pType);
 		if (paramLocs != null && pi < paramLocs.length && paramLocs[pi] != null) {
 			paramSym.location = paramLocs[pi];
 		}
@@ -2841,6 +2846,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		if (temps.length > 0) bodyIntoBlock(body, temps);
 	}
 	closeScope(ctx.table);
+	releaseNames(ctx, boundNames);
 	ctx.readonlyBoundary = savedBoundary;
 	ctx.ctorExits = savedCtorExits;
 	ctx.currentFunction = savedFunction;
