@@ -1,7 +1,7 @@
 // Decorator accessor helpers — returns only primitives to avoid DRC cross-module Node lifecycle bugs.
 
 import { Node, NodeKind, Symbol, SymbolKind, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData, ExportDeclData, PropertyDeclData } from "../ast/node";
-import { markUsedIn, CheckerContext, sgRecordSym, findExportedSymbol } from "./context";
+import { markUsedIn, CheckerContext, sgRecordSym, addError, findExportedSymbol } from "./context";
 import { lookupSymbol } from "./symbol";
 import { findChar } from "../utils/string";
 
@@ -77,6 +77,24 @@ export function resolveDecoratorSymbol(ctx: CheckerContext, name: string): Symbo
 	const info = findExportedSymbol(ctx.exportRegistry, ns.modulePath, rest);
 	if (info == null) return null as unknown as Symbol;
 	return info.sym;
+}
+
+export function checkFieldDecoratorNames(ctx: CheckerContext, rows: Node[][]): void {
+	for (const row of rows) {
+		for (const dec of row) {
+			const name = (dec.data as MacroInvocationData).macroName;
+			const sym = resolveDecoratorSymbol(ctx, name);
+			if (sym == null) {
+				addError(ctx, `Cannot find name '${name}'`, dec.location.line, dec.location.column);
+				continue;
+			}
+			if (sym.symbolKind != SymbolKind.Function && sym.symbolKind != SymbolKind.Macro) {
+				addError(ctx, `'${name}' is not callable as a decorator`, dec.location.line, dec.location.column);
+				continue;
+			}
+			markUsedIn(ctx, sym);
+		}
+	}
 }
 
 export function recordFieldDecorators(sym: Symbol, dd: DecoratedDeclData): void {
