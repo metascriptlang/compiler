@@ -1305,7 +1305,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 		},
 		TypeKind.Ptr => {
 			const innerType = t.typeReturn;
-			if (innerType != null && (innerType.kind == TypeKind.Ref || innerType.kind == TypeKind.Ptr)) {
+			if (innerType != null && innerType.kind == TypeKind.Ref) {
 				const ptrType = getTypeDesc(g, innerType);
 				typeCacheSet(g.typeCache, key, ptrType);
 				return ptrType;
