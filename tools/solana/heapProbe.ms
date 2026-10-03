@@ -7,8 +7,10 @@ import {
 	findProgramAddress,
 	instructionData,
 	logU64,
+	account,
 	programAddress,
 	programId,
+	signed,
 } from "std/solana";
 
 extern function msSolAlloc(size: uint64): uint64;
@@ -29,6 +31,36 @@ function builderLoop(count: uint64): Result<uint64, ProgramError> {
 		instruction.appendU8(0);
 	}
 	logU64(count);
+	return Result.ok(0);
+}
+
+function selfCall(): Result<Instruction, ProgramError> {
+	const self = try account(0);
+	const instruction = Instruction.forProgram(programId(), 1, 3);
+	instruction.addReadonly(self);
+	instruction.appendU8(12);
+	instruction.appendU8(0);
+	instruction.appendU8(0);
+	return Result.ok(instruction);
+}
+
+function signedLoop(count: uint64): Result<uint64, ProgramError> {
+	const program = programId();
+	const found = try findProgramAddress(["pet", program]);
+	for (let index: uint64 = 0; index < count; index++) {
+		const instruction = try selfCall();
+		const _sent = try signed(instruction.invoke(), ["pet", program, [found.bump]]);
+	}
+	logU64(msSolAlloc(0));
+	return Result.ok(0);
+}
+
+function unsignedLoop(count: uint64): Result<uint64, ProgramError> {
+	for (let index: uint64 = 0; index < count; index++) {
+		const instruction = try selfCall();
+		const _sent = try instruction.invoke();
+	}
+	logU64(msSolAlloc(0));
 	return Result.ok(0);
 }
 
@@ -121,6 +153,9 @@ function dispatch(): Result<uint64, ProgramError> {
 	if (op == 7) { return literalLoop(count); }
 	if (op == 8) { return pairLoop(count); }
 	if (op == 9) { return textLoop(count); }
+	if (op == 10) { return signedLoop(count); }
+	if (op == 11) { return unsignedLoop(count); }
+	if (op == 12) { return Result.ok(0); }
 	return request(0 - count);
 }
 

@@ -23,7 +23,7 @@ const HEAP = 32 * 1024;
 const BUDGET = 1_400_000;
 const LARGEST_COUNT = 60_000;
 const NAMED = /std\/solana: the (\d+) KiB program heap is exhausted \(asked (\d+) more bytes at (\d+)\)/;
-const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5, push: 6, literal: 7, pairs: 8, text: 9 };
+const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5, push: 6, literal: 7, pairs: 8, text: 9, signed: 10, unsigned: 11 };
 const MASK = 2n ** 64n - 1n;
 const SUMS = {
 	push: (n) => sum(n, (i) => (3n * i + 1n) * (i + 1n)),
@@ -129,6 +129,25 @@ function namedFailure(label, outcome) {
 		check(`[${name}] ${first} rounds fail on the compute budget, not on the heap`,
 			!failed.ok && failed.named === null && /ComputationalBudgetExceeded|exceeded CUs meter/.test(`${failed.error}\n${failed.logs.join("\n")}`));
 	}
+}
+
+{
+	const name = "signing";
+	const rounds = [1, 2, 8, 20];
+	const plain = new Map();
+	const signed = new Map();
+	for (const count of rounds) {
+		plain.set(count, await run(OPS.unsigned, count));
+		signed.set(count, await run(OPS.signed, count));
+		check(`[${name}] ${count} CPIs run, unsigned and signed (${plain.get(count).units} and ${signed.get(count).units} CU)`,
+			plain.get(count).ok && signed.get(count).ok);
+		check(`[${name}] ${count} signed CPIs leave the heap where ${count} unsigned ones do (${signed.get(count).value})`,
+			signed.get(count).value === plain.get(count).value);
+	}
+	const perCall = (signed.get(20).value - signed.get(1).value) / 19n;
+	check(`[${name}] a CPI takes ${perCall} bytes of the heap, all of it the instruction builder`,
+		perCall > 0n && perCall === (signed.get(8).value - signed.get(1).value) / 7n);
+	console.log(`[${name}] per CPI: ${perCall} heap bytes, ${Math.round((signed.get(20).units - signed.get(1).units) / 19)} CU signed, ${Math.round((plain.get(20).units - plain.get(1).units) / 19)} CU unsigned`);
 }
 
 for (const [name, op] of Object.entries(OPS).filter(([, op]) => op > OPS.seeds && op <= OPS.cells)) {
