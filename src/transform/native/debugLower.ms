@@ -7,7 +7,6 @@
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol, createNode } from "../../ast/node";
 import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, int32Type } from "../../checker/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
-import { lookupSymbol } from "../../checker/symbol";
 import { findExtension } from "../../checker/context";
 import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl, runtimeRef, makeNumber } from "../util";
 import { anonTypeName, isAnonTypeName, hashToBase36, typeKey } from "../../codegen/c/types";
@@ -15,13 +14,10 @@ import { isSlotUnion, projectTagUnionMember } from "../../checker/fit";
 import { charToString } from "./stringOpLower";
 import { SymbolKind } from "../../ast/node";
 
-// Resolve the struct type for a type name string (e.g., "Person" → struct type with fields).
-function resolveJsonTargetType(typeArgStr: string, ctx: TransformContext): Type | null {
-	if (ctx.checkerCtx == null) return null;
-	const sym = lookupSymbol(ctx.checkerCtx.table, typeArgStr);
-	if (sym == null) return null;
-	if (sym.symbolType == null) return null;
-	const unwrapped = unwrapRef(sym.symbolType);
+// The struct a type's own declaration defines.
+function resolveJsonTargetType(inner: Type): Type | null {
+	if (inner.sym == null || inner.sym.symbolType == null) return null;
+	const unwrapped = unwrapRef(inner.sym.symbolType);
 	if (unwrapped.kind == TypeKind.Struct) return unwrapped;
 	return null;
 }
@@ -80,7 +76,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 			return buildJsonValueDebug(arg, loc, ctx);
 		}
 		// Named struct/class → "\x1b[34mTypeName \x1b[0m" + stringify(jsonObject(...))
-		let structType = resolveJsonTargetType(typeName, ctx);
+		let structType = resolveJsonTargetType(inner);
 		if (structType == null && inner.typeNames != null && inner.typeChildren != null) {
 			structType = inner;
 		}
@@ -360,7 +356,7 @@ function buildStructDebugString(arg: Node, typeName: string, structType: Type | 
 // debug color prefix/type label. Reuses the same json-object + stringify path
 // console.log uses, so struct toString actually yields a string (not a passthrough).
 export function buildStructToString(arg: Node, inner: Type, loc: SourceLocation, ctx: TransformContext): Node {
-	let structType = resolveJsonTargetType(inner.typeName, ctx);
+	let structType = resolveJsonTargetType(inner);
 	if (structType == null && inner.typeNames != null && inner.typeChildren != null) {
 		structType = inner;
 	}
