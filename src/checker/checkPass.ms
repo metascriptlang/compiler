@@ -32,6 +32,7 @@ import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
 import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMutationLocation } from "./paramMutationAnalysis";
+import { writableViewRefusal } from "./assignable";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
@@ -779,6 +780,10 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 
 function refuseStoredView(ctx: CheckerContext, node: Node, d: VariableDeclData, varType: Type | null): void {
 	if (node.resolvedSym == null || varType == null) return;
+	if (varType.kind == TypeKind.Span && !isReadonlyView(varType) && d.initializer != null) {
+		const viewRefusal = writableViewRefusal(d.initializer);
+		if (viewRefusal != "") addError(ctx, viewRefusal, d.initializer.location.line, d.initializer.location.column);
+	}
 	if (!hasFlag(node.resolvedSym, SymbolFlag.Global)) {
 		refuseNestedView(ctx, "'" + d.declName + "'", varType, d.nameLocation.line, d.nameLocation.column);
 		return;

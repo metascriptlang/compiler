@@ -9,7 +9,7 @@
 // stays legal. Mutating methods on those views are still found by name in
 // paramMutationAnalysis until method receivers become ordinary arguments.
 
-import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
 import { isReadonlyView } from "./types";
 import { isValueAggregateParam } from "./paramMutationAnalysis";
@@ -113,6 +113,23 @@ export function writeRefusal(target: Node, asRefArg: boolean): string {
 		WriteVerdict.ConstRebind | WriteVerdict.ConstInterior => `cannot ${what} — '${name}' is const (use 'let')`,
 		WriteVerdict.ValueParamInterior => `cannot mutate value-type parameter '${name}': value parameters are read-only views; copy it locally first`,
 		WriteVerdict.ForVarInterior => `cannot mutate value-type loop variable '${name}': for-of binds a per-iteration copy; iterate by index to mutate the collection`,
+		_ => "",
+	};
+}
+
+export function writableViewRefusal(viewed: Node): string {
+	const source = viewed.kind == NodeKind.HiddenStdConv ? (viewed.data as HiddenStdConvData).convExpr : viewed;
+	if (source == null) return "";
+	if (source.kind != NodeKind.Identifier && source.kind != NodeKind.MemberExpr && source.kind != NodeKind.ArrayAccess) return "";
+	if (!isValueAggregateParam(source.nodeType)) return "";
+	const w = checkWrite(source, true);
+	if (w.root == null) return "";
+	const name = w.root.name;
+	const fix = "declare the view Readonly<Span<…>>, or copy it first";
+	return match (w.verdict) {
+		WriteVerdict.ConstRebind | WriteVerdict.ConstInterior => `cannot view '${lvalueText(source)}' as a writable Span — '${name}' is const (use 'let', or ${fix})`,
+		WriteVerdict.ValueParamInterior => `cannot view value-type parameter '${name}' as a writable Span: value parameters are read-only views; ${fix}`,
+		WriteVerdict.ForVarInterior => `cannot view value-type loop variable '${name}' as a writable Span: for-of binds a per-iteration copy; ${fix}`,
 		_ => "",
 	};
 }
