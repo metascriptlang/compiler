@@ -613,7 +613,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	if (isTypeInfo) {
 		// TypeInfo is DRC metadata — skip under --gc=manual (write-only, never read)
 		if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
-		if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) {
+		if (g.aliveSet.computed && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) {
 			const skipBase = d.declName.slice(0, nameLen - 8);
 			if (g.preparingDeclarations) {
 				if (g.preparationFacts == null) return;
@@ -739,7 +739,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, staticPfx: string, cType: string): boolean {
 	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return false;
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.entries.length > 0 && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
+	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
 	const body = cType.slice(0, cType.length - 1);
 	if (isHcrImageModule(g, g.modulePath) && g.emissionFacts.hcrTypeInfoOwners.has(body)) return false;
 	const od = d.initializer.data as ObjectLiteralData;
@@ -776,7 +776,7 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	const arrT = t0.kind == TypeKind.Ref ? t0.typeReturn : t0;
 	if (arrT == null || arrT.kind != TypeKind.Array) return false;
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.entries.length > 0 && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
+	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
 	const arrCType = cType.slice(0, cType.length - 1);
 	const typeInfo = ensureRefArrayCellTypeInfo(g, arrT);
 	const viaRegistry = isHcrImageModule(g, g.modulePath);

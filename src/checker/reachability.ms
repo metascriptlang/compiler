@@ -32,7 +32,7 @@ import { lookupCtorDefaults } from "./instantiate";
 import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
 
 export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {
-	if (aliveSet.entries.length == 0) return true;
+	if (!aliveSet.computed) return true;
 	const name = (node.data as FunctionDeclData).fnName;
 	const sym = node.resolvedSym;
 	// $-prefixed functions without a traced routine symbol ($Env_*Destroy etc. DRC hooks) are
@@ -784,6 +784,7 @@ function markAliveGlobalDestroys(pending: GlobalDestroysBlock[]): boolean {
 
 function takeReachability(): AliveSet {
 	const result = _aliveSet;
+	result.computed = true;
 	_aliveSet = createAliveSet();
 	_singleModule = "";
 	_visitedSet = new HashSet<string>();
@@ -953,6 +954,17 @@ test "empty programs produce empty alive set" {
 	assert aliveSet.entries.length == 0;
 }
 
+test "a computed alive set that marked no name still drops a module nothing reaches" {
+	const aliveSet = computeAliveSet([], [], "/entry.ms", false, createModuleGraph());
+	assert aliveSet.computed;
+	assert aliveSetHasModule(aliveSet, "/entry.ms");
+	assert !aliveSetHasModule(aliveSet, "/other.ms");
+}
+
+test "an alive set nobody computed keeps every module" {
+	assert aliveSetHasModule(createAliveSet(), "/other.ms");
+}
+
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
 import { createStruct, createRef, createUnion, nullType, stringType } from "./types";
@@ -988,6 +1000,7 @@ function importGraph(edges: string[][]): ModuleGraph {
 
 function moduleAlive(graph: ModuleGraph, modulePath: string): boolean {
 	_aliveSet = createAliveSet();
+	_aliveSet.computed = true;
 	aliveSetAdd(_aliveSet, "/main.ms", "main");
 	aliveSetAdd(_aliveSet, "/impl.ms", "add");
 	markImportedModulesAlive(graph);

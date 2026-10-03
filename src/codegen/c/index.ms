@@ -721,6 +721,7 @@ test "TypeInfo facts use emission DCE predicates before any module emits" {
 	node.resolvedSym = makeSymbol("Hidden", SymbolKind.Class, null, false);
 	node.resolvedSym.modulePath = path;
 	const alive = createAliveSet();
+	alive.computed = true;
 	aliveSetAdd(alive, path, "AliveTypeInfo");
 	const facts = new CEmissionFacts();
 	prepareCModuleEmission(parsed.value, ctx, path, alive, facts);

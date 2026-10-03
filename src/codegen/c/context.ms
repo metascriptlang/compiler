@@ -595,6 +595,7 @@ export class CTypeInfoDemand {
 }
 
 export class AliveSet {
+	computed: boolean;       // reachability ran: what it did not mark is dead, even when nothing was marked by name
 	entries: string[];       // "modulePath:symbolName" keys
 	_set: HashSet<string>;       // O(1) lookup mirror
 	_modules: HashSet<string>;   // O(1) module-level lookup
@@ -606,7 +607,7 @@ export class AliveSet {
 
 export function createAliveSet(): AliveSet {
 	return {
-		entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
+		computed: false, entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
 		typeInfos: [], typeInfoKeys: new HashSet<string>(), foreignOps: new HashMap<Symbol, string[]>(),
 	};
 }
@@ -642,7 +643,7 @@ export function aliveSetHas(aliveSet: Readonly<AliveSet>, modulePath: string, na
 }
 
 export function aliveSetHasModule(aliveSet: Readonly<AliveSet>, modulePath: string): boolean {
-	if (aliveSet.entries.length == 0) return true;  // DCE disabled
+	if (!aliveSet.computed) return true;
 	return aliveSet._modules.has(modulePath);
 }
 
@@ -705,7 +706,7 @@ export function aliveSetFingerprint(aliveSet: AliveSet): string {
 		entries.push(`t\t${info.key}\t${info.owner}\t${aliveSymKey(info.destroy)}\t${info.trace != null ? aliveSymKey(info.trace) : ""}`);
 	}
 	const joined = entries.join("\n");
-	return `${hashToHex(djb2(joined))}${hashToHex(fingerprint(joined))}:${entries.length}`;
+	return `${hashToHex(djb2(joined))}${hashToHex(fingerprint(joined))}:${entries.length}:${aliveSet.computed}`;
 }
 
 export interface DeferredStructDef {
