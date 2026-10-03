@@ -235,7 +235,8 @@ export function synthStringify(ctx: CheckerContext, expr: Node): Node | null {
 	const t = expr.nodeType;
 	if (t == null) return null;
 	const peeled = peelToStructOrUnion(t);
-	if (peeled == null || peeled.kind != TypeKind.Struct) return null;
+	if (peeled == null) return null;
+	if (peeled.kind != TypeKind.Struct && peeled.kind != TypeKind.Union && peeled.kind != TypeKind.Enum && peeled.kind != TypeKind.Distinct) return null;
 	const loc = expr.location;
 	const memberNode = createNodeAt(NodeKind.MemberExpr,
 		{ object: expr, property: "toString", isOptional: false }, loc);

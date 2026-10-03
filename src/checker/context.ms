@@ -320,7 +320,6 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 			if (other.sym != null
 					&& other.sym.name == method.sym.name
 					&& other.sym.modulePath == method.sym.modulePath
-					&& other.receiverTypeName == method.receiverTypeName
 					&& other.isStatic == method.isStatic
 					&& other.sym.location.line == method.sym.location.line
 					&& other.sym.location.column == method.sym.location.column) {
