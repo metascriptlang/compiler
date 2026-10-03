@@ -122,6 +122,7 @@ function extractGlobal(stmt: Node, ctx: TransformContext, index: int32): HcrGlob
 	}
 	const storageType = createStruct(`_ms_hcr_value${index}`, ["value"], [t], true);
 	const pointer = makeHcrSymbol(`_ms_hcr_v${index}`, createPtr(storageType));
+	setFlag(pointer, SymbolFlag.HcrCell);
 	const fresh = makeHcrSymbol(`_ms_hcr_new${index}`, booleanType());
 	return {
 		sym, declType: t, storageType, initNode: d.initializer,

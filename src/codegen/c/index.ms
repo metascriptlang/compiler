@@ -432,9 +432,11 @@ export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutp
 	const b = createBuilder();
 	const datInits = new HashSet<string>();
 	const inits = new HashSet<string>();
+	const deinits = new HashSet<string>();
 	for (const output of outputs) {
 		if (output.hasDatInit) datInits.add(output.modulePath);
 		if (output.hasInit) inits.add(output.modulePath);
+		if (output.hasDeinit) deinits.add(output.modulePath);
 	}
 	addLine(b, "#include <stdint.h>");
 	addLine(b, "#include \"runtime/drc.h\"");
@@ -444,6 +446,7 @@ export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutp
 	for (const mp of modulePaths) {
 		if (datInits.has(mp)) addLine(b, `void ${mangleModuleName(mp)}__DatInit000(void);`);
 		if (inits.has(mp)) addLine(b, `void ${mangleModuleName(mp)}__Init000(void);`);
+		if (deinits.has(mp)) addLine(b, `void ${mangleModuleName(mp)}__Deinit000(void);`);
 	}
 	addNewline(b);
 	addLine(b, "int cmdCount;");
@@ -464,6 +467,20 @@ export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutp
 	}
 	b.indent -= 1;
 	addLine(b, "}");
+	addNewline(b);
+	addLine(b, "void msHcrCoreDeinit(void) {");
+	b.indent += 1;
+	addLine(b, "static int done = 0;");
+	addLine(b, "if (done) return;");
+	addLine(b, "done = 1;");
+	let di = modulePaths.length;
+	while (di > 0) {
+		di -= 1;
+		if (deinits.has(modulePaths[di])) addLine(b, `${mangleModuleName(modulePaths[di])}__Deinit000();`);
+	}
+	addLine(b, "msOrcCollect();");
+	b.indent -= 1;
+	addLine(b, "}");
 	return extract(b);
 }
 
@@ -474,6 +491,7 @@ export function genHcrImageDispatcher(output: CModuleOutput, isEntry: boolean): 
 	addNewline(b);
 	if (output.hasDatInit) addLine(b, `void ${modName}__DatInit000(void);`);
 	if (output.hasInit || isEntry) addLine(b, `void ${modName}__Init000(void);`);
+	if (output.hasDeinit) addLine(b, `void ${modName}__Deinit000(void);`);
 	addNewline(b);
 	addLine(b, "MS_HCR_EXPORT void DatInit000(void) {");
 	addLine(b, "  msHcrCoreInit();");
@@ -482,6 +500,11 @@ export function genHcrImageDispatcher(output: CModuleOutput, isEntry: boolean): 
 	addLine(b, "MS_HCR_EXPORT void Init000(void) {");
 	if (output.hasInit || isEntry) addLine(b, `  ${modName}__Init000();`);
 	addLine(b, "}");
+	if (output.hasDeinit) {
+		addLine(b, "MS_HCR_EXPORT void Deinit000(void) {");
+		addLine(b, `  ${modName}__Deinit000();`);
+		addLine(b, "}");
+	}
 	return extract(b);
 }
 

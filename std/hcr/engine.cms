@@ -43,6 +43,7 @@ extern function msHcrGuardText(): string;
 extern function msHcrRestoreTypeInfos(moduleId: cstring): void;
 extern function msDrainUntilIdle(): void;
 extern function msReportOrphanFailures(): int32;
+extern function msHcrCoreDeinit(): void;
 
 interface HcrImage {
 	handle: Ptr<void>;
@@ -284,7 +285,17 @@ export function start(): int32 {
 		if (msHcrCallInitStatus(required(item.image, "Init000")) != 0) fatal(`initialization of module '${item.module.moduleId}' threw`);
 	}
 	msDrainUntilIdle();
-	return msReportOrphanFailures() != 0 ? 1 : 0;
+	const code = msReportOrphanFailures() != 0 ? 1 : 0;
+	destroyGlobals();
+	return code;
+}
+
+function destroyGlobals(): void {
+	for (let i = modules.length - 1; i >= 0; i -= 1) {
+		const raw = symbolOf(modules[i].image.handle, "Deinit000");
+		if (hcrIsNull(raw) == 0 && msHcrCallInitStatus(raw) != 0) fatal(`module '${modules[i].moduleId}' threw while destroying its globals`);
+	}
+	msHcrCoreDeinit();
 }
 
 function release(candidates: HcrCandidate[]): void {

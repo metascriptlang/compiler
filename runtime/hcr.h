@@ -87,5 +87,6 @@ int32_t msHcrInvokeInit(void* raw);
 void* msHcrTypeInfo(const char* moduleId, const char* typeName);
 void msHcrRestoreTypeInfos(const char* moduleId);
 void msHcrCoreInit(void);
+void msHcrCoreDeinit(void);
 
 #endif
