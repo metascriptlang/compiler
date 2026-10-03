@@ -1,40 +1,37 @@
 // GUARD-OS solana
-// GUARD-CHECK-FAIL solanaCpiAccountLimit.ms:14:
-// GUARD-CHECK-FAIL a CPI lists at most 64 accounts, the runtime's limit on the account infos it takes, and the list has 65
-// A CPI written at the call lists at most sixty-four accounts, the runtime's limit on the account infos
-// a CPI takes; a longer run-time list is invokeList, which answers InvalidArgument.
-// RED MEANS: invoke accepted a list the runtime refuses, or lost the error that names the limit.
-import { InstructionAccount, ProgramError, account, failWith, invoke, programId, putU8 } from "std/solana";
+// GUARD-CHECK-FAIL overflows the maximum allowed frame space
+// GUARD-CHECK-FAIL compile failed for
+// A CPI written at the call builds its accounts in the caller's frame, so a list too long for the
+// 4 KB frame (45 accounts beside a one-byte buffer) fails the build, naming the function and its size;
+// the 44 that fit build in solanaCpiFrame.ms.
+// RED MEANS: a CPI list stopped living in the caller's frame, or the frame check no longer fires.
+import { Account, InstructionAccount, ProgramError, account, failWith, invoke, programId, putU8 } from "std/solana";
+
+function send(a: Account): Result<uint64, ProgramError> {
+	let storage: uint8[1] = [];
+	return invoke(programId(), [
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+	], storage, putU8(storage, 0, 1));
+}
 
 function main(): void {
 	const first = account(0);
 	if (!first.ok) { return; }
-	const a = first.value;
-	let storage: uint8[1] = [];
-	const sent = invoke(programId(), [
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
-		InstructionAccount.writable(a), InstructionAccount.writable(a),
-	], storage, putU8(storage, 0, 1));
+	const sent = send(first.value);
 	if (!sent.ok) { failWith(sent.error); }
 }
 main();

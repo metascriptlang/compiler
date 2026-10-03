@@ -1,7 +1,7 @@
 // GUARD-OS solana
 // The largest CPI shapes the std supports build for SBF inside the 4 KB frame: sixteen accounts
-// written at the call beside a 1 KB data buffer, a signed one, and the run-time lists behind
-// commit, scheduleTask and requestRandomness.
+// written at the call beside a 1 KB data buffer, a signed one, forty-four beside a one-byte buffer,
+// and the run-time lists behind invokeList (up to 64), commit, scheduleTask and requestRandomness.
 // RED MEANS: a CPI shape grew past the frame the SBF backend allows, or a helper stopped
 // building its accounts and data on the caller's stack.
 import {
@@ -42,6 +42,27 @@ function sixteen(a: Account, b: Account): Result<uint64, ProgramError> {
 	);
 }
 
+function forty4(a: Account): Result<uint64, ProgramError> {
+	let storage: uint8[1] = [];
+	return invoke(programId(), [
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a), InstructionAccount.writable(a),
+	], storage, putU8(storage, 0, 1));
+}
+
 function signedSixteen(a: Account, b: Account): Result<uint64, ProgramError> {
 	let storage: uint8[1024] = [];
 	return signed(
@@ -65,8 +86,8 @@ function signedSixteen(a: Account, b: Account): Result<uint64, ProgramError> {
 }
 
 function listed(a: Account, count: int32): Result<uint64, ProgramError> {
-	let metas: InstructionAccount[16];
-	for (let index = 0; index < 16; index++) { metas[index] = InstructionAccount.writable(a); }
+	let metas: InstructionAccount[64];
+	for (let index = 0; index < 64; index++) { metas[index] = InstructionAccount.writable(a); }
 	let storage: uint8[1024] = [];
 	return invokeList(programId(), metas[0..count], storage, putU8(storage, 0, 1));
 }
@@ -104,10 +125,11 @@ function main(): void {
 	const metas: AccountMeta[2] = [AccountMeta.writable(Pubkey.zero()), AccountMeta.readonly(Pubkey.zero())];
 	let result = sixteen(a.value, b.value);
 	if (op == 1) { result = signedSixteen(a.value, b.value); }
-	if (op == 2) { result = listed(a.value, op as int32); }
+	if (op == 2) { result = listed(a.value, 64); }
 	if (op == 3) { result = committed(a.value, b.value, c.value, op as int32); }
 	if (op == 4) { result = scheduledList(a.value, b.value, c.value); }
 	if (op == 5) { result = randomness(a.value, b.value, c.value, metas); }
+	if (op == 6) { result = forty4(a.value); }
 	if (!result.ok) { failWith(result.error); }
 }
 main();

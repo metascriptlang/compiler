@@ -88,6 +88,15 @@ function limitCall(which: uint64): Result<uint64, ProgramError> {
 	return signed(invokeList(programId(), accounts, storage, length), ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
 }
 
+function wideList(count: int32): Result<uint64, ProgramError> {
+	const self = try account(0);
+	let metas: InstructionAccount[65];
+	for (let index = 0; index < 65; index++) { metas[index] = InstructionAccount.readonly(self); }
+	let storage: uint8[3] = [];
+	const length = putU8(storage, putU8(storage, putU8(storage, 0, 12), 0), 0);
+	return invokeList(programId(), metas[0..count], storage, length);
+}
+
 function unsignedLoop(count: uint64): Result<uint64, ProgramError> {
 	for (let index: uint64 = 0; index < count; index++) {
 		const self = try account(0);
@@ -259,6 +268,7 @@ function dispatch(): Result<uint64, ProgramError> {
 	if (op == 16) { return returnDataLoop(count); }
 	if (op == 17) { return logKeyLoop(count); }
 	if (op == 18) { return eventLoop(count); }
+	if (op == 19) { return wideList(count as int32); }
 	return request(0 - count);
 }
 

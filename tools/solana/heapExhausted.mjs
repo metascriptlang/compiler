@@ -25,7 +25,7 @@ const HEAP = 32 * 1024;
 const BUDGET = 1_400_000;
 const LARGEST_COUNT = 60_000;
 const NAMED = /std\/solana: the (\d+) KiB program heap is exhausted \(asked (\d+) more bytes at (\d+)\)/;
-const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5, push: 6, literal: 7, pairs: 8, text: 9, signed: 10, unsigned: 11, limits: 13, rent: 14, clock: 15, returnData: 16, logKey: 17, event: 18 };
+const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5, push: 6, literal: 7, pairs: 8, text: 9, signed: 10, unsigned: 11, limits: 13, rent: 14, clock: 15, returnData: 16, logKey: 17, event: 18, wide: 19 };
 const MASK = 2n ** 64n - 1n;
 const SUMS = {
 	push: (n) => sum(n, (i) => (3n * i + 1n) * (i + 1n)),
@@ -152,6 +152,13 @@ function namedFailure(label, outcome) {
 		check(`[${name}] a signer of ${what} fails the CPI (${refused.error})`,
 			!refused.ok && /MaxSeedLengthExceeded|Max seed length exceeded|Length of the seed is too long/i.test(`${refused.error}\n${refused.logs.join("\n")}`));
 	}
+	for (const count of [1, 16, 17, 63, 64]) {
+		const listed = await run(OPS.wide, count);
+		check(`[${name}] a run-time list of ${count} accounts is sent (${listed.ok ? `${listed.units} CU` : listed.error})`, listed.ok);
+	}
+	const beyond = await run(OPS.wide, 65);
+	check(`[${name}] a run-time list of 65 accounts is refused with InvalidArgument before it is sent (${beyond.error})`,
+		!beyond.ok && /InvalidArgument/.test(beyond.error));
 	const perCall = (kind) => Math.round((units.get(`${kind}20`) - units.get(`${kind}1`)) / 19);
 	console.log(`[${name}] per CPI: 0 heap bytes, ${perCall("signed")} CU signed, ${perCall("unsigned")} CU unsigned, ${perCall("builders")} CU with a 512-byte buffer`);
 }
