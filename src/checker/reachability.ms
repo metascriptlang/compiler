@@ -1,8 +1,7 @@
 // Global Dead Code Elimination — Reachability Analysis
 //
 // Computes an AliveSet of symbols by walking ASTs from roots (main, top-level
-// stmts, test decls, exported symbols); symbol-less TypeInfo declarations are
-// still keyed "modulePath:name".
+// stmts, test decls, exported symbols); TypeInfo declarations are still keyed "modulePath:name".
 
 import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, HiddenStdConvData,
 	ExportDeclData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
@@ -278,8 +277,7 @@ function markPromiseAllResult(resultType: Type, modulePath: string): void {
 	markReferenced(requireOpByKey(createArray(elem), AttachedOp.AttachedDestructor), modulePath);
 }
 
-// Union narrow/project sites make codegen emit variant Copy/Destroy calls with no AST
-// edge — any walked node typed Union pins its variants' ops.
+// Union narrow/project sites make codegen emit variant Copy/Destroy calls with no AST edge.
 function markUnionHookEdges(t: Type): void {
 	for (const vt of t.typeChildren) {
 		if (vt == null) continue;
@@ -701,7 +699,6 @@ export function computeAliveSet(
 				}
 			}
 
-			// Root 2: exported root functions.
 			if (bare.kind == NodeKind.FunctionDecl) {
 				if (bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
 					markSymAndWalk(bare.resolvedSym, modulePath);
