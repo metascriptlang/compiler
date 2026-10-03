@@ -12,8 +12,6 @@
 // Two passes:
 //   Pass 1 (Declarations): For each FunctionDecl with Span<T> params:
 //     - Replace Span<T> param with two params (T* name_data, int64_t name_len)
-//     - Inject shadowing local: const name = { data: name_data, len: name_len }
-//     - Body stays untouched — references name as a Span struct via the local
 //
 //   Pass 2 (Call Sites): For each call of an extern whose declared type has Span<T> params, in any module:
 //     - If arg is ObjectLiteral (from spanLower): extract data/len fields into two args
@@ -25,14 +23,12 @@
 // V1 limitation: top-level FunctionDecl only. Span in closures/function-pointer types
 // emits a diagnostic.
 
-import { Node, NodeKind, DeclKind, FunctionDeclData, CallExprData, ObjectLiteralData, ArrayLiteralData, BlockStmtData, Type, TypeKind } from "../../ast/node";
-import { createPtr, createSpan, getSysType, copyTypeShallow } from "../../checker/types";
-import { SymbolFlag, hasFlag } from "../../checker/symbol";
+import { Node, NodeKind, FunctionDeclData, Symbol, CallExprData, ObjectLiteralData, ArrayLiteralData, Type, TypeKind } from "../../ast/node";
+import { createPtr, getSysType } from "../../checker/types";
 import { TransformContext, reportTransformError } from "../context";
 import { walkNode } from "../walker";
 import {
-	makeVarDecl, makeTypedIdent, makeObjectLiteral, makeMember,
-	makeConditional, makeBinary, makeNumber, makeNull,
+	makeMember, makeConditional, makeBinary, makeNumber, makeNull, overloadWinner,
 } from "../util";
 
 // Track which functions had Span params expanded (by function name → param indices)
@@ -40,6 +36,11 @@ interface ExpandedParam {
 	originalIndex: number;
 	paramName: string;
 	elemType: Type;
+}
+
+interface ExpandedFunc {
+	funcSym: Symbol;
+	params: ExpandedParam[];
 }
 
 // ===== Main Entry Point =====
@@ -164,50 +165,24 @@ function expandFunctionDecl(node: Node): void {
 	node.nodeType = flat;
 	if (node.resolvedSym != null && node.resolvedSym.symbolType == fnType) node.resolvedSym.symbolType = flat;
 
-	// Inject shadowing locals at top of body
-	if (d.fnBody != null && d.fnBody.kind == NodeKind.BlockStmt) {
-		const bd = d.fnBody.data as BlockStmtData;
-		const loc = node.location;
-
-		// Insert in reverse order so they appear in original param order
-		let si = spanParams.length - 1;
-		while (si >= 0) {
-			const ep = spanParams[si];
-			const spanType = createSpan(ep.elemType);
-
-			// const name = { data: name_data, len: name_len }
-			const dataRef = makeTypedIdent(ep.paramName + "_data", createPtr(ep.elemType), loc);
-			const lenRef = makeTypedIdent(ep.paramName + "_len", getSysType(TypeKind.Int64), loc);
-			const initObj = makeObjectLiteral(["data", "len"], [dataRef, lenRef], loc);
-			initObj.nodeType = spanType;
-			const shadowDecl = makeVarDecl(ep.paramName, initObj, DeclKind.Const, loc);
-			shadowDecl.nodeType = spanType;
-
-			// Prepend to body statements
-			const newStmts: Node[] = [shadowDecl];
-			let bi = 0;
-			while (bi < bd.statements.length) {
-				newStmts.push(bd.statements[bi]);
-				bi = bi + 1;
-			}
-			bd.statements = newStmts;
-
-			si = si - 1;
-		}
-	}
-
+	// Record this function as expanded
+	if (node.resolvedSym == null) throw new Error(`internal: extern '${d.fnName}' with a span parameter reached expansion without its symbol`);
+	expandedFuncs.push({ funcSym: node.resolvedSym, params: spanParams });
 }
 
 // ===== Pass 2: Call Site Expansion =====
 
 function expandCallSite(node: Node): void {
 	const d = node.data as CallExprData;
-	const sym = node.resolvedSym != null ? node.resolvedSym : (d.callee != null ? d.callee.resolvedSym : null);
-	if (sym == null || !hasFlag(sym, SymbolFlag.ImportC)) return;
-	const declared = d.callee != null ? d.callee.nodeType : null;
-	if (declared == null || declared.kind != TypeKind.Function) return;
-	const spanParams = spanParamsOf(declared, []);
-	if (spanParams.length == 0) return;
+
+	if (node.resolvedSym == null) return;
+	const target = overloadWinner(node.resolvedSym, d.resolvedOverloadIdx);
+	let funcInfo: ExpandedFunc = null as unknown as ExpandedFunc;
+	for (const ef of expandedFuncs) {
+		if (ef.funcSym == target) { funcInfo = ef; break; }
+	}
+
+	if (funcInfo == null) return;
 
 	// Build new argument list, expanding Span args into two
 	const newArgs: Node[] = [];
