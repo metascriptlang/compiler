@@ -708,12 +708,12 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			for (const c of t.typeChildren) children.push(idxType(c));
 		}
 		const names: string[] = t.typeNames != null ? t.typeNames : [];
-		const opsRaw: (Symbol | null)[] = t.attachedOps != null ? t.attachedOps : [];
-		const ops: string[] = [];
-		for (const o of opsRaw) {
-			ops.push(o != null ? o.name : "");
+		if (t.attachedOps != null) {
+			for (const o of t.attachedOps) {
+				if (o != null) throw new Error(`internal: prelude pack type '${t.typeName}' carries attached op '${o.name}', which exists only after lowering`);
+			}
 		}
-		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(ops)}`);
+		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}`);
 	}
 
 	_wnodeIdx = nodeIdx;
@@ -1145,9 +1145,6 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			typeReturnIdx.push(f[9].parseInt() as int32);
 			typeExtraIdx.push(f[10].parseInt() as int32);
 			typeSymIdx.push(f[11].parseInt() as int32);
-			for (const opName of splitCsv(f[12])) {
-				if (opName != "") throw new Error(`internal: prelude pack type '${t.typeName}' carries attached op '${opName}', which exists only after lowering`);
-			}
 			t.attachedOps = [];
 			types.push(t);
 		} else if (f[0] == "N") {
