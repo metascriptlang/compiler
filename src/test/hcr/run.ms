@@ -341,6 +341,10 @@ function subdirModule(): void {
 }
 
 function reloadsNewTypeEdit(tag: string, fixture: string, prefix: string, why: string): void {
+	if (platform != "windows" && platform != "linux") {
+		console.log(`skip ${tag}: file watching has no backend for ${platform}`);
+		return;
+	}
 	const dir = copyAppAndLib(fixture);
 	copy(`${dir}/app/logicTag.ms`, `${dir}/app/edit.txt`);
 	mustBuild(tag, `${dir}/app`, ["build", "app.ms", "--hcr", "--output=out/built/app"], why);
