@@ -627,7 +627,8 @@ function _bridgeMsStringFromCodePoint(args: RaiserValue[]): RaiserValue {
 // from either side; every derived string algorithm is Tier 2
 // (std/core/string/shared.ms). The only bridges that CREATE a VM heap value.
 function _bridgeMsAsBytes(args: RaiserValue[]): RaiserValue {
-	const bytes = unboxString(args[0]).asBytes();
+	const text = unboxString(args[0]);
+	const bytes = text.asBytes();
 	const heapOrNull = activeHostArrayHeap();
 	if (heapOrNull == null) return raiserNil();
 	const heap: RaiserArrayHeap = heapOrNull;
