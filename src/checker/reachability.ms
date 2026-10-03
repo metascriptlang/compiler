@@ -895,7 +895,7 @@ test "a computed alive set keeps the side-effect imports of the entry and their 
 
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
-import { createStruct, createRef, createUnion, nullType, stringType } from "./types";
+import { spelled, createStruct, createRef, createUnion, nullType, stringType } from "./types";
 import { liftedOp, resetHookSyms, objectTypeInfoKey } from "../codegen/c/types";
 
 function allocationOf(source: string): Node {
@@ -942,7 +942,7 @@ test "an allocation demands its base class TypeInfo and names it" {
 test "a lambda environment class is local to the module that lifted it" {
 	const program = allocationOf("let value = { label: \"held\" };");
 	const allocation = ((program.data as ProgramData).programStmts[0].data as VariableDeclData).initializer;
-	const env = createStruct("$Env_run_shared", ["label"], [stringType()], true);
+	const env = spelled(createStruct("$Env_run_shared", ["label"], [stringType()], true));
 	allocation.nodeType = createRef(env);
 	const alive = computeAliveSet([program], ["user.ms"], "user.ms", false, createModuleGraph());
 	assert alive.typeInfos.length == 1;

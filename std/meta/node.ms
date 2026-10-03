@@ -78,6 +78,7 @@ export enum TypeFlag {
 	PtrIntroduced,        // Ptr<T> introduced by pointer-param introduction, not user-declared
 	HasGenericParam,
 	BorrowDot,
+	Spelled,              // the compiler spelled this name from an owner and arguments: it is the identity and no declaring symbol exists
 }
 
 // ===== Attached Lifecycle Ops =====

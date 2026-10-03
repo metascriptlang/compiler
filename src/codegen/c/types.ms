@@ -6,7 +6,7 @@
 
 import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { genericParamsOf, nominalTypeKey, isNominalKind } from "../../checker/types";
+import { spelled, genericParamsOf, nominalTypeKey, isNominalKind } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
@@ -1244,12 +1244,13 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 				for (const n of instBody.typeNames) bodyNames.push(n);
 				const bodyChildren: Type[] = [];
 				for (const c of instBody.typeChildren) bodyChildren.push(c);
-				return genObjectType(g, createStruct(instName, bodyNames, bodyChildren, isStructType(instBody)));
+				return genObjectType(g, spelled(createStruct(instName, bodyNames, bodyChildren, isStructType(instBody))));
 			}
 			if (instBody != null && instBody.kind == TypeKind.Union) {
 				const renamed = emptyType();
 				assignType(renamed, instBody);
 				renamed.typeName = instName;
+				spelled(renamed);
 				return genUnionType(g, renamed);
 			}
 			if (baseType != null && baseType.kind == TypeKind.Struct) {
@@ -1269,9 +1270,10 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 						for (const c of concType.typeChildren) newChildren.push(c);
 						const newNames: string[] = [];
 						for (const n of concType.typeNames) newNames.push(n);
-						concType = createStruct(instName, newNames, newChildren, isStructType(concType));
+						concType = spelled(createStruct(instName, newNames, newChildren, isStructType(concType)));
 					} else {
 						concType.typeName = instName;
+						spelled(concType);
 					}
 					return genObjectType(g, concType);
 				}
@@ -1293,6 +1295,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 					// Stamp instance name so genUnionType caches under it (Phase 1b emits typedef)
 					if (concType != baseType) {
 						concType.typeName = instName;
+						spelled(concType);
 					}
 					return genUnionType(g, concType);
 				}

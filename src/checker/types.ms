@@ -296,7 +296,7 @@ export function createResult(okType: Type, errType: Type): Type {
 	base.typeName = "Result";
 	base.typeExtra = booleanType();
 	base.typeNames = ["ok", "true", "false"];
-	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn);
+	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn).incl(TypeFlag.Spelled);
 	return createGenericInstance(base, [okType, errType]);
 }
 
@@ -306,6 +306,7 @@ export function createPromise(innerType: Type | null): Type {
 	base.typeName = "Promise";
 	base.typeNames = [];
 	base.typeChildren = [];
+	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.Spelled);
 	return createGenericInstance(base, [innerType!]);
 }
 
@@ -325,14 +326,14 @@ export function createSpawnHandle(innerType: Type | null): Type {
 	// createGenericInstance propagates base.typeFlags onto the produced
 	// GenericInstance so isAffineAwaitable(t) can detect spawn-origin Promises
 	// anywhere they flow.
-	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.AwaitableAffine).incl(TypeFlag.AwaitableScopeBound);
+	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.AwaitableAffine).incl(TypeFlag.AwaitableScopeBound).incl(TypeFlag.Spelled);
 	return createGenericInstance(base, [innerType!]);
 }
 
 // Iterator<T> — return type of function* generators. Wraps yield type T.
 // At runtime: { next: () => { value: T, done: boolean } }
 export function createIteratorResult(yieldType: Type): Type {
-	const genericBase = createStruct("IteratorResult", ["value", "done"], [createGenericParam("T"), createPrimitive(TypeKind.Boolean)], false);
+	const genericBase = spelled(createStruct("IteratorResult", ["value", "done"], [createGenericParam("T"), createPrimitive(TypeKind.Boolean)], false));
 	const gi = createGenericInstance(genericBase, [yieldType]);
 	instantiateGenericBody(gi, "T");
 	return gi;
@@ -340,7 +341,7 @@ export function createIteratorResult(yieldType: Type): Type {
 
 export function createIterator(yieldType: Type): Type {
 	const nextFnType = createClosureType([], [], createIteratorResult(yieldType));
-	const iter = createStruct("Iterator", ["next"], [nextFnType], false);
+	const iter = spelled(createStruct("Iterator", ["next"], [nextFnType], false));
 	return iter;
 }
 
@@ -1462,7 +1463,7 @@ export function createMaybeType(inner: Type): Type {
 	t.typeName = "Maybe_" + key;
 	t.typeNames = ["value", "present"];
 	t.typeChildren = [inner, booleanType()];
-	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct).incl(TypeFlag.IsMaybe);
+	t.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct).incl(TypeFlag.IsMaybe).incl(TypeFlag.Spelled);
 	t.typeReturn = inner;    // store inner type for unwrapping
 	propagateToOwner(t, inner);
 	if (!_queryCachesReadOnly) {
@@ -1536,9 +1537,9 @@ export function lockedCellName(payload: Type | null): string {
 }
 
 export function createLockedCell(payload: Type | null): Type {
-	return createStruct(lockedCellName(payload),
+	return spelled(createStruct(lockedCellName(payload),
 		["lockNext", "lockServing", "value"],
-		[getSysType(TypeKind.Int32), getSysType(TypeKind.Int32), payload!], true);
+		[getSysType(TypeKind.Int32), getSysType(TypeKind.Int32), payload!], true));
 }
 
 export function createLocked(payload: Type | null): Type {
@@ -1864,7 +1865,7 @@ export function createBitSet(elem: Type): Type {
 	t.typeName = "BitSet";
 	t.typeReturn = elem;
 	t.typeValue = bitSetMemberCount(elem);
-	return t;
+	return spelled(t);
 }
 
 export function createBrandDistinct(brandKey: string, inner: Type): Type {
@@ -2227,7 +2228,7 @@ export function destrObjectRestType(srcType: Type | null, taken: string[]): Type
 		if (ft == null) return null;
 		types.push(ft);
 	}
-	return createStruct(anonStructName(names, types), names, types, false);
+	return spelled(createStruct(anonStructName(names, types), names, types, false));
 }
 
 // StringLiteral: a specific string value as a type (TypeScript parity).
@@ -2562,30 +2563,20 @@ export function tupleTypeName(t: Type | null): string {
 	return "msTuple_" + _stdHashToBase36(key);
 }
 
-const BUILTIN_TYPE_NAMES: string[] = ["Result", "Promise", "Iterator", "IteratorResult", "BitSet"];
-
-export function isCompilerSpelledTypeName(name: string): boolean {
-	if (name.startsWith("$")) return true;
-	if (name.indexOf("__", 0) >= 0) return true;
-	if (name.indexOf(".", 0) >= 0) return true;
-	if (name.startsWith("{") || name.startsWith("(") || name.startsWith("|") || name.startsWith("__anon")) return true;
-	return name.startsWith("Maybe_") || name.startsWith("msTuple_") || name.startsWith("msAnon_")
-		|| name.startsWith("msUnion_") || name.startsWith("msLockedCell_");
+export function spelled(t: Type): Type {
+	t.typeFlags = t.typeFlags.incl(TypeFlag.Spelled);
+	return t;
 }
 
 export function hasTypeIdentity(t: Type): boolean {
-	if (t.sym != null) return true;
-	if (t.kind == TypeKind.Distinct && t.typeFlags.has(TypeFlag.BrandWiden)) return true;
-	return isCompilerSpelledTypeName(t.typeName) || BUILTIN_TYPE_NAMES.includes(t.typeName);
+	return t.sym != null || t.typeFlags.has(TypeFlag.Spelled)
+		|| (t.kind == TypeKind.Distinct && t.typeFlags.has(TypeFlag.BrandWiden));
 }
 
 export function nominalTypeKey(t: Type): string {
 	const sym = t.sym;
 	if (sym != null) return `${sym.modulePath}:${sym.name}:${sym.disamb}`;
 	if (!hasTypeIdentity(t)) throw new Error(`internal: named type '${t.typeName}' (kind ${t.kind as number}) has no declaring symbol`);
-	if (t.typeName.startsWith("{") || t.typeName.startsWith("(") || t.typeName.startsWith("|") || t.typeName.startsWith("__anon")) {
-		return t.typeName + "{" + t.typeNames.join(",") + "}";
-	}
 	return t.typeName;
 }
 
@@ -3193,6 +3184,7 @@ function substituteStruct(t: Type, paramName: string, concrete: Type, seen: Curs
 	// identity bit (set at createUnion) that must survive the rebuild or mono'd
 	// generic-union payloads lose their DU ownership marker.
 	if (t.typeFlags.has(TypeFlag.DuVariant)) result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
+	if (t.typeFlags.has(TypeFlag.Spelled)) result.typeFlags = result.typeFlags.incl(TypeFlag.Spelled);
 	return result;
 }
 
@@ -3425,6 +3417,7 @@ function substituteStructAll(t: Type, names: string[], concretes: Type[], seen: 
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
 	if (t.typeFlags.has(TypeFlag.DuVariant)) result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
+	if (t.typeFlags.has(TypeFlag.Spelled)) result.typeFlags = result.typeFlags.incl(TypeFlag.Spelled);
 	return result;
 }
 
@@ -4997,4 +4990,25 @@ test "a tuple refuses a named member that has no declaring symbol" {
 		refused = e.message;
 	}
 	assert refused.contains("OrphanCell");
+}
+
+test "a named type has identity only from its symbol or the Spelled flag" {
+	function refusal(t: Type): string {
+		try {
+			nominalTypeKey(t);
+			return "";
+		} catch (e) {
+			return e.message;
+		}
+	}
+	const lookalike = createStruct("{x: number}", ["x"], [numberType()], false);
+	assert refusal(lookalike).contains("{x: number}");
+	const anon = createStruct("__anon1__xn", ["x"], [numberType()], false);
+	assert refusal(anon).contains("__anon1__xn");
+	const mangled = createStruct("Box__number", ["v"], [numberType()], true);
+	assert refusal(mangled).contains("Box__number");
+	assert nominalTypeKey(spelled(mangled)) == "Box__number";
+	assert nominalTypeKey(spelled(anon)) == "__anon1__xn";
+	assert hasTypeIdentity(createMaybeType(stringType()));
+	assert hasTypeIdentity(createLockedCell(numberType()));
 }

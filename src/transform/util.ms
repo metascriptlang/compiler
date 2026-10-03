@@ -4,6 +4,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr } from "../checker/types";
+import { spelled } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym } from "./context";
 import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
@@ -642,7 +643,7 @@ export function makeInterfaceDeclFromTypes(name: string, fields: string[], field
 		nameLocation: loc,
 		interfaceFieldDecorators: noFieldDecorators(fields.length),
 	}, syntheticToken(loc));
-	n.nodeType = createStruct(name, fields, resolvedTypes, true);
+	n.nodeType = spelled(createStruct(name, fields, resolvedTypes, true));
 	return n;
 }
 
