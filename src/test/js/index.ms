@@ -9,4 +9,5 @@ import "./awaitOperand";
 import "./concurrencyBoundary";
 import "./testSuspension";
 import "./intConv";
+import "./asConversion";
 import "./downConversion";

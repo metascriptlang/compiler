@@ -104,6 +104,7 @@ import "./macroExpansionBoundary";
 import "./macroReflection";
 import "./pointerSlotRelation";
 import "./preludeExportOwnership";
+import "./raiserProgramArgv";
 import "./slotRelation";
 import "./storageMutability";
 import "./tupleIndex";
