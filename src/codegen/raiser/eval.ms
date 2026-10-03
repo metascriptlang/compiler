@@ -93,17 +93,19 @@ function transformForEngine(program: Node): Node {
 		&& outer.module != null
 		&& outer.preludeCtx != null;
 	const prevEngineMode = setEngineCheckMode(true);
-	const rowMark = genericTypeInstMark();
-	const checkerCtx = hasFullOuterCtx
-		? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
-		: checkProgram(program);
-	_lastEngineCheckErrors = checkerCtx.errors;
-	const transformed = transformForRaiser(program, checkerCtx);
-	dropCTypeRowsSince(rowMark);
-	setEngineCheckMode(prevEngineMode);
-	if (outer != null) {
-		outer.program = savedOuterProgram;
-		outer.preludeCtx = savedOuterPrelude;
+	let transformed = program;
+	try {
+		const checkerCtx = hasFullOuterCtx
+			? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
+			: checkProgram(program);
+		_lastEngineCheckErrors = checkerCtx.errors;
+		transformed = transformForRaiser(program, checkerCtx);
+	} finally {
+		setEngineCheckMode(prevEngineMode);
+		if (outer != null) {
+			outer.program = savedOuterProgram;
+			outer.preludeCtx = savedOuterPrelude;
+		}
 	}
 	return transformed;
 }
