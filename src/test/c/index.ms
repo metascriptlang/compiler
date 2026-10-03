@@ -52,3 +52,4 @@ import "./objectLiteralDestination";
 import "./returnedCallResultSlot";
 import "./comptimeBlockStaticType";
 import "./nrvoOutTempZero";
+import "./emissionOwnership";

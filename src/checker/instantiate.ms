@@ -7,7 +7,7 @@
 import { methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { spelled, inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
+import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
 import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
@@ -965,6 +965,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	instSym.location = classSym.location;
 	instSym.nameId = getIdentId(host.table.identCache, mangledClass);
 	instSym.instantiatedFrom = classSym;
+	substStruct.sym = instSym;
 	instances.push(instSym);
 	host.typeInstCache.set(classSym, instances);
 	const classBody: Node[] = instanceFieldInits(classData, dedup.names, dedup.types, substStruct, classSym, ctx, loc);
@@ -1015,10 +1016,10 @@ function instanceStruct(structBase: Type, mangledClass: string, names: string[],
 		for (const n of substStruct.typeNames) newNames.push(n);
 		const newChildren: Type[] = [];
 		for (const c of substStruct.typeChildren) newChildren.push(c);
-		return spelled(createStruct(mangledClass, newNames, newChildren, isStructType(substStruct)));
+		return createStruct(mangledClass, newNames, newChildren, isStructType(substStruct));
 	}
 	substStruct.typeName = mangledClass;
-	return spelled(substStruct);
+	return substStruct;
 }
 
 function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], types: Type[], mangledClass: string, thisType: Type, ctx: CheckerContext, loc: SourceLocation): Node {
