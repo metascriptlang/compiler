@@ -679,6 +679,15 @@ export function literalAdoptsFloat32(lit: Node): boolean {
 	return (lit.data as NumberLiteralData).isFloat || (isNodeIntLit(lit) && intLiteralExactInFloat(lit, createPrimitive(TypeKind.Float32)));
 }
 
+export function constantAdoptsFloat32(expr: Node): Node {
+	const none = null as unknown as Node;
+	if (expr.kind == NodeKind.NumberLiteral || !isUntypedConstant(expr, 0)) return none;
+	const folded = foldedNumber(expr);
+	if (folded == null || !literalAdoptsFloat32(folded)) return none;
+	folded.nodeType = createPrimitive(TypeKind.Float32);
+	return folded;
+}
+
 export function isFittingIntLiteral(expr: Node, target: Type): boolean {
 	if (isNodeIntLit(expr)) return literalFitsInType(expr, target, false);
 	if (expr.kind == NodeKind.UnaryExpr) {
@@ -1429,6 +1438,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	}
 	const constantFit = fitIntegerConstant(ctx, expr, exprType, formal);
 	if (constantFit != null) return constantFit.nodeType == formal ? constantFit : fitNode(ctx, constantFit, formal, constantFit.nodeType);
+	const carriedConstant = numericConstantForCarrier(expr, exprType, formal);
+	if (carriedConstant != null) return fitNode(ctx, carriedConstant, formal, carriedConstant.nodeType);
 	const payloadSlot = isMaybeType(formal) && formal.typeReturn != null && !isMaybeType(exprType) ? formal.typeReturn : formal;
 	if (!hasGenericParams(formal) && !slotTakesValue(exprType, payloadSlot)) {
 		const converted = tryApplyConverter(ctx, expr, exprType, formal);
@@ -1499,7 +1510,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 			reportNumericConvConstAware(ctx, expr, exprType, formal, "");
 			return expr;
 		}
-		return wrapInConv(expr, formal);
+		const rounded = float32ConstantLiteral(expr, formal);
+		return rounded != null ? rounded : wrapInConv(expr, formal);
 	}
 	// Narrowing integer conversion: wrap in HiddenStdConv
 	if (isNarrowingIntConv(exprType, formal) || refusesIntConv(exprType, formal)) {
@@ -1576,6 +1588,7 @@ function doubleFitsIntTarget(v: number, target: Type): boolean {
 
 const DOUBLES_ALL_INTEGRAL_FROM: number = 4503599627370496.0;
 const FLOAT32_MAX: number = 3.4028234663852886e38;
+const FLOAT32_ROUNDS_TO_INFINITY: number = 3.4028235677973366e38;
 
 function isFloatSlot(t: Type): boolean {
 	return t.kind == TypeKind.Float32 || t.kind == TypeKind.Float64 || t.kind == TypeKind.Number;
@@ -1600,8 +1613,15 @@ function roundedToFloat32(v: number): number {
 	return widened;
 }
 
-function doubleExactInFloat32(v: number): boolean {
-	return v != v || roundedToFloat32(v) == v;
+function float32Overflows(v: number): boolean {
+	return (v >= FLOAT32_ROUNDS_TO_INFINITY || v <= -FLOAT32_ROUNDS_TO_INFINITY) && v != Infinity && v != -Infinity;
+}
+
+export function reportFloat32LiteralRange(ctx: CheckerContext, lit: Node): void {
+	const v = (lit.data as NumberLiteralData).value;
+	if (!float32Overflows(v)) return;
+	addError(ctx, "number out of range: '" + floatValueText(v) + "' is outside the float32 range (±3.4028235e38) — float32 would hold Infinity; keep the value in a 'number'",
+		lit.location.line, lit.location.column);
 }
 
 function intExactInMantissa(magnitude: uint64, mantissaBits: int32): boolean {
@@ -1649,13 +1669,45 @@ function foldedNumber(expr: Node): Node {
 export function isFittingNumericConstant(expr: Node, target: Type): boolean {
 	if (isFittingIntLiteral(expr, target)) return true;
 	const slot = ownedValueSlot(target);
-	return isFloatSlot(slot) && isUntypedConstant(expr, 0) && constantExactInFloat(expr, slot);
+	return isFloatSlot(slot) && isUntypedConstant(expr, 0) && constantFitsFloat(expr, slot);
 }
 
-function constantExactInFloat(expr: Node, target: Type): boolean {
+export function float32ConstantLiteral(expr: Node, target: Type): Node {
+	const none = null as unknown as Node;
+	const slot = ownedValueSlot(target);
+	if (slot.kind != TypeKind.Float32 || !isUntypedConstant(expr, 0)) return none;
+	const folded = foldedNumber(expr);
+	if (folded == null || !constHoldsFloat(folded)) return none;
+	folded.nodeType = slot;
+	return folded;
+}
+
+export function numericConstantForCarrier(expr: Node, exprType: Type | null, formal: Type | null): Node {
+	const none = null as unknown as Node;
+	if (formal == null || exprType == null || !isNumeric(exprType) || !slotRefuses(exprType, formal)) return none;
+	if (isMaybeType(formal) && formal.typeReturn != null) return numericConstantForMember(expr, exprType, formal.typeReturn);
+	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return none;
+	for (const member of formal.typeChildren) {
+		const fitted = numericConstantForMember(expr, exprType, member);
+		if (fitted != null) return fitted;
+	}
+	return none;
+}
+
+function numericConstantForMember(expr: Node, exprType: Type, member: Type | null): Node {
+	const none = null as unknown as Node;
+	if (member == null || !isNumeric(member) || !numericConvRefuses(exprType, member) || !isFittingNumericConstant(expr, member)) return none;
+	const folded = foldedNumber(expr);
+	if (folded == null) return none;
+	if (isIntegerType(member)) return typedIntegerLiteral((folded.data as NumberLiteralData).intVal, member, expr.location);
+	folded.nodeType = member;
+	return folded;
+}
+
+function constantFitsFloat(expr: Node, target: Type): boolean {
 	const folded = foldedNumber(expr);
 	if (folded == null) return false;
-	if (constHoldsFloat(folded)) return target.kind != TypeKind.Float32 || doubleExactInFloat32(constFloatValue(folded));
+	if (constHoldsFloat(folded)) return target.kind != TypeKind.Float32 || !float32Overflows(constFloatValue(folded));
 	return intExactInMantissa(constIntMagnitude(folded), mantissaBitsOf(target));
 }
 
@@ -1702,8 +1754,7 @@ function constantRefusal(expr: Node, from: Type, target: Type): string {
 			return "takes the float " + text + ", and a float never becomes an integer implicitly — " + spelled + asTarget;
 		}
 		if (target.kind != TypeKind.Float32) return "";
-		if (v > FLOAT32_MAX || v < -FLOAT32_MAX) return text + " is outside the float32 range (±3.4028235e38) — write " + asTarget;
-		if (!doubleExactInFloat32(v)) return "cannot hold " + text + " exactly (" + mantissaText(target) + ") — write " + asTarget;
+		if (float32Overflows(v)) return text + " is outside the float32 range (±3.4028235e38) — write " + asTarget;
 		return typedConstantRefusal(expr, from, target, text);
 	}
 	const d = folded.data as NumberLiteralData;

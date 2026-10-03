@@ -38,6 +38,31 @@ test "numeric constants: an untyped integer constant flows into a float slot tha
 	assert ok("const p = 4611686018427387904;\nconst q = -9007199254740992;\nconst n: number = p;\nconst m: number = q;\nconsole.log(n, m);\n");
 }
 
+test "numeric constants: an untyped float constant goes into a float32 slot as a float literal does" {
+	assert errorCount("const K = 0.1;\nconst f: float32 = K;\n") == 0;
+	assert errorCount("const f: float32 = 1.0 / 60.0;\n") == 0;
+	assert errorCount("const K = 0.1;\nconst A = K;\nfunction t(x: float32): float32 { return A; }\nconst r = t(K);\n") == 0;
+	assert errorCount("const K = 0.1;\nconst C = 3;\nconst m: float32 | null = K;\nconst n: float32 | null = C;\nconst s: float32 | string = K;\nconst b: int8 | string = C;\n") == 0;
+	assert ok("const K = 0.1;\nstruct P { w: float32; }\nconst p: P = { w: K };\nconst xs: float32[] = [K, 1.0 / 3.0];\nfunction m(v: float32 | null): float32 { return v ?? 0; }\nconsole.log(p.w, xs[1], m(K));\n");
+}
+
+test "numeric constants: an untyped constant beside a float32 operand is float32, as a literal is" {
+	assert errorCount("const K = 0.1;\nconst C = 3;\nconst W = 70000;\nlet x: float32 = 3;\nconst a: float32 = x * K;\nconst b: float32 = K * x;\nconst c: float32 = x * C;\nconst d: float32 = x * W;\nx *= K;\n") == 0;
+	assert hasError("const L = 16777217;\nlet x: float32 = 3;\nconst r: float32 = x + L;\n", "may lose precision");
+	assert hasError("const H = 1e39;\nlet x: float32 = 3;\nconst r = x * H;\n", "number out of range: '1e+39' is outside the float32 range");
+	assert hasError("const K: number = 0.1;\nlet x: float32 = 3;\nconst r: float32 = x * K;\n", "may lose precision");
+}
+
+test "numeric constants: a float out of the float32 range is refused, literal or constant" {
+	assert hasError("const K = 1e39;\nconst f: float32 = K;\n", "1e+39 is outside the float32 range");
+	assert hasError("const f: float32 = 1e39;\n", "number out of range: '1e+39' is outside the float32 range (±3.4028235e38) — float32 would hold Infinity");
+	assert hasError("const f: float32 = -1e39;\n", "number out of range: '1e+39'");
+	assert hasError("const f: float32 | string = 1e39;\n", "number out of range: '1e+39'");
+	assert hasError("let x: float32 = 3;\nconst r: float32 = x * 1e39;\n", "number out of range: '1e+39'");
+	assert hasError("const f: float32 = 3.4028235677973366e38;\n", "is outside the float32 range");
+	assert errorCount("const f: float32 = 3.4028235677973362e38;\nconst g: float32 = 1e-50;\nconst K = 1e-50;\nconst h: float32 = K;\n") == 0;
+}
+
 test "numeric constants: an integer a float cannot hold is refused naming the mantissa" {
 	assert hasError("const L = 16777217;\nconst f: float32 = L;\n", "cannot hold 16777217 exactly (float32 has a 24-bit mantissa)");
 	assert hasError("const K: int64 = 9007199254740993;\nconst n: number = K;\n", "cannot hold 9007199254740993 exactly (a double has a 53-bit mantissa)");
@@ -72,7 +97,7 @@ test "numeric constants: an integer refusal names the value only when the value 
 
 test "numeric constants: a float constant names what a narrower slot loses" {
 	assert hasError("const K: number = 1e300;\nconst f: float32 = K;\n", "is outside the float32 range");
-	assert hasError("const K = 0.1;\nconst f: float32 = K;\n", "cannot hold 0.1 exactly (float32 has a 24-bit mantissa)");
+	assert hasError("const K: number = 0.1;\nconst f: float32 = K;\n", "'K' is declared number, so its type decides, not its value 0.1");
 	assert hasError("const K: number = 9223372036854775807.0;\nconst i: int64 = K;\n", "9223372036854776000.0 is outside [-9223372036854775808, 9223372036854775807]");
 	assert hasError("const K: number = -0.0;\nconst i: int32 = K;\n", "a float never becomes an integer implicitly");
 }

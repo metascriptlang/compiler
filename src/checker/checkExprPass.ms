@@ -29,7 +29,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32 } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -399,6 +399,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (isNodeIntLit(node) && !intLiteralExactInFloat(node, expectedType)) {
 					node.nodeType = untypedIntegerLiteralType(ctx, node, false); return;
 				}
+				if (expectedType.kind == TypeKind.Float32) reportFloat32LiteralRange(ctx, node);
 				node.nodeType = expectedType.kind == TypeKind.Number ? numberType() : expectedType; return;
 			} else if (expectedType != null && expectedType.kind == TypeKind.Union) {
 				// Mirror the StringLiteral/BooleanLiteral arms below: a numeric
@@ -411,6 +412,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					}
 					if ((child.kind == TypeKind.Float64 || child.kind == TypeKind.Float32 || child.kind == TypeKind.Number)
 						&& (!isNodeIntLit(node) || intLiteralExactInFloat(node, child))) {
+						if (child.kind == TypeKind.Float32) reportFloat32LiteralRange(ctx, node);
 						node.nodeType = child; return;
 					}
 				}
@@ -929,6 +931,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// Example: `h: int64; h * 33` — coerces literal 33 (default int32) to int64.
 			let effLeft = leftType != null ? peelTransparentInstance(leftType) : null;
 			let effRight = rightType != null ? peelTransparentInstance(rightType) : null;
+			const rightAsFloat32 = leftType != null && leftType.kind == TypeKind.Float32 ? constantAdoptsFloat32(d.right) : null as unknown as Node;
+			const leftAsFloat32 = rightAsFloat32 == null && !isAsgn && rightType != null && rightType.kind == TypeKind.Float32 ? constantAdoptsFloat32(d.left) : null as unknown as Node;
 			if (isIntegerType(leftType) && rightType != null
 				&& isNodeIntLit(d.right) && literalFitsInType(d.right, leftType!, false)) {
 				effRight = leftType;
@@ -938,11 +942,21 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				effLeft = rightType;
 				d.left.nodeType = rightType;
 			} else if (leftType != null && leftType.kind == TypeKind.Float32 && literalAdoptsFloat32(d.right)) {
+				reportFloat32LiteralRange(ctx, d.right);
 				effRight = leftType;
 				d.right.nodeType = leftType;
 			} else if (rightType != null && rightType.kind == TypeKind.Float32 && literalAdoptsFloat32(d.left)) {
+				reportFloat32LiteralRange(ctx, d.left);
 				effLeft = rightType;
 				d.left.nodeType = rightType;
+			} else if (rightAsFloat32 != null) {
+				reportFloat32LiteralRange(ctx, rightAsFloat32);
+				d.right = rightAsFloat32;
+				effRight = leftType;
+			} else if (leftAsFloat32 != null) {
+				reportFloat32LiteralRange(ctx, leftAsFloat32);
+				d.left = leftAsFloat32;
+				effLeft = rightType;
 			} else {
 				const constRight = constantOperandAs(d.right, d.left, leftType);
 				const constLeft = constRight == null && !isAsgn ? constantOperandAs(d.left, d.right, rightType) : null as unknown as Node;

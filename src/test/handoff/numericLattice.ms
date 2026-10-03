@@ -58,8 +58,8 @@ test "numeric lattice: an integer too wide for the float's mantissa is refused" 
 }
 
 test "numeric lattice: a float into an integer or a narrower float is refused" {
-	assert hasError("const d: float64 = 0.1;\nconst f: float32 = d;\n", "cannot hold 0.1 exactly (float32 has a 24-bit mantissa)");
-	assert hasError("const n: number = 0.1;\nconst f: float32 = n;\n", "cannot hold 0.1 exactly (float32 has a 24-bit mantissa)");
+	assert hasError("const d: float64 = 0.1;\nconst f: float32 = d;\n", "may lose precision (float32 has a 24-bit mantissa) — 'd' is declared float64");
+	assert hasError("const n: number = 0.1;\nconst f: float32 = n;\n", "may lose precision (float32 has a 24-bit mantissa) — 'n' is declared number");
 	assert hasError("const d: float64 = 1.5;\nconst i: int32 = d;\n", "drops the fractional part of 1.5");
 	assert hasError("const f: float32 = 1.5;\nconst i: int32 = f;\n", "drops the fractional part of 1.5");
 }
