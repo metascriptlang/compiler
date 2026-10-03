@@ -5,7 +5,6 @@ import {
 	ExternalMutable,
 	InstructionAccount,
 	Program,
-	ProgramAddress,
 	System,
 	Writable,
 	WritableSigner,
@@ -15,11 +14,11 @@ import {
 } from "./core";
 import { ProgramError } from "./error";
 import { invokeSigned } from "./invoke";
-import { isTokenProgram } from "./mint";
+import { associatedTokenAddress, isTokenProgram } from "./mint";
 import { Pubkey } from "./pubkey";
-import { SeedSlice, SignerSeeds, bytesAddress, findAddress, seedBytes } from "./seed";
+import { SignerSeeds, bytesAddress, findAddress, seedBytes } from "./seed";
 
-export { initializeMint2 } from "./mint";
+export { associatedTokenAddress, initializeMint2 } from "./mint";
 export { createMintPda } from "./macro";
 
 when (testBuild) {
@@ -374,21 +373,6 @@ export function closeAccount(
 		length,
 		signers,
 	);
-}
-
-export function associatedTokenAddress(
-	wallet: Pubkey,
-	mint: Pubkey,
-	program: Pubkey,
-): Result<ProgramAddress, ProgramError> {
-	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
-	const seeds: SeedSlice[3] = [
-		seedBytes(wallet.bytes),
-		seedBytes(program.bytes),
-		seedBytes(mint.bytes),
-	];
-	const associatedProgram = Pubkey.associatedTokenProgram();
-	return findAddress(seeds, bytesAddress(associatedProgram.bytes));
 }
 
 function createAssociated(

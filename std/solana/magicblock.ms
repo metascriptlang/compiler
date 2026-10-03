@@ -188,7 +188,7 @@ function scheduled(
 		const meta = taskAccounts[index];
 		const held: Account = { address: meta.key - 8 };
 		metas[index + 1] = InstructionAccount.flagged(held, held.isWritable(), held.isSigner());
-		length = putPubkey(storage, length, meta.address());
+		length = putPubkey(storage, length, meta.pubkey());
 		length = putU8(storage, length, meta.signer);
 		length = putU8(storage, length, meta.writable);
 	}

@@ -327,7 +327,7 @@ export function readonlySigner(this typeof InstructionAccount, account: Account)
 	return { key: account.address + 8, writable: 0, signer: 1 };
 }
 
-export function address(this meta: InstructionAccount): Pubkey {
+export function pubkey(this meta: InstructionAccount): Pubkey {
 	return loadPubkey(meta.key);
 }
 
@@ -606,7 +606,7 @@ export type Delegated<T> = distinct Account;
 @delegate export function dataLength<T>(this proof: Mutable<T>): uint64;
 @delegate export function dataLength<T>(this proof: Delegated<T>): uint64;
 
-function keysEqual(left: uint64, right: uint64): boolean {
+export function keysEqual(left: uint64, right: uint64): boolean {
 	return msSolLoadU64(left) == msSolLoadU64(right) &&
 		msSolLoadU64(left + 8) == msSolLoadU64(right + 8) &&
 		msSolLoadU64(left + 16) == msSolLoadU64(right + 16) &&
@@ -991,6 +991,44 @@ export function expectAddress(actual: Pubkey, expected: Pubkey): Result<void, Pr
 
 export function expectHasOne(actual: Pubkey, expected: Pubkey): Result<void, ProgramError> {
 	if (actual != expected) { return Result.err(ProgramError.constraintHasOne()); }
+	return Result.ok(null);
+}
+
+export function keyAddress(this key: Pubkey): uint64 {
+	return msSolSpanAddress(key.bytes);
+}
+
+export function keysMatch(
+	actual: uint64,
+	expected: uint64,
+	failure: uint64,
+): Result<void, ProgramError> {
+	if (!keysEqual(actual, expected)) { return Result.err({ code: failure }); }
+	return Result.ok(null);
+}
+
+export function holds(condition: boolean, failure: uint64): Result<void, ProgramError> {
+	if (!condition) { return Result.err({ code: failure }); }
+	return Result.ok(null);
+}
+
+export function seedsGiven(
+	key: uint64,
+	seeds: Span<SeedSlice>,
+	bump: uint8,
+): Result<void, ProgramError> {
+	const derived = createAddressWithBump(seeds, bump, ownProgram());
+	if (!derived.ok || !keysEqual(msSolSpanAddress(derived.value.bytes), key)) {
+		return Result.err(ProgramError.constraintSeeds());
+	}
+	return Result.ok(null);
+}
+
+export function seedsCanonical(key: uint64, seeds: Span<SeedSlice>): Result<void, ProgramError> {
+	const found = try findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
+	if (!keysEqual(msSolSpanAddress(found.key.bytes), key)) {
+		return Result.err(ProgramError.constraintSeeds());
+	}
 	return Result.ok(null);
 }
 
