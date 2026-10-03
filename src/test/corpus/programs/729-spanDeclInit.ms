@@ -16,22 +16,25 @@ function check(label: string, got: string, want: string): void {
 	}
 }
 
-const heap: uint8[] = [7, 8, 9];
-const sHeap: Span<uint8> = heap;
-check("heap", describe(sHeap), "3:7");
+function run(): void {
+	const heap: uint8[] = [7, 8, 9];
+	const sHeap: Span<uint8> = heap;
+	check("heap", describe(sHeap), "3:7");
 
-const sized: uint8[4] = [1, 2, 3, 4];
-const sSized: Span<uint8> = sized;
-check("sized", describe(sSized), "4:1");
+	let sized: uint8[4] = [1, 2, 3, 4];
+	const sSized: Span<uint8> = sized;
+	check("sized", describe(sSized), "4:1");
 
-const sLit: Span<uint8> = [5, 6];
-check("lit", describe(sLit), "2:5");
+	const sLit: Span<uint8> = [5, 6];
+	check("lit", describe(sLit), "2:5");
 
-let sLet: Span<uint8> = heap;
-check("let", describe(sLet), "3:7");
-sLet = sized;
-check("let-reassign", describe(sLet), "4:1");
+	let sLet: Span<uint8> = heap;
+	check("let", describe(sLet), "3:7");
+	sLet = sized;
+	check("let-reassign", describe(sLet), "4:1");
+}
 
+run();
 if (fails == 0) {
 	console.log("span-decl all-ok");
 }
