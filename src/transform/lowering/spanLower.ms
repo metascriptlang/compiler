@@ -68,8 +68,9 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
 					} else if (srcType.kind == TypeKind.String) {
 						// String -> Span<char>: { data: msArrDataOr0(str.p), len: str.len }
-						const dataExpr2 = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
-						dataExpr2.nodeType = createPtr(spanTarget.typeReturn);
+						const bytes = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
+						bytes.nodeType = createPtr(spanTarget.typeReturn);
+						const dataExpr2 = makeHiddenStdConv(bytes, createPtr(spanTarget.typeReturn), loc);
 						const lenExpr2 = makeMember(d.convExpr, "len", loc);
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr2, lenExpr2], targetType, loc);
 					}
