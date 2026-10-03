@@ -2,12 +2,12 @@
 import {
 	ProgramError,
 	account,
-	borshBuffer,
 	failWith,
 	instructionData,
 	invoke,
 	logU64,
 	programId,
+	putU8,
 	returnData,
 	setReturnData,
 } from "std/solana";
@@ -22,7 +22,7 @@ function ask(): Result<uint64, ProgramError> {
 	if (returnData() !== null) { return Result.err(ProgramError.invalidAccountData()); }
 	const _self = try account(1);
 	let storage: uint8[1] = [];
-	const _invoked = try invoke(programId(), [], borshBuffer(storage).u8(1));
+	const _invoked = try invoke(programId(), [], storage, putU8(storage, 0, 1));
 	const answered = returnData();
 	if (answered === null) { return Result.err(ProgramError.invalidAccountData()); }
 	if (!answered.program.equals(programId())) { return Result.err(ProgramError.incorrectProgramId()); }

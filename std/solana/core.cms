@@ -4,7 +4,7 @@
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { ProgramError } from "./error";
 import { Discriminator } from "./discriminator";
-import { BorshBuffer, Bytes, borshBuffer, storePubkey } from "./buffer";
+import { Bytes, putPubkey, putU32, putU64, storePubkey } from "./buffer";
 import { InstructionAccount } from "./cpi";
 import { invokeSigned } from "./invoke";
 import {
@@ -20,7 +20,21 @@ import {
 } from "./seed";
 
 export { ProgramAddress } from "./seed";
-export { BorshBuffer, Bytes, borshBuffer } from "./buffer";
+export {
+	Bytes,
+	putBool,
+	putBytes,
+	putI16,
+	putI32,
+	putI64,
+	putI8,
+	putPubkey,
+	putSpan,
+	putU16,
+	putU32,
+	putU64,
+	putU8,
+} from "./buffer";
 export { CpiAccount, InstructionAccount, MAX_CPI_ACCOUNTS, invokeList } from "./cpi";
 
 extern function msSolAccountCount(): uint64;
@@ -28,7 +42,6 @@ extern function msSolAccountAt(index: uint64): uint64;
 extern function msSolInstructionData(): uint64;
 extern function msSolInstructionDataLength(): uint64;
 extern function msSolProgramId(): uint64;
-extern function msSolAlloc(size: uint64): uint64;
 extern function msSolSetResult(code: uint64): void;
 extern function msSolPointer(address: uint64): Ptr<void>;
 extern function msSolLoadU8(address: uint64): uint8;
@@ -337,10 +350,15 @@ export function createAccount(
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
 	let storage: uint8[52] = [];
+	let length = putU32(storage, 0, 0);
+	length = putU64(storage, length, lamports);
+	length = putU64(storage, length, space);
+	length = putPubkey(storage, length, newOwner);
 	return invokeSigned(
 		Pubkey.systemProgram(),
 		[InstructionAccount.writableSigner(payer), InstructionAccount.writableSigner(target)],
-		borshBuffer(storage).u32(0).u64(lamports).u64(space).pubkey(newOwner),
+		storage,
+		length,
 		signers,
 	);
 }
@@ -351,10 +369,12 @@ export function assignTo(
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
 	let storage: uint8[36] = [];
+	const length = putPubkey(storage, putU32(storage, 0, 1), newOwner);
 	return invokeSigned(
 		Pubkey.systemProgram(),
 		[InstructionAccount.writableSigner(target)],
-		borshBuffer(storage).u32(1).pubkey(newOwner),
+		storage,
+		length,
 		signers,
 	);
 }
@@ -366,10 +386,12 @@ export function transfer(
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
 	let storage: uint8[12] = [];
+	const length = putU64(storage, putU32(storage, 0, 2), lamports);
 	return invokeSigned(
 		Pubkey.systemProgram(),
 		[InstructionAccount.writableSigner(source), InstructionAccount.writable(destination)],
-		borshBuffer(storage).u32(2).u64(lamports),
+		storage,
+		length,
 		signers,
 	);
 }
@@ -380,10 +402,12 @@ export function allocate(
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
 	let storage: uint8[12] = [];
+	const length = putU64(storage, putU32(storage, 0, 8), space);
 	return invokeSigned(
 		Pubkey.systemProgram(),
 		[InstructionAccount.writableSigner(target)],
-		borshBuffer(storage).u32(8).u64(space),
+		storage,
+		length,
 		signers,
 	);
 }

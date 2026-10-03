@@ -3,9 +3,13 @@ import {
 	Bytes,
 	InstructionAccount,
 	MAX_CPI_ACCOUNTS,
-	borshBuffer,
 	createProgramAccountSeeded,
 	invokeList,
+	putPubkey,
+	putSpan,
+	putU32,
+	putU64,
+	putU8,
 } from "./core";
 import { ProgramError } from "./error";
 import { findProgramAddressOf } from "./macro";
@@ -16,7 +20,7 @@ export { DelegationAccounts, DelegationConfig, anyValidator, delegationProgram, 
 export { delegate } from "./macro";
 
 when (testBuild) {
-	import { account, failWith, instructionData, programId } from "./core";
+	import { account, failWith, instructionData, programId, putBytes } from "./core";
 	import {
 		DelegationAccounts,
 		DelegationConfig,
@@ -58,7 +62,8 @@ function scheduleCommit(
 		at = at + 1;
 	}
 	let storage: uint8[4] = [];
-	return invokeList(Pubkey.magicProgram(), metas[0..at], borshBuffer(storage).u32(discriminant));
+	const length = putU32(storage, 0, discriminant);
+	return invokeList(Pubkey.magicProgram(), metas[0..at], storage, length);
 }
 
 export function commit(payer: Account, committed: Account, magicContextAccount: Account): Result<uint64, ProgramError> {
@@ -162,7 +167,7 @@ function scheduled(
 	iterations: uint64,
 	taskProgram: Pubkey,
 	taskAccounts: Span<InstructionAccount>,
-	taskData: Bytes,
+	taskData: Readonly<Span<uint8>>,
 ): Result<uint64, ProgramError> {
 	if (!payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
 	const count = taskAccounts.length as uint64;
@@ -170,22 +175,24 @@ function scheduled(
 	let metas: InstructionAccount[16];
 	metas[0] = InstructionAccount.writableSigner(payer);
 	let storage: uint8[1024] = [];
-	let data = borshBuffer(storage)
-		.u32(6)
-		.u64(taskId)
-		.u64(intervalMillis)
-		.u64(iterations)
-		.u64(1)
-		.pubkey(taskProgram)
-		.u64(count);
+	let length = putU32(storage, 0, 6);
+	length = putU64(storage, length, taskId);
+	length = putU64(storage, length, intervalMillis);
+	length = putU64(storage, length, iterations);
+	length = putU64(storage, length, 1);
+	length = putPubkey(storage, length, taskProgram);
+	length = putU64(storage, length, count);
 	for (let index = 0; index < taskAccounts.length; index++) {
 		const meta = taskAccounts[index];
 		const held: Account = { address: meta.key - 8 };
 		metas[index + 1] = InstructionAccount.flagged(held, held.isWritable(), held.isSigner());
-		data = data.pubkey(meta.address()).u8(meta.signer).u8(meta.writable);
+		length = putPubkey(storage, length, meta.address());
+		length = putU8(storage, length, meta.signer);
+		length = putU8(storage, length, meta.writable);
 	}
-	data = data.u64(taskData.length).bytes(taskData);
-	return invokeList(Pubkey.magicProgram(), metas[0..(1 + taskAccounts.length)], data);
+	length = putU64(storage, length, taskData.length as uint64);
+	length = putSpan(storage, length, taskData);
+	return invokeList(Pubkey.magicProgram(), metas[0..(1 + taskAccounts.length)], storage, length);
 }
 
 export function scheduleTask(
@@ -194,7 +201,7 @@ export function scheduleTask(
 	intervalMillis: uint64,
 	iterations: uint64,
 	target: Account,
-	targetData: Bytes,
+	targetData: Readonly<Span<uint8>>,
 	targetProgram: Pubkey,
 ): Result<uint64, ProgramError> {
 	const accounts: InstructionAccount[1] = [InstructionAccount.writable(target)];
@@ -208,7 +215,7 @@ export function scheduleTask(
 	iterations: uint64,
 	targetProgram: Pubkey,
 	targetAccounts: Span<InstructionAccount>,
-	targetData: Bytes,
+	targetData: Readonly<Span<uint8>>,
 ): Result<uint64, ProgramError> {
 	return scheduled(payer, taskId, intervalMillis, iterations, targetProgram, targetAccounts, targetData);
 }
@@ -484,14 +491,17 @@ when (testBuild) {
 		const op = try data.readU8(0);
 		const payer = try account(0);
 		const tail = try data.range(1, 2);
+		let relay: uint8[2] = [];
+		const relayed = putBytes(relay, 0, tail);
+		if (relayed != 2) { return Result.err(ProgramError.invalidInstructionData()); }
 		if (op == 0) {
-			return scheduleTask(payer, 7, 400, 3, try account(1), tail, programId());
+			return scheduleTask(payer, 7, 400, 3, try account(1), relay, programId());
 		}
 		const task: InstructionAccount[2] = [
 			InstructionAccount.writable(try account(1)),
 			InstructionAccount.readonly(try account(2)),
 		];
-		return scheduleTask(payer, 7, 400, 3, programId(), task, tail);
+		return scheduleTask(payer, 7, 400, 3, programId(), task, relay);
 	}
 
 	function scheduleEntry(): void {

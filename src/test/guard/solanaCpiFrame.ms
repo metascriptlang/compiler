@@ -11,12 +11,13 @@ import {
 	ProgramError,
 	Pubkey,
 	account,
-	borshBuffer,
 	failWith,
 	instructionData,
 	invoke,
 	invokeList,
 	programId,
+	putU64,
+	putU8,
 	signed,
 } from "std/solana";
 import { commit, scheduleTask } from "std/solana/magicblock";
@@ -36,7 +37,8 @@ function sixteen(a: Account, b: Account): Result<uint64, ProgramError> {
 			InstructionAccount.readonlySigner(a), InstructionAccount.readonlySigner(b),
 			InstructionAccount.writableSigner(a), InstructionAccount.writableSigner(b),
 		],
-		borshBuffer(storage).u8(1).u64(2),
+		storage,
+		putU64(storage, putU8(storage, 0, 1), 2),
 	);
 }
 
@@ -55,7 +57,8 @@ function signedSixteen(a: Account, b: Account): Result<uint64, ProgramError> {
 				InstructionAccount.readonlySigner(a), InstructionAccount.readonlySigner(b),
 				InstructionAccount.writableSigner(a), InstructionAccount.writableSigner(b),
 			],
-			borshBuffer(storage).u8(1).u64(2),
+			storage,
+			putU64(storage, putU8(storage, 0, 1), 2),
 		),
 		["pet", [1]],
 	);
@@ -65,7 +68,7 @@ function listed(a: Account, count: int32): Result<uint64, ProgramError> {
 	let metas: InstructionAccount[16];
 	for (let index = 0; index < 16; index++) { metas[index] = InstructionAccount.writable(a); }
 	let storage: uint8[1024] = [];
-	return invokeList(programId(), metas[0..count], borshBuffer(storage).u8(1));
+	return invokeList(programId(), metas[0..count], storage, putU8(storage, 0, 1));
 }
 
 function committed(payer: Account, context: Account, vault: Account, count: int32): Result<uint64, ProgramError> {
@@ -76,7 +79,7 @@ function committed(payer: Account, context: Account, vault: Account, count: int3
 
 function scheduledList(payer: Account, a: Account, b: Account): Result<uint64, ProgramError> {
 	const task: InstructionAccount[2] = [InstructionAccount.writable(a), InstructionAccount.readonly(b)];
-	const bytes = try instructionData().range(1, 2);
+	const bytes: uint8[2] = [1, 2];
 	return scheduleTask(payer, 1, 2, 3, programId(), task, bytes);
 }
 
@@ -88,7 +91,7 @@ function randomness(a: Account, b: Account, c: Account, metas: AccountMeta[2]): 
 		systemProgram: a,
 		slotHashes: b,
 	};
-	const bytes = try instructionData().range(1, 2);
+	const bytes: uint8[2] = [1, 2];
 	return requestRandomness(request, Pubkey.zero(), 1, metas, bytes);
 }
 

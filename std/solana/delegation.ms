@@ -1,11 +1,14 @@
 import {
 	Account,
-	Bytes,
 	InstructionAccount,
 	assignTo,
-	borshBuffer,
 	createAccount,
+	putPubkey,
+	putU32,
+	putU64,
+	putU8,
 } from "./core";
+import { putAddress } from "./buffer";
 import { invokeSigned } from "./invoke";
 import { ProgramError } from "./error";
 import { Pubkey, pubkeyOf } from "./pubkey";
@@ -103,15 +106,18 @@ export function delegateAt(
 	const _assigned = try assignTo(accounts.delegated, Pubkey.delegationProgram(), signer);
 
 	let storage: uint8[625] = [];
-	let data = borshBuffer(storage).u64(0).u32(config.commitFrequencyMs).u32(seedCount as uint32);
+	let length = putU64(storage, 0, 0);
+	length = putU32(storage, length, config.commitFrequencyMs);
+	length = putU32(storage, length, seedCount as uint32);
 	for (const seed of seeds) {
-		const written: Bytes = { address: seed.address, length: seed.length };
-		data = data.u32(seed.length as uint32).bytes(written);
+		length = putU32(storage, length, seed.length as uint32);
+		length = putAddress(storage, length, seed.address, seed.length);
 	}
 	if (config.validator.isZero()) {
-		data = data.u8(0);
+		length = putU8(storage, length, 0);
 	} else {
-		data = data.u8(1).pubkey(config.validator);
+		length = putU8(storage, length, 1);
+		length = putPubkey(storage, length, config.validator);
 	}
 	const _delegated = try invokeSigned(
 		Pubkey.delegationProgram(),
@@ -124,7 +130,8 @@ export function delegateAt(
 			InstructionAccount.writable(accounts.delegationMetadata),
 			InstructionAccount.readonly(accounts.systemProgram),
 		],
-		data,
+		storage,
+		length,
 		signer,
 	);
 	return closeBuffer(accounts.payer, accounts.buffer);

@@ -45,7 +45,18 @@ import {
 	ProgramAddress,
 	Bytes,
 	InstructionAccount,
-	borshBuffer,
+	putBool,
+	putBytes,
+	putI16,
+	putI32,
+	putI64,
+	putI8,
+	putPubkey,
+	putSpan,
+	putU16,
+	putU32,
+	putU64,
+	putU8,
 	invoke,
 	invokeList,
 	invokeSigned,
@@ -66,6 +77,7 @@ import {
 import { anchorIdl } from "./idl";
 
 extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
+extern function msSolProgramId(): uint64;
 
 
 export struct Counter {
@@ -687,6 +699,27 @@ test "emitEvent holds an event of exactly the 1024 bytes its buffer has" {
 	assert line.endsWith("HR4fIAEAAAAAAAAAAgAAAAAAAAADAAAAAAAAAA==");
 }
 
+function inputBufferEntry(): void {
+	const first = account(0);
+	if (!first.ok) { failWith(ProgramError.custom(1)); return; }
+	const held = first.value;
+	if (held.data().address != held.address + 88) { failWith(ProgramError.custom(2)); return; }
+	const data = instructionData();
+	if (data.address + data.length != msSolProgramId()) { failWith(ProgramError.custom(3)); return; }
+	const inner = data.range(1, 2);
+	if (!inner.ok || inner.value.address != data.address + 1) { failWith(ProgramError.custom(4)); return; }
+	const meta = InstructionAccount.writable(held);
+	if (meta.key != held.address + 8) { failWith(ProgramError.custom(5)); }
+}
+
+test "every view and address a program can hold points into the input buffer the runtime built" {
+	const accounts = [holder(1, keyOf(9), [1, 2, 3], false, true)];
+	const input: uint8[] = [9, 1, 2, 3];
+	assert run(programKey(), accounts, input, inputBufferEntry).result == 0;
+	const empty: uint8[] = [0, 0, 0];
+	assert run(programKey(), accounts, empty, inputBufferEntry).result == 0;
+}
+
 function returnDataEntry(): void {
 	const payload: uint8[3] = [7, 8, 9];
 	setReturnData(payload);
@@ -858,40 +891,57 @@ test "accounts<T>() verifies a Delegated<T> field like delegated<T>()" {
 		ProgramError.accountOwnedByWrongProgram().code;
 }
 
-test "borshBuffer writes Borsh little-endian fields and refuses a write past its capacity" {
+test "the put functions write Borsh little-endian fields and answer an offset past the storage for a write that does not fit" {
 	let fields: uint8[14] = [];
-	const written = borshBuffer(fields).u64(0x0102030405060708).bool(true).i32(-2).u8(9).written();
-	assert written.ok;
-	if (written.ok) {
-		const view = written.value;
-		assert view.length == 14;
-		const expected: uint8[] = [8, 7, 6, 5, 4, 3, 2, 1, 1, 254, 255, 255, 255, 9];
-		for (let index = 0; index < 14; index++) {
-			const byte = view.readU8(index as uint64);
-			assert byte.ok && byte.value == expected[index];
-			assert fields[index] == expected[index];
-		}
-	}
+	let at = putU64(fields, 0, 0x0102030405060708);
+	at = putBool(fields, at, true);
+	at = putI32(fields, at, -2);
+	at = putU8(fields, at, 9);
+	assert at == 14;
+	const expected: uint8[] = [8, 7, 6, 5, 4, 3, 2, 1, 1, 254, 255, 255, 255, 9];
+	for (let index = 0; index < 14; index++) { assert fields[index] == expected[index]; }
 	let key: uint8[32] = [];
-	const keyed = borshBuffer(key).pubkey(keyOf(7)).written();
-	assert keyed.ok && keyed.value.length == 32 && key[0] == 7 && key[31] == 0;
+	assert putPubkey(key, 0, keyOf(7)) == 32 && key[0] == 7 && key[31] == 0;
 	let eight: uint8[8] = [];
-	const over = borshBuffer(eight).u64(1).u8(2).written();
-	assert !over.ok;
-	const after = borshBuffer(eight).u64(1).u8(2).u8(3).written();
-	assert !after.ok;
+	const over = putU8(eight, putU64(eight, 0, 1), 2);
+	assert over == 9;
+	assert eight[0] == 1 && eight[1] == 0;
+	assert putU8(eight, over, 3) == 9;
+	assert putU64(eight, over, 3) == 9;
+	assert eight[0] == 1 && eight[7] == 0;
 }
 
-test "borshBuffer copies a byte view, keeps its length as the cursor and refuses one past its capacity" {
+test "each width fits exactly the room it needs and is refused one byte short" {
+	let storage: uint8[8] = [];
+	assert putU8(storage, 7, 1) == 8 && putU8(storage, 8, 1) == 9;
+	assert putU16(storage, 6, 1) == 8 && putU16(storage, 7, 1) == 9;
+	assert putU32(storage, 4, 1) == 8 && putU32(storage, 5, 1) == 9;
+	assert putU64(storage, 0, 1) == 8 && putU64(storage, 1, 1) == 9;
+	assert putI8(storage, 7, -1) == 8 && putI16(storage, 6, -1) == 8;
+	assert putI32(storage, 4, -1) == 8 && putI64(storage, 0, -1) == 8;
+	assert storage[0] == 255 && storage[7] == 255;
+	let wide: uint8[32] = [];
+	assert putPubkey(wide, 0, keyOf(1)) == 32 && putPubkey(wide, 1, keyOf(1)) == 33;
+	assert putU8([], 0, 1) == 1;
+}
+
+test "putBytes and putSpan copy a view, keep the offset as the length and are refused one past the storage" {
 	let source: uint8[3] = [4, 5, 6];
 	const view: Bytes = { address: msSolSpanAddress(source), length: 3 };
 	let room: uint8[6] = [];
-	const copied = borshBuffer(room).u8(1).bytes(view).u16(0x0807).written();
-	assert copied.ok && copied.value.length == 6;
+	let at = putU8(room, 0, 1);
+	at = putBytes(room, at, view);
+	at = putU16(room, at, 0x0807);
+	assert at == 6;
 	const expected: uint8[] = [1, 4, 5, 6, 7, 8];
 	for (let index = 0; index < 6; index++) { assert room[index] == expected[index]; }
 	let tight: uint8[3] = [];
-	assert !borshBuffer(tight).u8(1).bytes(view).written().ok;
+	assert putBytes(tight, putU8(tight, 0, 1), view) == 4;
+	assert tight[1] == 0 && tight[2] == 0;
+	let spanned: uint8[6] = [];
+	assert putSpan(spanned, putU8(spanned, 0, 1), source) == 4;
+	assert spanned[1] == 4 && spanned[2] == 5 && spanned[3] == 6;
+	assert putSpan(tight, putU8(tight, 0, 1), source) == 4;
 }
 
 export enum GaugeOp {
@@ -1119,10 +1169,12 @@ function counterSigner(): uint8[][] {
 
 function ping(target: Account, signers: Span<SignerSeeds> = []): Result<uint64, ProgramError> {
 	let storage: uint8[1] = [];
+	const length = putU8(storage, 0, 3);
 	return invokeSigned(
 		keyOf(9),
 		[InstructionAccount.writable(target)],
-		borshBuffer(storage).u8(3),
+		storage,
+		length,
 		signers,
 	);
 }
@@ -1358,10 +1410,12 @@ test "createProgramAccount creates a blank target in one call and tops up, alloc
 
 function forwarded(first: Account, signers: Span<SignerSeeds> = []): Result<uint64, ProgramError> {
 	let storage: uint8[4] = [];
+	const length = putU32(storage, 0, 5);
 	return invokeSigned(
 		keyOf(9),
 		[InstructionAccount.writable(first)],
-		borshBuffer(storage).u32(5),
+		storage,
+		length,
 		signers,
 	);
 }
@@ -1372,7 +1426,7 @@ function listed(first: Account, count: uint64): Result<uint64, ProgramError> {
 		metas[index] = InstructionAccount.flagged(first, index % 2 == 0, index % 3 == 0);
 	}
 	let storage: uint8[4] = [];
-	return invokeList(keyOf(9), metas[0..(count as int32)], borshBuffer(storage).u8(1));
+	return invokeList(keyOf(9), metas[0..(count as int32)], storage, putU8(storage, 0, 1));
 }
 
 function invokeStep(): Result<uint64, ProgramError> {
@@ -1381,9 +1435,14 @@ function invokeStep(): Result<uint64, ProgramError> {
 	const b = try account(1);
 	const c = try account(2);
 	let storage: uint8[16] = [];
-	if (op == 0) { return invoke(keyOf(9), [], borshBuffer(storage).u8(7)); }
+	if (op == 0) { return invoke(keyOf(9), [], storage, putU8(storage, 0, 7)); }
 	if (op == 1) {
-		return invoke(keyOf(9), [InstructionAccount.writable(a)], borshBuffer(storage).u32(2).u64(10));
+		return invoke(
+			keyOf(9),
+			[InstructionAccount.writable(a)],
+			storage,
+			putU64(storage, putU32(storage, 0, 2), 10),
+		);
 	}
 	if (op == 2) {
 		return invoke(
@@ -1395,12 +1454,13 @@ function invokeStep(): Result<uint64, ProgramError> {
 				InstructionAccount.flagged(a, true, false),
 				InstructionAccount.flagged(c, false, true),
 			],
-			borshBuffer(storage).u8(1).u8(2),
+			storage,
+			putU8(storage, putU8(storage, 0, 1), 2),
 		);
 	}
 	if (op == 3) {
 		return signed(
-			invoke(keyOf(9), [InstructionAccount.writable(a)], borshBuffer(storage).u8(3)),
+			invoke(keyOf(9), [InstructionAccount.writable(a)], storage, putU8(storage, 0, 3)),
 			["vault", [7]],
 		);
 	}
@@ -1417,13 +1477,19 @@ function invokeStep(): Result<uint64, ProgramError> {
 				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
 				InstructionAccount.readonlySigner(a),
 			],
-			borshBuffer(storage).u8(6),
+			storage,
+			putU8(storage, 0, 6),
 		);
 	}
 	if (op == 7) { return listed(a, 3); }
 	if (op == 8) { return listed(a, 17); }
 	if (op == 9) {
-		return invoke(keyOf(9), [InstructionAccount.writable(a)], borshBuffer(storage).u64(1).u64(2).u8(3));
+		return invoke(
+			keyOf(9),
+			[InstructionAccount.writable(a)],
+			storage,
+			putU8(storage, putU64(storage, putU64(storage, 0, 1), 2), 3),
+		);
 	}
 	return Result.err(ProgramError.invalidArgument());
 }

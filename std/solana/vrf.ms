@@ -1,11 +1,13 @@
 import {
 	Account,
 	AccountMeta,
-	BorshBuffer,
-	Bytes,
 	InstructionAccount,
-	borshBuffer,
 	programId,
+	putBool,
+	putPubkey,
+	putSpan,
+	putU32,
+	putU64,
 } from "./core";
 import { ProgramError } from "./error";
 import { invokeSigned } from "./invoke";
@@ -14,7 +16,7 @@ import { Pubkey, pubkeyOf } from "./pubkey";
 import { SeedSlice, SignerSeeds, seedBytes, seedText, signerOf } from "./seed";
 
 when (testBuild) {
-	import { account, failWith, instructionData } from "./core";
+	import { account, failWith, instructionData, putBytes } from "./core";
 	import { HostAccount, invocations, run, signerIs, textBytes } from "./host";
 }
 
@@ -43,19 +45,21 @@ function requested(
 	callerSeed: Pubkey,
 	callbackDiscriminator: uint64,
 	callbackAccounts: Span<AccountMeta>,
-	callbackArguments: Bytes,
-): BorshBuffer {
-	let data = borshBuffer(storage)
-		.u64(10)
-		.pubkey(callerSeed)
-		.pubkey(programId())
-		.u32(8)
-		.u64(callbackDiscriminator)
-		.u32(callbackAccounts.length as uint32);
+	callbackArguments: Readonly<Span<uint8>>,
+): uint64 {
+	let length = putU64(storage, 0, 10);
+	length = putPubkey(storage, length, callerSeed);
+	length = putPubkey(storage, length, programId());
+	length = putU32(storage, length, 8);
+	length = putU64(storage, length, callbackDiscriminator);
+	length = putU32(storage, length, callbackAccounts.length as uint32);
 	for (const meta of callbackAccounts) {
-		data = data.pubkey(meta.key).bool(meta.signer).bool(meta.writable);
+		length = putPubkey(storage, length, meta.key);
+		length = putBool(storage, length, meta.signer);
+		length = putBool(storage, length, meta.writable);
 	}
-	return data.u32(callbackArguments.length as uint32).bytes(callbackArguments);
+	length = putU32(storage, length, callbackArguments.length as uint32);
+	return putSpan(storage, length, callbackArguments);
 }
 
 export function requestRandomness(
@@ -63,15 +67,15 @@ export function requestRandomness(
 	callerSeed: Pubkey,
 	callbackDiscriminator: uint64,
 	callbackAccounts: Span<AccountMeta>,
-	callbackArguments: Bytes,
+	callbackArguments: Readonly<Span<uint8>>,
 	payerSigners: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
 	const identity = try findProgramAddress(["identity"]);
 	if (!identity.key.equals(accounts.programIdentity.key())) { return Result.err(ProgramError.invalidSeeds()); }
 	if (payerSigners.length > 1) { return Result.err(ProgramError.invalidArgument()); }
 	let storage: uint8[1024] = [];
-	const data = requested(storage, callerSeed, callbackDiscriminator, callbackAccounts, callbackArguments);
-	if (data.overflowed()) { return Result.err(ProgramError.invalidInstructionData()); }
+	const length = requested(storage, callerSeed, callbackDiscriminator, callbackAccounts, callbackArguments);
+	if (length > (storage.length as uint64)) { return Result.err(ProgramError.invalidInstructionData()); }
 	const bump: uint8[1] = [identity.bump];
 	const identitySeeds: SeedSlice[2] = [seedText("identity"), seedBytes(bump)];
 	let both: SignerSeeds[2] = [signerOf(identitySeeds), signerOf(identitySeeds)];
@@ -85,7 +89,8 @@ export function requestRandomness(
 			InstructionAccount.readonly(accounts.systemProgram),
 			InstructionAccount.readonly(accounts.slotHashes),
 		],
-		data,
+		storage,
+		length,
 		both[0..(1 + payerSigners.length)],
 	);
 }
@@ -154,11 +159,13 @@ when (testBuild) {
 			slotHashes: try account(4),
 		};
 		const callback: uint64 = 0x0807060504030201;
+		const tail = try data.range(1, data.length - 1);
+		let relay: uint8[1024] = [];
+		const kept = putBytes(relay, 0, tail) as int32;
 		if (op >= 3) {
-			const rest = try data.range(1, data.length - 1);
-			return requestRandomness(request, keyOf(99), callback, [], rest);
+			return requestRandomness(request, keyOf(99), callback, [], relay[0..kept]);
 		}
-		const args = try data.range(1, 2);
+		const args = relay[0..2];
 		if (op == 0) {
 			const callbackAccount = try account(5);
 			const one: AccountMeta[1] = [AccountMeta.writable(callbackAccount.key())];

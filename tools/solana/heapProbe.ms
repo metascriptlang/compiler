@@ -5,7 +5,6 @@ import {
 	ProgramError,
 	Pubkey,
 	account,
-	borshBuffer,
 	clock,
 	emitEvent,
 	failWith,
@@ -18,6 +17,7 @@ import {
 	minimumBalance,
 	programAddress,
 	programId,
+	putU8,
 	returnData,
 	setReturnData,
 	signed,
@@ -42,7 +42,8 @@ function builderLoop(count: uint64): Result<uint64, ProgramError> {
 		const _sent = try invoke(
 			programId(),
 			[InstructionAccount.readonly(self)],
-			borshBuffer(storage).u8(12).u8(0).u8(0),
+			storage,
+			putU8(storage, putU8(storage, putU8(storage, 0, 12), 0), 0),
 		);
 	}
 	logU64(msSolAlloc(0));
@@ -56,7 +57,12 @@ function signedLoop(count: uint64): Result<uint64, ProgramError> {
 		const self = try account(0);
 		let storage: uint8[3] = [];
 		const _sent = try signed(
-			invoke(program, [InstructionAccount.readonly(self)], borshBuffer(storage).u8(12).u8(0).u8(0)),
+			invoke(
+				program,
+				[InstructionAccount.readonly(self)],
+				storage,
+				putU8(storage, putU8(storage, putU8(storage, 0, 12), 0), 0),
+			),
 			["pet", program, [found.bump]],
 		);
 	}
@@ -67,19 +73,19 @@ function signedLoop(count: uint64): Result<uint64, ProgramError> {
 function limitCall(which: uint64): Result<uint64, ProgramError> {
 	const self = try account(0);
 	let storage: uint8[3] = [];
-	const call = borshBuffer(storage).u8(12).u8(0).u8(0);
+	const length = putU8(storage, putU8(storage, putU8(storage, 0, 12), 0), 0);
 	const accounts: InstructionAccount[1] = [InstructionAccount.readonly(self)];
 	if (which == 0) {
-		return signed(invokeList(programId(), accounts, call), [
+		return signed(invokeList(programId(), accounts, storage, length), [
 			[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
 		]);
 	}
 	if (which == 1) {
-		return signed(invokeList(programId(), accounts, call), [
+		return signed(invokeList(programId(), accounts, storage, length), [
 			[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16],
 		]);
 	}
-	return signed(invokeList(programId(), accounts, call), ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+	return signed(invokeList(programId(), accounts, storage, length), ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
 }
 
 function unsignedLoop(count: uint64): Result<uint64, ProgramError> {
@@ -89,7 +95,8 @@ function unsignedLoop(count: uint64): Result<uint64, ProgramError> {
 		const _sent = try invoke(
 			programId(),
 			[InstructionAccount.readonly(self)],
-			borshBuffer(storage).u8(12).u8(0).u8(0),
+			storage,
+			putU8(storage, putU8(storage, putU8(storage, 0, 12), 0), 0),
 		);
 	}
 	logU64(msSolAlloc(0));

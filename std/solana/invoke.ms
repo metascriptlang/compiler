@@ -1,7 +1,13 @@
 import { Node, NodeKind, bindSym } from "std/meta";
 import { invokeCpi } from "./cpi";
 
-export macro invokeSigned(program: Node, accounts: Node, data: Node, signers: Node): Node {
+export macro invokeSigned(
+	program: Node,
+	accounts: Node,
+	data: Node,
+	length: Node,
+	signers: Node,
+): Node {
 	if (accounts.kind !== NodeKind.ArrayLiteral) {
 		error("accounts must be written as a list at the call: " +
 			"[InstructionAccount.writable(vault), InstructionAccount.readonlySigner(owner)]", accounts);
@@ -52,6 +58,7 @@ export macro invokeSigned(program: Node, accounts: Node, data: Node, signers: No
 			accounts,
 			{ kind: NodeKind.ArrayLiteral, line: accounts.line, column: accounts.column, elements: blanks },
 			data,
+			length,
 			signers,
 		],
 		isDirectCall: false,
@@ -59,7 +66,7 @@ export macro invokeSigned(program: Node, accounts: Node, data: Node, signers: No
 	};
 }
 
-export macro invoke(program: Node, accounts: Node, data: Node): Node {
+export macro invoke(program: Node, accounts: Node, data: Node, length: Node): Node {
 	return {
 		kind: NodeKind.CallExpr,
 		line: program.line,
@@ -69,6 +76,7 @@ export macro invoke(program: Node, accounts: Node, data: Node): Node {
 			program,
 			accounts,
 			data,
+			length,
 			{ kind: NodeKind.ArrayLiteral, line: data.line, column: data.column, elements: [] },
 		],
 		isDirectCall: false,

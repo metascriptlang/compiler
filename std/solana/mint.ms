@@ -3,8 +3,9 @@ import {
 	InstructionAccount,
 	Writable,
 	WritableSigner,
-	borshBuffer,
 	createProgramAccountSeeded,
+	putPubkey,
+	putU8,
 } from "./core";
 import { invoke } from "./invoke";
 import { ProgramError } from "./error";
@@ -24,13 +25,16 @@ export function initializeMint2(
 ): Result<uint64, ProgramError> {
 	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
 	let storage: uint8[67] = [];
-	let data = borshBuffer(storage).u8(20).u8(decimals).pubkey(mintAuthority);
+	let length = putU8(storage, 0, 20);
+	length = putU8(storage, length, decimals);
+	length = putPubkey(storage, length, mintAuthority);
 	if (freezeAuthority === null) {
-		data = data.u8(0);
+		length = putU8(storage, length, 0);
 	} else {
-		data = data.u8(1).pubkey(freezeAuthority);
+		length = putU8(storage, length, 1);
+		length = putPubkey(storage, length, freezeAuthority);
 	}
-	return invoke(program, [InstructionAccount.writable(mint)], data);
+	return invoke(program, [InstructionAccount.writable(mint)], storage, length);
 }
 
 export function createMintPdaAt(

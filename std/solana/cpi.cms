@@ -3,7 +3,6 @@
 
 import { Pubkey } from "./pubkey";
 import { ProgramError } from "./error";
-import { BorshBuffer } from "./buffer";
 import { SignerSeeds, signingOf } from "./seed";
 
 extern function msSolLoadU8(address: uint64): uint8;
@@ -55,11 +54,12 @@ export function invokeCpi(
 	program: Pubkey,
 	metas: Span<InstructionAccount>,
 	infos: Span<CpiAccount>,
-	data: BorshBuffer,
+	data: Readonly<Span<uint8>>,
+	length: uint64,
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
 	const count = metas.length as uint64;
-	if (count > MAX_CPI_ACCOUNTS || infos.length != metas.length || data.overflowed()) {
+	if (count > MAX_CPI_ACCOUNTS || infos.length != metas.length || length > (data.length as uint64)) {
 		return Result.err(ProgramError.invalidArgument());
 	}
 	for (let index = 0; index < metas.length; index++) {
@@ -78,8 +78,8 @@ export function invokeCpi(
 		program: msSolSpanAddress(program.bytes),
 		accounts: msSolMetasAddress(metas),
 		accountCount: count,
-		data: data.address,
-		dataLength: data.cursor,
+		data: msSolSpanAddress(data),
+		dataLength: length,
 	}];
 	const signing = signingOf(signers);
 	const status = msSolInvokeSigned(
@@ -99,14 +99,15 @@ export function invokeCpi(
 export function invokeList(
 	program: Pubkey,
 	accounts: Span<InstructionAccount>,
-	data: BorshBuffer,
+	data: Readonly<Span<uint8>>,
+	length: uint64,
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
 	if (accounts.length > MAX_CPI_ACCOUNTS as int32) {
 		return Result.err(ProgramError.invalidArgument());
 	}
 	let infos: CpiAccount[16];
-	return invokeCpi(program, accounts, infos[0..accounts.length], data, signers);
+	return invokeCpi(program, accounts, infos[0..accounts.length], data, length, signers);
 }
 
 test "the CPI structs have the runtime's sizes" {

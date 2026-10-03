@@ -9,7 +9,8 @@ import {
 	System,
 	Writable,
 	WritableSigner,
-	borshBuffer,
+	putU64,
+	putU8,
 	unchecked,
 } from "./core";
 import { ProgramError } from "./error";
@@ -310,6 +311,7 @@ export function mintTo(
 ): Result<uint64, ProgramError> {
 	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
 	let storage: uint8[9] = [];
+	const length = putU64(storage, putU8(storage, 0, 7), amount);
 	return invokeSigned(
 		program,
 		[
@@ -317,7 +319,8 @@ export function mintTo(
 			InstructionAccount.writable(destination),
 			InstructionAccount.readonlySigner(authority),
 		],
-		borshBuffer(storage).u8(7).u64(amount),
+		storage,
+		length,
 		signers,
 	);
 }
@@ -334,6 +337,9 @@ export function transferChecked(
 ): Result<uint64, ProgramError> {
 	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
 	let storage: uint8[10] = [];
+	let length = putU8(storage, 0, 12);
+	length = putU64(storage, length, amount);
+	length = putU8(storage, length, decimals);
 	return invokeSigned(
 		program,
 		[
@@ -342,7 +348,8 @@ export function transferChecked(
 			InstructionAccount.writable(destination),
 			InstructionAccount.readonlySigner(authority),
 		],
-		borshBuffer(storage).u8(12).u64(amount).u8(decimals),
+		storage,
+		length,
 		signers,
 	);
 }
@@ -356,6 +363,7 @@ export function closeAccount(
 ): Result<uint64, ProgramError> {
 	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
 	let storage: uint8[1] = [];
+	const length = putU8(storage, 0, 9);
 	return invokeSigned(
 		program,
 		[
@@ -363,7 +371,8 @@ export function closeAccount(
 			InstructionAccount.writable(destination),
 			InstructionAccount.readonlySigner(authority),
 		],
-		borshBuffer(storage).u8(9),
+		storage,
+		length,
 		signers,
 	);
 }
@@ -395,6 +404,7 @@ function createAssociated(
 ): Result<uint64, ProgramError> {
 	if (!isTokenProgram(program.key())) { return Result.err(ProgramError.incorrectProgramId()); }
 	let storage: uint8[1] = [];
+	const length = putU8(storage, 0, discriminator);
 	return invokeSigned(
 		Pubkey.associatedTokenProgram(),
 		[
@@ -405,7 +415,8 @@ function createAssociated(
 			InstructionAccount.readonly(systemProgram),
 			InstructionAccount.readonly(program),
 		],
-		borshBuffer(storage).u8(discriminator),
+		storage,
+		length,
 		signers,
 	);
 }
