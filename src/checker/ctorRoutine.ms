@@ -10,10 +10,12 @@ export interface CtorRow {
 
 let _routines: HashMap<Symbol, Symbol> = new HashMap<Symbol, Symbol>();
 let _rows: CtorRow[] = [];
+let _rowAt: HashMap<Symbol, int32> = new HashMap<Symbol, int32>();
 
 export function resetCtorRoutines(): void {
 	_routines = new HashMap<Symbol, Symbol>();
 	_rows = [];
+	_rowAt = new HashMap<Symbol, int32>();
 }
 
 export function ctorRoutineMark(): int32 {
@@ -33,8 +35,14 @@ export function replayCtorRoutines(rows: CtorRow[]): void {
 }
 
 function registerCtorRoutine(owner: Symbol, routine: Symbol): void {
+	const at = _rowAt.get(owner);
+	if (at != null) {
+		_rows[at].routine = routine;
+	} else {
+		_rowAt.set(owner, _rows.length);
+		_rows.push({ owner, routine });
+	}
 	_routines.set(owner, routine);
-	_rows.push({ owner, routine });
 }
 
 export function mintCtorRoutine(ctx: CheckerContext, owner: Symbol, ownerName: string, thisType: Type, userTypes: Type[], userNames: string[], declNode: Node | null, defaults: Node[]): Symbol {
