@@ -20,7 +20,7 @@ import { TokenKind, createToken } from "../../lexer/token";
 import { TransformContext } from "../context";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, makeMember, makeNumber, generatedRef } from "../util";
+import { makeBinary, makeCall, makeMember, makeNumber, generatedRef, runtimeRef } from "../util";
 import { createPrimitive, isIntegerType, peelToRepr } from "../../checker/types";
 import { int64ToDecimal, uint64ToDecimal } from "../../utils/string";
 import { cloneIfPure } from "./intArithJS";
