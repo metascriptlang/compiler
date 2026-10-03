@@ -1,7 +1,7 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
-import { refusePrivateField, declaringSymOf, refuseHiddenMethodCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
+import { refuseMemberAccess, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
@@ -3750,7 +3750,9 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		}
 	}
 	if (!isStaticClassAccess && !isUnresolvedType(propType)) {
-		refusePrivateField(ctx, fieldOwnerSym != null ? fieldOwnerSym : resolvedObjType.sym, d.property, node.location.line, node.location.column);
+		const memberOwner = fieldOwnerSym != null ? fieldOwnerSym : resolvedObjType.sym;
+		const receiver = isSuperReceiver(d.object) ? null : memberOwner;
+		refuseMemberAccess(ctx, memberOwner, d.property, receiver, node.location.line, node.location.column);
 	}
 	// Static property lookup: check class symbol's staticFields
 	if (isStaticClassAccess && isUnresolvedType(propType) && d.object.resolvedSym != null) {

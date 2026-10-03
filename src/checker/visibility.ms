@@ -1,4 +1,4 @@
-import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, IdentifierData } from "../ast/node";
 import { classDeclNodeOf, parentClassSymOf, lookupSymbol, Scope } from "./symbol";
 import { CheckerContext, addError } from "./context";
 
@@ -92,14 +92,29 @@ function derivesFrom(cls: Symbol, owner: Symbol): boolean {
 	return false;
 }
 
-function grantsPrivateAccess(ctx: CheckerContext, owner: Symbol, protectedMember: boolean): boolean {
+function enclosingGrant(ctx: CheckerContext, owner: Symbol, protectedMember: boolean): Symbol | null {
 	let scope: Scope | null = ctx.table.current;
 	while (scope != null) {
 		const granted = scope.privateAccess;
-		if (granted != null && (originOf(granted) == owner || (protectedMember && derivesFrom(originOf(granted), owner)))) return true;
+		if (granted != null) {
+			const cls = originOf(granted);
+			if (cls == owner || (protectedMember && derivesFrom(cls, owner))) return cls;
+		}
 		scope = scope.parent;
 	}
-	return false;
+	return null;
+}
+
+function reportClassMember(ctx: CheckerContext, owner: Symbol, name: string, what: string, protectedMember: boolean, receiver: Symbol | null, line: int32, column: int32): boolean {
+	const through = enclosingGrant(ctx, owner, protectedMember);
+	if (through == null) {
+		const where = protectedMember ? "inside that class and its subclasses" : "inside that class";
+		addError(ctx, `'${name}' is a ${protectedMember ? "protected" : "private"} ${what} of class '${owner.name}' and is only accessible ${where}`, line, column);
+		return true;
+	}
+	if (!protectedMember || receiver == null || derivesFrom(originOf(receiver), through)) return false;
+	addError(ctx, `'${name}' is a protected ${what} of class '${owner.name}' and is only accessible through an instance of class '${through.name}'; this is an instance of class '${originOf(receiver).name}'`, line, column);
+	return true;
 }
 
 function befriends(ctx: CheckerContext, modulePath: string): boolean {
@@ -145,8 +160,7 @@ function isProtectedMember(owner: Symbol, name: string): boolean {
 	return isClassLike(owner) && ownVisibility(owner, name) == DeclaredVisibility.Protected;
 }
 
-export function fieldVisible(ctx: CheckerContext, owner: Symbol, name: string): boolean {
-	if (isClassLike(owner)) return grantsPrivateAccess(ctx, owner, isProtectedMember(owner, name));
+function structFieldVisible(ctx: CheckerContext, owner: Symbol): boolean {
 	return owner.modulePath == ctx.modulePath || befriends(ctx, owner.modulePath);
 }
 
@@ -162,22 +176,26 @@ export function methodOwnerClass(ctx: CheckerContext, method: Symbol): Symbol | 
 }
 
 export function refusePrivateField(ctx: CheckerContext, typeSym: Symbol | null, field: string, line: int32, column: int32): boolean {
+	return refuseMemberAccess(ctx, typeSym, field, typeSym, line, column);
+}
+
+export function refuseMemberAccess(ctx: CheckerContext, typeSym: Symbol | null, field: string, receiver: Symbol | null, line: int32, column: int32): boolean {
 	const owner = privateFieldOwner(typeSym, field);
-	if (owner == null || fieldVisible(ctx, owner, field)) return false;
-	if (isProtectedMember(owner, field)) {
-		addError(ctx, `'${field}' is a protected field of class '${owner.name}' and is only accessible inside that class and its subclasses`, line, column);
-	} else if (isClassLike(owner)) {
-		addError(ctx, `'${field}' is a private field of class '${owner.name}' and is only accessible inside that class`, line, column);
-	} else {
-		addError(ctx, `'${field}' is a private field of '${owner.name}' and is only accessible in the module that declares it`, line, column);
-	}
+	if (owner == null) return false;
+	if (isClassLike(owner)) return reportClassMember(ctx, owner, field, "field", isProtectedMember(owner, field), receiver, line, column);
+	if (structFieldVisible(ctx, owner)) return false;
+	addError(ctx, `'${field}' is a private field of '${owner.name}' and is only accessible in the module that declares it`, line, column);
 	return true;
 }
 
 export function hiddenPrivateField(ctx: CheckerContext, typeSym: Symbol | null, fields: string[]): string {
 	for (const f of fields) {
 		const owner = privateFieldOwner(typeSym, f);
-		if (owner != null && !fieldVisible(ctx, owner, f)) return f;
+		if (owner == null) continue;
+		const visible = isClassLike(owner)
+			? enclosingGrant(ctx, owner, isProtectedMember(owner, f)) != null
+			: structFieldVisible(ctx, owner);
+		if (!visible) return f;
 	}
 	return "";
 }
@@ -230,8 +248,18 @@ export function refuseHiddenMethodCall(ctx: CheckerContext, call: Node): void {
 	const vis = memberVisibility(md.methodVisibility);
 	if (vis != DeclaredVisibility.Private && vis != DeclaredVisibility.Protected) return;
 	const owner = methodClass(ctx, method);
-	if (owner == null || grantsPrivateAccess(ctx, owner, vis == DeclaredVisibility.Protected)) return;
-	const what = vis == DeclaredVisibility.Protected ? "protected" : "private";
-	const where = vis == DeclaredVisibility.Protected ? "inside that class and its subclasses" : "inside that class";
-	addError(ctx, `'${md.methodName}' is a ${what} method of class '${owner.name}' and is only accessible ${where}`, call.location.line, call.location.column);
+	if (owner == null) return;
+	const receiver = md.methodIsStatic ? null : receiverClassOf(callee);
+	reportClassMember(ctx, owner, md.methodName, "method", vis == DeclaredVisibility.Protected, receiver, call.location.line, call.location.column);
+}
+
+export function isSuperReceiver(object: Node): boolean {
+	return object.kind == NodeKind.Identifier && (object.data as IdentifierData).name == "super";
+}
+
+function receiverClassOf(callee: Node): Symbol | null {
+	if (callee.kind != NodeKind.MemberExpr) return null;
+	const object = (callee.data as MemberExprData).object;
+	if (object == null || isSuperReceiver(object)) return null;
+	return declaringSymOf(object.nodeType);
 }
