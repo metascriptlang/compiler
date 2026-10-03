@@ -453,6 +453,84 @@ when (testBuild) {
 		assert invocations().length == 0;
 	}
 
+	function scheduleStep(): Result<uint64, ProgramError> {
+		const data = instructionData();
+		const op = try data.readU8(0);
+		const payer = try account(0);
+		const tail = try data.range(1, 2);
+		if (op == 0) {
+			return scheduleTask(payer, 7, 400, 3, try account(1), tail, programId());
+		}
+		const task = Instruction.forProgram(programId(), 2, 2);
+		task.addWritable(try account(1));
+		task.addReadonly(try account(2));
+		task.appendBytes(tail);
+		return scheduleTask(payer, 7, 400, 3, task);
+	}
+
+	function scheduleEntry(): void {
+		const result = scheduleStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function scheduleAccounts(): HostAccount[] {
+		const readonly: HostAccount = {
+			...holder(keyOf(5), Pubkey.delegationProgram(), []),
+			writable: false,
+		};
+		return [payerAccount(), holder(keyOf(4), Pubkey.delegationProgram(), []), readonly];
+	}
+
+	function scheduleRun(op: uint8): uint64 {
+		const input: uint8[] = [op, 0xaa, 0xbb];
+		return run(programKey(), scheduleAccounts(), input, scheduleEntry).result;
+	}
+
+	function scheduleHead(): uint8[] {
+		const head: uint8[] = [
+			6, 0, 0, 0,
+			7, 0, 0, 0, 0, 0, 0, 0,
+			144, 1, 0, 0, 0, 0, 0, 0,
+			3, 0, 0, 0, 0, 0, 0, 0,
+			1, 0, 0, 0, 0, 0, 0, 0,
+		];
+		const sent = head.concat(keyBytes(programKey()));
+		return sent;
+	}
+
+	test "scheduleTask sends the magic program the payer, the task's accounts and the task encoded" {
+		assert scheduleRun(0) == 0;
+		const single = invocations()[0];
+		assert single.program.equals(Pubkey.magicProgram());
+		assert single.accounts.length == 2;
+		assert single.accounts[0].key.equals(keyOf(1));
+		assert single.accounts[0].writable && single.accounts[0].signer;
+		assert single.accounts[1].key.equals(keyOf(4));
+		assert single.accounts[1].writable && !single.accounts[1].signer;
+		const oneAccount: uint8[] = [1, 0, 0, 0, 0, 0, 0, 0];
+		const meta: uint8[] = [0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0xaa, 0xbb];
+		const singleBytes = scheduleHead().concat(oneAccount).concat(keyBytes(keyOf(4))).concat(meta);
+		assert sameBytes(single.data, singleBytes);
+
+		assert scheduleRun(1) == 0;
+		const listed = invocations()[0];
+		assert listed.program.equals(Pubkey.magicProgram());
+		assert listed.accounts.length == 3;
+		assert listed.accounts[1].key.equals(keyOf(4)) && listed.accounts[1].writable;
+		assert listed.accounts[2].key.equals(keyOf(5)) && !listed.accounts[2].writable;
+		assert !listed.accounts[1].signer && !listed.accounts[2].signer;
+		const twoAccounts: uint8[] = [2, 0, 0, 0, 0, 0, 0, 0];
+		const first: uint8[] = [0, 1];
+		const second: uint8[] = [0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0xaa, 0xbb];
+		const listBytes = scheduleHead()
+			.concat(twoAccounts)
+			.concat(keyBytes(keyOf(4)))
+			.concat(first)
+			.concat(keyBytes(keyOf(5)))
+			.concat(second);
+		assert sameBytes(listed.data, listBytes);
+	}
+
 	function undelegateStep(): Result<uint64, ProgramError> {
 		const data = instructionData();
 		if (!isUndelegateCallback(data)) { return Result.err(ProgramError.invalidInstructionData()); }
