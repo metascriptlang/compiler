@@ -40,7 +40,6 @@ function lowerAddress(node: Node, native: boolean): Node {
 	return address;
 }
 
-export function lowerPointerAddresses(program: Node, ctx: TransformContext): Node {
-	const native = !ctx.jsBackend;
+export function lowerPointerAddresses(program: Node, ctx: TransformContext, native: boolean): Node {
 	return walkNode(program, (node: Node): Node => lowerAddress(node, native));
 }

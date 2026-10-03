@@ -28,6 +28,7 @@ import { lowerCtorInit } from "./lowering/ctorLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerBorrow } from "./lowering/borrowLower";
+import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerAggregateEquality, lowerUserOperators } from "./lowering/operatorLower";
 import { liftDestructors } from "./lowering/destructorLifting";
@@ -36,7 +37,8 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.raiserBackend = true;
 	ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
-	let result = lowerBorrow(program, ctx);
+	let result = lowerPointerAddresses(program, ctx, false);
+	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);

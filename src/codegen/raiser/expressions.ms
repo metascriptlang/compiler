@@ -16,7 +16,7 @@ import { RaiserOpcode, RaiserConvClass, raiserABC, convOperand } from "../../rai
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
-import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive } from "../../checker/types";
+import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import {
@@ -1586,6 +1586,8 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 	const refusedOp = refusePointerOp(s, node);
 	if (refusedOp >= 0) return refusedOp;
 	const d = node.data as ArrayAccessData;
+	const held = skipModifier(d.array.nodeType);
+	if (held != null && held.kind == TypeKind.Ptr) return compileExpr(s, d.array);
 	if (d.index.kind == NodeKind.BinaryExpr) {
 		const bd = d.index.data as BinaryExprData;
 		if (bd.operator == ".." || bd.operator == "...") return compileArraySlice(s, d, bd);
