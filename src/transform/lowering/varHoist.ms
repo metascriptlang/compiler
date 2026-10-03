@@ -9,8 +9,7 @@
 //                              }
 //
 // Only inside function bodies. Module-level var is NOT hoisted.
-// Deduplicates: multiple var x → single let x = null at top.
-// Stops at nested function boundaries.
+// One hoisted let per declared symbol; stops at nested function boundaries.
 
 import {
 	Node, NodeKind, DeclKind, SourceLocation,
@@ -18,14 +17,29 @@ import {
 	ArrowFunctionData, MethodDeclData, ConstructorDeclData,
 	VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData,
 	DoWhileStmtData, SwitchStmtData, SwitchCaseData,
-	ExportDeclData, ClassDeclData, DecoratedDeclData,
+	ExportDeclData, ClassDeclData, DecoratedDeclData, Symbol,
 } from "../../ast/node";
-import { TransformContext, NameSet, createNameSet } from "../context";
-import { makeVarDecl, makeIdent, makeNull, makeAssign, makeExprStmt, makeBlock, collectDeclNames } from "../util";
-import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount } from "../testUtil";
+import { TransformContext } from "../context";
+import { forEachChild } from "../../ast/visitor";
+import { makeVarDecl, makeTypedIdentResolved, makeNull, makeAssign, makeExprStmt, makeBlock } from "../util";
+import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount, parseInput, getStmts } from "../testUtil";
+import { checkProgram } from "../../checker/checkPass";
+import { createTransformContextWithChecker } from "../context";
 
 // ===== Conversion =====
 // Replace var decls with assignments (or drop if no init). Recurse into nested blocks.
+
+function varSymOf(decl: Node): Symbol {
+	if (decl.resolvedSym == null) throw new Error(`internal: var '${(decl.data as VariableDeclData).declName}' reached hoisting without its symbol`);
+	return decl.resolvedSym;
+}
+
+function collectVarDecls(node: Node | null, out: Node[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr) return;
+	if (node.kind == NodeKind.VariableDecl && (node.data as VariableDeclData).declKind == DeclKind.Var) out.push(node);
+	forEachChild(node, (c: Node): void => { collectVarDecls(c, out); });
+}
 
 function convertVarsInStmts(stmts: Node[], loc: SourceLocation): void {
 	for (let i = 0; i < stmts.length; i += 1) {
@@ -40,7 +54,7 @@ function convertVarInNode(stmts: Node[], idx: number, loc: SourceLocation): void
 			const d = stmt.data as VariableDeclData;
 			if (d.declKind == DeclKind.Var) {
 				if (d.initializer != null && d.initializer.kind != NodeKind.NullLiteral) {
-					stmts[idx] = makeExprStmt(makeAssign(makeIdent(d.declName, loc), d.initializer, loc), loc);
+					stmts[idx] = makeExprStmt(makeAssign(makeTypedIdentResolved(varSymOf(stmt), null, loc), d.initializer, loc), loc);
 				} else {
 					stmts[idx] = makeBlock([], loc);
 				}
@@ -92,20 +106,29 @@ function convertVarInBody(body: Node, loc: SourceLocation): void {
 // ===== Per-Function Hoisting =====
 
 function hoistVarsInBody(body: Node, loc: SourceLocation): void {
-	const ns: NameSet = createNameSet();
-	collectDeclNames(body, ns, true);
+	const decls: Node[] = [];
+	collectVarDecls(body, decls);
 
-	if (ns.items.length == 0) return;
+	if (decls.length == 0) return;
+	for (const decl of decls) {
+		if (decl.resolvedSym == null && decl.nodeType == null) return;
+	}
 
 	if (body.kind != NodeKind.BlockStmt) return;
 	const bd = body.data as BlockStmtData;
 
 	convertVarsInStmts(bd.statements, loc);
 
-	// Build new stmt list: hoisted decls + original stmts
 	const newStmts: Node[] = [];
-	for (let ni = 0; ni < ns.items.length; ni += 1) {
-		newStmts.push(makeVarDecl(ns.items[ni], makeNull(loc), DeclKind.Let, loc));
+	const hoisted: Symbol[] = [];
+	for (const decl of decls) {
+		const sym = varSymOf(decl);
+		if (hoisted.indexOf(sym) >= 0) continue;
+		hoisted.push(sym);
+		const letDecl = makeVarDecl(sym.name, makeNull(loc), DeclKind.Let, loc);
+		letDecl.resolvedSym = sym;
+		letDecl.nodeType = decl.nodeType;
+		newStmts.push(letDecl);
 	}
 	for (let oi = 0; oi < bd.statements.length; oi += 1) {
 		newStmts.push(bd.statements[oi]);
@@ -196,20 +219,27 @@ test "let unchanged" { assert stmtCountAfter("let x = 1;", lowerVarHoist) == 1; 
 
 test "module var stays" { assert firstStmtKindAfter("var x = 1;", lowerVarHoist) == NodeKind.VariableDecl; }
 
-test "function with var" { assert stmtCountAfter("function f() { var x = 1; }", lowerVarHoist) == 1; }
-
-test "function with var is FunctionDecl" { assert firstStmtKindAfter("function f() { var x = 1; }", lowerVarHoist) == NodeKind.FunctionDecl; }
+function checkedFnBodyCount(input: string): int32 {
+	const pr = parseInput(input);
+	if (!pr.ok) return -1;
+	const cc = checkProgram(pr.value);
+	const stmts = getStmts(lowerVarHoist(pr.value, createTransformContextWithChecker(cc)));
+	if (stmts.length == 0 || stmts[0].kind != NodeKind.FunctionDecl) return -1;
+	return ((stmts[0].data as FunctionDeclData).fnBody.data as BlockStmtData).statements.length;
+}
 
 test "no var passthrough" { assert stmtCountAfter("function f() { let x = 1; }", lowerVarHoist) == 1; }
 
 test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", lowerVarHoist) == 2; }
 
 test "var hoisted adds let at top" {
-	// function f() { var x = 1; } → body has 2 stmts: let x = null; x = 1;
-	assert fnBodyStmtCount("function f() { var x = 1; }", lowerVarHoist) == 2;
+	assert checkedFnBodyCount("function f() { var x = 1; }") == 2;
+}
+
+test "two sibling vars hoist one let each" {
+	assert checkedFnBodyCount("function f(c: boolean) { if (c) { var x = 1; } else { var y = 2; } }") == 3;
 }
 
 test "nested fn var not hoisted to outer" {
-	// function f() { function g() { var x = 1; } } → outer body still 1 stmt (nested fn)
-	assert fnBodyStmtCount("function f() { function g() { var x = 1; } }", lowerVarHoist) == 1;
+	assert checkedFnBodyCount("function f() { function g() { var x = 1; } }") == 1;
 }
