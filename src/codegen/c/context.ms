@@ -605,7 +605,7 @@ export class CTypeInfoDemand {
 }
 
 export class AliveSet {
-	enabled: boolean;        // false: DCE off, everything is alive
+	enabled: boolean;
 	entries: string[];       // "modulePath:symbolName" keys
 	_set: HashSet<string>;       // O(1) lookup mirror
 	_modules: HashSet<string>;   // O(1) module-level lookup

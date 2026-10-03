@@ -349,8 +349,6 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	// Check if struct type already declared (by genObjectType for generic instances)
 	const classKey = "object:" + name;
 	const typeAlreadyDeclared = nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, classKey);
-	// The struct body emission below is guarded by typeAlreadyDeclared to avoid
-	// re-emitting the forward decl / struct body.
 	nameSetAdd(g.declaredThings, name);
 	genStaticFieldGlobals(g, d, node.resolvedSym);
 	const parent = node.nodeType != null ? classParentOf(node.nodeType) : null;

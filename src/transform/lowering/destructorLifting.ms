@@ -623,7 +623,6 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			if (resolvedName != "") {
 				// Reference parity: trace only emits for cyclic field types (defaultOp is no-op for trace)
 				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
-					// Field-recursion is a CONSUMER path.
 					ensureHooks(resolvedName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(fieldType, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, buf, loc);
@@ -723,7 +722,6 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				stringOp(hook, xf, yf, fieldName, buf, loc);
 			} else if (fieldType.typeName != "") {
 				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
-					// Field-recursion is a CONSUMER path.
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(fieldType, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, buf, loc);
@@ -1513,7 +1511,6 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 		return;
 	}
 
-	// No RC fields → skip hooks for a class/interface.
 	// Exception (Nim parity, `produceSym` in liftdestructors.nim:1180): plain
 	// value-type Struct still emits empty-body hooks so container iteration
 	// (e.g. `HashSet__numberDestroy` calling `HashSetEntry__numberDestroy` per
@@ -2303,8 +2300,6 @@ function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation
 }
 
 function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
-		// Consumer path (declaring = false).
-		//
 		// Skip match-type variant structs (typeName like "Alias.Key") — their
 		// hooks are emitted via the parent Union's `<Union>_v<N>` helper
 		// dispatch, not as standalone `<Alias.Key>Copy` (which would be an

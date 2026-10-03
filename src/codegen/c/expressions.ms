@@ -1080,7 +1080,6 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 	}
 	if (kind == NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
-		// A generated operation owned by another TU needs an extern prototype here.
 		ensureDrcProto(g, d.name, node.resolvedSym);
 		const builtin = node.resolvedSym != null ? node.resolvedSym.builtinKind : "";
 		if (builtin == "NaN") { ctx.results.push("NAN"); return; }
