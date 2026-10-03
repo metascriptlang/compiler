@@ -1289,3 +1289,24 @@ test "engine: a string span views its bytes" {
 	assert ctx.error == "";
 	assert ctx.output == "532 317\n";
 }
+
+test "engine: a byte view of a struct span traps instead of reading an element" {
+	const ctx = evalOrcVM("struct P { a: uint32; } const ps: P[] = [{ a: 258 }]; const v: Span<P> = ps;"
+		+ " const bytes = v as Ptr<void> as Ptr<uint8>; console.log(`${bytes[0]}`);");
+	assert ctx.error.includes("on the Raiser VM: no byte representation"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: a byte view through a typed pointer traps" {
+	const ctx = evalOrcVM("struct P { a: uint32; } let p: P = { a: 258 }; const typed = p as Ptr<P>;"
+		+ " const bytes = typed as Ptr<uint8>; console.log(`${bytes[0]}`);");
+	assert ctx.error.includes("cannot convert Ptr<P> to Ptr<uint8> on the Raiser VM"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: a same-element span pointer still reads its first element" {
+	const ctx = evalOrcVM("struct P { a: uint32; } const ps: P[] = [{ a: 258 }]; const v: Span<P> = ps;"
+		+ " const first = v as Ptr<P>; console.log(`${first[0].a}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "258\n";
+}
