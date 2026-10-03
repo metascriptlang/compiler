@@ -44,6 +44,7 @@ export function fromCharCode(this typeof String, code: int32): string {
 
 // ===== String Extension Methods (after lowering: s.method(args) → method(s, args)) =====
 
+@compilerFunc
 export function charAt(this s: string, idx: int32): string {
 	@emit(`return (${idx} < 0 || ${idx} >= ${s}.length) ? "" : ${s}.charAt(${idx});`);
 	unreachable;
@@ -161,6 +162,7 @@ export function msNumberToStringRadix(n: number, radix: number): string {
 // double, so they are the same String()/toString() call. Exact int64 semantics
 // on this backend wait on the BigInt mapping — until then these exist so the
 // shared lowering can name one function for both backends.
+@compilerFunc
 export function msIntToString(n: int64): string {
 	@emit(`return String(${n});`);
 	unreachable;
@@ -191,6 +193,7 @@ export function msBoolToString(b: boolean): string {
 }
 
 // String hash — DJB2 over WTF-8 bytes (matches C runtime msStringHash)
+@compilerFunc
 export function msStringHash(s: string): int32 {
 	const sb = wtf8Cached(s);
 	let h: int32 = 5381;
@@ -202,15 +205,18 @@ export function msStringHash(s: string): int32 {
 
 // .length on string → UTF-16 code units (LANG.md Index-Space Contract) = native.
 @compilerFunc
+@compilerFunc
 export function msStringLength(s: string): int32 {
 	@emit(`return ${s}.length;`);
 	unreachable;
 }
 
+@compilerFunc
 export function msStringByteLength(s: string): int32 {
 	return wtf8Cached(s).length;
 }
 
+@compilerFunc
 export function msStringByteAt(s: string, idx: int32): int32 {
 	return s.byteAt(idx);
 }

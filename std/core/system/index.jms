@@ -175,6 +175,7 @@ function msCheckRangeI64(v: float64): float64 {
 }
 
 @compilerFunc
+@compilerFunc
 function msDivI32(a: int32, b: int32): int32 {
 	@emit(`if (${b} === 0) ${msDefect}("division by zero");
 	if (${b} === -1 && ${a} === -2147483648) ${msDefect}("over- or underflow");
@@ -183,12 +184,14 @@ function msDivI32(a: int32, b: int32): int32 {
 }
 
 @compilerFunc
+@compilerFunc
 function msModI32(a: int32, b: int32): int32 {
 	@emit(`if (${b} === 0) ${msDefect}("division by zero");
 	return (${a} % ${b}) | 0;`);
 	unreachable;
 }
 
+@compilerFunc
 @compilerFunc
 function msDivU32(a: uint32, b: uint32): uint32 {
 	@emit(`if (${b} === 0) ${msDefect}("division by zero");
@@ -197,12 +200,14 @@ function msDivU32(a: uint32, b: uint32): uint32 {
 }
 
 @compilerFunc
+@compilerFunc
 function msModU32(a: uint32, b: uint32): uint32 {
 	@emit(`if (${b} === 0) ${msDefect}("division by zero");
 	return ${a} % ${b};`);
 	unreachable;
 }
 
+@compilerFunc
 @compilerFunc
 function msDivI64(a: int64, b: int64): int64 {
 	@emit(`if (${b} === 0n) ${msDefect}("division by zero");
@@ -212,12 +217,14 @@ function msDivI64(a: int64, b: int64): int64 {
 }
 
 @compilerFunc
+@compilerFunc
 function msModI64(a: int64, b: int64): int64 {
 	@emit(`if (${b} === 0n) ${msDefect}("division by zero");
 	return ${a} % ${b};`);
 	unreachable;
 }
 
+@compilerFunc
 @compilerFunc
 function msDivU64(a: uint64, b: uint64): uint64 {
 	@emit(`if (${b} === 0n) ${msDefect}("division by zero");
@@ -226,12 +233,14 @@ function msDivU64(a: uint64, b: uint64): uint64 {
 }
 
 @compilerFunc
+@compilerFunc
 function msModU64(a: uint64, b: uint64): uint64 {
 	@emit(`if (${b} === 0n) ${msDefect}("division by zero");
 	return ${a} % ${b};`);
 	unreachable;
 }
 
+@compilerFunc
 @compilerFunc
 function msPowI32(a: int32, b: int32): int32 {
 	@emit(`if (${b} < 0) ${msDefect}("value " + ${b} + " not in range 0 .. 2147483647");
@@ -246,6 +255,7 @@ function msPowI32(a: int32, b: int32): int32 {
 	unreachable;
 }
 
+@compilerFunc
 @compilerFunc
 function msPowU32(a: uint32, b: uint32): uint32 {
 	@emit(`let r = 1, x = ${a}, y = ${b};
@@ -291,6 +301,7 @@ function msUint64ToFloat32(a: uint64): float32 {
 }
 
 @compilerFunc
+@compilerFunc
 function msPowI64(a: int64, b: int64): int64 {
 	@emit(`if (${b} < 0n) ${msDefect}("value " + ${b} + " not in range 0 .. 9223372036854775807");
 	let r = 1n, x = ${a}, y = ${b};
@@ -304,6 +315,7 @@ function msPowI64(a: int64, b: int64): int64 {
 	unreachable;
 }
 
+@compilerFunc
 @compilerFunc
 function msPowU64(a: uint64, b: uint64): uint64 {
 	@emit(`let r = 1n, x = ${a}, y = ${b};
@@ -322,12 +334,14 @@ function msPowU64(a: uint64, b: uint64): uint64 {
 // the corpus compares both backends' messages.
 
 @compilerFunc
+@compilerFunc
 function msChkIndex(i: int64, len: int64): int64 {
 	@emit(`if (!(${i} >= 0 && ${i} < ${len})) ${msDefect}("index " + ${i} + " out of bounds (length " + ${len} + ")");
 	return Number(${i});`);
 	unreachable;
 }
 
+@compilerFunc
 @compilerFunc
 function msSpanAt(v: unknown, i: int64): unknown {
 	@emit(`if (!(${i} >= 0 && ${i} < ${v}.len)) ${msDefect}("index " + ${i} + " out of bounds (length " + ${v}.len + ")");
@@ -336,11 +350,13 @@ function msSpanAt(v: unknown, i: int64): unknown {
 }
 
 @compilerFunc
+@compilerFunc
 function msSpanValues(v: unknown): unknown {
 	@emit(`return ${v}.base.slice(${v}.off, ${v}.off + ${v}.len);`);
 	unreachable;
 }
 
+@compilerFunc
 @compilerFunc
 function msSpanCell(v: unknown, i: int64): unknown {
 	@emit(`if (!(${i} >= 0 && ${i} < ${v}.len)) ${msDefect}("index " + ${i} + " out of bounds (length " + ${v}.len + ")");
@@ -349,6 +365,7 @@ function msSpanCell(v: unknown, i: int64): unknown {
 }
 
 @compilerFunc
+@compilerFunc
 function msArrayCell(a: unknown, i: int64): unknown {
 	@emit(`if (!(${i} >= 0 && ${i} < ${a}.length)) ${msDefect}("index " + ${i} + " out of bounds (length " + ${a}.length + ")");
 	return [${a}, Number(${i})];`);
@@ -356,11 +373,13 @@ function msArrayCell(a: unknown, i: int64): unknown {
 }
 
 @compilerFunc
+@compilerFunc
 function msSpanOf(a: unknown): unknown {
 	@emit(`return { base: ${a}, off: 0, len: ${a}.length };`);
 	unreachable;
 }
 
+@compilerFunc
 @compilerFunc
 function msSliceOf(a: unknown, start: number, end: number): unknown {
 	@emit(`const s = Number(${start}), e = Number(${end}), n = ${a}.length;
@@ -370,6 +389,7 @@ function msSliceOf(a: unknown, start: number, end: number): unknown {
 }
 
 @compilerFunc
+@compilerFunc
 function msSliceSpan(v: unknown, start: number, end: number): unknown {
 	@emit(`const s = Number(${start}), e = Number(${end}), n = ${v}.len;
 	if (e !== s && (s < 0 || e < s || e > n)) ${msDefect}("slice " + s + ".." + e + " out of bounds (length " + n + ")");
@@ -378,6 +398,7 @@ function msSliceSpan(v: unknown, start: number, end: number): unknown {
 }
 
 @compilerFunc
+@compilerFunc
 function msArrayAt(a: unknown, i: int64): unknown {
 	@emit(`const _a = ${a}, _i = ${i};
 	if (!(_i >= 0 && _i < _a.length)) ${msDefect}("index " + _i + " out of bounds (length " + _a.length + ")");
@@ -385,6 +406,7 @@ function msArrayAt(a: unknown, i: int64): unknown {
 	unreachable;
 }
 
+@compilerFunc
 @compilerFunc
 function msChkArray(a: unknown, i: int64): unknown {
 	@emit(`const _a = ${a}, _i = ${i};
@@ -401,3 +423,26 @@ function msChkStore(a: unknown, i: int64, v: unknown): unknown {
 	return _v;`);
 	unreachable;
 }
+
+// ===== JavaScript globals and helpers the compiler synthesizes calls to =====
+
+@compilerFunc
+extern function msPrintln(s: string): void;
+
+@compilerFunc
+extern function __paBegin(source: string): void;
+
+@compilerFunc
+extern function __paEnd(): void;
+
+@compilerFunc
+extern function __paValueStr(col: int32, label: string, val: string): void;
+
+@compilerFunc
+extern function __paValueNum(col: int32, label: string, val: float64): void;
+
+@compilerFunc
+extern function __paValueInt(col: int32, label: string, val: int64): void;
+
+@compilerFunc
+extern function __paValueBool(col: int32, label: string, val: boolean): void;

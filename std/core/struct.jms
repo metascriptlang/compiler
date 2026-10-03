@@ -134,6 +134,7 @@ export function toString<E>(this self: BitSet<E>): string {
 }
 
 
+@compilerFunc
 export function msSetCard32(v: uint32): int32 {
 	let n: uint32 = v;
 	let c: int32 = 0;
