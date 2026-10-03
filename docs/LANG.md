@@ -2201,7 +2201,7 @@ extern function ok<T>(val: T): Result<T, any>;
 | `@throws` | extern function | The routine raises by setting the runtime error flag instead of returning | DONE (2026-09-18) |
 | `@delegate` | body-less function, distinct type | Reuse the base function's implementation or expose the base's fields; see [Delegating a distinct](#delegating-a-distinct) | Verified on C and JS (2026-09-30) |
 | `@beforeReload` / `@afterReload` | module-level `(): void` function | Hot-reload lifecycle handler, run by `std/hcr` around a reload under `--hcr` ("Hot Code Reload" below) | DONE on Windows x64 and Linux x64 (`hcrEngine`, 2026-09-27) |
-| `@comptime` | block | Compile-time evaluation | PLANNED |
+| `@comptime` | block, function | Evaluate a block, or every call of the function, while compiling; see [docs/LANG-METAPROGRAMMING.md](LANG-METAPROGRAMMING.md) "`@comptime` functions" | Verified on C and JS (2026-10-03) |
 | `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
 | `@inline` | function | Hint to inline function body at call site | PLANNED |
 

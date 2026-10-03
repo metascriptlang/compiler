@@ -118,13 +118,18 @@ Supports: number, string, boolean, null, array, object returns. Each maps to the
 
 A `@comptime` block also gets the checker context a macro body gets, so the typed queries of Tier 2 answer inside one (landed 2026-09-12). Measured 2026-09-13 against a class `Later` declared in the same module: `getTypeImpl(bindSym("Later"))` → `Struct` (the `Ref` is peeled), `getImpl(bindSym("Later"))` → its `ClassDecl`, `resolveType("Later | null")` → `TypeUnion`, and `typeKind(resolveType("int32"))` → `Int32`.
 
+### `@comptime` functions
+
+A function marked `@comptime` runs only while compiling: each call is evaluated where it is written and replaced by its value, so `export const PROGRAM: uint64 = digitSum("2222");` is the constant `198535` in the emitted C and JS and builds under `--os=solana`. Every argument must be a compile-time value — a literal, a module-level `const` built from literals, or an expression of those; a parameter, a local or a module `let` is an error at the call. Calls inside other compile-time code (a `@comptime` function body, a `@comptime` block, a macro) run in the evaluator and are not checked this way. An overloaded `@comptime` function is refused, because the evaluator keys routines by name.
+
+Measured 2026-10-03 on `wt/comptime-calls`: corpus `1054-comptimeCallFolds` prints `program=198535 named=198535 joined=198535 key=7,14 weight=30 nested=20 chain=18 local=42` on the c, orc, danger, js, esm and raiser lanes, with no call left in the emitted C. Not done: a `@comptime` function that stays reachable (exported from the entry module, or used as a value) is still emitted as run-time code.
+
 ### Planned enhancements
 
 1. **Scope capture** — read surrounding `const` declarations (immutable values only)
-2. **@comptime functions** — `@comptime function f(): number { ... }` evaluated at every call site
-3. **Type inference** — propagate result type back to checker
-4. **Statement-position** — `@comptime { assert(SIZE > 0); }` as compile-time assertions
-5. **@compileError** — static error reporting from compile-time code
+2. **Type inference** — propagate result type back to checker
+3. **Statement-position** — `@comptime { assert(SIZE > 0); }` as compile-time assertions
+4. **@compileError** — static error reporting from compile-time code
 
 ## Tier 2: Macros — Typed AST Manipulation
 
