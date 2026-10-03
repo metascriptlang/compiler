@@ -1267,7 +1267,7 @@ function writeDepsFile(graph: ModuleGraph, entryPath: string, outDir: string): v
 	}
 	const depsPath = `${outDir}/${replaceExt(basename(entryPath), ".deps")}`;
 	writeOutput(depsPath, depsContent);
-	console.log(dim(`  wrote deps → ${depsPath}`));
+	printDiag(dim(`  wrote deps → ${depsPath}`));
 }
 
 // ===== Change Detection =====
@@ -1374,7 +1374,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		manifest = `${manifest}  ]\n}\n`;
 		writeOutput(`${splitRoot}/_manifest.json`, manifest);
 		if (opts.showTime) printTiming("emitted", t0);
-		console.log(success(`${tree.modulePaths.length} module(s) → ${bold(splitRoot)}`));
+		printDiag(success(`${tree.modulePaths.length} module(s) → ${bold(splitRoot)}`));
 		return;
 	}
 	entryPath = canonicalModulePath(entryPath);
@@ -1545,7 +1545,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		output = `${output}\n//# sourceMappingURL=${mapName}\n`;
 	}
 	writeOutput(outPath, output);
-	console.log(success(`${compiled} module(s) bundled → ${bold(outPath)}`));
+	printDiag(success(`${compiled} module(s) bundled → ${bold(outPath)}`));
 }
 
 // Platform-specific runtime compile — dispatch + selectors + pool + fs.
@@ -2095,7 +2095,7 @@ function publishHcrBuildAbi(state: HcrBuildAbi, changedPaths: string[]): void {
 		throw new Error(BUILD_STOPPED);
 	}
 	for (const decision of decisions) console.log(hcrReloadDiagnostic(decision));
-	console.log(`${green("  Wrote")} ${bold(state.bundlePath)}`);
+	printDiag(`${green("  Wrote")} ${bold(state.bundlePath)}`);
 }
 
 // ===== C Build =====
@@ -2526,7 +2526,7 @@ setGlobalHookOwners(sharedHookOwners);
 		|| (hcrBuildAbi.hadCurrent && hcrBundlesMatch(hcrBuildAbi.current, hcrBuildAbi.candidate));
 	const upToDate = session.keep ? lastBuilt && session.check.rechecked.size == 0 && hcrBundleCurrent : !projectChanged && hcrBundleCurrent;
 	if (upToDate) {
-		console.log(success("Up to date") + " " + bold(outBinary));
+		printDiag(success("Up to date") + " " + bold(outBinary));
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
 			ensureDir(depsDir);
@@ -2949,7 +2949,7 @@ setGlobalHookOwners(sharedHookOwners);
 			ensureDir(emitDir);
 			const emitPath = `${emitDir}/${mangleModuleName(p.modPath)}.c`;
 			writeOutput(emitPath, cCode);
-			console.log(`${green("  Wrote")} ${bold(emitPath)}`);
+			printDiag(`${green("  Wrote")} ${bold(emitPath)}`);
 		} else {
 			let modFlags = appendFlag(sideFlags, quoteCcArg(`-iquote${dirname(p.modPath)}`));
 			modFlags = appendFlag(modFlags, quoteCcArg(`-iquote${cd}`));
@@ -3018,15 +3018,15 @@ setGlobalHookOwners(sharedHookOwners);
 			if (!hcrModulePaths.includes(mp)) coreModules.push(mp);
 		}
 		writeOutput(`${emitDir}/_hcrcore.c`, genHcrCoreDispatcher(coreModules, moduleOutputs));
-		console.log(`${green("  Wrote")} ${bold(`${emitDir}/_hcrcore.c`)}`);
+		printDiag(`${green("  Wrote")} ${bold(`${emitDir}/_hcrcore.c`)}`);
 		for (const mp of hcrModulePaths) {
 			const output = moduleOutputFor(moduleOutputs, mp);
 			if (output == null) continue;
 			const imagePath = `${emitDir}/_hcrimage_${mangleModuleName(mp)}.c`;
 			writeOutput(imagePath, genHcrImageDispatcher(output, mp == entryPath));
-			console.log(`${green("  Wrote")} ${bold(imagePath)}`);
+			printDiag(`${green("  Wrote")} ${bold(imagePath)}`);
 		}
-		console.log(success(`Emitted ${compiled + 1 + hcrModulePaths.length} C module(s)`));
+		printDiag(success(`Emitted ${compiled + 1 + hcrModulePaths.length} C module(s)`));
 		if (opts.showTime) printTiming("emitted", t0);
 		session.lastBuilt = true;
 		return BuildStatus.Built;
@@ -3043,8 +3043,8 @@ setGlobalHookOwners(sharedHookOwners);
 		const emitDir = emitDirOf(opts);
 		const dispPath = `${emitDir}/_dispatch.c`;
 		writeOutput(dispPath, dispatcher);
-		console.log(`${green("  Wrote")} ${bold(dispPath)}`);
-		console.log(success(`Emitted ${compiled + 1} C module(s)`));
+		printDiag(`${green("  Wrote")} ${bold(dispPath)}`);
+		printDiag(success(`Emitted ${compiled + 1} C module(s)`));
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
 			writeDepsFile(graph, entryPath, depsDir);
@@ -3127,7 +3127,7 @@ setGlobalHookOwners(sharedHookOwners);
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		if (session.keep && cJobs.length <= PLANNED_COMPILE_JOBS) ensurePchs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (opts.showTime) printTiming("phase D (link images)", tLink);
-		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(` (+${hcrModulePaths.length} HCR images)`));
+		printDiag(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(` (+${hcrModulePaths.length} HCR images)`));
 		session.lastBuilt = true;
 		return BuildStatus.Built;
 	}
@@ -3156,7 +3156,7 @@ setGlobalHookOwners(sharedHookOwners);
 		}
 		if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
-		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(" (link cached)"));
+		printDiag(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(" (link cached)"));
 		if (opts.showTime) printTiming("built", t0);
 		session.lastBuilt = true;
 		return BuildStatus.Built;
@@ -3217,7 +3217,7 @@ setGlobalHookOwners(sharedHookOwners);
 	writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 
 	if (opts.showTime) printTiming("phase D (link)", tD);
-	console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`));
+	printDiag(success(`Built ${compiled} module(s) → ${bold(outBinary)}`));
 	if (opts.showTime) printTiming("total", t0);
 	session.lastBuilt = true;
 	return BuildStatus.Built;
