@@ -15,11 +15,13 @@ import {
 	args,
 	close,
 	createPda,
+	createPdaOf,
 	expectAddress,
 	expectHasOne,
 	externalMutable,
 	failWith,
 	instruction,
+	leBytes,
 	pdaWithBump,
 	readArgs,
 	selectInstruction,
@@ -71,8 +73,8 @@ export struct RefundAccounts {
 	systemProgram: Program<System>;
 }
 
-export function escrowSeeds(maker: Pubkey, seed: uint64): Seeds {
-	return Seeds.empty(4).addText("escrow").addPubkey(maker).addU64(seed);
+function escrowSigner(maker: Pubkey, seed: uint64, bump: uint8): Seeds {
+	return Seeds.empty(4).addText("escrow").addPubkey(maker).addU64(seed).withBump(bump);
 }
 
 function make(): Result<uint64, ProgramError> {
@@ -82,7 +84,7 @@ function make(): Result<uint64, ProgramError> {
 	}
 	const x = try accounts<MakeAccounts>();
 	const _ownAta = try expectAssociated(x.makerAtaA.key(), x.maker.key(), x.mintA);
-	const made = try createPda<Escrow>(x.maker, x.escrow, escrowSeeds(x.maker.key(), a.seed));
+	const made = try createPda<Escrow>(x.maker, x.escrow, ["escrow", x.maker, leBytes(a.seed)]);
 	const escrow = made.account.data();
 	escrow.seed = a.seed;
 	escrow.maker = x.maker.key();
@@ -118,8 +120,11 @@ function make(): Result<uint64, ProgramError> {
 function take(): Result<uint64, ProgramError> {
 	const x = try accounts<TakeAccounts>();
 	const escrow = x.escrow.data();
-	const seeds = escrowSeeds(escrow.maker, escrow.seed);
-	const verified = try pdaWithBump(x.escrow, seeds, escrow.bump);
+	const verified = try pdaWithBump(
+		x.escrow,
+		["escrow", escrow.maker, leBytes(escrow.seed)],
+		escrow.bump,
+	);
 	const _maker = try expectHasOne(escrow.maker, x.maker.key());
 	const _mintA = try expectAddress(x.mintA.key(), escrow.mintA);
 	const _mintB = try expectAddress(x.mintB.key(), escrow.mintB);
@@ -137,7 +142,7 @@ function take(): Result<uint64, ProgramError> {
 		receive,
 	);
 	const held = (try x.vault.read()).amount;
-	const signer = seeds.withBump(verified.bump);
+	const signer = escrowSigner(escrow.maker, escrow.seed, verified.bump);
 	const _released = try transferTokensSigned(
 		x.vault,
 		x.takerAtaA,
@@ -154,15 +159,18 @@ function take(): Result<uint64, ProgramError> {
 function refund(): Result<uint64, ProgramError> {
 	const x = try accounts<RefundAccounts>();
 	const escrow = x.escrow.data();
-	const seeds = escrowSeeds(escrow.maker, escrow.seed);
-	const verified = try pdaWithBump(x.escrow, seeds, escrow.bump);
+	const verified = try pdaWithBump(
+		x.escrow,
+		["escrow", escrow.maker, leBytes(escrow.seed)],
+		escrow.bump,
+	);
 	const _maker = try expectHasOne(escrow.maker, x.maker.key());
 	const _mintA = try expectAddress(x.mintA.key(), escrow.mintA);
 	const escrowAccount = x.escrow as Account;
 	const _vault = try expectAssociated(x.vault.key(), escrowAccount.key(), x.mintA);
 	const _ownAta = try expectAssociated(x.makerAtaA.key(), x.maker.key(), x.mintA);
 	const held = (try x.vault.read()).amount;
-	const signer = seeds.withBump(verified.bump);
+	const signer = escrowSigner(escrow.maker, escrow.seed, verified.bump);
 	const _returned = try transferTokensSigned(
 		x.vault,
 		x.makerAtaA,
@@ -199,7 +207,7 @@ when (!testBuild) {
 }
 
 when (testBuild) {
-	import { Discriminator, instructionDiscriminator } from "std/solana";
+	import { Discriminator, findProgramAddressOf, instructionDiscriminator } from "std/solana";
 	import { HostAccount, run } from "std/solana/host";
 	import { associatedTokenAddress } from "std/solana/token";
 
@@ -277,7 +285,7 @@ when (testBuild) {
 	}
 
 	function escrowKey(maker: Pubkey, seed: uint64): Pubkey {
-		const found = escrowSeeds(maker, seed).findProgramAddress(programKey());
+		const found = findProgramAddressOf(programKey(), ["escrow", maker, leBytes(seed)]);
 		return found.ok ? found.value.key : Pubkey.zero();
 	}
 

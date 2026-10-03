@@ -7,6 +7,7 @@ import {
 	programId,
 } from "./core";
 import { ProgramError } from "./error";
+import { findProgramAddress, findProgramAddressOf } from "./macro";
 import { Pubkey, pubkeyOf } from "./pubkey";
 
 when (testBuild) {
@@ -42,7 +43,7 @@ function requested(
 	callbackArguments: Bytes,
 	payerSigner: Seeds,
 ): Result<uint64, ProgramError> {
-	const identity = try Seeds.empty(1).addText("identity").findProgramAddress(programId());
+	const identity = try findProgramAddress(["identity"]);
 	if (!identity.key.equals(accounts.programIdentity.key())) { return Result.err(ProgramError.invalidSeeds()); }
 	const metaCount = callbackAccounts.length as uint64;
 	const instruction = Instruction.forProgram(
@@ -121,7 +122,7 @@ export function requestRandomness(
 
 export function verifyVrfCallback(identity: Account): Result<uint64, ProgramError> {
 	if (!identity.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
-	const scoped = try Seeds.empty(2).addText("identity").addPubkey(programId()).findProgramAddress(Pubkey.vrfProgram());
+	const scoped = try findProgramAddressOf(Pubkey.vrfProgram(), ["identity", programId()]);
 	if (!scoped.key.equals(identity.key())) { return Result.err(ProgramError.incorrectAuthority()); }
 	return Result.ok(0);
 }
@@ -150,16 +151,13 @@ when (testBuild) {
 	}
 
 	function identityOf(program: Pubkey): Pubkey {
-		const found = Seeds.empty(1).addText("identity").findProgramAddress(program);
+		const found = findProgramAddressOf(program, ["identity"]);
 		if (found.ok) { return found.value.key; }
 		return Pubkey.zero();
 	}
 
 	function scopedIdentity(): Pubkey {
-		const found = Seeds.empty(2)
-			.addText("identity")
-			.addPubkey(programKey())
-			.findProgramAddress(Pubkey.vrfProgram());
+		const found = findProgramAddressOf(Pubkey.vrfProgram(), ["identity", programKey()]);
 		if (found.ok) { return found.value.key; }
 		return Pubkey.zero();
 	}
@@ -207,12 +205,12 @@ when (testBuild) {
 	}
 
 	function vrfPayerBump(): Result<uint8, ProgramError> {
-		const found = try payerSeeds().findProgramAddress(programId());
+		const found = try findProgramAddress(["vrf-payer"]);
 		return Result.ok(found.bump);
 	}
 
 	function vrfPayerKey(): Pubkey {
-		const found = payerSeeds().findProgramAddress(programKey());
+		const found = findProgramAddressOf(programKey(), ["vrf-payer"]);
 		if (found.ok) { return found.value.key; }
 		return Pubkey.zero();
 	}

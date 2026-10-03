@@ -4,6 +4,18 @@
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { ProgramError } from "./error";
 import { Discriminator } from "./discriminator";
+import {
+	SeedSlice,
+	SeedTable,
+	createAddressWithBump,
+	emptyTable,
+	fillWithBump,
+	findAt,
+	ownProgram,
+	tableAddress,
+} from "./seed";
+
+export { ProgramAddress } from "./seed";
 
 extern function msSolAccountCount(): uint64;
 extern function msSolAccountAt(index: uint64): uint64;
@@ -30,8 +42,6 @@ extern function msSolLogComputeUnits(): void;
 extern function msSolRemainingComputeUnits(): uint64;
 extern function msSolStringAddress(text: string): uint64;
 extern function msSolStringLength(text: string): uint64;
-extern function msSolCreateProgramAddress(seeds: uint64, seedCount: uint64, programId: uint64, out: uint64): uint64;
-extern function msSolTryFindProgramAddress(seeds: uint64, seedCount: uint64, programId: uint64, out: uint64, bump: uint64): uint64;
 extern function msSolInvokeSigned(instruction: uint64, accountInfos: uint64, accountInfoCount: uint64, signers: uint64, signerCount: uint64): uint64;
 extern function msSolGetClock(out: uint64): uint64;
 extern function msSolGetRent(out: uint64): uint64;
@@ -47,11 +57,6 @@ export struct Bytes {
 
 export struct Account {
 	address: uint64;
-}
-
-export struct ProgramAddress {
-	key: Pubkey;
-	bump: uint8;
 }
 
 export struct Seeds {
@@ -141,6 +146,10 @@ export function key(this account: Account): Pubkey {
 	return loadPubkey(account.address + 8);
 }
 
+export function keyAddress(this account: Account): uint64 {
+	return account.address + 8;
+}
+
 export function owner(this account: Account): Pubkey {
 	return loadPubkey(account.address + 40);
 }
@@ -228,37 +237,61 @@ export function readPubkey(this bytes: Bytes, offset: uint64): Result<Pubkey, Pr
 	return Result.ok(loadPubkey(address));
 }
 
-export function writeU8(this bytes: Bytes, offset: uint64, value: uint8): Result<uint64, ProgramError> {
+export function writeU8(
+	this bytes: Bytes,
+	offset: uint64,
+	value: uint8,
+): Result<uint64, ProgramError> {
 	const address = try checkedAddress(bytes, offset, 1);
 	msSolStoreU8(address, value);
 	return Result.ok(offset + 1);
 }
 
-export function writeU16(this bytes: Bytes, offset: uint64, value: uint16): Result<uint64, ProgramError> {
+export function writeU16(
+	this bytes: Bytes,
+	offset: uint64,
+	value: uint16,
+): Result<uint64, ProgramError> {
 	const address = try checkedAddress(bytes, offset, 2);
 	msSolStoreU16(address, value);
 	return Result.ok(offset + 2);
 }
 
-export function writeU32(this bytes: Bytes, offset: uint64, value: uint32): Result<uint64, ProgramError> {
+export function writeU32(
+	this bytes: Bytes,
+	offset: uint64,
+	value: uint32,
+): Result<uint64, ProgramError> {
 	const address = try checkedAddress(bytes, offset, 4);
 	msSolStoreU32(address, value);
 	return Result.ok(offset + 4);
 }
 
-export function writeU64(this bytes: Bytes, offset: uint64, value: uint64): Result<uint64, ProgramError> {
+export function writeU64(
+	this bytes: Bytes,
+	offset: uint64,
+	value: uint64,
+): Result<uint64, ProgramError> {
 	const address = try checkedAddress(bytes, offset, 8);
 	msSolStoreU64(address, value);
 	return Result.ok(offset + 8);
 }
 
-export function writePubkey(this bytes: Bytes, offset: uint64, value: Pubkey): Result<uint64, ProgramError> {
+export function writePubkey(
+	this bytes: Bytes,
+	offset: uint64,
+	value: Pubkey,
+): Result<uint64, ProgramError> {
 	const address = try checkedAddress(bytes, offset, 32);
 	storePubkey(value, address);
 	return Result.ok(offset + 32);
 }
 
-export function range(this bytes: Bytes, offset: uint64, length: uint64): Result<Bytes, ProgramError> {
+export function range(
+	this bytes: Bytes,
+	offset: uint64,
+	length: uint64,
+): Result<Bytes, ProgramError> {
 	const address = try checkedAddress(bytes, offset, length);
 	const view: Bytes = { address: address, length: length };
 	return Result.ok(view);
@@ -350,25 +383,6 @@ export function withBump(this seeds: Seeds, bump: uint8): Seeds {
 	return copy.addU8(bump);
 }
 
-export function findProgramAddress(this seeds: Seeds, program: Pubkey): Result<ProgramAddress, ProgramError> {
-	const count = seeds.seedCount();
-	if (count > seeds.capacity || count > 15) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
-	const out = msSolAlloc(33);
-	const status = msSolTryFindProgramAddress(seeds.address + 8, count, storedPubkey(program), out, out + 32);
-	if (status != 0) { return Result.err(ProgramError.invalidSeeds()); }
-	const found: ProgramAddress = { key: loadPubkey(out), bump: msSolLoadU8(out + 32) };
-	return Result.ok(found);
-}
-
-export function createProgramAddress(this seeds: Seeds, program: Pubkey): Result<Pubkey, ProgramError> {
-	const count = seeds.seedCount();
-	if (count > seeds.capacity || count > 16) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
-	const out = msSolAlloc(32);
-	const status = msSolCreateProgramAddress(seeds.address + 8, count, storedPubkey(program), out);
-	if (status != 0) { return Result.err(ProgramError.invalidSeeds()); }
-	return Result.ok(loadPubkey(out));
-}
-
 function metasAddress(instruction: Instruction): uint64 {
 	return instruction.address + 48;
 }
@@ -386,7 +400,12 @@ function flagByte(value: boolean): uint8 {
 	return 0;
 }
 
-export function forProgram(this typeof Instruction, program: Pubkey, accountCapacity: uint64, dataCapacity: uint64): Instruction {
+export function forProgram(
+	this typeof Instruction,
+	program: Pubkey,
+	accountCapacity: uint64,
+	dataCapacity: uint64,
+): Instruction {
 	const address = msSolAlloc(48 + 72 * accountCapacity + dataCapacity + 32);
 	const instruction: Instruction = { address: address, accountCapacity: accountCapacity, dataCapacity: dataCapacity };
 	const programAddress = payloadAddress(instruction) + dataCapacity;
@@ -397,7 +416,12 @@ export function forProgram(this typeof Instruction, program: Pubkey, accountCapa
 	return instruction;
 }
 
-export function addAccount(this instruction: Instruction, account: Account, writable: boolean, signer: boolean): Instruction {
+export function addAccount(
+	this instruction: Instruction,
+	account: Account,
+	writable: boolean,
+	signer: boolean,
+): Instruction {
 	const count = msSolLoadU64(instruction.address + 16);
 	if (count >= instruction.accountCapacity) {
 		msSolStoreU64(instruction.address + 40, 1);
@@ -556,7 +580,10 @@ function invokeWith(
 	return Result.ok(status);
 }
 
-export function invokeSigned(this instruction: Instruction, signer: Seeds): Result<uint64, ProgramError> {
+export function invokeSigned(
+	this instruction: Instruction,
+	signer: Seeds,
+): Result<uint64, ProgramError> {
 	if (signer.address == 0) { return invokeWith(instruction, 0, 0); }
 	const one: Seeds[1] = [signer];
 	return instruction.invokeSigned(one);
@@ -583,7 +610,40 @@ export function invoke(this instruction: Instruction): Result<uint64, ProgramErr
 	return instruction.invokeSigned(Seeds.none());
 }
 
-export function createAccount(payer: Account, target: Account, lamports: uint64, space: uint64, newOwner: Pubkey, signer: Seeds): Result<uint64, ProgramError> {
+struct Signing {
+	table: uint64;
+	count: uint64;
+}
+
+function unsigned(): Signing {
+	return { table: 0, count: 0 };
+}
+
+function signingOfSeeds(signer: Seeds): Result<Signing, ProgramError> {
+	if (signer.address == 0) { return Result.ok(unsigned()); }
+	const count = signer.seedCount();
+	if (count > signer.capacity) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
+	return Result.ok({ table: signer.address + 8, count: count });
+}
+
+function signingOfTable(ref signed: SeedTable): Signing {
+	return { table: tableAddress(signed.slices), count: signed.count };
+}
+
+function invokeSigning(instruction: Instruction, signing: Signing): Result<uint64, ProgramError> {
+	if (signing.table == 0) { return invokeWith(instruction, 0, 0); }
+	const signer: SeedSlice[1] = [{ address: signing.table, length: signing.count }];
+	return invokeWith(instruction, tableAddress(signer), 1);
+}
+
+function createAccountWith(
+	payer: Account,
+	target: Account,
+	lamports: uint64,
+	space: uint64,
+	newOwner: Pubkey,
+	signing: Signing,
+): Result<uint64, ProgramError> {
 	const instruction = Instruction.forProgram(Pubkey.systemProgram(), 2, 52);
 	instruction.addWritableSigner(payer);
 	instruction.addWritableSigner(target);
@@ -591,32 +651,85 @@ export function createAccount(payer: Account, target: Account, lamports: uint64,
 	instruction.appendU64(lamports);
 	instruction.appendU64(space);
 	instruction.appendPubkey(newOwner);
-	return instruction.invokeSigned(signer);
+	return invokeSigning(instruction, signing);
 }
 
-export function assignTo(target: Account, newOwner: Pubkey, signer: Seeds): Result<uint64, ProgramError> {
+function assignToWith(
+	target: Account,
+	newOwner: Pubkey,
+	signing: Signing,
+): Result<uint64, ProgramError> {
 	const instruction = Instruction.forProgram(Pubkey.systemProgram(), 1, 36);
 	instruction.addWritableSigner(target);
 	instruction.appendU32(1);
 	instruction.appendPubkey(newOwner);
-	return instruction.invokeSigned(signer);
+	return invokeSigning(instruction, signing);
 }
 
-export function transfer(source: Account, destination: Account, lamports: uint64, signer: Seeds): Result<uint64, ProgramError> {
+function transferWith(
+	source: Account,
+	destination: Account,
+	lamports: uint64,
+	signing: Signing,
+): Result<uint64, ProgramError> {
 	const instruction = Instruction.forProgram(Pubkey.systemProgram(), 2, 12);
 	instruction.addWritableSigner(source);
 	instruction.addWritable(destination);
 	instruction.appendU32(2);
 	instruction.appendU64(lamports);
-	return instruction.invokeSigned(signer);
+	return invokeSigning(instruction, signing);
 }
 
-export function allocate(target: Account, space: uint64, signer: Seeds): Result<uint64, ProgramError> {
+function allocateWith(
+	target: Account,
+	space: uint64,
+	signing: Signing,
+): Result<uint64, ProgramError> {
 	const instruction = Instruction.forProgram(Pubkey.systemProgram(), 1, 12);
 	instruction.addWritableSigner(target);
 	instruction.appendU32(8);
 	instruction.appendU64(space);
-	return instruction.invokeSigned(signer);
+	return invokeSigning(instruction, signing);
+}
+
+export function createAccount(
+	payer: Account,
+	target: Account,
+	lamports: uint64,
+	space: uint64,
+	newOwner: Pubkey,
+	signer: Seeds,
+): Result<uint64, ProgramError> {
+	const signing = try signingOfSeeds(signer);
+	return createAccountWith(payer, target, lamports, space, newOwner, signing);
+}
+
+export function assignTo(
+	target: Account,
+	newOwner: Pubkey,
+	signer: Seeds,
+): Result<uint64, ProgramError> {
+	const signing = try signingOfSeeds(signer);
+	return assignToWith(target, newOwner, signing);
+}
+
+export function transfer(
+	source: Account,
+	destination: Account,
+	lamports: uint64,
+	signer: Seeds,
+): Result<uint64, ProgramError> {
+	const signing = try signingOfSeeds(signer);
+	return transferWith(source, destination, lamports, signing);
+}
+
+export function allocate(
+	target: Account,
+	space: uint64,
+	signer: Seeds,
+): Result<uint64, ProgramError> {
+	const signing = try signingOfSeeds(signer);
+	return allocateWith(target, space, signing);
 }
 
 export function minimumBalance(dataLength: uint64): uint64 {
@@ -630,15 +743,49 @@ export function minimumBalance(dataLength: uint64): uint64 {
 	return bytes * lamportsPerByte;
 }
 
-export function createProgramAccount(payer: Account, target: Account, space: uint64, newOwner: Pubkey, signer: Seeds): Result<uint64, ProgramError> {
+function createProgramAccountWith(
+	payer: Account,
+	target: Account,
+	space: uint64,
+	newOwner: Pubkey,
+	signing: Signing,
+): Result<uint64, ProgramError> {
 	const required = minimumBalance(space);
 	const current = target.lamports();
-	if (current == 0) { return createAccount(payer, target, required, space, newOwner, signer); }
-	if (required > current) {
-		const _funded = try transfer(payer, target, required - current, Seeds.none());
+	if (current == 0) {
+		return createAccountWith(payer, target, required, space, newOwner, signing);
 	}
-	const _allocated = try allocate(target, space, signer);
-	return assignTo(target, newOwner, signer);
+	if (required > current) {
+		const _funded = try transferWith(payer, target, required - current, unsigned());
+	}
+	const _allocated = try allocateWith(target, space, signing);
+	return assignToWith(target, newOwner, signing);
+}
+
+export function createProgramAccount(
+	payer: Account,
+	target: Account,
+	space: uint64,
+	newOwner: Pubkey,
+	signer: Seeds,
+): Result<uint64, ProgramError> {
+	const signing = try signingOfSeeds(signer);
+	return createProgramAccountWith(payer, target, space, newOwner, signing);
+}
+
+export function createProgramAccountSeeded(
+	payer: Account,
+	target: Account,
+	space: uint64,
+	newOwner: Pubkey,
+	seeds: Span<SeedSlice>,
+	bump: uint8,
+): Result<uint64, ProgramError> {
+	let signed = emptyTable();
+	if (!fillWithBump(signed, tableAddress(seeds), seeds.length as uint64, bump)) {
+		return Result.err(ProgramError.maxSeedLengthExceeded());
+	}
+	return createProgramAccountWith(payer, target, space, newOwner, signingOfTable(signed));
 }
 
 export function clock(): Clock {
@@ -690,44 +837,6 @@ test "custom error 0 is not the success code" {
 	assert ProgramError.custom(7).code == 7;
 }
 
-function hostProgram(): Pubkey {
-	return pubkeyOf("9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu");
-}
-
-function byteSeeds(count: uint64): Seeds {
-	let seeds = Seeds.empty(count);
-	for (let index: uint64 = 0; index < count; index++) {
-		seeds = seeds.addU8(index as uint8);
-	}
-	return seeds;
-}
-
-test "findProgramAddress finds the address and bump the runtime finds" {
-	const identity = pubkeyOf("FLtPrptzq3LRxEv7uX39Hrfuw5mS9Uwc5yaMQdeThWeX");
-	const found = Seeds.empty(1).addText("identity").findProgramAddress(hostProgram());
-	assert found.ok;
-	if (found.ok) {
-		assert found.value.bump == 255;
-		assert found.value.key.equals(identity);
-	}
-}
-
-test "findProgramAddress skips bumps whose address is on the curve" {
-	const derived = pubkeyOf("6RWy3mtB7rxdHcS6tgrBqmtuUQ8tTjg5JHaK9g458kYj");
-	const found = byteSeeds(15).findProgramAddress(hostProgram());
-	assert found.ok;
-	if (found.ok) {
-		assert found.value.bump == 249;
-		assert found.value.key.equals(derived);
-	}
-}
-
-test "findProgramAddress refuses a sixteenth caller seed" {
-	const found = byteSeeds(16).findProgramAddress(hostProgram());
-	assert !found.ok;
-	if (!found.ok) { assert found.error.code == ProgramError.maxSeedLengthExceeded().code; }
-}
-
 export struct System {}
 export struct Token {}
 export struct Token2022 {}
@@ -759,6 +868,17 @@ export type Delegated<T> = distinct Account;
 @delegate export function key<T>(this proof: External<T>): Pubkey;
 @delegate export function key<T>(this proof: ExternalMutable<T>): Pubkey;
 @delegate export function key<T>(this proof: Delegated<T>): Pubkey;
+
+@delegate export function keyAddress(this proof: Signer): uint64;
+@delegate export function keyAddress(this proof: WritableSigner): uint64;
+@delegate export function keyAddress(this proof: Writable): uint64;
+@delegate export function keyAddress(this proof: SystemAccount): uint64;
+@delegate export function keyAddress<P>(this proof: Program<P>): uint64;
+@delegate export function keyAddress<T>(this proof: Owned<T>): uint64;
+@delegate export function keyAddress<T>(this proof: Mutable<T>): uint64;
+@delegate export function keyAddress<T>(this proof: External<T>): uint64;
+@delegate export function keyAddress<T>(this proof: ExternalMutable<T>): uint64;
+@delegate export function keyAddress<T>(this proof: Delegated<T>): uint64;
 
 @delegate export function lamports(this proof: Signer): uint64;
 @delegate export function lamports(this proof: WritableSigner): uint64;
@@ -1042,14 +1162,14 @@ function initialized(
 	target: Writable,
 	space: uint64,
 	discriminator: uint64,
-	signer: Seeds,
+	signing: Signing,
 ): Result<Account, ProgramError> {
 	const funding = payer as Account;
 	const created = target as Account;
 	if (funding.key() == created.key()) {
 		return Result.err(ProgramError.tryingToInitPayerAsProgramAccount());
 	}
-	const _made = try createProgramAccount(funding, created, space, programId(), signer);
+	const _made = try createProgramAccountWith(funding, created, space, programId(), signing);
 	msSolStoreU64(created.address + 88, discriminator);
 	return claimExclusive(created);
 }
@@ -1060,55 +1180,66 @@ export function create<T>(
 	signer: Seeds,
 ): Result<Mutable<T>, ProgramError> {
 	const space = 8 + (sizeof(T) as uint64);
-	const created = try initialized(payer, target, space, T.discriminator().word(), signer);
+	const signing = try signingOfSeeds(signer);
+	const created = try initialized(payer, target, space, T.discriminator().word(), signing);
 	return Result.ok(created as Mutable<T>);
 }
 
-export function createPda<T>(
+export function createPdaOf<T>(
 	payer: WritableSigner,
 	target: Writable,
-	seeds: Seeds,
+	seeds: Span<SeedSlice>,
 ): Result<Pda<T>, ProgramError> {
-	const found = try seeds.findProgramAddress(programId());
+	const found = try findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
 	if (found.key != (target as Account).key()) {
 		return Result.err(ProgramError.constraintSeeds());
 	}
+	let signed = emptyTable();
+	if (!fillWithBump(signed, tableAddress(seeds), seeds.length as uint64, found.bump)) {
+		return Result.err(ProgramError.maxSeedLengthExceeded());
+	}
 	const space = 8 + (sizeof(T) as uint64);
-	const signer = seeds.withBump(found.bump);
-	const created = try initialized(payer, target, space, T.discriminator().word(), signer);
+	const discriminator = T.discriminator().word();
+	const created = try initialized(payer, target, space, discriminator, signingOfTable(signed));
 	return Result.ok({ account: created as Mutable<T>, bump: found.bump });
 }
 
-export function pda<T>(account: Mutable<T>, seeds: Seeds): Result<Pda<T>, ProgramError> {
-	const found = try seeds.findProgramAddress(programId());
+export function verifiedPda<T>(
+	this account: Mutable<T>,
+	seeds: Span<SeedSlice>,
+): Result<Pda<T>, ProgramError> {
+	const found = try findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
 	if (found.key != account.key()) { return Result.err(ProgramError.constraintSeeds()); }
 	return Result.ok({ account: account, bump: found.bump });
 }
 
-export function pdaWithBump<T>(
-	account: Mutable<T>,
-	seeds: Seeds,
+export function verifiedPdaWithBump<T>(
+	this account: Mutable<T>,
+	seeds: Span<SeedSlice>,
 	bump: uint8,
 ): Result<Pda<T>, ProgramError> {
-	const derived = seeds.withBump(bump).createProgramAddress(programId());
+	const derived = createAddressWithBump(seeds, bump, ownProgram());
 	if (!derived.ok || derived.value != account.key()) {
 		return Result.err(ProgramError.constraintSeeds());
 	}
 	return Result.ok({ account: account, bump: bump });
 }
 
-export function pda<T>(account: Delegated<T>, seeds: Seeds): Result<uint8, ProgramError> {
-	const found = try seeds.findProgramAddress(programId());
+export function verifiedPda<T>(
+	this account: Delegated<T>,
+	seeds: Span<SeedSlice>,
+): Result<uint8, ProgramError> {
+	const found = try findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
 	if (found.key != account.key()) { return Result.err(ProgramError.constraintSeeds()); }
 	return Result.ok(found.bump);
 }
 
-export function pdaWithBump<T>(
-	account: Delegated<T>,
-	seeds: Seeds,
+export function verifiedPdaWithBump<T>(
+	this account: Delegated<T>,
+	seeds: Span<SeedSlice>,
 	bump: uint8,
 ): Result<uint8, ProgramError> {
-	const derived = seeds.withBump(bump).createProgramAddress(programId());
+	const derived = createAddressWithBump(seeds, bump, ownProgram());
 	if (!derived.ok || derived.value != account.key()) {
 		return Result.err(ProgramError.constraintSeeds());
 	}
@@ -1143,7 +1274,7 @@ export function realloc<T>(
 	const required = minimumBalance(space);
 	const held = target.lamports();
 	if (required > held) {
-		const _funded = try transfer(funding, target, required - held, Seeds.none());
+		const _funded = try transferWith(funding, target, required - held, unsigned());
 	} else if (held > required) {
 		target.setLamports(required);
 		funding.setLamports(funding.lamports() + (held - required));
@@ -1306,7 +1437,7 @@ export function transferLamports(
 	to: Writable,
 	lamports: uint64,
 ): Result<uint64, ProgramError> {
-	return transfer(from as Account, to as Account, lamports, Seeds.none());
+	return transferWith(from as Account, to as Account, lamports, unsigned());
 }
 
 export function transferLamportsSigned(

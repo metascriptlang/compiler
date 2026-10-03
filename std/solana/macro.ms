@@ -27,6 +27,16 @@ import {
 	writable,
 	writableSigner,
 } from "./core";
+import { createMintPdaAt } from "./mint";
+import {
+	bytesAddress,
+	createAddress,
+	findAddress,
+	ownProgram,
+	seedBytes,
+	seedKey,
+	seedText,
+} from "./seed";
 
 export macro instruction(): Node {
 	const decl = getTypeArg();
@@ -532,5 +542,332 @@ export macro emitEvent(value: Node): Node {
 			resolvedOverloadIdx: -1,
 		},
 		asType: "uint64",
+	};
+}
+
+macro seedTable(list: Node): Node {
+	if (list.kind !== NodeKind.ArrayLiteral) {
+		error("seeds must be written as a list at the call: [\"pet\", mint, [bump]]", list);
+	}
+	const slices: Node[] = [];
+	let position = 0;
+	while (position < list.elements.length) {
+		const element = list.elements[position];
+		const line = element.line;
+		const column = element.column;
+		const written = element.nodeType;
+		let builder: Node | null = null;
+		let argument: Node = element;
+		let description = "no known type";
+		if (element.kind === NodeKind.ArrayLiteral) {
+			builder = bindSym("seedBytes");
+			argument = {
+				kind: NodeKind.TypeAssertion,
+				line: line,
+				column: column,
+				asExpr: element,
+				asType: "uint8[" + (element.elements.length as int32) + "]",
+			};
+		}
+		if (builder == null && written != null) {
+			let name = "";
+			let inner = "";
+			if (written.kind === NodeKind.Identifier) { name = written.name; }
+			if (written.kind === NodeKind.TypeObject) { name = written.typExprTypeName; }
+			if (written.kind === NodeKind.TypeArray) { name = "an array"; }
+			if (written.kind === NodeKind.TypeGeneric) {
+				name = written.typExprBase.name;
+				const first = written.typExprArgs[0];
+				if (first.kind === NodeKind.TypeObject) { inner = first.typExprTypeName; }
+				if (first.kind === NodeKind.TypeArray) { inner = "an array"; }
+			}
+			description = "type " + name + (inner == "" ? "" : "<" + inner + ">");
+			if (name == "string") { builder = bindSym("seedText"); }
+			if (name == "an array" || (name == "Ref" && inner == "an array")) {
+				builder = bindSym("seedBytes");
+			}
+			if (name == "Pubkey") {
+				builder = bindSym("seedBytes");
+				argument = {
+					kind: NodeKind.MemberExpr,
+					line: line,
+					column: column,
+					object: element,
+					property: "bytes",
+					isOptional: false,
+				};
+			}
+			if (name == "Account" || (name == "Distinct" && inner == "Account") ||
+				name == "Program" || name == "Owned" || name == "Mutable" ||
+				name == "External" || name == "ExternalMutable" || name == "Delegated") {
+				builder = bindSym("seedKey");
+				argument = {
+					kind: NodeKind.CallExpr,
+					line: line,
+					column: column,
+					callee: {
+						kind: NodeKind.MemberExpr,
+						line: line,
+						column: column,
+						object: element,
+						property: "keyAddress",
+						isOptional: false,
+					},
+					arguments: [],
+					isDirectCall: false,
+					resolvedOverloadIdx: -1,
+				};
+			}
+		}
+		if (builder == null) {
+			error("seed " + ((position + 1) as int32) + " has " + description +
+				": a seed is a string, a byte array, a Pubkey or an account; " +
+				"write an integer seed as bytes: `[x]` for a uint8, " +
+				"`leBytes(x)` for a wider integer", element);
+		}
+		slices.push({
+			kind: NodeKind.CallExpr,
+			line: line,
+			column: column,
+			callee: builder!,
+			arguments: [argument],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		});
+		position = position + 1;
+	}
+	return { kind: NodeKind.ArrayLiteral, line: list.line, column: list.column, elements: slices };
+}
+
+export macro programAddress(seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: seeds.line,
+		column: seeds.column,
+		callee: bindSym("createAddress"),
+		arguments: [{
+			kind: NodeKind.CallExpr,
+			line: seeds.line,
+			column: seeds.column,
+			callee: bindSym("seedTable"),
+			arguments: [seeds],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}, {
+			kind: NodeKind.CallExpr,
+			line: seeds.line,
+			column: seeds.column,
+			callee: bindSym("ownProgram"),
+			arguments: [],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+export macro programAddressOf(program: Node, seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: seeds.line,
+		column: seeds.column,
+		callee: bindSym("createAddress"),
+		arguments: [{
+			kind: NodeKind.CallExpr,
+			line: seeds.line,
+			column: seeds.column,
+			callee: bindSym("seedTable"),
+			arguments: [seeds],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}, {
+			kind: NodeKind.CallExpr,
+			line: program.line,
+			column: program.column,
+			callee: bindSym("bytesAddress"),
+			arguments: [{
+				kind: NodeKind.MemberExpr,
+				line: program.line,
+				column: program.column,
+				object: program,
+				property: "bytes",
+				isOptional: false,
+			}],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+export macro findProgramAddress(seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: seeds.line,
+		column: seeds.column,
+		callee: bindSym("findAddress"),
+		arguments: [{
+			kind: NodeKind.CallExpr,
+			line: seeds.line,
+			column: seeds.column,
+			callee: bindSym("seedTable"),
+			arguments: [seeds],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}, {
+			kind: NodeKind.CallExpr,
+			line: seeds.line,
+			column: seeds.column,
+			callee: bindSym("ownProgram"),
+			arguments: [],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+export macro findProgramAddressOf(program: Node, seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: seeds.line,
+		column: seeds.column,
+		callee: bindSym("findAddress"),
+		arguments: [{
+			kind: NodeKind.CallExpr,
+			line: seeds.line,
+			column: seeds.column,
+			callee: bindSym("seedTable"),
+			arguments: [seeds],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}, {
+			kind: NodeKind.CallExpr,
+			line: program.line,
+			column: program.column,
+			callee: bindSym("bytesAddress"),
+			arguments: [{
+				kind: NodeKind.MemberExpr,
+				line: program.line,
+				column: program.column,
+				object: program,
+				property: "bytes",
+				isOptional: false,
+			}],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+export macro pda(account: Node, seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: account.line,
+		column: account.column,
+		callee: {
+			kind: NodeKind.MemberExpr,
+			line: account.line,
+			column: account.column,
+			object: account,
+			property: "verifiedPda",
+			isOptional: false,
+		},
+		arguments: [{
+			kind: NodeKind.CallExpr,
+			line: seeds.line,
+			column: seeds.column,
+			callee: bindSym("seedTable"),
+			arguments: [seeds],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+export macro pdaWithBump(account: Node, seeds: Node, bump: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: account.line,
+		column: account.column,
+		callee: {
+			kind: NodeKind.MemberExpr,
+			line: account.line,
+			column: account.column,
+			object: account,
+			property: "verifiedPdaWithBump",
+			isOptional: false,
+		},
+		arguments: [{
+			kind: NodeKind.CallExpr,
+			line: seeds.line,
+			column: seeds.column,
+			callee: bindSym("seedTable"),
+			arguments: [seeds],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}, bump],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+export macro createPda(payer: Node, target: Node, seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: payer.line,
+		column: payer.column,
+		callee: {
+			kind: NodeKind.Identifier,
+			line: payer.line,
+			column: payer.column,
+			name: "createPdaOf",
+		},
+		arguments: [payer, target, {
+			kind: NodeKind.CallExpr,
+			line: seeds.line,
+			column: seeds.column,
+			callee: bindSym("seedTable"),
+			arguments: [seeds],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+export macro createMintPda(
+	payer: Node,
+	mint: Node,
+	seeds: Node,
+	program: Node,
+	decimals: Node,
+	mintAuthority: Node,
+	freezeAuthority: Node,
+): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: payer.line,
+		column: payer.column,
+		callee: bindSym("createMintPdaAt"),
+		arguments: [payer, mint, {
+			kind: NodeKind.CallExpr,
+			line: seeds.line,
+			column: seeds.column,
+			callee: bindSym("seedTable"),
+			arguments: [seeds],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}, program, decimals, mintAuthority, freezeAuthority],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
 	};
 }

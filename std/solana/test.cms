@@ -17,6 +17,7 @@ import {
 	close,
 	create,
 	createPda,
+	createPdaOf,
 	pda,
 	realloc,
 	writableSigner,
@@ -37,7 +38,13 @@ import {
 	borshBuffer,
 } from "./index";
 import { HostAccount, logs, run } from "./host";
-import { accounts, args, emitEvent, instruction } from "./macro";
+import {
+	accounts,
+	args,
+	emitEvent,
+	findProgramAddressOf,
+	instruction,
+} from "./macro";
 import { anchorIdl } from "./idl";
 
 
@@ -320,10 +327,6 @@ test "dispatch refuses short data, an unknown instruction and short or invalid a
 		ProgramError.instructionDidNotDeserialize().code;
 }
 
-function counterSeeds(): Seeds {
-	return Seeds.empty(1).addText("counter");
-}
-
 function createEntry(): void {
 	const result = createStep();
 	codeOf(result);
@@ -346,7 +349,7 @@ function createPdaEntry(): void {
 function createPdaStep(): Result<uint64, ProgramError> {
 	const payer = try writableSigner(0);
 	const target = try writable(1);
-	const made = try createPda<Counter>(payer, target, counterSeeds());
+	const made = try createPda<Counter>(payer, target, ["counter"]);
 	const at = made.account.data();
 	at.value = made.bump as uint64;
 	return Result.ok(0);
@@ -358,7 +361,8 @@ function verifyPdaEntry(): void {
 }
 
 function verifyPdaStep(): Result<uint64, ProgramError> {
-	const found = try pda(try mutable<Counter>(0), counterSeeds());
+	const counter = try mutable<Counter>(0);
+	const found = try pda(counter, ["counter"]);
 	return Result.ok(found.bump as uint64);
 }
 
@@ -413,7 +417,7 @@ test "create allocates through the System program and writes Anchor's discrimina
 }
 
 test "createPda accepts only the canonical address and records its bump" {
-	const derived = counterSeeds().findProgramAddress(programKey());
+	const derived = findProgramAddressOf(programKey(), ["counter"]);
 	assert derived.ok;
 	if (derived.ok) {
 		const accounts = [wallet(1, 10000000), blank(derived.value.key)];
@@ -535,7 +539,7 @@ function delegationProgramKey(): Pubkey {
 }
 
 function counterAddress(): ProgramAddress {
-	const derived = counterSeeds().findProgramAddress(programKey());
+	const derived = findProgramAddressOf(programKey(), ["counter"]);
 	if (derived.ok) { return derived.value; }
 	return { key: Pubkey.zero(), bump: 0 };
 }
@@ -556,8 +560,8 @@ function delegatedEntry(): void {
 function delegatedPdaStep(): Result<uint8, ProgramError> {
 	const found = try delegated<Counter>(0);
 	const pinned = try instructionData().readU8(0);
-	if (pinned == 0) { return pda(found, counterSeeds()); }
-	return pdaWithBump(found, counterSeeds(), pinned);
+	if (pinned == 0) { return pda(found, ["counter"]); }
+	return pdaWithBump(found, ["counter"], pinned);
 }
 
 function delegatedPdaEntry(): void { codeOf(delegatedPdaStep()); }
@@ -606,7 +610,7 @@ export struct ClaimAccounts {
 
 function claimStep(): Result<uint64, ProgramError> {
 	const x = try accounts<ClaimAccounts>();
-	const _bump = try pda(x.pet, counterSeeds());
+	const _bump = try pda(x.pet, ["counter"]);
 	return Result.ok(x.pet.data().value);
 }
 
