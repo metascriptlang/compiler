@@ -218,5 +218,22 @@ decoy_main=$(git -C "$D" rev-parse main)
 check "S15 sandbox o landed" '[ "$(cat "$T/ctl/ro")" = 0 ] && onmain o.txt'
 check "S15 decoy main untouched" '[ "$(git -C "$D" rev-parse main)" = "$decoy_main" ] && [ ! -e "$D/o.txt" ]'
 
+echo "== S16 a run a dead runner left is queued again by the next runner and lands"
+setup; mkwt s; mkwt u
+mkdir -p "$MSC_LAND_QUEUE"
+printf 'name=s\nworktree=%s\n' "$T/ws/.wt/wt-s" >"$MSC_LAND_QUEUE/1-1.run"
+enqueue u
+ru=$(waitfor u 60); rs=$(waitfor s 60)
+check "S16 the stranded land and the new one both land" '[ "$rs" = 0 ] && [ "$ru" = 0 ] && onmain s.txt && onmain u.txt'
+check "S16 the runner log names the recovery" 'grep -q "s: queued again, a dead runner left it running" "$MSC_LAND_QUEUE/runner.log"'
+
+echo "== S17 --async and --wait on a land a dead runner left start a runner instead of refusing or hanging"
+setup; mkwt v
+mkdir -p "$MSC_LAND_QUEUE"
+printf 'name=v\nworktree=%s\n' "$T/ws/.wt/wt-v" >"$MSC_LAND_QUEUE/1-1.run"
+enqueue v; ea=$?
+rv=$(waitfor v 60)
+check "S17 v landed" '[ "$ea" = 0 ] && [ "$rv" = 0 ] && onmain v.txt'
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

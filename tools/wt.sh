@@ -426,6 +426,9 @@ queued_for() {
   return 0
 }
 
+runner_alive() { local p; p=$(cat "$1/runner.lock/pid" 2>/dev/null); [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+start_runner() { (nohup bash "$MAIN/tools/landQueue.sh" >/dev/null 2>&1 &); }
+
 cmd_land() {
   local target="" also=() w old new moved paths clash p failed=0 cmd gate=1 async=0 wait=0 qd item name verdict
   while [ $# -gt 0 ]; do
@@ -445,6 +448,7 @@ cmd_land() {
   if [ "$wait" -eq 1 ]; then
     while [ ! -e "$qd/$name.done" ] && [ ! -e "$qd/$name.red" ]; do
       [ -n "$(queued_for "$qd" "$name")" ] || die "land: nothing queued for $name and no result in $qd"
+      runner_alive "$qd" || start_runner
       sleep "${MSC_LAND_QUEUE_WAIT_POLL:-30}"
     done
     if [ -e "$qd/$name.done" ]; then say "land-queue: $name landed — $(cat "$qd/$name.done")"; exit 0; fi
@@ -463,12 +467,17 @@ cmd_land() {
   git -C "$w" merge-base --is-ancestor "$old" "$new" || die "land: HEAD does not descend from $BASE"
   if [ "$async" -eq 1 ]; then
     mkdir -p "$qd"
-    [ -z "$(queued_for "$qd" "$name" run)" ] || die "land: $name is landing now; wait with: wt.sh land $name --wait"
+    if [ -n "$(queued_for "$qd" "$name" run)" ]; then
+      runner_alive "$qd" && die "land: $name is landing now; wait with: wt.sh land $name --wait"
+      start_runner
+      say "land: $name was left running by a dead runner; a new runner queues it again — wait with: wt.sh land $name --wait"
+      exit 0
+    fi
     queued_for "$qd" "$name" item | while IFS= read -r p; do rm -f "$p"; done
     rm -f "$qd/$name.done" "$qd/$name.red" "$qd/$name.land.log"
     item="$qd/$(date +%s)-$$.item"
     printf 'name=%s\nworktree=%s\n' "$name" "$w" >"$item.tmp" && mv "$item.tmp" "$item"
-    (nohup bash "$MAIN/tools/landQueue.sh" >/dev/null 2>&1 &)
+    start_runner
     say "land: $name queued ($(ls "$qd"/*.item 2>/dev/null | wc -l | tr -d ' ') pending) — the runner rebases, gates and lands it in turn; $BASE moves only on green; log $qd/$name.land.log"
     say "land: wait for the verdict in the background with: ~/nerdtools/claude/tools/wt.sh land $name --wait"
     exit 0

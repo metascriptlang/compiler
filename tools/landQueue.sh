@@ -33,6 +33,21 @@ next_item() { ls "$Q"/*.item 2>/dev/null | sort | head -1; }
 
 field() { sed -n "s/^$1=//p" "$2" | head -1; }
 
+recover_stranded() {
+  local run name
+  for run in "$Q"/*.run; do
+    [ -e "$run" ] || continue
+    name=$(field name "$run")
+    if [ -n "$name" ] && grep -qx "name=$name" "$Q"/*.item 2>/dev/null; then
+      log "$name: dropped the run a dead runner left, it is queued again"
+      rm -f "$run"
+    else
+      log "${name:-?}: queued again, a dead runner left it running"
+      mv "$run" "${run%.run}.item"
+    fi
+  done
+}
+
 finish() {
   local name=$1 verdict=$2 text=$3
   rm -f "$Q/$name.done" "$Q/$name.red"
@@ -85,6 +100,7 @@ run_item() {
 claim || exit 0
 trap 'release; log "runner down"' EXIT
 log "runner up (pid $$)"
+recover_stranded
 idle_since=0
 while :; do
   owns || { trap - EXIT; log "lock lost to another runner, exiting"; exit 0; }
