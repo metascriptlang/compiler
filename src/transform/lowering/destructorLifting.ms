@@ -2594,41 +2594,33 @@ function liftComparisons(ctx: TransformContext, lctx: LiftCtx, loc: SourceLocati
 	}
 }
 
-// JS runs no lifetime hooks, but its == on value types calls the same generated Eq.
-export function liftEqualityOps(program: Node, ctx: TransformContext): Node {
+// JS runs no lifetime hooks, but its == on value types calls the same
+// generated Eq; the reference's liftdestructors carries its own per-target flag.
+export function liftDestructors(program: Node, ctx: TransformContext, withHooks: boolean): Node {
 	if (ctx.checkerCtx == null) return program;
-	const lctx = newLiftCtx(ctx, true);
+
+	const pd = program.data as ProgramData;
+	const lctx = newLiftCtx(ctx, !withHooks);
+
+	if (withHooks) {
+		for (const stmt of pd.programStmts) {
+			processDecl(stmt, lctx);
+		}
+
+		// Scan for anonymous struct types (from ObjectLiterals with no declaration).
+		// These have typeName like "__anon..." set by the checker but no InterfaceDecl.
+		const defaultLoc2 = makeLoc(0, 0);
+		scanForAnonStructTypes(program, lctx, defaultLoc2);
+
+		// Scan for standalone array type usage
+		for (const stmt of pd.programStmts) {
+			scanStmtForArrayTypes(stmt, lctx);
+		}
+
+		const defaultLoc = makeLoc(0, 0);
+		generateArrayHooks(lctx, defaultLoc);
+	}
 	liftComparisons(ctx, lctx, makeLoc(0, 0));
-	const pd = program.data as ProgramData;
-	for (const decl of lctx.collector) {
-		pd.programStmts.push(decl);
-	}
-	return program;
-}
-
-export function liftDestructors(program: Node, ctx: TransformContext): Node {
-	if (ctx.checkerCtx == null) return program;
-
-	const pd = program.data as ProgramData;
-	const lctx = newLiftCtx(ctx, false);
-
-	for (const stmt of pd.programStmts) {
-		processDecl(stmt, lctx);
-	}
-
-	// Scan for anonymous struct types (from ObjectLiterals with no declaration).
-	// These have typeName like "__anon..." set by the checker but no InterfaceDecl.
-	const defaultLoc2 = makeLoc(0, 0);
-	scanForAnonStructTypes(program, lctx, defaultLoc2);
-
-	// Scan for standalone array type usage
-	for (const stmt of pd.programStmts) {
-		scanStmtForArrayTypes(stmt, lctx);
-	}
-
-	const defaultLoc = makeLoc(0, 0);
-	generateArrayHooks(lctx, defaultLoc);
-	liftComparisons(ctx, lctx, defaultLoc);
 
 	for (const decl of lctx.collector) {
 		pd.programStmts.push(decl);
@@ -2649,7 +2641,7 @@ function liftWithChecker(input: string): Node {
 	if (!pr.ok) return null as unknown as Node;
 	const checkerCtx = checkProgram(pr.value);
 	const ctx = createTransformContextWithChecker(checkerCtx);
-	return liftDestructors(pr.value, ctx);
+	return liftDestructors(pr.value, ctx, true);
 }
 
 
@@ -2684,7 +2676,7 @@ function liftWithCompare(input: string): Node {
 	const checkerCtx = checkProgram(pr.value);
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const lowered = lowerOperators(pr.value, ctx);
-	return liftDestructors(lowered, ctx);
+	return liftDestructors(lowered, ctx, true);
 }
 
 function hasGeneratedFnIn(prog: Node, fnSuffix: string): boolean {
