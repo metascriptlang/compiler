@@ -7,14 +7,14 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { firstPrivateField } from "./visibility";
-import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData } from "../ast/node";
 import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
-import { isAssignable as isAssignableCheck, isValueStructDecl } from "./compat";
+import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
 import { buildTypeArgKeys, monoBaseName, monoInstanceNameOf, monoTypeKey } from "../monomorphize/registry";
 
 function anyHasGenericParams(types: Type[]): boolean {
@@ -1410,6 +1410,46 @@ function findPredicateInfix(text: string): int32 {
 	return (idxSp + 1) as int32;
 }
 
+
+function overloadDeclConflict(existing: Symbol, fnType: Type, d: FunctionDeclData): boolean {
+	const a = existing.symbolType;
+	if (a.typeChildren.length != fnType.typeChildren.length) return false;
+	for (let i = 0; i < a.typeChildren.length; i += 1) {
+		if (a.typeNames[i] != fnType.typeNames[i]) return false;
+		if (!sameType(a.typeChildren[i], fnType.typeChildren[i])) return false;
+	}
+	const ea = existing.declNode != null && existing.declNode.kind == NodeKind.FunctionDecl
+		? existing.declNode.data as FunctionDeclData : null;
+	if (ea == null || ea.fnReturnType == "" || d.fnReturnType == "") return false;
+	return !sameType(a.typeReturn, fnType.typeReturn);
+}
+
+function checkOverloadDeclAmbiguity(ctx: CheckerContext, node: Node, sym: Symbol, fnType: Type, d: FunctionDeclData): void {
+	const primary = lookupSymbol(ctx.table, d.fnName);
+	if (primary == null || primary.symbolKind != SymbolKind.Function) return;
+	let relevant = primary == sym;
+	if (!relevant) {
+		for (const ov of primary.overloads) {
+			if (ov == sym) {
+				relevant = true;
+				break;
+			}
+		}
+	}
+	if (!relevant) return;
+	const candidates: Symbol[] = [primary];
+	for (const ov of primary.overloads) candidates.push(ov);
+	for (const cand of candidates) {
+		if (cand == sym || cand.symbolKind != SymbolKind.Function) continue;
+		if (cand.modulePath != sym.modulePath) continue;
+		if (isUnresolvedType(cand.symbolType) || cand.symbolType.kind != TypeKind.Function) continue;
+		if (overloadDeclConflict(cand, fnType, d)) {
+			const prev = cand.declNode != null ? cand.declNode.location : node.location;
+			addError(ctx, `overloaded '${d.fnName}' leads to ambiguous calls — previous declaration at line ${prev.line}`, node.location.line, node.location.column);
+			return;
+		}
+	}
+}
 export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
 	// Use resolvedSym set by collectPass (preserves overloadIdx for overloaded functions).
@@ -1546,6 +1586,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 		closeScope(ctx.table);
 	}
 
+	checkOverloadDeclAmbiguity(ctx, node, sym, fnType, d);
 	// Overload handling: resolve in declaration order
 	if (sym.overloads.length > 0 && !isUnresolvedType(sym.symbolType)) {
 		// Primary already resolved — assign to first unresolved overload

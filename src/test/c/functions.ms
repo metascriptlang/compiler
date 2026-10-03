@@ -67,3 +67,30 @@ test "E2E C: an extern's rest arguments are passed to C one by one" {
 	assert c.value.contains("printf(");
 	assert !c.value.contains("msGenericArrayPush");
 }
+
+test "E2E C: the refusal names the previous declaration with no call" {
+	const src = "function pick(a: int32): int32 { return a; }\nfunction pick(a: int32): string { return \"s\"; }";
+	const c = compileToC(src);
+	assert !c.ok;
+	assert c.error.contains("overloaded 'pick' leads to ambiguous calls");
+	assert c.error.contains("previous declaration at line 1");
+}
+
+test "E2E C: overload tier-1 signatures and their implementation still register" {
+	const src = "enum K { A }\nfunction take(k: K.A): string;\nfunction take(k: K): string { return \"r\"; }\nconst r = take(K.A);";
+	const c = compileToC(src);
+	assert c.ok, c.error;
+}
+
+
+test "E2E C: overloads differing by parameter type still register" {
+	const src = "function pick(a: int32): int32 { return a; }\nfunction pick(a: string): string { return a; }\nconst r = pick(\"x\");";
+	const c = compileToC(src);
+	assert c.ok, c.error;
+}
+
+test "E2E C: one overload without a return annotation stays allowed" {
+	const src = "function pick(a: int32): int32 { return a; }\nfunction pick(a: int32) { return a; }";
+	const c = compileToC(src);
+	assert c.ok, c.error;
+}
