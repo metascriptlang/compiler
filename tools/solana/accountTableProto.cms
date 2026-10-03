@@ -1,0 +1,374 @@
+@include("runtime/solana/solana.h");
+@include("tools/solana/accountTableProto.h");
+@compile("runtime/solana/host.c");
+
+import { Account, ProgramError } from "std/solana";
+import { Mint, TokenAccount } from "std/solana/token";
+import { associatedMatches } from "std/solana/mint";
+import { SeedSlice, createAddressWithBump, createAt, findAt, ownProgram, tableAddress } from "std/solana/seed";
+
+extern function msSolAccountTable(): uint64;
+extern function msSolAccountAt(index: uint64): uint64;
+extern function msSolAccountCount(): uint64;
+extern function msSolLoadU32(address: uint64): uint32;
+extern function msSolFoundAddress(found: Span<Account>): uint64 from "msSolSpanAddress";
+extern function msSolFoundReadAddress(found: Readonly<Span<Account>>): uint64 from "msSolSpanAddress";
+extern function msSolLoadU8(address: uint64): uint8;
+extern function msSolLoadU64(address: uint64): uint64;
+extern function msSolStoreU8(address: uint64, value: uint8): void;
+extern function msSolStoreU64(address: uint64, value: uint64): void;
+extern function msSolProgramId(): uint64;
+extern function msSolWordsAddress(words: Readonly<Span<uint64>>): uint64 from "msSolSpanAddress";
+extern function msSolSlicesAddress(slices: Span<SeedSlice>): uint64 from "msSolSpanAddress";
+extern function msSolScratchAddress(words: Span<uint64>): uint64 from "msSolSpanAddress";
+extern function msSolBytesAddress(bytes: Readonly<Span<uint8>>): uint64 from "msSolSpanAddress";
+
+const ACCOUNT_NOT_SIGNER: uint64 = 3010;
+const CONSTRAINT_MUT: uint64 = 2000;
+const INVALID_PROGRAM_EXECUTABLE: uint64 = 3009;
+const ACCOUNT_BORROW_FAILED: uint64 = 0xC00000000;
+const ACCOUNT_NOT_ENOUGH_KEYS: uint64 = 3005;
+const ACCOUNT_OWNED_BY_WRONG_PROGRAM: uint64 = 3007;
+const ACCOUNT_DISCRIMINATOR_NOT_FOUND: uint64 = 3001;
+const ACCOUNT_DISCRIMINATOR_MISMATCH: uint64 = 3002;
+const ACCOUNT_DID_NOT_DESERIALIZE: uint64 = 3003;
+const INVALID_PROGRAM_ID: uint64 = 3008;
+const ACCOUNT_NOT_SYSTEM_OWNED: uint64 = 3011;
+const CONSTRAINT_SEEDS: uint64 = 2006;
+
+const SYSTEM_OWNED: uint64 = 1;
+const PROGRAM_KEY: uint64 = 2;
+const PROGRAM_DATA: uint64 = 3;
+const DELEGATED_DATA: uint64 = 4;
+const MINT_VERIFY: uint64 = 5;
+const TOKEN_VERIFY: uint64 = 6;
+
+const CLAIM: uint64 = 0x10;
+const WANT: uint64 = 0x01010100;
+const SIGNER_BIT: uint64 = 0x100;
+const WRITABLE_BIT: uint64 = 0x10000;
+
+const END: uint64 = 0;
+const EQUAL: uint64 = 1;
+const ASSOCIATED: uint64 = 2;
+const SEEDS: uint64 = 3;
+
+const TEXT: uint64 = 1;
+const ADDRESS: uint64 = 2;
+
+const FROM_ACCOUNT: uint64 = 1;
+const FROM_TABLE: uint64 = 2;
+const FROM_PROGRAM: uint64 = 3;
+
+const CUSTOM_ERROR: uint64 = 0x4000000000000000;
+
+const PROGRAMS: uint64[12] = [
+	0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+	0x93a165d7e1f6dd06, 0xac79ebce46e1cbd9, 0x91375b5fed85b41c, 0xa900ff7e85f58c3a,
+	0xf189244e8f25978c, 0x830d8e1429103dbb, 0x8410ffda99135a0b, 0x59f8e9dbd87b8e04,
+];
+
+const DELEGATION: uint64[4] = [
+	0xc03a57f2e100b7b5,
+	0x97cf4a34012206cc,
+	0x9819e58ceb0635b8,
+	0x3ea78093187e62cc,
+];
+
+function keysEqual(left: uint64, right: uint64): boolean {
+	return msSolLoadU64(left) == msSolLoadU64(right) &&
+		msSolLoadU64(left + 8) == msSolLoadU64(right + 8) &&
+		msSolLoadU64(left + 16) == msSolLoadU64(right + 16) &&
+		msSolLoadU64(left + 24) == msSolLoadU64(right + 24);
+}
+
+function keyIsZeroAt(address: uint64): boolean {
+	return (msSolLoadU64(address) | msSolLoadU64(address + 8) | msSolLoadU64(address + 16) |
+		msSolLoadU64(address + 24)) == 0;
+}
+
+function claimed(address: uint64): boolean {
+	if (msSolLoadU8(address) != 0xff) { return false; }
+	msSolStoreU8(address, 0);
+	return true;
+}
+
+function flagsFailure(want: uint64, flags: uint64): uint64 {
+	if ((want & SIGNER_BIT) != 0 && (flags & SIGNER_BIT) == 0) { return ACCOUNT_NOT_SIGNER; }
+	if ((want & WRITABLE_BIT) != 0 && (flags & WRITABLE_BIT) == 0) { return CONSTRAINT_MUT; }
+	return INVALID_PROGRAM_EXECUTABLE;
+}
+
+function extraFailure(head: uint64, address: uint64, index: uint64, ops: uint64): uint64 {
+	const extra = head & 0xf;
+	if (extra == PROGRAM_DATA || extra == DELEGATED_DATA) {
+		let owner = msSolProgramId();
+		if (extra == DELEGATED_DATA) { owner = msSolWordsAddress(DELEGATION); }
+		if (!keysEqual(address + 40, owner)) { return ACCOUNT_OWNED_BY_WRONG_PROGRAM; }
+		const length = msSolLoadU64(address + 80);
+		if (length < 8) { return ACCOUNT_DISCRIMINATOR_NOT_FOUND; }
+		const given = ops + index * 16;
+		if (msSolLoadU64(address + 88) != msSolLoadU64(given)) {
+			return ACCOUNT_DISCRIMINATOR_MISMATCH;
+		}
+		if (length < 8 + msSolLoadU64(given + 8)) { return ACCOUNT_DID_NOT_DESERIALIZE; }
+		return 0;
+	}
+	if (extra == PROGRAM_KEY) {
+		if (!keysEqual(address + 8, msSolWordsAddress(PROGRAMS) + ((head >> 32) & 0xf) * 32)) {
+			return INVALID_PROGRAM_ID;
+		}
+		return 0;
+	}
+	if (extra == SYSTEM_OWNED) {
+		if (!keyIsZeroAt(address + 40)) { return ACCOUNT_NOT_SYSTEM_OWNED; }
+		return 0;
+	}
+	if (extra == MINT_VERIFY) {
+		const verified = Mint.verify(index as int32);
+		if (!verified.ok) { return verified.error.code; }
+		return 0;
+	}
+	const verified = TokenAccount.verify(index as int32);
+	if (!verified.ok) { return verified.error.code; }
+	return 0;
+}
+
+export function verifiedAccounts(
+	table: Readonly<Span<uint64>>,
+	ops: Readonly<Span<uint64>>,
+	found: Span<Account>,
+): uint64 {
+	const count = found.length as uint64;
+	const have = msSolAccountCount();
+	const limit = count < have ? count : have;
+	const first = msSolWordsAddress(table);
+	const opsAt = msSolWordsAddress(ops);
+	let accounts = msSolAccountTable();
+	let at = first;
+	let out = msSolFoundAddress(found);
+	const end = first + limit * 8;
+	let failure: uint64 = 0;
+	while (at < end) {
+		const address = msSolLoadU64(accounts);
+		const head = msSolLoadU64(at);
+		const extra = head & 0xf;
+		if (extra == MINT_VERIFY) {
+			const verified = Mint.verify(((at - first) >> 3) as int32);
+			if (!verified.ok) { failure = verified.error.code; break; }
+		} else if (extra == TOKEN_VERIFY) {
+			const verified = TokenAccount.verify(((at - first) >> 3) as int32);
+			if (!verified.ok) { failure = verified.error.code; break; }
+		} else if (extra != 0) {
+			failure = extraFailure(head, address, (at - first) >> 3, opsAt);
+			if (failure != 0) { break; }
+		}
+		const want = head & WANT;
+		const flags = msSolLoadU32(address) as uint64;
+		if ((flags & want) != want) { failure = flagsFailure(want, flags); break; }
+		if ((head & CLAIM) != 0 && !claimed(address)) {
+			failure = ACCOUNT_BORROW_FAILED;
+			break;
+		}
+		msSolStoreU64(out, address);
+		accounts += 8;
+		at += 8;
+		out += 8;
+	}
+	if (failure == 0 && limit < count) { failure = ACCOUNT_NOT_ENOUGH_KEYS; }
+	return failure;
+}
+
+export function failed(code: uint64): Result<void, ProgramError> {
+	return Result.err({ code: code });
+}
+
+function sourceAddress(source: uint64, base: uint64, external: uint64, found: uint64): uint64 {
+	const kind = source & 0xf;
+	const arg = (source >> 4) & 0xff;
+	if (kind == FROM_ACCOUNT) { return msSolLoadU64(found + arg * 8) + ((source >> 12) & 0xff) * 8; }
+	if (kind == FROM_TABLE) { return base + ((source >> 12) & 0xff) * 8; }
+	if (kind == FROM_PROGRAM) { return msSolProgramId(); }
+	return msSolLoadU64(external + arg * 8);
+}
+
+export function verifiedConstraints(
+	table: Readonly<Span<uint64>>,
+	external: Readonly<Span<uint64>>,
+	found: Readonly<Span<Account>>,
+): uint64 {
+	const base = msSolWordsAddress(table);
+	const given = msSolWordsAddress(external);
+	const accounts = msSolFoundReadAddress(found);
+	let at = base;
+	while (true) {
+		const head = msSolLoadU64(at);
+		at += 8;
+		const op = head & 0xff;
+		if (op == END) { return 0; }
+		if (op == EQUAL) {
+			const left = sourceAddress((head >> 8) & 0xfffff, base, given, accounts);
+			const right = sourceAddress((head >> 28) & 0xfffff, base, given, accounts);
+			if (!keysEqual(left, right)) {
+				const slot = head >> 48;
+				if (slot != 0) { return CUSTOM_ERROR | (slot - 1); }
+				return msSolLoadU64(at);
+			}
+			at += 8;
+		} else if (op == ASSOCIATED) {
+			const token = sourceAddress((head >> 8) & 0xfffff, base, given, accounts);
+			const wallet = sourceAddress((head >> 28) & 0xfffff, base, given, accounts);
+			const mint = sourceAddress(msSolLoadU64(at), base, given, accounts);
+			at += 8;
+			const verdict = associatedMatches(token, wallet, mint);
+			if (!verdict.ok) { return verdict.error.code; }
+		} else {
+			const key = msSolLoadU64(accounts + ((head >> 8) & 0xff) * 8) + 8;
+			const count = (head >> 16) & 0xff;
+			const stored = ((head >> 24) & 0xff) != 0;
+			let slices: SeedSlice[17];
+			let scratch: uint64[16];
+			const slicesAt = msSolSlicesAddress(slices);
+			const scratchAt = msSolScratchAddress(scratch);
+			for (let seed: uint64 = 0; seed < count; seed++) {
+				const element = msSolLoadU64(at);
+				at += 8;
+				const kind = element & 0xff;
+				if (kind == TEXT) {
+					const length = (element >> 8) & 0xff;
+					msSolStoreU64(slicesAt + seed * 16, at);
+					msSolStoreU64(slicesAt + seed * 16 + 8, length);
+					at += ((length + 7) >> 3) * 8;
+				} else if (kind == ADDRESS) {
+					msSolStoreU64(slicesAt + seed * 16, sourceAddress((element >> 8) & 0xfffff, base, given, accounts));
+					msSolStoreU64(slicesAt + seed * 16 + 8, 32);
+				} else {
+					msSolStoreU64(scratchAt + seed * 8, msSolLoadU64(given + ((element >> 12) & 0xff) * 8));
+					msSolStoreU64(slicesAt + seed * 16, scratchAt + seed * 8);
+					msSolStoreU64(slicesAt + seed * 16 + 8, (element >> 28) & 0xff);
+				}
+			}
+			if (stored) {
+				let bump: uint8[1];
+				bump[0] = msSolLoadU64(given + ((head >> 32) & 0xff) * 8) as uint8;
+				msSolStoreU64(slicesAt + count * 16, msSolBytesAddress(bump));
+				msSolStoreU64(slicesAt + count * 16 + 8, 1);
+				const derived = createAt(slicesAt, count + 1, ownProgram());
+				if (!derived.ok || !keysEqual(msSolBytesAddress(derived.value.bytes), key)) {
+					return CONSTRAINT_SEEDS;
+				}
+			} else {
+				const located = findAt(slicesAt, count, ownProgram());
+				if (!located.ok) { return located.error.code; }
+				if (!keysEqual(msSolBytesAddress(located.value.key.bytes), key)) { return CONSTRAINT_SEEDS; }
+			}
+		}
+	}
+	return 0;
+}
+
+export function signerCode(index: int32, out found: Account): uint64 {
+	found = { address: msSolAccountAt(index as uint64) };
+	if (found.address == 0) { return ACCOUNT_NOT_ENOUGH_KEYS; }
+	if (msSolLoadU8(found.address + 1) == 0) { return ACCOUNT_NOT_SIGNER; }
+	return 0;
+}
+
+export function writableSignerCode(index: int32, out found: Account): uint64 {
+	found = { address: msSolAccountAt(index as uint64) };
+	if (found.address == 0) { return ACCOUNT_NOT_ENOUGH_KEYS; }
+	if (msSolLoadU8(found.address + 1) == 0) { return ACCOUNT_NOT_SIGNER; }
+	if (msSolLoadU8(found.address + 2) == 0) { return CONSTRAINT_MUT; }
+	return 0;
+}
+
+export function writableCode(index: int32, out found: Account): uint64 {
+	found = { address: msSolAccountAt(index as uint64) };
+	if (found.address == 0) { return ACCOUNT_NOT_ENOUGH_KEYS; }
+	if (msSolLoadU8(found.address + 2) == 0) { return CONSTRAINT_MUT; }
+	return 0;
+}
+
+export function systemCode(index: int32, out found: Account): uint64 {
+	found = { address: msSolAccountAt(index as uint64) };
+	if (found.address == 0) { return ACCOUNT_NOT_ENOUGH_KEYS; }
+	if (!keyIsZeroAt(found.address + 40)) { return ACCOUNT_NOT_SYSTEM_OWNED; }
+	return 0;
+}
+
+export function anyCode(index: int32, out found: Account): uint64 {
+	found = { address: msSolAccountAt(index as uint64) };
+	if (found.address == 0) { return ACCOUNT_NOT_ENOUGH_KEYS; }
+	return 0;
+}
+
+export function programCode(index: int32, id: uint64, out found: Account): uint64 {
+	found = { address: msSolAccountAt(index as uint64) };
+	if (found.address == 0) { return ACCOUNT_NOT_ENOUGH_KEYS; }
+	if (!keysEqual(found.address + 8, msSolWordsAddress(PROGRAMS) + id * 32)) { return INVALID_PROGRAM_ID; }
+	if (msSolLoadU8(found.address + 3) == 0) { return INVALID_PROGRAM_EXECUTABLE; }
+	return 0;
+}
+
+function ownedCore(index: int32, delegated: boolean, mutable: boolean, discriminator: uint64, size: uint64, out found: Account): uint64 {
+	found = { address: msSolAccountAt(index as uint64) };
+	if (found.address == 0) { return ACCOUNT_NOT_ENOUGH_KEYS; }
+	let owner = msSolProgramId();
+	if (delegated) { owner = msSolWordsAddress(DELEGATION); }
+	if (!keysEqual(found.address + 40, owner)) { return ACCOUNT_OWNED_BY_WRONG_PROGRAM; }
+	const length = msSolLoadU64(found.address + 80);
+	if (length < 8) { return ACCOUNT_DISCRIMINATOR_NOT_FOUND; }
+	if (msSolLoadU64(found.address + 88) != discriminator) { return ACCOUNT_DISCRIMINATOR_MISMATCH; }
+	if (length < 8 + size) { return ACCOUNT_DID_NOT_DESERIALIZE; }
+	if (mutable) {
+		if (msSolLoadU8(found.address + 2) == 0) { return CONSTRAINT_MUT; }
+		if (!claimed(found.address)) { return ACCOUNT_BORROW_FAILED; }
+	}
+	return 0;
+}
+
+export function ownedCode(index: int32, discriminator: uint64, size: uint64, out found: Account): uint64 {
+	return ownedCore(index, false, false, discriminator, size, found);
+}
+
+export function mutableCode(index: int32, discriminator: uint64, size: uint64, out found: Account): uint64 {
+	return ownedCore(index, false, true, discriminator, size, found);
+}
+
+export function delegatedCode(index: int32, discriminator: uint64, size: uint64, out found: Account): uint64 {
+	return ownedCore(index, true, false, discriminator, size, found);
+}
+
+export function keysCode(actual: uint64, expected: uint64, failure: uint64): uint64 {
+	if (!keysEqual(actual, expected)) { return failure; }
+	return 0;
+}
+
+export function tokenMintCode(token: uint64, expected: uint64): uint64 {
+	if (!keysEqual(token + 80, expected)) { return 2014; }
+	return 0;
+}
+
+export function tokenAuthorityCode(token: uint64, expected: uint64): uint64 {
+	if (!keysEqual(token + 112, expected)) { return 2015; }
+	return 0;
+}
+
+export function associatedCode(token: uint64, wallet: uint64, mint: uint64): uint64 {
+	const verdict = associatedMatches(token, wallet, mint);
+	if (!verdict.ok) { return verdict.error.code; }
+	return 0;
+}
+
+export function seedsGivenCode(key: uint64, seeds: Span<SeedSlice>, bump: uint8): uint64 {
+	const derived = createAddressWithBump(seeds, bump, ownProgram());
+	if (!derived.ok || !keysEqual(msSolBytesAddress(derived.value.bytes), key)) { return CONSTRAINT_SEEDS; }
+	return 0;
+}
+
+export function seedsCanonicalCode(key: uint64, seeds: Span<SeedSlice>): uint64 {
+	const located = findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
+	if (!located.ok) { return located.error.code; }
+	if (!keysEqual(msSolBytesAddress(located.value.key.bytes), key)) { return CONSTRAINT_SEEDS; }
+	return 0;
+}
