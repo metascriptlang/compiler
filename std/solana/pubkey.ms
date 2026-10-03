@@ -99,6 +99,23 @@ export function isZero(this key: Pubkey): boolean {
 	return key == Pubkey.zero();
 }
 
+when (solana) {
+	@include("runtime/solana/solana.h");
+
+	extern function msSolLoadU64(address: uint64): uint64;
+	extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
+
+	// The builtin struct `==` is a byte loop: 352 CU for equal keys, measured on LiteSVM 1.4.1.
+	export function `==`(this left: Pubkey, right: Pubkey): boolean {
+		const a = msSolSpanAddress(left.bytes);
+		const b = msSolSpanAddress(right.bytes);
+		return msSolLoadU64(a) == msSolLoadU64(b) &&
+			msSolLoadU64(a + 8) == msSolLoadU64(b + 8) &&
+			msSolLoadU64(a + 16) == msSolLoadU64(b + 16) &&
+			msSolLoadU64(a + 24) == msSolLoadU64(b + 24);
+	}
+}
+
 export function equals(this key: Pubkey, other: Pubkey): boolean {
 	return key == other;
 }

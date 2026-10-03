@@ -5,6 +5,7 @@ import {
 	appendTransactionMessageInstruction,
 	createKeyPairSignerFromPrivateKeyBytes,
 	createTransactionMessage,
+	getAddressDecoder,
 	getAddressEncoder,
 	getProgramDerivedAddress,
 	lamports,
@@ -25,6 +26,12 @@ const SYSTEM = address("11111111111111111111111111111111");
 const DELEGATION = address("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh");
 const FEW = 8;
 const encoder = getAddressEncoder();
+const decoder = getAddressDecoder();
+const flipped = (key, at) => {
+	const bytes = new Uint8Array(encoder.encode(key));
+	bytes[at] ^= 0xff;
+	return decoder.decode(bytes);
+};
 
 const OPS = [
 	["idle", 0],
@@ -44,23 +51,23 @@ const OPS = [
 	["instruction<Dispatch> (last)", 14],
 ];
 
-// Total compute units of each op with the std of commit 99d28088c, before the shared cores (compiler built from that tree).
-const HEAD = {
-	"idle": 235,
-	"owned<Pet>": 802,
-	"mutable<Pet>": 805,
-	"delegated<Pet>": 798,
-	"accounts<Everything>": 2698,
-	"args<Parameters>": 564,
-	"createPda<Pet>": 4272,
-	"create<Pet>": 2169,
-	"pda (Mutable)": 4443,
-	"pdaWithBump (Mutable)": 3011,
-	"pda (Delegated)": 2930,
-	"pdaWithBump (Delegated)": 2997,
-	"realloc<Pet>": 1110,
-	"close<Pet>": 1020,
-	"instruction<Dispatch> (last)": 566,
+// Totals of each op when this table was last set (LiteSVM 1.4.1, platform-tools v1.57); an op that costs more than FEW above its total fails.
+const BASELINE = {
+	"idle": 234,
+	"owned<Pet>": 410,
+	"mutable<Pet>": 422,
+	"delegated<Pet>": 407,
+	"accounts<Everything>": 1071,
+	"args<Parameters>": 505,
+	"createPda<Pet>": 3884,
+	"create<Pet>": 2091,
+	"pda (Mutable)": 3712,
+	"pdaWithBump (Mutable)": 2272,
+	"pda (Delegated)": 2188,
+	"pdaWithBump (Delegated)": 2247,
+	"realloc<Pet>": 718,
+	"close<Pet>": 620,
+	"instruction<Dispatch> (last)": 369,
 };
 
 function u64(value) {
@@ -131,7 +138,7 @@ async function run(path, op, setup = {}) {
 		{ address: setup.peekKey ?? peekKey, role: AccountRole.READONLY },
 		{ address: rolledAt, role: AccountRole.READONLY },
 		{ address: fresh.address, role: AccountRole.WRITABLE_SIGNER, signer: fresh },
-		{ address: SYSTEM, role: AccountRole.READONLY },
+		{ address: setup.systemAt ?? SYSTEM, role: AccountRole.READONLY },
 	];
 	const message = pipe(
 		createTransactionMessage({ version: 0 }),
@@ -173,17 +180,17 @@ for (const [name, op] of OPS) {
 }
 
 const idle = measured.get("idle");
-const idleBefore = controlPath ? controlled.get("idle") : HEAD.idle;
-console.log(`\n${"op".padEnd(32)}${"total".padStart(8)}${"check".padStart(8)}${(controlPath ? "control" : "HEAD").padStart(9)}${"change".padStart(8)}`);
+const idleBefore = controlPath ? controlled.get("idle") : BASELINE.idle;
+console.log(`\n${"op".padEnd(32)}${"total".padStart(8)}${"check".padStart(8)}${(controlPath ? "control" : "baseline").padStart(9)}${"change".padStart(8)}`);
 for (const [name] of OPS) {
 	const cost = measured.get(name) - idle;
-	const base = (controlPath ? controlled.get(name) - idleBefore : HEAD[name] - HEAD.idle);
+	const base = (controlPath ? controlled.get(name) - idleBefore : BASELINE[name] - BASELINE.idle);
 	console.log(`${name.padEnd(32)}${String(measured.get(name)).padStart(8)}${String(cost).padStart(8)}${String(base).padStart(9)}${String(cost - base).padStart(8)}`);
 }
 if (!controlPath) {
 	for (const [name] of OPS) {
 		const cost = measured.get(name) - idle;
-		const base = HEAD[name] - HEAD.idle;
+		const base = BASELINE[name] - BASELINE.idle;
 		check(`[${name}] costs at most ${FEW} CU more than before (${cost} against ${base})`, cost <= base + FEW);
 	}
 }
@@ -205,6 +212,14 @@ await refuses("mutable: the account is read-only", 2, { pet: { readonly: true } 
 await refuses("delegated: owned by this program, not the delegation program", 3, { rolledOwner: programSigner.address }, 3007);
 await refuses("accounts<T>: a Mutable field refuses a read-only account", 4, { pet: { readonly: true } }, 2000);
 await refuses("args<T>: the data stops short of the arguments", 5, { data: parameters(5, 1).subarray(0, 20) }, 102);
+for (const at of [0, 7, 8, 15, 16, 23, 24, 31]) {
+	await refuses(`owned: an owner that differs from this program in byte ${at}`, 1, { peekOwner: flipped(programSigner.address, at) }, 3007);
+	await refuses(`delegated: an owner that differs from the delegation program in byte ${at}`, 3, { rolledOwner: flipped(DELEGATION, at) }, 3007);
+}
+await refuses("accounts<T>: a Program field refuses another key", 4, { systemAt: stranger }, 3008);
+await refuses("accounts<T>: a Program field refuses the System key off by its last byte", 4, { systemAt: flipped(SYSTEM, 31) }, 3008);
+await refuses("accounts<T>: a Program field refuses the System key off by its first byte", 4, { systemAt: flipped(SYSTEM, 0) }, 3008);
+await refuses("pda: an account that differs from the PDA in its last byte", 8, { pet: { key: flipped(petKey, 31) } }, 2006);
 await refuses("createPda: the target is not the PDA of the seeds", 6, { target: stranger }, 2006);
 await refuses("pda: the account is not at the PDA of the seeds", 8, { pet: { key: stranger } }, 2006);
 await refuses("pdaWithBump: another bump", 9, { bump: petBump - 1 }, 2006);
