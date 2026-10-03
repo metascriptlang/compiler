@@ -70,6 +70,11 @@ Ownership measurements from the 2026-10-03 root sweep:
   native boxing, both values print correctly but ledger `alloc=2 destroy=0`.
   Routing through existing `msBoxArc` makes DRC/ORC ledger `2/2`; C and JS print
   `arc-contextual 8 first 9 second`.
+- `checker3pass/scenarios/arcLiteralSafety` applies the constructor's existing
+  deep-immutable pointee gate to contextual literal creation. Before the gate,
+  an `Arc<SharedData>` containing a class reference checks clean; after it,
+  C and JS reject it naming `SharedData`. The primitive/string literal consumer
+  above remains accepted.
 
 The explicit `new Arc(...)` constructor was separately checked on C; this does
 not claim JS constructor support or coverage of every atomic-container operation.
