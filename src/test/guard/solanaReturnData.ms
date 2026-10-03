@@ -1,10 +1,11 @@
 // GUARD-OS solana
 import {
-	Instruction,
 	ProgramError,
 	account,
+	borshBuffer,
 	failWith,
 	instructionData,
+	invoke,
 	logU64,
 	programId,
 	returnData,
@@ -20,9 +21,8 @@ function answer(): Result<uint64, ProgramError> {
 function ask(): Result<uint64, ProgramError> {
 	if (returnData() !== null) { return Result.err(ProgramError.invalidAccountData()); }
 	const _self = try account(1);
-	const instruction = Instruction.forProgram(programId(), 0, 1);
-	instruction.appendU8(1);
-	const _invoked = try instruction.invoke();
+	let storage: uint8[1] = [];
+	const _invoked = try invoke(programId(), [], borshBuffer(storage).u8(1));
 	const answered = returnData();
 	if (answered === null) { return Result.err(ProgramError.invalidAccountData()); }
 	if (!answered.program.equals(programId())) { return Result.err(ProgramError.incorrectProgramId()); }

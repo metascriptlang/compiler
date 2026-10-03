@@ -8,13 +8,13 @@ import {
 	failWith,
 	findProgramAddress,
 	instructionData,
+	invoke,
 	invokeList,
 	logU64,
 	programAddress,
 	programId,
 	signed,
 } from "std/solana";
-import { invoke } from "std/solana/invoke";
 
 extern function msSolAlloc(size: uint64): uint64;
 

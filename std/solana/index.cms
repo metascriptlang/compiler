@@ -4,3 +4,4 @@ export * from "./discriminator";
 export * from "./littleEndian";
 export * from "./core";
 export * from "./macro";
+export * from "./invoke";

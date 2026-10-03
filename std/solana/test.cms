@@ -14,7 +14,6 @@ import {
 	signer,
 	writable,
 	instructionDiscriminator,
-	Instruction,
 	account,
 	allocate,
 	assignTo,
@@ -44,9 +43,10 @@ import {
 	Bytes,
 	InstructionAccount,
 	borshBuffer,
+	invoke,
 	invokeList,
+	invokeSigned,
 } from "./index";
-import { invoke, invokeSigned } from "./invoke";
 import { SignerSeeds } from "./seed";
 import { HostAccount, invocations, logs, run, signerIs, textBytes } from "./host";
 import {
@@ -905,6 +905,16 @@ function counterSigner(): uint8[][] {
 	return [textBytes("counter"), [7]];
 }
 
+function ping(target: Account, signers: Span<SignerSeeds> = []): Result<uint64, ProgramError> {
+	let storage: uint8[1] = [];
+	return invokeSigned(
+		keyOf(9),
+		[InstructionAccount.writable(target)],
+		borshBuffer(storage).u8(3),
+		signers,
+	);
+}
+
 function signingStep(): Result<uint64, ProgramError> {
 	const op = try instructionData().readU8(0);
 	const first = try account(0);
@@ -918,33 +928,30 @@ function signingStep(): Result<uint64, ProgramError> {
 	if (op == 4) {
 		return signed(createProgramAccount(first, second, 16, keyOf(9)), ["vault", keyOf(5), [7]]);
 	}
-	const instruction = Instruction.forProgram(keyOf(9), 1, 1);
-	instruction.addWritable(second);
-	instruction.appendU8(3);
-	if (op == 5) { return signed(instruction.invoke(), ["vault", keyOf(5), [7]]); }
+	if (op == 5) { return signed(ping(second), ["vault", keyOf(5), [7]]); }
 	if (op == 6) {
-		return signed(instruction.invoke(), [["vault", keyOf(5), [7]], ["counter", [7]]]);
+		return signed(ping(second), [["vault", keyOf(5), [7]], ["counter", [7]]]);
 	}
 	if (op == 11) {
-		return signed(instruction.invoke(), [
+		return signed(ping(second), [
 			[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16],
 		]);
 	}
 	if (op == 12) {
-		return signed(instruction.invoke(), ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+		return signed(ping(second), ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
 	}
 	if (op == 13) {
-		return signed(instruction.invoke(), [
+		return signed(ping(second), [
 			[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
 		]);
 	}
-	if (op == 8) { return signed(instruction.invoke(), ["k", first, second, [7]]); }
-	if (op == 9) { return signed(instruction.invoke(), [[7]]); }
+	if (op == 8) { return signed(ping(second), ["k", first, second, [7]]); }
+	if (op == 9) { return signed(ping(second), [[7]]); }
 	if (op == 10) {
 		const wide: uint64 = 258;
-		return signed(instruction.invoke(), [["a", leBytes(wide)], [[1], [2]], [first, "z"]]);
+		return signed(ping(second), [["a", leBytes(wide)], [[1], [2]], [first, "z"]]);
 	}
-	return instruction.invoke();
+	return ping(second);
 }
 
 function signingEntry(): void { codeOf(signingStep()); }

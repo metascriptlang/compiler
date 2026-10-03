@@ -11,13 +11,11 @@ import {
 	SeedSlice,
 	SeedTable,
 	SignerSeeds,
-	Signing,
 	createAddressWithBump,
 	fillWithBump,
 	findAt,
 	ownProgram,
 	signerOfBumped,
-	signingOf,
 	tableAddress,
 } from "./seed";
 
@@ -48,10 +46,7 @@ extern function msSolLogPubkey(address: uint64): void;
 extern function msSolLogData(address: uint64, length: uint64): void;
 extern function msSolLogComputeUnits(): void;
 extern function msSolRemainingComputeUnits(): uint64;
-extern function msSolStringAddress(text: string): uint64;
-extern function msSolStringLength(text: string): uint64;
 extern function msSolWordsAddress(words: Span<uint64>): uint64 from "msSolSpanAddress";
-extern function msSolInvokeSigned(instruction: uint64, accountInfos: uint64, accountInfoCount: uint64, signers: uint64, signerCount: uint64): uint64;
 extern function msSolGetClock(out: uint64): uint64;
 extern function msSolGetRent(out: uint64): uint64;
 extern function msSolSetReturnData(data: Span<uint8>): void;
@@ -61,12 +56,6 @@ const MAX_RETURN_DATA: uint64 = 1024;
 
 export struct Account {
 	address: uint64;
-}
-
-export struct Instruction {
-	address: uint64;
-	accountCapacity: uint64;
-	dataCapacity: uint64;
 }
 
 export struct AccountMeta {
@@ -301,128 +290,9 @@ export function fillWith(this bytes: Bytes, value: uint8): void {
 	if (bytes.length > 0) { msSolFill(bytes.address, value, bytes.length); }
 }
 
-function metasAddress(instruction: Instruction): uint64 {
-	return instruction.address + 48;
-}
-
-function infosAddress(instruction: Instruction): uint64 {
-	return instruction.address + 48 + 16 * instruction.accountCapacity;
-}
-
-function payloadAddress(instruction: Instruction): uint64 {
-	return instruction.address + 48 + 72 * instruction.accountCapacity;
-}
-
 function flagByte(value: boolean): uint8 {
 	if (value) { return 1; }
 	return 0;
-}
-
-export function forProgram(
-	this typeof Instruction,
-	program: Pubkey,
-	accountCapacity: uint64,
-	dataCapacity: uint64,
-): Instruction {
-	const address = msSolAlloc(48 + 72 * accountCapacity + dataCapacity + 32);
-	const instruction: Instruction = { address: address, accountCapacity: accountCapacity, dataCapacity: dataCapacity };
-	const programAddress = payloadAddress(instruction) + dataCapacity;
-	storePubkey(program, programAddress);
-	msSolStoreU64(address, programAddress);
-	msSolStoreU64(address + 8, metasAddress(instruction));
-	msSolStoreU64(address + 24, payloadAddress(instruction));
-	return instruction;
-}
-
-export function addAccount(
-	this instruction: Instruction,
-	account: Account,
-	writable: boolean,
-	signer: boolean,
-): Instruction {
-	const count = msSolLoadU64(instruction.address + 16);
-	if (count >= instruction.accountCapacity) {
-		msSolStoreU64(instruction.address + 40, 1);
-		return instruction;
-	}
-	const meta = metasAddress(instruction) + count * 16;
-	msSolStoreU64(meta, account.address + 8);
-	msSolStoreU8(meta + 8, flagByte(writable));
-	msSolStoreU8(meta + 9, flagByte(signer));
-	const info = infosAddress(instruction) + count * 56;
-	msSolStoreU64(info, account.address + 8);
-	msSolStoreU64(info + 8, account.address + 72);
-	msSolStoreU64(info + 16, account.dataLength());
-	msSolStoreU64(info + 24, account.address + 88);
-	msSolStoreU64(info + 32, account.address + 40);
-	msSolStoreU8(info + 48, msSolLoadU8(account.address + 1));
-	msSolStoreU8(info + 49, msSolLoadU8(account.address + 2));
-	msSolStoreU8(info + 50, msSolLoadU8(account.address + 3));
-	msSolStoreU64(instruction.address + 16, count + 1);
-	return instruction;
-}
-
-export function addWritableSigner(this instruction: Instruction, account: Account): Instruction {
-	return instruction.addAccount(account, true, true);
-}
-
-export function addWritable(this instruction: Instruction, account: Account): Instruction {
-	return instruction.addAccount(account, true, false);
-}
-
-export function addReadonlySigner(this instruction: Instruction, account: Account): Instruction {
-	return instruction.addAccount(account, false, true);
-}
-
-export function addReadonly(this instruction: Instruction, account: Account): Instruction {
-	return instruction.addAccount(account, false, false);
-}
-
-function reserve(instruction: Instruction, width: uint64): uint64 {
-	const length = msSolLoadU64(instruction.address + 32);
-	if (width > instruction.dataCapacity - length) {
-		msSolStoreU64(instruction.address + 40, 1);
-		return 0;
-	}
-	msSolStoreU64(instruction.address + 32, length + width);
-	return payloadAddress(instruction) + length;
-}
-
-export function appendU8(this instruction: Instruction, value: uint8): Instruction {
-	const address = reserve(instruction, 1);
-	if (address != 0) { msSolStoreU8(address, value); }
-	return instruction;
-}
-
-export function appendU32(this instruction: Instruction, value: uint32): Instruction {
-	const address = reserve(instruction, 4);
-	if (address != 0) { msSolStoreU32(address, value); }
-	return instruction;
-}
-
-export function appendU64(this instruction: Instruction, value: uint64): Instruction {
-	const address = reserve(instruction, 8);
-	if (address != 0) { msSolStoreU64(address, value); }
-	return instruction;
-}
-
-export function appendPubkey(this instruction: Instruction, value: Pubkey): Instruction {
-	const address = reserve(instruction, 32);
-	if (address != 0) { storePubkey(value, address); }
-	return instruction;
-}
-
-export function appendBytes(this instruction: Instruction, value: Bytes): Instruction {
-	const address = reserve(instruction, value.length);
-	if (address != 0 && value.length > 0) { msSolCopy(address, value.address, value.length); }
-	return instruction;
-}
-
-export function appendText(this instruction: Instruction, value: string): Instruction {
-	const length = msSolStringLength(value);
-	const address = reserve(instruction, length);
-	if (address != 0 && length > 0) { msSolCopy(address, msSolStringAddress(value), length); }
-	return instruction;
 }
 
 export function writable(this typeof AccountMeta, key: Pubkey): AccountMeta {
@@ -460,83 +330,6 @@ export function flagged(
 	signer: boolean,
 ): InstructionAccount {
 	return { key: account.address + 8, writable: flagByte(writable), signer: flagByte(signer) };
-}
-
-export function appendAccountMeta(this instruction: Instruction, meta: AccountMeta): Instruction {
-	instruction.appendPubkey(meta.key);
-	instruction.appendU8(flagByte(meta.signer));
-	return instruction.appendU8(flagByte(meta.writable));
-}
-
-export function accountLength(this instruction: Instruction): uint64 {
-	return msSolLoadU64(instruction.address + 16);
-}
-
-export function encodedLength(this instruction: Instruction): uint64 {
-	return 48 + 34 * instruction.accountLength() + msSolLoadU64(instruction.address + 32);
-}
-
-export function addAccountsOf(this instruction: Instruction, inner: Instruction): Instruction {
-	const count = inner.accountLength();
-	for (let index: uint64 = 0; index < count; index++) {
-		const found: Account = { address: msSolLoadU64(infosAddress(inner) + index * 56) - 8 };
-		instruction.addAccount(found, found.isWritable(), found.isSigner());
-	}
-	return instruction;
-}
-
-export function appendInstruction(this instruction: Instruction, inner: Instruction): Instruction {
-	if (msSolLoadU64(inner.address + 40) != 0) {
-		msSolStoreU64(instruction.address + 40, 1);
-		return instruction;
-	}
-	instruction.appendPubkey(loadPubkey(msSolLoadU64(inner.address)));
-	const count = inner.accountLength();
-	instruction.appendU64(count);
-	for (let index: uint64 = 0; index < count; index++) {
-		const meta = metasAddress(inner) + index * 16;
-		instruction.appendPubkey(loadPubkey(msSolLoadU64(meta)));
-		instruction.appendU8(msSolLoadU8(meta + 9));
-		instruction.appendU8(msSolLoadU8(meta + 8));
-	}
-	const payload: Bytes = {
-		address: payloadAddress(inner),
-		length: msSolLoadU64(inner.address + 32),
-	};
-	instruction.appendU64(payload.length);
-	return instruction.appendBytes(payload);
-}
-
-function invokeWith(
-	instruction: Instruction,
-	signers: uint64,
-	signerCount: uint64,
-): Result<uint64, ProgramError> {
-	if (msSolLoadU64(instruction.address + 40) != 0) { return Result.err(ProgramError.invalidArgument()); }
-	const status = msSolInvokeSigned(
-		instruction.address,
-		infosAddress(instruction),
-		msSolLoadU64(instruction.address + 16),
-		signers,
-		signerCount,
-	);
-	if (status != 0) {
-		const failure: ProgramError = { code: status };
-		return Result.err(failure);
-	}
-	return Result.ok(status);
-}
-
-export function invoke(
-	this instruction: Instruction,
-	signers: Span<SignerSeeds> = [],
-): Result<uint64, ProgramError> {
-	const signing = signingOf(signers);
-	return invokeWith(instruction, signing.table, signing.count);
-}
-
-function invokeSigning(instruction: Instruction, signing: Signing): Result<uint64, ProgramError> {
-	return invokeWith(instruction, signing.table, signing.count);
 }
 
 export function createAccount(
