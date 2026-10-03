@@ -551,6 +551,7 @@ test "operator lower auto-rewrites === on interface without explicit extension" 
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
 	const objType = createStruct("Token", [], [], true);
+	objType.sym = makeSymbol("Token", SymbolKind.Interface, objType, false);
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, objType, false));
 	defineSymbol(checkerCtx.table, makeSymbol("b", SymbolKind.Variable, objType, false));
 	const ctx = createTransformContextWithChecker(checkerCtx);

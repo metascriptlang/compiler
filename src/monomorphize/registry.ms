@@ -6,7 +6,7 @@
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { hashToBase36 } from "std/hash";
-import { getGlobalTypeOwner, getGlobalTypeOwnerByShape } from "../checker/context";
+import { nominalTypeKey } from "../checker/types";
 
 // ===== Data Structures =====
 
@@ -52,12 +52,9 @@ function monoStructuralKey(t: Type): string {
 }
 
 function monoOwnerPath(t: Type): string {
-	if (t.sym != null && t.sym.modulePath != "") return t.sym.modulePath;
-	if (t.typeNames != null && t.typeNames.length > 0) {
-		const byShape = getGlobalTypeOwnerByShape(t.typeName, t.typeNames.join(","));
-		if (byShape != "") return byShape;
-	}
-	return getGlobalTypeOwner(t.typeName);
+	if (t.sym != null) return t.sym.modulePath;
+	nominalTypeKey(t);
+	return "";
 }
 
 // Declaring module of the generic a GenericInstance instantiates. The instance
@@ -72,11 +69,8 @@ function monoGenericOwner(gi: Type): string {
 		base = base.kind == TypeKind.GenericInstance ? base.typeExtra : base.typeReturn;
 		hops = hops + 1;
 	}
-	if (base != null) {
-		const owner = monoOwnerPath(base);
-		if (owner != "") return owner;
-	}
-	return getGlobalTypeOwner(gi.typeName);
+	if (base != null) return monoOwnerPath(base);
+	return "";
 }
 
 // The BASE of a monomorphized name, qualified by the module that declared the
@@ -269,6 +263,13 @@ export function monoRegister(
 }
 
 // ===== Tests =====
+function declaredAt(t: Type, kind: SymbolKind, modulePath: string): Type {
+	const sym = makeSymbol(t.typeName, kind, t, false);
+	sym.modulePath = modulePath;
+	t.sym = sym;
+	return t;
+}
+
 test "monoTypeKey primitives" {
 	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
 	assert monoTypeKey(num) == "number";
@@ -285,8 +286,19 @@ test "monoTypeKey array" {
 }
 
 test "monoTypeKey object" {
-	const obj: Type = { kind: TypeKind.Struct, typeName: "Box", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
-	assert monoTypeKey(obj) == "Box";
+	const obj = declaredAt({ kind: TypeKind.Struct, typeName: "Box", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> }, SymbolKind.Struct, "/p/box.ms");
+	assert monoTypeKey(obj) == "Box_" + hashToBase36("/p/box.ms");
+}
+
+test "monoTypeKey refuses a declared-looking name that has no symbol" {
+	const orphan: Type = { kind: TypeKind.Struct, typeName: "Box", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	let refused = "";
+	try {
+		monoTypeKey(orphan);
+	} catch (e) {
+		refused = e.message;
+	}
+	assert refused.contains("Box");
 }
 
 test "mangleMonoName single param" {
@@ -348,8 +360,8 @@ test "monoTypeKey unhandled kinds key apart" {
 
 test "monoTypeKey keys distinct types by identity" {
 	const f64: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
-	const meters: Type = { kind: TypeKind.Distinct, typeName: "Meters", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
-	const seconds: Type = { kind: TypeKind.Distinct, typeName: "Seconds", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const meters = declaredAt({ kind: TypeKind.Distinct, typeName: "Meters", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> }, SymbolKind.TypeAlias, "/p/m.ms");
+	const seconds = declaredAt({ kind: TypeKind.Distinct, typeName: "Seconds", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> }, SymbolKind.TypeAlias, "/p/m.ms");
 	assert monoTypeKey(meters) != monoTypeKey(seconds);
 	const metersA: Type = { kind: TypeKind.Distinct, typeName: "Meters", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
 	const metersB: Type = { kind: TypeKind.Distinct, typeName: "Meters", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
@@ -367,8 +379,8 @@ test "monoTypeKey keys distinct types by identity" {
 test "registry separates instantiations over distinct types" {
 	const reg = createMonoRegistry();
 	const f64: Type = { kind: TypeKind.Float64, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
-	const meters: Type = { kind: TypeKind.Distinct, typeName: "Meters", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
-	const seconds: Type = { kind: TypeKind.Distinct, typeName: "Seconds", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const meters = declaredAt({ kind: TypeKind.Distinct, typeName: "Meters", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> }, SymbolKind.TypeAlias, "/p/m.ms");
+	const seconds = declaredAt({ kind: TypeKind.Distinct, typeName: "Seconds", typeNames: [], typeChildren: [], typeReturn: f64, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> }, SymbolKind.TypeAlias, "/p/m.ms");
 	const params: string[] = ["T"];
 	monoRegister(reg, "show", params, [meters]);
 	monoRegister(reg, "show", params, [seconds]);

@@ -25,6 +25,7 @@ import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet } from "../context";
 import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr } from "../../checker/types";
+import { hasTypeIdentity } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily } from "../../codegen/c/types";
 import { liftedOp } from "../../codegen/c/types";
 import { opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
@@ -2425,7 +2426,7 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 		// dispatch, not as standalone `<Alias.Key>Copy` (which would be an
 		// invalid C identifier anyway).
 		if (t.kind == TypeKind.Struct && t.typeName != ""
-			&& t.typeName.indexOf(".") < 0) {
+			&& t.typeName.indexOf(".") < 0 && hasTypeIdentity(t)) {
 			ensureHooks(t.typeName, t, null as unknown as Type, t, false, lctx, loc);
 		} else if (t.kind == TypeKind.Struct && t.typeName == ""
 			&& t.typeNames.length > 0

@@ -6,7 +6,7 @@
 // The RcInfo result carries enough info to emit the correct AST calls.
 
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isPrimitiveUnionMember, isCountedRef, isUncountedPtrElement } from "../checker/types";
-import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
+import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
 import { attachedOpSym } from "../transform/util";
 import { makeCtx } from "../transform/testUtil";
@@ -508,6 +508,11 @@ test "function → Closure" {
 	assert (info.destroyFn as Symbol).name == "msClosureDestroy";
 }
 
+function declaredTestStruct(t: Type): Type {
+	t.sym = makeSymbol(t.typeName, SymbolKind.Struct, t, false);
+	return t;
+}
+
 function liftTestOps(t: Type, n: string): Type {
 	resetHookSyms();
 	liftedOp(t, AttachedOp.AttachedDestructor, n + "Destroy", null);
@@ -519,7 +524,7 @@ function liftTestOps(t: Type, n: string): Type {
 
 test "named object with managed field → Named" {
 	const ctx = makeCtx();
-	const info = classifyType(liftTestOps(createStruct("Token", ["value"], [stringType()], false), "Token"), ctx);
+	const info = classifyType(liftTestOps(declaredTestStruct(createStruct("Token", ["value"], [stringType()], false)), "Token"), ctx);
 	assert info.rcKind == RcKind.Named;
 	assert info.needsCleanup;
 	assert (info.destroyFn as Symbol).name == "TokenDestroy";
@@ -550,7 +555,7 @@ test "ref → Ref" {
 
 test "ref to self-cyclic struct → cyclic ops" {
 	const ctx = makeCtx();
-	const s = createStruct("CycNode", ["next"], [numberType()], false);
+	const s = declaredTestStruct(createStruct("CycNode", ["next"], [numberType()], false));
 	s.typeChildren[0] = createRef(s);
 	const info = classifyType(createRef(s), ctx);
 	assert info.rcKind == RcKind.Ref;
@@ -561,8 +566,8 @@ test "ref to self-cyclic struct → cyclic ops" {
 
 test "ref to leaf struct → plain ops" {
 	const ctx = makeCtx();
-	const inner = createStruct("LeafInner", ["value"], [numberType()], false);
-	const leaf = createStruct("LeafOuter", ["x", "child"], [numberType(), createRef(inner)], false);
+	const inner = declaredTestStruct(createStruct("LeafInner", ["value"], [numberType()], false));
+	const leaf = declaredTestStruct(createStruct("LeafOuter", ["x", "child"], [numberType(), createRef(inner)], false));
 	const info = classifyType(createRef(leaf), ctx);
 	assert info.rcKind == RcKind.Ref;
 	assert (info.destroyFn as Symbol).name == "msDecref";

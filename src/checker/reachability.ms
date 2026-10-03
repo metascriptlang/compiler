@@ -23,7 +23,7 @@ import {
 } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey } from "../codegen/c/types";
-import { hasFlag, SymbolFlag } from "./symbol";
+import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
 import { hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance, unwrapRef } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
@@ -974,6 +974,8 @@ test "nullable reference allocation keeps its concrete TypeInfo alive" {
 	assert allocation != null;
 	if (allocation == null) return;
 	const body = createStruct("Holder", ["label"], [stringType()], true);
+	body.sym = makeSymbol("Holder", SymbolKind.Interface, body, false);
+	body.sym.modulePath = "owner.ms";
 	allocation.nodeType = createUnion([createRef(body), nullType()]);
 	const alive = computeAliveSet([parsed.value], ["owner.ms"], "owner.ms", false, createModuleGraph());
 	assert aliveSetHas(alive, "owner.ms", "HolderTypeInfo");
@@ -991,8 +993,12 @@ test "a generated op is alive through the symbol that references it" {
 	assert parsed.ok;
 	if (!parsed.ok) return;
 	resetHookSyms();
-	const live = liftedOp(createStruct("HookLive", ["v"], [stringType()], true), AttachedOp.AttachedDestructor, "hookDestroy", null);
-	const dead = liftedOp(createStruct("HookDead", ["v"], [stringType()], true), AttachedOp.AttachedDestructor, "deadDestroy", null);
+	const liveBody = createStruct("HookLive", ["v"], [stringType()], true);
+	liveBody.sym = makeSymbol("HookLive", SymbolKind.Interface, liveBody, false);
+	const deadBody = createStruct("HookDead", ["v"], [stringType()], true);
+	deadBody.sym = makeSymbol("HookDead", SymbolKind.Interface, deadBody, false);
+	const live = liftedOp(liveBody, AttachedOp.AttachedDestructor, "hookDestroy", null);
+	const dead = liftedOp(deadBody, AttachedOp.AttachedDestructor, "deadDestroy", null);
 	const stmts = (parsed.value.data as ProgramData).programStmts;
 	stmts[1].resolvedSym = live;
 	stmts[2].resolvedSym = dead;
