@@ -19,7 +19,7 @@ test "macro node variant fit: the uncast literal still works" {
 declareWireShape(0);
 
 test "macro declaration wire: an empty interfaceExtends crosses the macro wire without a Nil walk" {
-	const s: WireShape = { a: 5 };
+	const s: SplicedShape = { a: 5 };
 	assert s.a === 5;
 }
 
