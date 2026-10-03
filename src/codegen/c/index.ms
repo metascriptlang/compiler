@@ -691,6 +691,7 @@ test "generic module emission preserves defining owner under permutations" {
 	node.nodeType = fnType;
 	node.resolvedSym = makeSymbol("generic__i32", SymbolKind.Function, fnType, false);
 	node.resolvedSym.modulePath = "owner.ms";
+	node.resolvedSym.instantiatedFrom = makeSymbol("generic", SymbolKind.Function, fnType, false);
 	pd.programStmts.push(node);
 	const ctx = null as unknown as CheckerContext;
 	const alive = createAliveSet();
