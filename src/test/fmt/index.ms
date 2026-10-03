@@ -38,6 +38,7 @@ import "./cases/inlineImport";
 import "./cases/enumComment";
 import "./cases/standaloneComment";
 import "./cases/interfaceFieldComment";
+import "./cases/structFieldDecorators";
 import "./cases/classFieldComment";
 import "./cases/propertyVisibility";
 import "./cases/methodVisibility";

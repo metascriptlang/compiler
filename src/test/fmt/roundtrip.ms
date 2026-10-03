@@ -21,7 +21,7 @@ import { Node, NodeKind,
 	MoveExprData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, DoWhileStmtData, BlockStmtData, FunctionDeclData,
 	VariableDeclData, ImportDeclData, ProgramData, ThrowStmtData, TryCatchStmtData,
-	FunctionExprData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, MethodDeclData,
+	FunctionExprData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, MacroInvocationData, ClassDeclData, ActorDeclData, PropertyDeclData, MethodDeclData,
 	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../../ast/node";
 import { formatNode } from "../../compiler/fmt/printer/index";
@@ -264,13 +264,19 @@ export function astShape(node: Node | null): string {
 			}
 			return k + "[" + d.enumName + "{" + mems + "}]";
 		},
-		NodeKind.InterfaceDecl => {
+		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = node.data as InterfaceDeclData;
 			const g = node.typeArg;
 			const generics = g !== "" ? "<" + g + ">" : "";
 			let fs = "";
 			for (let i = 0; i < d.interfaceFields.length; i = i + 1) {
 				if (i > 0) fs = fs + ",";
+				for (const dec of d.interfaceFieldDecorators[i]) {
+					const md = dec.data as MacroInvocationData;
+					fs = fs + "@" + md.macroName + "(";
+					for (const arg of md.macroArgs) fs = fs + astShape(arg) + ";";
+					fs = fs + ")";
+				}
 				fs = fs + d.interfaceFields[i] + ":" + d.interfaceFieldTypes[i];
 			}
 			return k + "[" + d.interfaceName + generics + "{" + fs + "}]";
