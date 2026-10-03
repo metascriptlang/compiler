@@ -17,7 +17,7 @@ import { makeA } from "./fixtures/sameNameHookA";
 import { makeB } from "./fixtures/sameNameHookB";
 
 function main(): void {
-	let t = 0;
+	let t: number = 0;
 	for (let i = 0; i < 3; i += 1) {
 		t += makeA();
 		t += makeB();

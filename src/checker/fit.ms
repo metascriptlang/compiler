@@ -2,7 +2,7 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, createNode, createNodeAt } from "../ast/node";
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
@@ -686,6 +686,32 @@ export function constantAdoptsFloat32(expr: Node): Node {
 	if (folded == null || !literalAdoptsFloat32(folded)) return none;
 	folded.nodeType = createPrimitive(TypeKind.Float32);
 	return folded;
+}
+
+export function compoundOperandRefuses(op: string, target: Type | null, operand: Type | null): boolean {
+	if (target == null || operand == null || !isNumeric(target) || !isNumeric(operand)) return false;
+	if (op == "<<=" || op == ">>=" || op == ">>>=" || op == "&&=" || op == "||=" || op == "??=" || op == "=" || compoundBase(op) == op) return false;
+	return numericConvRefuses(operand, target);
+}
+
+export function reportCompoundOperand(ctx: CheckerContext, op: string, target: Node, operand: Node, from: Type, to: Type): void {
+	const inferred = inferredFromInteger(target);
+	if (inferred == "") {
+		reportNumericConvConstAware(ctx, operand, from, to, " in '" + op + "'");
+		return;
+	}
+	addError(ctx, "implicit " + typeDisplayName(from) + " → " + typeDisplayName(to) + " conversion in '" + op + "' " + numericRefusalReason(from, to)
+		+ " — '" + inferred + "' is " + typeDisplayName(to) + ", inferred from its integer initializer; declare it '" + inferred + ": " + typeDisplayName(from)
+		+ "', or write an explicit 'as " + typeDisplayName(to) + "'", operand.location.line, operand.location.column);
+}
+
+function inferredFromInteger(target: Node): string {
+	if (target.kind != NodeKind.Identifier || target.resolvedSym == null || target.resolvedSym.declNode == null) return "";
+	const decl = target.resolvedSym.declNode;
+	if (decl.kind != NodeKind.VariableDecl) return "";
+	const vd = decl.data as VariableDeclData;
+	if (vd.declType != "" || vd.initializer == null || !isUntypedIntegerConstant(vd.initializer, 0)) return "";
+	return target.resolvedSym.name;
 }
 
 export function isFittingIntLiteral(expr: Node, target: Type): boolean {

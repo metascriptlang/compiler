@@ -130,7 +130,7 @@ test "for loop building arrays" {
 
 test "for..of summing numbers" {
 	const nums: number[] = [10, 20, 30, 40, 50];
-	let sum = 0;
+	let sum: number = 0;
 	for (const n of nums) {
 		sum += n;
 	}

@@ -22,7 +22,7 @@ function mul2(x: number): number { return x * 2; }
 function add1(x: number): number { return x + 1; }
 
 function sumArr(arr: number[]): number {
-	let total = 0;
+	let total: number = 0;
 	for (const n of arr) { total += n; }
 	return total;
 }
@@ -77,7 +77,7 @@ function orderTotal(order: Order): number {
 }
 
 function itemCount(order: Order): number {
-	let cnt = 0;
+	let cnt: number = 0;
 	let i = 0;
 	while (i < order.items.length) { cnt += order.items[i].qty; i += 1; }
 	return cnt;
@@ -193,7 +193,7 @@ function findFirstEven(arr: number[]): number {
 }
 
 function sumOddsOnly(arr: number[]): number {
-	let total = 0;
+	let total: number = 0;
 	let i = 0;
 	while (i < arr.length) {
 		if (arr[i] % 2 == 0) { i += 1; continue; }

@@ -66,7 +66,7 @@ function makeFormatter(prefix: string, width: number): (dummy: number) => string
 }
 
 function makeCounterPair(): CounterPair {
-	let count = 0;
+	let count: number = 0;
 	const incFn = (n: number): number => {
 		count += n;
 		return count;

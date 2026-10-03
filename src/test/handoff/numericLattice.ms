@@ -129,3 +129,13 @@ test "numeric lattice: a number goes into the one union member that holds it imp
 	assert hasError("let i: int32 = 3;\nfunction t(v: int64 | number): void {}\nt(i);\n", "fits both int64 and number");
 	assert hasError("let d: float64 = 0.1;\nconst f: float32 | string = d;\n", "may lose precision");
 }
+
+test "numeric lattice: a compound assignment converts its right operand as an assignment would" {
+	assert hasError("let i: int64 = 5000000000;\nlet x: int32 = 3;\nx += i;\n", "implicit int64 → int32 conversion in '+=' narrows — write an explicit 'as int32'");
+	assert hasError("let d: number = 0.1;\nlet x: float32 = 3;\nx *= d;\n", "implicit number → float32 conversion in '*=' may lose precision");
+	assert hasError("let x: int32 = 3;\nx += 0.5;\n", "in '+=' drops the fractional part of 0.5");
+	assert hasError("let x: int8 = 1;\nx += 300;\n", "in '+=' 300 is outside [-128, 127]");
+	assert hasError("let x: int32 = 1;\nlet y: uint32 = 2;\nx -= y;\n", "in '-='");
+	assert hasError("let total = 0;\nconst v: number = 1.5;\ntotal += v;\n", "implicit number → int32 conversion in '+=' may drop a fractional part or fall outside its range — 'total' is int32, inferred from its integer initializer; declare it 'total: number', or write an explicit 'as int32'");
+	assert errorCount("let u: uint8 = 0;\nu -= 1;\nlet h: int64 = 5;\nh *= 33;\nlet s: int32 = 1;\nlet w: int16 = 2;\ns += w;\nlet f: float32 = 1;\nlet k: int16 = 3;\nf += k;\nlet n: number = 1;\nn += s;\nlet t = \"a\";\nt += 1;\n") == 0;
+}

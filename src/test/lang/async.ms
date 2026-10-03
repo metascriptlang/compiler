@@ -29,7 +29,7 @@ async function asyncMax(a: number, b: number): Promise<number> {
 }
 
 async function asyncSum(arr: number[]): Promise<number> {
-	let total = 0;
+	let total: number = 0;
 	let i = 0;
 	while (i < arr.length) {
 		total += arr[i];
@@ -52,7 +52,7 @@ async function asyncFind(arr: number[], target: number): Promise<number> {
 // dispatcher while(1) without completing the return future → deadlock.
 // for..of is lowered to while BEFORE generatorLower so this hits the same fix path.
 async function asyncTakeUntil(arr: number[], stopAt: number): Promise<number> {
-	let sum = 0;
+	let sum: number = 0;
 	for (const v of arr) {
 		if (v == stopAt) break;
 		sum += v;
@@ -61,7 +61,7 @@ async function asyncTakeUntil(arr: number[], stopAt: number): Promise<number> {
 }
 
 async function asyncSumSkipping(arr: number[], skip: number): Promise<number> {
-	let total = 0;
+	let total: number = 0;
 	for (const v of arr) {
 		if (v == skip) continue;
 		total += v;
