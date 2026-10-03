@@ -28,6 +28,14 @@ typedef bool MS_BOOL;
 #define MS_FALSE false
 #define MS_NIL NULL
 
+#ifndef MS_LIB_PRIVATE
+#if defined(_WIN32)
+#define MS_LIB_PRIVATE
+#else
+#define MS_LIB_PRIVATE __attribute__((visibility("hidden")))
+#endif
+#endif
+
 /* ===== I/O ===== */
 
 void msPrintln(msString s);
