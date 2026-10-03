@@ -30,8 +30,8 @@ test "byteViews: a reinterpret between typed scalar pointers is refused on JS" {
 }
 
 test "byteViews: changing a span's element type is refused on JS" {
-	assert refused("function read(v: Span<P>): uint8 { const bytes = v as Span<uint8>; return bytes[0]; }\nconsole.log(read(values));\n",
-		"cannot convert Span<P> to Span<uint8>");
+	const out = js("function read(v: Span<P>): uint8 { const bytes = v as Span<uint8>; return bytes[0]; }\nconsole.log(read(values));\n");
+	assert out.startsWith("ERROR:") && out.includes("a view keeps its element type"), out.slice(0, 300);
 }
 
 test "byteViews: every spelling of the byte pointer type is refused on JS" {
@@ -73,4 +73,24 @@ test "byteViews: a span of references is not a pointer to its objects on either 
 	if (!c.ok) assert c.error.includes("the view stores reference slots"), c.error;
 	const out = compileProjectToJSWithStd([{ entryPath: "test/rows.ms", entrySource: source }], "test/rows.ms");
 	assert out.includes("the view stores reference slots"), out.slice(0, 300);
+}
+
+test "byteViews: pointer arithmetic and ordering are refused on JS" {
+	const at = "let xs: uint8[] = [1, 2, 3]; let p = xs[0] as Ptr<uint8>; const q = xs[1] as Ptr<uint8>;\n";
+	assert refusedOp(at + "console.log((p + 1)[0]);\n", "cannot apply '+' to a pointer");
+	assert refusedOp(at + "console.log(q - p);\n", "cannot apply '-' to a pointer");
+	assert refusedOp(at + "console.log(p < q);\n", "cannot apply '<' to a pointer");
+	assert refusedOp(at + "p += 1; console.log(p[0]);\n", "cannot apply '+=' to a pointer");
+	assert refusedOp(at + "console.log(p[1]);\n", "cannot index a pointer past the element it addresses");
+	assert refusedOp(at + "let i = 0; console.log(p[i]);\n", "cannot index a pointer past the element it addresses");
+}
+
+test "byteViews: pointer identity and the first element stay legal on JS" {
+	const out = js("let xs: uint8[] = [1, 2]; const p = xs[0] as Ptr<uint8>; const q = xs[0] as Ptr<uint8>;\nconsole.log(`${p == q} ${p[0]} ${p[]}`);\n");
+	assert !out.startsWith("ERROR:"), out.slice(0, 300);
+}
+
+function refusedOp(source: string, refusal: string): boolean {
+	const out = js(source);
+	return out.startsWith("ERROR:") && out.includes(refusal + " on JS: a location there has no address arithmetic");
 }
