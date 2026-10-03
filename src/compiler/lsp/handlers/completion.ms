@@ -25,7 +25,7 @@ import { CheckerContext, findModuleExports } from "../../../checker/context";
 import { handleDidOpen, handleDidChange } from "./lifecycle";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
 import { createTypeRef } from "../../../checker/types";
-import { Node, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, Type, SymbolKind } from "../../../ast/node";
+import { Node, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, Type, Symbol, SymbolKind } from "../../../ast/node";
 import { forEachChild } from "../../../ast/visitor";
 import { isMsModuleExtension, stripMsModuleExtension } from "../../../module/resolver";
 import {
@@ -80,7 +80,7 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 			if (entry.modulePath == path) continue;
 			for (const sym of entry.symbols) {
 				if (sym.name.length == 0 || inScopeSet.has(sym.name)) continue;
-				if (sym.extReceiverType.length > 0) continue;
+				if (sym.ext != null) continue;
 				const kindNum = lspCompletionItemKind(sym.sym.symbolKind, false);
 				items.push("{\"label\":" + lspJsonString(sym.name) + ",\"kind\":" + kindNum + ",\"sortText\":\"25\"}");
 			}
@@ -252,7 +252,7 @@ function lspCrossModuleCandidates(
 			const sym = entry.symbols[si];
 			if (sym.name.length == 0) continue;
 			// Skip extension methods — they only appear via member access
-			if (sym.extReceiverType.length > 0) continue;
+			if (sym.ext != null) continue;
 			// Prefix filter
 			if (prefix.length > 0 && prefix.length > sym.name.length) continue;
 			if (prefix.length > 0 && sym.name.slice(0, prefix.length) != prefix) continue;
@@ -430,6 +430,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	// Works for both simple (config.) and nested (config.fmt.) chains:
 	// scan backward from cursor to find the last `.`, then query the token before it.
 	let receiverType: Type | null = null;
+	let staticOwner: Symbol | null = null;
 	if (kind == SgCompletionKind.MemberAccess) {
 		// Find the dot position by scanning source backward from cursor
 		const lineOffset = sgGetLineOffset(source, pos.line);
@@ -444,11 +445,10 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 			const sg = sgQueryAtPosition(ctx, pos.line, dotCol - 1);
 			if (sg != null) {
 				receiverType = sg.symType;
-				// Static access on type name (e.g., Buffer.alloc, Result.ok):
-				// use "typeof TypeName" so extension registry matches static extensions.
 				if (sg.kind == SymbolKind.TypeAlias || sg.kind == SymbolKind.Class
 					|| sg.kind == SymbolKind.Actor || sg.kind == SymbolKind.Interface || sg.kind == SymbolKind.Struct) {
 					receiverType = createTypeRef(sg.name);
+					staticOwner = sg.sym;
 				}
 			}
 		}
@@ -470,7 +470,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 
 	// ObjectField handled early (before caches) — see above
 
-	const candidates = sgGetCompletionCandidates(ctx, kind, prefix, receiverType);
+	const candidates = sgGetCompletionCandidates(ctx, kind, prefix, receiverType, staticOwner);
 
 	// Cache the individual formatted items for future prefix filtering
 	const cachedItems = formatCompletionItemsArray(candidates, db, path);
@@ -695,7 +695,7 @@ function lspCompleteImportName(program: Node, source: string, pos: LspCursorPara
 	for (let i = 0; i < modExports.symbols.length; i = i + 1) {
 		const sym = modExports.symbols[i];
 		// Skip extension methods (they're auto-imported, not named imports)
-		if (sym.extReceiverType.length > 0) continue;
+		if (sym.ext != null) continue;
 		// Skip already-imported names
 		let alreadyImported = false;
 		for (let j = 0; j < existingNames.length; j = j + 1) {
