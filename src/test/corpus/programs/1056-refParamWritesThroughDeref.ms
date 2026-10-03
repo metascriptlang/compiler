@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot assign through a pointer or ref parameter at comptime: the Raiser VM writes in place only into a struct or an array
 // @stdout: ptr=11 30 31 retarget=2 ints=9 z points=9 4 3 bag=77 reads=4 2
 
 struct Cell { v: int32; }
