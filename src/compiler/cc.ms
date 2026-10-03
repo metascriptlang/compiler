@@ -719,6 +719,15 @@ function planDir(): string {
 	return _planDir;
 }
 
+export function toolchainHeaderRoot(ccOption: number, ccBinary: string): string {
+	const command = compilerInvocation(ccOption, ccBinary);
+	if (!command.ok || !isZigDriver(command.value)) return "";
+	let path = command.value.path;
+	const found = findOnPath(path);
+	if (found != "") path = found;
+	return `${dirname(path)}/lib`;
+}
+
 function isZigDriver(command: ToolCommand): boolean {
 	const name = basename(command.path).toLowerCase();
 	return (name == "zig" || name == "zig.exe") && command.args.length > 0 && (command.args[0] == "cc" || command.args[0] == "c++");

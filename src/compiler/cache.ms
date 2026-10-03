@@ -237,12 +237,22 @@ function nativeDependencyPaths(srcPath: string, compileCmd: string): string[] {
 }
 
 const _dependenciesByStamp = new HashMap<string, string>();
+let _ownedHeaderPrefix = "";
+
+export function setToolchainHeaderRoot(root: string): void {
+	_ownedHeaderPrefix = root == "" ? "" : foldedPath(`${root}/`);
+}
+
+function foldedPath(path: string): string {
+	const slashed = path.replaceAll("\\", "/");
+	return platform == "windows" ? slashed.toLowerCase() : slashed;
+}
 
 function dependencyPathsIn(path: string): string[] {
 	const stamp = changeStamp(path);
 	if (stamp == "") return parseDependencyFile(path);
 	const known = _dependenciesByStamp.get(path);
-	const prefix = `${stamp}|`;
+	const prefix = `${stamp}|${_ownedHeaderPrefix}|`;
 	if (known != null && known.startsWith(prefix)) {
 		const listed = known.substring(prefix.length, known.length);
 		return listed == "" ? [] : listed.split("\n");
@@ -256,39 +266,38 @@ function parseDependencyFile(path: string): string[] {
 	const result: string[] = [];
 	if (!exists(path)) return result;
 	const content = try readFile(path) catch "";
-	let colon = 0;
-	while (colon < content.length && content.charAt(colon) != ":") colon = colon + 1;
-	if (colon == content.length) return result;
-	let current = "";
+	const n = content.byteLength;
+	const colon = content.byteIndexOf(":");
+	if (colon < 0) return result;
+	let start = -1;
+	let escaped = false;
 	let i = colon + 1;
-	while (i < content.length) {
-		const c = content.charAt(i);
-		if (c == "\\") {
-			if (i + 1 < content.length && content.charAt(i + 1) == "\n") {
-				i = i + 2;
+	while (i < n) {
+		const b = content.byteAt(i);
+		if (b == "\\".code && i + 1 < n) {
+			const next = content.byteAt(i + 1);
+			if (next == "\n".code || next == "\r".code) {
+				if (start >= 0) pushDependency(result, dependencyToken(content.byteSlice(start, i), escaped));
+				start = -1;
+				escaped = false;
+				i = next == "\r".code && i + 2 < n && content.byteAt(i + 2) == "\n".code ? i + 3 : i + 2;
 				continue;
 			}
-			if (i + 2 < content.length && content.charAt(i + 1) == "\r" && content.charAt(i + 2) == "\n") {
-				i = i + 3;
-				continue;
-			}
-			if (i + 1 < content.length) {
-				current = current + content.charAt(i + 1);
-				i = i + 2;
-				continue;
-			}
+			if (start < 0) start = i;
+			escaped = true;
+			i = i + 2;
+			continue;
 		}
-		if (c == " " || c == "\t" || c == "\n" || c == "\r") {
-			if (current != "") {
-				result.push(current);
-				current = "";
-			}
-		} else {
-			current = current + c;
+		if (b == " ".code || b == "\t".code || b == "\n".code || b == "\r".code) {
+			if (start >= 0) pushDependency(result, dependencyToken(content.byteSlice(start, i), escaped));
+			start = -1;
+			escaped = false;
+		} else if (start < 0) {
+			start = i;
 		}
 		i = i + 1;
 	}
-	if (current != "") result.push(current);
+	if (start >= 0) pushDependency(result, dependencyToken(content.byteSlice(start, n), escaped));
 	return result;
 }
 
@@ -315,6 +324,28 @@ export function pchManifestCurrent(manifest: string): boolean {
 		if (tab <= 0 || hashFile(line.slice(0, tab)) != line.slice(tab + 1, line.length)) return false;
 	}
 	return true;
+}
+
+function pushDependency(result: string[], path: string): void {
+	if (_ownedHeaderPrefix != "" && foldedPath(path).startsWith(_ownedHeaderPrefix)) return;
+	result.push(path);
+}
+
+function dependencyToken(raw: string, escaped: boolean): string {
+	if (!escaped) return raw;
+	let out = "";
+	let from = 0;
+	let i = 0;
+	while (i < raw.byteLength) {
+		if (raw.byteAt(i) == "\\".code && i + 1 < raw.byteLength) {
+			out = out + raw.byteSlice(from, i);
+			from = i + 1;
+			i = i + 2;
+		} else {
+			i = i + 1;
+		}
+	}
+	return out + raw.byteSlice(from, raw.byteLength);
 }
 
 export function nativeDependenciesKnown(srcPath: string, compileCmd: string): boolean {
@@ -1391,6 +1422,30 @@ test "a dependency file rewritten to the same size at once lists its new paths" 
 	assert dependencyPathsIn(path).join(",") == "c.h,d.h";
 	remove(path);
 	assert dependencyPathsIn(path).length == 0;
+}
+
+test "a dependency file reads escaped spaces, line continuations and CRLF as clang writes them" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-deps-escape-${performance.now()}.d`;
+	writeFile(path, "native: C:/a.h \\\r\n  C:/my\\ dir/b.h \\\n  c\\\\d.h\te.h\r\n");
+	assert parseDependencyFile(path).join("|") == "C:/a.h|C:/my dir/b.h|c\\d.h|e.h";
+	writeFile(path, "native:\n");
+	assert parseDependencyFile(path).length == 0;
+	remove(path);
+}
+
+test "a dependency under the C compiler's own install is left to the compiler identity" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-deps-owned-${performance.now()}.d`;
+	writeFile(path, "native: C:/tools/Zig/lib/libc/include/stdio.h C:/proj/runtime/core/system.h C:/tools/zigx/lib/a.h\n");
+	setToolchainHeaderRoot("C:\\tools\\zig\\lib");
+	const owned = parseDependencyFile(path).join("|");
+	setToolchainHeaderRoot("");
+	const all = parseDependencyFile(path).join("|");
+	remove(path);
+	assert all == "C:/tools/Zig/lib/libc/include/stdio.h|C:/proj/runtime/core/system.h|C:/tools/zigx/lib/a.h";
+	if (platform == "windows") assert owned == "C:/proj/runtime/core/system.h|C:/tools/zigx/lib/a.h";
+	else assert owned == all;
 }
 
 test "a native source rewritten to the same size at once moves its fingerprint" {

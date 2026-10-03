@@ -60,11 +60,11 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto } from "./cc";
+import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot } from "./cc";
 import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp, writePchManifest, pchManifestCurrent } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -2411,6 +2411,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	// below runs too late for that, it only re-stamps the prelude context.
 	resolveTargetGcMode(opts);
 	resolveCC(opts);
+	setToolchainHeaderRoot(toolchainHeaderRoot(opts.ccCompiler, opts.ccBinary));
 	resolveLto(opts);
 	useDriverPlans(session.keep && opts.isHcr);
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
@@ -3235,6 +3236,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// binary will actually be built with.
 	resolveTargetGcMode(opts);
 	resolveCC(opts);
+	setToolchainHeaderRoot(toolchainHeaderRoot(opts.ccCompiler, opts.ccBinary));
 	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
 // Reference parity: global hook ownership registry shared across all modules.
