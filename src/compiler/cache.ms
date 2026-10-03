@@ -38,6 +38,13 @@ function hashFileContent(path: string): string {
 
 const _hashByStamp = new HashMap<string, string>();
 
+const SETTLED_SECONDS = 2;
+
+function settled(path: string): boolean {
+	const modified = modifiedTime(path);
+	return modified >= 0 && modified <= nowSeconds() - SETTLED_SECONDS;
+}
+
 function hashFile(path: string): string {
 	const stamp = changeStamp(path);
 	if (stamp == "") return hashFileContent(path);
@@ -45,7 +52,7 @@ function hashFile(path: string): string {
 	const prefix = `${stamp}|`;
 	if (known != null && known.startsWith(prefix)) return known.substring(prefix.length, known.length);
 	const hash = hashFileContent(path);
-	_hashByStamp.set(path, `${prefix}${hash}`);
+	if (settled(path)) _hashByStamp.set(path, `${prefix}${hash}`);
 	return hash;
 }
 
@@ -241,7 +248,7 @@ function dependencyPathsIn(path: string): string[] {
 		return listed == "" ? [] : listed.split("\n");
 	}
 	const paths = parseDependencyFile(path);
-	_dependenciesByStamp.set(path, `${prefix}${paths.join("\n")}`);
+	if (settled(path)) _dependenciesByStamp.set(path, `${prefix}${paths.join("\n")}`);
 	return paths;
 }
 
@@ -360,7 +367,7 @@ function sourceIdentity(path: string): string {
 	const prefix = `${stamp}|`;
 	if (known != null && known.startsWith(prefix)) return known.substring(prefix.length, known.length);
 	const identity = readSourceIdentity(path);
-	_sourceIdentityByStamp.set(path, `${prefix}${identity}`);
+	if (settled(path)) _sourceIdentityByStamp.set(path, `${prefix}${identity}`);
 	return identity;
 }
 
@@ -1354,6 +1361,26 @@ test "a native source rewritten to the same size at once moves its fingerprint" 
 
 test "a link output rewritten to the same size at once is not taken as cached" {
 	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+test "a file written within the settle window is not remembered by its change stamp" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-settle-${performance.now()}.d`;
+	writeFile(path, "native: a.h\n");
+	hashFile(path);
+	dependencyPathsIn(path);
+	sourceIdentity(path);
+	assert _hashByStamp.get(path) == null;
+	assert _dependenciesByStamp.get(path) == null;
+	assert _sourceIdentityByStamp.get(path) == null;
+	remove(path);
+}
+
+test "a settled file is remembered by its change stamp" {
+	const path = join(resolveRuntimeDir(), "runtime/core/system.h");
+	assert settled(path);
+	hashFile(path);
+	assert _hashByStamp.get(path) != null;
+}
+
 	const output = `${base}/msc-link-output-${performance.now()}.bin`;
 	writeFile(output, "first");
 	writeLinkCache([], [], "-flags", output, output);
