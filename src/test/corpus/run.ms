@@ -747,10 +747,9 @@ function firstLineContaining(text: string, needle: string): string {
 // exempt from the balance rule).
 // Balance rule: fail iff destroy > 0 and (alloc - destroy) differs from the
 // program's declared @ledger-slack for that type (default 0). Slack is
-// EXACT-match: values still alive at exit (module-level globals are not
-// destroyed at exit — probe-verified 2026-07-29) must be declared per type,
-// and if the compiler ever starts destroying them the unused slack goes red
-// like an XPASS. destroy==0 may be a NULL-destroyFn type (msFuture) — that
+// EXACT-match: values still alive at exit must be declared per type, and if
+// the compiler ever starts destroying them the unused slack goes red like an
+// XPASS. destroy==0 may be a NULL-destroyFn type (msFuture) — that
 // blind spot belongs to the RSS lane.
 function ledgerSlackFor(spec: Spec, typeName: string): int32 {
 	for (let i = 0; i < spec.slackTypes.length; i = i + 1) {

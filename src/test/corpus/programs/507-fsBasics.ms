@@ -1,7 +1,4 @@
 // @xfail(raiser): error: Property 'sort' does not exist on type 'Array'
-// @ledger-slack(msStringArrayRefCell): 2
-// std/process argv module-init allocates 2 string arrays never destroyed at
-// exit — TESTGAP T6 (probed: bare `import { argv }` program shows 2/0).
 // Parity program — std fs I/O floor: write → stat → read roundtrip, append,
 // copy, lines roundtrip, dir tree (ensureDir/readDir/rename/remove/removeAll),
 // and the Result error path (readFile of a missing path → IoErrorKind).

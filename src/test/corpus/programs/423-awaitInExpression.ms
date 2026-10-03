@@ -1,6 +1,3 @@
-// @ledger-slack(Box): 1
-// @ledger-slack(Pair): 1
-// @ledger-slack(int32_tArrayRefCell): 2
 let trace = "";
 
 function side(tag: string, v: int32): int32 {

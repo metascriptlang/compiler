@@ -1,5 +1,4 @@
 // @xfail(raiser): error: Cannot resolve module 'std/core/buffer'
-// @ledger-slack(msStringArrayRefCell): 2
 // @stdout: {"name":"x","n":3,"c":"Blue","s":"Inactive","cs":["Green","Red"]}
 // note: every lane shares the codec macros, so each check also grades itself into the exit code.
 import { exit } from "std/process";
