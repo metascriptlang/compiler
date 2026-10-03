@@ -1,9 +1,3 @@
-// Symptom: a module const used in a match guard kept the writable C global under --os=solana
-// (SBF "relocation refers to a symbol in a discarded section"), while the same const in an
-// arm body or an if condition folded.
-// Root cause: mapChildren/forEachChild never traversed MatchCaseData.caseGuard, so every
-// walker-driven pass — constant folding included — was blind to guard expressions.
-// Fix: walk caseGuard in src/transform/walker.ms and src/ast/visitor.ms.
 import { compileToC } from "../helpers";
 
 const CAP615: int32 = 12000;
@@ -26,14 +20,14 @@ function picked615(): int32 {
 	return picked;
 }
 
-test "bug639: guard consts cap at each level" {
+test "matchGuardConstFold: guard consts cap at each level" {
 	assert capped615(20000) == 12000;
 	assert capped615(7000) == 6000;
 	assert capped615(5) == 5;
 	assert picked615() == 6000;
 }
 
-test "bug639: every guard use of a module const folds, leaving only the definition" {
+test "matchGuardConstFold: every guard use of a module const folds, leaving only the definition" {
 	const src = `
 const FCAP615: int32 = 12000;
 const FNESTED615: int32 = FCAP615 / 2;

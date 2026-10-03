@@ -1,13 +1,3 @@
-// bug685 — bindSym of a generic function crashed msc
-//
-// Symptom:    a macro emitting `callee: bindSym("pick")` for a generic `pick` exited 139 with
-//             no output when the call site did not import `pick`; with the import it was refused.
-// Root cause: the literal path refused generic symbols and then left `bindSym("pick")` in the body,
-//             so the run-time lookup ran in the call site's scope, missed, returned null, and the
-//             null callee reached the checker.
-// Fix:        a literal bound symbol may be generic and the call site instantiates it; a literal
-//             that does not resolve stops the expansion; a null callee is an error, not a crash.
-
 import { compileProjectToCWithStd, compileProjectToJSWithStd, checkProjectDiagnostics, MapEntry } from "../helpers";
 
 function lib(binding: string): string {
@@ -41,7 +31,7 @@ const text: string = "a";
 console.log(first(value), first(text), first<int32>(value));
 `;
 
-test "bug685: a literal bindSym of a generic instantiates at the call site on C and JS" {
+test "bindSymGeneric: a literal bindSym of a generic instantiates at the call site on C and JS" {
 	const entries = project(literalBinding, genericCall);
 	const c = compileProjectToCWithStd(entries, "test/main.ms");
 	assert c.indexOf("ERROR", 0) < 0, c;
@@ -50,7 +40,7 @@ test "bug685: a literal bindSym of a generic instantiates at the call site on C 
 	assert js.indexOf("ERROR", 0) < 0, js;
 }
 
-test "bug685: a computed bindSym that misses is an error at the call, not a crash" {
+test "bindSymGeneric: a computed bindSym that misses is an error at the call, not a crash" {
 	const main = `
 import { first } from "./lib";
 const value: int32 = 4;
@@ -67,7 +57,7 @@ console.log(first(value));
 	assert found.length == 0, found.join("\n");
 }
 
-test "bug685: an unresolved literal bindSym is one error naming it" {
+test "bindSymGeneric: an unresolved literal bindSym is one error naming it" {
 	const main = `
 import { first } from "./lib";
 const value: int32 = 4;

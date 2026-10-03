@@ -1,14 +1,3 @@
-// bug688 — names used only at compile time were reported "imported but never used"
-//
-// Symptom:    an import read only in a `@comptime` block, as a macro's return type, through a
-//             literal `bindSym("name")`, or as a macro call's type argument was reported unused,
-//             although removing it broke the program (every std/solana program printed ~24).
-// Root cause: those positions are evaluated or baked without the checker visiting their names, so
-//             nothing marked the imported symbols used.
-// Fix:        the declaration walk marks a macro's return type and its literal bindSym names, a
-//             `@comptime` block's names are marked before it is evaluated, and a macro call's type
-//             argument is resolved at the call site.
-
 import { checkProjectDiagnostics, MapEntry } from "../helpers";
 
 function occurrences(messages: string[], text: string): int32 {
@@ -23,7 +12,7 @@ const helperModule = `export function helper(n: int32): int32 { return n * 2; }
 export function other(): int32 { return 1; }
 `;
 
-test "bug688: a macro's return type and a literal bindSym name count as uses" {
+test "compileTimeNameUse: a macro's return type and a literal bindSym name count as uses" {
 	const entries: MapEntry[] = [
 		{ entryPath: "src/helpers.ms", entrySource: helperModule },
 		{ entryPath: "src/lib.ms", entrySource: `import { Node, NodeKind, bindSym } from "std/meta";
@@ -41,7 +30,7 @@ export macro twice(): Node {
 	assert occurrences(messages, "'helper' is imported but never used") == 0, messages.join("\n");
 }
 
-test "bug688: a @comptime block and a macro type argument count as uses; a dead import still warns" {
+test "compileTimeNameUse: a @comptime block and a macro type argument count as uses; a dead import still warns" {
 	const entries: MapEntry[] = [
 		{ entryPath: "src/helpers.ms", entrySource: helperModule },
 		{ entryPath: "src/ops.ms", entrySource: `export enum Op { A, B, C }
