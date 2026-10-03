@@ -1626,7 +1626,7 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 		NodeKind.SwitchStmt => processSwitch(stmt, dctx, sloc),
 		NodeKind.BreakStmt | NodeKind.ContinueStmt => { setNeedsTryAll(dctx); return stmt; },
 		NodeKind.ThrowStmt => processThrow(stmt, dctx),
-		NodeKind.ExportDecl => processExport(stmt, dctx, sloc),
+		NodeKind.ExportDecl => processExport(stmt, idx, stmts, dctx, sloc),
 		NodeKind.ClassDecl => processClass(stmt, dctx, sloc),
 		NodeKind.ArrowFunction => processArrow(stmt, dctx, sloc),
 		NodeKind.FunctionExpr => processFuncExpr(stmt, dctx, sloc),
@@ -2462,10 +2462,18 @@ function processSwitch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 	return stmt;
 }
 
-function processExport(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
+function processExport(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as ExportDeclData;
 	if (d.exportedDecl != null && d.exportedDecl.kind == NodeKind.FunctionDecl) {
 		processFuncDecl(d.exportedDecl, dctx, loc);
+	}
+	if (d.exportedDecl != null && d.exportedDecl.kind == NodeKind.VariableDecl) {
+		const processed = processVarDecl(d.exportedDecl, idx, stmts, dctx, loc);
+		if (processed.kind != NodeKind.VariableDecl) {
+			dctx.ctx.errors.push(`DRC: exported variable '${(d.exportedDecl.data as VariableDeclData).declName}' needs a ${processed.kind} to initialize, which an export cannot hold`);
+			return stmt;
+		}
+		d.exportedDecl = processed;
 	}
 	return stmt;
 }
@@ -2518,16 +2526,22 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	if (program.kind != NodeKind.Program) return program;
 	const d = program.data as ProgramData;
 
-	// Module-level scope: process statements but skip cleanup.
-	// Reference parity: globals at top scope
-	// (s.parent == nil) go to graph.globalDestructors, NOT scope.final.
-	// Module globals persist for the program's lifetime — Init000 must not destroy them.
+	// Reference parity: globals at top scope (s.parent == nil) go to
+	// graph.globalDestructors, destroyed in reverse at program end; the top
+	// scope's other variables go to scope.final, destroyed where its body ends.
 	pushScope(dctx, false, false);
 	dctx.finallyProtectedVars = collectFinallyVars(program);
 	dctx.currentFuncBody = program;
 	clearCfgCache(dctx.cfgCache);
 	d.programStmts = processStmtList(d.programStmts, dctx, program.location);
-	popScope(dctx); // discard cleanup — module globals outlive Init000
+	const moduleScope = popScope(dctx);
+	for (const s of generateCleanup(moduleScope, program.location)) d.programStmts.push(s);
+	if (dctx.globalsToDestroy.length > 0) {
+		const exitScope: DrcScope = { varsToCleanup: dctx.globalsToDestroy, wasMoved: [], preStmts: [], pendingStmts: [], needsTry: false, isLoop: false, isFunction: false };
+		const destroys = makeBlock(generateCleanup(exitScope, program.location), program.location);
+		destroys.flags = destroys.flags.incl(NodeFlag.GlobalDestroys);
+		d.programStmts.push(destroys);
+	}
 
 	return program;
 }

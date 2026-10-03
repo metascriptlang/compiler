@@ -77,6 +77,7 @@ export interface DrcContext {
 	parkedInitDepth: number;        // depth inside an AwaitHandle decl's initializer walk — the
 	                                // initializer call is parked on (msWaitForReady), so actor proxy
 	                                // args there stay borrows instead of SEND-class consumption
+	globalsToDestroy: VarInfo[];
 }
 
 // ===== Constructors =====
@@ -98,6 +99,7 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		capturedNodes: [],
 		capturedSyms: [],
 		rcMemo: new HashMap<Type, RcInfo>(),
+		globalsToDestroy: [],
 	};
 }
 
@@ -164,9 +166,11 @@ export function registerVar(dctx: DrcContext, rcInfo: RcInfo, isCursor: boolean,
 	// join this scope's cleanup list — destroying it at scope exit frees the value
 	// for all later callers. Reference parity: the decision is made at the
 	// declaration, which routes a global's destroy to a program-exit list instead
-	// of the scope's final section; module globals are never destroyed here, so
-	// declining to register is that same routing.
-	if (hasFlag(sym, SymbolFlag.Global)) return;
+	// of the scope's final section.
+	if (hasFlag(sym, SymbolFlag.Global)) {
+		dctx.globalsToDestroy.push({ sym, rcInfo, isCursor: false, isInitialized: true });
+		return;
+	}
 	const scope = currentScope(dctx);
 	const info: VarInfo = { sym, rcInfo, isCursor: false, isInitialized: true };
 	scope.varsToCleanup.push(info);

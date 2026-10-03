@@ -32,6 +32,7 @@ export class CModuleOutput {
 	modulePath: string = "";
 	hasDatInit: boolean = false;
 	hasInit: boolean = false;
+	hasDeinit: boolean = false;
 	errors: CheckerError[] = [];
 }
 
@@ -196,12 +197,15 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 
 	const datContent = extract(sec(g, CSection.DatInit));
 	const initContent = extract(sec(g, CSection.ModuleInit));
+	const deinitContent = extract(sec(g, CSection.ModuleDeinit));
 	output.hasDatInit = datContent.length > 0;
 	output.hasInit = initContent.length > 0;
+	output.hasDeinit = deinitContent.length > 0;
 
 	// Clear sections (re-emitted into Procs)
 	sec(g, CSection.DatInit).parts = [];
 	sec(g, CSection.ModuleInit).parts = [];
+	sec(g, CSection.ModuleDeinit).parts = [];
 
 	const hdrs = sec(g, CSection.ProcHeaders);
 	const procs = sec(g, CSection.Procs);
@@ -242,6 +246,23 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 	}
 	addLine(procs, "}");
 	addNewline(procs);
+
+	if (!output.hasDeinit) return;
+	const deinitName = `${modName}__Deinit000`;
+	addLine(hdrs, `void ${deinitName}(void);`);
+	addLine(procs, `void ${deinitName}(void) {`);
+	if (!skipGuard) {
+		addLine(procs, `  static MS_BOOL ${deinitName}_guard_ = 0;`);
+		addLine(procs, `  if (${deinitName}_guard_) return;`);
+		addLine(procs, `  ${deinitName}_guard_ = 1;`);
+	}
+	add(procs, deinitContent);
+	if (g.deinitProc.beforeRetNeeded) {
+		addLine(procs, "  BeforeRet_: ;");
+		g.deinitProc.beforeRetNeeded = false;
+	}
+	addLine(procs, "}");
+	addNewline(procs);
 }
 
 // ===== Global Init Dispatcher =====
@@ -259,9 +280,11 @@ export function genProjectDispatcher(
 	const b = createBuilder();
 	const emptyDatInits = new HashSet<string>();
 	const emptyInits = new HashSet<string>();
+	const deinits = new HashSet<string>();
 	for (const output of outputs) {
 		if (!output.hasDatInit) emptyDatInits.add(output.modulePath);
 		if (!output.hasInit) emptyInits.add(output.modulePath);
+		if (output.hasDeinit) deinits.add(output.modulePath);
 	}
 
 	// Include stdint.h for int32_t, drc.h for msOrcCollect, system.h for msTestErrorFlag + async futures
@@ -275,6 +298,7 @@ export function genProjectDispatcher(
 		const modName = mangleModuleName(mp);
 		if (!emptyDatInits.has(mp)) addLine(b, `void ${modName}__DatInit000(void);`);
 		if (!emptyInits.has(mp) || mp == entryPath) addLine(b, `void ${modName}__Init000(void);`);
+		if (deinits.has(mp)) addLine(b, `void ${modName}__Deinit000(void);`);
 	}
 	addNewline(b);
 
@@ -320,6 +344,20 @@ export function genProjectDispatcher(
 	addLine(b, "}");
 	addNewline(b);
 
+	addLine(b, "void MsDestroyGlobals(void) {");
+	b.indent += 1;
+	if (deinits.has(entryPath)) addLine(b, `${mangleModuleName(entryPath)}__Deinit000();`);
+	let di = modulePaths.length;
+	while (di > 0) {
+		di -= 1;
+		const mp = modulePaths[di];
+		if (mp != entryPath && deinits.has(mp)) addLine(b, `${mangleModuleName(mp)}__Deinit000();`);
+	}
+	addLine(b, "msOrcCollect();");
+	b.indent -= 1;
+	addLine(b, "}");
+	addNewline(b);
+
 	// Library output: the host owns the entry point and calls MsMain() — emit no
 	// main wrapper, whatever the target OS.
 	if (noMain) return extract(b);
@@ -328,6 +366,7 @@ export function genProjectDispatcher(
 		"bare" => {
 			addLine(b, "int main(void) {");
 			addLine(b, "  MsMain();");
+			addLine(b, "  MsDestroyGlobals();");
 			addLine(b, "  return msProgramResult;");
 			addLine(b, "}");
 		},
@@ -344,6 +383,7 @@ export function genProjectDispatcher(
 			addLine(b, "  MsMain();");
 			addLine(b, "  msDrainUntilIdle();");
 			addLine(b, "  if (msReportOrphanFailures()) msProgramResult = 1;");
+			addLine(b, "  MsDestroyGlobals();");
 			addLine(b, "  return msProgramResult;");
 			addLine(b, "}");
 		},
@@ -359,6 +399,7 @@ export function genProjectDispatcher(
 			addLine(b, "  MsMain();");
 			addLine(b, "  msDrainUntilIdle();");
 			addLine(b, "  if (msReportOrphanFailures()) msProgramResult = 1;");
+			addLine(b, "  MsDestroyGlobals();");
 			addLine(b, "  return msProgramResult;");
 			addLine(b, "}");
 		},
@@ -493,6 +534,33 @@ test "dispatcher follows dependency order regardless of result order" {
 	assert original.indexOf(`${depName}__Init000();`) < original.indexOf(`${entryName}__Init000();`);
 	const bareEntry = genProjectDispatcher([empty.modulePath], empty.modulePath, "", true, [empty]);
 	assert bareEntry.indexOf(`${emptyName}__Init000();`) >= 0;
+}
+
+test "dispatcher destroys globals after the drain, entry module first then dependencies in reverse" {
+	const dep = new CModuleOutput();
+	dep.modulePath = "test/dep";
+	dep.hasInit = true;
+	dep.hasDeinit = true;
+	const mid = new CModuleOutput();
+	mid.modulePath = "test/mid";
+	mid.hasDeinit = true;
+	const quiet = new CModuleOutput();
+	quiet.modulePath = "test/quiet";
+	quiet.hasInit = true;
+	const entry = new CModuleOutput();
+	entry.modulePath = "test/entry";
+	entry.hasInit = true;
+	entry.hasDeinit = true;
+	const paths = [dep.modulePath, mid.modulePath, quiet.modulePath, entry.modulePath];
+	const out = genProjectDispatcher(paths, entry.modulePath, "", false, [dep, mid, quiet, entry]);
+	const entryCall = out.indexOf(`${mangleModuleName(entry.modulePath)}__Deinit000();`);
+	const midCall = out.indexOf(`${mangleModuleName(mid.modulePath)}__Deinit000();`);
+	const depCall = out.indexOf(`${mangleModuleName(dep.modulePath)}__Deinit000();`);
+	assert entryCall >= 0 && entryCall < midCall && midCall < depCall;
+	assert out.indexOf(`${mangleModuleName(quiet.modulePath)}__Deinit000`) < 0;
+	assert out.indexOf("msReportOrphanFailures()") < out.indexOf("  MsDestroyGlobals();");
+	const lib = genProjectDispatcher(paths, entry.modulePath, "", true, [dep, mid, quiet, entry]);
+	assert lib.indexOf("void MsDestroyGlobals(void) {") >= 0 && lib.indexOf("int main") < 0;
 }
 
 test "headers include stdint" {
