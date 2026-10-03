@@ -61,7 +61,7 @@ static inline msRefHeader* msHeader(void* p) {
 #if defined(MS_FREESTANDING_LIBC)
 
 void* msArenaAlloc(size_t size);
-void* msArenaRealloc(void* old, size_t old_size, size_t new_size);
+void* msRealloc(void* old, size_t old_size, size_t new_size);
 void msArenaReset(void);
 
 #elif defined(MSOS_SOLANA)
@@ -170,7 +170,7 @@ static inline void* msArenaAlloc(size_t size) {
 #endif
 
 #ifndef MS_FREESTANDING_LIBC
-static inline void* msArenaRealloc(void* old, size_t old_size, size_t new_size) {
+static inline void* msRealloc(void* old, size_t old_size, size_t new_size) {
     void* p = msArenaAlloc(new_size);
     if (p && old && old_size > 0) {
         size_t copy_size = old_size < new_size ? old_size : new_size;
@@ -298,16 +298,14 @@ static inline void qsort(void* base, size_t count, size_t size, int (*cmp)(const
 }
 
 /* Redirect libc allocator to arena */
-static inline void* _ms_manual_realloc(void* old, size_t new_size) {
-    if (!old) return msArenaAlloc(new_size);
-    return msArenaRealloc(old, new_size, new_size);
-}
 static inline void* _ms_manual_calloc(size_t n, size_t size) {
     return msArenaAlloc(n * size);
 }
+void* msReallocNeedsOldSize(void* old, size_t size)
+    __attribute__((error("realloc has no old size in an arena build: call msRealloc(old, oldSize, newSize)")));
 #define malloc(s)     msArenaAlloc(s)
 #define calloc(n, s)  _ms_manual_calloc((n), (s))
-#define realloc(p, s) _ms_manual_realloc((p), (s))
+#define realloc(p, s) msReallocNeedsOldSize((p), (s))
 #define free(p)       ((void)(p))
 
 #elif defined(MS_FREESTANDING_LIBC)
@@ -330,16 +328,14 @@ static inline void* _ms_manual_calloc(size_t n, size_t size) {
 /* Redirect libc allocator to arena — only in freestanding mode.
    System headers already parsed above, so macros only affect
    function bodies in .h inlines and .c files compiled with -include. */
-static inline void* _ms_manual_realloc(void* old, size_t new_size) {
-    if (!old) return msArenaAlloc(new_size);
-    return msArenaRealloc(old, new_size, new_size);
-}
 static inline void* _ms_manual_calloc(size_t n, size_t size) {
     return msArenaAlloc(n * size);
 }
+void* msReallocNeedsOldSize(void* old, size_t size)
+    __attribute__((error("realloc has no old size in an arena build: call msRealloc(old, oldSize, newSize)")));
 #define malloc(s)     msArenaAlloc(s)
 #define calloc(n, s)  _ms_manual_calloc((n), (s))
-#define realloc(p, s) _ms_manual_realloc((p), (s))
+#define realloc(p, s) msReallocNeedsOldSize((p), (s))
 #define free(p)       ((void)(p))
 
 #else

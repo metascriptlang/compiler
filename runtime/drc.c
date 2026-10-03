@@ -152,7 +152,7 @@ void msCellSeqInit(msCellSeq* s) {
 
 static void msCellSeqGrow(msCellSeq* s) {
 	int32_t newCap = s->cap <= 0 ? 16 : s->cap * 2;
-	s->data = (msCell*)realloc(s->data, (size_t)newCap * sizeof(msCell));
+	s->data = (msCell*)msRealloc(s->data, (size_t)s->cap * sizeof(msCell), (size_t)newCap * sizeof(msCell));
 	s->cap = newCap;
 }
 

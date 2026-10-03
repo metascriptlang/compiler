@@ -73,7 +73,7 @@ void* msArrayPrepareAdd(int64_t len, void* p, int64_t addLen, int64_t elemSize) 
 
 	int64_t oldSize = headerSize + oldCap * elemSize;
 	int64_t newSize = headerSize + newCap * elemSize;
-	msArrayPayloadBase* q = (msArrayPayloadBase*)realloc(p, newSize);
+	msArrayPayloadBase* q = (msArrayPayloadBase*)msRealloc(p, oldSize, newSize);
 	if (q) {
 		if (newSize > oldSize) {
 			memset((char*)q + oldSize, 0, newSize - oldSize);
@@ -259,8 +259,9 @@ void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elem
 	int64_t newCap = msArrayResizeCap(oldCap);
 	if (newCap < needed) newCap = needed;
 
+	int64_t oldSize = headerSize + oldCap * elemSize;
 	int64_t newSize = headerSize + newCap * elemSize;
-	msArrayPayloadBase* q = (msArrayPayloadBase*)realloc(p, newSize);
+	msArrayPayloadBase* q = (msArrayPayloadBase*)msRealloc(p, oldSize, newSize);
 	if (q) q->cap = newCap;
 	return q;
 }

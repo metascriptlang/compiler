@@ -189,6 +189,11 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 	return (void*)(h + 1);
 }
 
+static inline void* msRealloc(void* old, size_t oldSize, size_t newSize) {
+	(void)oldSize;
+	return realloc(old, newSize);
+}
+
 /* Arc<T> box: msAllocTyped, but starts at rc = MS_RC_INCREMENT (sole owner).
  * msAtomicDecRefIsLast frees when fetch_sub sees the old rc == MS_RC_INCREMENT
  * (Rust Arc convention) — an Arc must NOT start at the rc=0 "sole owner" of the

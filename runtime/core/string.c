@@ -51,8 +51,8 @@ static msStrPayload* allocPayload0(int64_t cap) {
 	return p;
 }
 
-static msStrPayload* reallocPayload(msStrPayload* old, int64_t newCap) {
-	msStrPayload* p = (msStrPayload*)realloc(old, msStrContentSize(newCap));
+static msStrPayload* reallocPayload(msStrPayload* old, int64_t oldCap, int64_t newCap) {
+	msStrPayload* p = (msStrPayload*)msRealloc(old, msStrContentSize(oldCap), msStrContentSize(newCap));
 	if (p) p->cap = newCap;
 	return p;
 }
@@ -60,7 +60,7 @@ static msStrPayload* reallocPayload(msStrPayload* old, int64_t newCap) {
 /* Zeroing realloc — zeros only [oldCap+1..newCap) region.
    Standard reference implementation: reallocPayload0(old, contentSize(oldLen), contentSize(newLen)) */
 static msStrPayload* reallocPayload0(msStrPayload* old, int64_t oldCap, int64_t newCap) {
-	msStrPayload* p = (msStrPayload*)realloc(old, msStrContentSize(newCap));
+	msStrPayload* p = (msStrPayload*)msRealloc(old, msStrContentSize(oldCap), msStrContentSize(newCap));
 	if (p) {
 		p->cap = newCap;
 		if (newCap > oldCap) {
@@ -276,7 +276,7 @@ void msStringPrepareAdd(msString* s, int64_t addLen) {
 			int64_t newCap = newLen;
 			int64_t resized = msStringResizeCap(oldCap);
 			if (resized > newCap) newCap = resized;
-			s->p = reallocPayload(s->p, newCap);
+			s->p = reallocPayload(s->p, oldCap, newCap);
 			/* Zero tail after growth — standard reference patterns */
 			if (s->p && newCap > s->len) {
 				memset(s->p->data + s->len + 1, 0, newCap - s->len);

@@ -161,12 +161,6 @@ void* msArenaAlloc(size_t size) {
     return memset((void*)start, 0, size);
 }
 
-void* msArenaRealloc(void* old, size_t oldSize, size_t newSize) {
-    void* ptr = msArenaAlloc(newSize);
-    if (ptr && old) memcpy(ptr, old, oldSize < newSize ? oldSize : newSize);
-    return ptr;
-}
-
 void* malloc(size_t size) {
     if (size > SIZE_MAX - sizeof(msAllocationHeader)) return NULL;
     msAllocationHeader* header = msArenaAlloc(sizeof(msAllocationHeader) + size);
@@ -182,13 +176,17 @@ void* calloc(size_t count, size_t size) {
 
 void free(void* ptr) { (void)ptr; }
 
+void* msRealloc(void* old, size_t oldSize, size_t newSize) {
+    void* ptr = malloc(newSize);
+    if (ptr && old) memcpy(ptr, old, oldSize < newSize ? oldSize : newSize);
+    return ptr;
+}
+
 void* realloc(void* old, size_t size) {
     if (!old) return malloc(size);
     if (!size) return NULL;
     const msAllocationHeader* header = (const msAllocationHeader*)old - 1;
-    void* ptr = malloc(size);
-    if (ptr) memcpy(ptr, old, header->size < size ? header->size : size);
-    return ptr;
+    return msRealloc(old, header->size, size);
 }
 
 _Noreturn void abort(void) { __builtin_trap(); }
