@@ -26,9 +26,20 @@ function numericReference(value: float64): VariantRef<float64, string> { return 
 
 function textError(error: string): VariantRef<float64, string> { return { kind: ReferenceKind.Err, error: error }; }
 
-function textReference(value: string): VariantRef<string, float64> { return { kind: ReferenceKind.Ok, value: value }; }
+type PayloadBody<T, E> = match (kind: ReferenceKind) {
+	ReferenceKind.Ok => { value: T },
+	ReferenceKind.Err => { error: E },
+};
 
-function numericError(error: float64): VariantRef<string, float64> { return { kind: ReferenceKind.Err, error: error }; }
+type PayloadRef<T, E> = Ref<PayloadBody<T, E>>;
+
+function textPayload(value: string): PayloadRef<string, float64> {
+	return { kind: ReferenceKind.Ok, value: value };
+}
+
+function numericFailure(error: float64): PayloadRef<string, float64> {
+	return { kind: ReferenceKind.Err, error: error };
+}
 
 class Box<T> {
 	items: T[];
@@ -89,16 +100,19 @@ test "nominalInstantiation: nominal unions with identical shapes preserve both a
 test "nominalInstantiation: reference-wrapped generic variants retain the substituted payload in each arm" {
 	const n = numericReference(99);
 	const e = textError("boom");
-	const s = textReference("hello-payload");
-	const f = numericError(42);
 	assert n.kind == ReferenceKind.Ok;
 	assert e.kind == ReferenceKind.Err;
-	assert s.kind == ReferenceKind.Ok;
-	assert f.kind == ReferenceKind.Err;
 	if (n.kind == ReferenceKind.Ok) assert n.value == 99;
 	if (e.kind == ReferenceKind.Err) assert e.error == "boom";
-	if (s.kind == ReferenceKind.Ok) assert s.value == "hello-payload";
-	if (f.kind == ReferenceKind.Err) assert f.error == 42;
+}
+
+test "nominalInstantiation: a reference-wrapped variant reads and destroys a string payload" {
+	const ok = textPayload("hello-payload");
+	const err = numericFailure(42);
+	assert ok.kind == ReferenceKind.Ok;
+	assert err.kind == ReferenceKind.Err;
+	if (ok.kind == ReferenceKind.Ok) assert ok.value == "hello-payload";
+	if (err.kind == ReferenceKind.Err) assert err.error == 42;
 }
 
 test "nominalInstantiation: generic class field type substitutes through typeReturn" {
