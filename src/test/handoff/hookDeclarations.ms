@@ -1,4 +1,6 @@
-import { checkProjectDiagnostics, compileProjectToCWithStd, compileProjectToJSWithStd, compileToC, MapEntry } from "../helpers";
+import { checkProjectDiagnostics, compileProjectToCWithStd, compileProjectToJSWithStd, compileToC, compileToJS, MapEntry } from "../helpers";
+import { checkSource } from "./helpers";
+import { Severity } from "../../checker/context";
 
 const hooks = ["onDestroy", "onCopy", "onMove", "onMoved", "onTrace", "onClone"];
 
@@ -110,4 +112,54 @@ test "hook declarations: a distinct type takes its hook at scope exit, as a fiel
 	const c = compileToC(src);
 	assert c.ok, c.error;
 	assert destroyCallsOf(c.value, "Fd") >= 4, "the destroy hook of a distinct type is not called from a local, a field and an element: " + destroyCallsOf(c.value, "Fd").toString();
+}
+
+function errorsOf(source: string): string[] {
+	const out: string[] = [];
+	const ctx = checkSource(source);
+	if (ctx == null) {
+		out.push("the source did not parse");
+		return out;
+	}
+	for (const err of ctx.errors) {
+		if (err.severity == Severity.Error) out.push(err.message);
+	}
+	return out;
+}
+
+const shapes = "struct S { id: int32; }\nclass C { id: int32 = 0; next: C | null = null; }\n";
+
+function expectFault(problems: string[], label: string, source: string, fault: string): void {
+	const errors = errorsOf(shapes + source);
+	if (errors.length != 1) problems.push(label + ": " + errors.length.toString() + " errors: " + errors.join(" | "));
+	else if (errors[0].indexOf(fault) < 0) problems.push(label + ": " + errors[0]);
+}
+
+function expectAccepted(problems: string[], label: string, source: string): void {
+	const errors = errorsOf(shapes + source);
+	if (errors.length > 0) problems.push(label + ": " + errors[0]);
+}
+
+test "hook declarations: onTrace takes the receiver and the tracer, and nothing else" {
+	const problems: string[] = [];
+	const wrongCount = "signature for 'onTrace' is wrong: it takes the receiver and the tracer ('env: Ptr<void>')";
+	expectFault(problems, "onTrace(this x: C)", "function onTrace(this x: C): void { }\n", wrongCount + ", 1 parameter declared");
+	expectFault(problems, "onTrace(this x: C, env, extra)", "function onTrace(this x: C, env: Ptr<void>, extra: int32): void { }\n", wrongCount + ", 3 parameters declared");
+	expectFault(problems, "onTrace method", "class T { next: T | null = null; onTrace(): void { } }\n", wrongCount + ", 1 parameter declared");
+	expectFault(problems, "onTrace env: int32", "function onTrace(this x: C, env: int32): void { }\n", "its second parameter is 'int32', the tracer is 'env: Ptr<void>'");
+	expectFault(problems, "onTrace env: Ptr<S>", "function onTrace(this x: C, env: Ptr<S>): void { }\n", "its second parameter is 'Ptr<S>', the tracer is 'env: Ptr<void>'");
+	expectAccepted(problems, "onTrace on a class", "function onTrace(this x: C, env: Ptr<void>): void { }\n");
+	expectAccepted(problems, "onTrace on a struct", "function onTrace(this ref x: S, env: Ptr<void>): void { }\n");
+	expectAccepted(problems, "onTrace method", "class T { next: T | null = null; onTrace(env: Ptr<void>): void { } }\n");
+	assert problems.length == 0, problems.join("\n");
+}
+
+test "hook declarations: C and JS both refuse an onTrace without the tracer" {
+	const source = shapes + "function onTrace(this x: C): void { }\n";
+	const c = compileToC(source);
+	assert !c.ok, "C accepted an onTrace without the tracer";
+	assert c.error.indexOf("signature for 'onTrace' is wrong") >= 0, c.error;
+	const js = compileToJS(source);
+	assert !js.ok, "JS accepted an onTrace without the tracer";
+	assert js.error.indexOf("signature for 'onTrace' is wrong") >= 0, js.error;
 }

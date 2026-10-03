@@ -39,16 +39,21 @@ interface Case {
 	name: string;
 	files: Source[];
 	refused: string;
+	runs: string;
 }
 
 const cases: Case[] = [];
 
 function refuse(name: string, refused: string, files: Source[]): void {
-	cases.push({ name, files, refused });
+	cases.push({ name, files, refused, runs: "" });
 }
 
 function accept(name: string, files: Source[]): void {
-	cases.push({ name, files, refused: "" });
+	cases.push({ name, files, refused: "", runs: "" });
+}
+
+function runsOrc(name: string, printed: string, files: Source[]): void {
+	cases.push({ name, files, refused: "", runs: printed });
 }
 
 function one(text: string): Source[] {
@@ -67,6 +72,21 @@ accept("a hook declared beside its type, used from another module", [
 	{ path: "main.ms", text: "import { S } from \"./lib\";\nconst a: S = { id: 1, name: \"n\" };\nconsole.log(a.id.toString());\n" },
 ]);
 
+const cyclic = "class N { id: int32 = 0; next: N | null = null; }\n";
+const cycle = "function run(): void {\n\tconst a = new N();\n\tconst b = new N();\n\ta.id = 1;\n\tb.id = 2;\n\ta.next = b;\n\tb.next = a;\n}\nrun();\nconsole.log(\"end\");\n";
+
+runsOrc("onTrace takes the tracer and runs under the cycle collector", "trace", one(
+	cyclic + "function onTrace(this x: N, env: Ptr<void>): void { console.log(\"trace \" + x.id.toString()); }\n" + cycle));
+
+refuse("onTrace without the tracer", "signature for 'onTrace' is wrong: it takes the receiver and the tracer ('env: Ptr<void>'), 1 parameter declared", one(
+	cyclic + "function onTrace(this x: N): void { console.log(\"trace\"); }\n" + cycle));
+
+refuse("onTrace with a tracer of another type", "signature for 'onTrace' is wrong: its second parameter is 'int32', the tracer is 'env: Ptr<void>'", one(
+	cyclic + "function onTrace(this x: N, env: int32): void { console.log(\"trace\"); }\n" + cycle));
+
+refuse("an onTrace method without the tracer", "signature for 'onTrace' is wrong: it takes the receiver and the tracer ('env: Ptr<void>'), 1 parameter declared", one(
+	"class N { id: int32 = 0; next: N | null = null; onTrace(): void { console.log(\"trace\"); } }\n" + cycle));
+
 function verdict(dir: string, target: string): string {
 	const args = target == "c" ? ["check", `${dir}/main.ms`] : ["check", `${dir}/main.ms`, "--target=js"];
 	const r = execFileResult(msc, args);
@@ -79,13 +99,20 @@ for (const c of cases) {
 	const dir = `${root}/out/guard/hookDeclarations/${slot}`;
 	ensureDir(dir);
 	for (const f of c.files) writeFile(`${dir}/${f.path}`, f.text);
+	if (c.runs != "") {
+		const r = execFileResult(msc, ["run", "--gc=orc", `${dir}/main.ms`]);
+		const out = `${r.output}${r.errorOutput}`;
+		if (r.exitCode != 0) report(`[orc] ${c.name}: did not build and run: ${out}`);
+		else if (!out.includes(c.runs)) report(`[orc] ${c.name}: the hook never printed '${c.runs}': ${out}`);
+		continue;
+	}
 	for (const target of ["c", "js"]) {
 		const out = verdict(dir, target);
 		const accepted = out.startsWith("OK\n");
 		if (c.refused == "") {
 			if (!accepted) report(`[${target}] ${c.name}: refused: ${out}`);
 		} else if (accepted) {
-			report(`[${target}] ${c.name}: accepted, the hook would never run`);
+			report(`[${target}] ${c.name}: accepted, the reference refuses it`);
 		} else if (!out.includes(c.refused)) {
 			report(`[${target}] ${c.name}: refused without the rule named (${c.refused}): ${out}`);
 		}
