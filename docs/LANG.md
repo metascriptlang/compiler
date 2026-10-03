@@ -732,6 +732,11 @@ Developer writes normal code — the compiler picks the fastest path automatical
 | `ref` | `f(ref v: Struct)` | In-out — the callee reads and writes the caller's value |
 | `out` | `f(out v: Struct)` | Output parameter — callee fills the value |
 
+A closure cannot capture a `ref` or `out` parameter (`'n' is a ref/out parameter and cannot be
+captured by a closure`), as the reference refuses capturing a `var` parameter (lambdalifting.nim:208
+`illegalCapture`): the closure could outlive the caller's variable. Before 2026-10-03 the capture
+compiled on JS and failed in clang on C; copy the value into a local, or pass it as an argument.
+
 `move` is not a parameter modifier: it is written at the call site, `f(move v)` (see Move
 Semantics). A `sink` parameter is only for an `extern` declaration; on a MetaScript function it is
 refused (`'sink' parameter on 'f': only an extern declaration can take ownership of an argument`).
@@ -2750,7 +2755,7 @@ never its bits read as an address. The rules live in `checkPointerAddress`
 
 | Written | Native (C) | JS | Raiser VM |
 |---|---|---|---|
-| `n as Ptr<int32>`, `s as Ptr<S>`, `xs[i] as Ptr<T>`, `s.f as Ptr<F>` | address of the location | `[base, index]` location | struct/array: the object; scalar write traps |
+| `n as Ptr<int32>`, `s as Ptr<S>`, `xs[i] as Ptr<T>`, `s.f as Ptr<F>` | address of the location | `[base, index]` location | a VM location (register, global, element, field); a struct or array is its object |
 | `view as Ptr<T>` (`Span<T>`) | `&view[0]`; an empty span raises the bound error | same, raises the same | element 0; an empty span raises the same |
 | `view as Ptr<void>` | the data pointer, `null` for an empty array | refused | refused |
 | `n as Ptr<U>`, `U ≠ T` (byte view) | `cast[ptr U](addr n)`: `uint32 258 as Ptr<uint8>` reads `2 1` | refused at compile time | refused, traps |
@@ -2760,13 +2765,13 @@ never its bits read as an address. The rules live in `checkPointerAddress`
 | `xs as Ptr<uint8>` for `T[]` / `string` | refused: the handle is not the elements; write `xs as Span<T> as Ptr<…>` | refused | refused |
 | `view as Span<U>`, `U ≠ T` | refused, as the reference refuses `cast[openArray[U]]` | refused | refused |
 | `p + n`, `q - p`, `p < q`, `p[i]` with `i ≠ 0`, `p += n` | pointer arithmetic | refused: no address arithmetic | refused, traps |
-| `p == q`, `p[]`, `p[0]`, `p.f` | as C | location identity and access | object identity and access |
+| `p == q`, `p[]`, `p[0]`, `p.f` | as C | location identity and access | location identity and access |
 
 An array of `Ptr<T>` holds addresses and never counts them (the reference's `ptr` has no
 hooks): before, `const slots: Ptr<Pet>[] = [a as Ptr<Pet>]` aborted at scope exit by
 decrementing a stack address.
 
-Measured 2026-10-03 on tree `2e95a5ad` with `msc run` (C, `--gc=orc`, `--target=js`,
+Measured 2026-10-03 on tree `20fcc562` with `msc run` (C, `--gc=orc`, `--target=js`,
 `--target=raiser`): corpus `679-typedPointerLocations` (every lane) and
 `687-nativePointerAddresses` (native lanes) print their oracles; `src/test/c/pointerAddress.ms`,
 `src/test/js/byteViews.ms` and the raiser engine tests in `src/codegen/raiser/eval.ms` hold the
