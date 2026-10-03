@@ -301,6 +301,14 @@ export function cloneIfPure(node: Node): Node | null {
 	// A deref/addr wrapper evaluates nothing of its own, so re-reading it costs
 	// exactly what re-reading its operand costs. conditionalExprLower walks the
 	// same pair transparently when it hoists assignment-target effects.
+	if (node.kind == NodeKind.HiddenDeref || node.kind == NodeKind.HiddenAddr) {
+		const d = node.data as HiddenDerefData;
+		const inner = cloneIfPure(d.expr);
+		if (inner == null) return null;
+		const c = node.kind == NodeKind.HiddenDeref ? makeHiddenDeref(inner, node.location) : makeHiddenAddr(inner, node.location);
+		c.nodeType = node.nodeType;
+		return c;
+	}
 	if (node.kind == NodeKind.CallExpr && isCompilerCheckCall(node)) {
 		const d = node.data as CallExprData;
 		const args: Node[] = [];
