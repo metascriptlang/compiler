@@ -3224,19 +3224,20 @@ function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 		return `(${arrayTypeName}){0}`;
 	}
 
-	// Non-primitive: temp + push pattern
+	// A sequence allocates its payload once, then assigns each element in place
 	// (string arrays already lowered to an msStringArrayFromArr CallExpr by nativeLower)
 	const isSizedArray = node.nodeType != null && node.nodeType.kind == TypeKind.SizedArray;
 	const tmp = getTemp(p, arrayTypeName);
 	const tmpName = tmp.snippet;
 	emitStmtsLine(p, `${tmpName} = (${arrayTypeName}){0};`);
+	if (!isSizedArray) {
+		emitStmtsLine(p, `${tmpName}.p = (__typeof__(${tmpName}.p))msArrayPayloadNew(${d.elements.length}, sizeof(${tmpName}.p->data[0]));`);
+		emitStmtsLine(p, `${tmpName}.len = ${d.elements.length};`);
+	}
+	const slots = isSizedArray ? `${tmpName}.data` : `${tmpName}.p->data`;
 	let i = 0;
 	while (i < d.elements.length) {
-		if (isSizedArray) {
-			emitStmtsLine(p, `${tmpName}.data[${i}] = ${genExpr(g, p, d.elements[i])};`);
-		} else {
-			emitStmtsLine(p, `msGenericArrayPush(&${tmpName}, ${genExpr(g, p, d.elements[i])});`);
-		}
+		emitStmtsLine(p, `${slots}[${i}] = ${genExpr(g, p, d.elements[i])};`);
 		i += 1;
 	}
 	return tmpName;
@@ -3315,7 +3316,7 @@ test "empty array" {
 }
 
 test "array with elements no type" {
-	// Without nodeType (no checker), falls back to temp + push
+	// Without nodeType (no checker), falls back to a generic msRefArray temp
 	const result = exprSnippet("[1, 2, 3];");
 	// Returns temp name (setup emitted to proc stmts)
 	assert result.length > 0;
