@@ -1553,7 +1553,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	const textSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
 	if (textSym != null && (textSym.builtinKind == "Echo" || (textSym.builtinKind == "ToString" && d.arguments.length == 1))) {
 		for (let ai = 0; ai < d.arguments.length; ai += 1) {
-			const text = synthStringify(ctx, d.arguments[ai]);
+			const text = synthStringify(ctx, d.arguments[ai], textSym.builtinKind == "Echo");
 			if (text == null) continue;
 			d.arguments[ai] = text;
 			argTypes[ai] = text.nodeType!;

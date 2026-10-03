@@ -2,13 +2,13 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData } from "../ast/node";
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
-import { ArrayAccessData, YieldExprData, ArrayLiteralData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, extDeclaresReceiver } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral } from "./types";
+import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
@@ -226,17 +226,120 @@ export function nullishPayloadType(t: Type | null): Type | null {
 	return t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : null;
 }
 
+function valueShape(t: Type): Type {
+	const aliased = peelThrough(skipModifier(t) ?? t, PEEL_ALIAS);
+	return peelTransparentInstance(aliased ?? t);
+}
+
+function isValueStructShape(s: Type): boolean {
+	if (s.kind == TypeKind.GenericInstance) {
+		if (s.typeName == "" || isAwaitable(s)) return false;
+		const nominal = peelToStructOrUnion(s.typeExtra);
+		return nominal != null && nominal.kind == TypeKind.Struct;
+	}
+	if (s.kind != TypeKind.Struct || isMaybeType(s)) return false;
+	return s.typeName != "";
+}
+
+function comparedByFields(s: Type): boolean {
+	return isValueStructShape(s) || s.kind == TypeKind.Tuple || s.kind == TypeKind.SizedArray;
+}
+
+function equalityEntry(ctx: CheckerContext, left: Type, right: Type): string {
+	const a = valueShape(left);
+	const b = valueShape(right);
+	if (a.kind == TypeKind.Null || b.kind == TypeKind.Null || a.kind == TypeKind.Void || b.kind == TypeKind.Void) return "";
+	if (hasGenericParams(a) || hasGenericParams(b)) return "";
+	if (isMaybeType(a) || isMaybeType(b)) {
+		const carrier = isMaybeType(a) ? a : b;
+		const other = isMaybeType(a) ? b : a;
+		if (isMaybeType(other)) return typeNameOf(a) == typeNameOf(b) ? "nullableEquals" : "";
+		return isUnknownType(other) ? "" : "nullableEquals";
+	}
+	if (isResult(a) && isResult(b)) return sameType(a, b) ? "resultEquals" : "";
+	if (comparedByFields(a) && comparedByFields(b)) {
+		if (sameType(a, b)) return "valueEquals";
+		if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct && (isAssignable(a, b) || isAssignable(b, a))) return "valueEquals";
+	}
+	return "";
+}
+
+function boundCallOf(sym: Symbol, args: Node[], loc: SourceLocation): Node {
+	const callee = createNodeAt(NodeKind.Identifier, { name: sym.name }, loc);
+	callee.resolvedSym = sym;
+	callee.flags = callee.flags.incl(NodeFlag.BoundSym);
+	return createNodeAt(NodeKind.CallExpr, { callee: callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+}
+
+function boundCall(ctx: CheckerContext, entry: string, args: Node[], loc: SourceLocation): Node {
+	const sym = ctx.compilerFuncs.get(entry);
+	if (sym == null) throw new Error(`internal: the value routine '${entry}' is not declared by the prelude`);
+	return boundCallOf(sym, args, loc);
+}
+
+function replaceWithCall(node: Node, call: Node, negated: boolean): void {
+	if (negated) {
+		node.kind = NodeKind.UnaryExpr;
+		node.data = { unaryOp: "!", operand: call } as NodeData;
+		node.nodeType = booleanType();
+		return;
+	}
+	node.kind = NodeKind.CallExpr;
+	node.data = call.data;
+	node.nodeType = call.nodeType;
+	node.flags = call.flags;
+	node.variantSlot = call.variantSlot;
+	node.resolvedSym = call.resolvedSym;
+}
+
+// `==` / `!=` over two values of one value type calls the operator the program declares for the
+// pair, else the std routine for that type; both are bound by symbol like any synthesized call.
+export function synthValueEquality(ctx: CheckerContext, node: Node, d: BinaryExprData, leftType: Type, rightType: Type): boolean {
+	const op = d.operator;
+	const negated = op == "!=" || op == "!==";
+	if (!negated && op != "==" && op != "===") return false;
+	if (d.left.kind == NodeKind.NullLiteral || d.right.kind == NodeKind.NullLiteral) return false;
+	const entry = equalityEntry(ctx, leftType, rightType);
+	if (entry == "") return false;
+	const loc = node.location;
+	if (ctx.extensionRegistry != null) {
+		const pair = [leftType, rightType];
+		const declaredNe = negated ? resolveOperatorCall(ctx.table, ctx.extensionRegistry, "!=", pair) : null as unknown as ExtensionMethod;
+		const declaredEq = resolveOperatorCall(ctx.table, ctx.extensionRegistry, "==", pair);
+		const declared = declaredNe != null ? declaredNe : declaredEq;
+		if (declared != null && declared.sym != null) {
+			const direct = boundCallOf(declared.sym, [d.left, d.right], loc);
+			callCheckExpr(ctx, direct, null);
+			replaceWithCall(node, direct, negated && declaredNe == null);
+			return true;
+		}
+	}
+	let left = d.left;
+	let right = d.right;
+	if (entry == "nullableEquals") {
+		const a = valueShape(leftType);
+		const b = valueShape(rightType);
+		if (!isMaybeType(a)) left = synthMaybeWrap(left, b, leftType);
+		if (!isMaybeType(b)) right = synthMaybeWrap(right, a, rightType);
+	}
+	const call = boundCall(ctx, entry, [left, right], loc);
+	callCheckExpr(ctx, call, null);
+	replaceWithCall(node, call, negated);
+	return true;
+}
+
 // Reference parity (sigmatch.nim:2596 `localConvMatch`, :2179 `implicitConv`): a
 // stringification the call site needs is planted DURING checking, so it is bound
 // by the same overload resolution a hand-written `x.toString()` gets and reaches
-// codegen carrying its symbol. Returns null when nothing real binds — primitives
-// and enums have no declaration and stay on the builtin-lowering path.
-export function synthStringify(ctx: CheckerContext, expr: Node): Node | null {
+// codegen carrying its symbol. A value type without a user `toString` takes the std
+// dump. Returns null when nothing real binds - primitives and enums have no
+// declaration and stay on the builtin-lowering path.
+export function synthStringify(ctx: CheckerContext, expr: Node, debug: boolean = false): Node | null {
 	const t = expr.nodeType;
 	if (t == null) return null;
 	const peeled = peelToStructOrUnion(t);
-	if (peeled == null) return null;
-	if (peeled.kind != TypeKind.Struct && peeled.kind != TypeKind.Union && peeled.kind != TypeKind.Enum && peeled.kind != TypeKind.Distinct) return null;
+	const dumped = dumpedShape(t, valueShape(t));
+	if (!dumped && (peeled == null || (peeled.kind != TypeKind.Struct && peeled.kind != TypeKind.Union && peeled.kind != TypeKind.Enum && peeled.kind != TypeKind.Distinct))) return null;
 	const loc = expr.location;
 	const memberNode = createNodeAt(NodeKind.MemberExpr,
 		{ object: expr, property: "toString", isOptional: false }, loc);
@@ -247,15 +350,52 @@ export function synthStringify(ctx: CheckerContext, expr: Node): Node | null {
 	// the builtin path. The receiver's own diagnostics were already recorded when
 	// the caller checked it, so the trial's output is dropped either way.
 	const errMark = ctx.errors.length;
+	_probedToString = synthCall;
 	callCheckExpr(ctx, synthCall, null);
+	_probedToString = null;
 	const fits = ctx.errors.length == errMark;
 	while (ctx.errors.length > errMark) { ctx.errors.pop(); }
-	if (!fits) return null;
-	if (synthCall.nodeType == null || !isStringLike(synthCall.nodeType)) return null;
-	// The universal `.toString()` fallback mints a symbol with no declaration; it
-	// is the shape that used to reach C codegen as a struct member call.
-	if (synthCall.resolvedSym == null || synthCall.resolvedSym.declNode == null) return null;
-	return synthCall;
+	const userBound = fits && synthCall.nodeType != null && isStringLike(synthCall.nodeType)
+		&& synthCall.resolvedSym != null && synthCall.resolvedSym.declNode != null;
+	if (userBound) return synthCall;
+	if (!dumped) return null;
+	const dump = debug
+		? boundCall(ctx, "valueDebug", [expr], loc)
+		: boundCall(ctx, "valueDump", [expr, createNodeAt(NodeKind.BooleanLiteral, { boolValue: false }, loc)], loc);
+	callCheckExpr(ctx, dump, null);
+	return dump;
+}
+
+let _probedToString: Node | null = null;
+
+// `x.toString()` on a value type with no user `toString` is the std dump, like the implicit forms.
+export function synthExplicitDump(ctx: CheckerContext, node: Node): void {
+	if (node == _probedToString || node.kind != NodeKind.CallExpr) return;
+	const d = node.data as CallExprData;
+	if (d.arguments.length != 0 || d.callee.kind != NodeKind.MemberExpr) return;
+	const me = d.callee.data as MemberExprData;
+	if (me.property != "toString") return;
+	const sym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
+	if (sym == null || sym.name != "toString" || sym.declNode != null) return;
+	const receiver = me.object;
+	const t = receiver.nodeType;
+	if (t == null || !dumpedShape(t, valueShape(t))) return;
+	const call = boundCall(ctx, "valueDump", [receiver, createNodeAt(NodeKind.BooleanLiteral, { boolValue: false }, node.location)], node.location);
+	callCheckExpr(ctx, call, null);
+	node.data = call.data;
+	node.nodeType = call.nodeType;
+	node.flags = call.flags;
+	node.variantSlot = call.variantSlot;
+	node.resolvedSym = call.resolvedSym;
+}
+
+function dumpedShape(t: Type, shape: Type): boolean {
+	if (shape.kind == TypeKind.Tuple || shape.kind == TypeKind.SizedArray || isResult(shape)) return true;
+	if (isValueStructShape(shape)) return true;
+	const bare = skipModifier(t) ?? t;
+	if (bare.kind == TypeKind.Ref && bare.typeReturn != null && bare.typeReturn.kind == TypeKind.GenericInstance) return false;
+	const inner = peelToStructOrUnion(t);
+	return inner != null && inner.kind == TypeKind.Struct && inner.typeName != "" && !isMaybeType(inner);
 }
 
 // `Flag.A | Flag.B` is a set of enum members, not the numeric OR of their

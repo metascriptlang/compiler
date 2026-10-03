@@ -50,6 +50,7 @@ import "./closureEnvArrayType";
 import "./closureParamCapture";
 import "./unknownNullFieldHooks";
 import "./toStringUnified";
+import "./valueRoutines";
 import "./incompleteStruct";
 import "./anonStructCast";
 import "./nullVarType";
