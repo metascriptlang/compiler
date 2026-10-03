@@ -72,7 +72,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	if ((inner.kind == TypeKind.Struct || inner.kind == TypeKind.Union) && inner.typeName != "") {
 		const typeName = inner.typeName;
 		// JsonValue → "\x1b[35mJson \x1b[0m" + stringify(value)
-		if (typeName == "JsonValue" || typeName == "JsonValueData") {
+		if (isJsonValueData(inner)) {
 			return buildJsonValueDebug(arg, loc, ctx);
 		}
 		// Named struct/class → "\x1b[34mTypeName \x1b[0m" + stringify(jsonObject(...))
@@ -151,6 +151,10 @@ function ensureUnionTextFn(ut: Type, prefix: string, memberText: (v: Node) => No
 	fnNode.resolvedSym = sym;
 	_dumpFnDecls.push(fnNode);
 	return sym;
+}
+
+function isJsonValueData(t: Type): boolean {
+	return t.sym != null && t.sym.name == "JsonValueData" && t.sym.modulePath.endsWith("/std/serialize/json/types.ms");
 }
 
 function resolveDbgIdent(name: string, ctx: TransformContext, loc: SourceLocation): Node {
