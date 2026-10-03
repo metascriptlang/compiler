@@ -1,6 +1,6 @@
 import {
 	Node, NodeKind, NodeFlag, Type, TypeKind, Symbol, SymbolKind,
-	CallExprData, MemberExprData, ArrayAccessData,
+	CallExprData, MemberExprData, ArrayAccessData, BinaryExprData,
 	OutExprData, HiddenDerefData, VariableDeclData, FunctionDeclData, BlockStmtData,
 	createNodeAt,
 } from "../../ast/node";
@@ -121,6 +121,14 @@ function derefPair(s: Symbol, at: Node): Node {
 	return acc;
 }
 
+function isRangeAccess(n: Node): boolean {
+	if (n.kind != NodeKind.ArrayAccess) return false;
+	const index = (n.data as ArrayAccessData).index;
+	if (index.kind != NodeKind.BinaryExpr) return false;
+	const op = (index.data as BinaryExprData).operator;
+	return op == ".." || op == "...";
+}
+
 function pairize(arg: Node): Node {
 	if (arg == null) return arg;
 	const inner = unwrapAddr(arg);
@@ -145,7 +153,7 @@ function pairize(arg: Node): Node {
 		const ad = inner.data as ArrayAccessData;
 		const indexed = indexedType(ad.array);
 		const cont = rw(unwrapAddr(ad.array));
-		cont.nodeType = null;
+		if (!isRangeAccess(cont)) cont.nodeType = null;
 		if (indexed == null) return pairLit(cont, rw(ad.index), inner);
 		const cellOf = indexed.kind == TypeKind.Span ? "msSpanCell" : "msArrayCell";
 		return makeCall(runtimeRef(cellOf, inner.location), [cont, rw(ad.index)], inner.location);
