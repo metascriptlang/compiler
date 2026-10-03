@@ -64,7 +64,7 @@ import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCo
 import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -1155,6 +1155,7 @@ interface ModuleCompileJob {
 	fp: string;
 	baseFp: string;
 	depFile: string;
+	cacheKey: string;
 	slot: number;
 }
 
@@ -1680,9 +1681,13 @@ function buildHcrCandidateAbi(
 
 function pushDispatcherJob(cJobs: ModuleCompileJob[], oSlots: string[][], key: string, source: string, flags: string, opts: CliOptions): void {
 	const fp = moduleCompileFp(source, fullCompileCmd(opts.ccCompiler, opts.mode, flags, opts.ccBinary));
+	if (isCCodeCached(key, fp)) {
+		oSlots.push([stableOFileFp(key, fp)]);
+		return;
+	}
 	writeCSource(key, fp, source);
 	oSlots.push([]);
-	cJobs.push({ cFile: stableCFileFp(key, fp), oFile: stableOFileFp(key, fp), modPath: "", flags, fp: "", baseFp: "", depFile: "", slot: oSlots.length - 1 });
+	cJobs.push({ cFile: stableCFileFp(key, fp), oFile: stableOFileFp(key, fp), modPath: "", flags, fp: "", baseFp: fp, depFile: "", cacheKey: key, slot: oSlots.length - 1 });
 }
 
 function moduleOutputFor(outputs: CModuleOutput[], modPath: string): CModuleOutput | null {
@@ -2828,7 +2833,7 @@ setGlobalHookOwners(sharedHookOwners);
 				const cFile = stableCFileFp(p.modPath, baseFp);
 				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 				oSlots.push([]);
-				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), slot: oSlots.length - 1 });
+				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: oSlots.length - 1 });
 				modulesRecompiled = modulesRecompiled + 1;
 				recompiledModulePaths.push(p.modPath);
 			}
@@ -2940,6 +2945,7 @@ setGlobalHookOwners(sharedHookOwners);
 		const code = cCodes[cji];
 		if (code == 0) {
 			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile];
+			if (cj.cacheKey != "") writeCompileFingerprintFp(cj.cacheKey, cj.baseFp);
 		} else if (cj.modPath == "") {
 			printDiag(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
 			throw new Error(BUILD_STOPPED);
@@ -3244,7 +3250,7 @@ setGlobalHookOwners(sharedHookOwners);
 			const cFile = stableCFileFp(p.modPath, baseFp);
 			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 			oSlots.push([]);
-			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), slot: oSlots.length - 1 });
+			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: oSlots.length - 1 });
 		}
 		compiled = compiled + 1;
 		p.program = null as unknown as Node;
@@ -3267,7 +3273,7 @@ setGlobalHookOwners(sharedHookOwners);
 	writeCSource("_test_dispatch", dispFp, dispatcher);
 	const dispFile = stableCFileFp("_test_dispatch", dispFp);
 	oSlots.push([]);
-	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", baseFp: "", depFile: "", slot: oSlots.length - 1 });
+	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", baseFp: "", depFile: "", cacheKey: "", slot: oSlots.length - 1 });
 
 	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 	let testFailed = false;
