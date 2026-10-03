@@ -4,7 +4,7 @@ import { inferredType, noneType, emptyType, createStruct, createEnum, createType
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -249,28 +249,23 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	const exportNameRejected = reportExportNameMisuse(ctx, dd);
 	const declName = getDeclName(dd.decoratedNode);
 	if (declName == "") return;
-	const sym = lookupSymbol(ctx.table, declName);
-	if (sym == null) return;
+	const named = lookupSymbol(ctx.table, declName);
+	if (named == null) return;
+	const sym = declaredSymbolOf(dd.decoratedNode, named);
 	const info = extractDecoratorInfo(node);
 	const handlerName = reloadHandlerExportName(ctx, dd, sym, declName);
 	const exportName = handlerName != "" ? handlerName : exportNameRejected ? "" : info.exportName;
-	// For overloaded functions, the new function was just pushed as the last overload.
-	// Set builtinKind on the correct symbol (not the primary).
-	// CRITICAL: must write directly through array index — intermediate variable creates a clone (DRC #25).
-	if (sym.overloads.length > 0) {
-		const idx = sym.overloads.length - 1;
-		if (info.builtinKind != "") sym.overloads[idx].builtinKind = info.builtinKind;
-		if (exportName != "") sym.overloads[idx].exportName = exportName;
-		if (info.throws) setFlag(sym.overloads[idx], SymbolFlag.Throws);
-		if (info.compilerFunc) registerCompilerFunc(ctx, sym.overloads[idx]);
-		if (info.borrow) markBorrow(ctx, dd, sym.overloads[idx]);
-	} else {
-		if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
-		if (exportName != "") sym.exportName = exportName;
-		if (info.throws) setFlag(sym, SymbolFlag.Throws);
-		if (info.compilerFunc) registerCompilerFunc(ctx, sym);
-		if (info.borrow) markBorrow(ctx, dd, sym);
-	}
+	if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
+	if (exportName != "") sym.exportName = exportName;
+	if (info.throws) setFlag(sym, SymbolFlag.Throws);
+	if (info.compilerFunc) registerCompilerFunc(ctx, sym);
+	if (info.borrow) markBorrow(ctx, dd, sym);
+}
+
+function declaredSymbolOf(decorated: Node, named: Symbol): Symbol {
+	const decl = declOfStatement(decorated);
+	if (decl.kind == NodeKind.FunctionDecl && decl.resolvedSym != null) return decl.resolvedSym;
+	return named.overloads.length > 0 ? named.overloads[named.overloads.length - 1] : named;
 }
 
 function markBorrow(ctx: CheckerContext, dd: DecoratedDeclData, sym: Symbol): void {
@@ -1320,6 +1315,21 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 	}
 }
 
+function reexportPastBinding(ctx: CheckerContext, bound: Symbol, expInfo: ExportedSymInfo, sourcePath: string, specifier: string, node: Node): void {
+	const sym = expInfo.sym;
+	if (sym == null) return;
+	const routines = sym.symbolKind == SymbolKind.Function && bound.symbolKind == SymbolKind.Function;
+	if (sym != bound && !routines && isExportedBy(ctx, bound)) {
+		if (ctx.importSet.has(bound)) {
+			addError(ctx, `export * from '${specifier}': '${expInfo.name}' is already exported from another module; re-export one of them by name`, node.location.line, node.location.column);
+		}
+		return;
+	}
+	if (sym != bound) noteImported(ctx, sym);
+	exportSymAs(ctx, sym, expInfo.name);
+	propagateImportedExtensions(ctx, expInfo.name, expInfo, sourcePath, sym);
+}
+
 export function collectExport(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ExportDeclData;
 
@@ -1344,7 +1354,11 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 					if (modExports != null) {
 						for (let si = 0; si < modExports.symbols.length; si += 1) {
 							const expInfo = modExports.symbols[si];
-							if (lookupLocal(ctx.table, expInfo.name) != null) continue;
+							const bound = lookupLocal(ctx.table, expInfo.name);
+							if (bound != null) {
+								reexportPastBinding(ctx, bound, expInfo, sourcePath, imp.importSource, node);
+								continue;
+							}
 							const preludeStarSym = sharedPreludeSym(ctx, expInfo.name, expInfo.name, expInfo);
 							if (preludeStarSym != null) {
 								defineSymbol(ctx.table, preludeStarSym);
@@ -1442,12 +1456,9 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 	if (name != "") {
 		const sym = lookupSymbol(ctx.table, name);
 		if (sym != null) {
-			exportSym(ctx, sym);
-			// For overloaded functions, also mark the latest overload as exported.
-			// defineSymbol appends to overloads[], so last entry is the just-defined one.
-			if (sym.overloads.length > 0) {
-				exportSym(ctx, sym.overloads[sym.overloads.length - 1]);
-			}
+			if (!ctx.importSet.has(sym)) exportSym(ctx, sym);
+			const declared = declaredSymbolOf(d.exportedDecl, sym);
+			if (declared != sym) exportSym(ctx, declared);
 		}
 	}
 	if (d.exportedDecl.kind == NodeKind.ClassDecl) {

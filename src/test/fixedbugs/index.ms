@@ -411,3 +411,5 @@ import "./bug658ParamShadowedByLocal";
 import "./bug659AliasNarrowingCast";
 import "./bug660VecOfStructCopies";
 import "./bug661TransparentAliasInstanceConsumers";
+import "./bug680ExportStarCarriesBoundNames";
+import "./bug683DelegateBaseFromAnotherModule";
