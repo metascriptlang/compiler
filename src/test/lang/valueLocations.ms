@@ -13,6 +13,11 @@ function readHunger(this pet: LocatedPet): int32 { return pet.hunger; }
 function locatedPet(value: int32): LocatedPet {
 	return { hunger: value, name: "a", inner: { v: 1, tags: [2] }, tags: [1, 2] };
 }
+function putThroughRef(ref value: uint8): void { value = 99; }
+function forwardRef(ref value: uint8): void { putThroughRef(value); }
+function writeSecond(view: Span<uint8>): void { forwardRef(view[1]); }
+function replaceThroughRef(ref value: StoredValue): void { value = { n: 77 }; }
+function replaceSecond(view: Span<StoredValue>): void { replaceThroughRef(view[1]); }
 let locationReads: int32 = 0;
 function selectedIndex(): int32 { locationReads++; return 1; }
 
@@ -390,4 +395,22 @@ test "valueLocations: a throw before an explicit move never evaluates the moved 
 	try { explicitAfterThrow(true); } catch (e) { caught = true; }
 	assert caught && movedIndexReads == 0;
 	assert explicitAfterThrow(false) == 2 && movedIndexReads == 1;
+}
+
+test "valueLocations: a span element forwarded through ref parameters writes the original array" {
+	let values: uint8[] = [11, 22, 33, 44];
+	writeSecond(values);
+	assert values[0] == 11 && values[1] == 99 && values[2] == 33 && values[3] == 44;
+}
+
+test "valueLocations: a ref to a slice element keeps the slice offset into its sized array" {
+	let values: uint8[4] = [11, 22, 33, 44];
+	writeSecond(values[1..3]);
+	assert values[0] == 11 && values[1] == 22 && values[2] == 99 && values[3] == 44;
+}
+
+test "valueLocations: replacing a struct span element through ref reaches its storage" {
+	let values: StoredValue[] = [{ n: 1 }, { n: 2 }, { n: 3 }];
+	replaceSecond(values);
+	assert values[0].n == 1 && values[1].n == 77 && values[2].n == 3;
 }
