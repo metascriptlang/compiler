@@ -93,7 +93,7 @@ function includedFixture(name: string, header: string): string {
 
 function waitForNextSecond(): void {
 	const until = performance.now() + 2000;
-	while (performance.now() < until) {}
+	while (performance.now() < until) execFileCapture(compiler, ["--version"]);
 }
 
 function build(dir: string, label: string, output: string = "probe", flags: string[] = [], cc: string = "", exe: string = compiler): number {
