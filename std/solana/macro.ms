@@ -19,6 +19,7 @@ import {
 	delegatedAccount,
 	exclusiveWritable,
 	holds,
+	keysEqual,
 	keysMatch,
 	logEvent,
 	mutableAccount,
@@ -402,6 +403,30 @@ export macro accounts(): Node {
 		return call(bindSym("keyAddressOf")!, [rewrite(n)], n);
 	}
 
+	// Anchor builds a custom error inside the failing branch (anchor-syn-0.31.1 constraints.rs:
+	// has_one 297-334, address 172-190, constraint 348-356); a success must not evaluate it.
+	function lazily(passed: Node, error: Node, at: Node): Node {
+		const refuse = attempt(call(bindSym("holds")!, [{
+			kind: NodeKind.BooleanLiteral,
+			line: at.line,
+			column: at.column,
+			boolValue: false,
+		}, member(rewrite(error), "code", at)], at), at);
+		return {
+			kind: NodeKind.IfStmt,
+			line: at.line,
+			column: at.column,
+			condition: {
+				kind: NodeKind.UnaryExpr,
+				line: at.line,
+				column: at.column,
+				unaryOp: "!",
+				operand: passed,
+			},
+			consequent: { kind: NodeKind.BlockStmt, line: at.line, column: at.column, statements: [refuse] },
+		};
+	}
+
 	const values: Node[] = [];
 	let field = 0;
 	while (field < decl.interfaceFields.length) {
@@ -614,9 +639,11 @@ export macro accounts(): Node {
 				const stored = call(bindSym("keyAddressOf")!, [
 					member(call(member(member(ident(holder, d), self, d), "data", d), [], d), target, d),
 				], d);
-				const failure = args.length == 2
-					? member(rewrite(args[1]), "code", d)
-					: whole(ProgramError.constraintHasOne().code as number, d);
+				if (args.length == 2) {
+					related.push(lazily(call(bindSym("keysEqual")!, [stored, keyOf(args[0])], d), args[1], d));
+					continue;
+				}
+				const failure = whole(ProgramError.constraintHasOne().code as number, d);
 				related.push(attempt(call(bindSym("keysMatch")!, [stored, keyOf(args[0]), failure], d), d));
 				continue;
 			}
@@ -624,9 +651,11 @@ export macro accounts(): Node {
 				if (args.length < 1 || args.length > 2) {
 					error(where + " takes a condition and an optional error", d);
 				}
-				const failure = args.length == 2
-					? member(rewrite(args[1]), "code", d)
-					: whole(ProgramError.constraintRaw().code as number, d);
+				if (args.length == 2) {
+					required.push(lazily(rewrite(args[0]), args[1], d));
+					continue;
+				}
+				const failure = whole(ProgramError.constraintRaw().code as number, d);
 				required.push(attempt(call(bindSym("holds")!, [rewrite(args[0]), failure], d), d));
 				continue;
 			}
@@ -634,9 +663,11 @@ export macro accounts(): Node {
 				if (args.length < 1 || args.length > 2) {
 					error(where + " takes a key and an optional error", d);
 				}
-				const failure = args.length == 2
-					? member(rewrite(args[1]), "code", d)
-					: whole(ProgramError.constraintAddress().code as number, d);
+				if (args.length == 2) {
+					addressed.push(lazily(call(bindSym("keysEqual")!, [keyOf(ident(self, d)), keyOf(args[0])], d), args[1], d));
+					continue;
+				}
+				const failure = whole(ProgramError.constraintAddress().code as number, d);
 				addressed.push(attempt(call(bindSym("keysMatch")!, [keyOf(ident(self, d)), keyOf(args[0]), failure], d), d));
 				continue;
 			}

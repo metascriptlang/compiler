@@ -1756,6 +1756,46 @@ test "@constraint holds a condition over the accounts and their data, with Const
 	assert run(programKey(), high, [], boundedEntry).result == ProgramError.userError(5).code;
 }
 
+let builtErrors: uint64 = 0;
+
+function counted(ordinal: uint32): ProgramError {
+	builtErrors = builtErrors + 1;
+	return ProgramError.userError(ordinal);
+}
+
+export struct Lazy {
+	owner: Signer;
+	@hasOne(owner, counted(3)) @constraint(safe.limit > 5, counted(5)) safe: Owned<Safe>;
+	@address(Pubkey.systemProgram(), counted(4)) system: Account;
+}
+
+function lazyStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Lazy>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function lazyEntry(): void { codeOf(lazyStep()); }
+
+test "a custom error is built when its check fails and not before, as Anchor builds it in the failing branch" {
+	const system = systemAccountKey();
+	const stranger = holder(5, Pubkey.systemProgram(), [], false, false);
+	const mine = readOnly(safeAt(keyOf(8), keyOf(2), 50, 0));
+	builtErrors = 0;
+	assert run(programKey(), [ownerWallet(), mine, system], [], lazyEntry).result == 0;
+	assert builtErrors == 0;
+	const strangers = readOnly(safeAt(keyOf(8), keyOf(9), 50, 0));
+	assert run(programKey(), [ownerWallet(), strangers, system], [], lazyEntry).result ==
+		ProgramError.userError(3).code;
+	assert builtErrors == 1;
+	const low = readOnly(safeAt(keyOf(8), keyOf(2), 1, 0));
+	assert run(programKey(), [ownerWallet(), low, system], [], lazyEntry).result ==
+		ProgramError.userError(5).code;
+	assert builtErrors == 2;
+	assert run(programKey(), [ownerWallet(), mine, stranger], [], lazyEntry).result ==
+		ProgramError.userError(4).code;
+	assert builtErrors == 3;
+}
+
 export struct Ordered {
 	owner: Signer;
 	@address(Pubkey.systemProgram()) @constraint(safe.limit > 5) @hasOne(owner) @seeds("safe", owner) @bump(safe.bump)
