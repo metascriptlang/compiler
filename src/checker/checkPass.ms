@@ -35,7 +35,7 @@ import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMuta
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
-import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, macroDeclOf, markNamesUsed } from "./callResolve";
+import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { checkActorStaticField } from "./sendable";
@@ -567,6 +567,9 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 			ctx.stmtPosExpr = d.expr;
 			checkExpr(ctx, d.expr, null);
 			ctx.stmtPosExpr = prevStmtPos;
+			if (d.expr.kind == NodeKind.MacroInvocation && invokedMacroSym(ctx, d.expr) == null && !isDirectiveInvocation(d.expr)) {
+				addError(ctx, "invalid directive '@" + (d.expr.data as MacroInvocationData).macroName + "': no macro or compiler directive has this name", d.expr.location.line, d.expr.location.column);
+			}
 			if (d.expr.kind == NodeKind.SpliceMany) {
 				spliceStmtMany(ctx, node, d.expr);
 				return;
