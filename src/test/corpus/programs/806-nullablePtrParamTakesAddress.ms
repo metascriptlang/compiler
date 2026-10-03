@@ -2,7 +2,7 @@
 // @exit: 0
 
 // A MetaScript function never receives a struct's address through a `Ptr<S> | null` parameter:
-// that promotion is for extern C functions only (corpus 805, 807; fixedbugs bug209). Code that
+// that promotion is for extern C functions only (corpus 805, 807; src/test/handoff/pointerSlotRelation.ms). Code that
 // reads the caller's struct takes it by value, code that writes it takes `ref`, and the nullable
 // pointer parameter takes a pointer or `null`.
 // Axes: a read, null, a write through `ref`, a struct field of a local.

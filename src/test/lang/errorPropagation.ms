@@ -86,6 +86,40 @@ function errorConversionFeedGeneric<E>(fail: boolean, fallback: E): Result<uint6
 	return Result.ok(value);
 }
 
+struct AccountFault { code: int32; }
+
+struct PetFault { code: int32; }
+
+struct FightFault { code: int32; }
+
+converter errorConversionAccountFaultToPet(e: AccountFault): PetFault {
+	return { code: e.code + 100 };
+}
+
+converter errorConversionPetFaultToFight(e: PetFault): FightFault {
+	return { code: e.code + 1000 };
+}
+
+function errorConversionLoadFault(fail: boolean): Result<int32, AccountFault> {
+	if (fail) return Result.err({ code: 7 });
+	return Result.ok(1);
+}
+
+function errorConversionReloadFault(fail: boolean): Result<int32, AccountFault> {
+	const value = try errorConversionLoadFault(fail);
+	return Result.ok(value + 1);
+}
+
+function errorConversionFeedFault(fail: boolean): Result<int32, PetFault> {
+	const value = try errorConversionLoadFault(fail);
+	return Result.ok(value + 1);
+}
+
+function errorConversionFightFault(fail: boolean): Result<int32, FightFault> {
+	const value = try errorConversionFeedFault(fail);
+	return Result.ok(value + 1);
+}
+
 test "errorPropagation: no-try raising call in a test block compiles and runs" {
     const a = testRaiseMayRaise(1);
     assert a == 2;
@@ -129,6 +163,20 @@ test "errorPropagation: try converts an enum error through its converter" {
 	assert !err.ok && err.error == ErrorConversionPetError.Account;
 }
 
+test "errorPropagation: try converts between distinct struct errors of identical fields" {
+	const ok = errorConversionFeedFault(false);
+	assert ok.ok && ok.value == 2;
+	const err = errorConversionFeedFault(true);
+	assert !err.ok && err.error.code == 107;
+}
+
+test "errorPropagation: try with the same struct error type passes the error through" {
+	const ok = errorConversionReloadFault(false);
+	assert ok.ok && ok.value == 2;
+	const err = errorConversionReloadFault(true);
+	assert !err.ok && err.error.code == 7;
+}
+
 test "errorPropagation: the converter is chosen by the target error type" {
 	const err = errorConversionCharge(true);
 	assert !err.ok && (err.error as uint64) == 1001;
@@ -141,6 +189,13 @@ test "errorPropagation: a converted try inside a function reached by another con
 	assert ok.ok && ok.value == 114;
 	const err = errorConversionFight(true);
 	assert !err.ok && err.error == ErrorConversionFightError.Pet;
+}
+
+test "errorPropagation: a struct error crosses two converted try levels, one conversion each" {
+	const ok = errorConversionFightFault(false);
+	assert ok.ok && ok.value == 3;
+	const err = errorConversionFightFault(true);
+	assert !err.ok && err.error.code == 1107;
 }
 
 test "errorPropagation: an async try converts through its converter" {

@@ -53,6 +53,10 @@ test "array storage: constant indexes respect sized bounds while dynamic indexes
 		{ source: "function f(): int32 { const a: int32[] = [1, 2, 3]; return a[5]; }", errors: 0, needle: "" },
 		{ source: "function f(): int32 { let a: int32[1] = [7]; return a[0]; }", errors: 0, needle: "" },
 		{ source: "function f(): int32 { let a: int32[1] = [7]; return a[1]; }", errors: 1, needle: "index 1 out of bounds" },
+		{ source: "const I = 5;\nfunction f(): int32 { let a: int32[4] = [1, 2, 3, 4]; return a[I]; }", errors: 1, needle: "index 5 out of bounds" },
+		{ source: "function f(): int32 { const k = 2 + 3; let a: int32[4] = [1, 2, 3, 4]; return a[k]; }", errors: 1, needle: "index 5 out of bounds" },
+		{ source: "const I = 3;\nfunction f(): int32 { let a: int32[4] = [1, 2, 3, 4]; return a[I]; }", errors: 0, needle: "" },
+		{ source: "function f(): int32 { let k = 5; let a: int32[4] = [1, 2, 3, 4]; return a[k]; }", errors: 0, needle: "" },
 	];
 	for (const item of cases) {
 		assert strictErrorCount(item.source) == item.errors, item.source;

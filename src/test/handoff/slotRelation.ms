@@ -34,10 +34,13 @@ test "slot relation: the argument relation governs every storage boundary" {
 		{ source: "Other", target: "Ptr<Value> | null", accepted: false },
 		{ source: "null", target: "Ptr<Value> | null", accepted: true },
 		{ source: "Ptr<Value> | null", target: "Ptr<Value> | null", accepted: true },
+		{ source: "Cell<int32>", target: "Cell<string>", accepted: false },
+		{ source: "Cell<int32>", target: "Cell<int32>", accepted: true },
 		{ source: "string", target: '"north" | "south"', accepted: false },
 	];
 	for (const pair of pairs) {
-		const pre = "class Box { n: int32 = 1; } struct Value { n: int32; } struct Other { s: string; }\n";
+		const pre = "class Box { n: int32 = 1; } struct Value { n: int32; } struct Other { s: string; }\n"
+			+ "class Cell<T> { v: T; constructor(v: T) { this.v = v; } }\n";
 		const declaration = "function f(value: " + pair.source + "): void { const slot: " + pair.target + " = value; }";
 		const assignment = "function f(value: " + pair.source + ", initial: " + pair.target + "): void { let slot: " + pair.target + " = initial; slot = value; }";
 		const returned = "function f(value: " + pair.source + "): " + pair.target + " { return value; }";
@@ -91,13 +94,16 @@ test "slot relation: contextual fitting survives generic bodies and expression c
 		{ name: "contextual cast, void callback and rest argument", source: "class Base { n: int32 = 0; } class Derived extends Base {}\n"
 			+ "function pick(c: boolean, a: Base, b: Base): Derived { return (c ? a : b) as Derived; }\n"
 			+ "function effect(f: () => void): void { f(); } function run(c: boolean): void { const i: int32 = 7; effect(() => i + 1); console.log(c ? \"yes\" : \"no\"); }\n" },
-		{ name: "unused generic body with a contextually typed empty array field", source: "interface Op<T> { v: T; } interface Queue<T> { ops: Op<T>[]; reset: boolean; } class Host<T> { attach(): Queue<T> { const q: Queue<T> = { ops: [], reset: false }; return q; } }\n" },
 	];
 	for (const item of cases) {
 		assert strictErrorCount(item.source) == 0, item.name;
 		const c = compileToC(item.source);
 		assert c.ok, item.name + (c.ok ? "" : ": " + c.error);
 	}
+	const genericBodies = [
+		{ name: "unused generic body with a contextually typed empty array field", source: "interface Op<T> { v: T; } interface Queue<T> { ops: Op<T>[]; reset: boolean; } class Host<T> { attach(): Queue<T> { const q: Queue<T> = { ops: [], reset: false }; return q; } }\n" },
+	];
+	for (const item of genericBodies) assert strictErrorCount(item.source) == 0, item.name;
 	const bad = "function via<T>(value: T): int32 { const n: int32 = value; return n; } const n = via<string>(\"a\");";
 	assert strictErrorCount(bad) > 0;
 	const js = compileToJS("function f(s: string): void { const n: int32 = s; }");

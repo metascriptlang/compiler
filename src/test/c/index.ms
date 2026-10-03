@@ -38,3 +38,7 @@ import "./buildIsolation";
 import "./aggregateLifecycle";
 import "./referenceTransfer";
 import "./sliceBounds";
+import "./sameNameGenericInstances";
+import "./asCoercionNullable";
+import "./nominalArrayLayout";
+import "./vecOfStructCopies";

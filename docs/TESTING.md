@@ -54,11 +54,12 @@ program belongs under `lang/` or in a standalone semantic corpus entry;
 emitted ABI details belong under `c/` or `js/` only when the emitted form
 itself is the contract. Reuse an existing owner before adding a file.
 
-The historical `fixedbugs/` lane still runs while its contracts migrate, but
-it is **not** an authoring destination. Keep a repro variant when it catches
-an independent mechanism; retire obsolete emitted-token and compile-only
-assertions once a real consumer proves their intended behavior. The final
-cutover removes that lane and its old known-red identities together.
+Keep a repro variant when it catches an independent mechanism; drop
+emitted-token and compile-only assertions once a real consumer proves their
+intended behavior. A contract that is red only because of an open compiler bug
+sits in `<module>Parked.ms` beside its module: no index imports it, the inbox
+card names it on its `Parked at:` line, and the fixing session moves it into
+the module and registers it.
 
 ### Pipeline tests (`c/*.ms`, `js/*.ms`)
 

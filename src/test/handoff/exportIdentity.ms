@@ -2,6 +2,7 @@ import { CheckerContext, ExtensionRegistry, buildExportInfo, createExportRegistr
 import { makeSymbol } from "../../checker/symbol";
 import { createNodeAt, NodeKind, SymbolKind, makeLoc, Symbol } from "../../ast/node";
 import { inferredType } from "../../checker/types";
+import { compileProjectToC, compileProjectToJS, MapEntry } from "../helpers";
 
 function declaringSymbol(name: string, kind: NodeKind): Result<Symbol, string> {
 	const loc = makeLoc(0, 0);
@@ -62,4 +63,88 @@ test "export identity: an exported alias does not rename or clone the defining s
 		assert original.declNode.kind == kind;
 		assert findExportsByName(registry, "Original").length == 0;
 	}
+}
+
+const IDENTITY_LIB_PATH = "test/exportIdentity/lib.ms";
+const IDENTITY_MAIN_PATH = "test/exportIdentity/main.ms";
+
+function identityEntries(libSource: string, mainSource: string): MapEntry[] {
+	return [
+		{ entryPath: IDENTITY_LIB_PATH, entrySource: libSource },
+		{ entryPath: IDENTITY_MAIN_PATH, entrySource: mainSource },
+	];
+}
+
+function refusedInMain(libSource: string, mainSource: string): boolean {
+	const cCode = compileProjectToC(identityEntries(libSource, mainSource), IDENTITY_MAIN_PATH);
+	return cCode.startsWith("ERROR: check [") && cCode.contains("main.ms]");
+}
+
+function fitsOnBothBackends(libSource: string, mainSource: string): boolean {
+	const cCode = compileProjectToC(identityEntries(libSource, mainSource), IDENTITY_MAIN_PATH);
+	const jsCode = compileProjectToJS(identityEntries(libSource, mainSource), IDENTITY_MAIN_PATH);
+	return !cCode.startsWith("ERROR") && !jsCode.startsWith("ERROR");
+}
+
+test "export identity: fit follows the declaration of a generic or enum, not its name" {
+	const cases = [
+		{
+			name: "a generic class with other fields",
+			libSource: `export class Box<T> { v: T; constructor(v: T) { this.v = v; } }\n` +
+				`export function mkA(): Box<string> { return new Box<string>("a"); }\n`,
+			redeclared: `import { mkA } from "./lib";\n` +
+				`class Box<T> { n: int32; w: T; ` +
+				`constructor(w: T) { this.n = 7; this.w = w; } }\n` +
+				`const m: Box<string> = mkA();\nconsole.log(m.w);\n`,
+			imported: `import { Box, mkA } from "./lib";\n` +
+				`const m: Box<string> = mkA();\n` +
+				`const n: Box<string> = new Box<string>("b");\n` +
+				`console.log(m.v, n.v);\n`,
+		},
+		{
+			name: "a generic interface with other fields",
+			libSource: `export interface Box<T> { v: T; }\n` +
+				`export function mkA(): Box<string> { return { v: "a" }; }\n`,
+			redeclared: `import { mkA } from "./lib";\n` +
+				`interface Box<T> { n: int32; w: T; }\n` +
+				`const m: Box<string> = mkA();\nconsole.log(m.w);\n`,
+			imported: `import { Box, mkA } from "./lib";\n` +
+				`const m: Box<string> = mkA();\nconsole.log(m.v);\n`,
+		},
+		{
+			name: "a generic alias with other fields, met as an argument",
+			libSource: `export type Box<T> = { v: T };\n` +
+				`export function mkA(): Box<string> { return { v: "a" }; }\n`,
+			redeclared: `import { mkA } from "./lib";\n` +
+				`type Box<T> = { n: int32, w: T };\n` +
+				`function show(b: Box<string>): string { return b.w; }\n` +
+				`console.log(show(mkA()));\n`,
+			imported: `import { Box, mkA } from "./lib";\n` +
+				`function show(b: Box<string>): string { return b.v; }\n` +
+				`console.log(show(mkA()));\n`,
+		},
+		{
+			name: "an enum with other members",
+			libSource: `export enum K { A, B, C }\n` +
+				`export function mkA(): K { return K.C; }\n`,
+			redeclared: `import { mkA } from "./lib";\n` +
+				`enum K { X, Y }\n` +
+				`const m: K = mkA();\nconsole.log(m == K.X);\n`,
+			imported: `import { K, mkA } from "./lib";\n` +
+				`const m: K = mkA();\nconsole.log(m == K.C);\n`,
+		},
+	];
+	for (const item of cases) {
+		assert fitsOnBothBackends(item.libSource, item.imported), item.name + ": imported";
+		assert refusedInMain(item.libSource, item.redeclared), item.name + ": redeclared";
+	}
+}
+
+test "export identity: a same-shaped generic interface of another module fits structurally" {
+	const libSource = `export interface Box<T> { v: T; }\n` +
+		`export function mkA(): Box<string> { return { v: "a" }; }\n`;
+	const mainSource = `import { mkA } from "./lib";\n` +
+		`interface Box<T> { v: T; }\n` +
+		`const m: Box<string> = mkA();\nconsole.log(m.v);\n`;
+	assert fitsOnBothBackends(libSource, mainSource);
 }

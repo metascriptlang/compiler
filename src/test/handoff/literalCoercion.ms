@@ -224,6 +224,40 @@ test "a bitwise integer constant keeps its int32 value, so it fits an int32 slot
 	assert strictErrorCount("const v: int32 = ~0 & 255;") == 0;
 }
 
+test "a constant cast to a signed type is refused by its folded value when it does not fit" {
+	const casts = [
+		{ fits: "const K = 127;\nfunction f(): int8 { return K as int8; }", refused: "const K = 300;\nfunction f(): int8 { return K as int8; }", needle: "cannot convert 300 to int8" },
+		{ fits: "const K = 30000;\nfunction f(): int16 { return K as int16; }", refused: "const K = 30000;\nfunction f(): int16 { return (K + K) as int16; }", needle: "cannot convert 60000 to int16" },
+		{ fits: "const K = -128;\nfunction f(): int8 { return K as int8; }", refused: "const K = -200;\nfunction f(): int8 { return K as int8; }", needle: "cannot convert -200 to int8" },
+		{ fits: "function f(): int8 { const k = 100; return k as int8; }", refused: "function f(): int8 { const k = 300; return k as int8; }", needle: "cannot convert 300 to int8" },
+	];
+	for (const item of casts) {
+		assert strictErrorCount(item.fits) == 0, item.fits;
+		assert strictErrorCount(item.refused) == 1, item.refused;
+		assert hasError(item.refused, item.needle), item.refused;
+	}
+}
+
+test "a constant cast to an unsigned type is not judged against its range" {
+	assert strictErrorCount("const K = 300;\nfunction f(): uint8 { return K as uint8; }") == 0;
+}
+
+test "a cast of a run-time value is left to the run-time range check" {
+	assert strictErrorCount("function f(k: int32): int8 { return k as int8; }") == 0;
+}
+
+test "a local constant is judged at a narrower slot by its folded value, as a module constant is" {
+	const slots = [
+		{ fits: "const K = 100;\nfunction f(): int8 { const b: int8 = K; return b; }", refused: "const K = 300;\nfunction f(): int8 { const b: int8 = K; return b; }" },
+		{ fits: "function f(): int8 { const k = 100; const b: int8 = k; return b; }", refused: "function f(): int8 { const k = 300; const b: int8 = k; return b; }" },
+	];
+	for (const slot of slots) {
+		assert strictErrorCount(slot.fits) == 0, slot.fits;
+		assert strictErrorCount(slot.refused) == 1, slot.refused;
+		assert hasError(slot.refused, "cannot convert 300 to int8"), slot.refused;
+	}
+}
+
 test "negative literal out of range for uint8 is error" {
 	const src = "const x: uint8 = -1;";
 	// -1 is UnaryExpr so won't trigger literal check directly

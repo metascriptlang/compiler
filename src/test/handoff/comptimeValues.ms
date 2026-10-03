@@ -100,10 +100,15 @@ test "comptime values: floating representation" {
 test "comptime values: unsupported evaluation" {
 	const cases = [
 		{ name: "an operator the engine cannot evaluate is a compile error, not a silent 0 r", source: "const a: int32 = -8; return a >>> 1;", low: 0, high: 0 },
-		{ name: "signed narrowing out of range is an error, as at runtime r", source: "const i: int32 = 300; return i as int8;", low: 0, high: 0 },
 	];
 	for (const item of cases) {
 		const result = evalSourceFull(item.source);
 		assert result.lastError != "", item.name;
 	}
+}
+
+test "comptime values: an operator the engine cannot evaluate is reported by name" {
+	const result = evalSourceFull("const a: int32 = -8; return a >>> 1;");
+	const expected = "cannot evaluate operator '>>>' at comptime";
+	assert result.lastError.contains(expected), result.lastError;
 }

@@ -56,10 +56,12 @@ function rowsOf(): JsonValue[] {
 }
 
 test "macro witness access: indexed hoisted and generic reads preserve every row field" {
+	const contextual: Row[] = decodeGeneric(rowsOf(), null);
 	const variants: Row[][] = [
 		decodeIndexed(rowsOf()),
 		decodeHoisted(rowsOf()),
 		decodeGeneric<Row>(rowsOf(), null),
+		contextual,
 	];
 	for (let route: int32 = 0; route < variants.length; route++) {
 		const rows = variants[route];
@@ -145,6 +147,9 @@ interface CodecPalette { name: string; cs: CodecColor[]; }
 test "macro enum codec: each narrowed discriminant round-trips with its payload" {
 	const narrowed: CodecEvent = { kind: CodecKind.Click, x: 7 };
 	assert JSON.stringify(narrowed) == `{"kind":"Click","x":7}`;
+	const narrowedKey: CodecEvent = { kind: CodecKind.Key, code: 42 };
+	const back = JSON.parse<CodecEvent>(JSON.stringify(narrowedKey));
+	assert back.ok && back.value.kind == CodecKind.Key;
 	const values: CodecEvent[] = [
 		{ kind: CodecKind.Click, x: 7 },
 		{ kind: CodecKind.Key, code: 42 },
@@ -156,8 +161,6 @@ test "macro enum codec: each narrowed discriminant round-trips with its payload"
 		const parsed = JSON.parse<CodecEvent>(text);
 		assert parsed.ok;
 		assert parsed.value.kind == value.kind;
-		if (parsed.value.kind == CodecKind.Click) assert parsed.value.x == 7;
-		else assert parsed.value.code == 42;
 	}
 }
 
@@ -178,7 +181,7 @@ test "macro enum codec: an enum array reads member names back" {
 
 test "macro enum codec: a number in an enum array is an error naming the element" {
 	const r = JSON.parse<CodecPalette>(`{"name":"y","cs":["Blue",0]}`);
-	assert !r.ok && r.error.includes("cs[1]");
+	assert !r.ok && r.error.includes("field 'cs[1]': expected CodecColor member name, got int");
 }
 
 test "macro enum codec: a plain enum field reads its member name, holey values included" {
@@ -192,8 +195,9 @@ test "macro enum codec: a number where a plain enum field is expected is an erro
 	const pr = parseJson(`{"name":"y","c":1,"s":"Busy","cs":[]}`);
 	const errs: string[] = [];
 	const p: CodecPaint = jsonValueToStructE(pr.ok ? pr.value : jsonNull(), null as CodecPaint | null, errs, "");
-	assert p.name == "y" && errs.length == 2 && errs[0].contains("'c'")
-		&& errs[1].contains("'s'") && errs[1].contains("Busy");
+	assert p.name == "y" && errs.length == 2 &&
+		errs[0] == "field 'c': expected CodecColor member name, got int" &&
+		errs[1] == "field 's': 'Busy' is not a member of CodecStatus";
 }
 
 enum ContextColor { Red, Green, Blue }

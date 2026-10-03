@@ -743,7 +743,7 @@ caller's choice, not the macro's. It resolves in the call site's scope (that is
 where the user spelled the name). Because the value differs per call site, the
 macro body is baked into a CLONE and the compiled-macro cache is keyed by
 (macro name, type argument); a name-only key would let the first instantiation
-poison every later one (`fixedbugs/bug055.ms` pins exactly that).
+poison every later one (`src/test/handoff/macroReflection.ms` pins exactly that).
 
 ```ms
 export macro decode(s: Node): Node {
@@ -782,7 +782,7 @@ model (a symbol node in the macro output; re-checked, never re-bound):
 
 - the call site needs NO imports for names the macro emits;
 - a user-local declaration of the same name CANNOT hijack the macro's callee
-  (`fixedbugs/bug056.ms` pins both);
+  (`src/test/lang/macroSourceForms.ms` pins both);
 - non-exported helpers of the macro's own module are bindable.
 
 ```ms

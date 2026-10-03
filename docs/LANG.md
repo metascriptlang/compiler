@@ -1078,13 +1078,13 @@ const r = slot as Row | null;   // slot: number | Row | null — a Row converts,
   (`Wire as Align | null`, `number | Row | null as Row | null`) alike, as it drops bound checks.
 
 Measured on tree `2d72bcc3` plus this change: corpus `649`–`654` on C drc/orc/danger, JS and ESM,
-`fixedbugs/bug602`. The nullable tag test under `--danger`: corpus `674`, and `mk(0) as Align | null`
+`src/test/js/asConversion.ms`. The nullable tag test under `--danger`: corpus `674`, and `mk(0) as Align | null`
 on tree `60b63319` prints the error in debug and `--release` and passes under `--danger`. Not covered: the Raiser VM tests no conversion, and JS tests the tag only for a
 string, number or boolean member.
 
 Class members, measured on tree `af10d638` plus the class-member change (`number | Row | null`,
 `number | Row`, `Row | Other | null`, `Base | Child | null`): the held value and null convert to
-the same result on C drc/orc, JS and Raiser (corpus `656`, `fixedbugs/bug603`; Raiser cannot run
+the same result on C drc/orc, JS and Raiser (corpus `656`; Raiser cannot run
 `Base | Child`, it does not evaluate `super`). A wrong member stops with the message above on C
 drc/orc/release and throws an Error with the same text on JS (corpus `657`, `658`, guard
 `asClassMemberChecked`). Under `--danger` neither the nullable nor the bare union stops (exit 139 on

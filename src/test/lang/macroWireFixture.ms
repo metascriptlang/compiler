@@ -8,7 +8,7 @@ export macro declareWireShape(node: Node): Node {
 		spliceNodes: [
 			{
 				kind: NodeKind.InterfaceDecl, line: L, column: C,
-				interfaceName: "WireShape",
+				interfaceName: "SplicedShape",
 				interfaceFields: ["a"],
 				interfaceFieldTypes: ["number"],
 				interfaceExtends: [],
