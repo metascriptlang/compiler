@@ -3,7 +3,7 @@ import "../../parser/statements/core";
 import { checkProgramWithRegistry, preludeContextFor } from "../../checker/checkPass";
 import { CheckerContext, ExportRegistry } from "../../checker/context";
 import { monomorphizeProgram } from "../../monomorphize/collect";
-import { Node, NodeKind, Symbol, NewExprData, MemberExprData, ProgramData } from "../../ast/node";
+import { Node, NodeKind, Symbol, NewExprData, ProgramData } from "../../ast/node";
 import { Module, ModuleGraph } from "../../module/graph";
 import { forEachChild } from "../../ast/visitor";
 import { resetBuildState } from "../../compiler/buildSession";
@@ -30,10 +30,10 @@ function instanceSyms(n: Node | null, out: Symbol[]): void {
 	forEachChild(n, (c: Node): void => { instanceSyms(c, out); });
 }
 
-function toStringSyms(n: Node | null, out: Symbol[]): void {
+function callSyms(n: Node | null, out: Symbol[]): void {
 	if (n == null) return;
-	if (n.kind == NodeKind.MemberExpr && (n.data as MemberExprData).property == "toString" && n.resolvedSym != null) out.push(n.resolvedSym);
-	forEachChild(n, (c: Node): void => { toStringSyms(c, out); });
+	if (n.kind == NodeKind.CallExpr && n.resolvedSym != null) out.push(n.resolvedSym);
+	forEachChild(n, (c: Node): void => { callSyms(c, out); });
 }
 
 test "instanceSymbolIdentity: the instance of a generic class carries its declaration and an item" {
@@ -50,16 +50,18 @@ test "instanceSymbolIdentity: the instance of a generic class carries its declar
 	}
 }
 
-test "instanceSymbolIdentity: the compiler-provided toString carries an item on a class and on a struct" {
+test "instanceSymbolIdentity: toString on a class and on an interface binds the std dump instance, which carries an item and its declaration" {
 	const sources = [
 		"class UserPoint { x: number = 1; }\nfunction userShow(p: UserPoint): string { return p.toString(); }",
 		"interface UserShape { w: number; }\nfunction userShow(s: UserShape): string { return s.toString(); }",
 	];
 	for (const source of sources) {
 		const found: Symbol[] = [];
-		toStringSyms(checkedProgram(source), found);
-		assert found.length == 1, `toString count ${found.length}: ${source}`;
-		assert found[0].item > 0, `toString item ${found[0].item}: ${source}`;
+		callSyms(checkedProgram(source), found);
+		assert found.length == 1, `call count ${found.length}: ${source}`;
+		assert found[0].item > 0, `dump instance item ${found[0].item}: ${source}`;
+		const generic = found[0].instantiatedFrom;
+		assert generic != null && generic.declNode != null && generic.declNode.kind == NodeKind.FunctionDecl, `dump instance declaration: ${source}`;
 	}
 }
 
