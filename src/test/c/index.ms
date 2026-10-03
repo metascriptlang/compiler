@@ -30,6 +30,7 @@ import "./rangeCheckPolicy";
 import "./nominalFit";
 import "./structFieldDecorators";
 import "./bitSetWidth";
+import "./enumStorageWidth";
 import "./bitSetAlgebra";
 import "./sizeofFold";
 import "./numericNarrowing";
