@@ -2,7 +2,7 @@
 import {
 	AccountMeta,
 	Bytes,
-	Instruction,
+	InstructionAccount,
 	ProgramError,
 	Pubkey,
 	account,
@@ -41,11 +41,11 @@ function vrfList(args: Bytes): Result<uint64, ProgramError> {
 
 function crankList(args: Bytes): Result<uint64, ProgramError> {
 	const payer = try signerAccount(0);
-	const task = Instruction.forProgram(programId(), 2, args.length);
-	task.addWritable(try account(1));
-	task.addReadonly(try account(2));
-	task.appendBytes(args);
-	return scheduleTask(payer, 7, 400, 3, task);
+	const task: InstructionAccount[2] = [
+		InstructionAccount.writable(try account(1)),
+		InstructionAccount.readonly(try account(2)),
+	];
+	return scheduleTask(payer, 7, 400, 3, programId(), task, args);
 }
 
 function crankSingle(args: Bytes): Result<uint64, ProgramError> {

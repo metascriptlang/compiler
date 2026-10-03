@@ -449,6 +449,10 @@ export function readonlySigner(this typeof InstructionAccount, account: Account)
 	return { key: account.address + 8, writable: 0, signer: 1 };
 }
 
+export function address(this meta: InstructionAccount): Pubkey {
+	return loadPubkey(meta.key);
+}
+
 export function flagged(
 	this typeof InstructionAccount,
 	account: Account,

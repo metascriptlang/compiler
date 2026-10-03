@@ -1,4 +1,12 @@
-import { Account, Bytes, Instruction, createProgramAccountSeeded } from "./core";
+import {
+	Account,
+	Bytes,
+	InstructionAccount,
+	MAX_CPI_ACCOUNTS,
+	borshBuffer,
+	createProgramAccountSeeded,
+	invokeList,
+} from "./core";
 import { ProgramError } from "./error";
 import { findProgramAddressOf } from "./macro";
 import { Pubkey, pubkeyOf } from "./pubkey";
@@ -37,19 +45,20 @@ function scheduleCommit(
 ): Result<uint64, ProgramError> {
 	if (!payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
 	const prefix: uint64 = feeVault === null ? 2 : 3;
-	const instruction = Instruction.forProgram(
-		Pubkey.magicProgram(),
-		prefix + (committed.length as uint64),
-		4,
-	);
-	instruction.addAccount(payer, payer.isWritable(), true);
-	instruction.addWritable(magicContextAccount);
-	if (feeVault !== null) { instruction.addWritable(feeVault); }
-	for (const account of committed) {
-		instruction.addAccount(account, account.isWritable(), account.isSigner());
+	if (prefix + (committed.length as uint64) > MAX_CPI_ACCOUNTS) {
+		return Result.err(ProgramError.invalidArgument());
 	}
-	instruction.appendU32(discriminant);
-	return instruction.invoke();
+	let metas: InstructionAccount[16];
+	metas[0] = InstructionAccount.flagged(payer, payer.isWritable(), true);
+	metas[1] = InstructionAccount.writable(magicContextAccount);
+	if (feeVault !== null) { metas[2] = InstructionAccount.writable(feeVault); }
+	let at = prefix as int32;
+	for (const account of committed) {
+		metas[at] = InstructionAccount.flagged(account, account.isWritable(), account.isSigner());
+		at = at + 1;
+	}
+	let storage: uint8[4] = [];
+	return invokeList(Pubkey.magicProgram(), metas[0..at], borshBuffer(storage).u32(discriminant));
 }
 
 export function commit(payer: Account, committed: Account, magicContextAccount: Account): Result<uint64, ProgramError> {
@@ -151,30 +160,32 @@ function scheduled(
 	taskId: uint64,
 	intervalMillis: uint64,
 	iterations: uint64,
-	task: Instruction,
+	taskProgram: Pubkey,
+	taskAccounts: Span<InstructionAccount>,
+	taskData: Bytes,
 ): Result<uint64, ProgramError> {
 	if (!payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
-	const instruction = Instruction.forProgram(
-		Pubkey.magicProgram(),
-		1 + task.accountLength(),
-		36 + task.encodedLength(),
-	);
-	instruction.addWritableSigner(payer);
-	instruction.addAccountsOf(task);
-	instruction.appendU32(6);
-	instruction.appendU64(taskId);
-	instruction.appendU64(intervalMillis);
-	instruction.appendU64(iterations);
-	instruction.appendU64(1);
-	instruction.appendInstruction(task);
-	return instruction.invoke();
-}
-
-export function scheduleTask(payer: Account, taskId: uint64, intervalMillis: uint64, iterations: uint64, target: Account, targetData: Bytes, targetProgram: Pubkey): Result<uint64, ProgramError> {
-	const task = Instruction.forProgram(targetProgram, 1, targetData.length);
-	task.addWritable(target);
-	task.appendBytes(targetData);
-	return scheduled(payer, taskId, intervalMillis, iterations, task);
+	const count = taskAccounts.length as uint64;
+	if (1 + count > MAX_CPI_ACCOUNTS) { return Result.err(ProgramError.invalidArgument()); }
+	let metas: InstructionAccount[16];
+	metas[0] = InstructionAccount.writableSigner(payer);
+	let storage: uint8[1024] = [];
+	let data = borshBuffer(storage)
+		.u32(6)
+		.u64(taskId)
+		.u64(intervalMillis)
+		.u64(iterations)
+		.u64(1)
+		.pubkey(taskProgram)
+		.u64(count);
+	for (let index = 0; index < taskAccounts.length; index++) {
+		const meta = taskAccounts[index];
+		const held: Account = { address: meta.key - 8 };
+		metas[index + 1] = InstructionAccount.flagged(held, held.isWritable(), held.isSigner());
+		data = data.pubkey(meta.address()).u8(meta.signer).u8(meta.writable);
+	}
+	data = data.u64(taskData.length).bytes(taskData);
+	return invokeList(Pubkey.magicProgram(), metas[0..(1 + taskAccounts.length)], data);
 }
 
 export function scheduleTask(
@@ -182,9 +193,24 @@ export function scheduleTask(
 	taskId: uint64,
 	intervalMillis: uint64,
 	iterations: uint64,
-	task: Instruction,
+	target: Account,
+	targetData: Bytes,
+	targetProgram: Pubkey,
 ): Result<uint64, ProgramError> {
-	return scheduled(payer, taskId, intervalMillis, iterations, task);
+	const accounts: InstructionAccount[1] = [InstructionAccount.writable(target)];
+	return scheduled(payer, taskId, intervalMillis, iterations, targetProgram, accounts, targetData);
+}
+
+export function scheduleTask(
+	payer: Account,
+	taskId: uint64,
+	intervalMillis: uint64,
+	iterations: uint64,
+	targetProgram: Pubkey,
+	targetAccounts: Span<InstructionAccount>,
+	targetData: Bytes,
+): Result<uint64, ProgramError> {
+	return scheduled(payer, taskId, intervalMillis, iterations, targetProgram, targetAccounts, targetData);
 }
 
 when (testBuild) {
@@ -461,11 +487,11 @@ when (testBuild) {
 		if (op == 0) {
 			return scheduleTask(payer, 7, 400, 3, try account(1), tail, programId());
 		}
-		const task = Instruction.forProgram(programId(), 2, 2);
-		task.addWritable(try account(1));
-		task.addReadonly(try account(2));
-		task.appendBytes(tail);
-		return scheduleTask(payer, 7, 400, 3, task);
+		const task: InstructionAccount[2] = [
+			InstructionAccount.writable(try account(1)),
+			InstructionAccount.readonly(try account(2)),
+		];
+		return scheduleTask(payer, 7, 400, 3, programId(), task, tail);
 	}
 
 	function scheduleEntry(): void {
@@ -529,6 +555,48 @@ when (testBuild) {
 			.concat(keyBytes(keyOf(5)))
 			.concat(second);
 		assert sameBytes(listed.data, listBytes);
+	}
+
+	function countedStep(): Result<uint64, ProgramError> {
+		const data = instructionData();
+		const count = try data.readU8(0);
+		const withVault = try data.readU8(1);
+		const payer = try account(0);
+		const context = try account(1);
+		const vault = try account(2);
+		let list: Account[16];
+		for (let index = 0; index < 16; index++) { list[index] = try account(3 + index); }
+		const some = list[0..(count as int32)];
+		if (withVault == 1) { return commit(payer, some, context, vault); }
+		return commit(payer, some, context);
+	}
+
+	function countedEntry(): void {
+		const result = countedStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function countedRun(count: uint8, withVault: uint8): uint64 {
+		const accounts = commitAccounts();
+		for (let index = 0; index < 16; index++) {
+			accounts.push(holder(keyOf((20 + index) as uint8), Pubkey.delegationProgram(), []));
+		}
+		const input: uint8[] = [count, withVault];
+		return run(programKey(), accounts, input, countedEntry).result;
+	}
+
+	test "a committed list fills sixteen accounts with the payer and the context, and one more is refused" {
+		assert countedRun(14, 0) == 0;
+		const sent = invocations()[0];
+		assert sent.accounts.length == 16;
+		assert sent.accounts[2].key.equals(keyOf(4)) && sent.accounts[3].key.equals(keyOf(5));
+		assert sent.accounts[4].key.equals(keyOf(20)) && sent.accounts[15].key.equals(keyOf(31));
+		assert countedRun(15, 0) == ProgramError.invalidArgument().code;
+		assert invocations().length == 0;
+		assert countedRun(13, 1) == 0;
+		assert invocations()[0].accounts.length == 16;
+		assert countedRun(14, 1) == ProgramError.invalidArgument().code;
+		assert invocations().length == 0;
 	}
 
 	function undelegateStep(): Result<uint64, ProgramError> {

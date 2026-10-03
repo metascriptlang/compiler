@@ -1,4 +1,12 @@
-import { Account, Bytes, Instruction, assignTo, createAccount } from "./core";
+import {
+	Account,
+	Bytes,
+	InstructionAccount,
+	assignTo,
+	borshBuffer,
+	createAccount,
+} from "./core";
+import { invokeSigned } from "./invoke";
 import { ProgramError } from "./error";
 import { Pubkey, pubkeyOf } from "./pubkey";
 import {
@@ -94,28 +102,30 @@ export function delegateAt(
 	}
 	const _assigned = try assignTo(accounts.delegated, Pubkey.delegationProgram(), signer);
 
-	const instruction = Instruction.forProgram(Pubkey.delegationProgram(), 7, 49 + 36 * seedCount);
-	instruction.addWritableSigner(accounts.payer);
-	instruction.addWritableSigner(accounts.delegated);
-	instruction.addReadonly(accounts.ownerProgram);
-	instruction.addWritable(accounts.buffer);
-	instruction.addWritable(accounts.delegationRecord);
-	instruction.addWritable(accounts.delegationMetadata);
-	instruction.addReadonly(accounts.systemProgram);
-	instruction.appendU64(0);
-	instruction.appendU32(config.commitFrequencyMs);
-	instruction.appendU32(seedCount as uint32);
+	let storage: uint8[625] = [];
+	let data = borshBuffer(storage).u64(0).u32(config.commitFrequencyMs).u32(seedCount as uint32);
 	for (const seed of seeds) {
 		const written: Bytes = { address: seed.address, length: seed.length };
-		instruction.appendU32(seed.length as uint32);
-		instruction.appendBytes(written);
+		data = data.u32(seed.length as uint32).bytes(written);
 	}
 	if (config.validator.isZero()) {
-		instruction.appendU8(0);
+		data = data.u8(0);
 	} else {
-		instruction.appendU8(1);
-		instruction.appendPubkey(config.validator);
+		data = data.u8(1).pubkey(config.validator);
 	}
-	const _delegated = try instruction.invoke(signer);
+	const _delegated = try invokeSigned(
+		Pubkey.delegationProgram(),
+		[
+			InstructionAccount.writableSigner(accounts.payer),
+			InstructionAccount.writableSigner(accounts.delegated),
+			InstructionAccount.readonly(accounts.ownerProgram),
+			InstructionAccount.writable(accounts.buffer),
+			InstructionAccount.writable(accounts.delegationRecord),
+			InstructionAccount.writable(accounts.delegationMetadata),
+			InstructionAccount.readonly(accounts.systemProgram),
+		],
+		data,
+		signer,
+	);
 	return closeBuffer(accounts.payer, accounts.buffer);
 }
