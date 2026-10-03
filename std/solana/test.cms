@@ -1841,3 +1841,35 @@ test "accounts<T>() reads the discriminator of each account type, so an account 
 	assert run(programKey(), counters, [], twoTypesEntry).result ==
 		ProgramError.accountDiscriminatorMismatch().code;
 }
+
+export struct BySeed {
+	owner: Signer;
+	@seeds("safe", owner, leBytes(given.seed)) @bump(safe.bump) safe: Mutable<Safe>;
+}
+
+function bySeedStep(): Result<uint64, ProgramError> {
+	const given = try args<MakeArgs>();
+	const x = try accounts<BySeed>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function bySeedEntry(): void { codeOf(bySeedStep()); }
+
+test "a seed names an instruction argument through the local that holds it where accounts<T>() is written" {
+	const seven: uint64 = 7;
+	const derived = findProgramAddressOf(programKey(), ["safe", keyOf(2), leBytes(seven)]);
+	assert derived.ok;
+	if (derived.ok) {
+		const found = derived.value;
+		const safe = safeAt(found.key, keyOf(2), 9, found.bump);
+		const bytes = makeTail(7, 0, 0, 41);
+		const data: uint8[] = [0, 0, 0, 0, 0, 0, 0, 0];
+		for (const byte of bytes) { data.push(byte); }
+		assert run(programKey(), [ownerWallet(), safe], data, bySeedEntry).result == 0;
+		const other = makeTail(8, 0, 0, 41);
+		const wrong: uint8[] = [0, 0, 0, 0, 0, 0, 0, 0];
+		for (const byte of other) { wrong.push(byte); }
+		assert run(programKey(), [ownerWallet(), safe], wrong, bySeedEntry).result ==
+			ProgramError.constraintSeeds().code;
+	}
+}
