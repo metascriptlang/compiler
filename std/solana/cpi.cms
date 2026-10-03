@@ -1,0 +1,134 @@
+@include("runtime/solana/solana.h");
+@compile("runtime/solana/host.c");
+
+import { Pubkey } from "./pubkey";
+import { ProgramError } from "./error";
+import { BorshBuffer } from "./buffer";
+import { SignerSeeds, signingOf } from "./seed";
+
+extern function msSolLoadU8(address: uint64): uint8;
+extern function msSolLoadU64(address: uint64): uint64;
+extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
+extern function msSolMetasAddress(table: Span<InstructionAccount>): uint64 from "msSolSpanAddress";
+extern function msSolInfosAddress(table: Span<CpiAccount>): uint64 from "msSolSpanAddress";
+extern function msSolInstructionAddress(table: Span<CpiInstruction>): uint64 from "msSolSpanAddress";
+extern function msSolInvokeSigned(
+	instruction: uint64,
+	accountInfos: uint64,
+	accountInfoCount: uint64,
+	signers: uint64,
+	signerCount: uint64,
+): uint64;
+
+export const MAX_CPI_ACCOUNTS: uint64 = 16;
+
+// The runtime's SolAccountMeta: the key is the address of the account's key in the input buffer.
+export struct InstructionAccount {
+	key: uint64;
+	writable: uint8;
+	signer: uint8;
+}
+
+// The runtime's SolAccountInfo.
+export struct CpiAccount {
+	key: uint64;
+	lamports: uint64;
+	dataLength: uint64;
+	data: uint64;
+	owner: uint64;
+	rentEpoch: uint64;
+	signer: uint8;
+	writable: uint8;
+	executable: uint8;
+}
+
+// The runtime's SolInstruction.
+export struct CpiInstruction {
+	program: uint64;
+	accounts: uint64;
+	accountCount: uint64;
+	data: uint64;
+	dataLength: uint64;
+}
+
+export function blankAccount(): CpiAccount {
+	return {
+		key: 0,
+		lamports: 0,
+		dataLength: 0,
+		data: 0,
+		owner: 0,
+		rentEpoch: 0,
+		signer: 0,
+		writable: 0,
+		executable: 0,
+	};
+}
+
+function infoOf(meta: InstructionAccount): CpiAccount {
+	const record = meta.key - 8;
+	return {
+		key: meta.key,
+		lamports: record + 72,
+		dataLength: msSolLoadU64(record + 80),
+		data: record + 88,
+		owner: record + 40,
+		rentEpoch: 0,
+		signer: msSolLoadU8(record + 1),
+		writable: msSolLoadU8(record + 2),
+		executable: msSolLoadU8(record + 3),
+	};
+}
+
+export function invokeCpi(
+	program: Pubkey,
+	metas: Span<InstructionAccount>,
+	infos: Span<CpiAccount>,
+	data: BorshBuffer,
+	signers: Span<SignerSeeds> = [],
+): Result<uint64, ProgramError> {
+	const count = metas.length as uint64;
+	if (count > MAX_CPI_ACCOUNTS || infos.length != metas.length || data.overflowed()) {
+		return Result.err(ProgramError.invalidArgument());
+	}
+	for (let index = 0; index < metas.length; index++) { infos[index] = infoOf(metas[index]); }
+	const instruction: CpiInstruction[1] = [{
+		program: msSolSpanAddress(program.bytes),
+		accounts: msSolMetasAddress(metas),
+		accountCount: count,
+		data: data.address,
+		dataLength: data.cursor,
+	}];
+	const signing = signingOf(signers);
+	const status = msSolInvokeSigned(
+		msSolInstructionAddress(instruction),
+		msSolInfosAddress(infos),
+		count,
+		signing.table,
+		signing.count,
+	);
+	if (status != 0) {
+		const failure: ProgramError = { code: status };
+		return Result.err(failure);
+	}
+	return Result.ok(status);
+}
+
+export function invokeList(
+	program: Pubkey,
+	accounts: Span<InstructionAccount>,
+	data: BorshBuffer,
+	signers: Span<SignerSeeds> = [],
+): Result<uint64, ProgramError> {
+	if (accounts.length > MAX_CPI_ACCOUNTS as int32) {
+		return Result.err(ProgramError.invalidArgument());
+	}
+	let infos: CpiAccount[16];
+	return invokeCpi(program, accounts, infos[0..accounts.length], data, signers);
+}
+
+test "the CPI structs have the runtime's sizes" {
+	assert sizeof(InstructionAccount) == 16;
+	assert sizeof(CpiAccount) == 56;
+	assert sizeof(CpiInstruction) == 40;
+}

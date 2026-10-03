@@ -873,7 +873,6 @@ export macro signed(call: Node, seeds: Node): Node {
 	let calleeName = "the callee";
 	if (callee.kind === NodeKind.Identifier) {
 		calleeName = callee.name;
-		callee = { kind: NodeKind.Identifier, line: callee.line, column: callee.column, name: callee.name };
 	}
 	if (callee.kind === NodeKind.MemberExpr) {
 		calleeName = callee.property;

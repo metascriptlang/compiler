@@ -1,3 +1,5 @@
+@include("runtime/solana/solana.h");
+
 import {
 	Account,
 	Discriminator,
@@ -40,8 +42,12 @@ import {
 	programId,
 	ProgramAddress,
 	Bytes,
+	InstructionAccount,
 	borshBuffer,
+	invokeList,
 } from "./index";
+import { invoke, invokeSigned } from "./invoke";
+import { SignerSeeds } from "./seed";
 import { HostAccount, invocations, logs, run, signerIs, textBytes } from "./host";
 import {
 	accounts,
@@ -55,6 +61,8 @@ import {
 	signed,
 } from "./macro";
 import { anchorIdl } from "./idl";
+
+extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 
 
 export struct Counter {
@@ -639,7 +647,8 @@ test "accounts<T>() verifies a Delegated<T> field like delegated<T>()" {
 }
 
 test "borshBuffer writes Borsh little-endian fields and refuses a write past its capacity" {
-	const written = borshBuffer(14).u64(0x0102030405060708).bool(true).i32(-2).u8(9).written();
+	let fields: uint8[14] = [];
+	const written = borshBuffer(fields).u64(0x0102030405060708).bool(true).i32(-2).u8(9).written();
 	assert written.ok;
 	if (written.ok) {
 		const view = written.value;
@@ -648,14 +657,29 @@ test "borshBuffer writes Borsh little-endian fields and refuses a write past its
 		for (let index = 0; index < 14; index++) {
 			const byte = view.readU8(index as uint64);
 			assert byte.ok && byte.value == expected[index];
+			assert fields[index] == expected[index];
 		}
 	}
-	const keyed = borshBuffer(32).pubkey(keyOf(7)).written();
-	assert keyed.ok && keyed.value.length == 32;
-	const over = borshBuffer(8).u64(1).u8(2).written();
+	let key: uint8[32] = [];
+	const keyed = borshBuffer(key).pubkey(keyOf(7)).written();
+	assert keyed.ok && keyed.value.length == 32 && key[0] == 7 && key[31] == 0;
+	let eight: uint8[8] = [];
+	const over = borshBuffer(eight).u64(1).u8(2).written();
 	assert !over.ok;
-	const after = borshBuffer(8).u64(1).u8(2).u8(3).written();
+	const after = borshBuffer(eight).u64(1).u8(2).u8(3).written();
 	assert !after.ok;
+}
+
+test "borshBuffer copies a byte view, keeps its length as the cursor and refuses one past its capacity" {
+	let source: uint8[3] = [4, 5, 6];
+	const view: Bytes = { address: msSolSpanAddress(source), length: 3 };
+	let room: uint8[6] = [];
+	const copied = borshBuffer(room).u8(1).bytes(view).u16(0x0807).written();
+	assert copied.ok && copied.value.length == 6;
+	const expected: uint8[] = [1, 4, 5, 6, 7, 8];
+	for (let index = 0; index < 6; index++) { assert room[index] == expected[index]; }
+	let tight: uint8[3] = [];
+	assert !borshBuffer(tight).u8(1).bytes(view).written().ok;
 }
 
 export enum GaugeOp {
@@ -1111,4 +1135,149 @@ test "createProgramAccount creates a blank target in one call and tops up, alloc
 	const assignHead: uint8[] = [1, 0, 0, 0];
 	assert sameBytes(calls[2].data, joined(assignHead, owner9())) && calls[2].accounts.length == 1;
 	assert calls[2].accounts[0].key.equals(keyOf(2)) && calls[2].accounts[0].signer;
+}
+
+function forwarded(first: Account, signers: Span<SignerSeeds> = []): Result<uint64, ProgramError> {
+	let storage: uint8[4] = [];
+	return invokeSigned(
+		keyOf(9),
+		[InstructionAccount.writable(first)],
+		borshBuffer(storage).u32(5),
+		signers,
+	);
+}
+
+function listed(first: Account, count: uint64): Result<uint64, ProgramError> {
+	let metas: InstructionAccount[17];
+	for (let index = 0; index < 17; index++) {
+		metas[index] = InstructionAccount.flagged(first, index % 2 == 0, index % 3 == 0);
+	}
+	let storage: uint8[4] = [];
+	return invokeList(keyOf(9), metas[0..(count as int32)], borshBuffer(storage).u8(1));
+}
+
+function invokeStep(): Result<uint64, ProgramError> {
+	const op = try instructionData().readU8(0);
+	const a = try account(0);
+	const b = try account(1);
+	const c = try account(2);
+	let storage: uint8[16] = [];
+	if (op == 0) { return invoke(keyOf(9), [], borshBuffer(storage).u8(7)); }
+	if (op == 1) {
+		return invoke(keyOf(9), [InstructionAccount.writable(a)], borshBuffer(storage).u32(2).u64(10));
+	}
+	if (op == 2) {
+		return invoke(
+			keyOf(9),
+			[
+				InstructionAccount.writableSigner(a),
+				InstructionAccount.readonlySigner(b),
+				InstructionAccount.readonly(c),
+				InstructionAccount.flagged(a, true, false),
+				InstructionAccount.flagged(c, false, true),
+			],
+			borshBuffer(storage).u8(1).u8(2),
+		);
+	}
+	if (op == 3) {
+		return signed(
+			invoke(keyOf(9), [InstructionAccount.writable(a)], borshBuffer(storage).u8(3)),
+			["vault", [7]],
+		);
+	}
+	if (op == 4) { return signed(forwarded(a), [["a"], ["b", [1]]]); }
+	if (op == 5) { return forwarded(a); }
+	if (op == 6) {
+		return invoke(
+			keyOf(9),
+			[
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.readonlySigner(a),
+			],
+			borshBuffer(storage).u8(6),
+		);
+	}
+	if (op == 7) { return listed(a, 3); }
+	if (op == 8) { return listed(a, 17); }
+	if (op == 9) {
+		return invoke(keyOf(9), [InstructionAccount.writable(a)], borshBuffer(storage).u64(1).u64(2).u8(3));
+	}
+	return Result.err(ProgramError.invalidArgument());
+}
+
+function invokeEntry(): void { codeOf(invokeStep()); }
+
+function invokeRun(op: uint8): uint64 {
+	const accounts = [wallet(1, 100), holder(2, programKey(), [], false, true), holder(3, programKey(), [], false, false)];
+	const input: uint8[] = [op];
+	return run(programKey(), accounts, input, invokeEntry).result;
+}
+
+test "invoke lists no account, one account or several with their flags, and sends the bytes written" {
+	assert invokeRun(0) == 0;
+	let sent = invocations();
+	assert sent.length == 1 && sent[0].program.equals(keyOf(9));
+	assert sent[0].accounts.length == 0 && sent[0].signers == 0;
+	const one: uint8[] = [7];
+	assert sameBytes(sent[0].data, one);
+
+	assert invokeRun(1) == 0;
+	sent = invocations();
+	assert sent[0].accounts.length == 1 && sent[0].accounts[0].key.equals(keyOf(1));
+	assert sent[0].accounts[0].writable && !sent[0].accounts[0].signer;
+	const two: uint8[] = [2, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(sent[0].data, two);
+
+	assert invokeRun(2) == 0;
+	const flags = invocations()[0].accounts;
+	assert flags.length == 5;
+	assert flags[0].key.equals(keyOf(1)) && flags[0].writable && flags[0].signer;
+	assert flags[1].key.equals(keyOf(2)) && !flags[1].writable && flags[1].signer;
+	assert flags[2].key.equals(keyOf(3)) && !flags[2].writable && !flags[2].signer;
+	assert flags[3].key.equals(keyOf(1)) && flags[3].writable && !flags[3].signer;
+	assert flags[4].key.equals(keyOf(3)) && !flags[4].writable && flags[4].signer;
+	const pair: uint8[] = [1, 2];
+	assert sameBytes(invocations()[0].data, pair);
+}
+
+test "signed signs an invoke, and a function that forwards its signers signs the same way" {
+	assert invokeRun(3) == 0;
+	let sent = invocations();
+	assert sent.length == 1 && sent[0].signers == 1;
+	assert signerIs(sent[0], 0, [textBytes("vault"), [7]]);
+	assert invokeRun(4) == 0;
+	sent = invocations();
+	assert sent[0].signers == 2;
+	assert signerIs(sent[0], 0, [textBytes("a")]) && signerIs(sent[0], 1, [textBytes("b"), [1]]);
+	const five: uint8[] = [5, 0, 0, 0];
+	assert sameBytes(sent[0].data, five);
+	assert invokeRun(5) == 0;
+	assert invocations()[0].signers == 0;
+}
+
+test "sixteen accounts are sent, in order, and the sixteenth keeps its own flags" {
+	assert invokeRun(6) == 0;
+	const sent = invocations()[0];
+	assert sent.accounts.length == 16;
+	assert sent.accounts[0].key.equals(keyOf(1)) && sent.accounts[1].key.equals(keyOf(2));
+	assert sent.accounts[14].key.equals(keyOf(3)) && sent.accounts[14].writable;
+	assert sent.accounts[15].key.equals(keyOf(1));
+	assert !sent.accounts[15].writable && sent.accounts[15].signer;
+}
+
+test "a run-time list sends its accounts, and one past sixteen or data past its buffer is refused" {
+	assert invokeRun(7) == 0;
+	const sent = invocations()[0];
+	assert sent.accounts.length == 3;
+	assert sent.accounts[0].writable && sent.accounts[0].signer;
+	assert !sent.accounts[1].writable && !sent.accounts[1].signer;
+	assert sent.accounts[2].writable && !sent.accounts[2].signer;
+	assert invokeRun(8) == ProgramError.invalidArgument().code;
+	assert invocations().length == 0;
+	assert invokeRun(9) == ProgramError.invalidArgument().code;
+	assert invocations().length == 0;
 }

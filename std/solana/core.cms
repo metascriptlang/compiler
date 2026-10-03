@@ -4,6 +4,8 @@
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { ProgramError } from "./error";
 import { Discriminator } from "./discriminator";
+import { BorshBuffer, Bytes, storePubkey } from "./buffer";
+import { InstructionAccount } from "./cpi";
 import {
 	SeedSlice,
 	SeedTable,
@@ -20,6 +22,8 @@ import {
 } from "./seed";
 
 export { ProgramAddress } from "./seed";
+export { BorshBuffer, Bytes, borshBuffer } from "./buffer";
+export { CpiAccount, InstructionAccount, MAX_CPI_ACCOUNTS, invokeList } from "./cpi";
 
 extern function msSolAccountCount(): uint64;
 extern function msSolAccountAt(index: uint64): uint64;
@@ -53,11 +57,6 @@ extern function msSolSetReturnData(data: Span<uint8>): void;
 extern function msSolGetReturnData(data: uint64, length: uint64, programId: uint64): uint64;
 
 const MAX_RETURN_DATA: uint64 = 1024;
-
-export struct Bytes {
-	address: uint64;
-	length: uint64;
-}
 
 export struct Account {
 	address: uint64;
@@ -95,11 +94,6 @@ export function failWith(error: ProgramError): void {
 function loadPubkey(address: uint64): Pubkey {
 	const at = msSolPointer(address) as Ptr<Pubkey>;
 	return at[];
-}
-
-function storePubkey(key: Pubkey, address: uint64): void {
-	const at = msSolPointer(address) as Ptr<Pubkey>;
-	at[] = key;
 }
 
 function storedPubkey(key: Pubkey): uint64 {
@@ -436,6 +430,31 @@ export function writable(this typeof AccountMeta, key: Pubkey): AccountMeta {
 
 export function readonly(this typeof AccountMeta, key: Pubkey): AccountMeta {
 	return { key: key, writable: false, signer: false };
+}
+
+export function writable(this typeof InstructionAccount, account: Account): InstructionAccount {
+	return { key: account.address + 8, writable: 1, signer: 0 };
+}
+
+export function readonly(this typeof InstructionAccount, account: Account): InstructionAccount {
+	return { key: account.address + 8, writable: 0, signer: 0 };
+}
+
+export function writableSigner(this typeof InstructionAccount, account: Account): InstructionAccount {
+	return { key: account.address + 8, writable: 1, signer: 1 };
+}
+
+export function readonlySigner(this typeof InstructionAccount, account: Account): InstructionAccount {
+	return { key: account.address + 8, writable: 0, signer: 1 };
+}
+
+export function flagged(
+	this typeof InstructionAccount,
+	account: Account,
+	writable: boolean,
+	signer: boolean,
+): InstructionAccount {
+	return { key: account.address + 8, writable: flagByte(writable), signer: flagByte(signer) };
 }
 
 export function appendAccountMeta(this instruction: Instruction, meta: AccountMeta): Instruction {
@@ -1169,79 +1188,6 @@ export function expectAddress(actual: Pubkey, expected: Pubkey): Result<void, Pr
 export function expectHasOne(actual: Pubkey, expected: Pubkey): Result<void, ProgramError> {
 	if (actual != expected) { return Result.err(ProgramError.constraintHasOne()); }
 	return Result.ok(null);
-}
-
-export struct BorshBuffer {
-	address: uint64;
-	capacity: uint64;
-	cursor: uint64;
-}
-
-export function borshBuffer(capacity: uint64): BorshBuffer {
-	return { address: msSolAlloc(capacity), capacity: capacity, cursor: 0 };
-}
-
-function reserved(buffer: BorshBuffer, width: uint64): uint64 {
-	if (buffer.cursor > buffer.capacity || width > buffer.capacity - buffer.cursor) { return 0; }
-	return buffer.address + buffer.cursor;
-}
-
-function filled(buffer: BorshBuffer, at: uint64, width: uint64): BorshBuffer {
-	if (at == 0) { return { ...buffer, cursor: buffer.capacity + 1 }; }
-	return { ...buffer, cursor: buffer.cursor + width };
-}
-
-export function u8(this buffer: BorshBuffer, value: uint8): BorshBuffer {
-	const at = reserved(buffer, 1);
-	if (at != 0) { msSolStoreU8(at, value); }
-	return filled(buffer, at, 1);
-}
-
-export function u16(this buffer: BorshBuffer, value: uint16): BorshBuffer {
-	const at = reserved(buffer, 2);
-	if (at != 0) { msSolStoreU16(at, value); }
-	return filled(buffer, at, 2);
-}
-
-export function u32(this buffer: BorshBuffer, value: uint32): BorshBuffer {
-	const at = reserved(buffer, 4);
-	if (at != 0) { msSolStoreU32(at, value); }
-	return filled(buffer, at, 4);
-}
-
-export function u64(this buffer: BorshBuffer, value: uint64): BorshBuffer {
-	const at = reserved(buffer, 8);
-	if (at != 0) { msSolStoreU64(at, value); }
-	return filled(buffer, at, 8);
-}
-
-export function i8(this buffer: BorshBuffer, value: int8): BorshBuffer {
-	return buffer.u8(value as uint8);
-}
-export function i16(this buffer: BorshBuffer, value: int16): BorshBuffer {
-	return buffer.u16(value as uint16);
-}
-export function i32(this buffer: BorshBuffer, value: int32): BorshBuffer {
-	return buffer.u32(value as uint32);
-}
-export function i64(this buffer: BorshBuffer, value: int64): BorshBuffer {
-	return buffer.u64(value as uint64);
-}
-
-export function bool(this buffer: BorshBuffer, value: boolean): BorshBuffer {
-	return buffer.u8(value ? 1 : 0);
-}
-
-export function pubkey(this buffer: BorshBuffer, value: Pubkey): BorshBuffer {
-	const at = reserved(buffer, 32);
-	if (at != 0) { storePubkey(value, at); }
-	return filled(buffer, at, 32);
-}
-
-export function written(this buffer: BorshBuffer): Result<Bytes, ProgramError> {
-	if (buffer.cursor > buffer.capacity) { return Result.err(ProgramError.invalidArgument()); }
-	const view: Bytes = { address: buffer.address, length: buffer.cursor };
-	return Result.ok(view);
 }
 
 export struct EventWriter {
