@@ -482,11 +482,11 @@ export function appendText(this instruction: Instruction, value: string): Instru
 	return instruction;
 }
 
-export function writableKey(this typeof AccountMeta, key: Pubkey): AccountMeta {
+export function writable(this typeof AccountMeta, key: Pubkey): AccountMeta {
 	return { key: key, writable: true, signer: false };
 }
 
-export function readonlyKey(this typeof AccountMeta, key: Pubkey): AccountMeta {
+export function readonly(this typeof AccountMeta, key: Pubkey): AccountMeta {
 	return { key: key, writable: false, signer: false };
 }
 

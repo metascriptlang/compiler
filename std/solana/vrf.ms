@@ -73,7 +73,7 @@ function requested(
 }
 
 export function requestRandomness(accounts: RandomnessRequest, callerSeed: Pubkey, callbackDiscriminator: uint64, callbackAccount: Account, callbackArguments: Bytes): Result<uint64, ProgramError> {
-	const callbackAccounts: AccountMeta[1] = [AccountMeta.writableKey(callbackAccount.key())];
+	const callbackAccounts: AccountMeta[1] = [AccountMeta.writable(callbackAccount.key())];
 	return requested(
 		accounts,
 		callerSeed,
@@ -191,9 +191,9 @@ when (testBuild) {
 			return requestRandomness(request, keyOf(99), callback, try account(5), args);
 		}
 		const metas: AccountMeta[3] = [
-			AccountMeta.writableKey(keyOf(11)),
-			AccountMeta.readonlyKey(keyOf(12)),
-			AccountMeta.writableKey(keyOf(13)),
+			AccountMeta.writable(keyOf(11)),
+			AccountMeta.readonly(keyOf(12)),
+			AccountMeta.writable(keyOf(13)),
 		];
 		if (op == 2) {
 			const signer = payerSeeds().withBump(try vrfPayerBump());
