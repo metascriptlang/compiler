@@ -59,6 +59,11 @@ export function joinBranchTypes(types: Type[]): Type {
 	}
 	if (prepared.length == 0) return inferredType();
 	if (prepared.length == 1) return prepared[0];
+	let allStrings = true;
+	for (const p of prepared) {
+		if (!isStringLike(p)) { allStrings = false; break; }
+	}
+	if (allStrings) return stringType();
 	let allNumeric = true;
 	for (const p of prepared) {
 		if (!isNumeric(p) && p.kind != TypeKind.Enum) { allNumeric = false; break; }
