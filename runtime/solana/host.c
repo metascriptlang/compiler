@@ -27,6 +27,7 @@ typedef struct {
 static _Alignas(16) uint8_t msSolHostHeap[MS_SOL_HOST_HEAP_SIZE];
 static const uint64_t msSolHostEmptyInput[6];
 static msSolanaContext msSolHostState;
+static uint64_t msSolHostAccounts[MS_SOL_MAX_ACCOUNTS];
 static uint8_t* msSolHostInputBuffer;
 static uint64_t msSolHostFaultCode;
 static char msSolHostFaultText[160];
@@ -43,6 +44,7 @@ msSolanaContext* msSolHostContext(void) {
     if (msSolHostState.input == 0) {
         msSolHostState.input = (uint64_t)msSolHostEmptyInput;
         msSolHostState.arenaPosition = sizeof(msSolanaContext);
+        msSolParse(msSolHostAccounts);
     }
     return &msSolHostState;
 }
@@ -87,6 +89,7 @@ void msSolHostEnter(uint64_t input) {
     memset(&msSolHostState, 0, sizeof(msSolHostState));
     msSolHostState.input = input == 0 ? (uint64_t)msSolHostEmptyInput : input;
     msSolHostState.arenaPosition = sizeof(msSolanaContext);
+    msSolParse(msSolHostAccounts);
     msSolHostFaultCode = 0;
     msSolHostFaultText[0] = 0;
     msSolHostReturnLength = 0;
@@ -734,7 +737,6 @@ void msSolHostSetReturnData(const uint8_t* data, int64_t length) {
     }
     memcpy(msSolHostReturnData, data, (size_t)length);
     msSolHostReturnLength = (uint64_t)length;
-    msSolParse();
     memcpy(msSolHostReturnProgram, (const void*)msSolHostContext()->programId, 32);
 }
 
