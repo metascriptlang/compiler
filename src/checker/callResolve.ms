@@ -22,7 +22,7 @@ import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, reso
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
+import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
@@ -199,6 +199,19 @@ export function stampCallSite(stmt: Node, loc: SourceLocation): void {
 		const vd = stmt.data as VariableDeclData;
 		vd.nameLocation = loc;
 	}
+}
+
+// The expansion result takes over the node it replaces. A bindSym identifier or a
+// checked enum member keeps its Symbol: its spelling is not declared in any scope.
+export function adoptExpansionResult(node: Node, value: Node): void {
+	node.kind = value.kind;
+	node.data = value.data;
+	if (value.location != null) node.location = value.location;
+	node.nodeType = null as unknown as Type;
+	const carried = symbolCarried(value);
+	node.resolvedSym = carried != null ? carried : null as unknown as Symbol;
+	node.flags = (carried != null && value.flags.has(NodeFlag.BoundSym) ? NodeFlag.BoundSym : 0) as BitSet<NodeFlag>;
+	node.variantSlot = 0;
 }
 
 // Last element is the value that replaces the call site; the ones before it are
@@ -1262,15 +1275,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			}
 			// Replace current node contents with the expanded result.
 			// Identity is preserved — the parent (e.g. VariableDecl) still references this node.
-			node.kind = expandedValue.kind;
-			node.data = expandedValue.data;
-			if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
-			if (expandedValue.location != null) node.location = expandedValue.location;
+			adoptExpansionResult(node, expandedValue);
 			node.nodeType = null as unknown as Type;
-			node.resolvedSym = null;
-			node.flags = 0 as BitSet<NodeFlag>;
-			node.variantSlot = 0;
-			keepFoldedType(node, expandedValue);
 			// Re-check the mutated node so its nodeType is set. This drives correct
 			// type inference for the parent (e.g., the VariableDecl declaring `x`).
 			// If the expanded result is itself a macro call, this recurses through

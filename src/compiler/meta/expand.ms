@@ -70,6 +70,7 @@ import { RaiserVM } from "../../raiser/vm";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
 import { valueToNode, takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType } from "./bridge";
+import { symbolCarried } from "../../checker/symbol";
 import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
 import { addWarning } from "../../checker/context";
@@ -187,9 +188,10 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 			properties: symValues, keys: symKeys, keyLocations: [],
 		}, loc));
 	}
-	if (node.resolvedSym != null && node.flags.has(NodeFlag.BoundSym)) {
+	const carried = symbolCarried(node);
+	if (carried != null) {
 		keys.push("symHandle");
-		values.push(mkNumber(registerBoundSym(node.resolvedSym), loc));
+		values.push(mkNumber(registerBoundSym(carried), loc));
 	}
 
 	return createNodeAt(NodeKind.ObjectLiteral, {

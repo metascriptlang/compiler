@@ -1,7 +1,18 @@
-import { Node, NodeKind, Symbol, SymbolFlag, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, Symbol, SymbolFlag, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
 export { SymbolFlag } from "../ast/node";
 import { noneType } from "./types";
 import { IdentCache, createIdentCache, findIdentId, getIdentId } from "./idents";
+
+// A bindSym identifier and a checked enum member cross the macro wire as their
+// Symbol: the enum member's checked form is an identifier spelled with a mangled
+// name that no scope declares, so it can only come back by symbol.
+export function symbolCarried(node: Node): Symbol | null {
+	const sym = node.resolvedSym;
+	if (sym == null) return null;
+	if (node.flags.has(NodeFlag.BoundSym)) return sym;
+	if (node.kind == NodeKind.Identifier && sym.symbolKind == SymbolKind.EnumMember) return sym;
+	return null;
+}
 
 // The lifted constructor's name. Read by reachability (DCE marking),
 // methodToFunction (which creates it) and the C backend (call + proto sites) —

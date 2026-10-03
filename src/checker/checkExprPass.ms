@@ -589,13 +589,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const splice = createNodeAt(NodeKind.SpliceMany, node.data, node.location);
 			const spliceValue = unwrapSpliceManyAtExpr(ctx, node, splice);
 			if (spliceValue == null) { node.nodeType = errorType(); return; }
-			node.kind = spliceValue.kind;
-			node.data = spliceValue.data;
-			if (spliceValue.location != null) node.location = spliceValue.location;
-			node.nodeType = null as unknown as Type;
-			node.resolvedSym = null;
-			node.flags = 0 as BitSet<NodeFlag>;
-			node.variantSlot = 0;
+			adoptExpansionResult(node, spliceValue);
 			checkExpr(ctx, node, expectedType);
 			bindRefsToHoistedPrefix(node, splice);
 			node.nodeType = node.nodeType; return;
@@ -619,14 +613,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
 				if (expandedValue == null) { node.nodeType = errorType(); return; }
 			}
-			node.kind = expandedValue.kind;
-			node.data = expandedValue.data;
-			if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
-			if (expandedValue.location != null) node.location = expandedValue.location;
-			node.nodeType = null as unknown as Type;
-			node.resolvedSym = null;
-			node.flags = 0 as BitSet<NodeFlag>;
-			node.variantSlot = 0;
+			adoptExpansionResult(node, expandedValue);
 			const valueType = expectedType != null || hoists || staticType == null || isUnresolvedType(staticType)
 				|| staticType.kind == TypeKind.Error || staticType.kind == TypeKind.Void || isNodeGraphType(staticType)
 				? expectedType : staticType;
@@ -2430,15 +2417,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						node.nodeType = errorType(); return;
 					}
 				}
-				node.kind = expandedValue.kind;
-				node.data = expandedValue.data;
-				if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
-				if (expandedValue.location != null) node.location = expandedValue.location;
-				node.nodeType = null as unknown as Type;
-				node.resolvedSym = null;
-				node.flags = 0 as BitSet<NodeFlag>;
-				node.variantSlot = 0;
-				keepFoldedType(node, expandedValue);
+				adoptExpansionResult(node, expandedValue);
 				if (node.kind == NodeKind.SpliceMany) markExpansion(ctx, node, friends);
 				checkExpr(ctx, node, expectedType);
 				unfriend(friendScope, friends);
@@ -3129,7 +3108,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, pickBodyCtx } from "./instantiate";
-import { anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed } from "./callResolve";
+import { adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed } from "./callResolve";
 
 function createSyntheticToken(loc: SourceLocation): Token {
 	return createToken(TokenKind.Ident, "", loc.line);
