@@ -1,6 +1,4 @@
 // @stdout: stores 100 6 a5 5 15 30
-// @ledger-slack(Box): 1
-// @ledger-slack(int32_tArrayRefCell): 1
 // @xfail(raiser): the Raiser VM reads a store operand after the await (prints 'stores 100 6 a5 1' where C prints 'stores 100 6 a5 5')
 // note: an operand left of an await is read before the await runs, as in TypeScript: a variable, a field, an array element, an argument before an awaited argument, the target of `x += await f()`, and the object and index of `o.f = await f()` or `a[i] = await f()`. Before the fix C read them after resume, so `x + await f()` saw what f wrote (105 instead of 6). A value struct or array stays in place: the store and the push land in it.
 

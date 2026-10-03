@@ -73,10 +73,13 @@ test "a write into a computed array checks through the array once" {
 	assert result.value.contains("msChkArray(");
 }
 
-test "a write with a computed array and a computed index stores through the helper once" {
-	const result = compileToJS("function g(): int32[] { return [1]; } function h(): int32 { return 0; } function f(): void { g()[h()] = 5; }");
+test "a write with a computed array and a computed index holds the array in a temporary" {
+	const result = compileToJS("function g(): int32[] { return [1]; } function h(): int32 { return 0; } function f(): void { g()[h()] = 5; g()[h()] += 1; g()[h()]++; }");
 	assert result.ok;
-	assert result.value.contains("msChkStore(");
+	assert result.value.contains("var $place_");
+	assert result.value.contains("($place_0 = g");
+	assert result.value.contains("$place_0.length)] = 5");
+	assert !result.value.contains("msArrayAt(");
 }
 
 test "a read with a computed array and a computed index goes through the read helper" {

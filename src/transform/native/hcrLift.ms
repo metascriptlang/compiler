@@ -1,210 +1,211 @@
-// HCR State Lifting — rewrites module globals into a heap-allocated struct
-// Gated behind --hcr flag. Without it, this file is never called.
-//
-// Before (standard):
-//   let count: number = 0;
-//   function increment(): void { count += 1; }
-//
-// After (HCR):
-//   struct _GlobalState { _struct_hash: uint64; count: number; }
-//   @emit("_GlobalState* _ms_gs;")
-//   function increment(): void { (*_ms_gs).count += 1; }
-//   @emit("void* _hcr_handover(void* old_state) { MS_HCR_HANDOVER(_GlobalState, ...) }")
-//
-// Codegen sees normal AST: StructDecl, MemberExpr, HiddenDeref, @emit. Zero HCR awareness needed.
-
 import {
-	Node, NodeKind, SourceLocation, createNode,
-	ProgramData, VariableDeclData, ExportDeclData, DecoratedDeclData, Symbol, Type, TypeKind } from "../../ast/node";
-import { createStruct, createPtr, createPrimitive } from "../../checker/types";
+	Node, NodeKind, SourceLocation, createNode, DeclKind, SymbolKind, SymbolFlag,
+	ProgramData, VariableDeclData, ExportDeclData, DecoratedDeclData, ExprStmtData,
+	MacroInvocationData, Symbol, Type, TypeKind,
+} from "../../ast/node";
+import { createPtr, createStruct, booleanType, isUnresolvedType } from "../../checker/types";
+import { makeSymbol, setFlag } from "../../checker/symbol";
+import { constantLiteralOf } from "../../checker/constFold";
+import { skipConvDfa } from "../../analyzer/alias";
+import { hcrSignatureKey } from "../../compiler/hcrAbi";
+import { mangledGlobalName } from "../../codegen/c/names";
+import { cStringLiteral } from "../../codegen/c/literals";
 import { TransformContext, reportTransformError } from "../context";
-import { djb2 } from "std/hash";
 import { walkNode } from "../walker";
-import { makeIdentResolved, makeTypedIdent, makeMember, makeHiddenDeref, makeBinary, makeExprStmt, syntheticToken } from "../util";
-import { typeKey } from "../../codegen/c/types";
-
-// ===== Collected Global Info =====
+import {
+	makeIdentResolved, makeHiddenDeref, makeMember, makeBinary, makeExprStmt,
+	makeVarDecl, makeIf, makeBlock, syntheticToken,
+} from "../util";
 
 interface HcrGlobal {
-	name: string;
 	sym: Symbol;
 	declType: Type;
+	storageType: Type;
 	initNode: Node;
+	cName: string;
+	sourceName: string;
+	key: string;
+	pointer: Symbol;
+	fresh: Symbol;
+	literalAlias: boolean;
 }
 
-// ===== Main Entry Point =====
-
-export function liftHcrState(program: Node, ctx: TransformContext): Node {
+export function liftHcrState(program: Node, ctx: TransformContext, moduleId: string): Node {
 	if (program == null || program.kind != NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
-
-	// Pass 1: Collect globals, replace VariableDecl with assignment ExprStmt
+	const loc = program.location;
 	const globals: HcrGlobal[] = [];
+	const bySymbol = new HashMap<Symbol, HcrGlobal>();
+	const first = makeHcrSymbol("_ms_hcr_first", booleanType());
+	const firstDecl = makeHcrVariableDecl(first, loc);
+	const result: Node[] = [
+		makeEmitStmt("/*INCLUDESECTION*/#include \"runtime/hcr.h\"", loc),
+		firstDecl,
+		makeEmitStmt(`/*DATINITSECTION*/  _ms_hcr_first = msHcrModuleBegin(${cStringLiteral(moduleId)});`, loc),
+	];
 	const kept: Node[] = [];
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		const stmt = pd.programStmts[i];
-		const g = extractGlobal(stmt, ctx);
-		if (g != null) {
-			globals.push(g);
-			// Convert initializer to assignment statement (stays in ModuleInit)
-			if (g.initNode != null) {
-				const lhs = makeIdentResolved(g.sym, stmt.location);
-				if (g.declType != null) lhs.nodeType = g.declType;
-				const assign = makeBinary(lhs, "=", g.initNode, stmt.location);
-				if (g.declType != null) assign.nodeType = g.declType;
-				kept.push(makeExprStmt(assign, stmt.location));
-			}
-		} else {
-			kept.push(stmt);
+	for (const stmt of pd.programStmts) {
+		const g = extractGlobal(stmt, ctx, globals.length as int32);
+		if (g == null) {
+			kept.push(isDeclarationOrEmit(stmt)
+				? stmt
+				: makeIf(makeIdentResolved(first, stmt.location), makeBlock([stmt], stmt.location), null, stmt.location));
+			continue;
+		}
+		globals.push(g);
+		bySymbol.set(g.sym, g);
+		result.push(hcrStorageDecl(g.storageType, stmt.location));
+		result.push(makeHcrVariableDecl(g.pointer, stmt.location));
+		result.push(makeHcrVariableDecl(g.fresh, stmt.location));
+		result.push(makeEmitStmt(
+			`/*DATINITSECTION*/  ${g.fresh.nativeName} = msHcrRegisterVariable(${cStringLiteral(moduleId)}, ${cStringLiteral(g.cName)}, ${cStringLiteral(g.key)}, sizeof(*${g.pointer.nativeName}), (void**)&${g.pointer.nativeName});`,
+			stmt.location,
+		));
+		if (g.initNode != null) {
+			const lhs = makeIdentResolved(g.sym, stmt.location);
+			lhs.nodeType = g.declType;
+			const assign = makeBinary(lhs, "=", g.initNode, stmt.location);
+			assign.nodeType = g.declType;
+			const init = makeExprStmt(assign, stmt.location);
+			kept.push(g.literalAlias ? init
+				: makeIf(makeIdentResolved(g.fresh, stmt.location), makeBlock([init], stmt.location), null, stmt.location));
 		}
 	}
-
-	// No globals → nothing to lift
-	if (globals.length == 0) {
-		pd.programStmts = kept;
-		return program;
+	let entries = "";
+	let names = "";
+	for (const g of globals) {
+		entries = entries + `${cStringLiteral(g.cName)}, ${cStringLiteral(g.key)}, `;
+		names = names + `${cStringLiteral(g.cName)}, ${cStringLiteral(g.sourceName)}, `;
 	}
-
-	const fieldNames: string[] = ["_struct_hash"];
-	const fieldTypes: Type[] = [createPrimitive(TypeKind.Uint64)];
-	for (let i = 0; i < globals.length; i += 1) {
-		fieldNames.push(globals[i].name);
-		fieldTypes.push(globals[i].declType);
-	}
-	const gsType = createStruct("_GlobalState", fieldNames, fieldTypes, true);
-	const gsPtrType = createPtr(gsType);
-
-	const globalSyms = new HashSet<Symbol>();
-	for (const g of globals) globalSyms.add(g.sym);
-
-	// Pass 2: Rewrite all Identifier references to globals → (*_ms_gs).field
-	const loc = program.location;
-	for (let i = 0; i < kept.length; i += 1) {
-		kept[i] = rewriteGlobalRefs(kept[i], globalSyms, gsPtrType, loc);
-	}
-
-	const emitNodes: Node[] = [];
-	const stateDecl = createNode(NodeKind.StructDecl, {
-		interfaceName: "_GlobalState",
-		interfaceFields: fieldNames,
-		interfaceFieldTypes: [],
-		interfaceExtends: [],
-		nameLocation: loc,
-	}, syntheticToken(loc));
-	stateDecl.nodeType = gsType;
-	emitNodes.push(stateDecl);
-
-	// Structural hash of GlobalState layout (djb2 over field names + types)
-	const structHash = computeStructHash(globals);
-	emitNodes.push(makeEmitStmt("#define _MS_STRUCT_HASH " + structHash + "ULL", loc));
-
-	// Global pointer variable
-	emitNodes.push(makeEmitStmt("_GlobalState* _ms_gs;", loc));
-
-	// Handover function — allocates GlobalState on first load, reuses on reload.
-	// On reload, checks structural hash to detect incompatible layout changes.
-	const handover = "MS_HCR_EXPORT void* _hcr_handover(void* old_state) { "
-		+ "if (old_state == NULL) { _ms_gs = (_GlobalState*)calloc(1, sizeof(_GlobalState)); _ms_gs->_struct_hash = _MS_STRUCT_HASH; return _ms_gs; } "
-		+ "if (((_GlobalState*)old_state)->_struct_hash != _MS_STRUCT_HASH) { "
-		+ "fprintf(stderr, \"HCR: incompatible state layout change, full restart required\\n\"); return ((void*)0); } "
-		+ "_ms_gs = (_GlobalState*)old_state; return _ms_gs; }";
-	emitNodes.push(makeEmitStmt(handover, loc));
-
-	// Assemble: emit nodes first, then kept statements
-	const result: Node[] = [];
-	for (let i = 0; i < emitNodes.length; i += 1) {
-		result.push(emitNodes[i]);
-	}
-	for (let i = 0; i < kept.length; i += 1) {
-		result.push(kept[i]);
-	}
+	result.push(makeEmitStmt(
+		`MS_HCR_EXPORT const char* const* HcrVariables000(void) { static const char* const variables[] = { ${entries}NULL }; return variables; }`,
+		loc,
+	));
+	result.push(makeEmitStmt(
+		`MS_HCR_EXPORT const char* const* HcrVariableNames000(void) { static const char* const names[] = { ${names}NULL }; return names; }`,
+		loc,
+	));
+	for (const stmt of kept) result.push(rewriteGlobalRefs(stmt, bySymbol));
 	pd.programStmts = result;
 	return program;
 }
 
-// ===== Extract Global =====
-// Returns HcrGlobal if the statement is a top-level variable declaration, null otherwise.
-// Unwraps ExportDecl and DecoratedDecl wrappers.
-
-function extractGlobal(stmt: Node, ctx: TransformContext): HcrGlobal {
-	if (stmt == null) return null as unknown as HcrGlobal;
-
-	// Direct VariableDecl
-	if (stmt.kind == NodeKind.VariableDecl) {
-		return varDeclToGlobal(stmt, ctx);
-	}
-
-	// export const x = ...
-	if (stmt.kind == NodeKind.ExportDecl) {
-		const ed = stmt.data as ExportDeclData;
-		if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.VariableDecl) {
-			return varDeclToGlobal(ed.exportedDecl, ctx);
+function unwrapDeclaration(node: Node): Node {
+	let n = node;
+	while (n != null) {
+		if (n.kind == NodeKind.ExportDecl) {
+			n = (n.data as ExportDeclData).exportedDecl;
+		} else if (n.kind == NodeKind.DecoratedDecl) {
+			n = (n.data as DecoratedDeclData).decoratedNode;
+		} else {
+			return n;
 		}
 	}
-
-	// @decorator const x = ...
-	if (stmt.kind == NodeKind.DecoratedDecl) {
-		const dd = stmt.data as DecoratedDeclData;
-		if (dd.decoratedNode != null && dd.decoratedNode.kind == NodeKind.VariableDecl) {
-			return varDeclToGlobal(dd.decoratedNode, ctx);
-		}
-	}
-
-	return null as unknown as HcrGlobal;
+	return null as unknown as Node;
 }
 
-function varDeclToGlobal(node: Node, ctx: TransformContext): HcrGlobal {
+function extractGlobal(stmt: Node, ctx: TransformContext, index: int32): HcrGlobal {
+	const node = unwrapDeclaration(stmt);
+	if (node == null || node.kind != NodeKind.VariableDecl) return null as unknown as HcrGlobal;
 	const d = node.data as VariableDeclData;
-	// Skip TypeInfo vars (ORC runtime, should stay as globals)
-	if (d.declName.length > 8 && d.declName.endsWith("TypeInfo")) {
-		return null as unknown as HcrGlobal;
-	}
+	if (d.declName.length > 8 && d.declName.endsWith("TypeInfo")) return null as unknown as HcrGlobal;
 	const sym = node.resolvedSym;
 	if (sym == null) {
 		reportTransformError(ctx, `internal: HCR state lifting met module variable '${d.declName}' without a symbol`, node.location);
 		return null as unknown as HcrGlobal;
 	}
-	const t = node.nodeType != null ? node.nodeType : null as unknown as Type;
-	return { name: d.declName, sym, declType: t, initNode: d.initializer };
+	const t = node.nodeType != null ? node.nodeType : sym.symbolType;
+	if (t == null || t.kind == TypeKind.None || isUnresolvedType(t)
+			|| sym.symbolType == null || sym.symbolType.kind == TypeKind.None || isUnresolvedType(sym.symbolType)) {
+		reportTransformError(ctx, `internal: HCR state lifting met module variable '${d.declName}' without a resolved type`, node.location);
+		return null as unknown as HcrGlobal;
+	}
+	const storageType = createStruct(`_ms_hcr_value${index}`, ["value"], [t], true);
+	const pointer = makeHcrSymbol(`_ms_hcr_v${index}`, createPtr(storageType));
+	const fresh = makeHcrSymbol(`_ms_hcr_new${index}`, booleanType());
+	return {
+		sym, declType: t, storageType, initNode: d.initializer,
+		cName: mangledGlobalName(sym, d.declName),
+		sourceName: d.declName,
+		key: "v:" + hcrSignatureKey(sym.symbolType),
+		pointer, fresh,
+		literalAlias: d.declKind == DeclKind.Const && isLiteralAlias(d.initializer),
+	};
 }
 
-// ===== Rewrite Global References =====
-// Walks AST and replaces Identifier nodes that reference lifted globals
-// with MemberExpr: (*_ms_gs).fieldName
+function isLiteralAlias(initializer: Node): boolean {
+	return initializer != null && (constantLiteralOf(initializer, 0) != null || isStringLiteralAlias(initializer, 0));
+}
 
-function rewriteGlobalRefs(node: Node, globalSyms: HashSet<Symbol>, gsPtrType: Type, loc: SourceLocation): Node {
+function isStringLiteralAlias(initializer: Node, depth: int32): boolean {
+	if (initializer == null || depth > 64) return false;
+	const literal = skipConvDfa(initializer);
+	if (literal.kind == NodeKind.StringLiteral || literal.kind == NodeKind.NullLiteral) return true;
+	if (literal.kind != NodeKind.Identifier || literal.resolvedSym == null) return false;
+	const sym = literal.resolvedSym;
+	if (sym.symbolKind != SymbolKind.Variable || sym.symFlags.has(SymbolFlag.Mutable)) return false;
+	const decl = unwrapDeclaration(sym.declNode);
+	if (decl == null || decl.kind != NodeKind.VariableDecl) return false;
+	const d = decl.data as VariableDeclData;
+	return d.declKind == DeclKind.Const && isStringLiteralAlias(d.initializer, depth + 1);
+}
+
+function makeHcrSymbol(name: string, t: Type): Symbol {
+	const sym = makeSymbol(name, SymbolKind.Variable, t, true);
+	sym.nativeName = name;
+	setFlag(sym, SymbolFlag.Global);
+	setFlag(sym, SymbolFlag.Used);
+	setFlag(sym, SymbolFlag.Cursor);
+	return sym;
+}
+
+
+function makeHcrVariableDecl(sym: Symbol, loc: SourceLocation): Node {
+	const decl = makeVarDecl(sym.name, null as unknown as Node, DeclKind.Let, loc);
+	decl.resolvedSym = sym;
+	decl.nodeType = sym.symbolType;
+	return decl;
+}
+
+function rewriteGlobalRefs(node: Node, globals: HashMap<Symbol, HcrGlobal>): Node {
 	return walkNode(node, (n: Node): Node => {
-		if (n.kind != NodeKind.Identifier || n.resolvedSym == null || !globalSyms.has(n.resolvedSym)) return n;
-		const sym = n.resolvedSym;
-
-		// Build (*_ms_gs).fieldName
-		const gsIdent = makeTypedIdent("_ms_gs", gsPtrType, loc);
-		const deref = makeHiddenDeref(gsIdent, loc);
-		const member = makeMember(deref, sym.name, loc);
-		// Preserve original type
-		if (n.nodeType != null) {
-			member.nodeType = n.nodeType;
-		}
-		return member;
+		if ((n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr) || n.resolvedSym == null) return n;
+		const g = globals.get(n.resolvedSym);
+		if (g == null) return n;
+		const value = makeMember(makeHiddenDeref(makeIdentResolved(g.pointer, n.location), n.location), "value", n.location);
+		value.nodeType = n.nodeType != null ? n.nodeType : g.declType;
+		return value;
 	});
 }
 
-// ===== @emit Helper =====
-// Creates: ExprStmt(MacroInvocation("emit", [StringLiteral(code)]))
+export function hcrStorageDecl(t: Type, loc: SourceLocation): Node {
+	const decl = createNode(NodeKind.StructDecl, {
+		interfaceName: t.typeName, interfaceFields: ["value"], interfaceFieldTypes: [],
+		interfaceExtends: [], nameLocation: loc,
+	}, syntheticToken(loc));
+	decl.nodeType = t;
+	return decl;
+}
+
+function isDeclarationOrEmit(stmt: Node): boolean {
+	const node = unwrapDeclaration(stmt);
+	if (node == null) return true;
+	match (node.kind) {
+		NodeKind.VariableDecl | NodeKind.FunctionDecl | NodeKind.ImportDecl | NodeKind.TypeAliasDecl
+			| NodeKind.EnumDecl | NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ClassDecl
+			| NodeKind.PropertyDecl | NodeKind.MethodDecl | NodeKind.ConstructorDecl | NodeKind.ActorDecl
+			| NodeKind.ExternDecl | NodeKind.MacroDecl | NodeKind.TestDecl | NodeKind.ComptimeBlock => { return true; },
+		NodeKind.ExprStmt => {
+			const expr = (node.data as ExprStmtData).expr;
+			return expr != null && expr.kind == NodeKind.MacroInvocation && (expr.data as MacroInvocationData).macroName == "emit";
+		},
+		NodeKind.MacroInvocation => { return (node.data as MacroInvocationData).macroName == "emit"; },
+		_ => { return false; },
+	};
+}
 
 function makeEmitStmt(code: string, loc: SourceLocation): Node {
 	const strNode = createNode(NodeKind.StringLiteral, { value: code }, syntheticToken(loc));
 	const macroNode = createNode(NodeKind.MacroInvocation, { macroName: "emit", macroArgs: [strNode], macroHasParens: true }, syntheticToken(loc));
 	return createNode(NodeKind.ExprStmt, { expr: macroNode }, syntheticToken(loc));
-}
-
-// ===== Structural Hash =====
-// djb2 hash over field "name:typeKey;" pairs. Detects layout changes at reload time.
-
-function computeStructHash(globals: HcrGlobal[]): int64 {
-	let key = "";
-	for (const g of globals) {
-		key = key + g.name + ":" + typeKey(g.declType) + ";";
-	}
-	return djb2(key);
 }

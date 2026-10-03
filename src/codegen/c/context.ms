@@ -22,6 +22,7 @@ export enum CSection {
 	Procs,          // function bodies
 	DatInit,        // data initialization (type info, static data — runs first)
 	ModuleInit,     // module code initialization (user top-level code — runs second)
+	ModuleDeinit,
 }
 
 // ===== CProcSection — per-proc sections (standard reference parity) =====
@@ -651,6 +652,7 @@ export function aliveSetModuleCount(aliveSet: Readonly<AliveSet>): int32 {
 export class CEmissionFacts {
 	genericOwners: HashMap<string, string> = new HashMap<string, string>();
 	skippedTypeInfos: HashSet<string> = new HashSet<string>();
+	hcrCoreUnits: HashSet<string> = new HashSet<string>();
 	typeInfos: HashMap<string, CTypeInfoDemand> = new HashMap<string, CTypeInfoDemand>();
 	typeInfoOrder: CTypeInfoDemand[] = [];
 	hcrModules: HashSet<string> = new HashSet<string>();
@@ -669,7 +671,7 @@ export class CGen {
 	errors: CheckerError[];
 	preparingDeclarations: boolean;
 	emittedInstances: HashSet<string>;
-	sections: Builder[];       // CSection enum-indexed (10 sections)
+	sections: Builder[];       // CSection enum-indexed (11 sections)
 	currentProc: CProc | null;        // active proc being generated
 	typeCache: TypeCache;      // fully-emitted types
 	forwTypeCache: TypeCache;  // forward-declared types
@@ -681,6 +683,7 @@ export class CGen {
 	modulePath: string;        // source file path (for module-qualified init names)
 	labels: number;            // module-scope unique counter
 	initProc: CProc;           // shared CProc for Init000 (persistent temp counter)
+	deinitProc: CProc;
 	aliveSet: Readonly<AliveSet>;        // global DCE reachability set (empty = no filtering)
 	isTestBuild: boolean;      // true when compiling via cmdTest (assert = non-fatal)
 	isHcr: boolean;            // true when --hcr (fixed Init000 names for dlsym)
@@ -701,7 +704,7 @@ export interface TestEntry {
 
 export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string): CGen {
 	const sections: Builder[] = [];
-	for (let i = 0; i < 10; i += 1) {
+	for (let i = 0; i < 11; i += 1) {
 		const b = createBuilder();
 		sections.push(b);
 	}
@@ -723,6 +726,7 @@ export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string): C
 		modulePath,
 		labels: 0,
 		initProc: createProc("__init000", null),
+		deinitProc: createProc("__deinit000", null),
 		aliveSet: createAliveSet(),
 		isTestBuild: false,
 		isHcr: false,
@@ -987,9 +991,9 @@ test "no duplicates" {
 	assert ns.size == 1;
 }
 
-test "create with 10 sections" {
+test "create with 11 sections" {
 	const g = createCGen(null as unknown as CheckerContext, "test");
-	assert g.sections.length == 10;
+	assert g.sections.length == 11;
 }
 
 test "section accessor" {

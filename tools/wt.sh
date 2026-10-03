@@ -148,13 +148,35 @@ provision_vendor() {
   [ -e "$w/vendor/mbedtls/tf-psa-crypto" ]
 }
 
+refresh_main_builder() {
+  local w=$1 src="$1/msc" dest="$MAIN/msc" key wk tmp prev
+  [ -e "$w/msc.exe" ] && src="$w/msc.exe"
+  [ ! -e "$MAIN/msc.exe" ] || dest="$MAIN/msc.exe"
+  tmp="$dest.new" prev="${dest%.exe}.prev"
+  key=$(cat "$w/msc.key" 2>/dev/null)
+  wk=$(cd "$w" && bash tools/gate.sh --tree-key HEAD 2>/dev/null)
+  if [ -z "$key" ] || [ "$key" != "$wk" ]; then say "land: main builder not refreshed, $w/msc is not the candidate for the landed tree"; return 0; fi
+  if [ "$(cat "${dest%.exe}.key" 2>/dev/null)" = "$key" ]; then say "land: main builder already current"; return 0; fi
+  if cp "$src" "$tmp" 2>/dev/null && { [ ! -e "$dest" ] || { rm -f "$prev"; mv "$dest" "$prev" 2>/dev/null; }; } \
+    && mv "$tmp" "$dest" 2>/dev/null && printf '%s\n' "$key" >"${dest%.exe}.key"; then
+    say "land: main builder refreshed from $w (previous kept as ${prev##*/})"
+  else
+    [ -e "$dest" ] || { [ ! -e "$prev" ] || mv "$prev" "$dest" 2>/dev/null; }
+    rm -f "$tmp" 2>/dev/null
+    say "land: MAIN BUILDER NOT REFRESHED: could not swap $dest; the land stands"
+  fi
+  return 0
+}
+
 pick_builder() {
-  local w=$1 c
+  local w=$1 c wk
+  wk=$(cd "$w" && bash tools/gate.sh --tree-key HEAD 2>/dev/null)
   for c in ${MSC_BUILDER:-} "$MAIN/msc" "$(command -v msc 2>/dev/null)"; do
     [ -n "$c" ] && [ -x "$c" ] || continue
-    rm -f "$w/msc" "$w/msc.exe"
+    rm -f "$w/msc" "$w/msc.exe" "$w/msc.key"
     cp "$c" "$w/msc" || return 1
     if (cd "$w" && ./msc check src/index.ms >/dev/null 2>&1); then
+      [ -z "$wk" ] || [ "$(cat "${c%.exe}.key" 2>/dev/null)" != "$wk" ] || printf '%s\n' "$wk" >"$w/msc.key"
       say "builder: $c"
       return 0
     fi
@@ -499,6 +521,7 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
   done <<<"$paths"
   [ "$failed" -eq 0 ] || die "land: $BASE is at $(git -C "$MAIN" rev-parse --short "$new"); the paths above need a manual merge"
   say "landed $(git -C "$MAIN" rev-list --count "$old..$new") commit(s): $BASE $(git -C "$MAIN" rev-parse --short "$old")..$(git -C "$MAIN" rev-parse --short "$new")"
+  refresh_main_builder "$w" || true
 }
 
 wt_context_extra() {

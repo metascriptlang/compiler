@@ -376,9 +376,11 @@ function emittedNode(node: Node): Node {
 }
 
 function emitPostfixBase(gen: JSGenerator, node: Node, formal: Type | null = null): void {
-	const k = emittedNode(node).kind;
+	const base = emittedNode(node);
+	const k = base.kind;
 	const wrap = k == NodeKind.NumberLiteral || k == NodeKind.AwaitExpr || k == NodeKind.YieldExpr
-		|| k == NodeKind.UnaryExpr || k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr;
+		|| k == NodeKind.UnaryExpr || k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr
+		|| (k == NodeKind.BinaryExpr && isAssignmentOp((base.data as BinaryExprData).operator));
 	if (wrap) emit(gen, "(");
 	emitNativeArg(gen, node, formal);
 	if (wrap) emit(gen, ")");

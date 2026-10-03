@@ -10,7 +10,7 @@ export function nowSeconds(): number {
 	return Date.now() / 1000;
 }
 
-export function collectStaleEntries(root: string, now: number): void {
+export function collectStaleEntries(root: string, now: number, staleSeconds: number = STALE_ENTRY_SECONDS): void {
 	const mark = `${root}/${COLLECTED_MARK}`;
 	const last = modifiedTime(mark);
 	if (last >= 0 && now - last < COLLECT_EVERY_SECONDS) return;
@@ -20,16 +20,17 @@ export function collectStaleEntries(root: string, now: number): void {
 		const isDir = e.endsWith("/");
 		const path = `${root}/${isDir ? e.slice(0, e.length - 1) : e}`;
 		const age = now - modifiedTime(path);
-		if (age > STALE_ENTRY_SECONDS) {
+		if (age > staleSeconds) {
 			if (isDir) removeAll(path);
 			else remove(path);
 			continue;
 		}
 		if (!isDir) continue;
 		for (const f of readDir(path)) {
-			if (f.indexOf(".tmp.", 0) < 0) continue;
-			const tmp = `${path}/${f}`;
-			if (now - modifiedTime(tmp) > STALE_TMP_SECONDS) remove(tmp);
+			if (f.endsWith("/")) continue;
+			const entry = `${path}/${f}`;
+			const limit = f.indexOf(".tmp.", 0) >= 0 ? STALE_TMP_SECONDS : staleSeconds;
+			if (now - modifiedTime(entry) > limit) remove(entry);
 		}
 	}
 }
@@ -59,6 +60,17 @@ test "a tmp older than an hour goes, its stamp stays" {
 	collectStaleEntries(root, nowSeconds() + STALE_TMP_SECONDS + 60);
 	assert exists(`${root}/stampB/entry.pk`);
 	assert !exists(`${root}/stampB/entry.pk.tmp.1`);
+	removeAll(root);
+}
+
+test "an entry unwritten past the limit goes from a stamp still in use" {
+	const root = scratchRoot("stamp-entry");
+	const until = performance.now() + 2100;
+	while (performance.now() < until) {}
+	writeFile(`${root}/stampA/fresh.pk`, "new");
+	collectStaleEntries(root, nowSeconds(), 1.5);
+	assert exists(`${root}/stampA/fresh.pk`);
+	assert !exists(`${root}/stampA/entry.pk`);
 	removeAll(root);
 }
 

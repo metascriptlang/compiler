@@ -1,171 +1,139 @@
-// HCR Host — loads a MetaScript .so/.dylib module, supports reload
-//
-// Interactive usage: hcrHost <module.so>
-//   Press Enter to reload, 'q' to quit.
-//
-// Probe usage: hcrHost --probe <symbol> <gen1.so> <gen2.so> [...]
-//   Single-image reload contract, driven over generation paths:
-//   loads gen1, then for each further path loads the CANDIDATE while the
-//   current generation stays mapped, validates the state handover, and
-//   publishes only on success. A rejected candidate never disturbs current.
-//
-// The host calls three symbols from the loaded module:
-//   _hcr_handover(old_state) — allocates or reuses GlobalState; NULL rejects
-//                              the candidate (incompatible layout change)
-//   DatInit000()             — data/type initialization (every generation)
-//   Init000()                — user top-level code (first load only)
-//
-// Probe output lines (stable prefixes, asserted by run.sh):
-//   HCR-PROBE loaded <file> state=<ptr>
-//   HCR-PROBE call <file> -> <value>
-//   HCR-PROBE reloaded <file> state=<ptr>
-//   HCR-PROBE rejected <file> (layout|dlopen|dlsym)
-// The rejected-generation call line repeats the CURRENT file name: it proves
-// the running image still answers.
+#include "../examples/hcrProbe/hostCalls.h"
+#include <unistd.h>
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <dlfcn.h>
-
-typedef void* (*HandoverFn)(void*);
-typedef void (*InitFn)(void);
-typedef int (*ProbeFn)(void);
+typedef int32_t (*ProbeFn)(void);
 
 typedef struct {
-    void* handle;
-    void* state;
-    const char* path;
+	void* handle;
+	void* state;
+	const char* path;
 } HcrModule;
 
-static HcrModule hcrLoad(const char* path, void* oldState) {
-    HcrModule m = {0, 0, path};
-    m.handle = dlopen(path, RTLD_NOW);
-    if (!m.handle) {
-        fprintf(stderr, "dlopen: %s\n", dlerror());
-        return m;
-    }
-
-    HandoverFn handover = (HandoverFn)dlsym(m.handle, "_hcr_handover");
-    if (!handover) {
-        fprintf(stderr, "dlsym(_hcr_handover): %s\n", dlerror());
-        dlclose(m.handle);
-        m.handle = 0;
-        return m;
-    }
-
-    m.state = handover(oldState);
-
-    InitFn datInit = (InitFn)dlsym(m.handle, "DatInit000");
-    if (datInit) datInit();
-
-    if (oldState == 0) {
-        InitFn init = (InitFn)dlsym(m.handle, "Init000");
-        if (init) init();
-    }
-
-    return m;
+static int hcrLoadInitial(HcrModule* module, const char* path, const char* probe) {
+	if (!hcrProbeOpenCore(path)) {
+		fprintf(stderr, "HCR: core load or symbol resolution failed for %s\n", path);
+		return 0;
+	}
+	void* handle = msHcrImageOpen(path);
+	if (handle == NULL) {
+		fprintf(stderr, "dlopen: %s\n", msHcrImageFailure());
+		return 0;
+	}
+	if (!hcrProbeValidate(handle, probe)) {
+		fprintf(stderr, "HCR: required image symbol or variable metadata missing in %s\n", path);
+		msHcrImageClose(handle);
+		return 0;
+	}
+	if (hcrProbeCallDatInit(handle) || hcrProbeCallInit(handle)) {
+		fprintf(stderr, "HCR: initial initialization failed for %s\n", path);
+		return 0;
+	}
+	*module = (HcrModule){handle, hcrProbeState(handle), path};
+	return 1;
 }
 
-// Load candidate without disturbing current. Returns 1 when the candidate was
-// published (current updated); 0 when it was rejected and current is intact.
-static int hcrTryReload(HcrModule* current, const char* path) {
-    HcrModule cand = {0, 0, path};
-    cand.handle = dlopen(path, RTLD_NOW);
-    if (!cand.handle) {
-        fprintf(stderr, "dlopen: %s\n", dlerror());
-        printf("HCR-PROBE rejected %s (dlopen)\n", path);
-        return 0;
-    }
+static int hcrReject(void* handle, const char* path, const char* reason) {
+	if (handle != NULL) msHcrImageClose(handle);
+	printf("HCR-PROBE rejected %s (%s)\n", path, reason);
+	return 0;
+}
 
-    HandoverFn handover = (HandoverFn)dlsym(cand.handle, "_hcr_handover");
-    if (!handover) {
-        fprintf(stderr, "dlsym(_hcr_handover): %s\n", dlerror());
-        dlclose(cand.handle);
-        printf("HCR-PROBE rejected %s (dlsym)\n", path);
-        return 0;
-    }
+static int hcrTryReload(HcrModule* current, const char* imagePath, const char* path, const char* probe) {
+	void* handle = msHcrImageOpen(imagePath);
+	if (handle == NULL) {
+		fprintf(stderr, "dlopen: %s\n", msHcrImageFailure());
+		return hcrReject(NULL, path, "dlopen");
+	}
+	if (!hcrProbeValidate(handle, probe)) return hcrReject(handle, path, "dlsym");
+	if (!hcrProbeSameModule(current->handle, handle)) return hcrReject(handle, path, "identity");
+	if (!hcrProbeSameTypes(current->handle, handle)) {
+		fprintf(stderr, "HCR: restart required for changed type layout in %s\n", path);
+		return hcrReject(handle, path, "layout");
+	}
+	hcrProbeStageBegin();
+	int32_t failed = hcrProbeCallDatInit(handle);
+	hcrProbeStageEnd();
+	if (failed || !hcrProbeStaged(handle)) {
+		hcrProbeDiscard(handle);
+		return hcrReject(handle, path, "init");
+	}
+	hcrProbeCommit(handle);
+	if (hcrProbeCallInit(handle)) {
+		hcrProbeRollback(handle);
+		return hcrReject(NULL, path, "init");
+	}
+	hcrProbeFinalize(handle);
+	*current = (HcrModule){handle, hcrProbeState(handle), path};
+	printf("HCR-PROBE reloaded %s state=%p\n", path, current->state);
+	return 1;
+}
 
-    // Rejected inside handover: incompatible _GlobalState layout. The module
-    // already printed the restart-required diagnostic on stderr.
-    cand.state = handover(current->state);
-    if (!cand.state) {
-        dlclose(cand.handle);
-        printf("HCR-PROBE rejected %s (layout)\n", path);
-        return 0;
-    }
-
-    InitFn datInit = (InitFn)dlsym(cand.handle, "DatInit000");
-    if (datInit) datInit();
-    // Init000 stays first-load only: global initializers must not rerun over
-    // live state.
-
-    // Publish. The previous generation stays mapped: unloading code another
-    // frame may still reference is not ours to decide here.
-    *current = cand;
-    printf("HCR-PROBE reloaded %s state=%p\n", path, current->state);
-    return 1;
+static int hcrPrintCall(const HcrModule* module, const char* symbol) {
+	ProbeFn fn = (ProbeFn)msHcrImageSymbol(module->handle, symbol);
+	if (fn == NULL) {
+		fprintf(stderr, "HCR: missing probe %s in %s\n", symbol, module->path);
+		return 0;
+	}
+	printf("HCR-PROBE call %s -> %d\n", module->path, fn());
+	return 1;
 }
 
 static int runProbe(int argc, char** argv) {
-    // argv: --probe sym1 gen1 [sym2 gen2 ...]; one pair per generation. Each
-    // generation exports a path-mangled symbol, so the callable is re-resolved
-    // from the CURRENT handle after every step — the single-image stand-in for
-    // what the module vtable does in the cross-module design.
-    HcrModule mod = hcrLoad(argv[3], 0);
-    if (!mod.handle) return 1;
-    printf("HCR-PROBE loaded %s state=%p\n", mod.path, mod.state);
+	if ((argc - 2) % 2 != 0) return 1;
+	HcrModule module = {0};
+	if (!hcrLoadInitial(&module, argv[3], argv[2])) return 1;
+	printf("HCR-PROBE loaded %s state=%p\n", module.path, module.state);
+	const char* currentSymbol = argv[2];
+	if (!hcrPrintCall(&module, currentSymbol)) return 1;
+	for (int i = 4; i + 1 < argc; i += 2) {
+		if (hcrTryReload(&module, argv[i + 1], argv[i + 1], argv[i])) currentSymbol = argv[i];
+		if (!hcrPrintCall(&module, currentSymbol)) return 1;
+	}
+	return 0;
+}
 
-    const char* curSym = argv[2];
-    ProbeFn fn = (ProbeFn)dlsym(mod.handle, curSym);
-    if (!fn) {
-        fprintf(stderr, "dlsym(%s): %s\n", curSym, dlerror());
-        return 1;
-    }
-    printf("HCR-PROBE call %s -> %d\n", mod.path, fn());
-
-    for (int i = 4; i + 1 < argc; i += 2) {
-        if (hcrTryReload(&mod, argv[i + 1])) curSym = argv[i];
-        fn = (ProbeFn)dlsym(mod.handle, curSym);
-        if (!fn) {
-            fprintf(stderr, "dlsym(%s): %s\n", curSym, dlerror());
-            return 1;
-        }
-        printf("HCR-PROBE call %s -> %d\n", mod.path, fn());
-    }
-    return 0;
+static int hcrCopyCandidate(const char* path, char* copy, size_t capacity, unsigned generation) {
+	int length = snprintf(copy, capacity, "%s.reload.%ld.%u%s", path, (long)getpid(), generation, MS_HCR_IMAGE_EXT);
+	if (length < 0 || (size_t)length >= capacity) return 0;
+	FILE* input = fopen(path, "rb");
+	if (input == NULL) return 0;
+	FILE* output = fopen(copy, "wb");
+	if (output == NULL) { fclose(input); return 0; }
+	char buffer[65536];
+	size_t size;
+	int ok = 1;
+	while ((size = fread(buffer, 1, sizeof(buffer), input)) != 0) {
+		if (fwrite(buffer, 1, size, output) != size) { ok = 0; break; }
+	}
+	if (ferror(input)) ok = 0;
+	fclose(input);
+	if (fclose(output) != 0) ok = 0;
+	if (!ok) unlink(copy);
+	return ok;
 }
 
 int main(int argc, char** argv) {
-    if (argc >= 4 && strcmp(argv[1], "--probe") == 0) {
-        return runProbe(argc, argv);
-    }
-    if (argc < 2) {
-        fprintf(stderr, "Usage: hcrHost <module.so>\n"
-                        "       hcrHost --probe <sym1> <gen1.so> [<sym2> <gen2.so> ...]\n");
-        return 1;
-    }
-
-    HcrModule mod = hcrLoad(argv[1], 0);
-    if (!mod.handle) return 1;
-
-    printf("Module loaded. State: %p\n", mod.state);
-    printf("Press Enter to reload, 'q' to quit.\n");
-
-    char buf[256];
-    while (fgets(buf, sizeof(buf), stdin)) {
-        if (buf[0] == 'q') break;
-        printf("Reloading %s...\n", argv[1]);
-        void* oldState = mod.state;
-        if (mod.handle) dlclose(mod.handle);
-        mod = hcrLoad(argv[1], oldState);
-        if (!mod.handle) {
-            fprintf(stderr, "Reload failed\n");
-            return 1;
-        }
-        printf("Reloaded. State: %p\n", mod.state);
-    }
-
-    if (mod.handle) dlclose(mod.handle);
-    return 0;
+	if (argc >= 4 && strcmp(argv[1], "--probe") == 0) return runProbe(argc, argv);
+	if (argc != 2) {
+		fprintf(stderr, "Usage: hcrHost <module.so>\n"
+			"       hcrHost --probe <sym1> <gen1.so> [<sym2> <gen2.so> ...]\n");
+		return 1;
+	}
+	HcrModule module = {0};
+	if (!hcrLoadInitial(&module, argv[1], NULL)) return 1;
+	printf("Module loaded. State: %p\n", module.state);
+	printf("Press Enter to reload, 'q' to quit.\n");
+	char line[256];
+	unsigned generation = 0;
+	while (fgets(line, sizeof(line), stdin)) {
+		if (line[0] == 'q') break;
+		char copy[4096];
+		if (!hcrCopyCandidate(argv[1], copy, sizeof(copy), ++generation)) {
+			fprintf(stderr, "HCR: cannot copy candidate %s; current retained\n", argv[1]);
+			continue;
+		}
+		hcrTryReload(&module, copy, argv[1], NULL);
+		unlink(copy);
+	}
+	return 0;
 }

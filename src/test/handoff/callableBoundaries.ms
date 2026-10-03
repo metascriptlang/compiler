@@ -210,3 +210,16 @@ test "callable boundaries: nullable closure slots fit signatures before wrapping
 	const c = compileToCWithStd(unwrapped);
 	assert !c.ok;
 }
+
+test "callableBoundaries: an overload signature chosen by a method call is fitted to its implementation" {
+	const cases = [
+		{ name: "a signature whose receiver the implementation does not accept is refused", source: "\nstruct Account { address: uint64; }\nfunction key(this a: Account): uint64 { return a.address * 2; }\ntype Signer = distinct Account;\nfunction key(this s: Signer): uint64;\nconst a: Account = { address: 21 };\nconst k = (a as Signer).key();\n", refusal: "Overload signature for 'key' param 1 type 'Signer' not assignable to implementation param type 'Account'" },
+		{ name: "signatures the implementation accepts are called through method syntax", source: "\nstruct A { v: int32; }\nstruct B { w: int32; }\nfunction show(this a: A): int32;\nfunction show(this b: B): int32;\nfunction show(this x: A | B): int32 { return 1; }\nconst a: A = { v: 1 };\nexport const shown: int32 = a.show();\n", refusal: "" },
+	];
+	for (const item of cases) {
+		const result = compileToCWithStd(item.source);
+		const error = result.ok ? "" : result.error;
+		assert result.ok == (item.refusal == ""), item.name + ": " + error;
+		assert item.refusal == "" || error.indexOf(item.refusal, 0) >= 0, item.name + ": " + error;
+	}
+}

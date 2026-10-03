@@ -3,7 +3,7 @@
 // distinct emitted names — by param type, by arity, and for statics. Was: both
 // bodies mangled to one C name (conflicting types at cc) and on js the later
 // class member clobbered the earlier one, so every call ran the last body.
-// Guard: fixedbugs/bug129.
+// Guard: src/test/lang/classCalls.ms.
 class Box {
 	v: int32 = 0;
 	describe(n: int32): string { return "int:" + n.toString(); }

@@ -4,7 +4,7 @@ import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd 
 import { watch, nextChanges, msIoRunOnce, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile } from "std/fs";
 import { writeStderr } from "std/io";
-import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
+import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isStaticExtensionSym, Severity } from "../checker/context";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
@@ -37,7 +37,7 @@ import { refineTypes } from "../transform/typeRefine";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
-import { HcrImport, HcrIndirectModule, lowerHcrIndirection } from "../transform/native/hcrIndirect";
+import { HcrIndirectModule, hcrFunctions, lowerHcrIndirection } from "../transform/native/hcrIndirect";
 import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet, NameSet } from "../transform/context";
@@ -49,7 +49,7 @@ import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
 import { drainPendingInstances, distinctInstances, placeInstance } from "../checker/instantiate";
-import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTablesFingerprint, collectTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
+import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, collectTypeInstanceRows, moduleTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { hookSymMark, hookSymsFrom, replayHookSyms, opMark, opsFrom, replayOps } from "../codegen/c/types";
 import { GenericTypeInstRow, addGenericTypeInstRow } from "../parser/context";
 import { dbLower } from "./transam/index";
@@ -60,16 +60,16 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, getCompilerName, resolveLto } from "./cc";
+import { compileCFile, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto } from "./cc";
 import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, writeCompileFingerprintFp, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
-import { HcrAbiExport, HcrModuleAbi, HcrReloadDecision, HcrReloadKind, HcrReloadReason, buildHcrModuleAbi, classifyHcrReload, createHcrAbiExport, hcrAbiFingerprint, hcrExportKey, hcrLayoutKey, hcrReloadDiagnostic, hcrSignatureKey, parseHcrAbiBundle, serializeHcrAbiBundle } from "./hcrAbi";
+import { HcrAbiExport, HcrModuleAbi, HcrReloadDecision, HcrReloadKind, HcrReloadReason, buildHcrModuleAbi, classifyHcrReload, createHcrAbiExport, hcrAbiFingerprint, hcrLayoutKey, hcrReloadDiagnostic, hcrSignatureKey, parseHcrAbiBundle, serializeHcrAbiBundle } from "./hcrAbi";
 import { VERSION } from "./usage";
 
 // Header-inline disk cache injection (loader can't import ./cache directly —
@@ -114,7 +114,7 @@ function addFileDepRoots(deps: DepsSection, baseDir: string, roots: DepsSection,
 	}
 }
 
-export function depRoots(projectRoot: string): DepsSection {
+export function fileDepRoots(projectRoot: string): DepsSection {
 	const roots = defaultDepsSection();
 	if (projectRoot != "") {
 		const cfg = loadBuildConfig(join(projectRoot, "build.ms"), false);
@@ -123,6 +123,11 @@ export function depRoots(projectRoot: string): DepsSection {
 			addFileDepRoots(cfg.devDeps, projectRoot, roots);
 		}
 	}
+	return roots;
+}
+
+export function depRoots(projectRoot: string): DepsSection {
+	const roots = fileDepRoots(projectRoot);
 	const lockPath = projectRoot != "" ? join(projectRoot, "msc.lock") : "msc.lock";
 	const lock = readLockfile(lockPath);
 	if (lock.valid) {
@@ -572,6 +577,7 @@ interface A2Job {
 	opts: CliOptions;
 	stdPath: string;
 	hcrSlot: int32;
+	hcrModules: HcrIndirectModule[];
 	fsAsyncHits: FsAsyncHit[];
 	timers: A2Timers;
 	diagnostics: ModuleError[];
@@ -654,7 +660,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	}
 	const hcrSlot = job.hcrSlot;
 	const _tx0 = performance.now();
-	const transformed = transformProgram(comptimeResolved, ctx, false);
+	const transformed = transformProgram(comptimeResolved, ctx, false, hcrSlot >= 0);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	const nativeCtx = createTransformContextWithChecker(ctx);
@@ -667,7 +673,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const _tn0 = performance.now();
 	const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 	job.timers.native = job.timers.native + (performance.now() - _tn0);
-	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx, job.hcrModules[hcrSlot].moduleId) : nativeTransformed;
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 		else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
@@ -699,48 +705,6 @@ interface ModuleEmissionJob {
 	ctx: CheckerContext;
 	modPath: string;
 	weight: int32;
-}
-
-function completeHcrTables(jobs: ModuleEmissionJob[], paths: string[], modules: HcrIndirectModule[], aliveSet: AliveSet, facts: CEmissionFacts, cloneInputs: boolean): void {
-	for (const path of paths) facts.hcrModules.add(path);
-	for (const info of facts.typeInfoOrder) {
-		const slot = paths.indexOf(info.owner);
-		if (slot >= 0) modules[slot].typeInfos.push(info.cName);
-	}
-	for (const job of jobs) {
-		const slot = paths.indexOf(job.modPath);
-		if (slot < 0) continue;
-		for (const stmt of (job.program.data as ProgramData).programStmts) {
-			const op = stmt.kind == NodeKind.FunctionDecl ? stmt.resolvedSym : null;
-			if (op == null) continue;
-			const users = aliveSet.foreignOps.get(op);
-			if (users == null) continue;
-			for (const user of users) {
-				if (!paths.includes(user)) {
-					printDiag(`${error("error")}: internal: HCR core module '${user}' calls '${op.name}', which module '${job.modPath}' generates in its reloadable image`);
-					throw new Error(BUILD_STOPPED);
-				}
-			}
-			modules[slot].symbols.push(opCName(op));
-			modules[slot].generated.push(opCName(op));
-		}
-	}
-	const keys: HashMap<string, string> = new HashMap<string, string>();
-	for (let i = 0; i < modules.length; i += 1) {
-		if (modules[i].generated.length > 0) modules[i].abiKey = hashContent(modules[i].abiKey + "|generated:" + modules[i].generated.join(","));
-		keys.set(modules[i].moduleId, modules[i].abiKey);
-	}
-	for (let i = 0; i < modules.length; i += 1) {
-		for (let j = 0; j < modules[i].imports.length; j += 1) {
-			modules[i].imports[j].abiKey = keys.get(modules[i].imports[j].moduleId) ?? modules[i].imports[j].abiKey;
-		}
-	}
-	for (const job of jobs) {
-		const slot = paths.indexOf(job.modPath);
-		if (slot < 0) continue;
-		if (cloneInputs) job.program = cloneNodeKeepSem(job.program);
-		job.program = lowerHcrIndirection(job.program, modules[slot], modules);
-	}
 }
 
 class ModuleEmissionResult {
@@ -1094,7 +1058,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				let probeFlags = allFlags;
 				if (upFlag != "") probeFlags = appendFlag(probeFlags, upFlag);
 				if (customFlags != "") probeFlags = appendFlag(probeFlags, customFlags);
-				const probeKey = fullCompileCmd(ccOption, mode, probeFlags, ccBinary);
+				const probeKey = fullCompileCmd(ccOption, mode, probeFlags, ccBinary, isCppFile(fullPath));
 				const dependencyFile = nativeDepFile(fullPath, probeKey);
 				const dependenciesKnown = nativeDependenciesKnown(fullPath, probeKey);
 				const probeFp = computeFingerprint(fullPath, probeKey);
@@ -1163,7 +1127,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			printDiag(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
 			stopBuild();
 		}
-		const compileCmd = fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary);
+		const compileCmd = fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary, isCppFile(j.fullPath));
 		registerNativeDependencies(j.fullPath, compileCmd);
 		if (j.dependenciesKnown) {
 			writeCompileCache(j.oFile, j.fp);
@@ -1191,6 +1155,8 @@ interface ModuleCompileJob {
 	modPath: string;
 	flags: string;
 	fp: string;
+	baseFp: string;
+	depFile: string;
 	slot: number;
 }
 
@@ -1203,12 +1169,12 @@ function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: n
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
 		futures.push(spawn(() => {
-			let r = compileCFile(j.cFile, j.oFile, "", j.flags, mode, ccOption, ccBinary);
+			let r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary);
 			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn EAGAIN
 				// under fork pressure). One retry absorbs it; real compile errors
 				// have a nonzero exitCode and are not retried.
-				r = compileCFile(j.cFile, j.oFile, "", j.flags, mode, ccOption, ccBinary);
+				r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary);
 			}
 			if (r.ok) return 0;
 			printDiag(r.error.errorOutput != "" ? r.error.errorOutput : `${r.error.command}: ${r.error.message}`);
@@ -1264,23 +1230,39 @@ function unitProgramAt(paths: string[], programs: Node[], path: string): Node | 
 	return null;
 }
 
-function routeInstances(order: Node[], programOf: (path: string) => Node | null, place: boolean, classesBesideGeneric: boolean = false): HashMap<string, Node[]> {
-	const byHome = new HashMap<string, Node[]>();
-	for (const instNode of distinctInstances(order)) {
+function routeInstances(order: Node[], programOf: (path: string) => Node | null, place: boolean, homes: HashMap<Node, string> | null, classesBesideGeneric: boolean = false): HashMap<string, Node[]> {
+	const grouped = new HashMap<string, Node[]>();
+	const homeOrder: string[] = [];
+	for (const instNode of order) {
 		const sym = instNode.resolvedSym;
 		if (sym == null || sym.modulePath == "") throw new Error(`internal: a generic instance of this build has no owning module`);
-		if (instNode.nodeType == null && sym.symbolType != null) instNode.nodeType = sym.symbolType;
-		const program = programOf(sym.modulePath);
-		if (program == null) throw new Error(`internal: generic instance '${sym.name}' belongs to ${sym.modulePath}, which is not a module of this build`);
-		if (!byHome.has(sym.modulePath)) byHome.set(sym.modulePath, []);
-		byHome.get(sym.modulePath).push(instNode);
-		if (place) placeInstance((program.data as ProgramData).programStmts, instNode, classesBesideGeneric);
+		const home = (homes != null ? homes.get(instNode) : null) ?? sym.modulePath;
+		let group = grouped.get(home);
+		if (group == null) {
+			group = [];
+			grouped.set(home, group);
+			homeOrder.push(home);
+		}
+		group.push(instNode);
+	}
+	const byHome = new HashMap<string, Node[]>();
+	for (const home of homeOrder) {
+		const program = programOf(home);
+		if (program == null) throw new Error(`internal: generic instances are placed in ${home}, which is not a module of this build`);
+		const placed = distinctInstances(grouped.get(home)!);
+		for (const instNode of placed) {
+			const sym = instNode.resolvedSym!;
+			if (instNode.nodeType == null && sym.symbolType != null) instNode.nodeType = sym.symbolType;
+			if (instNode.kind == NodeKind.FunctionDecl) sym.modulePath = home;
+			if (place) placeInstance((program.data as ProgramData).programStmts, instNode, classesBesideGeneric);
+		}
+		byHome.set(home, placed);
 	}
 	return byHome;
 }
 
 function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[], classesBesideGeneric: boolean = false): void {
-	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true, classesBesideGeneric);
+	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true, null, classesBesideGeneric);
 }
 
 function graphCheckedModule(graph: ModuleGraph, modPath: string, mod: Module, opts: CliOptions): { program: Node, ctx: CheckerContext } {
@@ -1566,10 +1548,13 @@ function hcrBuildRoot(entryPath: string, projectRoot: string): string {
 	return root;
 }
 
-function hcrModuleId(modPath: string, root: string, stdPath: string): string {
+function hcrModuleId(modPath: string, root: string, stdPath: string, deps: DepsSection): string {
 	if (stdPath != "" && isUnder(modPath, stdPath)) return "";
-	if (!isUnder(modPath, root)) return "";
-	return replaceExt(relative(root, modPath), "");
+	if (isUnder(modPath, root)) return replaceExt(relative(root, modPath), "");
+	for (let i = 0; i < deps.keys.length; i += 1) {
+		if (isUnder(modPath, deps.values[i])) return `${deps.keys[i]}/${replaceExt(relative(deps.values[i], modPath), "")}`;
+	}
+	return "";
 }
 
 function hcrFunctionSymbol(info: ExportedSymInfo, fn: Symbol): string {
@@ -1590,9 +1575,7 @@ function hcrFunctionSlot(info: ExportedSymInfo, fn: Symbol): string {
 
 function appendHcrFunctionExport(exports: HcrAbiExport[], moduleId: string, info: ExportedSymInfo, fn: Symbol): Result<void, string> {
 	if (hasFlag(fn, SymbolFlag.OverloadSig) || hasFlag(fn, SymbolFlag.Borrow)) return Result.ok(null);
-	if (hasGenericParams(fn.symbolType)) {
-		return Result.err(`HCR ABI cannot represent generic export '${moduleId}::${info.name}'`);
-	}
+	if (hasGenericParams(fn.symbolType)) return Result.ok(null);
 	exports.push(createHcrAbiExport(moduleId, hcrFunctionSymbol(info, fn), hcrSignatureKey(fn.symbolType), hcrFunctionSlot(info, fn)));
 	return Result.ok(null);
 }
@@ -1655,25 +1638,29 @@ function buildHcrCandidateAbi(
 	stdPath: string,
 ): Result<HcrCandidateAbi, string> {
 	const root = hcrBuildRoot(entryPath, opts.projectRoot);
+	const deps = depRoots(opts.projectRoot != "" ? opts.projectRoot : root);
 	const cpu = opts.targetInfo.cpu != "" ? opts.targetInfo.cpu : "host";
 	const targetKey = `${opts.targetOs}:${cpu}:${opts.targetInfo.ptrSize}:${opts.targetInfo.floatSize}`;
 	const toolchainKey = `${VERSION}:${toolchainStamp()}:${getCompilerName(opts.ccCompiler, opts.ccBinary)}:${hashContent(compileFlags)}`;
 	const candidate: HcrModuleAbi[] = [];
 	const modulePaths: string[] = [];
+	const imageOwners = new HashMap<string, string>();
 	for (const modPath of graph.loadOrder) {
-		const moduleId = hcrModuleId(modPath, root, stdPath);
+		const moduleId = hcrModuleId(modPath, root, stdPath, deps);
 		if (moduleId == "") continue;
+		const imageName = moduleId.replaceAll("/", ".");
+		const owner = imageOwners.get(imageName);
+		if (owner != null) {
+			return Result.err(`HCR modules '${owner}' and '${modPath}' both build the image '${imageName}'; rename one of them`);
+		}
+		imageOwners.set(imageName, modPath);
 		const mod = findModule(graph, modPath);
 		if (mod == null) return Result.err(`HCR ABI module '${modPath}' is missing from the graph`);
 		const dependencies: string[] = [];
 		for (const imported of mod.imports) {
-			const dependencyId = hcrModuleId(imported.sourcePath, root, stdPath);
+			const dependencyId = hcrModuleId(imported.sourcePath, root, stdPath, deps);
 			if (dependencyId == "") continue;
 			dependencies.push(dependencyId);
-			const shared = hcrSharedVariable(imported.sourcePath, imported.names);
-			if (shared != "") {
-				return Result.err(`HCR cannot share exported variable '${dependencyId}::${shared}' with module '${moduleId}' across module images; export a function that reads it instead`);
-			}
 		}
 		const exports = hcrModuleExports(moduleId, modPath);
 		if (!exports.ok) return Result.err(exports.error);
@@ -1692,39 +1679,12 @@ function buildHcrCandidateAbi(
 	return Result.ok({ candidate, modulePaths });
 }
 
-function hcrSharedVariable(sourcePath: string, names: string[]): string {
-	const moduleExports = findModuleExports(graphRegistry, sourcePath);
-	if (moduleExports == null) return "";
-	for (const name of names) {
-		for (const info of moduleExports.symbols) {
-			if (info.name == name && info.sym.modulePath == sourcePath && info.sym.symbolKind == SymbolKind.Variable) return name;
-		}
-	}
-	return "";
-}
-
-function hcrForeignSymbols(modPath: string): HashSet<string> {
-	const foreign = new HashSet<string>();
-	const moduleExports = findModuleExports(graphRegistry, modPath);
-	if (moduleExports == null) return foreign;
-	for (const info of moduleExports.symbols) {
-		if (info.sym.modulePath != modPath || info.sym.symbolKind != SymbolKind.Function) continue;
-		addHcrForeignSymbol(foreign, info, info.sym);
-		for (const ov of info.sym.overloads) addHcrForeignSymbol(foreign, info, ov);
-	}
-	return foreign;
-}
-
-function addHcrForeignSymbol(foreign: HashSet<string>, info: ExportedSymInfo, fn: Symbol): void {
-	const isBinding = fn.exportName == "" && (fn.nativeName != "" || hasFlag(fn, SymbolFlag.ImportC));
-	if (info.name == "main" || isBinding) foreign.add(hcrFunctionSymbol(info, fn));
-}
 
 function pushDispatcherJob(cJobs: ModuleCompileJob[], oSlots: string[][], key: string, source: string, flags: string, opts: CliOptions): void {
 	const fp = moduleCompileFp(source, fullCompileCmd(opts.ccCompiler, opts.mode, flags, opts.ccBinary));
 	writeCSource(key, fp, source);
 	oSlots.push([]);
-	cJobs.push({ cFile: stableCFileFp(key, fp), oFile: stableOFileFp(key, fp), modPath: "", flags, fp: "", slot: oSlots.length - 1 });
+	cJobs.push({ cFile: stableCFileFp(key, fp), oFile: stableOFileFp(key, fp), modPath: "", flags, fp: "", baseFp: "", depFile: "", slot: oSlots.length - 1 });
 }
 
 function moduleOutputFor(outputs: CModuleOutput[], modPath: string): CModuleOutput | null {
@@ -1916,26 +1876,64 @@ function hcrRootFunctions(modulePaths: string[]): Symbol[] {
 	return roots;
 }
 
+function refuseCoreCallsIntoImageOps(unit: ProcessedModule, imagePaths: string[], aliveSet: Readonly<AliveSet>): void {
+	for (const stmt of (unit.program.data as ProgramData).programStmts) {
+		const op = stmt.kind == NodeKind.FunctionDecl ? stmt.resolvedSym : null;
+		if (op == null) continue;
+		const users = aliveSet.foreignOps.readonlyGet(op);
+		if (users == null) continue;
+		for (const user of users) {
+			if (imagePaths.includes(user)) continue;
+			printDiag(`${error("error")}: internal: HCR core module '${user}' calls '${op.name}', which module '${unit.modPath}' generates in its reloadable image`);
+			throw new Error(BUILD_STOPPED);
+		}
+	}
+}
+
+function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[], aliveSet: Readonly<AliveSet>, facts: CEmissionFacts): void {
+	const imagePaths: string[] = [];
+	for (const module of modules) {
+		imagePaths.push(module.modulePath);
+		facts.hcrModules.add(module.modulePath);
+	}
+	for (const info of facts.typeInfoOrder) {
+		for (const module of modules) {
+			if (info.owner == module.modulePath && !module.typeInfos.includes(info.cName)) module.typeInfos.push(info.cName);
+		}
+	}
+	const owners = new HashMap<string, string>();
+	for (const module of modules) {
+		for (const unit of processed) {
+			if (unit.modPath != module.modulePath) continue;
+			refuseCoreCallsIntoImageOps(unit, imagePaths, aliveSet);
+			for (const fn of hcrFunctions(unit.program, aliveSet, unit.modPath, facts)) {
+				if (!owners.has(fn.symbol) || fn.sourcePath == unit.modPath) owners.set(fn.symbol, module.moduleId);
+			}
+		}
+	}
+	for (const module of modules) {
+		for (const unit of processed) {
+			if (unit.modPath != module.modulePath) continue;
+			unit.program = lowerHcrIndirection(cloneNodeKeepSem(unit.program), module, modules, owners, aliveSet, facts);
+		}
+	}
+}
+
 function hcrIndirectModules(abi: HcrCandidateAbi): Result<HcrIndirectModule[], string> {
 	const modules: HcrIndirectModule[] = [];
 	for (let i = 0; i < abi.candidate.length; i += 1) {
 		const manifest = abi.candidate[i];
-		const foreign = hcrForeignSymbols(abi.modulePaths[i]);
-		const symbols: string[] = [];
-		for (const item of manifest.exports) symbols.push(foreign.has(item.symbol) ? "" : item.symbol);
-		const imports: HcrImport[] = [];
+		const imports: string[] = [];
 		for (const dependency of manifest.dependencies) {
 			const target = hcrManifestById(abi.candidate, dependency);
 			if (target == null) return Result.err(`HCR module '${manifest.moduleId}' imports '${dependency}', which has no ABI manifest`);
-			imports.push({ moduleId: dependency, abiKey: hcrExportKey(target) });
+			imports.push(dependency);
 		}
 		modules.push({
 			moduleId: manifest.moduleId,
-			symbols,
-			generated: [],
+			modulePath: abi.modulePaths[i],
 			typeInfos: [],
 			typeKeys: [],
-			abiKey: hcrExportKey(manifest),
 			imports,
 			beforeReload: [],
 			afterReload: [],
@@ -2036,18 +2034,20 @@ function emitDirOf(opts: CliOptions): string {
 }
 
 interface WatchFeed {
-	watcher: FsWatch;
-	armed: boolean;
+	watchers: FsWatch[];
+	armed: boolean[];
 	batches: FsChanges[];
 }
 
 function pumpFeed(feed: WatchFeed, timeoutMs: int32): void {
-	if (!feed.armed) {
-		feed.armed = true;
+	for (let i = 0; i < feed.watchers.length; i += 1) {
+		if (feed.armed[i]) continue;
+		feed.armed[i] = true;
 		const target = feed;
-		nextChanges(target.watcher).then((changes: FsChanges): void => {
+		const slot = i;
+		nextChanges(target.watchers[slot]).then((changes: FsChanges): void => {
 			target.batches.push(changes);
-			target.armed = false;
+			target.armed[slot] = false;
 		});
 	}
 	msIoRunOnce(timeoutMs);
@@ -2143,13 +2143,22 @@ function openWatch(entryPath: string, opts: CliOptions, resolveSection: ResolveS
 	let feed: WatchFeed | null = null;
 	if (opts.watchReplay == "") {
 		const root = opts.projectRoot != "" ? opts.projectRoot : dirname(canonicalModulePath(entryPath));
-		const opened = watch(root, true);
-		if (!opened.ok) {
-			printDiag(`${error("error")}: --watch cannot watch ${root}: ${opened.error.message}`);
-			exit(1);
+		const roots: string[] = [root];
+		for (const depRoot of fileDepRoots(root).values) {
+			if (!isUnder(depRoot, root)) roots.push(depRoot);
 		}
-		feed = { watcher: opened.value, armed: false, batches: [] };
-		console.log(`watch: watching ${root}`);
+		const opened: WatchFeed = { watchers: [], armed: [], batches: [] };
+		for (const dir of roots) {
+			const watcher = watch(dir, true);
+			if (!watcher.ok) {
+				printDiag(`${error("error")}: --watch cannot watch ${dir}: ${watcher.error.message}`);
+				exit(1);
+			}
+			opened.watchers.push(watcher.value);
+			opened.armed.push(false);
+			console.log(`watch: watching ${dir}`);
+		}
+		feed = opened;
 	}
 	setRecoverableBuild(true);
 	return { entryPath, opts, resolveSection, session: createBuildSession(true), feed, replay, step: 0 };
@@ -2226,6 +2235,10 @@ function buildHcrHost(dir: string): string {
 	return host;
 }
 
+function hcrHostMissesEngine(graph: ModuleGraph, stdPath: string): boolean {
+	return findModule(graph, canonicalModulePath(`${stdPath}/hcr/engine.cms`)) == null;
+}
+
 export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
 	if (opts.watchReplay != "") {
 		printDiag(`${error("error")}: msc run --hcr watches the sources itself; --watch-replay belongs to msc build`);
@@ -2235,6 +2248,7 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 	const stem = replaceExt(basename(entryPath), "");
 	ensureDir(dir);
 	opts.outputPath = `${dir}/${stem}${soSuffix()}`;
+	opts.hcrHost = true;
 	const host = buildHcrHost(dir);
 	const run = openWatch(entryPath, opts, resolveSection);
 	while (!watchBuild(run)) {
@@ -2278,6 +2292,10 @@ setGlobalHookOwners(sharedHookOwners);
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
 	applyGcMode(opts);
 	session.moduleCount = graph.loadOrder.length as int32;
+	if (opts.hcrHost && hcrHostMissesEngine(graph, config.stdPath)) {
+		printDiag(`${error("error")}: ${basename(entryPath)} never imports std/hcr, so nothing calls reload() and an edit would never reach the running program; import { reload } from "std/hcr" and call reload() once per pass of the main loop`);
+		stopBuild();
+	}
 
 	// Solana: resolve the SBF toolchain, force release mode. The gc force lives
 	// in resolveTargetGcMode (it has to happen before the check pass).
@@ -2432,12 +2450,19 @@ setGlobalHookOwners(sharedHookOwners);
 		programByPath.set(modPath, checked.program);
 	}
 
+	const reloadable: string[] = opts.isHcr ? hcrModulePaths : [];
 	const routeOrder: Node[] = [];
+	const homes = new HashMap<Node, string>();
 	for (const modPath of graph.loadOrder) {
 		const created = session.check.instances.get(modPath);
-		if (created != null) for (const instNode of created) routeOrder.push(instNode);
+		if (created == null) continue;
+		const keeps = reloadable.includes(modPath);
+		for (const instNode of created) {
+			routeOrder.push(instNode);
+			if (keeps) homes.set(instNode, modPath);
+		}
 	}
-	const instancesByOwner = routeInstances(routeOrder, (path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, !session.keep);
+	const instancesByOwner = routeInstances(routeOrder, (path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, !session.keep, homes);
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
 	for (let i = 0; i < hcrModulePaths.length; i += 1) {
@@ -2449,25 +2474,51 @@ setGlobalHookOwners(sharedHookOwners);
 		hcrModules[i].beforeReload = hcrReloadHandlers(program, SymbolFlag.BeforeReload);
 		hcrModules[i].afterReload = hcrReloadHandlers(program, SymbolFlag.AfterReload);
 	}
-	const typeRows = collectTypeInstanceRows(session.check, graph.loadOrder);
 	const firstModule = checkedMods.length > 0 ? checkedMods[0].modPath : "";
+	const typeRowsOf = new HashMap<string, GenericTypeInstRow[]>();
+	const sharedOrder: string[] = [];
+	const sharedFromReloadable: GenericTypeInstRow[] = [];
+	for (const path of graph.loadOrder) {
+		if (!reloadable.includes(path) || path == firstModule) {
+			sharedOrder.push(path);
+			continue;
+		}
+		const own: GenericTypeInstRow[] = [];
+		for (const row of moduleTypeInstanceRows(session.check, path)) {
+			if (row.prelude) sharedFromReloadable.push(row);
+			else own.push(row);
+		}
+		typeRowsOf.set(path, own);
+	}
+	const sharedRows = collectTypeInstanceRows(session.check, sharedOrder);
+	const sharedKeys = new HashSet<string>();
+	for (const row of sharedRows) sharedKeys.add(row.baseName + "|" + row.typeArgKey);
+	for (const row of sharedFromReloadable) {
+		const key = row.baseName + "|" + row.typeArgKey;
+		if (sharedKeys.has(key)) continue;
+		sharedKeys.add(key);
+		sharedRows.push(row);
+	}
+	typeRowsOf.set(firstModule, sharedRows);
+	const noTypeRows: GenericTypeInstRow[] = [];
 	const ownerFingerprints: HashMap<string, string> = new HashMap<string, string>();
 	if (session.keep) {
 		if (opts.isHcr) {
-			const tablesNow = hcrTablesFingerprint(hcrModules) + projectTypesFingerprint(session, hcrModulePaths);
+			const typesNow = hcrTypeRegistryFingerprint(hcrModules) + projectTypesFingerprint(session, hcrModulePaths);
 			let greenHcrModule = false;
 			for (const path of hcrModulePaths) {
 				if (!session.check.rechecked.has(path)) greenHcrModule = true;
 			}
-			if (session.hcrTablesFingerprint != "" && session.hcrTablesFingerprint != tablesNow && greenHcrModule) {
-				session.staleReason = "the HCR export tables changed";
+			if (session.hcrTypeRegistryFingerprint != "" && session.hcrTypeRegistryFingerprint != typesNow && greenHcrModule) {
+				session.staleReason = "the project type layouts changed";
 				return BuildStatus.Stale;
 			}
-			session.hcrTablesFingerprint = tablesNow;
+			session.hcrTypeRegistryFingerprint = typesNow;
 		}
 		for (const cm of checkedMods) {
 			let fingerprint = instancesFingerprint(session, instancesByOwner.get(cm.modPath));
-			if (cm.modPath == firstModule) fingerprint = fingerprint + "#types:" + typeInstanceRowsFingerprint(typeRows);
+			const rows = typeRowsOf.get(cm.modPath);
+			if (rows != null && rows.length > 0) fingerprint = fingerprint + "#types:" + typeInstanceRowsFingerprint(rows);
 			ownerFingerprints.set(cm.modPath, fingerprint);
 			if (session.check.rechecked.has(cm.modPath) || !session.lowerFingerprints.has(cm.modPath)) continue;
 			if (session.lowerFingerprints.get(cm.modPath) != fingerprint) {
@@ -2488,11 +2539,12 @@ setGlobalHookOwners(sharedHookOwners);
 			opts,
 			stdPath: config.stdPath,
 			hcrSlot: hcrModulePaths.indexOf(modPath) as int32,
+			hcrModules,
 			fsAsyncHits,
 			timers: a2t,
 			diagnostics: [],
 			instances: routed != null ? routed : [],
-			typeInstances: modPath == firstModule ? typeRows : [],
+			typeInstances: typeRowsOf.get(modPath) ?? noTypeRows,
 			cloneInput: session.keep,
 			ran: false,
 			claims: { typeInfos: [], owners: [], hooks: [], ops: [] },
@@ -2568,6 +2620,7 @@ setGlobalHookOwners(sharedHookOwners);
 		throw new Error(BUILD_STOPPED);
 	}
 
+
 	const tB = performance.now();
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
@@ -2633,13 +2686,14 @@ setGlobalHookOwners(sharedHookOwners);
 	for (const p of processed) {
 		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
 		prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
+		if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) emissionFacts.hcrCoreUnits.add(p.modPath);
 	}
+	if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts);
 	const emissionJobs: ModuleEmissionJob[] = [];
 	for (const p of processed) {
 		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
 		emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath, weight: p.program.location.endLine });
 	}
-	if (opts.isHcr) completeHcrTables(emissionJobs, hcrModulePaths, hcrModules, aliveSet, emissionFacts, session.keep);
 	const emitStart = performance.now();
 	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
 	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr ? entryPath : "");
@@ -2723,7 +2777,8 @@ setGlobalHookOwners(sharedHookOwners);
 			const upFlag = userProjectFlag(p.modPath, opts.projectRoot, resolveRuntimeDir());
 			if (upFlag != "") modFlags = appendFlag(modFlags, upFlag);
 			const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, modFlags, opts.ccBinary);
-			const modFp = moduleCompileFp(cCode, compileCmd);
+			const baseFp = moduleCompileFp(cCode, compileCmd);
+			const modFp = moduleObjectFp(p.modPath, baseFp);
 			const oFile = stableOFileFp(p.modPath, modFp);
 
 			if (isCCodeCached(p.modPath, modFp)) {
@@ -2733,11 +2788,11 @@ setGlobalHookOwners(sharedHookOwners);
 				// Write only .c source BEFORE compile (always — debuggable).
 				// Defer fingerprint (.cfp) until after successful compile so a
 				// failed zig cc doesn't leave a false cache hit for the next run.
-				writeCSource(p.modPath, modFp, cCode);
-				const cFile = stableCFileFp(p.modPath, modFp);
+				writeCSource(p.modPath, baseFp, cCode);
+				const cFile = stableCFileFp(p.modPath, baseFp);
 				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 				oSlots.push([]);
-				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, slot: oSlots.length - 1 });
+				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), slot: oSlots.length - 1 });
 				modulesRecompiled = modulesRecompiled + 1;
 				recompiledModulePaths.push(p.modPath);
 			}
@@ -2848,8 +2903,7 @@ setGlobalHookOwners(sharedHookOwners);
 		const cj = cJobs[cji];
 		const code = cCodes[cji];
 		if (code == 0) {
-			if (cj.fp != "") writeCompileFingerprintFp(cj.modPath, cj.fp);
-			oSlots[cj.slot] = [cj.oFile];
+			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile];
 		} else if (cj.modPath == "") {
 			printDiag(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
 			throw new Error(BUILD_STOPPED);
@@ -3041,7 +3095,7 @@ setGlobalHookOwners(sharedHookOwners);
 		const macroExpanded = expandMacros(monoed, ctx);
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		const transformed = transformProgram(comptimeResolved, ctx, false);
+		const transformed = transformProgram(comptimeResolved, ctx, false, opts.isHcr && modPath == filePath);
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
@@ -3049,7 +3103,7 @@ setGlobalHookOwners(sharedHookOwners);
 		nativeCtx.objChecks = opts.mode != MODE_DANGER;
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
-		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx, replaceExt(entryName(filePath), "")) : nativeTransformed;
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
@@ -3141,7 +3195,8 @@ setGlobalHookOwners(sharedHookOwners);
 		const upFlag = userProjectFlag(p.modPath, opts.projectRoot, resolveRuntimeDir());
 		if (upFlag != "") testModFlags = appendFlag(testModFlags, upFlag);
 		const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, testModFlags, opts.ccBinary);
-		const modFp = moduleCompileFp(cCode, compileCmd);
+		const baseFp = moduleCompileFp(cCode, compileCmd);
+		const modFp = moduleObjectFp(p.modPath, baseFp);
 		const oFile = stableOFileFp(p.modPath, modFp);
 
 		if (isCCodeCached(p.modPath, modFp)) {
@@ -3149,11 +3204,11 @@ setGlobalHookOwners(sharedHookOwners);
 			if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
 		} else {
 			// Same as main path — defer fingerprint until success.
-			writeCSource(p.modPath, modFp, cCode);
-			const cFile = stableCFileFp(p.modPath, modFp);
+			writeCSource(p.modPath, baseFp, cCode);
+			const cFile = stableCFileFp(p.modPath, baseFp);
 			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 			oSlots.push([]);
-			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, slot: oSlots.length - 1 });
+			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), slot: oSlots.length - 1 });
 		}
 		compiled = compiled + 1;
 		p.program = null as unknown as Node;
@@ -3176,7 +3231,7 @@ setGlobalHookOwners(sharedHookOwners);
 	writeCSource("_test_dispatch", dispFp, dispatcher);
 	const dispFile = stableCFileFp("_test_dispatch", dispFp);
 	oSlots.push([]);
-	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", slot: oSlots.length - 1 });
+	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", baseFp: "", depFile: "", slot: oSlots.length - 1 });
 
 	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 	let testFailed = false;
@@ -3185,8 +3240,7 @@ setGlobalHookOwners(sharedHookOwners);
 		const cj = cJobs[cji];
 		const code = cCodes[cji];
 		if (code == 0) {
-			if (cj.fp != "") writeCompileFingerprintFp(cj.modPath, cj.fp);
-			oSlots[cj.slot] = [cj.oFile];
+			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile];
 		} else if (cj.modPath == "") {
 			printDiag(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
 			testFailed = true;
@@ -3229,6 +3283,10 @@ setGlobalHookOwners(sharedHookOwners);
 	if (opts.showTime) printTiming("compiled", t0);
 	if (opts.verbose) verboseLog("running tests");
 	const runCode = execFile(testBin);
+	if (platform == "windows" && runCode >= 0xC0000000) {
+		printDiag(`${error("error")}: test binary terminated with status 0x${runCode.toString(16).toUpperCase()}`);
+		exit(1);
+	}
 	if (runCode > 128) printDiag(`${error("error")}: test binary terminated by signal ${runCode - 128}`);
 	exit(runCode);
 }
@@ -3657,4 +3715,11 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 	if (ctx.lastResult.kind == RaiserValueKind.Int) {
 		exit(ctx.lastResult.intVal as int32);
 	}
+}
+
+test "msc run --hcr needs the std/hcr engine in the program's graph" {
+	const graph = createModuleGraph();
+	assert hcrHostMissesEngine(graph, "/std");
+	addModule(graph, createModule(canonicalModulePath("/std/hcr/engine.cms")));
+	assert !hcrHostMissesEngine(graph, "/std");
 }

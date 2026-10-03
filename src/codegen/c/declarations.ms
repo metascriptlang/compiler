@@ -19,24 +19,11 @@ import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { isBakeableAggregateConst, isTracedRoutine } from "../../checker/reachability";
+import { isBakeableAggregateConst, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 // genGenericTypeInsts lives in index.ms for the same reason.
 
 // ===== genDecl — main declaration dispatcher =====
-
-// DCE: check if a function declaration is alive (reachable).
-// Empty aliveSet means no DCE filtering (DCE disabled).
-function isDeclAlive(g: CGen, node: Readonly<Node>): boolean {
-	if (g.aliveSet.entries.length == 0) return true;
-	const d = node.data as FunctionDeclData;
-	const name = d.fnName;
-	const sym = node.resolvedSym;
-	// $-prefixed functions without a traced routine symbol ($Env_*Destroy etc. DRC hooks) are
-	// referenced by DRC-injected code the walker can't trace — keep them unconditionally alive.
-	if (name.length > 0 && name.slice(0, 1) == "$" && !isTracedRoutine(sym)) return true;
-	return aliveSetHasDecl(g.aliveSet, g.modulePath, name, sym);
-}
 
 
 export function genDecl(g: CGen, node: Readonly<Node>, exported: boolean): void {
@@ -47,7 +34,7 @@ export function genDecl(g: CGen, node: Readonly<Node>, exported: boolean): void 
 
 	match (node.kind) {
 		NodeKind.FunctionDecl => {
-			if (!isDeclAlive(g, node)) return;
+			if (!functionDeclIsAlive(g.aliveSet, g.modulePath, node)) return;
 			genFunctionDecl(g, node, exported);
 		},
 		NodeKind.EnumDecl => { genEnumDecl(g, node); },
@@ -152,8 +139,9 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	// Generic instances: not static, not exported — one definition, other modules get forward decl.
 	const isExported = sym != null && (exported || hasFlag(sym, SymbolFlag.Exported) || sym.exportName != "");
 	const exportPrefix = isExported && g.isHcr ? "MS_HCR_EXPORT " : "";
+	const hcrCoreCallable = sym != null && sym.modulePath != "" && g.emissionFacts.hcrCoreUnits.has(g.modulePath);
 	const isTypeBound = sym != null && isTypeBoundOp(sym);
-	const linkage = (isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance || isTypeBound) ? "" : "static ";
+	const linkage = (isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance || isTypeBound || hcrCoreCallable) ? "" : "static ";
 	const prefix = exportPrefix + linkage;
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
@@ -570,16 +558,18 @@ function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 		}
 	}
 	// Other statements go to ModuleInit — use shared initProc for consistent temp counter
-	const p = g.initProc;
+	const atExit = node.flags.has(NodeFlag.GlobalDestroys);
+	const p = atExit ? g.deinitProc : g.initProc;
+	const target = atExit ? CSection.ModuleDeinit : CSection.ModuleInit;
 	genStmt(g, p, node);
 	const locals = readProcLocals(p);
 	const stmts = readProcStmts(p);
 	clearProcBuffers(p);
 	if (locals.length > 0) {
-		add(sec(g, CSection.ModuleInit), locals);
+		add(sec(g, target), locals);
 	}
 	if (stmts.length > 0) {
-		add(sec(g, CSection.ModuleInit), stmts);
+		add(sec(g, target), stmts);
 	}
 }
 

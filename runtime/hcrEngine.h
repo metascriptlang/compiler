@@ -2,7 +2,7 @@
 #define MS_HCR_ENGINE_H
 
 #include "runtime/hcr.h"
-#include "runtime/core/string.h"
+#include "runtime/core/system.h"
 
 void msHcrLaunch(const char* dir, const char* stem);
 msString msHcrLaunchDir(void);
@@ -23,6 +23,41 @@ static inline msString msHcrImportId(void* raw, int32_t index) {
 
 static inline msString msHcrImportKey(void* raw, int32_t index) {
 	return msStringFromCStr(((const char* const* (*)(void))raw)()[index * 2 + 1]);
+}
+
+static inline int32_t msHcrListCount(void* raw) {
+	const char* const* values = ((const char* const* (*)(void))raw)();
+	int32_t count = 0;
+	while (values[count] != NULL) count += 1;
+	return count;
+}
+
+static inline msString msHcrListItem(void* raw, int32_t index) {
+	return msStringFromCStr(((const char* const* (*)(void))raw)()[index]);
+}
+
+static inline int32_t msHcrBindingCount(void* raw) {
+	const char* const* values = ((const char* const* (*)(void))raw)();
+	int32_t count = 0;
+	while (values[count * 3] != NULL) count += 1;
+	return count;
+}
+
+static inline msString msHcrBindingOwner(void* raw, int32_t index) {
+	return msStringFromCStr(((const char* const* (*)(void))raw)()[index * 3]);
+}
+
+static inline msString msHcrBindingName(void* raw, int32_t index) {
+	return msStringFromCStr(((const char* const* (*)(void))raw)()[index * 3 + 1]);
+}
+
+static inline msString msHcrBindingKey(void* raw, int32_t index) {
+	return msStringFromCStr(((const char* const* (*)(void))raw)()[index * 3 + 2]);
+}
+
+static inline int32_t msHcrCallInitStatus(void* raw) {
+	((void (*)(void))raw)();
+	return msErrTake() ? 1 : 0;
 }
 
 static inline msString msHcrFailureText(void) { return msStringFromCStr(msHcrImageFailure()); }
@@ -47,9 +82,17 @@ static inline int32_t msHcrMakeDir(const char* path) {
 	return 0;
 }
 static inline uint32_t msHcrProcessId(void) { return (uint32_t)GetCurrentProcessId(); }
+static inline int32_t msHcrProcessAlive(uint32_t pid) {
+	HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+	if (process == NULL) return GetLastError() == ERROR_INVALID_PARAMETER ? 0 : 1;
+	DWORD waited = WaitForSingleObject(process, 0);
+	CloseHandle(process);
+	return waited == WAIT_TIMEOUT ? 1 : 0;
+}
 #else
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -92,6 +135,10 @@ static inline int32_t msHcrMakeDir(const char* path) {
 	return 0;
 }
 static inline uint32_t msHcrProcessId(void) { return (uint32_t)getpid(); }
+static inline int32_t msHcrProcessAlive(uint32_t pid) {
+	if (pid == 0 || pid > 0x7fffffffU) return 0;
+	return kill((pid_t)pid, 0) == 0 || errno == EPERM ? 1 : 0;
+}
 #endif
 
 #endif

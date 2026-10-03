@@ -3,7 +3,7 @@
 import { argv, exit, platform, arch } from "std/process";
 import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
-import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, formatDefines } from "./defines";
+import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, formatDefines, defineSymbol } from "./defines";
 import { setDefaultLoopLimit } from "../raiser/vm";
 import { TargetInfo, hostTargetInfo, floatInt64Align } from "../checker/types";
 
@@ -49,6 +49,7 @@ export interface CliOptions {
 	sourcemap: boolean;        // --sourcemap: js target writes a .map beside each output and links it
 	fmtCheck: boolean;
 	isHcr: boolean;
+	hcrHost: boolean;          // msc run --hcr: the std host starts the program, so it must import std/hcr
 	watch: boolean;
 	watchReplay: string;
 	emitSubdir: string;
@@ -146,6 +147,7 @@ function newCliOptions(): CliOptions {
 		sourcemap: false,
 		fmtCheck: false,
 		isHcr: false,
+		hcrHost: false,
 		watch: false,
 		watchReplay: "",
 		emitSubdir: "",
@@ -305,6 +307,7 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 			opts.fmtCheck = true;
 		} else if (arg == "--hcr") {
 			opts.isHcr = true;
+			defineSymbol(opts.defines, "hcr", "true");
 		} else if (arg == "--watch") {
 			opts.watch = true;
 		} else if (arg.startsWith("--watch-replay=")) {

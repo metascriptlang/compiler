@@ -18,6 +18,12 @@ test "constant folding leaves overflowing typed integer addition for runtime sem
 	assert (value.data as BinaryExprData).operator == "+";
 }
 
+test "constant folding leaves an int32 cast operand sum past the range for runtime semantics" {
+	const value = returnValue("function probe(): int32 { return (2147483647 as int32) + 1; }");
+	assert value != null && value.kind == NodeKind.BinaryExpr;
+	assert (value.data as BinaryExprData).operator == "+";
+}
+
 test "the minimum integer remainder by negative one retains its checked runtime operation" {
 	const value = returnValue("const LOW: int32 = -2147483648; function probe(): int32 { return LOW % -1; }");
 	assert value != null && value.kind == NodeKind.CallExpr;

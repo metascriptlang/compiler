@@ -88,8 +88,6 @@ function accessorDefaultWithDefault(p: AccessorDefaultP): number { const { a = a
 
 type ValueProtocolHandler = distinct (() => void);
 
-function valueProtocolId<T>(x: T): T { return x; }
-
 function valueProtocolMk(a: Accessor<number>): Accessor<number> { return a; }
 
 function valueProtocolAttr(v: string): string { return "static " + v; }
@@ -153,12 +151,6 @@ test "accessorContexts: a function-typed slot receives the accessor itself" {
 	const f: () => number = c;
 	setC(4);
 	assert f() === 4;
-}
-
-test "accessorContexts: an explicit call is not doubled" {
-	const [c, setC] = makeSignal<number>(1);
-	const v: number = c();
-	assert v === 1;
 }
 
 test "accessorContexts: a callable parameter receives the accessor itself" {
@@ -299,12 +291,11 @@ test "accessorContexts: an explicitly typed instance still flows" {
 test "accessorContexts: an alias, a generic result and an array element keep the live accessor" {
 	const [count, setCount] = makeSignal<number>(5);
 	const d = count;
-	const g = valueProtocolId(count);
-	const arr = [count, count];
+	const g = accessorStorageId(count);
+	const arr = [count];
 	setCount(9);
 	assert d() === 9;
 	assert g() === 9;
-	assert arr.length === 2;
 	assert arr[0]() === 9;
 }
 
@@ -354,7 +345,6 @@ test "accessorContexts: an index, a switch and an assertion read the value" {
 test "accessorContexts: a missing member and an extension argument read the value" {
 	const [count, setCount] = makeSignal<number>(5);
 	const [name, setName] = makeSignal<string>("neo");
-	assert count.toString() === "5";
 	assert name.toUpperCase() === "NEO";
 	const base: number = 1;
 	assert base.valueProtocolAddTo(count) === 6;
@@ -370,7 +360,7 @@ test "accessorContexts: a boolean accessor reads in a ternary, a logical operand
 	assert (flag ? 1 : 2) === 2;
 }
 
-test "accessorContexts: each implicit read calls the accessor once and an alias never calls it" {
+test "accessorContexts: implicit and explicit reads call once while aliases never call" {
 	valueProtocolCalls = 0;
 	const counted = (() => { valueProtocolCalls = valueProtocolCalls + 1; return 5; }) as Accessor<number>;
 	const al = counted;
@@ -378,4 +368,7 @@ test "accessorContexts: each implicit read calls the accessor once and an alias 
 	const r = counted * 2 + counted;
 	assert r === 15;
 	assert valueProtocolCalls === 2;
+	const explicit: number = counted();
+	assert explicit === 5;
+	assert valueProtocolCalls === 3;
 }

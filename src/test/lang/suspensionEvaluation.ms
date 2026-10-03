@@ -107,6 +107,18 @@ async function awaitOperandComputed(): Promise<string> {
 	return `${sum} ${awaitOperandArr[1]} ${pick} ${neg} ${own}`;
 }
 
+function awaitOperandWidePair(wide: int64, value: int32): string {
+	return `${wide}+${value}`;
+}
+
+async function awaitOperandWidened(): Promise<string> {
+	awaitOperandX = 1;
+	const cast = (awaitOperandX as int64) + await awaitOperandClobber();
+	awaitOperandX = 1;
+	const argument = awaitOperandWidePair(awaitOperandX, await awaitOperandClobber());
+	return `${cast} ${argument}`;
+}
+
 test "suspensionEvaluation: a read left of an await is read before it" {
 	assert await awaitOperandReads() == "6 6 15 1005 s5 105";
 }
@@ -121,6 +133,10 @@ test "suspensionEvaluation: a value struct and an array stay in place" {
 
 test "suspensionEvaluation: computed operands, a computed index and a receiver's field are read before their awaits" {
 	assert await awaitOperandComputed() == "7 5 6 4 4";
+}
+
+test "suspensionEvaluation: casts and implicit widening preserve the read before an await" {
+	assert await awaitOperandWidened() == "6 1+5";
 }
 
 let operandTrace = "";

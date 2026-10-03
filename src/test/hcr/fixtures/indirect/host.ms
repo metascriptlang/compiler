@@ -6,15 +6,13 @@ import { argv, exit } from "std/process";
 extern function hcrOpen(path: cstring): Ptr<void> from "msHcrImageOpen";
 extern function hcrSymbol(handle: Ptr<void>, name: cstring): Ptr<void> from "msHcrImageSymbol";
 extern function hcrIsNull(value: Ptr<void>): int32 from "msHcrImageIsNull";
-extern function hcrCallHandover(raw: Ptr<void>, state: Ptr<void>): Ptr<void> from "msHcrImageCallHandover";
 extern function hcrCallInit(raw: Ptr<void>): void from "msHcrImageCallInit";
 extern function hcrCallProbe(raw: Ptr<void>): int32 from "msHcrImageCallProbe";
-extern function hcrNull(): Ptr<void> from "msHcrImageNull";
 extern function hcrFixtureCore(): Ptr<void> from "hcrFixtureCore";
 extern function hcrImageExt(): string from "hcrFixtureImageExt";
 extern function hcrFixtureCallName(raw: Ptr<void>, name: cstring): void from "hcrFixtureCallName";
 extern function hcrFixtureCallNameInt(raw: Ptr<void>, name: cstring): int32 from "hcrFixtureCallNameInt";
-extern function hcrFixtureImportMatches(imports: Ptr<void>, moduleId: cstring, key: Ptr<void>): int32 from "hcrFixtureImportMatches";
+extern function hcrFixtureBindingsMatch(bindings: Ptr<void>, moduleId: cstring, functions: Ptr<void>, variables: Ptr<void>): int32 from "hcrFixtureBindingsMatch";
 
 function required(handle: Ptr<void>, name: string): Ptr<void> {
 	const raw = hcrSymbol(handle, name);
@@ -34,15 +32,8 @@ function open(path: string): Ptr<void> {
 	return image;
 }
 
-function handover(image: Ptr<void>, state: Ptr<void>): Ptr<void> {
-	const raw = hcrSymbol(image, "_hcr_handover");
-	if (hcrIsNull(raw) != 0) return hcrNull();
-	return hcrCallHandover(raw, state);
-}
-
 function probe(entry: Ptr<void>, generation: string): void {
-	const symbols = ["hcrIndirectValue", "hcrShapeValue", "hcrErrorValue", "hcrTickValue"];
-	for (const symbol of symbols) {
+	for (const symbol of ["hcrIndirectValue", "hcrShapeValue", "hcrErrorValue", "hcrTickValue"]) {
 		const value = hcrCallProbe(required(entry, symbol));
 		console.log("HCR-HOST " + generation + " " + symbol + " -> " + value.toString());
 	}
@@ -60,7 +51,6 @@ function imageModuleId(name: string): string {
 
 const images: Ptr<void>[] = [];
 const names: string[] = [];
-const states: Ptr<void>[] = [];
 const reloads: string[] = [];
 let inReloads = false;
 for (let i = 1; i < argv.length; i += 1) {
@@ -77,31 +67,30 @@ if (images.length == 0) {
 	console.log("usage: host <image in dependency order>... [-- <reload image>...]");
 	exit(2);
 }
-for (const image of images) states.push(handover(image, hcrNull()));
 for (const image of images) hcrCallInit(required(image, "DatInit000"));
 for (const image of images) hcrCallInit(required(image, "Init000"));
 const entry = images[images.length - 1];
 probe(entry, "gen1");
-
 const core = hcrFixtureCore();
 if (hcrIsNull(core) != 0) {
 	console.log("HCR-HOST the core image is not loaded");
 	exit(1);
 }
 
-function keysMatch(candidate: Ptr<void>, moduleId: string): boolean {
-	const key = required(candidate, "HcrAbiKey000");
+function bindingsMatch(candidate: Ptr<void>, moduleId: string): boolean {
 	let matches = true;
 	for (let i = 0; i < images.length; i += 1) {
-		const found = hcrFixtureImportMatches(required(images[i], "HcrImports000"), moduleId, key);
+		const found = hcrFixtureBindingsMatch(required(images[i], "HcrBindings000"), moduleId,
+			required(candidate, "HcrFunctions000"), required(candidate, "HcrVariables000"));
 		if (found < 0) continue;
-		console.log("HCR-HOST key " + names[i] + " -> " + moduleId + (found == 1 ? " matches" : " differs"));
+		console.log("HCR-HOST bindings " + names[i] + " -> " + moduleId + (found == 1 ? " match" : " differ"));
 		if (found == 0) matches = false;
 	}
 	return matches;
 }
 
-for (const path of reloads) {
+for (let index = 0; index < reloads.length; index += 1) {
+	const path = reloads[index];
 	const slot = names.indexOf(imageName(path));
 	if (slot < 0) {
 		console.log("HCR-HOST no current image for " + path);
@@ -109,29 +98,29 @@ for (const path of reloads) {
 	}
 	const moduleId = imageModuleId(imageName(path));
 	const candidate = open(path);
-	if (!keysMatch(candidate, moduleId)) {
+	if (!bindingsMatch(candidate, moduleId)) {
 		console.log("HCR-HOST rejected " + path);
+		console.log("HCR-HOST rejection hcrIndirectValue -> " + hcrCallProbe(required(entry, "hcrIndirectValue")).toString());
+		console.log("HCR-HOST rejection hcrTickValue -> " + hcrCallProbe(required(entry, "hcrTickValue")).toString());
 		continue;
 	}
 	hcrCallInit(required(core, "msHcrStageBegin"));
-	const state = handover(candidate, states[slot]);
-	if (hcrIsNull(state) != 0 && hcrIsNull(states[slot]) == 0) {
-		console.log("HCR-HOST rejected " + path);
-		exit(1);
-	}
 	hcrCallInit(required(candidate, "DatInit000"));
 	hcrCallInit(required(core, "msHcrStageEnd"));
-	const staged = hcrFixtureCallNameInt(required(core, "msHcrStaged"), moduleId);
-	console.log("HCR-HOST staged " + moduleId + " -> " + staged.toString());
+	console.log("HCR-HOST staged " + moduleId + " -> " + hcrFixtureCallNameInt(required(core, "msHcrStaged"), moduleId).toString());
 	console.log("HCR-HOST staged hcrIndirectValue -> " + hcrCallProbe(required(entry, "hcrIndirectValue")).toString());
 	hcrFixtureCallName(required(core, "msHcrCommit"), moduleId);
-	const previous = images[slot];
-	images[slot] = candidate;
-	states[slot] = state;
+	hcrCallInit(required(candidate, "Init000"));
 	console.log("HCR-HOST reloaded " + path);
 	probe(entry, "gen2");
-	hcrFixtureCallName(required(core, "msHcrRollback"), moduleId);
-	images[slot] = previous;
-	console.log("HCR-HOST rolled back " + moduleId);
-	console.log("HCR-HOST rollback hcrIndirectValue -> " + hcrCallProbe(required(entry, "hcrIndirectValue")).toString());
+	if (index == 0) {
+		hcrFixtureCallName(required(core, "msHcrRollback"), moduleId);
+		console.log("HCR-HOST rolled back " + moduleId);
+		console.log("HCR-HOST rollback hcrIndirectValue -> " + hcrCallProbe(required(entry, "hcrIndirectValue")).toString());
+		console.log("HCR-HOST rollback hcrTickValue -> " + hcrCallProbe(required(entry, "hcrTickValue")).toString());
+	} else {
+		hcrFixtureCallName(required(core, "msHcrFinalize"), moduleId);
+		images[slot] = candidate;
+		console.log("HCR-HOST finalized " + moduleId);
+	}
 }

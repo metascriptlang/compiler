@@ -11,7 +11,7 @@
 //
 // The JSX argument matters: a literal argument eager-folds the macro without
 // the engine wrapper, whose ordinary checker already saw int32 — only the
-// engine compile took the wrong view. (A same-file fixedbugs pin through
+// engine compile took the wrong view. (A same-file test through
 // compileToCWithStd misses it for the same reason; this probe must build
 // through the real CLI like any msc build.)
 

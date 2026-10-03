@@ -58,6 +58,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 			advance(state); // consume 'comptime'
 			const comptimeBody = try parseBlockStmt(state);
 			const node = createNode(NodeKind.ComptimeBlock, { comptimeBody }, token);
+			stampEnd(state, node);
 			return Result.ok(attachComments(state, node));
 		}
 	}
@@ -68,6 +69,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 		const fn = try parseFunctionDecl(state);
 		const fd = fn.data as FunctionDeclData;
 		fd.fnFlags = fd.fnFlags == "" ? "template" : fd.fnFlags + "|template";
+		stampEnd(state, fn);
 		return Result.ok(attachComments(state, fn));
 	}
 
@@ -82,6 +84,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 		if (decorators.length == 1 && !isAtEnd(state) && current(state).kind == TokenKind.Semicolon) {
 			consumeSemicolon(state);
 			const node = createNode(NodeKind.ExprStmt, { expr: decorators[0] }, token);
+			stampEnd(state, node);
 			return Result.ok(attachComments(state, node));
 		}
 		const decl = try parseStatement(state);

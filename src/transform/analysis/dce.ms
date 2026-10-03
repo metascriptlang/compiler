@@ -91,7 +91,7 @@ function enumOwnerOf(sym: Symbol): Symbol | null {
 }
 
 // Returns true for declarations that can be eliminated if unreferenced.
-// Reference parity: function-level DCE is handled by codegen (isDeclAlive with
+// Reference parity: function-level DCE is handled by codegen (functionDeclIsAlive with
 // cross-module visibility), NOT by transform-level DCE (per-module, no cross-module refs).
 // Only type aliases and enums are safe to eliminate at transform level.
 //
@@ -471,7 +471,7 @@ test "strips after return" { assert stmtCountAfter("return 1; const x = 2; const
 test "strips after throw" { assert stmtCountAfter("throw 1; const x = 2;", lowerDCE) == 1; }
 
 test "hoisted function kept at transform level" {
-	// Functions not eliminated by transform DCE — codegen isDeclAlive handles cross-module DCE.
+	// Functions not eliminated by transform DCE — functionDeclIsAlive handles cross-module DCE.
 	assert stmtCountAfter("return 1; function helper() { return 2; }", lowerDCE) == 2;
 }
 

@@ -234,21 +234,23 @@ function compoundBaseOf(op: string): string {
 	};
 }
 
-// `a OP= b` has no expression-level rewrite that stays correct for an arbitrary
-// left side: the value has to be read as well as written, and reading it twice
-// re-runs whatever the lvalue evaluates. Only side-effect-free shapes are
-// rewritten; anything else would silently keep C's value and JS's, so it is
-// refused by name instead.
-function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: TransformContext): Node {
+export function needsIntegerCompoundRewrite(d: BinaryExprData): boolean {
+	const base = compoundBaseOf(d.operator);
+	if (base == "") return false;
 	const t = peelToRepr(d.left.nodeType);
-	if (t == null || !isIntConvKind(t.kind)) return node;
+	if (t == null || !isIntConvKind(t.kind)) return false;
+	if ((base == "/" || base == "%") && !cannotRaise(d.right, t)) return true;
+	if (base == "%" || is64(t.kind)) return false;
+	return base == "/" || t.kind == TypeKind.Uint32 || subIntKind(t) != TypeKind.Unknown;
+}
+
+function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: TransformContext): Node {
+	if (!needsIntegerCompoundRewrite(d)) return node;
+	const t = peelToRepr(d.left.nodeType);
+	if (t == null) return node;
 	const checked = (base == "/" || base == "%") && !cannotRaise(d.right, t);
 	const unsigned = t.kind == TypeKind.Uint32;
 	const narrow = subIntKind(t);
-	if (!checked) {
-		if (base == "%" || is64(t.kind)) return node;
-		if (base != "/" && !unsigned && narrow == TypeKind.Unknown) return node;
-	}
 	const readBack = cloneIfPure(d.left);
 	if (readBack == null) {
 		if (ctx.checkerCtx != null) {

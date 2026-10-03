@@ -280,6 +280,7 @@ export enum NodeFlag {
 	ObjCheck,      // checker: this TypeAssertion is an object down-conversion checked at run time
 	ConvCheck,     // checker: this conversion narrows to a union member or into a string-literal union, tested at run time
 	NoFieldCheck,
+	GlobalDestroys,
 }
 
 // ===== Node Kind Enum =====

@@ -759,6 +759,26 @@ function _bridgeMsStringReplaceAll(args: RaiserValue[]): RaiserValue {
 	return boxString(unboxString(args[0]).replaceAll(unboxString(args[1]), unboxString(args[2])));
 }
 
+function _bridgeMsStringByteLength(args: RaiserValue[]): RaiserValue {
+	return boxInt(unboxString(args[0]).byteLength());
+}
+
+function _bridgeMsStringByteAt(args: RaiserValue[]): RaiserValue {
+	return boxInt(unboxString(args[0]).byteAt(unboxInt(args[1]) as int32));
+}
+
+function _bridgeMsStringByteSlice(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).byteSlice(unboxInt(args[1]) as int32, unboxInt(args[2]) as int32));
+}
+
+function _bridgeMsStringByteIndexOf(args: RaiserValue[]): RaiserValue {
+	return boxInt(unboxString(args[0]).byteIndexOf(unboxString(args[1]), unboxInt(args[2]) as int32));
+}
+
+function _bridgeMsStringByteLastIndexOf(args: RaiserValue[]): RaiserValue {
+	return boxInt(unboxString(args[0]).byteLastIndexOf(unboxString(args[1]), unboxInt(args[2]) as int32));
+}
+
 // --- Registry init ---
 // Idempotent: subsequent calls are no-ops. Phase 5 invokes this on first
 // @comptime block entry.
@@ -869,6 +889,11 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringEndsWith",      _bridgeMsStringEndsWith, HostCapability.Pure);
 	registerHostFn("msStringReplace",       _bridgeMsStringReplace, HostCapability.Pure);
 	registerHostFn("msStringReplaceAll",    _bridgeMsStringReplaceAll, HostCapability.Pure);
+	registerHostFn("msStringByteLength",    _bridgeMsStringByteLength, HostCapability.Pure);
+	registerHostFn("msStringByteAt",        _bridgeMsStringByteAt, HostCapability.Pure);
+	registerHostFn("msStringByteSlice",     _bridgeMsStringByteSlice, HostCapability.Pure);
+	registerHostFn("msStringByteIndexOf",   _bridgeMsStringByteIndexOf, HostCapability.Pure);
+	registerHostFn("msStringByteLastIndexOf", _bridgeMsStringByteLastIndexOf, HostCapability.Pure);
 	registerHostFn("msAsBytes",             _bridgeMsAsBytes, HostCapability.Pure);
 	registerHostFn("msAsString",            _bridgeMsAsString, HostCapability.Pure);
 	// math (std/core/math externs + the float `%` / `**` lowerings)

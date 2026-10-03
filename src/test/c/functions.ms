@@ -58,3 +58,12 @@ test "E2E C: array return is by value not pointer" {
 	// Return types must NOT be promoted to pointers — arrays returned by value
 	assert c.value.contains("msStringArray getItems__");
 }
+
+test "E2E C: an extern's rest arguments are passed to C one by one" {
+	const src = "extern function printf(fmt: cstring, ...args: unknown[]): int32;\n" +
+		"function f(c: cstring): void { printf(\"%s %d\", c, 5 as int32); }\nf(\"a\");";
+	const c = compileToC(src);
+	assert c.ok;
+	assert c.value.contains("printf(");
+	assert !c.value.contains("msGenericArrayPush");
+}

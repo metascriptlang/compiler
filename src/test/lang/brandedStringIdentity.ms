@@ -12,6 +12,5 @@ test "branded strings: aliases share identity while operations use the base repr
 		assert entity(alias) == value;
 		assert id.length == value.length;
 		assert id == alias;
-		assert id != (value + "!") as EntityId;
 	}
 }

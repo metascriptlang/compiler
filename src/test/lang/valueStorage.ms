@@ -100,7 +100,9 @@ function variantReplacementChurn(): int32 {
 		const before = variantReplacementRead(u);
 		u = variantReplacementU(i % 2 == 0, i);
 		const want = i % 2 == 0 ? "L" + i.toString() : "M" + i.toString();
-		if (variantReplacementRead(u) == want && before != "") {
+		const previous = i - 1;
+		const wantBefore = previous % 2 == 0 ? "L" + previous.toString() : "M" + previous.toString();
+		if (variantReplacementRead(u) == want && before == wantBefore) {
 			ok += 1;
 		}
 	}
@@ -232,12 +234,18 @@ test "valueStorage: spread + explicit override" {
 	assert base.height == null;
 }
 
-test "valueStorage: spread alone copies every field" {
-	const p: SpreadPrecedencePt = { x: 3, y: 4, label: "src" };
+test "valueStorage: spread copies every field independently of later source mutation" {
+	let p: SpreadPrecedencePt = { x: 3, y: 4, label: "src" };
 	const q: SpreadPrecedencePt = { ...p };
+	p.x = 8;
+	p.y = 9;
+	p.label = "second";
 	assert q.x == 3;
 	assert q.y == 4;
 	assert q.label == "src";
+	assert p.x == 8;
+	assert p.y == 9;
+	assert p.label == "second";
 }
 
 test "valueStorage: later spread wins field-wise (static-type semantics)" {
@@ -267,14 +275,6 @@ test "valueStorage: call operand is hoisted and evaluated once" {
 test "valueStorage: spread literal in argument position" {
 	const p: SpreadPrecedencePt = { x: 3, y: 4, label: "p" };
 	assert spreadPrecedenceDist({ ...p, y: 10 }) == 13;
-}
-
-test "valueStorage: string field survives the copy after source mutation" {
-	let p: SpreadPrecedencePt = { x: 1, y: 2, label: "first" };
-	const q: SpreadPrecedencePt = { ...p };
-	p.label = "second";
-	assert q.label == "first";
-	assert p.label == "second";
 }
 
 test "valueStorage: sink carries the payload across variants" {

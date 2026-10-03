@@ -1,5 +1,5 @@
 import { checkSource, strictErrorCount, warningCount } from "./helpers";
-import { compileToC, compileToCWithStd } from "../helpers";
+import { compileToC, compileToCWithStd, compileToJS } from "../helpers";
 import { parseSource } from "../../parser/statements/validation";
 import { resetAllSideChannels } from "../../parser/context";
 import { checkProgramWithRegistry } from "../../checker/checkPass";
@@ -37,8 +37,6 @@ test "declarationBoundaries: annotation boundaries distinguish unknown from unsu
 	const cases = [
 		{ name: "annotation 'any' is rejected with guidance", source: "function f(x: any): void {}", expected: -1 },
 		{ name: "compound 'any' positions are rejected too", source: "function f(): any[] { return []; }", expected: -1 },
-		{ name: "annotation 'undefined' warns but stays legal", source: "let x: undefined = null;", expected: 0 },
-		{ name: "'undefined' aliases null in a union position", source: "function f(s: string | undefined): boolean { return s === null; }", expected: 0 },
 		{ name: "'unknown' stays legal", source: "function f(x: unknown): void {}", expected: 0 },
 		{ name: "the null cast idiom stays legal", source: "interface T { v: int32; } function f(): T { return null as unknown as T; }", expected: 0 },
 	];
@@ -218,5 +216,29 @@ test "declaration boundaries: match arm returns follow the nearest value context
 	for (const item of cases) {
 		const c = compileToCWithStd(pre + item.source);
 		assert c.ok == item.accepted, item.name + (c.ok ? "" : ": " + c.error);
+	}
+}
+
+test "declaration boundaries: a wrong return in a statement match arm gets the diagnostic an if return gets" {
+	const inMatch = compileToCWithStd("function f(value: uint32): uint64 { match (value) { 0 => { return \"s\"; }, _ => {}, }; return 1; }");
+	const inIf = compileToCWithStd("function f(value: uint32): uint64 { if (value == 0) { return \"s\"; } return 1; }");
+	assert !inMatch.ok;
+	assert !inIf.ok;
+	assert inMatch.error == inIf.error, inMatch.error + " | " + inIf.error;
+}
+
+test "declarationBoundaries: a generic type is written with its type arguments wherever an annotation names it" {
+	const generics = "struct Owned<T> { v: T; n: int32; }\ninterface Pair<K, V> { k: K; v: V; }\n";
+	const cases = [
+		{ name: "a receiver annotation without its type argument is refused", source: "function f(this o: Owned): int32 { return o.n; }", message: "generic type 'Owned' requires 1 type argument(s)" },
+		{ name: "a union member annotation without its type arguments is refused", source: "const p: Pair | null = null;", message: "generic type 'Pair' requires 2 type argument(s)" },
+		{ name: "an array element annotation without its type argument is refused", source: "const xs: Owned[] = [];", message: "generic type 'Owned' requires 1 type argument(s)" },
+		{ name: "the same annotations with their type arguments are accepted", source: "function f(this o: Owned<int32>): int32 { return o.n; }\nconst p: Pair<int32, string> | null = null;", message: "" },
+	];
+	for (const item of cases) {
+		const result = compileToJS(generics + item.source + "\n");
+		const error = result.ok ? "" : result.error;
+		assert result.ok == (item.message == ""), item.name + ": " + error;
+		assert item.message == "" || error.indexOf(item.message, 0) >= 0, item.name + ": " + error;
 	}
 }

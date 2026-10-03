@@ -7,7 +7,7 @@
 // ⚠ Every COMPUTED push must cast `as uint8` (a number-typed arg silently
 // binds the number[] overload on C — §2 push-dispatch facet).
 
-import { asBytes, byteSlice } from "./bytes";
+import { asBytes, byteSlice, byteIndexOf } from "./bytes";
 
 export function startsWith(this s: string, prefix: string): boolean {
 	const sb = s.asBytes();
@@ -42,46 +42,6 @@ export function includes(this s: string, sub: string): boolean {
 
 export function contains(this s: string, sub: string): boolean {
 	return s.byteIndexOf(sub, 0) >= 0;
-}
-
-export function byteIndexOf(this s: string, sub: string, start: int32 = 0): int32 {
-	const sb = s.asBytes();
-	const xb = sub.asBytes();
-	if (xb.length == 0) return start;
-	if (start > sb.length) return -1;
-	let i = start;
-	if (i < 0) i = 0;
-	while (i <= sb.length - xb.length) {
-		let found = true;
-		let j = 0;
-		while (j < xb.length) {
-			if (sb[i + j] != xb[j]) { found = false; break; }
-			j = j + 1;
-		}
-		if (found) return i;
-		i = i + 1;
-	}
-	return -1;
-}
-
-export function byteLastIndexOf(this s: string, sub: string, startIdx: int32 = -1): int32 {
-	const sb = s.asBytes();
-	const xb = sub.asBytes();
-	if (xb.length == 0) return sb.length;
-	if (xb.length > sb.length) return -1;
-	let i = sb.length - xb.length;
-	if (startIdx >= 0 && startIdx < i) i = startIdx;
-	while (i >= 0) {
-		let found = true;
-		let j = 0;
-		while (j < xb.length) {
-			if (sb[i + j] != xb[j]) { found = false; break; }
-			j = j + 1;
-		}
-		if (found) return i;
-		i = i - 1;
-	}
-	return -1;
 }
 
 // Non-overlapping occurrences. An empty needle counts every gap: byteLength + 1.

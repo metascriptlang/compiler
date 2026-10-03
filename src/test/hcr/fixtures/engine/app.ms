@@ -1,6 +1,6 @@
 import { copyFile, readFile, writeFile } from "std/fs";
 import { exit, platform } from "std/process";
-import { reload, reloadKindName } from "std/hcr";
+import { reload, lastReload, reloadKindName } from "std/hcr";
 import { tick, value } from "./logic";
 import { Probe, makeProbe, version } from "./lifecycle";
 
@@ -27,10 +27,10 @@ function truncate(generation: string, name: string): void {
 }
 
 function report(label: string): void {
-	const outcome = reload();
+	reload();
+	const outcome = lastReload();
 	const names = outcome.modules.length > 0 ? " " + outcome.modules.join(",") : "";
-	const reason = outcome.reason != "" ? ` (${outcome.reason})` : "";
-	console.log(`HCR-ENGINE ${label}: ${reloadKindName(outcome.kind)}${names}${reason}`);
+	console.log(`HCR-ENGINE ${label}: ${reloadKindName(outcome.kind)}${names}`);
 }
 
 function inspect(label: string): void {
@@ -72,17 +72,20 @@ show("after rollback");
 inspect("probe after rollback");
 probe = null;
 
+place("g2", image("lifecycle"));
+place("g2", BUNDLE);
+report("handler recovery");
+
 place("g3", image("logic"));
 place("g3", BUNDLE);
 report("added export, app not rebuilt");
-show("after rejection");
+show("after added export");
 
 place("g4", image("logic"));
 place("g4", BUNDLE);
-report("state layout changed");
-show("after layout rejection");
+report("added global");
+show("after added global");
 
-place("g1", image("logic"));
 place("g6", image("lifecycle"));
 place("g6", BUNDLE);
 report("class layout changed");

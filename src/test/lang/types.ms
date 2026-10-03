@@ -313,7 +313,7 @@ test "power of 2 via bitwise trick" {
 // `interface & interface` merges fields at resolve (resolvePass two-tier).
 // `Prim & { __brand }` is a BRANDED primitive (TSGAP item 5 S1): nominal in
 // the checker — identity = the brand literal pairs — erased to the base
-// after check. Cross-brand / base→brand rejection coverage: fixedbugs/bug074.
+// after check. Cross-brand / base→brand rejection coverage: src/test/handoff/slotRelation.ms.
 
 type TypesXBrand = string & { __brand: "X" };
 

@@ -109,3 +109,25 @@ function main(): void {
 	assert c.ok;
 	assert !c.value.contains("msRaiseFieldError");
 }
+
+const ALIGN_PRELUDE = "type Align = \"auto\" | \"center\" | \"stretch\";\ntype Wire = number | string | null;\n"
+	+ "function show(a: Align | null): string { if (a == null) return \"null\"; const t: string = a; return t; }\n";
+
+test "E2E C: an as into a nullable string-literal union tests membership without reinterpreting the carrier" {
+	const cases = [
+		{ name: "a string", source: "function f(s: string): Align | null { return s as Align | null; }\nconsole.log(show(f(\"center\")));" },
+		{ name: "a nullable string", source: "function f(s: string | null): Align | null { return s as Align | null; }\nconsole.log(show(f(\"center\")));" },
+	];
+	for (const item of cases) {
+		const c = compileToC(ALIGN_PRELUDE + item.source);
+		assert c.ok, item.name;
+		assert c.value.contains("msStrLitConv("), item.name;
+		assert !c.value.contains("*(Maybe_"), item.name;
+	}
+}
+
+test "E2E C: an as from a nullable union into a string-literal union tests membership" {
+	const c = compileToC(ALIGN_PRELUDE + "function f(v: Wire): Align { return v as Align; }\nconst w: Wire = \"center\";\nconsole.log(show(f(w)));");
+	assert c.ok;
+	assert c.value.contains("msStrLitConv(");
+}

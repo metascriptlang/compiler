@@ -5,7 +5,7 @@
 //
 // The second null-check on `a`/`b` (ternary, after the if/else join) is the
 // load-bearing line: a joined read must keep its Maybe carrier so the compare
-// lowers to a present-check, not a pointer compare (fixedbugs/bug117).
+// lowers to a present-check, not a pointer compare.
 
 interface Box { label: string; }
 

@@ -14,12 +14,12 @@
 //   BuildCache                   → project cache file (key=value format)
 
 import { env, platform, argv, execFileCapture, findOnPath } from "std/process";
-import { exists, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, remove, readDir, ensureDir } from "std/fs";
+import { exists, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, remove, removeAll, readDir, ensureDir } from "std/fs";
 import { join } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace } from "./io";
-import { getCompilerName, compilerInvocation, modeFlags } from "./cc";
+import { getCompilerName, compilerInvocation, objectCompileKey } from "./cc";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 import { VERSION } from "./usage";
 
@@ -42,12 +42,13 @@ function hashFile(path: string): string {
 // binary plus every file under the resolved runtime/ AND vendor/ trees. VERSION
 // only moves on release, but WIP trees change codegen, runtime/*.h and vendor
 // headers while reporting the same version — two such builds must never share
-// cache entries (locally or in the global content-addressed cache), and an
+// cache entries of msc's own output (pack, header translations, project cache), and an
 // on-disk runtime/vendor header edit must invalidate .o files even when their
 // generated C is byte-identical. vendor/ is a real compile input: runtime TUs
 // include vendor headers (zip/inflate/deflate → miniz.h, blake2b/chacha20/
 // x25519 → monocypher.h) and std modules @compile vendor .c directly.
 let _toolchainStamp = "";
+let _objectStamp = "";
 
 // readDir order is filesystem-dependent; the stamp must be stable across runs.
 function collectFilesSorted(dir: string, prefix: string, outPaths: string[]): void {
@@ -91,14 +92,22 @@ function stampTreeInto(acc: string, dir: string, prefix: string): string {
 // workers only ever read the settled value.
 export function toolchainStamp(): string {
 	if (_toolchainStamp != "") return _toolchainStamp;
-	let acc = hashFile(resolveArgv0(argv[0]));
-	const root = resolveRuntimeDir();
+	_toolchainStamp = hashContent(`${hashFile(resolveArgv0(argv[0]))}\n${objectStamp()}`);
+	return _toolchainStamp;
+}
+
+export function objectStamp(): string {
+	if (_objectStamp == "") _objectStamp = supportTreesStamp(resolveRuntimeDir());
+	return _objectStamp;
+}
+
+export function supportTreesStamp(root: string): string {
+	let acc = "";
 	if (root != "") {
 		acc = stampTreeInto(acc, join(root, "runtime"), "runtime/");
 		acc = stampTreeInto(acc, join(root, "vendor"), "vendor/");
 	}
-	_toolchainStamp = hashContent(acc);
-	return _toolchainStamp;
+	return hashContent(acc);
 }
 
 // ===== Cache State =====
@@ -107,6 +116,8 @@ let _cacheDir = "";
 let _forceRebuild = false;
 let _nativeProjectDeps: string[] = [];
 let _nativeProjectDepSet: HashSet<string> = new HashSet<string>();
+let _headerHashes: HashMap<string, string> = new HashMap<string, string>();
+let _buildStartedSeconds: number = 0;
 
 // Initialize cache with build mode and force flag. Must be called before any cache operations.
 // Reference-aligned: cacheSuffix (_d/_r), optForceFullMake (force bypass).
@@ -123,6 +134,8 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 	_forceRebuild = forceRebuild;
 	_nativeProjectDeps = [];
 	_nativeProjectDepSet = new HashSet<string>();
+	_headerHashes = new HashMap<string, string>();
+	_buildStartedSeconds = Date.now() / 1000;
 	toolchainStamp();
 }
 
@@ -201,8 +214,11 @@ export function nativeDepFile(srcPath: string, compileCmd: string): string {
 }
 
 function nativeDependencyPaths(srcPath: string, compileCmd: string): string[] {
+	return dependencyPathsIn(nativeDepFile(srcPath, compileCmd));
+}
+
+function dependencyPathsIn(path: string): string[] {
 	const result: string[] = [];
-	const path = nativeDepFile(srcPath, compileCmd);
 	if (!exists(path)) return result;
 	const content = try readFile(path) catch "";
 	let colon = 0;
@@ -279,7 +295,7 @@ export function stableCFileFp(modPath: string, fp: string): string {
 
 // One-time migration sweep: pre-fp-keyed layouts share physical files per
 // srcPath — unfixable in place — so bump the schema marker and wipe the dir
-// once. Cost is one cold rebuild, same as any toolchainStamp change.
+// once. Cost is one cold rebuild, same as any objectStamp change.
 function ensureLocalSchema(): void {
 	const marker = `${getCacheDir()}/.schema-fpkey`;
 	if (exists(marker)) return;
@@ -293,13 +309,12 @@ function ensureLocalSchema(): void {
 	writeFile(marker, "v1");
 }
 
-// Full compile command for fingerprint — includes compiler, -std, mode flags.
-export function fullCompileCmd(ccOption: number, mode: number, extraFlags: string, ccBinary: string): string {
-	return `${getCompilerHash(ccOption, ccBinary)} -std=gnu11${modeFlags(mode)} ${extraFlags}`;
+export function fullCompileCmd(ccOption: number, mode: number, extraFlags: string, ccBinary: string, isCpp: boolean = false): string {
+	return `${getCompilerHash(ccOption, ccBinary)} ${objectCompileKey(ccOption, ccBinary, isCpp, mode, extraFlags)}`;
 }
 
-// Fingerprint folds in VERSION and toolchainStamp(): the stamp content-hashes
-// the msc binary plus every file under runtime/ and vendor/, so a header edit
+// Fingerprint folds in VERSION and objectStamp(): the stamp content-hashes
+// every file under runtime/ and vendor/, so a header edit
 // that leaves the .c bytes identical still invalidates every entry — a stale
 // .o built against an old header layout is never served. VERSION stays folded
 // as a belt-and-braces release barrier — redundant with the stamp, but safe.
@@ -311,7 +326,7 @@ export function fullCompileCmd(ccOption: number, mode: number, extraFlags: strin
 export function computeFingerprint(srcPath: string, compileCmd: string): string {
 	const src = try readFile(srcPath) catch "";
 	registerNativeProjectDep(srcPath);
-	let result = `${hashContent(src)}:${src.byteLength}:${compileCmd}:${VERSION}:${platform}:${toolchainStamp()}`;
+	let result = `${hashContent(src)}:${src.byteLength}:${compileCmd}:${VERSION}:${platform}:${objectStamp()}`;
 	const deps = nativeDependencyPaths(srcPath, compileCmd);
 	if (deps.length == 0) return result + `:dependencies-unresolved:${srcPath}`;
 	for (const path of deps) {
@@ -366,7 +381,7 @@ function globalCacheRoot(): string {
 function globalObjectsDir(): string {
 	const root = globalCacheRoot();
 	if (root == "") return "";
-	return `${root}/objects/${toolchainStamp()}`;
+	return `${root}/objects/${objectStamp()}`;
 }
 
 // Convert a fingerprint string into a flat filename hash (stable, collision-safe).
@@ -514,8 +529,12 @@ function getCompilerHash(ccOption: number, ccBinary: string): string {
 		version = r.ok ? r.value : r.error.errorOutput;
 	}
 	_compilerHashKey = name;
-	_compilerHash = hashContent(`${name}:${hashFile(path)}:${version}`);
+	_compilerHash = compilerIdentity(name, path, fileSize(path), modifiedTime(path), version);
 	return _compilerHash;
+}
+
+export function compilerIdentity(name: string, path: string, size: number, modified: number, version: string): string {
+	return hashContent(`${name}:${path}:${size}:${modified}:${version}`);
 }
 
 function buildCmdFingerprint(ccOption: number, ccBinary: string, mode: number, compileFlags: string): string {
@@ -691,7 +710,58 @@ export function stableCFile(modPath: string): string {
 // precompute it at gather time instead of holding every module's C text
 // alive until the post-join fingerprint write.
 export function moduleCompileFp(cCode: string, compileCmd: string): string {
-	return `${hashContent(cCode)}:${compileCmd}:${toolchainStamp()}`;
+	return `${hashContent(cCode)}:${compileCmd}:${objectStamp()}`;
+}
+
+export function moduleDepFile(modPath: string, baseFp: string): string {
+	return `${getCacheDir()}/${cacheStem(modPath)}.${fpKey(baseFp)}.d`;
+}
+
+function moduleHeaderPaths(modPath: string, baseFp: string): string[] {
+	const own = stableCFileFp(modPath, baseFp);
+	const result: string[] = [];
+	for (const path of dependencyPathsIn(moduleDepFile(modPath, baseFp))) {
+		if (path != own) result.push(path);
+	}
+	return result;
+}
+
+function headerHash(path: string): string {
+	const known = _headerHashes.get(path);
+	if (known != null) return known;
+	const hash = hashFile(path);
+	_headerHashes.set(path, hash);
+	return hash;
+}
+
+export function moduleObjectFp(modPath: string, baseFp: string): string {
+	if (!exists(moduleDepFile(modPath, baseFp))) return `${baseFp}:dependencies-unresolved`;
+	let result = baseFp;
+	for (const path of moduleHeaderPaths(modPath, baseFp)) {
+		registerNativeProjectDep(path);
+		result = `${result}:${path}=${headerHash(path)}`;
+	}
+	return result;
+}
+
+export function publishModuleObject(modPath: string, baseFp: string, oFile: string, fp: string): string {
+	for (const path of moduleHeaderPaths(modPath, baseFp)) {
+		const modified = modifiedTime(path);
+		if (modified < 0 || modified >= Math.floor(_buildStartedSeconds)) return oFile;
+	}
+	const resolvedFp = moduleObjectFp(modPath, baseFp);
+	if (resolvedFp == fp) {
+		writeCompileFingerprintFp(modPath, fp);
+		return oFile;
+	}
+	const resolved = stableOFileFp(modPath, resolvedFp);
+	const tmp = `${resolved}.tmp.${performance.now()}`;
+	if (!copyFile(oFile, tmp).ok || !renameReplace(tmp, resolved)) {
+		tryRemoveFile(tmp);
+		return oFile;
+	}
+	writeCompileFingerprintFp(modPath, resolvedFp);
+	return resolved;
 }
 
 // Check if generated C code matches cached version. If match, .o is up to date.
@@ -726,7 +796,7 @@ export function writeCCodeCache(modPath: string, cCode: string, compileCmd: stri
 // concurrent reader of the previous bytes is never torn.
 export function writeCSource(modPath: string, fp: string, cCode: string): void {
 	const path = stableCFileFp(modPath, fp);
-	// The path embeds fpKey(hash(cCode):compileCmd:toolchainStamp), so a
+	// The path embeds fpKey(hash(cCode):compileCmd:objectStamp), so a
 	// correctly written file already sitting here holds these exact bytes.
 	// Re-publishing it is not merely redundant: atomicWriteFile swaps the file
 	// with MoveFileEx(REPLACE_EXISTING) out from under a CONCURRENT build whose
@@ -966,11 +1036,30 @@ test "bug6: writeCSource alone does not produce a cache hit" {
 	bug6_clearArtifacts(modPath, fp);
 }
 
-test "toolchain stamp folds into module and external fingerprints" {
-	const stamp = toolchainStamp();
-	assert stamp.length > 0;
-	assert moduleCompileFp("int main(){}", "cc -O2").indexOf(stamp, 0) >= 0;
-	assert toolchainStamp() == stamp;
+test "object fingerprints fold in the support trees and never the msc binary" {
+	const objects = objectStamp();
+	assert objects.length > 0;
+	assert objects != toolchainStamp();
+	assert moduleCompileFp("int main(){}", "cc -O2").indexOf(objects, 0) >= 0;
+	assert moduleCompileFp("int main(){}", "cc -O2").indexOf(toolchainStamp(), 0) < 0;
+	assert toolchainStamp() == toolchainStamp();
+}
+
+test "a runtime or vendor file edit moves the support-tree stamp" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const root = `${base}/msc-support-stamp-${performance.now()}`;
+	ensureDir(`${root}/runtime`);
+	ensureDir(`${root}/vendor/lib`);
+	writeFile(`${root}/runtime/core.h`, "#define A 1\n");
+	writeFile(`${root}/vendor/lib/x.h`, "#define B 1\n");
+	const first = supportTreesStamp(root);
+	assert supportTreesStamp(root) == first;
+	writeFile(`${root}/vendor/lib/x.h`, "#define B 2\n");
+	const vendorEdit = supportTreesStamp(root);
+	assert vendorEdit != first;
+	writeFile(`${root}/runtime/core.h`, "#define A 2\n");
+	assert supportTreesStamp(root) != vendorEdit;
+	removeAll(root);
 }
 
 test "bug6: writeCompileFingerprint after writeCSource produces a cache hit" {
@@ -1177,4 +1266,14 @@ test "header cache: MSC_NO_HEADER_CACHE disables both directions" {
 		env.delete("MSC_NO_HEADER_CACHE");
 	}
 	assert lookupHeaderInline(key) == "OUT-6";
+}
+
+test "the C compiler identity moves with its path, size, mtime and version" {
+	const base = compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000000, "0.16.0");
+	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000000, "0.16.0") == base;
+	assert compilerIdentity("zig cc", "/opt/zig2/zig", 177108480, 1700000000, "0.16.0") != base;
+	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108481, 1700000000, "0.16.0") != base;
+	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000001, "0.16.0") != base;
+	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000000, "0.16.1") != base;
+	assert compilerIdentity("clang", "/opt/zig/zig", 177108480, 1700000000, "0.16.0") != base;
 }

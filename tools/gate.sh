@@ -8,7 +8,7 @@ EMITS='^src/(analyzer|ast|binder|checker|codegen|diagnostics|lexer|module|monomo
 RULES=(
   'tools|^tools/'
   'hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^runtime/hcr|^examples/hcrProbe/'
-  'tests|^src/test/(c|js|fixedbugs|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$'
+  'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$'
   "tests,corpus|$EMITS"
   'guard|^src/test/guard/'
   'corpus|^src/test/corpus/'
@@ -39,8 +39,31 @@ after another, and compare every red against src/test/known-red.json.
   --reds <lane> <log>  print the failure names the gate reads out of a lane log
   --inert <from> <to>  exit 0 when every path changed from..to picks no lane
   --select       print the corpus programs whose emitted C or JS differs from the merge base
+  --tree-key <rev>  print the key of the src and std tree at <rev> (what msc.key holds)
   --route        read paths on stdin, print "lane<TAB>path" for each lane a path picks
   --self-test    check the routing table and the red parsers against fixed cases
+
+One gate at a time runs per machine: a run with any lane besides tools, and
+--select, queues first-come first-served in ~/.metascript/gates and starts when
+every gate ahead of it has finished or died. It names the gate it waits behind
+about once a minute; the wait is not capped by GATE_WAIT_MAX and shows in the
+ledger wait column. Only the running gate counts when worker slots are split.
+--dry-run, a tools-only run and the --emit-one children of a running gate never
+queue. An empty registry file is a running gate whose gate.sh predates the queue;
+it is waited for like any other. A registry file that does not parse stops the
+run and names the file.
+
+The build lane builds the candidate with the worktree builder, then rebuilds it with
+itself and compares the two link response files (objects and link flags, output path
+ignored); equal means a fixed point, otherwise the newer one becomes the candidate and
+is rebuilt once more. Still unequal after three generations is the red
+"self-host: no fixed point after 3 generations".
+
+A GREEN run whose build lane produced the candidate for the clean src and std tree
+of HEAD makes that candidate the worktree builder ./msc (the old one stays as
+msc.prev, the tree key goes to msc.key); a failed swap prints "builder not
+refreshed" and changes neither verdict nor exit code. --tree-key <rev> prints
+the key for any rev, which tools/wt.sh land compares with msc.key.
 
 Every path that is not inert and not under tools/ gets build and suite; a rule
 only adds lanes to that floor. The tests lane compiles its tiers with the
@@ -67,7 +90,7 @@ never known, and never known-now-green — a program that fails half the time ca
 answer either question. Putting one there needs a run that shows both outcomes.
 
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
-env:  GATE_WAIT_MAX seconds to wait for load <= cores (default 1800, 0 = do not wait)
+env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (default 1800, 0 = do not wait)
       GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers
       MSCORPUS_BUILD_JOBS optional corpus build ceiling, kept across phases
       these limits do not cap aggregate processes or compiler-internal parallelism
@@ -166,6 +189,35 @@ tree_key() {
   t=$({ git ls-tree "$1" src/ | grep -v $'\tsrc/test$'; git ls-tree "$1" std; } 2>/dev/null)
   [ -n "$t" ] && printf '%s\n' "$t" | git hash-object --stdin
 }
+refresh_builder() {
+  local src=$1 dest=$2 key=$3 tmp="$2.new" prev="${2%.exe}.prev"
+  cp "$src" "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; say "gate: builder not refreshed: cannot copy $src to $tmp"; return 1; }
+  if [ -e "$dest" ]; then
+    rm -f "$prev"
+    mv "$dest" "$prev" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; say "gate: builder not refreshed: cannot move $dest aside"; return 1; }
+  fi
+  mv "$tmp" "$dest" 2>/dev/null || {
+    rm -f "$tmp" 2>/dev/null; [ ! -e "$prev" ] || mv "$prev" "$dest" 2>/dev/null
+    say "gate: builder not refreshed: cannot move the new builder to $dest"; return 1
+  }
+  printf '%s\n' "$key" >"${dest%.exe}.key" 2>/dev/null || { say "gate: builder not refreshed: cannot write ${dest%.exe}.key"; return 1; }
+  say "gate: builder refreshed: $dest is the candidate for tree ${key:0:12} (previous kept as ${prev##*/})"
+}
+
+adopt_builder() {
+  local verdict=$1 ran=$2 dest="$TOP/msc"
+  [ "$verdict" = GREEN ] || return 0
+  case " $ran " in *" build "*) ;; *) return 0 ;; esac
+  [ -n "$cand_key" ] && [ "$(cat "$CAND.key" 2>/dev/null)" = "$cand_key" ] || return 0
+  [ -z "$(git -C "$TOP" status --porcelain -- src std)" ] && [ "$(cd "$TOP" && tree_key HEAD)" = "$cand_key" ] || return 0
+  [ ! -e "$TOP/msc.exe" ] || dest="$TOP/msc.exe"
+  if [ "$(cat "$TOP/msc.key" 2>/dev/null)" = "$cand_key" ]; then
+    say "gate: builder already current for tree ${cand_key:0:12}"
+    return 0
+  fi
+  refresh_builder "$CAND" "$dest" "$cand_key" || return 0
+}
+
 differ_c() { awk -F'\t' '$2 != $6 || $4 != 0 || $8 != 0 { print $1 }'; }
 
 list_programs() {
@@ -207,8 +259,8 @@ control_todo() {
       close(f ".key"); close(f ".sig"); print }'
 }
 
-TIERS="src/test/fixedbugs/index.ms src/test/c/index.ms src/test/js/index.ms src/test/handoff/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/fmt/index.ms src/test/helpers.ms"
-SHARDED_TIERS="src/test/fixedbugs/index.ms src/test/c/index.ms"
+TIERS="src/test/c/index.ms src/test/js/index.ms src/test/handoff/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/fmt/index.ms src/test/helpers.ms"
+SHARDED_TIERS="src/test/c/index.ms"
 TEST_SHARDS=${GATE_TEST_SHARDS:-3}
 
 test_jobs() {
@@ -261,6 +313,7 @@ emit_one() {
 }
 
 if [ "${1:-}" = --emit-one ]; then emit_one "${2:?}" "${3:?}" "${4:?}" "${5:?}"; exit 0; fi
+if [ "${1:-}" = --tree-key ]; then tree_key "${2:?--tree-key needs a rev}"; exit $?; fi
 
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git checkout"
 cd "$TOP" || die "cannot enter $TOP"
@@ -277,7 +330,9 @@ GATE_SELECT_LEDGER=${GATE_SELECT_LEDGER:-$HOME/.metascript/gate-select.tsv}
 reds_of() {
   local lane=$1 log=$2 rc=$3
   case "$lane" in
-    build) [ "$rc" -eq 0 ] || echo "build" ;;
+    build)
+      sed -n 's/^FAIL \(self-host: .*[^)]\)\( ([^)]*)\)\{0,1\}$/\1/p' "$log"
+      [ "$rc" -eq 0 ] || grep -q '^FAIL self-host: ' "$log" || echo "build" ;;
     boundary) sed -n 's/^FAIL  \(.*\)  expected=.*$/\1/p; s/^boundary: setup step failed: \(.*\) (root .*$/setup: \1/p' "$log" ;;
     tools) sed -nE 's/^FAIL (.*): (bash -n|self-test|check)$/\1/p' "$log" ;;
     suite|tests)
@@ -318,6 +373,295 @@ program_keys() {
       if (depth < 0 || gsub(/\.\.\//, "", m) > depth) outside[prog(p)] = 1
       next }
     END { for (p in key) if (!(p in outside)) print p " " key[p] }'
+}
+
+cores() { sysctl -n hw.ncpu 2>/dev/null || nproc; }
+
+GATES_DIR="${HOME:-$USERPROFILE}/.metascript/gates"
+QUEUE_POLL=2
+
+queue_write() { printf '%s %s %s\n' "$MY_TICKET" "$1" "$(basename "$TOP")" >"$GATES_DIR/.w.$$" && mv -f "$GATES_DIR/.w.$$" "$GATES_DIR/$$"; }
+
+queue_scan() {
+  local f p t s n rows="" left ahead_pid ahead_name
+  Q_MAX=0 Q_HOLDERS=0 Q_FIRST="" Q_AHEAD=0 Q_BEHIND="" Q_BEHIND_PID=""
+  for f in "$GATES_DIR"/.w.* "$GATES_DIR"/.m.*; do
+    [ -e "$f" ] || continue
+    kill -0 "${f##*.}" 2>/dev/null || rm -rf "$f"
+  done
+  for f in "$GATES_DIR"/*; do
+    [ -e "$f" ] || continue
+    p=${f##*/}
+    [[ "$p" =~ ^[0-9]+$ ]] || die "gate queue: unexpected file $f"
+    kill -0 "$p" 2>/dev/null || { rm -f "$f"; continue; }
+    if [ -e "$f" ] && [ ! -s "$f" ]; then Q_HOLDERS=$((Q_HOLDERS + 1)); Q_BEHIND_PID=$p Q_BEHIND="a gate.sh without the queue"; continue; fi
+    if ! IFS=' ' read -r t s n <"$f" 2>/dev/null; then [ -e "$f" ] || continue; die "gate queue: unparseable registry file $f"; fi
+    [[ "$t" =~ ^[0-9]+$ ]] && { [ "$s" = wait ] || [ "$s" = hold ]; } && [ -n "$n" ] || die "gate queue: unparseable registry file $f"
+    [ "$t" -le "$Q_MAX" ] || Q_MAX=$t
+    if [ "$s" = hold ]; then Q_HOLDERS=$((Q_HOLDERS + 1)); Q_BEHIND_PID=$p Q_BEHIND=$n; else rows="$rows$t $p $n"$'\n'; fi
+  done
+  [ -n "$rows" ] || return 0
+  rows=$(printf '%s' "$rows" | sort -k1,1n -k2,2n)
+  Q_FIRST=$(awk 'NR == 1 { print $2 }' <<<"$rows")
+  left=$(awk -v p="$$" '$2 == p { exit } { n++; l = $2 " " $3 } END { print n + 0, l }' <<<"$rows")
+  read -r Q_AHEAD ahead_pid ahead_name <<<"$left"
+  if [ "$Q_HOLDERS" -eq 0 ] && [ "$Q_AHEAD" -gt 0 ]; then Q_BEHIND_PID=$ahead_pid Q_BEHIND=$ahead_name; fi
+  return 0
+}
+
+queue_lock() {
+  local m tmp="$GATES_DIR/.m.$$" try
+  for try in 1 2; do
+    rm -rf "$tmp"; mkdir -p "$tmp/$$" || die "gate queue: cannot create $tmp"
+    mv -T "$tmp" "$GATES_DIR/.lock" 2>/dev/null && return 0
+    rm -rf "$tmp"
+    for m in "$GATES_DIR/.lock"/*; do
+      [ -e "$m" ] || continue
+      m=${m##*/}
+      [[ "$m" =~ ^[0-9]+$ ]] || die "gate queue: unexpected entry $GATES_DIR/.lock/$m"
+      ! kill -0 "$m" 2>/dev/null || return 1
+      rmdir "$GATES_DIR/.lock/$m" 2>/dev/null
+    done
+    rmdir "$GATES_DIR/.lock" 2>/dev/null
+  done
+  return 1
+}
+
+queue_acquire() {
+  local t0=$SECONDS shown=-60
+  mkdir -p "$GATES_DIR" || die "cannot create $GATES_DIR"
+  queue_scan; MY_TICKET=$((Q_MAX + 1))
+  queue_write wait || die "gate queue: cannot write $GATES_DIR/$$"
+  while :; do
+    queue_scan
+    if [ "$Q_HOLDERS" -eq 0 ] && [ "$Q_FIRST" = "$$" ] && queue_lock; then queue_write hold || die "gate queue: cannot write $GATES_DIR/$$"; break; fi
+    if [ $((SECONDS - t0 - shown)) -ge 60 ]; then
+      shown=$((SECONDS - t0))
+      say "gate: queued behind ${Q_BEHIND:-another gate} (pid ${Q_BEHIND_PID:-?}), $Q_AHEAD waiting ahead, ${shown}s"
+    fi
+    sleep "$QUEUE_POLL"
+  done
+  ADMIT_WAITED=$((${ADMIT_WAITED:-0} + SECONDS - t0))
+  [ "$shown" -lt 0 ] || say "gate: left the queue after $((SECONDS - t0))s"
+}
+
+queue_release() {
+  rm -f "$GATES_DIR/$$"
+  rmdir "$GATES_DIR/.lock/$$" 2>/dev/null && rmdir "$GATES_DIR/.lock" 2>/dev/null
+  return 0
+}
+
+live_gates() {
+  queue_scan
+  [ "$Q_HOLDERS" -ge 1 ] || Q_HOLDERS=1
+  echo "$Q_HOLDERS"
+}
+
+share_of_cores() {
+  local g w
+  g=$(live_gates) || exit $?
+  w=$(( $(cores) / g / $1 ))
+  [ "$w" -ge 1 ] || w=1
+  echo "$w"
+}
+
+rsp_norm() { sed -E 's#[/\\]+boot[0-9]+([/\\]+msc)#\1#g' "$1"; }
+
+rsp_diff() {
+  local only_a only_b
+  only_a=$(comm -23 <(rsp_norm "$1" | sort) <(rsp_norm "$2" | sort) | grep -c .)
+  only_b=$(comm -13 <(rsp_norm "$1" | sort) <(rsp_norm "$2" | sort) | grep -c .)
+  if [ "$only_b" -gt "$only_a" ]; then only_a=$only_b; fi
+  if [ "$only_a" -eq 0 ] && ! cmp -s <(rsp_norm "$1") <(rsp_norm "$2"); then only_a=1; fi
+  echo "$only_a"
+}
+
+self_host_boot() {
+  local cand=$1 ccflag=$2 dir ext="" n gen diffs rc
+  dir=$(dirname "$cand")
+  case "$cand" in *.exe) ext=.exe ;; esac
+  [ -f "${cand}_link.rsp" ] || { say "FAIL self-host: gen1 wrote no link response file"; return 1; }
+  for n in 2 3; do
+    gen="$dir/boot$n/msc$ext"
+    rm -rf "$dir/boot$n"; mkdir -p "$dir/boot$n"
+    env -u NO_COLOR -u FORCE_COLOR "$cand" build src/index.ms --gc=drc --danger $ccflag --output="$gen"; rc=$?
+    if [ "$rc" -ne 0 ]; then rm -rf "$dir/boot$n"; say "FAIL self-host: gen$n build failed (exit $rc)"; return 1; fi
+    if [ ! -f "${gen}_link.rsp" ]; then rm -rf "$dir/boot$n"; say "FAIL self-host: gen$n wrote no link response file"; return 1; fi
+    diffs=$(rsp_diff "${cand}_link.rsp" "${gen}_link.rsp")
+    if [ "$diffs" -eq 0 ]; then
+      say "gate: self-host gen$n = gen$((n - 1)) (fixed point)"
+      rm -rf "$dir/boot$n"; return 0
+    fi
+    if [ "$n" -eq 3 ]; then
+      rm -rf "$dir/boot$n"
+      say "FAIL self-host: no fixed point after 3 generations ($diffs link inputs differ)"
+      return 1
+    fi
+    say "gate: self-host gen$n differs from gen$((n - 1)) in $diffs link inputs, building gen$((n + 1))"
+    rm -f "$cand" "${cand}_link.rsp" "${cand%.exe}.pdb"
+    mv "$gen" "$cand" && mv "${gen}_link.rsp" "${cand}_link.rsp" || { say "FAIL self-host: cannot promote gen$n"; return 1; }
+    [ ! -e "${gen%.exe}.pdb" ] || mv "${gen%.exe}.pdb" "${cand%.exe}.pdb"
+    rm -rf "$dir/boot$n"
+  done
+}
+
+boot_self_test() {
+  local bad=0 d cand got rc
+  d=$(mktemp -d) || return 1
+  cand="$d/out/gate/msc.exe"
+  mkdir -p "$d/out/gate"
+  cat >"$d/fake" <<FAKE
+#!/bin/bash
+D=$d
+n=\$(( \$(cat \$D/count) + 1 )); echo \$n >\$D/count
+[ ! -e \$D/fail.\$n ] || exit 3
+out=""; for a; do case \$a in --output=*) out=\${a#--output=} ;; esac; done
+mkdir -p "\$(dirname "\$out")"
+{ cat "\$0"; echo "# gen\$n"; } >"\$out"; chmod +x "\$out"
+{ cat \$D/rsp.\$n; echo "-Wl,--out=\$out"; } >"\${out}_link.rsp"
+: >"\${out%.exe}.pdb"
+FAKE
+  setup() {
+    rm -rf "$d/out" "$d"/rsp.* "$d"/fail.*; mkdir -p "$d/out/gate"
+    { cat "$d/fake"; echo "# gen1"; } >"$cand"; chmod +x "$cand"; echo 1 >"$d/count"
+    printf 'a.o\nb.o\n' >"$d/rsp.1"; { cat "$d/rsp.1"; echo "-Wl,--out=$cand"; } >"${cand}_link.rsp"
+    : >"${cand%.exe}.pdb"
+  }
+  left() { find "$d/out" -type f | sed "s#$d/out/gate/##" | sort | paste -sd, -; }
+  setup; printf 'a.o\nb.o\n' >"$d/rsp.2"
+  got=$(self_host_boot "$cand" "--cc=x"); rc=$?
+  { [ "$rc" -eq 0 ] && [[ "$got" == *"gen2 = gen1 (fixed point)"* ]] && [ "$(tail -1 "$cand")" = "# gen1" ] && [ "$(cat "$d/count")" = 2 ] \
+    && [ "$(left)" = "msc.exe,msc.exe_link.rsp,msc.pdb" ]; } || { printf 'FAIL boot: fixed point at gen2: rc=%s left=%s out "%s"\n' "$rc" "$(left)" "$got"; bad=1; }
+  setup; printf 'a.o\nc.o\n' >"$d/rsp.2"; cp "$d/rsp.2" "$d/rsp.3"
+  got=$(self_host_boot "$cand" ""); rc=$?
+  { [ "$rc" -eq 0 ] && [[ "$got" == *"gen2 differs from gen1 in 1 link inputs, building gen3"* ]] && [[ "$got" == *"gen3 = gen2 (fixed point)"* ]] \
+    && [ "$(tail -1 "$cand")" = "# gen2" ] && grep -q '^c.o$' "${cand}_link.rsp" && [ "$(left)" = "msc.exe,msc.exe_link.rsp,msc.pdb" ]; } \
+    || { printf 'FAIL boot: fixed point at gen3: rc=%s left=%s out "%s"\n' "$rc" "$(left)" "$got"; bad=1; }
+  setup; printf 'a.o\nc.o\n' >"$d/rsp.2"; printf 'a.o\nd.o\n' >"$d/rsp.3"
+  got=$(self_host_boot "$cand" ""); rc=$?
+  { [ "$rc" -eq 1 ] && [[ "$got" == *"FAIL self-host: no fixed point after 3 generations (1 link inputs differ)"* ]] && [ "$(left)" = "msc.exe,msc.exe_link.rsp,msc.pdb" ]; } \
+    || { printf 'FAIL boot: no fixed point: rc=%s left=%s out "%s"\n' "$rc" "$(left)" "$got"; bad=1; }
+  printf '%s\n' "$got" >"$d/log"
+  got=$(reds_of build "$d/log" 1 | paste -sd'|' -)
+  [ "$got" = "self-host: no fixed point after 3 generations" ] || { printf 'FAIL boot: reds_of build: got "%s"\n' "$got"; bad=1; }
+  setup; touch "$d/fail.2"
+  got=$(self_host_boot "$cand" ""); rc=$?
+  { [ "$rc" -eq 1 ] && [[ "$got" == *"FAIL self-host: gen2 build failed (exit 3)"* ]] && [ "$(left)" = "msc.exe,msc.exe_link.rsp,msc.pdb" ]; } \
+    || { printf 'FAIL boot: failing gen2: rc=%s left=%s out "%s"\n' "$rc" "$(left)" "$got"; bad=1; }
+  printf '%s\n' "$got" >"$d/log"
+  got=$(reds_of build "$d/log" 1 | paste -sd'|' -)
+  [ "$got" = "self-host: gen2 build failed" ] || { printf 'FAIL boot: reds_of gen2 failure: got "%s"\n' "$got"; bad=1; }
+  printf 'compile error\n' >"$d/log"
+  got=$(reds_of build "$d/log" 1 | paste -sd'|' -)
+  [ "$got" = "build" ] || { printf 'FAIL boot: reds_of plain build failure: got "%s"\n' "$got"; bad=1; }
+  rm -rf "$d"
+  return $bad
+}
+
+adopt_self_test() {
+  local bad=0 d got saveTOP=$TOP saveCAND=$CAND savekey=${cand_key-} g="git -c user.name=t -c user.email=t@t"
+  d=$(mktemp -d) || return 1
+  TOP="$d/wt"; CAND="$d/wt/out/gate/msc.exe"
+  mkdir -p "$TOP/src" "$TOP/std" "$TOP/out/gate"
+  printf 'a\n' >"$TOP/src/a.ms"; printf 'b\n' >"$TOP/std/b.ms"
+  (cd "$TOP" && git init -q . && $g add -A src std && $g commit -qm x) >/dev/null 2>&1
+  local k; k=$(cd "$TOP" && tree_key HEAD)
+  got=$(cd "$TOP" && bash "$saveTOP/tools/gate.sh" --tree-key HEAD)
+  [ -n "$k" ] && [ "$got" = "$k" ] || { printf 'FAIL adopt: --tree-key "%s" is not tree_key "%s"\n' "$got" "$k"; bad=1; }
+  got=$(cd "$saveTOP" && bash tools/gate.sh --tree-key HEAD)
+  [ "$got" = "$(tree_key HEAD)" ] || { printf 'FAIL adopt: --tree-key HEAD differs from tree_key in the real checkout\n'; bad=1; }
+  reset() { rm -rf "$TOP"/msc "$TOP"/msc.exe "$TOP"/msc.key "$TOP"/msc.prev "$TOP"/msc.new; printf 'old\n' >"$TOP/msc"; printf 'new\n' >"$CAND"; printf '%s\n' "$k" >"$CAND.key"; cand_key=$k; }
+  reset; adopt_builder GREEN " tools build suite" >/dev/null
+  { [ "$(cat "$TOP/msc")" = new ] && [ "$(cat "$TOP/msc.prev")" = old ] && [ "$(cat "$TOP/msc.key")" = "$k" ] && [ ! -e "$TOP/msc.new" ]; } \
+    || { printf 'FAIL adopt: GREEN with a matching key did not swap (msc=%s prev=%s)\n' "$(cat "$TOP/msc" 2>&1)" "$(cat "$TOP/msc.prev" 2>&1)"; bad=1; }
+  printf 'newer\n' >"$CAND"; rm -f "$TOP/msc.key"; adopt_builder GREEN " build" >/dev/null
+  { [ "$(cat "$TOP/msc")" = newer ] && [ "$(cat "$TOP/msc.prev")" = new ]; } || { printf 'FAIL adopt: .prev was not rotated\n'; bad=1; }
+  got=$(adopt_builder GREEN " build"); printf 'x\n' >"$CAND"
+  adopt_builder GREEN " build" >/dev/null
+  { [ "$(cat "$TOP/msc")" = newer ] && [[ "$got" == *"already current"* ]]; } || { printf 'FAIL adopt: swapped although msc.key already equals the key: "%s"\n' "$got"; bad=1; }
+  reset; adopt_builder RED " build" >/dev/null
+  { [ "$(cat "$TOP/msc")" = old ] && [ ! -e "$TOP/msc.key" ]; } || { printf 'FAIL adopt: adopted on RED\n'; bad=1; }
+  reset; adopt_builder GREEN " tools" >/dev/null
+  { [ "$(cat "$TOP/msc")" = old ] && [ ! -e "$TOP/msc.key" ]; } || { printf 'FAIL adopt: adopted when the build lane did not run\n'; bad=1; }
+  reset; printf 'other\n' >"$CAND.key"; adopt_builder GREEN " build" >/dev/null
+  [ "$(cat "$TOP/msc")" = old ] || { printf 'FAIL adopt: adopted a candidate whose key does not match\n'; bad=1; }
+  reset; cand_key=""; adopt_builder GREEN " build" >/dev/null
+  [ "$(cat "$TOP/msc")" = old ] || { printf 'FAIL adopt: adopted although the tree was dirty at the start\n'; bad=1; }
+  reset; printf 'dirty\n' >>"$TOP/src/a.ms"; adopt_builder GREEN " build" >/dev/null
+  [ "$(cat "$TOP/msc")" = old ] || { printf 'FAIL adopt: adopted although src is dirty now\n'; bad=1; }
+  (cd "$TOP" && git checkout -q -- src/a.ms)
+  reset; rm -f "$CAND"; mkdir "$TOP/msc.new"
+  got=$(adopt_builder GREEN " build"); rc=$?
+  { [ "$rc" -eq 0 ] && [[ "$got" == "gate: builder not refreshed: "* ]] && [ "$(cat "$TOP/msc")" = old ]; } \
+    || { printf 'FAIL adopt: failure path: rc=%s, out "%s"\n' "$rc" "$got"; bad=1; }
+  rm -rf "$TOP/msc.new"; reset; mv "$TOP/msc" "$TOP/msc.exe"
+  adopt_builder GREEN " build" >/dev/null
+  { [ "$(cat "$TOP/msc.exe")" = new ] && [ "$(cat "$TOP/msc.prev")" = old ]; } || { printf 'FAIL adopt: msc.exe naming\n'; bad=1; }
+  TOP=$saveTOP CAND=$saveCAND cand_key=$savekey
+  rm -rf "$d"
+  return $bad
+}
+
+queue_self_test() {
+  local bad=0 keep_dir=$GATES_DIR keep_poll=$QUEUE_POLL out h w w2 a i got rc home pids=""
+  GATES_DIR=$(mktemp -d) || return 1
+  out="$GATES_DIR.out" QUEUE_POLL=0.2
+  fake() { printf '%s %s fake\n' "$3" "$2" >"$GATES_DIR/$1"; }
+  live() { sleep 120 >/dev/null 2>&1 & LIVE=$!; pids="$pids $LIVE"; }
+  settle() { rm -rf "$GATES_DIR"/* "$GATES_DIR"/.lock; }
+  seen() { for ((i = 0; i < 100; i++)); do grep -q "$1" "$2" 2>/dev/null && return 0; sleep 0.2; done; return 1; }
+  held() { for ((i = 0; i < 50; i++)); do grep -q ' hold ' "$GATES_DIR/$$" 2>/dev/null && return 0; sleep 0.2; done; return 1; }
+  queue_acquire >"$out"
+  { [[ "$(<"$GATES_DIR/$$")" == "1 hold "* ]] && [ -d "$GATES_DIR/.lock/$$" ] && [ ! -s "$out" ]; } || { printf 'FAIL queue: acquire when free\n'; bad=1; }
+  queue_release
+  { [ ! -e "$GATES_DIR/$$" ] && [ ! -e "$GATES_DIR/.lock" ]; } || { printf 'FAIL queue: release leaves the file or the lock\n'; bad=1; }
+  live; h=$LIVE; fake "$h" hold 1; mkdir -p "$GATES_DIR/.lock/$h"
+  ( queue_acquire >"$out" ) & a=$!
+  seen "behind fake" "$out"
+  { [ "$(cut -d' ' -f2 "$GATES_DIR/$$")" = wait ] && kill -0 "$a" 2>/dev/null && grep -q "behind fake (pid $h)" "$out"; } || { printf 'FAIL queue: wait while a live holder exists\n'; bad=1; }
+  kill "$h"; wait "$h" 2>/dev/null
+  held || { printf 'FAIL queue: no reclaim from a dead holder\n'; bad=1; }
+  { [ -d "$GATES_DIR/.lock/$$" ] && [ ! -e "$GATES_DIR/.lock/$h" ] && [ ! -e "$GATES_DIR/$h" ]; } || { printf 'FAIL queue: dead holder left its marker or file\n'; bad=1; }
+  wait "$a"; queue_release; settle
+  live; h=$LIVE; live; w=$LIVE; fake "$h" hold 1; mkdir -p "$GATES_DIR/.lock/$h"; fake "$w" wait 2
+  ( queue_acquire >"$out" ) & a=$!
+  seen "behind fake" "$out"
+  [ "$(cut -d' ' -f1 "$GATES_DIR/$$")" = 3 ] || { printf 'FAIL queue: ticket after two live gates: got "%s"\n' "$(<"$GATES_DIR/$$")"; bad=1; }
+  kill "$h"; wait "$h" 2>/dev/null
+  sleep 2
+  { [ "$(cut -d' ' -f2 "$GATES_DIR/$$")" = wait ] && [ ! -d "$GATES_DIR/.lock/$$" ]; } || { printf 'FAIL queue: FIFO, took the lock ahead of an older waiter\n'; bad=1; }
+  kill "$w"; wait "$w" 2>/dev/null
+  held || { printf 'FAIL queue: FIFO, did not start once the older waiter was gone\n'; bad=1; }
+  wait "$a"; queue_release; settle
+  live; h=$LIVE; live; w=$LIVE; live; w2=$LIVE; fake "$h" hold 1; fake "$w" wait 2; fake "$w2" wait 3
+  got="$(live_gates) $(share_of_cores 1) $(cores)"
+  [ "$got" = "1 $(cores) $(cores)" ] || { printf 'FAIL queue: waiters counted by live_gates/share_of_cores: got "%s"\n' "$got"; bad=1; }
+  settle; fake "$w" wait 1; fake "$w2" wait 2
+  [ "$(live_gates)" = 1 ] || { printf 'FAIL queue: live_gates with waiters only\n'; bad=1; }
+  fake "$h" hold 3; fake "$w" hold 1
+  [ "$(live_gates)" = 2 ] || { printf 'FAIL queue: live_gates with two holders\n'; bad=1; }
+  settle; printf 'junk\n' >"$GATES_DIR/$h"
+  got=$( (queue_scan) 2>&1 ); rc=$?
+  { [ "$rc" -eq 2 ] && [[ "$got" == *"$GATES_DIR/$h"* ]]; } || { printf 'FAIL queue: junk registry file: rc=%s, got "%s"\n' "$rc" "$got"; bad=1; }
+  : >"$GATES_DIR/$h"; fake "$w" hold 1
+  got=$( (live_gates) 2>&1 ); rc=$?
+  { [ "$rc" -eq 0 ] && [ "$got" = 2 ]; } || { printf 'FAIL queue: a pre-queue gate (empty file) is not a holder: rc=%s, got "%s"\n' "$rc" "$got"; bad=1; }
+  settle; : >"$GATES_DIR/$h"
+  ( queue_acquire >"$out" ) & a=$!
+  seen "behind a gate.sh without the queue (pid $h)" "$out" || { printf 'FAIL queue: no wait behind a pre-queue gate\n'; bad=1; }
+  kill "$h"; wait "$h" 2>/dev/null
+  held || { printf 'FAIL queue: no start once the pre-queue gate died\n'; bad=1; }
+  wait "$a"; queue_release
+  settle; : >"$GATES_DIR/notapid"
+  got=$( (queue_scan) 2>&1 ); rc=$?
+  { [ "$rc" -eq 2 ] && [[ "$got" == *"$GATES_DIR/notapid"* ]]; } || { printf 'FAIL queue: foreign file in the registry: rc=%s\n' "$rc"; bad=1; }
+  home=$(mktemp -d)
+  GATE_EMIT_DIR="$home/e" HOME="$home" USERPROFILE="$home" bash "$TOP/tools/gate.sh" --emit-one true 1 x "$home/x.ms" >/dev/null 2>&1
+  { [ -d "$home/e/1" ] && [ ! -e "$home/.metascript" ]; } || { printf 'FAIL queue: --emit-one touched the queue or did not run\n'; bad=1; }
+  kill $pids 2>/dev/null
+  rm -rf "$home" "$GATES_DIR" "$out"
+  GATES_DIR=$keep_dir QUEUE_POLL=$keep_poll
+  return $bad
 }
 
 self_test() {
@@ -396,9 +740,9 @@ std/core/date/index.cms|
 CASES
   log=$(mktemp) || return 1
   printf '%s\n' " FAIL  $TOP/src/test/c/json.ms" "  × parses numbers" \
-    "NORESULT src/test/fixedbugs/index.ms > no result" "error: 3 type error(s) found" >"$log"
+    "NORESULT src/test/handoff/index.ms > no result" "error: 3 type error(s) found" >"$log"
   got=$(reds_of tests "$log" 1 | paste -sd'|' -)
-  want="src/test/c/json.ms > parses numbers|src/test/fixedbugs/index.ms > no result"
+  want="src/test/c/json.ms > parses numbers|src/test/handoff/index.ms > no result"
   [ "$got" = "$want" ] || { printf 'FAIL reds tests: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   printf ' FAIL  %s/src/test/c/json.ms\n  × parses numbers\n\342\234[LSP-OPEN] /a.ms parse=1ms\n\223 %s/src/test/c/ok.ms\n FAIL  %s/src/test/c/bigint.ms\n  × unary plus\n' \
     "$TOP" "$TOP" "$TOP" >"$log"
@@ -410,10 +754,10 @@ CASES
   got=$(reds_of boundary "$log" 1 | paste -sd'|' -)
   want="setup: source baseline|when branch after a -d: value change"
   [ "$got" = "$want" ] || { printf 'FAIL reds boundary: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
-  printf '%s\n' 'LOSSY src/test/fixedbugs/bug228.ms: fmt changes `await` at 84:10 into `(` at 81:11 of the output' \
+  printf '%s\n' 'LOSSY src/test/handoff/x.ms: fmt changes `await` at 84:10 into `(` at 81:11 of the output' \
     'UNSTABLE src/test/lang/a.ms: second pass differs' '1648 files · 1 lossy · 1 unstable · 0 no-fmt' >"$log"
   got=$(reds_of fmt "$log" 1 | paste -sd'|' -)
-  want="src/test/fixedbugs/bug228.ms|src/test/lang/a.ms"
+  want="src/test/handoff/x.ms|src/test/lang/a.ms"
   [ "$got" = "$want" ] || { printf 'FAIL reds fmt: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   printf '%s\n' 'FAIL tools/gate.sh: self-test' 'FAIL tools/wt.sh: bash -n' 'ok   tools/x.sh: check' >"$log"
   got=$(reds_of tools "$log" 1 | paste -sd'|' -)
@@ -437,9 +781,9 @@ CASES
   rm -f "$log"
   [ "$got" = "x|y" ] || { printf 'FAIL bounded inside a pipeline: want "x|y", got "%s"\n' "$got"; bad=1; }
   got=$(TEST_SHARDS=3; test_jobs | awk '{ n++; if ($2 != "-") s++ } NR == 1 { first = $0 } END { printf "%d %d %s", n, s, first }')
-  [ "$got" = "12 6 src/test/fixedbugs/index.ms 0/3" ] || { printf 'FAIL test jobs with 3 shards: got "%s"\n' "$got"; bad=1; }
+  [ "$got" = "9 3 src/test/c/index.ms 0/3" ] || { printf 'FAIL test jobs with 3 shards: got "%s"\n' "$got"; bad=1; }
   got=$(TEST_SHARDS=1; test_jobs | awk '$2 != "-" { s++ } END { printf "%d %d", NR, s }')
-  [ "$got" = "8 0" ] || { printf 'FAIL test jobs unsharded: got "%s"\n' "$got"; bad=1; }
+  [ "$got" = "7 0" ] || { printf 'FAIL test jobs unsharded: got "%s"\n' "$got"; bad=1; }
   log=$(mktemp -d) || return 1
   printf 'ok k1\nfailed k2\nstale k3\nnew k4\n' >"$log/keys"
   printf 'k1\n' >"$log/ok.key"; printf 'ok\tc\tj\t0\t9\n' >"$log/ok.sig"
@@ -510,6 +854,9 @@ CASES
     got=$(cap_jobs 32 "$invalid" 2>/dev/null); rc=$?
     [ "$rc" -eq 2 ] && [ -z "$got" ] || { printf 'FAIL invalid worker cap %s: rc=%s, jobs="%s"\n' "$invalid" "$rc" "$got"; bad=1; }
   done
+  queue_self_test || bad=1
+  adopt_self_test || bad=1
+  boot_self_test || bad=1
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -624,7 +971,6 @@ cand_key=""
 CC_FLAG=""
 [ "$(uname -s)" = Darwin ] && command -v clang >/dev/null 2>&1 && CC_FLAG="--cc=clang"
 
-cores() { sysctl -n hw.ncpu 2>/dev/null || nproc; }
 load1() {
   if [ -r /proc/loadavg ]; then cut -d' ' -f1 /proc/loadavg; else sysctl -n vm.loadavg | awk '{print $2}'; fi
 }
@@ -644,7 +990,6 @@ lane_cmd() {
   case "$1" in
     build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
     boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s' "$CAND" "$CAND" ;;
-    hcr) printf 'MSC=%s %s run --target=raiser src/test/hcr/run.ms' "$CAND" "$CAND" ;;
     corpus) printf '%s%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     fmt) printf '%s run src/test/fmt/run.ms' "$BUILDER" ;;
@@ -863,26 +1208,10 @@ need_cand() {
 
 fmt_secs() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
 
-GATES_DIR="${HOME:-$USERPROFILE}/.metascript/gates"
-
-live_gates() {
-  local f n=0
-  for f in "$GATES_DIR"/*; do
-    [ -e "$f" ] || continue
-    if kill -0 "${f##*/}" 2>/dev/null; then n=$((n + 1)); else rm -f "$f"; fi
-  done
-  [ "$n" -ge 1 ] || n=1
-  echo "$n"
-}
-
-share_of_cores() {
-  local w=$(( $(cores) / $(live_gates) / $1 ))
-  [ "$w" -ge 1 ] || w=1
-  echo "$w"
-}
-
 if [ "$select_only" -eq 1 ]; then
   need_cand select
+  trap queue_release EXIT
+  queue_acquire
   select=1 selected=0 select_label=corpus
   select_programs
   [ "$selected" -eq 0 ] || cat "$EMIT/only.corpus"
@@ -927,30 +1256,41 @@ with_test_binary() {
   return $rc
 }
 
-run_guard_lane() {
-  local i n=${GATE_GUARD_SHARDS:-$PAR} rc=0 part
+run_sharded_lane() {
+  local lane=$1 var=$2 runner=$3 n=$4 i rc=0 part prc
   for ((i = 0; i < n; i++)); do
-    part="$OUT/guard.$i.part"
-    (with_slot env -u FORCE_COLOR NO_COLOR=1 GUARD_SHARD="$i/$n" MSC="$CAND" "$CAND" run --target=raiser src/test/guard/run.ms >"$part" 2>&1; echo $? >"$part.rc") &
+    part="$OUT/$lane.$i.part"
+    (with_slot env -u FORCE_COLOR NO_COLOR=1 "$var=$i/$n" MSC="$CAND" "$CAND" run --target=raiser "$runner" >"$part" 2>&1; echo $? >"$part.rc") &
   done
   wait
   for ((i = 0; i < n; i++)); do
-    part="$OUT/guard.$i.part"
+    part="$OUT/$lane.$i.part"
     cat "$part"
-    [ "$(cat "$part.rc" 2>/dev/null)" = 0 ] || rc=1
+    prc=$(cat "$part.rc" 2>/dev/null)
+    if [ "$prc" != 0 ]; then
+      rc=1
+      grep -q '^FAIL ' "$part" || printf 'FAIL %s shard %s/%s: exit %s with no named failure\n' "$lane" "$i" "$n" "${prc:-none}"
+    fi
     rm -f "$part" "$part.rc"
   done
   return $rc
 }
 
+build_lane() {
+  env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
+  self_host_boot "$CAND" "$CC_FLAG"
+}
+
 lane_body() {
   local lane=$1 log="$OUT/$1.log" rc t0=$SECONDS
-  [ "$lane" != build ] || rm -f "$CAND.key"
+  [ "$lane" != build ] || rm -f "$CAND.key" "${CAND}_link.rsp"
   case "$lane" in
+    build) with_slot bounded build_lane >"$log" 2>&1; rc=$? ;;
     tools) bounded run_tools_lane >"$log" 2>&1; rc=$? ;;
     tests|suite) bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
-    guard) bounded run_guard_lane >"$log" 2>&1; rc=$? ;;
-    boundary|corpus|san|hcr) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
+    guard) bounded run_sharded_lane guard GUARD_SHARD src/test/guard/run.ms "${GATE_GUARD_SHARDS:-$PAR}" >"$log" 2>&1; rc=$? ;;
+    hcr) bounded run_sharded_lane hcr HCR_SHARD src/test/hcr/run.ms "${GATE_HCR_SHARDS:-$PAR}" >"$log" 2>&1; rc=$? ;;
+    boundary|corpus|san) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
   if [ "$lane" = build ] && [ "$rc" -eq 0 ] && [ -n "$cand_key" ] && [ -z "$(git status --porcelain -- src std)" ] \
@@ -964,8 +1304,8 @@ PHASES=("tools build" "boundary suite hcr tests fmt" "corpus guard" "san")
 
 start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0
-mkdir -p "$GATES_DIR" && : >"$GATES_DIR/$$"
-trap 'rm -f "$GATES_DIR/$$"' EXIT
+trap queue_release EXIT
+[ "$lanes" = tools ] || queue_acquire
 PAR=$(cap_jobs "${GATE_PAR:-$(share_of_cores 5)}") || exit $?
 rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
 [ "$lanes" = tools ] || admit
@@ -1092,4 +1432,5 @@ fi
 
 say "gate: $verdict ($(printf '%s' "$ran" | sed 's/^ //; s/ /, /g')) $(fmt_secs $((SECONDS - start)))${blocked:+ · not run on this host:$blocked}"
 ledger total $((SECONDS - start)) "$([ "$verdict" = GREEN ] && echo 0 || echo 1)" "$red_sum" "$((red_sum - new_sum))" "$new_sum" "$flaky_sum" "$ADMIT_WAITED"
-[ "$verdict" = GREEN ]
+if [ "$verdict" = GREEN ]; then adopt_builder GREEN "$ran"; exit 0; fi
+exit 1

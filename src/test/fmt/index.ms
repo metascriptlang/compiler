@@ -44,6 +44,7 @@ import "./cases/methodVisibility";
 import "./cases/bigIntRegex";
 import "./cases/missingPrinters";
 import "./cases/asyncFlags";
+import "./cases/statementEndLines";
 import "./cases/awaitYieldAtom";
 import "./cases/assertEscape";
 import "./cases/externFunction";

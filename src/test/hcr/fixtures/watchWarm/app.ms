@@ -1,6 +1,7 @@
 import { base, pair, tick } from "./logic";
 import { viewValue } from "./view";
 import { Square, checked, makeSquare } from "./shapes";
+import { boxValue } from "./box";
 
 @exportName("hcrIndirectValue")
 export function hcrIndirectValue(): int32 {
@@ -28,4 +29,9 @@ export function hcrErrorValue(): int32 {
 	} catch (e) {
 		return 1;
 	}
+}
+
+@exportName("hcrBoxValue")
+export function hcrBoxValue(): int32 {
+	return boxValue();
 }

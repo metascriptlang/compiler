@@ -2240,9 +2240,9 @@ function declaredInThisModule(ctx: CheckerContext, t: Type | null): boolean {
 function markMacroUsedSymbols(ctx: CheckerContext, node: Node): void {
 	const d = node.data as MacroDeclData;
 	// Mark param type names as used (e.g. `x: Node` → mark Node)
-	for (const paramType of d.macroDeclParamTypes) {
-		if (paramType != "") {
-			const sym = lookupSymbol(ctx.table, paramType);
+	for (const typeName of [...d.macroDeclParamTypes, d.macroDeclReturnType]) {
+		if (typeName != "") {
+			const sym = lookupSymbol(ctx.table, typeName);
 			if (sym != null) markUsedIn(ctx, sym);
 		}
 	}
@@ -2255,6 +2255,14 @@ function markMacroBodyUsed(ctx: CheckerContext, node: Node): void {
 		const id = node.data as IdentifierData;
 		const sym = lookupSymbol(ctx.table, id.name);
 		if (sym != null) markUsedIn(ctx, sym);
+	}
+	if (node.kind == NodeKind.CallExpr) {
+		const call = node.data as CallExprData;
+		if (call.callee.kind == NodeKind.Identifier && (call.callee.data as IdentifierData).name == "bindSym"
+				&& call.arguments.length == 1 && call.arguments[0].kind == NodeKind.StringLiteral) {
+			const sym = lookupSymbol(ctx.table, (call.arguments[0].data as StringLiteralData).value);
+			if (sym != null) markUsedIn(ctx, sym);
+		}
 	}
 	forEachChild(node, (child: Node): void => {
 		markMacroBodyUsed(ctx, child);
@@ -3107,9 +3115,11 @@ function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude 
 	const ctorMark = ctorDefaultsMark();
 	const outerDispatch = startDispatchCapture();
 	const ctx = _graphPreludeFn != null ? _graphPreludeFn(stdPath, backendExt) : buildPreludeContext(stdPath, backendExt);
+	const typeInstances = takeGenericTypeInstsFrom(typeInstMark);
+	for (const row of typeInstances) row.prelude = true;
 	return {
 		ctx,
-		typeInstances: takeGenericTypeInstsFrom(typeInstMark),
+		typeInstances,
 		duVariants: duVariantsFrom(duMark),
 		ctorDefaults: ctorDefaultsFrom(ctorMark),
 		dispatch: endDispatchCapture(outerDispatch),

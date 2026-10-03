@@ -1,5 +1,4 @@
 // @stdout: as-conv center center stretch,null center,null center center 4 auto s:auto,null n:4,null s:stretch center auto s:center,null s:auto stretch
-// @xfail(raiser): the Raiser VM does not narrow a nullable union by typeof (`const w: Wire = 7` then `typeof w === "number"` prints `?` on the old compiler too)
 
 type Align = "auto" | "center" | "stretch";
 type Wire = number | string | null;

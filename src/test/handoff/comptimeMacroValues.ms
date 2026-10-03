@@ -6,7 +6,7 @@ import { Node, NodeKind } from "std/meta";
 
 export macro hashName(node: Node): Node {
 	const s = "padding:8px;";
-	let h = 5381;
+	let h: int64 = 5381;
 	for (let i = 0; i < s.length; i += 1) {
 		h = (h * 33 + s.charCodeAt(i)) % 4294967296;
 	}
@@ -51,6 +51,62 @@ function main(): void {
 main();
 `);
 	assert result.ok, result.ok ? "" : result.error;
+}
+
+test "comptime macro values: byte search and slice keep their edge results" {
+	const result = compileToCWithStd(`
+import { Node, NodeKind } from "std/meta";
+
+export macro byteEdges(node: Node): Node {
+	const s = "hello";
+	const got = [
+		s.byteIndexOf("l").toString(), s.byteIndexOf("l", 3).toString(), s.byteIndexOf("l", 4).toString(),
+		s.byteIndexOf("", 2).toString(), s.byteIndexOf("o", -5).toString(), s.byteIndexOf("h", 9).toString(),
+		s.byteLastIndexOf("l").toString(), s.byteLastIndexOf("l", 2).toString(), s.byteLastIndexOf("").toString(),
+		s.byteLastIndexOf("hello!").toString(), s.byteSlice(1, 3), s.byteSlice(3, 99), s.byteSlice(2, 1),
+		s.byteAt(1).toString(), s.byteAt(9).toString(), s.byteLength().toString(), "é".byteLength().toString(),
+	].join(",");
+	if (got !== "2,3,-1,2,4,-1,3,2,5,-1,el,lo,,101,-1,5,2") { error("comptime value mismatch: " + got, node); }
+	return { kind: NodeKind.StringLiteral, line: node.line, column: node.column, value: got };
+}
+
+function main(): void {
+	console.log(byteEdges(0));
+}
+main();
+`);
+	assert result.ok, result.ok ? "" : result.error;
+}
+
+function lineCountSource(lines: int32): string {
+	return `
+import { Node, NodeKind } from "std/meta";
+
+export macro lineCount(node: Node): Node {
+	const text = "0123456789abcdef0123456789abcdef0123456789abcdef\\n".repeat(${lines});
+	const n = text.split("\\n").length;
+	if (n !== ${lines + 1}) { error("comptime value mismatch: " + n.toString(), node); }
+	return { kind: NodeKind.StringLiteral, line: node.line, column: node.column, value: n.toString() };
+}
+
+function main(): void {
+	console.log(lineCount(0));
+}
+main();
+`;
+}
+
+test "comptime macro values: splitting a large string stays linear in its length" {
+	compileToCWithStd(lineCountSource(10));
+	const t0 = performance.now();
+	const small = compileToCWithStd(lineCountSource(10));
+	const t1 = performance.now();
+	const large = compileToCWithStd(lineCountSource(1000));
+	const t2 = performance.now();
+	assert small.ok, small.ok ? "" : small.error;
+	assert large.ok, large.ok ? "" : large.error;
+	const extra = (t2 - t1) - (t1 - t0);
+	assert extra < 4000, `splitting 49 KB into 1001 lines cost ${extra} ms more than 11 lines`;
 }
 
 test "comptime macro values: immutable module data is available" {

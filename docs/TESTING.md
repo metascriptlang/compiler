@@ -54,11 +54,12 @@ program belongs under `lang/` or in a standalone semantic corpus entry;
 emitted ABI details belong under `c/` or `js/` only when the emitted form
 itself is the contract. Reuse an existing owner before adding a file.
 
-The historical `fixedbugs/` lane still runs while its contracts migrate, but
-it is **not** an authoring destination. Keep a repro variant when it catches
-an independent mechanism; retire obsolete emitted-token and compile-only
-assertions once a real consumer proves their intended behavior. The final
-cutover removes that lane and its old known-red identities together.
+Keep a repro variant when it catches an independent mechanism; drop
+emitted-token and compile-only assertions once a real consumer proves their
+intended behavior. A contract that is red only because of an open compiler bug
+sits in `<module>Parked.ms` beside its module: no index imports it, the inbox
+card names it on its `Parked at:` line, and the fixing session moves it into
+the module and registers it.
 
 ### Pipeline tests (`c/*.ms`, `js/*.ms`)
 
@@ -175,6 +176,20 @@ lines), and ALL determinism obligations live on the program:
   SAN were not exercised for these entries. The `e8431cc9` land selector
   picked two unrelated known-red programs, so its green verdict is not
   evidence that the newly added corpus entries ran.
+  Follow-up Windows VM measurement with the retained ESM gate compiler
+  (compiler key `2f1a29cdbb3a5d21d8ab012b43184341e34b45b2`): direct
+  `msc run <entry> --target=raiser` runs of all thirteen installed semantic
+  successor entries matched their exact stdout, **13 pass / 0 fail**; the
+  staged integer-width variant printed `widths -128 2 24464 32767 -1`.
+  This clears the six previously observed VM consumer failures on that
+  candidate, not the remaining unregistered families or remote integration.
+  No new native full-gate, SAN or thin-LTO claim accompanies this VM slice.
+  On landed ESM base `cd52b8e1`, seven changed checker/runtime owner files
+  passed **112/112 native tests** via
+  `msc test <owner> --tests-in-dir --target=c --emit-jobs=1`; the directory
+  selector excluded compiler dependency tests, so this is not a full-suite
+  verdict. The strengthened generic-module consumer also ran natively with
+  `1 r0 3`. Mandatory unregistered owners still require their own proof.
 - **Write RC-stress shapes deliberately**: churn in loops, values relayed
   through calls then dropped unread, throw/catch unwinding mid-build,
   refcounted values held across await. The plain lane asserts behavior;
@@ -367,8 +382,23 @@ Traps, all paid for on 2026-09-05:
 - The selector degenerates for broad changes (codegen/runtime/analyzer work
   that rewrites most programs' C): |A| large ⇒ the full run is the honest
   option. |A| is self-calibrating, no guessing up front.
-- SAN on hosts without libasan (scoop MinGW: `cannot find -lasan`) is
-  environment-blocked — record it, don't chase phantom code bugs.
+- Missing sanitizer support is environment-blocked, not a program red. Host
+  selection and capability checks live in `src/test/corpus/run.ms`
+  `sanWindowsClang` / `asanLinkGap`.
+- Windows capability measurement (2026-09-30, LLVM 23.1.0 + MinGW 16.1.0,
+  x64): `MSC=C:/Users/metacraft/.metascript/bin/msc.exe MSCORPUS_SAN=1
+  MSCORPUS_ONLY=820-float32ConstFold MSCORPUS_BUILD_JOBS=1 MSCORPUS_JOBS=1
+  <installed-msc> run src/test/corpus/run.ms` returned
+  `1 pass · 0 fail · 0 xfail · 0 xpass` in 16.78 s. Subject and support trees
+  were installed build `35601908`, not the current integration compiler;
+  the harness was `4225315e` plus the stricter capability-probe follow-up.
+  Its clean C control printed `asan-control=42`; the planted fault had to
+  exit nonzero with `ERROR: AddressSanitizer: stack-use-after-scope`.
+  With `ASAN_OPTIONS=detect_leaks=notbool`, the runtime instead reports
+  `AddressSanitizer: ERROR: Flag parsing failed` (exit 1): that is not evidence
+  of fault detection and must not satisfy the capability check.
+  Other toolchain versions/architectures and a full current integration SAN
+  run were not verified by this measurement.
 - Heap corruption inside the compiler itself: build it under ASan with the
   DRC slab off, `msc build src/index.ms --gc=drc --sanitize=address
   --passC=-DMS_SLAB_MAX=0 --passL=-fsanitize=address --cc=clang

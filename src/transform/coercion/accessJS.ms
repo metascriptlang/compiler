@@ -1,27 +1,78 @@
-import { Node, NodeKind, ArrayAccessData, BinaryExprData, UpdateExprData, MemberExprData, SpreadExprData, SourceLocation, Type, TypeKind, TypeFlag, DeclKind, ExprStmtData } from "../../ast/node";
+import { Node, NodeKind, ArrayAccessData, BinaryExprData, UpdateExprData, MemberExprData, SpreadExprData, CallExprData, SourceLocation, Type, TypeKind, DeclKind } from "../../ast/node";
+import { forEachChild } from "../../ast/visitor";
 import { TransformContext, freshTempSym } from "../context";
 import { addError } from "../../checker/context";
-import { peelTransparentInstance, distinctBody } from "../../checker/types";
+import { peelTransparentInstance, unknownType } from "../../checker/types";
 import { walkNode, walkExpandBlocks, isAssignOp } from "../walker";
-import { makeBinary, makeCall, makeMember, makeArrayAccess, runtimeRef, isRuntimeProcCall, makeVarDecl, makeIdentResolved, makeExprStmt } from "../util";
+import { makeBinary, makeCall, makeMember, makeArrayAccess, makeAssign, makeVarDecl, makeNull, makeIdentResolved, runtimeRef, isRuntimeProcCall } from "../util";
 import { cloneIfPure } from "./intArithJS";
+import { asUnknown } from "./nullishCoalesce";
 
 export function lowerAccessJS(program: Node, ctx: TransformContext): Node {
-	stabilizeElementPlaces(program, ctx);
-	return walkNode(program, (node: Node): Node => rewriteAccess(node, ctx));
+	const lowered = walkNode(program, (node: Node): Node => rewriteAccess(node));
+	walkExpandBlocks(lowered, (stmt: Node, c: TransformContext): Node[] => holdPlacesStmt(stmt, c), ctx);
+	return walkNode(lowered, (node: Node): Node => refuseUnheldPlace(node, ctx));
 }
 
-
-function rewriteAccess(node: Node, ctx: TransformContext): Node {
+function rewriteAccess(node: Node): Node {
 	if (node.kind == NodeKind.ArrayAccess) return checkedAccess(node);
 	if (node.kind == NodeKind.MemberExpr) return spanLength(node);
 	if (node.kind == NodeKind.SpreadExpr) return spreadSpanValues(node);
+	return node;
+}
+
+function holdPlacesStmt(stmt: Node, ctx: TransformContext): Node[] {
+	const temps: Node[] = [];
+	holdPlaces(stmt, temps, ctx);
+	temps.push(stmt);
+	return temps;
+}
+
+function holdPlaces(node: Node, temps: Node[], ctx: TransformContext): void {
+	if (node == null) return;
+	forEachChild(node, (c: Node): void => {
+		if (c == null) return;
+		const k = c.kind;
+		if (k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr || k == NodeKind.FunctionDecl
+			|| k == NodeKind.MethodDecl || k == NodeKind.ConstructorDecl || k == NodeKind.BlockStmt) return;
+		holdPlaces(c, temps, ctx);
+	});
+	if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (isAssignOp(d.operator)) d.left = heldPlace(d.left, temps, ctx);
+	} else if (node.kind == NodeKind.UpdateExpr) {
+		const d = node.data as UpdateExprData;
+		d.updateArg = heldPlace(d.updateArg, temps, ctx);
+	}
+}
+
+function heldPlace(target: Node, temps: Node[], ctx: TransformContext): Node {
+	const span = isRuntimeProcCall(target, "msSpanAt");
+	if (!span && !isRuntimeProcCall(target, "msArrayAt")) return target;
+	const args = (target.data as CallExprData).arguments;
+	const loc = target.location;
+	const held = args[0];
+	const sym = freshTempSym(ctx, "place", unknownType());
+	const decl = makeVarDecl(sym.name, makeNull(loc), DeclKind.Var, loc);
+	decl.resolvedSym = sym;
+	decl.nodeType = sym.symbolType;
+	temps.push(decl);
+	const first = makeAssign(makeIdentResolved(sym, loc), asUnknown(held, loc), loc);
+	first.nodeType = sym.symbolType;
+	const place = span
+		? makeArrayAccess(makeMember(first, "base", loc), makeBinary(makeMember(makeIdentResolved(sym, loc), "off", loc), "+", checkedIndex(args[1], makeMember(makeIdentResolved(sym, loc), "len", loc), loc), loc), loc)
+		: makeArrayAccess(first, checkedIndex(args[1], makeMember(makeIdentResolved(sym, loc), "length", loc), loc), loc);
+	place.nodeType = target.nodeType;
+	return place;
+}
+
+function refuseUnheldPlace(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		if (isAssignOp(d.operator)) refuseReadOnlyPlace(d.left, ctx);
-		return node;
+	} else if (node.kind == NodeKind.UpdateExpr) {
+		refuseReadOnlyPlace((node.data as UpdateExprData).updateArg, ctx);
 	}
-	if (node.kind == NodeKind.UpdateExpr) refuseReadOnlyPlace((node.data as UpdateExprData).updateArg, ctx);
 	return node;
 }
 
@@ -88,53 +139,6 @@ function checkedAccess(node: Node): Node {
 	if (access == null) access = makeCall(runtimeRef(span ? "msSpanAt" : "msArrayAt", loc), [d.array, d.index], loc);
 	access.nodeType = node.nodeType;
 	return access;
-}
-
-
-// Destination parts are evaluated once, as Nim does before a store
-// (injectdestructors.nim stabilizeBracketIndex): a clone re-runs effects, and
-// an array hoisted into a temp initializer becomes a detached value copy.
-function stabilizeElementPlaces(program: Node, ctx: TransformContext): void {
-	walkExpandBlocks(program, (stmt: Node): Node[] => stabilizeStmt(stmt, ctx), ctx);
-}
-
-function stabilizeStmt(stmt: Node, ctx: TransformContext): Node[] {
-	if (stmt.kind != NodeKind.ExprStmt) return [stmt];
-	const ed = stmt.data as ExprStmtData;
-	if (ed.expr == null || ed.expr.kind != NodeKind.BinaryExpr) return [stmt];
-	const bd = ed.expr.data as BinaryExprData;
-	if (bd.operator != "=" || bd.left.kind != NodeKind.ArrayAccess || isRange((bd.left.data as ArrayAccessData).index)) return [stmt];
-	const ad = bd.left.data as ArrayAccessData;
-	if (indexedType(ad.array) == null) return [stmt];
-	const loc = bd.left.location;
-	if (isSpan(ad.array)) {
-		if (cloneIfPure(ad.array) != null) return [stmt];
-		const sym = freshTempSym(ctx, "rcdst", ad.array.nodeType);
-		const decl = makeVarDecl(sym.name, ad.array, DeclKind.Const, loc);
-		decl.resolvedSym = sym;
-		ad.array = makeIdentResolved(sym, loc);
-		return [decl, stmt];
-	}
-	if (cloneIfPure(ad.array) != null || cloneIfPure(ad.index) != null) return [stmt];
-	if (elementIsValueJS(bd.left.nodeType)) return [stmt];
-	const store = makeCall(runtimeRef("msChkStore", loc), [ad.array, ad.index, bd.right], loc);
-	store.nodeType = bd.right.nodeType;
-	return [makeExprStmt(store, loc)];
-}
-
-// Mirrors needsValueCopy in codegen/js/valueCopy.ms, the authority: a
-// value-typed element stores through msValAssign at emission, never through
-// msChkStore, which would alias the stored value instead of copying it in.
-function elementIsValueJS(t: Type | null): boolean {
-	let base = distinctBody(t);
-	while (base != null) {
-		t = base;
-		base = distinctBody(t);
-	}
-	if (t != null && t.kind == TypeKind.Struct && t.typeFlags.has(TypeFlag.IsMaybe) && t.typeReturn != null) t = t.typeReturn;
-	if (t == null) return false;
-	if (t.kind == TypeKind.Struct) return t.typeFlags.has(TypeFlag.IsStruct);
-	return t.kind == TypeKind.Tuple || t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray;
 }
 
 function refuseReadOnlyPlace(target: Node, ctx: TransformContext): void {

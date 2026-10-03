@@ -167,6 +167,21 @@ test "stringRepresentation: string indexes and padding count UTF-16 units rather
 	}
 }
 
+test "stringRepresentation: byte search and byte slices count encoded bytes at their edges" {
+	const s = "hello";
+	const got = [
+		s.byteIndexOf("l").toString(), s.byteIndexOf("l", 3).toString(), s.byteIndexOf("l", 4).toString(),
+		s.byteIndexOf("", 2).toString(), s.byteIndexOf("o", -5).toString(), s.byteIndexOf("h", 9).toString(),
+		s.byteLastIndexOf("l").toString(), s.byteLastIndexOf("l", 2).toString(), s.byteLastIndexOf("").toString(),
+		s.byteLastIndexOf("hello!").toString(), s.byteSlice(1, 3), s.byteSlice(3, 99), s.byteSlice(2, 1),
+		s.byteAt(1).toString(), s.byteAt(9).toString(), s.byteLength().toString(), "é".byteLength().toString(),
+	].join(",");
+	assert got == "2,3,-1,2,4,-1,3,2,5,-1,el,lo,,101,-1,5,2", got;
+	assert "héxlo".byteIndexOf("x") == 3;
+	assert "héxlo".byteLastIndexOf("l") == 4;
+	assert "a,b,,c".split(",").join("|") == "a|b||c";
+}
+
 test "stringRepresentation: astral character indexing and slicing retain individual surrogate halves" {
 	assert "👍x".charAt(1).charCodeAt(0) == 56397;
 	assert "👍x"[1].charCodeAt(0) == 56397;

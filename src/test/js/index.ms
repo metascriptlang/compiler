@@ -10,3 +10,8 @@ import "./concurrencyBoundary";
 import "./testSuspension";
 import "./accessCheck";
 import "./float32";
+import "./intConv";
+import "./asConversion";
+import "./downConversion";
+import "./genericClassInstance";
+import "./aliasNarrowingCast";

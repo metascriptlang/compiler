@@ -10,7 +10,7 @@
 // or function pointer".
 //
 // Runtime siblings: corpus 305-closureCallChain (every callee shape, all lanes)
-// and fixedbugs/bug104 (the same shapes inside the test tier).
+// and src/test/lang/closureStorage.ms (the same shapes inside the test tier).
 
 import { compileToC } from "../helpers";
 

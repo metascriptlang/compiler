@@ -1,4 +1,3 @@
-// @xfail(raiser): struct == compares by reference on raiser (card 2026-09-29-raiser-struct-equality-by-reference)
 // @stdout: nested=true,false deep=true,false generic=true,false sameName=true,false,true,false local=true,false,false
 // note: `==` on a struct compares a field whose type is declared in a module this file never imports, one and two levels down and inside a generic instance. Two modules that each declare a struct `Key`, and a local struct named like the nested foreign one, each compare through their own equality. Same output on every backend.
 

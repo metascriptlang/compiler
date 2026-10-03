@@ -163,3 +163,51 @@ test "instanceof on a union of classes tests the stored member" {
 	assert other instanceof Dog;
 	if (held instanceof Dog) assert held.name == "rex";
 }
+
+class ConvBase { id: int32 = 0; }
+class ConvNative extends ConvBase { view: string = "native"; }
+class ConvDom extends ConvBase { el: int32 = 42; }
+type ConvNativeAlias = ConvNative;
+type ConvBaseAlias = ConvBase;
+
+function convViewOf(b: ConvBase): string {
+	return (b as ConvNative).view;
+}
+
+function convViewOfAlias(b: ConvBase): string {
+	return (b as ConvNativeAlias).view;
+}
+
+function convViewIfNative(b: ConvBase): string {
+	if (b instanceof ConvNative) return b.view;
+	return "";
+}
+
+function convUp(n: ConvNative): ConvBaseAlias {
+	return n as ConvBaseAlias;
+}
+
+test "a base reference converts down to the derived class it holds" {
+	const held: ConvBase = new ConvNative();
+	assert convViewOf(held) == "native";
+}
+
+test "a conversion to an alias of the derived class converts down to that class" {
+	const held: ConvBase = new ConvNative();
+	assert convViewOfAlias(held) == "native";
+}
+
+test "instanceof narrows a base reference to the derived class" {
+	assert convViewIfNative(new ConvNative()) == "native";
+	assert convViewIfNative(new ConvDom()) == "";
+	assert convViewIfNative(new ConvBase()) == "";
+}
+
+test "a conversion up to an alias of the base class keeps the instance" {
+	const derived = new ConvNative();
+	derived.id = 7;
+	const up = convUp(derived);
+	assert up.id == 7;
+	up.id = 9;
+	assert derived.id == 9;
+}

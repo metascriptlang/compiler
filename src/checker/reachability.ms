@@ -18,17 +18,28 @@ import {
 	aliveSetHasSym,
 	aliveSetAddModule,
 	aliveSetHas,
+	aliveSetHasDecl,
 	aliveSetHasModule,
 	aliveSetModuleCount,
 } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
-import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey } from "../codegen/c/types";
+import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey } from "../codegen/c/types";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { lookupCtorDefaults } from "./instantiate";
 import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
+
+export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {
+	if (aliveSet.entries.length == 0) return true;
+	const name = (node.data as FunctionDeclData).fnName;
+	const sym = node.resolvedSym;
+	// $-prefixed functions without a traced routine symbol ($Env_*Destroy etc. DRC hooks) are
+	// referenced by DRC-injected code the walker can't trace — keep them unconditionally alive.
+	if (name.startsWith("$") && !isTracedRoutine(sym)) return true;
+	return aliveSetHasDecl(aliveSet, modulePath, name, sym);
+}
 
 // ===== Global Name Index =====
 // Pre-built name→modulePath index for O(1) cross-module lookup.
@@ -200,7 +211,7 @@ function walkBody(node: Node, modulePath: string): void {
 	}
 
 	if (k == NodeKind.HiddenSubConv && node.variantSlot > 0) {
-		markRematerializedMemberTypeInfo((node.data as HiddenStdConvData).convType);
+		markRematerializedMemberTypeInfo((node.data as HiddenStdConvData).convType, modulePath);
 		walkChildrenGeneric(node, modulePath);
 		return;
 	}
@@ -213,7 +224,7 @@ function walkBody(node: Node, modulePath: string): void {
 
 	if (k == NodeKind.BinaryExpr && (node.data as BinaryExprData).operator == "instanceof") {
 		const rhs = (node.data as BinaryExprData).right;
-		markTypeInfoOf(rhs.resolvedSym != null ? rhs.resolvedSym.symbolType : rhs.nodeType);
+		markTypeInfoOf(rhs.resolvedSym != null ? rhs.resolvedSym.symbolType : rhs.nodeType, modulePath);
 		walkChildrenGeneric(node, modulePath);
 		return;
 	}
@@ -298,23 +309,23 @@ function markUnionHookEdges(t: Type): void {
 // at runtime, so no direct call site exists). Mirrors codegen's on-demand
 // TypeInfo emission: mark only when the TypeInfo decl really exists.
 function markTypeInfoEdge(node: Node, modulePath: string): void {
-	markTypeInfoOf(node.nodeType);
+	markTypeInfoOf(node.nodeType, modulePath);
 }
 
 function markTypeInfoHooks(t: Type, modulePath: string): void {
-	const destroy = getAttachedOp(t, AttachedOp.AttachedDestructor);
+	const destroy = getOpByKey(t, AttachedOp.AttachedDestructor) ?? getAttachedOp(t, AttachedOp.AttachedDestructor);
 	if (destroy != null) markReferenced(destroy, modulePath);
-	const trace = getAttachedOp(t, AttachedOp.AttachedTrace);
+	const trace = getOpByKey(t, AttachedOp.AttachedTrace) ?? getAttachedOp(t, AttachedOp.AttachedTrace);
 	if (trace != null) markReferenced(trace, modulePath);
 }
 
-function markRematerializedMemberTypeInfo(conv: Type | null): void {
+function markRematerializedMemberTypeInfo(conv: Type | null, modulePath: string): void {
 	if (conv == null || conv.kind == TypeKind.Union) return;
 	const member = unwrapPointerLikeForVariant(conv);
-	if (member != null && member != conv && member.kind == TypeKind.Struct) markTypeInfoOf(member);
+	if (member != null && member != conv && member.kind == TypeKind.Struct) markTypeInfoOf(member, modulePath);
 }
 
-function markTypeInfoOf(type: Type | null): void {
+function markTypeInfoOf(type: Type | null, modulePath: string): void {
 	if (type == null) return;
 	let t = peelTransparentInstance(type);
 	const nullableRef = unwrapRefNullUnion(t);
@@ -365,7 +376,7 @@ function markTypeInfoOf(type: Type | null): void {
 		markAndWalk(home, tiName);
 	}
 	if (t.kind != TypeKind.Struct) return;
-	markTypeInfoHooks(t, t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : home);
+	markTypeInfoHooks(t, t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : (home != "" ? home : modulePath));
 	let bt = t.typeExtra;
 	let depth = 0;
 	while (bt != null && depth < 64) {
@@ -689,7 +700,7 @@ export function computeAliveSet(
 			}
 
 			// Root 2: Compiler-generated functions — always alive.
-			// Must match isDeclAlive exemptions in codegen/c/declarations.ms exactly:
+			// Must match functionDeclIsAlive exemptions above exactly:
 			// $prefix without a traced routine symbol (DRC hooks), =prefix (operators),
 			// __prefix (builtinLower), DRC lifecycle suffixes, generic instantiations (__ in middle of name).
 			if (bare.kind == NodeKind.FunctionDecl) {

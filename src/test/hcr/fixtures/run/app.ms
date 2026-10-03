@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "std/fs";
 import { exit } from "std/process";
-import { reload, reloadKindName, HcrReloadKind } from "std/hcr";
+import { reload, lastReload, reloadKindName, ReloadKind } from "std/hcr";
 import { value } from "./logic";
 
 console.log(`HCR-RUN start value ${value()}`);
@@ -12,12 +12,12 @@ if (!edit.ok || !writeFile("logic.ms", edit.value).ok) {
 const deadline = performance.now() + 120000;
 let done = false;
 while (!done && performance.now() < deadline) {
-	const outcome = reload();
-	if (outcome.kind == HcrReloadKind.Reloaded) {
-		console.log(`HCR-RUN reloaded ${outcome.modules.join(",")} value ${value()}`);
+	const kind = reload();
+	if (kind == ReloadKind.Reloaded) {
+		console.log(`HCR-RUN reloaded ${lastReload().modules.join(",")} value ${value()}`);
 		done = true;
-	} else if (outcome.kind != HcrReloadKind.NoChange && outcome.kind != HcrReloadKind.Pending) {
-		console.log(`HCR-RUN ${reloadKindName(outcome.kind)} ${outcome.reason}`);
+	} else if (kind != ReloadKind.NoChange && kind != ReloadKind.Pending) {
+		console.log(`HCR-RUN ${reloadKindName(kind)} ${lastReload().reason}`);
 		done = true;
 	} else {
 		await sleepAsync(20);

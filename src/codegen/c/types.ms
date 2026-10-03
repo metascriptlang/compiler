@@ -1152,6 +1152,7 @@ function refArrayCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 	const arrT = info.cell.typeReturn!;
 	const arrCType = getTypeDesc(g, arrT);
 	const elem = arrayOpElement(arrT.typeReturn);
+	if (arrCType == "msRefArray" && opCName(info.destroy) == "msNumberArrayDestroy") return "msPtrArrayRefCell";
 	if (arrCType == "msRefArray" && elem != null && (elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr)) {
 		if (elem.sym != null && elem.sym.symbolKind == SymbolKind.Actor) return "msPtrArrayRefCell";
 		if (isAtomicRef(elem)) return "msAtomicArrayRefCell";

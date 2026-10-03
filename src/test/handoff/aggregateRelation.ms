@@ -2,7 +2,11 @@ import { strictErrorCount } from "./helpers";
 import { compileToC, compileToJS } from "../helpers";
 
 test "aggregate relation: storage wrappers preserve element identity at every slot" {
-	const pre = "class Animal { name: string = \"\"; } class Dog extends Animal { breed: string = \"\"; } class Box<T> { value: T; constructor(value: T) { this.value = value; } }\n";
+	const pre = "class Animal { name: string = \"\"; } class Dog extends Animal { breed: string = \"\"; } class Box<T> { value: T; constructor(value: T) { this.value = value; } }\n"
+		+ "class Other<T> { value: T; constructor(value: T) { this.value = value; } }\n"
+		+ "interface Cell<T> { value: T; }\n"
+		+ "struct Pair<T> { a: T; b: T; }\n"
+		+ "struct Twin<T> { a: T; b: T; }\n";
 	const pairs = [
 		{ source: "Dog[]", target: "Animal[]", accepted: false },
 		{ source: "Dog[]", target: "Span<Animal>", accepted: false },
@@ -22,6 +26,15 @@ test "aggregate relation: storage wrappers preserve element identity at every sl
 		{ source: "(x: int32) => int32", target: "(x: string) => int32", accepted: false },
 		{ source: "(x: int32) => int32", target: "(x: int32) => int32", accepted: true },
 		{ source: "Result<int32, string>", target: "Result<string, string>", accepted: false },
+		{ source: "Box<int32>", target: "Box<number>", accepted: false },
+		{ source: "Box<int32>", target: "Other<string>", accepted: false },
+		{ source: "Box<Box<int32>>", target: "Box<Box<string>>", accepted: false },
+		{ source: "Box<Box<int32>>", target: "Box<Box<int32>>", accepted: true },
+		{ source: "Cell<int32>", target: "Cell<string>", accepted: false },
+		{ source: "Cell<int32>", target: "Cell<int32>", accepted: true },
+		{ source: "Pair<int32>", target: "Pair<string>", accepted: false },
+		{ source: "Pair<int32>", target: "Pair<int32>", accepted: true },
+		{ source: "Pair<int32>", target: "Twin<int32>", accepted: false },
 	];
 	for (const pair of pairs) {
 		const boundaries = [
@@ -36,6 +49,35 @@ test "aggregate relation: storage wrappers preserve element identity at every sl
 			const errors = strictErrorCount(pre + source);
 			assert pair.accepted ? errors == 0 : errors > 0, pair.source + " -> " + pair.target + ": " + source;
 		}
+	}
+}
+
+test "aggregate relation: a refused generic instance is named with its type arguments" {
+	const pre = "class Box<T> { v: T; constructor(v: T) { this.v = v; } }\n"
+		+ "struct Pair<T> { a: T; b: T; }\n"
+		+ "const a = new Box<int32>(7);\n"
+		+ "const p: Pair<int32> = { a: 1, b: 2 };\n";
+	const cases = [
+		{
+			name: "a class instance refused at a declaration",
+			source: pre + "const b: Box<string> = a;",
+			message: "'Box<int32>' is not assignable to type 'Box<string>'",
+		},
+		{
+			name: "a class instance refused at an argument",
+			source: pre + "function t(x: Box<string>): void {} t(a);",
+			message: "got Box<int32>, expected Box<string>",
+		},
+		{
+			name: "a struct instance refused at an argument",
+			source: pre + "function t(x: Pair<string>): void {} t(p);",
+			message: "got Pair<int32>, expected Pair<string>",
+		},
+	];
+	for (const item of cases) {
+		const c = compileToC(item.source);
+		assert !c.ok, item.name;
+		assert c.error.contains(item.message), item.name + ": " + c.error;
 	}
 }
 
@@ -103,9 +145,19 @@ test "aggregate relation: structural fitting requires a layout prefix, not just 
 		{ source: "{ v: string; w: int32 }", target: "{ w: int32; v: string }", accepted: false },
 		{ source: "{ w: int32; v: string }", target: "{ v: string }", accepted: false },
 		{ source: "Leaf", target: "{ v: string }", accepted: false },
+		{ source: "Face", target: "Mask", accepted: true },
+		{ source: "Thing", target: "Peer", accepted: true },
+		{ source: "Crate<int32>", target: "Bin<int32>", accepted: true },
+		{ source: "Crate<int32>", target: "Bin<string>", accepted: false },
 	];
 	for (const pair of pairs) {
-		const pre = "class Leaf { w: int32 = 7; v: string = \"p\"; } type Target = " + pair.target + "; ";
+		const pre = "class Leaf { w: int32 = 7; v: string = \"p\"; } "
+			+ "class Crate<T> { w: T; constructor(w: T) { this.w = w; } } "
+			+ "class Bin<T> { w: T; constructor(w: T) { this.w = w; } } "
+			+ "interface Face { w: int32; v: string; } interface Mask { w: int32; v: string; } "
+			+ "class Thing { w: int32 = 7; v: string = \"p\"; } "
+			+ "class Peer { w: int32 = 7; v: string = \"p\"; } "
+			+ "type Target = " + pair.target + "; ";
 		for (const body of [
 			"function f(value: " + pair.source + "): void { const slot: Target = value; }",
 			"class Box { value: Target; constructor(value: Target) { this.value = value; } } function f(value: " + pair.source + "): void { const box = new Box(value); }",
@@ -114,6 +166,73 @@ test "aggregate relation: structural fitting requires a layout prefix, not just 
 			assert pair.accepted ? errors == 0 : errors > 0, body;
 		}
 	}
+	const related = [
+		"interface Face { w: int32; v: string; } interface Mask { w: int32; v: string; } "
+			+ "const face: Face = { w: 1, v: \"p\" }; const mask: Mask = face;",
+		"class Thing { w: int32 = 7; v: string = \"p\"; } "
+			+ "class Peer { w: int32 = 7; v: string = \"p\"; } "
+			+ "const thing = new Thing(); const peer: Peer = thing;",
+		"class Crate<T> { w: T; constructor(w: T) { this.w = w; } } "
+			+ "class Bin<T> { w: T; constructor(w: T) { this.w = w; } } "
+			+ "const crate = new Crate<int32>(7); const bin: Bin<int32> = crate;",
+	];
+	for (const source of related) {
+		const c = compileToC(source);
+		assert c.ok, c.error;
+	}
+}
+
+test "aggregate relation: a declared value struct relates by declaration, never by shape" {
+	const pre = "struct Base { code: int32; } struct Alike { code: int32; } "
+		+ "struct Wider { code: int32; extra: int32; } struct Child extends Base { extra: int32; } "
+		+ "type Shape = { code: int32 }; interface Face { code: int32; } "
+		+ "class Thing { code: int32 = 7; }\n";
+	const pairs = [
+		{ source: "Base", target: "Base", accepted: true },
+		{ source: "Child", target: "Child", accepted: true },
+		{ source: "Child", target: "Base", accepted: true },
+		{ source: "Base", target: "Child", accepted: false },
+		{ source: "Alike", target: "Base", accepted: false },
+		{ source: "Wider", target: "Base", accepted: false },
+		{ source: "Shape", target: "Base", accepted: false },
+		{ source: "Face", target: "Base", accepted: false },
+		{ source: "Thing", target: "Base", accepted: false },
+	];
+	for (const pair of pairs) {
+		const sourceType = pair.source;
+		const targetType = pair.target;
+		const boundaries = [
+			"function f(value: " + sourceType + "): void { const slot: " + targetType + " = value; }",
+			"function f(value: " + sourceType + ", initial: " + targetType + "): void { "
+				+ "let slot: " + targetType + " = initial; slot = value; }",
+			"function f(value: " + sourceType + "): " + targetType + " { return value; }",
+			"function take(value: " + targetType + "): void {} "
+				+ "function f(value: " + sourceType + "): void { take(value); }",
+			"struct Holder { value: " + targetType + "; } "
+				+ "function f(value: " + sourceType + "): Holder { return { value: value }; }",
+			"function f(value: " + sourceType + "): void { "
+				+ "const slots: (" + targetType + ")[] = [value]; }",
+		];
+		for (const body of boundaries) {
+			const errors = strictErrorCount(pre + body);
+			const reason = sourceType + " -> " + targetType + ": " + body;
+			assert pair.accepted ? errors == 0 : errors > 0, reason;
+		}
+	}
+	const nullableSlots = [
+		{ source: "Base", accepted: true },
+		{ source: "Alike", accepted: false },
+	];
+	for (const item of nullableSlots) {
+		const body = "function f(value: " + item.source + "): void { const slot: Base | null = value; }";
+		const errors = strictErrorCount(pre + body);
+		assert item.accepted ? errors == 0 : errors > 0, body;
+	}
+	const adopted = [
+		"const literal = { code: 7 }; const slot: Base = literal;",
+		"function take(value: Base): void {} take({ code: 8 });",
+	];
+	for (const body of adopted) assert strictErrorCount(pre + body) == 0, body;
 }
 
 test "aggregate relation: array methods respect element width and view capability" {

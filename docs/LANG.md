@@ -1083,13 +1083,13 @@ const r = slot as Row | null;   // slot: number | Row | null — a Row converts,
   (`Wire as Align | null`, `number | Row | null as Row | null`) alike, as it drops bound checks.
 
 Measured on tree `2d72bcc3` plus this change: corpus `649`–`654` on C drc/orc/danger, JS and ESM,
-`fixedbugs/bug602`. The nullable tag test under `--danger`: corpus `674`, and `mk(0) as Align | null`
+`src/test/js/asConversion.ms`. The nullable tag test under `--danger`: corpus `674`, and `mk(0) as Align | null`
 on tree `60b63319` prints the error in debug and `--release` and passes under `--danger`. Not covered: the Raiser VM tests no conversion, and JS tests the tag only for a
 string, number or boolean member.
 
 Class members, measured on tree `af10d638` plus the class-member change (`number | Row | null`,
 `number | Row`, `Row | Other | null`, `Base | Child | null`): the held value and null convert to
-the same result on C drc/orc, JS and Raiser (corpus `656`, `fixedbugs/bug603`; Raiser cannot run
+the same result on C drc/orc, JS and Raiser (corpus `656`; Raiser cannot run
 `Base | Child`, it does not evaluate `super`). A wrong member stops with the message above on C
 drc/orc/release and throws an Error with the same text on JS (corpus `657`, `658`, guard
 `asClassMemberChecked`). Under `--danger` neither the nullable nor the bare union stops (exit 139 on
@@ -2200,7 +2200,7 @@ extern function ok<T>(val: T): Result<T, any>;
 | `@compilerFunc` | extern function | The compiler may synthesize calls to this routine; its declaration is where they read their signature | DONE (2026-09-18) |
 | `@throws` | extern function | The routine raises by setting the runtime error flag instead of returning | DONE (2026-09-18) |
 | `@delegate` | body-less function, distinct type | Reuse the base function's implementation or expose the base's fields; see [Delegating a distinct](#delegating-a-distinct) | Verified on C and JS (2026-09-30) |
-| `@beforeReload` / `@afterReload` | module-level `(): void` function | Hot-reload lifecycle handler, run by `std/hcr` around a reload under `--hcr` (docs/HCR.md "Host runtime (S4)") | DONE on Windows x64 (2026-09-23) |
+| `@beforeReload` / `@afterReload` | module-level `(): void` function | Hot-reload lifecycle handler, run by `std/hcr` around a reload under `--hcr` ("Hot Code Reload" below) | DONE on Windows x64 and Linux x64 (`hcrEngine`, 2026-09-27) |
 | `@comptime` | block | Compile-time evaluation | PLANNED |
 | `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
 | `@inline` | function | Hint to inline function body at call site | PLANNED |
@@ -2312,6 +2312,7 @@ Comparison is numeric when both sides are numeric, string otherwise.
 | OS family (computed) | `posix`, `unix`, `bsd` |
 | Memory mode | `drc`, `orc`, `none`, `manual`, plus `gc=orc` |
 | Build mode | `debug`, `release`, `danger`, plus `mode=release` |
+| Hot code reload | `hcr` under `--hcr` |
 | Command line | `-d:myFlag`, `-d:tier=3`, `--define:name=value` |
 
 A flag with no value is `"true"`. A name that is not defined is **false, never an
@@ -2323,6 +2324,87 @@ user has not set. `msc --help-defines` lists everything currently defined.
 > `@target(...)` and `@platform(...)` were retired 2026-08-09 in favour of `when`.
 > `@target` never gated anything (the name was accepted, the filter was never
 > written); `@platform` gated directives only. Both now raise an error pointing here.
+
+## Hot Code Reload (`--hcr`)
+
+`msc run --hcr app.ms` builds the program as one native image per module, starts it under
+the host from `std/hcr`, and on every save rebuilds the module that changed while the
+program keeps running. New code takes effect where the program calls `reload()`, which it
+imports from `std/hcr` where it wants reloads to happen, once per pass of its main loop:
+
+```typescript
+import { reload, ReloadKind } from "std/hcr";
+import { tick, message } from "./logic";
+
+while (true) {
+	tick();
+	if (reload() == ReloadKind.Reloaded) console.log(message());
+	await sleepAsync(16);
+}
+```
+
+Edit the body of `message` in `logic.ms` and save: the next `reload()` answers `Reloaded`,
+and the next `message()` runs the new code. `examples/hcrApp/` is this program.
+
+| `reload()` | When |
+|---|---|
+| `NoChange` | no image changed since the last call |
+| `Reloaded` | the changed images are loaded, initialized and published |
+| `Pending` | an image cannot be loaded yet (the linker is still writing it); retried when it changes |
+| `Rejected` | an incompatible binding, initializer failure or handler failure prevented publication; old code remains callable |
+| `RestartRequired` | the change cannot apply to live state (below); `lastReload().reason` names what changed |
+
+What a reload keeps and what it refuses:
+
+- **Module-level state is per variable.** Same-name, same-type values survive reload, so
+  editing `let count = 0` to `let count = 5` does not overwrite the running counter. New
+  variables initialize; removed values are retained until restart; reintroduced names start
+  fresh. A changed variable type initializes that variable alone and names the reset in
+  `lastReload().reason`. An unchanged image still bound to the old type makes the reload
+  `Rejected` and must be rebuilt.
+- **Literal const aliases update.** Numeric and string const edits were checked across an
+  unchanged caller image. Ordinary effectful `const` initialization remains state: its
+  initializer does not run again merely because the image reloaded.
+- **Types keep their layout.** Method bodies reload and live objects run the new methods; a
+  field added, removed or retyped in a class, interface or struct, a base class included,
+  answers `RestartRequired`. So does an edit that makes the program use a runtime or
+  standard-library routine it did not use before.
+- **A call to a named function runs its newest code.** That holds for a direct call, for a
+  call through a function value taken before the reload (`onFrame(update)`, a handler stored
+  in a table), and for a call made by code of an older generation. A function already
+  running finishes on the code it started with, so a loop that never returns stays on its
+  generation; reloadable logic belongs in the functions it calls.
+- **A closure keeps its own body.** An arrow function or lambda created before the reload
+  runs the code it was created with, over the environment it captured; the named functions it
+  calls are still the newest. Create it again in an `@afterReload` handler to pick up an edit
+  of its own body. A changed variable type resets that variable, and code of the old
+  generation still writing it directly writes the retired storage.
+- **Project exports can cross images.** Exported state and concrete generic instances are
+  supported, including private helpers/state that an instance needs from its home module.
+  Compatibility is checked per used symbol; adding an unused export does not reject callers.
+- **Dependencies reload like the project.** A module of a `file:` dependency
+  (`deps: { "neon": "file:../neon" }` in `build.ms`) or of a locked package is its own image,
+  and `msc run --hcr` watches each `file:` dependency's folder, so saving a file there reloads
+  it into the running app. std and the runtime stay in the core image: an edit there answers
+  `RestartRequired`. Two modules whose paths map to one image name (`a/b.ms` and `a.b.ms`)
+  stop the build with an error naming both.
+- **`@beforeReload` / `@afterReload`** mark module-level `(): void` functions that run around
+  a reload, leaf module first: before-handlers on the old code, after-handlers on the new
+  code. A throwing initializer or after-handler restores function publication and TypeInfo and
+  answers `Rejected`; mutations to already shared state are not undone. Closures handed to
+  native code or other threads still need explicit re-registration in these handlers.
+- **A program that never imports `std/hcr` is refused by `msc run --hcr`**: nothing would call
+  `reload()`, so `error: app.ms never imports std/hcr, …` stops the build and the watch waits
+  for the save that adds the import.
+- **Without `--hcr` none of this exists**: no cells, no lifted state, no host. `reload` is a
+  macro, and without `--hcr` it expands to `ReloadKind.NoChange` at compile time: the same
+  source builds for production, and the loop's `reload()` costs no call there. `--hcr` defines
+  `hcr` for `when`.
+
+On 2026-10-02 the whole `src/test/hcr/run.ms` passed on Linux x64 (WSL Ubuntu, 23 cases) and
+its function-value, dependency and image-name cases passed on Windows x64; the main gate
+checks the Windows run. Linux watch timing, macOS watch and iOS remain
+unverified/unimplemented respectively. Architecture, measurements and limits: [`HCR.md`](HCR.md).
 
 ## Strings and Characters
 

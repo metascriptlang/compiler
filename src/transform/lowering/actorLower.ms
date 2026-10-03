@@ -8,17 +8,16 @@
 // - @include("runtime/actor/actor.h") injected for C compilation
 
 import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
-	ActorDeclData, MethodDeclData, ConstructorDeclData,
-	DecoratedDeclData, ExportDeclData, ProgramData, NewExprData,
-	VariableDeclData, FunctionDeclData, IfStmtData,
+	ActorDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData,
+	DecoratedDeclData, ExportDeclData, ProgramData,
+	VariableDeclData, IfStmtData,
 	WhileStmtData, ForOfStmtData, ForStmtData, BlockStmtData,
-	DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData,
-	ExprStmtData, ReturnStmtData, TestDeclData, ArrowFunctionData, FunctionExprData,
+	DoWhileStmtData, TryCatchStmtData,
+	ExprStmtData, ReturnStmtData,
 	Symbol, SymbolKind, createNode } from "../../ast/node";
 import { TransformContext, freshTempSym, mintSym } from "../context";
 import { canFormAcycle } from "../cycles";
-import { containsExprKind, mapExprChildren, replaceInExpr } from "../walker";
-import { forEachChild } from "../../ast/visitor";
+import { containsExprKind } from "../walker";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	syntheticToken, makeIdentResolved, makeTypedIdentResolved, makeCall, makeExprStmt, makeReturn,
@@ -769,7 +768,8 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 	};
 	actors.push(lowered);
 
-	result.push(emitActorStruct(node, d, ctx, loc));
+	const stateClass = emitActorStruct(node, d, ctx, loc);
+	result.push(stateClass);
 
 	const methods = collectActorMethods(d);
 	emitActorMethods(d, name, lowered, ctx, loc, result);
@@ -858,11 +858,10 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 		lowered.sysMsg = sysSym;
 	}
 
-	if (methods.length > 0) {
-		const dispatchNode = emitActorDispatch(d, name, actorType, methods, ctx, loc);
-		result.push(dispatchNode);
-		lowered.dispatch = dispatchNode.resolvedSym;
-	}
+	const dispatchNode = emitActorDispatch(d, name, actorType, methods, ctx, loc);
+	result.push(dispatchNode);
+	lowered.dispatch = dispatchNode.resolvedSym;
+	wireActorConstructor(stateClass, lowered, actorType, loc, ctx);
 
 	return result;
 }
@@ -908,7 +907,7 @@ function expandActorDecls(program: Node, actors: ActorLowered[], ctx: TransformC
 	return program;
 }
 
-// The routines lowering emitted for one actor of this module; `new` of the actor wires them.
+// The routines lowering emitted for one actor of this module; the actor's constructor wires them.
 interface ActorLowered {
 	actorSym: Symbol;
 	dispatch: Symbol | null;
@@ -920,84 +919,54 @@ interface ActorLowered {
 	ctor: Symbol | null;
 }
 
-// The actor a `new` constructs, when it is one this module declares.
-function loweredActorOf(actors: ActorLowered[], ne: NewExprData): ActorLowered | null {
-	const calleeSym = ne.newCallee.resolvedSym;
-	if (calleeSym == null) return null;
-	for (const a of actors) {
-		if (a.actorSym == calleeSym) return a;
-	}
-	return null;
+function actorPidMember(thisSym: Symbol, loc: SourceLocation): Node {
+	const member = makeMember(makeIdentResolved(thisSym, loc), "pid", loc);
+	member.nodeType = getSysType(TypeKind.Int64);
+	return member;
 }
 
-// ===== Generate actor pid wiring statements for a variable =====
-
-function generateActorWiring(varName: string, varSym: Symbol | null, actor: ActorLowered, loc: SourceLocation, newExprNode: Node): Node[] {
+function generateActorWiring(thisSym: Symbol, actor: ActorLowered, loc: SourceLocation, ctorParams: Symbol[]): Node[] {
 	const result: Node[] = [];
 	const actorName = actor.actorSym.name;
 	const dSym = actor.dispatch;
-	if (dSym == null) throw new Error(`internal: actor '${actorName}' declares no message method, so it has no dispatch to wire at 'new'`);
-	if (varSym == null) throw new Error(`internal: the binding '${varName}' of a new '${actorName}' reached actor wiring without its symbol`);
-	const bound: Symbol = varSym;
-	const dispatchRef = makeIdentResolved(dSym, loc);
-	const varRef = function(): Node {
-		return makeIdentResolved(bound, loc);
-	};
-	const pidMember = function(): Node {
-		const m = makeMember(varRef(), "pid", loc);
-		m.nodeType = getSysType(TypeKind.Int64);
-		return m;
-	};
+	if (dSym == null) throw new Error(`internal: actor '${actorName}' declares no message method, so its constructor has no dispatch to wire`);
 	const createCall = makeCall(runtimeRef("msActorCreatePid", loc), [
-		varRef(),
-		dispatchRef,
+		makeIdentResolved(thisSym, loc),
+		makeIdentResolved(dSym, loc),
 	], loc);
-	const assignActor = makeBinary(
-		pidMember(),
-		"=", createCall, loc
-	);
-	result.push(makeExprStmt(assignActor, loc));
-	const pidRef = pidMember();
+	result.push(makeExprStmt(makeBinary(actorPidMember(thisSym, loc), "=", createCall, loc), loc));
 	const registerCall = makeCall(runtimeRef("msActorRegister", loc), [
-		makeCall(runtimeRef("msActorFromPid", loc), [pidRef], loc),
+		makeCall(runtimeRef("msActorFromPid", loc), [actorPidMember(thisSym, loc)], loc),
 	], loc);
 	result.push(makeExprStmt(registerCall, loc));
-	const increfCall = makeCall(runtimeRef("msIncRef", loc), [
-		varRef(),
-	], loc);
-	result.push(makeExprStmt(increfCall, loc));
+	result.push(makeExprStmt(makeCall(runtimeRef("msIncRef", loc), [makeIdentResolved(thisSym, loc)], loc), loc));
 	const onTerminate = actor.onTerminate;
 	if (onTerminate != null) {
-		const pidRef2 = pidMember();
 		const setTermCall = makeCall(runtimeRef("msActorSetOnTerminate", loc), [
-			makeCall(runtimeRef("msActorFromPid", loc), [pidRef2], loc),
+			makeCall(runtimeRef("msActorFromPid", loc), [actorPidMember(thisSym, loc)], loc),
 			makeIdentResolved(onTerminate, loc),
 		], loc);
 		result.push(makeExprStmt(setTermCall, loc));
 	}
 	const sysMsg = actor.sysMsg;
 	if (sysMsg != null) {
-		const pidRef3 = pidMember();
 		const setSysCall = makeCall(runtimeRef("msActorSetSystemMsgHandler", loc), [
-			makeCall(runtimeRef("msActorFromPid", loc), [pidRef3], loc),
+			makeCall(runtimeRef("msActorFromPid", loc), [actorPidMember(thisSym, loc)], loc),
 			makeIdentResolved(sysMsg, loc),
 		], loc);
 		result.push(makeExprStmt(setSysCall, loc));
 	}
 	if (actor.onExit != null) {
 		const trapCall = makeCall(runtimeRef("msActorTrapExits", loc), [
-			pidMember(),
+			actorPidMember(thisSym, loc),
 			makeNumber(1, loc),
 		], loc);
 		result.push(makeExprStmt(trapCall, loc));
 	}
 	const ctor = actor.ctor;
-	if (ctor != null && newExprNode != null) {
-		const ne = newExprNode.data as NewExprData;
-		const ctorArgs: Node[] = [varRef()];
-		if (ne.newArguments != null) {
-			for (const arg of ne.newArguments) ctorArgs.push(arg);
-		}
+	if (ctor != null) {
+		const ctorArgs: Node[] = [makeIdentResolved(thisSym, loc)];
+		for (let i = 1; i < ctorParams.length; i += 1) ctorArgs.push(makeIdentResolved(ctorParams[i], loc));
 		const ctorCall = makeCall(makeIdentResolved(ctor, loc), ctorArgs, loc);
 		ctorCall.resolvedSym = null;
 		result.push(makeExprStmt(ctorCall, loc));
@@ -1005,200 +974,37 @@ function generateActorWiring(varName: string, varSym: Symbol | null, actor: Acto
 	return result;
 }
 
-// ===== Extract `new ActorType()` from arbitrary expression positions =====
-// Handles cases like `actors.push(new Counter())` or `doSomething(new MyActor())`
-// where the NewExpr is not directly in a VarDecl initializer.
-// Returns pre-statements to inject before the original statement.
-
-function extractActorNewExprs(stmt: Node, actors: ActorLowered[], ctx: TransformContext): Node[] {
-	// Skip VarDecl with direct NewExpr initializer — handled by existing code path
-	if (stmt.kind == NodeKind.VariableDecl) {
-		const vd = stmt.data as VariableDeclData;
-		if (vd.initializer != null && vd.initializer.kind == NodeKind.NewExpr) return [];
+function wireActorConstructor(classNode: Node, actor: ActorLowered, actorType: Type, loc: SourceLocation, ctx: TransformContext): void {
+	const d = classNode.data as ClassDeclData;
+	let ctor: Node | null = null;
+	for (const member of d.classBody) {
+		if (member.kind == NodeKind.ConstructorDecl) { ctor = member; break; }
 	}
-	// Get the expression(s) from the statement. containsExprKind/replaceInExpr
-	// use mapExprChildren which only traverses expression nodes, not statement wrappers.
-	const targetExpr: Node | null = match (stmt.kind) {
-		NodeKind.ExprStmt => (stmt.data as ExprStmtData).expr,
-		NodeKind.VariableDecl => (stmt.data as VariableDeclData).initializer,
-		NodeKind.ReturnStmt => (stmt.data as ReturnStmtData).argument,
-		_ => null,
-	};
-	if (targetExpr == null) return [];
-	if (!containsExprKind(targetExpr, NodeKind.NewExpr)) return [];
-
-	const preStmts: Node[] = [];
-	const replacer = (node: Node): Node => {
-		if (node.kind != NodeKind.NewExpr) return node;
-		const ne = node.data as NewExprData;
-		if (ne.newCallee.kind != NodeKind.Identifier) return node;
-		const actor = loweredActorOf(actors, ne);
-		if (actor == null) return node;
-		const loc = node.location;
-		const tmpSym = freshTempSym(ctx, "actor", node.nodeType);
-		const tmpName = tmpSym.name;
-		const tmpDecl = makeVarDecl(tmpName, node, DeclKind.Const, loc);
-		tmpDecl.resolvedSym = tmpSym;
-		preStmts.push(tmpDecl);
-		const wiring = generateActorWiring(tmpName, tmpSym, actor, loc, node);
-		for (const w of wiring) preStmts.push(w);
-		return makeIdentResolved(tmpSym, loc);
-	};
-	const replaced = replaceInExpr(targetExpr, replacer);
-	if (stmt.kind == NodeKind.ExprStmt) {
-		(stmt.data as ExprStmtData).expr = replaced;
-	} else if (stmt.kind == NodeKind.VariableDecl) {
-		(stmt.data as VariableDeclData).initializer = replaced;
-	} else if (stmt.kind == NodeKind.ReturnStmt) {
-		(stmt.data as ReturnStmtData).argument = replaced;
+	if (ctor == null) {
+		ctor = createNode(NodeKind.ConstructorDecl, {
+			ctorParams: [],
+			ctorParamTypes: [],
+			ctorBody: makeBlock([], loc),
+			ctorDefaults: [],
+		}, syntheticToken(loc));
+		ctor.nodeType = createFunction([], [], voidType());
+		ctor.paramSyms = [mintSym(ctx, SymbolKind.Parameter, "this", actorType)];
+		d.classBody.push(ctor);
 	}
-	return preStmts;
+	const params = ctor.paramSyms;
+	if (params == null || params.length == 0 || params[0].name != "this") {
+		ctx.errors.push(`internal: actor '${actor.actorSym.name}' constructor has no checked receiver`);
+		return;
+	}
+	const body = (ctor.data as ConstructorDeclData).ctorBody.data as BlockStmtData;
+	for (const stmt of generateActorWiring(params[0], actor, loc, params)) body.statements.push(stmt);
 }
 
-// ===== Wire actor creation after `new ActorType()` in any statement list =====
-
-function wireActorInStmts(stmts: Node[], actors: ActorLowered[], ctx: TransformContext): Node[] {
-	const out: Node[] = [];
-	for (const stmt of stmts) {
-		// Recurse into nested blocks first
-		wireActorInNode(stmt, actors, ctx);
-		// Extract `new ActorType()` from non-VarDecl-initializer positions into temp vars.
-		// e.g. `actors.push(new Counter())` → `const _a0 = new Counter(); _a0.pid = ...; actors.push(_a0);`
-		const preStmts = extractActorNewExprs(stmt, actors, ctx);
-		for (const ps of preStmts) out.push(ps);
-		out.push(stmt);
-		// After VarDecl with `new ActorType()`, inject pid wiring
-		if (stmt.kind == NodeKind.VariableDecl) {
-			const vd = stmt.data as VariableDeclData;
-			if (vd.initializer != null && vd.initializer.kind == NodeKind.NewExpr) {
-				const ne = vd.initializer.data as NewExprData;
-				if (ne.newCallee.kind == NodeKind.Identifier) {
-					const actor = loweredActorOf(actors, ne);
-					if (actor != null) {
-						const wiring = generateActorWiring(vd.declName, stmt.resolvedSym, actor, stmt.location, vd.initializer);
-						for (const w of wiring) out.push(w);
-					}
-				}
-			}
-		}
-	}
-	return out;
-}
-
-// ===== Recursively walk into nodes that contain statement lists =====
-
-function exprHasActorNew(expr: Node, actors: ActorLowered[]): boolean {
-	if (expr == null) return false;
-	if (expr.kind == NodeKind.NewExpr) {
-		const ne = expr.data as NewExprData;
-		if (ne.newCallee.kind == NodeKind.Identifier && loweredActorOf(actors, ne) != null) return true;
-	}
-	const hits: Node[] = [];
-	mapExprChildren(expr, (child: Node): Node => {
-		if (exprHasActorNew(child, actors)) hits.push(child);
-		return child;
-	});
-	return hits.length > 0;
-}
-
-function wireActorInNode(node: Node, actors: ActorLowered[], ctx: TransformContext): void {
-	match (node.kind) {
-		NodeKind.FunctionDecl => {
-			const fd = node.data as FunctionDeclData;
-			if (fd.fnBody != null) wireActorInNode(fd.fnBody, actors, ctx);
-		},
-		NodeKind.ExportDecl => {
-			// `export function foo() { const w = new Actor(); }` — drill into the
-			// wrapped decl so the function body gets wired. Without this branch,
-			// any `new ActorType()` inside an exported function is silently
-			// skipped, leaving the actor pid uninitialized and SEND a no-op.
-			const ed = node.data as ExportDeclData;
-			if (ed.exportedDecl != null) {
-				wireActorInNode(ed.exportedDecl, actors, ctx);
-			}
-		},
-		NodeKind.BlockStmt => {
-			const bd = node.data as BlockStmtData;
-			bd.statements = wireActorInStmts(bd.statements, actors, ctx);
-		},
-		NodeKind.IfStmt => {
-			const id = node.data as IfStmtData;
-			wireActorInNode(id.consequent, actors, ctx);
-			if (id.alternate != null) wireActorInNode(id.alternate, actors, ctx);
-		},
-		NodeKind.WhileStmt => {
-			const wd = node.data as WhileStmtData;
-			wireActorInNode(wd.whileBody, actors, ctx);
-		},
-		NodeKind.DoWhileStmt => {
-			const dd = node.data as DoWhileStmtData;
-			wireActorInNode(dd.doBody, actors, ctx);
-		},
-		NodeKind.ForOfStmt => {
-			const fd = node.data as ForOfStmtData;
-			wireActorInNode(fd.forOfBody, actors, ctx);
-		},
-		NodeKind.ForStmt => {
-			const fd = node.data as ForStmtData;
-			wireActorInNode(fd.forBody, actors, ctx);
-		},
-		NodeKind.TryCatchStmt => {
-			const td = node.data as TryCatchStmtData;
-			wireActorInNode(td.tryBody, actors, ctx);
-			if (td.catchBody != null) wireActorInNode(td.catchBody, actors, ctx);
-			if (td.finallyBody != null) wireActorInNode(td.finallyBody, actors, ctx);
-		},
-		NodeKind.SwitchStmt => {
-			const sd = node.data as SwitchStmtData;
-			for (const c of sd.switchCases) wireActorInNode(c, actors, ctx);
-		},
-		NodeKind.SwitchCase => {
-			const sc = node.data as SwitchCaseData;
-			sc.caseStmts = wireActorInStmts(sc.caseStmts, actors, ctx);
-		},
-		NodeKind.TestDecl => {
-			const td = node.data as TestDeclData;
-			wireActorInNode(td.testBody, actors, ctx);
-		},
-		NodeKind.ArrowFunction => {
-			const ad = node.data as ArrowFunctionData;
-			if (ad.arrowBody != null) {
-				if (ad.arrowBody.kind != NodeKind.BlockStmt && exprHasActorNew(ad.arrowBody, actors)) {
-					ad.arrowBody = makeBlock([makeReturn(ad.arrowBody, node.location)], node.location);
-				}
-				wireActorInNode(ad.arrowBody, actors, ctx);
-			}
-		},
-		NodeKind.FunctionExpr => {
-			const fe = node.data as FunctionExprData;
-			if (fe.funcExprBody != null) {
-				if (fe.funcExprBody.kind != NodeKind.BlockStmt && exprHasActorNew(fe.funcExprBody, actors)) {
-					fe.funcExprBody = makeBlock([makeReturn(fe.funcExprBody, node.location)], node.location);
-				}
-				wireActorInNode(fe.funcExprBody, actors, ctx);
-			}
-		},
-		_ => {
-			forEachChild(node, (child: Node): void => {
-				wireActorInNode(child, actors, ctx);
-			});
-		},
-	};
-}
-
-// ===== Top-level: wire actors at all scopes + inject poll at exit =====
-
-function rewriteAndInjectPoll(program: Node, actors: ActorLowered[], ctx: TransformContext): Node {
+function injectActorPoll(program: Node): Node {
 	if (program.kind != NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
-
-	// Recursively wire actor creation at all scope levels
-	pd.programStmts = wireActorInStmts(pd.programStmts, actors, ctx);
-
-	// Drain all actor mailboxes at exit
 	const exitLoc = program.location;
 	pd.programStmts.push(makeExprStmt(makeCall(runtimeRef("msActorPollAll", exitLoc), [], exitLoc), exitLoc));
-
 	return program;
 }
 
@@ -1352,5 +1158,5 @@ export function lowerActor(program: Node, ctx: TransformContext): Node {
 	const actors: ActorLowered[] = [];
 	const expanded = expandActorDecls(program, actors, ctx);
 	if (actors.length == 0) return expanded;
-	return rewriteAndInjectPoll(expanded, actors, ctx);
+	return injectActorPoll(expanded);
 }

@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createRef, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup } from "../../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createRef, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -449,7 +449,7 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 }
 
 function runtimeCellDestroy(elem: Type | null, canon: Type): string {
-	if (elem == null) return "msNumberArrayDestroy";
+	if (elem == null || isUncountedPtrElement(elem)) return "msNumberArrayDestroy";
 	if (elem.kind == TypeKind.String) return "msStringArrayDestroy";
 	if (elem.kind == TypeKind.Function) return "msClosureArrayDestroy";
 	if (elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr) {
@@ -1559,6 +1559,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 				return;
 			}
 			if (sym.symbolKind == SymbolKind.Class
+				|| sym.symbolKind == SymbolKind.Actor
 				|| sym.symbolKind == SymbolKind.Interface) {
 				isClassOrInterface = true;
 				if (refType == null) refType = sym.symbolType;
@@ -2485,7 +2486,7 @@ function ensureHooksByName(typeName: string, lctx: LiftCtx, loc: SourceLocation,
 		const objType = unwrapRef(sym.symbolType);
 		if (objType == null) return;
 		if (namesAnotherType(sym, objType, typeName)) return;
-		const refType = (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Interface)
+		const refType = (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor || sym.symbolKind == SymbolKind.Interface)
 			? sym.symbolType
 			: null as unknown as Type;
 		ensureHooks(typeName, objType, refType, objType, true, lctx, loc);

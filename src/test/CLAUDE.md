@@ -14,7 +14,8 @@ Examples per tier, the corpus directive contract, the two-tree convention and th
 | Lifecycle guard | `guard/*.ms` | one DRC-ledger invariant per file, trusted only after it was proven red (`guard/README.md`) |
 
 - **Register each runnable test module** in its `lang/`, `handoff/`, `c/` or `js/` index. Corpus and lifecycle-guard runners discover standalone entries; imported fixture modules are not entries.
-- **Place new regressions by their invariant and consumer boundary**, not a bug number. The remaining `fixedbugs/` files are migration debt, not an authoring location.
+- **Place new regressions by their invariant and consumer boundary**, not a bug number.
+- **A `<module>Parked.ms` stays unregistered.** It holds the contracts of that module that are red because of an open compiler bug; the inbox card names it on its `Parked at:` line, and the fixing session moves its tests into the module and deletes it.
 - **Corpus stdout is deterministic** — no timers, randomness, addresses, RSS or timing prints; ordered output, fixed loop bounds. Extend an existing invariant program when a variant shares its oracle.
 
 ## Anti-patterns

@@ -2,7 +2,7 @@
 // call that picks the generic instantiates it from its arguments, whatever
 // the call's result flows into (a cast, a typed slot, a parameter, a log).
 //
-// @stdout: 7|7|7|1|7|5|8|5|s
+// @stdout: 7|7|7|1|7|5|8|5|s|7 7 7 s
 // @exit: 0
 
 function pick<T>(a: T, b: T): T { return a; }
@@ -17,6 +17,7 @@ const power: int32 = 7;
 const q: int32 = 3;
 const viaCast = pick(power, 1) as int64;
 const declared: int64 = pick(power, q);
+const typedLiteral: int64 = pick(power, 1);
 out.push(`${viaCast}`);
 out.push(`${declared}`);
 out.push(`${show(pick(power, 1))}`);
@@ -28,4 +29,5 @@ out.push(`${r}`);
 out.push(`${apply(n, (v) => v * 2)}`);
 out.push(`${apply<int64>(4, (v) => v + 1)}`);
 out.push(pick("s"));
-console.log(out.join("|"));
+out.push(`${typedLiteral}`);
+console.log(out.join("|"), pick(power, power), pick(power, 1), pick("s"));

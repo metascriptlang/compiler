@@ -130,9 +130,11 @@ test "unionPayloads: narrowed union payloads remain readable and re-widen at eve
 }
 
 test "unionPayloads: lifted consumers use later-declared variant payloads in both arms" {
-	const area = (shape: LaterShape): float64 => match (shape.kind) {
-		"circle" => shape.radius * shape.radius,
-		"square" => shape.width * shape.width,
+	const area = (shape: LaterShape): float64 => {
+		return match (shape.kind) {
+			"circle" => shape.radius * shape.radius,
+			"square" => shape.width * shape.width,
+		};
 	};
 	for (const circle of [true, false]) {
 		const value = laterDeclaredShape(circle);

@@ -74,7 +74,7 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 
 // useHeader + emitIncludeDirectives moved to context.ms to break types.ms ↔ forward.ms cycle.
 
-// ms-prefixed GENERATED hooks must classify as DRC hooks or isDeclAlive DCEs their
+// ms-prefixed GENERATED hooks must classify as DRC hooks or functionDeclIsAlive DCEs their
 // defs (undefined symbol at link once a call site is reachable) — msTuple_ and
 // msAnon_ both hit the blanket ms→false landmine.
 test "generated tuple and anon hooks are DRC hooks despite ms prefix" {

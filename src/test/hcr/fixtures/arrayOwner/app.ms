@@ -13,6 +13,5 @@ if (exists(`g2/module.logic${EXT}`)) {
 			exit(1);
 		}
 	}
-	const outcome = reload();
-	console.log(`HCR-ARRAY ${reloadKindName(outcome.kind)} ${total()}`);
+	console.log(`HCR-ARRAY ${reloadKindName(reload())} ${total()}`);
 }

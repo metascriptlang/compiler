@@ -6,4 +6,4 @@ function positive(n: int32): boolean {
 }
 
 if (!positive(hit()) || !positive(hit())) console.log("HCR-LIFT short");
-console.log(`HCR-LIFT hits ${hit()} ${reloadKindName(reload().kind)}`);
+console.log(`HCR-LIFT hits ${hit()} ${reloadKindName(reload())}`);

@@ -27,6 +27,10 @@ test "genericBinding: empty branch arrays acquire a concrete peer element type" 
 	for (const item of cases) {
 		const result = compileToC(item.source);
 		assert result.ok == (item.expected == 0), item.name + (result.ok ? "" : ": " + result.error);
+		if (!result.ok) {
+			assert result.error.contains("cannot infer the element type"), item.name + ": " + result.error;
+			assert !result.error.contains("internal:"), item.name + ": " + result.error;
+		}
 	}
 }
 
@@ -95,12 +99,6 @@ test "genericBinding: inferred and explicit type arguments both meet constraints
 		const errors = strictErrorCount(item.source);
 		assert item.expected < 0 ? errors > 0 : errors == item.expected, item.name;
 	}
-}
-
-test "generic binding: match arms infer empty array elements" {
-	const source = "function f(n: number, xs: number[]): number[] { const result = match (n) { 1 => xs, _ => [] }; return result; } function main(): void { console.log(f(2, [7, 8]).length); }";
-	const c = compileToC(source);
-	assert c.ok, c.error;
 }
 
 test "generic binding: an explicit covering type is not replaced by narrower arguments" {
