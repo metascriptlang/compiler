@@ -690,9 +690,13 @@ export struct CcPlan {
 	output: string;
 	outputStem: string;
 	deps: string;
+	implib: string;
+	implibStub: string;
 }
 
-export const NO_PLAN: CcPlan = { exe: "", args: [], input: "", output: "", outputStem: "", deps: "" };
+export const NO_PLAN: CcPlan = { exe: "", args: [], input: "", output: "", outputStem: "", deps: "", implib: "", implibStub: "" };
+
+const IMPLIB_FLAG = "-Wl,--out-implib,";
 
 const PLAN_TAG = "msc-plan-";
 let _planDir = "";
@@ -768,7 +772,7 @@ function adoptDriverObject(tokens: string[], input: string, output: string): voi
 	}
 }
 
-function capturePlan(command: ToolCommand, argv: string[], isLink: boolean, input: string, output: string, outputStem: string, deps: string): CcPlan {
+function capturePlan(command: ToolCommand, argv: string[], isLink: boolean, input: string, output: string, outputStem: string, deps: string, implib: string = "", implibStub: string = ""): CcPlan {
 	const r = execFileResult(command.path, argv);
 	if (!r.started || r.signal != 0) return NO_PLAN;
 	const lines: string[] = [];
@@ -794,12 +798,13 @@ function capturePlan(command: ToolCommand, argv: string[], isLink: boolean, inpu
 		else if (deps != "" && token == deps) depFiles += 1;
 		else if (!isLink && token == basename(input)) continue;
 		else if (outputStem != "" && token.indexOf(basename(outputStem), 0) >= 0) continue;
+		else if (implibStub != "" && token.indexOf(implibStub, 0) >= 0) continue;
 		else return NO_PLAN;
 	}
 	if (inputs != 1 || (!isLink && outputs != 1) || depFiles != (deps != "" ? 1 : 0)) return NO_PLAN;
 	const args: string[] = [];
 	for (let k = isLink ? 0 : 1; k < tokens.length; k += 1) args.push(tokens[k]);
-	return { exe: isLink ? command.path : tokens[0], args, input, output, outputStem, deps };
+	return { exe: isLink ? command.path : tokens[0], args, input, output, outputStem, deps, implib, implibStub };
 }
 
 function planArgs(plan: Readonly<CcPlan>, inputs: string[], output: string, deps: string): string[] {
@@ -816,6 +821,8 @@ function planArgs(plan: Readonly<CcPlan>, inputs: string[], output: string, deps
 			args.push(deps);
 		} else if (plan.outputStem == "" && token == basename(plan.input)) {
 			args.push(basename(inputs[0]));
+		} else if (plan.implibStub != "" && token.indexOf(plan.implibStub, 0) >= 0) {
+			args.push(token.replaceAll(plan.implibStub, plan.implib));
 		} else if (plan.outputStem != "" && token.indexOf(basename(plan.outputStem), 0) >= 0) {
 			args.push(token.replaceAll(plan.outputStem, realStem).replaceAll(basename(plan.outputStem), basename(realStem)));
 		} else {
@@ -837,7 +844,7 @@ export function compilePlanFor(cFile: string, hasDeps: boolean, extraFlags: stri
 	const key = `${parts.value.command.path}\n${argv.join("\n")}`;
 	const known = _plans.get(key);
 	if (known != null) return known;
-	if (!exists(input)) writeFile(input, "");
+	writeFile(input, "");
 	argv.push("-###");
 	const plan = capturePlan(parts.value.command, argv, false, input, output, "", deps);
 	_plans.set(key, plan);
@@ -850,18 +857,29 @@ function linkPlanFor(command: ToolCommand, prefix: string[], flagArgs: string[],
 	const input = join(dir, `${PLAN_TAG}input.o`);
 	const stem = join(dir, `${PLAN_TAG}output`);
 	const output = `${stem}${outBinary.substring(withoutExtension(outBinary).length, outBinary.length)}`;
+	const implibStub = join(dir, `${PLAN_TAG}implib.lib`);
+	let implib = "";
+	const keyArgs: string[] = [];
 	const argv: string[] = [];
 	for (const arg of prefix) argv.push(arg);
 	argv.push(input);
-	for (const arg of flagArgs) argv.push(arg);
+	for (const arg of flagArgs) {
+		keyArgs.push(arg);
+		if (arg.startsWith(IMPLIB_FLAG)) {
+			implib = arg.substring(IMPLIB_FLAG.length, arg.length);
+			argv.push(`${IMPLIB_FLAG}${implibStub}`);
+		} else {
+			argv.push(arg);
+		}
+	}
 	argv.push("-o");
 	argv.push(output);
-	const key = `${command.path}\n${argv.join("\n")}`;
+	const key = `${command.path}\n${prefix.join("\n")}\n${keyArgs.join("\n")}\n${output}`;
 	const known = _plans.get(key);
 	if (known != null) return known;
-	if (!exists(input)) writeFile(input, "");
+	writeFile(input, "");
 	argv.push("-###");
-	const plan = capturePlan(command, argv, true, input, output, stem, "");
+	const plan = capturePlan(command, argv, true, input, output, stem, "", implib, implib != "" ? implibStub : "");
 	_plans.set(key, plan);
 	return plan;
 }
@@ -1226,9 +1244,26 @@ test "a link plan takes every object at the input's place and the output's stem 
 		output: "/t/msc-plan-output.dll",
 		outputStem: "/t/msc-plan-output",
 		deps: "",
+		implib: "",
+		implibStub: "",
 	};
 	const args = planArgs(plan, ["a.o", "b.o"], "out/app.logic.dll", "");
 	assert args.join(" ") == "lld-link -OUT:out/app.logic.dll -PDB:out/app.logic.pdb -PDBALTPATH:app.logic.pdb a.o b.o -lc";
+}
+
+test "a link plan writes its import library where the link asked, never where the capture did" {
+	const plan: CcPlan = {
+		exe: "zig",
+		args: ["lld-link", "-DLL", "-OUT:/t/msc-plan-output.dll", "-IMPLIB:/t/msc-plan-implib.lib", "/t/msc-plan-input.o"],
+		input: "/t/msc-plan-input.o",
+		output: "/t/msc-plan-output.dll",
+		outputStem: "/t/msc-plan-output",
+		deps: "",
+		implib: "out/app.core.lib",
+		implibStub: "/t/msc-plan-implib.lib",
+	};
+	const args = planArgs(plan, ["core.o"], "out/app.core.dll", "");
+	assert args.join(" ") == "lld-link -DLL -OUT:out/app.core.dll -IMPLIB:out/app.core.lib core.o";
 }
 
 test "a compile plan renames the input, its main-file name, the object and the dependency file" {
@@ -1239,6 +1274,8 @@ test "a compile plan renames the input, its main-file name, the object and the d
 		output: "/t/msc-plan-output.o",
 		outputStem: "",
 		deps: "/t/msc-plan-deps.d",
+		implib: "",
+		implibStub: "",
 	};
 	const args = planArgs(plan, ["cache/logic.c"], "cache/logic.o.tmp.1", "cache/logic.d.tmp.1");
 	assert args.join(" ") == "-cc1 -main-file-name logic.c -dependency-file cache/logic.d.tmp.1 -o cache/logic.o.tmp.1 -x c cache/logic.c";
