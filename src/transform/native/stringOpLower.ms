@@ -221,8 +221,10 @@ function asAsciiCharCode(node: Node): int32 {
 
 function isStringTyped(node: Node): boolean {
 	if (node == null) return false;
-	if (node.nodeType == null) return false;
-	return isStringLike(peelTransparentInstance(node.nodeType));
+	let t = node.nodeType;
+	if (t == null) return false;
+	if (t.kind == TypeKind.Var && t.typeReturn != null) t = t.typeReturn;
+	return isStringLike(peelTransparentInstance(t));
 }
 
 // Check if two nodes refer to the same lvalue path (syntactic equality).
