@@ -1467,16 +1467,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 		}
 	}
 
-	// Lambda-lifted env InterfaceDecls (`$Env_*`) have no registered symbol.
-	// They're heap-allocated ref types → must use HiddenDeref on `self` in hook
-	// bodies. Synthesize a Ref wrapper so the classType path runs.
-	if (typeName.length > 5 && typeName.startsWith("$Env_")) {
-		isClassOrInterface = true;
-		if (refType == null) refType = createRef(objType);
-		isCrossModuleClass = false;
-	}
-
-	if (objType.kind == TypeKind.Distinct ? !hasAnyUserHook(typeName, lctx, objType) : objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union) return;
+	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union) return;
 
 	if (isCrossModuleClass && !declaring) {
 		aliasLiftedOps(orig, objType);

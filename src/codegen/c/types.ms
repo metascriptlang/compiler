@@ -2457,6 +2457,17 @@ test "a TypeInfo requested for a type that has none is an error" {
 	assert g.errors.length == 1;
 }
 
+test "a generated $ type is spelled by its module-owned symbol in both hook base names" {
+	const owned = declaredHere(createStruct("$Env_probe_1", ["v"], [createPrimitive(TypeKind.String)], false));
+	owned.sym.modulePath = "/m/owner.ms";
+	const want = mangledTypeName(owned.sym, "$Env_probe_1");
+	assert hookBaseCName("$Env_probe_1", owned, null) == want;
+	assert hookBaseCNameOfSym("$Env_probe_1", owned.sym) == want;
+	const ownerless = declaredHere(createStruct("$Env_probe_2", ["v"], [createPrimitive(TypeKind.String)], false));
+	assert hookBaseCName("$Env_probe_2", ownerless, null) == "$Env_probe_2";
+	assert hookBaseCNameOfSym("$Env_probe_2", ownerless.sym) == "$Env_probe_2";
+}
+
 test "a hook base name comes from the type's own symbol, not from a table lookup by name" {
 	const cc = createContext();
 	const declared = declaredHere(createStruct("HookOwner", ["v"], [createPrimitive(TypeKind.String)], false));
