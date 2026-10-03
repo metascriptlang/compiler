@@ -16,7 +16,7 @@ import { mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTop
 import { readFile } from "std/fs";
 import { env } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
-import { join, normalize } from "std/fs/path";
+import { join, normalize, isAbsolute } from "std/fs/path";
 import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
@@ -2565,7 +2565,7 @@ export function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 		// Resolve @link paths relative to declaring module's directory (like @compile).
 		// Prepend to link list (reference-aligned: linked first, like addExternalFileToLink).
 		const modDir = getModuleDir(ctx.modulePath);
-		const resolved = modDir != "" ? modDir + "/" + arg0Str : arg0Str;
+		const resolved = isAbsolute(arg0Str) || modDir == "" ? normalize(arg0Str) : normalize(modDir + "/" + arg0Str);
 		linkObjects().add(resolved);
 	} else if (name == "passL") {
 		linkFlags().add(arg0Str);

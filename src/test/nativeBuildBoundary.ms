@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, or all");
 	exit(2);
 }
 
@@ -546,6 +546,38 @@ function runObjectStore(): void {
 	record("a stored object after the C compiler changed", "59", builtValue(tool, build(tool, "second-toolchain", "probe", [], secondTool)));
 }
 
+function runDirectivePaths(): void {
+	const dup = `${root}/dedupe-directive`;
+	ensureDir(dup);
+	put(`${dup}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dup}/api.h`, "int probeValue(void);\n");
+	put(`${dup}/api.c`, "int probeValue(void) { return 53; }\n");
+	put(`${dup}/main.ms`, "@compile(\"./api.c\");\nimport { probeValue } from \"./api.h\";\nconsole.log(probeValue());\n");
+	need(build(dup, "dedupe") == 0, "dedupe directive build");
+	record("explicit @compile dedupes with header companion", "53", value(dup));
+
+	const nested = `${root}/dedupe-nested`;
+	ensureDir(`${nested}/sub`);
+	put(`${nested}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${nested}/sub/x.h`, "extern int xValue;\n");
+	put(`${nested}/sub/x.c`, "int xValue = 59;\n");
+	put(`${nested}/sub/lib.ms`, "export function readX(): number { return 0; }\n@compile(\"./x.c\");\n");
+	put(`${nested}/main.ms`, "import { readX } from \"./sub/lib.ms\";\nimport { xValue } from \"./sub/x.h\";\nconsole.log(xValue);\n");
+	need(build(nested, "dedupe-nested") == 0, "dedupe nested build");
+	record("subdir module @compile dedupes with header companion", "59", value(nested));
+
+	const abs = `${root}/link-absolute`;
+	ensureDir(abs);
+	put(`${abs}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${abs}/api.h`, "int probeValue(void);\n");
+	put(`${abs}/native.c`, "int probeValue(void) { return 61; }\n");
+	need(command(abs, "cc-abs", "clang", ["-c", "native.c", "-o", "native.o"]).code == 0, "cc abs");
+	need(command(abs, "ar-abs", "ar", ["rcs", "libnative.a", "native.o"]).code == 0, "ar abs");
+	put(`${abs}/main.ms`, "import { probeValue } from \"./api.h\";\n@link(\"" + abs + "/libnative.a\");\nconsole.log(probeValue());\n");
+	need(build(abs, "link-absolute") == 0, "link absolute build");
+	record("@link with absolute archive path", "61", value(abs));
+}
+
 if (group == "argv" || group == "all") runArgv();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
@@ -553,6 +585,7 @@ if (group == "audit" || group == "all") runAudit();
 if (group == "comptime-cache" || group == "all") runComptimeCache();
 if (group == "object-store" || group == "all") runObjectStore();
 if (group == "project-cache" || group == "all") runProjectCache();
+if (group == "directive-paths" || group == "all") runDirectivePaths();
 
 let failures = 0;
 console.log(`root ${root}`);
