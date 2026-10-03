@@ -7,7 +7,7 @@
 
 import { TypeKind } from "../../ast/node";
 import { checkSource, fullPipeline, errorCount } from "./helpers";
-import { compileToC, compileToJS } from "../helpers";
+import { compileToC, compileToJS, compileToCWithStd } from "../helpers";
 import { lookupSymbol } from "../../checker/symbol";
 
 test "checker: generic class method has this param" {
@@ -206,6 +206,24 @@ test "E2E C: a class instance is keyed by the enum member of its type argument" 
 		"console.log(a.v == K.A, b.v == K.A);\n");
 	assert repeated.ok;
 	assert boxInstances(repeated.value).length == 1;
+}
+
+test "E2E C: a constructor's this binds the type parameters of a generic callee" {
+	const sources = [
+		"class Bag<T> {\n\titems: T[];\n\tconstructor(xs: T[]) { this.items = []; for (const x of xs) { put(this, x); } }\n}\n"
+			+ "function put<T>(b: Bag<T>, x: T): void { b.items.push(x); }\n"
+			+ "console.log(new Bag<int32>([1, 2, 3]).items.length);\n",
+		"class Pair<K, V> {\n\tks: K[];\n\tvs: V[];\n\tconstructor(k: K, v: V) { this.ks = []; this.vs = []; putP(this, k, v); }\n}\n"
+			+ "function putP<K, V>(p: Pair<K, V>, k: K, v: V): void { p.ks.push(k); p.vs.push(v); }\n"
+			+ "console.log(new Pair<int32, string>(1, \"a\").ks.length);\n",
+		"class Bag<T> {\n\titems: T[];\n\tconstructor(xs: T[]) { this.items = []; for (const x of xs) { this.put(x); } }\n}\n"
+			+ "function put<T>(this b: Bag<T>, x: T): void { b.items.push(x); }\n"
+			+ "console.log(new Bag<int32>([1, 2, 3]).items.length);\n",
+	];
+	for (const source of sources) {
+		const c = compileToCWithStd(source);
+		assert c.ok, c.error;
+	}
 }
 
 // Regression test for the generic wrapper + Map.set monomorphize bug
