@@ -336,10 +336,15 @@ function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: Node
 	};
 }
 
+function liftSym(lctx: LiftCtx, kind: SymbolKind, name: string, t: Type | null, mutable: boolean = false): Symbol {
+	if (lctx.checkerCtx == null) throw new Error(`internal: lifted symbol '${name}' has no checker context to mint it from`);
+	const sym = newSym(lctx.checkerCtx, kind, name, t);
+	if (mutable) setFlag(sym, SymbolFlag.Mutable);
+	return sym;
+}
+
 function liftTempSym(lctx: LiftCtx, name: string, t: Type | null): Symbol {
-	const sym = lctx.checkerCtx != null
-		? newSym(lctx.checkerCtx, SymbolKind.Temp, name, t)
-		: makeSymbol(name, SymbolKind.Temp, t, false);
+	const sym = liftSym(lctx, SymbolKind.Temp, name, t);
 	sym.state = SymbolState.Checked;
 	return sym;
 }
@@ -852,7 +857,7 @@ function isTaggedUnion(t: Type): boolean {
 function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
 	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union) return false;
 	const probe = newBuf();
-	const selfSym = makeSymbol("self", SymbolKind.Variable, null, false);
+	const selfSym = liftSym(lctx, SymbolKind.Variable, "self", null);
 	if (objType.kind == TypeKind.Union) {
 		if (!isTagCarriedUnion(objType)) return false;
 		if (isPrimitiveOnlyUnion(objType) && primitiveUnionStringIdx(objType) >= 0) return true;
@@ -1083,10 +1088,10 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 			// Generate per-variant arm body
 			const armBuf = newBuf();
 			const vName = "v" + vi.toString();
-			const h1 = makeSymbol(s1.name, SymbolKind.Variable, s1.symbolType, false);
+			const h1 = liftSym(lctx, SymbolKind.Variable, s1.name, s1.symbolType);
 			const h2 = hook == "trace"
-				? makeSymbol(s2.name, SymbolKind.Variable, createPtr(voidType()), false)
-				: (s2.name == s1.name ? h1 : makeSymbol(s2.name, SymbolKind.Variable, s2.symbolType, false));
+				? liftSym(lctx, SymbolKind.Variable, s2.name, createPtr(voidType()))
+				: (s2.name == s1.name ? h1 : liftSym(lctx, SymbolKind.Variable, s2.name, s2.symbolType));
 			if (scalar) {
 				buildScalarArmBody(hook, h1, h2, vName, objType.typeChildren[vi], lctx, armBuf, loc);
 			} else {
@@ -1248,14 +1253,14 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	const isTrace = hook == "trace";
 	const isUnary = hook == "destroy" || hook == "wasMoved" || isTrace;
 	const hookParamT = classType != null ? classType : createVar(objType);
-	const s1 = makeSymbol(isUnary ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
+	const s1 = liftSym(lctx, SymbolKind.Variable, isUnary ? "self" : "dest", hookParamT);
 	const n2 = match (hook) {
 		"trace" => "callback",
 		"destroy" | "wasMoved" => "self",
 		_ => "src",
 	};
 	const s2Type = isTrace ? createPtr(voidType()) : hookParamT;
-	const s2 = n2 == s1.name ? s1 : makeSymbol(n2, SymbolKind.Variable, s2Type, false);
+	const s2 = n2 == s1.name ? s1 : liftSym(lctx, SymbolKind.Variable, n2, s2Type);
 
 	// Self-assignment guard for binary hooks (copy, sink): compare the raw
 	// param pointers — Ref params are pointers already, Var<T> params read as
@@ -1404,8 +1409,8 @@ function typeInfoDisplay(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 // dup emission in the old Path A / Path B, just deduplicated.
 function emitDup(typeName: string, cName: string, objType: Type, classType: Type | null, isRef: boolean, lctx: LiftCtx, loc: SourceLocation): Symbol {
 	const dupStmts: Node[] = [];
-	const srcSym = makeSymbol("src", SymbolKind.Variable, classType != null ? classType : objType, false);
-	const resultSym = makeSymbol("$result", SymbolKind.Variable, classType != null ? classType : objType, true);
+	const srcSym = liftSym(lctx, SymbolKind.Variable, "src", classType != null ? classType : objType);
+	const resultSym = liftSym(lctx, SymbolKind.Variable, "$result", classType != null ? classType : objType, true);
 	const resultDecl = makeVarDecl("$result", makeIdentResolved(srcSym, loc), DeclKind.Let, loc);
 	resultDecl.resolvedSym = resultSym;
 	if (isRef) {
@@ -1642,8 +1647,8 @@ function generateEq(typeName: string, objType: Type, orig: Type, lctx: LiftCtx, 
 	//   return true;
 	// }
 	const buf: Node[] = [];
-	const aSym = makeSymbol("a", SymbolKind.Variable, objType, false);
-	const bSym = makeSymbol("b", SymbolKind.Variable, objType, false);
+	const aSym = liftSym(lctx, SymbolKind.Variable, "a", objType);
+	const bSym = liftSym(lctx, SymbolKind.Variable, "b", objType);
 	for (let i = 0; i < objType.typeNames.length; i += 1) {
 		const fieldName = objType.typeNames[i];
 		const fieldType = objType.typeChildren[i];
@@ -1699,8 +1704,8 @@ function ensureSizedArrayEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string
 function generateSizedArrayEq(name: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const elem = t.typeReturn;
 	if (elem == null) throw new Error(`internal: fixed array '${name}' has no element type`);
-	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
-	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
+	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
+	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
 	const counter = "$i_" + lctx.tempCounter.toString();
 	lctx.tempCounter = lctx.tempCounter + 1;
 	const counterSym = liftTempSym(lctx, counter, numberType());
@@ -1750,8 +1755,8 @@ function generateNullableEqJS(
 	lctx: LiftCtx,
 	loc: SourceLocation,
 ): void {
-	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
-	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
+	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
+	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
 	const a = makeTypedIdentResolved(aSym, null, loc);
 	const b = makeTypedIdentResolved(bSym, null, loc);
 	const compare = nullableEqJS(a, b, unwrapMaybeType(t), lctx, loc);
@@ -1775,8 +1780,8 @@ function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftC
 	const buf = newBuf();
 	const isUnary = hook == "destroy" || hook == "wasMoved";
 	const hookParamT = createVar(t);
-	const s1 = makeSymbol(isUnary ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
-	const s2 = isUnary ? s1 : makeSymbol("src", SymbolKind.Variable, hookParamT, false);
+	const s1 = liftSym(lctx, SymbolKind.Variable, isUnary ? "self" : "dest", hookParamT);
+	const s2 = isUnary ? s1 : liftSym(lctx, SymbolKind.Variable, "src", hookParamT);
 
 	if (!isUnary) {
 		buf.items.push(makeIf(
@@ -1812,7 +1817,7 @@ function generateTupleHook(hook: string, tupleName: string, t: Type, lctx: LiftC
 // Probe whether any tuple element emits cleanup (mirror typeNeedsHooks for structs).
 function tupleNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
 	const probe = newBuf();
-	const selfSym = makeSymbol("self", SymbolKind.Variable, null, false);
+	const selfSym = liftSym(lctx, SymbolKind.Variable, "self", null);
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
 		const visited: NameSet = createNameSet();
 		fillBody("destroy", makeTypedIdentResolved(selfSym, null, loc), makeTypedIdentResolved(selfSym, null, loc), "_" + i.toString(), t.typeChildren[i], lctx, probe, visited, loc);
@@ -1860,7 +1865,7 @@ function sizedArrayNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): bool
 	const elem = t.typeReturn;
 	if (elem == null) return false;
 	const probe = newBuf();
-	const selfSym = makeSymbol("self", SymbolKind.Variable, null, false);
+	const selfSym = liftSym(lctx, SymbolKind.Variable, "self", null);
 	fillBody("destroy", makeTypedIdentResolved(selfSym, null, loc), makeTypedIdentResolved(selfSym, null, loc), "", elem, lctx, probe, createNameSet(), loc);
 	return probe.items.length > 0;
 }
@@ -1871,8 +1876,8 @@ function generateSizedArrayHook(hook: string, name: string, t: Type, lctx: LiftC
 	const buf = newBuf();
 	const isUnary = hook == "destroy" || hook == "wasMoved";
 	const hookParamT = createVar(t);
-	const s1 = makeSymbol(isUnary ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
-	const s2 = isUnary ? s1 : makeSymbol("src", SymbolKind.Variable, hookParamT, false);
+	const s1 = liftSym(lctx, SymbolKind.Variable, isUnary ? "self" : "dest", hookParamT);
+	const s2 = isUnary ? s1 : liftSym(lctx, SymbolKind.Variable, "src", hookParamT);
 	if (!isUnary) {
 		buf.items.push(makeIf(
 			makeBinary(makeIdentResolved(s1, loc), "===", makeIdentResolved(s2, loc), loc),
@@ -1939,8 +1944,8 @@ function tupleField(obj: Node, idx: number, lctx: LiftCtx, loc: SourceLocation):
 //        return true
 function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf: Node[] = [];
-	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
-	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
+	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
+	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
 	let i = 0;
 	while (i < t.typeChildren.length) {
 		const aField = tupleField(makeTypedIdentResolved(aSym, t, loc), i, lctx, loc);
@@ -1968,8 +1973,8 @@ function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 // We inline the cmp pattern: if (a < b) return true; if (a > b) return false;
 function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf: Node[] = [];
-	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
-	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
+	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
+	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
 	let i = 0;
 	while (i < t.typeChildren.length) {
 		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
@@ -1999,8 +2004,8 @@ function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 //        return true    <-- only difference from <
 function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf: Node[] = [];
-	const aSym = makeSymbol("a", SymbolKind.Variable, t, false);
-	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
+	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
+	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
 	let i = 0;
 	while (i < t.typeChildren.length) {
 		const aField = tupleField(makeTypedIdentResolved(aSym, null, loc), i, lctx, loc);
@@ -2029,8 +2034,8 @@ function generateArrayHook(hook: string, arrayType: Type, lctx: LiftCtx, loc: So
 	const buf = newBuf();
 	const hookParamT = hook == "destroy" ? arrayType : createPtr(arrayType);
 	const secondT = isTrace ? createPtr(voidType()) : arrayType;
-	const s1 = makeSymbol(isUnary || isTrace ? "self" : "dest", SymbolKind.Variable, hookParamT, false);
-	const s2 = isUnary ? s1 : makeSymbol(isTrace ? "callback" : "src", SymbolKind.Variable, secondT, false);
+	const s1 = liftSym(lctx, SymbolKind.Variable, isUnary || isTrace ? "self" : "dest", hookParamT);
+	const s2 = isUnary ? s1 : liftSym(lctx, SymbolKind.Variable, isTrace ? "callback" : "src", secondT);
 
 	if (hook == "destroy") {
 		const selfNode = makeIdentResolved(s1, loc);

@@ -24,25 +24,18 @@ import { makeIdent, cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeB
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, unwrapMaybeType, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { sizedArrayHookName } from "../../analyzer/classify";
-import { lookupSymbol } from "../../checker/symbol";
 import { resolveOperatorCall, getExtFnType, ExtensionMethod } from "../../checker/context";
 
 // ===== Type Resolution =====
 
 // Resolve the Type of an expression node.
-// Tries nodeType first (set by checker/analyzer), then resolvedSym, then symbol table.
+// Tries nodeType first (set by checker/analyzer), then resolvedSym.
 function resolveType(ctx: TransformContext, node: Node): Type | null {
 	if (node.nodeType != null) return node.nodeType;
 	if (node.resolvedSym != null && node.resolvedSym.symbolType != null) {
 		return node.resolvedSym.symbolType;
 	}
-	// Fallback: symbol table lookup for identifiers without resolvedSym
-	if (ctx.checkerCtx == null) return null;
-	if (node.kind != NodeKind.Identifier) return null;
-	const d = node.data as IdentifierData;
-	const sym = lookupSymbol(ctx.checkerCtx.table, d.name);
-	if (sym == null) return null;
-	return sym.symbolType;
+	return null;
 }
 
 // Built-in types that use native C operators — never rewrite these.
@@ -474,9 +467,25 @@ export function lowerAggregateEquality(program: Node, ctx: TransformContext): No
 
 import { createContext, createExtensionRegistry, registerExtension } from "../../checker/context";
 import { createStruct, createFunction, createTuple, createRef, createPtr, createMaybeType, inferredType, numberType, stringType, booleanType } from "../../checker/types";
-import { defineSymbol, makeSymbol } from "../../checker/symbol";
+import { defineSymbol, makeSymbol, lookupSymbol, SymbolTable } from "../../checker/symbol";
+import { forEachChild } from "../../ast/visitor";
 import { createTransformContextWithChecker } from "../context";
 import { parseInput, getStmts, firstExprKind } from "../testUtil";
+
+function bindFromTable(node: Node, table: SymbolTable): void {
+	if (node.kind == NodeKind.Identifier) {
+		const sym = lookupSymbol(table, (node.data as IdentifierData).name);
+		if (sym != null) node.resolvedSym = sym;
+	}
+	forEachChild(node, (child: Node): void => {
+		bindFromTable(child, table);
+	});
+}
+
+function lowerBound(program: Node, ctx: TransformContext): Node {
+	bindFromTable(program, ctx.checkerCtx!.table);
+	return lowerOperators(program, ctx);
+}
 
 function makeOpExt(receiverType: string, opName: string): ExtensionMethod {
 	const fnType = createFunction([inferredType(), inferredType()], ["a", "b"], inferredType());
@@ -516,7 +525,7 @@ test "operator lower rewrites === on interface types" {
 	const ctx = setupCtx("Token", "==");
 	const pr = parseInput("a === b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	const stmts = getStmts(result);
 	assert stmts.length > 0;
 	assert stmts[0].kind == NodeKind.ExprStmt;
@@ -532,7 +541,7 @@ test "operator lower does not rewrite builtin types without override" {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("a === b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.BinaryExpr;
 }
 
@@ -541,7 +550,7 @@ test "operator lower rewrites builtin type with explicit override" {
 	const ctx = setupCtx("number", "==");
 	const pr = parseInput("a == b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	// Explicit extension registered → rewritten to CallExpr
 	assert firstExprKind(result) == NodeKind.CallExpr;
 }
@@ -557,7 +566,7 @@ test "operator lower auto-rewrites === on interface without explicit extension" 
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("a === b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	const stmts = getStmts(result);
 	assert stmts.length > 0;
 	// Interface type auto-rewrites to Token_eq(a, b) — CallExpr, not BinaryExpr
@@ -574,7 +583,7 @@ test "operator lower does not rewrite Ref types" {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("a === b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.BinaryExpr;
 }
 
@@ -590,7 +599,7 @@ test "!== derives from == on interface (auto-generated)" {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("a !== b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.BinaryExpr;
 }
 
@@ -598,7 +607,7 @@ test "!= is not derived from an explicit == extension" {
 	const ctx = setupCtx("Coord", "==");
 	const pr = parseInput("a !== b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.BinaryExpr;
 }
 
@@ -606,7 +615,7 @@ test "> is not derived from <" {
 	const ctx = setupCtx("Vec", "<");
 	const pr = parseInput("a > b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.BinaryExpr;
 }
 
@@ -614,7 +623,7 @@ test ">= is not derived from <=" {
 	const ctx = setupCtx("Vec", "<=");
 	const pr = parseInput("a >= b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.BinaryExpr;
 }
 
@@ -628,7 +637,7 @@ test "> not derived without < defined" {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("a > b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.BinaryExpr;
 }
 
@@ -645,7 +654,7 @@ test "explicit != overrides derivation from ==" {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("a !== b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	// Explicit !== extension → direct CallExpr (not UnaryExpr wrapping)
 	assert firstExprKind(result) == NodeKind.CallExpr;
 }
@@ -656,7 +665,7 @@ test "tuple === rewrites to _eq call" {
 	const ctx = setupTupleCtx();
 	const pr = parseInput("a === b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.CallExpr;
 	// Should register pending tuple op
 	assert ctx.pendingTupleOps.length > 0;
@@ -666,7 +675,7 @@ test "tuple < rewrites to _lt call" {
 	const ctx = setupTupleCtx();
 	const pr = parseInput("a < b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.CallExpr;
 }
 
@@ -674,7 +683,7 @@ test "tuple <= rewrites to Le call" {
 	const ctx = setupTupleCtx();
 	const pr = parseInput("a <= b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.CallExpr;
 }
 
@@ -682,7 +691,7 @@ test "tuple != is not derived at transform time" {
 	const ctx = setupTupleCtx();
 	const pr = parseInput("a !== b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.BinaryExpr;
 }
 
@@ -690,7 +699,7 @@ test "tuple > is not derived at transform time" {
 	const ctx = setupTupleCtx();
 	const pr = parseInput("a > b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.BinaryExpr;
 }
 
@@ -698,7 +707,7 @@ test "tuple >= is not derived at transform time" {
 	const ctx = setupTupleCtx();
 	const pr = parseInput("a >= b;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.BinaryExpr;
 }
 
@@ -706,10 +715,10 @@ test "pending tuple ops dedup" {
 	const ctx = setupTupleCtx();
 	const pr1 = parseInput("a === b;");
 	if (!pr1.ok) return;
-	lowerOperators(pr1.value, ctx);
+	lowerBound(pr1.value, ctx);
 	const pr2 = parseInput("a === b;");
 	if (!pr2.ok) return;
-	lowerOperators(pr2.value, ctx);
+	lowerBound(pr2.value, ctx);
 	// Same tuple type used twice — should only have 1 pending entry
 	assert ctx.pendingTupleOps.length == 1;
 }
@@ -725,7 +734,7 @@ test "Ref !== null is NOT constant-folded" {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("x !== null;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	// Should remain BinaryExpr (not constant-folded to BooleanLiteral)
 	assert firstExprKind(result) == NodeKind.BinaryExpr;
 }
@@ -738,7 +747,7 @@ test "Ptr !== null is NOT constant-folded" {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("p !== null;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	assert firstExprKind(result) == NodeKind.BinaryExpr;
 }
 
@@ -750,7 +759,7 @@ test "Maybe<Interface> !== null rewrites to .present" {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("t !== null;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	// Should rewrite to t.present → MemberExpr
 	assert firstExprKind(result) == NodeKind.MemberExpr;
 }
@@ -764,7 +773,7 @@ test "interface !== null constant-folds to true" {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("t !== null;");
 	if (!pr.ok) return;
-	const result = lowerOperators(pr.value, ctx);
+	const result = lowerBound(pr.value, ctx);
 	// Should constant-fold to BooleanLiteral(true)
 	assert firstExprKind(result) == NodeKind.BooleanLiteral;
 }

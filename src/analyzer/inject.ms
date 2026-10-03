@@ -2487,16 +2487,8 @@ function ctorSymsWithoutReceiver(paramSyms: Symbol[] | null): Symbol[] | null {
 function processCtorMember(member: Node, dctx: DrcContext, loc: SourceLocation): void {
 	const cd = member.data as ConstructorDeclData;
 	if (cd.ctorBody != null) {
-		// Same pattern as processMethodMember: use function type for param RC classification.
-		// Constructor's function type is on member.nodeType (set in resolvePass).
-		const ctorType = member.nodeType;
 		const ctorParamSyms = ctorSymsWithoutReceiver(member.paramSyms);
-		if (ctorType != null && ctorType.kind == TypeKind.Function) {
-			const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorType, false);
-			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, ctorSym, "constructor", cd.ctorParams, ctorParamSyms, dctx, loc, member.nodeType!);
-		} else {
-			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "", cd.ctorParams, ctorParamSyms, dctx, loc, member.nodeType!);
-		}
+		cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "constructor", cd.ctorParams, ctorParamSyms, dctx, loc, member.nodeType!);
 	}
 }
 
