@@ -8,6 +8,7 @@
 // GUARD-CHECK-FAIL accounts<Third>(): @associated on field 'token': the token program is the mint's owner, so a third argument
 // GUARD-CHECK-FAIL accounts<NotToken>(): @tokenMint on field 'wallet': the field must be External<TokenAccount> or ExternalMutable<TokenAccount>
 // GUARD-CHECK-FAIL accounts<Closure>(): a decorator argument of this form is not supported
+// GUARD-CHECK-FAIL a key is an account or a Pubkey, and this has type
 // A decorator of a struct that accounts<T>() reads is refused where the struct is declared, by
 // the form it was written in: an unknown name, a pair of seeds and bump that is not a pair, a
 // target that is not a field, a field without data, a token decorator on a field that is not a
@@ -80,6 +81,10 @@ export struct NotToken {
 	@tokenMint(wallet) wallet: Signer;
 }
 
+export struct NotAKey {
+	@address(7) safe: Mutable<Safe>;
+}
+
 export struct Closure {
 	@address(() => 1) safe: Mutable<Safe>;
 }
@@ -94,6 +99,7 @@ function run(): Result<uint64, ProgramError> {
 	const g = try accounts<Third>();
 	const h = try accounts<NotToken>();
 	const i = try accounts<Closure>();
+	const j = try accounts<NotAKey>();
 	return Result.ok(0);
 }
 
