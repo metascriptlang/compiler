@@ -768,7 +768,7 @@ function crossImageNew(): void {
 	for (const f of readDir(`${FIXTURES}/crossNew`)) copy(`${FIXTURES}/crossNew/${f}`, `${dir}/${f}`);
 	mustBuild(tag, dir, ["build", "app.ms", "--hcr"], "an image that constructs another image's classes did not build");
 	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
-	if (!succeeded(ran) || !both(ran).contains("NEW kept 3")) {
+	if (!succeeded(ran) || !both(ran).contains("NEW kept 3 child")) {
 		console.log(both(ran));
 		failWith(tag, "msc run --hcr could not construct classes declared in another image");
 	}

@@ -9,3 +9,11 @@ export class Keeper {
 export class Counter {
 	count: int32 = 3;
 }
+
+export class Base {
+	label: string;
+
+	constructor(label: string) {
+		this.label = label;
+	}
+}
