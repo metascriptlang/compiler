@@ -595,7 +595,7 @@ test "isCountedRef agrees with classifyType's Ref arms" {
 		createRef(leaf), unknownType(), createPrimitive(TypeKind.BigInt), stringType(), numberType(),
 		createPtr(voidType()), createPtr(createRef(leaf)), createUnion([createRef(leaf), nullType()]),
 		createUnion([createPtr(createRef(leaf)), nullType()]), createFunction([], [], voidType()),
-		createStruct("CountedToken", ["value"], [stringType()], false), createArray(numberType()),
+		liftTestOps(createStruct("CountedToken", ["value"], [stringType()], false), "CountedToken"), createArray(numberType()),
 	];
 	for (const t of samples) {
 		assert isCountedRef(t) == (classifyType(t, ctx).rcKind == RcKind.Ref);
