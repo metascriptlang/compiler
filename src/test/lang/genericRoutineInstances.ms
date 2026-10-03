@@ -25,3 +25,28 @@ test "a generic that trys a static of its type parameter binds the instance's ty
 	const r = decodeWide<Pet>(3);
 	assert r.ok && r.value == 7;
 }
+
+function accountKind(this typeof Pet): int32 { return 7; }
+
+class Holder<T> {
+	item: T;
+	constructor(x: T) { this.item = x; }
+	count(): int32 { return this.item.n; }
+	kind(): int32 { return T.accountKind(); }
+}
+
+class Outer<T> {
+	inner: Holder<T>;
+	constructor(x: T) { this.inner = new Holder<T>(x); }
+	count(): int32 { return this.inner.item.n + this.inner.count(); }
+}
+
+test "a generic class method reads a field of its type argument per instance" {
+	const h = new Holder<Pet>({ n: 4 });
+	assert h.count() == 4;
+	assert new Outer<Pet>({ n: 5 }).count() == 10;
+}
+
+test "a generic class method calls a static of its type argument per instance" {
+	assert new Holder<Pet>({ n: 1 }).kind() == 7;
+}
