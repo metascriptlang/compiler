@@ -13,7 +13,7 @@
 // kinds remain for JSON-related rewrites here.
 
 import { Node, NodeKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, ArrayAccessData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, inferredType, unwrapRef, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase } from "../../checker/types";
+import { peelTransparentInstance, isNumeric, createResult, createPrimitive, stringType, booleanType, inferredType, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import {
@@ -21,8 +21,7 @@ import {
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringSym,
 	makeHiddenAddr, runtimeRef, takeValueShareFns,
 } from "../util";
-import { rewriteEcho, buildStructToString, buildUnionText, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
-import { isSlotUnion } from "../../checker/fit";
+import { rewriteEcho } from "./debugLower";
 import { charToString, stringifyCharOperand } from "./stringOpLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 import { tryLowerPromiseBuiltin, lowerNewPromise } from "../lowering/promiseLower";
@@ -31,8 +30,7 @@ import { evictHelperName } from "./nativeLower";
 // ===== Main Entry Point =====
 
 export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
-	resetStructDumpFns();
-	const result = walkNode(program, (node: Node): Node => {
+	return walkNode(program, (node: Node): Node => {
 		if (node.kind == NodeKind.CallExpr) {
 			return lowerCallExpr(node, ctx);
 		}
@@ -50,13 +48,6 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 		}
 		return node;
 	});
-	const dumpFns = takeStructDumpFns();
-	for (const decl of takeValueShareFns()) dumpFns.push(decl);
-	if (dumpFns.length > 0 && result.kind == NodeKind.Program) {
-		const pd = result.data as ProgramData;
-		for (const decl of dumpFns) { pd.programStmts.push(decl); }
-	}
-	return result;
 }
 
 // ===== Call Expression Lowering =====
@@ -126,24 +117,6 @@ function lowerEnumReverseIndex(node: Node, ctx: TransformContext): Node {
 // Every type has a compiler-provided default. User extensions take priority.
 // Resolution: user extension > number > boolean > enum > string > struct/class > array > fallback
 
-function memberToString(v: Node, loc: SourceLocation, ctx: TransformContext): Node {
-	const vt = v.nodeType;
-	if (vt == null) throw new Error("internal: a union member reached toString without a type");
-	const t = peelTransparentInstance(vt);
-	const tn = typeNameOf(t);
-	if (ctx.checkerCtx != null && tn != "") {
-		const ext = findExtension(ctx.checkerCtx.extensionRegistry, tn, "toString");
-		if (ext != null && ext.sym != null) {
-			const direct = makeCall(makeTypedIdentResolved(ext.sym, null, loc), [v], loc);
-			direct.nodeType = stringType();
-			return direct;
-		}
-	}
-	const call = makeCall(makeMember(v, "toString", loc), [], loc);
-	call.nodeType = stringType();
-	return lowerToString(call, v, t, loc, ctx);
-}
-
 function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLocation, ctx: TransformContext): Node {
 	const base = literalBase(objType);
 	if (base != objType) return lowerToString(callNode, obj, base, loc, ctx);
@@ -204,12 +177,7 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		cond.nodeType = stringType();
 		return cond;
 	}
-	if (isSlotUnion(objType)) return ctx.jsBackend ? callNode : buildUnionText(obj, objType, "msUnionToString_", (v: Node): Node => memberToString(v, loc, ctx), loc, ctx);
-	// Struct/Class → plain JSON string (reuses console.log's struct→string path)
-	const inner = unwrapRef(objType);
-	if (inner.kind == TypeKind.Struct && inner.typeName != "") {
-		return buildStructToString(obj, inner, loc, ctx);
-	}
+
 	// Array → msArrayToString (runtime helper)
 	if (tk == TypeKind.Array) {
 		const call = makeCall(runtimeRef("msArrayToString", loc), [obj], loc);

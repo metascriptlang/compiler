@@ -854,23 +854,18 @@ test "engine: typeof of a single-type operand is its static tag" {
 	assert ctx.output == "number string boolean\n";
 }
 
-test "engine: structs with equal field values compare equal" {
-	const ctx = evalOrcVM("struct Record { n: int32; text: string; ratio: float64; }"
-		+ " const a: Record = { n: 1, text: 'm' + 'n', ratio: 0.5 }; const b: Record = { n: 1, text: 'm' + 'n', ratio: 0.5 };"
-		+ " const c: Record = { n: 1, text: 'm' + 'x', ratio: 0.5 }; const d: Record = { n: 1, text: 'm' + 'n', ratio: 0.25 };"
-		+ " console.log(`${a == b} ${a == c} ${a == d} ${a != b} ${a != c}`);");
-	assert ctx.error == "";
-	assert ctx.output == "true false false false true\n";
+// The single-module engine links no prelude instance; the raiser corpus lane (663-666, stdValueEquality)
+// runs the same comparisons program-wide.
+test "engine: a struct == is a call to the std equality, not a by-reference compare" {
+	const r = evalFull("struct Record { n: int32; text: string; }"
+		+ " const a: Record = { n: 1, text: 'm' + 'n' }; const b: Record = { n: 1, text: 'm' + 'n' };"
+		+ " return a == b ? 1 : 0;");
+	assert r.lastError.indexOf("valueEquals", 0) >= 0;
 }
 
-test "engine: nested structs and tuples compare by value" {
-	const ctx = evalOrcVM("struct Inner { a: int32; tag: string; } struct Outer { inner: Inner; k: int32; }"
-		+ " const o1: Outer = { inner: { a: 1, tag: 't' }, k: 2 }; const o2: Outer = { inner: { a: 1, tag: 't' }, k: 2 };"
-		+ " const o3: Outer = { inner: { a: 1, tag: 'u' }, k: 2 };"
-		+ " const l: [int32, string] = [1, 'a' + 'b']; const r: [int32, string] = [1, 'a' + 'b']; const x: [int32, string] = [1, 'b'];"
-		+ " console.log(`${o1 == o2} ${o1 == o3} ${l == r} ${l == x}`);");
-	assert ctx.error == "";
-	assert ctx.output == "true false true false\n";
+test "engine: a tuple != is the negated std equality call" {
+	const r = evalFull("const l: [int32, string] = [1, 'a' + 'b']; const q: [int32, string] = [1, 'a' + 'b']; return l != q ? 1 : 0;");
+	assert r.lastError.indexOf("valueEquals", 0) >= 0;
 }
 
 test "engine: the hash builtins give the bits of the native 128-bit mix and float layout" {

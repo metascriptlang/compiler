@@ -1536,136 +1536,25 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 // Reference implementation uses compile-time `fields()` magic iterator unrolling; we do the same here
 // by iterating typeNames/typeChildren at transform time.
 
-function isPayloadUnion(t: Type): boolean {
-	if (t.kind != TypeKind.Union) return false;
-	if (!isPrimitiveOnlyUnion(t)) return false;
-	for (const m of t.typeChildren) {
-		if (m == null || m.kind == TypeKind.Null) return false;
-	}
-	return true;
-}
-
-function payloadUnionEqExpr(aField: Node, bField: Node, u: Type, lctx: LiftCtx, loc: SourceLocation): Node {
+function payloadUnionEqExpr(aField: Node, bField: Node, u: Type, loc: SourceLocation): Node {
 	let acc = makeBinary(makeMember(clonePath(aField, loc), "_tag", loc), "===", makeMember(clonePath(bField, loc), "_tag", loc), loc);
 	for (let vi = 0; vi < u.typeChildren.length; vi += 1) {
 		const vName = `v${vi}`;
-		const memberEq = fieldEqExpr(makeMember(clonePath(aField, loc), vName, loc), makeMember(clonePath(bField, loc), vName, loc), u.typeChildren[vi], lctx, loc);
+		const memberEq = unionMemberEq(makeMember(clonePath(aField, loc), vName, loc), makeMember(clonePath(bField, loc), vName, loc), u.typeChildren[vi], loc);
 		const inactive = makeBinary(makeMember(clonePath(aField, loc), "_tag", loc), "!==", makeNumber(vi, loc), loc);
 		acc = makeBinary(acc, "&&", makeBinary(inactive, "||", memberEq, loc), loc);
 	}
 	return acc;
 }
 
-function nullableEqJS(aField: Node, bField: Node, payload: Type, lctx: LiftCtx, loc: SourceLocation): Node {
-	const aPresent = makeBinary(clonePath(aField, loc), "!==", makeNull(loc), loc);
-	const bPresent = makeBinary(clonePath(bField, loc), "!==", makeNull(loc), loc);
-	const payloadEq = fieldEqExpr(clonePath(aField, loc), clonePath(bField, loc), payload, lctx, loc);
-	const bothEqual = makeBinary(makeBinary(aPresent, "&&", bPresent, loc), "&&", payloadEq, loc);
-	return makeBinary(makeBinary(aField, "===", bField, loc), "||", bothEqual, loc);
+function unionMemberEq(aMember: Node, bMember: Node, memberType: Type, loc: SourceLocation): Node {
+	if (isStringLike(memberType)) {
+		return makeCall(runtimeRef("msStringEquals", loc), [aMember, bMember], loc);
+	}
+	return makeBinary(aMember, "===", bMember, loc);
 }
 
-function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx, loc: SourceLocation): Node {
-	if (fieldType.kind == TypeKind.Set) {
-		const repr = setRepr(fieldType);
-		if (repr != null) return fieldEqExpr(aField, bField, repr, lctx, loc);
-	}
-	if (isMaybeType(fieldType)) {
-		ensureCarrierEq(fieldType, lctx, loc);
-		return makeCall(makeTypedIdentResolved(requireOpByKey(fieldType, AttachedOp.AttachedEq), null, loc), [aField, bField], loc);
-	}
-	if (fieldType.kind == TypeKind.Struct && fieldType.typeName != "") {
-		ensureStructEq(fieldType, lctx, loc);
-		return makeCall(makeTypedIdentResolved(requireOpByKey(fieldType, AttachedOp.AttachedEq), null, loc), [aField, bField], loc);
-	}
-	if (fieldType.kind == TypeKind.SizedArray) {
-		ensureSizedArrayEq(fieldType, lctx, loc);
-		return makeCall(makeTypedIdentResolved(requireOpByKey(fieldType, AttachedOp.AttachedEq), null, loc), [aField, bField], loc);
-	}
-	// Tuple fields are C structs — `===` would emit an invalid struct comparison.
-	// Route to the generated msTuple_<hash>Eq (field-by-field), ensuring it exists.
-	if (fieldType.kind == TypeKind.Tuple) {
-		const tn = tupleTypeName(fieldType);
-		ensureTupleEq(tn, fieldType, lctx, loc);
-		return makeCall(makeTypedIdentResolved(requireOpByKey(fieldType, AttachedOp.AttachedEq), null, loc), [aField, bField], loc);
-	}
-	if (fieldType.kind == TypeKind.GenericInstance) {
-		const gi = unwrapGenericInstance(fieldType);
-		if (gi.mangledName != "" && gi.body != null && gi.body.kind == TypeKind.Struct) {
-			ensureInstanceEq(gi.mangledName, gi.body, fieldType, lctx, loc);
-			return makeCall(makeTypedIdentResolved(requireOpByKey(fieldType, AttachedOp.AttachedEq), null, loc), [aField, bField], loc);
-		}
-	}
-	if (lctx.jsBackend) {
-		return makeBinary(aField, "===", bField, loc);
-	}
-	// String fields — reference parity: genStrEquals → eqStrings().
-	// msString is a C struct, so === doesn't work. Call msStringEquals(a, b).
-	if (isStringLike(fieldType)) {
-		return makeCall(runtimeRef("msStringEquals", loc), [aField, bField], loc);
-	}
-	// bigint fields are msBigInt* — `===` would answer identity, not value.
-	if (fieldType.kind == TypeKind.BigInt) {
-		return makeBinary(makeCall(runtimeRef("msBigIntCmp", loc), [aField, bField], loc), "===", makeNumber(0, loc), loc);
-	}
-	if (isPayloadUnion(fieldType)) {
-		return payloadUnionEqExpr(aField, bField, fieldType, lctx, loc);
-	}
-	if (!lctx.jsBackend && hasUnionEq(fieldType)) {
-		ensureUnionEq(fieldType, lctx, loc);
-		return makeCall(makeTypedIdentResolved(requireOpByKey(fieldType, AttachedOp.AttachedEq), null, loc), [aField, bField], loc);
-	}
-	// Array fields — arrays are C structs, can't use ==.
-	// JavaScript semantics: === is reference equality (same object).
-	// Compare data pointers — same backing store = same array.
-	// Deep comparison belongs in stdlib (e.g. deepEqual).
-	if (fieldType.kind == TypeKind.Array) {
-		const pA = makeMember(aField, "p", loc);
-		const pB = makeMember(bField, "p", loc);
-		return makeBinary(pA, "===", pB, loc);
-	}
-	// Closure fields — compare function pointer and environment separately (reference parity)
-	if (fieldType.kind == TypeKind.Function) {
-		const fnA = makeMember(aField, "fn", loc);
-		const fnB = makeMember(bField, "fn", loc);
-		const envA = makeMember(aField, "env", loc);
-		const envB = makeMember(bField, "env", loc);
-		return makeBinary(makeBinary(fnA, "===", fnB, loc), "&&", makeBinary(envA, "===", envB, loc), loc);
-	}
-	// For all other types (primitives, enums, etc): use === directly
-	return makeBinary(aField, "===", bField, loc);
-}
-
-function generateEq(typeName: string, objType: Type, orig: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	// Build: function TypeName_eq(a: TypeName, b: TypeName): boolean {
-	//   if (a.field1 !== b.field1) return false;
-	//   if (a.field2 !== b.field2) return false;
-	//   ...
-	//   return true;
-	// }
-	const buf: Node[] = [];
-	const aSym = liftSym(lctx, SymbolKind.Variable, "a", objType);
-	const bSym = liftSym(lctx, SymbolKind.Variable, "b", objType);
-	for (let i = 0; i < objType.typeNames.length; i += 1) {
-		const fieldName = objType.typeNames[i];
-		const fieldType = objType.typeChildren[i];
-		const aField = makeMember(makeTypedIdentResolved(aSym, objType, loc), fieldName, loc);
-		const bField = makeMember(makeTypedIdentResolved(bSym, objType, loc), fieldName, loc);
-
-		// Generate: if (!fieldEq) return false;
-		const eqExpr = fieldEqExpr(aField, bField, fieldType, lctx, loc);
-		const notEq = makeUnary("!", eqExpr, loc);
-		buf.push(makeIf(notEq, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
-	}
-	buf.push(makeReturn(makeBool(true, loc), loc));
-	const eqFn = makeFnDecl(typeName + "Eq", [aSym, bSym], [typeName, typeName], makeBlock(buf, loc), "", "boolean", loc);
-	setHookParamType(eqFn, 0, objType);
-	setHookParamType(eqFn, 1, objType);
-	liftOp(eqFn, objType, orig, AttachedOp.AttachedEq, typeName + "Eq");
-	if (orig != objType) aliasOpByKey(orig, objType, AttachedOp.AttachedEq);
-	lctx.collector.push(eqFn);
-}
-
-// ===== Ensure Eq (on-demand: only for struct/interface types actually compared) =====
+// ===== Ensure Eq (on-demand: only for unions actually compared) =====
 
 // C links every module into one image, so one module owns each Eq; a JS module
 // only sees its own top level, so each module that compares emits its own.
@@ -1677,63 +1566,8 @@ function claimEq(t: Type, op: AttachedOp, lctx: LiftCtx): boolean {
 	return !hasLiftedOp(t, op);
 }
 
-function ensureInstanceEq(mangledName: string, body: Type, orig: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	if (!claimEq(body, AttachedOp.AttachedEq, lctx)) {
-		aliasOpByKey(orig, body, AttachedOp.AttachedEq);
-		return;
-	}
-	generateEq(mangledName, body, orig, lctx, loc);
-}
-
-function ensureStructEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
-	const cName = hookCName(t.typeName, t, lctx);
-	if (claimEq(t, AttachedOp.AttachedEq, lctx)) generateEq(cName, t, t, lctx, loc);
-	return cName + "Eq";
-}
-
-function ensureSizedArrayEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
-	const name = sizedArrayHookName(t);
-	if (claimEq(t, AttachedOp.AttachedEq, lctx)) generateSizedArrayEq(name, t, lctx, loc);
-	return name + "Eq";
-}
-
-function generateSizedArrayEq(name: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	const elem = t.typeReturn;
-	if (elem == null) throw new Error(`internal: fixed array '${name}' has no element type`);
-	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
-	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
-	const counter = "$i_" + lctx.tempCounter.toString();
-	lctx.tempCounter = lctx.tempCounter + 1;
-	const counterSym = liftTempSym(lctx, counter, numberType());
-	const ai = makeArrayAccess(makeTypedIdentResolved(aSym, t, loc), makeTypedIdentResolved(counterSym, null, loc), loc);
-	const bi = makeArrayAccess(makeTypedIdentResolved(bSym, t, loc), makeTypedIdentResolved(counterSym, null, loc), loc);
-	ai.nodeType = elem;
-	bi.nodeType = elem;
-	const differs = makeUnary("!", fieldEqExpr(ai, bi, elem, lctx, loc), loc);
-	const next = makeBinary(makeTypedIdentResolved(counterSym, null, loc), "+", makeNumber(1, loc), loc);
-	const step = makeBlock([
-		makeIf(differs, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc),
-		makeExprStmt(makeAssign(makeTypedIdentResolved(counterSym, null, loc), next, loc), loc),
-	], loc);
-	const length = makeNumber(t.typeValue as number, loc);
-	const bound = makeBinary(makeTypedIdentResolved(counterSym, null, loc), "<", length, loc);
-	const counterDecl = makeVarDecl(counter, makeNumber(0, loc), DeclKind.Let, loc);
-	counterDecl.resolvedSym = counterSym;
-	const buf: Node[] = [
-		counterDecl,
-		makeWhile(bound, step, loc),
-		makeReturn(makeBool(true, loc), loc),
-	];
-	const body = makeBlock(buf, loc);
-	const eqFn = makeFnDecl(name + "Eq", [aSym, bSym], [name, name], body, "", "boolean", loc);
-	setHookParamType(eqFn, 0, t);
-	setHookParamType(eqFn, 1, t);
-	liftOp(eqFn, t, t, AttachedOp.AttachedEq, name + "Eq");
-	lctx.collector.push(eqFn);
-}
-
 function ensureUnionEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
-	const cName = hookCName(t.typeName, t, lctx);
+	const cName = t.typeName == "" ? anonUnionCName(t) : hookCName(t.typeName, t, lctx);
 	if (claimEq(t, AttachedOp.AttachedEq, lctx)) generateUnionEq(cName, t, lctx, loc);
 	return cName + "Eq";
 }
@@ -1741,44 +1575,11 @@ function ensureUnionEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
 function generateUnionEq(typeName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
 	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
-	const same = payloadUnionEqExpr(makeTypedIdentResolved(aSym, t, loc), makeTypedIdentResolved(bSym, t, loc), t, lctx, loc);
+	const same = payloadUnionEqExpr(makeTypedIdentResolved(aSym, t, loc), makeTypedIdentResolved(bSym, t, loc), t, loc);
 	const eqFn = makeFnDecl(typeName + "Eq", [aSym, bSym], [typeName, typeName], makeBlock([makeReturn(same, loc)], loc), "", "boolean", loc);
 	setHookParamType(eqFn, 0, t);
 	setHookParamType(eqFn, 1, t);
 	liftOp(eqFn, t, t, AttachedOp.AttachedEq, typeName + "Eq");
-	lctx.collector.push(eqFn);
-}
-
-function ensureCarrierEq(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
-	const carrierName = typeNameOf(t);
-	if (!claimEq(t, AttachedOp.AttachedEq, lctx)) {
-		return carrierName + "Eq";
-	}
-	if (lctx.jsBackend && isMaybeType(t)) {
-		generateNullableEqJS(carrierName, t, lctx, loc);
-	} else {
-		generateEq(carrierName, t, t, lctx, loc);
-	}
-	return carrierName + "Eq";
-}
-
-function generateNullableEqJS(
-	carrierName: string,
-	t: Type,
-	lctx: LiftCtx,
-	loc: SourceLocation,
-): void {
-	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
-	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
-	const a = makeTypedIdentResolved(aSym, null, loc);
-	const b = makeTypedIdentResolved(bSym, null, loc);
-	const compare = nullableEqJS(a, b, unwrapMaybeType(t), lctx, loc);
-	const body = makeBlock([makeReturn(compare, loc)], loc);
-	const names = [carrierName, carrierName];
-	const eqFn = makeFnDecl(carrierName + "Eq", [aSym, bSym], names, body, "", "boolean", loc);
-	setHookParamType(eqFn, 0, t);
-	setHookParamType(eqFn, 1, t);
-	liftOp(eqFn, t, t, AttachedOp.AttachedEq, carrierName + "Eq");
 	lctx.collector.push(eqFn);
 }
 
@@ -1929,16 +1730,6 @@ function ensureSizedArrayHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): voi
 	generateSizedArrayHook("wasMoved", name, t, lctx, loc);
 }
 
-// On-demand msTuple_<hash>Eq for a tuple compared as a struct/tuple field (fieldEqExpr).
-// Shares the `tupleName + "Eq"` dedup key with operatorLower's pending-ops, so one body.
-function ensureTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	if (tupleName == "" || t == null || t.kind != TypeKind.Tuple) return;
-	if (!claimEq(t, AttachedOp.AttachedEq, lctx)) {
-		return;
-	}
-	generateTupleEq(tupleName, t, lctx, loc);
-}
-
 // ===== Tuple Comparison Operators (reference parity: reference core lines 1973-1996) =====
 // Auto-generate ==, <, <= for tuples using positional field names (_0, _1, ...).
 // Reference implementation uses `fields()` magic iterator; we unroll at transform time.
@@ -1949,30 +1740,6 @@ function tupleField(obj: Node, idx: number, lctx: LiftCtx, loc: SourceLocation):
 	const t = obj.nodeType;
 	if (t != null && t.kind == TypeKind.Tuple && idx < t.typeChildren.length) field.nodeType = t.typeChildren[idx];
 	return field;
-}
-
-// Generate element-by-element equality for tuples.
-// Reference: proc `==`*[T: tuple|object](x, y: T): bool =
-//        for a, b in fields(x, y): if a != b: return false
-//        return true
-function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	const buf: Node[] = [];
-	const aSym = liftSym(lctx, SymbolKind.Variable, "a", t);
-	const bSym = liftSym(lctx, SymbolKind.Variable, "b", t);
-	let i = 0;
-	while (i < t.typeChildren.length) {
-		const aField = tupleField(makeTypedIdentResolved(aSym, t, loc), i, lctx, loc);
-		const bField = tupleField(makeTypedIdentResolved(bSym, t, loc), i, lctx, loc);
-		const eqExpr = fieldEqExpr(aField, bField, t.typeChildren[i], lctx, loc);
-		buf.push(makeIf(makeUnary("!", eqExpr, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc));
-		i += 1;
-	}
-	buf.push(makeReturn(makeBool(true, loc), loc));
-	const teqFn = makeFnDecl(tupleName + "Eq", [aSym, bSym], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
-	setHookParamType(teqFn, 0, t);
-	setHookParamType(teqFn, 1, t);
-	liftOp(teqFn, t, t, AttachedOp.AttachedEq, tupleName + "Eq");
-	lctx.collector.push(teqFn);
 }
 
 // Generate lexicographic < for tuples.
@@ -2449,14 +2216,12 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 	};
 }
 
-// Comparison operators operatorLower routed to generated functions: tuple ==/</<=,
-// struct ==, and == on types with no symbol (Maybe carriers, generic struct instances).
-// reference parity: reference core:1973 (==), :1980 (<=), :1989 (<) for tuples.
+// Comparison operators operatorLower routed to generated functions: tuple ordering and
+// payload-union ==. reference parity: reference core:1980 (<=), :1989 (<) for tuples.
 function tupleCompareOp(suffix: string): AttachedOp {
 	return match (suffix) {
 		"Lt" => AttachedOp.AttachedLt,
-		"Le" => AttachedOp.AttachedLe,
-		_ => AttachedOp.AttachedEq,
+		_ => AttachedOp.AttachedLe,
 	};
 }
 
@@ -2467,37 +2232,17 @@ function liftComparisons(ctx: TransformContext, lctx: LiftCtx, loc: SourceLocati
 				continue;
 			}
 			match (op) {
-				"Eq" => { generateTupleEq(pending.tupleName, pending.tupleType, lctx, loc); },
 				"Lt" => { generateTupleLt(pending.tupleName, pending.tupleType, lctx, loc); },
 				"Le" => { generateTupleLe(pending.tupleName, pending.tupleType, lctx, loc); },
 				_ => {},
 			};
 		}
 	}
-	for (const valueType of ctx.pendingValueEqs) {
-		if (valueType.kind == TypeKind.SizedArray) {
-			ensureSizedArrayEq(valueType, lctx, loc);
-		} else if (valueType.kind == TypeKind.Union) {
-			ensureUnionEq(valueType, lctx, loc);
-		} else {
-			ensureStructEq(valueType, lctx, loc);
-		}
-	}
-	for (const carrierType of ctx.pendingCarrierEqs) {
-		if (carrierType.kind == TypeKind.GenericInstance) {
-			const gi = unwrapGenericInstance(carrierType);
-			if (gi.mangledName != "" && gi.body != null && gi.body.kind == TypeKind.Struct) {
-				ensureInstanceEq(gi.mangledName, gi.body, carrierType, lctx, loc);
-				continue;
-			}
-		}
-		if (typeNameOf(carrierType) == "") continue;
-		ensureCarrierEq(carrierType, lctx, loc);
+	for (const unionType of ctx.pendingUnionEqs) {
+		ensureUnionEq(unionType, lctx, loc);
 	}
 }
 
-// JS runs no lifetime hooks, but its == on value types calls the same
-// generated Eq; the reference's liftdestructors carries its own per-target flag.
 export function liftDestructors(program: Node, ctx: TransformContext, withHooks: boolean): Node {
 	if (ctx.checkerCtx == null) return program;
 
@@ -2566,7 +2311,7 @@ function generatedFnCount(input: string): number {
 	return count;
 }
 
-// Run the full lower→lift pipeline so `===` in the source drives on-demand Eq generation.
+// Run the full lower→lift pipeline so a union `==` in the source drives on-demand Eq generation.
 function liftWithCompare(input: string): Node {
 	resetHookSyms();
 	const pr = parseInput(input);
@@ -2575,6 +2320,16 @@ function liftWithCompare(input: string): Node {
 	const ctx = checkedCtx(checkerCtx);
 	const lowered = lowerOperators(pr.value, ctx);
 	return liftDestructors(lowered, ctx, true);
+}
+
+test "a payload union compared with == gets one generated Eq on C" {
+	const src = "type NamedU = int32 | string; function same(a: NamedU, b: NamedU): boolean { return a == b; }";
+	assert hasGeneratedFnIn(liftWithCompare(src), "Eq");
+}
+
+test "a struct compared with == gets no generated Eq: the std equality compares its fields" {
+	const src = "struct Point { x: int32; y: int32; } function same(a: Point, b: Point): boolean { return a == b; }";
+	assert !hasGeneratedFnIn(liftWithCompare(src), "PointEq");
 }
 
 function hasGeneratedFnIn(prog: Node, fnSuffix: string): boolean {
@@ -2658,18 +2413,6 @@ test "eq NOT generated for uncompared struct" {
 	assert !hasGeneratedFn("struct Point { x: number; y: number; }", "PointEq");
 }
 
-test "eq generated on-demand for compared struct" {
-	const src = "struct Point { x: number; y: number; } function f(a: Point, b: Point): boolean { return a === b; }";
-	assert hasGeneratedFnIn(liftWithCompare(src), "PointEq");
-}
-
-test "eq transitive to nested struct field when outer compared" {
-	const src = "struct Inner { a: number; } struct Outer { i: Inner; } function f(a: Outer, b: Outer): boolean { return a === b; }";
-	assert hasGeneratedFnIn(liftWithCompare(src), "OuterEq");
-	assert hasGeneratedFnIn(liftWithCompare(src), "InnerEq");
-}
-
-// Interfaces are reference types — `===` is pointer equality, no structural Eq is lifted.
 test "eq NOT generated for interface" {
 	assert !hasGeneratedFn("interface Token { value: string; }", "TokenEq");
 }

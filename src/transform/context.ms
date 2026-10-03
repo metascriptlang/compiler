@@ -9,7 +9,7 @@ import { noneType } from "../checker/types";
 export interface PendingTupleOp {
 	tupleType: Type;
 	tupleName: string;
-	ops: string[];  // which ops needed: "eq", "lt", "le"
+	ops: string[];  // which ops needed: "Lt", "Le"
 }
 
 export class TransformContext {
@@ -24,9 +24,8 @@ export class TransformContext {
 	boundChecks: boolean;
 	objChecks: boolean;
 	keepBuiltinMemberCalls: boolean;  // backend resolves builtins natively (opcodes / native methods) — keep member-call form instead of UFCS-rewriting to direct calls (mangled-name backends like C set false)
-	pendingTupleOps: PendingTupleOp[];  // tuple comparison ops to generate (reference parity)
-	pendingValueEqs: Type[];
-	pendingCarrierEqs: Type[];   // synthesized carrier structs (Maybe<T>) compared by ==; carried as Type because they have no symbol-table entry to look the name up by
+	pendingTupleOps: PendingTupleOp[];  // tuple ordering ops to generate (reference parity)
+	pendingUnionEqs: Type[];  // payload unions compared by == on C
 	cyclicCache: NameSet;     // canFormAcycle entry-level memo (types confirmed cyclic)
 	acyclicCache: NameSet;    // canFormAcycle entry-level memo (types confirmed acyclic)
 	splitLoopLocals: Symbol[];  // bindings of a loop body split at a yield: generatorLower hoists them to one slot for the whole loop
@@ -40,7 +39,7 @@ export interface EnumToStringCopy {
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, preserveModuleConstants: false, rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingValueEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [] };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, preserveModuleConstants: false, rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [] };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {

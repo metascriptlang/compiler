@@ -990,7 +990,7 @@ export function promiseAllShape(inner: Type | null): PromiseAllShape {
 }
 
 export function hasUnionEq(t: Type): boolean {
-	if (t.kind != TypeKind.Union || t.typeName == "" || t.typeExtra != null || isStringLike(t)) return false;
+	if (t.kind != TypeKind.Union || t.typeExtra != null || isStringLike(t)) return false;
 	if (unwrapRefNullUnion(t) != null) return false;
 	for (const m of t.typeChildren) {
 		if (m == null) return false;
