@@ -12,6 +12,7 @@ extern function msSolInstructionDataLength(): uint64;
 extern function msSolProgramId(): uint64;
 extern function msSolAlloc(size: uint64): uint64;
 extern function msSolSetResult(code: uint64): void;
+extern function msSolPointer(address: uint64): Ptr<void>;
 extern function msSolLoadU8(address: uint64): uint8;
 extern function msSolLoadU16(address: uint64): uint16;
 extern function msSolLoadU32(address: uint64): uint32;
@@ -88,12 +89,12 @@ export function failWith(error: ProgramError): void {
 }
 
 function loadPubkey(address: uint64): Pubkey {
-	const at = address as Ptr<Pubkey>;
+	const at = msSolPointer(address) as Ptr<Pubkey>;
 	return at[];
 }
 
 function storePubkey(key: Pubkey, address: uint64): void {
-	const at = address as Ptr<Pubkey>;
+	const at = msSolPointer(address) as Ptr<Pubkey>;
 	at[] = key;
 }
 
@@ -927,15 +928,15 @@ export function externalMutable<T>(index: int32): Result<ExternalMutable<T>, Pro
 }
 
 export function data<T>(this proof: Mutable<T>): Ptr<T> {
-	return ((proof as Account).address + 96) as Ptr<T>;
+	return msSolPointer((proof as Account).address + 96) as Ptr<T>;
 }
 
 export function data<T>(this proof: Owned<T>): Readonly<Ptr<T>> {
-	return ((proof as Account).address + 96) as Ptr<T>;
+	return msSolPointer((proof as Account).address + 96) as Ptr<T>;
 }
 
 export function data<T>(this proof: Delegated<T>): Readonly<Ptr<T>> {
-	return ((proof as Account).address + 96) as Ptr<T>;
+	return msSolPointer((proof as Account).address + 96) as Ptr<T>;
 }
 
 export function read<T>(this proof: External<T>): Result<T, ProgramError> {

@@ -131,6 +131,10 @@ static inline void msSolSetResult(uint64_t code) {
     msSolContext()->result = code;
 }
 
+static inline void* msSolPointer(uint64_t address) {
+    return (void*)(uintptr_t)address;
+}
+
 static inline uint8_t msSolLoadU8(uint64_t address) {
     return *(const uint8_t*)address;
 }

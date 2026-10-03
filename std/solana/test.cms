@@ -30,6 +30,8 @@ import {
 	pdaWithBump,
 	pubkeyOf,
 	instructionData,
+	logPubkey,
+	programId,
 	ProgramAddress,
 	Bytes,
 	borshBuffer,
@@ -109,6 +111,51 @@ function programKey(): Pubkey { return keyOf(200); }
 
 function counterTag(): Discriminator {
 	return Counter.discriminator();
+}
+
+function patternedKey(): Pubkey {
+	let key = Pubkey.zero();
+	for (let i = 0; i < 32; i++) { key.bytes[i] = (i + 1) as uint8; }
+	return key;
+}
+
+function programIdEntry(): void {
+	if (!programId().equals(patternedKey())) { failWith(ProgramError.invalidArgument()); }
+}
+
+function accountKeyEntry(): void {
+	const found = writable(0);
+	if (!found.ok) {
+		failWith(found.error);
+		return;
+	}
+	if (!found.value.key().equals(patternedKey())) { failWith(ProgramError.invalidArgument()); }
+}
+
+function logKeyEntry(): void { logPubkey(patternedKey()); }
+
+test "a program id is read from the bytes the runtime put in the input buffer" {
+	const none: HostAccount[] = [];
+	assert run(patternedKey(), none, [], programIdEntry).result == 0;
+	assert run(keyOf(3), none, [], programIdEntry).result == ProgramError.invalidArgument().code;
+}
+
+test "an account key is read from its record in the input buffer" {
+	const matching = [holder(1, keyOf(9), [], true, true)];
+	matching[0].key = patternedKey();
+	assert run(programKey(), matching, [], accountKeyEntry).result == 0;
+	const other = [holder(1, keyOf(9), [], true, true)];
+	assert run(programKey(), other, [], accountKeyEntry).result == ProgramError.invalidArgument().code;
+}
+
+test "a Pubkey stored in program memory is logged from its own bytes" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], logKeyEntry).result == 0;
+	let found = false;
+	for (const line of logs()) {
+		if (line == "Program log: " + patternedKey().toBase58()) { found = true; }
+	}
+	assert found;
 }
 
 test "a signer verifier refuses an unsigned account with Anchor's AccountNotSigner" {

@@ -31,6 +31,7 @@ extern function msSolHostSetClock(
 	leaderEpoch: uint64,
 	unixTime: uint64,
 ): void;
+extern function msSolPointer(address: uint64): Ptr<void>;
 extern function msSolLoadU8(address: uint64): uint8;
 extern function msSolLoadU64(address: uint64): uint64;
 extern function msSolStoreU8(address: uint64, value: uint8): void;
@@ -59,12 +60,12 @@ export struct HostInvocation {
 }
 
 function storeKey(address: uint64, key: Pubkey): void {
-	const at = address as Ptr<Pubkey>;
+	const at = msSolPointer(address) as Ptr<Pubkey>;
 	at[] = key;
 }
 
 function loadKey(address: uint64): Pubkey {
-	const at = address as Ptr<Pubkey>;
+	const at = msSolPointer(address) as Ptr<Pubkey>;
 	return at[];
 }
 
