@@ -2787,8 +2787,11 @@ type, as the reference's `tyDistinct` arm does (liftdestructors 1193-1199).
 returned from a function 2 and 2, and none in `const b = a`, `b = a`, a call argument and returning
 a parameter. Corpus `userCloneHook` pins `[a, a]`, an object literal field, `const b = a`, `b = a` and returning a
 parameter; 300,000 rounds of the
-clone path hold RSS at 2 MB under both GC modes. A type without `onClone` still gets a generated
-`<T>Dup` that nothing calls (`emitDup`, `destructorLifting.ms`).
+clone path hold RSS at 2 MB under both GC modes. A std generic that copies elements with `push` calls `onClone`
+once per element: `slice<T>` (`std/core/array`) does, where the reference's slice assigns and so calls
+`=copy` (the `clone.ms` card repro with `xs.slice(0)` printed `clone S` for each of two elements). A
+type without `onClone` still gets a generated `<T>Dup` that nothing calls (`emitDup`,
+`destructorLifting.ms`).
 
 On C, corpus `hookReceiverSpellings` counts `onCopy` once, `onMove` twice and `onMoved` three times
 for a struct, whether the receiver is `this ref x: S` or `Var<S>`.
