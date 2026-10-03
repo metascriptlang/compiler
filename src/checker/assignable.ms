@@ -9,8 +9,9 @@
 // stays legal. Mutating methods on those views are still found by name in
 // paramMutationAnalysis until method receivers become ordinary arguments.
 
-import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
+import { isReadonlyView } from "./types";
 import { isValueAggregateParam } from "./paramMutationAnalysis";
 
 export enum WriteVerdict {
@@ -72,6 +73,25 @@ export function checkWrite(target: Node, asRefArg: boolean): WriteCheck {
 	}
 	if (viewInterior && sym.symbolKind == SymbolKind.Parameter) return { verdict: WriteVerdict.ValueParamInterior, root: sym };
 	return { verdict: WriteVerdict.Writable, root: sym };
+}
+
+export function readonlyPrefixType(target: Node): Type | null {
+	let cur: Node | null = target;
+	while (cur != null) {
+		let base: Node | null = null;
+		if (cur.kind == NodeKind.MemberExpr) base = (cur.data as MemberExprData).object;
+		else if (cur.kind == NodeKind.ArrayAccess) base = (cur.data as ArrayAccessData).array;
+		else if (cur.kind == NodeKind.HiddenDeref) base = (cur.data as HiddenDerefData).expr;
+		else break;
+		if (base != null && base.nodeType != null && isReadonlyView(base.nodeType)) return base.nodeType;
+		cur = base;
+	}
+	return null;
+}
+
+export function readonlyRootType(target: Node): Type | null {
+	if (target.kind == NodeKind.Identifier && isReadonlyView(target.nodeType)) return target.nodeType;
+	return readonlyPrefixType(target);
 }
 
 export function lvalueText(node: Node): string {

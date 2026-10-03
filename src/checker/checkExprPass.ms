@@ -12,7 +12,7 @@ import {
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
-import { writeRefusal } from "./assignable";
+import { writeRefusal, readonlyPrefixType, readonlyRootType } from "./assignable";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
@@ -118,25 +118,6 @@ function checkAssignTarget(ctx: CheckerContext, target: Node): void {
 function reportArcWrite(ctx: CheckerContext, target: Node): void {
 	addError(ctx, "cannot write through 'Arc<T>' — SHARE is immutable; shared mutable state is Locked<T> (PARALOCK Amendment I)",
 		target.location.line, target.location.column);
-}
-
-function readonlyPrefixType(target: Node): Type | null {
-	let cur: Node | null = target;
-	while (cur != null) {
-		let base: Node | null = null;
-		if (cur.kind == NodeKind.MemberExpr) base = (cur.data as MemberExprData).object;
-		else if (cur.kind == NodeKind.ArrayAccess) base = (cur.data as ArrayAccessData).array;
-		else if (cur.kind == NodeKind.HiddenDeref) base = (cur.data as HiddenDerefData).expr;
-		else break;
-		if (base != null && base.nodeType != null && isReadonlyView(base.nodeType)) return base.nodeType;
-		cur = base;
-	}
-	return null;
-}
-
-function readonlyRootType(target: Node): Type | null {
-	if (target.kind == NodeKind.Identifier && isReadonlyView(target.nodeType)) return target.nodeType;
-	return readonlyPrefixType(target);
 }
 
 function reportReadonlyWrite(ctx: CheckerContext, ro: Type, verb: string, line: int32, column: int32): void {
