@@ -11,9 +11,8 @@ import { integerRank, isIntegerType, peelToRepr, enumOrdinalBounds, createPrimit
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeNumber, runtimeRef } from "../util";
-import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
+import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts, checkedCtx } from "../testUtil";
 import { ExprStmtData, VariableDeclData } from "../../ast/node";
-import { createTransformContextWithChecker } from "../context";
 import { checkProgram } from "../../checker/checkPass";
 
 // ===== Helpers =====
@@ -184,7 +183,7 @@ export function makeRangeCheck(expr: Node, fnName: string, minVal: number, maxVa
 function castExprKind(input: string, rangeChecks: boolean = true): NodeKind {
 	const result = parseInput(input);
 	if (!result.ok) return NodeKind.Program;
-	const ctx = createTransformContextWithChecker(checkProgram(result.value));
+	const ctx = checkedCtx(checkProgram(result.value));
 	ctx.rangeChecks = rangeChecks;
 	injectRangeChecks(result.value, ctx);
 	const found: NodeKind[] = [];
