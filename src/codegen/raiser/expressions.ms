@@ -1011,6 +1011,9 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	if (isExitCall(d.callee) && d.arguments.length == 1) {
 		return compileExitCall(s, node);
 	}
+	if (asyncBuiltinKind(node) == "MapFatal" && d.arguments.length == 1) {
+		return compileMapFatalCall(s, node);
+	}
 
 	// spawn(fn) / sleepAsync(ms) / waitFor(h) / Promise.resolve(v) — the async
 	// surface the VM owns as opcodes. Keyed on builtinKind (set from the @builtin
@@ -1548,6 +1551,25 @@ function compileExitCall(s: RaiserCompState, node: Node): int32 {
 	// process.exit bypasses msDrainUntilIdle on C.
 	emitInst(s, raiserABC(RaiserOpcode.Halt, codeReg, 1, 0));
 	return codeReg;
+}
+
+function compileMapFatalCall(s: RaiserCompState, node: Node): int32 {
+	const d = node.data as CallExprData;
+	const head = allocReg(s);
+	emitLoadConst(s, head, raiserString("fatal error: "));
+	const text = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.ConcatStr, text, head, compileExpr(s, d.arguments[0])));
+	const newline = allocReg(s);
+	emitLoadConst(s, newline, raiserString("\n"));
+	emitInst(s, raiserABC(RaiserOpcode.ConcatStr, text, text, newline));
+	const written = allocReg(s);
+	const arg = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.Move, arg, text, 0));
+	emitInst(s, raiserABC(RaiserOpcode.CallHost, written, addConst(s, raiserString("msWriteStderr")), 1));
+	const code = allocReg(s);
+	emitLoadConst(s, code, raiserInt(2));
+	emitInst(s, raiserABC(RaiserOpcode.Halt, code, 1, 0));
+	return code;
 }
 
 // spawn/waitFor/Promise.resolve carry @builtin on the extern; the kind lands
