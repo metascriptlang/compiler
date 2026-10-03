@@ -546,6 +546,13 @@ export function boundTypeAt(index: int32): Type | null {
 	return _boundTypes[index];
 }
 
+export function boundTypeOfObject(objHeap: RaiserObjectHeap, handle: int64): Type | null {
+	const th = heapObjectGetField(objHeap, handle, "typeHandle");
+	if (th.kind == RaiserValueKind.Int) return boundTypeAt(th.intVal as int32);
+	if (th.kind == RaiserValueKind.Float) return boundTypeAt(th.floatVal as int32);
+	return null;
+}
+
 // `declNode` skipped to avoid Symbol↔Node cycle; reach it via getImpl.
 function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap): RaiserValue {
 	const handle = heapAllocObject(objHeap);
@@ -1317,15 +1324,15 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 			const kindField = heapObjectGetField(objHeap, handle, "kind");
 			if (kindField.kind == RaiserValueKind.Int) {
 				const out = readNodeFromObject(handle, kindField.intVal as NodeKind, objHeap, arrHeap, fallbackLoc);
-				// Preserve type-AST hint so subsequent macro expansions see the
-				// original arg's type info (Node.nodeType is a Type and can't
-				// be round-tripped; the type-AST Node form survives via
-				// nodeTypeAst). Fixes Bug 6 nested-macro re-expansion path.
+				// The argument's type survives the wire twice: the Type through its
+				// bound-type handle, the type-AST Node form in nodeTypeAst.
 				if (out != null) {
 					const ntField = heapObjectGetField(objHeap, handle, "nodeType");
 					if (ntField.kind == RaiserValueKind.Object) {
 						out.nodeTypeAst = valueToNode(ntField, objHeap, arrHeap, fallbackLoc);
 					}
+					const typed = boundTypeOfObject(objHeap, handle);
+					if (typed != null) out.nodeType = typed;
 					// One flag, by name, not the whole word: a macro that could set
 					// Sem/Transf/LL would forge pipeline state on a node the passes
 					// have never processed. Widen this list only per-flag.
@@ -3289,17 +3296,28 @@ test "nodeToValue — self-referential nodeType (Tree) terminates via cycle brea
 	assert kindVal.intVal == NodeKind.TypeObject as int64;
 }
 
-test "valueToNode — drops nodeType field (forward-only design)" {
+test "valueToNode — restores nodeType from its bound-type handle" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
 	const loc = makeLoc(1, 0);
 	const ident = createNodeAt(NodeKind.Identifier, { name: "x" }, loc);
-	ident.nodeType = makePrimType(TypeKind.Int32);
+	const written = makePrimType(TypeKind.Int32);
+	ident.nodeType = written;
 	const v = nodeToValue(ident, objH, arrH);
 	const back = valueToNode(v, objH, arrH, loc);
 	assert back.kind == NodeKind.Identifier;
 	assert (back.data as IdentifierData).name == "x";
-	assert back.nodeType == null;  // forward-only: reverse path leaves nodeType null
+	assert back.nodeType == written;
+}
+
+test "valueToNode — a node that never had a type comes back without one" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const ident = createNodeAt(NodeKind.Identifier, { name: "x" }, loc);
+	const v = nodeToValue(ident, objH, arrH);
+	const back = valueToNode(v, objH, arrH, loc);
+	assert back.nodeType == null;
 }
 
 test "nodeToValue — child Nodes' nodeType cascades through dispatch" {

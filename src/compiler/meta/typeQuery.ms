@@ -5,7 +5,7 @@ import { builtinTypeNamed, ensureShaped, resolveAnnotation } from "../../checker
 import { instantiateGenericBody, genericParamsOf, unwrapRefBase } from "../../checker/types";
 import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField } from "../../raiser/value";
 import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHeap } from "../../raiser/hostRegistry";
-import { mapTypeToAst, nodeToValue, boundSymAt, boundTypeAt } from "./bridge";
+import { mapTypeToAst, nodeToValue, boundSymAt, boundTypeOfObject } from "./bridge";
 import { sameType } from "../../checker/compat";
 import { activeMetaCtx, activeMetaLine, activeMetaColumn } from "./callbacks";
 import { boxString, unboxString } from "../../raiser/marshal";
@@ -65,9 +65,8 @@ function typeArgOf(v: RaiserValue): Type | null {
 	if (v.kind == RaiserValueKind.Object) {
 		const heap = activeHostObjectHeap();
 		if (heap != null) {
-			const th = heapObjectGetField(heap, v.intVal, "typeHandle");
-			if (th.kind == RaiserValueKind.Int) { const t = boundTypeAt(th.intVal as int32); if (t != null) return t; }
-			if (th.kind == RaiserValueKind.Float) { const t = boundTypeAt(th.floatVal as int32); if (t != null) return t; }
+			const t = boundTypeOfObject(heap, v.intVal);
+			if (t != null) return t;
 		}
 	}
 	const sym = boundSymOf(v);
