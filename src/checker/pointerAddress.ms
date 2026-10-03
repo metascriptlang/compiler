@@ -1,5 +1,5 @@
 import { Node, NodeKind, Type, TypeKind, ArrayAccessData, createNodeAt } from "../ast/node";
-import { skipModifier, peelTransparentInstance, typeDisplayName, isNumeric, isReadonlyView, createReadonlyView } from "./types";
+import { skipModifier, peelTransparentInstance, typeDisplayName, isReadonlyView, createReadonlyView } from "./types";
 import { sameType, nonNullMemberOfNullable } from "./compat";
 import { CheckerContext, addError } from "./context";
 import { writeRefusal } from "./assignable";
@@ -19,8 +19,7 @@ function bareSource(source: Type | null): Type | null {
 }
 
 function storedInline(t: Type): boolean {
-	return isNumeric(t) || t.kind == TypeKind.Boolean || t.kind == TypeKind.Char || t.kind == TypeKind.Enum
-		|| t.kind == TypeKind.Struct || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Tuple;
+	return t.kind == TypeKind.Struct || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Tuple;
 }
 
 export function pointerAddressElement(source: Type | null, target: Type | null): Type | null {
@@ -33,14 +32,13 @@ export function pointerAddressElement(source: Type | null, target: Type | null):
 		if (item != null && (item.kind == TypeKind.Ref || item.kind == TypeKind.Ptr)) return null;
 		return src.typeReturn != null && sameType(src.typeReturn, elem) ? src.typeReturn : null;
 	}
-	return sameType(src, elem) ? src : null;
+	return storedInline(src) && sameType(src, elem) ? src : null;
 }
 
 export function nativeAddressSource(source: Type | null, target: Type | null): Type | null {
 	const src = bareSource(source);
 	const elem = pointee(target);
 	if (src == null || elem == null || pointerAddressElement(source, target) != null) return null;
-	if (src.kind == TypeKind.Ptr) return sameType(src, elem) ? src : null;
 	return storedInline(src) ? src : null;
 }
 
