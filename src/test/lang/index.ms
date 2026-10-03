@@ -49,6 +49,7 @@ import "./stringRepresentation";
 import "./suspendedBindings";
 import "./suspensionControl";
 import "./suspensionEvaluation";
+import "./unionPayloads";
 import "./unionUpdates";
 import "./valueLocations";
 import "./valueStorage";
