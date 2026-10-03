@@ -8,7 +8,7 @@ import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType
 import { AttachedOp } from "../../ast/node";
 import { genericParamsOf, enumStorageKind, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, CTypeInfoDemand, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet, addCGenError } from "./context";
@@ -160,7 +160,7 @@ export function opTypeKey(t: Type | null): string {
 	return typeKey(t);
 }
 
-function opKey(t: Type, op: AttachedOp): string {
+export function opKey(t: Type, op: AttachedOp): string {
 	return attachedOpName(op) + "|" + opTypeKey(t);
 }
 
@@ -192,6 +192,11 @@ export function bindOpByKey(t: Type, op: AttachedOp, sym: Symbol): void {
 
 export function isTypeBoundOp(sym: Symbol): boolean {
 	return _canonOps.has(sym);
+}
+
+export function hasLiftedOp(t: Type, op: AttachedOp): boolean {
+	const sym = _opSyms.get(opKey(t, op));
+	return sym != null && sym.state == SymbolState.Checked;
 }
 
 export function getOpByKey(t: Type, op: AttachedOp): Symbol | null {

@@ -43,7 +43,7 @@ import { HcrIndirectModule, hcrFunctions, lowerHcrIndirection } from "../transfo
 import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet, NameSet } from "../transform/context";
-import { setGlobalHookOwners, hookOwnerMark, hookOwnersFrom, replayHookOwners, typeInfoOwnerMark, typeInfoOwnersFrom, replayTypeInfoOwners } from "../transform/lowering/destructorLifting";
+import { setGlobalHookOwners, typeInfoOwnerMark, typeInfoOwnersFrom, replayTypeInfoOwners } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, tryLoadPreludeDeps, writePreludeDeps, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
@@ -622,7 +622,6 @@ function programWithInstances(program: Node, instances: Node[] | null): Node {
 function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.ran = true;
 	const typeInfoMark = typeInfoOwnerMark();
-	const ownerMark = hookOwnerMark();
 	const keyedOpMark = opMark();
 	const opts = job.opts;
 	const modPath = job.modPath;
@@ -696,7 +695,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 	job.timers.lower = job.timers.lower + (performance.now() - _tl0);
 	truncateErrors(ctx, errBase);
-	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), owners: hookOwnersFrom(ownerMark), hooks: [], ops: opsFrom(keyedOpMark) };
+	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), owners: [], hooks: [], ops: opsFrom(keyedOpMark) };
 	return nativeLowered;
 }
 
@@ -2711,7 +2710,6 @@ setGlobalHookOwners(sharedHookOwners);
 				const claims = session.lowerClaims.get(modPath);
 				if (claims != null) {
 					replayTypeInfoOwners(claims.typeInfos);
-					replayHookOwners(claims.owners);
 					replayOps(claims.ops);
 				}
 				const replay = session.lowerDiagnostics.get(modPath);
