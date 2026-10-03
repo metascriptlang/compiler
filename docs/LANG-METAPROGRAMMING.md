@@ -702,7 +702,7 @@ Three entry points, and picking the wrong one is the usual mistake:
 | a typed value or reflected field type | `getTypeImpl(value)` | the concrete implementation; Ref/Alias/generic wrappers are expanded at the query root, while nested generic field types retain their identity and can be queried separately |
 | a type the CALLER picked: `m<T>(...)` | `getTypeArg()` | the call site's `<T>`, resolved in the CALL SITE scope, Ref peeled |
 | a bound symbol (`bindSym`, either mode) | `getType(s)` / `getTypeImpl(s)` | syntax view / implementation view of its checked type; the implementation AST retains the original type identity; no type → compile error `node has no type`; a `null` node → `null` |
-| a bound symbol | `getImpl(s)` | a copy of its declaration (`ClassDecl`, `FunctionDecl`, …), `null` when the symbol has none; not a symbol → `node is not a symbol`; a `null` node → `null` |
+| a bound symbol | `getImpl(s)` | a copy of its declaration (`ClassDecl`, `FunctionDecl`, …), `null` when the symbol has none; not a symbol → `node is not a symbol`; a `null` node → `null`. A `StructDecl` / `InterfaceDecl` carries `interfaceFields`, `interfaceFieldTypes` and `interfaceFieldDecorators` — one list of `MacroInvocation` nodes (`macroName`, `macroArgs`) per field, empty for an undecorated field |
 | a type written as a string (`propType`, a param type) | `resolveType("A \| null")` | the type-AST the checker resolves for that annotation at the expansion site |
 | a type-AST from any query above | `typeKind(t)` | the original checked `TypeKind`, independent of the rendered AST shape; `getTypeImpl` can render a `TypeObject` while retaining a Ref or GenericInstance identity; no type handle → `node carries no type` |
 | two type-ASTs | `sameType(a, b)` | the checker's type identity (`resolveType("int32")` twice → true, against `"string"` → false); a non-type node → `sameType needs two type nodes` |
@@ -714,6 +714,8 @@ export macro createStyles(sheet: Node): Node {
     // st.typExprFieldNames / st.typExprFieldTypes / st.typExprFieldDecorators
 }
 ```
+
+`typExprFieldDecorators[i]` holds the decorators of field `i` as `MacroInvocation` nodes for a class, a struct and an interface alike; for a struct or interface it is the same list the declaration holds in `interfaceFieldDecorators[i]` (LANG.md "Field Decorators"). Their arguments are unevaluated syntax, so a macro that wants a string reads `stringValue(arg)` and an identifier's `name` after a `kind` check.
 
 Both hand back a **type-AST `Node`** (`TypeObject` / `TypeUnion` / `TypeArray` /
 `TypeGeneric` / `Identifier` / literal kinds — see `mapTypeToAst` in

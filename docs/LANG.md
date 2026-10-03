@@ -638,6 +638,26 @@ interface IUser { name: string; age: number; }
 struct SuperUser = IUser & { role: string; };
 ```
 
+#### Field Decorators
+
+A `struct` or `interface` field takes `@name` or `@name(args)` decorators before its name. A field decorator is metadata: it has no initializer contract and no run-time effect, and no code is emitted for it, so a decorated declaration has the same layout and the same emitted C and JS as the plain one.
+
+```typescript
+struct Accounts {
+    @signer @writable maker: Pubkey;
+    @seeds("config", mint) @bump(config.bump) config: Pubkey;
+    @address(Pubkey.systemProgram()) vault: Pubkey;
+}
+```
+
+- The name must resolve, in the scope of the declaration, to a function or a macro (`@ns.name` through a namespace import works). An unresolved name is the error `Cannot find name 'x'`, and a name that resolves to anything else is `'x' is not callable as a decorator`; the decorator is never called.
+- Arguments are kept as unevaluated syntax: `mint` and `config.bump` above need not name anything in scope.
+- A macro reads the decorators of field `i` through the declaration (`getImpl(bindSym(name))`, `interfaceFieldDecorators[i]`) or through the type view (`getTypeArg()` / `getTypeImpl`, `typExprFieldDecorators[i]`): a list of `MacroInvocation` nodes, each with `macroName` and `macroArgs`. The row exists for every field, empty when the field has none. See `docs/LANG-METAPROGRAMMING.md` "Reading types from a macro body".
+- Decorators on a class field keep the TC39 meaning (a function applied at compile time); only `struct` and `interface` fields are metadata.
+- An `extends` child lists only its own fields in `interfaceFields`, so a parent's decorators are on the parent's declaration; in the type view (`typExprFieldDecorators`) an inherited field's row is empty.
+
+Measured 2026-10-03 on a candidate built from tree `3c0765fc6b98bb83a2aedf4dae041b2e26252709`, shared machine: `msc run` of `src/test/corpus/programs/structFieldDecorators/main.ms` printed its `@stdout` line on C and with `--target=js`; a decorated and a plain `struct` or `interface` emit byte-identical C (`src/test/c/structFieldDecorators.ms`) and JS (`src/test/js/structFieldDecorators.ms`); the class decorator guards `src/test/guard/decorator*.ms` and `decorated*.ms` passed on C, except `decoratorReplace.ms`, which fails identically on the parent commit. Not measured: the type view of a generic struct instance (`getTypeArg()` cannot resolve `Pair<int32>` at the call site), LSP hover or go-to-definition on a decorator name, and the editor grammar.
+
 #### Struct Parameter Passing
 
 Struct params are **TS-compatible** — mutation propagates to the caller, just like TypeScript objects. The compiler auto-selects the optimal C ABI per parameter based on size and mutation analysis:
