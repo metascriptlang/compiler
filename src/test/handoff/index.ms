@@ -87,6 +87,7 @@ import "./comptimeHostEffects";
 import "./comptimeMacroValues";
 import "./comptimeValues";
 import "./declarationBoundaries";
+import "./delegateDeclarations";
 import "./editorRecovery";
 import "./enumRelations";
 import "./errorChannelFit";

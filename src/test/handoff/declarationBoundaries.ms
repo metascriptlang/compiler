@@ -1,5 +1,5 @@
 import { checkSource, strictErrorCount, warningCount } from "./helpers";
-import { compileToC, compileToCWithStd } from "../helpers";
+import { compileToC, compileToCWithStd, compileToJS } from "../helpers";
 import { parseSource } from "../../parser/statements/validation";
 import { resetAllSideChannels } from "../../parser/context";
 import { checkProgramWithRegistry } from "../../checker/checkPass";
@@ -225,4 +225,20 @@ test "declaration boundaries: a wrong return in a statement match arm gets the d
 	assert !inMatch.ok;
 	assert !inIf.ok;
 	assert inMatch.error == inIf.error, inMatch.error + " | " + inIf.error;
+}
+
+test "declarationBoundaries: a generic type is written with its type arguments wherever an annotation names it" {
+	const generics = "struct Owned<T> { v: T; n: int32; }\ninterface Pair<K, V> { k: K; v: V; }\n";
+	const cases = [
+		{ name: "a receiver annotation without its type argument is refused", source: "function f(this o: Owned): int32 { return o.n; }", message: "generic type 'Owned' requires 1 type argument(s)" },
+		{ name: "a union member annotation without its type arguments is refused", source: "const p: Pair | null = null;", message: "generic type 'Pair' requires 2 type argument(s)" },
+		{ name: "an array element annotation without its type argument is refused", source: "const xs: Owned[] = [];", message: "generic type 'Owned' requires 1 type argument(s)" },
+		{ name: "the same annotations with their type arguments are accepted", source: "function f(this o: Owned<int32>): int32 { return o.n; }\nconst p: Pair<int32, string> | null = null;", message: "" },
+	];
+	for (const item of cases) {
+		const result = compileToJS(generics + item.source + "\n");
+		const error = result.ok ? "" : result.error;
+		assert result.ok == (item.message == ""), item.name + ": " + error;
+		assert item.message == "" || error.indexOf(item.message, 0) >= 0, item.name + ": " + error;
+	}
 }
