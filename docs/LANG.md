@@ -143,7 +143,7 @@ const masked = flags & 0x00FF00FF;
 const shifted = byte << 4;
 ```
 
-**Type Promotion Rules**: A numeric conversion is implicit only when no value of the source can lose information. Sized integers widen into any integer type whose range contains them (`uint8` → `int16`/`int32`/`int64`, `uint16` → `int32`/`int64`, `uint32` → `int64`, and every same-signedness widening), `int8`..`uint16` widen into `float32`, `int8`..`uint32` into `float64`/`number`, `float32` into `float64`/`number`, and `number` ↔ `float64` alias. Every other numeric conversion — narrowing, a sign change that can alter a value, a wider integer into a float, `float64`/`number` → `float32`, and any float → integer at run time — is the programmer's word: `as`. The rule holds at every slot: declarations, assignments, returns, arguments (functions, methods, extensions, generic methods such as `Map.set`), union members, `sink` parameters, and the operands of arithmetic, comparison and compound-assignment operators. Into a union, a number goes into the one member that holds it implicitly (`int16` into `int32 | string`, `int32` into `number | string`); when two members hold it (`int32` into `int64 | number`) the conversion is refused and `as` names the member.
+**Type Promotion Rules**: A numeric conversion is implicit only when no value of the source can lose information. Sized integers widen into any integer type whose range contains them (`uint8` → `int16`/`int32`/`int64`, `uint16` → `int32`/`int64`, `uint32` → `int64`, and every same-signedness widening), `int8`..`uint16` widen into `float32`, `int8`..`uint32` into `float64`/`number`, `float32` into `float64`/`number`, and `number` ↔ `float64` alias. Every other numeric conversion — narrowing, a sign change that can alter a value, a wider integer into a float, `float64`/`number` → `float32`, and any float → integer at run time — is the programmer's word: `as`. The rule holds at every slot: declarations, assignments, returns, arguments (functions, methods, extensions, generic methods such as `Map.set`), union members, `sink` parameters, and the operands of arithmetic, comparison and compound-assignment operators. Into a union, a number goes into the member that holds it best, ranked as an overload is (`int16` into `int32 | string`, `int32` into `number | string`; `int32` into `int64 | number` takes `int64`, an integer widening over an integer → float conversion); when two members rank the same (`int16` into `float32 | number`) the conversion is refused and `as` names the member.
 
 Constants follow Nim's literal rule, with one safety addition:
 
@@ -167,7 +167,7 @@ error: operator '+' would convert the int64 operand to number implicitly, which 
 error: 'f' arg 0: an out parameter of type number is written in place, so the variable must be number, not int64 — declare it as number and convert after the call
 error: number out of range: '18446744073709551615' — an integer literal without a declared type is at most int64; declare the type that holds it (e.g. 'const x: uint64 = 18446744073709551615')
 error: number out of range: '1e+39' is outside the float32 range (±3.4028235e38) — float32 would hold Infinity; keep the value in a 'number'
-error: implicit int32 conversion into 'int64 | number' fits both int64 and number — write an explicit 'as int64' or 'as number'
+error: implicit int16 conversion into 'float32 | number' fits both float32 and number — write an explicit 'as float32' or 'as number'
 error: implicit int64 → int32 conversion in '+=' narrows — write an explicit 'as int32'
 ```
 
