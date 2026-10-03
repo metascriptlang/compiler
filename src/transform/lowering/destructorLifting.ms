@@ -36,7 +36,7 @@ import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
-import { CheckerContext, newSym, extReceiverSym, findAllExtensionsByName } from "../../checker/context";
+import { CheckerContext, newSym, extReceiverSym, findAllExtensionsByName, hasExtensionByName, getExtFnType } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
@@ -1467,7 +1467,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 		}
 	}
 
-	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union) return;
+	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union && !(objType.kind == TypeKind.Distinct && hasAnyUserHook(objType, lctx))) return;
 
 	if (isCrossModuleClass && !declaring) {
 		aliasLiftedOps(orig, objType);
@@ -2407,6 +2407,26 @@ function processDecl(stmt: Node, lctx: LiftCtx): void {
 	};
 }
 
+// A user hook declared for a distinct type binds to that type (reference bindHookToType accepts
+// tyDistinct), so the distinct owns lifted ops of its own, lifted in the module that declares it.
+function liftDistinctUserHooks(lctx: LiftCtx): void {
+	const cc = lctx.checkerCtx;
+	if (cc == null || cc.extensionRegistry == null) return;
+	for (const hook of ["destroy", "copy", "sink", "wasMoved", "trace"]) {
+		const methodName = userHookMethodName(hook);
+		if (!hasExtensionByName(cc.extensionRegistry, methodName)) continue;
+		for (const m of findAllExtensionsByName(cc.extensionRegistry, methodName)) {
+			if (m.isStatic || m.sym == null || m.sym.modulePath != cc.modulePath) continue;
+			const fnType = getExtFnType(m);
+			if (fnType.kind != TypeKind.Function || fnType.typeChildren.length == 0) continue;
+			let formal = fnType.typeChildren[0];
+			while ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Ref) && formal.typeReturn != null) formal = formal.typeReturn;
+			if (formal.kind != TypeKind.Distinct || formal.sym == null || formal.sym.modulePath != cc.modulePath) continue;
+			ensureHooks(formal.sym.name, formal, null as unknown as Type, formal, true, lctx, makeLoc(0, 0));
+		}
+	}
+}
+
 // ===== Main Entry Point =====
 
 function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
@@ -2488,6 +2508,7 @@ export function liftDestructors(program: Node, ctx: TransformContext, withHooks:
 		for (const stmt of pd.programStmts) {
 			processDecl(stmt, lctx);
 		}
+		liftDistinctUserHooks(lctx);
 
 		// Scan for anonymous struct types (from ObjectLiterals with no declaration).
 		// These have typeName like "__anon..." set by the checker but no InterfaceDecl.
@@ -2503,6 +2524,7 @@ export function liftDestructors(program: Node, ctx: TransformContext, withHooks:
 		generateArrayHooks(lctx, defaultLoc);
 	}
 	liftComparisons(ctx, lctx, makeLoc(0, 0));
+
 
 	for (const decl of lctx.collector) {
 		pd.programStmts.push(decl);
