@@ -1,4 +1,4 @@
-import { checkProjectDiagnostics, compileProjectToCWithStd, compileProjectToJSWithStd, MapEntry } from "../helpers";
+import { checkProjectDiagnostics, compileProjectToCWithStd, compileProjectToJSWithStd, compileToC, MapEntry } from "../helpers";
 
 const hooks = ["onDestroy", "onCopy", "onMove", "onMoved", "onTrace", "onClone"];
 
@@ -63,4 +63,51 @@ test "hook declarations: C and JS both refuse a hook outside its type's module" 
 	assert c.indexOf("can be defined only in the same module with its type (S)") >= 0, c;
 	const js = compileProjectToJSWithStd(project(library, main), "test/main.ms");
 	assert js.indexOf("can be defined only in the same module with its type (S)") >= 0, js;
+}
+
+function isIdentChar(c: string): boolean {
+	return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "_";
+}
+
+function destroyCallsOf(code: string, typeName: string): int32 {
+	let n: int32 = 0;
+	let at = code.indexOf("Destroy(&");
+	while (at >= 0) {
+		let from = at;
+		while (from > 0 && isIdentChar(code.charAt(from - 1))) from -= 1;
+		if (code.slice(from, at).startsWith(typeName)) n += 1;
+		at = code.indexOf("Destroy(&", at + 9);
+	}
+	return n;
+}
+
+test "hook declarations: a struct with no managed field takes its hook at scope exit" {
+	const src = "struct Handle { h: int32; }\n"
+		+ "function onDestroy(this x: Handle): void { console.log(\"closed\"); }\n"
+		+ "function use(): void { const a: Handle = { h: 1 }; console.log(a.h.toString()); }\n"
+		+ "use();\n";
+	const c = compileToC(src);
+	assert c.ok, c.error;
+	assert destroyCallsOf(c.value, "Handle") >= 1, "the scope exit never calls the destroy hook of a handle-only struct";
+	const generic = "struct Slot<T> { v: T; }\n"
+		+ "function onDestroy<T>(this x: Slot<T>): void { console.log(\"closed\"); }\n"
+		+ "function use(): void { const a: Slot<int32> = { v: 1 }; console.log(a.v.toString()); }\n"
+		+ "use();\n";
+	const g = compileToC(generic);
+	assert g.ok, g.error;
+	assert destroyCallsOf(g.value, "Slot") >= 1, "the scope exit never calls the destroy hook of a handle-only generic struct instance";
+}
+
+test "hook declarations: a distinct type takes its hook at scope exit, as a field and as an element" {
+	const src = "type Fd = distinct int32;\n"
+		+ "function onDestroy(this x: Fd): void { console.log(\"closed\"); }\n"
+		+ "function open(n: int32): Fd { return n as Fd; }\n"
+		+ "struct Owner { fd: Fd; tag: string; }\n"
+		+ "function local(): void { const a = open(1); console.log(\"local\"); }\n"
+		+ "function field(): void { const o: Owner = { fd: open(2), tag: \"t\" }; console.log(o.tag); }\n"
+		+ "function element(): void { const xs: Fd[] = [open(3), open(4)]; console.log(xs.length.toString()); }\n"
+		+ "local(); field(); element();\n";
+	const c = compileToC(src);
+	assert c.ok, c.error;
+	assert destroyCallsOf(c.value, "Fd") >= 4, "the destroy hook of a distinct type is not called from a local, a field and an element: " + destroyCallsOf(c.value, "Fd").toString();
 }
