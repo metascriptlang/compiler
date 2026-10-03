@@ -420,7 +420,7 @@ queued_for() {
   local qd=$1 name=$2 kinds=${3:-item run} k f
   for k in $kinds; do
     for f in "$qd"/*."$k"; do
-      [ -e "$f" ] && grep -qx "name=$name" "$f" && printf '%s\n' "$f"
+      [ -e "$f" ] && grep -qx "name=$name" "$f" 2>/dev/null && printf '%s\n' "$f"
     done
   done
   return 0
@@ -440,11 +440,12 @@ cmd_land() {
   done
   if [ -n "$target" ]; then w=$(resolve_target "$target") || exit 1; else w=$(git -C "$WT_CURRENT" rev-parse --show-toplevel); fi
   name=$(git -C "$w" symbolic-ref -q --short HEAD)
+  [ -n "$name" ] || [ "$wait" -ne 1 ] || name=$(sed -n 's#^refs/heads/##p' "$(git -C "$w" rev-parse --git-path rebase-merge/head-name)" 2>/dev/null)
   case "$name" in wt/*) name=${name#wt/} ;; *) die "land: $w is not on a wt/<name> branch" ;; esac
   qd=${MSC_LAND_QUEUE:-$HOME/metascript/.wt/queue}
   if [ "$wait" -eq 1 ]; then
     while [ ! -e "$qd/$name.done" ] && [ ! -e "$qd/$name.red" ]; do
-      [ -n "$(queued_for "$qd" "$name")" ] || die "land: nothing queued for $name and no result in $qd"
+      [ -n "$(queued_for "$qd" "$name")" ] || [ -e "$qd/$name.done" ] || [ -e "$qd/$name.red" ] || die "land: nothing queued for $name and no result in $qd"
       sleep "${MSC_LAND_QUEUE_WAIT_POLL:-30}"
     done
     if [ -e "$qd/$name.done" ]; then say "land-queue: $name landed — $(cat "$qd/$name.done")"; exit 0; fi
