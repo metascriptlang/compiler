@@ -13,7 +13,7 @@
 //   "a" + 1          — mixed types
 
 import { Node, NodeKind, BinaryExprData, UnaryExprData, MemberExprData, StringLiteralData } from "../../ast/node";
-import { foldConstantExpression, foldBinaryLiterals, foldUnaryLiteral } from "../../checker/constFold";
+import { foldConstantExpression, foldBinaryLiterals, foldUnaryLiteral, foldConstInitializer } from "../../checker/constFold";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeNumber } from "../util";
@@ -34,13 +34,19 @@ function foldNode(node: Node): Node {
 		NodeKind.Identifier => foldConstantExpression(node),
 		NodeKind.TypeAssertion => foldConstantExpression(node),
 		NodeKind.HiddenStdConv => foldConstantExpression(node),
+		NodeKind.VariableDecl => foldConstDecl(node),
 		_ => node,
 	};
 }
 
+function foldConstDecl(node: Node): Node {
+	foldConstInitializer(node);
+	return node;
+}
+
 function foldReloadableNode(node: Node): Node {
 	match (node.kind) {
-		NodeKind.Identifier | NodeKind.TypeAssertion | NodeKind.HiddenStdConv => { return node; },
+		NodeKind.Identifier | NodeKind.TypeAssertion | NodeKind.HiddenStdConv | NodeKind.VariableDecl => { return node; },
 		NodeKind.MemberExpr => {
 			const d = node.data as MemberExprData;
 			return d.object.kind == NodeKind.StringLiteral && d.property == "code" ? foldMember(node) : node;
