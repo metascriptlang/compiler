@@ -15,7 +15,7 @@ import { hasErrors, CheckerError, CheckerContext } from "../checker/context";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { expandMacros } from "../compiler/meta/expand";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
-import { refuseSpanByteCastOnJs } from "../checker/spanByteCast";
+import { refusePointerCastsOnJs } from "../checker/byteViews";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { transformForNative } from "../transform/native/index";
@@ -210,6 +210,8 @@ export function compileToJS(source: string, target: TargetInfo = hostTargetInfo(
 	const checkerCtx = unit.ctx;
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
 	placeOwnedInstances([unit], true);
+	refusePointerCastsOnJs(checkerCtx, unit.program);
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
 
 	const transformed = transformProgram(unit.program, checkerCtx, true);
 	// Mirrors the drain compile.ms runs after the JS transform: a pass that
@@ -241,6 +243,8 @@ export function compileTestBuildToJS(source: string): CompileResult {
 	const checkerCtx = unit.ctx;
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
 	placeOwnedInstances([unit], true);
+	refusePointerCastsOnJs(checkerCtx, unit.program);
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
 
 	const transformed = transformProgram(unit.program, checkerCtx, true);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
@@ -551,7 +555,6 @@ function emitJSTwoPhase(graph: ModuleGraph, entryFilter: MapEntry[] | null, cano
 
 		if (isEntryPath(canonEntries, modPath)) {
 			refuseSyncAwaitOnJs(ctx, expanded);
-			refuseSpanByteCastOnJs(ctx, expanded);
 			if (hasErrors(ctx)) {
 				let msg = `ERROR: check [${modPath}]:`;
 				for (const err of ctx.errors) {
@@ -588,7 +591,18 @@ function emitJSTwoPhase(graph: ModuleGraph, entryFilter: MapEntry[] | null, cano
 
 	let combined = "";
 	for (let i = 0; i < unitPrograms.length; i += 1) {
+		refusePointerCastsOnJs(unitCtxs[i], unitPrograms[i]);
+		if (hasErrors(unitCtxs[i])) {
+			let msg = `ERROR: check [${unitPaths[i]}]:`;
+			for (const err of unitCtxs[i].errors) msg = `${msg} ${err.message}`;
+			return msg;
+		}
 		const transformed = transformProgram(unitPrograms[i], unitCtxs[i], true);
+		if (hasErrors(unitCtxs[i])) {
+			let msg = `ERROR: transform [${unitPaths[i]}]:`;
+			for (const err of unitCtxs[i].errors) msg = `${msg} ${err.message}`;
+			return msg;
+		}
 		combined = combined + generateJS(transformed, []);
 	}
 	return combined;
