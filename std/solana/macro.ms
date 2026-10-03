@@ -303,6 +303,22 @@ export macro accounts(): Node {
 				isDirectCall: false,
 				resolvedOverloadIdx: -1,
 			};
+			const folded: Node = {
+				kind: NodeKind.ComptimeBlock,
+				line: line,
+				column: column,
+				comptimeBody: {
+					kind: NodeKind.BlockStmt,
+					line: line,
+					column: column,
+					statements: [{
+						kind: NodeKind.ReturnStmt,
+						line: line,
+						column: column,
+						argument: discriminator,
+					}],
+				},
+			};
 			const size: Node = {
 				kind: NodeKind.TypeAssertion,
 				line: line,
@@ -315,7 +331,7 @@ export macro accounts(): Node {
 				},
 				asType: "uint64",
 			};
-			extra = [discriminator, size];
+			extra = [folded, size];
 		}
 		let check: Node | null = null;
 		if (callee != null) {
