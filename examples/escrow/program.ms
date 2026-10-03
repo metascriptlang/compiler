@@ -205,7 +205,7 @@ when (!testBuild) {
 
 when (testBuild) {
 	import { Discriminator, findProgramAddressOf, instructionDiscriminator } from "std/solana";
-	import { HostAccount, run } from "std/solana/host";
+	import { HostAccount, invocations, run, signerIs, textBytes } from "std/solana/host";
 	import { associatedTokenAddress } from "std/solana/token";
 
 	function keyOf(seed: uint8): Pubkey {
@@ -361,6 +361,48 @@ when (testBuild) {
 		assert taken[7].owner == Pubkey.systemProgram();
 		assert taken[8].lamports == 0;
 		assert taken[1].lamports > makerBefore;
+	}
+
+	function escrowSeeds(seed: uint64): uint8[][] {
+		const found = findProgramAddressOf(programKey(), ["escrow", maker, leBytes(seed)]);
+		const makerBytes: uint8[] = [];
+		for (let i = 0; i < 32; i++) { makerBytes.push(maker.bytes[i]); }
+		const seedBytes: uint8[] = [];
+		pushU64(seedBytes, seed);
+		return [textBytes("escrow"), makerBytes, seedBytes, [found.ok ? found.value.bump : 0]];
+	}
+
+	test "make, take and refund sign with the escrow's seeds and its bump" {
+		const made = makeAccounts(7);
+		assert run(programKey(), made, makeData(7, 600, 300), entry).result == 0;
+		const created = invocations();
+		assert created.length == 3 && created[0].signers == 1 && created[1].signers == 0;
+		assert signerIs(created[0], 0, escrowSeeds(7));
+		const taken: HostAccount[] = [
+			wallet(taker),
+			{ ...made[0], signer: false },
+			made[1],
+			made[2],
+			tokenAccount(taker, mintA, 0),
+			tokenAccount(taker, mintB, 500),
+			tokenAccount(maker, mintB, 0),
+			made[4],
+			made[5],
+			made[7],
+			made[8],
+		];
+		assert run(programKey(), taken, instructionData("Take"), entry).result == 0;
+		const calls = invocations();
+		assert calls.length == 3 && calls[0].signers == 0;
+		assert calls[1].signers == 1 && signerIs(calls[1], 0, escrowSeeds(7));
+		assert calls[2].signers == 1 && signerIs(calls[2], 0, escrowSeeds(7));
+		const again = makeAccounts(9);
+		assert run(programKey(), again, makeData(9, 600, 300), entry).result == 0;
+		const refunded = [again[0], again[1], again[3], again[4], again[5], again[7], again[8]];
+		assert run(programKey(), refunded, instructionData("Refund"), entry).result == 0;
+		const returned = invocations();
+		assert returned.length == 2;
+		assert signerIs(returned[0], 0, escrowSeeds(9)) && signerIs(returned[1], 0, escrowSeeds(9));
 	}
 
 	test "refund returns the deposit to the maker and closes both accounts" {

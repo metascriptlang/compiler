@@ -15,7 +15,7 @@ import { SeedTable, bytesAddress, findAt, tableAddress } from "./seed";
 when (testBuild) {
 	import { account, failWith, instructionData, programId } from "./core";
 	import { findProgramAddress } from "./macro";
-	import { HostAccount, invocations, run } from "./host";
+	import { HostAccount, invocations, run, signerIs, textBytes } from "./host";
 }
 
 export struct DelegationAccounts {
@@ -410,6 +410,27 @@ when (testBuild) {
 			0,
 		];
 		assert sameBytes(sent.data, args);
+	}
+
+	function keyBytes(key: Pubkey): uint8[] {
+		const bytes: uint8[] = [];
+		for (let index = 0; index < 32; index++) { bytes.push(key.bytes[index]); }
+		return bytes;
+	}
+
+	test "delegate signs the buffer, the assign and the delegation with their seeds and bumps" {
+		const accounts = delegationAccounts();
+		assert delegateRun(accounts, 0) == 0;
+		const calls = invocations();
+		const pet = findProgramAddressOf(programKey(), ["pet"]);
+		const buffer = findProgramAddressOf(programKey(), ["buffer", petKey()]);
+		assert pet.ok && buffer.ok;
+		if (pet.ok && buffer.ok) {
+			const bufferSeeds = [textBytes("buffer"), keyBytes(petKey()), [buffer.value.bump]];
+			assert calls[0].signers == 1 && signerIs(calls[0], 0, bufferSeeds);
+			assert calls[1].signers == 1 && signerIs(calls[1], 0, [textBytes("pet"), [pet.value.bump]]);
+			assert calls[2].signers == 1 && signerIs(calls[2], 0, [textBytes("pet"), [pet.value.bump]]);
+		}
 	}
 
 	test "delegate zeroes the account, hands it to the delegation program and closes the buffer" {

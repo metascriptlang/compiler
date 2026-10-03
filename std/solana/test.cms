@@ -13,6 +13,13 @@ import {
 	writable,
 	instructionDiscriminator,
 	Seeds,
+	Instruction,
+	account,
+	allocate,
+	assignTo,
+	createAccount,
+	createProgramAccount,
+	transfer,
 	close,
 	create,
 	createPda,
@@ -36,7 +43,7 @@ import {
 	Bytes,
 	borshBuffer,
 } from "./index";
-import { HostAccount, logs, run } from "./host";
+import { HostAccount, invocations, logs, run, signerIs, textBytes } from "./host";
 import {
 	accounts,
 	args,
@@ -858,4 +865,112 @@ test "an account is a seed through its key, whatever proof it carries" {
 		holder(4, Pubkey.systemProgram(), [], false, false),
 	];
 	assert run(programKey(), accounts, [], accountSeedEntry).result == 0;
+}
+
+function keyBytes(key: Pubkey): uint8[] {
+	const bytes: uint8[] = [];
+	for (let index = 0; index < 32; index++) { bytes.push(key.bytes[index]); }
+	return bytes;
+}
+
+function vaultSigner(): uint8[][] {
+	return [textBytes("vault"), keyBytes(keyOf(5)), [7]];
+}
+
+function counterSigner(): uint8[][] {
+	return [textBytes("counter"), [7]];
+}
+
+function signingStep(): Result<uint64, ProgramError> {
+	const op = try instructionData().readU8(0);
+	const first = try account(0);
+	const second = try account(1);
+	const vault = Seeds.empty(3).addText("vault").addPubkey(keyOf(5)).addU8(7);
+	if (op == 0) { return transfer(first, second, 10, vault); }
+	if (op == 1) { return createAccount(first, second, 100, 8, keyOf(9), vault); }
+	if (op == 2) { return assignTo(second, keyOf(9), vault); }
+	if (op == 3) { return allocate(second, 16, vault); }
+	if (op == 4) { return createProgramAccount(first, second, 16, keyOf(9), vault); }
+	const instruction = Instruction.forProgram(keyOf(9), 1, 1);
+	instruction.addWritable(second);
+	instruction.appendU8(3);
+	if (op == 5) { return instruction.invokeSigned(vault); }
+	if (op == 6) {
+		const counter = Seeds.empty(2).addText("counter").addU8(7);
+		const both: Seeds[2] = [vault, counter];
+		return instruction.invokeSigned(both);
+	}
+	return instruction.invoke();
+}
+
+function signingEntry(): void { codeOf(signingStep()); }
+
+function signingRun(op: uint8, target: HostAccount): HostAccount[] {
+	const accounts = [wallet(1, 10000000), target];
+	const input: uint8[] = [op];
+	run(programKey(), accounts, input, signingEntry);
+	return accounts;
+}
+
+test "a signed System call sends the seeds it was given, in order" {
+	for (const op of [0, 1, 2, 3]) {
+		signingRun(op as uint8, op == 1 ? blank(keyOf(2)) : wallet(2, 5000));
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, vaultSigner());
+	}
+	assert signingRun(0, wallet(2, 5000))[1].lamports == 5010;
+}
+
+test "createProgramAccount signs the create, or the allocate and the assign of a prefunded account" {
+	signingRun(4, blank(keyOf(2)));
+	let calls = invocations();
+	assert calls.length == 1 && signerIs(calls[0], 0, vaultSigner());
+	signingRun(4, wallet(2, 1));
+	calls = invocations();
+	assert calls.length == 3;
+	assert calls[0].signers == 0 && calls[0].signerSeeds.length == 0;
+	assert calls[1].signers == 1 && signerIs(calls[1], 0, vaultSigner());
+	assert calls[2].signers == 1 && signerIs(calls[2], 0, vaultSigner());
+}
+
+test "an instruction is invoked with one signer, with two, or with none" {
+	signingRun(5, wallet(2, 5000));
+	let calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 1;
+	assert signerIs(calls[0], 0, vaultSigner());
+	signingRun(6, wallet(2, 5000));
+	calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 2;
+	assert signerIs(calls[0], 0, vaultSigner()) && signerIs(calls[0], 1, counterSigner());
+	signingRun(7, wallet(2, 5000));
+	calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 0 && calls[0].signerSeeds.length == 0;
+}
+
+function createSignedStep(): Result<uint64, ProgramError> {
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	const vault = Seeds.empty(3).addText("vault").addPubkey(keyOf(5)).addU8(7);
+	const counter = try create<Counter>(payer, target, vault);
+	counter.data().value = 5;
+	return Result.ok(0);
+}
+
+function createSignedEntry(): void { codeOf(createSignedStep()); }
+
+test "create signs with the seeds it was given, and createPda with its seeds and the found bump" {
+	const accounts = [wallet(1, 10000000), blank(keyOf(2))];
+	assert run(programKey(), accounts, [], createSignedEntry).result == 0;
+	let calls = invocations();
+	assert calls.length == 1 && signerIs(calls[0], 0, vaultSigner());
+	const derived = findProgramAddressOf(programKey(), ["counter"]);
+	assert derived.ok;
+	if (derived.ok) {
+		const pdaAccounts = [wallet(1, 10000000), blank(derived.value.key)];
+		assert run(programKey(), pdaAccounts, [], createPdaEntry).result == 0;
+		calls = invocations();
+		assert calls.length == 1 && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, [textBytes("counter"), [derived.value.bump]]);
+	}
 }

@@ -26,11 +26,13 @@ when (testBuild) {
 		account,
 		failWith,
 		instructionData,
+		external,
+		externalMutable,
 		logU64,
 		writable,
 		writableSigner,
 	} from "./core";
-	import { HostAccount, invocations, logs, run } from "./host";
+	import { HostAccount, invocations, logs, run, signerIs, textBytes } from "./host";
 	import { accounts, findProgramAddressOf } from "./macro";
 }
 
@@ -811,6 +813,49 @@ when (testBuild) {
 		const payer = try account(3);
 		const none = Seeds.none();
 		const token = Pubkey.tokenProgram();
+		const signing = Seeds.empty(2).addText("auth").addU8(5);
+		if (op == 7) { return mintTo(token, mint, target, authority, 500, signing); }
+		if (op == 8) { return transferChecked(token, payer, mint, target, authority, 250, 6, signing); }
+		if (op == 9) { return closeAccount(token, target, payer, authority, signing); }
+		if (op == 10) {
+			const system = try account(4);
+			const program = try account(5);
+			return createAssociatedToken(payer, target, authority, mint, system, program, signing);
+		}
+		if (op == 11) {
+			const system = try account(4);
+			const program = try account(5);
+			return createAssociatedTokenIdempotent(
+				payer,
+				target,
+				authority,
+				mint,
+				system,
+				program,
+				signing,
+			);
+		}
+		if (op == 12) {
+			return mintTokens(try externalMutable<Mint>(0), try externalMutable<TokenAccount>(1), authority, 500, signing);
+		}
+		if (op == 13) {
+			return closeTokenAccount(
+				try externalMutable<TokenAccount>(1),
+				try writable(3),
+				authority,
+				signing,
+			);
+		}
+		if (op == 14) {
+			return transferTokensSigned(
+				try externalMutable<TokenAccount>(3),
+				try externalMutable<TokenAccount>(1),
+				try external<Mint>(0),
+				authority,
+				250,
+				signing,
+			);
+		}
 		if (op == 0) { return mintTo(token, mint, target, authority, 500, none); }
 		if (op == 1) {
 			const extended = Pubkey.token2022Program();
@@ -913,6 +958,28 @@ when (testBuild) {
 		assert created.data.length == 1 && created.data[0] == 1;
 	}
 
+	function authSigner(): uint8[][] {
+		return [textBytes("auth"), [5]];
+	}
+
+	test "each token CPI sends the signer seeds it was given" {
+		for (const op of [7, 8, 9, 10, 11, 12, 13, 14]) {
+			const accounts = cpiAccounts();
+			if (op == 10) {
+				accounts[1].lamports = 0;
+				accounts[3].lamports = 10000000;
+			}
+			if (op == 14) { accounts[3].owner = Pubkey.tokenProgram(); }
+			assert resultOf(accounts, op as uint8, cpiEntry) == 0;
+			const calls = invocations();
+			assert calls.length == 1 && calls[0].signers == 1;
+			assert signerIs(calls[0], 0, authSigner());
+		}
+		assert resultOf(cpiAccounts(), 0, cpiEntry) == 0;
+		const unsigned = invocations()[0];
+		assert unsigned.signers == 0 && unsigned.signerSeeds.length == 0;
+	}
+
 	function mintPdaStep(): Result<uint64, ProgramError> {
 		const op = try instructionData().readU8(0);
 		const program = op == 0 ? Pubkey.tokenProgram() : Pubkey.systemProgram();
@@ -955,6 +1022,9 @@ when (testBuild) {
 		const created = invocations()[0];
 		assert created.program.equals(Pubkey.systemProgram()) && created.data[0] == 0;
 		assert created.data[12] == 82 && created.signers == 1;
+		const mintBump = findProgramAddressOf(keyOf(9), ["mint"]);
+		assert mintBump.ok;
+		if (mintBump.ok) { assert signerIs(created, 0, [textBytes("mint"), [mintBump.value.bump]]); }
 		const initialized = invocations()[1];
 		assert initialized.program.equals(Pubkey.tokenProgram());
 		assert initialized.accounts.length == 1 && initialized.accounts[0].key.equals(mintKey());

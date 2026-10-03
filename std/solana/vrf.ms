@@ -12,7 +12,7 @@ import { Pubkey, pubkeyOf } from "./pubkey";
 
 when (testBuild) {
 	import { account, failWith, instructionData } from "./core";
-	import { HostAccount, invocations, run } from "./host";
+	import { HostAccount, invocations, run, signerIs, textBytes } from "./host";
 }
 
 export struct RandomnessRequest {
@@ -244,6 +244,9 @@ when (testBuild) {
 		assert requestRun(requestAccounts(identityOf(programKey())), 0) == 0;
 		const sent = invocations()[0];
 		assert sent.program.equals(Pubkey.vrfProgram()) && sent.signers == 1;
+		const identity = findProgramAddressOf(programKey(), ["identity"]);
+		assert identity.ok;
+		if (identity.ok) { assert signerIs(sent, 0, [textBytes("identity"), [identity.value.bump]]); }
 		assert sent.accounts.length == 5;
 		assert sent.accounts[0].key.equals(keyOf(1));
 		assert sent.accounts[0].signer && sent.accounts[0].writable;
@@ -284,6 +287,13 @@ when (testBuild) {
 		assert requestRun(accounts, 2) == 0;
 		const sent = invocations()[0];
 		assert sent.signers == 2;
+		const identity = findProgramAddressOf(programKey(), ["identity"]);
+		const payer = findProgramAddressOf(programKey(), ["vrf-payer"]);
+		assert identity.ok && payer.ok;
+		if (identity.ok && payer.ok) {
+			assert signerIs(sent, 0, [textBytes("identity"), [identity.value.bump]]);
+			assert signerIs(sent, 1, [textBytes("vrf-payer"), [payer.value.bump]]);
+		}
 		assert sent.accounts[0].key.equals(vrfPayerKey());
 		assert sent.accounts[0].signer && sent.accounts[0].writable;
 		assert sent.accounts[1].key.equals(identityOf(programKey())) && sent.accounts[1].signer;
