@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
 import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, collectTokenText } from "../context";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
@@ -848,7 +848,16 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	const fieldTypeExprs: Node[] = [];
 	const fieldLocations: SourceLocation[] = [];
 	const fieldVisibility: string[] = [];
+	const fieldDecorators: Node[][] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
+		const decorators: Node[] = [];
+		while (!isAtEnd(state) && current(state).kind == TokenKind.At) {
+			const dec = try parseMacroInvocation(state);
+			if (dec.kind != NodeKind.MacroInvocation) {
+				return Result.err(`Expected '@name' or '@name(args)' before a ${keyword} field at line ${dec.location.line}`);
+			}
+			decorators.push(dec);
+		}
 		let visibility = "";
 		const modifier = current(state);
 		if ((modifier.kind == TokenKind.Private || modifier.kind == TokenKind.Public || modifier.kind == TokenKind.Protected)
@@ -864,6 +873,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 			return Result.err(`Expected field name in ${keyword} at line ${field.line}`);
 		}
 		fieldVisibility.push(visibility);
+		fieldDecorators.push(decorators);
 
 		fields.push(field.value);
 		fieldLocations.push(makeLocFromToken(field));
@@ -900,6 +910,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		// nameLoc (from nameToken) is preferred; fall back to keyword token for legacy callers.
 		nameLocation: nameLoc != null ? nameLoc : makeLocFromToken(token),
 		interfaceFieldVisibility: fieldVisibility,
+		interfaceFieldDecorators: fieldDecorators,
 	}, token);
 	ifaceNode.typeArg = genericNames;
 	ifaceNode.typeExprs = fieldTypeExprs;
@@ -955,6 +966,7 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 			interfaceExtends: aliasExtends,
 			nameLocation: nameLoc,
 			interfaceFieldVisibility: [],
+			interfaceFieldDecorators: [],
 		}, token);
 		aliasNode.typeArg = genericNames;
 		aliasNode.typeExprs = [];
@@ -1965,6 +1977,37 @@ test "export struct" { assert programOk("export struct Vec2 { x: number; y: numb
 test "exported distinct modifier rejected" { assert !programOk("export distinct type EntityId = number;"); }
 
 test "extern struct" { assert programOk("extern struct NativePoint { x: float64; y: float64; }"); }
+
+test "struct field decorators keep name, arguments and order, one row per field" {
+	const d = stmtAt("struct S { @a @b(1, x) f: int32; g: int32; }", 0).data as InterfaceDeclData;
+	assert d.interfaceFieldDecorators.length == 2;
+	assert d.interfaceFieldDecorators[0].length == 2;
+	assert (d.interfaceFieldDecorators[0][0].data as MacroInvocationData).macroName == "a";
+	assert !(d.interfaceFieldDecorators[0][0].data as MacroInvocationData).macroHasParens;
+	const second = d.interfaceFieldDecorators[0][1].data as MacroInvocationData;
+	assert second.macroName == "b" && second.macroHasParens && second.macroArgs.length == 2;
+	assert second.macroArgs[1].kind == NodeKind.Identifier;
+	assert d.interfaceFieldDecorators[1].length == 0;
+}
+
+test "interface field decorators parse on the shared field path" {
+	const d = stmtAt("interface I { @a f: int32; g: int32; }", 0).data as InterfaceDeclData;
+	assert d.interfaceFieldDecorators.length == 2 && d.interfaceFieldDecorators[0].length == 1;
+}
+
+test "struct field decorator with a dotted name keeps the whole name" {
+	const d = stmtAt("struct S { @ns.seeds(\"a\") f: int32; }", 0).data as InterfaceDeclData;
+	assert (d.interfaceFieldDecorators[0][0].data as MacroInvocationData).macroName == "ns.seeds";
+}
+
+test "struct field decorator with no field after it is a parse error" { assert !programOk("struct S { @a }"); }
+
+test "struct field accepts no comptime block in place of a decorator" { assert !programOk("struct S { @comptime { } f: int32; }"); }
+
+test "struct without decorators carries one empty row per field" {
+	const d = stmtAt("struct S { f: int32; g: int32; }", 0).data as InterfaceDeclData;
+	assert d.interfaceFieldDecorators.length == 2 && d.interfaceFieldDecorators[0].length == 0 && d.interfaceFieldDecorators[1].length == 0;
+}
 
 // Param features — exercises parseParamList + skipDefaultValue
 test "rest param" { assert programOk("function f(...args) { return args; }"); }

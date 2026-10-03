@@ -456,12 +456,10 @@ function idxsP(arr: Node[] | null): string {
 
 function nestedIdxsP(arrs: Node[][] | null): string {
 	if (arrs == null) return "-";
-	if (arrs.length == 0) return "";
 	let out = "";
 	let i = 0;
 	while (i < arrs.length) {
-		if (i > 0) out = out + ";";
-		out = out + idxsP(arrs[i]);
+		out = out + idxsP(arrs[i]) + ";";
 		i = i + 1;
 	}
 	return out;
@@ -973,7 +971,7 @@ function tp(i: int32, types: Type[]): Type | null {
 	return i >= 0 && i < types.length ? types[i] : null;
 }
 
-function splitSemi(s: string): string[] {
+function splitRows(s: string): string[] {
 	const out: string[] = [];
 	let cur = "";
 	let i = 0;
@@ -982,19 +980,17 @@ function splitSemi(s: string): string[] {
 		if (ch == ";") {
 			out.push(cur);
 			cur = "";
-			i = i + 1;
-			continue;
+		} else {
+			cur = cur + ch;
 		}
-		cur = cur + ch;
 		i = i + 1;
 	}
-	if (cur != "" || out.length > 0) out.push(cur);
 	return out;
 }
 
 function parseNestedNodeArrs(s: string, nodes: Node[]): Node[][] {
 	if (s == "-" || s == "") return [];
-	const parts = splitSemi(s);
+	const parts = splitRows(s);
 	const out: Node[][] = [];
 	for (const p of parts) out.push(parseNodeArr(p, nodes));
 	return out;
@@ -1060,7 +1056,7 @@ function buildNodeData(kind: NodeKind, f: string[], nodes: Node[], types: Type[]
 	if (kind == NodeKind.ExportDecl) return { exportedDecl: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.TypeAliasDecl) return { aliasName: unescapeP(f[0]), aliasType: unescapeP(f[1]), aliasIsDistinct: f[2] == "1", aliasGenericParams: unescapeP(f[3]), discriminantName: unescapeP(f[4]), discriminantType: unescapeP(f[5]), variantKeys: splitCsv(f[6]), variantTypes: splitCsv(f[7]), nameLocation: parseLoc(f[8]) } as NodeData;
 	if (kind == NodeKind.EnumDecl) return { enumName: unescapeP(f[0]), enumMembers: splitCsv(f[1]), enumValues: parseFloatsCsv(f[2]), nameLocation: parseLoc(f[3]), memberLocations: f[4] == "-" ? null as unknown as SourceLocation[] : parseLocs(f[4]), enumInits: parseNodeArr(f[5], nodes) } as NodeData;
-	if (kind == NodeKind.InterfaceDecl || kind == NodeKind.StructDecl) return { interfaceName: unescapeP(f[0]), interfaceFields: splitCsv(f[1]), interfaceFieldTypes: splitCsv(f[2]), interfaceExtends: splitCsv(f[3]), nameLocation: parseLoc(f[4]), interfaceFieldVisibility: splitCsv(f[5]) } as NodeData;
+	if (kind == NodeKind.InterfaceDecl || kind == NodeKind.StructDecl) return { interfaceName: unescapeP(f[0]), interfaceFields: splitCsv(f[1]), interfaceFieldTypes: splitCsv(f[2]), interfaceExtends: splitCsv(f[3]), nameLocation: parseLoc(f[4]), interfaceFieldVisibility: splitCsv(f[5]), interfaceFieldDecorators: parseNestedNodeArrs(f[6], nodes) } as NodeData;
 	if (kind == NodeKind.ClassDecl) return { className: unescapeP(f[0]), classExtends: unescapeP(f[1]), classBody: parseNodeArr(f[2], nodes), nameLocation: parseLoc(f[3]) } as NodeData;
 	if (kind == NodeKind.PropertyDecl) return { propName: unescapeP(f[0]), propType: unescapeP(f[1]), propIsStatic: f[2] == "1", propIsReadonly: f[3] == "1", propVisibility: unescapeP(f[4]), propInitializer: nd(f[5].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.MethodDecl) return { methodName: unescapeP(f[0]), methodParams: splitCsv(f[1]), methodParamTypes: splitCsv(f[2]), methodBody: nd(f[3].parseInt() as int32, nodes) as Node, methodIsStatic: f[4] == "1", methodFlags: unescapeP(f[5]), methodVisibility: unescapeP(f[6]), methodReturnType: unescapeP(f[7]), methodDefaults: parseNodeArr(f[8], nodes), nativeName: unescapeP(f[9]), nameLocation: parseLoc(f[10]) } as NodeData;

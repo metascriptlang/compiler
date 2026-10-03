@@ -162,6 +162,19 @@ function collectFieldDecorators(t: Type): Node[][] {
 	const out: Node[][] = [];
 	for (let i = 0; i < t.typeNames.length; i = i + 1) out.push([]);
 	if (t.sym == null) return out;
+	const decl = t.sym.declNode;
+	if (decl != null && (decl.kind == NodeKind.StructDecl || decl.kind == NodeKind.InterfaceDecl)) {
+		const d = decl.data as InterfaceDeclData;
+		for (let j = 0; j < t.typeNames.length; j = j + 1) {
+			for (let k = 0; k < d.interfaceFields.length; k = k + 1) {
+				if (d.interfaceFields[k] == t.typeNames[j]) {
+					out[j] = d.interfaceFieldDecorators[k];
+					break;
+				}
+			}
+		}
+		return out;
+	}
 	for (let j = 0; j < t.typeNames.length; j = j + 1) {
 		for (let k = 0; k < t.sym.fieldDecoratorNames.length; k = k + 1) {
 			if (t.sym.fieldDecoratorNames[k] == t.typeNames[j]) {
@@ -937,6 +950,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStrs(objHeap, arrHeap, handle, "interfaceFieldTypes", d.interfaceFieldTypes);
 			setStrs(objHeap, arrHeap, handle, "interfaceExtends", d.interfaceExtends);
 			setStrs(objHeap, arrHeap, handle, "interfaceFieldVisibility", d.interfaceFieldVisibility != null ? d.interfaceFieldVisibility : []);
+			setNodeArrays(objHeap, arrHeap, handle, "interfaceFieldDecorators", d.interfaceFieldDecorators);
 			setStr(objHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.ClassDecl => {
@@ -1270,6 +1284,12 @@ function readNodeArrays(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: 
 		i = i + 1;
 	}
 	return result;
+}
+
+function readFieldDecorators(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, fieldCount: int32, fallbackLoc: SourceLocation): Node[][] {
+	const rows = readNodeArrays(objHeap, arrHeap, h, "interfaceFieldDecorators", fallbackLoc);
+	while (rows.length < fieldCount) rows.push([]);
+	return rows;
 }
 
 export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
@@ -1770,6 +1790,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 				interfaceExtends: readStrs(objHeap, arrHeap, h, "interfaceExtends"),
 				nameLocation: loc,
 				interfaceFieldVisibility: readStrs(objHeap, arrHeap, h, "interfaceFieldVisibility"),
+				interfaceFieldDecorators: readFieldDecorators(objHeap, arrHeap, h, interfaceFields.length, loc),
 			}, loc);
 			decl.typeArg = readStr(objHeap, h, "typeArg");
 			return decl;
@@ -1783,6 +1804,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 				interfaceExtends: readStrs(objHeap, arrHeap, h, "interfaceExtends"),
 				nameLocation: loc,
 				interfaceFieldVisibility: readStrs(objHeap, arrHeap, h, "interfaceFieldVisibility"),
+				interfaceFieldDecorators: readFieldDecorators(objHeap, arrHeap, h, interfaceFields.length, loc),
 			}, loc);
 			decl.typeArg = readStr(objHeap, h, "typeArg");
 			return decl;
@@ -3456,7 +3478,7 @@ test "round-trip InterfaceDecl keeps interfaceExtends" {
 	const loc = makeLoc(3, 1);
 	const orig = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: "Child", interfaceFields: ["x"], interfaceFieldTypes: ["number"],
-		interfaceExtends: ["Base"], nameLocation: loc,
+		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
@@ -3470,11 +3492,43 @@ test "round-trip StructDecl keeps interfaceExtends" {
 	const loc = makeLoc(3, 1);
 	const orig = createNode(NodeKind.StructDecl, {
 		interfaceName: "S", interfaceFields: [], interfaceFieldTypes: [],
-		interfaceExtends: ["Base"], nameLocation: loc,
+		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldDecorators: [],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
 	assert d.interfaceExtends.length == 1;
+}
+
+test "round-trip StructDecl keeps each field's decorators with their arguments" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 1);
+	const arg = createNode(NodeKind.StringLiteral, { value: "config" }, synthToken(loc));
+	const dec = createNode(NodeKind.MacroInvocation, { macroName: "seeds", macroArgs: [arg], macroHasParens: true }, synthToken(loc));
+	const orig = createNode(NodeKind.StructDecl, {
+		interfaceName: "S", interfaceFields: ["a", "b"], interfaceFieldTypes: ["int32", "int32"],
+		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [[dec], []],
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as InterfaceDeclData;
+	assert d.interfaceFieldDecorators.length == 2;
+	assert d.interfaceFieldDecorators[0].length == 1 && d.interfaceFieldDecorators[1].length == 0;
+	const md = d.interfaceFieldDecorators[0][0].data as MacroInvocationData;
+	assert md.macroName == "seeds" && md.macroArgs.length == 1 && md.macroHasParens;
+	assert md.macroArgs[0].kind == NodeKind.StringLiteral;
+}
+
+test "round-trip pads a declaration built without decorators to one empty row per field" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 1);
+	const orig = createNode(NodeKind.InterfaceDecl, {
+		interfaceName: "I", interfaceFields: ["a", "b", "c"], interfaceFieldTypes: ["int32", "int32", "int32"],
+		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [],
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as InterfaceDeclData;
+	assert d.interfaceFieldDecorators.length == 3 && d.interfaceFieldDecorators[2].length == 0;
 }
 
 test "round-trip keeps the generic params of an interface, a struct, a class and an actor" {
@@ -3483,12 +3537,12 @@ test "round-trip keeps the generic params of an interface, a struct, a class and
 	const loc = makeLoc(3, 1);
 	const iface = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: "Box", interfaceFields: ["v"], interfaceFieldTypes: ["T"],
-		interfaceExtends: [] as string[], nameLocation: loc,
+		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	iface.typeArg = "T";
 	const strukt = createNode(NodeKind.StructDecl, {
 		interfaceName: "Cell", interfaceFields: ["v"], interfaceFieldTypes: ["T"],
-		interfaceExtends: [] as string[], nameLocation: loc,
+		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	strukt.typeArg = "T:number";
 	const cls = createNode(NodeKind.ClassDecl, { className: "Pair", classExtends: "", classBody: [] as Node[], nameLocation: loc }, synthToken(loc));
@@ -3548,7 +3602,7 @@ test "round-trip InterfaceDecl keeps interfaceExtends" {
 	const loc = makeLoc(3, 1);
 	const orig = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: "Child", interfaceFields: ["x"], interfaceFieldTypes: ["number"],
-		interfaceExtends: ["Base"], nameLocation: loc,
+		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
@@ -3562,7 +3616,7 @@ test "round-trip StructDecl keeps interfaceExtends" {
 	const loc = makeLoc(3, 1);
 	const orig = createNode(NodeKind.StructDecl, {
 		interfaceName: "S", interfaceFields: [], interfaceFieldTypes: [],
-		interfaceExtends: ["Base"], nameLocation: loc,
+		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldDecorators: [],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;

@@ -4,7 +4,7 @@
 // during type checking (src/checker/instantiate.ms → callInstantiateGeneric).
 // This file only handles generic TYPE instances (e.g., Box<number> → InterfaceDecl).
 
-import { Node, NodeKind, NodeData, makeLoc, ProgramData, createNodeAt } from "../ast/node";
+import { Node, NodeKind, NodeData, makeLoc, ProgramData, createNodeAt, noFieldDecorators } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import {
 	getGenericTypeInstCount, getGenericTypeInstMangledName,
@@ -26,7 +26,7 @@ function monoEmitOneTypeInst(program: Node, idx: int32): void {
 		fieldTypes.push(getGenericTypeInstFieldTypeAt(idx, fi));
 	}
 	const loc = makeLoc(0, 0);
-	const data: NodeData = { interfaceName: mangledName, interfaceFields: fieldNames, interfaceFieldTypes: fieldTypes, interfaceExtends: [] as string[], nameLocation: loc };
+	const data: NodeData = { interfaceName: mangledName, interfaceFields: fieldNames, interfaceFieldTypes: fieldTypes, interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: noFieldDecorators(fieldCount) };
 	const declNode = createNodeAt(NodeKind.InterfaceDecl, data, loc);
 	const pd = program.data as ProgramData;
 	pd.programStmts.push(declNode);

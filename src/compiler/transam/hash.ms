@@ -98,6 +98,15 @@ function hNodes(h: number, nodes: Node[]): number {
 	return h;
 }
 
+function hNodeRows(h: number, rows: Node[][]): number {
+	if (rows == null) return combine(h, 0);
+	h = hI(h, rows.length);
+	for (const row of rows) {
+		h = hNodes(h, row);
+	}
+	return h;
+}
+
 function hStrings(h: number, strs: string[]): number {
 	if (strs == null) return combine(h, 0);
 	h = hI(h, strs.length);
@@ -371,6 +380,7 @@ export function transAmHashNode(node: Node): number {
 		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = node.data as InterfaceDeclData;
 			h = hS(h, d.interfaceName); h = hStrings(h, d.interfaceFields); h = hStrings(h, d.interfaceFieldTypes);
+			h = hNodeRows(h, d.interfaceFieldDecorators);
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
