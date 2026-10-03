@@ -6,7 +6,7 @@
 
 import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { genericParamsOf, nominalTypeKey } from "../../checker/types";
+import { genericParamsOf, nominalTypeKey, isNominalKind } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
@@ -19,7 +19,7 @@ import { cStringLiteral } from "./literals";
 
 export function resolvedTypeCName(t: Type, hasCheckerCtx: boolean): string {
 	if (t.sym != null) return mangledTypeName(t.sym, t.typeName);
-	if (hasCheckerCtx && t.typeName != "") nominalTypeKey(t);
+	if (hasCheckerCtx && t.typeName != "" && isNominalKind(t.kind)) nominalTypeKey(t);
 	return mangledTypeName(null, t.typeName);
 }
 

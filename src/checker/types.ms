@@ -2585,10 +2585,13 @@ export function nominalTypeKey(t: Type): string {
 	const sym = t.sym;
 	if (sym != null) return `${sym.modulePath}:${sym.name}:${sym.disamb}`;
 	if (!hasTypeIdentity(t)) throw new Error(`internal: named type '${t.typeName}' (kind ${t.kind as number}) has no declaring symbol`);
-	return t.typeName + "{" + t.typeNames.join(",") + "}";
+	if (t.typeName.startsWith("{") || t.typeName.startsWith("(") || t.typeName.startsWith("|") || t.typeName.startsWith("__anon")) {
+		return t.typeName + "{" + t.typeNames.join(",") + "}";
+	}
+	return t.typeName;
 }
 
-function isNominalKind(k: TypeKind): boolean {
+export function isNominalKind(k: TypeKind): boolean {
 	return k == TypeKind.Struct || k == TypeKind.Union || k == TypeKind.Enum || k == TypeKind.Distinct;
 }
 
@@ -3207,7 +3210,6 @@ function copyTypeForSubst(t: Type): Type {
 	result.typeFlags = t.typeFlags;
 	result.typeValue = t.typeValue;
 	result.callConv = t.callConv;
-	result.sym = t.sym;
 	for (let ci = 0; ci < t.typeChildren.length; ci += 1) {
 		result.typeChildren.push(null as unknown as Type);
 		result.typeChildren[ci] = t.typeChildren[ci];
@@ -3272,6 +3274,7 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 				return fn;
 			},
 			TypeKind.Union | TypeKind.Tuple => {
+				if (t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)) return t;
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlace(copy, paramName, concrete, active);
 				if (t.kind == TypeKind.Union && isNullableShape(copy.typeChildren) && !hasGenericParams(copy)) {
@@ -3360,6 +3363,7 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 				return fn;
 			},
 			TypeKind.Union | TypeKind.Tuple => {
+				if (t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)) return t;
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(copy, names, concretes, active);
 				if (t.kind == TypeKind.Union && isNullableShape(copy.typeChildren) && !hasGenericParams(copy)) {

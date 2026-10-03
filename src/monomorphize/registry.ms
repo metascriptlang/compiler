@@ -6,7 +6,7 @@
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { hashToBase36 } from "std/hash";
-import { nominalTypeKey } from "../checker/types";
+import { nominalTypeKey, hasTypeIdentity } from "../checker/types";
 
 // ===== Data Structures =====
 
@@ -53,6 +53,8 @@ function monoStructuralKey(t: Type): string {
 
 function monoOwnerPath(t: Type): string {
 	if (t.sym != null) return t.sym.modulePath;
+	if (t.typeName == "") return "";
+	if (t.kind == TypeKind.Struct && t.typeNames.length > 0 && !hasTypeIdentity(t)) return "";
 	nominalTypeKey(t);
 	return "";
 }
@@ -288,6 +290,13 @@ test "monoTypeKey array" {
 test "monoTypeKey object" {
 	const obj = declaredAt({ kind: TypeKind.Struct, typeName: "Box", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> }, SymbolKind.Struct, "/p/box.ms");
 	assert monoTypeKey(obj) == "Box_" + hashToBase36("/p/box.ms");
+}
+
+test "a generic instance over an unnamed base type has no owner to name" {
+	const elem: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const base: Type = { kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [], typeReturn: elem, typeExtra: null, typeFlags: 0 as BitSet<TypeFlag> };
+	const instance: Type = { kind: TypeKind.GenericInstance, typeName: "", typeNames: [], typeChildren: [elem], typeReturn: null, typeExtra: base, typeFlags: 0 as BitSet<TypeFlag> };
+	assert monoTypeKey(instance) != "";
 }
 
 test "monoTypeKey refuses a declared-looking name that has no symbol" {

@@ -28,7 +28,9 @@ function typeIdentity(t: Type): string {
 		return "";
 	}
 	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span) return typeKey(t);
-	if (t.typeName != "" && !isAnonTypeName(t.typeName)) return nominalTypeKey(t);
+	if (t.typeName != "" && !isAnonTypeName(t.typeName)) {
+		return t.kind == TypeKind.Struct || t.kind == TypeKind.Union ? nominalTypeKey(t) : t.typeName;
+	}
 	if (t.typeNames.length > 0) return anonTypeName(t);
 	return "";
 }
