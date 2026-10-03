@@ -25,7 +25,6 @@ import {
 	programAccount,
 	resizedProgramAccount,
 	selectedInstruction,
-	unchecked,
 } from "./core";
 import { SeedSlice } from "./seed";
 
@@ -68,22 +67,12 @@ export function delegated<T>(index: int32): Result<Delegated<T>, ProgramError> {
 }
 
 export function external<T>(index: int32): Result<External<T>, ProgramError> {
-	const found = try unchecked(index);
-	if (!T.acceptsOwner(found.owner())) {
-		return Result.err(ProgramError.accountOwnedByWrongProgram());
-	}
-	const decoded = T.decode(found.data());
-	if (!decoded.ok) { return Result.err(decoded.error); }
+	const found = try T.verify(index);
 	return Result.ok(found as External<T>);
 }
 
 export function externalMutable<T>(index: int32): Result<ExternalMutable<T>, ProgramError> {
-	const found = try unchecked(index);
-	if (!T.acceptsOwner(found.owner())) {
-		return Result.err(ProgramError.accountOwnedByWrongProgram());
-	}
-	const decoded = T.decode(found.data());
-	if (!decoded.ok) { return Result.err(decoded.error); }
+	const found = try T.verify(index);
 	const claimed = try exclusiveWritable(found);
 	return Result.ok(claimed as ExternalMutable<T>);
 }

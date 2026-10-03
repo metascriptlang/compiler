@@ -202,6 +202,20 @@ export function readTokenAccount(this account: Account): Result<TokenAccount, Pr
 	return tokenAccountFields(data);
 }
 
+function mintReadable(account: Account): boolean {
+	const bytes = mintBytes(account);
+	if (!bytes.ok) { return false; }
+	const initialized = bytes.value.readU8(45);
+	return initialized.ok && initialized.value == 1;
+}
+
+function tokenAccountReadable(account: Account): boolean {
+	const bytes = tokenAccountBytes(account);
+	if (!bytes.ok) { return false; }
+	const state = bytes.value.readU8(108);
+	return state.ok && (state.value == 1 || state.value == 2);
+}
+
 function extensionBase(kind: ExtensionType): uint8 {
 	return match (kind) {
 		ExtensionType.Uninitialized => 0,
@@ -449,11 +463,10 @@ export function decode(this typeof Mint, data: Bytes): Result<Mint, ProgramError
 
 export function verify(this typeof Mint, index: int32): Result<Account, ProgramError> {
 	const found = try unchecked(index);
-	if (!isTokenProgram(found.owner())) {
+	if (!found.isOwnedBy(Pubkey.tokenProgram()) && !found.isOwnedBy(Pubkey.token2022Program())) {
 		return Result.err(ProgramError.accountOwnedByWrongProgram());
 	}
-	const decoded = found.readMint();
-	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	if (!mintReadable(found)) { return Result.err(ProgramError.accountDidNotDeserialize()); }
 	return Result.ok(found);
 }
 
@@ -471,11 +484,10 @@ export function decode(this typeof TokenAccount, data: Bytes): Result<TokenAccou
 
 export function verify(this typeof TokenAccount, index: int32): Result<Account, ProgramError> {
 	const found = try unchecked(index);
-	if (!isTokenProgram(found.owner())) {
+	if (!found.isOwnedBy(Pubkey.tokenProgram()) && !found.isOwnedBy(Pubkey.token2022Program())) {
 		return Result.err(ProgramError.accountOwnedByWrongProgram());
 	}
-	const decoded = found.readTokenAccount();
-	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	if (!tokenAccountReadable(found)) { return Result.err(ProgramError.accountDidNotDeserialize()); }
 	return Result.ok(found);
 }
 
@@ -1221,5 +1233,61 @@ when (testBuild) {
 			ProgramError.constraintTokenOwner().code;
 		assert resultOf(decorated(program, 3, own, 2, 4), 0, decoratedEntry) ==
 			ProgramError.constraintTokenOwner().code;
+	}
+
+	function agreeStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const found = try account(0);
+		if (op == 0) {
+			const lean = Mint.verify(0);
+			const full = found.readMint();
+			if (lean.ok != full.ok) { return Result.err(ProgramError.custom(8)); }
+			if (!lean.ok) { return Result.err(ProgramError.custom(7)); }
+			return Result.ok(0);
+		}
+		const lean = TokenAccount.verify(0);
+		const full = found.readTokenAccount();
+		if (lean.ok != full.ok) { return Result.err(ProgramError.custom(8)); }
+		if (!lean.ok) { return Result.err(ProgramError.custom(7)); }
+		return Result.ok(0);
+	}
+
+	function agreeEntry(): void {
+		const result = agreeStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function resized(bytes: uint8[], length: int32, at: int32, value: uint8): uint8[] {
+		while (bytes.length < length) { bytes.push(0); }
+		while (bytes.length > length) { bytes.pop(); }
+		if (at < bytes.length) { bytes[at] = value; }
+		return bytes;
+	}
+
+	test "verifying a mint or a token account accepts exactly what decoding it accepts" {
+		let accepted = 0;
+		let refused = 0;
+		for (const owner of [Pubkey.tokenProgram(), Pubkey.token2022Program(), Pubkey.systemProgram()]) {
+			for (const length of [0, 44, 81, 82, 83, 164, 165, 166, 200, 355]) {
+				for (const tag of [0 as uint8, 1 as uint8, 2 as uint8, 3 as uint8]) {
+					const mintBytes = resized(mintData(7, 500, 6), length, 165, tag);
+					const initialized = resized(mintBytes, length, 45, 1 as uint8);
+					const uninitialized = resized(mintData(7, 500, 6), length, 45, 0 as uint8);
+					for (const data of [initialized, uninitialized]) {
+						const code = resultOf([holderOf(1, owner, data)], 0, agreeEntry);
+						assert code == 0 || code == 7;
+						if (code == 0) { accepted = accepted + 1; } else { refused = refused + 1; }
+					}
+					for (const state of [0 as uint8, 1 as uint8, 2 as uint8, 3 as uint8]) {
+						const bytes = resized(tokenAccountData(1, 3, 900, state), length, 165, tag);
+						const kept = resized(bytes, length, 108, state);
+						const code = resultOf([holderOf(1, owner, kept)], 1, agreeEntry);
+						assert code == 0 || code == 7;
+						if (code == 0) { accepted = accepted + 1; } else { refused = refused + 1; }
+					}
+				}
+			}
+		}
+		assert accepted > 20 && refused > 100;
 	}
 }

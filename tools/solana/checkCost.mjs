@@ -60,7 +60,7 @@ const BASELINE = {
 	"owned<Pet>": 372,
 	"mutable<Pet>": 381,
 	"delegated<Pet>": 376,
-	"accounts<Everything>": 817,
+	"accounts<Everything>": 837,
 	"args<Parameters>": 534,
 	"createPda<Pet>": 3855,
 	"create<Pet>": 2059,
@@ -71,8 +71,8 @@ const BASELINE = {
 	"realloc<Pet>": 644,
 	"close<Pet>": 546,
 	"instruction<Dispatch> (last)": 401,
-	"external<Mint>": 649,
-	"externalMutable<TokenAccount>": 814,
+	"external<Mint>": 482,
+	"externalMutable<TokenAccount>": 493,
 };
 
 function u64(value) {

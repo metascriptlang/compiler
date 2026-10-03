@@ -175,7 +175,7 @@ export function isExecutable(this account: Account): boolean {
 }
 
 export function isOwnedBy(this account: Account, candidate: Pubkey): boolean {
-	return account.owner().equals(candidate);
+	return keysEqual(account.address + 40, msSolSpanAddress(candidate.bytes));
 }
 
 export function assign(this account: Account, newOwner: Pubkey): void {
