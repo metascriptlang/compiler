@@ -22,9 +22,6 @@ const program = `${dir}/prog.so`;
 
 let failed = 0;
 
-// Card 2026-10-03-prelude-pack-shared-by-a-host-build-and-an-os-solana-build.md: drop this line when it lands.
-env.set("MSC_NO_PRELUDE_PACK", "1");
-
 function report(msg: string): void {
 	console.log(`GUARD-FAIL ${msg}`);
 	failed = failed + 1;
