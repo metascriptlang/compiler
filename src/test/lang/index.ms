@@ -44,6 +44,7 @@ import "./nullableInstantiation";
 import "./numericRepresentation";
 import "./receiverViews";
 import "./serializationVariants";
+import "./spawnThunkValues";
 import "./stringRepresentation";
 import "./suspendedBindings";
 import "./suspensionControl";

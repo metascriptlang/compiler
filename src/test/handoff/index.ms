@@ -102,6 +102,7 @@ import "./macroConverterBoundary";
 import "./macroDiagnostics";
 import "./macroExpansionBoundary";
 import "./macroReflection";
+import "./paralockLicences";
 import "./pointerSlotRelation";
 import "./preludeExportOwnership";
 import "./raiserProgramArgv";
