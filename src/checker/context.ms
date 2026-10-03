@@ -293,6 +293,22 @@ export function createExtMethod(methodName: string, receiverTypeName: string, so
 	};
 }
 
+let _userHooks: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+
+export function resetUserHooks(): void {
+	_userHooks = new HashMap<string, Symbol>();
+}
+
+export function bindUserHook(typeName: string, hookName: string, sym: Symbol): void {
+	if (sym.modulePath == "") return;
+	_userHooks.set(sym.modulePath + "|" + typeName + "." + hookName, sym);
+}
+
+export function lookupUserHook(ownerModule: string, typeName: string, hookName: string): Symbol | null {
+	if (ownerModule == "") return null;
+	return _userHooks.get(ownerModule + "|" + typeName + "." + hookName);
+}
+
 export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
 	// Dedup by sym identity first (cheap fast-path).
 	if (method.sym != null) {
@@ -1008,6 +1024,17 @@ export const LIFECYCLE_HOOK_NAMES: string[] = ["onDestroy", "onCopy", "onMove", 
 
 export function isLifecycleHookName(name: string): boolean {
 	return LIFECYCLE_HOOK_NAMES.includes(name);
+}
+
+export function declaresLifecycleHook(ctx: CheckerContext, typeName: string): boolean {
+	const registry = ctx.extensionRegistry;
+	if (registry == null) return false;
+	for (const hookName of LIFECYCLE_HOOK_NAMES) {
+		for (const m of findAllExtensionsByName(registry, hookName)) {
+			if (m.receiverTypeName == typeName && !m.isStatic && m.sym != null && m.sym.modulePath == ctx.modulePath) return true;
+		}
+	}
+	return false;
 }
 
 export function getExtReceiverText(flags: string): string {

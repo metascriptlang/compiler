@@ -13,7 +13,7 @@ import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFla
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
-import { CheckerContext, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode } from "./context";
+import { CheckerContext, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, resetUserHooks } from "./context";
 import { createContext } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceName, monoInstanceNameOf } from "../monomorphize/registry";
@@ -147,6 +147,7 @@ export function resetInstantiationState(): void {
 	_ctorRows = [];
 	_instanceHooks = new HashMap<string, InstanceHook>();
 	_hookScannedInstances = new HashMap<Symbol, HashSet<string>>();
+	resetUserHooks();
 }
 
 export function lookupCtorDefaults(classSym: Symbol | null, className: string): CtorEntry | null {
