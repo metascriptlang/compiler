@@ -23,7 +23,7 @@ const HEAP = 32 * 1024;
 const BUDGET = 1_400_000;
 const LARGEST_COUNT = 60_000;
 const NAMED = /std\/solana: the (\d+) KiB program heap is exhausted \(asked (\d+) more bytes at (\d+)\)/;
-const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5, push: 6, literal: 7, pairs: 8, text: 9, signed: 10, unsigned: 11 };
+const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5, push: 6, literal: 7, pairs: 8, text: 9, signed: 10, unsigned: 11, limits: 13 };
 const MASK = 2n ** 64n - 1n;
 const SUMS = {
 	push: (n) => sum(n, (i) => (3n * i + 1n) * (i + 1n)),
@@ -147,6 +147,12 @@ function namedFailure(label, outcome) {
 	const perCall = (signed.get(20).value - signed.get(1).value) / 19n;
 	check(`[${name}] a CPI takes ${perCall} bytes of the heap, all of it the instruction builder`,
 		perCall > 0n && perCall === (signed.get(8).value - signed.get(1).value) / 7n);
+	check(`[${name}] a signer of sixteen seeds is sent`, (await run(OPS.limits, 0)).ok);
+	for (const [count, what] of [[1, "seventeen seeds"], [2, "a seed of thirty-three bytes"]]) {
+		const refused = await run(OPS.limits, count);
+		check(`[${name}] a signer of ${what} fails the CPI (${refused.error})`,
+			!refused.ok && /MaxSeedLengthExceeded|Max seed length exceeded|Length of the seed is too long/i.test(`${refused.error}\n${refused.logs.join("\n")}`));
+	}
 	console.log(`[${name}] per CPI: ${perCall} heap bytes, ${Math.round((signed.get(20).units - signed.get(1).units) / 19)} CU signed, ${Math.round((plain.get(20).units - plain.get(1).units) / 19)} CU unsigned`);
 }
 

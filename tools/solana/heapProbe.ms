@@ -55,6 +55,21 @@ function signedLoop(count: uint64): Result<uint64, ProgramError> {
 	return Result.ok(0);
 }
 
+function limitCall(which: uint64): Result<uint64, ProgramError> {
+	const instruction = try selfCall();
+	if (which == 0) {
+		return signed(instruction.invoke(), [
+			[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
+		]);
+	}
+	if (which == 1) {
+		return signed(instruction.invoke(), [
+			[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16],
+		]);
+	}
+	return signed(instruction.invoke(), ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+}
+
 function unsignedLoop(count: uint64): Result<uint64, ProgramError> {
 	for (let index: uint64 = 0; index < count; index++) {
 		const instruction = try selfCall();
@@ -156,6 +171,7 @@ function dispatch(): Result<uint64, ProgramError> {
 	if (op == 10) { return signedLoop(count); }
 	if (op == 11) { return unsignedLoop(count); }
 	if (op == 12) { return Result.ok(0); }
+	if (op == 13) { return limitCall(count); }
 	return request(0 - count);
 }
 
