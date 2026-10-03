@@ -109,6 +109,7 @@ import "./macroReflection";
 import "./numericConstants";
 import "./numericLattice";
 import "./paralockLicences";
+import "./instanceSymbolIdentity";
 import "./loweredSymbolIdentity";
 import "./pointerSlotRelation";
 import "./positionalNameBinding";

@@ -14,7 +14,7 @@ import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFla
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, nominalTypeSym } from "./context";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, nominalTypeSym, newSym, stampItem } from "./context";
 import { createContext } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceName, monoInstanceNameOf } from "../monomorphize/registry";
@@ -367,7 +367,7 @@ function tryInjectTypeSym(name: string, fallbackType: Type, ctx: CheckerContext,
 	if (lookupSymbol(ctx.table, name) != null) return false;
 	const callerSym = lookupSymbol(callerCtx.table, name);
 	const symType = callerSym != null ? callerSym.symbolType : fallbackType;
-	const sym = makeSymbol(name, SymbolKind.TypeAlias, symType, false);
+	const sym = newSym(ctx, SymbolKind.TypeAlias, name, symType);
 	sym.nameId = getIdentId(ctx.table.identCache, name);
 	addSymbolToScope(ctx.table.current, sym);
 	injected.push(sym);
@@ -474,7 +474,7 @@ function openInstanceScope(ctx: CheckerContext, names: string[], types: Type[]):
 	ctx.table.current = top;
 	openScope(ctx.table, ScopeKind.Block);
 	for (let i = 0; i < names.length && i < types.length; i += 1) {
-		const sym = makeSymbol(names[i].trim(), SymbolKind.TypeAlias, types[i], false);
+		const sym = newSym(ctx, SymbolKind.TypeAlias, names[i].trim(), types[i]);
 		sym.state = SymbolState.Shaped;
 		sym.nameId = getIdentId(ctx.table.identCache, sym.name);
 		addSymbolToScope(ctx.table.current, sym);
@@ -763,6 +763,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	instSym.nativeName = "";
 	instSym.builtinKind = sym.builtinKind;
 	instSym.modulePath = sym.modulePath != "" ? sym.modulePath : ctx.modulePath;
+	stampItem(bodyCtx, instSym);
 	instSym.declNode = cloned;
 	instSym.nameId = getIdentId(host.table.identCache, mangledName);
 	instSym.instantiatedFrom = sym;
@@ -941,18 +942,11 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		if (inst.name == mangledClass) return inst;
 	}
 
-	// An imported class symbol carries the ImportDecl, not the ClassDecl — export
-	// deliberately drops class declaration nodes (context.ms: shipping them makes the
-	// importer re-resolve member types in its own scope and pollute the type registry).
-	// Ask the DEFINING module for the real declaration through the same module-ctx
-	// registry this function already uses to re-check the constructor body below.
-	let classDeclNode: Node | null = classSym.declNode;
+	const classDeclNode = classSym.declNode;
 	if (classDeclNode == null || classDeclNode.kind != NodeKind.ClassDecl) {
-		const declCtx = pickBodyCtx(classSym.modulePath, ctx);
-		const declSym = lookupSymbol(declCtx.table, classSym.name);
-		classDeclNode = declSym != null ? declSym.declNode : null;
+		addError(ctx, `internal: class '${classSym.name}' reached constructor instantiation without its declaration`, classSym.location.line, classSym.location.column);
+		return null;
 	}
-	if (classDeclNode == null || classDeclNode.kind != NodeKind.ClassDecl) return null;
 	const classData = classDeclNode.data as ClassDeclData;
 	let ctorNode: Node | null = null;
 	for (const member of classData.classBody) {
@@ -965,7 +959,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	const substStruct = instanceStruct(structBase, mangledClass, dedup.names, dedup.types);
 	substStruct.typeExtra = parent;
 	const concreteClassType = createRef(substStruct);
-	const instSym = makeSymbol(mangledClass, SymbolKind.Class, concreteClassType, false);
+	const instSym = newSym(bodyCtx, SymbolKind.Class, mangledClass, concreteClassType);
 	instSym.state = SymbolState.Shaped;
 	instSym.symFlags = classSym.symFlags;
 	instSym.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
