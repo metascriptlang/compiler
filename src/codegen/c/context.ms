@@ -695,10 +695,10 @@ function aliveSymKey(sym: Readonly<Symbol>): string {
 	return `${sym.modulePath}:${sym.name}#${sym.disamb}.${sym.overloadIdx}`;
 }
 
-export function aliveSetFingerprint(aliveSet: Readonly<AliveSet>): string {
+export function aliveSetFingerprint(aliveSet: AliveSet): string {
 	const entries: string[] = [];
 	for (const entry of aliveSet.entries) entries.push(entry);
-	for (const sym of [...aliveSet._syms]) entries.push(aliveSymKey(sym));
+	aliveSet._syms.forEach((sym: Symbol): void => { entries.push(aliveSymKey(sym)); });
 	entries.sort();
 	for (const info of aliveSet.typeInfos) {
 		entries.push(`t\t${info.key}\t${info.owner}\t${aliveSymKey(info.destroy)}\t${info.trace != null ? aliveSymKey(info.trace) : ""}`);
