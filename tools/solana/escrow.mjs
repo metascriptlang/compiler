@@ -274,6 +274,97 @@ await scenario("refund", async (t) => {
 	t.check("vault and escrow closed", t.gone(vault) && t.gone(escrow));
 });
 
+await scenario("constraints", async (t) => {
+	const { escrow, vault } = await t.make(7, 600, 300);
+	const stored = t.svm.getAccount(escrow);
+	const takeBuilt = () => client.methods.take().accountsStrict({
+		taker: key(t.taker.address),
+		maker: key(t.maker.address),
+		mintA: key(t.mintA),
+		mintB: key(t.mintB),
+		takerAtaA: key(t.takerAtaA),
+		takerAtaB: key(t.takerAtaB),
+		makerAtaB: key(t.makerAtaB),
+		escrow: key(escrow),
+		vault: key(vault),
+		tokenProgram: key(TOKEN),
+		systemProgram: key(SYSTEM),
+	}).instruction();
+	const takeMetas = [
+		t.meta(t.taker.address, true, true),
+		t.meta(t.maker.address, true),
+		t.meta(t.mintA, false),
+		t.meta(t.mintB, false),
+		t.meta(t.takerAtaA, true),
+		t.meta(t.takerAtaB, true),
+		t.meta(t.makerAtaB, true),
+		t.meta(escrow, true),
+		t.meta(vault, true),
+		t.meta(TOKEN, false),
+		t.meta(SYSTEM, false),
+	];
+	const corrupt = (label, at, code) => async () => {
+		const data = new Uint8Array(stored.data);
+		data[at] ^= 1;
+		t.svm.setAccount({
+			address: escrow,
+			data,
+			executable: false,
+			lamports: stored.lamports,
+			programAddress: stored.programAddress,
+			space: BigInt(data.length),
+		});
+		await t.send(label, t.taker, await takeBuilt(), takeMetas, discriminator("take"), `code: ${code}`);
+	};
+	const SEED = 8, MAKER = 16, MINT_A = 48, MINT_B = 80, BUMP = 120;
+	await corrupt("take with the escrow naming another maker (has_one)", MAKER + 31, 2001)();
+	await corrupt("take with the escrow naming another mint A (has_one)", MINT_A + 31, 2001)();
+	await corrupt("take with the escrow naming another mint B (has_one)", MINT_B + 31, 2001)();
+	await corrupt("take with another stored bump (seeds)", BUMP, 2006)();
+	await corrupt("take with another stored seed (seeds)", SEED, 2006)();
+	t.svm.setAccount({
+		address: t.takerAtaB,
+		data: tokenData(t.mintB, t.maker.address, 500),
+		executable: false,
+		lamports: lamports(2_039_280n),
+		programAddress: TOKEN,
+		space: 165n,
+	});
+	await t.send("take with a token account of another authority (token owner)", t.taker, await takeBuilt(), takeMetas, discriminator("take"), "code: 2015");
+	t.svm.setAccount({
+		address: t.takerAtaB,
+		data: tokenData(t.mintB, t.taker.address, 500),
+		executable: false,
+		lamports: lamports(2_039_280n),
+		programAddress: TOKEN,
+		space: 165n,
+	});
+	const stranger = (await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(9))).address;
+	t.svm.setAccount({
+		address: stranger,
+		data: tokenData(t.mintB, t.maker.address, 0),
+		executable: false,
+		lamports: lamports(2_039_280n),
+		programAddress: TOKEN,
+		space: 165n,
+	});
+	const movedMetas = takeMetas.map((meta) => meta.address === t.makerAtaB ? t.meta(stranger, true) : meta);
+	const moved = await client.methods.take().accountsStrict({
+		taker: key(t.taker.address),
+		maker: key(t.maker.address),
+		mintA: key(t.mintA),
+		mintB: key(t.mintB),
+		takerAtaA: key(t.takerAtaA),
+		takerAtaB: key(t.takerAtaB),
+		makerAtaB: key(stranger),
+		escrow: key(escrow),
+		vault: key(vault),
+		tokenProgram: key(TOKEN),
+		systemProgram: key(SYSTEM),
+	}).instruction();
+	await t.send("take with a token account off the associated address (associated)", t.taker, moved, movedMetas, discriminator("take"), "code: 2009");
+});
+
 await scenario("refused", async (t) => {
 	const { error } = await t.make(7, 0, 300, "6000");
 	const code = Number(/code: (\d+)/.exec(error)?.[1]);

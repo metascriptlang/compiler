@@ -11,15 +11,16 @@ import {
 	WritableSigner,
 	accounts,
 	args,
+	associated,
+	bump,
 	close,
 	createPda,
-	expectAddress,
-	expectHasOne,
 	externalMutable,
 	failWith,
+	hasOne,
 	instruction,
 	leBytes,
-	pdaWithBump,
+	seeds,
 	signed,
 } from "std/solana";
 import {
@@ -36,7 +37,7 @@ export struct MakeAccounts {
 	maker: WritableSigner;
 	mintA: External<Mint>;
 	mintB: External<Mint>;
-	makerAtaA: ExternalMutable<TokenAccount>;
+	@associated(mintA, maker) makerAtaA: ExternalMutable<TokenAccount>;
 	escrow: Writable;
 	vault: Writable;
 	associatedTokenProgram: Program<AssociatedToken>;
@@ -49,11 +50,13 @@ export struct TakeAccounts {
 	maker: Writable;
 	mintA: External<Mint>;
 	mintB: External<Mint>;
-	takerAtaA: ExternalMutable<TokenAccount>;
-	takerAtaB: ExternalMutable<TokenAccount>;
-	makerAtaB: ExternalMutable<TokenAccount>;
+	@associated(mintA, taker) takerAtaA: ExternalMutable<TokenAccount>;
+	@associated(mintB, taker) takerAtaB: ExternalMutable<TokenAccount>;
+	@associated(mintB, maker) makerAtaB: ExternalMutable<TokenAccount>;
+	@seeds("escrow", maker, leBytes(escrow.seed)) @bump(escrow.bump)
+	@hasOne(maker) @hasOne(mintA) @hasOne(mintB)
 	escrow: Mutable<Escrow>;
-	vault: ExternalMutable<TokenAccount>;
+	@associated(mintA, escrow) vault: ExternalMutable<TokenAccount>;
 	tokenProgram: Account;
 	systemProgram: Program<System>;
 }
@@ -61,9 +64,10 @@ export struct TakeAccounts {
 export struct RefundAccounts {
 	maker: WritableSigner;
 	mintA: External<Mint>;
-	makerAtaA: ExternalMutable<TokenAccount>;
+	@associated(mintA, maker) makerAtaA: ExternalMutable<TokenAccount>;
+	@seeds("escrow", maker, leBytes(escrow.seed)) @bump(escrow.bump) @hasOne(maker) @hasOne(mintA)
 	escrow: Mutable<Escrow>;
-	vault: ExternalMutable<TokenAccount>;
+	@associated(mintA, escrow) vault: ExternalMutable<TokenAccount>;
 	tokenProgram: Account;
 	systemProgram: Program<System>;
 }
@@ -74,7 +78,6 @@ function make(): Result<uint64, ProgramError> {
 		return Result.err(escrowError(EscrowError.ZeroAmount));
 	}
 	const x = try accounts<MakeAccounts>();
-	const _ownAta = try expectAssociated(x.makerAtaA.key(), x.maker.key(), x.mintA);
 	const made = try createPda<Escrow>(x.maker, x.escrow, ["escrow", x.maker, leBytes(a.seed)]);
 	const escrow = made.account.data();
 	escrow.seed = a.seed;
@@ -111,19 +114,7 @@ function make(): Result<uint64, ProgramError> {
 function take(): Result<uint64, ProgramError> {
 	const x = try accounts<TakeAccounts>();
 	const escrow = x.escrow.data();
-	const verified = try pdaWithBump(
-		x.escrow,
-		["escrow", escrow.maker, leBytes(escrow.seed)],
-		escrow.bump,
-	);
-	const _maker = try expectHasOne(escrow.maker, x.maker.key());
-	const _mintA = try expectAddress(x.mintA.key(), escrow.mintA);
-	const _mintB = try expectAddress(x.mintB.key(), escrow.mintB);
 	const escrowAccount = x.escrow as Account;
-	const _vault = try expectAssociated(x.vault.key(), escrowAccount.key(), x.mintA);
-	const _takerA = try expectAssociated(x.takerAtaA.key(), x.taker.key(), x.mintA);
-	const _takerB = try expectAssociated(x.takerAtaB.key(), x.taker.key(), x.mintB);
-	const _makerB = try expectAssociated(x.makerAtaB.key(), escrow.maker, x.mintB);
 	const receive = escrow.receive;
 	const _paid = try transferTokens(
 		x.takerAtaB,
@@ -135,11 +126,11 @@ function take(): Result<uint64, ProgramError> {
 	const held = (try x.vault.read()).amount;
 	const _released = try signed(
 		transferTokens(x.vault, x.takerAtaA, x.mintA, escrowAccount, held),
-		["escrow", escrow.maker, leBytes(escrow.seed), [verified.bump]],
+		["escrow", escrow.maker, leBytes(escrow.seed), [escrow.bump]],
 	);
 	const _vaultClosed = try signed(
 		closeTokenAccount(x.vault, x.maker, escrowAccount),
-		["escrow", escrow.maker, leBytes(escrow.seed), [verified.bump]],
+		["escrow", escrow.maker, leBytes(escrow.seed), [escrow.bump]],
 	);
 	const _escrowClosed = try close(x.escrow, x.maker);
 	return Result.ok(held);
@@ -148,24 +139,15 @@ function take(): Result<uint64, ProgramError> {
 function refund(): Result<uint64, ProgramError> {
 	const x = try accounts<RefundAccounts>();
 	const escrow = x.escrow.data();
-	const verified = try pdaWithBump(
-		x.escrow,
-		["escrow", escrow.maker, leBytes(escrow.seed)],
-		escrow.bump,
-	);
-	const _maker = try expectHasOne(escrow.maker, x.maker.key());
-	const _mintA = try expectAddress(x.mintA.key(), escrow.mintA);
 	const escrowAccount = x.escrow as Account;
-	const _vault = try expectAssociated(x.vault.key(), escrowAccount.key(), x.mintA);
-	const _ownAta = try expectAssociated(x.makerAtaA.key(), x.maker.key(), x.mintA);
 	const held = (try x.vault.read()).amount;
 	const _returned = try signed(
 		transferTokens(x.vault, x.makerAtaA, x.mintA, escrowAccount, held),
-		["escrow", escrow.maker, leBytes(escrow.seed), [verified.bump]],
+		["escrow", escrow.maker, leBytes(escrow.seed), [escrow.bump]],
 	);
 	const _vaultClosed = try signed(
 		closeTokenAccount(x.vault, x.maker.asWritable(), escrowAccount),
-		["escrow", escrow.maker, leBytes(escrow.seed), [verified.bump]],
+		["escrow", escrow.maker, leBytes(escrow.seed), [escrow.bump]],
 	);
 	const _escrowClosed = try close(x.escrow, x.maker.asWritable());
 	return Result.ok(held);
@@ -238,7 +220,7 @@ when (testBuild) {
 		return account(key, Pubkey.tokenProgram(), data, 1461600);
 	}
 
-	function associated(wallet: Pubkey, mint: Pubkey): Pubkey {
+	function associatedKey(wallet: Pubkey, mint: Pubkey): Pubkey {
 		const found = associatedTokenAddress(wallet, mint, Pubkey.tokenProgram());
 		return found.ok ? found.value.key : Pubkey.zero();
 	}
@@ -251,7 +233,7 @@ when (testBuild) {
 		zeros(data, 36);
 		data.push(1);
 		zeros(data, 56);
-		return account(associated(wallet, mint), Pubkey.tokenProgram(), data, 2039280);
+		return account(associatedKey(wallet, mint), Pubkey.tokenProgram(), data, 2039280);
 	}
 
 	function wallet(key: Pubkey): HostAccount {
@@ -308,7 +290,7 @@ when (testBuild) {
 			mintAccount(mintB),
 			tokenAccount(maker, mintA, 1000),
 			blank(escrow),
-			blank(associated(escrow, mintA)),
+			blank(associatedKey(escrow, mintA)),
 			executable(Pubkey.associatedTokenProgram()),
 			executable(Pubkey.tokenProgram()),
 			executable(Pubkey.systemProgram()),
@@ -399,16 +381,16 @@ when (testBuild) {
 		assert refunded[3].lamports == 0 && refunded[4].lamports == 0;
 	}
 
-	test "make refuses a zero amount and take refuses someone else's escrow" {
+	test "make refuses a zero amount" {
 		const zero = makeAccounts(7);
 		assert run(programKey(), zero, makeData(7, 0, 300), entry).result ==
 			ProgramError.userError(0).code;
-		const made = makeAccounts(7);
-		assert run(programKey(), made, makeData(7, 600, 300), entry).result == 0;
-		const stranger = keyOf(9);
-		const taken: HostAccount[] = [
+	}
+
+	function takeAccounts(made: HostAccount[]): HostAccount[] {
+		return [
 			wallet(taker),
-			{ ...wallet(stranger), signer: false },
+			{ ...made[0], signer: false },
 			made[1],
 			made[2],
 			tokenAccount(taker, mintA, 0),
@@ -419,7 +401,66 @@ when (testBuild) {
 			made[7],
 			made[8],
 		];
-		assert run(programKey(), taken, instructionData("Take"), entry).result ==
-			ProgramError.constraintHasOne().code;
+	}
+
+	function refused(accounts: HostAccount[]): uint64 {
+		return run(programKey(), accounts, instructionData("Take"), entry).result;
+	}
+
+	const ESCROW_MAKER = 8 + 8;
+	const ESCROW_MINT_A = ESCROW_MAKER + 32;
+	const ESCROW_MINT_B = ESCROW_MINT_A + 32;
+	const ESCROW_BUMP = ESCROW_MINT_B + 32 + 8;
+
+	test "take refuses an escrow that names another maker, mint A or mint B with ConstraintHasOne" {
+		for (const at of [ESCROW_MAKER, ESCROW_MINT_A, ESCROW_MINT_B]) {
+			const made = makeAccounts(7);
+			assert run(programKey(), made, makeData(7, 600, 300), entry).result == 0;
+			const taken = takeAccounts(made);
+			taken[7].data[at + 31] = taken[7].data[at + 31] ^ 1;
+			assert refused(taken) == ProgramError.constraintHasOne().code;
+		}
+	}
+
+	test "take refuses an escrow whose seed or bump does not give its address with ConstraintSeeds" {
+		const made = makeAccounts(7);
+		assert run(programKey(), made, makeData(7, 600, 300), entry).result == 0;
+		const wrongBump = takeAccounts(made);
+		wrongBump[7].data[ESCROW_BUMP] = wrongBump[7].data[ESCROW_BUMP] ^ 1;
+		assert refused(wrongBump) == ProgramError.constraintSeeds().code;
+		const wrongSeed = takeAccounts(made);
+		wrongSeed[7].data[8] = wrongSeed[7].data[8] ^ 1;
+		assert refused(wrongSeed) == ProgramError.constraintSeeds().code;
+		const elsewhere = takeAccounts(made);
+		elsewhere[7].key = keyOf(77);
+		assert refused(elsewhere) == ProgramError.constraintSeeds().code;
+	}
+
+	test "take refuses a token account of another owner with ConstraintTokenOwner and one off the associated address with ConstraintAssociated" {
+		const made = makeAccounts(7);
+		assert run(programKey(), made, makeData(7, 600, 300), entry).result == 0;
+		const stranger = keyOf(9);
+		const strangersMaker = takeAccounts(made);
+		strangersMaker[1] = { ...wallet(stranger), signer: false };
+		assert refused(strangersMaker) == ProgramError.constraintTokenOwner().code;
+		const strangersAta = takeAccounts(made);
+		strangersAta[4] = tokenAccount(stranger, mintA, 0);
+		assert refused(strangersAta) == ProgramError.constraintTokenOwner().code;
+		const movedAta = takeAccounts(made);
+		movedAta[5].key = keyOf(66);
+		assert refused(movedAta) == ProgramError.constraintAssociated().code;
+		const movedVault = takeAccounts(made);
+		movedVault[8] = { ...made[5], key: keyOf(65) };
+		assert refused(movedVault) == ProgramError.constraintAssociated().code;
+	}
+
+	test "take refuses someone else's escrow when only the maker account differs" {
+		const made = makeAccounts(7);
+		assert run(programKey(), made, makeData(7, 600, 300), entry).result == 0;
+		const stranger = keyOf(9);
+		const taken = takeAccounts(made);
+		taken[1] = { ...wallet(stranger), signer: false };
+		taken[6] = tokenAccount(stranger, mintB, 0);
+		assert refused(taken) == ProgramError.constraintSeeds().code;
 	}
 }
