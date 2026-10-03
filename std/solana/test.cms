@@ -1,4 +1,5 @@
 import {
+	Account,
 	Discriminator,
 	ProgramError,
 	Pubkey,
@@ -18,6 +19,7 @@ import {
 	create,
 	createPda,
 	createPdaOf,
+	leBytes,
 	pda,
 	realloc,
 	writableSigner,
@@ -42,8 +44,11 @@ import {
 	accounts,
 	args,
 	emitEvent,
+	findProgramAddress,
 	findProgramAddressOf,
 	instruction,
+	programAddress,
+	programAddressOf,
 } from "./macro";
 import { anchorIdl } from "./idl";
 
@@ -696,4 +701,164 @@ test "anchorIdl describes nested structs as defined types and fixed arrays as ar
 		assert types.at(1).serialization.asString() == "bytemuck";
 		assert types.at(1).type.fields.at(1).type.asString() == "u16";
 	}
+}
+
+function hostProgram(): Pubkey {
+	return pubkeyOf("9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu");
+}
+
+function foundAt(found: Result<ProgramAddress, ProgramError>, key: Pubkey, bump: uint8): boolean {
+	return found.ok && found.value.bump == bump && found.value.key.equals(key);
+}
+
+test "a seed list derives the address the heap seeds derived, kind by kind" {
+	const program = hostProgram();
+	let five = Pubkey.zero();
+	five.bytes[0] = 5;
+	assert foundAt(
+		findProgramAddressOf(program, ["identity"]),
+		pubkeyOf("FLtPrptzq3LRxEv7uX39Hrfuw5mS9Uwc5yaMQdeThWeX"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["pet", [7]]),
+		pubkeyOf("93PwUMspkoH1MnRnJgVx8hcRkw1uXygXkK6LaovKJwE5"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["pk", five]),
+		pubkeyOf("65QKPW56NGMfywzKLBCHUcoXdHGiFG87TP7xLby1toZq"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["n", leBytes(0x0102030405060708 as uint64)]),
+		pubkeyOf("HZQsCyXSzhvuj7DCbx4exy39BBuLSEFnUMMUm2fAfqzF"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["all", [9], five, leBytes(258 as uint64)]),
+		pubkeyOf("AFwfQ1B22ZmWpoExE5vELZJFFWLMpLPoi5e8rngVFHgd"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]),
+		pubkeyOf("BTXAfu37pBqYg3YPwGthTeCscLRn3tWcsQB2Y4rof6EE"),
+		253,
+	);
+}
+
+test "a seed list takes a byte array, a span and a heap array like a byte literal" {
+	const program = hostProgram();
+	const fixed: uint8[1] = [7];
+	const span: Span<uint8> = fixed;
+	const heap: uint8[] = [7];
+	const literal = findProgramAddressOf(program, ["pet", [7]]);
+	assert literal.ok;
+	for (const found of [
+		findProgramAddressOf(program, ["pet", fixed]),
+		findProgramAddressOf(program, ["pet", span]),
+		findProgramAddressOf(program, ["pet", heap]),
+	]) {
+		assert found.ok;
+		if (found.ok && literal.ok) {
+			assert found.value.key.equals(literal.value.key);
+			assert found.value.bump == literal.value.bump;
+		}
+	}
+}
+
+test "programAddress rebuilds the address its bump was found for, and no other" {
+	const program = hostProgram();
+	const bump: uint8 = 255;
+	const identity = pubkeyOf("FLtPrptzq3LRxEv7uX39Hrfuw5mS9Uwc5yaMQdeThWeX");
+	const rebuilt = programAddressOf(program, ["identity", [bump]]);
+	assert rebuilt.ok;
+	if (rebuilt.ok) { assert rebuilt.value.equals(identity); }
+	const other: uint8 = 254;
+	const different = programAddressOf(program, ["identity", [other]]);
+	if (different.ok) { assert !different.value.equals(identity); }
+}
+
+test "findProgramAddress skips bumps whose address is on the curve" {
+	const found = findProgramAddressOf(hostProgram(), [
+		[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14],
+	]);
+	assert foundAt(
+		found,
+		pubkeyOf("6RWy3mtB7rxdHcS6tgrBqmtuUQ8tTjg5JHaK9g458kYj"),
+		249,
+	);
+}
+
+test "a list of sixteen seeds finds nothing and seventeen seeds create nothing" {
+	const program = hostProgram();
+	const sixteen = findProgramAddressOf(program, [
+		[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
+	]);
+	assert !sixteen.ok;
+	if (!sixteen.ok) { assert sixteen.error.code == ProgramError.maxSeedLengthExceeded().code; }
+	const seventeen = programAddressOf(program, [
+		[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16],
+	]);
+	assert !seventeen.ok;
+	if (!seventeen.ok) { assert seventeen.error.code == ProgramError.maxSeedLengthExceeded().code; }
+	const sixteenCreated = programAddressOf(program, [
+		[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
+	]);
+	if (!sixteenCreated.ok) {
+		assert sixteenCreated.error.code == ProgramError.invalidSeeds().code;
+	}
+}
+
+test "a seed of thirty-three bytes is refused by find and by create" {
+	const program = hostProgram();
+	const found = findProgramAddressOf(program, ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+	assert !found.ok;
+	if (!found.ok) { assert found.error.code == ProgramError.maxSeedLengthExceeded().code; }
+	const created = programAddressOf(program, ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+	assert !created.ok;
+	if (!created.ok) { assert created.error.code == ProgramError.maxSeedLengthExceeded().code; }
+	const wide: uint8[33] = [];
+	const bytes = programAddressOf(program, [wide]);
+	assert !bytes.ok;
+	if (!bytes.ok) { assert bytes.error.code == ProgramError.maxSeedLengthExceeded().code; }
+}
+
+export struct SeedAccounts {
+	owner: Signer;
+	vault: Writable;
+	pet: Mutable<Counter>;
+	plain: Account;
+}
+
+function accountSeedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<SeedAccounts>();
+	const byAccount = try findProgramAddress(["k", x.owner, x.vault, x.pet, x.plain]);
+	const byKey = try findProgramAddress([
+		"k",
+		x.owner.key(),
+		x.vault.key(),
+		x.pet.key(),
+		x.plain.key(),
+	]);
+	if (byAccount.key != byKey.key || byAccount.bump != byKey.bump) {
+		return Result.err(ProgramError.invalidSeeds());
+	}
+	const rebuilt = try programAddress(["k", x.owner, x.vault, x.pet, x.plain, [byAccount.bump]]);
+	if (rebuilt != byAccount.key) { return Result.err(ProgramError.constraintSeeds()); }
+	const reversed = try findProgramAddress(["k", x.plain, x.pet, x.vault, x.owner]);
+	if (reversed.key == byAccount.key) { return Result.err(ProgramError.constraintAddress()); }
+	return Result.ok(byAccount.bump as uint64);
+}
+
+function accountSeedEntry(): void { codeOf(accountSeedStep()); }
+
+test "an account is a seed through its key, whatever proof it carries" {
+	const accounts = [
+		holder(2, keyOf(9), [], true, false),
+		holder(3, Pubkey.systemProgram(), [], false, true),
+		holder(1, programKey(), counterBytes(counterTag(), 41, 48), false, true),
+		holder(4, Pubkey.systemProgram(), [], false, false),
+	];
+	assert run(programKey(), accounts, [], accountSeedEntry).result == 0;
 }
