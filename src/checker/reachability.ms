@@ -225,10 +225,11 @@ function markRefArrayCell(arrT: Type, modulePath: string): void {
 	const trace = refArrayCellOp(arrT, AttachedOp.AttachedTrace);
 	let owner = _singleModule != "" ? _singleModule : modulePath;
 	if (_singleModule == "") {
-		if (destroy.modulePath != "") owner = destroy.modulePath;
+		const destroyHome = hasFlag(destroy, SymbolFlag.ImportC) ? "" : destroy.modulePath;
+		if (destroyHome != "") owner = destroyHome;
 		if (trace != null) {
-			if (destroy.modulePath != "" && destroy.modulePath != trace.modulePath) {
-				throw new Error(`internal: ref-array cell ${key} has its destroy op in ${destroy.modulePath} and its trace op in ${trace.modulePath}`);
+			if (destroyHome != "" && destroyHome != trace.modulePath) {
+				throw new Error(`internal: ref-array cell ${key} has its destroy op in ${destroyHome} and its trace op in ${trace.modulePath}`);
 			}
 			owner = trace.modulePath;
 		}
@@ -308,11 +309,6 @@ function opOwner(op: Symbol | null, fallback: string): string {
 	return home != "" ? home : fallback;
 }
 
-function ownModuleOp(op: Symbol | null, modulePath: string): Symbol | null {
-	if (op == null) return null;
-	return opHome(op, modulePath) == modulePath ? op : null;
-}
-
 function markAllocationInfo(allocated: Type | null, modulePath: string): void {
 	if (allocated == null) return;
 	let t = peelTransparentInstance(allocated);
@@ -328,8 +324,8 @@ function markObjectTypeInfo(type: Type | null, modulePath: string): void {
 	const key = objectTypeInfoKey(subject, modulePath);
 	if (_aliveSet.typeInfoKeys.has(key)) return;
 	const isPrivate = isPrivateTypeInfoSubject(subject);
-	const destroy = isPrivate ? ownModuleOp(getOpByKey(subject, AttachedOp.AttachedDestructor), modulePath) : getOpByKey(subject, AttachedOp.AttachedDestructor);
-	const trace = isPrivate ? ownModuleOp(getOpByKey(subject, AttachedOp.AttachedTrace), modulePath) : getOpByKey(subject, AttachedOp.AttachedTrace);
+	const destroy = getOpByKey(subject, AttachedOp.AttachedDestructor);
+	const trace = getOpByKey(subject, AttachedOp.AttachedTrace);
 	let owner = _singleModule != "" ? _singleModule : modulePath;
 	if (!isPrivate && _singleModule == "") {
 		if (subject.sym != null && subject.sym.modulePath != "") owner = subject.sym.modulePath;
