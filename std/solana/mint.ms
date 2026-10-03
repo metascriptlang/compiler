@@ -1,25 +1,18 @@
 import {
 	Account,
-	Instruction,
+	InstructionAccount,
 	Writable,
 	WritableSigner,
+	borshBuffer,
 	createProgramAccountSeeded,
 } from "./core";
+import { invoke } from "./invoke";
 import { ProgramError } from "./error";
 import { Pubkey } from "./pubkey";
 import { SeedSlice, findAt, ownProgram, tableAddress } from "./seed";
 
 export function isTokenProgram(program: Pubkey): boolean {
 	return program.equals(Pubkey.tokenProgram()) || program.equals(Pubkey.token2022Program());
-}
-
-export function tokenInstruction(
-	program: Pubkey,
-	accountCount: uint64,
-	dataLength: uint64,
-): Result<Instruction, ProgramError> {
-	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
-	return Result.ok(Instruction.forProgram(program, accountCount, dataLength));
 }
 
 export function initializeMint2(
@@ -29,18 +22,15 @@ export function initializeMint2(
 	mintAuthority: Pubkey,
 	freezeAuthority: Pubkey | null,
 ): Result<uint64, ProgramError> {
-	const instruction = try tokenInstruction(program, 1, 67);
-	instruction.addWritable(mint);
-	instruction.appendU8(20);
-	instruction.appendU8(decimals);
-	instruction.appendPubkey(mintAuthority);
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[67] = [];
+	let data = borshBuffer(storage).u8(20).u8(decimals).pubkey(mintAuthority);
 	if (freezeAuthority === null) {
-		instruction.appendU8(0);
+		data = data.u8(0);
 	} else {
-		instruction.appendU8(1);
-		instruction.appendPubkey(freezeAuthority);
+		data = data.u8(1).pubkey(freezeAuthority);
 	}
-	return instruction.invoke();
+	return invoke(program, [InstructionAccount.writable(mint)], data);
 }
 
 export function createMintPdaAt(

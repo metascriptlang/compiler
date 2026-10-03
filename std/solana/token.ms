@@ -3,16 +3,18 @@ import {
 	Bytes,
 	External,
 	ExternalMutable,
-	Instruction,
+	InstructionAccount,
 	Program,
 	ProgramAddress,
 	System,
 	Writable,
 	WritableSigner,
+	borshBuffer,
 	unchecked,
 } from "./core";
 import { ProgramError } from "./error";
-import { isTokenProgram, tokenInstruction } from "./mint";
+import { invokeSigned } from "./invoke";
+import { isTokenProgram } from "./mint";
 import { Pubkey } from "./pubkey";
 import { SeedSlice, SignerSeeds, bytesAddress, findAddress, seedBytes } from "./seed";
 
@@ -306,13 +308,18 @@ export function mintTo(
 	amount: uint64,
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
-	const instruction = try tokenInstruction(program, 3, 9);
-	instruction.addWritable(mint);
-	instruction.addWritable(destination);
-	instruction.addReadonlySigner(authority);
-	instruction.appendU8(7);
-	instruction.appendU64(amount);
-	return instruction.invoke(signers);
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[9] = [];
+	return invokeSigned(
+		program,
+		[
+			InstructionAccount.writable(mint),
+			InstructionAccount.writable(destination),
+			InstructionAccount.readonlySigner(authority),
+		],
+		borshBuffer(storage).u8(7).u64(amount),
+		signers,
+	);
 }
 
 export function transferChecked(
@@ -325,15 +332,19 @@ export function transferChecked(
 	decimals: uint8,
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
-	const instruction = try tokenInstruction(program, 4, 10);
-	instruction.addWritable(source);
-	instruction.addReadonly(mint);
-	instruction.addWritable(destination);
-	instruction.addReadonlySigner(authority);
-	instruction.appendU8(12);
-	instruction.appendU64(amount);
-	instruction.appendU8(decimals);
-	return instruction.invoke(signers);
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[10] = [];
+	return invokeSigned(
+		program,
+		[
+			InstructionAccount.writable(source),
+			InstructionAccount.readonly(mint),
+			InstructionAccount.writable(destination),
+			InstructionAccount.readonlySigner(authority),
+		],
+		borshBuffer(storage).u8(12).u64(amount).u8(decimals),
+		signers,
+	);
 }
 
 export function closeAccount(
@@ -343,12 +354,18 @@ export function closeAccount(
 	authority: Account,
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
-	const instruction = try tokenInstruction(program, 3, 1);
-	instruction.addWritable(account);
-	instruction.addWritable(destination);
-	instruction.addReadonlySigner(authority);
-	instruction.appendU8(9);
-	return instruction.invoke(signers);
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	let storage: uint8[1] = [];
+	return invokeSigned(
+		program,
+		[
+			InstructionAccount.writable(account),
+			InstructionAccount.writable(destination),
+			InstructionAccount.readonlySigner(authority),
+		],
+		borshBuffer(storage).u8(9),
+		signers,
+	);
 }
 
 export function associatedTokenAddress(
@@ -377,15 +394,20 @@ function createAssociated(
 	signers: Span<SignerSeeds>,
 ): Result<uint64, ProgramError> {
 	if (!isTokenProgram(program.key())) { return Result.err(ProgramError.incorrectProgramId()); }
-	const instruction = Instruction.forProgram(Pubkey.associatedTokenProgram(), 6, 1);
-	instruction.addWritableSigner(payer);
-	instruction.addWritable(associated);
-	instruction.addReadonly(wallet);
-	instruction.addReadonly(mint);
-	instruction.addReadonly(systemProgram);
-	instruction.addReadonly(program);
-	instruction.appendU8(discriminator);
-	return instruction.invoke(signers);
+	let storage: uint8[1] = [];
+	return invokeSigned(
+		Pubkey.associatedTokenProgram(),
+		[
+			InstructionAccount.writableSigner(payer),
+			InstructionAccount.writable(associated),
+			InstructionAccount.readonly(wallet),
+			InstructionAccount.readonly(mint),
+			InstructionAccount.readonly(systemProgram),
+			InstructionAccount.readonly(program),
+		],
+		borshBuffer(storage).u8(discriminator),
+		signers,
+	);
 }
 
 export function createAssociatedToken(
