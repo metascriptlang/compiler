@@ -441,9 +441,13 @@ cmd_land() {
     esac
     shift
   done
-  if [ -n "$target" ]; then w=$(resolve_target "$target") || exit 1; else w=$(git -C "$WT_CURRENT" rev-parse --show-toplevel); fi
-  name=$(git -C "$w" symbolic-ref -q --short HEAD)
-  case "$name" in wt/*) name=${name#wt/} ;; *) die "land: $w is not on a wt/<name> branch" ;; esac
+  if [ "$wait" -eq 1 ] && [ -n "$target" ] && [[ "$target" != /* && "$target" != ?:/* && "$target" != ?:\\* ]]; then
+    name=$target
+  else
+    if [ -n "$target" ]; then w=$(resolve_target "$target") || exit 1; else w=$(git -C "$WT_CURRENT" rev-parse --show-toplevel); fi
+    name=$(git -C "$w" symbolic-ref -q --short HEAD)
+    case "$name" in wt/*) name=${name#wt/} ;; *) die "land: $w is not on a wt/<name> branch" ;; esac
+  fi
   qd=${MSC_LAND_QUEUE:-$HOME/metascript/.wt/queue}
   if [ "$wait" -eq 1 ]; then
     while [ ! -e "$qd/$name.done" ] && [ ! -e "$qd/$name.red" ]; do

@@ -244,5 +244,13 @@ for i in $(seq 1 40); do [ -d "$MSC_LAND_QUEUE/runner.lock" ] && break; sleep 0.
 check "S18 x landed" '[ "$(cat "$T/ctl/rx")" = 0 ] && onmain x.txt'
 unset IDLE; export MSC_LAND_QUEUE_IDLE=2
 
+echo "== S19 --wait by name answers while the worktree's HEAD is detached, as during a rebase"
+setup; mkwt z
+enqueue z
+rz=$(waitfor z 60)
+git -C "$T/ws/.wt/wt-z" checkout -q --detach
+rz2=$(waitfor z 20)
+check "S19 wait by name ignores a detached HEAD" '[ "$rz" = 0 ] && [ "$rz2" = 0 ] && grep -q "z landed" "$T/ctl/wait.z"'
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
