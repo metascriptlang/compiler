@@ -101,3 +101,4 @@ import "./macroReflection";
 import "./pointerSlotRelation";
 import "./preludeExportOwnership";
 import "./storageMutability";
+import "./tupleIndex";
