@@ -1,4 +1,4 @@
-import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData } from "../ast/node";
 import { classDeclNodeOf, parentClassSymOf, lookupSymbol, Scope } from "./symbol";
 import { CheckerContext, addError } from "./context";
 
@@ -26,7 +26,13 @@ function originOf(sym: Symbol): Symbol {
 	return s;
 }
 
-enum DeclaredVisibility { NotDeclared, Public, Private }
+enum DeclaredVisibility { NotDeclared, Public, Private, Protected }
+
+function memberVisibility(written: string): DeclaredVisibility {
+	if (written == "private") return DeclaredVisibility.Private;
+	if (written == "protected") return DeclaredVisibility.Protected;
+	return DeclaredVisibility.Public;
+}
 
 function ownVisibility(sym: Symbol, field: string): DeclaredVisibility {
 	if (isClassLike(sym)) {
@@ -37,7 +43,7 @@ function ownVisibility(sym: Symbol, field: string): DeclaredVisibility {
 			if (m == null || m.kind != NodeKind.PropertyDecl) continue;
 			const pd = m.data as PropertyDeclData;
 			if (pd.propIsStatic || pd.propName != field) continue;
-			return pd.propVisibility == "private" ? DeclaredVisibility.Private : DeclaredVisibility.Public;
+			return memberVisibility(pd.propVisibility);
 		}
 		return DeclaredVisibility.NotDeclared;
 	}
@@ -66,7 +72,7 @@ export function privateFieldOwner(typeSym: Symbol | null, field: string): Symbol
 	let depth = 0;
 	while (sym != null && depth < 64) {
 		const vis = ownVisibility(sym, field);
-		if (vis == DeclaredVisibility.Private) return sym;
+		if (vis == DeclaredVisibility.Private || vis == DeclaredVisibility.Protected) return sym;
 		if (vis == DeclaredVisibility.Public) return null;
 		const parent = parentOf(sym);
 		sym = parent != null ? originOf(parent) : null;
@@ -75,11 +81,22 @@ export function privateFieldOwner(typeSym: Symbol | null, field: string): Symbol
 	return null;
 }
 
-function grantsPrivateAccess(ctx: CheckerContext, owner: Symbol): boolean {
+function derivesFrom(cls: Symbol, owner: Symbol): boolean {
+	let c: Symbol | null = cls;
+	let depth = 0;
+	while (c != null && depth < 64) {
+		if (originOf(c) == owner) return true;
+		c = parentClassSymOf(c);
+		depth += 1;
+	}
+	return false;
+}
+
+function grantsPrivateAccess(ctx: CheckerContext, owner: Symbol, protectedMember: boolean): boolean {
 	let scope: Scope | null = ctx.table.current;
 	while (scope != null) {
 		const granted = scope.privateAccess;
-		if (granted != null && originOf(granted) == owner) return true;
+		if (granted != null && (originOf(granted) == owner || (protectedMember && derivesFrom(originOf(granted), owner)))) return true;
 		scope = scope.parent;
 	}
 	return false;
@@ -94,8 +111,12 @@ function befriends(ctx: CheckerContext, modulePath: string): boolean {
 	return false;
 }
 
-export function fieldVisible(ctx: CheckerContext, owner: Symbol): boolean {
-	if (isClassLike(owner)) return grantsPrivateAccess(ctx, owner);
+function isProtectedMember(owner: Symbol, name: string): boolean {
+	return isClassLike(owner) && ownVisibility(owner, name) == DeclaredVisibility.Protected;
+}
+
+export function fieldVisible(ctx: CheckerContext, owner: Symbol, name: string): boolean {
+	if (isClassLike(owner)) return grantsPrivateAccess(ctx, owner, isProtectedMember(owner, name));
 	return owner.modulePath == ctx.modulePath || befriends(ctx, owner.modulePath);
 }
 
@@ -112,8 +133,10 @@ export function methodOwnerClass(ctx: CheckerContext, method: Symbol): Symbol | 
 
 export function refusePrivateField(ctx: CheckerContext, typeSym: Symbol | null, field: string, line: int32, column: int32): boolean {
 	const owner = privateFieldOwner(typeSym, field);
-	if (owner == null || fieldVisible(ctx, owner)) return false;
-	if (isClassLike(owner)) {
+	if (owner == null || fieldVisible(ctx, owner, field)) return false;
+	if (isProtectedMember(owner, field)) {
+		addError(ctx, `'${field}' is a protected field of class '${owner.name}' and is only accessible inside that class and its subclasses`, line, column);
+	} else if (isClassLike(owner)) {
 		addError(ctx, `'${field}' is a private field of class '${owner.name}' and is only accessible inside that class`, line, column);
 	} else {
 		addError(ctx, `'${field}' is a private field of '${owner.name}' and is only accessible in the module that declares it`, line, column);
@@ -124,7 +147,7 @@ export function refusePrivateField(ctx: CheckerContext, typeSym: Symbol | null, 
 export function hiddenPrivateField(ctx: CheckerContext, typeSym: Symbol | null, fields: string[]): string {
 	for (const f of fields) {
 		const owner = privateFieldOwner(typeSym, f);
-		if (owner != null && !fieldVisible(ctx, owner)) return f;
+		if (owner != null && !fieldVisible(ctx, owner, f)) return f;
 	}
 	return "";
 }
@@ -150,4 +173,35 @@ export function firstPrivateField(typeSym: Symbol | null, fields: string[]): str
 		if (privateFieldOwner(typeSym, f) != null) return f;
 	}
 	return "";
+}
+
+function methodClass(ctx: CheckerContext, method: Symbol): Symbol | null {
+	const t = method.symbolType;
+	const decl = unwrapDecl(method.declNode);
+	if (decl != null && decl.kind == NodeKind.MethodDecl) {
+		const md = decl.data as MethodDeclData;
+		if (!md.methodIsStatic && t != null && t.kind == TypeKind.Function && t.typeChildren != null && t.typeChildren.length > 0) {
+			const receiver = declaringSymOf(t.typeChildren[0]);
+			if (receiver != null && isClassLike(receiver)) return originOf(receiver);
+		}
+	}
+	const owner = methodOwnerClass(ctx, method);
+	return owner != null ? originOf(owner) : null;
+}
+
+export function refuseHiddenMethodCall(ctx: CheckerContext, call: Node): void {
+	if (call.kind != NodeKind.CallExpr) return;
+	const callee = (call.data as CallExprData).callee;
+	if (callee == null || callee.resolvedSym == null) return;
+	const method = originOf(callee.resolvedSym);
+	const decl = unwrapDecl(method.declNode);
+	if (decl == null || decl.kind != NodeKind.MethodDecl) return;
+	const md = decl.data as MethodDeclData;
+	const vis = memberVisibility(md.methodVisibility);
+	if (vis != DeclaredVisibility.Private && vis != DeclaredVisibility.Protected) return;
+	const owner = methodClass(ctx, method);
+	if (owner == null || grantsPrivateAccess(ctx, owner, vis == DeclaredVisibility.Protected)) return;
+	const what = vis == DeclaredVisibility.Protected ? "protected" : "private";
+	const where = vis == DeclaredVisibility.Protected ? "inside that class and its subclasses" : "inside that class";
+	addError(ctx, `'${md.methodName}' is a ${what} method of class '${owner.name}' and is only accessible ${where}`, call.location.line, call.location.column);
 }

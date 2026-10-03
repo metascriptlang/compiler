@@ -1,7 +1,7 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
-import { refusePrivateField, declaringSymOf } from "./visibility";
+import { refusePrivateField, declaringSymOf, refuseHiddenMethodCall } from "./visibility";
 import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
@@ -890,6 +890,7 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 	_cceCount = _cceCount + 1;
 	const _cc0 = performance.now();
 	const r = checkCallExprInner(ctx, node, expectedType);
+	refuseHiddenMethodCall(ctx, node);
 	_cceTime = _cceTime + (performance.now() - _cc0);
 	return evalCompileTimeCall(ctx, node, r);
 }
