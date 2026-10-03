@@ -6,7 +6,7 @@
 //
 // Original symptom: a function returning `(() => T)[]` printed correct values
 // then PANICKED on cleanup (misaligned msRefHeader access — msArrayRefDestroy
-// read inline 16B msClosure structs as 8B void*). The existing fixedbugs/bug033
+// read inline 16B msClosure structs as 8B void*). The existing src/test/lang/closureStorage.ms
 // inline "no crash" test never executes the C destroy path — so it
 // guards nothing for the actual fix. This runs the real native binary through
 // C DRC, where the crash actually lived. Looped so a regression also shows as

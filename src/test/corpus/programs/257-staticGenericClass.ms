@@ -1,7 +1,7 @@
 // note: static method of a generic class must monomorphize per instantiation —
 // T binds from an explicit <int32>, the annotated destination, or plain arg
 // inference; two value types prove the instances coexist. Was: checker passed,
-// C link failed on the unmonomorphized call name. Guard: fixedbugs/bug128.
+// C link failed on the unmonomorphized call name. Guard: src/test/lang/classCalls.ms.
 class Box<T> {
 	v: T;
 	constructor(x: T) { this.v = x; }

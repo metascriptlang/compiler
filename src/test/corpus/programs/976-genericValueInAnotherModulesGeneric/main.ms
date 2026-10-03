@@ -1,6 +1,6 @@
 // @stdout: 5 2 7 9 11 2 | 4 8 1
 // note: a generic instance stored in a generic of another module keeps its type arguments
-// (fixedbugs/bug553). The container's body is re-checked in its own module, where `Crate` names the
+// (src/test/handoff/genericBinding.ms). The container's body is re-checked in its own module, where `Crate` names the
 // caller's declaration through an alias of that name; that alias dropped `<int32>`, so C declared the
 // entry vector under two names (interface, class) or the check refused `set` (value struct).
 

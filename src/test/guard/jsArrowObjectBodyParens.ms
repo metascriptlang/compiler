@@ -6,7 +6,7 @@
 // returning undefined. Compile-clean on both lanes; at runtime every
 // object-valued arrow read undefined (Neon's <Ctx.Provider value={{...}}>
 // crashed "Cannot read properties of undefined"). C was unaffected. The
-// fixedbugs/harness lane cannot see it — generateJS normalizes the body
+// in-process compileToJS test cannot see it — generateJS normalizes the body
 // before emit — only this CLI-built node-run does.
 //
 // GUARD-JS

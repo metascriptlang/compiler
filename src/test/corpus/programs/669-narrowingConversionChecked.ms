@@ -1,6 +1,6 @@
 // @exit: 1
 // @stdout: value 200 not in range -128 .. 127
-// @skip-js: node reports the thrown range error with its own stack trace and parity compares merged output (sibling of 647); fixedbugs bug634 pins the JS check
+// @skip-js: node reports the thrown range error with its own stack trace and parity compares merged output (sibling of 647); src/test/js/intConv.ms pins the JS check
 // @xfail(danger): --danger drops range checks, so the conversion wraps instead of stopping
 // @skip-raiser: the raiser stops with the same range error but writes it to stderr, which the raiser lane does not read; src/raiser/vm.ms tests pin the raiser check
 // note: a conversion to a narrower signed integer keeps an in-range value (from int32, int64, uint8 and a float, which truncates) and stops with a range error on the first value outside the target's range; a conversion to an unsigned type wraps. Same on every backend.
