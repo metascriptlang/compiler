@@ -39,9 +39,9 @@ test "instanceSymbolIdentity: the instance of a generic class carries its declar
 	for (const source of sources) {
 		const found: Symbol[] = [];
 		instanceSyms(checkedProgram(source), found);
-		assert found.length == 1, source;
-		assert found[0].item > 0, source;
-		assert found[0].declNode != null && found[0].declNode.kind == NodeKind.ClassDecl, source;
+		assert found.length == 1, `instance count ${found.length}: ${source}`;
+		assert found[0].item > 0, `instance item ${found[0].item}: ${source}`;
+		assert found[0].declNode != null && found[0].declNode.kind == NodeKind.ClassDecl, `instance declaration: ${source}`;
 	}
 }
 
@@ -53,7 +53,7 @@ test "instanceSymbolIdentity: the compiler-provided toString carries an item on 
 	for (const source of sources) {
 		const found: Symbol[] = [];
 		toStringSyms(checkedProgram(source), found);
-		assert found.length == 1, source;
-		assert found[0].item > 0, source;
+		assert found.length == 1, `toString count ${found.length}: ${source}`;
+		assert found[0].item > 0, `toString item ${found[0].item}: ${source}`;
 	}
 }
