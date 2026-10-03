@@ -734,6 +734,7 @@ void msSolHostSetReturnData(const uint8_t* data, int64_t length) {
     }
     memcpy(msSolHostReturnData, data, (size_t)length);
     msSolHostReturnLength = (uint64_t)length;
+    msSolParse();
     memcpy(msSolHostReturnProgram, (const void*)msSolHostContext()->programId, 32);
 }
 
