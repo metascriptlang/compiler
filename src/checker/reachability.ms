@@ -211,7 +211,7 @@ function walkBody(node: Node, modulePath: string): void {
 	}
 
 	if (k == NodeKind.HiddenSubConv && node.variantSlot > 0) {
-		markRematerializedMemberTypeInfo((node.data as HiddenStdConvData).convType);
+		markRematerializedMemberTypeInfo((node.data as HiddenStdConvData).convType, modulePath);
 		walkChildrenGeneric(node, modulePath);
 		return;
 	}
@@ -224,7 +224,7 @@ function walkBody(node: Node, modulePath: string): void {
 
 	if (k == NodeKind.BinaryExpr && (node.data as BinaryExprData).operator == "instanceof") {
 		const rhs = (node.data as BinaryExprData).right;
-		markTypeInfoOf(rhs.resolvedSym != null ? rhs.resolvedSym.symbolType : rhs.nodeType);
+		markTypeInfoOf(rhs.resolvedSym != null ? rhs.resolvedSym.symbolType : rhs.nodeType, modulePath);
 		walkChildrenGeneric(node, modulePath);
 		return;
 	}
@@ -309,7 +309,7 @@ function markUnionHookEdges(t: Type): void {
 // at runtime, so no direct call site exists). Mirrors codegen's on-demand
 // TypeInfo emission: mark only when the TypeInfo decl really exists.
 function markTypeInfoEdge(node: Node, modulePath: string): void {
-	markTypeInfoOf(node.nodeType);
+	markTypeInfoOf(node.nodeType, modulePath);
 }
 
 function markTypeInfoHooks(t: Type, modulePath: string): void {
@@ -319,13 +319,13 @@ function markTypeInfoHooks(t: Type, modulePath: string): void {
 	if (trace != null) markReferenced(trace, modulePath);
 }
 
-function markRematerializedMemberTypeInfo(conv: Type | null): void {
+function markRematerializedMemberTypeInfo(conv: Type | null, modulePath: string): void {
 	if (conv == null || conv.kind == TypeKind.Union) return;
 	const member = unwrapPointerLikeForVariant(conv);
-	if (member != null && member != conv && member.kind == TypeKind.Struct) markTypeInfoOf(member);
+	if (member != null && member != conv && member.kind == TypeKind.Struct) markTypeInfoOf(member, modulePath);
 }
 
-function markTypeInfoOf(type: Type | null): void {
+function markTypeInfoOf(type: Type | null, modulePath: string): void {
 	if (type == null) return;
 	let t = peelTransparentInstance(type);
 	const nullableRef = unwrapRefNullUnion(t);
@@ -376,7 +376,7 @@ function markTypeInfoOf(type: Type | null): void {
 		markAndWalk(home, tiName);
 	}
 	if (t.kind != TypeKind.Struct) return;
-	markTypeInfoHooks(t, t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : home);
+	markTypeInfoHooks(t, t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : (home != "" ? home : modulePath));
 	let bt = t.typeExtra;
 	let depth = 0;
 	while (bt != null && depth < 64) {
