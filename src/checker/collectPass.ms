@@ -14,7 +14,7 @@ import { quoteCcArg } from "../utils/commandLine";
 import { declGenericParams } from "./types";
 import { callDecoratorDefers, callCheckExpr } from "./checkerCallbacks";
 import { mangleModuleName } from "../codegen/c/names";
-import { setOpByKey } from "../codegen/c/types";
+import { setOpByKey, getOpByKey } from "../codegen/c/types";
 
 // ===== Top-Level Collector =====
 
@@ -838,9 +838,11 @@ export function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 		enumSym.nativeName = d.enumName;
 	}
 	defineOrError(ctx, enumSym, node);
-	const toStringSym = newSym(ctx, SymbolKind.Function, d.enumName + "_toString", createFunction([enumType], ["v"], stringType()));
-	toStringSym.state = SymbolState.Checked;
-	setOpByKey(enumType, AttachedOp.AttachedToString, toStringSym);
+	if (getOpByKey(enumType, AttachedOp.AttachedToString) == null) {
+		const toStringSym = newSym(ctx, SymbolKind.Function, d.enumName + "_toString", createFunction([enumType], ["v"], stringType()));
+		toStringSym.state = SymbolState.Checked;
+		setOpByKey(enumType, AttachedOp.AttachedToString, toStringSym);
+	}
 	// Record enum type DEF for symbol graph
 	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.enumName.length, enumSym, enumType, SymbolKind.Enum, d.enumName, "", true);
 	// Record each enum member for the symbol graph (DEF records for go-to-definition).
@@ -1667,6 +1669,17 @@ test "collect interface" {
 test "collect enum" {
 	assert hasSymbol("enum Color { Red, Green }", "Color");
 	assert symbolKindOf("enum Color { Red, Green }", "Color") == SymbolKind.Enum;
+}
+
+test "an enum collected again in a second checker context keeps its first toString op" {
+	const src = "enum ToStringOnceProbe { A, B }";
+	const first = collectFromSource(src);
+	const firstType = lookupSymbol(first.table, "ToStringOnceProbe")!.symbolType;
+	const op = getOpByKey(firstType, AttachedOp.AttachedToString);
+	assert op != null;
+	const second = collectFromSource(src);
+	const secondType = lookupSymbol(second.table, "ToStringOnceProbe")!.symbolType;
+	assert getOpByKey(secondType, AttachedOp.AttachedToString) == op;
 }
 
 test "collect enum type (members resolved at use site)" {
