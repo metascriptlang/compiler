@@ -189,9 +189,6 @@ entry();
 `;
 }
 
-// One bound per generic family, in bytes per copy of the linked wrapper, and the number of copies
-// the probe makes. A pass-through wrapper (the result type does not depend on the account type)
-// is a call and a return; one that keeps a typed result also rebuilds the result.
 struct Bound {
 	family: string;
 	copies: int32;
@@ -218,7 +215,6 @@ const BOUNDS: Bound[] = [
 	{ family: "externalMutable", copies: 2, most: 544 },
 ];
 
-// The input parser is one shared function: nothing else may carry it.
 const ONE_COPY: Bound[] = [
 	{ family: "ownProgram", copies: 1, most: 160 },
 	{ family: "instructionData", copies: 0, most: 160 },
