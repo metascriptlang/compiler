@@ -179,10 +179,24 @@ function firstWarmBuild(): void {
 	copy(`${FIXTURES}/logicBodyEdit.ms`, `${dir}/logic.ms`);
 	mustBuild(tag, dir, build, "body-edit build failed");
 	let relinked = 0;
+	const changed: string[] = [];
 	for (const key of linkKeys(dir)) {
-		if (!cold.includes(key)) relinked += 1;
+		if (!cold.includes(key)) {
+			relinked += 1;
+			changed.push(key);
+		}
 	}
 	need(tag, cold.length > 0, "the cold build left no link keys");
+	if (relinked != 1) {
+		for (const key of changed) {
+			const name = key.split("\n")[0];
+			let before = "(no cold entry)";
+			for (const entry of cold) {
+				if (entry.split("\n")[0] == name) before = entry;
+			}
+			console.log(`${tag}: ${name} changed\n--- cold\n${before}\n--- warm\n${key}`);
+		}
+	}
 	need(tag, relinked == 1, `the first warm build relinked ${relinked} images, expected only logic's`);
 
 	const plain = freshDir(`${TMP}/firstWarmPlain`);
