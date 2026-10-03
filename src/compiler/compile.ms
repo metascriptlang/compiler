@@ -6,7 +6,7 @@ import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
 import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
-import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isStaticExtensionSym, Severity } from "../checker/context";
+import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isStaticExtensionSym, Severity } from "../checker/context";
 import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobalImportModules, loadExtraGlobalImportModules, noteStdGlobalImportModules, CheckSession } from "../checker/orchestrator";
 import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
@@ -1625,6 +1625,7 @@ function hcrFunctionSlot(info: ExportedSymInfo, fn: Symbol): string {
 function appendHcrFunctionExport(exports: HcrAbiExport[], moduleId: string, info: ExportedSymInfo, fn: Symbol): Result<void, string> {
 	if (hasFlag(fn, SymbolFlag.OverloadSig) || hasFlag(fn, SymbolFlag.Borrow)) return Result.ok(null);
 	if (hasGenericParams(fn.symbolType)) return Result.ok(null);
+	if (fn.declNode != null && fn.declNode.kind == NodeKind.FunctionDecl && isGenericFn((fn.declNode.data as FunctionDeclData).fnFlags)) return Result.ok(null);
 	exports.push(createHcrAbiExport(moduleId, hcrFunctionSymbol(info, fn), hcrSignatureKey(fn.symbolType), hcrFunctionSlot(info, fn)));
 	return Result.ok(null);
 }

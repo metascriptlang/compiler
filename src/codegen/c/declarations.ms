@@ -105,7 +105,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	// Determine C return type — MUST have nodeType (Decisive Checker mandate)
 	const fnType = node.nodeType;
 	if (fnType == null) return;
-	if (hasGenericParams(fnType)) return;
+	if (hasGenericParams(fnType) || isGenericFn(d.fnFlags)) return;
 	const isGenericInstance = d.fnName.indexOf("__") >= 0 && sym != null && sym.name.indexOf("__") >= 0;
 	if (g.preparingDeclarations) {
 		if (isGenericInstance && g.preparationFacts != null

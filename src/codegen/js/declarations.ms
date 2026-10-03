@@ -7,6 +7,7 @@ import {
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
 import { hasGenericParams } from "../../checker/types";
+import { isGenericFn } from "../../checker/context";
 
 // ===== Function Declaration =====
 
@@ -54,7 +55,7 @@ export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
 	if (isExternFlag(d.fnFlags)) return;
 	// Tier 1: body-less overload signatures are typecheck-only, skip emission
 	if (d.fnFlags.indexOf("overload", 0) >= 0) return;
-	if (node.nodeType != null && hasGenericParams(node.nodeType)) return;
+	if (isGenericFn(d.fnFlags) || (node.nodeType != null && hasGenericParams(node.nodeType))) return;
 	emitIndent(gen);
 	emitFunctionDeclInner(gen, node);
 }
