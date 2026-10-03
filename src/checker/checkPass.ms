@@ -4390,6 +4390,41 @@ test "string DU match stmt missing variant errors" {
 	assert !checkOk("type S = { kind: \"a\", x: number } | { kind: \"b\", y: string }; function f(s: S): void { match (s.kind) { \"a\" => {} }; }");
 }
 
+function firstAliasError(input: string): string {
+	const ctx = checkSource(input);
+	if (ctx.errors.length == 0) return "";
+	return ctx.errors[0].message;
+}
+
+test "an alias that reaches itself through only structural types is refused at its declaration" {
+	assert firstAliasError("type X = X;").indexOf("illegal recursion in type 'X'") >= 0;
+	assert firstAliasError("type A = B; type B = A;").indexOf("illegal recursion") >= 0;
+	assert firstAliasError("type L = L[];").indexOf("illegal recursion in type 'L'") >= 0;
+	assert firstAliasError("type T = [number, T];").indexOf("illegal recursion in type 'T'") >= 0;
+	assert firstAliasError("type T = [number, [string, T]];").indexOf("illegal recursion in type 'T'") >= 0;
+	assert firstAliasError("type F = (x: number) => F;").indexOf("illegal recursion in type 'F'") >= 0;
+	assert firstAliasError("type D = distinct D[];").indexOf("illegal recursion in type 'D'") >= 0;
+	assert firstAliasError("type G<T> = [T, G<T>];").indexOf("illegal recursion in type 'G'") >= 0;
+	assert firstAliasError("type A = [B]; type B = [A];").indexOf("illegal recursion") >= 0;
+}
+
+test "an alias that holds itself by value inside a union or tuple is refused as infinite size" {
+	assert firstAliasError("type U = U | number;").indexOf("contains itself by value") >= 0;
+	assert firstAliasError("type T = [number, T | null];").indexOf("contains itself by value") >= 0;
+}
+
+test "an alias that recurses through an object, interface, class or named union stays accepted" {
+	assert checkOk("type Json = string | number | Json[];");
+	assert checkOk("type Json = string | number | Json[] | null;");
+	assert checkOk("type Tree = { v: number, kids: Tree[] };");
+	assert checkOk("type Tree = { v: number, parent: Tree | null };");
+	assert checkOk("type A = { b: B | null }; type B = { a: A[] };");
+	assert checkOk("interface Node { kids: Node[] } type Pair = [number, Node]; type Fn = (n: Node) => Pair;");
+	assert checkOk("class N { next: N | null = null; } type Link = [number, N];");
+	assert checkOk("type Box<T> = { v: T, next: Box<T> | null };");
+	assert checkOk("type F = F[] | number;");
+}
+
 // ===== Tier 3: Generic Type Aliases =====
 
 test "declared struct answers generic queries from its members" {
