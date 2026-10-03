@@ -35,7 +35,7 @@ import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMuta
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
-import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, macroDeclOf } from "./callResolve";
+import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, macroDeclOf, markNamesUsed } from "./callResolve";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { checkActorStaticField } from "./sendable";
@@ -2242,33 +2242,15 @@ function declaredInThisModule(ctx: CheckerContext, t: Type | null): boolean {
 function markMacroUsedSymbols(ctx: CheckerContext, node: Node): void {
 	const d = node.data as MacroDeclData;
 	// Mark param type names as used (e.g. `x: Node` → mark Node)
-	for (const typeName of [...d.macroDeclParamTypes, d.macroDeclReturnType]) {
+	const typeNames: string[] = [d.macroDeclReturnType];
+	for (const paramType of d.macroDeclParamTypes) typeNames.push(paramType);
+	for (const typeName of typeNames) {
 		if (typeName != "") {
 			const sym = lookupSymbol(ctx.table, typeName);
 			if (sym != null) markUsedIn(ctx, sym);
 		}
 	}
-	markMacroBodyUsed(ctx, d.macroDeclBody);
-}
-
-function markMacroBodyUsed(ctx: CheckerContext, node: Node): void {
-	if (node == null) return;
-	if (node.kind == NodeKind.Identifier) {
-		const id = node.data as IdentifierData;
-		const sym = lookupSymbol(ctx.table, id.name);
-		if (sym != null) markUsedIn(ctx, sym);
-	}
-	if (node.kind == NodeKind.CallExpr) {
-		const call = node.data as CallExprData;
-		if (call.callee.kind == NodeKind.Identifier && (call.callee.data as IdentifierData).name == "bindSym"
-				&& call.arguments.length == 1 && call.arguments[0].kind == NodeKind.StringLiteral) {
-			const sym = lookupSymbol(ctx.table, (call.arguments[0].data as StringLiteralData).value);
-			if (sym != null) markUsedIn(ctx, sym);
-		}
-	}
-	forEachChild(node, (child: Node): void => {
-		markMacroBodyUsed(ctx, child);
-	});
+	markNamesUsed(ctx, d.macroDeclBody);
 }
 
 function importedStmtMacro(ctx: CheckerContext, call: Node): Symbol | null {
@@ -2315,7 +2297,7 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 		rewriteCallAsMacroInvocation(call, sym);
 	}
 	const md = call.data as MacroInvocationData;
-	for (const arg of md.macroArgs) markMacroBodyUsed(ctx, arg);
+	for (const arg of md.macroArgs) markNamesUsed(ctx, arg);
 	foldComptimeNodeAliasArgs(ctx, md.macroArgs);
 	if (macroDepthExceeded(ctx, md.macroName, call)) {
 		call.flags = call.flags.incl(NodeFlag.Sem);

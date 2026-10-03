@@ -342,6 +342,24 @@ export function invokedMacroSym(ctx: CheckerContext, node: Node): Symbol | null 
 	return macroDeclOf(sym) != null ? sym : null;
 }
 
+export function markNamesUsed(ctx: CheckerContext, node: Node | null): void {
+	if (node == null) return;
+	let name = "";
+	if (node.kind == NodeKind.Identifier) name = (node.data as IdentifierData).name;
+	if (node.kind == NodeKind.CallExpr) {
+		const cd = node.data as CallExprData;
+		if (cd.callee.kind == NodeKind.Identifier && (cd.callee.data as IdentifierData).name == "bindSym"
+				&& cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
+			name = (cd.arguments[0].data as StringLiteralData).value;
+		}
+	}
+	if (name != "") {
+		const sym = lookupSymbol(ctx.table, name);
+		if (sym != null) markUsedIn(ctx, sym);
+	}
+	forEachChild(node, (child: Node): void => { markNamesUsed(ctx, child); });
+}
+
 export function isDirectiveInvocation(node: Node): boolean {
 	return macroDeclOf(node.resolvedSym) == null && isBuiltinDirective((node.data as MacroInvocationData).macroName);
 }

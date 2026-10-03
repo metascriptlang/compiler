@@ -70,7 +70,7 @@ import { RaiserVM } from "../../raiser/vm";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
 import { valueToNode, takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType } from "./bridge";
-import { ensureShaped } from "../../checker/resolvePass";
+import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
 import { addWarning } from "../../checker/context";
 
@@ -1712,6 +1712,7 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		}
 	}
 
+	if (node.typeArg != "") resolveAnnotation(node.typeArg, ctx, node.location.line, node.location.column);
 	const compileMark = ctx.errors.length;
 	const cm = getOrCompileMacro(ctx, regCtx, macroSym, d.macroName, decl, node.typeArg);
 	if (cm == null) {

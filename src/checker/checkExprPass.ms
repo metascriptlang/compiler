@@ -518,6 +518,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// fossilizes X's symbol type as `unknown`, emitting `void* X` in C
 			// codegen, because the post-check evaluateComptimeBlocks pass
 			// replaces the AST node AFTER the variable's symbol type is set.
+			markNamesUsed(ctx, node);
 			const expanded = callEvalComptimeBlock(node, ctx);
 			let expandedValue = expanded;
 			const hoists = isHoistingSplice(ctx, node, expanded);
@@ -2809,7 +2810,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
-import { anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst } from "./callResolve";
+import { anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed } from "./callResolve";
 
 function createSyntheticToken(loc: SourceLocation): Token {
 	return createToken(TokenKind.Ident, "", loc.line);
