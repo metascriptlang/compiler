@@ -4,6 +4,7 @@ export enum ReloadKind {
 	Pending,
 	Rejected,
 	RestartRequired,
+	RolledBack,
 }
 
 export struct ReloadResult {
@@ -19,5 +20,6 @@ export function reloadKindName(kind: ReloadKind): string {
 		ReloadKind.Pending => "pending",
 		ReloadKind.Rejected => "rejected",
 		ReloadKind.RestartRequired => "restart required",
+		ReloadKind.RolledBack => "rolled back",
 	};
 }

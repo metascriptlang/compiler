@@ -34,6 +34,9 @@ typedef struct MsHcrEntry {
 	int candidateActive;
 	int candidateForwards;
 	int savedActive;
+	void* previous;
+	MsHcrStorage* previousStorage;
+	int previousActive;
 } MsHcrEntry;
 
 struct MsHcrModule {
@@ -44,6 +47,8 @@ struct MsHcrModule {
 	int active;
 	int savedActive;
 	int phase;
+	int previousActive;
+	int revertible;
 };
 
 typedef struct MsHcrTypeEntry {
@@ -52,8 +57,10 @@ typedef struct MsHcrTypeEntry {
 	char* name;
 	msTypeInfo info;
 	msTypeInfo saved;
+	msTypeInfo previous;
 	int created;
 	int exposed;
+	int revertible;
 } MsHcrTypeEntry;
 
 static MsHcrModule* msHcrModules[256];
@@ -329,14 +336,49 @@ void msHcrFinalize(const char* moduleId) {
 	MsHcrModule* module = msHcrModule(moduleId);
 	if (msHcrStaging || module->phase != 2) msHcrFail(moduleId, "finalize requires a committed module");
 	for (MsHcrEntry* entry = module->entries; entry != NULL; entry = entry->moduleNext) {
-		if (entry->savedStorage != entry->storage) msHcrRetire(module, entry->savedStorage);
+		if (module->revertible && entry->previousStorage != entry->savedStorage && entry->previousStorage != entry->storage) {
+			msHcrRetire(module, entry->previousStorage);
+		}
+		entry->previous = entry->saved;
+		entry->previousStorage = entry->savedStorage;
+		entry->previousActive = entry->savedActive;
 		entry->saved = NULL;
 		entry->savedStorage = NULL;
 		entry->savedActive = 0;
 	}
+	for (MsHcrTypeEntry* entry = msHcrTypes; entry != NULL; entry = entry->next) {
+		if (entry->module != module) continue;
+		entry->previous = entry->saved;
+		entry->revertible = 1;
+	}
 	msHcrAcceptTypeSnapshots(module);
+	module->previousActive = module->savedActive;
+	module->revertible = 1;
 	module->savedActive = 0;
 	module->phase = 0;
+}
+
+void msHcrRevert(const char* moduleId) {
+	MsHcrModule* module = msHcrModule(moduleId);
+	if (msHcrStaging || module->phase != 0 || !module->revertible) msHcrFail(moduleId, "revert requires an accepted reload of the module");
+	for (MsHcrEntry* entry = module->entries; entry != NULL; entry = entry->moduleNext) {
+		if (entry->storage != entry->previousStorage) msHcrRetire(module, entry->storage);
+		entry->cell.current = entry->previous;
+		entry->storage = entry->previousStorage;
+		entry->active = entry->previousActive;
+		entry->previous = NULL;
+		entry->previousStorage = NULL;
+		entry->previousActive = 0;
+	}
+	for (MsHcrTypeEntry* entry = msHcrTypes; entry != NULL; entry = entry->next) {
+		if (entry->module != module || !entry->revertible) continue;
+		entry->info = entry->previous;
+		entry->saved = entry->previous;
+		entry->revertible = 0;
+	}
+	module->active = module->previousActive;
+	module->previousActive = 0;
+	module->revertible = 0;
 }
 
 int32_t msHcrInvokeInit(void* raw) { return msHcrCallInitStatus(raw); }
@@ -376,3 +418,252 @@ void msHcrLaunch(const char* dir, const char* stem) {
 msString msHcrLaunchDir(void) { return msStringFromCStr(msHcrDir != NULL ? msHcrDir : ""); }
 
 msString msHcrLaunchStem(void) { return msStringFromCStr(msHcrStem != NULL ? msHcrStem : ""); }
+
+/* Windows resumes a guard from its captured register context: the fatal trap restores it
+ * directly, the vectored handler hands it back to the OS, so nothing jumps out of the dispatcher. */
+#if defined(_WIN32)
+int __cdecl _resetstkoflw(void);
+#else
+#include <setjmp.h>
+#include <signal.h>
+#include <pthread.h>
+#endif
+
+enum { MS_HCR_GUARD_OK = 0, MS_HCR_GUARD_FAULT = 1, MS_HCR_GUARD_FATAL = 2, MS_HCR_GUARD_THREW = 3 };
+
+typedef struct MsHcrGuard {
+#if defined(_WIN32)
+	CONTEXT context;
+#else
+	sigjmp_buf env;
+#endif
+	volatile int kind;
+	volatile unsigned long code;
+	volatile uintptr_t address;
+} MsHcrGuard;
+
+static MsHcrGuard* volatile msHcrGuardActive = NULL;
+static volatile unsigned long msHcrGuardOwner = 0;
+static char msHcrGuardReason[512];
+static int msHcrGuardInstalled = 0;
+
+#if defined(_WIN32)
+static unsigned long msHcrGuardThread(void) { return (unsigned long)GetCurrentThreadId(); }
+#else
+static unsigned long msHcrGuardThread(void) { return (unsigned long)pthread_self(); }
+#endif
+
+static MsHcrGuard* msHcrGuardHere(void) {
+	MsHcrGuard* guard = msHcrGuardActive;
+	return guard != NULL && msHcrGuardOwner == msHcrGuardThread() ? guard : NULL;
+}
+
+static void msHcrGuardFatal(void) {
+	MsHcrGuard* guard = msHcrGuardHere();
+	if (guard == NULL) return;
+	guard->kind = MS_HCR_GUARD_FATAL;
+#if defined(_WIN32)
+	RtlRestoreContext(&guard->context, NULL);
+#else
+	siglongjmp(guard->env, 1);
+#endif
+}
+
+#if defined(_WIN32)
+static LONG CALLBACK msHcrGuardException(EXCEPTION_POINTERS* info) {
+	DWORD code = info->ExceptionRecord->ExceptionCode;
+	switch (code) {
+	case EXCEPTION_ACCESS_VIOLATION:
+	case EXCEPTION_ILLEGAL_INSTRUCTION:
+	case EXCEPTION_PRIV_INSTRUCTION:
+	case EXCEPTION_INT_DIVIDE_BY_ZERO:
+	case EXCEPTION_INT_OVERFLOW:
+	case EXCEPTION_DATATYPE_MISALIGNMENT:
+	case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+	case EXCEPTION_STACK_OVERFLOW:
+		break;
+	default:
+		return EXCEPTION_CONTINUE_SEARCH;
+	}
+	MsHcrGuard* guard = msHcrGuardHere();
+	if (guard == NULL) return EXCEPTION_CONTINUE_SEARCH;
+	guard->kind = MS_HCR_GUARD_FAULT;
+	guard->code = code;
+	guard->address = (uintptr_t)info->ExceptionRecord->ExceptionAddress;
+	CONTEXT* to = info->ContextRecord;
+	const CONTEXT* from = &guard->context;
+	to->Rip = from->Rip;
+	to->Rsp = from->Rsp;
+	to->Rbp = from->Rbp;
+	to->Rbx = from->Rbx;
+	to->Rsi = from->Rsi;
+	to->Rdi = from->Rdi;
+	to->R12 = from->R12;
+	to->R13 = from->R13;
+	to->R14 = from->R14;
+	to->R15 = from->R15;
+	to->Rax = from->Rax;
+	to->Rcx = from->Rcx;
+	to->Rdx = from->Rdx;
+	to->R8 = from->R8;
+	to->R9 = from->R9;
+	to->R10 = from->R10;
+	to->R11 = from->R11;
+	to->EFlags = from->EFlags;
+	to->MxCsr = from->MxCsr;
+	return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+static void msHcrGuardInstall(void) {
+	if (msHcrGuardInstalled) return;
+	msHcrGuardInstalled = 1;
+	ULONG reserve = 65536;
+	SetThreadStackGuarantee(&reserve);
+	AddVectoredExceptionHandler(1, msHcrGuardException);
+	msFatalTrap = msHcrGuardFatal;
+}
+
+static const char* msHcrGuardFaultName(unsigned long code) {
+	switch (code) {
+	case EXCEPTION_ACCESS_VIOLATION: return "access violation";
+	case EXCEPTION_ILLEGAL_INSTRUCTION: return "illegal instruction";
+	case EXCEPTION_PRIV_INSTRUCTION: return "privileged instruction";
+	case EXCEPTION_INT_DIVIDE_BY_ZERO: return "integer division by zero";
+	case EXCEPTION_INT_OVERFLOW: return "integer overflow";
+	case EXCEPTION_DATATYPE_MISALIGNMENT: return "misaligned access";
+	case EXCEPTION_ARRAY_BOUNDS_EXCEEDED: return "array bounds exceeded";
+	case EXCEPTION_STACK_OVERFLOW: return "stack overflow";
+	default: return "fault";
+	}
+}
+#else
+static const int msHcrGuardSignals[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT };
+static struct sigaction msHcrGuardPrevious[sizeof(msHcrGuardSignals) / sizeof(msHcrGuardSignals[0])];
+static _Thread_local void* msHcrGuardAltStack = NULL;
+
+static void msHcrGuardSignal(int sig, siginfo_t* info, void* context) {
+	(void)context;
+	MsHcrGuard* guard = msHcrGuardHere();
+	if (guard == NULL) {
+		for (size_t i = 0; i < sizeof(msHcrGuardSignals) / sizeof(msHcrGuardSignals[0]); i++) {
+			if (msHcrGuardSignals[i] == sig) sigaction(sig, &msHcrGuardPrevious[i], NULL);
+		}
+		if (sig == SIGABRT) raise(sig);
+		return;
+	}
+	guard->kind = MS_HCR_GUARD_FAULT;
+	guard->code = (unsigned long)sig;
+	guard->address = (uintptr_t)info->si_addr;
+	siglongjmp(guard->env, 1);
+}
+
+static void msHcrGuardInstall(void) {
+	if (msHcrGuardAltStack == NULL) {
+		size_t size = 65536;
+		msHcrGuardAltStack = malloc(size);
+		stack_t stack;
+		stack.ss_sp = msHcrGuardAltStack;
+		stack.ss_size = size;
+		stack.ss_flags = 0;
+		sigaltstack(&stack, NULL);
+	}
+	if (msHcrGuardInstalled) return;
+	msHcrGuardInstalled = 1;
+	struct sigaction action;
+	memset(&action, 0, sizeof(action));
+	action.sa_sigaction = msHcrGuardSignal;
+	action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
+	sigemptyset(&action.sa_mask);
+	for (size_t i = 0; i < sizeof(msHcrGuardSignals) / sizeof(msHcrGuardSignals[0]); i++) {
+		sigaction(msHcrGuardSignals[i], &action, &msHcrGuardPrevious[i]);
+	}
+	msFatalTrap = msHcrGuardFatal;
+}
+
+static const char* msHcrGuardFaultName(unsigned long code) {
+	switch ((int)code) {
+	case SIGSEGV: return "segmentation fault";
+	case SIGBUS: return "bus error";
+	case SIGILL: return "illegal instruction";
+	case SIGFPE: return "arithmetic fault";
+	case SIGABRT: return "abort";
+	default: return "fault";
+	}
+}
+#endif
+
+typedef struct MsHcrGuardCall {
+	void* fn;
+	void* env;
+	int32_t status;
+	int kind;
+} MsHcrGuardCall;
+
+static void msHcrGuardInvoke(MsHcrGuardCall* call) {
+	if (call->kind == 0) ((void (*)(void*))call->fn)(call->env);
+	else if (call->kind == 1) ((void (*)(void))call->fn)();
+	else call->status = ((int32_t (*)(void))call->fn)();
+}
+
+static int32_t msHcrGuarded(MsHcrGuardCall* call) {
+	MsHcrGuard guard;
+	guard.kind = MS_HCR_GUARD_OK;
+	guard.code = 0;
+	guard.address = 0;
+	MsHcrGuard* volatile outer = msHcrGuardActive;
+	volatile unsigned long outerOwner = msHcrGuardOwner;
+	msHcrGuardReason[0] = 0;
+	msHcrGuardInstall();
+#if defined(_WIN32)
+	RtlCaptureContext(&guard.context);
+	if (guard.kind == MS_HCR_GUARD_OK) {
+#else
+	if (sigsetjmp(guard.env, 1) == 0) {
+#endif
+		msHcrGuardOwner = msHcrGuardThread();
+		msHcrGuardActive = &guard;
+		msHcrGuardInvoke(call);
+		msHcrGuardActive = outer;
+		msHcrGuardOwner = outerOwner;
+		if (!msErr) return MS_HCR_GUARD_OK;
+		guard.kind = MS_HCR_GUARD_THREW;
+	}
+	msHcrGuardActive = outer;
+	msHcrGuardOwner = outerOwner;
+	const int kind = guard.kind;
+	const unsigned long code = guard.code;
+	const uintptr_t address = guard.address;
+#if defined(_WIN32)
+	if (kind == MS_HCR_GUARD_FAULT && code == EXCEPTION_STACK_OVERFLOW) _resetstkoflw();
+#endif
+	if (kind == MS_HCR_GUARD_FAULT) {
+		snprintf(msHcrGuardReason, sizeof(msHcrGuardReason), "%s at %p", msHcrGuardFaultName(code), (void*)address);
+	} else if (kind == MS_HCR_GUARD_FATAL) {
+		snprintf(msHcrGuardReason, sizeof(msHcrGuardReason), "a fatal runtime error (reported above)");
+	} else {
+		msString message = msCurrException != NULL ? ((msError*)msCurrException)->message : MS_EMPTY_STRING;
+		snprintf(msHcrGuardReason, sizeof(msHcrGuardReason), "an uncaught exception: %.*s",
+		         (int)(message.len < 400 ? message.len : 400), message.p != NULL ? message.p->data : "");
+	}
+	if (msCurrException != NULL) msDecref((void*)msCurrException);
+	msCurrException = NULL;
+	msErr = false;
+	return kind;
+}
+
+int32_t msHcrGuardRun(msClosure body) {
+	MsHcrGuardCall call = { (void*)body.fn, body.env, 0, 0 };
+	return msHcrGuarded(&call);
+}
+
+int32_t msHcrGuardInit(void* raw) {
+	MsHcrGuardCall call = { raw, NULL, 0, 1 };
+	return msHcrGuarded(&call) != MS_HCR_GUARD_OK ? 1 : 0;
+}
+
+int32_t msHcrGuardProbe(void* raw) {
+	MsHcrGuardCall call = { raw, NULL, 0, 2 };
+	return msHcrGuarded(&call) != MS_HCR_GUARD_OK ? 1 : call.status;
+}
+
+msString msHcrGuardText(void) { return msStringFromCStr(msHcrGuardReason); }

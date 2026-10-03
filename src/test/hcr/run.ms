@@ -708,6 +708,29 @@ function runCommand(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function stepCrash(): void {
+	const tag = "hcrStepCrash";
+	const dir = freshDir(`${TMP}/stepCrash`);
+	for (const f of readDir(`${FIXTURES}/step`)) copy(`${FIXTURES}/step/${f}`, `${dir}/${f}`);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("STEP ")) seen.push(line);
+	}
+	const want = [
+		"STEP start 2",
+		"STEP rolled back logic fatal then 2",
+		"STEP rolled back logic fault then 2",
+		"STEP rolled back logic exception then 2",
+		"STEP reloaded 3",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "a crash inside step() did not roll back to the previous generation and keep running");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function reloadOff(): void {
 	const tag = "hcrReloadOff";
 	const dir = freshDir(`${TMP}/reloadOff`);
@@ -1005,6 +1028,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrLiftNames", run: liftNames },
 	{ name: "hcrLiftKinds", run: liftKinds },
 	{ name: "hcrRun", run: runCommand },
+	{ name: "hcrStepCrash", run: stepCrash },
 	{ name: "hcrRegistryVariables", run: registryVariables },
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
 	{ name: "hcrFunctionValues", run: functionValues },

@@ -1,0 +1,4 @@
+export function work(n: int32): int32 {
+	if (n > 0) throw new Error("boom");
+	return n;
+}

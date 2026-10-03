@@ -74,6 +74,7 @@ void msHcrStageEnd(void);
 int32_t msHcrStaged(const char* moduleId);
 void msHcrCommit(const char* moduleId);
 void msHcrRollback(const char* moduleId);
+void msHcrRevert(const char* moduleId);
 void msHcrDiscard(const char* moduleId);
 void msHcrFinalize(const char* moduleId);
 int32_t msHcrInvokeInit(void* raw);

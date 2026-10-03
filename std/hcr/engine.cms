@@ -12,7 +12,7 @@ extern function msHcrStageEnd(): void;
 extern function msHcrCommit(moduleId: cstring): void;
 extern function msHcrDiscard(moduleId: cstring): void;
 extern function msHcrFinalize(moduleId: cstring): void;
-extern function msHcrCallInitStatus(raw: Ptr<void>): int32;
+extern function msHcrCallInitStatus(raw: Ptr<void>): int32 from "msHcrGuardInit";
 extern function msHcrListCount(raw: Ptr<void>): int32;
 extern function msHcrListItem(raw: Ptr<void>, index: int32): string;
 extern function msHcrBindingCount(raw: Ptr<void>): int32;
@@ -35,8 +35,11 @@ extern function msHcrFailureText(): string;
 extern function msHcrImageExt(): string;
 extern function hcrIsNull(value: Ptr<void>): int32 from "msHcrImageIsNull";
 extern function hcrNull(): Ptr<void> from "msHcrImageNull";
-extern function hcrCallStatus(raw: Ptr<void>): int32 from "msHcrImageCallProbe";
+extern function hcrCallStatus(raw: Ptr<void>): int32 from "msHcrGuardProbe";
 extern function msHcrRollback(moduleId: cstring): void;
+extern function msHcrRevert(moduleId: cstring): void;
+extern function msHcrGuardRun(body: () => void): int32;
+extern function msHcrGuardText(): string;
 extern function msHcrRestoreTypeInfos(moduleId: cstring): void;
 extern function msDrainUntilIdle(): void;
 extern function msReportOrphanFailures(): int32;
@@ -62,6 +65,14 @@ interface HcrModule {
 	identity: uint64;
 	image: HcrImage;
 	failedIdentity: uint64;
+	crashedIdentity: uint64;
+}
+
+interface HcrUndo {
+	module: HcrModule;
+	image: HcrImage;
+	identity: uint64;
+	isNew: boolean;
 }
 
 interface HcrCandidate {
@@ -87,6 +98,7 @@ let bundleIdentity: uint64 = 0;
 let pending = false;
 let last: ReloadResult = { kind: ReloadKind.NoChange, modules: [], reason: "" };
 const modules: HcrModule[] = [];
+let undo: HcrUndo[] = [];
 const discovering: string[] = [];
 
 function result(kind: ReloadKind, names: string[], reason: string): ReloadResult {
@@ -205,6 +217,7 @@ function discover(moduleId: string, source: string, order: HcrCandidate[]): stri
 		identity: msHcrFileIdentity(source),
 		image: loaded.image,
 		failedIdentity: 0,
+		crashedIdentity: 0,
 	};
 	if (moduleId != "" && module.moduleId != moduleId) {
 		return `${source} declares module '${module.moduleId}', expected '${moduleId}'`;
@@ -362,6 +375,39 @@ export function engineReload(): ReloadKind {
 	return last.kind;
 }
 
+export function engineStep(body: () => void): ReloadKind {
+	const kind = engineReload();
+	if (msHcrGuardRun(body) == 0) return kind;
+	last = revertAfterCrash(msHcrGuardText());
+	return last.kind;
+}
+
+function revertAfterCrash(reason: string): ReloadResult {
+	if (undo.length == 0) {
+		fatal(`the program crashed with ${reason}, and no earlier generation is loaded to roll back to`);
+	}
+	const names: string[] = [];
+	for (let i = undo.length - 1; i >= 0; i -= 1) {
+		const step = undo[i];
+		msHcrRevert(step.module.moduleId);
+		step.module.crashedIdentity = step.module.identity;
+		step.module.image = step.image;
+		step.module.identity = step.identity;
+		names.push(step.module.moduleId);
+	}
+	for (const step of undo) {
+		if (!step.isNew) continue;
+		const at = modules.indexOf(step.module);
+		if (at >= 0) modules.splice(at, 1);
+	}
+	undo = [];
+	const resumed = failingHandler("HcrAfterReload000", modules.length);
+	if (resumed != "") {
+		fatal(`the program crashed with ${reason}; rolling back ${names.join(",")} then failed in the after-reload handler of module '${resumed}'`);
+	}
+	return result(ReloadKind.RolledBack, names, `the program crashed with ${reason}; rolled back ${names.join(",")}`);
+}
+
 export function engineLastReload(): ReloadResult {
 	return last;
 }
@@ -381,7 +427,7 @@ function performReload(): ReloadResult {
 	for (let i = 0; i < known; i += 1) {
 		const module = modules[i];
 		const identity = msHcrFileIdentity(module.source);
-		if (identity == module.identity) continue;
+		if (identity == module.identity || identity == module.crashedIdentity) continue;
 		if (identity == module.failedIdentity) {
 			release(candidates);
 			return result(ReloadKind.Pending, [module.moduleId], `${module.source} is not a loadable image yet`);
@@ -495,6 +541,11 @@ function performReload(): ReloadResult {
 	const resumeFailed = initFailed == "" ? failingHandler("HcrAfterReload000", modules.length) : initFailed;
 	if (resumeFailed == "") {
 		for (const item of candidates) msHcrFinalize(item.module.moduleId);
+		const accepted: HcrUndo[] = [];
+		for (let i = 0; i < candidates.length; i += 1) {
+			accepted.push({ module: candidates[i].module, image: previousImages[i], identity: previousIdentities[i], isNew: candidates[i].isNew });
+		}
+		undo = accepted;
 		return result(ReloadKind.Reloaded, names, reset.length > 0 ? "reset variables: " + reset.join(", ") : "");
 	}
 	for (let i = 0; i < candidates.length; i += 1) {

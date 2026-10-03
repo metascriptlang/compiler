@@ -55,6 +55,11 @@ static inline msString msHcrBindingKey(void* raw, int32_t index) {
 	return msStringFromCStr(((const char* const* (*)(void))raw)()[index * 3 + 2]);
 }
 
+int32_t msHcrGuardRun(msClosure body);
+int32_t msHcrGuardInit(void* raw);
+int32_t msHcrGuardProbe(void* raw);
+msString msHcrGuardText(void);
+
 static inline int32_t msHcrCallInitStatus(void* raw) {
 	((void (*)(void))raw)();
 	return msErrTake() ? 1 : 0;
