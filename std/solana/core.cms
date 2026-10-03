@@ -994,10 +994,6 @@ export function expectHasOne(actual: Pubkey, expected: Pubkey): Result<void, Pro
 	return Result.ok(null);
 }
 
-export function keyAddress(this key: Pubkey): uint64 {
-	return msSolSpanAddress(key.bytes);
-}
-
 export function keysMatch(
 	actual: uint64,
 	expected: uint64,

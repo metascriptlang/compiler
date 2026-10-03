@@ -83,9 +83,9 @@ const BASELINE = {
 	"accounts<3 fields>": 508,
 	"accounts<3 fields> + @seeds @bump(account.field)": 2229,
 	"accounts<3 fields> + @seeds @bump": 3685,
-	"accounts<3 fields> + @hasOne": 549,
+	"accounts<3 fields> + @hasOne": 555,
 	"accounts<3 fields> + @constraint": 528,
-	"accounts<7 fields> + @address": 839,
+	"accounts<7 fields> + @address": 833,
 	"accounts<7 fields>, no @address": 782,
 };
 

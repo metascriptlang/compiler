@@ -399,7 +399,7 @@ export macro accounts(): Node {
 	}
 
 	function keyOf(n: Node): Node {
-		return call(member(rewrite(n), "keyAddress", n), [], n);
+		return call(bindSym("keyAddressOf")!, [rewrite(n)], n);
 	}
 
 	const values: Node[] = [];
@@ -611,11 +611,9 @@ export macro accounts(): Node {
 					error(where + ": '" + self + "' must be Owned<T>, Mutable<T> or Delegated<T> " +
 						"of a struct with a field '" + target + "'", d);
 				}
-				const stored = call(
-					member(member(call(member(member(ident(holder, d), self, d), "data", d), [], d), target, d), "keyAddress", d),
-					[],
-					d,
-				);
+				const stored = call(bindSym("keyAddressOf")!, [
+					member(call(member(member(ident(holder, d), self, d), "data", d), [], d), target, d),
+				], d);
 				const failure = args.length == 2
 					? member(rewrite(args[1]), "code", d)
 					: whole(ProgramError.constraintHasOne().code as number, d);
@@ -946,6 +944,66 @@ export macro emitEvent(value: Node): Node {
 }
 
 const SEED_LIST_REQUIRED = "seeds must be written as a list at the call: [\"pet\", mint, [bump]]";
+
+const KEY_REQUIRED = "a key is an account or a Pubkey";
+
+macro keyAddressOf(operand: Node): Node {
+	const line = operand.line;
+	const column = operand.column;
+	const written = operand.nodeType;
+	let name = "";
+	let inner = "";
+	if (written != null) {
+		if (written.kind === NodeKind.Identifier) { name = written.name; }
+		if (written.kind === NodeKind.TypeObject) { name = written.typExprTypeName; }
+		if (written.kind === NodeKind.TypeArray) { name = "an array"; }
+		if (written.kind === NodeKind.TypeGeneric) {
+			name = written.typExprBase.name;
+			const first = written.typExprArgs[0];
+			if (first.kind === NodeKind.TypeObject) { inner = first.typExprTypeName; }
+		}
+	}
+	if (name == "Pubkey") {
+		return {
+			kind: NodeKind.CallExpr,
+			line: line,
+			column: column,
+			callee: bindSym("bytesAddress"),
+			arguments: [{
+				kind: NodeKind.MemberExpr,
+				line: line,
+				column: column,
+				object: operand,
+				property: "bytes",
+				isOptional: false,
+			}],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		};
+	}
+	if (name == "Account" || (name == "Distinct" && inner == "Account") ||
+		name == "Program" || name == "Owned" || name == "Mutable" ||
+		name == "External" || name == "ExternalMutable" || name == "Delegated") {
+		return {
+			kind: NodeKind.CallExpr,
+			line: line,
+			column: column,
+			callee: {
+				kind: NodeKind.MemberExpr,
+				line: line,
+				column: column,
+				object: operand,
+				property: "keyAddress",
+				isOptional: false,
+			},
+			arguments: [],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		};
+	}
+	error(KEY_REQUIRED + ", and this has " + (name == "" ? "no known type" : "type " + name +
+		(inner == "" ? "" : "<" + inner + ">")), operand);
+}
 
 macro seedTable(list: Node): Node {
 	if (list.kind !== NodeKind.ArrayLiteral) {
