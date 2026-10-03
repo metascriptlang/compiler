@@ -185,7 +185,7 @@ MetaScript has its own tradeoffs and is not a clone of anything, but it would no
 
 - **Discord**: [join](https://discord.com/invite/gCwkmqS3xB)
 - **Website**: [metascriptlang.org](https://metascriptlang.org)
-- **Issues**: a bug report with a minimal reproduction becomes a program in `src/test/fixedbugs/`
+- **Issues**: a bug report with a minimal reproduction becomes a contract in the test module that owns its invariant
 
 ## License
 

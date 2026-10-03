@@ -32,7 +32,7 @@ msc run --target=raiser src/test/guard/run.ms          # lifecycle guards
 
 `test` is a keyword and a test body asserts with `assert`; see [docs/LANG-TEST.md](docs/LANG-TEST.md). `msc test <file>` runs that file's `test` blocks plus those of its transitive imports; there are no `--filter` or `--jobs` flags. Corpus runners test `./msc` when it exists, otherwise the installed `msc`; `MSC=<path>` overrides.
 
-A lifecycle guard is proven red on a binary that has the bug before it is trusted green. A fixed bug gets a program in `src/test/fixedbugs/`; that suite is append-only. Bugs and gaps you can hit today are listed in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md), each measured on a named commit.
+A lifecycle guard is proven red on a binary that has the bug before it is trusted green. A fixed bug gets a contract in the test module that owns its invariant, never a numbered bug file; [src/test/CLAUDE.md](src/test/CLAUDE.md) says where. Bugs and gaps you can hit today are listed in [docs/KNOWN-ISSUES.md](docs/KNOWN-ISSUES.md), each measured on a named commit.
 
 ## Sync into ~/.metascript
 
@@ -102,4 +102,4 @@ bash tools/editor-plugin/build.sh --install   # after grammar or highlight edits
 
 ## Reporting bugs
 
-Open an issue with a minimal `.ms` reproduction, the `msc --version` output, the host OS and the exact command. A reproduction that fits in one file becomes the next `src/test/fixedbugs/` program.
+Open an issue with a minimal `.ms` reproduction, the `msc --version` output, the host OS and the exact command. The fix pins that reproduction in the test module that owns its invariant.
