@@ -7,9 +7,9 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { firstPrivateField } from "./visibility";
-import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators } from "../ast/node";
+import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation } from "../ast/node";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
-import { peelToStructOrUnion, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
+import { peelToStructOrUnion, withoutReadonlyView, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
@@ -1515,7 +1515,6 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 			}
 		}
 	}
-	refuseHookReceiver(ctx, node, paramTypes);
 
 	const retLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
 	// Type predicate detection: fnReturnType is `"<paramName> is <typeText>"`
@@ -1559,6 +1558,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 	// Record return type annotation positions for LSP
 	resolveTypeExpr(node.typeExpr, ctx);
+	refuseHookReceiver(ctx, node, paramTypes, d.fnReturnType != "" ? returnType : null);
 	const fnType = createFunction(paramTypes, d.params, returnType);
 	if (predicateSentinel != null) {
 		fnType.typeExtra = predicateSentinel;
@@ -1680,7 +1680,7 @@ function hookReceiverFault(hook: string, key: string, written: string, recv: Typ
 	return "";
 }
 
-function refuseHookReceiver(ctx: CheckerContext, node: Node, paramTypes: Type[]): void {
+function refuseHookReceiver(ctx: CheckerContext, node: Node, paramTypes: Type[], declaredReturn: Type | null): void {
 	const d = node.data as FunctionDeclData;
 	if (!isLifecycleHookName(d.fnName) || paramTypes.length == 0) return;
 	const key = getExtReceiverType(d.fnFlags);
@@ -1694,6 +1694,58 @@ function refuseHookReceiver(ctx: CheckerContext, node: Node, paramTypes: Type[])
 		return;
 	}
 	refuseHookOutsideItsModule(ctx, node, key);
+	refuseHookSignature(ctx, d.fnName, d.nameLocation, paramTypes, declaredReturn);
+}
+
+function hookObjectOf(t: Type): Type {
+	let obj = t;
+	if (obj.kind == TypeKind.Var && obj.typeReturn != null) obj = obj.typeReturn;
+	if (obj.kind == TypeKind.Ref && obj.typeReturn != null && refWrapsNominal(obj)) obj = obj.typeReturn;
+	return withoutReadonlyView(obj);
+}
+
+function hookTakes(hook: string): string {
+	if (hook == "onCopy" || hook == "onMove") return "the receiver and the source value ('y: T')";
+	if (hook == "onTrace") return "the receiver and the tracer ('env: Ptr<void>')";
+	return "the receiver only";
+}
+
+function hookSignatureFault(hook: string, paramTypes: Type[], returnType: Type | null): string {
+	const want = hook == "onCopy" || hook == "onMove" || hook == "onTrace" ? 2 : 1;
+	if (paramTypes.length != want) {
+		return "it takes " + hookTakes(hook) + ", " + paramTypes.length.toString() + " parameter" + (paramTypes.length == 1 ? "" : "s") + " declared";
+	}
+	if (hook == "onTrace") {
+		const env = paramTypes[1];
+		if (env.kind != TypeKind.Ptr || env.typeReturn == null || env.typeReturn.kind != TypeKind.Void) {
+			return "its second parameter is '" + typeDisplayName(env) + "', the tracer is 'env: Ptr<void>'";
+		}
+	}
+	if (hook == "onCopy" || hook == "onMove") {
+		const src = paramTypes[1];
+		if (!sameType(hookObjectOf(paramTypes[0]), hookObjectOf(src)) || src.kind == TypeKind.Var) {
+			return "its second parameter is '" + typeDisplayName(src) + "', the source value is the receiver's own type ('y: T')";
+		}
+	}
+	if (returnType == null || isUnresolvedType(returnType)) return "";
+	if (hook == "onClone") {
+		if (returnType.kind == TypeKind.Var || !sameType(hookObjectOf(paramTypes[0]), hookObjectOf(returnType))) return "it returns '" + typeDisplayName(returnType) + "', a clone is a new value of the receiver's own type";
+		return "";
+	}
+	if (returnType.kind != TypeKind.Void) return "it returns '" + typeDisplayName(returnType) + "', a hook returns nothing";
+	return "";
+}
+
+function refuseHookSignature(ctx: CheckerContext, hook: string, at: SourceLocation, paramTypes: Type[], returnType: Type | null): void {
+	if (paramTypes.length == 0) return;
+	const recv = paramTypes[0];
+	if (recv == null || isUnresolvedType(recv)) return;
+	for (const t of paramTypes) {
+		if (t == null || isUnresolvedType(t)) return;
+	}
+	const fault = hookSignatureFault(hook, paramTypes, returnType);
+	if (fault == "") return;
+	addError(ctx, "signature for '" + hook + "' is wrong: " + fault, at.line, at.column);
 }
 
 function refuseHookOutsideItsModule(ctx: CheckerContext, node: Node, typeName: string): void {
@@ -2232,6 +2284,9 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
 				closeScope(ctx.table);
+			}
+			if (isLifecycleHookName(md.methodName) && !md.methodIsStatic) {
+				refuseHookSignature(ctx, md.methodName, md.nameLocation, paramTypes, md.methodReturnType != "" ? returnType : null);
 			}
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
 			stripRestParamPrefix(md.methodParams);
