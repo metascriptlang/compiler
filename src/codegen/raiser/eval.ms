@@ -12,7 +12,6 @@ import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
-import { refineTypes } from "../../transform/typeRefine";
 import { transformForRaiser } from "../../transform/raiserLowering";
 import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
@@ -99,9 +98,7 @@ function transformForEngine(program: Node): Node {
 		? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
 		: checkProgram(program);
 	_lastEngineCheckErrors = checkerCtx.errors;
-	const txCtx = createTransformContextWithChecker(checkerCtx);
-	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
-	const transformed = transformForRaiser(refined, checkerCtx);
+	const transformed = transformForRaiser(program, checkerCtx);
 	dropCTypeRowsSince(rowMark);
 	setEngineCheckMode(prevEngineMode);
 	if (outer != null) {
@@ -400,9 +397,7 @@ function compileForOrc(code: string): RaiserModule {
 	if (!parseResult.ok) { unreachable; }
 	const program = parseResult.value;
 	const checkerCtx = checkProgram(program);
-	const txCtx = createTransformContextWithChecker(checkerCtx);
-	const refined = refineTypes(program, txCtx, null as unknown as ExportRegistry);
-	const transformed = transformForRaiser(refined, checkerCtx);
+	const transformed = transformForRaiser(program, checkerCtx);
 	return generateRaiser(transformed);
 }
 
