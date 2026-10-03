@@ -486,7 +486,7 @@ The compiler already computes a DCE alive set (Phase B in `cmdBuildC`). But it o
 
 **What needs to change:**
 
-1. **Skip dead modules in Phase C** — if no symbol from a module is in the alive set, don't compile it. This eliminates json, buffer, promise, struct for a hello world. Benefits all targets (faster builds).
+1. **Skip dead modules in Phase C** — if no symbol from a module is in the alive set, don't compile it. This eliminates json, buffer, promise, struct for a hello world. Benefits all targets (faster builds). **Done** for the modules a program does not reach; measured 2026-10-04 on tree `wt/std-solana-lane-c` (base `da84849e` against the candidate, one fresh HOME each, platform-tools v1.57): `console.log(0)` with `--os=solana` built 9 modules (system, array, meta/node, json, promise, struct, math, object, the program) and now builds 1; `.text` 19,312 → 19,296 B and the unstripped link 23,112 → 22,112 B, so the saving is compile time and the symbol table, not code: `--gc-sections` already dropped the dead functions. `examples/escrow/program.ms` with the std/solana of that minute went 21 → 14 modules and 53,056 → 53,040 B of `.text`; `node tools/solana/escrow.mjs` passes on both. Two accidental roots had kept the modules alive (every exported class's `<Class>_init`, and the `nodeCache` init of `std/meta/node.ms`), and an alive set that had marked no name was read as "DCE off". Not measured: the other Phase 3b items, a host `--os=bare` build, a Windows host.
 
 2. **Skip TypeInfo for `--gc=manual`** — TypeInfo structs are mutable globals used only by DRC. In manual mode they're dead weight. Skipping them eliminates the main source of `.data` relocations.
 
