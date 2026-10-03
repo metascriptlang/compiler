@@ -21,7 +21,7 @@
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
 //   TypeInfo   TypeName_typeInfo                  — msTypeInfo for ORC runtime
 
-import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, createNodeAt, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr } from "../../checker/types";
@@ -1469,6 +1469,8 @@ function emitMinimalTypeInfo(cName: string, typeName: string, lctx: LiftCtx, loc
 		keys.push("base");
 		vals.push(makeString(baseTypeName, loc));
 	}
+	keys.push("display");
+	vals.push(typeInfoDisplay(typeName, lctx, loc));
 	const obj = makeObjectLiteral(keys, vals, loc);
 	lctx.collector.push(makeVarDecl(typeName + "TypeInfo", obj, DeclKind.Const, loc));
 }
@@ -1484,8 +1486,22 @@ function emitFullTypeInfo(cName: string, typeName: string, hasCycles: boolean, l
 		keys.push("base");
 		vals.push(makeString(baseTypeName, loc));
 	}
+	keys.push("display");
+	vals.push(typeInfoDisplay(typeName, lctx, loc));
 	const obj = makeObjectLiteral(keys, vals, loc);
 	lctx.collector.push(makeVarDecl(typeName + "TypeInfo", obj, DeclKind.Const, loc));
+}
+
+function typeInfoDisplay(typeName: string, lctx: LiftCtx, loc: SourceLocation): Node {
+	const names: string[] = [];
+	let current = typeName;
+	while (current != "") {
+		names.push(current);
+		current = getBaseClass(current, lctx);
+	}
+	const entries: Node[] = [];
+	for (let i = names.length - 1; i >= 0; i -= 1) entries.push(makeString(names[i], loc));
+	return createNodeAt(NodeKind.ArrayLiteral, { elements: entries }, loc);
 }
 
 // Emit the <T>Dup hook. Ref types (class/interface) get the incref shortcut;

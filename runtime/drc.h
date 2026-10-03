@@ -53,25 +53,12 @@ static inline msRefHeader* msHeader(void* p) {
 	return (msRefHeader*)((char*)p - sizeof(msRefHeader));
 }
 
-/* Runtime subtype test: display check (constant time); the exact-self compare
- * first keeps zero-display hand-written runtime TypeInfos correct and the
- * exact hit at one compare. Targets at display-overflow depth fall back to
- * the base walk. */
 static inline bool msIsInstance(void* p, const msTypeInfo* target) {
-	if (p == NULL) return false;
+	if (p == NULL || target == NULL) return false;
 	const msTypeInfo* t = msHeader(p)->type;
 	if (t == target) return true;
-	if (t == NULL) return false;
-	if (target->depth <= t->depth && target->depth < MS_TYPE_DISPLAY_MAX
-			&& t->display[target->depth] == target) return true;
-	if (target->depth >= MS_TYPE_DISPLAY_MAX) {
-		const msTypeInfo* b = t->base;
-		while (b != NULL) {
-			if (b == target) return true;
-			b = b->base;
-		}
-	}
-	return false;
+	return t != NULL && t->display != NULL && target->depth <= t->depth
+		&& t->display[target->depth] == target;
 }
 
 /* ===== DRC Ledger (test-only lifecycle guard) ===== */

@@ -1172,17 +1172,17 @@ function instanceofReload(): void {
 	const tag = "hcrInstanceofReload";
 	const ext = sharedLibraryExt();
 	const exe = platform == "windows" ? "host.exe" : "host";
-	const sources = ["app.ms", "logic.ms", "logicEdit.ms"];
 	const dir = freshDir(`${TMP}/instanceof`);
-	for (const f of sources) copy(`${FIXTURES}/instanceof/${f}`, `${dir}/${f}`);
+	for (const f of ["app.ms", "logic.ms", "logicEdit.ms"]) copy(`${FIXTURES}/instanceof/${f}`, `${dir}/${f}`);
 	copy(STD_HOST, `${dir}/host.cms`);
-	put(`${dir}/replay.txt`, "logicEdit.ms logic.ms\n");
-	const watched = msc(dir, ["build", "app.ms", "--hcr", "--watch-replay=replay.txt", `--output=run/module${ext}`]);
-	if (!succeeded(watched)) {
-		console.log(both(watched));
-		failWith(tag, "the warm replay of the instanceof module did not build");
-	}
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g1/module${ext}`], "the first generation did not build");
+	copy(`${FIXTURES}/instanceof/logicEdit.ms`, `${dir}/logic.ms`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g2/module${ext}`], "the edited generation did not build");
 	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
+	ensureDir(`${dir}/run`);
+	for (const image of readDir(`${dir}/g1`)) {
+		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
+	}
 	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {

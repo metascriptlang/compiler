@@ -865,7 +865,6 @@ function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string)
 		const datInit = sec(g, CSection.DatInit);
 		const p = createProc("__datinit", null);
 
-		let hasBase = false;
 		for (let i = 0; i < od.keys.length; i += 1) {
 			const key = od.keys[i];
 			if (key == "cname") {
@@ -898,16 +897,30 @@ function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string)
 					const parentName = (cParent != "") ? cParent : rawBase;
 					ensureTypeInfo(g, parentName);
 					addLine(datInit, `  ${infoName}.base = &${parentName}TypeInfo;`);
-					addLine(datInit, `  msTypeFillDisplay(&${infoName}, &${parentName}TypeInfo);`);
-					hasBase = true;
 				}
+			} else if (key == "display") {
+				const entries = (od.properties[i].data as ArrayLiteralData).elements;
+				const displayName = infoName + "Display";
+				addLine(sec(g, CSection.GlobalVars), `static const msTypeInfo* ${displayName}[${entries.length}];`);
+				for (let slot = 0; slot < entries.length; slot += 1) {
+					if (slot == entries.length - 1) {
+						addLine(datInit, `  ${displayName}[${slot}] = &${infoName};`);
+					} else {
+						const rawName = (entries[slot].data as StringLiteralData).value;
+						const cName = typeCacheGet(g.typeCache, "cname:" + rawName);
+						const entryName = cName != "" ? cName : rawName;
+						ensureTypeInfo(g, entryName);
+						addLine(datInit, `  ${displayName}[${slot}] = &${entryName}TypeInfo;`);
+					}
+				}
+				addLine(datInit, `  ${infoName}.depth = ${entries.length - 1};`);
+				addLine(datInit, `  ${infoName}.display = ${displayName};`);
 			} else {
 				// isCyclic: use genExpr directly
 				const val = genExpr(g, p, od.properties[i]);
 				addLine(datInit, `  ${infoName}.${key} = ${val};`);
 			}
 		}
-		if (!hasBase) addLine(datInit, `  msTypeFillDisplay(&${infoName}, NULL);`);
 	}
 }
 
