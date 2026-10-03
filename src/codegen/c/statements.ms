@@ -15,8 +15,8 @@ import {
 import { genExpr, shimCallArg } from "./expressions";
 import { formatCNumber, formatCNumberLit } from "./literals";
 import { ensureCrossModuleProto } from "./forward";
-import { safeName, mangledGlobalName, isModuleGlobalVar } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
+import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar } from "./names";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, callOverloadWinner, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
 
 // ===== blockLeaveActions — emit finally cleanup on break/continue/return =====
 // Reference parity: when control flow exits through
@@ -66,9 +66,12 @@ function isNumericCType(cType: string): boolean {
 
 function genNrvoCallExpr(g: CGen, p: CProc, callNode: Readonly<Node>, destVar: string): string {
 	const cd = callNode.data as CallExprData;
-	let callee = genExpr(g, p, cd.callee);
+	const winner = callOverloadWinner(callNode);
+	let callee = winner != null
+		? mangledFunctionName(winner.winnerSym, winner.winnerSym.name, winner.winnerIdx)
+		: genExpr(g, p, cd.callee);
 	// Resolve callee symbol + function type once (used for ABI shim + proto)
-	const nrvoSym = callNode.resolvedSym != null ? callNode.resolvedSym : (cd.callee.resolvedSym);
+	const nrvoSym = winner != null ? winner.winnerSym : (callNode.resolvedSym != null ? callNode.resolvedSym : cd.callee.resolvedSym);
 	const nrvoFnType = nrvoSym != null && nrvoSym.symbolType != null ? nrvoSym.symbolType : (cd.callee.nodeType != null ? cd.callee.nodeType : null as unknown as Type);
 	const hasParamTypes = nrvoFnType != null && nrvoFnType.kind == TypeKind.Function && nrvoFnType.typeChildren != null;
 	let argsStr = "";

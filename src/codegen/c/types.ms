@@ -13,7 +13,7 @@ import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, CTypeInfoDemand, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet, addCGenError } from "./context";
 import { SymbolFlag, hasFlag, lookupSymbolReadonly, makeSymbol, setFlag } from "../../checker/symbol";
-import { mangle, mangledTypeName, mangledFunctionName, mangleQualified, mangleModuleName, mangleFieldName, safeName } from "./names";
+import { mangle, mangledTypeName, mangledFunctionName, mangleQualified, mangleModuleName, mangleFieldName, safeName, resolveOverloadWinner, OverloadWinner } from "./names";
 import { cStringLiteral } from "./literals";
 import { getGlobalTypeOwner, getGlobalTypeOwnerByShape, CheckerContext, newSym } from "../../checker/context";
 
@@ -897,7 +897,22 @@ function closurePairFuncType(callee: Readonly<Node>): Type | null {
 	return null;
 }
 
+export function callOverloadWinner(callNode: Readonly<Node>): OverloadWinner | null {
+	const sym = callNode.resolvedSym;
+	if (sym == null || sym.overloads == null || sym.overloads.length == 0) return null;
+	const cd = callNode.data as CallExprData;
+	return resolveOverloadWinner(sym, cd.resolvedOverloadIdx);
+}
+
+function overloadWinnerFuncType(callNode: Readonly<Node>): Type | null {
+	const w = callOverloadWinner(callNode);
+	if (w == null || w.winnerSym.symbolType == null || w.winnerSym.symbolType.kind != TypeKind.Function) return null;
+	return w.winnerSym.symbolType;
+}
+
 export function getCalleeReturnType(callNode: Readonly<Node>): Type | null {
+	const winnerType = overloadWinnerFuncType(callNode);
+	if (winnerType != null) return winnerType.typeReturn;
 	const cd = callNode.data as CallExprData;
 	if (cd.callee != null && cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {
 		return cd.callee.nodeType.typeReturn;
@@ -912,6 +927,8 @@ export function getCalleeReturnType(callNode: Readonly<Node>): Type | null {
 }
 
 export function getCalleeFuncType(callNode: Readonly<Node>): Type | null {
+	const winnerType = overloadWinnerFuncType(callNode);
+	if (winnerType != null) return winnerType;
 	const cd = callNode.data as CallExprData;
 	if (cd.callee != null && cd.callee.nodeType != null) {
 		const calleeType = peelTransparentInstance(cd.callee.nodeType);
