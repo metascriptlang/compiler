@@ -32,6 +32,7 @@ static inline char* msHcrTlsBase(uint32_t index) { return ((char**)__readgsqword
 #define msRootsThreshold MS_HCR_TLS_REF(int32_t, msRootsThreshold)
 #define msOrcTeardownDepth MS_HCR_TLS_REF(int32_t, msOrcTeardownDepth)
 #define msFreedCyclicObjects MS_HCR_TLS_REF(int32_t, msFreedCyclicObjects)
+#define msSlabTLS MS_HCR_TLS_REF(msSlab, msSlabTLS)
 #define msFutureReleaseBuf MS_HCR_TLS_ARRAY(void*, msFutureReleaseBuf)
 #define msFutureReleaseCount MS_HCR_TLS_REF(int, msFutureReleaseCount)
 #define msIsPoolWorker MS_HCR_TLS_REF(bool, msIsPoolWorker)
