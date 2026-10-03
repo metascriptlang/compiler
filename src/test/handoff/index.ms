@@ -97,6 +97,7 @@ import "./exportIdentity";
 import "./flowInvalidation";
 import "./genericBinding";
 import "./genericContextBinding";
+import "./hookReceivers";
 import "./importedHeaderDeclarations";
 import "./localDeclarationIdentity";
 import "./macroCallbackFit";
