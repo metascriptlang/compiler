@@ -765,6 +765,18 @@ out, A/B on the same host: computing the link-cache input key once per build ins
 image (phase D unchanged, 70–90 ms both ways) and `-fuse-ld=lld` for image links (`logic` link
 23–25 ms both ways: a small image's link is the driver's startup).
 
+2026-10-03, same host, compilers of `9a36b5e6` and `3ab8bcec`, alternating runs. Every build
+re-parsed the std prelude closure to rediscover its imports (`graphLoad preludeMods` 47–62 ms,
+`seed=0`): the `.deps` file that seeds it was written only beside a `.pk` of the build's own
+backend, and a graph build checks its prelude in the graph and writes none. The loader now writes
+it: `preludeMods` 12.6–14.6 ms with `seed=1`, warm graph load and check 63–78 → 28.6–30.5 ms,
+warm build 246–271 → 209–236 ms (load 0.00); edit to visible 391–479 → 343–425 ms over 10 saves
+each (load 0.69–1.17). The `preludePack load=` figure every warm build prints is the first
+build's: the counters accumulate per process and the pack loads once. What remains of the 30 ms:
+reading and header-inlining 58 sources (about 13 ms), the entry tree (6 ms) and the check (8 ms).
+In a long-lived process the reference reprocesses only modules marked dirty
+(`compiler/pipelines.nim` `isDirty`); the watch session still rebuilds the graph from disk.
+
 A writer that empties the file before writing it (`cat new > logic.ms` from Git Bash, whose fork
 takes more than the 60 ms settle) can let a build read the empty file. That build fails with
 `Cannot resolve module './logic'`, because the loader treats an empty module as a missing one (an
