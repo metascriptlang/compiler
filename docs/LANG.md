@@ -733,6 +733,17 @@ enum Status {
 }
 ```
 
+An enum is stored in the narrowest integer that holds its member values: `uint8` when every value
+is between 0 and 255, `uint16` up to 65535, `int32` when a value is negative or larger. The rule
+reads the smallest and the largest value, not the declaration order. An `extern enum` (declared
+`extern` or imported from a C header) keeps the C enum's type. Measured 2026-10-03 on C, JS and
+the Raiser with corpus `enumStorageWidth`: for `enum Kind { Empty, Pet }`,
+`enum Wide { Low = 0, High = 300 }`, `enum Signed { Below = -1, Zero = 0 }`,
+`enum Big { Small = 1, Large = 70000 }` and the structs `{ kind: Kind; version: uint8 }`,
+`{ a: uint8; w: Wide; b: uint8; k: Kind }` and `{ s: Signed; k: Kind; w: Wide; v: uint8 }`,
+`sizeof` prints `1 2 4 4 2 6 12`. A struct field keeps that width in the account bytes a Solana
+program reads (`Pet { species: Species; level: uint8; hearts: uint16 }` is 4 bytes).
+
 ### BitSet&lt;E&gt;
 
 A set of enum members whose bit position is the member's **ordinal**. The representation
