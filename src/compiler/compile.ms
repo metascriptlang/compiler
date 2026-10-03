@@ -60,7 +60,7 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot } from "./cc";
+import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
@@ -2454,6 +2454,11 @@ setGlobalHookOwners(sharedHookOwners);
 			console.log(`  Expected it in the same platform-tools ${bold("llvm/bin")} directory.`);
 			throw new Error(BUILD_STOPPED);
 		}
+		if (resolveSbfObjcopy() == "") {
+			printDiag(`${error("error")}: --os=solana requires ${bold("llvm-objcopy")} beside the SBF clang`);
+			console.log(`  Expected it in the same platform-tools ${bold("llvm/bin")} directory.`);
+			throw new Error(BUILD_STOPPED);
+		}
 	}
 
 	// WASM: force release mode, use zig cc with wasm32-wasi target
@@ -3189,7 +3194,7 @@ setGlobalHookOwners(sharedHookOwners);
 			throw new Error(BUILD_STOPPED);
 		}
 	} else if (opts.targetOs == "solana") {
-		const linkRes = linkSolana(oFiles, outBinary);
+		const linkRes = linkSolana(oFiles, outBinary, opts.strip);
 		if (!linkRes.ok) {
 			printDiag(`${error("error")}: SBF link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 			if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);

@@ -162,10 +162,18 @@ export function resolveBpfClang(): string {
 // PATH lookup: a system ld.lld is a different LLVM version than the clang that
 // produced the objects, and platform-tools always ships the pair together.
 export function resolveSbfLinker(): string {
+	return sbfToolBesideClang("ld.lld");
+}
+
+export function resolveSbfObjcopy(): string {
+	return sbfToolBesideClang("llvm-objcopy");
+}
+
+function sbfToolBesideClang(tool: string): string {
 	const clang = resolveBpfClang();
 	if (clang == "") return "";
-	const lld = join(dirname(clang), `ld.lld${exeSuffix()}`);
-	if (exists(lld)) return lld;
+	const path = join(dirname(clang), `${tool}${exeSuffix()}`);
+	if (exists(path)) return path;
 	return "";
 }
 
@@ -232,7 +240,11 @@ function sbfCompilerBuiltins(): string {
 // and ld.lld ships inside platform-tools. --gc-sections drops unreferenced
 // functions (verified: strips a dead function, 952 → 880 bytes), rooted at the
 // `entrypoint` symbol via --entry.
-export function linkSolana(oFiles: string[], outBinary: string): Result<void, ProcessError> {
+//
+// The deploy artifact is the linked file passed through `llvm-objcopy --strip-all`, as
+// `cargo build-sbf` does; the unstripped link stays beside it as `<out>.debug`, the name
+// `cargo build-sbf --debug` gives its copy, unless `strip` asks for none.
+export function linkSolana(oFiles: string[], outBinary: string, strip: boolean): Result<void, ProcessError> {
 	const lld = resolveSbfLinker();
 	if (lld == "") {
 		return Result.err({
@@ -259,6 +271,19 @@ export function linkSolana(oFiles: string[], outBinary: string): Result<void, Pr
 			message: `cannot write linker script ${scriptPath}`,
 		});
 	}
+	const objcopy = resolveSbfObjcopy();
+	if (objcopy == "") {
+		return Result.err({
+			kind: ProcessErrorKind.NotFound,
+			command: "llvm-objcopy",
+			exitCode: 0,
+			signal: 0,
+			output: "",
+			errorOutput: "",
+			message: "llvm-objcopy not found next to the SBF clang (platform-tools llvm/bin)",
+		});
+	}
+	const unstripped = `${outBinary}.debug`;
 	const args = [
 		"--threads=1",
 		"-z",
@@ -272,13 +297,29 @@ export function linkSolana(oFiles: string[], outBinary: string): Result<void, Pr
 		"--gc-sections",
 		"--no-undefined",
 		"-o",
-		outBinary,
+		unstripped,
 	];
 	for (const oFile of oFiles) args.push(oFile);
 	const builtins = sbfCompilerBuiltins();
 	if (builtins != "") args.push(builtins);
 	const r = execFileCapture(lld, args);
 	if (!r.ok) return Result.err(r.error);
+	const stripped = execFileCapture(objcopy, ["--strip-all", unstripped, outBinary]);
+	if (!stripped.ok) return Result.err(stripped.error);
+	if (strip) {
+		const gone = remove(unstripped);
+		if (!gone.ok) {
+			return Result.err({
+				kind: ProcessErrorKind.SpawnFailed,
+				command: "linkSolana",
+				exitCode: 1,
+				signal: 0,
+				output: "",
+				errorOutput: "",
+				message: `cannot remove ${unstripped}`,
+			});
+		}
+	}
 	return Result.ok(null);
 }
 
@@ -604,7 +645,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean = false): string {
 	// Solana: linkSolana drives ld.lld with its own flag set (linker script,
 	// entry symbol, gc-sections) — none of the cc-driver flags apply.
-	if (opts.targetOs == "solana") return appendFlag(base, opts.passL);
+	if (opts.targetOs == "solana") return appendFlag(appendFlag(base, opts.passL), opts.strip ? "debug-copy=off" : "debug-copy=on");
 	// Emscripten: emcc links to .js + .wasm bundle
 	if (opts.targetOs == "emcc") {
 		let eflags = appendFlag(base, "-sWASM=1 -sALLOW_MEMORY_GROWTH=1");
