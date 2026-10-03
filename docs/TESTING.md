@@ -61,6 +61,19 @@ sits in `<module>Parked.ms` beside its module: no index imports it, the inbox
 card names it on its `Parked at:` line, and the fixing session moves it into
 the module and registers it.
 
+Ownership measurements from the 2026-10-03 root sweep:
+- `spliceSelfAliasing` keeps an inserted borrowed string/ref alive before deleting
+  its source slot. The pre-fix string probe aborts with ASan heap-use-after-free in
+  `msStringArraySplice3`; after retaining/copying before mutation, DRC and ORC
+  print `splice-self-alias all-ok`, with ledger `alloc=5 destroy=5`.
+- `arcContextualLiteral` exercises local and returned `Arc<T>` literals. Before
+  native boxing, both values print correctly but ledger `alloc=2 destroy=0`.
+  Routing through existing `msBoxArc` makes DRC/ORC ledger `2/2`; C and JS print
+  `arc-contextual 8 first 9 second`.
+
+The explicit `new Arc(...)` constructor was separately checked on C; this does
+not claim JS constructor support or coverage of every atomic-container operation.
+
 ### Pipeline tests (`c/*.ms`, `js/*.ms`)
 
 Test the FULL pipeline (parse → check → transform → analyze → codegen)
