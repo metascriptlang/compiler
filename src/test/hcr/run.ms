@@ -322,6 +322,7 @@ function privateHelper(): void {
 
 function subdirModule(): void {
 	const tag = "hcrSubdirModule";
+	if (noWatchBackend(tag)) return;
 	const dir = freshDir(`${TMP}/subdir`);
 	ensureDir(`${dir}/lib`);
 	copy(`${FIXTURES}/subdir/app.ms`, `${dir}/app.ms`);
@@ -340,11 +341,14 @@ function subdirModule(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function noWatchBackend(tag: string): boolean {
+	if (platform == "windows" || platform == "linux") return false;
+	console.log(`skip ${tag}: msc run --hcr needs a file-watch backend, none on ${platform} (inbox card 2026-10-03-macos-fs-watch-backend.md)`);
+	return true;
+}
+
 function reloadsNewTypeEdit(tag: string, fixture: string, prefix: string, why: string): void {
-	if (platform != "windows" && platform != "linux") {
-		console.log(`skip ${tag}: file watching has no backend for ${platform}`);
-		return;
-	}
+	if (noWatchBackend(tag)) return;
 	const dir = copyAppAndLib(fixture);
 	copy(`${dir}/app/logicTag.ms`, `${dir}/app/edit.txt`);
 	mustBuild(tag, `${dir}/app`, ["build", "app.ms", "--hcr", "--output=out/built/app"], why);
@@ -686,6 +690,7 @@ function liftKinds(): void {
 
 function runCommand(): void {
 	const tag = "hcrRun";
+	if (noWatchBackend(tag)) return;
 	const dir = freshDir(`${TMP}/run`);
 	copy(`${FIXTURES}/run/app.ms`, `${dir}/app.ms`);
 	copy(`${FIXTURES}/indirect/logic.ms`, `${dir}/logic.ms`);
@@ -855,6 +860,7 @@ function functionValues(): void {
 
 function fileDependency(): void {
 	const tag = "hcrFileDependency";
+	if (noWatchBackend(tag)) return;
 	const dir = freshDir(`${TMP}/fileDependency`);
 	for (const sub of ["app", "greeter"]) ensureDir(`${dir}/${sub}`);
 	for (const f of ["app/app.ms", "app/build.ms", "greeter/build.ms", "greeter/index.ms", "greeterEdit.ms"]) {
