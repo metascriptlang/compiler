@@ -9,26 +9,25 @@
 // `DetectionPass` struct (`lambdalifting.nim:297-310`).
 
 import {
-	Node, NodeKind, IdentifierData, ArrowFunctionData, FunctionExprData,
+	Node, NodeKind, ArrowFunctionData, FunctionExprData,
 	VariableDeclData, BlockStmtData, ExprStmtData, ReturnStmtData,
 	IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData,
 	BinaryExprData, UnaryExprData, CallExprData, SwitchStmtData,
 	SwitchCaseData, ExportDeclData, FunctionDeclData, MethodDeclData,
 	ConstructorDeclData, TestDeclData, SymbolKind, DeclKind, Symbol, BooleanLiteralData,
 } from "../../ast/node";
-import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
+import { SymSet, createSymSet, symSetAdd, symSetContains } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	ScopeStack, createScopeStack, cloneScopeStack, pushFuncBoundary,
-	popFuncBoundary, defineVar, isLocalVar, isOuterVar, isModuleLevelVar,
-	isBuiltinName,
+	popFuncBoundary, defineVar, defineParams, isLocalVar, isOuterVar, isModuleLevelVar,
 } from "./lambdaLiftingScope";
 
 // Result of capture detection over a single closure-bearing function body.
 export interface DetectResult {
-	captures: NameSet;
+	captures: SymSet;
 	capturedIdents: Node[];
 }
 
@@ -41,7 +40,7 @@ export interface DetectResult {
 // `detectionGetCaptures` and `detectionGetCapturedIdents`.
 export interface DetectionState {
 	fnNodes: Node[];
-	fnCaptures: NameSet[];
+	fnCaptures: SymSet[];
 	fnCapturedIdents: Node[][];
 }
 
@@ -66,11 +65,11 @@ function findNodeIdx(arr: Node[], target: Node): number {
 	return -1;
 }
 
-// Lookup captures for a given FunctionDecl. Returns an empty NameSet for
+// Lookup captures for a given FunctionDecl. Returns an empty set for
 // missing entries (the fn was not visited by Pass 1, or had no captures).
-export function detectionGetCaptures(state: DetectionState, fnNode: Node): NameSet {
+export function detectionGetCaptures(state: DetectionState, fnNode: Node): SymSet {
 	const idx = findNodeIdx(state.fnNodes, fnNode);
-	return idx >= 0 ? state.fnCaptures[idx] : createNameSet();
+	return idx >= 0 ? state.fnCaptures[idx] : createSymSet();
 }
 
 export function detectionGetCapturedIdents(state: DetectionState, fnNode: Node): Node[] {
@@ -87,8 +86,8 @@ export function detectionGetCapturedIdents(state: DetectionState, fnNode: Node):
 // Module-level state avoids closure-of-closure issues: this code itself is
 // lambda-lifting-relevant and we run it BEFORE any lifting happens.
 
-let _detectAllNames: NameSet = createNameSet();
-let _detectAllSS: ScopeStack = { names: [], funcMarkers: [], loopMarkers: [] };
+let _detectAllSyms: SymSet = createSymSet();
+let _detectAllSS: ScopeStack = createScopeStack();
 let _detectAllIdents: Node[] = [];
 let _detectClosureDepth: number = 0;  // >0 when inside a closure
 // Number of funcMarkers at start of the current detectAllCaptures call.
@@ -107,24 +106,24 @@ export function routineBindingSym(node: Node): Symbol | null {
 	return node.resolvedSym;
 }
 
-// True if `name`'s defining frame index is < `_detectInitialMarkers`,
+// True if `sym`'s defining frame index is < `_detectInitialMarkers`,
 // i.e., the var lives in F's own frame or one of F's ancestors — never in a
 // frame pushed during F's body walk.
-function definedAtOrAboveInitial(name: string): boolean {
-	let nameIdx = -1;
-	let i = _detectAllSS.names.length - 1;
+function definedAtOrAboveInitial(sym: Symbol): boolean {
+	let symIdx = -1;
+	let i = _detectAllSS.syms.length - 1;
 	while (i >= 0) {
-		if (_detectAllSS.names[i] == name) { nameIdx = i; break; }
+		if (_detectAllSS.syms[i] == sym) { symIdx = i; break; }
 		i -= 1;
 	}
-	if (nameIdx < 0) return false;
-	// Find defining frame: highest funcMarker idx s.t. funcMarkers[idx] <= nameIdx.
-	// If no funcMarker is <= nameIdx, the var is module-level — keep it (handled
+	if (symIdx < 0) return false;
+	// Find defining frame: highest funcMarker idx s.t. funcMarkers[idx] <= symIdx.
+	// If no funcMarker is <= symIdx, the var is module-level — keep it (handled
 	// elsewhere by isModuleLevelVar filter).
 	let frameIdx = _detectAllSS.funcMarkers.length;
 	let j = _detectAllSS.funcMarkers.length - 1;
 	while (j >= 0) {
-		if (_detectAllSS.funcMarkers[j] <= nameIdx) { frameIdx = j; break; }
+		if (_detectAllSS.funcMarkers[j] <= symIdx) { frameIdx = j; break; }
 		j -= 1;
 	}
 	if (frameIdx >= _detectAllSS.funcMarkers.length) return true;
@@ -132,7 +131,7 @@ function definedAtOrAboveInitial(name: string): boolean {
 }
 
 // Detect all captures from a function body. Single entry point; returns both
-// the captured-name set and the parallel array of original Identifier nodes
+// the captured-symbol set and the parallel array of original Identifier nodes
 // (preserved for symbol/type info during lifting).
 //
 // Only counts refs to vars defined in F's frame or one of F's ancestors. Vars
@@ -141,7 +140,7 @@ function definedAtOrAboveInitial(name: string): boolean {
 // belong to that nested closure's own env. Each closure boundary records its
 // own captures via separate detectAllCaptures calls (see `detectPassWalk`).
 export function detectAllCaptures(body: Node, ss: ScopeStack): DetectResult {
-	_detectAllNames = createNameSet();
+	_detectAllSyms = createSymSet();
 	_detectAllIdents = [];
 	_detectClosureDepth = 0;
 	_detectPendingRoutine = null;
@@ -151,15 +150,15 @@ export function detectAllCaptures(body: Node, ss: ScopeStack): DetectResult {
 	_detectInitialMarkers = _detectAllSS.funcMarkers.length;
 	detectAllWalk(body);
 	const result: DetectResult = {
-		captures: _detectAllNames,
+		captures: _detectAllSyms,
 		capturedIdents: _detectAllIdents,
 	};
-	_detectAllNames = createNameSet();
+	_detectAllSyms = createSymSet();
 	_detectAllIdents = [];
 	return result;
 }
 
-function detectClosureBody(params: string[], body: Node): void {
+function detectClosureBody(paramSyms: Symbol[] | null, params: string[], body: Node): void {
 	const savedRoutine = _detectRoutine;
 	const savedRoutineDepth = _detectRoutineDepth;
 	_detectRoutine = _detectPendingRoutine;
@@ -167,7 +166,7 @@ function detectClosureBody(params: string[], body: Node): void {
 	pushFuncBoundary(_detectAllSS);
 	_detectClosureDepth += 1;
 	_detectRoutineDepth = _detectClosureDepth;
-	for (const p of params) defineVar(_detectAllSS, p);
+	defineParams(_detectAllSS, paramSyms, params);
 	detectAllWalk(body);
 	_detectClosureDepth -= 1;
 	popFuncBoundary(_detectAllSS);
@@ -178,32 +177,30 @@ function detectClosureBody(params: string[], body: Node): void {
 function detectAllWalk(node: Node | null): void {
 	if (node == null) return;
 	if (node.kind == NodeKind.Identifier) {
-		const d = node.data as IdentifierData;
-		if (_detectRoutine != null && node.resolvedSym == _detectRoutine && _detectClosureDepth == _detectRoutineDepth) return;
+		const sym = node.resolvedSym;
+		if (sym == null) return;
+		if (_detectRoutine != null && sym == _detectRoutine && _detectClosureDepth == _detectRoutineDepth) return;
 		// Only capture at closure depth > 0 (inside ArrowFunction/FunctionExpr).
 		// Variables in the main function body are directly accessible — no capture needed.
-		if (_detectClosureDepth > 0 && !isBuiltinName(d.name) && !isLocalVar(_detectAllSS, d.name) && isOuterVar(_detectAllSS, d.name) && definedAtOrAboveInitial(d.name)) {
+		if (_detectClosureDepth > 0 && !isLocalVar(_detectAllSS, sym) && isOuterVar(_detectAllSS, sym) && definedAtOrAboveInitial(sym)) {
 			// Reference parity (interestingVar): only capture variables and params.
 			// Skip types (Class, Interface, TypeAlias, Enum) — they're not runtime values.
-			if (node.resolvedSym != null) {
-				const sk = node.resolvedSym.symbolKind;
-				if (sk == SymbolKind.Class || sk == SymbolKind.Interface
-					|| sk == SymbolKind.TypeAlias || sk == SymbolKind.Enum) {
-					return;
-				}
+			const sk = sym.symbolKind;
+			if (sk == SymbolKind.Class || sk == SymbolKind.Interface
+				|| sk == SymbolKind.TypeAlias || sk == SymbolKind.Enum) {
+				return;
 			}
 			// Reference parity (interestingVar): sfGlobal check on resolved symbol.
 			// Only for Variable/Parameter — these have the Global flag set correctly.
-			// Functions and other symbols use name-based check (existing behavior).
-			const sym = node.resolvedSym;
-			const isModLevel = (sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp || sym.symbolKind == SymbolKind.Parameter))
+			// Functions and other symbols use the frame they are bound in.
+			const isModLevel = (sk == SymbolKind.Variable || sk == SymbolKind.Temp || sk == SymbolKind.Parameter)
 				? hasFlag(sym, SymbolFlag.Global)
-				: isModuleLevelVar(_detectAllSS, d.name);
+				: isModuleLevelVar(_detectAllSS, sym);
 			if (!isModLevel) {
-				if (!nameSetContains(_detectAllNames, d.name)) {
+				if (!symSetContains(_detectAllSyms, sym)) {
 					_detectAllIdents.push(node);
 				}
-				nameSetAdd(_detectAllNames, d.name);
+				symSetAdd(_detectAllSyms, sym);
 			}
 		}
 		return;
@@ -213,12 +210,12 @@ function detectAllWalk(node: Node | null): void {
 	// Enter closures: push boundary, define params, recurse body, pop, track depth
 	if (node.kind == NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
-		detectClosureBody(d.arrowParams, d.arrowBody);
+		detectClosureBody(node.paramSyms, d.arrowParams, d.arrowBody);
 		return;
 	}
 	if (node.kind == NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
-		detectClosureBody(d.funcExprParams, d.funcExprBody);
+		detectClosureBody(node.paramSyms, d.funcExprParams, d.funcExprBody);
 		return;
 	}
 	// Track variable definitions for scope awareness
@@ -227,11 +224,11 @@ function detectAllWalk(node: Node | null): void {
 		const isSelfRefClosureInit = d.initializer != null
 			&& (d.initializer.kind == NodeKind.ArrowFunction
 				|| d.initializer.kind == NodeKind.FunctionExpr);
-		if (isSelfRefClosureInit) defineVar(_detectAllSS, d.declName);
+		if (isSelfRefClosureInit) defineVar(_detectAllSS, node.resolvedSym, d.declName);
 		_detectPendingRoutine = routineBindingSym(node);
 		detectAllWalk(d.initializer);
 		_detectPendingRoutine = null;
-		if (!isSelfRefClosureInit) defineVar(_detectAllSS, d.declName);
+		if (!isSelfRefClosureInit) defineVar(_detectAllSS, node.resolvedSym, d.declName);
 		return;
 	}
 	// Generic: recurse children via explicit dispatch (avoid deep mapChildren stack)
@@ -270,7 +267,7 @@ function detectAllWalk(node: Node | null): void {
 	if (node.kind == NodeKind.TryCatchStmt) {
 		const d = node.data as TryCatchStmtData;
 		detectAllWalk(d.tryBody);
-		if (d.catchName != "") defineVar(_detectAllSS, d.catchName);
+		if (d.catchName != "") defineVar(_detectAllSS, node.resolvedSym, d.catchName);
 		detectAllWalk(d.catchBody);
 		detectAllWalk(d.finallyBody);
 		return;
@@ -355,7 +352,7 @@ export function detectPass(program: Node): DetectionState {
 function recordFnCaptures(node: Node, body: Node, params: string[], state: DetectionState, ss: ScopeStack): void {
 	const fnSS = cloneScopeStack(ss);
 	pushFuncBoundary(fnSS);
-	for (const p of params) defineVar(fnSS, p);
+	defineParams(fnSS, node.paramSyms, params);
 	const result = detectAllCaptures(body, fnSS);
 	state.fnNodes.push(node);
 	state.fnCaptures.push(result.captures);
@@ -407,9 +404,9 @@ function detectPassWalk(node: Node, state: DetectionState, ss: ScopeStack, enclo
 		const isSelfRefClosureInit = d.initializer != null
 			&& (d.initializer.kind == NodeKind.ArrowFunction
 				|| d.initializer.kind == NodeKind.FunctionExpr);
-		if (isSelfRefClosureInit) defineVar(ss, d.declName);
+		if (isSelfRefClosureInit) defineVar(ss, node.resolvedSym, d.declName);
 		detectPassWalk(d.initializer, state, ss, enclosingFn);
-		if (!isSelfRefClosureInit) defineVar(ss, d.declName);
+		if (!isSelfRefClosureInit) defineVar(ss, node.resolvedSym, d.declName);
 		return;
 	}
 	// Generic: recurse children, propagating enclosingFn.

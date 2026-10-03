@@ -7,15 +7,16 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, arrayElementNeedsCleanup, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUncountedPtrElement } from "../../checker/types";
+import { isUnknownType, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
 	emitProcLocalsLine, lookupLocalName, lookupLocalSymName, typeCacheGet, typeCacheHas, typeCacheSet, addCGenError, addUnloweredError,
+	isIndirectRef,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, refArrayCellName, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
@@ -74,15 +75,6 @@ function crossModuleCtorParamTypes(sym: Symbol): Type[] {
 function ctorParamTypes(entry: CtorEntry | null, classSym: Symbol | null): Type[] {
 	if (entry != null && entry.fnType != null) return entry.fnType.typeChildren;
 	return crossModuleCtorParamTypes(classSym!);
-}
-
-import { getArrayTypeName } from "./types";
-
-export function bareArrayTypeName(g: CGen, arrCType: string): string {
-	if (!arrCType.endsWith("Array")) return arrCType;
-	const elemCName = arrCType.slice(0, arrCType.length - 5);
-	const bare = bareTypeName(g, elemCName);
-	return bare == elemCName ? arrCType : getArrayTypeName(bare);
 }
 
 function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string): void {
@@ -404,7 +396,7 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, arg
 }
 
 export function genArgCcgPtr(g: CGen, arg: string, argNode: Readonly<Node>, p: CProc, paramType: Type): string {
-	if (argNode.kind == NodeKind.Identifier && isIndirectParam(p, (argNode.data as IdentifierData).name)) {
+	if (argNode.kind == NodeKind.Identifier && isIndirectRef(p, argNode.resolvedSym, (argNode.data as IdentifierData).name)) {
 		// Indirect param: already a pointer — pass raw (reference patterns return snippet as-is)
 		return safeName((argNode.data as IdentifierData).name);
 	}
@@ -852,16 +844,6 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		const builtin = node.resolvedSym != null ? node.resolvedSym.builtinKind : "";
 		if (builtin == "NaN") { ctx.results.push("NAN"); return; }
 		if (builtin == "Infinity") { ctx.results.push("INFINITY"); return; }
-		// Auto-declare DRC sink temps on first use (zero-init for goto safety)
-		if (d.name.startsWith("$sink_") && p != null) {
-			let alreadySeen = false;
-			for (const s of p.seenSinks) { if (s == d.name) alreadySeen = true; }
-			if (!alreadySeen) {
-				p.seenSinks.push(d.name);
-				const cType = node.nodeType != null ? getTypeDesc(g, node.nodeType) : "void*";
-				emitProcLocalsLine(p, `  ${cType} ${safeName(d.name)} = {0};`);
-			}
-		}
 		// Ensure cross-module enum constants are emitted (Reference parity: enum definitions per module)
 		if (node.nodeType != null && node.nodeType.kind == TypeKind.Enum) {
 			getTypeDesc(g, node.nodeType);
@@ -909,7 +891,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		} else {
 			// Reference parity (sym.loc.snippet): symbol-based resolution first.
 			// localNameMap fallback for DRC cleanup identifiers with noSym (avoids cascade).
-			const isIndirect = isIndirectParam(p, d.name) || isIndirectLocal(p, d.name);
+			const isIndirect = isIndirectRef(p, idSym, d.name);
 			const safe = safeName(d.name);
 			let cName = "";
 			const localSymName = lookupLocalSymName(p, idSym);
@@ -1034,7 +1016,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 	if (kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
 		// Elide `x as unknown as T` chain when typeof(x) === T (no-op in monomorphized generics).
-		if (d.asExpr != null && d.asExpr.kind == NodeKind.TypeAssertion && node.nodeType != null) {
+		if (d.asExpr != null && d.asExpr.kind == NodeKind.TypeAssertion && isUnknownType(d.asExpr.nodeType) && node.nodeType != null) {
 			const inner = d.asExpr.data as TypeAssertionData;
 			if (inner.asExpr != null) {
 				// Use resolvedSym's type if nodeType not stamped (common for parameters)
@@ -1142,7 +1124,8 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// more. This matches the inline pattern already used for class-without-
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
 			const initName = classInitCName(cName);
-			const ctorChildren = ctorParamTypes(lookupCtorDefaults(d.newCallee.resolvedSym, bareTypeName(g, cName)), d.newCallee.resolvedSym);
+			const ctorOwner = d.newCallee.resolvedSym.instantiatedFrom ?? d.newCallee.resolvedSym;
+			const ctorChildren = ctorParamTypes(lookupCtorDefaults(ctorOwner, bareTypeName(g, cName)), ctorOwner);
 			const ctorProtoKey = "proto:" + initName;
 			if (ctorChildren != null && node.nodeType != null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
 				nameSetAdd(g.declaredProcs, ctorProtoKey);
@@ -1719,9 +1702,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				// If the symbol is passed by pointer in C, use `->`; otherwise
 				// direct dot access. Three paths produce a pointer:
 				//   1. Reference type (Ref/Ptr/Borrow): isPointerType is true
-				//   2. Large value-type param: tracked via `isIndirectParam`
+				//   2. Large value-type param: tracked via `isIndirectRef`
 				//   3. Local hoisted via `&temp` for borrow: tracked via
-				//      `isIndirectLocal`
+				//      `isIndirectRef`
 				// Pointer-ness is asked of the DECLARED type (symbolType), never
 				// the flow-narrowed nodeType: narrowing selects which variant slot
 				// is read, it does not move the base into pointer storage — but a
@@ -1730,7 +1713,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				// not a pointer"). Field resolution uses the narrowed type above;
 				// access syntax uses where the value lives.
 				const ptrType = idSym != null && isPointerType(idSym.symbolType);
-					const indirect = isIndirectParam(p, rawName) || isIndirectLocal(p, rawName);
+					const indirect = isIndirectRef(p, idSym, rawName);
 					const acc2 = (ptrType || indirect) ? "->" : ".";
 					if (discSuffix != "") {
 						ctx.results.push(enumDiscriminantFromTag(g, p, node, declTy, `${cName}${acc2}${discSuffix}`));
@@ -1963,7 +1946,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		const inner = peekResult(ctx, cc, 0);
 		truncResults(ctx, cc);
 		const d = node.data as ExprStmtData;
-		if (d.expr.kind == NodeKind.Identifier && isIndirectParam(p, (d.expr.data as IdentifierData).name)) {
+		if (d.expr.kind == NodeKind.Identifier && isIndirectRef(p, d.expr.resolvedSym, (d.expr.data as IdentifierData).name)) {
 			// Indirect param: already a pointer — reference pattern returns raw snippet
 			ctx.results.push(safeName((d.expr.data as IdentifierData).name));
 		} else {
@@ -1988,7 +1971,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			emitStmtsLine(p, `${tmp} = ${inner};`);
 			const heldUnion = d.convExpr.nodeType.typeReturn;
 			const failArgs = heldUnion != null ? variantFailArgs(g, heldUnion, rvi) : "MS_EMPTY_STRING, MS_EMPTY_STRING";
-			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${rvi}) msRaiseFieldError(${failArgs}, (int64_t)${tmp}.value._tag);`);
+			if (!node.flags.has(NodeFlag.NoFieldCheck)) emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${rvi}) msRaiseFieldError(${failArgs}, (int64_t)${tmp}.value._tag);`);
 			ctx.results.push(`(${tmp}.present ? ${tmp}.value.v${rvi} : (${targetC})NULL)`);
 			return;
 		}
@@ -2048,7 +2031,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const tmp = `_mnarrow${g.labels}_`;
 			emitProcLocalsLine(p, `${srcC} ${tmp};`);
 			emitStmtsLine(p, `${tmp} = ${inner};`);
-			emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${nvi}) msRaiseFieldError(${variantFailArgs(g, srcMaybe.typeReturn, nvi)}, (int64_t)${tmp}.value._tag);`);
+			if (!node.flags.has(NodeFlag.NoFieldCheck)) emitStmtsLine(p, `if (${tmp}.present && ${tmp}.value._tag != ${nvi}) msRaiseFieldError(${variantFailArgs(g, srcMaybe.typeReturn, nvi)}, (int64_t)${tmp}.value._tag);`);
 			const strLitSet = node.flags.has(NodeFlag.ConvCheck) ? strLitPayload(d.convType) : null;
 			const slotRead = `${tmp}.value.v${nvi}`;
 			const payload = strLitSet != null ? `msStrLitConv(${slotRead}, ${strLitConvArgs(g, strLitSet)})` : slotRead;
@@ -2114,6 +2097,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			let cType = "";
 			let isClassObj = false;
 			let unionWrapName = "";
+			let unionWrapType: Type | null = null;
 			let unionWrapIdx = -1;
 			let unionDiscKeyIdx = -1;
 			let isRefUnion = false;
@@ -2220,6 +2204,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 						if (varIdx >= 0) {
 							cType = variantStructCName(g, litType, varIdx, unionName);
 							unionWrapName = unionName;
+							unionWrapType = namingType;
 							unionWrapIdx = varIdx;
 						}
 					} else {
@@ -2246,6 +2231,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 						if (varIdx >= 0) {
 							cType = variantStructCName(g, litType, varIdx, unionName);
 							unionWrapName = unionName;
+							unionWrapType = namingType;
 							unionWrapIdx = varIdx;
 						}
 					}
@@ -2328,7 +2314,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					p.labels += 1;
 					const refTmp = `_ref${p.labels}_`;
 					emitProcLocalsLine(p, `${unionWrapName}* ${refTmp};`);
-					ensureTypeInfoDef(g, unionWrapName, null as unknown as Type);
+					ensureTypeInfoDef(g, unionWrapName, unionWrapType);
 					emitStmtsLine(p, `${refTmp} = (${unionWrapName}*)msAllocTyped(sizeof(${unionWrapName}), &${unionWrapName}TypeInfo);`);
 					emitStmtsLine(p, `${refTmp}->_tag = ${unionWrapIdx};`);
 					emitStmtsLine(p, `${refTmp}->v${unionWrapIdx} = ${tmpName};`);
@@ -2439,7 +2425,7 @@ function litFieldPrimitiveUnion(node: Readonly<Node>, key: string): Type | null 
 // present-gate (typeof null === "object", TS parity); everything else folds to
 // a constant from the static type.
 function genTypeofExpr(g: CGen, opNode: Readonly<Node>, opC: string): string {
-	const t = opNode != null ? opNode.nodeType : null;
+	const t = opNode != null && opNode.nodeType != null ? peelTransparentInstance(opNode.nodeType) : null;
 	// All-strlit unions are msString-carried — no _tag to switch on.
 	if (t != null && isTagCarriedUnion(t)) {
 		return typeofTagSwitch(g, t, opC);
@@ -2486,6 +2472,17 @@ function typeofStr(g: CGen, s: string): string {
 // env is LAST parameter (Standard reference pattern).
 // No forward declarations — closure struct is self-contained.
 
+// A struct-typed NRVO out-temp must read as zero when the callee exits on an
+// exception without writing it; primitives and pointers carry no destructor.
+function nrvoTempNeedsZero(cType: string): boolean {
+	if (cType == "" || cType == "void" || cType == "void*") return false;
+	if (cType == "double" || cType == "float" || cType == "bool"
+		|| cType == "int32_t" || cType == "int64_t" || cType == "int16_t" || cType == "int8_t"
+		|| cType == "uint8_t" || cType == "uint16_t" || cType == "uint32_t" || cType == "uint64_t") return false;
+	if (cType.byteLength > 0 && cType.charAt(cType.byteLength - 1) == "*") return false;
+	return true;
+}
+
 function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Type, node: Readonly<Node>, ctx: ExprEvalCtx): void {
 	// Reference implementation pattern: extract environment and function pointers from closure pair
 	const envExpr = callee + ".env";
@@ -2500,6 +2497,7 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 		// NRVO: allocate temp, pass &tmp as first arg, read tmp after call
 		const cType = getTypeDesc(g, nrvoType);
 		const tmp = getTemp(p, cType);
+		if (nrvoTempNeedsZero(cType)) emitStmtsLine(p, `(${tmp.snippet}) = (${cType}){0};`);
 		const nrvoArg = "&" + tmp.snippet;
 		let fullArgs = "";
 		if (argsStr != "") {
@@ -2544,7 +2542,9 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 
 function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, calleeName: string, argsStr: string, retType: Type | null, funcType: Type | null): void {
 	if (retType != null && isNrvoReturnType(retType, funcType)) {
-		const tmp = getTemp(p, getTypeDesc(g, retType));
+		const cType = getTypeDesc(g, retType);
+		const tmp = getTemp(p, cType);
+		if (nrvoTempNeedsZero(cType)) emitStmtsLine(p, `(${tmp.snippet}) = (${cType}){0};`);
 		let nrvoArgs = "&" + tmp.snippet;
 		if (argsStr != "") nrvoArgs = `${nrvoArgs}, ${argsStr}`;
 		emitStmtsLine(p, `${calleeName}(${nrvoArgs});`);
@@ -2558,7 +2558,7 @@ function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, calleeName: st
 
 enum CallMagic {
 	None,
-	StringConcatArr, StringArrayFromArr, StringAppendArr, NumberArrayFrom,
+	StringConcatArr, StringArrayFromArr, StringAppendArr,
 	BoxStruct, SinkBoxStruct, UnboxStruct, BoxRefArray, BoxArc,
 	BoxLocked, LockedLoad, LockedStore,
 	FutureCreateInline, SpawnInto, WaitForStruct, FutureThenBoxed,
@@ -2579,7 +2579,6 @@ function callMagicOf(sym: Symbol | null): CallMagic {
 		"StringConcatArr" => CallMagic.StringConcatArr,
 		"StringArrayFromArr" => CallMagic.StringArrayFromArr,
 		"StringAppendArr" => CallMagic.StringAppendArr,
-		"NumberArrayFrom" => CallMagic.NumberArrayFrom,
 		"BoxStruct" => CallMagic.BoxStruct,
 		"SinkBoxStruct" => CallMagic.SinkBoxStruct,
 		"UnboxStruct" => CallMagic.UnboxStruct,
@@ -2678,8 +2677,6 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		return;
 	}
 
-	// C varargs: msNumberArrayFrom(count, (double)(e1), ...) — va_arg reads 8 bytes for double
-	const isNumberArrayFrom = magic == CallMagic.NumberArrayFrom;
 	// Resolve callee's function type for parameter type checking. For
 	// closure-pair callees (post-lift IIFE), neither sym.symbolType nor
 	// cd.callee.nodeType holds the Function type (callee is an ObjectLiteral
@@ -2700,9 +2697,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	while (i < cc) {
 		if (i > 1) argsStr = argsStr + ", ";
 		let arg = peekResult(ctx, cc, i);
-		if (isNumberArrayFrom && i > 1) {
-			arg = `(double)(${arg})`;
-		} else if (hasParamTypes && magic == CallMagic.None) {
+		if (hasParamTypes && magic == CallMagic.None) {
 			const argIdx = i - 1;
 			if (argIdx < calleeType.typeChildren.length && argIdx < cd.arguments.length) {
 				const callMutBits: int32 = sym != null ? sym.mutatedParams : 0;
@@ -2775,12 +2770,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	if (magic == CallMagic.BoxRefArray && cd.arguments.length >= 1 && cd.arguments[0].nodeType != null && node.nodeType != null) {
 		const arrCType = getTypeDesc(g, cd.arguments[0].nodeType);
 		const cellCType = getTypeDesc(g, node.nodeType);
-		const elemT = cd.arguments[0].nodeType.typeReturn;
-		const destroyFn = refArrayDestroyFn(elemT, arrCType);
-		const cellName = refArrayCellName(cd.arguments[0].nodeType);
-		ensureDrcProto(g, destroyFn, null);
-		ensureRefArrayCellTypeInfo(g, cellName, refArrayCellLabel(destroyFn, bareArrayTypeName(g, arrCType)), destroyFn);
-		const tiArg = (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
+		const tiArg = ensureRefArrayCellTypeInfo(g, cd.arguments[0].nodeType);
 		const valTmp = getTemp(p, arrCType);
 		emitStmtsLine(p, `${valTmp.snippet} = ${argsStr};`);
 		const cellTmp = getTemp(p, cellCType);
@@ -2939,7 +2929,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// awaitedType.
 	let finalCallee = callee;
 	if (cd.arguments.length >= 1 && cd.arguments[0].nodeType != null
-		&& callee.startsWith("msPromiseAllFor_msFuture_")) {
+		&& cd.callee.resolvedSym != null && cd.callee.resolvedSym.builtinKind == "PromiseAllFor") {
 		let argArrType = cd.arguments[0].nodeType!;
 		if (argArrType.kind == TypeKind.Ref && argArrType.typeReturn != null) argArrType = argArrType.typeReturn;
 		const elementPromise = argArrType.typeReturn;
@@ -3141,13 +3131,14 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 	// helper expects. The `&`-prefix convention takes the address of a value-array
 	// receiver to form that pointer; for a Ref the address-of and the implied deref
 	// cancel (the Ref IS the pointer), so pass the receiver through unchanged.
-	const recvIsRefArray = args.length > 0 && args[0].nodeType != null
-		&& args[0].nodeType.kind == TypeKind.Ref && args[0].nodeType.typeReturn != null
-		&& args[0].nodeType.typeReturn.kind == TypeKind.Array;
+	const recvT = args.length > 0 && args[0].nodeType != null ? peelTransparentInstance(args[0].nodeType) : null;
+	const recvIsRefArray = recvT != null
+		&& recvT.kind == TypeKind.Ref && recvT.typeReturn != null
+		&& recvT.typeReturn.kind == TypeKind.Array;
 
 	// Array type suffix: ms_array_X → ms_array_X_number/_string/_ref
-	if (args.length > 0 && args[0].nodeType != null) {
-		const recvType = recvIsRefArray ? args[0].nodeType.typeReturn : args[0].nodeType;
+	if (recvT != null) {
+		const recvType = recvIsRefArray ? recvT.typeReturn : recvT;
 		if (recvType.kind == TypeKind.Array) {
 			if (cName.length >= 9 && cName.slice(0, 9) == "ms_array_") {
 				if (recvType.typeReturn != null) {
@@ -3185,41 +3176,6 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 //   string[]  → ms_string_array_new_with(count, e1, ...)
 //   other[]   → temp + ms_array_push_ref pattern
 
-// Two destroyer families. Pointer-payload elements (string / void*-ref / closure)
-// share a GENERIC runtime destroyer regardless of the typed arrCType — e.g.
-// string[][]'s element is a typed ref-to-array whose arrCType (msStringArraystar_Array)
-// has no per-type walker, so it must use msRefArrayDestroy.
-export function refArrayDestroyFn(elemT: Type | null, arrCType: string): string {
-	if (elemT == null || isUncountedPtrElement(elemT)) return "msNumberArrayDestroy";
-	return match (elemT.kind) {
-		TypeKind.String => "msStringArrayDestroy",
-		// Actor-handle elements are DRC-exempt (classify.ms classifyArray) — free the
-		// pointer buffer only, never per-element decref, else shared actors double-free.
-		TypeKind.Ref | TypeKind.Ptr => (elemT.sym != null && elemT.sym.symbolKind == SymbolKind.Actor)
-			? "msNumberArrayDestroy"
-			: (isAtomicRef(elemT) ? "msAtomicRefArrayDestroy" : "msRefArrayDestroy"),
-		TypeKind.Function => "msClosureArrayDestroy",
-		// Managed VALUE element (struct / union / generic-instance / distinct-over-those):
-		// the array TYPE's per-type <Name>ArrayDestroy walker (NIM-REF AN-24), selected once
-		// via arrayElementNeedsCleanup — the whole value-struct family in ONE place, no
-		// per-kind enumeration. Else (primitive / nested-array / tuple) free-only,
-		// with the msRefArray fallback for void*-collapsed payloads.
-		_ => arrayElementNeedsCleanup(elemT)
-			? arrCType + "Destroy"
-			: (arrCType == "msRefArray" ? "msRefArrayDestroy" : "msNumberArrayDestroy"),
-	};
-}
-
-// Free-only msRefArray cells (actor and uncounted Ptr elements) get their OWN weak TypeInfo
-// symbol: "msRefArrayRefCell" is ONE weak symbol program-wide, but destroyFn was
-// per-module first-ensure-wins + cross-module last-DatInit-wins — a module mixing
-// counted and inert element families scrambled the shared cell's destroyer.
-export function refArrayCellLabel(destroyFn: string, arrCType: string): string {
-	if (destroyFn == "msNumberArrayDestroy" && arrCType == "msRefArray") return "msPtrArrayRefCell";
-	if (destroyFn == "msAtomicRefArrayDestroy" && arrCType == "msRefArray") return "msAtomicArrayRefCell";
-	return arrCType + "RefCell";
-}
-
 function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 	const d = node.data as ArrayLiteralData;
 
@@ -3254,7 +3210,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 	}
 
 	// Non-primitive: temp + push pattern
-	// (number/string arrays already lowered to msNumberArrayFrom/msStringArrayFromArr CallExpr by nativeLower)
+	// (string arrays already lowered to an msStringArrayFromArr CallExpr by nativeLower)
 	const isSizedArray = node.nodeType != null && node.nodeType.kind == TypeKind.SizedArray;
 	const tmp = getTemp(p, arrayTypeName);
 	const tmpName = tmp.snippet;
@@ -3273,7 +3229,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 
 // ===== Tests =====
 
-import { createCGen, createProc, sec, CSection, isIndirectParam, isIndirectLocal } from "./context";
+import { createCGen, createProc, sec, CSection } from "./context";
 import { CheckerContext } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";

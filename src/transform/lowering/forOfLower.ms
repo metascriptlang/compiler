@@ -15,7 +15,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { appendLoopTail, bodySuspends } from "./forLoopLower";
-import { int32Type, charType, stringType, noneType, createArray, createSizedArray, createRef, isIterator, isMaybeType, getIteratorNextFnType } from "../../checker/types";
+import { int32Type, charType, stringType, noneType, createArray, createSizedArray, createRef, isIterator, isMaybeType, getIteratorNextFnType, peelTransparentInstance } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import {
@@ -43,7 +43,7 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 		node.resolvedSym = null;
 
 		// Iterator<T>: while + next() pattern (for function* generators)
-		const iterType = d.forOfIterable.nodeType;
+		const iterType = d.forOfIterable.nodeType != null ? peelTransparentInstance(d.forOfIterable.nodeType) : null;
 		if (iterType != null && isIterator(iterType)) {
 			return lowerIteratorForOf(d, ctx, loc, bindingSym);
 		}
@@ -104,7 +104,7 @@ function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: Source
 function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol | null): Node {
 	const idxSym = freshTempSym(ctx, "idx", int32Type());
 	const lenSym = freshTempSym(ctx, "len", int32Type());
-	const iterType = d.forOfIterable.nodeType;
+	const iterType = d.forOfIterable.nodeType != null ? peelTransparentInstance(d.forOfIterable.nodeType) : null;
 	// reference array: the iter expr keeps its Ref<Array> type (nativeLower derefs the
 	// synthesized .length/[idx] access), but element-type stamping must read through the
 	// Ref to the value array so `.typeReturn` yields the element type, not the inner array.

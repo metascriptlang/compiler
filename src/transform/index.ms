@@ -42,6 +42,8 @@ import { lowerStringLengthJS } from "./coercion/stringLengthJS";
 import { lowerIntConvJS, injectRangeChecksJS } from "./coercion/intConvJS";
 import { lowerNumberBitwiseOperands } from "./native/intCheckInject";
 import { lowerIntArithJS } from "./coercion/intArithJS";
+import { lowerAccessJS } from "./coercion/accessJS";
+import { lowerFloat32JS } from "./coercion/float32JS";
 import { lowerBigIntJS } from "./coercion/bigIntJS";
 import { refuseUnfoldedSizeofJS } from "./coercion/sizeofJS";
 import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
@@ -172,7 +174,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerStringOps(result, ctx); }
 	result = lowerSubscript(result, ctx);
 	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
-	if (!jsBackend) { result = spanLower(result, ctx); }
+	result = spanLower(result, ctx);
 	if (!jsBackend) { result = spanParamExpand(result, ctx); }
 	result = lowerConditionalExpr(result, ctx);
 	// Conditionally-evaluated positions (ternary arm, `&&`/`||` RHS, while-cond)
@@ -201,8 +203,10 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (jsBackend) { result = lowerNumberBitwiseOperands(result, ctx); }
 	if (jsBackend) { result = injectRangeChecksJS(result, ctx); }
 	if (jsBackend) { result = lowerBigIntJS(result, ctx); }
-	if (jsBackend) { result = lowerIntConvJS(result, ctx); }
+	if (jsBackend) { result = lowerFloat32JS(result, ctx); }
 	if (jsBackend) { result = lowerIntArithJS(result, ctx); }
+	if (jsBackend) { result = lowerIntConvJS(result, ctx); }
+	if (jsBackend) { result = lowerAccessJS(result, ctx); }
 	// Definitions for the `EnumName_toString` calls the lowerings above emit
 	// (enum reverse index + `.toString()`). C injects the same functions at the
 	// tail of its native pipeline (transform/native/index.ms); JS has no native

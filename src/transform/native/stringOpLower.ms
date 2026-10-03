@@ -25,7 +25,7 @@ import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, String
 import { isNumeric, isStringLike, isWideInteger, peelTransparentInstance, stringType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeNumber, makeHiddenAddr, runtimeRef, isRuntimeProcCall } from "../util";
+import { makeCall, makeNumber, makeHiddenAddr, runtimeRef, isRuntimeProcCall } from "../util";
 
 // ===== Main Entry Point =====
 

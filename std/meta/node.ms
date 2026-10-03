@@ -88,6 +88,10 @@ export enum AttachedOp {
 	AttachedDup,
 	AttachedSink,
 	AttachedTrace,
+	AttachedEq,
+	AttachedLt,
+	AttachedLe,
+	AttachedToString,
 }
 
 // ===== Type =====
@@ -211,6 +215,7 @@ export enum SymbolFlag {
 	StateMachine,
 	ForVar, // for-of loop binding (reference: skForVar) — rebinding legal, value interior read-only
 	Borrow,
+	NeverRaises,
 }
 
 // ===== Symbol =====
@@ -274,6 +279,7 @@ export enum NodeFlag {
 	CommaWritten,  // parser: a comma was written after this match case
 	ObjCheck,      // checker: this TypeAssertion is an object down-conversion checked at run time
 	ConvCheck,     // checker: this conversion narrows to a union member or into a string-literal union, tested at run time
+	NoFieldCheck,
 }
 
 // ===== Node Kind Enum =====

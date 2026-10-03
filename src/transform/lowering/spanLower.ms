@@ -10,7 +10,7 @@
 // - Zero-copy slicing: arr[start..end] with Span result → { data: arr.data + start, len: end - start }
 // - Stack-promoted literals: HiddenStdConv(ArrayLiteral, Span<T>) → SizedArray temp on stack
 
-import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { createSizedArray, createPtr, createPrimitive, peelToStructOrUnion } from "../../checker/types";
 import { takesAddressAtCArg, nonNullMemberOfNullable } from "../../checker/compat";
 import { TransformContext, freshTempSym } from "../context";
@@ -26,7 +26,7 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, (node: Node): Node => {
 		// Zero-copy slicing: ArrayAccess with range index and Span result type
 		if (node.kind == NodeKind.ArrayAccess) {
-			return lowerRangeAccess(node, ctx);
+			return ctx.jsBackend ? lowerRangeAccessJS(node) : lowerRangeAccess(node, ctx);
 		}
 
 		if (node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv) {
@@ -42,7 +42,13 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 			if (spanTarget.kind == TypeKind.Span) {
 				let srcType = d.convExpr.nodeType;
 				if (srcType != null && srcType.kind == TypeKind.Ref && srcType.typeReturn != null) srcType = srcType.typeReturn;
-				if (srcType != null) {
+				if (srcType != null && ctx.jsBackend) {
+					const view = spanViewJS(d.convExpr, srcType, node.location);
+					if (view != null) {
+						view.nodeType = targetType;
+						return view;
+					}
+				} else if (srcType != null) {
 					const loc = node.location;
 
 					// Stack-promoted literal: [1,2,3] → Span → SizedArray temp on stack
@@ -70,6 +76,7 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 				}
 			}
 
+			if (ctx.jsBackend) return node;
 			// Borrow promotion: HiddenStdConv(expr, Borrow<T>) → HiddenAddr(expr) (takes &expr in C)
 			if (targetType.kind == TypeKind.Borrow) {
 				const loc = node.location;
@@ -240,6 +247,49 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 	lenExpr.nodeType = createPrimitive(TypeKind.Int64);
 
 	return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], resultType, loc);
+}
+
+function borrowedJS(src: Node, srcType: Type): Node {
+	const addr = makeHiddenAddr(src, src.location);
+	addr.nodeType = createPtr(srcType);
+	return addr;
+}
+
+function spanViewJS(src: Node, srcType: Type, loc: SourceLocation): Node | null {
+	if (srcType.kind == TypeKind.Span) return src;
+	if (src.kind == NodeKind.ArrayLiteral || srcType.kind == TypeKind.Array || srcType.kind == TypeKind.SizedArray) {
+		return makeCall(runtimeRef("msSpanOf", loc), [borrowedJS(src, srcType)], loc);
+	}
+	if (srcType.kind == TypeKind.String) {
+		return makeCall(runtimeRef("asBytes", loc), [src], loc);
+	}
+	return null;
+}
+
+function lowerRangeAccessJS(node: Node): Node {
+	const d = node.data as ArrayAccessData;
+	if (d.index.kind != NodeKind.BinaryExpr) return node;
+	const bd = d.index.data as BinaryExprData;
+	if (bd.operator != ".." && bd.operator != "...") return node;
+	const resultType = node.nodeType;
+	if (resultType == null || resultType.kind != TypeKind.Span) return node;
+	let arrType = d.array.nodeType;
+	if (arrType != null && arrType.kind == TypeKind.Ref && arrType.typeReturn != null) arrType = arrType.typeReturn;
+	if (arrType == null) return node;
+
+	const loc = node.location;
+	const endExclusive = bd.operator == "..." ? makeBinary(bd.right, "+", makeNumber(1, loc), loc) : bd.right;
+	let slice: Node | null = null;
+	if (arrType.kind == TypeKind.Span) {
+		slice = makeCall(runtimeRef("msSliceSpan", loc), [d.array, bd.left, endExclusive], loc);
+	} else if (arrType.kind == TypeKind.Array || arrType.kind == TypeKind.SizedArray) {
+		slice = makeCall(runtimeRef("msSliceOf", loc), [borrowedJS(d.array, arrType), bd.left, endExclusive], loc);
+	} else if (arrType.kind == TypeKind.String) {
+		slice = makeCall(runtimeRef("msSliceSpan", loc), [makeCall(runtimeRef("asBytes", loc), [d.array], loc), bd.left, endExclusive], loc);
+	}
+	if (slice == null) return node;
+	slice.nodeType = resultType;
+	return slice;
 }
 
 // ===== Stack-Promoted Literals =====

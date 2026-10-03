@@ -20,6 +20,13 @@ test "array fields are cycle edges only when their element graph reaches the own
 	}
 }
 
+function declaresItemArrayOp(c: string, op: string, params: string): boolean {
+	for (const line of c.split("\n")) {
+		if (line.startsWith("void Item__") && line.indexOf("Array" + op + "__") > 0 && line.endsWith(params)) return true;
+	}
+	return false;
+}
+
 test "hook discovery traverses tuple and generic element containers to the managed leaf" {
 	for (const container of ["[Vec<Item>, int32]", "Pair<Vec<Item>>"]) {
 		const result = compileToC(`
@@ -30,11 +37,11 @@ const r = rows();
 console.log(r.length);
 `);
 		assert result.ok, result.ok ? "" : result.error;
-		assert result.value.contains("void ItemArrayDestroy(ItemArray* self);"), container + " destroy ABI";
+		assert declaresItemArrayOp(result.value, "Destroy", "Array* self);"), container + " destroy ABI";
 		if (container == "[Vec<Item>, int32]") {
-			assert result.value.contains("void ItemArraySink(ItemArray* dest, ItemArray* src);"), container + " sink ABI";
+			assert declaresItemArrayOp(result.value, "Sink", "Array* src);"), container + " sink ABI";
 		} else {
-			assert result.value.contains("void ItemArrayCopy(ItemArray* dest, ItemArray* src);"), container + " copy ABI";
+			assert declaresItemArrayOp(result.value, "Copy", "Array* src);"), container + " copy ABI";
 		}
 	}
 }

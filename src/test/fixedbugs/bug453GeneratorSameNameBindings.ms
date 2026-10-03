@@ -8,9 +8,8 @@
 // Root cause: src/transform/lowering/generatorLower.ms hoists locals into
 //             the iterator env by name, so both bindings became one field
 //             typed by the first.
-// Fix:        before hoisting, the generator frame goes through the lifting
-//             renamer (lambdaLiftingRename.ms), so every binding has a name
-//             of its own.
+// Fix:        the locals a state machine hoists are keyed by symbol, one
+//             hoisted slot per binding.
 //
 // Guarded end-to-end by corpus/programs/921-generatorStatements.ms.
 

@@ -17,7 +17,7 @@ import {
 	ArrayLiteralData, SpreadExprData, IdentifierData, BinaryExprData, Type, TypeKind,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { int32Type } from "../../checker/types";
+import { int32Type, peelTransparentInstance } from "../../checker/types";
 import { Symbol } from "../../ast/node";
 import { walkExpandBlocks, walkOnceEvaluated, OnceEvalState } from "../walker";
 import { forEachChild } from "../../ast/visitor";
@@ -74,12 +74,14 @@ function typedRef(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 }
 
 function isRefArray(t: Type | null): boolean {
-	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array;
+	const u = t != null ? peelTransparentInstance(t) : null;
+	return u != null && u.kind == TypeKind.Ref && u.typeReturn != null && u.typeReturn.kind == TypeKind.Array;
 }
 
 function bareArrayType(t: Type | null): Type | null {
 	if (t == null) return null;
-	return t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	const u = peelTransparentInstance(t);
+	return u.kind == TypeKind.Ref && u.typeReturn != null ? u.typeReturn : u;
 }
 
 function viewRef(sym: Symbol, t: Type | null, loc: SourceLocation): Node {

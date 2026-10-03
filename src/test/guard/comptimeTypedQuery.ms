@@ -17,6 +17,11 @@ const IMPL_KIND: int32 = @comptime {
 	return t == null ? -1 : (typeKind(t) as int32);
 };
 
+const IMPL_SHAPE: int32 = @comptime {
+	const t = getTypeImpl(bindSym("Later"));
+	return t == null ? -1 : (t.kind == NodeKind.TypeObject ? 1 : 0);
+};
+
 const FIELDS: int32 = @comptime {
 	const d = getImpl(bindSym("Later"));
 	return d == null ? -1 : d.classBody.length;
@@ -32,7 +37,8 @@ function expect(actual: string, want: string, name: string): int32 {
 
 function main(): int32 {
 	let rc: int32 = 0;
-	rc += expect(`${IMPL_KIND}`, `${TypeKind.Struct as int32}`, "comptimeGetTypeImpl");
+	rc += expect(`${IMPL_KIND}`, `${TypeKind.Ref as int32}`, "comptimeGetTypeImpl");
+	rc += expect(`${IMPL_SHAPE}`, "1", "comptimeGetTypeImplShape");
 	rc += expect(`${FIELDS}`, "2", "comptimeGetImpl");
 	if (rc == 0) { console.log("GUARD-OK comptimeTypedQuery"); }
 	return rc;

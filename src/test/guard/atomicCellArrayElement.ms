@@ -15,7 +15,7 @@
 //
 // RED MEANS the array arm stopped selecting by element type, or the atomic
 //   family lost its own cell TypeInfo — run /trace-nim on classifyArray and on
-//   refArrayDestroyFn / refArrayCellName before touching this file.
+//   runtimeCellDestroy / registerArrayOps (destructorLifting.ms) before touching this file.
 // Run by src/test/guard/run.sh with -DMS_DRC_LEDGER (drc + orc).
 // GUARD-BALANCE TOTAL
 

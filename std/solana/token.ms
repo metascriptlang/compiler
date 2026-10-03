@@ -1,16 +1,25 @@
 import {
 	Account,
 	Bytes,
+	External,
+	ExternalMutable,
 	Instruction,
+	Program,
 	ProgramAddress,
 	ProgramError,
 	Pubkey,
 	Seeds,
-} from "./index";
+	Signer,
+	System,
+	Writable,
+	WritableSigner,
+	unchecked,
+} from "./core";
 
 when (testBuild) {
-	import { account, failWith, instructionData, logU64 } from "./index";
+	import { account, failWith, instructionData, logU64, readArgs } from "./core";
 	import { HostAccount, invocations, logs, run } from "./host";
+	import { accounts } from "./macro";
 }
 
 export enum TokenAccountState {
@@ -67,30 +76,6 @@ export enum ExtensionType {
 	Pausable = 26,
 	PausableAccount = 27,
 	PermissionedBurn = 28,
-}
-
-export function tokenProgram(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0x93a165d7e1f6dd06;
-	const word1: uint64 = 0xac79ebce46e1cbd9;
-	const word2: uint64 = 0x91375b5fed85b41c;
-	const word3: uint64 = 0xa900ff7e85f58c3a;
-	return { word0: word0, word1: word1, word2: word2, word3: word3 };
-}
-
-export function token2022Program(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0xde8f75eee1f6dd06;
-	const word1: uint64 = 0xdacd6ce4bc5d4218;
-	const word2: uint64 = 0x270db9834dfc1ab6;
-	const word3: uint64 = 0xfc8ba1d828f9bdfe;
-	return { word0: word0, word1: word1, word2: word2, word3: word3 };
-}
-
-export function associatedTokenProgram(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0xf189244e8f25978c;
-	const word1: uint64 = 0x830d8e1429103dbb;
-	const word2: uint64 = 0x8410ffda99135a0b;
-	const word3: uint64 = 0x59f8e9dbd87b8e04;
-	return { word0: word0, word1: word1, word2: word2, word3: word3 };
 }
 
 function isTokenProgram(program: Pubkey): boolean {
@@ -151,8 +136,7 @@ function tokenAccountBytes(account: Account): Result<Bytes, ProgramError> {
 	return Result.ok(data);
 }
 
-export function readMint(this account: Account): Result<Mint, ProgramError> {
-	const data = try mintBytes(account);
+function mintFields(data: Bytes): Result<Mint, ProgramError> {
 	if ((try data.readU8(45)) != 1) { return Result.err(ProgramError.uninitializedAccount()); }
 	return Result.ok({
 		mintAuthority: try optionalKey(data, 0),
@@ -162,8 +146,12 @@ export function readMint(this account: Account): Result<Mint, ProgramError> {
 	});
 }
 
-export function readTokenAccount(this account: Account): Result<TokenAccount, ProgramError> {
-	const data = try tokenAccountBytes(account);
+export function readMint(this account: Account): Result<Mint, ProgramError> {
+	const data = try mintBytes(account);
+	return mintFields(data);
+}
+
+function tokenAccountFields(data: Bytes): Result<TokenAccount, ProgramError> {
 	const state = try stateOf(try data.readU8(108));
 	if (state == TokenAccountState.Uninitialized) {
 		return Result.err(ProgramError.uninitializedAccount());
@@ -180,6 +168,11 @@ export function readTokenAccount(this account: Account): Result<TokenAccount, Pr
 		delegatedAmount: try data.readU64(121),
 		closeAuthority: try optionalKey(data, 129),
 	});
+}
+
+export function readTokenAccount(this account: Account): Result<TokenAccount, ProgramError> {
+	const data = try tokenAccountBytes(account);
+	return tokenAccountFields(data);
 }
 
 function extensionBase(kind: ExtensionType): uint8 {
@@ -401,9 +394,172 @@ export function createAssociatedTokenIdempotent(
 	return createAssociated(payer, associated, wallet, mint, systemProgram, program, 1, signer);
 }
 
+export function acceptsOwner(this typeof Mint, owner: Pubkey): boolean {
+	return isTokenProgram(owner);
+}
+
+export function decode(this typeof Mint, data: Bytes): Result<Mint, ProgramError> {
+	const fits = data.length == 82 || (try hasExtensionLayout(data, 1) catch false);
+	if (!fits) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	const decoded = mintFields(data);
+	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	return decoded;
+}
+
+export function verify(this typeof Mint, index: int32): Result<Account, ProgramError> {
+	const found = try unchecked(index);
+	if (!isTokenProgram(found.owner())) {
+		return Result.err(ProgramError.accountOwnedByWrongProgram());
+	}
+	const decoded = found.readMint();
+	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	return Result.ok(found);
+}
+
+export function acceptsOwner(this typeof TokenAccount, owner: Pubkey): boolean {
+	return isTokenProgram(owner);
+}
+
+export function decode(this typeof TokenAccount, data: Bytes): Result<TokenAccount, ProgramError> {
+	const fits = data.length == 165 || (try hasExtensionLayout(data, 2) catch false);
+	if (!fits) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	const decoded = tokenAccountFields(data);
+	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	return decoded;
+}
+
+export function verify(this typeof TokenAccount, index: int32): Result<Account, ProgramError> {
+	const found = try unchecked(index);
+	if (!isTokenProgram(found.owner())) {
+		return Result.err(ProgramError.accountOwnedByWrongProgram());
+	}
+	const decoded = found.readTokenAccount();
+	if (!decoded.ok) { return Result.err(ProgramError.accountDidNotDeserialize()); }
+	return Result.ok(found);
+}
+
+function tokenProgramOf(mint: External<Mint>): Pubkey {
+	return (mint as Account).owner();
+}
+
+function mintDecimals(mint: External<Mint>): Result<uint8, ProgramError> {
+	const decoded = try (mint as Account).readMint();
+	return Result.ok(decoded.decimals);
+}
+
+export function transferTokens(
+	from: ExternalMutable<TokenAccount>,
+	to: ExternalMutable<TokenAccount>,
+	mint: External<Mint>,
+	authority: Signer,
+	amount: uint64,
+): Result<uint64, ProgramError> {
+	return transferTokensSigned(from, to, mint, authority as Account, amount, Seeds.none());
+}
+
+export function transferTokensSigned(
+	from: ExternalMutable<TokenAccount>,
+	to: ExternalMutable<TokenAccount>,
+	mint: External<Mint>,
+	authority: Account,
+	amount: uint64,
+	signer: Seeds,
+): Result<uint64, ProgramError> {
+	const decimals = try mintDecimals(mint);
+	return transferChecked(
+		tokenProgramOf(mint),
+		from as Account,
+		mint as Account,
+		to as Account,
+		authority,
+		amount,
+		decimals,
+		signer,
+	);
+}
+
+export function mintTokens(
+	mint: ExternalMutable<Mint>,
+	to: ExternalMutable<TokenAccount>,
+	authority: Account,
+	amount: uint64,
+	signer: Seeds,
+): Result<uint64, ProgramError> {
+	const target = mint as Account;
+	return mintTo(target.owner(), target, to as Account, authority, amount, signer);
+}
+
+export function closeTokenAccount(
+	account: ExternalMutable<TokenAccount>,
+	destination: Writable,
+	authority: Account,
+	signer: Seeds,
+): Result<uint64, ProgramError> {
+	const closing = account as Account;
+	return closeAccount(closing.owner(), closing, destination as Account, authority, signer);
+}
+
+export function createAssociatedFor(
+	payer: WritableSigner,
+	associated: Writable,
+	wallet: Account,
+	mint: External<Mint>,
+	systemProgram: Program<System>,
+	tokenProgram: Account,
+): Result<uint64, ProgramError> {
+	if (tokenProgram.key() != tokenProgramOf(mint)) {
+		return Result.err(ProgramError.constraintAssociatedTokenTokenProgram());
+	}
+	return createAssociatedToken(
+		payer as Account,
+		associated as Account,
+		wallet,
+		mint as Account,
+		systemProgram as Account,
+		tokenProgram,
+		Seeds.none(),
+	);
+}
+
+export function expectAssociated(
+	tokenAccount: Pubkey,
+	wallet: Pubkey,
+	mint: External<Mint>,
+): Result<void, ProgramError> {
+	const mintKey = (mint as Account).key();
+	const derived = try associatedTokenAddress(wallet, mintKey, tokenProgramOf(mint));
+	if (derived.key != tokenAccount) {
+		return Result.err(ProgramError.accountNotAssociatedTokenAccount());
+	}
+	return Result.ok(null);
+}
+
+export function expectTokenMint(token: TokenAccount, mint: Pubkey): Result<void, ProgramError> {
+	if (token.mint != mint) { return Result.err(ProgramError.constraintTokenMint()); }
+	return Result.ok(null);
+}
+
+export function expectTokenOwner(token: TokenAccount, owner: Pubkey): Result<void, ProgramError> {
+	if (token.owner != owner) { return Result.err(ProgramError.constraintTokenOwner()); }
+	return Result.ok(null);
+}
+
 when (testBuild) {
 	function keyOf(word: uint64): Pubkey {
-		return { word0: word, word1: 0, word2: 0, word3: 0 };
+		let key = Pubkey.zero();
+		for (let index = 0; index < 8; index++) {
+			key.bytes[index] = ((word >> ((index * 8) as uint64)) & 255) as uint8;
+		}
+		return key;
+	}
+
+	function wordAt(key: Pubkey, word: int32): uint64 {
+		let value: uint64 = 0;
+		for (let index = word * 8 + 7; index >= word * 8; index--) {
+			const byte: uint64 = key.bytes[index] as uint64;
+			value = (value << 8) | byte;
+		}
+		return value;
 	}
 
 	function pushU64(bytes: uint8[], value: uint64): void {
@@ -418,10 +574,7 @@ when (testBuild) {
 	}
 
 	function pushKey(bytes: uint8[], key: Pubkey): void {
-		pushU64(bytes, key.word0);
-		pushU64(bytes, key.word1);
-		pushU64(bytes, key.word2);
-		pushU64(bytes, key.word3);
+		for (let index = 0; index < 32; index++) { bytes.push(key.bytes[index]); }
 	}
 
 	function pushZeros(bytes: uint8[], count: int32): void {
@@ -495,7 +648,7 @@ when (testBuild) {
 			const authority = mint.mintAuthority;
 			logU64(mint.supply);
 			logU64(mint.decimals as uint64);
-			if (authority !== null) { logU64(authority.word0); }
+			if (authority !== null) { logU64(wordAt(authority, 0)); }
 			if (mint.freezeAuthority === null) { logU64(0); }
 			return Result.ok(0);
 		}
@@ -505,7 +658,7 @@ when (testBuild) {
 			logU64(tokens.amount);
 			logU64((tokens.state as int32) as uint64);
 			if (tokens.delegate === null && tokens.nativeReserve === null) { logU64(0); }
-			if (closer !== null) { logU64(closer.word0); }
+			if (closer !== null) { logU64(wordAt(closer, 0)); }
 			return Result.ok(0);
 		}
 		if (op == 2) {
@@ -633,10 +786,10 @@ when (testBuild) {
 			executable: true,
 		};
 		return [
-			holderOf(1, Pubkey.tokenProgram(), []),
-			holderOf(2, Pubkey.tokenProgram(), []),
+			holderOf(1, Pubkey.tokenProgram(), mintData(7, 500, 6)),
+			holderOf(2, Pubkey.tokenProgram(), tokenAccountData(1, 3, 0, 1)),
 			{ ...holderOf(3, keyOf(0), []), signer: true, writable: false },
-			{ ...holderOf(4, keyOf(0), []), signer: true },
+			{ ...holderOf(4, keyOf(0), tokenAccountData(1, 3, 900, 1)), signer: true },
 			{ ...holderOf(0, keyOf(0), []), writable: false, executable: true },
 			program,
 		];
@@ -712,7 +865,8 @@ when (testBuild) {
 		assert classic.ok;
 		if (classic.ok) {
 			assert classic.value.bump == 255;
-			assert classic.value.key.word0 == tokenWord0 && classic.value.key.word3 == tokenWord3;
+			assert wordAt(classic.value.key, 0) == tokenWord0;
+			assert wordAt(classic.value.key, 3) == tokenWord3;
 		}
 		const extendedWord0: uint64 = 0xc080ac8fa7881df3;
 		const extendedWord3: uint64 = 0x08b979898d73f9d3;
@@ -721,7 +875,68 @@ when (testBuild) {
 		if (extended.ok) {
 			const found = extended.value.key;
 			assert extended.value.bump == 254;
-			assert found.word0 == extendedWord0 && found.word3 == extendedWord3;
+			assert wordAt(found, 0) == extendedWord0 && wordAt(found, 3) == extendedWord3;
 		}
+	}
+}
+
+when (testBuild) {
+	export struct TransferAccounts {
+		owner: Signer;
+		from: ExternalMutable<TokenAccount>;
+		to: ExternalMutable<TokenAccount>;
+		mint: External<Mint>;
+	}
+
+	function typedTransferStep(): Result<uint64, ProgramError> {
+		const x = try accounts<TransferAccounts>();
+		const op = try instructionData().readU8(0);
+		if (op == 1) {
+			const _checked = try expectAssociated(x.from.key(), x.owner.key(), x.mint);
+		}
+		return transferTokens(x.from, x.to, x.mint, x.owner, 250);
+	}
+
+	function typedTransferEntry(): void {
+		const result = typedTransferStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function typedAccounts(mintOwner: Pubkey, mintData: uint8[]): HostAccount[] {
+		let owner = holderOf(3, Pubkey.systemProgram(), []);
+		owner.signer = true;
+		return [
+			owner,
+			holderOf(4, Pubkey.token2022Program(), tokenAccountData(1, 3, 900, 1)),
+			holderOf(5, Pubkey.token2022Program(), tokenAccountData(1, 6, 0, 1)),
+			holderOf(1, mintOwner, mintData),
+		];
+	}
+
+	function goodMint(): HostAccount[] {
+		return typedAccounts(Pubkey.token2022Program(), mintData(7, 500, 6));
+	}
+
+	test "typed token accounts verify through accounts<T>() and transfer with the mint's decimals" {
+		assert resultOf(goodMint(), 0, typedTransferEntry) == 0;
+		const moved = invocations()[0];
+		assert moved.program == Pubkey.token2022Program();
+		const moveBytes: uint8[] = [12, 250, 0, 0, 0, 0, 0, 0, 0, 6];
+		assert sameBytes(moved.data, moveBytes);
+	}
+
+	test "a mint owned by another program or with a broken layout is refused with Anchor's codes" {
+		const foreign = typedAccounts(Pubkey.systemProgram(), mintData(7, 500, 6));
+		assert resultOf(foreign, 0, typedTransferEntry) ==
+			ProgramError.accountOwnedByWrongProgram().code;
+		const short: uint8[] = [1, 2, 3];
+		const broken = typedAccounts(Pubkey.token2022Program(), short);
+		assert resultOf(broken, 0, typedTransferEntry) ==
+			ProgramError.accountDidNotDeserialize().code;
+	}
+
+	test "expectAssociated refuses a token account that is not the owner's associated account" {
+		assert resultOf(goodMint(), 1, typedTransferEntry) ==
+			ProgramError.accountNotAssociatedTokenAccount().code;
 	}
 }

@@ -1,7 +1,7 @@
 // Transform Context — shared state across all transforms
 
-import { CheckerContext, addError } from "../checker/context";
-import { Type, Symbol, SymbolKind, SourceLocation } from "../ast/node";
+import { CheckerContext, addError, newSym } from "../checker/context";
+import { Type, Symbol, SymbolKind, SymbolState, SourceLocation } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { noneType } from "../checker/types";
 
@@ -29,10 +29,17 @@ export class TransformContext {
 	cyclicCache: NameSet;     // canFormAcycle entry-level memo (types confirmed cyclic)
 	acyclicCache: NameSet;    // canFormAcycle entry-level memo (types confirmed acyclic)
 	splitLoopLocals: Symbol[];  // bindings of a loop body split at a yield: generatorLower hoists them to one slot for the whole loop
+	actorImpls: HashMap<Symbol, Symbol>;  // actor method → its _impl handler (actor lowering emits async ones in lowerActorPre)
+	jsEnumToStrings: EnumToStringCopy[];
+}
+
+export interface EnumToStringCopy {
+	enumType: Type;
+	fnSym: Symbol;
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, preserveModuleConstants: false, rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingValueEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [] };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, preserveModuleConstants: false, rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingValueEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [] };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
@@ -84,6 +91,26 @@ export function nameSetIntersect(a: NameSet, b: NameSet): NameSet {
 	return result;
 }
 
+export class SymSet {
+	items: Symbol[];
+	index: HashSet<Symbol>;
+}
+
+export function createSymSet(): SymSet {
+	return { items: [], index: new HashSet<Symbol>() };
+}
+
+export function symSetContains(ss: SymSet, sym: Symbol | null): boolean {
+	return sym != null && ss.index.has(sym);
+}
+
+export function symSetAdd(ss: SymSet, sym: Symbol): void {
+	if (!ss.index.has(sym)) {
+		ss.index.add(sym);
+		ss.items.push(sym);
+	}
+}
+
 // Generate unique temp variable name: "$result_0", "$match_1", "$iter_2"
 export function freshTemp(ctx: TransformContext, prefix: string): string {
 	const n = ctx.tempCounter;
@@ -91,11 +118,16 @@ export function freshTemp(ctx: TransformContext, prefix: string): string {
 	return "$" + prefix + "_" + n.toString();
 }
 
+export function mintSym(ctx: TransformContext, kind: SymbolKind, name: string, t: Type | null): Symbol {
+	const sym = ctx.checkerCtx != null ? newSym(ctx.checkerCtx, kind, name, t) : makeSymbol(name, kind, t, false);
+	sym.state = SymbolState.Checked;
+	return sym;
+}
+
 // Reference parity (getTemp): create a Symbol for a DRC temp variable.
 // Returns a Symbol with declNode=null — safe to store on VarInfo (no destroy cascade).
 export function freshTempSym(ctx: TransformContext, prefix: string, t: Type | null): Symbol {
-	const name = freshTemp(ctx, prefix);
-	return makeSymbol(name, SymbolKind.Temp, t != null ? t : noneType(), false);
+	return mintSym(ctx, SymbolKind.Temp, freshTemp(ctx, prefix), t != null ? t : noneType());
 }
 
 // Owned long-lived synthetic local. Must NOT be $-prefixed: the DRC injector
@@ -118,4 +150,18 @@ test "a name set keeps first-insertion order and ignores repeats" {
 	assert ns.items[1] == "a";
 	assert nameSetContains(ns, "a");
 	assert !nameSetContains(ns, "c");
+}
+
+test "a symbol set keys by identity, not by spelling, in first-insertion order" {
+	const a = makeSymbol("x", SymbolKind.Variable, null, false);
+	const b = makeSymbol("x", SymbolKind.Variable, null, false);
+	const ss = createSymSet();
+	symSetAdd(ss, b);
+	symSetAdd(ss, a);
+	symSetAdd(ss, b);
+	assert ss.items.length == 2;
+	assert ss.items[0] == b;
+	assert symSetContains(ss, a);
+	assert !symSetContains(ss, makeSymbol("x", SymbolKind.Variable, null, false));
+	assert !symSetContains(ss, null);
 }

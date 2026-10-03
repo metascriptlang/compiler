@@ -10,6 +10,7 @@ import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject } fro
 // color=false: {"key":"value","n":3}  (standard JSON)
 // color=true:  { key: "value", n: 3 } (colored console output, unquoted keys)
 
+@compilerFunc
 export function stringify(value: JsonValue, color: boolean = false): string {
 	if (value == null) return color ? "\x1b[2mnull\x1b[0m" : "null";
 	return match (value.kind) {

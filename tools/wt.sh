@@ -427,7 +427,7 @@ queued_for() {
 }
 
 cmd_land() {
-  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1 async=0 wait=0 qd item name
+  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1 async=0 wait=0 qd item name verdict
   while [ $# -gt 0 ]; do
     case "$1" in
       --also) also+=("${2:?--also needs a command}"); shift ;;
@@ -473,15 +473,28 @@ cmd_land() {
     say "land: wait for the verdict in the background with: ~/nerdtools/claude/tools/wt.sh land $name --wait"
     exit 0
   fi
-  if [ "$gate" -eq 1 ]; then
+  clash=$(main_held "$old" "$(git -C "$w" diff --name-only --no-renames "$old" "$new")")
+  [ -z "$clash" ] || die "land: the main checkout holds uncommitted work on paths this land writes; clear it, then land again (no gate ran):
+$(printf '%s\n' "$clash" | sed 's/^/  /')"
+  verdict="$(git -C "$w" rev-parse --absolute-git-dir)/wt-land-verdict"
+  if [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && [ -f "$verdict" ] \
+    && [ "$(awk '{print $1, $2}' "$verdict")" = "$new $old" ]; then
+    say "land: reusing the green gate of $(awk '{print $3}' "$verdict") for $(git -C "$w" rev-parse --short "$new") on $BASE $(git -C "$MAIN" rev-parse --short "$old")"
+  elif [ "$gate" -eq 1 ]; then
+    rm -f "$verdict"
     (cd "$w" && tools/gate.sh --base "$old") >&2 || die "land: the gate is not green"
+    for cmd in "${also[@]+"${also[@]}"}"; do
+      say "gate: $cmd"
+      (cd "$w" && bash -c "$cmd") >&2 || die "land: gate '$cmd' failed"
+    done
+    [ "${#also[@]}" -gt 0 ] || printf '%s %s %s\n' "$new" "$old" "$(date +%Y-%m-%dT%H:%M:%S)" >"$verdict"
   else
     say "land: --no-gate, tools/gate.sh did not run"
+    for cmd in "${also[@]+"${also[@]}"}"; do
+      say "gate: $cmd"
+      (cd "$w" && bash -c "$cmd") >&2 || die "land: gate '$cmd' failed"
+    done
   fi
-  for cmd in "${also[@]+"${also[@]}"}"; do
-    say "gate: $cmd"
-    (cd "$w" && bash -c "$cmd") >&2 || die "land: gate '$cmd' failed"
-  done
   [ "$(git -C "$w" rev-parse HEAD)" = "$new" ] && [ -z "$(git -C "$w" status --porcelain --untracked-files=no)" ] \
     || die "land: the worktree moved during the gate (HEAD was $(git -C "$w" rev-parse --short "$new"), now $(git -C "$w" rev-parse --short HEAD)$([ -z "$(git -C "$w" status --porcelain --untracked-files=no)" ] || printf ', with uncommitted edits')); the verdict covers neither; land again"
   while :; do
@@ -498,7 +511,7 @@ cmd_land() {
     fi
     paths=$(git -C "$w" diff --name-only --no-renames "$old" "$new")
     clash=$(main_held "$old" "$paths")
-    [ -z "$clash" ] || die "land: the main checkout holds uncommitted work on paths this land writes:
+    [ -z "$clash" ] || die "land: the main checkout holds uncommitted work on paths this land writes; the green gate is recorded, so clear it and land again:
 $(printf '%s\n' "$clash" | sed 's/^/  /')"
     git -C "$MAIN" update-ref -m "wt land $(basename "$w")" "refs/heads/$BASE" "$new" "$old" 2>/dev/null && break
   done

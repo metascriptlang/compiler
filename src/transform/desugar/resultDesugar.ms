@@ -19,16 +19,16 @@
 //   → const $result_0 = f();
 //     if (!$result_0.ok) { return Result.err($result_0.error); }
 
-import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData, CallExprData, MemberExprData, IdentifierData, HiddenDerefData, IfStmtData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData, CallExprData, IfStmtData, Type, TypeKind } from "../../ast/node";
 import { awaitedType, booleanType, noneType, isUnresolvedType, isResult, isMaybeType, getResultOkType, getResultErrType } from "../../checker/types";
-import { makeSymbol, lookupSymbol } from "../../checker/symbol";
+import { makeSymbol } from "../../checker/symbol";
 import { widenVariantToUnion } from "../../checker/fit";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
 import {
 	makeIdentResolved, makeVarDecl, makeBlock, makeCallResolved,
 	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool, makeNull,
-	makeExprStmt, makeTryCatch, makeCatchSym, makeAssign, makeDefaultValue, makeTypedObjectLiteral,
+	makeExprStmt, makeTryCatch, makeCatchSym, makeAssign, makeDefaultValue, makeTypedObjectLiteral, callBuiltinKind,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
@@ -51,13 +51,6 @@ function makeResultMember(sym: Symbol, resType: Type | null, propName: string, l
 		mem.resolvedSym = propSym;
 	}
 	return mem;
-}
-
-// Look up the Result.err symbol from checker context (returns null if unavailable)
-function lookupResultErr(ctx: TransformContext): Symbol {
-	if (ctx.checkerCtx == null) return null as unknown as Symbol;
-	if (ctx.checkerCtx.table == null) return null as unknown as Symbol;
-	return lookupSymbol(ctx.checkerCtx.table, "err");
 }
 
 // ===== Enclosing Function Return Type Tracking =====
@@ -102,24 +95,13 @@ export function lowerResultConstructors(program: Node): Node {
 function rewriteResultCall(node: Node): Node {
 	if (node.kind != NodeKind.CallExpr) return node;
 	const cd = node.data as CallExprData;
-	if (cd.callee.kind != NodeKind.MemberExpr) return node;
-	const md = cd.callee.data as MemberExprData;
-	// Checker wraps class refs in HiddenDeref — unwrap to find Identifier
-	let callerObj = md.object;
-	if (callerObj.kind == NodeKind.HiddenDeref) {
-		callerObj = (callerObj.data as HiddenDerefData).expr;
-	}
-	if (callerObj.kind != NodeKind.Identifier) return node;
-	const id = callerObj.data as IdentifierData;
-	if (id.name != "Result") return node;
-
+	const kind = callBuiltinKind(node);
 	const loc = node.location;
-	const prop = md.property;
 
-	if (prop == "ok") {
+	if (kind == "ResultOk") {
 		return makeResultOk(cd.arguments, node.nodeType!, loc);
 	}
-	if (prop == "err" && cd.arguments.length == 1) {
+	if (kind == "ResultErr" && cd.arguments.length == 1) {
 		return makeResultErr(cd.arguments[0], node.nodeType!, loc);
 	}
 	return node;
@@ -187,7 +169,7 @@ function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node 
 			const fbAssign = makeAssign(fbTarget, tryData.catchVal, loc);
 			const tryBlock = makeBlock([awDecl, makeExprStmt(storeAssign, loc)], loc);
 			const catchBlock = makeBlock([makeExprStmt(fbAssign, loc)], loc);
-			hoisted.push(makeTryCatch(tryBlock, makeCatchSym("$e"), catchBlock, makeBlock([], loc), loc));
+			hoisted.push(makeTryCatch(tryBlock, makeCatchSym(ctx, "$e"), catchBlock, makeBlock([], loc), loc));
 			const ref = makeIdentResolved(sym, loc);
 			ref.nodeType = node.nodeType != null ? node.nodeType : resType;
 			return ref;

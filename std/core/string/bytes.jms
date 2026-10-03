@@ -27,7 +27,7 @@ export function wtf8Cached(s: string): uint8[] {
 @builtin("AsBytes")
 export function asBytes(this s: string): Readonly<Span<uint8>> {
 	const c = wtf8Cached(s);
-	@emit(`return ${c}.slice();`);
+	@emit(`return { base: ${c}.slice(), off: 0, len: ${c}.length };`);
 	unreachable;
 }
 

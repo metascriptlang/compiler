@@ -14,6 +14,13 @@
 
 import { compileToC } from "../helpers";
 
+function declaresArrayOp(c: string, elem: string, op: string, params: string): boolean {
+	for (const line of c.split("\n")) {
+		if (line.startsWith("void " + elem + "__") && line.indexOf("Array" + op + "__") > 0 && line.endsWith(params)) return true;
+	}
+	return false;
+}
+
 test "bug333: a Vec<T> reached only through a tuple element gets its hooks" {
 	const src = `
 struct B333Pt { s: string; n: int32; }
@@ -28,8 +35,8 @@ run();
 	const c = compileToC(src);
 	assert c.ok;
 	if (c.ok) {
-		assert c.value.contains("void B333PtArrayDestroy(B333PtArray* self);");
-		assert c.value.contains("void B333PtArraySink(B333PtArray* dest, B333PtArray* src);");
+		assert declaresArrayOp(c.value, "B333Pt", "Destroy", "Array* self);");
+		assert declaresArrayOp(c.value, "B333Pt", "Sink", "Array* src);");
 	}
 }
 
@@ -47,7 +54,7 @@ run();
 	const c = compileToC(src);
 	assert c.ok;
 	if (c.ok) {
-		assert c.value.contains("void B333QtArrayDestroy(B333QtArray* self);");
-		assert c.value.contains("void B333QtArrayCopy(B333QtArray* dest, B333QtArray* src);");
+		assert declaresArrayOp(c.value, "B333Qt", "Destroy", "Array* self);");
+		assert declaresArrayOp(c.value, "B333Qt", "Copy", "Array* src);");
 	}
 }

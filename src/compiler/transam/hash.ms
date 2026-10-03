@@ -72,7 +72,7 @@ export function taHashKey(key: TaQueryKey): number {
 
 function hS(h: number, s: string): number {
 	if (s == null) return combine(h, 0);
-	return combine(h, taHashString(s));
+	return combine(h, taHashString(s) as number);
 }
 
 function hI(h: number, n: number): number {

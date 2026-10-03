@@ -1,40 +1,44 @@
 // Global Dead Code Elimination — Reachability Analysis
 //
-// Computes an AliveSet of "modulePath:symbolName" keys by walking ASTs
-// starting from roots (main, top-level stmts, test decls, exported symbols).
-// Cross-module references traced via ImportDecl source paths.
+// Computes an AliveSet of symbols by walking ASTs from roots (main, top-level
+// stmts, test decls, exported symbols); symbol-less TypeInfo and hook
+// declarations are still keyed "modulePath:name".
 
 import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, HiddenStdConvData,
-	ExportDeclData, IdentifierData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
+	ExportDeclData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
 	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
 import {
 	AliveSet,
+	CTypeInfoDemand,
 	createAliveSet,
 	aliveSetAdd,
+	aliveSetAddSym,
+	aliveSetHasSym,
 	aliveSetAddModule,
 	aliveSetHas,
+	aliveSetHasDecl,
 	aliveSetHasModule,
 	aliveSetModuleCount,
 } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
-import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
-import { hasFlag, SymbolFlag, initFnName } from "./symbol";
-import { isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion } from "./types";
-import { SymbolKind, Type, CallingConvention } from "../ast/node";
+import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey } from "../codegen/c/types";
+import { hasFlag, SymbolFlag } from "./symbol";
+import { hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance } from "./types";
+import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
-import { dispatchEntryAt, dispatchOverridesFor } from "./context";
+import { lookupCtorDefaults } from "./instantiate";
+import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
 
 export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {
 	if (aliveSet.entries.length == 0) return true;
 	const name = (node.data as FunctionDeclData).fnName;
-	const isLiftedClosure = name.startsWith("$lifted_") || name.startsWith("$fn_");
-	if (isLiftedClosure) return aliveSetHas(aliveSet, modulePath, name);
-	if (name.startsWith("$")) return true;
-	if (name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy")
-		|| name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved") || name.endsWith("RefCellTrace")) return true;
-	return aliveSetHas(aliveSet, modulePath, name);
+	const sym = node.resolvedSym;
+	// $-prefixed functions without a traced routine symbol ($Env_*Destroy etc. DRC hooks) are
+	// referenced by DRC-injected code the walker can't trace — keep them unconditionally alive.
+	if (name.startsWith("$") && !isTracedRoutine(sym)) return true;
+	return aliveSetHasDecl(aliveSet, modulePath, name, sym);
 }
 
 // ===== Global Name Index =====
@@ -72,11 +76,23 @@ function nameIndexLookup(name: string): string {
 let _declHead: HashMap<string, int32> = new HashMap<string, int32>();
 let _declNodes: Node[] = [];
 let _declNext: int32[] = [];
+let _declPaths: string[] = [];
+let _declWalked: boolean[] = [];
+let _symDeclHead: HashMap<Symbol, int32> = new HashMap<Symbol, int32>();
+let _symDeclNext: int32[] = [];
+let _instDeclHead: HashMap<Symbol, int32> = new HashMap<Symbol, int32>();
+let _instDeclNext: int32[] = [];
 
 function declIndexBuild(programs: Node[], paths: string[]): void {
 	_declHead = new HashMap<string, int32>();
 	_declNodes = [];
 	_declNext = [];
+	_declPaths = [];
+	_declWalked = [];
+	_symDeclHead = new HashMap<Symbol, int32>();
+	_symDeclNext = [];
+	_instDeclHead = new HashMap<Symbol, int32>();
+	_instDeclNext = [];
 	const indexed = new HashSet<string>();
 	for (let m = 0; m < programs.length; m += 1) {
 		const modPath = paths[m];
@@ -92,7 +108,16 @@ function declIndexBuild(programs: Node[], paths: string[]): void {
 			const next = _declHead.get(key) ?? -1;
 			_declNodes.push(decl);
 			_declNext.push(next);
-			_declHead.set(key, _declNodes.length - 1);
+			_declPaths.push(modPath);
+			_declWalked.push(false);
+			const at = _declNodes.length - 1;
+			_declHead.set(key, at);
+			const sym = decl.resolvedSym;
+			_symDeclNext.push(sym != null ? (_symDeclHead.get(sym) ?? -1) : -1);
+			if (sym != null) _symDeclHead.set(sym, at);
+			const generic = sym != null ? sym.instantiatedFrom : null;
+			_instDeclNext.push(generic != null ? (_instDeclHead.get(generic) ?? -1) : -1);
+			if (generic != null) _instDeclHead.set(generic, at);
 		}
 	}
 }
@@ -100,6 +125,7 @@ function declIndexBuild(programs: Node[], paths: string[]): void {
 // ===== Visited Set (Set-based for O(1) lookup) =====
 
 let _visitedSet: HashSet<string> = new HashSet<string>();
+let _visitedSyms: HashSet<Symbol> = new HashSet<Symbol>();
 
 function visitedHas(key: string): boolean {
 	return _visitedSet.has(key);
@@ -112,6 +138,7 @@ function visitedAdd(key: string): void {
 // ===== Module-level state (avoids closure capture of value-type arrays/structs) =====
 
 let _aliveSet: AliveSet = createAliveSet();
+let _singleModule = "";
 
 // ===== Core Walker =====
 
@@ -129,9 +156,9 @@ function walkBody(node: Node, modulePath: string): void {
 
 	// Identifier — mark its declaration alive
 	if (k == NodeKind.Identifier) {
-		const id = node.data as IdentifierData;
 		const sym = node.resolvedSym;
-		if (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp)) {
+		if (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp) && sym.modulePath == "") {
+			noteOpUse(sym, modulePath);
 			markAndWalk(modulePath, sym.name);
 			const hookMod = nameIndexLookup(sym.name);
 			if (hookMod != "" && hookMod != modulePath) {
@@ -139,28 +166,19 @@ function walkBody(node: Node, modulePath: string): void {
 			}
 			return;
 		}
-		if (sym != null) {
-			const targetName = sym.name;
-			if (sym.modulePath != "" && sym.modulePath != modulePath) {
-				markAndWalk(sym.modulePath, targetName);
-			} else {
-				markAndWalk(modulePath, targetName);
-			}
-		} else if (id.name.length > 0) {
-			// No resolvedSym: transform-generated or generic-instantiated identifiers.
-			// Try current module first, then use pre-built name index for cross-module.
-			markAndWalk(modulePath, id.name);
-			const crossMod = nameIndexLookup(id.name);
-			if (crossMod != "" && crossMod != modulePath) {
-				markAndWalk(crossMod, id.name);
-			}
-		}
+		if (sym != null) markReferenced(sym, modulePath);
 		return;
 	}
 
 	// CallExpr — walk callee and arguments
 	if (k == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
+		const magic = cd.callee.resolvedSym != null ? cd.callee.resolvedSym.builtinKind : "";
+		if (magic == "BoxRefArray" && cd.arguments.length > 0 && cd.arguments[0].nodeType != null) {
+			markRefArrayCell(cd.arguments[0].nodeType, modulePath);
+		} else if (magic == "PromiseAllFor" && node.nodeType != null) {
+			markPromiseAllResult(node.nodeType, modulePath);
+		}
 		walkBody(cd.callee, modulePath);
 		for (const arg of cd.arguments) {
 			walkBody(arg, modulePath);
@@ -168,32 +186,11 @@ function walkBody(node: Node, modulePath: string): void {
 		return;
 	}
 
-	// NewExpr — class constructor expressions need `<className>_init` alive.
-	// `methodToFunction` transform lifts the ctor body to a top-level
-	// `<className>_init(this, ...)` FunctionDecl AFTER reachability runs,
-	// so the lifted name isn't auto-discoverable here. We seed it explicitly
-	// when a class with `HasConstructor` is constructed: same mark-alive
-	// pattern MemberExpr uses for class methods, but keyed off the ctor's
-	// future synthetic name.
 	if (k == NodeKind.NewExpr) {
 		const nd = node.data as NewExprData;
 		walkBody(nd.newCallee, modulePath);
 		for (const arg of nd.newArguments) {
 			walkBody(arg, modulePath);
-		}
-		if (nd.newCallee.resolvedSym != null) {
-			const classSym = nd.newCallee.resolvedSym;
-			const className = classSym.name;
-			const initName = initFnName(className);
-			const ctorMod = classSym.modulePath != "" ? classSym.modulePath : modulePath;
-			markAndWalk(ctorMod, initName);
-			let gi = node.nodeType;
-			if (gi != null && (gi.kind == TypeKind.Ref || gi.kind == TypeKind.Ptr) && gi.typeReturn != null) gi = gi.typeReturn;
-			if (gi != null && gi.kind == TypeKind.GenericInstance && gi.typeName != "" && gi.typeChildren.length > 0) {
-				const monoName = monoInstanceName(gi);
-				markAndWalk(ctorMod, monoName);
-				markAndWalk(ctorMod, initFnName(monoName));
-			}
 		}
 		markTypeInfoEdge(node, modulePath);
 		return;
@@ -205,6 +202,12 @@ function walkBody(node: Node, modulePath: string): void {
 		markTypeInfoEdge(node, modulePath);
 		walkChildrenGeneric(node, modulePath);
 		return;
+	}
+
+	if (k == NodeKind.VariableDecl && node.nodeType != null && node.nodeType.kind == TypeKind.Ref
+			&& node.nodeType.typeReturn != null && node.nodeType.typeReturn.kind == TypeKind.Array
+			&& isBakeableAggregateConst(node)) {
+		markRefArrayCell(node.nodeType.typeReturn, modulePath);
 	}
 
 	if (k == NodeKind.HiddenSubConv && node.variantSlot > 0) {
@@ -230,25 +233,7 @@ function walkBody(node: Node, modulePath: string): void {
 	if (k == NodeKind.MemberExpr) {
 		const md = node.data as MemberExprData;
 		walkBody(md.object, modulePath);
-		if (node.resolvedSym != null) {
-			const sym2 = node.resolvedSym;
-			const targetName2 = sym2.name;
-			if (sym2.modulePath != "" && sym2.modulePath != modulePath) {
-				markAndWalk(sym2.modulePath, targetName2);
-			} else {
-				markAndWalk(modulePath, targetName2);
-			}
-		} else if (md.property != "") {
-			// No resolvedSym (generic instantiation clears it).
-			// Search all modules for the method — extension methods may be cross-module.
-			// No resolvedSym — use pre-built name index for cross-module extension methods.
-			const crossMod2 = nameIndexLookup(md.property);
-			if (crossMod2 != "") {
-				markAndWalk(crossMod2, md.property);
-			} else {
-				markAndWalk(modulePath, md.property);
-			}
-		}
+		if (node.resolvedSym != null) markReferenced(node.resolvedSym, modulePath);
 		return;
 	}
 
@@ -258,19 +243,37 @@ function walkBody(node: Node, modulePath: string): void {
 	walkChildrenGeneric(node, modulePath);
 }
 
-// Allocation site → <T>TypeInfo edge. The emitted allocation references the
-// type's TypeInfo global, whose initializer references <T>Destroy/<T>Trace —
-// the only AST path to ref-type hooks (msDecref dispatches through TypeInfo
-// at runtime, so no direct call site exists). Mirrors codegen's on-demand
-// TypeInfo emission: mark only when the TypeInfo decl really exists.
-// Array sequence hooks (msStringArray*/msRefArray*/…ArrayDestroy etc.) are
-// per-module static helpers whose demand arises inside codegen (cell TypeInfos
-// name them directly, no AST edge exists). Keep them rooted; the linker strips
-// unreferenced static functions, so dead ones cost nothing. Mirror of
-// isArraySeqHook in codegen/c/declarations.ms — keep in lock-step.
-function isArraySeqHookName(fn: string): boolean {
-	return fn.endsWith("ArrayDestroy") || fn.endsWith("ArrayCopy") ||
-		fn.endsWith("ArraySink") || fn.endsWith("ArrayWasMoved") || fn.endsWith("RefCellTrace");
+function markRefArrayCell(arrT: Type, modulePath: string): void {
+	const key = refArrayCellKey(arrT);
+	if (_aliveSet.typeInfoKeys.has(key)) return;
+	const destroy = refArrayCellOp(arrT, AttachedOp.AttachedDestructor);
+	if (destroy == null) throw new Error(`internal: ref-array cell ${key} is boxed in ${modulePath} before its destroy op was lifted`);
+	const trace = refArrayCellOp(arrT, AttachedOp.AttachedTrace);
+	let owner = _singleModule != "" ? _singleModule : modulePath;
+	if (_singleModule == "") {
+		if (destroy.modulePath != "") owner = destroy.modulePath;
+		if (trace != null) {
+			if (destroy.modulePath != "" && destroy.modulePath != trace.modulePath) {
+				throw new Error(`internal: ref-array cell ${key} has its destroy op in ${destroy.modulePath} and its trace op in ${trace.modulePath}`);
+			}
+			owner = trace.modulePath;
+		}
+	}
+	_aliveSet.typeInfoKeys.add(key);
+	const demand: CTypeInfoDemand = { cell: createRef(arrT), key, owner, cName: "", destroy, trace };
+	_aliveSet.typeInfos.push(demand);
+	aliveSetAddModule(_aliveSet, owner);
+	markReferenced(destroy, owner);
+	if (trace != null) markReferenced(trace, owner);
+}
+
+function markPromiseAllResult(resultType: Type, modulePath: string): void {
+	let collected = awaitedType(resultType);
+	if (collected != null && collected.kind == TypeKind.Ref && collected.typeReturn != null) collected = collected.typeReturn;
+	if (collected == null || collected.kind != TypeKind.Array || collected.typeReturn == null) return;
+	const elem = collected.typeReturn;
+	if (elem.kind != TypeKind.Struct || elem.typeName == "" || !hasAsgnFlag(elem)) return;
+	markReferenced(requireOpByKey(createArray(elem), AttachedOp.AttachedDestructor), modulePath);
 }
 
 // Union narrow/project sites make codegen emit variant Copy/Destroy calls by
@@ -300,8 +303,20 @@ function markUnionHookEdges(t: Type): void {
 	}
 }
 
+// Allocation site → <T>TypeInfo edge. The emitted allocation references the
+// type's TypeInfo global, whose initializer references <T>Destroy/<T>Trace —
+// the only AST path to ref-type hooks (msDecref dispatches through TypeInfo
+// at runtime, so no direct call site exists). Mirrors codegen's on-demand
+// TypeInfo emission: mark only when the TypeInfo decl really exists.
 function markTypeInfoEdge(node: Node, modulePath: string): void {
 	markTypeInfoOf(node.nodeType);
+}
+
+function markTypeInfoHooks(t: Type, modulePath: string): void {
+	const destroy = getAttachedOp(t, AttachedOp.AttachedDestructor);
+	if (destroy != null) markReferenced(destroy, modulePath);
+	const trace = getAttachedOp(t, AttachedOp.AttachedTrace);
+	if (trace != null) markReferenced(trace, modulePath);
 }
 
 function markRematerializedMemberTypeInfo(conv: Type | null): void {
@@ -311,8 +326,8 @@ function markRematerializedMemberTypeInfo(conv: Type | null): void {
 }
 
 function markTypeInfoOf(type: Type | null): void {
-	let t = type;
-	if (t == null) return;
+	if (type == null) return;
+	let t = peelTransparentInstance(type);
 	const nullableRef = unwrapRefNullUnion(t);
 	if (nullableRef != null) t = nullableRef;
 	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) {
@@ -361,6 +376,7 @@ function markTypeInfoOf(type: Type | null): void {
 		markAndWalk(home, tiName);
 	}
 	if (t.kind != TypeKind.Struct) return;
+	markTypeInfoHooks(t, t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : home);
 	let bt = t.typeExtra;
 	let depth = 0;
 	while (bt != null && depth < 64) {
@@ -395,54 +411,117 @@ function markAndWalk(modulePath: string, name: string): void {
 	visitedAdd(key);
 	aliveSetAdd(_aliveSet, modulePath, name);
 
-	// Dispatch bucket edge (Nim cgmeth: a reachable base method makes every
-	// override + its class TypeInfo reachable — the msDisp_* if-chain
-	// references them all regardless of static call sites).
-	const dde = dispatchEntryAt(modulePath, name);
-	if (dde != null && !dde.overloaded) {
-		for (const ov of dispatchOverridesFor(dde.classSym, dde.methodName)) {
-			markAndWalk(ov.sym.modulePath, ov.sym.name);
-			markAndWalk(ov.classSym.modulePath, ov.classSym.name + "TypeInfo");
-		}
-	}
-
 	// Walk ALL declarations with this name (handles overloaded functions)
 	let di = _declHead.get(key) ?? -1;
 	while (di >= 0) {
-		const found = _declNodes[di];
+		walkDecl(di);
 		di = _declNext[di];
-		walkBody(found, modulePath);
-		// When a class becomes alive, also mark `<className>_init` alive —
-		// `methodToFunction` lifts the ctor body into a top-level
-		// FunctionDecl with that name and removes the ConstructorDecl from
-		// classBody, so the name is not discoverable from the class node.
-		// Every class carries an `_init` (ctorLower synthesizes one when
-		// the source has no constructor), and marking a name that has no
-		// declaration is inert. Required for both `new C(...)` and
-		// `super(args)` from a child class — which codegen lowers to
-		// `<Parent>_init(this, args)`, so any reachable parent in the
-		// inheritance chain needs its `_init` alive too.
-		if (found.kind == NodeKind.ClassDecl) {
-			// Recursive: markAndWalk so the lifted `_init` body is also
-			// visited. The ctor body may contain `super(args)` whose
-			// parent class needs to be reached + that parent's `_init`
-			// chained alive too. Without recursion, A → B → C inheritance
-			// chains stop at the leaf and parent `_init`s drop out.
-			markAndWalk(modulePath, initFnName(name));
-		}
-		// Actors: actorLower erased the NewExpr before this walk runs, so
-		// no allocation-site edge fires — but a spawned actor's TypeInfo
-		// is always demanded. Marking it walks its initializer, which
-		// marks Destroy/Trace via the Identifier fallback.
-		const isActorOrigin = found.kind == NodeKind.ActorDecl
-			|| (found.kind == NodeKind.ClassDecl && found.resolvedSym != null
-				&& found.resolvedSym.symbolKind == SymbolKind.Actor);
-		if (isActorOrigin) {
-			const acName = hookBaseCNameOfSym(name, found.resolvedSym);
-			markAndWalk(modulePath, name + "TypeInfo");
-			markAndWalk(modulePath, acName + "Destroy");
-			markAndWalk(modulePath, acName + "Trace");
-		}
+	}
+}
+
+// Dispatch bucket edge (Nim cgmeth: a reachable base method makes every
+// override + its class TypeInfo reachable — the msDisp_* if-chain
+// references them all regardless of static call sites).
+function markDispatchOverrides(dde: DispMethodEntry | null): void {
+	if (dde == null || dde.overloaded) return;
+	for (const ov of dispatchOverridesFor(dde.classSym, dde.methodName)) {
+		markSymAndWalk(ov.sym, ov.sym.modulePath);
+		markAndWalk(ov.classSym.modulePath, ov.classSym.name + "TypeInfo");
+	}
+}
+
+function opHome(sym: Symbol, user: string): string {
+	if (sym.modulePath != "") return sym.modulePath;
+	let home = "";
+	let di = _symDeclHead.get(sym) ?? -1;
+	while (di >= 0) {
+		if (_declPaths[di] == user) return user;
+		if (home == "") home = _declPaths[di];
+		di = _symDeclNext[di];
+	}
+	return home;
+}
+
+function noteOpUse(sym: Symbol, user: string): void {
+	if (!hasFlag(sym, SymbolFlag.GeneratedOp)) return;
+	const home = opHome(sym, user);
+	if (home == "" || home == user) return;
+	const users = _aliveSet.foreignOps.get(sym);
+	if (users == null) _aliveSet.foreignOps.set(sym, [user]);
+	else if (!users.includes(user)) users.push(user);
+}
+
+function markReferenced(sym: Symbol, modulePath: string): void {
+	noteOpUse(sym, modulePath);
+	markSymAndWalk(sym, modulePath);
+	for (const overload of sym.overloads) markSymAndWalk(overload, modulePath);
+}
+
+function markSymAndWalk(sym: Symbol, modulePath: string): void {
+	if (_visitedSyms.has(sym)) return;
+	_visitedSyms.add(sym);
+	aliveSetAddSym(_aliveSet, sym);
+	const home = sym.modulePath != "" ? sym.modulePath : modulePath;
+	aliveSetAddModule(_aliveSet, home);
+	markDispatchOverrides(dispatchEntryFor(sym));
+	let di = _symDeclHead.get(sym) ?? -1;
+	if (di < 0 && sym.instantiatedFrom != null) {
+		markInstanceCopy(sym.instantiatedFrom, sym.name);
+		return;
+	}
+	while (di >= 0) {
+		walkDecl(di);
+		di = _symDeclNext[di];
+	}
+}
+
+function markInstanceCopy(generic: Symbol, name: string): void {
+	let di = _instDeclHead.get(generic) ?? -1;
+	while (di >= 0) {
+		if (_declNodes[di].resolvedSym.name == name) walkDecl(di);
+		di = _instDeclNext[di];
+	}
+}
+
+function markClassInit(classDecl: Node, modulePath: string, className: string): void {
+	const entry = classDecl.resolvedSym != null ? lookupCtorDefaults(classDecl.resolvedSym, className) : null;
+	if (entry != null && entry.initSym != null) markSymAndWalk(entry.initSym, modulePath);
+}
+
+function markRootDecl(decl: Node, modulePath: string): void {
+	if (decl.resolvedSym != null) markSymAndWalk(decl.resolvedSym, modulePath);
+	else markAndWalk(modulePath, topDeclName(decl));
+}
+
+function walkDecl(di: int32): void {
+	if (_declWalked[di]) return;
+	_declWalked[di] = true;
+	const found = _declNodes[di];
+	const modulePath = _declPaths[di];
+	const name = topDeclName(found);
+	if (found.resolvedSym != null) {
+		aliveSetAddSym(_aliveSet, found.resolvedSym);
+		markDispatchOverrides(dispatchEntryFor(found.resolvedSym));
+	} else {
+		aliveSetAdd(_aliveSet, modulePath, name);
+	}
+	aliveSetAddModule(_aliveSet, modulePath);
+	if (found.nodeType != null && hasGenericParams(found.nodeType)) return;
+	walkBody(found, modulePath);
+	// Codegen lowers `super(args)` to `<Parent>_init(this, args)` with no AST
+	// edge, so a live class keeps its init alive, as `new C(...)` needs.
+	if (found.kind == NodeKind.ClassDecl) markClassInit(found, modulePath, name);
+	// Actors: actorLower erased the NewExpr before this walk runs, so
+	// no allocation-site edge fires — but a spawned actor's TypeInfo
+	// is always demanded.
+	const isActorOrigin = found.kind == NodeKind.ActorDecl
+		|| (found.kind == NodeKind.ClassDecl && found.resolvedSym != null
+			&& found.resolvedSym.symbolKind == SymbolKind.Actor);
+	if (isActorOrigin) {
+		const acName = hookBaseCNameOfSym(name, found.resolvedSym);
+		markAndWalk(modulePath, name + "TypeInfo");
+		markAndWalk(modulePath, acName + "Destroy");
+		markAndWalk(modulePath, acName + "Trace");
 	}
 }
 
@@ -475,9 +554,20 @@ function topDeclName(decl: Node): string {
 
 const ANY_EXPORT = "*";
 
+function declaredNameAlive(modulePath: string, name: string): boolean {
+	if (aliveSetHas(_aliveSet, modulePath, name)) return true;
+	let di = _declHead.get(modulePath + ":" + name) ?? -1;
+	while (di >= 0) {
+		const sym = _declNodes[di].resolvedSym;
+		if (sym != null && aliveSetHasSym(_aliveSet, sym)) return true;
+		di = _declNext[di];
+	}
+	return false;
+}
+
 function reachesAliveThroughReexports(graph: ModuleGraph, modulePath: string, name: string, memo: HashMap<string, boolean>): boolean {
 	const anyName = name == ANY_EXPORT;
-	if (anyName ? aliveSetHasModule(_aliveSet, modulePath) : aliveSetHas(_aliveSet, modulePath, name)) return true;
+	if (anyName ? aliveSetHasModule(_aliveSet, modulePath) : declaredNameAlive(modulePath, name)) return true;
 	const key = modulePath + ":" + name;
 	const known = memo.get(key);
 	if (known != null) return known;
@@ -555,12 +645,16 @@ export function computeAliveSet(
 	isTest: boolean,
 	graph: ModuleGraph,
 	exportRootModules: string[] = [],
-	exportRootFunctions: string[] = [],
+	exportRootFunctions: Symbol[] = [],
 ): AliveSet {
-	const rootFunctions = new HashSet<string>();
-	for (const key of exportRootFunctions) rootFunctions.add(key);
+	const rootFunctions = new HashSet<Symbol>();
+	for (const sym of exportRootFunctions) {
+		rootFunctions.add(sym);
+		for (const overload of sym.overloads) rootFunctions.add(overload);
+	}
 	_aliveSet = createAliveSet();
 	_visitedSet = new HashSet<string>();
+	_visitedSyms = new HashSet<Symbol>();
 	nameIndexBuild(programs, paths);
 	declIndexBuild(programs, paths);
 	aliveSetAddModule(_aliveSet, entryPath);
@@ -589,7 +683,7 @@ export function computeAliveSet(
 			if (modulePath == entryPath && bare.kind == NodeKind.FunctionDecl) {
 				const fd = bare.data as FunctionDeclData;
 				if (fd.fnName == "main") {
-					markAndWalk(modulePath, "main");
+					markRootDecl(bare, modulePath);
 					continue;
 				}
 			}
@@ -599,33 +693,25 @@ export function computeAliveSet(
 				if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.FunctionDecl) {
 					const fd = ed.exportedDecl.data as FunctionDeclData;
 					if (fd.fnName == "main") {
-						markAndWalk(modulePath, "main");
+						markRootDecl(ed.exportedDecl, modulePath);
 						continue;
 					}
 				}
 			}
 
 			// Root 2: Compiler-generated functions — always alive.
-			// Must match isDeclAlive exemptions in codegen/c/declarations.ms exactly:
-			// $prefix (lambda lifting), =prefix (operators), __prefix (builtinLower),
-			// DRC lifecycle suffixes, generic instantiations (__ in middle of name).
+			// Must match functionDeclIsAlive exemptions above exactly:
+			// $prefix without a traced routine symbol (DRC hooks), =prefix (operators),
+			// __prefix (builtinLower), DRC lifecycle suffixes, generic instantiations (__ in middle of name).
 			if (bare.kind == NodeKind.FunctionDecl) {
 				const fd2 = bare.data as FunctionDeclData;
 				const fn = fd2.fnName;
-				if (fn.length > 0 && fn.slice(0, 1) == "$") {
-					const isLifted = (fn.length >= 8 && fn.slice(0, 8) == "$lifted_")
-						|| (fn.length >= 4 && fn.slice(0, 4) == "$fn_");
-					if (!isLifted) {
-						walkBody(bare, modulePath);
-					}
-					continue;
-				}
-				if (isArraySeqHookName(fn)) {
+				if (fn.length > 0 && fn.slice(0, 1) == "$" && !isTracedRoutine(bare.resolvedSym)) {
 					walkBody(bare, modulePath);
 					continue;
 				}
-				if (rootFunctions.has(modulePath + ":" + fn)) {
-					markAndWalk(modulePath, fn);
+				if (bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
+					markSymAndWalk(bare.resolvedSym, modulePath);
 					continue;
 				}
 			}
@@ -651,29 +737,62 @@ export function computeAliveSet(
 			}
 
 			if (exportsCSymbol(bare)) {
-				markAndWalk(modulePath, getDeclName(bare));
+				markRootDecl(topDecl(bare)!, modulePath);
 				continue;
 			}
 
 			if ((modulePath == entryPath || exportRootModules.includes(modulePath)) && isExportedDecl(bare)) {
-				const name = getDeclName(bare);
-				if (name != "") {
-					markAndWalk(modulePath, name);
+				const decl = topDecl(bare);
+				if (decl != null) {
+					markRootDecl(decl, modulePath);
+				} else {
+					const name = getDeclName(bare);
+					if (name != "") markAndWalk(modulePath, name);
 				}
 			}
 		}
 	}
 
 	markImportedModulesAlive(graph);
+	return takeReachability();
+}
 
+function takeReachability(): AliveSet {
 	const result = _aliveSet;
 	_aliveSet = createAliveSet();
+	_singleModule = "";
 	_visitedSet = new HashSet<string>();
+	_visitedSyms = new HashSet<Symbol>();
 	_nameIndex = new HashMap<string, string>();
 	_declHead = new HashMap<string, int32>();
 	_declNodes = [];
 	_declNext = [];
+	_declPaths = [];
+	_declWalked = [];
+	_symDeclHead = new HashMap<Symbol, int32>();
+	_symDeclNext = [];
+	_instDeclHead = new HashMap<Symbol, int32>();
+	_instDeclNext = [];
 	return result;
+}
+
+export function collectModuleTypeInfoDemands(program: Node, modulePath: string): AliveSet {
+	_aliveSet = createAliveSet();
+	_visitedSet = new HashSet<string>();
+	_visitedSyms = new HashSet<Symbol>();
+	_singleModule = modulePath;
+	nameIndexBuild([program], [modulePath]);
+	declIndexBuild([program], [modulePath]);
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const decl = topDecl(stmt);
+		if (decl != null && decl.nodeType != null && hasGenericParams(decl.nodeType)) continue;
+		walkBody(stmt, modulePath);
+	}
+	const walked = takeReachability();
+	const demands = createAliveSet();
+	demands.typeInfos = walked.typeInfos;
+	demands.typeInfoKeys = walked.typeInfoKeys;
+	return demands;
 }
 
 // Check if a statement is a side-effecting top-level statement (not a declaration)
@@ -724,6 +843,11 @@ function bakeableEmptyArrayLiteral(init: Readonly<Node>): boolean {
 	if (init.resolvedSym == null || init.resolvedSym.builtinKind != "BoxRefArray") return false;
 	if (cd.arguments.length != 1) return false;
 	return bakeableEmptyArrayLiteral(cd.arguments[0]);
+}
+
+// A routine reached only through its references; a DRC hook's references are injected later.
+export function isTracedRoutine(sym: Symbol | null): boolean {
+	return sym != null && sym.symbolKind == SymbolKind.Function && !hasFlag(sym, SymbolFlag.GeneratedOp);
 }
 
 export function isClosureThunkConv(node: Readonly<Node>): boolean {

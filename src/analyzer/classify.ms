@@ -6,13 +6,13 @@
 // The RcInfo result carries enough info to emit the correct AST calls.
 
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isPrimitiveUnionMember, isCountedRef, isUncountedPtrElement } from "../checker/types";
-import { hasFlag, SymbolFlag } from "../checker/symbol";
+import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
 import { attachedOpSym } from "../transform/util";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp } from "../ast/node";
 import { canFormAcycle } from "../transform/cycles";
 import { monoInstanceName } from "../monomorphize/registry";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, hookBaseCName, anonUnionCName, hashToBase36, typeKey } from "../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, anonUnionCName, hashToBase36, typeKey, requireOpByKey, hookPrototype, setOpByKey, resetHookSyms } from "../codegen/c/types";
 
 // ===== RC Classification Kind =====
 
@@ -65,6 +65,16 @@ function makeRcInfo(kind: RcKind, typeName: string, destroy: string, copy: strin
 	};
 }
 
+function makeOpsInfo(kind: RcKind, typeName: string, t: Type, seqLike: boolean): RcInfo {
+	return {
+		rcKind: kind, typeName, needsCleanup: true, seqLike,
+		destroyFn: requireOpByKey(t, AttachedOp.AttachedDestructor),
+		copyFn: requireOpByKey(t, AttachedOp.AttachedAsgn),
+		wasMovedFn: requireOpByKey(t, AttachedOp.AttachedWasMoved),
+		sinkFn: requireOpByKey(t, AttachedOp.AttachedSink),
+	};
+}
+
 // ===== Array Subclassification =====
 // Reference parity: use hasAsgnFlag (propagated at type creation) instead of runtime element inspection.
 
@@ -85,16 +95,12 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	}
 	// Nested array elements (e.g. string[][]) — inner arrays are value-type structs.
 	// Reference: forallElements recursively calls fillBody per element.
-	if (elem.kind == TypeKind.Array) {
-		const n = arrayCTypeName(t);
-		return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
-	}
+	if (elem.kind == TypeKind.Array) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
 	if (elem.kind == TypeKind.Tuple) {
 		if (!classifyType(elem, ctx).needsCleanup) {
 			return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 		}
-		const n = arrayCTypeName(t);
-		return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
+		return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
 	}
 	// Named struct/union elements — use hasAsgnFlag to decide if per-type hooks
 	// are needed. Reference parity: fillBody checks tfHasAsgn regardless of
@@ -113,19 +119,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		// Without this, arrays of a mono'd generic struct (Entry__string[]) misclassify as non-RC
 		// → no per-element destroy → leak on field-reassign/scope-exit.
 		const bodyAsgn = elem.kind == TypeKind.GenericInstance && elem.typeReturn != null && hasAsgnFlag(elem.typeReturn);
-		if (hasAsgnFlag(structElem) || bodyAsgn) {
-			// Mangled name for GenericInstance so array hook names match
-			// destructorLifting's emitted per-element hooks (unwrapGenericInstance)
-			// and codegen's struct name (types.ms:582-588).
-			let elemName = "";
-			if (elem.kind == TypeKind.GenericInstance) {
-				elemName = monoInstanceName(elem);
-			} else {
-				elemName = elem.typeName != "" ? elem.typeName : structElem.typeName;
-			}
-			const n = elemName + "Array";
-			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
-		}
+		if (hasAsgnFlag(structElem) || bodyAsgn) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
 		// POD elements: no per-element hooks, but the seq payload is still owned —
 		// Nim lifts =destroy/=copy for every tySequence regardless of element
 		// triviality (liftdestructors fillSeqOp). The generic macros size the
@@ -134,10 +128,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	}
 	if (elem.kind == TypeKind.Union && elem.typeName == "" && unwrapRefNullUnion(elem) == null
 			&& !isAllStringLiteralUnion(elem)) {
-		if (anonUnionOwnsRc(elem, ctx)) {
-			const n = arrayCTypeName(t);
-			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
-		}
+		if (anonUnionOwnsRc(elem, ctx)) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
 	if (isUncountedPtrElement(elem)) {
@@ -152,8 +143,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		// Ref-array elements keep their per-type struct (codegen elemIsRefArray, types.ms:1270)
 		// instead of collapsing to msRefArray, so the hooks must match that name.
 		if (elem.kind == TypeKind.Ref && elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Array) {
-			const n = arrayCTypeName(t);
-			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
+			return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
 		}
 		if (isAtomicRef(elem)) {
 			return makeRcInfo(RcKind.Named, "", "msArrayAtomicRefDestroy", "msArrayAtomicRefCopy", "msArrayRefWasMoved", "msArrayAtomicRefCopy", true);
@@ -225,8 +215,7 @@ function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 	if (resolvedName != "") {
 		// Reference parity: hasAsgnFlag checks propagated flag (set at type creation)
 		if (hasAsgnFlag(t)) {
-			const n = hookBaseCName(resolvedName, t, ctx.checkerCtx);
-			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", false);
+			return makeOpsInfo(RcKind.Named, resolvedName, t, false);
 		}
 	}
 	return noRcInfo();
@@ -287,7 +276,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				const bodyHasAsgn = t.typeReturn != null && hasAsgnFlag(t.typeReturn);
 				if (hasAsgnFlag(t) || bodyHasAsgn) {
 					const mangled = monoInstanceName(t);
-					return makeRcInfo(RcKind.Named, mangled, mangled + "Destroy", mangled + "Copy", mangled + "WasMoved", mangled + "Sink", false);
+					return makeOpsInfo(RcKind.Named, mangled, t, false);
 				}
 			}
 			return noRcInfo();
@@ -335,19 +324,18 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				return makeRcInfo(RcKind.String, "", "msStringDecref", "msStringCopy", "msStringWasMoved", "msStringSink", false);
 			}
 			if (t.typeName != "" && hasAsgnFlag(t)) {
-				const un = hookBaseCName(t.typeName, t, ctx.checkerCtx);
-				return makeRcInfo(RcKind.Named, un, un + "Destroy", un + "Copy", un + "WasMoved", un + "Sink", false);
+				return makeOpsInfo(RcKind.Named, t.typeName, t, false);
 			}
 			if (t.typeName == "" && anonUnionOwnsRc(t, ctx)) {
 				const an = anonUnionCName(t);
-				return makeRcInfo(RcKind.Named, an, an + "Destroy", an + "Copy", an + "WasMoved", an + "Sink", false);
+				return makeOpsInfo(RcKind.Named, an, t, false);
 			}
 			return noRcInfo();
 		},
 		TypeKind.SizedArray => {
 			if (!classifyType(t.typeReturn, ctx).needsCleanup) return noRcInfo();
 			const sn = sizedArrayHookName(t);
-			return makeRcInfo(RcKind.Named, sn, sn + "Destroy", sn + "Copy", sn + "WasMoved", sn + "Sink", false);
+			return makeOpsInfo(RcKind.Named, sn, t, false);
 		},
 		TypeKind.Tuple => {
 			// RC tuples get first-class named hooks (destructorLifting ensureTupleHooks); the
@@ -358,8 +346,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				if (classifyType(child, ctx).needsCleanup) { hasRc = true; }
 			}
 			if (!hasRc) return noRcInfo();
-			const n = tupleTypeName(t);
-			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", false);
+			return makeOpsInfo(RcKind.Named, tupleTypeName(t), t, false);
 		},
 		TypeKind.Unknown => makeRcInfo(RcKind.Ref, "", "msDecrefCyclic", "msIncrefCyclic", "msPtrWasMoved", "", false),
 		_ => noRcInfo(),
@@ -507,9 +494,22 @@ test "function → Closure" {
 	assert (info.destroyFn as Symbol).name == "msClosureDestroy";
 }
 
+function liftTestOps(t: Type, n: string): Type {
+	resetHookSyms();
+	const destroy = hookPrototype(n + "Destroy", null);
+	setFlag(destroy, SymbolFlag.DestroyOp);
+	const wasMoved = hookPrototype(n + "WasMoved", null);
+	setFlag(wasMoved, SymbolFlag.WasMovedOp);
+	setOpByKey(t, AttachedOp.AttachedDestructor, destroy);
+	setOpByKey(t, AttachedOp.AttachedAsgn, hookPrototype(n + "Copy", null));
+	setOpByKey(t, AttachedOp.AttachedWasMoved, wasMoved);
+	setOpByKey(t, AttachedOp.AttachedSink, hookPrototype(n + "Sink", null));
+	return t;
+}
+
 test "named object with managed field → Named" {
 	const ctx = createTransformContext();
-	const info = classifyType(createStruct("Token", ["value"], [stringType()], false), ctx);
+	const info = classifyType(liftTestOps(createStruct("Token", ["value"], [stringType()], false), "Token"), ctx);
 	assert info.rcKind == RcKind.Named;
 	assert info.needsCleanup;
 	assert (info.destroyFn as Symbol).name == "TokenDestroy";
@@ -622,7 +622,8 @@ test "binary expr is NOT fresh" { assert !isFreshExpr(NodeKind.BinaryExpr); }
 // test — the registry is process-global and keys by structural hash.
 test "nameless anon struct with RC field → owned msAnon hooks" {
 	const ctx = createTransformContext();
-	const info = classifyType(createStruct("", ["solo"], [stringType()], false), ctx);
+	const solo = createStruct("", ["solo"], [stringType()], false);
+	const info = classifyType(liftTestOps(solo, anonTypeName(solo)), ctx);
 	assert info.rcKind == RcKind.Named;
 	assert info.needsCleanup;
 	assert info.typeName.startsWith("msAnon_");

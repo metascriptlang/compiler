@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName } from "./types";
+import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -329,7 +329,8 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	source = peelTransparentInstance(source);
 	target = peelTransparentInstance(target);
 	if (isReadonlyView(source) && !isReadonlyView(target)
-			&& (target.kind == TypeKind.Ref || target.kind == TypeKind.Array || target.kind == TypeKind.Span)) return false;
+			&& (target.kind == TypeKind.Ref || target.kind == TypeKind.Array || target.kind == TypeKind.Span
+				|| target.kind == TypeKind.Ptr)) return false;
 
 	// Never is the bottom type — assignable TO everything. After exhaustive
 	// narrowing (all union variants handled), the residual type is never.
@@ -479,14 +480,12 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		};
 	}
 
-	// Numeric widening: any numeric type assignable to Number
 	if (isNumeric(source) && target.kind == TypeKind.Number) {
-		return true;
+		return !numericConvRefuses(source, target);
 	}
 
-	// Integer → float64 widening (lossless for int32 range); Number is the same C double
 	if ((isIntegerType(source) || source.kind == TypeKind.Number) && target.kind == TypeKind.Float64) {
-		return true;
+		return !numericConvRefuses(source, target);
 	}
 
 	// Ref<T> ↔ Ptr<T>: both are pointer types, interchangeable when inner types match.
@@ -647,7 +646,7 @@ export function needsStdConv(source: Type, target: Type): boolean {
 
 export function convertsImplicitly(source: Type, target: Type): boolean {
 	if (source.kind == TypeKind.Struct && target.kind == TypeKind.Union) return promotesToNullablePtr(source, target);
-	if (refusesIntConv(source, target)) return false;
+	if (numericConvRefuses(source, target)) return false;
 	return needsStdConv(source, target);
 }
 
@@ -664,9 +663,54 @@ function integerWidth(t: Type): int32 {
 	};
 }
 
+export function intRangeContained(source: Type, target: Type): boolean {
+	if (isUnsignedIntegerType(source) != isUnsignedIntegerType(target)) {
+		return isUnsignedIntegerType(source) && integerWidth(target) > integerWidth(source);
+	}
+	return integerWidth(source) <= integerWidth(target);
+}
+
 export function refusesIntConv(source: Type, target: Type): boolean {
 	if (!isIntegerType(source) || !isIntegerType(target) || source.kind == target.kind) return false;
-	return isUnsignedIntegerType(source) != isUnsignedIntegerType(target) || integerWidth(source) > integerWidth(target);
+	return !intRangeContained(source, target);
+}
+
+export function intExactInFloat(source: Type, target: Type): boolean {
+	if (!isIntegerType(source)) return false;
+	if (target.kind == TypeKind.Float32) return integerWidth(source) <= 16;
+	if (target.kind == TypeKind.Float64 || target.kind == TypeKind.Number) return integerWidth(source) <= 32;
+	return false;
+}
+
+export function numericConvRefuses(source: Type, target: Type): boolean {
+	if ((target.kind == TypeKind.Sink || target.kind == TypeKind.Lent) && target.typeReturn != null) return numericConvRefuses(source, target.typeReturn);
+	if (refusesIntConv(source, target)) return true;
+	if (isIntegerType(source) && !isIntegerType(target)
+		&& (isFloatType(target) || target.kind == TypeKind.Number)) {
+		return !intExactInFloat(source, target);
+	}
+	if (isFloatType(source) || source.kind == TypeKind.Number) {
+		if (isIntegerType(target)) return true;
+		if (target.kind == TypeKind.Float32
+			&& (source.kind == TypeKind.Float64 || source.kind == TypeKind.Number)) return true;
+	}
+	return false;
+}
+
+export function numericRefusalReason(from: Type, to: Type): string {
+	if ((to.kind == TypeKind.Sink || to.kind == TypeKind.Lent) && to.typeReturn != null) return numericRefusalReason(from, to.typeReturn);
+	if (isIntegerType(from) && isIntegerType(to)) {
+		if (isUnsignedIntegerType(from) == isUnsignedIntegerType(to)) return "narrows";
+		if (isUnsignedIntegerType(from)) return "may exceed the target's maximum";
+		return "changes signedness";
+	}
+	if (isIntegerType(from)) {
+		return "may lose integer precision above 2^" + (to.kind == TypeKind.Float32 ? "24" : "53");
+	}
+	if (isIntegerType(to)) {
+		return "may drop a fractional part or fall outside its range";
+	}
+	return "may lose precision (float32 has a 24-bit mantissa)";
 }
 
 // Repr comparison for ONE slot (param or return) of a function signature.
@@ -912,12 +956,19 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 	if (!isReadonlyView(src) || isReadonlyView(dst)) return false;
 	if (src.kind == TypeKind.Union && dst.kind != TypeKind.Union) return false;
 	return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Array || dst.kind == TypeKind.Span
-		|| dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union
+		|| dst.kind == TypeKind.Ptr || dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union
 		|| dst.kind == TypeKind.Unknown;
 }
 
 export function sameNominal(a: Type, b: Type): boolean {
-	if (a.sym != null && b.sym != null) return a.sym == b.sym;
+	if (a.sym != null && b.sym != null) {
+		if (a.sym == b.sym) return true;
+		return a.sym.modulePath != "" && a.sym.modulePath == b.sym.modulePath
+			&& a.sym.name == b.sym.name && a.sym.symbolKind == b.sym.symbolKind
+			&& a.sym.location.line > 0
+			&& a.sym.location.line == b.sym.location.line
+			&& a.sym.location.column == b.sym.location.column;
+	}
 	return a.typeName != "" && a.typeName == b.typeName;
 }
 
@@ -1162,6 +1213,10 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	}
 	if (isNumeric(formal) && (actual.kind == TypeKind.Number || actual.kind == TypeKind.Float64)) {
 		return TypeRelation.FromLiteral;
+	}
+	if (isIntegerType(actual) && isNumeric(formal) && !isIntegerType(formal)
+		&& !intExactInFloat(actual, formal)) {
+		return TypeRelation.None;
 	}
 	if (isIntegerType(actual) && isNumeric(formal) && !isIntegerType(formal)) {
 		return TypeRelation.Convertible;

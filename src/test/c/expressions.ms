@@ -72,3 +72,9 @@ test "E2E C: 1.0 / 0.0 emits as float division" {
 	assert c.value.contains("1.0 / 0.0");
 	assert !c.value.contains("(1 / 0)");
 }
+
+test "E2E C: an explicit float32 step in a chain of as survives" {
+	const c = compileToC("function a(v: number): number { return (v as float32) as number; }\nconsole.log(a(0.1));\n");
+	assert c.ok;
+	assert c.value.indexOf("(double)((float)") >= 0;
+}

@@ -4,7 +4,7 @@
 // Must run AFTER optionalChain so obj?.prop ?? fallback is already lowered.
 
 import { Node, NodeKind, BinaryExprData, MemberExprData, TypeAssertionData, TypeKind, DeclKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
-import { isMaybeType, unwrapMaybeType, isNumeric, isBoolType, isStringLike, unknownType, createPtr, voidType } from "../../checker/types";
+import { isMaybeType, unwrapMaybeType, peelTransparentInstance, isNumeric, isBoolType, isStringLike, unknownType, createPtr, voidType } from "../../checker/types";
 import { fitJoinedBranch, nullishPayloadType } from "../../checker/fit";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocks } from "../walker";
@@ -61,7 +61,7 @@ function lowerNullish(left: Node, right: Node, loc: SourceLocation, resultType: 
 	// A scalar left operand carries no null, and the lowered test would emit
 	// `double !== NULL`, which is not valid C. TS keeps the expression legal and
 	// its value is the left operand.
-	const leftType = left.nodeType;
+	const leftType = left.nodeType != null ? peelTransparentInstance(left.nodeType) : null;
 	if (leftType != null && !isMaybeType(leftType) && (isNumeric(leftType) || isBoolType(leftType))) {
 		return left;
 	}
@@ -83,8 +83,8 @@ function lowerNullish(left: Node, right: Node, loc: SourceLocation, resultType: 
 	// result type is the UNWRAPPED T, so the then-arm must read x.value — raw x would
 	// mix carrier and payload in the C ternary (and JS backend strips .value back to x).
 	// Nullable fallback keeps both arms in the carrier — no rewrite.
-	const lt = left.nodeType;
-	const rt = right.nodeType;
+	const lt = leftType;
+	const rt = right.nodeType != null ? peelTransparentInstance(right.nodeType) : null;
 	const joined = resultType != null && nullishPayloadType(resultType) == null ? resultType : null;
 	if (lt != null && isMaybeType(lt)
 		&& rt != null && rt.kind != TypeKind.Null && !isMaybeType(rt)) {

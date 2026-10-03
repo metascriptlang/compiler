@@ -1115,6 +1115,11 @@ test "string length in condition" {
 	assert ctx.lastResult.intVal == 1;
 }
 
+test "a catch binding ends with its clause" {
+	const ctx = evalRaiser("let r = 0; try { throw 1; } catch (e) { try { throw 2; } catch (e) { r = r + e; } r = r * 10 + e; } return r;");
+	assert ctx.lastResult.intVal == 21;
+}
+
 test "non-capturing closure" {
 	const ctx = evalRaiser("function lifted(_e) { return 42; } const f = { fn: lifted, env: {} }; return f();");
 	assert ctx.lastResult.intVal == 42;

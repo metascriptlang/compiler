@@ -6,15 +6,15 @@
 //   A. Parsing type annotation strings into Type objects
 //   B. Building proper Function/Object types for collected declarations
 
-import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
-import { markUsedIn, CheckerContext, findExtension, getExtTypeName, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls } from "./context";
+import { markUsedIn, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl } from "./compat";
-import { monoBaseName, monoTypeKey } from "../monomorphize/registry";
+import { buildTypeArgKeys, monoBaseName, monoInstanceNameOf, monoTypeKey } from "../monomorphize/registry";
 
 function anyHasGenericParams(types: Type[]): boolean {
 	for (const t of types) {
@@ -1081,6 +1081,7 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 			NodeKind.TypeAliasDecl => resolveTypeAlias(ctx, node),
 			NodeKind.VariableDecl => resolveVariable(ctx, node),
 			NodeKind.ExternDecl => resolveExtern(ctx, node),
+			NodeKind.MacroDecl => resolveConverterTarget(ctx, node, sym),
 			_ => {},
 		};
 	}
@@ -1098,6 +1099,20 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 
 	// Recursively ensure all overloads are shaped (Demand-Driven Completeness)
 	drainOverloads(sym, ctx);
+}
+
+// The target resolves in the declaring module's scope, with line=0 so an
+// unresolvable annotation adds no diagnostic; such a converter never applies.
+function resolveConverterTarget(ctx: CheckerContext, node: Node, sym: Symbol): void {
+	if (!node.flags.has(NodeFlag.Converter)) return;
+	const d = node.data as MacroDeclData;
+	if (d.macroDeclReturnType == "") return;
+	const t = resolveAnnotation(d.macroDeclReturnType, ctx, 0, 0);
+	if (t == null) return;
+	if (t.kind == TypeKind.Inferred || t.kind == TypeKind.Error || t.kind == TypeKind.None
+		|| t.kind == TypeKind.TypeReference || t.kind == TypeKind.Unknown) return;
+	ctx.converterTargetTypes.set(sym, t);
+	reportDuplicateConverter(ctx, sym, node.location.line, node.location.column);
 }
 
 // Shape every overload hanging off `sym`. Split out so the already-shaped
@@ -1189,10 +1204,19 @@ function substituteGenericParamsInType(rawType: string, paramNames: string[], ar
 // NOTE: Avoids all `let` string variables — only const strings + number let variables.
 // DRC generates msDecref instead of msStringDecref for let string locals in complex functions.
 export function recordGenericTypeInstantiation(baseName: string, genericSym: Symbol | null, args: string[], ctx: CheckerContext): void {
-	const typeArgKey = buildTypeArgKey(args, ctx);
+	const argTypes: Type[] = [];
+	for (const arg of args) {
+		const trimmed = arg.trim();
+		if (trimmed == "") return;
+		const resolved = resolveAnnotation(trimmed, ctx, 0, 0);
+		if (isUnresolvedType(resolved)) return;
+		argTypes.push(resolved);
+	}
+	const typeArgKey = buildTypeArgKeys(argTypes).join("_");
 	const decl = genericSym != null ? genericSym.declNode : null;
-	const instBase = monoBaseName(baseName, genericSym != null ? genericSym.modulePath : "");
-	const mangledName = instBase + "__" + typeArgKey;
+	const owner = genericSym != null ? genericSym.modulePath : "";
+	const instBase = monoBaseName(baseName, owner);
+	const mangledName = monoInstanceNameOf(baseName, owner, argTypes);
 
 	const fieldNamesStr = declFieldNamesJoined(decl);
 	const fieldTypesStr = declFieldTypesJoined(decl);
@@ -1509,19 +1533,6 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 				if (d.fnDefaults != null && d.fnDefaults.length > 0) {
 					overload.defaultParams = d.fnDefaults;
 				}
-				// Update extension fnType cache (secondary — getExtFnType reads sym.symbolType first)
-				const extTypeName2 = getExtTypeName(d.fnFlags);
-				if (extTypeName2 != "" && ctx.extensionRegistry != null) {
-					const ext2 = findExtension(ctx.extensionRegistry, extTypeName2, d.fnName);
-					if (ext2 != null) {
-						// Reference parity: sym is the single source of truth for the type.
-						// Only set fnType as fallback when sym is not available.
-						if (ext2.sym == null) {
-							ext2.fnType = fnType;
-							ext2.sym = overload;
-						}
-					}
-				}
 				return;
 			}
 		}
@@ -1532,19 +1543,6 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	// Copy defaults to primary sym for cross-module availability
 	if (d.fnDefaults != null && d.fnDefaults.length > 0) {
 		sym.defaultParams = d.fnDefaults;
-	}
-	// Reference parity: sym is the single source of truth for the type.
-	// Only set fnType as fallback when sym is not available. Never store the same Type
-	// in both fnType and sym.symbolType — that causes double-decref on ExtensionMethod destruction.
-	const extTypeName = getExtTypeName(d.fnFlags);
-	if (extTypeName != "" && ctx.extensionRegistry != null) {
-		const ext = findExtension(ctx.extensionRegistry, extTypeName, d.fnName);
-		if (ext != null) {
-			if (ext.sym == null) {
-				ext.fnType = fnType;
-				ext.sym = sym;
-			}
-		}
 	}
 }
 

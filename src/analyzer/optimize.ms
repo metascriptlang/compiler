@@ -16,8 +16,8 @@ import {
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
-import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym, runtimeRef } from "../transform/util";
-import { testLoc } from "./inject";
+import { makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym, runtimeRef } from "../transform/util";
+import { testLoc, testFnRef } from "./inject";
 import { testVarSym, symListHas, symListAdd } from "./scope";
 
 
@@ -220,14 +220,14 @@ function makeDestroyCallForTest(v: Symbol): Node {
 
 function makeOtherStmt(): Node {
 	const loc = testLoc();
-	return makeExprStmt(makeIdent("something", loc), loc);
+	return makeExprStmt(makeIdentResolved(testVarSym("something"), loc), loc);
 }
 
 function makeIfElse(cons: Node[], alt: Node[] | null, loc: SourceLocation): Node {
 	return {
 		kind: NodeKind.IfStmt, location: loc,
 		data: {
-			condition: makeIdent("cond", loc), consequent: makeBlock(cons, loc),
+			condition: makeIdentResolved(testVarSym("cond"), loc), consequent: makeBlock(cons, loc),
 			alternate: alt != null ? makeBlock(alt, loc) : null as unknown as Node,
 		},
 	};
@@ -305,7 +305,7 @@ test "if without else → preserve destroy" {
 
 function makeAssignStmt(target: Symbol): Node {
 	const loc = testLoc();
-	return makeExprStmt(makeAssign(makeIdentResolved(target, loc), makeIdent("fresh", loc), loc), loc);
+	return makeExprStmt(makeAssign(makeIdentResolved(target, loc), makeIdentResolved(testVarSym("fresh"), loc), loc), loc);
 }
 
 test "an assignment between wasMoved and destroy keeps the destroy" {
@@ -324,7 +324,7 @@ test "an assignment nested in a block between wasMoved and destroy keeps the des
 test "a read between wasMoved and destroy keeps the destroy" {
 	const loc = testLoc();
 	const x = testVarSym("x");
-	const read = makeExprStmt(makeCall(makeIdent("use", loc), [makeIdentResolved(x, loc)], loc), loc);
+	const read = makeExprStmt(makeCall(testFnRef("use", loc), [makeIdentResolved(x, loc)], loc), loc);
 	const result = optimizeBlock([makeWmCall(x), read, makeDestroyCallForTest(x)]);
 	assert result.length == 3;
 }

@@ -22,13 +22,13 @@ import { createContext as createRaiserContext, load as raiserLoad, execute as ra
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
-import { aliveSetHas, aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
+import { aliveSetHasDecl, aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
 import { collectFreestandingAsync, collectWritableModuleBindings, freestandingAsyncLoc, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
-import { getSimpleTypeDesc, sealHookSyms } from "../codegen/c/types";
+import { getSimpleTypeDesc, sealHookSyms, opCName } from "../codegen/c/types";
 import { sealRuntimeProcs } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
 import { SymbolFlag, hasFlag } from "../checker/symbol";
@@ -41,16 +41,16 @@ import { HcrIndirectModule, hcrFunctions, lowerHcrIndirection } from "../transfo
 import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet, NameSet } from "../transform/context";
-import { setGlobalHookOwners, useHookOwners, typeInfoOwnerMark, typeInfoOwnersFrom, replayTypeInfoOwners } from "../transform/lowering/destructorLifting";
+import { setGlobalHookOwners, hookOwnerMark, hookOwnersFrom, replayHookOwners, typeInfoOwnerMark, typeInfoOwnersFrom, replayTypeInfoOwners } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, preludePackStamp, tryLoadPreludeDeps, setStdGraphDepsSnapshot, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
-import { drainPendingInstances, distinctInstances } from "../checker/instantiate";
+import { drainPendingInstances, distinctInstances, placeInstance } from "../checker/instantiate";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, collectTypeInstanceRows, moduleTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
-import { hookSymMark, hookSymsFrom, replayHookSyms } from "../codegen/c/types";
+import { hookSymMark, hookSymsFrom, replayHookSyms, opMark, opsFrom, replayOps } from "../codegen/c/types";
 import { GenericTypeInstRow, addGenericTypeInstRow } from "../parser/context";
 import { dbLower } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
@@ -578,7 +578,6 @@ interface A2Job {
 	stdPath: string;
 	hcrSlot: int32;
 	hcrModules: HcrIndirectModule[];
-	sharedHookOwners: NameSet;
 	fsAsyncHits: FsAsyncHit[];
 	timers: A2Timers;
 	diagnostics: ModuleError[];
@@ -621,7 +620,9 @@ function programWithInstances(program: Node, instances: Node[] | null): Node {
 function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.ran = true;
 	const typeInfoMark = typeInfoOwnerMark();
+	const ownerMark = hookOwnerMark();
 	const hookMark = hookSymMark();
+	const keyedOpMark = opMark();
 	const opts = job.opts;
 	const modPath = job.modPath;
 	let program = checked;
@@ -658,7 +659,6 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 		}
 	}
 	const hcrSlot = job.hcrSlot;
-	if (opts.isHcr) useHookOwners(hcrSlot >= 0 ? createNameSet() : job.sharedHookOwners);
 	const _tx0 = performance.now();
 	const transformed = transformProgram(comptimeResolved, ctx, false, hcrSlot >= 0);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
@@ -673,7 +673,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const _tn0 = performance.now();
 	const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 	job.timers.native = job.timers.native + (performance.now() - _tn0);
-	const hcrResult = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx, job.hcrModules[hcrSlot].moduleId) : nativeTransformed;
+	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx, job.hcrModules[hcrSlot].moduleId) : nativeTransformed;
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
 		else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
@@ -682,7 +682,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	ctx.targetInfo = opts.targetInfo;
 	const _ta0 = performance.now();
 	const preAnErrors = ctx.errors.length;
-	const analyzed = analyzeProgram(hcrResult, ctx);
+	const analyzed = analyzeProgram(hcrLifted, ctx);
 	if (ctx.errors.length > preAnErrors) {
 		for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
 			const e = ctx.errors[ei];
@@ -695,7 +695,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 	job.timers.lower = job.timers.lower + (performance.now() - _tl0);
 	truncateErrors(ctx, errBase);
-	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), hooks: hookSymsFrom(hookMark) };
+	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), owners: hookOwnersFrom(ownerMark), hooks: hookSymsFrom(hookMark), ops: opsFrom(keyedOpMark) };
 	return nativeLowered;
 }
 
@@ -1230,7 +1230,7 @@ function unitProgramAt(paths: string[], programs: Node[], path: string): Node | 
 	return null;
 }
 
-function routeInstances(order: Node[], programOf: (path: string) => Node | null, place: boolean, homes: HashMap<Node, string> | null): HashMap<string, Node[]> {
+function routeInstances(order: Node[], programOf: (path: string) => Node | null, place: boolean, homes: HashMap<Node, string> | null, classesBesideGeneric: boolean = false): HashMap<string, Node[]> {
 	const grouped = new HashMap<string, Node[]>();
 	const homeOrder: string[] = [];
 	for (const instNode of order) {
@@ -1254,15 +1254,15 @@ function routeInstances(order: Node[], programOf: (path: string) => Node | null,
 			const sym = instNode.resolvedSym!;
 			if (instNode.nodeType == null && sym.symbolType != null) instNode.nodeType = sym.symbolType;
 			if (instNode.kind == NodeKind.FunctionDecl) sym.modulePath = home;
-			if (place) (program.data as ProgramData).programStmts.push(instNode);
+			if (place) placeInstance((program.data as ProgramData).programStmts, instNode, classesBesideGeneric);
 		}
 		byHome.set(home, placed);
 	}
 	return byHome;
 }
 
-function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[]): void {
-	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true, null);
+function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[], classesBesideGeneric: boolean = false): void {
+	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true, null, classesBesideGeneric);
 }
 
 function graphCheckedModule(graph: ModuleGraph, modPath: string, mod: Module, opts: CliOptions): { program: Node, ctx: CheckerContext } {
@@ -1391,7 +1391,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		unitCtxs.push(ctx);
 	}
 
-	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
+	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs, true);
 
 	// Phase 2 — backend transform + codegen
 	let anyTopLevelAwait = false;
@@ -1863,26 +1863,49 @@ function hcrReloadHandlers(program: Node | null, flag: SymbolFlag): string[] {
 	return names;
 }
 
-function hcrRootFunctions(modules: HcrIndirectModule[], processed: ProcessedModule[]): string[] {
-	const roots: string[] = [];
-	for (const module of modules) {
-		for (const unit of processed) {
-			if (unit.modPath != module.modulePath) continue;
-			for (const stmt of (unit.program.data as ProgramData).programStmts) {
-				const fn = exportedFunctionOf(stmt);
-				if (fn == null || fn.resolvedSym == null) continue;
-				roots.push(unit.modPath + ":" + (fn.data as FunctionDeclData).fnName);
-			}
+function hcrRootFunctions(modulePaths: string[]): Symbol[] {
+	const roots: Symbol[] = [];
+	for (const modPath of modulePaths) {
+		const moduleExports = findModuleExports(graphRegistry, modPath);
+		if (moduleExports == null) continue;
+		for (const info of moduleExports.symbols) {
+			if (info.sym.modulePath != modPath || info.sym.symbolKind != SymbolKind.Function) continue;
+			roots.push(info.sym);
 		}
 	}
 	return roots;
 }
 
-function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[], aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>): void {
+function refuseCoreCallsIntoImageOps(unit: ProcessedModule, imagePaths: string[], aliveSet: Readonly<AliveSet>): void {
+	for (const stmt of (unit.program.data as ProgramData).programStmts) {
+		const op = stmt.kind == NodeKind.FunctionDecl ? stmt.resolvedSym : null;
+		if (op == null) continue;
+		const users = aliveSet.foreignOps.readonlyGet(op);
+		if (users == null) continue;
+		for (const user of users) {
+			if (imagePaths.includes(user)) continue;
+			printDiag(`${error("error")}: internal: HCR core module '${user}' calls '${op.name}', which module '${unit.modPath}' generates in its reloadable image`);
+			throw new Error(BUILD_STOPPED);
+		}
+	}
+}
+
+function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[], aliveSet: Readonly<AliveSet>, facts: CEmissionFacts): void {
+	const imagePaths: string[] = [];
+	for (const module of modules) {
+		imagePaths.push(module.modulePath);
+		facts.hcrModules.add(module.modulePath);
+	}
+	for (const info of facts.typeInfoOrder) {
+		for (const module of modules) {
+			if (info.owner == module.modulePath && !module.typeInfos.includes(info.cName)) module.typeInfos.push(info.cName);
+		}
+	}
 	const owners = new HashMap<string, string>();
 	for (const module of modules) {
 		for (const unit of processed) {
 			if (unit.modPath != module.modulePath) continue;
+			refuseCoreCallsIntoImageOps(unit, imagePaths, aliveSet);
 			for (const fn of hcrFunctions(unit.program, aliveSet, unit.modPath, facts)) {
 				if (!owners.has(fn.symbol) || fn.sourcePath == unit.modPath) owners.set(fn.symbol, module.moduleId);
 			}
@@ -2113,7 +2136,7 @@ interface WatchRun {
 
 function openWatch(entryPath: string, opts: CliOptions, resolveSection: ResolveSection): WatchRun {
 	if (!opts.isHcr) {
-		printDiag(`${error("error")}: --watch needs --hcr: only per-module HCR images keep a module's lowering independent of the others`);
+		printDiag(`${error("error")}: --watch needs --hcr: warm rebuilds are verified against cold builds only for HCR module images`);
 		exit(1);
 	}
 	const replay: string[][] = opts.watchReplay != "" ? readReplay(opts.watchReplay) : [];
@@ -2261,6 +2284,11 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
+// Reference parity: global hook ownership registry shared across all modules.
+// First module to need a type's DRC hooks generates them; others get extern protos.
+// Before the graph check: enum toString ops register during checking, and this resets the op table.
+const sharedHookOwners = createNameSet();
+setGlobalHookOwners(sharedHookOwners);
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
 	applyGcMode(opts);
 	session.moduleCount = graph.loadOrder.length as int32;
@@ -2386,12 +2414,8 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	let totalCheckerErrors = 0;
 	// FREESTANDING E01 sites, collected pre-transform in A2, reported post-DCE.
 	const fsAsyncHits: FsAsyncHit[] = [];
-	const fsWritableHits: { modPath: string, source: string, name: string, line: int32, column: int32, message: string }[] = [];
+	const fsWritableHits: { modPath: string, source: string, name: string, sym: Symbol | null, line: int32, column: int32, message: string }[] = [];
 
-	// Reference parity: global hook ownership registry shared across all modules.
-	// First module to need a type's DRC hooks generates them; others get extern protos.
-	const sharedHookOwners = createNameSet();
-	setGlobalHookOwners(sharedHookOwners);
 
 	// PROFILE: sub-phase timings summed across all modules.
 	const a2t: A2Timers = { mono: 0, macro: 0, xform: 0, refine: 0, native: 0, analyze: 0, lower: 0 };
@@ -2516,7 +2540,6 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 			stdPath: config.stdPath,
 			hcrSlot: hcrModulePaths.indexOf(modPath) as int32,
 			hcrModules,
-			sharedHookOwners,
 			fsAsyncHits,
 			timers: a2t,
 			diagnostics: [],
@@ -2524,7 +2547,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 			typeInstances: typeRowsOf.get(modPath) ?? noTypeRows,
 			cloneInput: session.keep,
 			ran: false,
-			claims: { typeInfos: [], hooks: [] },
+			claims: { typeInfos: [], owners: [], hooks: [], ops: [] },
 		};
 		let nativeLowered: Node;
 		if (session.keep) {
@@ -2543,7 +2566,9 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 				const claims = session.lowerClaims.get(modPath);
 				if (claims != null) {
 					replayTypeInfoOwners(claims.typeInfos);
+					replayHookOwners(claims.owners);
 					replayHookSyms(claims.hooks);
+					replayOps(claims.ops);
 				}
 				const replay = session.lowerDiagnostics.get(modPath);
 				if (replay != null) for (const shown of replay) renderModuleError(modPath, cm.source, shown);
@@ -2563,6 +2588,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 					modPath,
 					source: cm.source,
 					name: d.declName,
+					sym: hitNode.resolvedSym,
 					line: d.nameLocation.line,
 					column: d.nameLocation.column,
 					message: writableModuleBindingMessage(hitNode),
@@ -2599,7 +2625,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
-	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths, hcrRootFunctions(hcrModules, processed));
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths, hcrRootFunctions(hcrModulePaths));
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
 	transformedPaths = [];
@@ -2625,7 +2651,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	if (fsWritableHits.length > 0) {
 		let fsReported = 0;
 		for (const h of fsWritableHits) {
-			if (!aliveSetHas(aliveSet, h.modPath, h.name)) continue;
+			if (!aliveSetHasDecl(aliveSet, h.modPath, h.name, h.sym)) continue;
 			renderModuleError(h.modPath, h.source, {
 				message: h.message,
 				line: h.line,
@@ -3011,6 +3037,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	resolveCC(opts);
 	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
+// Reference parity: global hook ownership registry shared across all modules.
+// Before the graph check: enum toString ops register during checking, and this resets the op table.
+const sharedHookOwners = createNameSet();
+setGlobalHookOwners(sharedHookOwners);
 	const graph = loadAndCheckGraph(filePath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode));
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules
@@ -3022,9 +3052,6 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const includePaths = bs.includePaths;
 	let oFiles: string[] = [];
 
-	// Reference parity: global hook ownership registry shared across all modules.
-	const sharedHookOwners = createNameSet();
-	setGlobalHookOwners(sharedHookOwners);
 
 
 	// Phase A1 — parse + check every module FIRST (no instance drain yet), so a generic
@@ -3357,7 +3384,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	// module that first asked for it — leaves the name pointing at one module
 	// and the definition sitting in another, which on this backend becomes a
 	// module importing a symbol from itself. Same routing as the bundle path.
-	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs);
+	placePendingInstances((path: string): Node | null => unitProgramAt(unitPaths, unitPrograms, path), unitCtxs, true);
 
 	// Export-name surface per module — jsMultiFileName keys public naming off
 	// this list on BOTH the declaring and the referencing side (symbol flags
@@ -3686,7 +3713,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions, resolveSection:
 
 	// C-target parity: the program's exit code becomes msc's own.
 	if (ctx.lastResult.kind == RaiserValueKind.Int) {
-		exit(ctx.lastResult.intVal);
+		exit(ctx.lastResult.intVal as int32);
 	}
 }
 

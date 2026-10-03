@@ -139,25 +139,30 @@ const masked = flags & 0x00FF00FF;
 const shifted = byte << 4;
 ```
 
-**Type Promotion Rules**:
-- An integer converts implicitly only to a wider type of the same signedness, for example
-  `int8` → `int32` → `int64` and `uint8` → `uint32` → `uint64`. The rule is the same at a typed slot, an
-  argument and in overload scoring.
-- Narrowing or a change of signedness needs an explicit `as`, even when the target could hold the
-  value (`uint8` → `int32`):
+**Type Promotion Rules**: A numeric conversion is implicit only when no value of the source can lose information. Sized integers widen into any integer type whose range contains them (`uint8` → `int16`/`int32`/`int64`, `uint16` → `int32`/`int64`, `uint32` → `int64`, and every same-signedness widening), `int8`..`uint16` widen into `float32`, `int8`..`uint32` into `float64`/`number`, `float32` into `float64`/`number`, and `number` ↔ `float64` alias. Every other numeric conversion — narrowing, a sign change that can alter a value, a wider integer into a float, `float64`/`number` → `float32`, and any float → integer at run time — is the programmer's word: `as`. The rule holds at every slot: declarations, assignments, returns, arguments (functions, methods, extensions, generic methods such as `Map.set`), union members, `sink` parameters, and the operands of arithmetic, comparison and compound-assignment operators.
 
-```typescript
-const big: int64 = 300;
-takeU8(big);            // error: implicit int64 → uint8 conversion in 'takeU8' arg 0 changes signedness — write an explicit 'as uint8'
-takeI32(big);           // error: implicit int64 → int32 conversion in 'takeI32' arg 0 narrows — write an explicit 'as int32'
-takeI32(big as int32);  // ok
+Constants follow Nim's literal rule, with one safety addition:
+
+- An untyped constant — a literal, or a `const` declared without a type — is a literal: it flows into any slot that holds its value exactly. An integer literal is `int32` when it fits and `int64` past that; an expression of untyped integer constants folds exactly in 64 bits, so `const x = 100000 * 100000` is the `int64` 10000000000.
+- A typed constant keeps its declared type: `const MAX: int64 = 100` narrows into `int32` only through `as`.
+- A float — literal or constant — never becomes an integer implicitly: `const i: int32 = 3.0` is refused; write `3`.
+- An integer a float cannot hold exactly is refused even as a literal (`const f: float32 = 16777217`), and so is a `uint64`/`int64` past what the slot holds. `16777217 as float32` rounds on the programmer's word.
+- A literal beside a `float32` operand is `float32`, so `x / 1000.0` and `x * 2` stay `float32`.
+
+An `out` argument is written in place, so its variable must have exactly the parameter's type. Measured refusals name the rule, the value when it is a constant, and the fix:
+
+```text
+error: cannot convert 10000000000 to int32
+error: implicit int64 → int32 conversion narrows — 'MAX' is declared int64, so its type decides, not its value 100; write an explicit 'as int32', or declare 'MAX' without a type
+error: implicit float64 → int32 conversion takes the float 3.0, and a float never becomes an integer implicitly — write 3, or an explicit 'as int32'
+error: implicit int32 → float32 conversion cannot hold 16777217 exactly (float32 has a 24-bit mantissa) — write an explicit 'as float32'
+error: implicit int64 → number conversion in 'save' arg 0 may lose integer precision above 2^53 — write an explicit 'as number'
+error: operator '+' would convert the int64 operand to number implicitly, which may lose integer precision above 2^53 — write an explicit 'as number' on it
+error: 'f' arg 0: an out parameter of type number is written in place, so the variable must be number, not int64 — declare it as number and convert after the call
+error: number out of range: '18446744073709551615' — an integer literal without a declared type is at most int64; declare the type that holds it (e.g. 'const x: uint64 = 18446744073709551615')
 ```
 
-- A float converts to an integer only through `as`: `implicit float64 → int32 narrowing … drops the
-  fractional part`. An integer converts to `float64`/`float32`/`number` implicitly today. Whether the
-  lossy cases (`int64` → `float64`, `int32` → `float32`, `float64` → `float32`) should need `as` is an
-  open decision.
-- Measured on C and `--target=js` with the same result on both (msc b899f456).
+Pins: `src/test/handoff/numericLattice.ms`, `numericConstants.ms`, `literalCoercion.ms`, `src/test/js/float32.ms`; corpus `1022`, `1031`.
 
 ### Float Types
 
@@ -166,7 +171,7 @@ takeI32(big as int32);  // ok
 | `float32` | 32-bit | `float` |
 | `float64` | 64-bit | `double` |
 
-`number` is `float64`. The `float32` type is available for interop with C APIs or GPU buffers that require single-precision.
+`number` is `float64`. The `float32` type is available for interop with C APIs or GPU buffers that require single-precision. A `float32` has the same bits on every backend: JS rounds each float32 the program produces with `Math.fround` (a literal at compile time, every arithmetic result, every `as float32`, a 64-bit integer through a single-rounding helper), and C compiles with `-ffp-contract=off`, so `a * b + c` rounds the product the way JS does — measured `0.1 * 10 - 1` is `0` on both. Not covered and not measured here: `sin`, `exp` and the other math library calls, which each backend takes from its own platform library.
 
 > **Reserved keywords**: `int`, `float`, and `double` are reserved by the lexer (they cannot be used as identifiers) but are **not currently usable as type names** — use the sized forms (`int32`, `float32`, `float64`). The unsized aliases are reserved for a future revision.
 
@@ -949,6 +954,19 @@ function longest<T extends { length: number }>(a: T, b: T): T { ... }
 // Default type parameters
 type Result<T, E = Error> = { ok: true; value: T } | { ok: false; error: E };
 ```
+**Declaration identity across module checks.** Re-reading a generic declaration must not turn
+it into a different type. This matters when a generic class method calls another module's
+generic method: `Shelf<Item>.put` can call `Map<string, Item>.set` without a spurious
+“got `Map<string, Item>`, expected `Map<string, Item>`” error.
+The checker uses the existing source-declaration identity convention (`sameNominal` in
+`src/checker/compat.ms`); equal names in different modules remain different declarations.
+
+Measured 2026-09-30 with the identity-fix candidate: `msc-idfix run smoke.ms` on C and
+`--target=js` both printed `H-identity 1` after constructing a cross-module `Shelf<Item>`,
+inserting one item and reading its map size. Pins `bug163`, `bug565`, `bug580` and `bug572`
+cover the nullable-set variant, same-name module boundaries and invariant type arguments.
+Full corpus and downstream deployment were not revalidated by this measurement.
+
 
 A generic parameter is always a type. A value parameter (a "const generic") is refused by the parser:
 
@@ -1056,12 +1074,12 @@ const r = slot as Row | null;   // slot: number | Row | null — a Row converts,
   of the union could hold an instance of that class: the other members must be primitives or
   classes unrelated to it by inheritance. Any other union converts on JS without a test, while
   C still tests the stored tag.
-- `--danger` drops the membership test and the tag test of a bare union, as it drops bound checks;
-  the tag test of a nullable union (`Wire as Align | null`, `number | Row | null as Row | null`)
-  stays.
+- `--danger` drops the membership test and the tag test, of a bare and of a nullable union
+  (`Wire as Align | null`, `number | Row | null as Row | null`) alike, as it drops bound checks.
 
 Measured on tree `2d72bcc3` plus this change: corpus `649`–`654` on C drc/orc/danger, JS and ESM,
-`fixedbugs/bug602`. Not covered: the Raiser VM tests no conversion, and JS tests the tag only for a
+`fixedbugs/bug602`. The nullable tag test under `--danger`: corpus `674`, and `mk(0) as Align | null`
+on tree `60b63319` prints the error in debug and `--release` and passes under `--danger`. Not covered: the Raiser VM tests no conversion, and JS tests the tag only for a
 string, number or boolean member.
 
 Class members, measured on tree `af10d638` plus the class-member change (`number | Row | null`,
@@ -1069,8 +1087,8 @@ Class members, measured on tree `af10d638` plus the class-member change (`number
 the same result on C drc/orc, JS and Raiser (corpus `656`, `fixedbugs/bug603`; Raiser cannot run
 `Base | Child`, it does not evaluate `super`). A wrong member stops with the message above on C
 drc/orc/release and throws an Error with the same text on JS (corpus `657`, `658`, guard
-`asClassMemberChecked`); under `--danger` the nullable union still stops and a bare union does not
-(exit 139 on `number | Row` as `Row`). Before the change `a as Row | null` from a union did not
+`asClassMemberChecked`). Under `--danger` neither the nullable nor the bare union stops (exit 139 on
+`number | Row | null` as `Row | null` and on `number | Row` as `Row`, measured on this branch). Before the change `a as Row | null` from a union did not
 compile on C, and JS passed every class member. Not covered: the Raiser VM accepts the wrong
 member at the `as` and fails at the next field read (`expected an object, got value kind Float`);
 `Base | Child | null` as `Child | null` raises on C for a `Base` value and passes it on JS

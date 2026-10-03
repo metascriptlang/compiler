@@ -227,6 +227,37 @@ function msPowU32(a: uint32, b: uint32): uint32 {
 	unreachable;
 }
 
+// ===== 64-bit integer to float32 =====
+
+@compilerFunc
+function msInt64ToFloat32(a: int64): float32 {
+	@emit(`const n = Number(${a});
+	if (n <= 9007199254740992 && n >= -9007199254740992) return Math.fround(n);
+	const neg = ${a} < 0n;
+	const m = neg ? -${a} : ${a};
+	const shift = BigInt(m.toString(2).length - 24);
+	let q = m >> shift;
+	const rest = m - (q << shift);
+	const half = 1n << (shift - 1n);
+	if (rest > half || (rest === half && (q & 1n) === 1n)) q = q + 1n;
+	const r = Number(q) * 2 ** Number(shift);
+	return neg ? -r : r;`);
+	unreachable;
+}
+
+@compilerFunc
+function msUint64ToFloat32(a: uint64): float32 {
+	@emit(`const n = Number(${a});
+	if (n <= 9007199254740992) return Math.fround(n);
+	const shift = BigInt(${a}.toString(2).length - 24);
+	let q = ${a} >> shift;
+	const rest = ${a} - (q << shift);
+	const half = 1n << (shift - 1n);
+	if (rest > half || (rest === half && (q & 1n) === 1n)) q = q + 1n;
+	return Number(q) * 2 ** Number(shift);`);
+	unreachable;
+}
+
 @compilerFunc
 function msPowI64(a: int64, b: int64): int64 {
 	@emit(`if (${b} < 0n) throw new Error("value " + ${b} + " not in range 0 .. 9223372036854775807");
@@ -251,5 +282,79 @@ function msPowU64(a: uint64, b: uint64): uint64 {
 		x = x * x;
 		if (x > 18446744073709551615n) throw new Error("over- or underflow");
 	}`);
+	unreachable;
+}
+
+// ===== Checked element access =====
+// The access lowering calls these; runtime/core/system.c holds the C twins, and
+// the corpus compares both backends' messages.
+
+@compilerFunc
+function msChkIndex(i: int64, len: int64): int64 {
+	@emit(`if (!(${i} >= 0 && ${i} < ${len})) throw new Error("index " + ${i} + " out of bounds (length " + ${len} + ")");
+	return Number(${i});`);
+	unreachable;
+}
+
+@compilerFunc
+function msSpanAt(v: unknown, i: int64): unknown {
+	@emit(`if (!(${i} >= 0 && ${i} < ${v}.len)) throw new Error("index " + ${i} + " out of bounds (length " + ${v}.len + ")");
+	return ${v}.base[${v}.off + Number(${i})];`);
+	unreachable;
+}
+
+@compilerFunc
+function msSpanValues(v: unknown): unknown {
+	@emit(`return ${v}.base.slice(${v}.off, ${v}.off + ${v}.len);`);
+	unreachable;
+}
+
+@compilerFunc
+function msSpanCell(v: unknown, i: int64): unknown {
+	@emit(`if (!(${i} >= 0 && ${i} < ${v}.len)) throw new Error("index " + ${i} + " out of bounds (length " + ${v}.len + ")");
+	return [${v}.base, ${v}.off + Number(${i})];`);
+	unreachable;
+}
+
+@compilerFunc
+function msArrayCell(a: unknown, i: int64): unknown {
+	@emit(`if (!(${i} >= 0 && ${i} < ${a}.length)) throw new Error("index " + ${i} + " out of bounds (length " + ${a}.length + ")");
+	return [${a}, Number(${i})];`);
+	unreachable;
+}
+
+@compilerFunc
+function msSpanOf(a: unknown): unknown {
+	@emit(`return { base: ${a}, off: 0, len: ${a}.length };`);
+	unreachable;
+}
+
+@compilerFunc
+function msSliceOf(a: unknown, start: number, end: number): unknown {
+	@emit(`const s = Number(${start}), e = Number(${end}), n = ${a}.length;
+	if (e !== s && (s < 0 || e < s || e > n)) throw new Error("slice " + s + ".." + e + " out of bounds (length " + n + ")");
+	return { base: ${a}, off: s, len: e - s };`);
+	unreachable;
+}
+
+@compilerFunc
+function msSliceSpan(v: unknown, start: number, end: number): unknown {
+	@emit(`const s = Number(${start}), e = Number(${end}), n = ${v}.len;
+	if (e !== s && (s < 0 || e < s || e > n)) throw new Error("slice " + s + ".." + e + " out of bounds (length " + n + ")");
+	return { base: ${v}.base, off: ${v}.off + s, len: e - s };`);
+	unreachable;
+}
+
+@compilerFunc
+function msArrayAt(a: unknown, i: int64): unknown {
+	@emit(`if (!(${i} >= 0 && ${i} < ${a}.length)) throw new Error("index " + ${i} + " out of bounds (length " + ${a}.length + ")");
+	return ${a}[${i}];`);
+	unreachable;
+}
+
+@compilerFunc
+function msChkArray(a: unknown, i: int64): unknown {
+	@emit(`if (!(${i} >= 0 && ${i} < ${a}.length)) throw new Error("index " + ${i} + " out of bounds (length " + ${a}.length + ")");
+	return ${a};`);
 	unreachable;
 }

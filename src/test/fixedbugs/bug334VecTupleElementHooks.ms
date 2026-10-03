@@ -14,6 +14,11 @@
 
 import { compileToC } from "../helpers";
 
+function lineHas(c: string, first: string, second: string): boolean {
+	for (const line of c.split("\n")) if (line.indexOf(first) >= 0 && line.indexOf(second) > line.indexOf(first)) return true;
+	return false;
+}
+
 test "bug334: a Vec of managed tuples is destroyed by its own array hook" {
 	const src = `
 function run(): void {
@@ -27,7 +32,7 @@ run();
 	assert c.ok;
 	if (c.ok) {
 		assert !c.value.contains("msArrayRefDestroy(xs_");
-		assert c.value.contains("ArrayDestroy(&(xs_");
+		assert lineHas(c.value, "ArrayDestroy__", "(&(xs_");
 	}
 }
 

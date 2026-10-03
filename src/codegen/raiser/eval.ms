@@ -1142,3 +1142,37 @@ function __macroBody(t: string): number {
 	}
 	assert found;
 }
+
+test "engine: a slice is a view that writes through to its array" {
+	const ctx = evalOrcVM("function bump(xs: Span<int32>): void { xs[0] += 100; }"
+		+ " const a: int32[] = [1, 2, 3, 4]; bump(a[1..3]); bump(a[2...3]);"
+		+ " const v: Span<int32> = a[1..4]; v[2] = 9; console.log(`${a[1]} ${a[2]} ${a[3]} ${v.length}`);");
+	assert ctx.error == "";
+	assert ctx.output == "102 103 9 3\n";
+}
+
+test "engine: a slice of a slice rebases onto the array" {
+	const ctx = evalOrcVM("const a: int32[] = [1, 2, 3, 4, 5]; const v: Span<int32> = a[1..5];"
+		+ " const w: Span<int32> = v[1..3]; w[0] = 30; console.log(`${a[2]} ${w.length} ${w[1]}`);");
+	assert ctx.error == "";
+	assert ctx.output == "30 2 4\n";
+}
+
+test "engine: a slice past the end stops with the slice error" {
+	const ctx = evalOrcVM("const a: int32[] = [1, 2, 3, 4]; let e = 9; const v: Span<int32> = a[1..e]; console.log('unreachable');");
+	assert ctx.error.contains("slice 1..9 out of bounds (length 4)");
+	assert ctx.output == "";
+}
+
+test "engine: an empty slice passes at any start" {
+	const ctx = evalOrcVM("const a: int32[] = [1, 2, 3, 4]; const v: Span<int32> = a[9..9]; console.log(`${v.length}`);");
+	assert ctx.error == "";
+	assert ctx.output == "0\n";
+}
+
+test "engine: a string span views its bytes" {
+	const ctx = evalOrcVM("function n(v: Span<char>): int32 { let t = 0; for (let i = 0; i < v.length; i++) t += v[i] as int32; return t; }"
+		+ " const s = 'hello'; console.log(`${n(s)} ${n(s[1..4])}`);");
+	assert ctx.error == "";
+	assert ctx.output == "532 317\n";
+}

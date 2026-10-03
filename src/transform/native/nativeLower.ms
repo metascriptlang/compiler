@@ -13,12 +13,12 @@
 //
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
-import { Node, NodeKind, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, createNode, makeLoc } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, createNode, makeLoc } from "../../ast/node";
 import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, isUnknownType, isUncountedPtrElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext, createTransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef, makeTypedIdent, makeArrayAccess, isRuntimeProcCall } from "../util";
+import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef, makeTypedIdent, makeArrayAccess, makeHiddenSubConv, isRuntimeProcCall } from "../util";
 import { checkVariantReads } from "./unionProjectLower";
 
 // reference array: a Ref<Array> receiver reaching access/length lowering (e.g. a node
@@ -78,6 +78,7 @@ function propagateSizedArrayType(node: Node): Node {
 function rewriteAccess(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.ArrayAccess) return rewriteArrayAccess(node, ctx.boundChecks);
 	if (!ctx.boundChecks && isRuntimeProcCall(node, "msSliceLen")) return uncheckedSliceLen(node);
+	if (!ctx.rangeChecks && node.kind == NodeKind.HiddenSubConv && node.variantSlot > 0) node.flags = node.flags.incl(NodeFlag.NoFieldCheck);
 	if (node.kind == NodeKind.MemberExpr) return rewriteMemberExpr(node);
 	if (node.kind == NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
 	if (node.kind == NodeKind.NewExpr) return rewriteNewExpr(node);
@@ -338,12 +339,11 @@ function rewriteMemberExpr(node: Node): Node {
 }
 
 // ===== Array Literal Lowering =====
-// Rewrites typed array literals to variadic runtime calls:
-//   [1, 2, 3]  on number[]  →  CallExpr("msNumberArrayFrom", [3, 1, 2, 3])
+// Rewrites typed array literals to runtime calls:
 //   ["a", "b"] on string[]  →  CallExpr("msStringArrayFromArr", [2, "a", "b"])
 //                              (codegen rewrites to stack-local array + msStringArrayFromArr(arr, N)
 //                               — avoids variadic 16-byte struct ABI bug on aarch64-windows-gnu)
-// Other types (object[], ref[]) stay as ArrayLiteral for codegen's Temp+Push pattern.
+// Other types (number[], object[], ref[]) stay as ArrayLiteral for codegen's Temp+Push pattern.
 
 function rewriteArrayLiteral(node: Node): Node {
 	const d = node.data as ArrayLiteralData;
@@ -368,17 +368,6 @@ function rewriteArrayLiteral(node: Node): Node {
 	if (elemType == null) return node;
 
 	const loc = node.location;
-
-	// number[]/float64[] → msNumberArrayFrom(count, e1, e2, ...)
-	if (elemType.kind == TypeKind.Number || elemType.kind == TypeKind.Float64) {
-		const args: Node[] = [makeNumber(d.elements.length, loc)];
-		for (let i = 0; i < d.elements.length; i += 1) {
-			args.push(d.elements[i]);
-		}
-		const call = makeCall(runtimeRef("msNumberArrayFrom", loc), args, loc);
-		call.nodeType = node.nodeType;
-		return call;
-	}
 
 	// string[] → msStringArrayFromArr(count, e1, e2, ...)
 	if (elemType.kind == TypeKind.String) {
@@ -434,3 +423,16 @@ function loweredSliceLen(boundChecks: boolean): Node {
 test "a slice length is bound-checked when bound checks are on" { assert isRuntimeProcCall(loweredSliceLen(true), "msSliceLen"); }
 
 test "a slice length is unchecked when bound checks are off" { assert isRuntimeProcCall(loweredSliceLen(false), "msSliceLenUnchecked"); }
+
+function loweredNarrowing(rangeChecks: boolean): Node {
+	const loc = makeLoc(1, 1);
+	const ctx = createTransformContext();
+	ctx.rangeChecks = rangeChecks;
+	const narrowing = makeHiddenSubConv(makeTypedIdent("u", int32Type(), loc), int32Type(), loc);
+	narrowing.variantSlot = 1;
+	return rewriteAccess(narrowing, ctx);
+}
+
+test "a union narrowing keeps its variant check when range checks are on" { assert !loweredNarrowing(true).flags.has(NodeFlag.NoFieldCheck); }
+
+test "a union narrowing drops its variant check when range checks are off" { assert loweredNarrowing(false).flags.has(NodeFlag.NoFieldCheck); }

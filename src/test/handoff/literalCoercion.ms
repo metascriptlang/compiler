@@ -5,7 +5,8 @@
 // Reference parity: standard reference's integer literal and range handling.
 
 import { TypeKind } from "../../ast/node";
-import { checkSource, strictErrorCount, warningCount, hasError } from "./helpers";
+import { checkSource, strictErrorCount, warningCount, hasError, errorCount } from "./helpers";
+import { compileToC, compileToJS } from "../helpers";
 import { lookupSymbol } from "../../checker/symbol";
 
 // ===== A: Variable declaration coercion =====
@@ -253,4 +254,46 @@ test "narrowing number to int8 assignment" {
 test "same type no conversion" {
 	const src = "const a: int32 = 1 as int32;\nconst x: int32 = a;";
 	assert strictErrorCount(src) == 0;
+}
+
+function ok(body: string): boolean {
+	return compileToC(body).ok && compileToJS(body).ok;
+}
+
+test "an integer literal past int32 is int64 and keeps its value" {
+	assert ok("const x = 5000000000;\nlet y = 4000000000;\nconst z = -9223372036854775808;\nconsole.log(x, y + 1, z);\n");
+	assert hasError("const x = 5000000000;\nconst a: int32 = x;\n", "cannot convert 5000000000 to int32");
+}
+
+test "an overload picks the width the literal needs" {
+	const overloads = "function show(v: int32): string { return \"32\"; }\nfunction show(v: int64): boolean { return true; }\n";
+	assert errorCount(overloads + "const wide: boolean = show(5000000000);\nconst narrow: string = show(5);\n") == 0;
+}
+
+test "a literal-only expression folds exactly in 64 bits" {
+	assert ok("const x = 100000 * 100000;\nconst big: int64 = 100000 * 100000;\nconst m = 2147483647 + 1;\nconsole.log(x, big, m);\n");
+	assert hasError("const w: int32 = 100000 * 100000;\n", "cannot convert 10000000000 to int32");
+	assert errorCount("const y = 10 + 20;\nconst s: int8 = y;\n") == 0;
+}
+
+test "an untyped integer past int64 is refused at compile time" {
+	assert hasError("const x = 18446744073709551615;\n", "number out of range: '18446744073709551615'");
+	assert hasError("const x = 9223372036854775807 + 1;\n", "over- or underflow");
+}
+
+test "a literal past int64 beside a uint64 operand is uint64" {
+	assert ok("const W: uint64 = 18446744073709551615;\nconsole.log(W == 18446744073709551615, 18446744073709551615 != W, W - 18446744073709551614);\n");
+}
+
+test "a literal beside a float32 operand is float32" {
+	assert ok("let x: float32 = 3;\nconst r: float32 = x / 1000.0;\nconst s: float32 = 0.42 * x;\nconst t: float32 = x * 2;\nconsole.log(r, s, t, x < 0.7);\n");
+	assert errorCount("let x: float32 = 3;\nconst r: float32 = x * 16777217;\n") > 0;
+}
+
+test "an integer literal picks a float overload that holds it, an integer one first" {
+	const g = "function g(x: float32): string { return \"f32\"; }\nfunction g(x: string): string { return x; }\n";
+	assert ok(g + "console.log(g(2));\n");
+	assert hasError(g + "g(16777217);\n", "No matching overload");
+	const f = "function f(x: int64): boolean { return true; }\nfunction f(x: float64): string { return \"f64\"; }\n";
+	assert errorCount(f + "const picked: boolean = f(5);\n") == 0;
 }

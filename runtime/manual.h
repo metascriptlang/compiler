@@ -208,38 +208,14 @@ static inline void  msDestroyAndDispose(void* p)  { (void)p; }
    Provide minimal libc functions inline. */
 #include <math.h>
 #include <time.h>
-static inline void* memcpy(void* dst, const void* src, size_t n) {
-    char* d = (char*)dst;
-    const char* s = (const char*)src;
-    while (n--) *d++ = *s++;
-    return dst;
-}
-static inline void* memset(void* dst, int c, size_t n) {
-    char* d = (char*)dst;
-    while (n--) *d++ = (char)c;
-    return dst;
-}
+#define memcpy __builtin_memcpy
+#define memset __builtin_memset
+#define memcmp __builtin_memcmp
+#define memmove __builtin_memmove
 static inline size_t strlen(const char* s) {
     size_t n = 0;
     while (s[n]) n++;
     return n;
-}
-static inline int memcmp(const void* a, const void* b, size_t n) {
-    const unsigned char *pa = (const unsigned char*)a, *pb = (const unsigned char*)b;
-    while (n--) { if (*pa != *pb) return *pa - *pb; pa++; pb++; }
-    return 0;
-}
-static inline void* memmove(void* dst, const void* src, size_t n) {
-    unsigned char* d = (unsigned char*)dst;
-    const unsigned char* s = (const unsigned char*)src;
-    if (d < s) {
-        while (n--) *d++ = *s++;
-    } else if (d > s) {
-        d += n;
-        s += n;
-        while (n--) *--d = *--s;
-    }
-    return dst;
 }
 static inline void* memchr(const void* p, int c, size_t n) {
     const unsigned char* s = (const unsigned char*)p;

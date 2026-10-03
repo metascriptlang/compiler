@@ -12,7 +12,7 @@ import { Node, NodeKind, SourceLocation, BinaryExprData, CallExprData, Identifie
 import { stringType, isStringLike } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeNumber, makeMember, runtimeRef, isRuntimeProcCall } from "../util";
+import { makeCall, makeNumber, makeMember, runtimeRef, isRuntimeProcCall } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 
 // ===== Main Entry Point =====

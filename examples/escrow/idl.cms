@@ -1,0 +1,35 @@
+import { anchorIdl } from "std/solana/idl";
+import { Escrow, EscrowError, EscrowOp, MakeArgs } from "./layout";
+import { MakeAccounts, RefundAccounts, TakeAccounts } from "./program";
+
+export function escrowIdl(): string {
+	return anchorIdl<EscrowOp>({
+		name: "escrow",
+		address: "",
+		Make: [MakeAccounts, MakeArgs],
+		Take: [TakeAccounts],
+		Refund: [RefundAccounts],
+		accounts: [Escrow],
+		events: [],
+		errors: EscrowError,
+	});
+}
+
+when (!testBuild) {
+	console.log(escrowIdl());
+}
+
+test "the escrow IDL is Anchor's JSON with snake_case names and Anchor discriminators" {
+	const parsed = JSON.parseValue(escrowIdl());
+	assert parsed.ok;
+	if (parsed.ok) {
+		const idl = parsed.value;
+		assert idl.instructions.at(0).name.asString() == "make";
+		assert idl.instructions.at(0).discriminator.at(0).asInt32() == 138;
+		assert idl.instructions.at(0).accounts.at(3).name.asString() == "maker_ata_a";
+		assert idl.instructions.at(1).accounts.length() == 11;
+		assert idl.accounts.at(0).discriminator.at(0).asInt32() == 31;
+		assert idl.errors.at(0).code.asInt32() == 6000;
+		assert idl.types.at(0).serialization.asString() == "bytemuck";
+	}
+}

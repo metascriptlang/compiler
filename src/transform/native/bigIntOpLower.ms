@@ -19,7 +19,7 @@ import { addError } from "../../checker/context";
 import { booleanType, createPrimitive, int32Type, isNumeric, typeDisplayName } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeAssign, makeBinary, makeCall, makeIdent, makeNumber, makeString, runtimeRef } from "../util";
+import { makeAssign, makeBinary, makeCall, makeNumber, makeString, runtimeRef } from "../util";
 
 export function lowerBigIntOps(program: Node, ctx: TransformContext): Node {
 	walkNode(program, (node: Node): Node => rewriteBigIntOp(node, ctx));

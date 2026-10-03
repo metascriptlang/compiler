@@ -343,12 +343,11 @@ function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 		// No resolvedSym (e.g., .cms prelude files): keep original name, don't hoist
 		hoistDecl = false;
 	}
-	// Dedup: skip hoisting if already declared by expression-level auto-declare (seenSinks)
 	if (hoistDecl && isTemp && p != null) {
-		for (const s of p.seenSinks) {
+		for (const s of p.hoistedTemps) {
 			if (s == d.declName) { hoistDecl = false; }
 		}
-		if (hoistDecl) p.seenSinks.push(d.declName);
+		if (hoistDecl) p.hoistedTemps.push(d.declName);
 	}
 
 	// Type resolution priority: nodeType (checker) > initializer.nodeType (DRC) > annotation fallback
@@ -411,6 +410,7 @@ function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 			else { emitStmtsLine(p, `${cType}* ${varName};`); }
 			emitStmtsLine(p, `${varName} = &(${initSnippet});`);
 			p.indirectLocals.push(d.declName);
+			if (node.resolvedSym != null) p.indirectSyms.push(node.resolvedSym);
 		} else {
 			const initSnippet = genExpr(g, p, d.initializer);
 			let finalInit = initSnippet;

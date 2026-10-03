@@ -1,10 +1,10 @@
-import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp } from "../ast/node";
 import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator } from "./decoratorHelpers";
-import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, int32Type, getSysType } from "./types";
+import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, int32Type, getSysType, stringType } from "./types";
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, stampOwner, stampItem, isStaticExtensionSym } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -14,6 +14,7 @@ import { quoteCcArg } from "../utils/commandLine";
 import { declGenericParams } from "./types";
 import { callDecoratorDefers, callCheckExpr } from "./checkerCallbacks";
 import { mangleModuleName } from "../codegen/c/names";
+import { setOpByKey } from "../codegen/c/types";
 
 // ===== Top-Level Collector =====
 
@@ -116,14 +117,11 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 		NodeKind.DecoratedDecl => {
 			const dd = node.data as DecoratedDeclData;
 			collectDeclLocal(ctx, dd.decoratedNode);
-			const declName = getDeclName(dd.decoratedNode);
-			if (declName != "") {
-				const sym = lookupSymbol(ctx.table, declName);
-				if (sym != null) {
-					const info = extractDecoratorInfo(node);
-					if (info.nativeName != "") sym.nativeName = info.nativeName;
-					if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
-				}
+			const sym = declOfStatement(dd.decoratedNode).resolvedSym;
+			if (sym != null) {
+				const info = extractDecoratorInfo(node);
+				if (info.nativeName != "") sym.nativeName = info.nativeName;
+				if (info.builtinKind != "") sym.builtinKind = info.builtinKind;
 			}
 		},
 		NodeKind.VariableDecl => {
@@ -822,6 +820,9 @@ export function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 		enumSym.nativeName = d.enumName;
 	}
 	defineOrError(ctx, enumSym, node);
+	const toStringSym = newSym(ctx, SymbolKind.Function, d.enumName + "_toString", createFunction([enumType], ["v"], stringType()));
+	toStringSym.state = SymbolState.Checked;
+	setOpByKey(enumType, AttachedOp.AttachedToString, toStringSym);
 	// Record enum type DEF for symbol graph
 	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.enumName.length, enumSym, enumType, SymbolKind.Enum, d.enumName, "", true);
 	// Record each enum member for the symbol graph (DEF records for go-to-definition).
@@ -973,47 +974,18 @@ export function collectMacro(ctx: CheckerContext, node: Node): void {
 	const sym = declSymbol(ctx, node, d.macroDeclName, SymbolKind.Macro, noneType(), false);
 	sym.symbolType.sym = sym;
 	defineOrError(ctx, sym, node);
-	ctx.macroBodyRegistry.set(d.macroDeclName, d.macroDeclBody);
-	ctx.macroParamsRegistry.set(d.macroDeclName, d.macroDeclParams);
-	ctx.macroParamTypesRegistry.set(d.macroDeclName, d.macroDeclParamTypes);
-	ctx.macroDeclModuleRegistry.set(d.macroDeclName, ctx.modulePath);
+	node.resolvedSym = sym;
 	if (node.flags.has(NodeFlag.Converter)) {
-		registerConverter(ctx, d.macroDeclReturnType, d.macroDeclName, 0, node.location.line, node.location.column);
+		registerConverter(ctx, sym, 0, node.location.line, node.location.column);
 	}
 }
 
-// Converter pair table (LANG.md "Converter Declarations" rules 3-4), tiered:
-// origin 0 = local decl, 1 = import, 2 = build.ms globalImports inject.
-// A LOWER origin shadows a higher one; two converters for the same pair at the
-// SAME tier is an error — the compiler never chooses between equals.
-export function registerConverter(ctx: CheckerContext, target: string, name: string, origin: int32, line: int32, column: int32): void {
-	ctx.converterTargetByName.set(name, target);
-	if (!ctx.converterTargets.has(target)) { ctx.converterTargetKeys.push(target); }
-	if (ctx.converterTargets.has(target)) {
-		const existing = ctx.converterTargets.get(target);
-		if (existing == name) { return; }
-		let existingOrigin: int32 = 1;
-		if (ctx.converterTargetOrigin.has(target)) {
-			const eo = ctx.converterTargetOrigin.get(target);
-			if (eo != null) { existingOrigin = eo; }
-		}
-		if (origin > existingOrigin) { return; }
-		if (origin == existingOrigin) {
-			if (origin == 0) {
-				addError(ctx, "duplicate converter for target '" + target + "': '" + (existing != null ? existing : "") + "' and '" + name + "' declared in the same module",
-					line, column);
-			} else if (origin == 1) {
-				addError(ctx, "duplicate converter for target '" + target + "': '" + (existing != null ? existing : "") + "' and '" + name + "' are both in scope — the compiler never chooses; import only one or call one explicitly",
-					line, column);
-			} else {
-				addError(ctx, "duplicate converter for target '" + target + "': '" + (existing != null ? existing : "") + "' and '" + name + "' are both injected via build.ms globalImports",
-					line, column);
-			}
-			return;
-		}
+export function registerConverter(ctx: CheckerContext, sym: Symbol, tier: int32, line: int32, column: int32): void {
+	for (let i = 0; i < ctx.macroConverters.length; i += 1) {
+		if (ctx.macroConverters[i].sym == sym) return;
 	}
-	ctx.converterTargets.set(target, name);
-	ctx.converterTargetOrigin.set(target, origin);
+	ctx.macroConverters.push({ sym, tier });
+	reportDuplicateConverter(ctx, sym, line, column);
 }
 
 // Look up resolved source path for an import specifier from the module's import entries
@@ -1178,12 +1150,6 @@ function importAliasedPreludeSym(ctx: CheckerContext, alias: string, name: strin
 	const info = buildExportInfo(sym, pre.extensionRegistry, sym.modulePath, pre);
 	const primary = importSymFromRegistry(ctx, alias, name, info, sym.modulePath, nameLoc, defNode);
 	propagateImportedExtensions(ctx, alias, info, sym.modulePath, primary);
-	if (info.sym.symbolKind == SymbolKind.Macro && info.macroBody != null && info.macroParams != null) {
-		ctx.macroBodyRegistry.set(alias, info.macroBody);
-		ctx.macroParamsRegistry.set(alias, info.macroParams);
-		if (info.macroParamTypes != null) ctx.macroParamTypesRegistry.set(alias, info.macroParamTypes);
-		ctx.macroDeclModuleRegistry.set(alias, info.sym.modulePath);
-	}
 	return primary;
 }
 
@@ -1270,23 +1236,9 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 			} else if (exportInfo != null) {
 				const nameLoc = d.nameLocations != null && i < d.nameLocations.length ? d.nameLocations[i] : node.location;
 				const primarySym = importSymFromRegistry(ctx, localAlias, importName, exportInfo, sourcePath, nameLoc, node);
-				// Phase E: cross-module macros — register imported macro body
-				// in the local context's registry so expandMacroInvocation finds it.
-				if (primarySym.symbolKind == SymbolKind.Macro
-						&& exportInfo.macroBody != null
-						&& exportInfo.macroParams != null) {
-					ctx.macroBodyRegistry.set(localAlias, exportInfo.macroBody);
-					ctx.macroParamsRegistry.set(localAlias, exportInfo.macroParams);
-					if (exportInfo.macroParamTypes != null) {
-						ctx.macroParamTypesRegistry.set(localAlias, exportInfo.macroParamTypes);
-					}
-					ctx.macroDeclModuleRegistry.set(localAlias, primarySym.modulePath != "" ? primarySym.modulePath : sourcePath);
-					if (exportInfo.converterTarget != "") {
-						registerConverter(ctx, exportInfo.converterTarget, localAlias, 1, nameLoc.line, nameLoc.column);
-						if (exportInfo.converterTargetType != null) {
-							ctx.converterTargetTypes.set(localAlias, exportInfo.converterTargetType);
-						}
-					}
+				if (primarySym.symbolKind == SymbolKind.Macro && exportInfo.converterTargetType != null) {
+					ctx.converterTargetTypes.set(primarySym, exportInfo.converterTargetType);
+					registerConverter(ctx, primarySym, 1, nameLoc.line, nameLoc.column);
 				}
 				// Propagate -iquote for header search path
 				if (primarySym.headerPath != "" && primarySym.modulePath != "") {
@@ -1431,23 +1383,6 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 						} else if (exportInfo != null) {
 							const reNameLoc = imp.nameLocations != null && i < imp.nameLocations.length ? imp.nameLocations[i] : d.exportedDecl.location;
 							const primaryNamed = importSymFromRegistry(ctx, alias, importName, exportInfo, sourcePath, reNameLoc, node);
-							// Phase E re-export parity: when re-exporting a macro through a
-							// hub (`export { jsonStringify } from "./encode"`), populate the
-							// hub's macroBodyRegistry too. Without this, the hub's own
-							// exportInfo (built later by buildExportInfo from this ctx) carries
-							// macroBody=null, so downstream importers get a Macro sym with no
-							// body — recursive expansion fails on the empty registry. Mirrors
-							// the same population in collectImport.
-							if (primaryNamed.symbolKind == SymbolKind.Macro
-									&& exportInfo.macroBody != null
-									&& exportInfo.macroParams != null) {
-								ctx.macroBodyRegistry.set(alias, exportInfo.macroBody);
-								ctx.macroParamsRegistry.set(alias, exportInfo.macroParams);
-								if (exportInfo.macroParamTypes != null) {
-									ctx.macroParamTypesRegistry.set(alias, exportInfo.macroParamTypes);
-								}
-								ctx.macroDeclModuleRegistry.set(alias, primaryNamed.modulePath != "" ? primaryNamed.modulePath : sourcePath);
-							}
 							// Re-export parity: propagate extension-method dispatch via
 							// shared helper. Same path used by collectImport's primary
 							// reg, named re-export, and star re-export.
@@ -1851,6 +1786,23 @@ test "overloaded @builtin routes to correct overload" {
 	}
 }
 
+test "the local collect tags the decorated overload, not the same-named primary" {
+	const ctx = createContext();
+	const pr = parseSource("function len(s: string): number { return 0; }\n@builtin(\"LengthArr\") function len(arr: number[]): number { return 0; }");
+	assert pr.ok;
+	if (!pr.ok) return;
+	collectTopLevelLocal(ctx, pr.value);
+	const sym = lookupSymbol(ctx.table, "len");
+	assert sym != null;
+	if (sym != null) {
+		assert sym.builtinKind == "";
+		assert sym.overloads.length == 1;
+		if (sym.overloads.length > 0) {
+			assert sym.overloads[0].builtinKind == "LengthArr";
+		}
+	}
+}
+
 test "@builtin on extern function sets both builtinKind and nativeName" {
 	const ctx = collectFromSource("@builtin(\"ResultOk\") extern function ok(val: number): number from \"msResultOk\";");
 	const sym = lookupSymbol(ctx.table, "ok");
@@ -1942,7 +1894,6 @@ test "re-export preserves original location and records sgSymRecord" {
 	const fakeExport: ExportedSymInfo = {
 		name: "get", sym: defining, extReceiverType: "", extIsStatic: false,
 		overloadExtReceiverTypes: [], overloadExtIsStatic: [],
-		macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [],
 	};
 	registerModuleExports(ctx.exportRegistry, "/test/hub/accessors", [fakeExport]);
 

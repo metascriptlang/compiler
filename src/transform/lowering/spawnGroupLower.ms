@@ -28,7 +28,7 @@ import {
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkExpandBlocksHooked } from "../walker";
-import { makeIdent, makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral, runtimeRef } from "../util";
+import { makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral, runtimeRef } from "../util";
 import { awaitedType, createPtr, voidType } from "../../checker/types";
 import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, makeUnboxCall, VOID_PTR_TYPE } from "./awaitLower";
 import { injectCancelSafePoints } from "./cancelSafePoints";

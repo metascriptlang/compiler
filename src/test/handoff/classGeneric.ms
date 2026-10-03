@@ -5,10 +5,11 @@
 // extension lowering produces correct mangled call,
 // and new Box<number>(42) instantiates correctly.
 
-import { TypeKind } from "../../ast/node";
+import { TypeKind, NodeKind, ClassDeclData } from "../../ast/node";
 import { checkSource, fullPipeline, errorCount } from "./helpers";
 import { compileToC } from "../helpers";
 import { lookupSymbol } from "../../checker/symbol";
+import { drainPendingInstances } from "../../checker/instantiate";
 
 test "checker: generic class method has this param" {
 	const ctx = checkSource("class Box<T> { value: T; get(): T { return this.value; } }");
@@ -167,3 +168,18 @@ test "E2E C: two-param generic compiles" {
 //   src/checker/checkExprPass.ms  — resolveGenericNewExpr prefers node.typeArg
 // Reverting any of the three causes the smoke test to fail with:
 //   set__...u0(Map__unknown_unknown*, void*, void*)
+
+test "checker: a generic class instance declares every field, initialized or not" {
+	const ctx = checkSource("class Bag<T> { items: Vec<T>; n: int32; label: string = \"x\"; }\nconst g = new Bag<int32>();\n");
+	assert ctx != null;
+	let instances = 0;
+	let fields = 0;
+	for (const inst of drainPendingInstances([ctx])) {
+		instances += 1;
+		for (const member of (inst.data as ClassDeclData).classBody) {
+			if (member.kind == NodeKind.PropertyDecl) fields += 1;
+		}
+	}
+	assert instances == 1;
+	assert fields == 3;
+}

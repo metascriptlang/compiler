@@ -4,11 +4,12 @@ import {
 	Instruction,
 	ProgramError,
 	Pubkey,
+	pubkeyOf,
 	Seeds,
 	assignTo,
 	createAccount,
 	createProgramAccount,
-} from "./index";
+} from "./core";
 
 export struct DelegationAccounts {
 	payer: Account;
@@ -26,30 +27,15 @@ export struct DelegationConfig {
 }
 
 export function delegationProgram(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0xc03a57f2e100b7b5;
-	const word1: uint64 = 0x97cf4a34012206cc;
-	const word2: uint64 = 0x9819e58ceb0635b8;
-	const word3: uint64 = 0x3ea78093187e62cc;
-	const key: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
-	return key;
+	return @comptime { return pubkeyOf("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"); };
 }
 
 export function magicProgram(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0x9570dab024b44505;
-	const word1: uint64 = 0x28d777c3ded6b9ec;
-	const word2: uint64 = 0xd612ea928ee7b691;
-	const word3: uint64 = 0x403abbdf;
-	const key: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
-	return key;
+	return @comptime { return pubkeyOf("Magic11111111111111111111111111111111111111"); };
 }
 
 export function magicContext(this typeof Pubkey): Pubkey {
-	const word0: uint64 = 0xbf28a5c424b44505;
-	const word1: uint64 = 0x8e8252442f03b45f;
-	const word2: uint64 = 0xf797dcd2c1ab38bb;
-	const word3: uint64 = 0x8054948b3f;
-	const key: Pubkey = { word0: word0, word1: word1, word2: word2, word3: word3 };
-	return key;
+	return @comptime { return pubkeyOf("MagicContext1111111111111111111111111111111"); };
 }
 
 export function anyValidator(this typeof DelegationConfig): DelegationConfig {

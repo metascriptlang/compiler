@@ -173,9 +173,10 @@ export class CProc {
 	breakIdx: number;      // which block a 'break' exits
 	withinLoop: number;    // > 0 means inside a loop
 	params: string[];      // parameter names (mangled)
-	seenSinks: string[];   // tracks declared $sink_N_ temps (prevents duplicates)
+	hoistedTemps: string[];
 	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
 	indirectLocals: string[];  // locals pointing into union variant data — auto-deref as (*name)
+	indirectSyms: Cursor<Symbol>[];  // the symbols of indirectParams and indirectLocals
 	nestedTryStmts: CTryEntry[];
 	beforeRetNeeded: boolean;
 	suppressRaiseCheck: boolean;
@@ -206,6 +207,16 @@ export function isIndirectLocal(p: CProc, name: string): boolean {
 	return false;
 }
 
+// A reference that carries its symbol is indirect only when that binding is.
+export function isIndirectRef(p: CProc, sym: Symbol | null, name: string): boolean {
+	if (p == null) return false;
+	if (sym == null) return isIndirectParam(p, name) || isIndirectLocal(p, name);
+	for (const s of p.indirectSyms) {
+		if (s == sym) return true;
+	}
+	return false;
+}
+
 export function createProc(name: string, returnType: Type | null): CProc {
 	const topBlock = createBlock(0, false);
 	const blocks: CBlock[] = [];
@@ -219,9 +230,10 @@ export function createProc(name: string, returnType: Type | null): CProc {
 		breakIdx: 0,
 		withinLoop: 0,
 		params: [],
-		seenSinks: [],
+		hoistedTemps: [],
 		indirectParams: [],
 		indirectLocals: [],
+		indirectSyms: [],
 		nestedTryStmts: [],
 		beforeRetNeeded: false,
 		suppressRaiseCheck: false,
@@ -571,14 +583,43 @@ export function nameSetAdd(ns: NameSet, name: string): void {
 
 // ===== AliveSet — global DCE reachability (Standard reference parity) =====
 
+export class CTypeInfoDemand {
+	cell: Type;
+	key: string;
+	owner: string;
+	cName: string = "";
+	destroy: Symbol;
+	trace: Symbol | null = null;
+}
+
 export class AliveSet {
 	entries: string[];       // "modulePath:symbolName" keys
 	_set: HashSet<string>;       // O(1) lookup mirror
 	_modules: HashSet<string>;   // O(1) module-level lookup
+	_syms: HashSet<Symbol>;
+	typeInfos: CTypeInfoDemand[];
+	typeInfoKeys: HashSet<string>;
+	foreignOps: HashMap<Symbol, string[]>;
 }
 
 export function createAliveSet(): AliveSet {
-	return { entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>() };
+	return {
+		entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
+		typeInfos: [], typeInfoKeys: new HashSet<string>(), foreignOps: new HashMap<Symbol, string[]>(),
+	};
+}
+
+export function aliveSetAddSym(aliveSet: AliveSet, sym: Symbol): void {
+	aliveSet._syms.add(sym);
+}
+
+export function aliveSetHasSym(aliveSet: Readonly<AliveSet>, sym: Symbol): boolean {
+	return aliveSet._syms.has(sym);
+}
+
+export function aliveSetHasDecl(aliveSet: Readonly<AliveSet>, modulePath: string, name: string, sym: Symbol | null): boolean {
+	if (sym != null) return aliveSet._syms.has(sym);
+	return aliveSetHas(aliveSet, modulePath, name);
 }
 
 export function aliveSetAdd(aliveSet: AliveSet, modulePath: string, name: string): void {
@@ -611,6 +652,9 @@ export class CEmissionFacts {
 	genericOwners: HashMap<string, string> = new HashMap<string, string>();
 	skippedTypeInfos: HashSet<string> = new HashSet<string>();
 	hcrCoreUnits: HashSet<string> = new HashSet<string>();
+	typeInfos: HashMap<string, CTypeInfoDemand> = new HashMap<string, CTypeInfoDemand>();
+	typeInfoOrder: CTypeInfoDemand[] = [];
+	hcrModules: HashSet<string> = new HashSet<string>();
 }
 
 export interface DeferredStructDef {

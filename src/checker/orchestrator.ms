@@ -20,6 +20,7 @@ import { registerModuleProgram, instantiateProfile, instantiateTimings, lookupMo
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbParse, dbTypeCheck, dbCheckIsCurrent, dbGetCheckedProgram, TransAmDb } from "../compiler/transam/index";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, resetGenericTypeInsts } from "../parser/context";
+import { opMark, opsFrom, replayOps, KeyedOp } from "../codegen/c/types";
 
 export class CheckSession {
 	db: TransAmDb | null;
@@ -28,6 +29,7 @@ export class CheckSession {
 	typeInstances: HashMap<string, GenericTypeInstRow[]>;
 	preludeTypeInstances: GenericTypeInstRow[];
 	rechecked: HashSet<string>;
+	ops: HashMap<string, KeyedOp[]>;
 }
 
 export function createCheckSession(): CheckSession {
@@ -38,6 +40,7 @@ export function createCheckSession(): CheckSession {
 		typeInstances: new HashMap<string, GenericTypeInstRow[]>(),
 		preludeTypeInstances: [],
 		rechecked: new HashSet<string>(),
+		ops: new HashMap<string, KeyedOp[]>(),
 	};
 }
 
@@ -192,13 +195,18 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		const injectedFlags = baseCtx.compilerFlags;
 		const _tm0 = performance.now();
 		const typeInstanceMark = genericTypeInstMark();
+		const opsMark0 = opMark();
 		const ctx = dbTypeCheck(db, path);
 		const fresh = session == null || session.checks.get(path) != ctx;
 		if (session != null && ctx != null && fresh) {
 			session.checks.set(path, ctx);
 			session.instances.set(path, ctx.generatedInstances);
 			session.typeInstances.set(path, takeGenericTypeInstsFrom(typeInstanceMark));
+			session.ops.set(path, opsFrom(opsMark0));
 			session.rechecked.add(path);
+		} else if (session != null && ctx != null) {
+			const warmOps = session.ops.get(path);
+			if (warmOps != null) replayOps(warmOps);
 		}
 		const _tm1 = performance.now();
 		if (graphTiming && (_tm1 - _tm0) > 100) {
@@ -520,12 +528,10 @@ function mainErrorsWith(mainSource: string): int32 {
 
 function soloErrorsWith(source: string): int32 {
 	const stdPath = join(resolveRuntimeDir(), "std");
-	const dir = "/tmp/msc-generic-instance-identity";
-	ensureDir(dir);
-	const soloPath = `${dir}/solo.ms`;
-	writeFile(soloPath, "class Crate<T> {\n\tv: T;\n\tconstructor(v: T) { this.v = v; }\n}\nfunction tag(this b: Crate<number>): number { return b.v; }\n" + source);
+	const soloPath = "/src/solo.ms";
 	const config = createDefaultConfig(backendOfExtension(".cms"), stdPath);
-	const provider = createFileSystemProvider();
+	const provider = createMapProvider([{ entryPath: soloPath, entrySource: "class Crate<T> {\n\tv: T;\n\tconstructor(v: T) { this.v = v; }\n}\nfunction tag(this b: Crate<number>): number { return b.v; }\n" + source }]);
+	provider.useFileSystem = true;
 	const graph = createModuleGraph();
 	loadStdGlobalImportModules(graph, provider, config);
 	loadModule(graph, soloPath, provider, config, 1);
@@ -783,7 +789,7 @@ test "extra globalImports entry resolving to a module is not a graph error" {
 }
 
 function sharedPreludeShape(ctx: CheckerContext): string {
-	return `${ctx.table.current.symbols.size}|${ctx.extensionRegistry.methods.length}|${ctx.macroBodyRegistry.size}|${ctx.compilerFuncs.size}|${ctx.preludeExports.size}|${ctx.interf.length}|${ctx.converterTargetByName.size}`;
+	return `${ctx.table.current.symbols.size}|${ctx.extensionRegistry.methods.length}|${ctx.compilerFuncs.size}|${ctx.preludeExports.size}|${ctx.interf.length}|${ctx.converterTargetTypes.size}`;
 }
 
 test "a graph check leaves the prelude every build shares as it found it" {

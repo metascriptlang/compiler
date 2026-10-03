@@ -3,7 +3,7 @@ import { exportedFunctionOf } from "../../checker/decoratorHelpers";
 import { hasGenericParams, createPtr, createStruct, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName } from "../../codegen/c/names";
-import { isNrvoReturnType } from "../../codegen/c/types";
+import { isNrvoReturnType, opCName } from "../../codegen/c/types";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
 import { walkNode } from "../walker";
 import { syntheticToken, makeHiddenDeref, makeTypedIdent, makeMember, makeCall, runtimeRef } from "../util";
@@ -47,6 +47,19 @@ export function hcrFunctions(program: Node, aliveSet: Readonly<AliveSet>, module
 			key: "f:" + hcrSignatureKey(sym != null ? sym.symbolType : fn.nodeType),
 			sourcePath: sym != null ? sym.modulePath : "",
 			forwards: sym != null && !d.fnName.startsWith("$"),
+		});
+	}
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const op = stmt.kind == NodeKind.FunctionDecl ? stmt.resolvedSym : null;
+		if (op == null || !aliveSet.foreignOps.has(op)) continue;
+		const symbol = opCName(op);
+		if (seen.has(symbol)) continue;
+		seen.add(symbol);
+		functions.push({
+			symbol,
+			key: "f:" + hcrSignatureKey(op.symbolType != null ? op.symbolType : stmt.nodeType),
+			sourcePath: modulePath,
+			forwards: !(stmt.data as FunctionDeclData).fnName.startsWith("$"),
 		});
 	}
 	return functions;

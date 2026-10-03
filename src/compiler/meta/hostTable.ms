@@ -404,7 +404,7 @@ extern function msZipWriterFinalize(handle: int64): string;
 extern function msZipWriterClose(handle: int64): void;
 
 function _bridgeMsZipReaderOpen(args: RaiserValue[]): RaiserValue {
-	return boxInt(msZipReaderOpen(unboxString(args[0])));
+	return raiserInt(msZipReaderOpen(unboxString(args[0])));
 }
 
 function _bridgeMsZipReaderCount(args: RaiserValue[]): RaiserValue {
@@ -416,7 +416,7 @@ function _bridgeMsZipReaderEntryName(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsZipReaderEntrySize(args: RaiserValue[]): RaiserValue {
-	return boxInt(msZipReaderEntrySize(unboxInt(args[0]) as int64, unboxInt(args[1]) as int32));
+	return raiserInt(msZipReaderEntrySize(unboxInt(args[0]) as int64, unboxInt(args[1]) as int32));
 }
 
 function _bridgeMsZipReaderEntryIsDir(args: RaiserValue[]): RaiserValue {
@@ -433,7 +433,7 @@ function _bridgeMsZipReaderClose(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsZipWriterNew(args: RaiserValue[]): RaiserValue {
-	return boxInt(msZipWriterNew());
+	return raiserInt(msZipWriterNew());
 }
 
 function _bridgeMsZipWriterAdd(args: RaiserValue[]): RaiserValue {
@@ -498,7 +498,7 @@ function _isNodeShaped(objHeap: RaiserObjectHeap, v: RaiserValue): boolean {
 	return kindField.kind == RaiserValueKind.Int || kindField.kind == RaiserValueKind.Float;
 }
 
-function _pushNodeShapedElems(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, arrHandle: number, out: RaiserValue[]): void {
+function _pushNodeShapedElems(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, arrHandle: int64, out: RaiserValue[]): void {
 	const len = heapArrayLen(arrHeap, arrHandle);
 	for (let j = 0; j < len; j = j + 1) {
 		const el = heapArrayGet(arrHeap, arrHandle, j);
@@ -510,7 +510,7 @@ function _pushNodeShapedElems(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHea
 	}
 }
 
-function _nodeChildSlots(h: number): RaiserValue[] {
+function _nodeChildSlots(h: int64): RaiserValue[] {
 	const out: RaiserValue[] = [];
 	const objHeapOrNull = activeHostObjectHeap();
 	const arrHeapOrNull = activeHostArrayHeap();
@@ -930,7 +930,7 @@ export function ensureHostTableLoaded(): void {
 
 // --- Tests ---
 
-import { raiserString, RaiserValueKind } from "../../raiser/value";
+import { raiserInt, raiserString, RaiserValueKind } from "../../raiser/value";
 import { lookupHostFn, _resetHostRegistryForTests } from "../../raiser/hostRegistry";
 
 test "ensureHostTableLoaded registers fs predicates" {

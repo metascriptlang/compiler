@@ -31,6 +31,11 @@ function headedBy(t: Type, alias: string): boolean {
 	return t.kind == TypeKind.GenericInstance && t.typeName == alias;
 }
 
+function namesArrayAfter(c: string, struct: string): boolean {
+	for (const line of c.split("\n")) if (line.startsWith("struct " + struct + "__") && line.indexOf("Array { int64_t len") > 0) return true;
+	return false;
+}
+
 function emitC(src: string): string {
 	const r = compileToC(src);
 	return r.ok ? r.value : "error: " + r.error;
@@ -103,7 +108,7 @@ test "bug656: C treats an array of bare-parameter alias instances of a class as 
 test "bug656: C names an array of bare-parameter alias instances of a struct after the struct" {
 	const out = emitC(BRAND + PT + "const pts: Brand656<Pt656>[] = [{ x: 1, y: 2 }];\nconsole.log(pts[0].x);\n");
 	assert out.indexOf("error:", 0) < 0, out;
-	assert out.indexOf("Pt656Array { int64_t len", 0) >= 0, out;
+	assert namesArrayAfter(out, "Pt656"), out;
 	assert !mentionsBoth(out, "Brand656", "Array"), out;
 }
 

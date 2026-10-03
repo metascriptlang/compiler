@@ -5,8 +5,9 @@ import {
 import { TransformContext } from "../context";
 import { walkExpandBlocks } from "../walker";
 import { literalTakesType } from "../../checker/constFold";
-import { makeAssign, makeMember, makeIdentResolved, makeIdent, makeExprStmt } from "../util";
+import { makeAssign, makeMember, makeIdentResolved, makeExprStmt } from "../util";
 import { parseInput, getStmts } from "../testUtil";
+import { checkProgram } from "../../checker/checkPass";
 
 function isDataInitLiteral(init: Node): boolean {
 	return init.kind == NodeKind.NumberLiteral
@@ -37,7 +38,10 @@ function staticFieldAssignment(declNode: Node, ownerName: string, member: Node):
 		pd.propInitializer.nodeType = member.nodeType;
 	}
 	const ownerSym = declNode.resolvedSym;
-	const receiver = ownerSym != null ? makeIdentResolved(ownerSym, member.location) : makeIdent(ownerName, member.location);
+	if (ownerSym == null) {
+		throw new Error(`internal: static field lowering reached '${ownerName}' without its class symbol`);
+	}
+	const receiver = makeIdentResolved(ownerSym, member.location);
 	const target = makeMember(receiver, pd.propName, member.location);
 	target.resolvedSym = staticFieldSym(ownerSym, ownerName + "." + pd.propName);
 	if (member.nodeType != null) { target.nodeType = member.nodeType; }
@@ -107,6 +111,7 @@ export function lowerStaticInit(program: Node, ctx: TransformContext): Node {
 function loweredKinds(input: string): string {
 	const result = parseInput(input);
 	if (!result.ok) return "PARSE_ERROR";
+	checkProgram(result.value);
 	const prog = lowerStaticInit(result.value, null as unknown as TransformContext);
 	let out = "";
 	for (const s of getStmts(prog)) {
@@ -130,6 +135,7 @@ test "a static block becomes statements after the class" {
 test "static statements follow class-body order" {
 	const result = parseInput("function f(): int32 { return 1; }\nclass K { static { K.b = 0; }\n\tstatic a: int32 = f(); }");
 	assert result.ok;
+	checkProgram(result.value);
 	const prog = lowerStaticInit(result.value, null as unknown as TransformContext);
 	const stmts = getStmts(prog);
 	assert stmts.length == 4;

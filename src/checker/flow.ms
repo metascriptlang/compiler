@@ -21,7 +21,7 @@ import {
 	createUnion, inferredType, nullType, neverType,
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
-	isMaybeType, unwrapMaybeType, isDiscriminatedUnion,
+	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance,
 	nullableUnionOf, hasGenericParams,
 	isAtomicRef, peelToStructOrUnion, typeofTagOf, isTypeofTag,
 } from "./types";
@@ -897,9 +897,10 @@ export function narrowType(t: Type | null, expr: Node | null, refNode: Node, ass
 	if (t == null || expr == null || refNode == null) return t;
 	if (_narrowDepth >= NARROW_DEPTH_LIMIT) return t;
 	_narrowDepth = _narrowDepth + 1;
-	const result = narrowTypeInner(t, expr, refNode, assumeTrue);
+	const peeled = peelTransparentInstance(t);
+	const result = narrowTypeInner(peeled, expr, refNode, assumeTrue);
 	_narrowDepth = _narrowDepth - 1;
-	return result;
+	return result == peeled ? t : result;
 }
 
 function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: boolean): Type | null {
@@ -1368,14 +1369,15 @@ function writesThrough(byAddress: Node, refNode: Node): boolean {
 function constrainToDeclared(rhs: Type, declared: Type): Type {
 	if (rhs == null) return declared;
 	if (declared == null) return rhs;
-	if (declared.kind != TypeKind.Union || declared.typeChildren == null) {
+	const union = peelTransparentInstance(declared);
+	if (union.kind != TypeKind.Union || union.typeChildren == null) {
 		return declared;
 	}
 	// Find the best-matching variant in the declared union using typeRelation.
 	// This handles identity matches, named-type matches, primitive kind
 	// matches, AND structural compatibility for anonymous structs — all in
 	// one pass via the established comparison infrastructure.
-	for (const v of declared.typeChildren) {
+	for (const v of union.typeChildren) {
 		if (v == rhs) return rhs;
 		const rel = typeRelation(v, rhs);
 		if (rel != TypeRelation.None) return rhs;

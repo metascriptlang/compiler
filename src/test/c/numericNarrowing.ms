@@ -17,7 +17,7 @@ import { compileToC } from "../helpers";
 function refused(source: string): boolean {
 	const r = compileToC(source);
 	if (r.ok) return false;
-	return r.error.contains("narrowing");
+	return r.error.contains("fractional part");
 }
 
 function accepted(source: string): boolean {
@@ -53,8 +53,10 @@ test "narrowing: an integral literal still flows implicitly" {
 	assert accepted("const x: int32 = 3;");
 }
 
-test "narrowing: an integral float literal still flows implicitly" {
-	assert accepted("const x: int32 = 3.0;");
+test "narrowing: an integral float literal is refused, a float never becomes an integer implicitly" {
+	const r = compileToC("const x: int32 = 3.0;");
+	assert !r.ok;
+	assert r.error.contains("a float never becomes an integer implicitly");
 }
 
 test "narrowing: an explicit cast is the way through" {

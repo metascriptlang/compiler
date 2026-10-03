@@ -4,17 +4,17 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { CGen, CSection, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet, addCGenError } from "./context";
+import { CGen, CSection, CTypeInfoDemand, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet, addCGenError } from "./context";
 import { SymbolFlag, hasFlag, lookupSymbolReadonly, makeSymbol, setFlag } from "../../checker/symbol";
-import { mangle, mangledTypeName, mangleQualified, mangleModuleName, mangleFieldName, safeName } from "./names";
-import { getGlobalTypeOwner, getGlobalTypeOwnerByShape, CheckerContext } from "../../checker/context";
+import { mangle, mangledTypeName, mangledFunctionName, mangleQualified, mangleModuleName, mangleFieldName, safeName } from "./names";
+import { getGlobalTypeOwner, getGlobalTypeOwnerByShape, CheckerContext, newSym } from "../../checker/context";
 
 // Struct C-name resolution: a sym-less named struct (macro-wire / mono
 // round-trips drop identity) first tries the shape-keyed owner registry so
@@ -84,13 +84,23 @@ import { useHeader } from "./context";
 // destructorLifting sets AttachedDestructor on a per-Type-object instance (a throwaway built by
 // unwrapGenericInstance for mono types), so the op never reaches the canonical type codegen reads.
 // The ops therefore live in one GLOBAL table keyed by hook name: a generated hook's symbol is
-// registered before its body exists, references carry it, and `ensureTypeInfoDef` asks it whether
-// a monomorphized instance has a destroy hook.
+// registered before its body exists and references carry it.
 // Lives here (codegen) so destructorLifting — which already imports this module — can populate it
 // without an import cycle. Reset per build via `setGlobalHookOwners` to avoid cross-test bleed.
 let _hookSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
 let _hookSymOrder: Symbol[] = [];
 let _hookSymsSealed = false;
+
+export interface KeyedOp {
+	key: string;
+	sym: Symbol;
+	canon: boolean;
+}
+
+let _opSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+let _opKeyOfName: HashMap<string, string> = new HashMap<string, string>();
+let _opOrder: KeyedOp[] = [];
+let _canonOps: HashSet<Symbol> = new HashSet<Symbol>();
 
 export function sealHookSyms(sealed: boolean): void {
 	_hookSymsSealed = sealed;
@@ -99,6 +109,146 @@ export function sealHookSyms(sealed: boolean): void {
 export function resetHookSyms(): void {
 	_hookSyms = new HashMap<string, Symbol>();
 	_hookSymOrder = [];
+	_opSyms = new HashMap<string, Symbol>();
+	_opKeyOfName = new HashMap<string, string>();
+	_opOrder = [];
+	_canonOps = new HashSet<Symbol>();
+}
+
+function attachedOpName(op: AttachedOp): string {
+	return match (op) {
+		AttachedOp.AttachedWasMoved => "wasMoved",
+		AttachedOp.AttachedDestructor => "destroy",
+		AttachedOp.AttachedAsgn => "copy",
+		AttachedOp.AttachedDup => "dup",
+		AttachedOp.AttachedSink => "sink",
+		AttachedOp.AttachedTrace => "trace",
+		AttachedOp.AttachedEq => "eq",
+		AttachedOp.AttachedLt => "lt",
+		AttachedOp.AttachedLe => "le",
+		AttachedOp.AttachedToString => "toString",
+	};
+}
+
+export function arrayOpElement(elem: Type | null): Type | null {
+	let e = elem;
+	while (e != null) {
+		const body = distinctBody(e);
+		if (body != null) {
+			e = body;
+			continue;
+		}
+		const peeled = peelTransparentInstance(e);
+		if (peeled != e) {
+			e = peeled;
+			continue;
+		}
+		if ((e.kind == TypeKind.Distinct || e.kind == TypeKind.Alias) && e.typeReturn != null) {
+			e = e.typeReturn;
+			continue;
+		}
+		return e;
+	}
+	return e;
+}
+
+export function opTypeKey(t: Type | null): string {
+	if (t == null) return "null";
+	if (t.kind == TypeKind.Alias && t.typeReturn != null) return opTypeKey(t.typeReturn);
+	if (t.kind == TypeKind.Array) return "array:" + opTypeKey(arrayOpElement(t.typeReturn));
+	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) {
+		const counting = isAtomicRef(t) ? "atomic:" : "";
+		return (t.kind == TypeKind.Ref ? "ref:" : "ptr:") + counting + opTypeKey(t.typeReturn);
+	}
+	return typeKey(t);
+}
+
+function opKey(t: Type, op: AttachedOp): string {
+	return attachedOpName(op) + "|" + opTypeKey(t);
+}
+
+function recordOp(key: string, sym: Symbol, canon: boolean): void {
+	const held = _opSyms.get(key);
+	if (held != null && held.name != sym.name) {
+		throw new Error(`internal: type-bound op ${key} is both '${held.name}' and '${sym.name}'`);
+	}
+	if (canon) {
+		const identity = sym.modulePath != "" ? `${sym.modulePath}:${sym.name}:${sym.disamb}` : sym.name;
+		const heldKey = _opKeyOfName.get(identity);
+		if (heldKey != null && heldKey != key) {
+			throw new Error(`internal: generated op '${sym.name}' serves two types: ${heldKey} and ${key}`);
+		}
+		if (heldKey == null) _opKeyOfName.set(identity, key);
+		_canonOps.add(sym);
+	}
+	if (held != null) return;
+	_opSyms.set(key, sym);
+	_opOrder.push({ key, sym, canon });
+}
+
+export function setOpByKey(t: Type, op: AttachedOp, sym: Symbol): void {
+	recordOp(opKey(t, op), sym, true);
+}
+
+export function bindOpByKey(t: Type, op: AttachedOp, sym: Symbol): void {
+	recordOp(opKey(t, op), sym, false);
+}
+
+export function isTypeBoundOp(sym: Symbol): boolean {
+	return _canonOps.has(sym);
+}
+
+export function getOpByKey(t: Type, op: AttachedOp): Symbol | null {
+	return _opSyms.get(opKey(t, op));
+}
+
+export function requireOpByKey(t: Type, op: AttachedOp): Symbol {
+	const key = opKey(t, op);
+	const sym = _opSyms.get(key);
+	if (sym == null) throw new Error(`internal: type-bound op ${key} is used before it was lifted`);
+	return sym;
+}
+
+export function opPrototype(t: Type, op: AttachedOp, name: string, ctx: CheckerContext): Symbol {
+	const key = opKey(t, op);
+	const existing = _opSyms.get(key);
+	if (existing != null) return existing;
+	if (_hookSymsSealed) throw new Error(`internal: type-bound op ${key} first requested while C modules are emitted in parallel`);
+	const sym = newSym(ctx, SymbolKind.Function, name, null);
+	setFlag(sym, SymbolFlag.GeneratedOp);
+	if (op == AttachedOp.AttachedDestructor) setFlag(sym, SymbolFlag.DestroyOp);
+	else if (op == AttachedOp.AttachedWasMoved) setFlag(sym, SymbolFlag.WasMovedOp);
+	recordOp(key, sym, true);
+	return sym;
+}
+
+export function aliasOpByKey(orig: Type, canon: Type, op: AttachedOp): void {
+	const sym = _opSyms.get(opKey(canon, op));
+	if (sym != null) recordOp(opKey(orig, op), sym, false);
+}
+
+export function checkOpByKey(t: Type, op: AttachedOp, name: string): void {
+	const byName = _hookSyms.get(name);
+	if (byName == null) return;
+	const key = opKey(t, op);
+	const byKey = _opSyms.get(key);
+	if (byKey == byName) return;
+	const held = byKey != null ? `'${byKey.name}'` : "nothing";
+	throw new Error(`internal: type-bound op ${key} holds ${held} where the hook table names '${name}'`);
+}
+
+export function opMark(): int32 {
+	return _opOrder.length as int32;
+}
+
+export function opsFrom(mark: int32): KeyedOp[] {
+	const taken: KeyedOp[] = [];
+	for (let i = mark; i < _opOrder.length; i += 1) taken.push(_opOrder[i]);
+	return taken;
+}
+
+export function replayOps(ops: KeyedOp[]): void {
+	for (const op of ops) recordOp(op.key, op.sym, op.canon);
 }
 
 export function hookSymMark(): int32 {
@@ -139,9 +289,6 @@ export function hookComplete(name: string, fnType: Type | null): Symbol {
 	sym.symbolType = fnType!;
 	return sym;
 }
-export function genHasDestroyHook(typeName: string): boolean {
-	return _hookSyms.get(typeName + "Destroy") != null;
-}
 
 export function procHeader(g: CGen, name: string, fnType: Type, paramNames: Readonly<string[]> | null, mutBits: int32, hookAbi: boolean): string {
 	let cRetType = getTypeDesc(g, fnType.typeReturn);
@@ -175,9 +322,14 @@ export function ensureDrcProto(g: CGen, callee: string, sym: Symbol | null): voi
 	if (hook == null || !hasFlag(hook, SymbolFlag.GeneratedOp)) return;
 	const fnType = hook.symbolType;
 	if (fnType == null || fnType.kind != TypeKind.Function) return;
-	if (nameSetHas(g.declaredProcs, callee)) return;
-	nameSetAdd(g.declaredProcs, callee);
-	addLine(sec(g, CSection.ProcHeaders), procHeader(g, callee, fnType, null, 0, true) + ";");
+	const cName = hook.modulePath != "" ? mangledFunctionName(hook, hook.name, hook.overloadIdx) : callee;
+	if (nameSetHas(g.declaredProcs, cName)) return;
+	nameSetAdd(g.declaredProcs, cName);
+	addLine(sec(g, CSection.ProcHeaders), procHeader(g, cName, fnType, null, 0, true) + ";");
+}
+
+export function opCName(op: Symbol): string {
+	return mangledFunctionName(op, op.name, op.overloadIdx);
 }
 
 
@@ -847,6 +999,17 @@ export function isCompilerGenCName(g: CGen, cn: string): boolean {
 	return bare.length > 0 && bare.slice(0, 1) == "$";
 }
 
+function sharedTypeOp(g: CGen, className: string, objType: Type | null, op: AttachedOp, suffix: string): Symbol | null {
+	if (objType == null) {
+		if (lookupHookSym(className + suffix) != null) {
+			addCGenError(g, `internal: TypeInfo '${className}' reached codegen without its type, so its lifted ${suffix} op cannot be found`, 0, 0);
+		}
+		return null;
+	}
+	const opType = objType.kind == TypeKind.Ref && objType.typeReturn != null ? objType.typeReturn : objType;
+	return getOpByKey(opType, op);
+}
+
 export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | null): void {
 	// TypeInfo is DRC metadata — unused under --gc=manual (write-only in manual.h).
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
@@ -897,22 +1060,20 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	const runtimeName = bareOrigin != "" ? mangle(bareOrigin) : className;
 	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.name = "${runtimeName}";`);
 	let destroyHook = "";
-	const destroySym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedDestructor) : null;
+	let destroySym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedDestructor) : null;
+	// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
+	// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
+	// objType resolved here. Read the op lifted for the instance's key instead.
+	if (destroySym == null && sharedName) destroySym = sharedTypeOp(g, className, objType, AttachedOp.AttachedDestructor, "Destroy");
 	if (destroySym != null) {
 		destroyHook = mangle(destroySym.name);
 		ensureDrcProto(g, destroyHook, destroySym);
-	} else if (sharedName && genHasDestroyHook(className)) {
-		// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
-		// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
-		// objType resolved here. Consult the global destroy-hook registry by hook name.
-		destroyHook = mangle(className + "Destroy");
-		ensureDrcProto(g, destroyHook, lookupHookSym(className + "Destroy"));
 	}
 	if (destroyHook.length > 0) {
 		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.destroyFn = (msDestroyProc)${destroyHook};`);
 	}
 	let traceSym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedTrace) : null;
-	if (traceSym == null && sharedName) traceSym = lookupHookSym(className + "Trace");
+	if (traceSym == null && sharedName) traceSym = sharedTypeOp(g, className, objType, AttachedOp.AttachedTrace, "Trace");
 	if (traceSym != null) {
 		const traceHook = mangle(traceSym.name);
 		ensureDrcProto(g, traceHook, traceSym);
@@ -939,7 +1100,7 @@ export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type | null, cType: 
 	typeCacheSet(g.forwTypeCache, key, cellName);
 	let destroyHook = "";
 	// Wire destroyFn only when the pointee actually carries owned refs — the same
-	// predicate the ref-array cell uses to pick its walker (refArrayDestroyFn).
+	// predicate the ref-array cell uses to pick its walker (registerArrayOps).
 	// A POD pointee's hook function is dropped by reachability (no AST call edge
 	// exists — the analyzer injects no destroys for POD temps), so wiring the
 	// name is an undefined symbol at link. types.h documents destroyFn == NULL
@@ -948,7 +1109,7 @@ export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type | null, cType: 
 		const hookSym = getAttachedOp(pointeeType, AttachedOp.AttachedDestructor);
 		if (hookSym != null) {
 			destroyHook = mangle(hookSym.name);
-			ensureDrcProto(g, destroyHook, lookupHookSym(hookSym.name));
+			ensureDrcProto(g, destroyHook, hookSym);
 		}
 	}
 	addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${cellName}TypeInfo;`);
@@ -959,23 +1120,65 @@ export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type | null, cType: 
 	return tiRef;
 }
 
-// Emit the TypeInfo for a reference-array heap cell (Ref<Array<T>>): a refcounted
-// cell whose destroyFn frees the boxed value-array's payload when rc hits 0. Weak
-// linkage — the same element type may be boxed in several modules; linker dedups.
-export function ensureRefArrayCellTypeInfo(g: CGen, cellName: string, label: string, destroyFn: string): void {
+export function refArrayCellKey(arrT: Type): string {
+	return opTypeKey(createRef(arrT));
+}
+
+export function refArrayCellOp(arrT: Type, op: AttachedOp): Symbol | null {
+	return getOpByKey(createRef(arrT), op);
+}
+
+export function isHcrImageModule(g: CGen, modulePath: string): boolean {
+	return g.emissionFacts.hcrModules.has(modulePath);
+}
+
+export function ensureRefArrayCellTypeInfo(g: CGen, arrT: Type): string {
+	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
+	const key = refArrayCellKey(arrT);
+	const info = g.emissionFacts.typeInfos.readonlyGet(key);
+	if (info == null) {
+		addCGenError(g, `internal: ref-array cell TypeInfo ${key} demanded in ${g.modulePath} without a reachability edge`, 0, 0);
+		return "NULL";
+	}
+	const forwKey = "typeInfo:" + info.cName;
+	if (!typeCacheHas(g.forwTypeCache, forwKey)) {
+		typeCacheSet(g.forwTypeCache, forwKey, info.cName);
+		addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${info.cName}TypeInfo;`);
+	}
+	return `&${info.cName}TypeInfo`;
+}
+
+function refArrayCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
+	const arrT = info.cell.typeReturn!;
+	const arrCType = getTypeDesc(g, arrT);
+	const elem = arrayOpElement(arrT.typeReturn);
+	if (arrCType == "msRefArray" && opCName(info.destroy) == "msNumberArrayDestroy") return "msPtrArrayRefCell";
+	if (arrCType == "msRefArray" && elem != null && (elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr)) {
+		if (elem.sym != null && elem.sym.symbolKind == SymbolKind.Actor) return "msPtrArrayRefCell";
+		if (isAtomicRef(elem)) return "msAtomicArrayRefCell";
+	}
+	if (!arrCType.endsWith("Array")) return arrCType + "RefCell";
+	const elemCName = arrCType.slice(0, arrCType.length - 5);
+	const bare = typeCacheGet(g.typeCache, "bare:" + elemCName);
+	return (bare != "" ? getArrayTypeName(bare) : arrCType) + "RefCell";
+}
+
+export function emitOwnedTypeInfos(g: CGen): void {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
-	const key = "refArrayCell:" + cellName;
-	if (typeCacheHas(g.forwTypeCache, key)) return;
-	typeCacheSet(g.forwTypeCache, key, cellName);
-	addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${cellName}TypeInfo;`);
-	addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.name = "${label}";`);
-	addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.destroyFn = (msDestroyProc)${destroyFn};`);
-	const traceSym = lookupHookSym(cellName + "Trace");
-	if (traceSym != null) {
-		const traceHook = mangle(traceSym.name);
-		ensureDrcProto(g, traceHook, traceSym);
-		addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.isCyclic = MS_TRUE;`);
-		addLine(sec(g, CSection.DatInit), `  ${cellName}TypeInfo.traceFn = (msTraceProc)${traceHook};`);
+	const viaRegistry = isHcrImageModule(g, g.modulePath);
+	for (const info of g.emissionFacts.typeInfoOrder) {
+		if (info.owner != g.modulePath) continue;
+		const destroyName = opCName(info.destroy);
+		ensureDrcProto(g, destroyName, info.destroy);
+		let traceName = "NULL";
+		if (info.trace != null) {
+			traceName = opCName(info.trace);
+			ensureDrcProto(g, traceName, info.trace);
+		}
+		const fields = `.name = "${refArrayCellLabel(g, info)}", .isCyclic = ${info.trace != null ? "MS_TRUE" : "MS_FALSE"}, `
+			+ `.traceFn = (msTraceProc)${traceName}, .destroyFn = (msDestroyProc)${destroyName}, .flags = 0, .base = NULL`;
+		if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${info.cName}TypeInfo = (msTypeInfo){ ${fields} };`);
+		else addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${info.cName}TypeInfo = { ${fields} };`);
 	}
 }
 
@@ -1487,17 +1690,11 @@ function genArrayType(g: CGen, t: Type): string {
 	// getTypeDesc(elem) kept for its emission side-effect (element typedef) + the data[] type.
 	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : getTypeDesc(g, t.typeReturn);
 
-	// Single source for the name: arrayCTypeName reproduces the legacy inline rule exactly
-	// (verified zero-divergence across the full self-host). destructorLifting routes the
-	// per-type walker name through the same arrayCTypeName, so the two can never drift.
 	const arrTypeName = arrayCTypeName(t);
 	typeCacheSet(g.typeCache, key, arrTypeName);
 
 	// Built-in array families are runtime-provided — no per-type typedef.
-	if (arrTypeName == "msNumberArray" || arrTypeName == "msStringArray" || arrTypeName == "msUint8Array"
-		|| arrTypeName == "msClosureArray" || arrTypeName == "msRefArray") {
-		return arrTypeName;
-	}
+	if (isRuntimeArrayFamily(t)) return arrTypeName;
 
 	// Emit typedef if not already done
 	const fwdKey = "arrtd:" + arrTypeName;
@@ -1529,11 +1726,6 @@ export function getArrayTypeName(elemType: string): string {
 	return mangle(elemType) + "Array";
 }
 
-// Element's C type NAME (no emission) — mirrors EVERY name-producing branch of getTypeDesc
-// using the SAME building blocks (getSimpleTypeDesc / mangle / monoTypeKey / tupleTypeName),
-// so arrayCTypeName agrees with getTypeDesc for any element that appears in a value array.
-// Verified complete: a build-wide name-equality check found zero divergences from the legacy
-// inline rule across the whole self-host. If a new element kind is added, re-run that check.
 function elemArrayCName(elem: Type): string {
 	const simple = getSimpleTypeDesc(elem);
 	if (simple != "") return simple;
@@ -1544,8 +1736,8 @@ function elemArrayCName(elem: Type): string {
 		const sr = setRepr(elem);
 		if (sr != null) return elemArrayCName(sr);
 	}
-	if (elem.kind == TypeKind.Enum) return mangle(elem.typeName);
-	if (elem.kind == TypeKind.EnumLiteral) return (elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Enum) ? mangle(elem.typeReturn.typeName) : "int32_t";
+	if (elem.kind == TypeKind.Enum) return resolvedTypeCName(elem, true);
+	if (elem.kind == TypeKind.EnumLiteral) return (elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Enum) ? resolvedTypeCName(elem.typeReturn, true) : "int32_t";
 	if (elem.kind == TypeKind.Tuple) return tupleTypeName(elem);
 	if (elem.kind == TypeKind.Array) return arrayCTypeName(elem);
 	if ((elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr || elem.kind == TypeKind.Var) && elem.typeReturn != null) return elemArrayCName(elem.typeReturn) + "*";
@@ -1557,7 +1749,7 @@ function elemArrayCName(elem: Type): string {
 	}
 	if (elem.kind == TypeKind.GenericInstance) return monoInstanceName(elem);
 	if (elem.kind == TypeKind.Struct) {
-		return isAnonTypeName(elem.typeName) ? anonTypeName(elem) : mangle(elem.typeName);
+		return isAnonTypeName(elem.typeName) ? anonTypeName(elem) : resolvedTypeCName(elem, true);
 	}
 	return "void*";
 }
@@ -1577,10 +1769,14 @@ export function arrayCTypeName(t: Type): string {
 	return getArrayTypeName(ecn);
 }
 
+export function isRuntimeArrayFamily(t: Type): boolean {
+	const name = arrayCTypeName(t);
+	return name == "msNumberArray" || name == "msStringArray" || name == "msUint8Array"
+		|| name == "msClosureArray" || name == "msRefArray";
+}
+
 export function refArrayCellName(t: Type): string {
-	const arrCType = arrayCTypeName(t);
-	if (!arrCType.startsWith("msRefArray")) return arrCType + "RefCell";
-	return arrCType + "_" + hashToBase36(typeKey(t.typeReturn)) + "RefCell";
+	return arrayCTypeName(t) + "_" + hashToBase36(opTypeKey(t)) + "RefCell";
 }
 
 // Returns the array content/payload struct name for a given array type name.
@@ -1761,12 +1957,12 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 	// the array typedef so the payload struct is complete for sizeof() inside the macro.
 	if (innerDesc == "int32_t") {
 		genArrayType(g, createArray(innerType));
-		emitPromiseAllInstance(g, "msFuture_int32", "int32_t", "int32_t", "int32_tArray", "int32_tArray__Content", "MS_COPY_SAME", "msNumberArrayDestroy");
+		emitPromiseAllInstance(g, "msFuture_int32", "int32_t", "int32_t", "int32_tArray", "int32_tArray__Content", "MS_COPY_SAME", "msNumberArrayDestroy", "int32_tArrayPallCell");
 		return "msPromiseAllFor_msFuture_int32";
 	}
 	if (innerDesc == "int64_t") {
 		genArrayType(g, createArray(innerType));
-		emitPromiseAllInstance(g, "msFuture_int64", "int64_t", "int64_t", "int64_tArray", "int64_tArray__Content", "MS_COPY_SAME", "msNumberArrayDestroy");
+		emitPromiseAllInstance(g, "msFuture_int64", "int64_t", "int64_t", "int64_tArray", "int64_tArray__Content", "MS_COPY_SAME", "msNumberArrayDestroy", "int64_tArrayPallCell");
 		return "msPromiseAllFor_msFuture_int64";
 	}
 
@@ -1779,25 +1975,18 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 	// msSinkBoxStruct), so collect is MS_COPY_BOXED_MOVE: move the bits out of the
 	// box, free the shell — refs transfer to the slot, no per-type Copy hook.
 	genArrayType(g, createArray(innerType));
-	// Array typedefs and DRC hooks are emitted under the BARE struct name
-	// (UserArray / UserArrayDestroy), while the future struct + instance symbol
-	// carry the module-mangled name — mixing them up references types that no TU defines.
-	const bareBase = typeCacheGet(g.typeCache, "bare:" + innerDesc);
-	const baseDesc = bareBase != "" ? bareBase : innerDesc;
 	const futName = "msFuture_" + mangle(innerDesc);
-	const arrName = getArrayTypeName(baseDesc);
+	const arrName = arrayCTypeName(createArray(innerType));
 	const payloadName = getArrayContentType(arrName);
-	// The result array cell's destroyFn releases collected slots. destructorLifting
-	// generates `<typeName>ArrayDestroy` only for named structs with RC fields
-	// (`hasAsgnFlag`); anonymous structs are skipped there, so they get the
-	// free-only fallback. Emit a forward decl in ProcHeaders so the static TI
-	// initializer (GlobalVars, renders before Procs) can reference the walker.
 	let destroyFn = "msNumberArrayDestroy";
 	if (innerType.kind == TypeKind.Struct && innerType.typeName != "" && hasAsgnFlag(innerType)) {
-		destroyFn = baseDesc + "ArrayDestroy";
-		ensureDrcProto(g, destroyFn, null);
+		const walker = requireOpByKey(createArray(innerType), AttachedOp.AttachedDestructor);
+		destroyFn = opCName(walker);
+		ensureDrcProto(g, destroyFn, walker);
 	}
-	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, "MS_COPY_BOXED_MOVE", destroyFn);
+	const bare = typeCacheGet(g.typeCache, "bare:" + innerDesc);
+	const cellName = (bare != "" ? getArrayTypeName(bare) : arrName) + "PallCell";
+	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, "MS_COPY_BOXED_MOVE", destroyFn, cellName);
 	return "msPromiseAllFor_" + futName;
 }
 
@@ -1806,7 +1995,7 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 // storage element `dstElem`). Guarded by #ifndef — idempotent across modules.
 // Pre-instantiated types (msFuture_double / msFuture_bool / msFuture_ptr in
 // combinator.h, msFuture_msString in system.h) are skipped at call sites.
-function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem: string, arrName: string, payloadName: string, copyStmt: string, destroyFn: string): void {
+function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem: string, arrName: string, payloadName: string, copyStmt: string, destroyFn: string, cellName: string): void {
 	const guard = "msPromiseAllFor_" + futName + "_DEFINED";
 	// Emit into GlobalVars (runs after Types + SeqTypes) so the array payload's
 	// full struct definition is visible to sizeof(payloadType) inside the macro
@@ -1814,7 +2003,7 @@ function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem:
 	const b = sec(g, CSection.GlobalVars);
 	addLine(b, "#ifndef " + guard);
 	addLine(b, "#define " + guard);
-	addLine(b, "MS_PROMISE_ALL_FOR(" + srcT + ", " + futName + ", " + dstElem + ", " + arrName + ", " + payloadName + ", " + copyStmt + ", " + destroyFn + ");");
+	addLine(b, "MS_PROMISE_ALL_FOR_NAMED(" + srcT + ", " + futName + ", " + dstElem + ", " + arrName + ", " + payloadName + ", " + copyStmt + ", " + destroyFn + ", \"" + cellName + "\");");
 	addLine(b, "#endif");
 	addNewline(b);
 }
@@ -1826,11 +2015,10 @@ export function ensureFutureThenBoxedInstance(g: CGen, innerType: Type, byRef: b
 	const name = (byRef ? "msFutureThenBoxedRef_" : "msFutureThenBoxed_") + mangle(innerDesc);
 	let drop = "MS_NO_DROP";
 	if (hasAsgnFlag(innerType)) {
-		const destroySym = getAttachedOp(innerType, AttachedOp.AttachedDestructor);
-		const hookName = destroySym != null ? destroySym.name : innerDesc + "Destroy";
-		const hook = destroySym != null ? destroySym : lookupHookSym(hookName);
+		const attached = getAttachedOp(innerType, AttachedOp.AttachedDestructor);
+		const hook = attached != null ? attached : getOpByKey(innerType, AttachedOp.AttachedDestructor);
 		if (hook != null) {
-			drop = mangle(hookName);
+			drop = mangle(hook.name);
 			ensureDrcProto(g, drop, hook);
 		}
 	}

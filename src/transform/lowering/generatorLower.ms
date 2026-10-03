@@ -23,26 +23,26 @@ import {
 	ExprStmtData, TryCatchStmtData, YieldExprData,
 	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type, TypeKind,
 	IdentifierData, Symbol, SymbolKind,
-	isEmptyBlock,
+	isEmptyBlock, makeLoc,
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { mapChildren } from "../walker";
 import { makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
-import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, reportTransformError } from "../context";
+import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError } from "../context";
 import {
-	makeIdent, makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
+	makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign, makeContinue,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
-	collectDeclNames, makeTryCatch, makeCatchSym, makeMoveExpr,
+	makeTryCatch, makeCatchSym, makeMoveExpr,
 	makeSwitch, makeSwitchCase, makeDefaultValue,
 } from "../util";
 import { numberType, createPtr, createPrimitive } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
-import { renameRepeatedBindingsInFrame } from "./lambdaLiftingRename";
 import { isOnceLoop, collectIterationDecls } from "./lambdaLiftingDetect";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
+import { checkProgram } from "../../checker/checkPass";
 
 // ===== Data Structures =====
 
@@ -51,7 +51,7 @@ export interface GenState {
 	isYield: boolean;
 	nextState: number;
 	stmts: Node[];
-	yieldVarName: string;   // variable assigned from yield (for async resume)
+	yieldVarSym: Symbol | null;  // binding assigned from yield (for async resume)
 	yieldVarType: Type | null;     // type of the variable (for unboxing msFutureRead)
 	excLanding: number;     // reference exceptionTable[i]: state to jump to if this state raises (-1 = propagate)
 }
@@ -120,20 +120,32 @@ function isFnBoundary(node: Node): boolean {
 }
 
 // Reference parity (captureVar): env fields always carry their original type.
-function collectDeclTypes(node: Node, names: string[], types: Type[], syms: Symbol[]): void {
+function collectDeclTypes(node: Node, syms: Symbol[], types: Type[]): void {
 	if (node == null || isFnBoundary(node)) return;
-	if (node.kind == NodeKind.VariableDecl) {
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null) {
 		const d = node.data as VariableDeclData;
 		let t = node.nodeType;
 		if (t == null && d.initializer != null) t = d.initializer.nodeType;
-		if (t == null && node.resolvedSym != null) t = node.resolvedSym.symbolType;
+		if (t == null) t = node.resolvedSym.symbolType;
 		if (t != null) {
-			names.push(d.declName);
+			syms.push(node.resolvedSym);
 			types.push(t);
-			syms.push(node.resolvedSym!);
 		}
 	}
-	forEachChild(node, (child: Node): void => { collectDeclTypes(child, names, types, syms); });
+	forEachChild(node, (child: Node): void => { collectDeclTypes(child, syms, types); });
+}
+
+// A local without its symbol cannot be told from another of its spelling (NIM-REF TR-1).
+export function collectStateLocals(node: Node | null, ctx: TransformContext, out: SymSet): void {
+	if (node == null || isFnBoundary(node)) return;
+	if (node.kind == NodeKind.VariableDecl) {
+		if (node.resolvedSym != null) {
+			symSetAdd(out, node.resolvedSym);
+		} else {
+			reportTransformError(ctx, `internal: the local '${(node.data as VariableDeclData).declName}' reached the state machine without its symbol`, node.location);
+		}
+	}
+	forEachChild(node, (child: Node): void => { collectStateLocals(child, ctx, out); });
 }
 
 function cloneStmts(stmts: Node[]): Node[] {
@@ -154,10 +166,10 @@ function finallyPrefix(frames: FinallyFrame[], n: number): FinallyFrame[] {
 	return out;
 }
 
-function lookupDeclIdx(names: string[], name: string): int32 {
+function lookupDeclIdx(syms: Symbol[], sym: Symbol): int32 {
 	let i = 0;
-	while (i < names.length) {
-		if (names[i] == name) return i as int32;
+	while (i < syms.length) {
+		if (syms[i] == sym) return i as int32;
 		i = i + 1;
 	}
 	return -1 as int32;
@@ -325,7 +337,7 @@ function needsSplit(stmt: Node, sc: StateCollector): boolean {
 
 export function allocState(sc: StateCollector): number {
 	const idx = sc.items.length;
-	const st: GenState = { index: idx, isYield: false, nextState: -1, stmts: [], yieldVarName: "", yieldVarType: null, excLanding: -1 };
+	const st: GenState = { index: idx, isYield: false, nextState: -1, stmts: [], yieldVarSym: null, yieldVarType: null, excLanding: -1 };
 	sc.items.push(st);
 	return idx;
 }
@@ -427,7 +439,8 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 				const yd = vd.initializer.data as YieldExprData;
 				const nextSt = allocState(sc);
 				emitYield(sc, currentState, nextSt, yd.yieldArg, loc, resultType);
-				sc.items[currentState].yieldVarName = vd.declName;
+				if (stmt.resolvedSym == null) reportUnsplit(stmt, `internal: the binding '${vd.declName}' of a yield or await reached the state machine without its symbol`);
+				sc.items[currentState].yieldVarSym = stmt.resolvedSym;
 				sc.items[currentState].yieldVarType = stmt.nodeType;
 				// On resume: convert decl to assignment (var is lifted)
 				currentState = nextSt;
@@ -749,9 +762,9 @@ export function hasExcLanding(sc: StateCollector): boolean {
 	return false;
 }
 
-export function wrapExcRouting(dispatch: Node, sc: StateCollector, loc: SourceLocation): Node {
+export function wrapExcRouting(dispatch: Node, sc: StateCollector, ctx: TransformContext, loc: SourceLocation): Node {
 	if (!hasExcLanding(sc)) return dispatch;
-	const caughtSym = makeCatchSym("$excCaught");
+	const caughtSym = makeCatchSym(ctx, "$excCaught");
 	return makeTryCatch(dispatch, caughtSym, buildExcRouting(sc, caughtSym, loc), null as unknown as Node, loc);
 }
 
@@ -819,47 +832,43 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 	}
 }
 
-function touchLocals(n: Node | null, nc: NameSet, touched: NameSet, declared: string[]): void {
+function touchLocals(n: Node | null, locals: SymSet, touched: SymSet, declared: Symbol[]): void {
 	if (n == null) return;
 	if (n.kind == NodeKind.Identifier) {
-		const name = (n.data as IdentifierData).name;
-		if (nameSetContains(nc, name)) nameSetAdd(touched, name);
+		if (symSetContains(locals, n.resolvedSym)) symSetAdd(touched, n.resolvedSym!);
 		return;
 	}
-	if (n.kind == NodeKind.VariableDecl) {
-		const name = (n.data as VariableDeclData).declName;
-		if (nameSetContains(nc, name)) {
-			nameSetAdd(touched, name);
-			declared.push(name);
-		}
+	if (n.kind == NodeKind.VariableDecl && symSetContains(locals, n.resolvedSym)) {
+		symSetAdd(touched, n.resolvedSym!);
+		declared.push(n.resolvedSym!);
 	}
-	forEachChild(n, (c: Node): void => { touchLocals(c, nc, touched, declared); });
+	forEachChild(n, (c: Node): void => { touchLocals(c, locals, touched, declared); });
 }
 
-export function localsSpanningStates(sc: StateCollector, nc: NameSet): NameSet {
-	const touched: NameSet[] = [];
-	const declared: string[] = [];
+export function localsSpanningStates(sc: StateCollector, locals: SymSet): SymSet {
+	const touched: SymSet[] = [];
+	const declared: Symbol[] = [];
 	for (const st of sc.items) {
-		const t = createNameSet();
-		for (const s of st.stmts) touchLocals(s, nc, t, declared);
+		const t = createSymSet();
+		for (const s of st.stmts) touchLocals(s, locals, t, declared);
 		touched.push(t);
 	}
 	for (const st of sc.items) {
-		if (st.isYield && st.yieldVarName != "" && st.nextState >= 0 && st.nextState < touched.length) {
-			nameSetAdd(touched[st.nextState], st.yieldVarName);
+		if (st.isYield && st.yieldVarSym != null && st.nextState >= 0 && st.nextState < touched.length) {
+			symSetAdd(touched[st.nextState], st.yieldVarSym);
 		}
 	}
-	const lifted = createNameSet();
-	for (const name of nc.items) {
+	const lifted = createSymSet();
+	for (const sym of locals.items) {
 		let states = 0;
 		for (const t of touched) {
-			if (nameSetContains(t, name)) states += 1;
+			if (symSetContains(t, sym)) states += 1;
 		}
 		let decls = 0;
 		for (const d of declared) {
-			if (d == name) decls += 1;
+			if (d == sym) decls += 1;
 		}
-		if (states != 1 || decls != 1) nameSetAdd(lifted, name);
+		if (states != 1 || decls != 1) symSetAdd(lifted, sym);
 	}
 	return lifted;
 }
@@ -868,28 +877,18 @@ export function localsSpanningStates(sc: StateCollector, nc: NameSet): NameSet {
 // Convert lifted variable declarations to assignments in state bodies.
 // Variables are hoisted to function scope, so decls become assignments.
 
-export function convertDeclsToAssigns(stmts: Node[], liftedNames: NameSet, loc: SourceLocation): void {
+export function convertDeclsToAssigns(stmts: Node[], lifted: SymSet, loc: SourceLocation): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
-		if (stmt.kind == NodeKind.VariableDecl) {
-			const vd = stmt.data as VariableDeclData;
-			if (nameSetContains(liftedNames, vd.declName)) {
-				// Convert: const/let x = init → x = init (assignment)
-				// Preserve the VarDecl's resolvedSym on the LHS Identifier so downstream
-				// passes (lambdaLifting capture resolution, codegen) identify this as the
-				// original local binding — not a fall-through to an outer/global with the
-				// same name. Critical for shadow-safe rewriting of async state machines.
-				const lhs = (stmt.resolvedSym != null)
-					? makeIdentResolved(stmt.resolvedSym, loc)
-					: makeIdent(vd.declName, loc);
-				(lhs.data as IdentifierData).name = vd.declName;
-				let init = vd.initializer;
-				if (init == null) {
-					init = makeNull(loc);
-					init.nodeType = stmt.nodeType;
-				}
-				stmts[i] = makeExprStmt(makeAssign(lhs, init, loc), loc);
+		if (stmt.kind == NodeKind.VariableDecl && symSetContains(lifted, stmt.resolvedSym)) {
+			// Convert: const/let x = init → x = init (assignment)
+			const lhs = makeIdentResolved(stmt.resolvedSym!, loc);
+			let init = (stmt.data as VariableDeclData).initializer;
+			if (init == null) {
+				init = makeNull(loc);
+				init.nodeType = stmt.nodeType;
 			}
+			stmts[i] = makeExprStmt(makeAssign(lhs, init, loc), loc);
 		}
 	}
 }
@@ -915,15 +914,13 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType:
 
 // ===== Generator Function Transform =====
 
-function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, loc: SourceLocation): Node {
-	// 1. Collect all local variable names and their types
-	renameRepeatedBindingsInFrame(params, body, "$g");
-	const nc: NameSet = createNameSet();
-	collectDeclNames(body, nc, false);
-	const dtNames: string[] = [];
-	const dtTypes: Type[] = [];
+function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, ctx: TransformContext, loc: SourceLocation): Node {
+	// 1. Collect all locals and their types
+	const locals = createSymSet();
+	collectStateLocals(body, ctx, locals);
 	const dtSyms: Symbol[] = [];
-	collectDeclTypes(body, dtNames, dtTypes, dtSyms);
+	const dtTypes: Type[] = [];
+	collectDeclTypes(body, dtSyms, dtTypes);
 
 	// 2. Extract body statements
 	const bodyStmts = extractBodyStmts(body);
@@ -942,7 +939,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	splitStmts(bodyStmts, sc, initState, doneState, loc, iterResultType);
 
 	// 5. Convert the declarations of the locals that outlive a state to assignments
-	const lifted = localsSpanningStates(sc, nc);
+	const lifted = localsSpanningStates(sc, locals);
 	for (const st of sc.items) {
 		convertDeclsToAssigns(st.stmts, lifted, loc);
 	}
@@ -954,7 +951,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	// wrap the dispatch in a try/catch that routes a raised state to its
 	// landing (reference closureiters exceptionTable + the wrapping except).
 	const hasExc = hasExcLanding(sc);
-	const dispatchBody = wrapExcRouting(dispatch, sc, loc);
+	const dispatchBody = wrapExcRouting(dispatch, sc, ctx, loc);
 
 	// 7. Wrap in while(true) { dispatch }
 	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
@@ -991,15 +988,13 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	stateDecl.resolvedSym = stateSym;
 	newBodyStmts.push(stateDecl);
 	if (hasExc) newBodyStmts.push(makeCurExcDecl(sc, loc));
-	for (const localName of lifted.items) {
+	for (const sym of lifted.items) {
 		// Stamp original nodeType so lambda lifting creates correctly-typed env fields.
 		// Reference parity: captureVar always adds field with original type.
-		const dtIdx = lookupDeclIdx(dtNames, localName);
-		const decl = makeVarDecl(localName, dtIdx >= 0 ? makeDefaultValue(dtTypes[dtIdx], loc) : makeNull(loc), DeclKind.Let, loc);
-		if (dtIdx >= 0) {
-			decl.nodeType = dtTypes[dtIdx];
-			decl.resolvedSym = dtSyms[dtIdx];
-		}
+		const dtIdx = lookupDeclIdx(dtSyms, sym);
+		const decl = makeVarDecl(sym.name, dtIdx >= 0 ? makeDefaultValue(dtTypes[dtIdx], loc) : makeNull(loc), DeclKind.Let, loc);
+		decl.resolvedSym = sym;
+		if (dtIdx >= 0) decl.nodeType = dtTypes[dtIdx];
 		newBodyStmts.push(decl);
 	}
 	newBodyStmts.push(makeReturn(iterObj, loc));
@@ -1009,19 +1004,19 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 
 // ===== Main Walk =====
 
-function walkGenerators(node: Node): void {
+function walkGenerators(node: Node, ctx: TransformContext): void {
 	match (node.kind) {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
-			for (const s of d.programStmts) { walkGenerators(s); }
+			for (const s of d.programStmts) { walkGenerators(s, ctx); }
 		},
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
-			for (const s of d.statements) { walkGenerators(s); }
+			for (const s of d.statements) { walkGenerators(s, ctx); }
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
-			walkGenerators(d.fnBody);
+			walkGenerators(d.fnBody, ctx);
 			if (isGeneratorFlag(d.fnFlags)) {
 				// Skip generic templates — only monomorphized instances should be lowered.
 				// Generic templates have unresolved type params that produce void in C.
@@ -1032,7 +1027,7 @@ function walkGenerators(node: Node): void {
 					const retType = fnType != null ? fnType.typeReturn : null;
 					d.fnBody = transformGeneratorFn(
 						d.params, d.fnParamTypes, d.fnBody,
-						d.fnFlags, d.fnReturnType, retType, node.location,
+						d.fnFlags, d.fnReturnType, retType, ctx, node.location,
 					);
 					d.fnFlags = "";
 				}
@@ -1040,37 +1035,37 @@ function walkGenerators(node: Node): void {
 		},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
-			walkGenerators(d.exportedDecl);
+			walkGenerators(d.exportedDecl, ctx);
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
-			for (const member of d.classBody) { walkGenerators(member); }
+			for (const member of d.classBody) { walkGenerators(member, ctx); }
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
-			walkGenerators(d.methodBody);
+			walkGenerators(d.methodBody, ctx);
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;
-			walkGenerators(d.decoratedNode);
+			walkGenerators(d.decoratedNode, ctx);
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			if (d.initializer != null) walkCheckFuncExpr(d.initializer);
+			if (d.initializer != null) walkCheckFuncExpr(d.initializer, ctx);
 		},
 		_ => {},
 	};
 }
 
 // Check FunctionExpr for generator flag
-function walkCheckFuncExpr(node: Node): void {
+function walkCheckFuncExpr(node: Node, ctx: TransformContext): void {
 	if (node.kind == NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
-		walkGenerators(d.funcExprBody);
+		walkGenerators(d.funcExprBody, ctx);
 		if (isGeneratorFlag(d.funcExprFlags)) {
 			d.funcExprBody = transformGeneratorFn(
 				d.funcExprParams, d.funcExprParamTypes, d.funcExprBody,
-				d.funcExprFlags, d.funcExprReturnType, node.nodeType != null ? node.nodeType.typeReturn : null, node.location,
+				d.funcExprFlags, d.funcExprReturnType, node.nodeType != null ? node.nodeType.typeReturn : null, ctx, node.location,
 			);
 			d.funcExprFlags = "";
 		}
@@ -1080,7 +1075,7 @@ function walkCheckFuncExpr(node: Node): void {
 // ===== Main Entry Point =====
 
 export function lowerGenerator(program: Node, ctx: TransformContext): Node {
-	walkGenerators(program);
+	walkGenerators(program, ctx);
 	for (const d of pendingSplitDiags) {
 		reportTransformError(ctx, d.message, d.loc);
 	}
@@ -1119,6 +1114,7 @@ test "regular function unchanged" { assert stmtCountAfter("function f() { while 
 function splitErrorsFor(src: string): int32 {
 	const parsed = parseInput(src);
 	if (!parsed.ok) return -1 as int32;
+	checkProgram(parsed.value);
 	const ctx = makeCtx();
 	lowerGenerator(parsed.value, ctx);
 	return ctx.errors.length as int32;
@@ -1129,3 +1125,32 @@ test "a yield inside an expression is reported, not passed through" { assert spl
 test "a statement kind the splitter cannot split is reported" { assert splitErrorsFor("function* gen() { throw (yield 1); }") == 1; }
 
 test "a splittable body reports nothing" { assert splitErrorsFor("function* gen() { do { yield 1; } while (false); switch (1) { case 1: yield 2; } }") == 0; }
+
+test "a hoisted local without its symbol is refused, not rebuilt by name" {
+	const loc = makeLoc(1, 1);
+	const body = makeBlock([makeVarDecl("x", makeNumber(1, loc), DeclKind.Let, loc)], loc);
+	const locals = createSymSet();
+	const ctx = makeCtx();
+	collectStateLocals(body, ctx, locals);
+	assert ctx.errors.length == 1;
+	assert locals.items.length == 0;
+}
+
+function hoistedDeclsOf(src: string): Node[] {
+	const parsed = parseInput(src);
+	if (!parsed.ok) return [];
+	checkProgram(parsed.value);
+	lowerGenerator(parsed.value, makeCtx());
+	const fd = (parsed.value.data as ProgramData).programStmts[0].data as FunctionDeclData;
+	const out: Node[] = [];
+	for (const s of (fd.fnBody.data as BlockStmtData).statements) {
+		if (s.kind == NodeKind.VariableDecl && s.resolvedSym != null && s.resolvedSym.name == "x") out.push(s);
+	}
+	return out;
+}
+
+test "two same-named locals of a generator are hoisted one slot each" {
+	const decls = hoistedDeclsOf("function* gen(f: boolean): Iterator<string> { if (f) { const x: string = \"s\"; yield x; yield x; } else { const x: int32 = 4; yield x.toString(); yield x.toString(); } }");
+	assert decls.length == 2;
+	assert decls[0].resolvedSym != decls[1].resolvedSym;
+}

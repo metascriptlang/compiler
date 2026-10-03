@@ -113,7 +113,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 					const names: Node[] = [];
 					for (let mi = 0; mi < ftype.enumMembers.length; mi = mi + 1) {
 						const ov: number = ftype.enumValues.length == ftype.enumMembers.length ? ftype.enumValues[mi] : mi;
-						ords.push({ kind: NodeKind.NumberLiteral, line: cv.line, column: cv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+						ords.push({ kind: NodeKind.NumberLiteral, line: cv.line, column: cv.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
 						names.push({ kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: ftype.enumMembers[mi] });
 					}
 					vKeyNodes.push(fname);
@@ -271,7 +271,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 				const names: Node[] = [];
 				for (let mi = 0; mi < elemType.enumMembers.length; mi = mi + 1) {
 					const ov: number = elemType.enumValues.length == elemType.enumMembers.length ? elemType.enumValues[mi] : mi;
-					ords.push({ kind: NodeKind.NumberLiteral, line: cv.line, column: cv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+					ords.push({ kind: NodeKind.NumberLiteral, line: cv.line, column: cv.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
 					names.push({ kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: elemType.enumMembers[mi] });
 				}
 				keyNodes.push(fname);
@@ -438,7 +438,7 @@ export macro cborValueToStruct(cv: Node, witness: Node): Node {
 			const names: Node[] = [];
 			for (let mi = 0; mi < ftype.enumMembers.length; mi = mi + 1) {
 				const ov: number = ftype.enumValues.length == ftype.enumMembers.length ? ftype.enumValues[mi] : mi;
-				ords.push({ kind: NodeKind.NumberLiteral, line: cv.line, column: cv.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+				ords.push({ kind: NodeKind.NumberLiteral, line: cv.line, column: cv.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
 				names.push({ kind: NodeKind.StringLiteral, line: cv.line, column: cv.column, value: ftype.enumMembers[mi] });
 			}
 			keyNodes.push(fname);

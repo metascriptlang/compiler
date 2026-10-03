@@ -331,7 +331,7 @@ export function dbPreprocess(db: TransAmDb, filePath: string): string {
 	}
 
 	db.preprocessCache.set(fileId, out);
-	const outHash = taHashString(out);
+	const outHash = taHashString(out) as number;
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, outHash, true);
 	return out;
 }
@@ -369,7 +369,7 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 		program = parseResult.value;
 	}
 	db.trees.set(parseNodeKey(fileId), program);
-	const parseHash = taHashString(source);
+	const parseHash = taHashString(source) as number;
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, parseHash, true);
 	return program;
 }

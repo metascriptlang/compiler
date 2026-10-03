@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
+import { TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -29,13 +29,7 @@ export interface ExportedSymInfo {
 	extIsStatic: boolean;
 	overloadExtReceiverTypes: string[];
 	overloadExtIsStatic: boolean[];
-	// Phase E: cross-module macros — carry body AST + param names through
-	// the export pipeline so importing modules can register in macroBodyRegistry.
-	macroBody: Node;
-	converterTarget: string; // converter target type name ("" = not a converter)
 	converterTargetType: Type; // resolved converter target (null when unresolved / not a converter)
-	macroParams: string[];
-	macroParamTypes: string[];
 }
 
 export interface ModuleExports {
@@ -160,37 +154,17 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		ovExtStatics.push(ovExt != null ? ovExt.isStatic : false);
 	}
 
-	// Phase E: carry macro body + params for cross-module macro import.
-	let mBody: Node = null as unknown as Node;
-	let mParams: string[] = [];
-	let mParamTypes: string[] = [];
-	let mConverterTarget = "";
 	let mConverterTargetType: Type = null as unknown as Type;
 	if (sym.symbolKind == SymbolKind.Macro && ctx != null) {
-		const registeredBody = ctx.macroBodyRegistry.get(sym.name);
-		if (registeredBody != null) {
-			mBody = registeredBody;
-		}
-		const ct = ctx.converterTargetByName.get(sym.name);
-		if (ct != null) { mConverterTarget = ct; }
-		const ctt = ctx.converterTargetTypes.get(sym.name);
+		const ctt = ctx.converterTargetTypes.get(sym);
 		if (ctt != null) { mConverterTargetType = ctt; }
-		const registeredParams = ctx.macroParamsRegistry.get(sym.name);
-		if (registeredParams != null) {
-			mParams = registeredParams;
-		}
-		const registeredParamTypes = ctx.macroParamTypesRegistry.get(sym.name);
-		if (registeredParamTypes != null) {
-			mParamTypes = registeredParamTypes;
-		}
 	}
 
 	return {
 		name: exportedName != "" ? exportedName : sym.name, sym,
 		extReceiverType: extRecv, extIsStatic: extStatic,
 		overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics,
-		macroBody: mBody, converterTarget: mConverterTarget, converterTargetType: mConverterTargetType,
-		macroParams: mParams, macroParamTypes: mParamTypes,
+		converterTargetType: mConverterTargetType,
 	};
 }
 
@@ -401,13 +375,6 @@ export function findExtension(registry: ExtensionRegistry, receiverTypeName: str
 // hasExtensionByName — check if ANY extension has this method name (any receiver)
 export function hasExtensionByName(registry: ExtensionRegistry, methodName: string): boolean {
 	return registry.byNameHead.has(methodName);
-}
-
-// findExtensionByName — find first extension with this method name (any receiver)
-export function findExtensionByName(registry: ExtensionRegistry, methodName: string): ExtensionMethod {
-	const i = registry.byNameHead.get(methodName) ?? -1;
-	if (i >= 0) return registry.methods[i];
-	return null as unknown as ExtensionMethod;
 }
 
 // findExtensionByType — find extension matching method name + fnType identity (for overload export)
@@ -765,7 +732,6 @@ export interface DispMethodEntry {
 let _dispEntries: DispMethodEntry[] = [];
 let _dispByClass: HashMap<Symbol, DispMethodEntry[]> = new HashMap<Symbol, DispMethodEntry[]>();
 let _dispBySym: HashMap<Symbol, DispMethodEntry> = new HashMap<Symbol, DispMethodEntry>();
-let _dispByPlace: HashMap<string, DispMethodEntry> = new HashMap<string, DispMethodEntry>();
 
 export interface DispatchRecords {
 	classSyms: Symbol[];
@@ -817,7 +783,6 @@ export function dispatchRecordMethod(classSym: Symbol, methodName: string, sym: 
 	if (ofClass != null) ofClass.push(e);
 	else _dispByClass.set(classSym, [e]);
 	_dispBySym.set(sym, e);
-	_dispByPlace.set(sym.modulePath + ":" + sym.name, e);
 }
 
 export function dispatchEntryCount(): int32 {
@@ -828,15 +793,10 @@ export function resetDispatchRegistry(): void {
 	_dispEntries = [];
 	_dispByClass = new HashMap<Symbol, DispMethodEntry[]>();
 	_dispBySym = new HashMap<Symbol, DispMethodEntry>();
-	_dispByPlace = new HashMap<string, DispMethodEntry>();
 }
 
 export function dispatchEntryFor(sym: Symbol): DispMethodEntry | null {
 	return _dispBySym.get(sym) ?? null;
-}
-
-export function dispatchEntryAt(modulePath: string, liftedName: string): DispMethodEntry | null {
-	return _dispByPlace.get(modulePath + ":" + liftedName) ?? null;
 }
 
 function dispDepthBelow(classSym: Symbol, root: Symbol): int32 {
@@ -912,6 +872,55 @@ export function isExtensionFlag(flags: string): boolean {
 
 function declaredName(sym: Symbol): string {
 	return sym.name;
+}
+
+// Tier 0 = local decl, 1 = import, 2 = build.ms globalImports inject (LANG.md
+// "Converter Declarations" rules 3-4). A LOWER tier shadows a higher one; two
+// converters for one target type at the SAME tier is an error — the compiler
+// never chooses between equals.
+export interface MacroConverter {
+	sym: Symbol;
+	tier: int32;
+}
+
+export function reportDuplicateConverter(ctx: CheckerContext, sym: Symbol, line: int32, column: int32): void {
+	const target = ctx.converterTargetTypes.get(sym);
+	if (target == null) return;
+	let tier: int32 = -1;
+	for (let i = 0; i < ctx.macroConverters.length; i += 1) {
+		if (ctx.macroConverters[i].sym == sym) tier = ctx.macroConverters[i].tier;
+	}
+	if (tier < 0) return;
+	for (let i = 0; i < ctx.macroConverters.length; i += 1) {
+		const other = ctx.macroConverters[i].sym;
+		if (other == sym || ctx.macroConverters[i].tier != tier) continue;
+		const otherTarget = ctx.converterTargetTypes.get(other);
+		if (otherTarget == null || !sameType(otherTarget, target)) continue;
+		const pair = "duplicate converter for target '" + typeDisplayName(target) + "': '" + other.name + "' and '" + sym.name + "'";
+		if (tier == 0) {
+			addError(ctx, pair + " declared in the same module", line, column);
+		} else if (tier == 1) {
+			addError(ctx, pair + " are both in scope — the compiler never chooses; import only one or call one explicitly", line, column);
+		} else {
+			addError(ctx, pair + " are both injected via build.ms globalImports", line, column);
+		}
+		return;
+	}
+}
+
+export function macroConverterFor(ctx: CheckerContext, target: Type): Symbol | null {
+	let best: Symbol | null = null;
+	let bestTier: int32 = 0;
+	for (let i = 0; i < ctx.macroConverters.length; i += 1) {
+		const entry = ctx.macroConverters[i];
+		const t = ctx.converterTargetTypes.get(entry.sym);
+		if (t == null || !sameType(t, target)) continue;
+		if (best == null || entry.tier < bestTier) {
+			best = entry.sym;
+			bestTier = entry.tier;
+		}
+	}
+	return best;
 }
 
 export function addRuntimeConverter(ctx: CheckerContext, sym: Symbol): void {
@@ -1055,37 +1064,6 @@ export function stripGenFlag(flags: string): string {
 	return result;
 }
 
-// ===== Attached Operations (lifecycle hooks per type) =====
-// Detects onDestroy/onCopy/onMove extension methods for destructor lifting.
-
-export interface AttachedOps {
-	typeName: string;
-	onDestroy: ExtensionMethod;    // null if not defined
-	onCopy: ExtensionMethod;       // null if not defined
-	onMove: ExtensionMethod;       // null if not defined
-}
-
-export function findAttachedOps(registry: ExtensionRegistry, typeName: string): AttachedOps {
-	const ops: AttachedOps = {
-		typeName,
-		onDestroy: null as unknown as ExtensionMethod,
-		onCopy: null as unknown as ExtensionMethod,
-		onMove: null as unknown as ExtensionMethod,
-	};
-	for (const m of registry.methods) {
-		if (m.receiverTypeName == typeName) {
-			if (m.methodName == "onDestroy") { ops.onDestroy = m; }
-			if (m.methodName == "onCopy") { ops.onCopy = m; }
-			if (m.methodName == "onMove") { ops.onMove = m; }
-		}
-	}
-	return ops;
-}
-
-export function hasAttachedOps(ops: AttachedOps): boolean {
-	return ops.onDestroy != null || ops.onCopy != null || ops.onMove != null;
-}
-
 // ===== Cancel Context =====
 // Single source of truth for cancellation context type.
 // transam/cancel.ms imports this (transam→checker dependency already established).
@@ -1206,16 +1184,9 @@ export class CheckerContext {
 	adoptedDecls: HashMap<Node, Symbol>;
 	compilerFuncs: HashMap<string, Symbol>;       // @compilerFunc — name the compiler synthesizes a call under → its declared symbol
 	extensionRegistry: ExtensionRegistry;
-	macroBodyRegistry: HashMap<string, Node>;       // Phase B: macroName → macroDeclBody
-	converterTargets: HashMap<string, string>;      // converter: target type name → converter name (in-scope pair table)
-	converterTargetOrigin: HashMap<string, int32>;  // converter: target type name → 0 local decl | 1 import (shadowing + dup detection)
-	converterTargetByName: HashMap<string, string>; // converter: converter name → target type name (export pipeline)
-	converterTargetTypes: HashMap<string, Type>;    // converter: converter name → target type resolved in the DECLARING module
+	macroConverters: MacroConverter[];              // in-scope compile-time converters, registration order
+	converterTargetTypes: HashMap<Symbol, Type>;    // converter symbol → target type resolved in the DECLARING module
 	runtimeConverters: Symbol[];
-	converterTargetKeys: string[];                  // registration-ordered target keys (Nim c.converters seq analog)
-	macroParamsRegistry: HashMap<string, string[]>; // Phase B: macroName → param names
-	macroParamTypesRegistry: HashMap<string, string[]>;
-	macroDeclModuleRegistry: HashMap<string, string>;
 	macroExpansionDepth: int32;                  // Phase B+ eager: recursion limit for macros that produce macros
 	jsxMacroArgDepth: int32;                     // JSX leak guard: >0 while checking a macro's args (JSX there is consumed, not leaked)
 	inferredReturn: Type;  // tracks inferred return type during function body checking
@@ -1239,8 +1210,7 @@ export class CheckerContext {
 	genericInstDepth: int32;     // recursion depth for on-demand instantiation (limit 50)
 	generatedInstances: Node[];  // on-demand instantiated function ASTs to inject into program
 	procInstCache: HashMap<Symbol, Symbol[]>;
-	typeInstCache: HashMap<Symbol, string[]>;
-	pendingEnumToStrings: Type[]; // enum types whose _toString def must be injected in this module (recorded at lowering sites; enums reachable only via imported field types are not in module scope)
+	typeInstCache: HashMap<Symbol, Symbol[]>;
 	pendingHoisted: Node[];      // statements an expression-position macro emitted ahead of its value; a stack — each statement-list walk takes a high-water mark on entry and drains only what was queued above it, so a block nested in the value cannot take the call site's prefix
 	pendingTrailing: Node[];
 	condEvalDepth: int32;        // >0 while checking a conditionally-evaluated position (&&/|| rhs, ternary arm, loop condition) — hoisting out of one would run it unconditionally
@@ -1291,16 +1261,9 @@ export function createContext(): CheckerContext {
 		adoptedDecls: new HashMap<Node, Symbol>(),
 		compilerFuncs: new HashMap<string, Symbol>(),
 		extensionRegistry: createExtensionRegistry(),
-		macroBodyRegistry: new HashMap<string, Node>(),
-		converterTargets: new HashMap<string, string>(),
-		converterTargetOrigin: new HashMap<string, int32>(),
-		converterTargetByName: new HashMap<string, string>(),
-		converterTargetTypes: new HashMap<string, Type>(),
+		macroConverters: [],
+		converterTargetTypes: new HashMap<Symbol, Type>(),
 		runtimeConverters: [],
-		converterTargetKeys: [],
-		macroParamsRegistry: new HashMap<string, string[]>(),
-		macroParamTypesRegistry: new HashMap<string, string[]>(),
-		macroDeclModuleRegistry: new HashMap<string, string>(),
 		macroExpansionDepth: 0,
 		jsxMacroArgDepth: 0,
 		inferredReturn: inferredType(),
@@ -1324,8 +1287,7 @@ export function createContext(): CheckerContext {
 		genericInstDepth: 0,
 		generatedInstances: [],
 		procInstCache: new HashMap<Symbol, Symbol[]>(),
-		typeInstCache: new HashMap<Symbol, string[]>(),
-		pendingEnumToStrings: [],
+		typeInstCache: new HashMap<Symbol, Symbol[]>(),
 		pendingHoisted: [],
 		pendingTrailing: [],
 		disambTable: new HashMap<string, int32>(),
@@ -1386,14 +1348,6 @@ export function nextDisamb(ctx: CheckerContext, modulePath: string, name: string
 	const next = ctx.disambTable.get(key) ?? 0;
 	ctx.disambTable.set(key, next + 1);
 	return next;
-}
-
-export function requestEnumToString(cc: CheckerContext, t: Type): void {
-	if (cc == null || t == null || t.typeName == "") return;
-	for (const e of cc.pendingEnumToStrings) {
-		if (e == t || (e.sym != null && e.sym == t.sym)) return;
-	}
-	cc.pendingEnumToStrings.push(t);
 }
 
 // Create context with a shared IdentCache (one cache per compilation).
@@ -1600,8 +1554,8 @@ test "extension name lookups keep registration order across truncation" {
 	assert !hasExtensionByName(r, "other");
 	const c: ExtensionMethod = { methodName: "m", receiverTypeName: "C", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, c);
-	assert findExtensionByName(r, "m") == c;
 	assert findAllExtensionsByName(r, "m").length == 1;
+	assert findAllExtensionsByName(r, "m")[0] == c;
 }
 
 test "static ext filter keeps only statics of that receiver" {
@@ -1616,45 +1570,6 @@ test "static ext filter keeps only statics of that receiver" {
 	assert filterStaticExtsByReceiverName(all, "").length == 0;
 }
 
-test "no attached ops" {
-	const r = createExtensionRegistry();
-	const ops = findAttachedOps(r, "Foo");
-	assert !hasAttachedOps(ops);
-}
-
-test "detect onDestroy" {
-	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	registerExtension(r, m);
-	const ops = findAttachedOps(r, "Foo");
-	assert hasAttachedOps(ops);
-	assert ops.onDestroy != null;
-	assert ops.onCopy == null;
-}
-
-test "detect all lifecycle hooks" {
-	const r = createExtensionRegistry();
-	const d: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	registerExtension(r, d);
-	const c: ExtensionMethod = { methodName: "onCopy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	registerExtension(r, c);
-	const mv: ExtensionMethod = { methodName: "onMove", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	registerExtension(r, mv);
-	const ops = findAttachedOps(r, "Bar");
-	assert hasAttachedOps(ops);
-	assert ops.onDestroy != null;
-	assert ops.onCopy != null;
-	assert ops.onMove != null;
-}
-
-test "wrong type no match" {
-	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	registerExtension(r, m);
-	const ops = findAttachedOps(r, "Bar");
-	assert !hasAttachedOps(ops);
-}
-
 test "create empty registry" {
 	const r = createExportRegistry();
 	assert r.entries.length == 0;
@@ -1663,7 +1578,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [] };
+	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -1681,7 +1596,7 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [] };
+	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");
@@ -1689,7 +1604,7 @@ test "missing symbol returns null" {
 }
 
 function namedExportInfo(name: string): ExportedSymInfo {
-	return { name, sym: makeSymbol(name, SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], macroBody: null as unknown as Node, macroParams: [], macroParamTypes: [] };
+	return { name, sym: makeSymbol(name, SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [] };
 }
 
 test "the name index keeps registration order across export updates" {

@@ -1,11 +1,12 @@
 // Transform Utilities — node-building helpers for AST transforms
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
-import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind, CallExprData, HiddenStdConvData } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
-import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
-import { lookupHookSym } from "../codegen/c/types";
+import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike } from "../checker/types";
+import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
+import { lookupHookSym, requireOpByKey } from "../codegen/c/types";
+import { forEachChild } from "../ast/visitor";
 import { mangleQualified, mangleModuleName } from "../codegen/c/names";
 import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
 import { syntheticToken, makeNumber, makeIntNumber, makeString, makeBool } from "../checker/literalNodes";
@@ -120,11 +121,25 @@ export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, l
 
 // Canonical name for auto-generated enum-to-string function (e.g., "Color_toString").
 // Used by enumToStringLower (generation), builtinLower + debugLower (call site rewriting).
-export function enumToStringName(enumName: string): string {
-	return enumName + "_toString";
+export function callBuiltinKind(call: Node): string {
+	if (call.resolvedSym != null && call.resolvedSym.builtinKind != "") return call.resolvedSym.builtinKind;
+	const callee = (call.data as CallExprData).callee;
+	return callee.resolvedSym != null ? callee.resolvedSym.builtinKind : "";
 }
 
-// Synthetic per-type helpers (enum toString, struct dump) are declared once per
+export function receiverKind(t: Type | null): TypeKind {
+	let cur = t;
+	let hops = 0;
+	while (cur != null && cur.typeReturn != null && hops < 8
+			&& (cur.kind == TypeKind.Sink || cur.kind == TypeKind.Lent || cur.kind == TypeKind.Ref || cur.kind == TypeKind.Ptr)) {
+		cur = cur.typeReturn;
+		hops += 1;
+	}
+	return cur == null ? TypeKind.Unknown : cur.kind;
+}
+
+
+// Synthetic per-type helpers (struct dump) are declared once per
 // requesting module. Two modules may declare the same type name: C keeps the
 // copies apart with static linkage per translation unit, but the JS bundle is
 // one flat scope where the later declaration silently replaces the earlier one
@@ -140,8 +155,33 @@ export function typeHelperName(t: Type, bare: string): string {
 	return bare;
 }
 
-export function enumToStringNameFor(t: Type): string {
-	return typeHelperName(t, enumToStringName(t.typeName));
+export function enumToStringSym(ctx: TransformContext, t: Type): Symbol {
+	if (ctx.checkerCtx == null || t.typeName == "") throw new Error(`internal: toString of enum '${t.typeName}' requested without a checker context`);
+	if (!ctx.jsBackend) return requireOpByKey(t, AttachedOp.AttachedToString);
+	for (const c of ctx.jsEnumToStrings) {
+		if (c.enumType == t || (c.enumType.sym != null && c.enumType.sym == t.sym)) return c.fnSym;
+	}
+	const fnSym = mintSym(ctx, SymbolKind.Function, t.typeName + "_toString", createFunction([t], ["v"], stringType()));
+	ctx.jsEnumToStrings.push({ enumType: t, fnSym });
+	return fnSym;
+}
+export function declaredEnums(program: Node): Type[] {
+	const found: Type[] = [];
+	walkEnumDecls(program, found);
+	return found;
+}
+
+function walkEnumDecls(node: Node, found: Type[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.EnumDecl) {
+		const sym = node.resolvedSym;
+		if (sym == null || sym.symbolType == null || sym.symbolType.kind != TypeKind.Enum) {
+			throw new Error(`internal: an enum declaration reached lowering without its symbol`);
+		}
+		found.push(sym.symbolType);
+		return;
+	}
+	forEachChild(node, (c: Node): void => { walkEnumDecls(c, found); });
 }
 
 // ===== Literal Builders =====
@@ -192,6 +232,10 @@ export function runtimeProcSym(procName: string): Symbol {
 	if (_runtimeIdentCache != null) sym.nameId = getIdentId(_runtimeIdentCache, procName);
 	_runtimeSyms.set(procName, sym);
 	return sym;
+}
+
+export function compilerFuncSym(procName: string): Symbol | null {
+	return _compilerFuncs.get(procName);
 }
 
 export function isRuntimeProcSym(sym: Symbol | null, procName: string): boolean {
@@ -308,8 +352,10 @@ export function makeTryCatch(tryBody: Node, catchSym: Symbol, catchBody: Node, f
 	return n;
 }
 
-export function makeCatchSym(name: string): Symbol {
-	return makeSymbol(name, SymbolKind.Variable, null, true);
+export function makeCatchSym(ctx: TransformContext, name: string): Symbol {
+	const sym = mintSym(ctx, SymbolKind.Variable, name, null);
+	setFlag(sym, SymbolFlag.Mutable);
+	return sym;
 }
 
 export function makeTryFinally(tryBody: Node, finallyBody: Node, loc: SourceLocation): Node {

@@ -481,6 +481,31 @@ function helloEmitClean(): void {
 	ok(tag);
 }
 
+// Nim follows only symbols into code generation: a field is never a routine,
+// so a destroy hook reading `label` must not keep another module's `label()`.
+function fieldNameKeepsNoRoutine(): void {
+	const tag = "fieldNameKeepsNoRoutine";
+	const dir = freshDir("fieldname");
+	const sentinel = "routine-named-like-a-field";
+	writeFile(`${dir}/lib.ms`, `export function used(): int32 { return 1; }\nexport function label(): string { return "${sentinel}"; }\n`);
+	writeFile(`${dir}/main.ms`, "import { used } from \"./lib\";\ninterface Tag { label: string; }\nfunction show(t: Tag): string { return t.label; }\nconsole.log(show({ label: \"x\" }) + String(used()));\n");
+	const b = execFileResult(MSC, ["build", "main.ms", "--gc=drc", "--emit=c"], dir);
+	writeFile(`${LOG_DIR}/${tag}.log`, both(b));
+	if (!succeeded(b)) {
+		fail(tag, "emit error");
+		return;
+	}
+	for (const f of readDir(`${dir}/out/debug`)) {
+		if (!f.endsWith(".c")) continue;
+		const text = try readFile(`${dir}/out/debug/${f}`) catch "";
+		if (text.contains(sentinel)) {
+			fail(tag, `${f} emits label() though only a field is named label`);
+			return;
+		}
+	}
+	ok(tag);
+}
+
 // `msc build` never runs a `test` block, so a globalImports loader check can
 // only be a gate: an inline guard test is green whatever the loader does.
 function preludeGate(tag: string, name: string, globalImport: string, probeCall: string, onMissing: string, onExit: string, link: string): void {
@@ -542,6 +567,7 @@ function main(): void {
 	}
 
 	helloEmitClean();
+	fieldNameKeepsNoRoutine();
 	preludeGate("preludeUserModule", "gi", `${GUARD_DIR}/fixtures/preludeUserModule`, "neonGuardPreludeProbe",
 		"globalImports symbol never reached the entry module", "", "");
 	preludeGate("preludeSymlinkedModule", "gisym", "./gi", "neonGuardPreludeProbe",

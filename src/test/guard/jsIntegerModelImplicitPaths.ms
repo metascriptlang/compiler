@@ -1,4 +1,4 @@
-// GUARD-CHECK-FAIL narrowing drops the fractional part
+// GUARD-CHECK-FAIL may drop a fractional part
 // GUARD-JS
 //
 // nim-guard: the four implicit number → int32 conversion paths are
@@ -32,11 +32,6 @@ function returnsI32(): int32 {
 
 function main(): void {
 	const viaDecl: int32 = opaque(3.9);
-	// KNOWN RULE GAP (2026-09-04): the call-ARGUMENT path below still
-	// compiles clean — fit.ms rejects decl/assign/return but not the arg
-	// position, so this truncates silently today. Left live so the gap is
-	// pinned in place; when fit.ms gains the arg arm this starts erroring
-	// and the tag count goes 3 → 4.
 	const viaParam: int32 = takesI32(opaque(3.9));
 	const viaReturn: int32 = returnsI32();
 	let viaAssign: int32 = 0;

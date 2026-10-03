@@ -9,7 +9,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionDa
 import { createFunction, createPtr, voidType, isAwaitable, awaitedType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym } from "../util";
+import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym } from "../util";
 
 function needsBoxing(t: Type): boolean {
 	if (t == null) return false;

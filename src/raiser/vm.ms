@@ -9,7 +9,7 @@ import {
 import {
 	RaiserValue, RaiserValueKind,
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserString, raiserArray, raiserToString, copyValueInto,
-	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
+	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField,
 	raiserFuture,
 	rcIncref, rcDecref, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap,
@@ -74,7 +74,7 @@ export interface RaiserStrand {
 	loopCount: number;
 	status: RaiserStrandStatus;
 	result: RaiserValue;
-	resultFuture: number;   // future this strand completes when it finishes; -1 for main
+	resultFuture: int64;   // future this strand completes when it finishes; -1 for main
 	safePoints: number[];
 	currentException: RaiserValue;
 	unwinding: boolean;
@@ -110,7 +110,7 @@ export interface RaiserFutures {
 
 export interface RaiserTimer {
 	dueMs: int64;
-	future: number;
+	future: int64;
 }
 
 export interface RaiserTimers {
@@ -344,7 +344,7 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 
 // --- Futures ---
 
-function newFuture(vm: RaiserVM): number {
+function newFuture(vm: RaiserVM): int64 {
 	const waiters: number[] = [];
 	const valueArrayHeap = createArrayHeap();
 	const valueObjectHeap = createStructHeap();
@@ -353,7 +353,7 @@ function newFuture(vm: RaiserVM): number {
 	return vm.sched.futures.items.length - 1;
 }
 
-function futureComplete(vm: RaiserVM, handle: number, value: RaiserValue): void {
+function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue): void {
 	if (handle < 0 || handle >= vm.sched.futures.items.length) {
 		vmError(vm, `future handle out of bounds: ${handle}`);
 		return;
@@ -375,7 +375,7 @@ function futureComplete(vm: RaiserVM, handle: number, value: RaiserValue): void 
 
 // --- Timers ---
 
-function vmArmTimer(vm: RaiserVM, delay: RaiserValue): number {
+function vmArmTimer(vm: RaiserVM, delay: RaiserValue): int64 {
 	let ms: int64 = 0;
 	if (delay.kind == RaiserValueKind.Float && delay.floatVal > 0) ms = delay.floatVal as int64;
 	if (delay.kind == RaiserValueKind.Int && delay.intVal > 0) ms = delay.intVal;
@@ -416,7 +416,7 @@ function vmHandleSleep(vm: RaiserVM, inst: RaiserInstruction): void {
 	setReg(vm, vm.baseReg + inst.a, raiserFuture(fut));
 }
 
-function futureFail(vm: RaiserVM, handle: number, message: string): void {
+function futureFail(vm: RaiserVM, handle: int64, message: string): void {
 	if (handle < 0 || handle >= vm.sched.futures.items.length) {
 		vmError(vm, `future handle out of bounds: ${handle}`);
 		return;
@@ -695,7 +695,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 		vmError(vm, `vmSpawnStrand: function index out of bounds: ${funcIdx}`);
 		return -1;
 	}
-	const callee = getModuleFunc(vm.mod, funcIdx);
+	const callee = getModuleFunc(vm.mod, funcIdx as number);
 	const slots: RaiserValue[] = [];
 	const regs: RaiserRegFile = { slots };
 	ensureSlots(regs, callee.maxRegs);
@@ -717,7 +717,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 // completes — the VM's msSpawn. env carries the -1 sentinel when the closure
 // captures nothing; otherwise it is the callee's last argument, and `spawn`
 // takes a zero-arg closure, so env is its only one.
-function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): number {
+function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	if (closure.kind != RaiserValueKind.Object) {
 		vmError(vm, "spawn expects a closure");
 		return -1;
@@ -728,7 +728,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): number {
 		vmError(vm, `spawn: function index out of bounds: ${funcIdx}`);
 		return -1;
 	}
-	const callee = getModuleFunc(vm.mod, funcIdx);
+	const callee = getModuleFunc(vm.mod, funcIdx as number);
 	const slots: RaiserValue[] = [];
 	const regs: RaiserRegFile = { slots };
 	ensureSlots(regs, callee.maxRegs);
@@ -752,7 +752,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): number {
 	const fut = newFuture(vm);
 	const result = raiserNil();
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as number, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	vm.sched.strands.items.push(s);
 	return fut;
 }
@@ -1039,6 +1039,8 @@ function runStrandSlice(vm: RaiserVM): void {
 			vmHandleArrayPush(vm, inst);
 		} else if (op == RaiserOpcode.ArraySetLen) {
 			vmHandleArraySetLen(vm, inst);
+		} else if (op == RaiserOpcode.ArraySlice) {
+			vmHandleArraySlice(vm, inst);
 		} else if (op == RaiserOpcode.NewObject) {
 			vmHandleNewObject(vm, inst);
 		} else if (op == RaiserOpcode.LoadField) {
@@ -1145,7 +1147,7 @@ function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
 	// `index N out of bounds (length M)` from the runtime array bounds
 	// check — there's no per-opcode guard.
 	const newBase = vm.baseReg + destReg + 1;
-	const callee = getModuleFunc(vm.mod, calleeFuncIdx);
+	const callee = getModuleFunc(vm.mod, calleeFuncIdx as number);
 	ensureSlots(vm.regs, newBase + callee.maxRegs);
 
 	// Push caller's frame (save current function name for stack traces)
@@ -1230,7 +1232,7 @@ function vmHandleCallIndirect(vm: RaiserVM, inst: RaiserInstruction): void {
 
 	// Reserve the callee's frame (same rationale as vmHandleCall).
 	const newBase = vm.baseReg + destReg + 1;
-	const callee = getModuleFunc(vm.mod, calleeFuncIdx);
+	const callee = getModuleFunc(vm.mod, calleeFuncIdx as number);
 	ensureSlots(vm.regs, newBase + callee.maxRegs);
 
 	// Push caller's frame
@@ -1249,7 +1251,7 @@ function vmHandleCallIndirect(vm: RaiserVM, inst: RaiserInstruction): void {
 
 	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1])
 	vm.baseReg = newBase;
-	vm.funcIdx = calleeFuncIdx;
+	vm.funcIdx = calleeFuncIdx as number;
 	vm.ip = 0;
 }
 
@@ -1338,6 +1340,9 @@ function vmHandleArrayPush(vm: RaiserVM, inst: RaiserInstruction): void {
 	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
 		vmError(vm, `array handle out of bounds: ${handle}`); return;
 	}
+	if (heapArrayIsView(vm.arrayHeap, handle)) {
+		vmError(vm, "cannot push to a slice"); return;
+	}
 	heapArrayPush(vm.arrayHeap, handle, val);
 	vmIncref(vm, val);
 }
@@ -1353,7 +1358,36 @@ function vmHandleArraySetLen(vm: RaiserVM, inst: RaiserInstruction): void {
 	if (lenVal.kind != RaiserValueKind.Int) {
 		vmError(vm, `ArraySetLen expected an integer length, got kind ${lenVal.kind}`); return;
 	}
+	if (heapArrayIsView(vm.arrayHeap, handle)) {
+		vmError(vm, "cannot set the length of a slice"); return;
+	}
 	heapArraySetLen(vm.arrayHeap, handle, lenVal.intVal);
+}
+
+function vmHandleArraySlice(vm: RaiserVM, inst: RaiserInstruction): void {
+	const srcVal = getReg(vm, vm.baseReg + inst.b);
+	const start = getReg(vm, vm.baseReg + inst.c).intVal;
+	const end = getReg(vm, vm.baseReg + inst.c + 1).intVal;
+	const handle = vmHeapOperand(vm, srcVal, RaiserValueKind.Array, "an array");
+	if (vm.halted) return;
+	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
+		vmError(vm, `array handle out of bounds: ${handle}`); return;
+	}
+	const len = heapArrayLen(vm.arrayHeap, handle);
+	if (end != start && (start < 0 || end < start || end > len)) {
+		vmError(vm, `slice ${start}..${end} out of bounds (length ${len})`); return;
+	}
+	let base = srcVal;
+	let off = start;
+	const data = vm.arrayHeap.arrays[handle];
+	if (data.viewOff >= 0) {
+		base = data.items[0];
+		off = data.viewOff + start;
+	}
+	const view = heapAllocView(vm.arrayHeap, base, off, (end - start) as int32);
+	vmIncref(vm, base);
+	setReg(vm, vm.baseReg + inst.a, raiserArray(view));
+	vmMaybeCollect(vm);
 }
 
 // --- Object opcode handlers ---
@@ -1553,7 +1587,7 @@ function vmHandleStrSlice(vm: RaiserVM, inst: RaiserInstruction): void {
 
 function asNum(val: RaiserValue): number {
 	if (val.kind == RaiserValueKind.Float) return val.floatVal;
-	return val.intVal;
+	return val.intVal as number;
 }
 
 function floatFitsSigned(f: float64, bits: int32): boolean {

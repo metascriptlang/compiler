@@ -179,6 +179,28 @@ void msSolHostLogPubkey(uint64_t address) {
     msSolHostRecordLog(line);
 }
 
+void msSolHostLogData(uint64_t address, uint64_t length) {
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const uint8_t* bytes = (const uint8_t*)address;
+    size_t encodedLength = (size_t)((length + 2) / 3 * 4);
+    char* line = (char*)malloc(encodedLength + 15);
+    if (line == NULL) abort();
+    memcpy(line, "Program data: ", 14);
+    size_t at = 14;
+    for (uint64_t index = 0; index < length; index += 3) {
+        uint32_t group = (uint32_t)bytes[index] << 16;
+        if (index + 1 < length) group |= (uint32_t)bytes[index + 1] << 8;
+        if (index + 2 < length) group |= bytes[index + 2];
+        line[at++] = alphabet[(group >> 18) & 63];
+        line[at++] = alphabet[(group >> 12) & 63];
+        line[at++] = index + 1 < length ? alphabet[(group >> 6) & 63] : '=';
+        line[at++] = index + 2 < length ? alphabet[group & 63] : '=';
+    }
+    line[at] = 0;
+    msSolHostRecordLog(line);
+    free(line);
+}
+
 void msSolHostLogComputeUnits(void) {
     char line[96];
     snprintf(line, sizeof(line), "Program consumption: %llu units remaining", (unsigned long long)MS_SOL_HOST_COMPUTE_BUDGET);
@@ -437,6 +459,188 @@ uint64_t msSolHostTryFindProgramAddress(uint64_t seeds, uint64_t count, uint64_t
     return 1;
 }
 
+static uint8_t* msSolHostRecordOf(const uint64_t* header, uint64_t index) {
+    if (index >= header[2]) return NULL;
+    const uint8_t* meta = (const uint8_t*)(header[1] + index * 16);
+    return (uint8_t*)(*(const uint64_t*)meta - 8);
+}
+
+static uint64_t msSolHostLamports(const uint8_t* record) {
+    uint64_t value;
+    memcpy(&value, record + 72, 8);
+    return value;
+}
+
+static void msSolHostSetLamports(uint8_t* record, uint64_t value) {
+    memcpy(record + 72, &value, 8);
+}
+
+static uint64_t msSolHostResize(uint8_t* record, uint64_t space) {
+    uint64_t length;
+    memcpy(&length, record + 80, 8);
+    int32_t delta;
+    memcpy(&delta, record + 4, 4);
+    int64_t next = (int64_t)delta + (int64_t)space - (int64_t)length;
+    if (next > (int64_t)MS_SOL_MAX_PERMITTED_DATA_INCREASE) return 20ULL << 32;
+    if (space > length) memset(record + 88 + length, 0, (size_t)(space - length));
+    int32_t stored = (int32_t)next;
+    memcpy(record + 4, &stored, 4);
+    memcpy(record + 80, &space, 8);
+    return 0;
+}
+
+static uint64_t msSolHostSystem(const uint64_t* header) {
+    static const uint8_t systemProgram[32] = {0};
+    if (memcmp((const void*)header[0], systemProgram, 32) != 0 || header[4] < 4) return 0;
+    const uint8_t* data = (const uint8_t*)header[3];
+    uint32_t tag;
+    memcpy(&tag, data, 4);
+    uint8_t* first = msSolHostRecordOf(header, 0);
+    uint8_t* second = msSolHostRecordOf(header, 1);
+    uint64_t amount = 0;
+    if (header[4] >= 12) memcpy(&amount, data + 4, 8);
+    switch (tag) {
+    case 0: {
+        if (first == NULL || second == NULL || header[4] < 52) return 3ULL << 32;
+        if (msSolHostLamports(second) != 0) return 1ULL << 32;
+        if (msSolHostLamports(first) < amount) return 1;
+        uint64_t space;
+        memcpy(&space, data + 12, 8);
+        uint64_t status = msSolHostResize(second, space);
+        if (status != 0) return status;
+        msSolHostSetLamports(first, msSolHostLamports(first) - amount);
+        msSolHostSetLamports(second, amount);
+        memcpy(second + 40, data + 20, 32);
+        return 0;
+    }
+    case 1:
+        if (first == NULL || header[4] < 36) return 3ULL << 32;
+        memcpy(first + 40, data + 4, 32);
+        return 0;
+    case 2:
+        if (first == NULL || second == NULL) return 3ULL << 32;
+        if (msSolHostLamports(first) < amount) return 1;
+        msSolHostSetLamports(first, msSolHostLamports(first) - amount);
+        msSolHostSetLamports(second, msSolHostLamports(second) + amount);
+        return 0;
+    case 8:
+        if (first == NULL) return 3ULL << 32;
+        return msSolHostResize(first, amount);
+    default:
+        return 0;
+    }
+}
+
+static const uint8_t msSolHostTokenProgram[32] = {
+    0x06, 0xdd, 0xf6, 0xe1, 0xd7, 0x65, 0xa1, 0x93, 0xd9, 0xcb, 0xe1, 0x46, 0xce, 0xeb, 0x79, 0xac,
+    0x1c, 0xb4, 0x85, 0xed, 0x5f, 0x5b, 0x37, 0x91, 0x3a, 0x8c, 0xf5, 0x85, 0x7e, 0xff, 0x00, 0xa9,
+};
+static const uint8_t msSolHostToken2022Program[32] = {
+    0x06, 0xdd, 0xf6, 0xe1, 0xee, 0x75, 0x8f, 0xde, 0x18, 0x42, 0x5d, 0xbc, 0xe4, 0x6c, 0xcd, 0xda,
+    0xb6, 0x1a, 0xfc, 0x4d, 0x83, 0xb9, 0x0d, 0x27, 0xfe, 0xbd, 0xf9, 0x28, 0xd8, 0xa1, 0x8b, 0xfc,
+};
+static const uint8_t msSolHostAssociatedProgram[32] = {
+    0x8c, 0x97, 0x25, 0x8f, 0x4e, 0x24, 0x89, 0xf1, 0xbb, 0x3d, 0x10, 0x29, 0x14, 0x8e, 0x0d, 0x83,
+    0x0b, 0x5a, 0x13, 0x99, 0xda, 0xff, 0x10, 0x84, 0x04, 0x8e, 0x7b, 0xd8, 0xdb, 0xe9, 0xf8, 0x59,
+};
+
+static int msSolHostIsTokenProgram(const uint8_t* key) {
+    return memcmp(key, msSolHostTokenProgram, 32) == 0 || memcmp(key, msSolHostToken2022Program, 32) == 0;
+}
+
+static uint64_t msSolHostLoadU64(const uint8_t* at) {
+    uint64_t value;
+    memcpy(&value, at, 8);
+    return value;
+}
+
+static void msSolHostStoreU64(uint8_t* at, uint64_t value) {
+    memcpy(at, &value, 8);
+}
+
+static uint64_t msSolHostMoveTokens(uint8_t* source, const uint8_t* mintKey, uint8_t* destination, uint64_t amount) {
+    uint8_t* from = source + 88;
+    uint8_t* to = destination + 88;
+    if (mintKey != NULL && (memcmp(from, mintKey, 32) != 0 || memcmp(to, mintKey, 32) != 0)) return 3;
+    if (memcmp(from, to, 32) != 0) return 3;
+    uint64_t held = msSolHostLoadU64(from + 64);
+    if (held < amount) return 1;
+    msSolHostStoreU64(from + 64, held - amount);
+    msSolHostStoreU64(to + 64, msSolHostLoadU64(to + 64) + amount);
+    return 0;
+}
+
+static uint64_t msSolHostToken(const uint64_t* header) {
+    if (!msSolHostIsTokenProgram((const uint8_t*)header[0]) || header[4] < 1) return 0;
+    const uint8_t* data = (const uint8_t*)header[3];
+    uint8_t* first = msSolHostRecordOf(header, 0);
+    uint8_t* second = msSolHostRecordOf(header, 1);
+    uint8_t* third = msSolHostRecordOf(header, 2);
+    uint8_t* fourth = msSolHostRecordOf(header, 3);
+    uint64_t amount = header[4] >= 9 ? msSolHostLoadU64(data + 1) : 0;
+    switch (data[0]) {
+    case 3:
+        if (first == NULL || second == NULL || third == NULL) return 11ULL << 32;
+        if (memcmp(first + 88 + 32, third + 8, 32) != 0) return 4;
+        return msSolHostMoveTokens(first, NULL, second, amount);
+    case 7:
+        if (first == NULL || second == NULL) return 11ULL << 32;
+        if (memcmp(second + 88, first + 8, 32) != 0) return 3;
+        msSolHostStoreU64(first + 88 + 36, msSolHostLoadU64(first + 88 + 36) + amount);
+        msSolHostStoreU64(second + 88 + 64, msSolHostLoadU64(second + 88 + 64) + amount);
+        return 0;
+    case 9: {
+        if (first == NULL || second == NULL || third == NULL) return 11ULL << 32;
+        if (memcmp(first + 88 + 32, third + 8, 32) != 0) return 4;
+        if (msSolHostLoadU64(first + 88 + 64) != 0) return 11;
+        msSolHostSetLamports(second, msSolHostLamports(second) + msSolHostLamports(first));
+        msSolHostSetLamports(first, 0);
+        uint64_t length = msSolHostLoadU64(first + 80);
+        memset(first + 88, 0, (size_t)length);
+        msSolHostResize(first, 0);
+        memset(first + 40, 0, 32);
+        return 0;
+    }
+    case 12:
+        if (first == NULL || second == NULL || third == NULL || fourth == NULL) return 11ULL << 32;
+        if (header[4] < 10) return 12;
+        if (memcmp(first + 88 + 32, fourth + 8, 32) != 0) return 4;
+        if (second[88 + 44] != data[9]) return 18;
+        return msSolHostMoveTokens(first, second + 8, third, amount);
+    default:
+        return 0;
+    }
+}
+
+static uint64_t msSolHostAssociated(const uint64_t* header) {
+    if (memcmp((const void*)header[0], msSolHostAssociatedProgram, 32) != 0) return 0;
+    const uint8_t* data = (const uint8_t*)header[3];
+    uint8_t* payer = msSolHostRecordOf(header, 0);
+    uint8_t* associated = msSolHostRecordOf(header, 1);
+    uint8_t* wallet = msSolHostRecordOf(header, 2);
+    uint8_t* mint = msSolHostRecordOf(header, 3);
+    uint8_t* program = msSolHostRecordOf(header, 5);
+    if (payer == NULL || associated == NULL || wallet == NULL || mint == NULL || program == NULL) {
+        return 11ULL << 32;
+    }
+    int idempotent = header[4] >= 1 && data[0] == 1;
+    if (msSolHostLamports(associated) != 0) {
+        if (idempotent && memcmp(associated + 40, program + 8, 32) == 0) return 0;
+        return 1ULL << 32;
+    }
+    uint64_t rent = (165 + 128) * 3480 * 2;
+    if (msSolHostLamports(payer) < rent) return 1;
+    uint64_t status = msSolHostResize(associated, 165);
+    if (status != 0) return status;
+    msSolHostSetLamports(payer, msSolHostLamports(payer) - rent);
+    msSolHostSetLamports(associated, rent);
+    memcpy(associated + 40, program + 8, 32);
+    memcpy(associated + 88, mint + 8, 32);
+    memcpy(associated + 88 + 32, wallet + 8, 32);
+    associated[88 + 108] = 1;
+    return 0;
+}
+
 uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint64_t accountInfoCount, uint64_t signers, uint64_t signerCount) {
     (void)accountInfos;
     (void)accountInfoCount;
@@ -463,7 +667,10 @@ uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint
     if (header[4] > 0) memcpy(record->data, (const void*)header[3], (size_t)header[4]);
     record->signerCount = signerCount;
     msSolHostReturnLength = 0;
-    return 0;
+    uint64_t status = msSolHostSystem(header);
+    if (status == 0) status = msSolHostToken(header);
+    if (status == 0) status = msSolHostAssociated(header);
+    return status;
 }
 
 uint64_t msSolHostGetClock(uint64_t out) {

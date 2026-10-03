@@ -51,7 +51,7 @@ export macro cborValueOf(t: Node): Node {
 			const names: Node[] = [];
 			for (let mi = 0; mi < elemType.enumMembers.length; mi = mi + 1) {
 				const ov: number = elemType.enumValues.length == elemType.enumMembers.length ? elemType.enumValues[mi] : mi;
-				ords.push({ kind: NodeKind.NumberLiteral, line: t.line, column: t.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+				ords.push({ kind: NodeKind.NumberLiteral, line: t.line, column: t.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
 				names.push({ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: elemType.enumMembers[mi] });
 			}
 			return {
@@ -267,7 +267,7 @@ export macro cborValueOf(t: Node): Node {
 			const names: Node[] = [];
 			for (let mi = 0; mi < tt.enumMembers.length; mi = mi + 1) {
 				const ov: number = tt.enumValues.length == tt.enumMembers.length ? tt.enumValues[mi] : mi;
-				ords.push({ kind: NodeKind.NumberLiteral, line: t.line, column: t.column, value: ov, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
+				ords.push({ kind: NodeKind.NumberLiteral, line: t.line, column: t.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
 				names.push({ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: tt.enumMembers[mi] });
 			}
 			return {

@@ -464,11 +464,10 @@ function arrowParamCount(t: string): int32 {
 	return sawAny ? count + 1 : 0;
 }
 
-function decoratorArity(sym: Symbol, decl: Node, isMacro: boolean, isFactory: boolean, regCtx: CheckerContext): int32 {
+function decoratorArity(sym: Symbol, decl: Node, isMacro: boolean, isFactory: boolean): int32 {
 	if (isMacro) {
 		if (isFactory) return arrowParamCount(macroDeclReturnRaw(decl));
-		const params = regCtx.macroParamsRegistry.get(declaringName(sym));
-		return params == null ? 0 : params.length;
+		return decl == null ? 0 : (decl.data as MacroDeclData).macroDeclParams.length;
 	}
 	const t = sym.symbolType;
 	if (t == null || t.kind != TypeKind.Function) return 0;
@@ -548,27 +547,26 @@ function buildCallee(sym: Symbol, md: MacroInvocationData, isMacro: boolean, isF
 	return callee;
 }
 
-function buildWrapper(ctx: CheckerContext, regCtx: CheckerContext, sym: Symbol, decl: Node, md: MacroInvocationData, isFactory: boolean, shape: int32, loc: SourceLocation): Node {
+function buildWrapper(ctx: CheckerContext, sym: Symbol, decl: Node, md: MacroInvocationData, isFactory: boolean, shape: int32, loc: SourceLocation): Node {
 	const isMacro = sym.symbolKind == SymbolKind.Macro;
-	const dn = declaringName(sym);
 	let paramList = "";
 	let macroBody: Node = null as unknown as Node;
 	if (isMacro) {
-		const params = regCtx.macroParamsRegistry.get(dn);
-		const types = regCtx.macroParamTypesRegistry.get(dn);
-		const registered = regCtx.macroBodyRegistry.get(dn);
-		if (params == null || registered == null) {
-			addError(ctx, `macro '${sym.name}' has no body registered in its declaring module`, loc.line, loc.column);
+		if (decl == null) {
+			addError(ctx, `macro '${sym.name}' has no declaration in its declaring module`, loc.line, loc.column);
 			return null as unknown as Node;
 		}
+		const macroDecl = decl.data as MacroDeclData;
+		const params = macroDecl.macroDeclParams;
+		const types = macroDecl.macroDeclParamTypes;
 		for (let i = 0; i < params.length; i += 1) {
 			if (i > 0) paramList = paramList + ", ";
 			paramList = paramList + params[i];
-			if (types != null && i < types.length && types[i] != "") paramList = paramList + ": " + types[i];
+			if (i < types.length && types[i] != "") paramList = paramList + ": " + types[i];
 		}
-		macroBody = callMacroBodyPreparer(cloneNodeForCheck(registered), ctx, regCtx, dn);
+		macroBody = callMacroBodyPreparer(cloneNodeForCheck(macroDecl.macroDeclBody), ctx, sym, declaringName(sym));
 	}
-	const arity = decoratorArity(sym, decl, isMacro, isFactory, regCtx);
+	const arity = decoratorArity(sym, decl, isMacro, isFactory);
 	const pr = parseSource(wrapperSource(isMacro, paramList, shape, arity));
 	if (!pr.ok) {
 		addError(ctx, `decorator '${sym.name}': wrapper parse failed: ${pr.error}`, loc.line, loc.column);
@@ -595,7 +593,7 @@ function readStrings(arrHeap: RaiserArrayHeap, v: RaiserValue): string[] {
 	if (v.kind != RaiserValueKind.Array) return out;
 	const len = heapArrayLen(arrHeap, v.intVal) as int32;
 	for (let i = 0; i < len; i += 1) {
-		out.push(heapArrayGet(arrHeap, v.intVal, i as number).strVal);
+		out.push(heapArrayGet(arrHeap, v.intVal, i).strVal);
 	}
 	return out;
 }
@@ -605,7 +603,7 @@ function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, v: Raise
 	if (v.kind != RaiserValueKind.Array) return out;
 	const len = heapArrayLen(arrHeap, v.intVal) as int32;
 	for (let i = 0; i < len; i += 1) {
-		const item = heapArrayGet(arrHeap, v.intVal, i as number);
+		const item = heapArrayGet(arrHeap, v.intVal, i);
 		if (item.kind == RaiserValueKind.Nil) continue;
 		out.push(valueToNode(item, objHeap, arrHeap, loc));
 	}
@@ -656,7 +654,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		addError(ctx, `decorator '${name}' returns an initializer function, which only a field decorator may do`, loc.line, loc.column);
 		return target;
 	}
-	const program = buildWrapper(ctx, regCtx, sym, decl, md, isFactory, shape, loc);
+	const program = buildWrapper(ctx, sym, decl, md, isFactory, shape, loc);
 	if (program == null) return target;
 	const decoratorSourcePath = sym.modulePath != "" ? sym.modulePath : regCtx.modulePath;
 	setMacroDeclModulePath(decoratorSourcePath);

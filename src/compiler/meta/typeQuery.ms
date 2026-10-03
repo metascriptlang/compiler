@@ -2,9 +2,10 @@ import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind, createNod
 import { CheckerContext, addError } from "../../checker/context";
 import { lookupSymbol, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
-import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField, heapObjectSetField } from "../../raiser/value";
+import { instantiateGenericBody, genericParamsOf, unwrapRefBase } from "../../checker/types";
+import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField } from "../../raiser/value";
 import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHeap } from "../../raiser/hostRegistry";
-import { mapTypeToAst, nodeToValue, boundSymAt, registerBoundType, boundTypeAt } from "./bridge";
+import { mapTypeToAst, nodeToValue, boundSymAt, boundTypeAt } from "./bridge";
 import { sameType } from "../../checker/compat";
 import { activeMetaCtx, activeMetaLine, activeMetaColumn } from "./callbacks";
 import { boxString, unboxString } from "../../raiser/marshal";
@@ -38,20 +39,24 @@ function emitNode(n: Node): RaiserValue {
 }
 
 function emitTypeNode(n: Node, src: Type): RaiserValue {
-	const v = emitNode(n);
+	n.nodeType = src;
 	const objHeap = activeHostObjectHeap();
-	if (objHeap != null && v.kind == RaiserValueKind.Object) {
-		heapObjectSetField(objHeap, v.intVal, "typeHandle", raiserInt(registerBoundType(src) as int64));
-	}
-	return v;
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap == null || arrHeap == null) return raiserNil();
+	return nodeToValue(n, objHeap, arrHeap, false);
 }
 
 function peelAlias(t: Type): Type {
+	const visited: Type[] = [];
 	let cur = t;
-	let g = 0;
-	while (cur != null && cur.kind == TypeKind.Alias && cur.typeReturn != null && g < 8) {
-		cur = cur.typeReturn;
-		g = g + 1;
+	while (cur.kind == TypeKind.Alias) {
+		const inner = cur.typeReturn;
+		if (inner == null) break;
+		for (const prior of visited) {
+			if (prior == cur) throw new Error(`type query: cyclic alias '${cur.typeName}'`);
+		}
+		visited.push(cur);
+		cur = inner;
 	}
 	return cur;
 }
@@ -74,14 +79,27 @@ function typeArgOf(v: RaiserValue): Type | null {
 	return null;
 }
 
-function peelToImpl(t: Type): Type {
+export function peelToImpl(t: Type, ctx: CheckerContext): Type | null {
+	const visited: Type[] = [];
 	let cur = t;
-	let guard = 0;
-	while (cur != null && guard < 4
-			&& (cur.kind == TypeKind.Ref || cur.kind == TypeKind.Alias)
-			&& cur.typeReturn != null) {
+	while (cur.kind == TypeKind.Ref || cur.kind == TypeKind.Alias || cur.kind == TypeKind.GenericInstance) {
+		for (const prior of visited) {
+			if (prior == cur) {
+				queryError(ctx, `getTypeImpl: cyclic implementation wrapper '${cur.typeName}'`);
+				return null;
+			}
+		}
+		visited.push(cur);
+		if (cur.kind == TypeKind.GenericInstance && cur.typeReturn == null) {
+			const base = cur.typeExtra != null ? unwrapRefBase(cur.typeExtra) : null;
+			if (base != null && base.sym != null) ensureShaped(base.sym, ctx);
+			instantiateGenericBody(cur, genericParamsOf(cur));
+		}
+		if (cur.typeReturn == null) {
+			queryError(ctx, `getTypeImpl: no concrete implementation for '${cur.typeName}' (${cur.kind.toString()})`);
+			return null;
+		}
 		cur = cur.typeReturn;
-		guard = guard + 1;
 	}
 	return cur;
 }
@@ -102,21 +120,14 @@ function hostGetType(args: RaiserValue[]): RaiserValue {
 	if (ctx == null || args.length < 1) return raiserNil();
 	const impl = args.length > 1 && args[1].kind == RaiserValueKind.Bool && args[1].intVal != 0;
 	const sym = boundSymOf(args[0]);
-	if (sym == null) {
-		const heap = activeHostObjectHeap();
-		if (heap != null && args[0].kind == RaiserValueKind.Object) {
-			const nt = heapObjectGetField(heap, args[0].intVal, "nodeType");
-			if (nt.kind == RaiserValueKind.Object) return nt;
-		}
-		return queryError(ctx, "node has no type");
-	}
-	if (hasFlag(sym, SymbolFlag.Forward)) return queryError(ctx, stillDecoratedMessage(sym.name));
-	if (sym.symbolKind != SymbolKind.Macro) ensureShaped(sym, ctx);
-	const t = sym.symbolType;
+	if (sym != null && hasFlag(sym, SymbolFlag.Forward)) return queryError(ctx, stillDecoratedMessage(sym.name));
+	const t = typeArgOf(args[0]);
 	if (t == null) return queryError(ctx, "node has no type");
 	const loc = makeLoc(activeMetaLine(), activeMetaColumn());
-	const src = impl ? peelToImpl(t) : t;
-	return emitTypeNode(mapTypeToAst(src, loc), src);
+	const src = impl ? peelToImpl(t, ctx) : t;
+	if (src == null) return raiserNil();
+	const result = mapTypeToAst(src, loc, impl);
+	return emitTypeNode(result, t);
 }
 
 function hostGetImpl(args: RaiserValue[]): RaiserValue {

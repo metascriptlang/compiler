@@ -1,5 +1,6 @@
+// @xfail(raiser): raiser runtime error: cannot assign through a pointer or ref parameter at comptime: the Raiser VM writes in place only into a struct or an array
 // @stdout: div=9 plus=9,1 field=9 unary=9,1 ext=9 countDown=500000500000 alternate=6,4
-// @xfail(raiser): raiser runtime error: cannot assign through a pointer or ref parameter at comptime (a scalar `ref` write, not handled on Raiser)
+// @xfail(raiser): the Raiser VM refuses a write through a ref parameter into a scalar ("writes in place only into a struct or an array"), also on main
 // note: a user operator with a `ref` parameter, written in operator form, writes through to the caller's variable: compound, binary, a field target, unary and a `this ref` compound. A self tail call that passes its `ref` parameter back loops over the caller's location a million times; one that swaps two `ref` parameters stays recursive. Same output on every backend.
 
 struct P { v: int32; }

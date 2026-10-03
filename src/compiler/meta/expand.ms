@@ -58,9 +58,8 @@ import { walkNode, mapChildren } from "../../transform/walker";
 import { hasGenericParams } from "../../checker/types";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
-import { rewriteCallAsMacroInvocation } from "../../checker/callResolve";
-import { stillDecoratedMessage } from "./typeQuery";
-import { TypeKind } from "../../ast/node";
+import { rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf } from "../../checker/callResolve";
+import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
 import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
 import "./decorators";
@@ -70,7 +69,7 @@ import { RaiserContext } from "../../raiser/context";
 import { RaiserVM } from "../../raiser/vm";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
-import { valueToNode, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym } from "./bridge";
+import { valueToNode, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType } from "./bridge";
 import { ensureShaped } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
 import { addWarning } from "../../checker/context";
@@ -136,7 +135,7 @@ function lowerQuoteExpr(node: Node): Node {
 //
 // Implementation strategy: build an ObjectLiteralData with kind, line, column,
 // + the kind-specific fields. Recursive for child Node fields.
-function nodeToASTLiteral(node: Node | null, loc: SourceLocation): Node {
+function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst: boolean = true): Node {
 	if (node == null) return mkNull(loc);
 	node = stripMacroArgWrappers(node);
 	if (node == null) return mkNull(loc);
@@ -161,23 +160,17 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation): Node {
 	// Append kind-specific fields
 	addKindFields(node, keys, values, loc);
 
-	// Type introspection (SERIALIZE Phase A1): if the host node has resolved
-	// type info, synthesize the type AST and embed it as `nodeType` field.
-	// Macros read `value.nodeType.kind`, `value.nodeType.typExprFieldNames`, etc.
-	// Synthesized type-AST nodes have nodeType=null (createNode default), so
-	// recursion terminates one level deep.
-	//
-	// Fallback to nodeTypeAst (a Node-form type-AST cached during macro VM
-	// round-trip) when nodeType (the Type form) is null. This propagates
-	// type info through nested macro expansion chains where readNodeFromObject
-	// can reconstruct the type-AST as Node but not as Type. Fixes Bug 6.
 	if (node.nodeType != null) {
-		const typeAst = mapTypeToAst(node.nodeType, loc);
+		keys.push("typeHandle");
+		values.push(mkNumber(registerBoundType(node.nodeType), loc));
+		if (includeTypeAst) {
+			const typeAst = mapTypeToAst(node.nodeType, loc);
+			keys.push("nodeType");
+			values.push(nodeToASTLiteral(typeAst, loc, false));
+		}
+	} else if (includeTypeAst && node.nodeTypeAst != null) {
 		keys.push("nodeType");
-		values.push(nodeToASTLiteral(typeAst, loc));
-	} else if (node.nodeTypeAst != null) {
-		keys.push("nodeType");
-		values.push(nodeToASTLiteral(node.nodeTypeAst, loc));
+		values.push(nodeToASTLiteral(node.nodeTypeAst, loc, false));
 	}
 
 	// Symbol introspection: surface name + kind for nodes the checker bound
@@ -239,7 +232,7 @@ function addBoolField(keys: string[], values: Node[], name: string, val: boolean
 	values.push(mkBool(val, loc));
 }
 
-function addNodeField(keys: string[], values: Node[], name: string, val: Node | null, loc: SourceLocation): void {
+function addNodeField(keys: string[], values: Node[], name: string, val: Node | null, loc: SourceLocation, includeTypeAst: boolean = true): void {
 	guardChildFieldName(name);
 	keys.push(name);
 	// splice(expr) inside a quote body: emit the arg expression directly
@@ -247,15 +240,15 @@ function addNodeField(keys: string[], values: Node[], name: string, val: Node | 
 	if (_quoteSpliceActive && isSpliceCall(val)) {
 		values.push((val.data as CallExprData).arguments[0]);
 	} else {
-		values.push(nodeToASTLiteral(val, loc));
+		values.push(nodeToASTLiteral(val, loc, includeTypeAst));
 	}
 }
 
-function addNodeArrayField(keys: string[], values: Node[], name: string, arr: Node[], loc: SourceLocation): void {
+function addNodeArrayField(keys: string[], values: Node[], name: string, arr: Node[], loc: SourceLocation, includeTypeAst: boolean = true): void {
 	guardChildFieldName(name);
 	const elements: Node[] = [];
 	for (const child of arr) {
-		elements.push(nodeToASTLiteral(child, loc));
+		elements.push(nodeToASTLiteral(child, loc, includeTypeAst));
 	}
 	keys.push(name);
 	values.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
@@ -434,22 +427,22 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 	if (k == NodeKind.TypeObject) {
 		const d = node.data as TypeObjectData;
 		addStrArrayField(keys, values, "typExprFieldNames", d.typExprFieldNames, loc);
-		addNodeArrayField(keys, values, "typExprFieldTypes", d.typExprFieldTypes, loc);
-		if (d.typExprIndexKey != null) addNodeField(keys, values, "typExprIndexKey", d.typExprIndexKey, loc);
-		if (d.typExprIndexValue != null) addNodeField(keys, values, "typExprIndexValue", d.typExprIndexValue, loc);
+		addNodeArrayField(keys, values, "typExprFieldTypes", d.typExprFieldTypes, loc, false);
+		if (d.typExprIndexKey != null) addNodeField(keys, values, "typExprIndexKey", d.typExprIndexKey, loc, false);
+		if (d.typExprIndexValue != null) addNodeField(keys, values, "typExprIndexValue", d.typExprIndexValue, loc, false);
 		addNodeArrayArrayField(keys, values, "typExprFieldDecorators", d.typExprFieldDecorators, loc);
 		addStrField(keys, values, "typExprTypeName", d.typExprTypeName, loc);
 		return;
 	}
 	if (k == NodeKind.TypeArray) {
 		const d = node.data as TypeArrayData;
-		addNodeField(keys, values, "typExprElement", d.typExprElement, loc);
+		addNodeField(keys, values, "typExprElement", d.typExprElement, loc, false);
 		addNumField(keys, values, "typExprSize", d.typExprSize, loc);
 		return;
 	}
 	if (k == NodeKind.TypeUnion) {
 		const d = node.data as TypeUnionData;
-		addNodeArrayField(keys, values, "typExprMembers", d.typExprMembers, loc);
+		addNodeArrayField(keys, values, "typExprMembers", d.typExprMembers, loc, false);
 		// V3 disc metadata — bridge populates for match-type DUs; empty for TS-style.
 		addStrField(keys, values, "discFieldName", d.discFieldName, loc);
 		addStrArrayField(keys, values, "variantKeys", d.variantKeys, loc);
@@ -458,19 +451,19 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 	}
 	if (k == NodeKind.TypeIntersection) {
 		const d = node.data as TypeIntersectionData;
-		addNodeArrayField(keys, values, "typExprMembers", d.typExprMembers, loc);
+		addNodeArrayField(keys, values, "typExprMembers", d.typExprMembers, loc, false);
 		return;
 	}
 	if (k == NodeKind.TypeGeneric) {
 		const d = node.data as TypeGenericData;
-		addNodeField(keys, values, "typExprBase", d.typExprBase, loc);
-		addNodeArrayField(keys, values, "typExprArgs", d.typExprArgs, loc);
+		addNodeField(keys, values, "typExprBase", d.typExprBase, loc, false);
+		addNodeArrayField(keys, values, "typExprArgs", d.typExprArgs, loc, false);
 		return;
 	}
 	if (k == NodeKind.TypeFunction) {
 		const d = node.data as TypeFunctionData;
-		addNodeArrayField(keys, values, "typExprParams", d.typExprParams, loc);
-		addNodeField(keys, values, "typExprReturn", d.typExprReturn, loc);
+		addNodeArrayField(keys, values, "typExprParams", d.typExprParams, loc, false);
+		addNodeField(keys, values, "typExprReturn", d.typExprReturn, loc, false);
 		addStrArrayField(keys, values, "typExprParamNames", d.typExprParamNames, loc);
 		return;
 	}
@@ -874,7 +867,7 @@ function hasUserMacroInvocation(node: Node | null, ctx: CheckerContext): boolean
 	if (k == NodeKind.MacroInvocation) {
 		const d = node.data as MacroInvocationData;
 		if (isBuiltinDirective(d.macroName)) return false;
-		return ctx.macroBodyRegistry.has(d.macroName);
+		return invokedMacroSym(ctx, node) != null;
 	}
 
 	// Statements
@@ -1407,7 +1400,7 @@ function preprocessMacroBody(body: Node): void {
 // helper the inner macro reaches codegen as an undeclared function call.
 //
 // This walks the freshly-deserialized result and mutates any
-// `CallExpr(Identifier(name))` whose name is in `macroBodyRegistry` to
+// `CallExpr(Identifier(name))` whose callee resolves to a macro into
 // `MacroInvocation`. The existing re-walk loop (depth < 16 + walkExpand)
 // then handles the nested expansion.
 function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node {
@@ -1415,11 +1408,11 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 	if (node.kind == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
 		if (cd.callee.kind == NodeKind.Identifier) {
-			const calleeName = (cd.callee.data as IdentifierData).name;
-			const calleeBound = cd.callee.flags.has(NodeFlag.BoundSym)
-				&& cd.callee.resolvedSym != null
-				&& cd.callee.resolvedSym.symbolKind == SymbolKind.Macro;
-			if (ctx.macroBodyRegistry.has(calleeName) || calleeBound) {
+			const calleeBound = cd.callee.flags.has(NodeFlag.BoundSym) && cd.callee.resolvedSym != null;
+			const macroSym = calleeBound
+				? cd.callee.resolvedSym
+				: lookupSymbol(ctx.table, (cd.callee.data as IdentifierData).name);
+			if (macroDeclOf(macroSym) != null) {
 				// Recurse into args first — nested macro calls inside args
 				// also need the rewrite.
 				let i = 0;
@@ -1427,7 +1420,7 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 					cd.arguments[i] = rewriteCallExprToMacroInvocation(cd.arguments[i], ctx);
 					i = i + 1;
 				}
-				rewriteCallAsMacroInvocation(node);
+				rewriteCallAsMacroInvocation(node, macroSym!);
 				return node;
 			}
 		}
@@ -1447,7 +1440,7 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 // Safe to bake into the shared body: the compiled-macro cache is keyed by macro
 // name, and a named type does not vary per call site. Mutation is idempotent —
 // a second pass finds literals, not calls.
-function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerContext, macroName: string, typeArg: string): Node {
+function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string, typeArg: string): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
@@ -1461,12 +1454,11 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 				&& cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
 			const symName = (cd.arguments[0].data as StringLiteralData).value;
 			let bindCtx = ctx;
-			const bindDeclPath = regCtx.macroDeclModuleRegistry.get(macroName);
-			if (bindDeclPath != null && bindDeclPath != "" && bindDeclPath != ctx.modulePath) {
-				const mc = lookupModuleCtx(bindDeclPath);
+			if (macroSym.modulePath != "" && macroSym.modulePath != ctx.modulePath) {
+				const mc = lookupModuleCtx(macroSym.modulePath);
 				if (mc != null) bindCtx = mc;
 			}
-			const boundSym = lookupSymbolInDefiningScope(bindCtx.table, macroName, symName);
+			const boundSym = lookupSymbolInDefiningScope(bindCtx.table, macroSym.name, symName);
 			if (boundSym == null) {
 				addError(ctx, `Macro '${macroName}': bindSym cannot resolve '${symName}' in the macro's module scope`, node.location.line, node.location.column);
 				return node;
@@ -1477,14 +1469,6 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 			if (hasGenericParams(boundSym.symbolType)) {
 				addError(ctx, `Macro '${macroName}': bindSym('${symName}') refers to a generic symbol — bind a concrete one (V1)`, node.location.line, node.location.column);
 				return node;
-			}
-			// Bound MACRO: expandMacroInvocation finds the declaring module's
-			// registries through modulePath — collectMacro never sets it.
-			if (boundSym.symbolKind == SymbolKind.Macro && boundSym.modulePath == "") {
-				const bmp = bindCtx.macroDeclModuleRegistry.get(symName);
-				boundSym.modulePath = bmp != null && bmp != ""
-					? bmp
-					: (bindDeclPath != null ? bindDeclPath : "");
 			}
 			const bloc = node.location;
 			const bkeys: string[] = ["kind", "line", "column", "name", "symHandle"];
@@ -1506,12 +1490,11 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 				&& cd.arguments[0].kind == NodeKind.Identifier) {
 			const typeName = (cd.arguments[0].data as IdentifierData).name;
 			let declCtx = ctx;
-			const declPath = regCtx.macroDeclModuleRegistry.get(macroName);
-			if (declPath != null && declPath != "" && declPath != ctx.modulePath) {
-				const mc = lookupModuleCtx(declPath);
+			if (macroSym.modulePath != "" && macroSym.modulePath != ctx.modulePath) {
+				const mc = lookupModuleCtx(macroSym.modulePath);
 				if (mc != null) declCtx = mc;
 			}
-			const sym = lookupSymbolInDefiningScope(declCtx.table, macroName, typeName);
+			const sym = lookupSymbolInDefiningScope(declCtx.table, macroSym.name, typeName);
 			if (sym != null) {
 				if (hasFlag(sym, SymbolFlag.Forward)) {
 					addError(ctx, `Macro '${macroName}': ${stillDecoratedMessage(typeName)}`, node.location.line, node.location.column);
@@ -1522,22 +1505,15 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 					addError(ctx, `Macro '${macroName}': getTypeImpl cannot resolve type '${typeName}' in the macro's module scope`, node.location.line, node.location.column);
 					return node;
 				}
-				// Peel the Ref/Alias wrapper: the caller asked about a TYPE, so hand back
-				// its implementation (TypeObject) rather than the Ref<T> that a VALUE of
-				// that type would carry. `nodeType` is the opposite case and keeps Ref.
-				let t = sym.symbolType;
-				let guard = 0;
-				while (t != null && guard < 4
-						&& (t.kind == TypeKind.Ref || t.kind == TypeKind.Alias)
-						&& t.typeReturn != null) {
-					t = t.typeReturn;
-					guard = guard + 1;
-				}
+				const t = peelToImpl(sym.symbolType, declCtx);
+				if (t == null) return node;
+				const implementation = mapTypeToAst(t, node.location, true);
+				implementation.nodeType = sym.symbolType;
 				// Assert to Node so flat reads on the spliced literal resolve through the
 				// NodeData unique-field-name rule; a bare literal would type as its own
 				// anonymous struct and expose only the keys it happens to carry.
 				return createNodeAt(NodeKind.TypeAssertion, {
-					asExpr: nodeToASTLiteral(mapTypeToAst(t, node.location), node.location),
+					asExpr: nodeToASTLiteral(implementation, node.location, false),
 					asType: "Node",
 				}, node.location);
 			}
@@ -1561,21 +1537,17 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, regCtx: CheckerCont
 				addError(ctx, `Macro '${macroName}': getTypeArg() cannot resolve type '${typeArg}' at the call site`, node.location.line, node.location.column);
 				return node;
 			}
-			let at = argSym.symbolType;
-			let aguard = 0;
-			while (at != null && aguard < 4
-					&& (at.kind == TypeKind.Ref || at.kind == TypeKind.Alias)
-					&& at.typeReturn != null) {
-				at = at.typeReturn;
-				aguard = aguard + 1;
-			}
+			const at = peelToImpl(argSym.symbolType, ctx);
+			if (at == null) return node;
+			const implementation = mapTypeToAst(at, node.location, true);
+			implementation.nodeType = argSym.symbolType;
 			return createNodeAt(NodeKind.TypeAssertion, {
-				asExpr: nodeToASTLiteral(mapTypeToAst(at, node.location), node.location),
+				asExpr: nodeToASTLiteral(implementation, node.location, false),
 				asType: "Node",
 			}, node.location);
 		}
 	}
-	mapChildren(node, (child: Node): Node => bakeTypeIntrinsics(child, ctx, regCtx, macroName, typeArg));
+	mapChildren(node, (child: Node): Node => bakeTypeIntrinsics(child, ctx, macroSym, macroName, typeArg));
 	return node;
 }
 
@@ -1588,35 +1560,38 @@ interface CompiledMacro {
 	funcIdx: number;
 }
 
+// A null `compiled` marks a macro whose body or helpers failed to check: it is
+// never executed, since its bytecode is garbage and running it turns one precise
+// diagnostic into a VM panic or a wrong AST. Reported once, then refused silently
+// for every later call site.
+interface MacroBuild {
+	typeArg: string;
+	compiled: CompiledMacro | null;
+}
+
 // Cache keyed on CheckerContext identity so it resets per compilation.
-let _compiledMacros: HashMap<string, CompiledMacro> = new HashMap<string, CompiledMacro>();
-let _compiledMacrosCtx: CheckerContext = null as unknown as CheckerContext;
-// A macro whose body or helpers failed to check is never executed: its bytecode
-// is garbage, and running it turns one precise diagnostic into a VM panic or a
-// wrong AST. Reported once, then refused silently for every later call site.
-let _failedMacros: HashMap<string, boolean> = new HashMap<string, boolean>();
+let _macroBuilds: HashMap<Symbol, MacroBuild[]> = new HashMap<Symbol, MacroBuild[]>();
+let _macroBuildsCtx: CheckerContext = null as unknown as CheckerContext;
 
-function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroName: string, body: Node, params: string[], typeArg: string): CompiledMacro {
-	if (_compiledMacrosCtx != ctx) {
-		_compiledMacros = new HashMap<string, CompiledMacro>();
-		_failedMacros = new HashMap<string, boolean>();
-		_compiledMacrosCtx = ctx;
+function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym: Symbol, macroName: string, decl: MacroDeclData, typeArg: string): CompiledMacro | null {
+	if (_macroBuildsCtx != ctx) {
+		_macroBuilds = new HashMap<Symbol, MacroBuild[]>();
+		_macroBuildsCtx = ctx;
 	}
-	// Cache key carries the declaring module (two modules' same-named macros —
-	// reachable via bindSym — must not share a compiled body) and the type
-	// argument (getTypeArg() bakes per call site).
-	const declKey = regCtx.macroDeclModuleRegistry.get(macroName);
-	const cacheKey = (declKey != null ? declKey : "") + "::"
-		+ (typeArg == "" ? macroName : macroName + "<" + typeArg + ">");
-	const existing = _compiledMacros.get(cacheKey);
-	if (existing != null) return existing;
-	if (_failedMacros.get(cacheKey) != null) return null as unknown as CompiledMacro;
+	const known = _macroBuilds.get(macroSym);
+	const builds: MacroBuild[] = known != null ? known : [];
+	if (known == null) _macroBuilds.set(macroSym, builds);
+	for (let bi = 0; bi < builds.length; bi += 1) {
+		if (builds[bi].typeArg == typeArg) return builds[bi].compiled;
+	}
+	let body = decl.macroDeclBody;
+	const params = decl.macroDeclParams;
 
-	// Bake into a CLONE when the call site supplies a type argument: the registry
+	// Bake into a CLONE when the call site supplies a type argument: the declared
 	// body is shared by every call site, and getTypeArg() resolves per site.
 	let workBody = body;
 	if (typeArg != "") workBody = cloneNodeForCheck(body);
-	bakeTypeIntrinsics(workBody, ctx, regCtx, macroName, typeArg);
+	bakeTypeIntrinsics(workBody, ctx, macroSym, macroName, typeArg);
 	body = workBody;
 
 	const loc = body.location;
@@ -1636,11 +1611,11 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroNam
 		si = si + 1;
 	}
 	const fnBody = createNode(NodeKind.BlockStmt, { statements: fnBodyStmts }, synthToken(loc));
-	const declParamTypes = regCtx.macroParamTypesRegistry.get(macroName);
+	const declParamTypes = decl.macroDeclParamTypes;
 	const paramTypes: string[] = [];
 	let pti = 0;
 	while (pti < params.length) {
-		paramTypes.push(declParamTypes != null && pti < declParamTypes.length ? declParamTypes[pti] : "");
+		paramTypes.push(pti < declParamTypes.length ? declParamTypes[pti] : "");
 		pti = pti + 1;
 	}
 	const emptyDefaults: Node[] = [];
@@ -1659,10 +1634,9 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroNam
 
 	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(loc));
 
-	const declModulePath = regCtx.macroDeclModuleRegistry.get(macroName);
-	setMacroDeclModulePath(declModulePath != null ? declModulePath : "");
+	setMacroDeclModulePath(macroSym.modulePath);
 	const result = callMacroEngineCompiler(program, ctx, "__macroBody");
-	if (result == null as unknown as EngineMacroResult || result.funcIdx < 0) return null as unknown as CompiledMacro;
+	if (result == null as unknown as EngineMacroResult || result.funcIdx < 0) return null;
 	let broken = false;
 	if (result.errors != null && result.errors.length > 0) {
 		for (const e of result.errors) {
@@ -1672,12 +1646,12 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroNam
 		}
 	}
 	if (broken) {
-		_failedMacros.set(cacheKey, true);
-		return null as unknown as CompiledMacro;
+		builds.push({ typeArg, compiled: null });
+		return null;
 	}
 
 	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx };
-	_compiledMacros.set(cacheKey, cm);
+	builds.push({ typeArg, compiled: cm });
 	return cm;
 }
 
@@ -1687,25 +1661,24 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	// Built-in directives pass through unchanged
 	if (isBuiltinDirective(d.macroName)) return node;
 
-	// Bound macro (bindSym): fetch the DECLARING module's registries — the
-	// caller never imported this macro, so the user ctx has no entry for it.
-	let regCtx = ctx;
-	if (node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null
-			&& node.resolvedSym.symbolKind == SymbolKind.Macro && node.resolvedSym.modulePath != "") {
-		const bmc = lookupModuleCtx(node.resolvedSym.modulePath);
-		if (bmc != null) regCtx = bmc;
-	}
-	// Look up the macro body
 	// Not a known user macro — leave it alone (could be parsed but undefined)
-	const body = regCtx.macroBodyRegistry.get(d.macroName);
-	if (body == null) {
-		if (regCtx != ctx) {
-			addError(ctx, "bound macro '" + d.macroName + "' has no body registered in its declaring module", node.location.line, node.location.column);
+	const macroSym = invokedMacroSym(ctx, node);
+	const decl = macroDeclOf(macroSym);
+	if (macroSym == null || decl == null) {
+		if (node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Macro) {
+			addError(ctx, "bound macro '" + d.macroName + "' has no declaration", node.location.line, node.location.column);
 		}
 		return node;
 	}
-	const params = regCtx.macroParamsRegistry.get(d.macroName);
-	if (params == null) return node;
+	// Bound macro (bindSym): the caller never imported it, so the body is built
+	// against the DECLARING module's scope.
+	let regCtx = ctx;
+	if (node.flags.has(NodeFlag.BoundSym) && macroSym.modulePath != "") {
+		const bmc = lookupModuleCtx(macroSym.modulePath);
+		if (bmc != null) regCtx = bmc;
+	}
+	const body = decl.macroDeclBody;
+	const params = decl.macroDeclParams;
 
 	// Phase D: Preprocess the body to rewrite NodeKind.X / DeclKind.X member
 	// access to integer literals. Mutation is in-place and idempotent — running
@@ -1734,8 +1707,8 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		}
 	}
 
-	const cm = getOrCompileMacro(ctx, regCtx, d.macroName, body, params, node.typeArg);
-	if (cm == null as unknown as CompiledMacro) {
+	const cm = getOrCompileMacro(ctx, regCtx, macroSym, d.macroName, decl, node.typeArg);
+	if (cm == null) {
 		addError(ctx, `Macro '${d.macroName}' evaluator unavailable`, node.location.line, node.location.column);
 		return node;
 	}
@@ -1745,8 +1718,7 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		const av = nodeToValue(stripMacroArgWrappers(arg), vm.objectHeap, vm.arrayHeap);
 		marshalArgs.push(av);
 	}
-	const declPath = regCtx.macroDeclModuleRegistry.get(d.macroName);
-	const macroSourcePath = declPath != null && declPath != "" ? declPath : regCtx.modulePath;
+	const macroSourcePath = macroSym.modulePath != "" ? macroSym.modulePath : regCtx.modulePath;
 	pushActiveMetaCtx(ctx, node.location.line, node.location.column);
 	const resultVal = callWithComptimeHostPolicy(vm, cm.funcIdx, marshalArgs, macroSourcePath);
 	popActiveMetaCtx();
@@ -2135,15 +2107,18 @@ export function expandMacros(program: Node, ctx: CheckerContext): Node {
 // without importing this module directly (breaks the checker ↔ compiler/meta cycle).
 import { registerExpandMacroInvocation } from "../../checker/checkerCallbacks";
 registerExpandMacroInvocation(expandMacroInvocation);
-registerMacroBodyPreparer((body: Node, ctx: CheckerContext, regCtx: CheckerContext, macroName: string): Node => {
+registerMacroBodyPreparer((body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string): Node => {
 	preprocessMacroBody(body);
-	return bakeTypeIntrinsics(body, ctx, regCtx, macroName, "");
+	return bakeTypeIntrinsics(body, ctx, macroSym, macroName, "");
 });
 registerComptimeHelperPreparer((decl: Node): void => {
 	preprocessMacroBody(decl);
 });
 
 // ===== Tests =====
+
+import { makeSymbol, defineSymbol } from "../../checker/symbol";
+import { noneType } from "../../checker/types";
 
 test "expand pass is no-op when no user macros" {
 	// Build a tiny Program manually to avoid the parseSource → check round trip
@@ -2344,11 +2319,20 @@ test "nodeToASTLiteral builds ObjectLiteral for Identifier" {
 // Audit-fix regression tests — verify hasUserMacroInvocation detects macros
 // in places that v1 originally missed (if condition, while body, for body, etc).
 
+function defineTestMacro(ctx: CheckerContext, name: string, loc: SourceLocation): void {
+	const decl = createNode(NodeKind.MacroDecl, {
+		macroDeclName: name, macroDeclParams: [], macroDeclParamTypes: [], macroDeclReturnType: "",
+		macroDeclBody: createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)),
+	}, synthToken(loc));
+	const sym = makeSymbol(name, SymbolKind.Macro, noneType(), false);
+	sym.declNode = decl;
+	defineSymbol(ctx.table, sym);
+}
+
 test "hasUserMacroInvocation detects macro in IfStmt condition" {
 	const loc = makeLoc(1, 0);
 	const ctx = createContext();
-	ctx.macroBodyRegistry.set("foo", createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)));
-	ctx.macroParamsRegistry.set("foo", []);
+	defineTestMacro(ctx, "foo", loc);
 	const inv = createNode(NodeKind.MacroInvocation, { macroName: "foo", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const ifNode = createNode(NodeKind.IfStmt, {
 		condition: inv,
@@ -2361,8 +2345,7 @@ test "hasUserMacroInvocation detects macro in IfStmt condition" {
 test "hasUserMacroInvocation detects macro in WhileStmt condition" {
 	const loc = makeLoc(1, 0);
 	const ctx = createContext();
-	ctx.macroBodyRegistry.set("foo", createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)));
-	ctx.macroParamsRegistry.set("foo", []);
+	defineTestMacro(ctx, "foo", loc);
 	const inv = createNode(NodeKind.MacroInvocation, { macroName: "foo", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const whileNode = createNode(NodeKind.WhileStmt, {
 		whileCondition: inv,
@@ -2375,8 +2358,7 @@ test "hasUserMacroInvocation detects macro in WhileStmt condition" {
 test "hasUserMacroInvocation detects macro in ForStmt body" {
 	const loc = makeLoc(1, 0);
 	const ctx = createContext();
-	ctx.macroBodyRegistry.set("foo", createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)));
-	ctx.macroParamsRegistry.set("foo", []);
+	defineTestMacro(ctx, "foo", loc);
 	const inv = createNode(NodeKind.MacroInvocation, { macroName: "foo", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const stmt = createNode(NodeKind.ExprStmt, { expr: inv }, synthToken(loc));
 	const body = createNode(NodeKind.BlockStmt, { statements: [stmt] }, synthToken(loc));
@@ -2393,8 +2375,7 @@ test "hasUserMacroInvocation detects macro in ForStmt body" {
 test "hasUserMacroInvocation detects macro in ClassDecl body" {
 	const loc = makeLoc(1, 0);
 	const ctx = createContext();
-	ctx.macroBodyRegistry.set("foo", createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)));
-	ctx.macroParamsRegistry.set("foo", []);
+	defineTestMacro(ctx, "foo", loc);
 	const inv = createNode(NodeKind.MacroInvocation, { macroName: "foo", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const stmt = createNode(NodeKind.ExprStmt, { expr: inv }, synthToken(loc));
 	const method = createNode(NodeKind.MethodDecl, {
@@ -2412,8 +2393,7 @@ test "hasUserMacroInvocation detects macro in ClassDecl body" {
 test "hasUserMacroInvocation detects macro in DecoratedDecl decorators" {
 	const loc = makeLoc(1, 0);
 	const ctx = createContext();
-	ctx.macroBodyRegistry.set("myDeco", createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)));
-	ctx.macroParamsRegistry.set("myDeco", []);
+	defineTestMacro(ctx, "myDeco", loc);
 	const inv = createNode(NodeKind.MacroInvocation, { macroName: "myDeco", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const inner = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc,

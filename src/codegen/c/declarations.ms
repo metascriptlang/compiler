@@ -8,12 +8,13 @@ import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types"
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
-	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, internString, addCGenError,
+	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, aliveSetHasDecl, internString, addCGenError,
+	setLocalSymName,
 } from "./context";
-import { genExpr, refArrayDestroyFn, refArrayCellLabel, bareArrayTypeName } from "./expressions";
+import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
-import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, refArrayCellName, isCompilerGenCName, isNilableValueType, ensureDrcProto, procHeader } from "./types";
+import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -23,16 +24,6 @@ import { isBakeableAggregateConst, functionDeclIsAlive } from "../../checker/rea
 // genGenericTypeInsts lives in index.ms for the same reason.
 
 // ===== genDecl — main declaration dispatcher =====
-
-
-
-// Array sequence hooks are generated per-module (each module that uses sequence gets its own).
-// They need static linkage to avoid duplicate symbols at link time.
-function isArraySeqHook(name: string): boolean {
-	if (name.slice(0, 13) == "msStringArray" || name.slice(0, 10) == "msRefArray") return true;
-	return name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
-		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved");
-}
 
 
 export function genDecl(g: CGen, node: Readonly<Node>, exported: boolean): void {
@@ -149,7 +140,8 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	const isExported = sym != null && (exported || hasFlag(sym, SymbolFlag.Exported) || sym.exportName != "");
 	const exportPrefix = isExported && g.isHcr ? "MS_HCR_EXPORT " : "";
 	const hcrCoreCallable = sym != null && sym.modulePath != "" && g.emissionFacts.hcrCoreUnits.has(g.modulePath);
-	const linkage = (isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance || hcrCoreCallable) ? "" : "static ";
+	const isTypeBound = sym != null && isTypeBoundOp(sym);
+	const linkage = (isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance || isTypeBound || hcrCoreCallable) ? "" : "static ";
 	const prefix = exportPrefix + linkage;
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
@@ -173,18 +165,20 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	if (instanceAlreadyEmitted) return;
 	if (d.fnBody != null) {
 		const p = createProc(name, fnType.typeReturn);
-		const isActorDispatch = name.length > 9 && name.slice(name.length - 9, name.length) == "_dispatch";
-		p.suppressRaiseCheck = isDrcHookFn || isActorDispatch;
+		p.suppressRaiseCheck = isDrcHookFn || (sym != null && hasFlag(sym, SymbolFlag.NeverRaises));
 		if (nrvo) p.isNrvo = true;
 		// Populate param names + pointer promotion (auto-deref via indirectParams)
 		const mutBits: int32 = sym != null ? sym.mutatedParams : 0;
 		for (let pi = 0; pi < d.params.length; pi += 1) {
+			const paramSym = node.paramSyms != null && pi < node.paramSyms.length ? node.paramSyms[pi] : null;
 			p.params.push(d.params[pi]);
 			scopeMangledParam(p, safeName(d.params[pi]));
+			if (paramSym != null) setLocalSymName(p, paramSym, safeName(d.params[pi]));
 			const isMutated = (mutBits & (1 << (pi as int32))) != 0;
 			const bodyPromote = pi < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(g.target, fnType.typeChildren[pi]) : shouldIndirectParam(g.target, fnType.typeChildren[pi], isMutated));
 			if (bodyPromote) {
 				p.indirectParams.push(d.params[pi]);
+				if (paramSym != null) p.indirectSyms.push(paramSym);
 			}
 		}
 		genStmt(g, p, d.fnBody);
@@ -601,7 +595,8 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	// convention is ORC-internal); revisit if collision reports surface.
 	const nameLen = d.declName.length;
 	const isTypeInfo = nameLen > 8 && d.declName.slice(nameLen - 8, nameLen) == "TypeInfo";
-	const varName = isTypeInfo ? safeName(d.declName) : mangledGlobalName(node.resolvedSym, d.declName);
+	const isModuleSlot = isModuleGlobalVar(node.resolvedSym);
+	const varName = isTypeInfo || !isModuleSlot ? safeName(d.declName) : mangledGlobalName(node.resolvedSym, d.declName);
 	// Identifier references recompute the mangled name on demand via mangledGlobalName
 	// (see expressions.ms isModuleGlobalVar branch). We deliberately DO NOT write to
 	// sym.nativeName here: that field is an extern/FFI marker — codegen uses
@@ -630,10 +625,10 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 
 	if (g.preparingDeclarations) return;
 	const cType = getTypeDesc(g, node.nodeType);
-	// Symbols without a modulePath (DRC/transform temps hoisted to top level) mangle to a
+	// Slots that are not module globals (DRC/transform temps hoisted to top level) keep a
 	// bare name that repeats across modules (per-module tempCounter) — static linkage is
 	// what makes them collision-free; nothing outside this module can reference them.
-	const staticPfx = (node.resolvedSym == null || node.resolvedSym.modulePath == "") ? "static " : "";
+	const staticPfx = isModuleSlot ? "" : "static ";
 	// Literal initializers → fold to C global initializer. This makes the global
 	// READY at program load time instead of waiting for Init000 dispatch order.
 	// Critical for things like `const INITIAL_CAPACITY: int32 = 32;` — if left to
@@ -724,7 +719,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, staticPfx: string, cType: string): boolean {
 	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return false;
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) return true;
+	if (g.aliveSet.entries.length > 0 && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
 	const body = cType.slice(0, cType.length - 1);
 	const od = d.initializer.data as ObjectLiteralData;
 	const p = g.initProc;
@@ -760,16 +755,12 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	const arrT = t0.kind == TypeKind.Ref ? t0.typeReturn : t0;
 	if (arrT == null || arrT.kind != TypeKind.Array) return false;
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) return true;
+	if (g.aliveSet.entries.length > 0 && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
 	const arrCType = cType.slice(0, cType.length - 1);
-	const destroyFn = refArrayDestroyFn(arrT.typeReturn, arrCType);
-	const cellName = refArrayCellName(arrT);
-	ensureDrcProto(g, destroyFn, null);
-	ensureRefArrayCellTypeInfo(g, cellName, refArrayCellLabel(destroyFn, bareArrayTypeName(g, arrCType)), destroyFn);
-	// ensureRefArrayCellTypeInfo is a no-op under --gc=manual (types.ms), so the cell
-	// symbol does not exist there - take the null slot like msBoxRefArray does.
-	const tiSlot = (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) ? "NULL" : `&${cellName}TypeInfo`;
-	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { 1 << 30, -1, ${tiSlot}, 0 }, { 0, NULL } };`);
+	const typeInfo = ensureRefArrayCellTypeInfo(g, arrT);
+	const viaRegistry = isHcrImageModule(g, g.modulePath);
+	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { 1 << 30, -1, ${viaRegistry ? "NULL" : typeInfo}, 0 }, { 0, NULL } };`);
+	if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${varName}_konst_.h.type = ${typeInfo};`);
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
 	nameSetAdd(g.declaredGlobals, varName);
 	return true;

@@ -1,0 +1,10 @@
+{
+  "name": "metascript-solana-harness",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@solana/kit": "8.2.0",
+    "litesvm": "1.4.1"
+  }
+}

@@ -15,7 +15,7 @@ import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, un
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, createTransformContext, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
-	makeIdent, makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
+	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, makeFnDecl, runtimeRef,
 } from "../transform/util";
 import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
@@ -1849,22 +1849,9 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as VariableDeclData;
 
-	// Prefer nodeType from checker (set on the VariableDecl during check pass)
-	// Fall back to symbol table lookup only if nodeType is absent
 	if (dctx.ctx.checkerCtx == null) return stmt;
-	let varType: Type | null = null;
-	if (stmt.nodeType != null) {
-		varType = stmt.nodeType;
-	} else {
-		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, d.declName);
-		// Only use symbol if it's a Variable/Parameter — avoid name collisions with extension methods
-		if (sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp || sym.symbolKind == SymbolKind.Parameter)) {
-			varType = sym.symbolType;
-		} else if (sym != null && sym.symbolKind == SymbolKind.Function) {
-			// Name collision: local variable shadowed by function — skip RC
-			return stmt;
-		}
-	}
+	const varType = stmt.nodeType != null ? stmt.nodeType
+		: (stmt.resolvedSym != null ? stmt.resolvedSym.symbolType : null);
 	if (varType == null) return stmt;
 
 	const rcInfo = classifyRc(varType, dctx);
@@ -2192,9 +2179,11 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 			const rc = sinkClassify(expr.nodeType, dctx);
 			return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 		}
-		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, name);
-		if (sym == null || sym.symbolType == null) return false;
-		const rc = sinkClassify(sym.symbolType, dctx);
+		if (expr.resolvedSym == null || expr.resolvedSym.symbolType == null) {
+			reportUntypedReturn(expr, dctx, "identifier '" + name + "'");
+			return false;
+		}
+		const rc = sinkClassify(expr.resolvedSym.symbolType, dctx);
 		// Only Ref types use msIncref. Strings/arrays use deep copy (handled by processReturn).
 		return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 	}
@@ -2206,19 +2195,7 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 			const rc = sinkClassify(expr.nodeType, dctx);
 			return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 		}
-		// Fallback: look up object type via symbol table (module-scope symbols only)
-		const md = expr.data as MemberExprData;
-		if (md.object.kind != NodeKind.Identifier) return false;
-		const objName = (md.object.data as IdentifierData).name;
-		const objSym = lookupSymbol(dctx.ctx.checkerCtx.table, objName);
-		if (objSym == null || objSym.symbolType == null) return false;
-		const objType = objSym.symbolType;
-		for (let fi = 0; fi < objType.typeNames.length && fi < objType.typeChildren.length; fi += 1) {
-			if (objType.typeNames[fi] == md.property) {
-				const rc = sinkClassify(objType.typeChildren[fi], dctx);
-				return rc.needsCleanup && rc.rcKind == RcKind.Ref;
-			}
-		}
+		reportUntypedReturn(expr, dctx, "member '" + (expr.data as MemberExprData).property + "'");
 		return false;
 	}
 	// ArrayAccess: use nodeType first, fallback to symbol lookup
@@ -2227,14 +2204,8 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 			const rc = sinkClassify(expr.nodeType, dctx);
 			return rc.needsCleanup && rc.rcKind == RcKind.Ref;
 		}
-		const ad = expr.data as ArrayAccessData;
-		if (ad.array.kind != NodeKind.Identifier) return false;
-		const arrName = (ad.array.data as IdentifierData).name;
-		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, arrName);
-		if (sym == null || sym.symbolType == null) return false;
-		if (sym.symbolType.typeReturn == null) return false;
-		const elemRc = sinkClassify(sym.symbolType.typeReturn, dctx);
-		return elemRc.needsCleanup && elemRc.rcKind == RcKind.Ref;
+		reportUntypedReturn(expr, dctx, "element access");
+		return false;
 	}
 
 	// Unhandled return-expression NodeKind with Ref type silently misses incref —
@@ -2250,6 +2221,13 @@ function needsReturnIncrefBare(expr: Node, dctx: DrcContext): boolean {
 		}
 	}
 	return false;
+}
+
+function reportUntypedReturn(expr: Node, dctx: DrcContext, what: string): void {
+	dctx.ctx.checkerCtx.errors.push({
+		message: "internal: the returned " + what + " reached the analyzer without its type",
+		line: expr.location.line, column: expr.location.column, fatal: false,
+	});
 }
 
 function processThrow(stmt: Node, dctx: DrcContext): Node {
@@ -2544,6 +2522,14 @@ export function testLoc(): SourceLocation {
 	return makeLoc(0, 0);
 }
 
+export function testFnRef(name: string, loc: SourceLocation): Node {
+	return makeIdentResolved(makeSymbol(name, SymbolKind.Function, null, false), loc);
+}
+
+export function testVarRef(name: string, loc: SourceLocation): Node {
+	return makeIdentResolved(testVarSym(name), loc);
+}
+
 test "injectProgram no-op on primitives" {
 	const dctx = testDrcContext("const x = 1; const y = 2;");
 	const prog = makeBlock([], testLoc());
@@ -2648,7 +2634,7 @@ test "callCanThrow false for ms-prefixed runtime calls" {
 
 test "callCanThrow true for user functions" {
 	const loc = testLoc();
-	const call = makeCall(makeIdent("parseExpr", loc), [], loc);
+	const call = makeCall(testFnRef("parseExpr", loc), [], loc);
 	assert callCanThrow(call);
 }
 
@@ -2664,7 +2650,7 @@ function scanSetsNeedsTry(stmt: Node): boolean {
 
 function userCallStmt(): Node {
 	const loc = testLoc();
-	return makeExprStmt(makeCall(makeIdent("parseExpr", loc), [], loc), loc);
+	return makeExprStmt(makeCall(testFnRef("parseExpr", loc), [], loc), loc);
 }
 
 test "setNeedsTryIfRaises marks every open scope for a user call statement" {
@@ -2673,19 +2659,19 @@ test "setNeedsTryIfRaises marks every open scope for a user call statement" {
 
 test "setNeedsTryIfRaises finds a user call inside an if body" {
 	const loc = testLoc();
-	const guarded = makeIf(makeIdent("flag", loc), makeBlock([userCallStmt()], loc), null as unknown as Node, loc);
+	const guarded = makeIf(testVarRef("flag", loc), makeBlock([userCallStmt()], loc), null as unknown as Node, loc);
 	assert scanSetsNeedsTry(guarded);
 }
 
 test "setNeedsTryIfRaises finds a user call in an if condition" {
 	const loc = testLoc();
-	const cond = makeCall(makeIdent("parseExpr", loc), [], loc);
+	const cond = makeCall(testFnRef("parseExpr", loc), [], loc);
 	assert scanSetsNeedsTry(makeIf(cond, makeBlock([], loc), null as unknown as Node, loc));
 }
 
 test "setNeedsTryIfRaises finds a user call passed to a runtime call" {
 	const loc = testLoc();
-	const inner = makeCall(makeIdent("parseExpr", loc), [], loc);
+	const inner = makeCall(testFnRef("parseExpr", loc), [], loc);
 	const outer = makeCall(runtimeRef("msStringDecref", loc), [inner], loc);
 	assert scanSetsNeedsTry(makeExprStmt(outer, loc));
 }
@@ -2709,7 +2695,7 @@ test "setNeedsTryIfRaises ignores a null node" {
 test "needsReturnIncref false for call expr (fresh)" {
 	const dctx = testDrcContext("function getString(): string { return \"\"; }");
 	const loc = testLoc();
-	const call = makeCall(makeIdent("getString", loc), [], loc);
+	const call = makeCall(testFnRef("getString", loc), [], loc);
 	assert !needsReturnIncref(call, dctx);
 }
 
@@ -2728,7 +2714,7 @@ test "needsReturnIncref false for local var (moved)" {
 test "needsReturnIncref false for member expr with string field (strings use passCopyToSink)" {
 	const dctx = testDrcContext("interface Obj { name: string; } const o: Obj = { name: \"\" };");
 	const loc = testLoc();
-	const memberExpr = makeMember(makeIdent("o", loc), "name", loc);
+	const memberExpr = makeMember(testVarRef("o", loc), "name", loc);
 	// String fields use passCopyToSink (deep copy), not msIncref (pointer refcount)
 	assert !needsReturnIncref(memberExpr, dctx);
 }
@@ -2737,7 +2723,7 @@ test "emitReturnWithIncref produces block with 3 stmts" {
 	const dctx = testDrcContext("interface Obj { name: string; } const o: Obj = { name: \"\" };");
 	const loc = testLoc();
 	pushScope(dctx, false, true);
-	const arg = makeMember(makeIdent("o", loc), "name", loc);
+	const arg = makeMember(testVarRef("o", loc), "name", loc);
 	const result = emitReturnWithIncref(arg, dctx, loc);
 	assert result.kind == NodeKind.BlockStmt;
 	const bd = result.data as BlockStmtData;
@@ -2815,7 +2801,7 @@ test "collectFinallyVars finds vars in finally block" {
 	const loc = testLoc();
 	const s = testVarSym("s");
 	const finallyBody = makeBlock([
-		makeExprStmt(makeCall(makeIdent("cleanup", loc), [makeIdentResolved(s, loc)], loc), loc),
+		makeExprStmt(makeCall(testFnRef("cleanup", loc), [makeIdentResolved(s, loc)], loc), loc),
 	], loc);
 	const tryStmt = makeTryFinally(
 		makeBlock([makeExprStmt(makeIdentResolved(s, loc), loc)], loc),
@@ -2825,7 +2811,7 @@ test "collectFinallyVars finds vars in finally block" {
 	const body = makeBlock([tryStmt], loc);
 	const vars = collectFinallyVars(body);
 	assert symListHas(vars, s);
-	assert vars.length == 1;
+	assert vars.length == 2;  // s plus the callee's function symbol — both ride along, only vars gate moves
 }
 
 test "collectFinallyVars empty when no finally" {
@@ -2892,7 +2878,7 @@ test "emitMoveSourceWasMoved on call expr returns false (fresh)" {
 	const rcStr = testStringRc();
 	const loc = testLoc();
 	pushScope(dctx, false, true);
-	const call = makeCall(makeIdent("f", loc), [], loc);
+	const call = makeCall(testFnRef("f", loc), [], loc);
 	const handled = emitMoveSourceWasMoved(call, rcStr, 0, [], dctx, loc, false);
 	assert !handled;
 	assert !hasPending(dctx);
@@ -2904,7 +2890,7 @@ test "isFreshExpr includes MoveExpr" { assert isFreshExpr(NodeKind.MoveExpr); }
 test "classifyMemberFieldRc returns RC info for string field" {
 	const dctx = testDrcContext("interface Obj { name: string; } const o: Obj = { name: \"\" };");
 	const loc = testLoc();
-	const memberExpr = makeMember(makeIdent("o", loc), "name", loc);
+	const memberExpr = makeMember(testVarRef("o", loc), "name", loc);
 	// classifyMemberFieldRc checks nodeType — must set it for the test to work
 	memberExpr.nodeType = createPrimitive(TypeKind.String);
 	const rc = classifyMemberFieldRc(memberExpr, dctx);
@@ -2928,7 +2914,7 @@ test "makeSinkCall emits sinkFn call node" {
 	const rcStr = testStringRc();
 	const loc = testLoc();
 	const xSym = makeSymbol("x", SymbolKind.Variable, noneType(), true);
-	const sink = makeSinkCall(xSym, makeIdent("y", loc), rcStr, loc);
+	const sink = makeSinkCall(xSym, testVarRef("y", loc), rcStr, loc);
 	// Should produce an ExprStmt containing a CallExpr with 2 args
 	assert sink.kind == NodeKind.ExprStmt;
 	const sd = sink.data as ExprStmtData;

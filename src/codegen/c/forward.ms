@@ -6,7 +6,7 @@
 
 import { Type, TypeKind, Symbol } from "../../ast/node";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, } from "./context";
+import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, addCGenError } from "./context";
 import { lookupHookSym, ensureDrcProto, procHeader } from "./types";
 
 // ===== DRC forward prototypes =====
@@ -56,9 +56,12 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 	// module's registry entry — by this point (codegen), all modules have been
 	// type-checked and the registry holds resolved types.
 	if (fnType == null || fnType.kind != TypeKind.Function) return;
-	const hook = sym != null ? sym : lookupHookSym(calleeName);
-	if (hook != null && hasFlag(hook, SymbolFlag.GeneratedOp)) {
-		ensureDrcProto(g, calleeName, hook);
+	if (sym == null && lookupHookSym(calleeName) != null) {
+		addCGenError(g, `internal: generated op '${calleeName}' is called without its symbol in ${g.modulePath}`, 0, 0);
+		return;
+	}
+	if (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp)) {
+		ensureDrcProto(g, calleeName, sym);
 		return;
 	}
 	if (sym != null && sym.modulePath != "" && sym.modulePath == g.modulePath) return;
@@ -71,7 +74,7 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 
 // useHeader + emitIncludeDirectives moved to context.ms to break types.ms ↔ forward.ms cycle.
 
-// ms-prefixed GENERATED hooks must classify as DRC hooks or isDeclAlive DCEs their
+// ms-prefixed GENERATED hooks must classify as DRC hooks or functionDeclIsAlive DCEs their
 // defs (undefined symbol at link once a call site is reachable) — msTuple_ and
 // msAnon_ both hit the blanket ms→false landmine.
 test "generated tuple and anon hooks are DRC hooks despite ms prefix" {

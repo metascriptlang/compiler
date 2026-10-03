@@ -8,7 +8,7 @@
 // the AwaitGroup pointer is known at transform time.
 
 import { Node, NodeKind, SourceLocation, BlockStmtData, WhileStmtData, DoWhileStmtData, ForOfStmtData, ForStmtData, IfStmtData } from "../../ast/node";
-import { makeCall, makeIdent, makeIf, makeBlock, makeReturn, runtimeRef } from "../util";
+import { makeCall, makeIf, makeBlock, makeReturn, runtimeRef } from "../util";
 import { booleanType } from "../../checker/types";
 
 // Inject cancellation checks at loop backedges in the given function body.

@@ -13,7 +13,7 @@ import {
 	logU64,
 	transfer,
 	writableAccount,
-} from "./index";
+} from "./core";
 
 extern function msSolHostInput(size: uint64): uint64;
 extern function msSolHostEnter(input: uint64): void;
@@ -59,19 +59,13 @@ export struct HostInvocation {
 }
 
 function storeKey(address: uint64, key: Pubkey): void {
-	msSolStoreU64(address, key.word0);
-	msSolStoreU64(address + 8, key.word1);
-	msSolStoreU64(address + 16, key.word2);
-	msSolStoreU64(address + 24, key.word3);
+	const at = address as Ptr<Pubkey>;
+	at[] = key;
 }
 
 function loadKey(address: uint64): Pubkey {
-	return {
-		word0: msSolLoadU64(address),
-		word1: msSolLoadU64(address + 8),
-		word2: msSolLoadU64(address + 16),
-		word3: msSolLoadU64(address + 24),
-	};
+	const at = address as Ptr<Pubkey>;
+	return at[];
 }
 
 function flag(value: boolean): uint8 {
@@ -234,7 +228,11 @@ export function setClock(clock: Clock): void {
 }
 
 function keyOf(word: uint64): Pubkey {
-	return { word0: word, word1: 0, word2: 0, word3: 0 };
+	let key = Pubkey.zero();
+	for (let index = 0; index < 8; index++) {
+		key.bytes[index] = ((word >> ((index * 8) as uint64)) & 255) as uint8;
+	}
+	return key;
 }
 
 function holderOf(word: uint64, data: uint8[], signer: boolean, writable: boolean): HostAccount {

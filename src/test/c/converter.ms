@@ -538,6 +538,75 @@ test "converter: local decl shadows imported converter for the same pair" {
 	assert cCode.contains("8");
 }
 
+const BOX_LIB = `
+import { Node, NodeKind } from "std/meta";
+export struct Box { v: number; }
+export converter toBox(n: Node): Box {
+	return {
+		kind: NodeKind.ObjectLiteral, line: n.line, column: n.column,
+		keys: ["v"], keyLocations: [],
+		properties: [{ kind: NodeKind.NumberLiteral, line: n.line, column: n.column, value: 7 }],
+	};
+}
+`;
+
+test "converter: a converter does not fire for a same-named type of another module" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/lib.ms", entrySource: BOX_LIB },
+		{ entryPath: "src/main.ms", entrySource: `
+			import { toBox } from "./lib";
+			struct Box { v: number; }
+			function main(): void { const b: Box = <a/>; }
+		` },
+	];
+	const cCode = compileProjectToCWithStd(entries, "src/main.ms");
+	assert cCode.contains("consumed by a macro");
+}
+
+test "converter: a target that does not resolve where the converter is declared never fires" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/lib.ms", entrySource: `
+import { Node, NodeKind } from "std/meta";
+export converter toBox(n: Node): Box {
+	return { kind: NodeKind.NumberLiteral, line: n.line, column: n.column, value: 7 };
+}
+` },
+		{ entryPath: "src/main.ms", entrySource: `
+			import { toBox } from "./lib";
+			interface Box { v: number; }
+			function main(): void { const b: Box = <a/>; }
+		` },
+	];
+	const cCode = compileProjectToCWithStd(entries, "src/main.ms");
+	assert cCode.contains("consumed by a macro");
+}
+
+test "converter: two same-named target types in two modules coexist" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/a.ms", entrySource: BOX_LIB },
+		{ entryPath: "src/b.ms", entrySource: BOX_LIB.replace("toBox", "toOtherBox") },
+		{ entryPath: "src/main.ms", entrySource: `
+			import { Box as ABox, toBox } from "./a";
+			import { Box as BBox, toOtherBox } from "./b";
+			function main(): void { const a: ABox = <a/>; const b: BBox = <b/>; }
+		` },
+	];
+	const cCode = compileProjectToCWithStd(entries, "src/main.ms");
+	assert !cCode.contains("ERROR:");
+}
+
+test "converter: a converter declared after its use applies" {
+	const c = compileToCWithStd(`
+import { Node, NodeKind } from "std/meta";
+function view(): number { return <a/>; }
+converter toNum(n: Node): number {
+	return { kind: NodeKind.NumberLiteral, line: n.line, column: n.column, value: 7 };
+}
+function main(): void { const x = view(); }
+`);
+	assert c.ok;
+}
+
 // ===== 9.4 diagnostics =====
 
 test "converter: absent converter at a typed boundary — error carries import hint" {

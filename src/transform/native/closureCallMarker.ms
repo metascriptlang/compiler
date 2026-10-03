@@ -95,7 +95,7 @@ function getCalleeType(cd: CallExprData): Type | null {
 import { createFunction, createClosureType, numberType, voidType } from "../../checker/types";
 import { makeSymbol } from "../../checker/symbol";
 import { createNode } from "../../ast/node";
-import { makeIdent, makeCall, makeMember } from "../util";
+import { makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeCall, makeMember } from "../util";
 import { makeCtx } from "../testUtil";
 import { createToken, TokenKind } from "../../lexer/token";
 
@@ -108,15 +108,9 @@ function wrapProgram(stmts: Node[]): Node {
 // Returns the call NODE, never its `data`: a CallExprData carried out through a
 // struct field is a copy, so a test reading it would observe the pre-walk value
 // and pass no matter what the pass does.
-function makeTestCall(calleeName: string, sym: Symbol, calleeType: Type): { prog: Node, call: Node } {
+function makeTestCall(sym: Symbol, calleeType: Type): { prog: Node, call: Node } {
 	const loc = makeLoc(0, 0);
-	const callee = makeIdent(calleeName, loc);
-	if (sym != null) {
-		callee.resolvedSym = sym;
-	}
-	if (calleeType != null) {
-		callee.nodeType = calleeType;
-	}
+	const callee = makeTypedIdentResolved(sym, calleeType, loc);
 	const callNode = makeCall(callee, [], loc);
 	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, createToken(TokenKind.Number, "", 0));
 	const prog = wrapProgram([exprStmt]);
@@ -130,7 +124,7 @@ function isDirect(call: Node): boolean {
 // Helper: create a MemberExpr-based call (obj.method())
 function makeMemberTestCall(): { prog: Node, call: Node } {
 	const loc = makeLoc(0, 0);
-	const obj = makeIdent("obj", loc);
+	const obj = makeIdentResolved(makeSymbol("obj", SymbolKind.Variable, null, false), loc);
 	const mem = makeMember(obj, "method", loc);
 	const callNode = makeCall(mem, [], loc);
 	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, createToken(TokenKind.Number, "", 0));
@@ -146,7 +140,7 @@ test "MemberExpr holding a closure is a closure call" {
 	// Simulates _envP.f from lambda lifting — a captured closure read back out
 	// of the environment struct.
 	const loc = makeLoc(0, 0);
-	const obj = makeIdent("_envP", loc);
+	const obj = makeIdentResolved(makeSymbol("_envP", SymbolKind.Variable, null, false), loc);
 	const mem = makeMember(obj, "handler", loc);
 	mem.nodeType = createClosureType([numberType()], [], voidType());
 	const callNode = makeCall(mem, [], loc);
@@ -165,7 +159,7 @@ test "MemberExpr without Function type stays direct" {
 test "Closure-typed variable callee is a closure call" {
 	const fnType = createClosureType([numberType()], [], voidType());
 	const sym = makeSymbol("cb", SymbolKind.Variable, fnType, false);
-	const t = makeTestCall("cb", sym, fnType);
+	const t = makeTestCall(sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
 	assert isDirect(t.call) == false;
 }
@@ -173,7 +167,7 @@ test "Closure-typed variable callee is a closure call" {
 test "Named function callee stays direct" {
 	const fnType = createFunction([numberType()], [], voidType());
 	const sym = makeSymbol("helper", SymbolKind.Function, fnType, false);
-	const t = makeTestCall("helper", sym, fnType);
+	const t = makeTestCall(sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
 	assert isDirect(t.call) == true;
 }
@@ -182,8 +176,7 @@ test "Synthesized callee without a symbol stays direct" {
 	// Per-type DRC hooks are emitted as plain calls with no symbol attached;
 	// treating "no symbol" as a closure emits `hook.env` on a function pointer.
 	const loc = makeLoc(0, 0);
-	const callee = makeIdent("HashMapEntry_copy", loc);
-	callee.nodeType = createFunction([numberType()], [], voidType());
+	const callee = makeTypedIdent("HashMapEntry_copy", createFunction([numberType()], [], voidType()), loc);
 	const callNode = makeCall(callee, [], loc);
 	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, createToken(TokenKind.Number, "", 0));
 	markClosureCalls(wrapProgram([exprStmt]), makeCtx());
@@ -196,7 +189,7 @@ test "Closure symbol without a node type stays direct" {
 	// compile error at the call, not be silently repaired from the symbol.
 	const fnType = createClosureType([numberType()], [], voidType());
 	const sym = makeSymbol("cb", SymbolKind.Variable, fnType, false);
-	const t = makeTestCall("cb", sym, null as unknown as Type);
+	const t = makeTestCall(sym, null as unknown as Type);
 	markClosureCalls(t.prog, makeCtx());
 	assert isDirect(t.call) == true;
 }
@@ -205,7 +198,7 @@ test "Callee produced by another call is a closure call" {
 	// `make(1)(2)` — the callee names nothing and carries no symbol, so only its
 	// type can classify it.
 	const loc = makeLoc(0, 0);
-	const inner = makeCall(makeIdent("make", loc), [], loc);
+	const inner = makeCall(makeIdentResolved(makeSymbol("make", SymbolKind.Function, null, false), loc), [], loc);
 	inner.nodeType = createClosureType([numberType()], [], voidType());
 	const outer = makeCall(inner, [], loc);
 	const exprStmt = createNode(NodeKind.ExprStmt, { expr: outer }, createToken(TokenKind.Number, "", 0));

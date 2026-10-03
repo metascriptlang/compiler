@@ -1,10 +1,10 @@
 // @stdout: conversion 12 3 12 -12 -3 -12
 
 function twice(value: number): number { return value * 2.0; }
-function returned(value: int64): number { return value; }
+function returned(value: int64): number { return value as number; }
 function converted(value: int64): number {
-	const declared: number = value;
-	return declared + returned(value) + twice(value);
+	const declared: number = value as number;
+	return declared + returned(value) + twice(value as number);
 }
 function narrow(value: int32): number {
 	const declared: number = value;
