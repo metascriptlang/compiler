@@ -1,4 +1,4 @@
-// @stdout: ptr=7/6/6 var=b/c/d generic=5/6/6 pick=ptr rex/value rex nullable=7/7
+// @stdout: ptr=7/6/6 var=b/c/d generic=5/6/6 pick=ptr rex/value rex/ptr rex nullable=7/7
 // note: a receiver declared `Ptr<T>` or `Var<T>` is found in method form and behaves as the free call: `p.f()` writes through the pointer, a `Var<T>` receiver writes through to the caller's place like `this ref`, a generic `Ptr<Box<T>>` receiver binds `T`, overloads on `Ptr<T>` and `T` are picked by the receiver, and a narrowed `Ptr<T> | null` is a receiver. Same output on every backend.
 
 struct Pet { hunger: uint16; name: string; }
@@ -36,7 +36,7 @@ const grown = box.grow(4);
 const freeGrown = grow(box, 1);
 const genericLine = `generic=${grown}/${freeGrown}/${boxes[0].count}`;
 
-const pickLine = `pick=${pet.which()}/${arena[0].which()}`;
+const pickLine = `pick=${pet.which()}/${arena[0].which()}/${which(pet)}`;
 
 let spare: Pet[1] = [{ hunger: 9, name: "b" }];
 const maybe: Ptr<Pet> | null = spare[0] as Ptr<Pet>;
