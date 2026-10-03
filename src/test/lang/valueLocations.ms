@@ -18,6 +18,12 @@ function forwardRef(ref value: uint8): void { putThroughRef(value); }
 function writeSecond(view: Span<uint8>): void { forwardRef(view[1]); }
 function replaceThroughRef(ref value: StoredValue): void { value = { n: 77 }; }
 function replaceSecond(view: Span<StoredValue>): void { replaceThroughRef(view[1]); }
+struct ByteLaid { a: uint32; b: uint8; }
+function firstByteOf(view: Span<ByteLaid>): uint8 { return (view as Ptr<void> as Ptr<uint8>)[0]; }
+function firstByteOfSized(values: ByteLaid[2]): uint8 { return ((values as Span<ByteLaid>) as Ptr<void> as Ptr<uint8>)[0]; }
+function writeThroughSpanPointer(view: Span<ByteLaid>): void { const pointer = view as Ptr<ByteLaid>; pointer[].a = 9; pointer[1].b = 7; }
+struct WideValue { a: int64; b: int64; c: int64; d: int64; e: int64; }
+function peekThroughAddress(value: WideValue): int64 { const view = value as Ptr<WideValue>; return view[].a; }
 let locationReads: int32 = 0;
 function selectedIndex(): int32 { locationReads++; return 1; }
 
@@ -413,4 +419,62 @@ test "valueLocations: replacing a struct span element through ref reaches its st
 	let values: StoredValue[] = [{ n: 1 }, { n: 2 }, { n: 3 }];
 	replaceSecond(values);
 	assert values[0].n == 1 && values[1].n == 77 && values[2].n == 3;
+}
+
+test "valueLocations: a span pointer dereferences and indexes the original elements" {
+	let values: ByteLaid[] = [{ a: 1, b: 2 }, { a: 3, b: 4 }];
+	writeThroughSpanPointer(values);
+	assert values[0].a == 9 && values[0].b == 2 && values[1].a == 3 && values[1].b == 7;
+	assert (values as Span<ByteLaid> as Ptr<ByteLaid>)[1].a == 3;
+}
+
+test "valueLocations: a same-type scalar pointer addresses its variable" {
+	let value: uint8 = 3;
+	const pointer = value as Ptr<uint8>;
+	pointer[] = 7;
+	assert value == 7;
+}
+
+test "valueLocations: a native byte view of a span reads its first element's bytes" {
+	const values: ByteLaid[] = [{ a: 258, b: 9 }, { a: 3, b: 4 }];
+	assert firstByteOf(values) == 2;
+	const sized: ByteLaid[2] = [{ a: 515, b: 9 }, { a: 3, b: 4 }];
+	assert firstByteOfSized(sized) == 3;
+}
+
+test "valueLocations: a const or value-parameter address reads the value" {
+	const fixed: StoredValue = { n: 4 };
+	const view = fixed as Ptr<StoredValue>;
+	assert view[].n == 4;
+	assert peekThroughAddress({ a: 1, b: 2, c: 3, d: 4, e: 5 }) == 1;
+}
+
+test "valueLocations: a scalar viewed through another pointee keeps its address" {
+	let n: int32 = 1;
+	const raw = n as Ptr<void>;
+	const typed = raw as Ptr<int32>;
+	typed[] = 5;
+	assert n == 5;
+	let word: uint32 = 258;
+	const bytes = word as Ptr<uint8>;
+	assert bytes[0] == 2 && bytes[1] == 1;
+}
+
+test "valueLocations: a sized array's address is its first element" {
+	let values: uint8[2] = [7, 8];
+	const first = values as Ptr<uint8>;
+	assert first[0] == 7 && first[1] == 8;
+}
+
+test "valueLocations: a pointer variable has an address of its own" {
+	let a: StoredValue = { n: 1 };
+	let b: StoredValue = { n: 2 };
+	let cursor = a as Ptr<StoredValue>;
+	const slot = cursor as Ptr<Ptr<StoredValue>>;
+	slot[] = b as Ptr<StoredValue>;
+	assert cursor[].n == 2;
+	const slots: Ptr<StoredValue>[] = [a as Ptr<StoredValue>, b as Ptr<StoredValue>];
+	const view: Span<Ptr<StoredValue>> = slots;
+	const firstSlot = view as Ptr<Ptr<StoredValue>>;
+	assert firstSlot[][].n == 1;
 }
