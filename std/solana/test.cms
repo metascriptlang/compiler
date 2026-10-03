@@ -1578,3 +1578,61 @@ test "a run-time list sends its accounts, and one past sixty-four or data past i
 	assert invokeRun(9) == ProgramError.invalidArgument().code;
 	assert invocations().length == 0;
 }
+
+export struct Safe {
+	owner: Pubkey;
+	limit: uint64;
+	bump: uint8;
+}
+
+export function discriminator(this typeof Safe): Discriminator {
+	return @comptime { return accountDiscriminator("Safe"); };
+}
+
+function safeBytes(owner: Pubkey, limit: uint8, bump: uint8): uint8[] {
+	const bytes: uint8[] = [];
+	const tag = Safe.discriminator();
+	for (let i = 0; i < 8; i++) { bytes.push(tag.bytes[i]); }
+	for (let i = 0; i < 32; i++) { bytes.push(owner.bytes[i]); }
+	bytes.push(limit);
+	for (let i = 0; i < 7; i++) { bytes.push(0); }
+	bytes.push(bump);
+	for (let i = 0; i < 7; i++) { bytes.push(0); }
+	return bytes;
+}
+
+function atKey(account: HostAccount, key: Pubkey): HostAccount {
+	return { ...account, key: key };
+}
+
+function readOnly(account: HostAccount): HostAccount {
+	return { ...account, writable: false };
+}
+
+function safeAt(key: Pubkey, owner: Pubkey, limit: uint8, bump: uint8): HostAccount {
+	return atKey(holder(1, programKey(), safeBytes(owner, limit, bump), false, true), key);
+}
+
+
+export struct TwoTypes {
+	counter: Mutable<Counter>;
+	safe: Mutable<Safe>;
+}
+
+function twoTypesStep(): Result<uint64, ProgramError> {
+	const x = try accounts<TwoTypes>();
+	return Result.ok(x.counter.data().value + x.safe.data().limit);
+}
+
+function twoTypesEntry(): void { codeOf(twoTypesStep()); }
+
+test "accounts<T>() reads the discriminator of each account type, so an account of the other type is refused" {
+	const counter = holder(1, programKey(), counterBytes(counterTag(), 3, 48), false, true);
+	const safe = safeAt(keyOf(2), keyOf(9), 4, 0);
+	assert run(programKey(), [counter, safe], [], twoTypesEntry).result == 0;
+	assert run(programKey(), [safe, counter], [], twoTypesEntry).result ==
+		ProgramError.accountDiscriminatorMismatch().code;
+	const counters = [counter, holder(3, programKey(), counterBytes(counterTag(), 5, 48), false, true)];
+	assert run(programKey(), counters, [], twoTypesEntry).result ==
+		ProgramError.accountDiscriminatorMismatch().code;
+}

@@ -27,7 +27,7 @@ import {
 	writable,
 	writableSigner,
 } from "./core";
-import { createPdaOf, readArgs, selectInstruction } from "./typed";
+import { createPdaOf, readArgs, selectInstruction, wordOf } from "./typed";
 import { delegateAt } from "./delegation";
 import { createMintPdaAt } from "./mint";
 import {
@@ -270,52 +270,31 @@ export macro accounts(): Node {
 			callee = bindSym("ownedAccount");
 			if (base == "Mutable") { callee = bindSym("mutableAccount"); }
 			if (base == "Delegated") { callee = bindSym("delegatedAccount"); }
+			// Read at run time: a @comptime block calls the first overload of `discriminator` for every
+			// account type (compiler card 2026-10-04-comptime-block-calls-the-first-overload-by-name).
 			const discriminator: Node = {
 				kind: NodeKind.CallExpr,
 				line: line,
 				column: column,
-				callee: {
-					kind: NodeKind.MemberExpr,
+				callee: bindSym("wordOf"),
+				arguments: [{
+					kind: NodeKind.CallExpr,
 					line: line,
 					column: column,
-					object: {
-						kind: NodeKind.CallExpr,
+					callee: {
+						kind: NodeKind.MemberExpr,
 						line: line,
 						column: column,
-						callee: {
-							kind: NodeKind.MemberExpr,
-							line: line,
-							column: column,
-							object: typeName,
-							property: "discriminator",
-							isOptional: false,
-						},
-						arguments: [],
-						isDirectCall: false,
-						resolvedOverloadIdx: -1,
+						object: typeName,
+						property: "discriminator",
+						isOptional: false,
 					},
-					property: "word",
-					isOptional: false,
-				},
-				arguments: [],
+					arguments: [],
+					isDirectCall: false,
+					resolvedOverloadIdx: -1,
+				}],
 				isDirectCall: false,
 				resolvedOverloadIdx: -1,
-			};
-			const folded: Node = {
-				kind: NodeKind.ComptimeBlock,
-				line: line,
-				column: column,
-				comptimeBody: {
-					kind: NodeKind.BlockStmt,
-					line: line,
-					column: column,
-					statements: [{
-						kind: NodeKind.ReturnStmt,
-						line: line,
-						column: column,
-						argument: discriminator,
-					}],
-				},
 			};
 			const size: Node = {
 				kind: NodeKind.TypeAssertion,
@@ -329,7 +308,7 @@ export macro accounts(): Node {
 				},
 				asType: "uint64",
 			};
-			extra = [folded, size];
+			extra = [discriminator, size];
 		}
 		let check: Node | null = null;
 		if (callee != null) {
