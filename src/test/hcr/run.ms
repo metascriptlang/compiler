@@ -1227,6 +1227,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrWatchLink", run: watchLink },
 	{ name: "hcrImageNameCollision", run: imageNameCollision },
 	{ name: "hcrArrayOwner", run: arrayOwner },
+	{ name: "hcrInstanceofReload", run: instanceofReload },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 

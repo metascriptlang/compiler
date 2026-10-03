@@ -13,6 +13,6 @@ if (exists(`g2/module.logic${EXT}`)) {
 			exit(1);
 		}
 	}
-	const outcome = reload();
-	console.log(`HCR-INST ${reloadKindName(outcome.kind)} ${probe()}`);
+	const kind = reload();
+	console.log(`HCR-INST ${reloadKindName(kind)} ${probe()}`);
 }
