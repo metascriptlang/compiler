@@ -1681,9 +1681,15 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 			setAttachedOp(objType, AttachedOp.AttachedTrace, traceSym);
 		}
 
-		const dupSym = emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
-		setOpByKey(objType, AttachedOp.AttachedDup, dupSym);
-		setAttachedOp(objType, AttachedOp.AttachedDup, dupSym);
+		const userDup = getUserDefinedHookSym(typeName, "dup", lctx, objType);
+		if (userDup != null) {
+			bindOpByKey(objType, AttachedOp.AttachedDup, userDup);
+			setAttachedOp(objType, AttachedOp.AttachedDup, userDup);
+		} else {
+			const dupSym = emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
+			setOpByKey(objType, AttachedOp.AttachedDup, dupSym);
+			setAttachedOp(objType, AttachedOp.AttachedDup, dupSym);
+		}
 		aliasLiftedOps(orig, objType);
 
 		claimGlobal(cName);

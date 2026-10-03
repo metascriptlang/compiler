@@ -35,6 +35,7 @@ export interface RcInfo {
 	copyFn: Symbol | null;      // =copy op (null = none)
 	wasMovedFn: Symbol | null;  // =wasMoved op (null = none)
 	sinkFn: Symbol | null;      // =sink op (null = raw assign)
+	dupFn: Symbol | null;       // the type's own onClone (null = none: a copy into a sink is =copy)
 	seqLike: boolean;        // reference parity: sequence/string destroy by-value, copy src by-value
 }
 
@@ -49,6 +50,7 @@ export function noRcInfo(): RcInfo {
 		copyFn: null,
 		wasMovedFn: null,
 		sinkFn: null,
+		dupFn: null,
 		seqLike: false,
 	};
 }
@@ -62,6 +64,7 @@ function makeRcInfo(kind: RcKind, typeName: string, destroy: string, copy: strin
 		copyFn: copy != "" ? attachedOpSym(copy, AttachedOp.AttachedAsgn) : null,
 		wasMovedFn: wasMoved != "" ? attachedOpSym(wasMoved, AttachedOp.AttachedWasMoved) : null,
 		sinkFn: sink != "" ? attachedOpSym(sink, AttachedOp.AttachedSink) : null,
+		dupFn: null,
 	};
 }
 
@@ -72,7 +75,13 @@ function makeOpsInfo(kind: RcKind, typeName: string, t: Type, seqLike: boolean):
 		copyFn: requireOpByKey(t, AttachedOp.AttachedAsgn),
 		wasMovedFn: requireOpByKey(t, AttachedOp.AttachedWasMoved),
 		sinkFn: requireOpByKey(t, AttachedOp.AttachedSink),
+		dupFn: userDupOf(t),
 	};
+}
+
+function userDupOf(t: Type): Symbol | null {
+	const dup = getOpByKey(t, AttachedOp.AttachedDup);
+	return dup != null && !hasFlag(dup, SymbolFlag.GeneratedOp) ? dup : null;
 }
 
 // ===== Array Subclassification =====
