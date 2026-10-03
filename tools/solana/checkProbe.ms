@@ -18,6 +18,8 @@ import {
 	create,
 	createPda,
 	delegated,
+	external,
+	externalMutable,
 	failWith,
 	instruction,
 	mutable,
@@ -28,6 +30,7 @@ import {
 	writable,
 	writableSigner,
 } from "std/solana";
+import { Mint, TokenAccount } from "std/solana/token";
 
 export struct Pet {
 	owner: Pubkey;
@@ -157,6 +160,16 @@ function selected(): Result<uint64, ProgramError> {
 	return Result.ok((picked as int32) as uint64);
 }
 
+function externalMint(): Result<uint64, ProgramError> {
+	const mint = try external<Mint>(7);
+	return Result.ok(mint.lamports());
+}
+
+function externalToken(): Result<uint64, ProgramError> {
+	const token = try externalMutable<TokenAccount>(8);
+	return Result.ok(token.lamports());
+}
+
 function entry(): void {
 	const op = argU8(0);
 	let result = idle();
@@ -174,6 +187,8 @@ function entry(): void {
 	if (op == 12) { result = resized(); }
 	if (op == 13) { result = closed(); }
 	if (op == 14) { result = selected(); }
+	if (op == 15) { result = externalMint(); }
+	if (op == 16) { result = externalToken(); }
 	if (!result.ok) { failWith(result.error); }
 }
 entry();

@@ -606,19 +606,22 @@ export type Delegated<T> = distinct Account;
 @delegate export function dataLength<T>(this proof: Mutable<T>): uint64;
 @delegate export function dataLength<T>(this proof: Delegated<T>): uint64;
 
-function present(index: int32): Result<Account, ProgramError> {
-	if (index < 0 || index >= accountCount()) {
-		return Result.err(ProgramError.accountNotEnoughKeys());
-	}
-	return account(index);
+function keysEqual(left: uint64, right: uint64): boolean {
+	return msSolLoadU64(left) == msSolLoadU64(right) &&
+		msSolLoadU64(left + 8) == msSolLoadU64(right + 8) &&
+		msSolLoadU64(left + 16) == msSolLoadU64(right + 16) &&
+		msSolLoadU64(left + 24) == msSolLoadU64(right + 24);
 }
 
-function claimExclusive(target: Account): Result<Account, ProgramError> {
-	if (msSolLoadU8(target.address) != 0xff) {
-		return Result.err(ProgramError.accountBorrowFailed());
-	}
-	msSolStoreU8(target.address, 0);
-	return Result.ok(target);
+function keyIsZero(address: uint64): boolean {
+	return (msSolLoadU64(address) | msSolLoadU64(address + 8) | msSolLoadU64(address + 16) |
+		msSolLoadU64(address + 24)) == 0;
+}
+
+function claimExclusive(address: uint64): boolean {
+	if (msSolLoadU8(address) != 0xff) { return false; }
+	msSolStoreU8(address, 0);
+	return true;
 }
 
 function delegationProgramId(): Pubkey {
@@ -626,56 +629,118 @@ function delegationProgramId(): Pubkey {
 }
 
 function programDataFailure(
-	target: Account,
-	owner: Pubkey,
+	address: uint64,
+	owner: uint64,
 	discriminator: uint64,
 	size: uint64,
-): ProgramError {
-	if (target.owner() != owner) { return ProgramError.accountOwnedByWrongProgram(); }
-	if (target.dataLength() < 8) { return ProgramError.accountDiscriminatorNotFound(); }
-	if (msSolLoadU64(target.address + 88) != discriminator) {
-		return ProgramError.accountDiscriminatorMismatch();
+): uint64 {
+	if (!keysEqual(address + 40, owner)) { return ProgramError.accountOwnedByWrongProgram().code; }
+	const length = msSolLoadU64(address + 80);
+	if (length < 8) { return ProgramError.accountDiscriminatorNotFound().code; }
+	if (msSolLoadU64(address + 88) != discriminator) {
+		return ProgramError.accountDiscriminatorMismatch().code;
 	}
-	if (target.dataLength() < 8 + size) { return ProgramError.accountDidNotDeserialize(); }
-	return { code: 0 };
+	if (length < 8 + size) { return ProgramError.accountDidNotDeserialize().code; }
+	return 0;
+}
+
+function proofResult(address: uint64, failure: uint64): Result<Account, ProgramError> {
+	if (failure != 0) { return Result.err({ code: failure }); }
+	const found: Account = { address: address };
+	return Result.ok(found);
 }
 
 export function signer(index: int32): Result<Signer, ProgramError> {
-	const found = try present(index);
-	if (!found.isSigner()) { return Result.err(ProgramError.accountNotSigner()); }
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
+	if (msSolLoadU8(address + 1) == 0) { return Result.err(ProgramError.accountNotSigner()); }
+	const found: Account = { address: address };
 	return Result.ok(found as Signer);
 }
 
 export function writableSigner(index: int32): Result<WritableSigner, ProgramError> {
-	const found = try present(index);
-	if (!found.isSigner()) { return Result.err(ProgramError.accountNotSigner()); }
-	if (!found.isWritable()) { return Result.err(ProgramError.constraintMut()); }
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
+	if (msSolLoadU8(address + 1) == 0) { return Result.err(ProgramError.accountNotSigner()); }
+	if (msSolLoadU8(address + 2) == 0) { return Result.err(ProgramError.constraintMut()); }
+	const found: Account = { address: address };
 	return Result.ok(found as WritableSigner);
 }
 
 export function writable(index: int32): Result<Writable, ProgramError> {
-	const found = try present(index);
-	if (!found.isWritable()) { return Result.err(ProgramError.constraintMut()); }
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
+	if (msSolLoadU8(address + 2) == 0) { return Result.err(ProgramError.constraintMut()); }
+	const found: Account = { address: address };
 	return Result.ok(found as Writable);
 }
 
 export function systemAccount(index: int32): Result<SystemAccount, ProgramError> {
-	const found = try present(index);
-	if (found.owner() != Pubkey.systemProgram()) {
-		return Result.err(ProgramError.accountNotSystemOwned());
-	}
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
+	if (!keyIsZero(address + 40)) { return Result.err(ProgramError.accountNotSystemOwned()); }
+	const found: Account = { address: address };
 	return Result.ok(found as SystemAccount);
 }
 
 export function unchecked(index: int32): Result<Account, ProgramError> {
-	return present(index);
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
+	const found: Account = { address: address };
+	return Result.ok(found);
 }
 
 export function programAccount(index: int32, id: Pubkey): Result<Account, ProgramError> {
-	const found = try present(index);
-	if (found.key() != id) { return Result.err(ProgramError.invalidProgramId()); }
-	if (!found.isExecutable()) { return Result.err(ProgramError.invalidProgramExecutable()); }
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
+	if (!keysEqual(address + 8, msSolSpanAddress(id.bytes))) {
+		return Result.err(ProgramError.invalidProgramId());
+	}
+	if (msSolLoadU8(address + 3) == 0) { return Result.err(ProgramError.invalidProgramExecutable()); }
+	const found: Account = { address: address };
 	return Result.ok(found);
+}
+
+export function ownedFailure(
+	index: int32,
+	discriminator: uint64,
+	size: uint64,
+	out found: Account,
+): uint64 {
+	found = { address: msSolAccountAt(index as uint64) };
+	if (found.address == 0) { return ProgramError.accountNotEnoughKeys().code; }
+	return programDataFailure(found.address, msSolProgramId(), discriminator, size);
+}
+
+export function delegatedFailure(
+	index: int32,
+	discriminator: uint64,
+	size: uint64,
+	out found: Account,
+): uint64 {
+	found = { address: msSolAccountAt(index as uint64) };
+	if (found.address == 0) { return ProgramError.accountNotEnoughKeys().code; }
+	return programDataFailure(
+		found.address,
+		msSolSpanAddress(delegationProgramId().bytes),
+		discriminator,
+		size,
+	);
+}
+
+export function mutableFailure(
+	index: int32,
+	discriminator: uint64,
+	size: uint64,
+	out found: Account,
+): uint64 {
+	found = { address: msSolAccountAt(index as uint64) };
+	if (found.address == 0) { return ProgramError.accountNotEnoughKeys().code; }
+	const failure = programDataFailure(found.address, msSolProgramId(), discriminator, size);
+	if (failure != 0) { return failure; }
+	if (msSolLoadU8(found.address + 2) == 0) { return ProgramError.constraintMut().code; }
+	if (!claimExclusive(found.address)) { return ProgramError.accountBorrowFailed().code; }
+	return 0;
 }
 
 export function ownedAccount(
@@ -683,10 +748,9 @@ export function ownedAccount(
 	discriminator: uint64,
 	size: uint64,
 ): Result<Account, ProgramError> {
-	const found = try present(index);
-	const failure = programDataFailure(found, programId(), discriminator, size);
-	if (failure.code != 0) { return Result.err(failure); }
-	return Result.ok(found);
+	let found: Account = { address: 0 };
+	const failure = ownedFailure(index, discriminator, size, found);
+	return proofResult(found.address, failure);
 }
 
 export function delegatedAccount(
@@ -694,15 +758,9 @@ export function delegatedAccount(
 	discriminator: uint64,
 	size: uint64,
 ): Result<Account, ProgramError> {
-	const found = try present(index);
-	const failure = programDataFailure(found, delegationProgramId(), discriminator, size);
-	if (failure.code != 0) { return Result.err(failure); }
-	return Result.ok(found);
-}
-
-export function exclusiveWritable(found: Account): Result<Account, ProgramError> {
-	if (!found.isWritable()) { return Result.err(ProgramError.constraintMut()); }
-	return claimExclusive(found);
+	let found: Account = { address: 0 };
+	const failure = delegatedFailure(index, discriminator, size, found);
+	return proofResult(found.address, failure);
 }
 
 export function mutableAccount(
@@ -710,8 +768,15 @@ export function mutableAccount(
 	discriminator: uint64,
 	size: uint64,
 ): Result<Account, ProgramError> {
-	const found = try ownedAccount(index, discriminator, size);
-	return exclusiveWritable(found);
+	let found: Account = { address: 0 };
+	const failure = mutableFailure(index, discriminator, size, found);
+	return proofResult(found.address, failure);
+}
+
+export function exclusiveWritable(found: Account): Result<Account, ProgramError> {
+	if (!found.isWritable()) { return Result.err(ProgramError.constraintMut()); }
+	if (!claimExclusive(found.address)) { return Result.err(ProgramError.accountBorrowFailed()); }
+	return Result.ok(found);
 }
 
 export function data<T>(this proof: Mutable<T>): Ptr<T> {
@@ -824,7 +889,8 @@ function initialized(
 	}
 	const _made = try createProgramAccount(funding, created, space, programId(), signers);
 	msSolStoreU64(created.address + 88, discriminator);
-	return claimExclusive(created);
+	if (!claimExclusive(created.address)) { return Result.err(ProgramError.accountBorrowFailed()); }
+	return Result.ok(created);
 }
 
 export function createdAccount(

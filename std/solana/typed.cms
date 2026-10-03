@@ -17,11 +17,11 @@ import {
 	closedProgramAccount,
 	createdAccount,
 	createdPdaAccount,
-	delegatedAccount,
+	delegatedFailure,
 	exclusiveWritable,
 	givenBump,
-	mutableAccount,
-	ownedAccount,
+	mutableFailure,
+	ownedFailure,
 	programAccount,
 	resizedProgramAccount,
 	selectedInstruction,
@@ -47,17 +47,23 @@ export function program<P>(index: int32): Result<Program<P>, ProgramError> {
 }
 
 export function owned<T>(index: int32): Result<Owned<T>, ProgramError> {
-	const found = try ownedAccount(index, wordOf(T.discriminator()), sizeof(T) as uint64);
+	let found: Account = { address: 0 };
+	const failure = ownedFailure(index, wordOf(T.discriminator()), sizeof(T) as uint64, found);
+	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(found as Owned<T>);
 }
 
 export function mutable<T>(index: int32): Result<Mutable<T>, ProgramError> {
-	const found = try mutableAccount(index, wordOf(T.discriminator()), sizeof(T) as uint64);
+	let found: Account = { address: 0 };
+	const failure = mutableFailure(index, wordOf(T.discriminator()), sizeof(T) as uint64, found);
+	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(found as Mutable<T>);
 }
 
 export function delegated<T>(index: int32): Result<Delegated<T>, ProgramError> {
-	const found = try delegatedAccount(index, wordOf(T.discriminator()), sizeof(T) as uint64);
+	let found: Account = { address: 0 };
+	const failure = delegatedFailure(index, wordOf(T.discriminator()), sizeof(T) as uint64, found);
+	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(found as Delegated<T>);
 }
 

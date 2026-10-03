@@ -24,6 +24,7 @@ if (!programPath) {
 
 const SYSTEM = address("11111111111111111111111111111111");
 const DELEGATION = address("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh");
+const TOKEN = address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const FEW = 8;
 const encoder = getAddressEncoder();
 const decoder = getAddressDecoder();
@@ -49,25 +50,29 @@ const OPS = [
 	["realloc<Pet>", 12],
 	["close<Pet>", 13],
 	["instruction<Dispatch> (last)", 14],
+	["external<Mint>", 15],
+	["externalMutable<TokenAccount>", 16],
 ];
 
 // Totals of each op when this table was last set (LiteSVM 1.4.1, platform-tools v1.57); an op that costs more than FEW above its total fails.
 const BASELINE = {
-	"idle": 234,
-	"owned<Pet>": 410,
-	"mutable<Pet>": 422,
-	"delegated<Pet>": 407,
-	"accounts<Everything>": 1071,
-	"args<Parameters>": 505,
-	"createPda<Pet>": 3884,
-	"create<Pet>": 2091,
-	"pda (Mutable)": 3712,
-	"pdaWithBump (Mutable)": 2272,
-	"pda (Delegated)": 2188,
-	"pdaWithBump (Delegated)": 2247,
-	"realloc<Pet>": 718,
-	"close<Pet>": 620,
-	"instruction<Dispatch> (last)": 369,
+	"idle": 264,
+	"owned<Pet>": 372,
+	"mutable<Pet>": 381,
+	"delegated<Pet>": 376,
+	"accounts<Everything>": 817,
+	"args<Parameters>": 534,
+	"createPda<Pet>": 3855,
+	"create<Pet>": 2059,
+	"pda (Mutable)": 3640,
+	"pdaWithBump (Mutable)": 2199,
+	"pda (Delegated)": 2128,
+	"pdaWithBump (Delegated)": 2187,
+	"realloc<Pet>": 644,
+	"close<Pet>": 546,
+	"instruction<Dispatch> (last)": 401,
+	"external<Mint>": 649,
+	"externalMutable<TokenAccount>": 814,
 };
 
 function u64(value) {
@@ -94,6 +99,18 @@ const PET_SIZE = 48;
 const petData = (length = 8 + PET_SIZE, tag = discriminator("account:Pet")) => {
 	const data = new Uint8Array(length);
 	data.set(tag.subarray(0, Math.min(8, length)));
+	return data;
+};
+
+const mintData = () => {
+	const data = new Uint8Array(82);
+	data[44] = 6;
+	data[45] = 1;
+	return data;
+};
+const tokenAccountData = () => {
+	const data = new Uint8Array(165);
+	data[108] = 1;
 	return data;
 };
 
@@ -124,6 +141,10 @@ async function run(path, op, setup = {}) {
 		programAddress: owner,
 		space: BigInt(data.length),
 	});
+	const mintAt = (await signerOf(10)).address;
+	const tokenAt = (await signerOf(11)).address;
+	put(mintAt, setup.mintOwner ?? TOKEN, setup.mintData ?? mintData());
+	put(tokenAt, setup.tokenOwner ?? TOKEN, setup.tokenData ?? tokenAccountData());
 	const pet = setup.pet ?? {};
 	put(pet.key ?? petKey, pet.owner ?? programSigner.address, pet.data ?? petData());
 	put(setup.peekKey ?? peekKey, setup.peekOwner ?? programSigner.address, setup.peekData ?? petData());
@@ -139,6 +160,8 @@ async function run(path, op, setup = {}) {
 		{ address: rolledAt, role: AccountRole.READONLY },
 		{ address: fresh.address, role: AccountRole.WRITABLE_SIGNER, signer: fresh },
 		{ address: setup.systemAt ?? SYSTEM, role: AccountRole.READONLY },
+		{ address: mintAt, role: AccountRole.READONLY },
+		{ address: tokenAt, role: AccountRole.WRITABLE },
 	];
 	const message = pipe(
 		createTransactionMessage({ version: 0 }),
@@ -191,7 +214,7 @@ if (!controlPath) {
 	for (const [name] of OPS) {
 		const cost = measured.get(name) - idle;
 		const base = BASELINE[name] - BASELINE.idle;
-		check(`[${name}] costs at most ${FEW} CU more than before (${cost} against ${base})`, cost <= base + FEW);
+		check(`[${name}] costs at most ${FEW} CU more than its baseline (${cost} against ${base})`, cost <= base + FEW);
 	}
 }
 
