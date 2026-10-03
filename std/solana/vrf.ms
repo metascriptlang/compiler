@@ -1,5 +1,14 @@
-import { Account, AccountMeta, Bytes, Instruction, programId } from "./core";
+import {
+	Account,
+	AccountMeta,
+	BorshBuffer,
+	Bytes,
+	InstructionAccount,
+	borshBuffer,
+	programId,
+} from "./core";
 import { ProgramError } from "./error";
+import { invokeSigned } from "./invoke";
 import { findProgramAddress, findProgramAddressOf, signed } from "./macro";
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { SeedSlice, SignerSeeds, seedBytes, seedText, signerOf } from "./seed";
@@ -30,35 +39,23 @@ export function vrfBaseQueue(this typeof Pubkey): Pubkey {
 }
 
 function requested(
-	accounts: RandomnessRequest,
+	storage: Span<uint8>,
 	callerSeed: Pubkey,
 	callbackDiscriminator: uint64,
 	callbackAccounts: Span<AccountMeta>,
 	callbackArguments: Bytes,
-): Instruction {
-	const metaCount = callbackAccounts.length as uint64;
-	const instruction = Instruction.forProgram(
-		Pubkey.vrfProgram(),
-		5,
-		92 + 34 * metaCount + callbackArguments.length,
-	);
-	instruction.addWritableSigner(accounts.payer);
-	instruction.addReadonlySigner(accounts.programIdentity);
-	instruction.addWritable(accounts.oracleQueue);
-	instruction.addReadonly(accounts.systemProgram);
-	instruction.addReadonly(accounts.slotHashes);
-	instruction.appendU64(10);
-	instruction.appendPubkey(callerSeed);
-	instruction.appendPubkey(programId());
-	instruction.appendU32(8);
-	instruction.appendU64(callbackDiscriminator);
-	instruction.appendU32(metaCount as uint32);
+): BorshBuffer {
+	let data = borshBuffer(storage)
+		.u64(10)
+		.pubkey(callerSeed)
+		.pubkey(programId())
+		.u32(8)
+		.u64(callbackDiscriminator)
+		.u32(callbackAccounts.length as uint32);
 	for (const meta of callbackAccounts) {
-		instruction.appendAccountMeta(meta);
+		data = data.pubkey(meta.key).bool(meta.signer).bool(meta.writable);
 	}
-	instruction.appendU32(callbackArguments.length as uint32);
-	instruction.appendBytes(callbackArguments);
-	return instruction;
+	return data.u32(callbackArguments.length as uint32).bytes(callbackArguments);
 }
 
 export function requestRandomness(
@@ -72,20 +69,25 @@ export function requestRandomness(
 	const identity = try findProgramAddress(["identity"]);
 	if (!identity.key.equals(accounts.programIdentity.key())) { return Result.err(ProgramError.invalidSeeds()); }
 	if (payerSigners.length > 1) { return Result.err(ProgramError.invalidArgument()); }
-	const instruction = requested(
-		accounts,
-		callerSeed,
-		callbackDiscriminator,
-		callbackAccounts,
-		callbackArguments,
-	);
-	if (payerSigners.length == 0) {
-		return signed(instruction.invoke(), ["identity", [identity.bump]]);
-	}
+	let storage: uint8[1024] = [];
+	const data = requested(storage, callerSeed, callbackDiscriminator, callbackAccounts, callbackArguments);
+	if (data.overflowed()) { return Result.err(ProgramError.invalidInstructionData()); }
 	const bump: uint8[1] = [identity.bump];
 	const identitySeeds: SeedSlice[2] = [seedText("identity"), seedBytes(bump)];
-	const both: SignerSeeds[2] = [signerOf(identitySeeds), payerSigners[0]];
-	return instruction.invoke(both);
+	let both: SignerSeeds[2] = [signerOf(identitySeeds), signerOf(identitySeeds)];
+	if (payerSigners.length == 1) { both[1] = payerSigners[0]; }
+	return invokeSigned(
+		Pubkey.vrfProgram(),
+		[
+			InstructionAccount.writableSigner(accounts.payer),
+			InstructionAccount.readonlySigner(accounts.programIdentity),
+			InstructionAccount.writable(accounts.oracleQueue),
+			InstructionAccount.readonly(accounts.systemProgram),
+			InstructionAccount.readonly(accounts.slotHashes),
+		],
+		data,
+		both[0..(1 + payerSigners.length)],
+	);
 }
 
 export function verifyVrfCallback(identity: Account): Result<uint64, ProgramError> {
@@ -152,6 +154,10 @@ when (testBuild) {
 			slotHashes: try account(4),
 		};
 		const callback: uint64 = 0x0807060504030201;
+		if (op >= 3) {
+			const rest = try data.range(1, data.length - 1);
+			return requestRandomness(request, keyOf(99), callback, [], rest);
+		}
 		const args = try data.range(1, 2);
 		if (op == 0) {
 			const callbackAccount = try account(5);
@@ -267,6 +273,20 @@ when (testBuild) {
 		assert sent.accounts[0].signer && sent.accounts[0].writable;
 		assert sent.accounts[1].key.equals(identityOf(programKey())) && sent.accounts[1].signer;
 		assert u32At(sent.data, 84) == 3;
+	}
+
+	function requestWith(length: int32): uint64 {
+		const input: uint8[] = [3];
+		for (let index = 0; index < length; index++) { input.push(0xcc); }
+		return run(programKey(), requestAccounts(identityOf(programKey())), input, requestEntry).result;
+	}
+
+	test "a request whose bytes do not fit the 1024-byte buffer is refused before it is sent" {
+		assert requestWith(1024 - 92) == 0;
+		const sent = invocations()[0];
+		assert sent.data.length == 1024;
+		assert requestWith(1024 - 92 + 1) == ProgramError.invalidInstructionData().code;
+		assert invocations().length == 0;
 	}
 
 	test "requestRandomness refuses an identity that is not the program's" {
