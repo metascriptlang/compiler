@@ -10,7 +10,6 @@ import { resetDuVariantRegistry } from "../checker/types";
 import { resetDuHashes } from "../analyzer/classify";
 import { resetLinkState } from "../utils/linkState";
 import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
-import { createNameSet } from "../transform/context";
 import { ModuleError } from "../module/graph";
 import { monoTypeKey } from "../monomorphize/registry";
 import { HcrIndirectModule } from "../transform/native/hcrIndirect";
@@ -25,18 +24,11 @@ export enum BuildStatus {
 
 export interface LowerClaims {
 	typeInfos: string[];
-	owners: string[];
-	hooks: Symbol[];
 	ops: KeyedOp[];
 }
 
 export function sameClaims(a: LowerClaims, b: LowerClaims): boolean {
 	if (a.typeInfos.join(",") != b.typeInfos.join(",")) return false;
-	if (a.owners.join(",") != b.owners.join(",")) return false;
-	if (a.hooks.length != b.hooks.length) return false;
-	for (let i = 0; i < a.hooks.length; i += 1) {
-		if (a.hooks[i].name != b.hooks[i].name) return false;
-	}
 	if (a.ops.length != b.ops.length) return false;
 	for (let i = 0; i < a.ops.length; i += 1) {
 		if (a.ops[i].key != b.ops[i].key || a.ops[i].sym.name != b.ops[i].sym.name) return false;
@@ -103,7 +95,7 @@ export function resetBuildState(): void {
 	resetDuVariantRegistry();
 	resetDuHashes();
 	resetLinkState();
-	setGlobalHookOwners(createNameSet());
+	setGlobalHookOwners();
 }
 
 export function startSessionBuild(session: BuildSession): void {

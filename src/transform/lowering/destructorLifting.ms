@@ -40,17 +40,10 @@ import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
 import { sizedArrayHookName } from "../../analyzer/classify";
 
-// ===== TypeInfo Ownership Registry =====
-// Hook ownership is the keyed op table: a type owns its hooks once its destroy op is lifted.
-// TypeInfo ownership is tracked SEPARATELY because the emission triggers differ: hooks can be
-// emitted by any module that references the type (DRC correctness only requires one definition);
-// TypeInfo must be emitted by the DEFINING module to match codegen's cross-module extern
-// conventions. Without this split, a consumer module that claims hooks first
-// would also block the defining module from emitting the TypeInfo global
-// (observed as `undefined symbol: _SymbolTypeInfo` link errors).
+// ===== Global TypeInfo Ownership Registry =====
 let _globalTypeInfoOwners: NameSet = createNameSet();
 
-export function setGlobalHookOwners(_owners: NameSet): void {
+export function setGlobalHookOwners(): void {
 	_globalTypeInfoOwners = createNameSet();
 	resetHookSyms();
 }
@@ -1456,9 +1449,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 //   - `objType` — the struct/union type whose fields the hooks walk.
 //   - `refType` — non-null iff caller already knows this is a Ref<Struct> (class/interface).
 //     When null, the function looks up the symbol by name and infers class/interface status.
-//   - Marks `lctx.generated` at the *end* of a successful emission — never mid-flight,
-//     never before TypeInfo is emitted. A type's hooks are globally owned once its
-//     destroy op is in the op table.
+//   - Marks `lctx.generated` at the end of a successful emission, never before TypeInfo is emitted.
 
 // Emit a minimal msTypeInfo for a class/interface with no RC fields. Needed so
 // `msAllocTyped(sizeof(T), &TTypeInfo)` links; destroyFn / traceFn are null.

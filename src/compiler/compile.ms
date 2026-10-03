@@ -42,7 +42,7 @@ import { liftHcrState } from "../transform/native/hcrLift";
 import { HcrIndirectModule, hcrFunctions, lowerHcrIndirection } from "../transform/native/hcrIndirect";
 import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
-import { createTransformContextWithChecker, createNameSet, NameSet } from "../transform/context";
+import { createTransformContextWithChecker } from "../transform/context";
 import { setGlobalHookOwners, typeInfoOwnerMark, typeInfoOwnersFrom, replayTypeInfoOwners } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
@@ -695,7 +695,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 	job.timers.lower = job.timers.lower + (performance.now() - _tl0);
 	truncateErrors(ctx, errBase);
-	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), owners: [], hooks: [], ops: opsFrom(keyedOpMark) };
+	job.claims = { typeInfos: typeInfoOwnersFrom(typeInfoMark), ops: opsFrom(keyedOpMark) };
 	return nativeLowered;
 }
 
@@ -2426,8 +2426,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 // Reference parity: global hook ownership registry shared across all modules.
 // First module to need a type's DRC hooks generates them; others get extern protos.
 // Before the graph check: enum toString ops register during checking, and this resets the op table.
-const sharedHookOwners = createNameSet();
-setGlobalHookOwners(sharedHookOwners);
+setGlobalHookOwners();
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
 	applyGcMode(opts);
 	session.moduleCount = graph.loadOrder.length as int32;
@@ -2691,7 +2690,7 @@ setGlobalHookOwners(sharedHookOwners);
 			typeInstances: typeRowsOf.get(modPath) ?? noTypeRows,
 			cloneInput: session.keep,
 			ran: false,
-			claims: { typeInfos: [], owners: [], hooks: [], ops: [] },
+			claims: { typeInfos: [], ops: [] },
 		};
 		let nativeLowered: Node;
 		if (session.keep) {
@@ -3253,8 +3252,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
 // Reference parity: global hook ownership registry shared across all modules.
 // Before the graph check: enum toString ops register during checking, and this resets the op table.
-const sharedHookOwners = createNameSet();
-setGlobalHookOwners(sharedHookOwners);
+setGlobalHookOwners();
 	const graph = loadAndCheckGraph(filePath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode));
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules
