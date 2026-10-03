@@ -1349,6 +1349,9 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	if (actual.kind == TypeKind.EnumLiteral && isNumeric(formal)) {
 		return TypeRelation.IntConv;
 	}
+	if (isMaybeType(formal) && !isMaybeType(actual) && formal.typeReturn != null) {
+		return typeRelation(formal.typeReturn, actual) == TypeRelation.None ? TypeRelation.None : TypeRelation.Subtype;
+	}
 	// Union target: best match
 	if (formal.kind == TypeKind.Union) {
 		let best = TypeRelation.None;

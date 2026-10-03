@@ -1,6 +1,6 @@
 import { platform } from "std/process";
 import { isNumeric, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView } from "./types";
-import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
+import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
@@ -623,7 +623,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	}
 	if (recvNominal != null && objNominal != null) return sameInstanceArgs(recvT, objT);
 	if (recvNominal != null || objNominal != null) return false;
-	return sameType(addressed(recvT), addressed(objT));
+	return typeRelation(addressed(withoutReadonlyView(recvT)), addressed(withoutReadonlyView(objT))) != TypeRelation.None;
 }
 
 function instanceArgs(t: Type): Type[] | null {
