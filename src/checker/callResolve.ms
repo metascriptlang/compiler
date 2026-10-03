@@ -12,7 +12,7 @@ import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, wri
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
-import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner } from "./context";
+import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym } from "./context";
 import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
@@ -489,14 +489,17 @@ function isTypeLevelAccess(ctx: CheckerContext, obj: Node, property: string): bo
 	if (sym.symbolKind != SymbolKind.Function) return false;
 	if (obj.kind != NodeKind.Identifier) return false;
 	if (ctx.extensionRegistry == null) return false;
-	return staticExtsOwnedBy(ctx, findAllExtensionsByName(ctx.extensionRegistry, property), sym).length > 0;
+	return staticExtsOwnedBy(ctx, findAllExtensionsByName(ctx.extensionRegistry, property), sym, null).length > 0;
 }
 
-function staticExtsOwnedBy(ctx: CheckerContext, exts: ExtensionMethod[], owner: Symbol): ExtensionMethod[] {
+function staticExtsOwnedBy(ctx: CheckerContext, exts: ExtensionMethod[], owner: Symbol, objType: Type | null): ExtensionMethod[] {
 	for (const e of exts) {
 		if (e.isStatic && e.sym != null) ensureShaped(e.sym, ctx);
 	}
-	return filterStaticExtsByOwner(exts, owner);
+	const owned = filterStaticExtsByOwner(exts, owner);
+	if (owned.length > 0 || owner.symbolKind != SymbolKind.TypeAlias || objType == null) return owned;
+	const denoted = nominalTypeSym(objType);
+	return denoted != null && denoted != owner ? filterStaticExtsByOwner(exts, denoted) : owned;
 }
 
 function getCalleeName(callee: Node): string {
@@ -1354,7 +1357,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				const isStaticAccess = isTypeLevelAccess(ctx, me.object, me.property);
 				let filtered = filterExtsByReceiverType(allByName, objType);
 				if (isStaticAccess && me.object.resolvedSym != null) {
-					for (const owned of staticExtsOwnedBy(ctx, allByName, me.object.resolvedSym)) filtered.push(owned);
+					for (const owned of staticExtsOwnedBy(ctx, allByName, me.object.resolvedSym, objType)) filtered.push(owned);
 				}
 				if (isStaticAccess && filtered.length > 1) {
 					const staticOnly: ExtensionMethod[] = [];
@@ -4434,7 +4437,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			}
 		}
 		if (ext == null && isStaticClassAccess && d.object.resolvedSym != null) {
-			const owned = staticExtsOwnedBy(ctx, allByName, d.object.resolvedSym);
+			const owned = staticExtsOwnedBy(ctx, allByName, d.object.resolvedSym, objType);
 			if (owned.length > 0) ext = owned[0];
 		}
 		if (ext != null) {
