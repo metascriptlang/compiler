@@ -1,5 +1,5 @@
 import { Node, NodeKind, Type, TypeKind, ArrayAccessData, createNodeAt } from "../ast/node";
-import { skipModifier, peelTransparentInstance, typeDisplayName, isReadonlyView, createReadonlyView } from "./types";
+import { skipModifier, peelTransparentInstance, typeDisplayName, isReadonlyView, createReadonlyView, isValueStorage } from "./types";
 import { sameType, nonNullMemberOfNullable } from "./compat";
 import { CheckerContext, addError } from "./context";
 import { writeRefusal } from "./assignable";
@@ -19,7 +19,7 @@ function bareSource(source: Type | null): Type | null {
 }
 
 function storedInline(t: Type): boolean {
-	return t.kind == TypeKind.Struct || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Tuple;
+	return isValueStorage(t) || t.kind == TypeKind.SizedArray;
 }
 
 export function pointerAddressElement(source: Type | null, target: Type | null): Type | null {

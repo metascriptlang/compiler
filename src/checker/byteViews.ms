@@ -68,7 +68,7 @@ export function byteViewRefusal(sourceType: Type | null, targetType: Type | null
 	const source = castType(sourceType);
 	const dest = castType(targetType);
 	if (source == null || dest == null) return "";
-	if (source.kind != TypeKind.Ptr && dest.kind != TypeKind.Ptr && viewType(dest) == null) return "";
+	if (source.kind != TypeKind.Ptr && dest.kind != TypeKind.Ptr && dest.kind != TypeKind.Span) return "";
 	if (hasGenericParams(source) || hasGenericParams(dest)) return "";
 	if (pointerCastSupported(source, dest, vmObjects)) return "";
 	return "cannot convert " + typeDisplayName(source) + " to " + typeDisplayName(dest);
