@@ -87,6 +87,8 @@ import "./comptimeHostEffects";
 import "./comptimeMacroValues";
 import "./comptimeValues";
 import "./declarationBoundaries";
+import "./declaredSubscript";
+import "./directiveStatement";
 import "./delegateDeclarations";
 import "./editorRecovery";
 import "./enumRelations";
