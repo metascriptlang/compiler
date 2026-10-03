@@ -13,11 +13,9 @@ import {
 	CTypeInfoDemand,
 	TypeInfoKind,
 	createAliveSet,
-	aliveSetAdd,
 	aliveSetAddSym,
 	aliveSetHasSym,
 	aliveSetAddModule,
-	aliveSetHas,
 	aliveSetHasDecl,
 	aliveSetHasModule,
 	aliveSetModuleCount,
@@ -34,7 +32,7 @@ export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: st
 	if (!aliveSet.enabled) return true;
 	const name = (node.data as FunctionDeclData).fnName;
 	const sym = node.resolvedSym;
-	return aliveSetHasDecl(aliveSet, modulePath, name, sym);
+	return aliveSetHasDecl(aliveSet, sym, name);
 }
 // ===== Declaration Index =====
 // "modulePath:name" → its first top-level declaration; _declNext chains the
@@ -351,15 +349,11 @@ function walkChildrenGeneric(node: Node, modulePath: string): void {
 	});
 }
 
-// Mark a symbol alive and walk its body if not already visited.
-// Walks ALL overloads with the same name (not just the first).
-function markAndWalk(modulePath: string, name: string): void {
+// Walk every declaration a module's export list names (all overloads of the name).
+function walkNamedDecls(modulePath: string, name: string): void {
 	const key = modulePath + ":" + name;
 	if (visitedHas(key)) return;
 	visitedAdd(key);
-	aliveSetAdd(_aliveSet, modulePath, name);
-
-	// Walk ALL declarations with this name (handles overloaded functions)
 	let di = _declHead.get(key) ?? -1;
 	while (di >= 0) {
 		walkDecl(di);
@@ -437,8 +431,8 @@ function markClassInit(classDecl: Node, modulePath: string, className: string): 
 }
 
 function markRootDecl(decl: Node, modulePath: string): void {
-	if (decl.resolvedSym != null) markSymAndWalk(decl.resolvedSym, modulePath);
-	else markAndWalk(modulePath, topDeclName(decl));
+	if (decl.resolvedSym == null) throw new Error(`internal: root declaration '${topDeclName(decl)}' of ${modulePath} has no symbol`);
+	markSymAndWalk(decl.resolvedSym, modulePath);
 }
 
 function walkDecl(di: int32): void {
@@ -451,7 +445,7 @@ function walkDecl(di: int32): void {
 		aliveSetAddSym(_aliveSet, found.resolvedSym);
 		markDispatchOverrides(dispatchEntryFor(found.resolvedSym));
 	} else {
-		aliveSetAdd(_aliveSet, modulePath, name);
+		throw new Error(`internal: declaration '${name}' of ${modulePath} reached reachability without a symbol`);
 	}
 	aliveSetAddModule(_aliveSet, modulePath);
 	if (found.nodeType != null && hasGenericParams(found.nodeType)) return;
@@ -500,7 +494,6 @@ function topDeclName(decl: Node): string {
 const ANY_EXPORT = "*";
 
 function declaredNameAlive(modulePath: string, name: string): boolean {
-	if (aliveSetHas(_aliveSet, modulePath, name)) return true;
 	let di = _declHead.get(modulePath + ":" + name) ?? -1;
 	while (di >= 0) {
 		const sym = _declNodes[di].resolvedSym;
@@ -688,7 +681,7 @@ export function computeAliveSet(
 					markRootDecl(decl, modulePath);
 				} else {
 					const name = getDeclName(bare);
-					if (name != "") markAndWalk(modulePath, name);
+					if (name != "") walkNamedDecls(modulePath, name);
 				}
 			}
 		}
@@ -879,7 +872,6 @@ test "endsWith helper" {
 test "empty programs produce empty alive set" {
 	const aliveSet = computeAliveSet([], [], "/entry.ms", false, createModuleGraph());
 	assert aliveSet.enabled;
-	assert aliveSet.entries.length == 0;
 	assert aliveSet.typeInfos.length == 0;
 }
 
@@ -980,6 +972,7 @@ test "a generated op is alive through the symbol that references it" {
 	const live = liftedOp(liveBody, AttachedOp.AttachedDestructor, "hookDestroy", null);
 	const dead = liftedOp(deadBody, AttachedOp.AttachedDestructor, "deadDestroy", null);
 	const stmts = (parsed.value.data as ProgramData).programStmts;
+	stmts[0].resolvedSym = makeSymbol("main", SymbolKind.Function, null, false);
 	stmts[1].resolvedSym = live;
 	stmts[2].resolvedSym = dead;
 	bindIdentifiers(stmts[0], "hookDestroy", live);
@@ -1003,13 +996,19 @@ function importGraph(edges: string[][]): ModuleGraph {
 }
 
 function moduleAlive(graph: ModuleGraph, modulePath: string): boolean {
+	const impl = allocationOf("function add(): void {}");
+	const add = (impl.data as ProgramData).programStmts[0];
+	add.resolvedSym = makeSymbol("add", SymbolKind.Function, null, false);
 	_aliveSet = createAliveSet();
 	_aliveSet.enabled = true;
-	aliveSetAdd(_aliveSet, "/main.ms", "main");
-	aliveSetAdd(_aliveSet, "/impl.ms", "add");
+	declIndexBuild([impl], ["/impl.ms"]);
+	aliveSetAddModule(_aliveSet, "/main.ms");
+	aliveSetAddModule(_aliveSet, "/impl.ms");
+	aliveSetAddSym(_aliveSet, add.resolvedSym);
 	markImportedModulesAlive(graph);
 	const alive = aliveSetHasModule(_aliveSet, modulePath);
 	_aliveSet = createAliveSet();
+	declIndexBuild([], []);
 	return alive;
 }
 

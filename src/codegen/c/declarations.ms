@@ -9,8 +9,8 @@ import { hasGenericParams, isIntegerType, isNumeric, classParentOf } from "../..
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
-	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, aliveSetHasDecl, aliveSetHasModule, internString, addCGenError,
-	setLocalSymName, factClaimGeneric, factSkipTypeInfo,
+	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHasDecl, aliveSetHasModule, internString, addCGenError,
+	setLocalSymName, factClaimGeneric,
 } from "./context";
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
@@ -717,7 +717,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, staticPfx: string, cType: string): boolean {
 	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return false;
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.enabled && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
+	if (g.aliveSet.enabled && !aliveSetHasDecl(g.aliveSet, node.resolvedSym, d.declName)) return true;
 	const body = cType.slice(0, cType.length - 1);
 	if (isHcrImageModule(g, g.modulePath) && g.emissionFacts.hcrTypeInfoOwners.has(body)) return false;
 	const od = d.initializer.data as ObjectLiteralData;
@@ -755,7 +755,7 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	const arrT = t0.kind == TypeKind.Ref ? t0.typeReturn : t0;
 	if (arrT == null || arrT.kind != TypeKind.Array) return false;
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.enabled && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
+	if (g.aliveSet.enabled && !aliveSetHasDecl(g.aliveSet, node.resolvedSym, d.declName)) return true;
 	const arrCType = cType.slice(0, cType.length - 1);
 	const typeInfo = ensureRefArrayCellTypeInfo(g, arrT);
 	const viaRegistry = isHcrImageModule(g, g.modulePath);

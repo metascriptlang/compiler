@@ -606,8 +606,6 @@ export class CTypeInfoDemand {
 
 export class AliveSet {
 	enabled: boolean;
-	entries: string[];       // "modulePath:symbolName" keys
-	_set: HashSet<string>;       // O(1) lookup mirror
 	_modules: HashSet<string>;   // O(1) module-level lookup
 	_syms: HashSet<Symbol>;
 	typeInfos: CTypeInfoDemand[];
@@ -617,7 +615,7 @@ export class AliveSet {
 
 export function createAliveSet(): AliveSet {
 	return {
-		enabled: false, entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
+		enabled: false, _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
 		typeInfos: [], typeInfoKeys: new HashSet<string>(), foreignOps: new HashMap<Symbol, string[]>(),
 	};
 }
@@ -630,26 +628,13 @@ export function aliveSetHasSym(aliveSet: Readonly<AliveSet>, sym: Symbol): boole
 	return aliveSet._syms.has(sym);
 }
 
-export function aliveSetHasDecl(aliveSet: Readonly<AliveSet>, modulePath: string, name: string, sym: Symbol | null): boolean {
-	if (sym != null) return aliveSet._syms.has(sym);
-	return aliveSetHas(aliveSet, modulePath, name);
-}
-
-export function aliveSetAdd(aliveSet: AliveSet, modulePath: string, name: string): void {
-	const key = modulePath + ":" + name;
-	if (aliveSet._set.has(key)) return;
-	aliveSet._set.add(key);
-	aliveSet.entries.push(key);
-	aliveSet._modules.add(modulePath);
+export function aliveSetHasDecl(aliveSet: Readonly<AliveSet>, sym: Symbol | null, declName: string): boolean {
+	if (sym == null) throw new Error(`internal: declaration '${declName}' has no symbol, so its aliveness is unknown`);
+	return aliveSet._syms.has(sym);
 }
 
 export function aliveSetAddModule(aliveSet: AliveSet, modulePath: string): void {
 	aliveSet._modules.add(modulePath);
-}
-
-export function aliveSetHas(aliveSet: Readonly<AliveSet>, modulePath: string, name: string): boolean {
-	const key = modulePath + ":" + name;
-	return aliveSet._set.has(key);
 }
 
 export function aliveSetHasModule(aliveSet: Readonly<AliveSet>, modulePath: string): boolean {

@@ -2769,7 +2769,7 @@ resetLiftedOps();
 	if (fsWritableHits.length > 0) {
 		let fsReported = 0;
 		for (const h of fsWritableHits) {
-			if (!aliveSetHasDecl(aliveSet, h.modPath, h.name, h.sym)) continue;
+			if (!aliveSetHasDecl(aliveSet, h.sym, h.name)) continue;
 			renderModuleError(h.modPath, h.source, {
 				message: h.message,
 				line: h.line,
