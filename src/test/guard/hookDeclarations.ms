@@ -2,8 +2,8 @@
 //
 // INVARIANT: a hook the compiler accepts is a hook that runs. The reference binds a hook to its
 //   type in `bindHookToType` and refuses one that cannot bind: a type bound operation can be defined
-//   only in the module of its type (semstmts 2205-2207), and a wrong signature is "signature for
-//   '=…' must be …" (semstmts 2220-2260, `bindDupHook` 2192-2203).
+//   only in the module of its type (semstmts 2196-2197), and a wrong signature is "signature for
+//   '=…' must be …" (`bindTypeHook` semstmts 2219-2258, `bindDupHook` 2200-2217).
 //
 // WHY A SUBPROCESS: the observable is the CLI verdict on C and on JS; the compiler under test is
 //   $MSC when the runner exports one, else `./msc` beside the recompiler root.
