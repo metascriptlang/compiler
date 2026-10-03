@@ -42,7 +42,7 @@ import { lookupModuleCtx, lookupModuleProgram } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { createTransformContextWithChecker, createNameSet, NameSet } from "../transform/context";
 import { setGlobalHookOwners, hookOwnerMark, hookOwnersFrom, replayHookOwners, typeInfoOwnerMark, typeInfoOwnersFrom, replayTypeInfoOwners } from "../transform/lowering/destructorLifting";
-import { createModuleGraph, findModule, ModuleGraph, Module, ModuleError, ErrorSeverity } from "../module/graph";
+import { createModuleGraph, findModule, addModule, createModule, ModuleGraph, Module, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, SourceProvider, takeInlineHeaderTimings, registerHeaderCache } from "../module/loader";
 import { registerPreludeStampFn, preludePackStats } from "../checker/preludePack";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
