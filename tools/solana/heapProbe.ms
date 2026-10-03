@@ -11,6 +11,7 @@ import {
 	invoke,
 	invokeList,
 	logU64,
+	minimumBalance,
 	programAddress,
 	programId,
 	signed,
@@ -85,6 +86,14 @@ function unsignedLoop(count: uint64): Result<uint64, ProgramError> {
 			borshBuffer(storage).u8(12).u8(0).u8(0),
 		);
 	}
+	logU64(msSolAlloc(0));
+	return Result.ok(0);
+}
+
+function rentLoop(count: uint64): Result<uint64, ProgramError> {
+	let sum: uint64 = 0;
+	for (let index: uint64 = 0; index < count; index++) { sum = sum + minimumBalance(index); }
+	logU64(sum);
 	logU64(msSolAlloc(0));
 	return Result.ok(0);
 }
@@ -182,6 +191,7 @@ function dispatch(): Result<uint64, ProgramError> {
 	if (op == 11) { return unsignedLoop(count); }
 	if (op == 12) { return Result.ok(0); }
 	if (op == 13) { return limitCall(count); }
+	if (op == 14) { return rentLoop(count); }
 	return request(0 - count);
 }
 

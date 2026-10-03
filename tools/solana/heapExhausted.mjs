@@ -23,7 +23,7 @@ const HEAP = 32 * 1024;
 const BUDGET = 1_400_000;
 const LARGEST_COUNT = 60_000;
 const NAMED = /std\/solana: the (\d+) KiB program heap is exhausted \(asked (\d+) more bytes at (\d+)\)/;
-const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5, push: 6, literal: 7, pairs: 8, text: 9, signed: 10, unsigned: 11, limits: 13 };
+const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5, push: 6, literal: 7, pairs: 8, text: 9, signed: 10, unsigned: 11, limits: 13, rent: 14 };
 const MASK = 2n ** 64n - 1n;
 const SUMS = {
 	push: (n) => sum(n, (i) => (3n * i + 1n) * (i + 1n)),
@@ -151,6 +151,16 @@ function namedFailure(label, outcome) {
 	}
 	const perCall = (kind) => Math.round((units.get(`${kind}20`) - units.get(`${kind}1`)) / 19);
 	console.log(`[${name}] per CPI: 0 heap bytes, ${perCall("signed")} CU signed, ${perCall("unsigned")} CU unsigned, ${perCall("builders")} CU with a 512-byte buffer`);
+}
+
+{
+	const name = "rent";
+	const base = (await run(OPS.seeds, 1)).value;
+	for (const count of [1, 2, 100, 1000]) {
+		const outcome = await run(OPS.rent, count);
+		check(`[${name}] ${count} rent reads leave the heap position at ${base} (${outcome.ok ? `${outcome.units} CU` : outcome.error})`,
+			outcome.ok && outcome.value === base);
+	}
 }
 
 for (const [name, op] of Object.entries(OPS).filter(([name]) => name === "cells")) {
