@@ -1,4 +1,7 @@
 // Parked at inbox card 2026-09-27-generic-ref-layout-identity.md
+// Parked at inbox card 2026-10-03-std-generic-instance-takes-another-modules-same-named-type.md
+
+import { fixtureShapeValue } from "./fixtures/sameNamedShape";
 
 enum ReferenceKind { Ok, Err }
 
@@ -30,4 +33,15 @@ test "nominalInstantiation: reference-wrapped generic variants retain the substi
 	if (e.kind == ReferenceKind.Err) assert e.error == "boom";
 	if (s.kind == ReferenceKind.Ok) assert s.value == "hello-payload";
 	if (f.kind == ReferenceKind.Err) assert f.error == 42;
+}
+
+interface WireCircle { kind: "circle"; r: float64; }
+interface WireSquare { kind: "square"; side: float64; }
+type WireShape = WireCircle | WireSquare;
+
+test "nominalInstantiation: a std generic instance keeps a type named like another module's type" {
+	assert fixtureShapeValue() == 5;
+	const parsed = JSON.parse<WireShape>(`{"kind":"square","side":3.0}`);
+	assert parsed.ok;
+	assert parsed.value.kind == "square";
 }
