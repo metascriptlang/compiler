@@ -724,6 +724,7 @@ void msNumberArraySplice3(msNumberArray* arr, int64_t start, int64_t deleteCount
 }
 
 void msStringArraySplice3(msStringArray* arr, int64_t start, int64_t deleteCount, msString item) {
+	if (item.p != NULL && !msIsLiteral(item)) item = msStringNew(item.p->data, item.len);
 	if (start < 0) start = 0;
 	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
 		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
@@ -742,11 +743,7 @@ void msStringArraySplice3(msStringArray* arr, int64_t start, int64_t deleteCount
 	if (tail > 0) {
 		memmove(arr->p->data + start + 1, arr->p->data + start, tail * sizeof(msString));
 	}
-	if (item.p != NULL && !msIsLiteral(item)) {
-		arr->p->data[start] = msStringNew(item.p->data, item.len);
-	} else {
-		arr->p->data[start] = item;
-	}
+	arr->p->data[start] = item;
 	arr->len += 1;
 }
 
@@ -798,6 +795,7 @@ void msAtomicRefArrayDestroy(msRefArray* arr) {
 /* splice(start, deleteCount, item): delete deleteCount then insert item.
  * The array owns a ref to each element (delete decrefs), so insert increfs. */
 void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
+	if (item != NULL) msIncref(item);
 	if (start < 0) start = 0;
 	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
 		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
@@ -816,7 +814,6 @@ void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void
 	if (tail > 0) {
 		memmove(arr->p->data + start + 1, arr->p->data + start, tail * sizeof(void*));
 	}
-	if (item != NULL) msIncref(item);
 	arr->p->data[start] = item;
 	arr->len += 1;
 }
@@ -834,6 +831,7 @@ void msAtomicRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount)
 }
 
 void msAtomicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
+	if (item != NULL) msAtomicIncref(item);
 	if (start < 0) start = 0;
 	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
 		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
@@ -852,7 +850,6 @@ void msAtomicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount
 	if (tail > 0) {
 		memmove(arr->p->data + start + 1, arr->p->data + start, tail * sizeof(void*));
 	}
-	if (item != NULL) msAtomicIncref(item);
 	arr->p->data[start] = item;
 	arr->len += 1;
 }
