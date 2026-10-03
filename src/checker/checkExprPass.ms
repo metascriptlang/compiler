@@ -3124,34 +3124,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, pickBodyCtx } from "./instantiate";
-import { anyArgIsParametric, keepFoldedType, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, takeDefaultArgTemps } from "./callResolve";
-
-function bodyIntoBlock(body: Node, temps: Node[]): void {
-	const value = createNodeAt(NodeKind.Identifier, { name: "" }, body.location);
-	value.kind = body.kind;
-	value.data = body.data;
-	value.nodeType = body.nodeType;
-	value.resolvedSym = body.resolvedSym;
-	value.flags = body.flags;
-	value.variantSlot = body.variantSlot;
-	value.typeArg = body.typeArg;
-	value.typeExpr = body.typeExpr;
-	value.flowNode = body.flowNode;
-	const valueless = body.nodeType == null || body.nodeType.kind == TypeKind.Void || body.nodeType.kind == TypeKind.Never;
-	const last = valueless
-		? createNodeAt(NodeKind.ExprStmt, { expr: value }, body.location)
-		: createNodeAt(NodeKind.ReturnStmt, { argument: value }, body.location);
-	const stmts: Node[] = [];
-	for (const t of temps) stmts.push(t);
-	stmts.push(last);
-	body.kind = NodeKind.BlockStmt;
-	body.data = { statements: stmts } as BlockStmtData;
-	body.nodeType = null;
-	body.resolvedSym = null;
-	body.typeArg = "";
-	body.typeExpr = null;
-	body.flowNode = null;
-}
+import { anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed } from "./callResolve";
 
 function createSyntheticToken(loc: SourceLocation): Token {
 	return createToken(TokenKind.Ident, "", loc.line);

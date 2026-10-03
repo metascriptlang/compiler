@@ -16,12 +16,13 @@ import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, Checker
 import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
-import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
+import { instantiateClassConstructor, pickBodyCtx, clearCheckerState } from "./instantiate";
+import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
 import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, parentClassSymOf, lookupCtorDefaults } from "./symbol";
+import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
@@ -880,18 +881,16 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	// (with class generic params substituted from explicit `<T,U>` so
 	// closure args see concrete types — Phase C parity with checkCallExpr).
 	// Otherwise use struct field types as expected (positional initialization).
-	const hasCtor = d.newCallee.resolvedSym != null && hasFlag(d.newCallee.resolvedSym, SymbolFlag.HasConstructor);
-	let ctorFormalTypes: Type[] = null as unknown as Type[];
-	if (hasCtor && d.newCallee.resolvedSym != null) {
-		const rawCtorTypes = getCtorParamTypes(d.newCallee.resolvedSym);
+	const classSym = d.newCallee.resolvedSym;
+	const hasCtor = classSym != null && hasFlag(classSym, SymbolFlag.HasConstructor);
+	const declaredCtor = ctorRoutineOf(classSym);
+	let ctorFormals: Type[] = null as unknown as Type[];
+	if (hasCtor && classSym != null) {
+		const rawCtorTypes = ctorFormalTypes(declaredCtor);
 		if (rawCtorTypes != null && rawCtorTypes.length > 0) {
-			ctorFormalTypes = rawCtorTypes;
-			// Substitute class generic params (T, U, ...) with explicit type
-			// args from `new X<int32, string>(...)`. Class generic param names
-			// come from the class declaration the callee resolved to.
-			const classGenericDecl = symGenericParams(d.newCallee.resolvedSym);
+			ctorFormals = rawCtorTypes;
+			const classGenericDecl = symGenericParams(classSym);
 			if (classGenericDecl != "") {
-				// Format: "T:Constraint,U" — strip constraints, split by comma
 				const classGenericNames: string[] = [];
 				const segs = splitTopLevel(classGenericDecl, ",");
 				for (const seg of segs) {
@@ -908,22 +907,22 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 					for (const t of rawCtorTypes) {
 						substituted.push(instantiateGeneric(t, classBindings.names, classBindings.types));
 					}
-					ctorFormalTypes = substituted;
+					ctorFormals = substituted;
 				}
 			}
 		}
 	}
-	const ctorRestIdx = hasCtor && ctorFormalTypes != null && ctorFormalTypes.length > 0
-		&& ctorFormalTypes[ctorFormalTypes.length - 1].kind == TypeKind.Varargs ? ctorFormalTypes.length - 1 : -1;
+	const ctorRestIdx = hasCtor && ctorFormals != null && ctorFormals.length > 0
+		&& ctorFormals[ctorFormals.length - 1].kind == TypeKind.Varargs ? ctorFormals.length - 1 : -1;
 	let ai = 0;
 	while (ai < d.newArguments.length) {
 		let argExpected: Type | null = null;
 		if (ctorRestIdx >= 0 && ai >= ctorRestIdx) {
-			const restArr = unwrapRef(unwrapVarargs(ctorFormalTypes![ctorRestIdx]));
+			const restArr = unwrapRef(unwrapVarargs(ctorFormals![ctorRestIdx]));
 			const restElem = getElementType(restArr);
 			argExpected = restElem.kind == TypeKind.Inferred || d.newArguments[ai].kind == NodeKind.SpreadExpr ? restArr : restElem;
-		} else if (hasCtor && ctorFormalTypes != null && ai < ctorFormalTypes.length) {
-			argExpected = ctorFormalTypes[ai];
+		} else if (hasCtor && ctorFormals != null && ai < ctorFormals.length) {
+			argExpected = ctorFormals[ai];
 		} else if (!hasCtor && innerType != null && innerType.typeChildren != null && ai < innerType.typeChildren.length) {
 			argExpected = innerType.typeChildren[ai];
 		}
@@ -934,40 +933,15 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		}
 		ai = ai + 1;
 	}
-	const declaringClass = hasCtor ? constructorDeclaringClass(d.newCallee.resolvedSym!) : null;
-	if (declaringClass != null) {
-		const defaults = declaringClass.defaultParams;
-		if (defaults != null && defaults.length > 0) {
-			const forwarding = ctorFnTypeOf(d.newCallee.resolvedSym!);
-			fillDefaults(ctx, d.newArguments, defaults, defaults.length, 0, ctorFormalTypes, declaringClass.modulePath, forwarding != null ? forwarding.typeNames : null);
-		}
-	} else if (hasCtor) {
-		// Path 1: monomorphized generic constructors (Set__string_new) via _ctorRegistry
-		// For GenericInstance types, compute mangled name from structure (typeName + type args).
-		// The GenericInstance keeps bare typeName ("Map") for type matching/unification;
-		// the mangled name ("Map__string_int64") is computed on-demand here.
-		let mangledName = "";
-		if (innerType != null) {
-			if (innerType.kind == TypeKind.GenericInstance && innerType.typeChildren.length > 0) {
-				mangledName = monoInstanceName(innerType);
-			} else {
-				mangledName = monoBaseName(innerType.typeName, d.newCallee.resolvedSym != null ? d.newCallee.resolvedSym.modulePath : "");
-			}
-		}
-		const ctorEntry = mangledName != "" ? lookupCtorDefaults(d.newCallee.resolvedSym, mangledName) : null;
-		const classModule = d.newCallee.resolvedSym != null ? d.newCallee.resolvedSym.modulePath : "";
-		if (ctorEntry != null && ctorEntry.fnType != null && ctorEntry.fnType.typeChildren != null) {
-			fillDefaults(ctx, d.newArguments, ctorEntry.defaults,
-				ctorEntry.fnType.typeChildren.length, 0, ctorEntry.fnType.typeChildren, classModule, ctorEntry.fnType.typeNames);
-		} else if (d.newCallee.resolvedSym != null && d.newCallee.resolvedSym.defaultParams != null
-				&& d.newCallee.resolvedSym.defaultParams.length > 0) {
-			// Path 2: non-generic constructors — defaults on class sym
-			const defaults = d.newCallee.resolvedSym.defaultParams;
-			const ctorType = ctorFnTypeOf(d.newCallee.resolvedSym);
-			const ctorParamTypes = ctorType != null ? ctorType.typeChildren : null as unknown as Type[];
-			fillDefaults(ctx, d.newArguments, defaults, defaults.length, 0, ctorParamTypes, classModule, ctorType != null ? ctorType.typeNames : null);
+	const ctorOwner = generic.instance != null ? generic.instance : classSym;
+	const ctorRoutine = ctorOwner != null ? ctorRoutineFor(ctx, ctorOwner) : null;
+	if (hasCtor && ctorRoutine != null) {
+		const routineFormals = ctorFormalTypes(ctorRoutine);
+		if (routineFormals != null) {
+			fillDefaults(ctx, d.newArguments, ctorRoutine.defaultParams, routineFormals.length, 0, routineFormals, ctorRoutine.modulePath);
 		}
 	}
+	node.resolvedSym = ctorRoutine;
 	if (generic.instance != null) d.newCallee.resolvedSym = generic.instance;
 	if (resolvedType != null && (resolvedType.kind == TypeKind.Struct || resolvedType.kind == TypeKind.Ref || resolvedType.kind == TypeKind.GenericInstance)) {
 		return resolvedType;
@@ -1164,27 +1138,20 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	ctx.calleeExpr = d.callee;
 	callCheckExpr(ctx, d.callee, null);
 	ctx.calleeExpr = prevCallee;
-	// Phase 5: super(args) call — type-check args against parent class
-	// constructor signature. resolveSuper set callee.resolvedSym to the parent
-	// class symbol. Reuse getCtorParamTypes which returns user-only params (no
-	// synthetic "this" prepended — that's symbol-scope only, not on Type).
 	if (d.callee.kind == NodeKind.Identifier
 			&& (d.callee.data as IdentifierData).name == "super"
 			&& d.callee.resolvedSym != null) {
-		let parentSym = d.callee.resolvedSym;
-		const parentInst = superInstance(d.callee.nodeType);
-		let ctorParamTypes = getCtorParamTypes(parentSym);
-		if (parentInst != null && !hasGenericParams(parentInst)) {
-			const names = splitTopLevel(genericParamNamesOf(symGenericParams(parentSym)), ",").map((n: string): string => n.trim());
-			const inst = instantiateClassConstructor(parentSym, names, parentInst.typeChildren, ctx);
-			if (inst != null) {
-				parentSym = inst;
-				d.callee.resolvedSym = inst;
-				ctorParamTypes = getCtorParamTypes(inst);
-			}
-		} else if (parentInst != null && ctorParamTypes != null) {
-			const names = splitTopLevel(genericParamNamesOf(symGenericParams(parentSym)), ",").map((n: string): string => n.trim());
-			ctorParamTypes = ctorParamTypes.map((t: Type): Type => substituteAllParams(t, names, parentInst.typeChildren));
+		const parentSym = d.callee.resolvedSym;
+		const parentCtor = parentSym.symbolKind == SymbolKind.Function ? parentSym : ctorRoutineOf(parentSym);
+		if (parentCtor == null) {
+			addError(ctx, `internal: the parent class '${parentSym.name}' has no constructor routine for super()`, node.location.line, node.location.column);
+			return errorType();
+		}
+		d.callee.resolvedSym = parentCtor;
+		const ctorParamTypes = ctorFormalTypes(parentCtor);
+		const expectedCount = ctorParamTypes != null ? ctorParamTypes.length : 0;
+		if (d.arguments.length != expectedCount) {
+			addError(ctx, "super() expects " + expectedCount.toString() + " arguments, got " + d.arguments.length.toString(), node.location.line, node.location.column);
 		}
 		const expectedCount = ctorParamTypes != null ? ctorParamTypes.length : 0;
 		for (let ai = 0; ai < d.arguments.length; ai += 1) {

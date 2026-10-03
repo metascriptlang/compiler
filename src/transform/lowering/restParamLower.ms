@@ -18,7 +18,8 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
-import { getCtorParamTypes, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { ctorFormalTypes } from "../../checker/ctorRoutine";
 
 export function lowerRestParams(program: Node, _ctx: TransformContext): Node {
 	walkNode(program, lowerRest);
@@ -39,13 +40,10 @@ function makeArrayLit(elements: Node[], restType: Type, line: int32): Node {
 
 function lowerRestNew(node: Node): Node {
 	const d = node.data as NewExprData;
-	if (d.newCallee == null || d.newCallee.resolvedSym == null) return node;
-	d.newArguments = packCtorRest(d.newArguments, getCtorParamTypes(d.newCallee.resolvedSym), node.location.line);
-	return node;
-}
+	if (node.resolvedSym == null) return node;
 
-function packCtorRest(args: Node[], ctorTypes: Type[] | null, line: int32): Node[] {
-	if (ctorTypes == null || ctorTypes.length == 0) return args;
+	const ctorTypes = ctorFormalTypes(node.resolvedSym);
+	if (ctorTypes == null || ctorTypes.length == 0) return node;
 	const lastType = ctorTypes[ctorTypes.length - 1];
 	if (lastType == null || lastType.kind != TypeKind.Varargs) return args;
 
@@ -94,6 +92,7 @@ function lowerRest(node: Node): Node {
 	if (sym == null) return node;
 	sym = overloadWinner(sym, d.resolvedOverloadIdx);
 	if (sym.builtinKind != "" || hasFlag(sym, SymbolFlag.ImportC)) return node;
+	if (sym.declNode != null && sym.declNode.kind == NodeKind.ConstructorDecl) return node;
 	if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return node;
 
 	const typeChildren = sym.symbolType.typeChildren;

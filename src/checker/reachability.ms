@@ -27,6 +27,7 @@ import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
 import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance, unwrapRef } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
+import { ctorRoutineOf } from "./ctorRoutine";
 import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
 
 export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {
@@ -434,9 +435,9 @@ function markInstanceCopy(generic: Symbol, name: string): void {
 	}
 }
 
-function markClassInit(classDecl: Node, modulePath: string, className: string): void {
-	const entry = classDecl.resolvedSym != null ? lookupCtorDefaults(classDecl.resolvedSym, className) : null;
-	if (entry != null && entry.initSym != null) markSymAndWalk(entry.initSym, modulePath);
+function markClassInit(classDecl: Node, modulePath: string): void {
+	const routine = classDecl.resolvedSym != null ? ctorRoutineOf(classDecl.resolvedSym) : null;
+	if (routine != null) markSymAndWalk(routine, modulePath);
 }
 
 function markRootDecl(decl: Node, modulePath: string): void {
@@ -461,7 +462,7 @@ function walkDecl(di: int32): void {
 	walkBody(found, modulePath);
 	// Codegen lowers `super(args)` to `<Parent>_init(this, args)` with no AST
 	// edge, so a live class keeps its init alive, as `new C(...)` needs.
-	if (found.kind == NodeKind.ClassDecl) markClassInit(found, modulePath, name);
+	if (found.kind == NodeKind.ClassDecl) markClassInit(found, modulePath);
 	// Actors: actorLower erased the NewExpr before this walk runs, so
 	// no allocation-site edge fires — but a spawned actor's TypeInfo
 	// is always demanded.

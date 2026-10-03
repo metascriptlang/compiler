@@ -10,6 +10,7 @@ import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
 import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
+import { mintCtorRoutine, resetCtorRoutines } from "./ctorRoutine";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
@@ -91,11 +92,10 @@ export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext): Ch
 	return ctx;
 }
 
-// ===== Constructor Default Registry =====
 export function resetInstantiationState(): void {
 	_moduleCtxMap = new HashMap<string, CheckerContext>();
 	_moduleProgramMap = new HashMap<string, Node>();
-	resetCtorRegistry();
+	resetCtorRoutines();
 	_instanceHooks = new HashMap<string, InstanceHook>();
 	_hookScannedInstances = new HashMap<Symbol, HashSet<string>>();
 	resetUserHooks();
@@ -969,7 +969,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	instances.push(instSym);
 	host.typeInstCache.set(classSym, instances);
 	const classBody: Node[] = instanceFieldInits(classData, dedup.names, dedup.types, substStruct, classSym, ctx, loc);
-	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, dedup.names, dedup.types, mangledClass, createRef(canonical), ctx, loc));
+	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, instSym, dedup.names, dedup.types, mangledClass, createRef(canonicalInstance(structBase, concreteTypes, classSym)), ctx, loc));
 	// Set classNode.nodeType to the concrete (instantiated) class type so the
 	// methodToFunction transform can pull the right receiver type when lifting
 	// the ctor — without it, `this` falls back to `void*` in the generated
@@ -1022,7 +1022,7 @@ function instanceStruct(structBase: Type, mangledClass: string, names: string[],
 	return substStruct;
 }
 
-function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], types: Type[], mangledClass: string, thisType: Type, ctx: CheckerContext, loc: SourceLocation): Node {
+function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, names: string[], types: Type[], mangledClass: string, thisType: Type, ctx: CheckerContext, loc: SourceLocation): Node {
 	const ctorData = ctorNode.data as ConstructorDeclData;
 
 	// Clone the constructor body
@@ -1059,14 +1059,17 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], typ
 	}
 	ctorDeclNode.nodeType = createFunction(resolvedParamTypes, fnParams, null as unknown as Type);
 
+	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
+	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
+	const ctorSym = mintCtorRoutine(bodyCtx, instSym, mangledClass, thisType, resolvedParamTypes, fnParams, ctorDeclNode, fnDefaults);
+	ctorSym.state = SymbolState.Checked;
+
 	// Re-check constructor body with concrete types in the class's DEFINING module ctx
 	// (from _moduleCtxMap registry). This resolves private module-level symbols
 	// referenced by the body — e.g. `let cap = INITIAL_CAPACITY;` in `HashSet.constructor`.
 	// Fallback chain: registry → preludeCtx → caller's ctx. Reference parity: Nim's
 	// `graph.ifaces[module]` lookup. Inject concrete type symbols so user types in type
 	// args (e.g. Item in `new HashSet<Item>(...)`) are visible during resolveAnnotation.
-	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
-	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
 	if (clonedBody != null) {
 		const savedHost = bodyCtx.instantiatingCtx;
 		bodyCtx.instantiatingCtx = host;
@@ -1085,14 +1088,6 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], typ
 		// Replicate checkPass.ms:264-284: prepend `this` with concrete class type
 		const ctorParams: string[] = ["this"];
 		for (const p of fnParams) { ctorParams.push(p); }
-		const ctorChildren: Type[] = [thisType];
-		for (const pt of resolvedParamTypes) { ctorChildren.push(pt); }
-		const ctorFnType = createFunction(ctorChildren, ctorParams, null as unknown as Type);
-		const ctorSym = newSym(bodyCtx, SymbolKind.Function, initFnName(mangledClass), ctorFnType);
-		ctorSym.state = SymbolState.Checked;
-		ctorSym.declNode = ctorDeclNode;
-		ctorSym.location = ctorDeclNode.location;
-		ctorDeclNode.resolvedSym = ctorSym;
 		const outerGensym = beginGensymUnit();
 		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
 		rewindTemplateGensym(outerGensym);
@@ -1104,9 +1099,6 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], typ
 		truncateCallerExtensions(bodyCtx, extPreCount);
 	}
 
-	// Store constructor type + defaults for cross-module default-fill lookup.
-	// Can't use symbol table (each module has its own). Use shared _ctorRegistry instead.
-	registerCtorDefaults(classSym, mangledClass, ctorDeclNode.nodeType!, fnDefaults);
 	return ctorDeclNode;
 }
 

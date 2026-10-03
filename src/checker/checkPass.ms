@@ -7,8 +7,8 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, initFnName, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
-import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, newSym } from "./context";
+import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
+import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -26,7 +26,8 @@ import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, 
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
-import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx } from "./instantiate";
+import { lookupModuleCtx, registerModuleCtx, forgetInstances } from "./instantiate";
+import { CtorRow, ctorRoutineMark, ctorRoutinesFrom, replayCtorRoutines } from "./ctorRoutine";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
 import { declGenericParams, symGenericParams, classParentOf, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView } from "./types";
 import { splitTopLevel } from "../utils/string";
@@ -1594,37 +1595,17 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
-			// ctorLower later lifts this node out of classBody, so a module that only
-			// reaches the class through an import can no longer read the signature off
-			// the AST. The shared registry is the order-independent carrier.
-			if (className != "" && classType.sym != null && node.nodeType != null && node.nodeType.kind == TypeKind.Function) {
-				registerCtorDefaults(classType.sym, className, node.nodeType, d.ctorDefaults != null ? d.ctorDefaults : []);
-			}
-			// Constructor allocates `this` — prepend to params for checking so this.* resolves,
-			// but don't modify AST (codegen handles `this` as a local, not a param).
+			const ctorSym = node.resolvedSym;
+			if (ctorSym == null) throw new Error(`internal: the constructor of '${className}' reached its body check without a routine symbol`);
 			if (d.ctorParams.length > 0 && d.ctorParams[0] == "this") addError(ctx, "a constructor has no 'this' parameter", node.location.line, node.location.column);
 			const ctorParams: string[] = ["this"];
 			for (let cpi = 0; cpi < d.ctorParams.length; cpi += 1) {
 				ctorParams.push(d.ctorParams[cpi]);
 			}
-			// Build constructor type with `this` at index 0
-			const ctorType = node.nodeType;
-			const ctorChildren: Type[] = [classType];
-			if (ctorType != null && ctorType.typeChildren != null) {
-				for (let cpi = 0; cpi < ctorType.typeChildren.length; cpi += 1) {
-					ctorChildren.push(ctorType.typeChildren[cpi]);
-				}
-			}
-			const ctorFnType = createFunction(ctorChildren, ctorParams, voidType());
-			// Prepend null location for synthetic "this" param
 			const ctorLocs: SourceLocation[] = [null as unknown as SourceLocation];
 			if (node.paramLocations != null) {
 				for (const loc of node.paramLocations) { ctorLocs.push(loc); }
 			}
-			const ctorSym = newSym(ctx, SymbolKind.Function, initFnName(className), ctorFnType);
-			ctorSym.declNode = node;
-			ctorSym.location = node.location;
-			node.resolvedSym = ctorSym;
 			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + 11, ctorSym, ctorSym.symbolType, SymbolKind.Method, "constructor", className, true);
 			node.paramSyms = checkFunctionBody(ctx, ctorSym, ctorParams, d.ctorBody, ctorLocs);
 		},
@@ -3731,7 +3712,7 @@ interface SharedPrelude {
 	ctx: CheckerContext;
 	typeInstances: GenericTypeInstRow[];
 	duVariants: Type[];
-	ctorDefaults: CtorRow[];
+	ctorRoutines: CtorRow[];
 	dispatch: DispatchRecords;
 }
 
@@ -3756,7 +3737,7 @@ export function preludeContextFor(stdPath: string, backendExt: string): CheckerC
 function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude {
 	const typeInstMark = genericTypeInstMark();
 	const duMark = duVariantMark();
-	const ctorMark = ctorDefaultsMark();
+	const ctorMark = ctorRoutineMark();
 	const outerDispatch = startDispatchCapture();
 	const ctx = _graphPreludeFn != null ? _graphPreludeFn(stdPath, backendExt) : buildPreludeContext(stdPath, backendExt);
 	const typeInstances = takeGenericTypeInstsFrom(typeInstMark);
@@ -3765,7 +3746,7 @@ function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude 
 		ctx,
 		typeInstances,
 		duVariants: duVariantsFrom(duMark),
-		ctorDefaults: ctorDefaultsFrom(ctorMark),
+		ctorRoutines: ctorRoutinesFrom(ctorMark),
 		dispatch: endDispatchCapture(outerDispatch),
 	};
 }
@@ -3773,7 +3754,7 @@ function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude 
 function replayPreludeContributions(shared: SharedPrelude): void {
 	for (const row of shared.typeInstances) addGenericTypeInstRow(row);
 	replayDuVariants(shared.duVariants);
-	replayCtorDefaults(shared.ctorDefaults);
+	replayCtorRoutines(shared.ctorRoutines);
 	replayDispatchRecords(shared.dispatch);
 }
 

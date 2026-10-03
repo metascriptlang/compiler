@@ -1,4 +1,4 @@
-import { Node, NodeKind, ClassDeclData, ActorDeclData, Symbol, SymbolFlag, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolFlag, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
 export { SymbolFlag } from "../ast/node";
 import { noneType } from "./types";
 import { IdentCache, createIdentCache, findIdentId, getIdentId } from "./idents";
@@ -40,110 +40,6 @@ export function parentClassSymOf(classSym: Symbol): Symbol {
 	if (p.sym == null) return null as unknown as Symbol;
 	return p.sym;
 }
-
-// Cross-module registry for constructor function types + defaults.
-// Each module has its own symbol table, so constructor symbols can't be shared
-// via scope. This registry is shared by every check of one build and provides the
-// concrete param types needed for default-fill in checkNewExpr.
-export interface CtorEntry {
-	className: string;
-	fnType: Type;
-	defaults: Node[];
-	initSym: Symbol | null;
-}
-
-export interface CtorRow {
-	classSym: Symbol;
-	entry: CtorEntry;
-}
-
-let _ctorRegistry: HashMap<Symbol, CtorEntry[]> = new HashMap<Symbol, CtorEntry[]>();
-let _ctorRows: CtorRow[] = [];
-
-export function registerCtorDefaults(classSym: Symbol, className: string, fnType: Type, defaults: Node[]): void {
-	if (lookupCtorDefaults(classSym, className) != null) return;
-	addCtorRow({ classSym, entry: { className, fnType, defaults, initSym: null } });
-}
-
-function addCtorRow(row: CtorRow): void {
-	let entries: CtorEntry[] = [];
-	const known = _ctorRegistry.get(row.classSym);
-	if (known != null) entries = known;
-	entries.push(row.entry);
-	_ctorRegistry.set(row.classSym, entries);
-	_ctorRows.push(row);
-}
-
-export function ctorDefaultsMark(): int32 {
-	return _ctorRows.length;
-}
-
-export function ctorDefaultsFrom(mark: int32): CtorRow[] {
-	const rows: CtorRow[] = [];
-	for (let i = mark; i < _ctorRows.length; i += 1) rows.push(_ctorRows[i]);
-	return rows;
-}
-
-export function replayCtorDefaults(rows: CtorRow[]): void {
-	for (const row of rows) {
-		if (lookupCtorDefaults(row.classSym, row.entry.className) == null) addCtorRow(row);
-	}
-}
-
-export function resetCtorRegistry(): void {
-	_ctorRegistry = new HashMap<Symbol, CtorEntry[]>();
-	_ctorRows = [];
-}
-
-export function lookupCtorDefaults(classSym: Symbol | null, className: string): CtorEntry | null {
-	if (classSym == null) return null;
-	const entries = _ctorRegistry.get(classSym);
-	if (entries == null) return null;
-	for (const e of entries) {
-		if (e.className == className) return e;
-	}
-	return null;
-}
-
-export function registerCtorInit(classSym: Symbol, className: string, fnType: Type, initSym: Symbol): void {
-	registerCtorDefaults(classSym, className, fnType, []);
-	const entry = lookupCtorDefaults(classSym, className);
-	if (entry != null) entry.initSym = initSym;
-}
-
-export function getCtorParamTypes(classSym: Symbol): Type[] {
-	const fnType = ctorFnTypeOf(classSym);
-	return fnType != null ? fnType.typeChildren : null as unknown as Type[];
-}
-
-export function ctorFnTypeOf(classSym: Symbol): Type | null {
-	let sym = classSym;
-	let depth = 0;
-	while (sym != null && depth < 64) {
-		const decl = classDeclNodeOf(sym);
-		if (decl == null) return null;
-		let body: Node[] = null as unknown as Node[];
-		if (decl.kind == NodeKind.ClassDecl) {
-			body = (decl.data as ClassDeclData).classBody;
-		} else if (decl.kind == NodeKind.ActorDecl) {
-			body = (decl.data as ActorDeclData).actorBody;
-		}
-		if (body != null) {
-			for (const member of body) {
-				if (member.kind == NodeKind.ConstructorDecl && member.nodeType != null
-						&& member.nodeType.kind == TypeKind.Function) {
-					return member.nodeType;
-				}
-			}
-		}
-		const lifted = lookupCtorDefaults(sym, sym.name);
-		if (lifted != null && lifted.fnType != null && lifted.fnType.kind == TypeKind.Function) return lifted.fnType;
-		sym = parentClassSymOf(sym);
-		depth += 1;
-	}
-	return null;
-}
-
 
 // Result<T, E> is now available globally via prelude.
 // In self-hosted source, we use it directly.

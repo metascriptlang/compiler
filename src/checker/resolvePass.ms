@@ -15,7 +15,8 @@ import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDup
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
-import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
+import { isAssignable as isAssignableCheck, isValueStructDecl } from "./compat";
+import { mintCtorRoutine } from "./ctorRoutine";
 import { buildTypeArgKeys, monoBaseName, monoInstanceNameOf, monoTypeKey } from "../monomorphize/registry";
 
 function anyHasGenericParams(types: Type[]): boolean {
@@ -2292,9 +2293,7 @@ function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext):
 	resolveTypeExprs(member.typeExprs, ctx);
 	member.nodeType = createFunction(paramTypes, cd.ctorParams, voidType());
 	stripRestParamPrefix(cd.ctorParams);
-	if (cd.ctorDefaults != null && cd.ctorDefaults.length > 0) {
-		sym.defaultParams = cd.ctorDefaults;
-	}
+	mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, member.nodeType.typeChildren, member.nodeType.typeNames, member, cd.ctorDefaults != null ? cd.ctorDefaults : []);
 }
 
 function declaresConstructor(body: Node[]): boolean {

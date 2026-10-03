@@ -14,12 +14,14 @@ import {
 	ExprStmtData, CallExprData, IdentifierData, FunctionDeclData, BinaryExprData, MemberExprData,
 	createNodeAt, SymbolKind, Symbol, Type,
 } from "../../ast/node";
-import { TransformContext, newLoweredSym } from "../context";
+import { TransformContext, newLoweredSym, mintingChecker } from "../context";
 import { makeAssign, makeMember, makeExprStmt, makeTypedIdent, makeTypedIdentResolved, makeBlock, makeCall, makeIdent } from "../util";
 import { createFunction, voidType } from "../../checker/types";
-import { getCtorParamTypes, parentClassSymOf, initFnName } from "../../checker/symbol";
+import { parentClassSymOf } from "../../checker/symbol";
+import { ctorRoutineFor, ctorFormalTypes } from "../../checker/ctorRoutine";
 import { lowerMethodToFunction } from "./methodToFunction";
-import { parseInput, getStmts, makeCtx } from "../testUtil";
+import { parseInput, getStmts, checkedCtx } from "../testUtil";
+import { checkProgram } from "../../checker/checkPass";
 
 export function fieldInitAssignment(member: Node, receiverType: Type | null, thisSym: Symbol | null): Node {
 	const pd = member.data as PropertyDeclData;
@@ -97,11 +99,13 @@ function implicitSuperStmt(classNode: Node, cd: ClassDeclData, ctx: TransformCon
 	const instance = ctx != null && ctx.checkerCtx != null ? instantiateParentClass(classParentOf(classNode.resolvedSym.symbolType), ctx.checkerCtx) : null;
 	const parentSym = instance != null ? instance : parentClassSymOf(classNode.resolvedSym);
 	if (parentSym == null) return null as unknown as Node;
-	const parentParams = getCtorParamTypes(parentSym);
+	const parentCtor = ctorRoutineFor(mintingChecker(ctx, "<constructor>"), parentSym);
+	if (parentCtor == null) return null as unknown as Node;
+	const parentParams = ctorFormalTypes(parentCtor);
 	if (parentParams != null && parentParams.length > 0) return null as unknown as Node;
 	const loc = classNode.location;
 	const callee = makeIdent("super", loc);
-	callee.resolvedSym = parentSym;
+	callee.resolvedSym = parentCtor;
 	const call = makeCall(callee, [], loc);
 	call.nodeType = voidType();
 	return makeExprStmt(call, loc);
@@ -111,7 +115,7 @@ function synthesizeCtor(classNode: Node, cd: ClassDeclData, ctx: TransformContex
 	const loc = classNode.location;
 	const stmts: Node[] = [];
 	const thisSym = newLoweredSym(ctx, SymbolKind.Parameter, "this", classNode.nodeType);
-	const superStmt = implicitSuperStmt(classNode, cd);
+	const superStmt = implicitSuperStmt(classNode, cd, ctx);
 	if (superStmt != null) stmts.push(superStmt);
 	for (const s of fieldInitStatements(classNode, cd, thisSym)) { stmts.push(s); }
 	const ctorNode = createNodeAt(NodeKind.ConstructorDecl, {
@@ -124,9 +128,12 @@ function synthesizeCtor(classNode: Node, cd: ClassDeclData, ctx: TransformContex
 	// type is already present; without it `this` lifts as void*.
 	ctorNode.nodeType = createFunction([], [], voidType());
 	ctorNode.paramSyms = [thisSym];
-	const className = (classNode.data as ClassDeclData).className;
-	ctorNode.resolvedSym = newLoweredSym(ctx, SymbolKind.Function, initFnName(className), ctorNode.nodeType);
-	ctorNode.resolvedSym.declNode = ctorNode;
+	const classSym = classNode.resolvedSym;
+	const routine = classSym != null ? ctorRoutineFor(mintingChecker(ctx, "<constructor>"), classSym) : null;
+	if (routine == null) throw new Error(`internal: class '${(classNode.data as ClassDeclData).className}' reached constructor synthesis without a routine symbol`);
+	routine.declNode = ctorNode;
+	routine.location = ctorNode.location;
+	ctorNode.resolvedSym = routine;
 	cd.classBody.push(ctorNode);
 }
 
@@ -190,7 +197,7 @@ export function lowerCtorInit(program: Node, ctx: TransformContext): Node {
 function ctorStmtKinds(input: string): string {
 	const result = parseInput(input);
 	if (!result.ok) return "PARSE_ERROR";
-	const prog = lowerCtorInit(result.value, makeCtx());
+	const prog = lowerCtorInit(result.value, checkedCtx(checkProgram(result.value)));
 	const stmts = getStmts(prog);
 	if (stmts.length == 0) return "NO_STMTS";
 	const cd = stmts[0].data as ClassDeclData;
@@ -210,7 +217,7 @@ function ctorStmtKinds(input: string): string {
 function liftedInitNames(input: string): string {
 	const result = parseInput(input);
 	if (!result.ok) return "PARSE_ERROR";
-	const ctx = makeCtx();
+	const ctx = checkedCtx(checkProgram(result.value));
 	let prog = lowerCtorInit(result.value, ctx);
 	prog = lowerMethodToFunction(prog, ctx);
 	let out = "";
@@ -225,7 +232,7 @@ function liftedInitNames(input: string): string {
 function remainingInitializers(input: string): number {
 	const result = parseInput(input);
 	if (!result.ok) return -1;
-	const prog = lowerCtorInit(result.value, makeCtx());
+	const prog = lowerCtorInit(result.value, checkedCtx(checkProgram(result.value)));
 	const stmts = getStmts(prog);
 	const cd = stmts[0].data as ClassDeclData;
 	let n = 0;
@@ -240,7 +247,7 @@ function remainingInitializers(input: string): number {
 function synthesizedReceiverIsItsParam(input: string): boolean {
 	const result = parseInput(input);
 	if (!result.ok) return false;
-	const prog = lowerCtorInit(result.value, makeCtx());
+	const prog = lowerCtorInit(result.value, checkedCtx(checkProgram(result.value)));
 	const cd = getStmts(prog)[0].data as ClassDeclData;
 	for (const member of cd.classBody) {
 		if (member.kind != NodeKind.ConstructorDecl) continue;

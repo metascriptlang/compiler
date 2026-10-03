@@ -24,14 +24,10 @@ import { findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
 import { useHeader } from "./context";
 import { GcMode, dispatchOverridesFor, dispatchEntryFor } from "../../checker/context";
+import { ctorFormalTypes } from "../../checker/ctorRoutine";
 import { monoBaseName } from "../../monomorphize/registry";
 import { isRuntimeProcSym } from "../../transform/util";
 
-// Constructor parameter types for a class symbol, reachable cross-module.
-// Same-module the class symbol carries its ClassDecl directly; imported symbols
-// do not (ClassDecl AST is intentionally not propagated through ExportedSymInfo,
-// to avoid polluting the importer's type registry), but the Type.sym chain
-// bridges to the defining module's decl — the same bridge used for InterfaceDecl.
 // Every class carries a `<Class>_init(this)` — ctorLower synthesizes one when
 // the source has no constructor — so field defaults and the parent chain run
 // in one place instead of being re-emitted at each `new` site.
@@ -56,28 +52,6 @@ function classHasInitFn(innerType: Type): boolean {
 	if (t == null || t.sym == null) return false;
 	const decl = t.sym.declNode;
 	return decl != null && decl.kind == NodeKind.ClassDecl;
-}
-
-function crossModuleCtorParamTypes(sym: Symbol): Type[] {
-	if (sym == null) return null as unknown as Type[];
-	let dn = sym.declNode;
-	if ((dn == null || dn.kind != NodeKind.ClassDecl) && sym.symbolType != null && sym.symbolType.sym != null) {
-		dn = sym.symbolType.sym.declNode;
-	}
-	if (dn == null || dn.kind != NodeKind.ClassDecl) return null as unknown as Type[];
-	const body = (dn.data as ClassDeclData).classBody;
-	for (const member of body) {
-		if (member.kind == NodeKind.ConstructorDecl && member.nodeType != null
-				&& member.nodeType.kind == TypeKind.Function) {
-			return member.nodeType.typeChildren;
-		}
-	}
-	return null as unknown as Type[];
-}
-
-function ctorParamTypes(entry: CtorEntry | null, classSym: Symbol | null): Type[] {
-	if (entry != null && entry.fnType != null) return entry.fnType.typeChildren;
-	return crossModuleCtorParamTypes(classSym!);
 }
 
 function emitClassInitCall(g: CGen, p: CProc, cName: string, tmp: string): void {
@@ -1374,8 +1348,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// more. This matches the inline pattern already used for class-without-
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
 			const initName = classInitCName(cName);
-			const ctorOwner = d.newCallee.resolvedSym.instantiatedFrom ?? d.newCallee.resolvedSym;
-			const ctorChildren = ctorParamTypes(lookupCtorDefaults(ctorOwner, d.newCallee.resolvedSym.name), ctorOwner);
+			const ctorChildren = ctorFormalTypes(node.resolvedSym);
 			const ctorProtoKey = "proto:" + initName;
 			if (ctorChildren != null && node.nodeType != null && !nameSetHas(g.declaredProcs, ctorProtoKey)) {
 				nameSetAdd(g.declaredProcs, ctorProtoKey);
@@ -1486,25 +1459,17 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 	if (cd.callee.kind == NodeKind.Identifier
 			&& (cd.callee.data as IdentifierData).name == "super"
 			&& cd.callee.resolvedSym != null) {
-		const parentSym = cd.callee.resolvedSym;
-		let parentName = "";
-		if (parentSym.symbolType != null && parentSym.symbolType.kind == TypeKind.Ref && parentSym.symbolType.typeReturn != null) {
-			parentName = getTypeDesc(g, parentSym.symbolType.typeReturn);
-		} else if (parentSym.symbolType != null) {
-			parentName = getTypeDesc(g, parentSym.symbolType);
+		const parentCtor = cd.callee.resolvedSym;
+		const parentChildren = ctorFormalTypes(parentCtor);
+		if (parentChildren == null) {
+			addCGenError(g, `internal: super() reached codegen without a parent constructor signature at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+			return;
 		}
+		const parentThis = parentCtor.symbolType.typeChildren[0];
+		const parentName = getTypeDesc(g, parentThis.kind == TypeKind.Ref && parentThis.typeReturn != null ? parentThis.typeReturn : parentThis);
 		if (parentName != "") {
 			const parentInitName = classInitCName(parentName);
-			const parentEntry = lookupCtorDefaults(parentSym, parentSym.name);
-			const parentChildren = ctorParamTypes(parentEntry, parentSym);
 			const parentProtoKey = "proto:" + parentInitName;
-			if (parentChildren == null && parentEntry != null && parentEntry.initSym != null) {
-				ensureCrossModuleProto(g, parentInitName, parentEntry.initSym.symbolType, parentEntry.initSym);
-			}
-			const parentIsForeign = parentSym.modulePath != "" && parentSym.modulePath != g.modulePath;
-			if (parentIsForeign && parentChildren == null && !nameSetHas(g.declaredProcs, parentProtoKey)) {
-				addCGenError(g, `cannot declare '${parentInitName}': the parent constructor signature is not reachable from this module`, node.location.line, node.location.column);
-			}
 			if (parentChildren != null && !nameSetHas(g.declaredProcs, parentProtoKey)) {
 				nameSetAdd(g.declaredProcs, parentProtoKey);
 				let parentProtoParams = `${parentName}* this`;
