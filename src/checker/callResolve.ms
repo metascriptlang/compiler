@@ -4171,7 +4171,9 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	//   - obj's type has an extension `getDynamicField(this T, key: string): U`.
 	// Mirrors the toItems / toString synthesis pattern (see checkPass.ms:770-790).
 	// Type opts in by declaring the extension; non-opt-in types remain strict.
+	const resolvedPerInstance = ctx.inGenericContext > 0 && hasGenericParams(resolvedObjType);
 	if (isUnresolvedType(propType)
+			&& !resolvedPerInstance
 			&& !isUnresolvedType(resolvedObjType)
 			&& resolvedObjType.kind != TypeKind.Error
 			&& !unionVariantHasProperty(resolvedObjType, d.property)
@@ -4241,7 +4243,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	}
 	// Unresolved member access — emit error with field suggestion if available
 	const propertyActuallyExists = resolvedObjType.typeNames != null && resolvedObjType.typeNames.indexOf(d.property) >= 0;
-	if (isUnresolvedType(propType) && !isUnresolvedType(resolvedObjType) && !propertyActuallyExists) {
+	if (isUnresolvedType(propType) && !resolvedPerInstance && !isUnresolvedType(resolvedObjType) && !propertyActuallyExists) {
 		// Suppress error in LHS-of-assignment context when type opts into the
 		// `setDynamicField` write protocol. The enclosing BinaryExpr handler
 		// rewrites the assignment as `obj.setDynamicField("key", value)`.
