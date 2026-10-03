@@ -326,4 +326,9 @@ static inline uint64_t msSolStringLength(msString text) {
     return (uint64_t)text.len;
 }
 
+static inline uint64_t msSolSpanAddress(const void* data, int64_t length) {
+    (void)length;
+    return (uint64_t)(uintptr_t)data;
+}
+
 #endif
