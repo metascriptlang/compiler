@@ -1,7 +1,7 @@
 // MetaScript Compiler CLI — compile command
 
 import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env } from "std/process";
-import { watch, nextChanges, msIoRunOnce, FsWatch, FsChanges } from "std/fs/watch";
+import { watch, nextChanges, msIoRunOnce, writeSettled, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
 import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
@@ -2035,6 +2035,7 @@ interface WatchFeed {
 	watchers: FsWatch[];
 	armed: boolean[];
 	batches: FsChanges[];
+	batchRoots: string[];
 }
 
 function pumpFeed(feed: WatchFeed, timeoutMs: int32): void {
@@ -2045,6 +2046,7 @@ function pumpFeed(feed: WatchFeed, timeoutMs: int32): void {
 		const slot = i;
 		nextChanges(target.watchers[slot]).then((changes: FsChanges): void => {
 			target.batches.push(changes);
+			target.batchRoots.push(target.watchers[slot].root);
 			target.armed[slot] = false;
 		});
 	}
@@ -2057,13 +2059,47 @@ function isWatchedSource(path: string): boolean {
 	return p.endsWith(".ms") || p.endsWith(".cms") || p.endsWith(".h");
 }
 
-function changedSources(changes: FsChanges): string[] {
-	const sources: string[] = [];
-	for (const path of changes.paths) {
-		if (isWatchedSource(path)) sources.push(path);
-	}
-	return sources;
+interface PendingWrites {
+	shown: string[];
+	open: string[];
+	rescan: boolean;
+	ended: boolean;
 }
+
+function absorbBatches(feed: WatchFeed, pending: PendingWrites): void {
+	const queued = feed.batches;
+	const roots = feed.batchRoots;
+	feed.batches = [];
+	feed.batchRoots = [];
+	for (let i = 0; i < queued.length; i += 1) {
+		const changes = queued[i];
+		if (changes.ended) pending.ended = true;
+		if (changes.rescan) pending.rescan = true;
+		for (const path of changes.paths) {
+			if (!isWatchedSource(path)) continue;
+			if (!pending.shown.includes(path)) pending.shown.push(path);
+			const full = join(roots[i], path);
+			const at = pending.open.indexOf(full);
+			if (changes.closed.includes(path)) {
+				if (at >= 0) pending.open.splice(at, 1);
+			} else if (at < 0) {
+				pending.open.push(full);
+			}
+		}
+	}
+}
+
+function writesSettled(pending: PendingWrites): boolean {
+	const stillOpen: string[] = [];
+	for (const path of pending.open) {
+		if (!writeSettled(path)) stillOpen.push(path);
+	}
+	pending.open = stillOpen;
+	return stillOpen.length == 0;
+}
+
+const RESCAN_SETTLE_MS = 60;
+const WRITER_WAIT_LIMIT_MS = 500;
 
 function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
 	while (true) {
@@ -2071,25 +2107,27 @@ function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
 			if (stopped()) return false;
 			pumpFeed(feed, 50);
 		}
-		const queued = feed.batches;
-		feed.batches = [];
-		let rescan = false;
-		const sources: string[] = [];
-		for (const changes of queued) {
-			if (changes.ended) return false;
-			if (changes.rescan) rescan = true;
-			for (const path of changedSources(changes)) {
-				if (!sources.includes(path)) sources.push(path);
+		const pending: PendingWrites = { shown: [], open: [], rescan: false, ended: false };
+		absorbBatches(feed, pending);
+		if (pending.ended) return false;
+		if (!pending.rescan && pending.shown.length == 0) continue;
+		console.log(pending.rescan ? "watch: changed (rescan)" : `watch: changed ${pending.shown.join(" ")}`);
+		const start = performance.now();
+		while (true) {
+			const waited = performance.now() - start;
+			const settled = pending.rescan ? waited >= RESCAN_SETTLE_MS : writesSettled(pending);
+			if (settled) {
+				pumpFeed(feed, 0);
+				if (feed.batches.length == 0) break;
+			} else if (waited >= WRITER_WAIT_LIMIT_MS) {
+				console.log(`watch: ${pending.open.join(" ")} still open for writing after ${WRITER_WAIT_LIMIT_MS} ms, building anyway`);
+				break;
+			} else {
+				pumpFeed(feed, pending.rescan ? 20 : 2);
 			}
+			absorbBatches(feed, pending);
+			if (pending.ended) return false;
 		}
-		if (!rescan && sources.length == 0) continue;
-		console.log(rescan ? "watch: changed (rescan)" : `watch: changed ${sources.join(" ")}`);
-		const settle = performance.now();
-		while (performance.now() - settle < 60) pumpFeed(feed, 20);
-		for (const later of feed.batches) {
-			if (later.ended) return false;
-		}
-		feed.batches = [];
 		return true;
 	}
 }
@@ -2145,7 +2183,7 @@ function openWatch(entryPath: string, opts: CliOptions, resolveSection: ResolveS
 		for (const depRoot of fileDepRoots(root).values) {
 			if (!isUnder(depRoot, root)) roots.push(depRoot);
 		}
-		const opened: WatchFeed = { watchers: [], armed: [], batches: [] };
+		const opened: WatchFeed = { watchers: [], armed: [], batches: [], batchRoots: [] };
 		for (const dir of roots) {
 			const watcher = watch(dir, true);
 			if (!watcher.ok) {
