@@ -1061,12 +1061,12 @@ const r = slot as Row | null;   // slot: number | Row | null — a Row converts,
   stays.
 
 Measured on tree `2d72bcc3` plus this change: corpus `649`–`654` on C drc/orc/danger, JS and ESM,
-`fixedbugs/bug602`. Not covered: the Raiser VM tests no conversion, and JS tests the tag only for a
+`src/test/js/asConversion.ms`. Not covered: the Raiser VM tests no conversion, and JS tests the tag only for a
 string, number or boolean member.
 
 Class members, measured on tree `af10d638` plus the class-member change (`number | Row | null`,
 `number | Row`, `Row | Other | null`, `Base | Child | null`): the held value and null convert to
-the same result on C drc/orc, JS and Raiser (corpus `656`, `fixedbugs/bug603`; Raiser cannot run
+the same result on C drc/orc, JS and Raiser (corpus `656`; Raiser cannot run
 `Base | Child`, it does not evaluate `super`). A wrong member stops with the message above on C
 drc/orc/release and throws an Error with the same text on JS (corpus `657`, `658`, guard
 `asClassMemberChecked`); under `--danger` the nullable union still stops and a bare union does not
