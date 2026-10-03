@@ -14,7 +14,7 @@
 //   BuildCache                   → project cache file (key=value format)
 
 import { env, platform, argv, execFileCapture, findOnPath } from "std/process";
-import { exists, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, remove, removeAll, readDir, ensureDir } from "std/fs";
+import { exists, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, changeStamp, remove, removeAll, readDir, ensureDir } from "std/fs";
 import { join } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
@@ -30,10 +30,23 @@ export function hashContent(s: string): string {	return `${hashToHex(djb2(s))}_$
 }
 
 // Hash a file's content. Returns "hash:byteLength" string.
-function hashFile(path: string): string {
+function hashFileContent(path: string): string {
 	if (!exists(path)) return "absent";
 	const src = try readFile(path) catch "";
 	return `${hashContent(src)}:${src.byteLength}`;
+}
+
+const _hashByStamp = new HashMap<string, string>();
+
+function hashFile(path: string): string {
+	const stamp = changeStamp(path);
+	if (stamp == "") return hashFileContent(path);
+	const known = _hashByStamp.get(path);
+	const prefix = `${stamp}|`;
+	if (known != null && known.startsWith(prefix)) return known.substring(prefix.length, known.length);
+	const hash = hashFileContent(path);
+	_hashByStamp.set(path, `${prefix}${hash}`);
+	return hash;
 }
 
 // ===== Toolchain Stamp =====
@@ -1043,6 +1056,19 @@ test "object fingerprints fold in the support trees and never the msc binary" {
 	assert moduleCompileFp("int main(){}", "cc -O2").indexOf(objects, 0) >= 0;
 	assert moduleCompileFp("int main(){}", "cc -O2").indexOf(toolchainStamp(), 0) < 0;
 	assert toolchainStamp() == toolchainStamp();
+}
+
+test "a file rewritten to the same size at once hashes to its new content" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-hash-stamp-${performance.now()}.txt`;
+	writeFile(path, "first content");
+	const before = hashFile(path);
+	assert hashFile(path) == before;
+	writeFile(path, "other content");
+	assert hashFile(path) != before;
+	assert hashFile(path) == hashFileContent(path);
+	remove(path);
+	assert hashFile(path) == "absent";
 }
 
 test "a runtime or vendor file edit moves the support-tree stamp" {
