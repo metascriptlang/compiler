@@ -155,6 +155,13 @@ export enum RaiserOpcode {
 	AddU64,
 	SubU64,
 	MulU64,
+	AddrReg,          // ABC: R[A] = address of R[B]
+	AddrGlobal,       // ABx: R[A] = address of global Bx
+	AddrIndex,        // ABC: R[A] = address of R[B][R[C]], bounds checked
+	AddrField,        // ABC: R[A] = address of field K[C] of R[B]
+	LoadDeref,        // ABC: R[A] = R[B][] — an object or array pointer reads as itself
+	StoreDeref,       // ABC: R[A][] = R[C]
+	SameLoc,          // ABC: R[A] = R[B] and R[C] are the same address (kind, handle, index, field)
 }
 
 export enum RaiserConvClass {

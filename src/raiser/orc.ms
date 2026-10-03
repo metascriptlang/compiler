@@ -15,45 +15,52 @@ import {
 	RaiserValue, RaiserValueKind, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, rcDecref,
 	createArrayHeap, createStructHeap, heapAllocArray, heapAllocObject,
-	heapObjectSetField, heapArrayPush, rcIncref
+	heapObjectSetField, heapArrayPush, rcIncref, heldHandle
 } from "./value";
 
 const COL_BLACK = 0;   // in use / alive (alloc default)
 const COL_GRAY = 1;    // under examination
 const COL_WHITE = 2;   // condemned (garbage)
 
-function isRef(v: RaiserValue): boolean {
+function isRef(held: RaiserValue): boolean {
+	const v = heldHandle(held);
 	return v.kind == RaiserValueKind.Array || v.kind == RaiserValueKind.Object;
 }
 
-function colorOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): int32 {
+function colorOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): int32 {
+	const v = heldHandle(held);
 	if (v.kind == RaiserValueKind.Array) return arrHeap.arrays[v.intVal].color;
 	return objHeap.objects[v.intVal].color;
 }
 
-function setColorOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue, col: int32): void {
+function setColorOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue, col: int32): void {
+	const v = heldHandle(held);
 	if (v.kind == RaiserValueKind.Array) { arrHeap.arrays[v.intVal].color = col; }
 	else { objHeap.objects[v.intVal].color = col; }
 }
 
-function rcOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): int32 {
+function rcOf(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): int32 {
+	const v = heldHandle(held);
 	if (v.kind == RaiserValueKind.Array) return arrHeap.arrays[v.intVal].rc;
 	return objHeap.objects[v.intVal].rc;
 }
 
-function decRcRaw(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): void {
+function decRcRaw(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
+	const v = heldHandle(held);
 	if (v.kind == RaiserValueKind.Array) { arrHeap.arrays[v.intVal].rc = arrHeap.arrays[v.intVal].rc - 1; }
 	else { objHeap.objects[v.intVal].rc = objHeap.objects[v.intVal].rc - 1; }
 }
 
-function incRcRaw(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): void {
+function incRcRaw(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
+	const v = heldHandle(held);
 	if (v.kind == RaiserValueKind.Array) { arrHeap.arrays[v.intVal].rc = arrHeap.arrays[v.intVal].rc + 1; }
 	else { objHeap.objects[v.intVal].rc = objHeap.objects[v.intVal].rc + 1; }
 }
 
 // --- Phase 1: mark gray + trial-delete internal edges ---
 
-function markGray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): void {
+function markGray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
+	const v = heldHandle(held);
 	if (colorOf(arrHeap, objHeap, v) == COL_GRAY) return;
 	setColorOf(arrHeap, objHeap, v, COL_GRAY);
 	if (v.kind == RaiserValueKind.Array) {
@@ -71,7 +78,8 @@ function markGray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: Raiser
 
 // --- Phase 2: scan — restore alive (rc>0) to black, condemn (rc==0) to white ---
 
-function scanBlack(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): void {
+function scanBlack(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
+	const v = heldHandle(held);
 	setColorOf(arrHeap, objHeap, v, COL_BLACK);
 	if (v.kind == RaiserValueKind.Array) {
 		const items = arrHeap.arrays[v.intVal].items;
@@ -92,7 +100,8 @@ function scanBlack(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: Raise
 	}
 }
 
-function scan(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): void {
+function scan(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
+	const v = heldHandle(held);
 	if (colorOf(arrHeap, objHeap, v) != COL_GRAY) return;
 	if (rcOf(arrHeap, objHeap, v) > 0) {
 		scanBlack(arrHeap, objHeap, v);
@@ -113,7 +122,8 @@ function scan(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValu
 // --- Phase 3: collect white — recycle the garbage cycle, release external refs ---
 // White → mark GRAY (in-collect-set) to disambiguate from external BLACK refs.
 
-function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue): int32 {
+function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): int32 {
+	const v = heldHandle(held);
 	if (colorOf(arrHeap, objHeap, v) != COL_WHITE) return 0;
 	setColorOf(arrHeap, objHeap, v, COL_GRAY);
 	let freed = 1;

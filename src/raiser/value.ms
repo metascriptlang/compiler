@@ -12,6 +12,10 @@ export enum RaiserValueKind {
 	Array,      // handle into RaiserArrayHeap
 	Object,     // handle into RaiserObjectHeap
 	Future,     // handle into RaiserFutures — the VM's msFuture
+	RegAddr,    // address of a register slot: intVal = absolute slot index
+	GlobalAddr, // address of a global: intVal = global index
+	ElemAddr,   // address of an array element: intVal = array handle, floatVal = index
+	FieldAddr,  // address of an object field: intVal = object handle, strVal = field name
 }
 
 // Flat interface — all fields always present, unused ones zeroed.
@@ -57,6 +61,28 @@ export function raiserObject(handle: int64): RaiserValue {
 
 export function raiserFuture(handle: int64): RaiserValue {
 	return { kind: RaiserValueKind.Future, intVal: handle, floatVal: 0.0, strVal: "" };
+}
+
+export function raiserRegAddr(slot: int64): RaiserValue {
+	return { kind: RaiserValueKind.RegAddr, intVal: slot, floatVal: 0.0, strVal: "" };
+}
+
+export function raiserGlobalAddr(index: int64): RaiserValue {
+	return { kind: RaiserValueKind.GlobalAddr, intVal: index, floatVal: 0.0, strVal: "" };
+}
+
+export function raiserElemAddr(handle: int64, index: int64): RaiserValue {
+	return { kind: RaiserValueKind.ElemAddr, intVal: handle, floatVal: index as number, strVal: "" };
+}
+
+export function raiserFieldAddr(handle: int64, name: string): RaiserValue {
+	return { kind: RaiserValueKind.FieldAddr, intVal: handle, floatVal: 0.0, strVal: name };
+}
+
+export function heldHandle(v: RaiserValue): RaiserValue {
+	if (v.kind == RaiserValueKind.ElemAddr) return raiserArray(v.intVal);
+	if (v.kind == RaiserValueKind.FieldAddr) return raiserObject(v.intVal);
+	return v;
 }
 
 // --- Deep copy (avoids pointer aliasing) ---
@@ -442,7 +468,8 @@ export function heapObjectSetField(heap: RaiserObjectHeap, handle: int64, name: 
 // Only Array/Object are heap refs; a ref can hold cross-heap children, so both
 // heaps are threaded through. Destroy is generic (the heap object is self-describing).
 
-export function rcIncref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, val: RaiserValue): void {
+export function rcIncref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
+	const val = heldHandle(held);
 	if (val.kind == RaiserValueKind.Array) {
 		arrHeap.arrays[val.intVal].rc = arrHeap.arrays[val.intVal].rc + 1;
 	} else if (val.kind == RaiserValueKind.Object) {
@@ -450,7 +477,8 @@ export function rcIncref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, va
 	}
 }
 
-export function rcDecref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, val: RaiserValue): void {
+export function rcDecref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
+	const val = heldHandle(held);
 	if (val.kind == RaiserValueKind.Array) {
 		const data = arrHeap.arrays[val.intVal];
 		data.rc = data.rc - 1;

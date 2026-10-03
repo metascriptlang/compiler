@@ -11,7 +11,7 @@ import {
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserString, raiserArray, raiserToString, copyValueInto,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField,
-	raiserFuture,
+	raiserFuture, raiserRegAddr, raiserGlobalAddr, raiserElemAddr, raiserFieldAddr, heapObjectSetField,
 	rcIncref, rcDecref, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap,
 } from "./value";
 import {
@@ -973,6 +973,23 @@ function runStrandSlice(vm: RaiserVM): void {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
 			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) * (rhs.intVal as uint64)) as int64));
+		} else if (op == RaiserOpcode.AddrReg) {
+			setReg(vm, base + inst.a, raiserRegAddr((base + inst.b) as int64));
+		} else if (op == RaiserOpcode.AddrGlobal) {
+			setReg(vm, base + inst.a, raiserGlobalAddr((inst.b * 256 + inst.c) as int64));
+		} else if (op == RaiserOpcode.AddrIndex) {
+			vmHandleAddrIndex(vm, inst);
+		} else if (op == RaiserOpcode.AddrField) {
+			const handle = vmHeapOperand(vm, getReg(vm, base + inst.b), RaiserValueKind.Object, "an object");
+			if (!vm.halted) setReg(vm, base + inst.a, raiserFieldAddr(handle, getFuncConst(getModuleFunc(mod, vm.funcIdx), inst.c).strVal));
+		} else if (op == RaiserOpcode.LoadDeref) {
+			vmHandleLoadDeref(vm, inst);
+		} else if (op == RaiserOpcode.StoreDeref) {
+			vmHandleStoreDeref(vm, inst);
+		} else if (op == RaiserOpcode.SameLoc) {
+			const l = getReg(vm, base + inst.b);
+			const r = getReg(vm, base + inst.c);
+			setReg(vm, base + inst.a, raiserBool(l.kind == r.kind && l.intVal == r.intVal && l.floatVal == r.floatVal && l.strVal == r.strVal));
 		} else if (op == RaiserOpcode.NegI64) {
 			const val = getReg(vm, base + inst.b);
 			setReg(vm, base + inst.a, raiserInt(-val.intVal));
@@ -1314,6 +1331,71 @@ function vmHeapOperand(vm: RaiserVM, v: RaiserValue, kind: RaiserValueKind, expe
 		vmError(vm, `expected ${expected}, got value kind ${v.kind}`);
 	}
 	return -1;
+}
+
+function vmElemIndex(vm: RaiserVM, handle: int64, idx: int64): boolean {
+	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
+		vmError(vm, `array handle out of bounds: ${handle}`); return false;
+	}
+	const arrLen = heapArrayLen(vm.arrayHeap, handle);
+	if (idx < 0 || idx >= arrLen) {
+		vmError(vm, `array index out of bounds: ${idx} (length ${arrLen})`); return false;
+	}
+	return true;
+}
+
+function vmHandleAddrIndex(vm: RaiserVM, inst: RaiserInstruction): void {
+	const handle = vmHeapOperand(vm, getReg(vm, vm.baseReg + inst.b), RaiserValueKind.Array, "an array");
+	if (vm.halted) return;
+	const idx = getReg(vm, vm.baseReg + inst.c).intVal;
+	if (!vmElemIndex(vm, handle, idx)) return;
+	setReg(vm, vm.baseReg + inst.a, raiserElemAddr(handle, idx));
+}
+
+function vmHandleLoadDeref(vm: RaiserVM, inst: RaiserInstruction): void {
+	const ptr = getReg(vm, vm.baseReg + inst.b);
+	let held = ptr;
+	if (ptr.kind == RaiserValueKind.RegAddr) {
+		held = getReg(vm, ptr.intVal as number);
+	} else if (ptr.kind == RaiserValueKind.GlobalAddr) {
+		held = vm.globals[ptr.intVal];
+	} else if (ptr.kind == RaiserValueKind.ElemAddr) {
+		if (!vmElemIndex(vm, ptr.intVal, ptr.floatVal as int64)) return;
+		held = heapArrayGet(vm.arrayHeap, ptr.intVal, ptr.floatVal as int64);
+	} else if (ptr.kind == RaiserValueKind.FieldAddr) {
+		held = heapObjectGetField(vm.objectHeap, ptr.intVal, ptr.strVal);
+	} else if (ptr.kind == RaiserValueKind.Nil) {
+		vmError(vm, "attempt to read through a nil pointer"); return;
+	}
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	vmIncref(vm, held);
+	vmDecref(vm, dst);
+	copyValueInto(dst, held);
+}
+
+function vmHandleStoreDeref(vm: RaiserVM, inst: RaiserInstruction): void {
+	const ptr = getReg(vm, vm.baseReg + inst.a);
+	const val = getReg(vm, vm.baseReg + inst.c);
+	if (ptr.kind == RaiserValueKind.RegAddr || ptr.kind == RaiserValueKind.GlobalAddr) {
+		const dst = ptr.kind == RaiserValueKind.RegAddr ? getReg(vm, ptr.intVal as number) : vm.globals[ptr.intVal];
+		vmIncref(vm, val);
+		vmDecref(vm, dst);
+		copyValueInto(dst, val);
+	} else if (ptr.kind == RaiserValueKind.ElemAddr) {
+		const idx = ptr.floatVal as int64;
+		if (!vmElemIndex(vm, ptr.intVal, idx)) return;
+		vmIncref(vm, val);
+		vmDecref(vm, heapArrayGet(vm.arrayHeap, ptr.intVal, idx));
+		heapArraySet(vm.arrayHeap, ptr.intVal, idx, val);
+	} else if (ptr.kind == RaiserValueKind.FieldAddr) {
+		vmIncref(vm, val);
+		vmDecref(vm, heapObjectGetField(vm.objectHeap, ptr.intVal, ptr.strVal));
+		heapObjectSetField(vm.objectHeap, ptr.intVal, ptr.strVal, val);
+	} else if (ptr.kind == RaiserValueKind.Nil) {
+		vmError(vm, "attempt to write through a nil pointer");
+	} else {
+		vmError(vm, `cannot write through a value of kind ${ptr.kind}: it is not a location`);
+	}
 }
 
 function vmHandleLoadIndex(vm: RaiserVM, inst: RaiserInstruction): void {
