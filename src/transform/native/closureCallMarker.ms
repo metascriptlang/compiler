@@ -111,6 +111,7 @@ function wrapProgram(stmts: Node[]): Node {
 function makeTestCall(sym: Symbol, calleeType: Type): { prog: Node, call: Node } {
 	const loc = makeLoc(0, 0);
 	const callee = makeTypedIdentResolved(sym, calleeType, loc);
+	callee.nodeType = calleeType;
 	const callNode = makeCall(callee, [], loc);
 	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, createToken(TokenKind.Number, "", 0));
 	const prog = wrapProgram([exprStmt]);
