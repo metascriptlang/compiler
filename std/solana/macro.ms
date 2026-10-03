@@ -649,7 +649,7 @@ export macro accounts(): Node {
 				if (name == "associated") {
 					if (args.length == 3) {
 						error(where + ": the token program is the mint's owner, so a third argument " +
-							"(Anchor's associated_token::token_program) is not supported", d);
+							"(associated_token::token_program) is not supported", d);
 					}
 					if (args.length != 2) { error(where + " takes the mint and the authority", d); }
 					associated.push(attempt(call(

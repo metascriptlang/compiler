@@ -1696,7 +1696,7 @@ function ownedStep(): Result<uint64, ProgramError> {
 
 function ownedSafeEntry(): void { codeOf(ownedStep()); }
 
-test "@hasOne compares the account's field of that name to the key of the sibling, with Anchor's code or the one given" {
+test "@hasOne compares the account's field of that name to the key of the sibling, with ConstraintHasOne or the error given" {
 	const mine = pinnedSafe(9);
 	const second = readOnly(safeAt(keyOf(8), keyOf(2), 4, 0));
 	assert run(programKey(), [ownerWallet(), mine, second], [], ownedSafeEntry).result == 0;
@@ -1721,7 +1721,7 @@ function addressedStep(): Result<uint64, ProgramError> {
 
 function addressedEntry(): void { codeOf(addressedStep()); }
 
-test "@address compares the field's key to a key, a field of another account's data or a call, with Anchor's code or the one given" {
+test "@address compares the field's key to a key, a field of another account's data or a call, with ConstraintAddress or the error given" {
 	const safe = readOnly(safeAt(keyOf(8), keyOf(2), 4, 0));
 	const system = holder(5, Pubkey.systemProgram(), [], false, false);
 	const payer = ownerWallet();

@@ -11,7 +11,7 @@
 // A decorator of a struct that accounts<T>() reads is refused where the struct is declared, by
 // the form it was written in: an unknown name, a pair of seeds and bump that is not a pair, a
 // target that is not a field, a field without data, a token decorator on a field that is not a
-// token account, Anchor's token_program argument, and an argument that is not an expression of
+// token account, a token program argument, and an argument that is not an expression of
 // accounts, fields of their data, calls, operators, casts and literals.
 // RED MEANS: accounts<T>() accepted a decorator it does not enforce, so a constraint written on
 // the field would be silently skipped.
