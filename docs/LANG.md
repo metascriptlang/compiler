@@ -2318,6 +2318,12 @@ declaration to jump to.
 | `@passC("flag");` | Raw C compiler flag | DONE |
 | `@passL("flag");` | Raw linker flag | DONE |
 
+Relative `@link` archive paths resolve from the declaring module; absolute paths
+remain absolute. Equivalent `@compile` paths and an imported header's companion
+source are compiled once. Measured 2026-10-03 with
+`src/test/nativeBuildBoundary.ms ... directive-paths`: the direct companion,
+subdirectory companion and absolute archive probes print `53`, `59` and `61`.
+
 #### 3-Tier Builtin System
 
 | Tier | Mapping | Output | Adding New Ones |
