@@ -451,6 +451,35 @@ Toolchain integration, entry points, freestanding headers, CLI automation.
 
 **What's blocking deploy:** The prelude pulls in 13 modules for a hello world. Dead modules (json, buffer, promise, struct) contain mutable globals (TypeInfo, init guards) and BPF-incompatible code (floats, aggregate returns). sbpf-linker rejects `.data` section relocations from these globals. Only 2 of 13 modules are actually needed.
 
+### Solana deploy artifact is stripped — measured 2026-10-03
+
+`msc build --os=solana` links to `<out>.debug` and writes `<out>` as `llvm-objcopy --strip-all` of it
+(`linkSolana`, `src/compiler/cc.ms`); `--strip` deletes the `.debug` copy and leaves `<out>` unchanged.
+The pin is `src/test/guard/solanaStripDeployArtifact.ms`.
+
+- **Reference.** `cargo-build-sbf 4.1.0` (platform-tools v1.54) ships its deploy artifact stripped. Its
+  source is not on this machine; the binary carries the strings `llvm-objcopy`, `--strip-all` and
+  `postprocessed`, and `--help` says `--debug` writes `target/deploy/debug/program.so.debug` with all
+  debug information while `program.so` is "a stripped version for execution in the VM". Three artifacts
+  it built here (`rust_counter.so`, `solana_vrf_program.so`, `hello_world.so`) list no `.symtab` or
+  `.strtab` under `llvm-readelf -S`; `hello_world.so` lists exactly `.rodata .text .shstrtab`, the table
+  an `msc` build now has. The unstripped copy exists in the reference only under `--debug`; here it is
+  always written unless `--strip`, because a build writes one file and nothing else keeps the names.
+- **Measured** on the base `4574b2a1c` plus this change, platform-tools v1.54, `--os=solana`:
+
+  | program | before | after | `.sections` before → after |
+  |---|---|---|---|
+  | `logU64(instructionData().length)` | 4,816 B | 1,888 B | `.rodata .text .symtab .strtab` → `.rodata .text` |
+  | `examples/escrow/program.ms` | 76,328 B | 58,352 B (−23.6%) | same |
+
+  `tools/solana/escrow.mjs` replays the escrow on LiteSVM against both files: 25 output lines, every
+  instruction and CU count identical. The `--strip` file is byte-identical to the default one (`cmp`).
+- **Not measured.** A deployment to a validator (only LiteSVM ran the stripped file); a Windows host;
+  whether `ld.lld --strip-all` alone gives the same bytes as the objcopy step. The 15% for Hibernal
+  (67,598 of 453,520 bytes) is the figure the reporting session measured, not re-run here.
+- **Cache.** The solana link flags carry `debug-copy=on|off`, so toggling `--strip` relinks. A `.debug`
+  deleted by hand is not restored by an unchanged rebuild: the link cache sees the program as current.
+
 ### Phase 3b: Module-Level DCE for Blockchain — TODO
 
 The compiler already computes a DCE alive set (Phase B in `cmdBuildC`). But it only marks dead *symbols* — all *modules* are still compiled. For blockchain, dead modules must be skipped entirely.
