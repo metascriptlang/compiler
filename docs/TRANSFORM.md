@@ -168,3 +168,16 @@ Other compilers carry transforms MetaScript deliberately does NOT:
 
 (Earlier-skipped `arrayMethodInline` and method-call lowering have since been implemented — see
 the pipeline table above; a declared `[]`/`[]=` is resolved as a call by the checker.)
+
+## Variant-read traversal verification
+
+The `guardVariantReads` fold shares traversal, not representation or pipeline position.
+C checks still run in the native tail; JS checks run before Maybe erasure. Moving either
+stage is a separate change, not part of removing the duplicate walk.
+
+Measured 2026-10-03 against a source-matched control at `712d8990`: emitted C and JS
+were byte-identical for narrowed/shared/nested/post-guard reads and corpus `789`, `685`,
+`241`, `788` (10 comparisons). The consumer printed
+`n=3 s=9 nest=7 guarded=3 fl=1.5` on both backends.
+No broader corpus or performance claim follows from this probe set.
+
