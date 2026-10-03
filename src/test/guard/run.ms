@@ -70,6 +70,7 @@ const HAS_NODE = cmdExists("node");
 let fails = 0;
 let passes = 0;
 const unscoredOs: string[] = [];
+const unscoredSkips: string[] = [];
 const unscoredTsan: string[] = [];
 let tsanProbed = 0;
 
@@ -297,6 +298,12 @@ function runGcLane(probe: Probe, gc: string): void {
 	const run = execFileResult(exe, []);
 	writeFile(`${LOG_DIR}/${probe.name}.${gc}.out`, run.output);
 	writeFile(`${LOG_DIR}/${probe.name}.${gc}.err`, run.errorOutput);
+	const skipped = firstLineContaining(run.output, "GUARD-SKIP");
+	if (succeeded(run) && skipped != "") {
+		unscoredSkips.push(tag);
+		console.log(`skip ${tag}: ${skipped.slice("GUARD-SKIP".length, skipped.length).trim()}`);
+		return;
+	}
 	const dd = firstLineContaining(run.errorOutput, "DOUBLE-DESTROY");
 	if (!succeeded(run) || dd != "") {
 		fail(tag, dd != "" ? dd : status(run));
@@ -583,6 +590,9 @@ function main(): void {
 	}
 	if (unscoredOs.length > 0) {
 		console.log(`nim-guard: !! ${unscoredOs.length} GUARD-OS cell(s) unscored on this host (no toolchain): ${unscoredOs.join(", ")}`);
+	}
+	if (unscoredSkips.length > 0) {
+		console.log(`nim-guard: !! ${unscoredSkips.length} probe cell(s) printed GUARD-SKIP and are unscored on this host: ${unscoredSkips.join(", ")}`);
 	}
 	const verdict = fails == 0 ? `nim-guard: ALL GREEN (${passes} cells)` : `nim-guard: FAILURES ABOVE (${passes} ok, ${fails} red)`;
 	console.log(verdict);
