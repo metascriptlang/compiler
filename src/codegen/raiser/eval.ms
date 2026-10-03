@@ -1354,17 +1354,22 @@ test "engine: a ref string, element, field and class reference reach their stora
 	assert ctx.output == "hi! 3 5 9\n";
 }
 
-test "engine: a scalar's address is written through" {
-	const ctx = evalOrcVM("let k: int32 = 1; const p = k as Ptr<int32>; p[] = 5; p[0] += 2; console.log(`${k} ${p[]}`);");
+test "engine: a span pointer to a scalar is written through" {
+	const ctx = evalOrcVM("let xs: int32[] = [1, 2]; const view: Span<int32> = xs; const p = view as Ptr<int32>; p[] = 5; p[0] += 2; console.log(`${xs[0]} ${p[]}`);");
 	assert ctx.error == "", ctx.error;
 	assert ctx.output == "7 7\n";
 }
 
+test "engine: an integer is not a typed pointer on the vm" {
+	const ctx = evalOrcVM("let k: int32 = 1; const p = k as Ptr<int32>; console.log(`${p[]}`);");
+	assert ctx.error.includes("cannot convert int32 to Ptr<int32> on the Raiser VM"), ctx.error;
+	assert ctx.output == "";
+}
+
 test "engine: scalar pointers compare by location" {
-	const ctx = evalOrcVM("let xs: int32[] = [1, 2]; let k: int32 = 0; let m: int32 = 0;"
-		+ " const a = xs[0] as Ptr<int32>; const b = xs[1] as Ptr<int32>; const c = xs[0] as Ptr<int32>;"
-		+ " const p = k as Ptr<int32>; const q = m as Ptr<int32>; const r = k as Ptr<int32>;"
-		+ " console.log(`${a == b} ${a == c} ${p == q} ${p == r} ${a != b}`);");
+	const ctx = evalOrcVM("let xs: int32[] = [1, 2, 3];"
+		+ " const a = xs[0..2] as Ptr<int32>; const b = xs[1..3] as Ptr<int32>; const c = xs[0..1] as Ptr<int32>; const d = xs[1..2] as Ptr<int32>;"
+		+ " console.log(`${a == b} ${a == c} ${b == d} ${a != b}`);");
 	assert ctx.error == "", ctx.error;
-	assert ctx.output == "false true false true true\n";
+	assert ctx.output == "false true true true\n";
 }
