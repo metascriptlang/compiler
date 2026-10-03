@@ -40,6 +40,8 @@ backend and DRC/ORC runtime.
 | Crash rollback (`step(body)`) | Windows x64 and Linux x64, `hcrStepCrash`: a fatal runtime error, a stack overflow, an access violation or segmentation fault and an uncaught exception inside `step` each revert the last accepted reload and the program keeps running on the previous generation; the crashed image is skipped until the next build. One level |
 | Old-generation purge | Not built: no accepted image is unloaded (see "Accepted generations stay loaded") |
 | Function values across reloads | Windows x64 and Linux x64, `hcrFunctionValues`: a named function's value taken before a reload, a private one, one stored in a module-level object and code of the old generation all reach the newest generation; a closure keeps its own body; a held function writes the new cell after a type reset |
+| Construction across images | Windows x64, `hcrCrossImageNew`: `new` of a class declared in another image, with and without a constructor, calls the class's `_init` through the owner's table. The installed compiler (`4573591e`) fails the link with `Keeper…_init` and `Counter…_init` undefined. Linux not run |
+| Module globals at exit | Windows x64, `hcrExitDestroy`: `msc run --hcr` destroys each module global once at exit, entry module first, and prints what `msc run` prints. The engine calls each current image's `Deinit000`, then the core's `msHcrCoreDeinit`; a retired cell (type reset) is never destroyed. The installed compiler printed no destroy line. Linux not run |
 | Dependency reload | Windows x64 and Linux x64, `hcrFileDependency`: an edit of a `file:` dependency reloads its module image in the running app; `hcrImageNameCollision`: two modules mapping to one image name stop the build |
 | `msc run --hcr app.ms` | Windows x64 and Linux x64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
 | iOS and automated deploy loops | Not implemented |
@@ -805,6 +807,18 @@ build's: the counters accumulate per process and the pack loads once. What remai
 reading and header-inlining 58 sources (about 13 ms), the entry tree (6 ms) and the check (8 ms).
 In a long-lived process the reference reprocesses only modules marked dirty
 (`compiler/pipelines.nim` `isDirty`); the watch session still rebuilds the graph from disk.
+
+2026-10-03 evening, WSL Ubuntu x64 (24 cores, WSL load 0.3–0.5), a compiler of `cbc24eec`
+cross-built with `--os=linux --cc=zig --danger --lto=off`, the two-module app of `out/lat2`,
+two rounds of ten saves by atomic rename (`out/lat2/latrb.sh`): edit to visible 82.8–103.6 ms
+after the first save (median about 91 ms, 3 of 18 above 100 ms), the first save 150–156 ms; warm
+build 79–93 ms. One warm build (temporary probes, `out/lat2/splitrb.sh`): graph 16.5 ms (entry
+tree 5.8, check 7.1, prelude about 3), phase A 9.2, DCE 12 (name index 2.4, declaration index
+2.0, root walk 7.0), job loop 7 (`@compile` 3.4), `cc -c` 12–14, `logic` link 13.5–14.5, runtime
+objects 3. The first save paid the compile-plan capture, a compile without a PCH (66 ms) and the
+first link plan (39 ms); preparing them right after the app starts (`b523e256`) took the first
+save from 136–142 to 84 ms in an A/B on the same host under Windows load 3–4, where later saves
+measured about 99 ms with either compiler. Windows was not measured again.
 
 A writer that empties the file before writing it (`cat new > logic.ms` from Git Bash, whose fork
 takes more than the 60 ms settle) can let a build read the empty file. That build fails with
