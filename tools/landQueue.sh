@@ -4,8 +4,6 @@ Q=${MSC_LAND_QUEUE:-$HOME/metascript/.wt/queue}
 WT_TOOL=${MSC_WT_TOOL:-$HOME/nerdtools/claude/tools/wt.sh}
 IDLE=${MSC_LAND_QUEUE_IDLE:-600}
 POLL=${MSC_LAND_QUEUE_POLL:-20}
-BUSY_POLL=${MSC_LAND_QUEUE_BUSY_POLL:-60}
-BUSY_MAX=${MSC_LAND_QUEUE_BUSY_MAX:-7200}
 TRIES=${MSC_LAND_QUEUE_TRIES:-3}
 LOCK=$Q/runner.lock
 mkdir -p "$Q"
@@ -33,14 +31,6 @@ release() { owns && rm -rf "$LOCK"; }
 
 next_item() { ls "$Q"/*.item 2>/dev/null | sort | head -1; }
 
-busy() {
-  if command -v tasklist >/dev/null 2>&1; then
-    tasklist 2>/dev/null | awk 'NR>2 {print $1}' | grep -ixE 'msc(\.exe)?|msc\.cand|msc\.self|zig\.exe|cc1\.exe|cc1plus\.exe|clang\.exe' | grep -q .
-  else
-    pgrep -f 'tools/gate\.sh' >/dev/null 2>&1
-  fi
-}
-
 field() { sed -n "s/^$1=//p" "$2" | head -1; }
 
 finish() {
@@ -51,7 +41,7 @@ finish() {
 }
 
 run_item() {
-  local item=$1 name worktree tries running waited rc
+  local item=$1 name worktree tries running rc
   name=$(field name "$item")
   worktree=$(field worktree "$item")
   tries=$(field tries "$item")
@@ -70,12 +60,6 @@ run_item() {
     rm -f "$running"
     return
   fi
-  waited=0
-  while busy; do
-    [ "$waited" -lt "$BUSY_MAX" ] || { log "$name: machine busy ${BUSY_MAX}s, gating anyway"; break; }
-    sleep "$BUSY_POLL"
-    waited=$((waited + BUSY_POLL))
-  done
   log "$name: land, try $tries"
   printf '\n===== %s try %s\n' "$(date '+%F %T')" "$tries" >>"$Q/$name.land.log"
   (WT_CWD="$worktree" bash "$WT_TOOL" land "$name" >>"$Q/$name.land.log" 2>&1)

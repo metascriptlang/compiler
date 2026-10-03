@@ -42,7 +42,7 @@ setup() {
   stop_runner
   rm -rf "$T/ws" "$T/ctl" "$T/fakebin" "$T/decoy" "$T/decoy-wt"; mkdir -p "$T/ws/.wt" "$T/ctl" "$T/fakebin"
   export LQ_TEST=$T/ctl MSC_LAND_QUEUE=$T/ws/queue MSC_WT_TOOL=$WT
-  export MSC_LAND_QUEUE_IDLE=${IDLE:-2} MSC_LAND_QUEUE_POLL=1 MSC_LAND_QUEUE_BUSY_POLL=1 MSC_LAND_QUEUE_BUSY_MAX=${BUSY_MAX:-0} MSC_LAND_QUEUE_WAIT_POLL=1
+  export MSC_LAND_QUEUE_IDLE=${IDLE:-2} MSC_LAND_QUEUE_POLL=1 MSC_LAND_QUEUE_WAIT_POLL=1
   unset MSC_WT_ROOT WT_CARD_ROOT WT_WORKTREE_ROOT WT_BASE CLAUDE_PROJECT_DIR
   R=$T/ws/repo
   git init -q -b main "$R"
@@ -175,14 +175,14 @@ setup; mkwt n
 rn=$(waitfor n 10)
 check "S11 wait rc nonzero with a reason" '[ "$rn" != 0 ] && grep -q "nothing queued" "$T/ctl/wait.n"'
 
-echo "== S12 Windows busy check (tasklist on PATH)"
-setup; BUSY_MAX=3; export MSC_LAND_QUEUE_BUSY_MAX=3
+echo "== S12 an idle msc.exe on the box (an editor's language server) does not hold the land"
+setup; export MSC_LAND_QUEUE_BUSY_MAX=600
 printf '#!/usr/bin/env bash\necho "Image Name   PID"\necho "=========== ===="\necho "msc.exe      1234"\n' >"$T/fakebin/tasklist"; chmod +x "$T/fakebin/tasklist"
 mkwt w
 (export PATH=$T/fakebin:$PATH; cd "$T/ws/.wt/wt-w" && sbwt land w --async) >/dev/null 2>&1
-rw=$(waitfor w 60)
-check "S12 waited on msc.exe, then gated anyway" '[ "$rw" = 0 ] && grep -q "w: machine busy 3s, gating anyway" "$MSC_LAND_QUEUE/runner.log"'
-export MSC_LAND_QUEUE_BUSY_MAX=0
+rw=$(waitfor w 30)
+check "S12 gated at once beside msc.exe" '[ "$rw" = 0 ] && onmain w.txt && ! grep -q "machine busy" "$MSC_LAND_QUEUE/runner.log"'
+unset MSC_LAND_QUEUE_BUSY_MAX
 
 echo "== S13 a commit made during the gate, main moved by an inert path: nothing ungated lands"
 setup; mkwt g hold
