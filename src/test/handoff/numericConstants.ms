@@ -1,8 +1,8 @@
-import { compileToC, compileToJS } from "../helpers";
+import { compileToC, compileToJSWithStd } from "../helpers";
 import { errorCount, hasError } from "./helpers";
 
 function ok(body: string): boolean {
-	return compileToC(body).ok && compileToJS(body).ok;
+	return compileToC(body).ok && compileToJSWithStd(body).ok;
 }
 
 const u64max = "const u: uint64 = 18446744073709551615;\n";
