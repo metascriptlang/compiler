@@ -1326,6 +1326,13 @@ Rules:
 - Each sig's param types must be assignable to the impl's corresponding params
 - Each sig's return type must be assignable to the impl's return type
 - At least one non-sig definition (the implementation) must exist
+- Same-name definitions with the same named parameter types cannot differ only
+  in their annotated return type. The second declaration is rejected even when
+  there is no call; the diagnostic names the function and previous declaration.
+
+Measured on C and JS, 2026-10-03: the conflicting `pick(int32)` definitions error
+at line 2; overloads distinguished by `int32` versus `string` still print `7 s`.
+Contract: `src/test/c/functions.ms`.
 
 **Known limitation — literal args**: Overload resolution currently scores each
 argument against each candidate's param type *without* per-candidate contextual
