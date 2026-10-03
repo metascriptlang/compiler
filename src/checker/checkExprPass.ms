@@ -13,6 +13,8 @@ import {
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth } from "./compat";
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
+import { checkArcPointeeSendable } from "./sendable";
+import { isLockedRef } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
 import { builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -1408,6 +1410,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (objExpected != null) {
 				const refMember = unwrapRefNullUnion(objExpected);
 				if (refMember != null) objExpected = refMember;
+			}
+			if (objExpected != null && isAtomicRef(objExpected) && !isLockedRef(objExpected)
+				&& objExpected.typeReturn != null && !hasGenericParams(objExpected.typeReturn)) {
+				checkArcPointeeSendable(ctx, objExpected.typeReturn, node.location.line, node.location.column);
 			}
 			// Unwrap Ref for class types — ObjectLiteral constructs the inner struct
 			if (objExpected != null && objExpected.kind == TypeKind.Ref && objExpected.typeReturn != null) {
