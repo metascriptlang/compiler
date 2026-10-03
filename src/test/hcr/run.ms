@@ -127,22 +127,27 @@ function moduleAbi(): void {
 
 	copy(`${FIXTURES}/logicBodyEdit.ms`, `${work}/logic.ms`);
 	const edit = mustBuild(tag, work, hcrBuild, "body-edit build failed");
-	let ccCount = 0;
-	let logicCompiled = false;
-	let appCompiled = false;
+	let supplied = 0;
+	let logicSupplied = false;
+	let appSupplied = false;
 	let appCached = false;
 	for (const line of lines(edit)) {
-		if (line.startsWith("    cc ")) {
-			ccCount = ccCount + 1;
-			if (line.contains("logic_x_ms")) logicCompiled = true;
-			if (line.contains("app_x_ms")) appCompiled = true;
-		}
 		const t = line.trim();
+		if (line.startsWith("    cc ")) {
+			supplied = supplied + 1;
+			if (line.contains("logic_x_ms")) logicSupplied = true;
+			if (line.contains("app_x_ms")) appSupplied = true;
+		}
+		if (line != t && t.startsWith("stored ")) {
+			supplied = supplied + 1;
+			if (t.endsWith("logic.ms")) logicSupplied = true;
+			if (t.endsWith("app.ms")) appSupplied = true;
+		}
 		if (line != t && t.startsWith("cached ") && t.endsWith("app.ms")) appCached = true;
 	}
-	need(tag, ccCount == 1, `body edit compiled ${ccCount} modules, expected 1`);
-	need(tag, logicCompiled, "logic object was not compiled");
-	need(tag, !appCompiled, "unchanged app object was compiled");
+	need(tag, supplied == 1, `body edit compiled or restored ${supplied} modules, expected 1`);
+	need(tag, logicSupplied, "logic object was neither compiled nor restored");
+	need(tag, !appSupplied, "unchanged app object was compiled or restored");
 	need(tag, appCached, "unchanged app object was not reported cached");
 	need(tag, exists(`${work}/module.hcr`), "linked HCR image missing");
 
