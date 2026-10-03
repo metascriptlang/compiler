@@ -46,7 +46,11 @@ typedef struct {
 
 /* msStringIsAscii fills the ASCII bits of a payload other threads may be reading:
    every read of cap on a payload this thread does not own exclusively goes through here. */
+#ifdef MSGC_MANUAL
+#define msStrCapLoad(p) ((p)->cap)
+#else
 #define msStrCapLoad(p) __atomic_load_n(&(p)->cap, __ATOMIC_RELAXED)
+#endif
 
 /* Empty string */
 #define MS_EMPTY_STRING ((msString){0, NULL})
