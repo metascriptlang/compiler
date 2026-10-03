@@ -1483,6 +1483,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 		&& unwrapRefNullUnion(formal) == null) {
 		const widened = widenVariantToUnion(expr, formal, exprType);
 		if (widened != null as unknown as Node) return widened;
+		const numeric = fitNumericIntoUnion(ctx, expr, exprType, formal);
+		if (numeric != null) return numeric;
 	}
 	if (formal.kind != TypeKind.Union && exprType.kind != TypeKind.Union) {
 		const projected = narrowUnionToVariant(expr, exprType);
@@ -1680,6 +1682,32 @@ export function float32ConstantLiteral(expr: Node, target: Type): Node {
 	if (folded == null || !constHoldsFloat(folded)) return none;
 	folded.nodeType = slot;
 	return folded;
+}
+
+export function fitNumericIntoUnion(ctx: CheckerContext, expr: Node, exprType: Type, formal: Type): Node {
+	const none = null as unknown as Node;
+	if (formal.kind != TypeKind.Union || exprType.kind == TypeKind.Union || hasGenericParams(formal) || unwrapRefNullUnion(formal) != null) return none;
+	if (variantIndexInUnion(formal, exprType) >= 0) return none;
+	const members = implicitNumericMembers(exprType, formal);
+	if (members.length == 0) return none;
+	if (members.length > 1) {
+		addError(ctx, "implicit " + typeDisplayName(exprType) + " conversion into '" + typeDisplayName(formal) + "' fits both " + typeDisplayName(members[0])
+			+ " and " + typeDisplayName(members[1]) + " — write an explicit 'as " + typeDisplayName(members[0]) + "' or 'as " + typeDisplayName(members[1]) + "'",
+			expr.location.line, expr.location.column);
+		return expr;
+	}
+	const widened = widenVariantToUnion(wrapInConv(expr, members[0]), formal, members[0]);
+	return widened != null ? widened : none;
+}
+
+function implicitNumericMembers(exprType: Type, formal: Type): Type[] {
+	const members: Type[] = [];
+	if (!isNumeric(exprType) || formal.typeChildren == null) return members;
+	for (const member of formal.typeChildren) {
+		if (member != null && isNumeric(member) && !numericConvRefuses(exprType, member)
+			&& (isAssignable(exprType, member) || convertsImplicitly(exprType, member))) members.push(member);
+	}
+	return members;
 }
 
 export function numericConstantForCarrier(expr: Node, exprType: Type | null, formal: Type | null): Node {

@@ -121,3 +121,11 @@ test "numeric lattice: an exact integer or an explicit conversion mixes with a f
 	assert ok("let n: number = 0.5;\nconst r = n + 5000000000;\nconsole.log(r);\n");
 	assert errorCount(total + "const avg = total as number + n;\n") == 0;
 }
+
+test "numeric lattice: a number goes into the one union member that holds it implicitly" {
+	assert errorCount("let h: int16 = 7;\nconst c: int32 | string = h;\nfunction t(v: int32 | string): void {}\nt(h);\n") == 0;
+	assert errorCount("let i: int32 = 3;\nconst a: number | string = i;\nlet f: float32 = 1.5;\nlet b: number | string = \"x\";\nb = f;\n") == 0;
+	assert hasError("let i: int32 = 3;\nconst a: int64 | number = i;\n", "implicit int32 conversion into 'int64 | number' fits both int64 and number — write an explicit 'as int64' or 'as number'");
+	assert hasError("let i: int32 = 3;\nfunction t(v: int64 | number): void {}\nt(i);\n", "fits both int64 and number");
+	assert hasError("let d: float64 = 0.1;\nconst f: float32 | string = d;\n", "may lose precision");
+}
