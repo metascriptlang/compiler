@@ -47,10 +47,14 @@ checker rejects it and names the alternative.
   header to test. `u as C` has no unchecked spelling and `--danger` is its only switch; a
   `Ptr<void>` read (`(u as Ptr<void>) as C`) is the one untested path, as below.
   `instanceof` narrows an `unknown` on every backend and is never dropped.
-- Only a non-generic class is a cast target out of `unknown`. An interface or a generic
-  class instance has no run-time identity to test (JS erases `Box<number>` and
-  `Box<string>` to one class), so `u as I` is refused: make `I` a class, or keep the values
-  in a discriminated union.
+- A class is a cast target out of `unknown`, and so is a generic class instance: each
+  instantiation has its own identity, its own type info on C and its own class on JS, so
+  `u as Box<number>` holding a `Box<string>` stops with `invalid object conversion`
+  (corpus `687`, `688`). An interface has no run-time identity to test, so `u as I` is
+  refused: make `I` a class, or keep the values in a discriminated union. `u instanceof Box`
+  without type arguments is refused for the same reason: no instance is built from the
+  generic itself. Not measured: a generic class with an `extends` clause, which does not
+  compile yet (`'super' requires the enclosing class to have an 'extends' clause`).
 - `x as unknown as T` is two conversions, up then a tested down, never a reinterpret:
   `i as unknown as K` for an `int32` is refused — write `i as K`. `null as unknown as T`
   still works, because a `null` literal takes any type.
