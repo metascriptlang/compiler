@@ -454,7 +454,7 @@ cmd_land() {
   [ "$(git -C "$MAIN" symbolic-ref -q HEAD)" = "refs/heads/$BASE" ] || die "land: the main checkout is not on $BASE"
   [ -z "$(git -C "$w" status --porcelain --untracked-files=no)" ] || die "land: $w has uncommitted changes to tracked files"
   old=$(git -C "$MAIN" rev-parse "$BASE")
-  if ! git -C "$w" rebase "$old" >&2; then
+  if ! git -C "$w" merge-base --is-ancestor "$old" HEAD && ! git -C "$w" rebase "$old" >&2; then
     git -C "$w" rebase --abort >/dev/null 2>&1
     die "land: rebase onto $BASE conflicts; rebase by hand in $w"
   fi
