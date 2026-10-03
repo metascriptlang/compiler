@@ -699,6 +699,10 @@ let _planDir = "";
 const _plans = new HashMap<string, CcPlan>();
 let _plansOn = false;
 
+export function driverPlansOn(): boolean {
+	return _plansOn;
+}
+
 export function useDriverPlans(on: boolean): void {
 	_plansOn = on;
 }
@@ -921,11 +925,77 @@ export function objectCompileArgs(ccOption: number, ccBinary: string, isCpp: boo
 export function objectCompileKey(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): string {
 	const parts = objectCompileArgs(ccOption, ccBinary, isCpp, mode, extraFlags);
 	if (!parts.ok) return `unresolved ${parts.error.message} ${extraFlags}`;
-	let key = quoteCcArg(parts.value.command.path);
-	for (const arg of parts.value.lead) key = `${key} ${quoteCcArg(arg)}`;
-	key = `${key} |`;
-	for (const arg of parts.value.trail) key = `${key} ${quoteCcArg(arg)}`;
-	return key;
+	return `${quoteCcArg(parts.value.command.path)} ${objectArgsText(parts.value)}`;
+}
+
+export function objectCompileArgsKey(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): string {
+	const parts = objectCompileArgs(ccOption, ccBinary, isCpp, mode, extraFlags);
+	if (!parts.ok) return `unresolved ${parts.error.message} ${extraFlags}`;
+	return `${withoutIncludeDirs(parts.value.lead).join(" ")} | ${withoutIncludeDirs(parts.value.trail).join(" ")}`;
+}
+
+function includeDirKind(arg: string): string {
+	for (const kind of ["-iquote", "-isystem", "-idirafter", "-I"]) {
+		if (arg.startsWith(kind)) return kind;
+	}
+	return "";
+}
+
+function withoutIncludeDirs(args: string[]): string[] {
+	const kept: string[] = [];
+	for (let i = 0; i < args.length; i++) {
+		const kind = includeDirKind(args[i]);
+		if (kind == "") {
+			kept.push(quoteCcArg(args[i]));
+		} else if (args[i] == kind) {
+			i = i + 1;
+		}
+	}
+	return kept;
+}
+
+function objectArgsText(parts: ObjectCompileArgs): string {
+	let text = "";
+	for (const arg of parts.lead) text = `${text}${quoteCcArg(arg)} `;
+	text = `${text}|`;
+	for (const arg of parts.trail) text = `${text} ${quoteCcArg(arg)}`;
+	return text;
+}
+
+function runtimeQuoteDir(): string {
+	const rtDir = resolveRuntime();
+	return rtDir != "" ? dirname(dirname(rtDir)) : "";
+}
+
+export function objectSearchDirs(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): string[] {
+	const parts = objectCompileArgs(ccOption, ccBinary, isCpp, mode, extraFlags);
+	const quote: string[] = [];
+	const angle: string[] = [];
+	const system: string[] = [];
+	if (!parts.ok) return quote;
+	const args: string[] = [];
+	for (const arg of parts.value.lead) args.push(arg);
+	if (runtimeQuoteDir() != "") args.push(`-iquote${runtimeQuoteDir()}`);
+	for (const arg of parts.value.trail) args.push(arg);
+	for (let i = 0; i < args.length; i++) {
+		const kind = includeDirKind(args[i]);
+		if (kind == "") continue;
+		let dir = args[i].slice(kind.length, args[i].length);
+		if (dir == "" && i + 1 < args.length) {
+			i = i + 1;
+			dir = args[i];
+		}
+		dir = dir.replaceAll("\\", "/");
+		while (dir.length > 1 && dir.endsWith("/")) dir = dir.slice(0, dir.length - 1);
+		match (kind) {
+			"-iquote" => quote.push(dir),
+			"-I" => angle.push(dir),
+			_ => system.push(dir),
+		}
+	}
+	for (const dir of angle) quote.push(dir);
+	for (const dir of system) quote.push(dir);
+	return quote;
 }
 
 // Compile a .c file to a native binary.
@@ -959,10 +1029,9 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 function objectCompileArgv(parts: ObjectCompileArgs, cFile: string, oFile: string, depFile: string): string[] {
 	const args: string[] = [];
 	for (const arg of parts.lead) args.push(arg);
-	const rtDir = resolveRuntime();
-	if (rtDir != "") args.push(`-iquote${dirname(dirname(rtDir))}`);
+	if (runtimeQuoteDir() != "") args.push(`-iquote${runtimeQuoteDir()}`);
 	if (depFile != "") {
-		args.push("-MMD");
+		args.push("-MD");
 		args.push("-MF");
 		args.push(depFile);
 		args.push("-MT");

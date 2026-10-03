@@ -60,11 +60,11 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, compilePlanFor, useDriverPlans, NO_PLAN, includePrefix, buildPch, linkObjects, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto } from "./cc";
+import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, objectSearchDirs, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto } from "./cc";
 import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -996,6 +996,7 @@ interface CompileJob {
 	fp: string;            // precomputed fingerprint; written post-compile
 	dependencyFile: string;
 	dependenciesKnown: boolean;
+	storeKey: string;
 }
 
 // Process @compile("foo.c") directives: compile each .c file to .o relative to module dir.
@@ -1076,11 +1077,18 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 					const fileFlags = probeFlags;
 					const fp = probeFp;
 					const oFile = probeOFile;
-					if (isCompileCached(oFile, fp, dependenciesKnown)) {
+					if (isCompileCached(oFile, fp)) {
 						if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile} ${dim("(cached)")}`);
 						hitOFiles.push(oFile);
 					} else {
-						jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, dependenciesKnown });
+						const storeKey = objectStoreKey(nativeStoreSource(fullPath), ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags);
+						const stored = restoreNativeObject(fullPath, probeKey, storeKey, objectSearchDirs(ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags));
+						if (stored != "") {
+							if (verbose) verboseLog(`  @compile ${fullPath} → ${stored} ${dim("(stored)")}`);
+							hitOFiles.push(stored);
+						} else {
+							jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, dependenciesKnown, storeKey });
+						}
 					}
 				}
 			}
@@ -1137,12 +1145,15 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		}
 		const compileCmd = fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary, isCppFile(j.fullPath));
 		registerNativeDependencies(j.fullPath, compileCmd);
+		const dirs = objectSearchDirs(ccOption, ccBinary, isCppFile(j.fullPath), mode, j.fileFlags);
 		if (j.dependenciesKnown) {
 			writeCompileCache(j.oFile, j.fp);
+			publishToStore(j.storeKey, j.oFile, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
 			oFiles.push(j.oFile);
 		} else {
 			const published = publishFirstCompile(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds);
 			if (published.ok) {
+				publishToStore(j.storeKey, published.value, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
 				oFiles.push(published.value);
 			} else {
 				printDiag(`${error("error")}: @compile ${j.fullPath}: ${published.error}`);
@@ -1167,6 +1178,7 @@ interface ModuleCompileJob {
 	depFile: string;
 	cacheKey: string;
 	slot: number;
+	storeKey: string;
 }
 
 // DISPATCH+JOIN for Phase C module compiles — same architecture as
@@ -1725,7 +1737,7 @@ function pushDispatcherJob(cJobs: ModuleCompileJob[], oSlots: string[][], key: s
 	}
 	writeCSource(key, fp, source);
 	oSlots.push([]);
-	cJobs.push({ cFile: stableCFileFp(key, fp), oFile: stableOFileFp(key, fp), modPath: "", flags, fp: "", baseFp: fp, depFile: "", cacheKey: key, slot: oSlots.length - 1 });
+	cJobs.push({ cFile: stableCFileFp(key, fp), oFile: stableOFileFp(key, fp), modPath: "", flags, fp: "", baseFp: fp, depFile: "", cacheKey: key, slot: oSlots.length - 1, storeKey: "" });
 }
 
 function moduleOutputFor(outputs: CModuleOutput[], modPath: string): CModuleOutput | null {
@@ -2924,9 +2936,14 @@ setGlobalHookOwners(sharedHookOwners);
 			const modFp = moduleObjectFp(p.modPath, baseFp);
 			const oFile = stableOFileFp(p.modPath, modFp);
 
-			if (isCCodeCached(p.modPath, modFp)) {
+			const storeKey = isCCodeCached(p.modPath, modFp) ? "" : objectStoreKey(moduleStoreSource(cCode), opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags);
+			const stored = storeKey == "" ? "" : restoreModuleObject(p.modPath, baseFp, storeKey, objectSearchDirs(opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags));
+			if (storeKey == "") {
 				oSlots.push([oFile]);
 				if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
+			} else if (stored != "") {
+				oSlots.push([stored]);
+				if (opts.verbose) verboseLog(`  stored ${p.modPath}`);
 			} else {
 				// Write only .c source BEFORE compile (always — debuggable).
 				// Defer fingerprint (.cfp) until after successful compile so a
@@ -2935,7 +2952,7 @@ setGlobalHookOwners(sharedHookOwners);
 				const cFile = stableCFileFp(p.modPath, baseFp);
 				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 				oSlots.push([]);
-				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: oSlots.length - 1 });
+				cJobs.push({ cFile, oFile, modPath: p.modPath, flags: modFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: oSlots.length - 1, storeKey });
 				modulesRecompiled = modulesRecompiled + 1;
 				recompiledModulePaths.push(p.modPath);
 			}
@@ -3046,8 +3063,13 @@ setGlobalHookOwners(sharedHookOwners);
 		const cj = cJobs[cji];
 		const code = cCodes[cji];
 		if (code == 0) {
-			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile];
+			const published = cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile;
 			if (cj.cacheKey != "") writeCompileFingerprintFp(cj.cacheKey, cj.baseFp);
+			if (cj.storeKey != "" && !driverPlansOn()) {
+				const dirs = objectSearchDirs(opts.ccCompiler, opts.ccBinary, false, opts.mode, cj.flags);
+				publishToStore(cj.storeKey, published, cj.depFile, cj.cFile, dirs, []);
+			}
+			oSlots[cj.slot] = [published];
 		} else if (cj.modPath == "") {
 			printDiag(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
 			throw new Error(BUILD_STOPPED);
@@ -3353,7 +3375,7 @@ setGlobalHookOwners(sharedHookOwners);
 			const cFile = stableCFileFp(p.modPath, baseFp);
 			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 			oSlots.push([]);
-			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: oSlots.length - 1 });
+			cJobs.push({ cFile, oFile, modPath: p.modPath, flags: testModFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: oSlots.length - 1, storeKey: "" });
 		}
 		compiled = compiled + 1;
 		p.program = null as unknown as Node;
@@ -3376,7 +3398,7 @@ setGlobalHookOwners(sharedHookOwners);
 	writeCSource("_test_dispatch", dispFp, dispatcher);
 	const dispFile = stableCFileFp("_test_dispatch", dispFp);
 	oSlots.push([]);
-	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", baseFp: "", depFile: "", cacheKey: "", slot: oSlots.length - 1 });
+	cJobs.push({ cFile: dispFile, oFile: stableOFileFp("_test_dispatch", dispFp), modPath: "", flags: allFlags, fp: "", baseFp: "", depFile: "", cacheKey: "", slot: oSlots.length - 1, storeKey: "" });
 
 	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary, cJobs.length <= PLANNED_COMPILE_JOBS);
 	let testFailed = false;
