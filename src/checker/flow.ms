@@ -180,7 +180,6 @@ function isMatchingReference(source: Node, target: Node): boolean {
 	if (source.kind != target.kind) return false;
 	match (source.kind) {
 		NodeKind.Identifier => {
-			// Symbol identity only: a side without a symbol never matches.
 			if (source.resolvedSym == null || target.resolvedSym == null) {
 				return false;
 			}
@@ -1196,12 +1195,10 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 		if (d.left == null) return null;
 		if (patternWritesInto(d.left, refNode)) return declared;
 		if (d.operator != "=") return null;
-		if (!isMatchingReference(d.left, refNode)) {
-			if (leavesNameUnbound(d.left, refNode)) {
-				throw new Error(`internal: assignment to '${(d.left.data as IdentifierData).name}' at ${d.left.location.line}:${d.left.location.column} reached flow narrowing with no symbol bound by position`);
-			}
-			return null;
+		if (d.left.kind == NodeKind.Identifier && d.left.resolvedSym == null) {
+			throw new Error(`internal: assignment to '${(d.left.data as IdentifierData).name}' at ${d.left.location.line}:${d.left.location.column} reached flow narrowing with no symbol bound by position`);
 		}
+		if (!isMatchingReference(d.left, refNode)) return null;
 		const rhs = skipHiddenConv(d.right);
 		if (rhs == null || rhs.nodeType == null) return declared;
 		return constrainToDeclared(rhs.nodeType, declared);
@@ -1219,12 +1216,6 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 		return constrainToDeclared(init.nodeType, declared);
 	}
 	return null;
-}
-
-function leavesNameUnbound(left: Node, refNode: Node): boolean {
-	if (left.kind != NodeKind.Identifier || refNode.kind != NodeKind.Identifier) return false;
-	if (left.resolvedSym != null) return false;
-	return (left.data as IdentifierData).name == (refNode.data as IdentifierData).name;
 }
 
 function stripHidden(n: Node | null): Node | null {
