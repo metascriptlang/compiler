@@ -3,5 +3,6 @@ export * from "./error";
 export * from "./discriminator";
 export * from "./littleEndian";
 export * from "./core";
+export * from "./typed";
 export * from "./macro";
 export * from "./invoke";

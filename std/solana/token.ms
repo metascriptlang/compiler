@@ -27,12 +27,11 @@ when (testBuild) {
 		account,
 		failWith,
 		instructionData,
-		external,
-		externalMutable,
 		logU64,
 		writable,
 		writableSigner,
 	} from "./core";
+	import { external, externalMutable } from "./typed";
 	import { HostAccount, invocations, logs, run, signerIs, textBytes } from "./host";
 	import { accounts, findProgramAddressOf, signed } from "./macro";
 }

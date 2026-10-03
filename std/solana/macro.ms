@@ -15,21 +15,19 @@ import {
 	argU64,
 	argU8,
 	argsFit,
-	createPdaOf,
 	delegatedAccount,
 	exclusiveWritable,
 	logEvent,
 	mutableAccount,
 	ownedAccount,
 	programAccount,
-	readArgs,
-	selectInstruction,
 	signer,
 	systemAccount,
 	unchecked,
 	writable,
 	writableSigner,
 } from "./core";
+import { createPdaOf, readArgs, selectInstruction } from "./typed";
 import { delegateAt } from "./delegation";
 import { createMintPdaAt } from "./mint";
 import {

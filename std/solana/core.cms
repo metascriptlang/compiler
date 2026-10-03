@@ -3,7 +3,6 @@
 
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { ProgramError } from "./error";
-import { Discriminator } from "./discriminator";
 import { Bytes, putPubkey, putU32, putU64, storePubkey } from "./buffer";
 import { InstructionAccount } from "./cpi";
 import { invokeSigned } from "./invoke";
@@ -715,47 +714,6 @@ export function mutableAccount(
 	return exclusiveWritable(found);
 }
 
-export function program<P>(index: int32): Result<Program<P>, ProgramError> {
-	const found = try programAccount(index, P.id());
-	return Result.ok(found as Program<P>);
-}
-
-export function owned<T>(index: int32): Result<Owned<T>, ProgramError> {
-	const found = try ownedAccount(index, T.discriminator().word(), sizeof(T) as uint64);
-	return Result.ok(found as Owned<T>);
-}
-
-export function mutable<T>(index: int32): Result<Mutable<T>, ProgramError> {
-	const found = try mutableAccount(index, T.discriminator().word(), sizeof(T) as uint64);
-	return Result.ok(found as Mutable<T>);
-}
-
-export function delegated<T>(index: int32): Result<Delegated<T>, ProgramError> {
-	const found = try delegatedAccount(index, T.discriminator().word(), sizeof(T) as uint64);
-	return Result.ok(found as Delegated<T>);
-}
-
-export function external<T>(index: int32): Result<External<T>, ProgramError> {
-	const found = try present(index);
-	if (!T.acceptsOwner(found.owner())) {
-		return Result.err(ProgramError.accountOwnedByWrongProgram());
-	}
-	const decoded = T.decode(found.data());
-	if (!decoded.ok) { return Result.err(decoded.error); }
-	return Result.ok(found as External<T>);
-}
-
-export function externalMutable<T>(index: int32): Result<ExternalMutable<T>, ProgramError> {
-	const found = try present(index);
-	if (!T.acceptsOwner(found.owner())) {
-		return Result.err(ProgramError.accountOwnedByWrongProgram());
-	}
-	const decoded = T.decode(found.data());
-	if (!decoded.ok) { return Result.err(decoded.error); }
-	const claimed = try exclusiveWritable(found);
-	return Result.ok(claimed as ExternalMutable<T>);
-}
-
 export function data<T>(this proof: Mutable<T>): Ptr<T> {
 	return msSolPointer((proof as Account).address + 96) as Ptr<T>;
 }
@@ -777,17 +735,13 @@ export function read<T>(this proof: ExternalMutable<T>): Result<T, ProgramError>
 }
 
 
-export function selectInstruction<E>(table: Readonly<Span<uint8>>): Result<E, ProgramError> {
-	const data = instructionData();
-	if (data.length < 8) { return Result.err(ProgramError.instructionMissing()); }
-	const count = table.length / 8;
+export function selectedInstruction(table: Readonly<Span<uint8>>): Result<int32, ProgramError> {
+	if (msSolInstructionDataLength() < 8) { return Result.err(ProgramError.instructionMissing()); }
+	const word = msSolLoadU64(msSolInstructionData());
+	const base = msSolSpanAddress(table);
+	const count = table.length >> 3;
 	for (let member = 0; member < count; member++) {
-		let same = true;
-		for (let b = 0; b < 8; b++) {
-			const byte = msSolLoadU8(data.address + (b as uint64));
-			if (byte != table[member * 8 + b]) { same = false; }
-		}
-		if (same) { return Result.ok((member as int32) as E); }
+		if (msSolLoadU64(base + (member as uint64) * 8) == word) { return Result.ok(member); }
 	}
 	return Result.err(ProgramError.instructionFallbackNotFound());
 }
@@ -856,16 +810,6 @@ export function argBytes(offset: uint64): Bytes {
 	return view;
 }
 
-export function readArgs<T>(fits: boolean, value: T): Result<T, ProgramError> {
-	if (!fits) { return Result.err(ProgramError.instructionDidNotDeserialize()); }
-	return Result.ok(value);
-}
-
-export struct Pda<T> {
-	account: Mutable<T>;
-	bump: uint8;
-}
-
 function initialized(
 	payer: WritableSigner,
 	target: Writable,
@@ -883,20 +827,27 @@ function initialized(
 	return claimExclusive(created);
 }
 
-export function create<T>(
+export function createdAccount(
 	payer: WritableSigner,
 	target: Writable,
-): Result<Mutable<T>, ProgramError> {
-	const space = 8 + (sizeof(T) as uint64);
-	const created = try initialized(payer, target, space, T.discriminator().word(), []);
-	return Result.ok(created as Mutable<T>);
+	space: uint64,
+	discriminator: uint64,
+): Result<Account, ProgramError> {
+	return initialized(payer, target, space, discriminator, []);
 }
 
-export function createPdaOf<T>(
+export struct DerivedAccount {
+	account: Account;
+	bump: uint8;
+}
+
+export function createdPdaAccount(
 	payer: WritableSigner,
 	target: Writable,
 	seeds: Span<SeedSlice>,
-): Result<Pda<T>, ProgramError> {
+	space: uint64,
+	discriminator: uint64,
+): Result<DerivedAccount, ProgramError> {
 	const found = try findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
 	if (found.key != (target as Account).key()) {
 		return Result.err(ProgramError.constraintSeeds());
@@ -905,37 +856,14 @@ export function createPdaOf<T>(
 	if (!fillWithBump(signed, tableAddress(seeds), seeds.length as uint64, found.bump)) {
 		return Result.err(ProgramError.maxSeedLengthExceeded());
 	}
-	const space = 8 + (sizeof(T) as uint64);
-	const discriminator = T.discriminator().word();
 	let one: SignerSeeds[1] = [{ address: 0, length: 0 }];
 	signerOfBumped(signed, one);
 	const created = try initialized(payer, target, space, discriminator, one);
-	return Result.ok({ account: created as Mutable<T>, bump: found.bump });
+	return Result.ok({ account: created, bump: found.bump });
 }
 
-export function verifiedPda<T>(
-	this account: Mutable<T>,
-	seeds: Span<SeedSlice>,
-): Result<Pda<T>, ProgramError> {
-	const found = try findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
-	if (found.key != account.key()) { return Result.err(ProgramError.constraintSeeds()); }
-	return Result.ok({ account: account, bump: found.bump });
-}
-
-export function verifiedPdaWithBump<T>(
-	this account: Mutable<T>,
-	seeds: Span<SeedSlice>,
-	bump: uint8,
-): Result<Pda<T>, ProgramError> {
-	const derived = createAddressWithBump(seeds, bump, ownProgram());
-	if (!derived.ok || derived.value != account.key()) {
-		return Result.err(ProgramError.constraintSeeds());
-	}
-	return Result.ok({ account: account, bump: bump });
-}
-
-export function verifiedPda<T>(
-	this account: Delegated<T>,
+export function canonicalBump(
+	account: Account,
 	seeds: Span<SeedSlice>,
 ): Result<uint8, ProgramError> {
 	const found = try findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
@@ -943,8 +871,8 @@ export function verifiedPda<T>(
 	return Result.ok(found.bump);
 }
 
-export function verifiedPdaWithBump<T>(
-	this account: Delegated<T>,
+export function givenBump(
+	account: Account,
 	seeds: Span<SeedSlice>,
 	bump: uint8,
 ): Result<uint8, ProgramError> {
@@ -955,9 +883,10 @@ export function verifiedPdaWithBump<T>(
 	return Result.ok(bump);
 }
 
-export function close<T>(account: Mutable<T>, refund: Writable): Result<uint64, ProgramError> {
-	const target = account as Account;
-	const destination = refund as Account;
+export function closedProgramAccount(
+	target: Account,
+	destination: Account,
+): Result<uint64, ProgramError> {
 	if (target.key() == destination.key()) { return Result.err(ProgramError.constraintClose()); }
 	const moved = target.lamports();
 	const total = destination.lamports() + moved;
@@ -969,13 +898,11 @@ export function close<T>(account: Mutable<T>, refund: Writable): Result<uint64, 
 	return Result.ok(moved);
 }
 
-export function realloc<T>(
-	account: Mutable<T>,
+export function resizedProgramAccount(
+	target: Account,
 	space: uint64,
-	payer: WritableSigner,
+	funding: Account,
 ): Result<uint64, ProgramError> {
-	const target = account as Account;
-	const funding = payer as Account;
 	const current = target.dataLength();
 	if (space > current && space - current > 10240) {
 		return Result.err(ProgramError.accountReallocExceedsLimit());
