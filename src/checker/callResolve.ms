@@ -1,6 +1,7 @@
 // Call / member / new resolution, overloads and generic instantiation.
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
+import { refusePrivateField, declaringSymOf } from "./visibility";
 import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
@@ -1693,7 +1694,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 					argTypes[pi] = paramType;
 				}
 			}
-			const adoptedArg = tryAdoptAnonStruct(args[pi], paramType, argTypes[pi]);
+			const adoptedArg = tryAdoptAnonStruct(ctx, args[pi], paramType, argTypes[pi]);
 			if (adoptedArg != null as unknown as Node) {
 				args[pi] = adoptedArg;
 				argTypes[pi] = paramType;
@@ -2077,7 +2078,7 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 				const uw = widenVariantToUnion(arg, formalValue, arg.nodeType);
 				if (uw != null as unknown as Node) cd.arguments[ai] = uw;
 			}
-			const adoptedGen = tryAdoptAnonStruct(arg, formal, arg.nodeType);
+			const adoptedGen = tryAdoptAnonStruct(ctx, arg, formal, arg.nodeType);
 			if (adoptedGen != null as unknown as Node) cd.arguments[ai] = adoptedGen;
 			const upcastGen = tryValueStructUpcast(cd.arguments[ai], formal, cd.arguments[ai].nodeType);
 			if (upcastGen != null as unknown as Node) cd.arguments[ai] = upcastGen;
@@ -3708,6 +3709,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			}
 		}
 	}
+	const fieldOwnerSym = declaringSymOf(resolvedObjType);
 	const peeledObjType = peelToStructOrUnion(resolvedObjType);
 	if (peeledObjType != null) { resolvedObjType = peeledObjType; }
 	// Static access detection: when the object is a type name (class, type alias, interface, struct),
@@ -3740,6 +3742,9 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			addError(ctx, `cannot access actor field '${d.property}' directly — use actor methods`,
 				node.location.line, node.location.column);
 		}
+	}
+	if (!isStaticClassAccess && !isUnresolvedType(propType)) {
+		refusePrivateField(ctx, fieldOwnerSym != null ? fieldOwnerSym : resolvedObjType.sym, d.property, node.location.line, node.location.column);
 	}
 	// Static property lookup: check class symbol's staticFields
 	if (isStaticClassAccess && isUnresolvedType(propType) && d.object.resolvedSym != null) {

@@ -117,6 +117,8 @@ export class Scope {
 	symbols: Map<int32, Symbol>;
 	scopeKind: ScopeKind;
 	parent: Cursor<Scope>;   // borrowed — allScopes owns all scopes
+	privateAccess: Symbol | null;
+	friendModule: string;
 }
 
 // ===== Symbol Table =====
@@ -130,7 +132,7 @@ export class SymbolTable {
 // ===== Constructors =====
 
 export function createSymbolTable(): SymbolTable {
-	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null };
+	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null, privateAccess: null, friendModule: "" };
 	return { current: global, allScopes: [global], identCache: createIdentCache() };
 }
 
@@ -138,14 +140,14 @@ export function createSymbolTable(): SymbolTable {
 // All contexts sharing a cache get identical nameIds for the same string,
 // eliminating cross-context nameId mismatch during generic instantiation.
 export function createSymbolTableWithCache(cache: IdentCache): SymbolTable {
-	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null };
+	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null, privateAccess: null, friendModule: "" };
 	return { current: global, allScopes: [global], identCache: cache };
 }
 
 // ===== Scope Operations =====
 
 export function openScope(table: SymbolTable, kind: ScopeKind): void {
-	const scope: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: kind, parent: table.current };
+	const scope: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: kind, parent: table.current, privateAccess: null, friendModule: "" };
 	table.allScopes.push(scope);
 	table.current = scope;
 }

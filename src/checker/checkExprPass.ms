@@ -1,6 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
+import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
@@ -1466,6 +1467,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// (unsubstituted base) until we reach a Struct or Union. Handle nested
 			// GenericInstance (e.g., MyResult<T, E> = Ref<MyData<T, E>> where MyData
 			// is itself generic) by recursing through GI/Ref wrappers.
+			const literalOwnerSym = declaringSymOf(objExpected);
 			objExpected = peelToStructOrUnion(objExpected);
 			// A generic-containing expected type (un-instantiated formal like
 			// `{ v: T }` at a call site whose T is still unbound) must NOT be
@@ -1544,6 +1546,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					if (fieldExpected != null) {
 						d.properties[fi] = fitNode(ctx, d.properties[fi], fieldExpected, d.properties[fi].nodeType);
 					}
+					refuseHiddenFieldInLiteral(ctx, literalOwnerSym != null ? literalOwnerSym : objE.sym, keyName, d.properties[fi], node, d, fi);
 					// Record property key as reference to struct field
 					if (fi < d.keys.length && d.keyLocations != null && fi < d.keyLocations.length && fieldExpected != null) {
 						const keyLoc = d.keyLocations[fi];
@@ -2891,6 +2894,26 @@ function createSyntheticToken(loc: SourceLocation): Token {
 // Register callback at module load time
 registerCheckExpr((ctx: CheckerContext, node: Node, expectedType: Type | null): void => { checkExpr(ctx, node, expectedType); });
 
+
+function refuseHiddenFieldInLiteral(ctx: CheckerContext, ownerSym: Symbol | null, key: string, value: Node, literal: Node, d: ObjectLiteralData, index: int32): void {
+	let line = literal.location.line;
+	let column = literal.location.column;
+	if (d.keyLocations != null && index < d.keyLocations.length && d.keyLocations[index].line > 0) {
+		line = d.keyLocations[index].line;
+		column = d.keyLocations[index].column;
+	}
+	if (key == "...") {
+		const spreadSource = value.kind == NodeKind.SpreadExpr ? (value.data as SpreadExprData).spreadArg : value;
+		const srcOwner = declaringSymOf(spreadSource.nodeType);
+		const src = peelToStructOrUnion(spreadSource.nodeType);
+		if (src == null || src.kind != TypeKind.Struct || src.typeNames == null) return;
+		const hidden = hiddenPrivateField(ctx, srcOwner, src.typeNames);
+		if (hidden != "") refusePrivateField(ctx, srcOwner, hidden, value.location.line, value.location.column);
+		return;
+	}
+	if (key == "" || key == "__computed__") return;
+	refusePrivateField(ctx, ownerSym, key, line, column);
+}
 
 test "a write target crossing a graph back-edge is rejected" {
 	const graphT = createRef(createStruct("Symbol", [], [], false));

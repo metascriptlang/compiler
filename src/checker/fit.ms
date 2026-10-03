@@ -2,6 +2,7 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
+import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
@@ -1367,12 +1368,18 @@ function hiddenSlotConv(expr: Node, target: Type, vi: int32): Node {
 // anonymous value member-wise as the named struct. Identifier sources only —
 // anything else would need single-eval temp machinery. Returns null when the
 // pair does not adopt; callers fall through to their existing reject path.
-export function tryAdoptAnonStruct(expr: Node, formalIn: Type | null, exprTypeIn: Type | null): Node {
+export function tryAdoptAnonStruct(ctx: CheckerContext, expr: Node, formalIn: Type | null, exprTypeIn: Type | null): Node {
 	const formal = skipModifier(formalIn);
 	const exprType = skipModifier(exprTypeIn);
 	if (formal == null || exprType == null) return null as unknown as Node;
 	if (expr.kind != NodeKind.Identifier) return null as unknown as Node;
 	if (!isAnonStructAdoption(exprType, formal)) return null as unknown as Node;
+	const owner = declaringSymOf(formalIn);
+	const hidden = hiddenPrivateField(ctx, owner, formal.typeNames);
+	if (hidden != "") {
+		refusePrivateField(ctx, owner, hidden, expr.location.line, expr.location.column);
+		return null as unknown as Node;
+	}
 	const tok = createToken(TokenKind.Ident, "", expr.location.line);
 	const props: Node[] = [];
 	const keys: string[] = [];
@@ -1487,7 +1494,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	if (!hasGenericParams(formal) && !slotTakesValue(exprType, formal) && valueOfInPlace(ctx, expr, ReadNeed.Slot, formal)) {
 		return fitNode(ctx, expr, formal, expr.nodeType);
 	}
-	const adopted = tryAdoptAnonStruct(expr, formal, exprType);
+	const adopted = tryAdoptAnonStruct(ctx, expr, formal, exprType);
 	if (adopted != null as unknown as Node) return adopted;
 	const upcast = tryValueStructUpcast(expr, formal, exprType);
 	if (upcast != null as unknown as Node) return upcast;

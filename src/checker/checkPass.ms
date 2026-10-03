@@ -1,10 +1,11 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
+import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType } from "./types";
+import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
 import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
@@ -961,6 +962,7 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	sym.state = SymbolState.Checking;
 
 	openScope(ctx.table, ScopeKind.Class);
+	ctx.table.current.privateAccess = sym;
 	// Register the class's generic parameters (e.g. T in `class Set<T>`) so member
 	// bodies — notably the constructor — can resolve them. Without this, a body
 	// expression like `new Map<T, T>()` inside the constructor fails lookupSymbol("T"),
@@ -1060,6 +1062,7 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 	}
 
 	openScope(ctx.table, ScopeKind.Class);
+	ctx.table.current.privateAccess = sym;
 	const prevActorName = ctx.currentActorName;
 	ctx.currentActorName = d.actorName;
 	for (const member of d.actorBody) {
@@ -1490,6 +1493,19 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 		for (const prop of opd.patternProps) {
 			if (prop.kind == NodeKind.ObjectPatternProp) takenKeys.push((prop.data as ObjectPatternPropData).propKey);
 		}
+		const sourceStruct = destructuredStruct(iterType);
+		const sourceOwner = declaringSymOf(iterType);
+		for (const prop of opd.patternProps) {
+			if (sourceStruct == null) break;
+			if (prop.kind == NodeKind.ObjectPatternProp) {
+				refusePrivateField(ctx, sourceOwner, (prop.data as ObjectPatternPropData).propKey, prop.location.line, prop.location.column);
+			} else if (prop.kind == NodeKind.SpreadExpr && sourceStruct.typeNames != null) {
+				const rest: string[] = [];
+				for (const n of sourceStruct.typeNames) { if (takenKeys.indexOf(n) < 0) rest.push(n); }
+				const hidden = hiddenPrivateField(ctx, sourceOwner, rest);
+				if (hidden != "") refusePrivateField(ctx, sourceOwner, hidden, prop.location.line, prop.location.column);
+			}
+		}
 		for (const prop of opd.patternProps) {
 			if (prop.kind == NodeKind.SpreadExpr) {
 				const inner = (prop.data as SpreadExprData).spreadArg;
@@ -1527,6 +1543,11 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 			}
 		}
 	}
+}
+
+function destructuredStruct(t: Type | null): Type | null {
+	const s = peelToStructOrUnion(t);
+	return s != null && s.kind == TypeKind.Struct ? s : null;
 }
 
 function checkForInStmt(ctx: CheckerContext, node: Node): void {
