@@ -2718,50 +2718,99 @@ parameter 'ref x: S' or 'x: S'"), a struct of another type, and the initializer 
 
 #### Lifecycle hooks of a type
 
-A struct or class takes over a lifecycle operation by declaring a hook, as a method of the class or
-as an extension function in the module that declares the type (`function onDestroy(this x: T)`).
-The six names are `onDestroy`, `onCopy`, `onMove`, `onMoved`, `onTrace` and `onClone`; user hooks run
-where the DRC runs, so on C and never on JS.
+A struct, a distinct type or a class takes over a lifecycle operation by declaring a hook, as a
+method of the class or as an extension function in the module that declares the type
+(`function onDestroy(this x: T)`). The six names are `onDestroy`, `onCopy`, `onMove`, `onMoved`,
+`onTrace` and `onClone`; user hooks run where the DRC runs, so on C and never on JS. A hook is
+bound to its type where it is declared (reference `bindHookToType`, semstmts 2182-2198) and an
+error at the declaration names the rule it breaks, so a hook the compiler accepts is a hook that
+runs. A declaration outside the module of its type is refused: `type bound operation 'onDestroy'
+can be defined only in the same module with its type (S)`.
+
+Every hook declares one of these parameter lists and returns nothing, except `onClone`. Measured
+2026-10-04 on tree `40b074a9ac6ea91aee90c93caa8a9411a72138f7`, C and JS, with `struct S`:
+
+| hook | parameters after the receiver | returns | runs when |
+|---|---|---|---|
+| `onDestroy`, `onMoved` | none | nothing | the value dies; the moved-from side of a move |
+| `onCopy`, `onMove` | `y: T`, the receiver's own type | nothing | a copy; a move into a destination |
+| `onTrace` | `env: Ptr<void>` | nothing | the cycle collector, `--gc=orc`, for a type that can form a cycle |
+| `onClone` | none | `T` | a copy into a sink position (below) |
+
+Anything else is `signature for 'onDestroy' is wrong: it takes the receiver only, 2 parameters
+declared`, `… its second parameter is 'int32', the source value is the receiver's own type`, `… it
+returns 'int32', a hook returns nothing` or `… a clone is a new value of the receiver's own type`
+(`bindTypeHook` semstmts 2219-2258, `bindDupHook` 2200-2217). A return type left to inference is
+checked after the body, and for a generic hook where it is instantiated. Before the check a
+second `onDestroy` parameter failed in the C compiler (`too few arguments to function call,
+expected 2, have 1`), a wrong `onCopy` source type failed there or compiled, and a value returned
+from `onDestroy` was accepted and ran (control `./msc`).
 
 The receiver names the type the hook belongs to, and the checker refuses a hook whose receiver
-cannot be that type, at its declaration, with an error that names the hook and the shapes it takes.
-Measured 2026-10-04 on a compiler built from tree `d9a6aa3984132575a9084cdd2df4734432c3aa92`, with `struct S` and `class C`:
+cannot be that type, with an error that names the hook and the shapes it takes. A class or an
+interface is held by reference, so it is never copied, moved or cloned by value: `onCopy`,
+`onMove`, `onMoved` and `onClone` on one are refused (`'C' is a class, its values are shared by
+reference …`), and `onDestroy` and `onTrace` are the hooks it takes. A distinct type follows the
+struct column (`distinct int32` and `distinct string` with `onDestroy`; `onCopy`, `onMove` and
+`onMoved` through `this x: Var<Fd>`; `onClone` through `this x: Fd`).
 
-| receiver | on a struct `S` | on a class `C` |
+| receiver | on a struct or distinct type | on a class or interface |
 |---|---|---|
-| `this x: S` | `onDestroy`, `onClone` | every hook |
+| `this x: S` | `onDestroy`, `onClone` | `onDestroy`, `onTrace` |
 | `this ref x: S`, `this x: Var<S>` | every hook but `onClone` | refused |
-| `this x: Readonly<T>` | `onDestroy`, `onClone` | `onDestroy`, `onClone` |
+| `this x: Readonly<T>` | `onDestroy`, `onClone` | `onDestroy` |
 | `Ptr<T>`, `Ref<T>`, `Cursor<T>`, `Borrow<T>`, `T[]`, `T \| null`, a primitive, an enum, an alias of the type | refused | refused |
 
-A bare generic parameter is refused too (measured with `onDestroy`). A hook that writes its receiver
-(`onCopy`, `onMove`, `onMoved`, `onTrace`) takes the struct by reference, because `this x: S` would be
-a copy of the destination. A class is already the reference to its object, so `this ref x: C` and
-`Var<C>` would point at that reference: `onDestroy` then read its own parameter through a misaligned
-address and crashed at scope exit (measured on the compiler before the check, `--gc=drc`).
+A bare generic parameter is refused too. A hook that writes its receiver (`onCopy`, `onMove`,
+`onMoved`, `onTrace`) takes a struct by reference, because `this x: S` would be a copy of the
+destination; a class receiver already is the reference, so `this ref x: C` and `Var<C>` would point
+at that reference (`onDestroy` read its own parameter through a misaligned address and crashed at
+scope exit, measured before the check, `--gc=drc`).
 
-Before the check, `onDestroy` accepted every refused shape on C. Its hook never ran for `Ptr<T>`,
-`Ref<T>`, `Cursor<T>`, `Borrow<T>`, `T[]`, a primitive, an enum, a bare `T` or an alias, and ran as
-`T`'s hook for `T | null`. Every hook accepted `Ptr<S>` on C and JS.
+A type with a hook is a managed type even when it holds nothing managed (reference
+`normalizeTypeHook` marks `tfHasAsgn`, semstmts 2163-2180): its scope exit calls the hook for a
+struct with only `int32` fields, a generic instance of one and a `distinct int32`. Before, those
+declarations compiled and the hook never ran, and a struct or class holding a string lost its hook
+whenever a generic from another module (`Map<string, T>`) lifted the type first, because the
+per-module extension registry hides a hook from every module but the one that declares it. The
+hook is now found through the declaration of the type (`bindUserHook`, `checker/context.ms`).
+Corpus `userHookReachesEveryLift` prints the hooks that ran, `fd fdArray fdField handle mapClass
+mapShared mapStruct name slot` on C under `--gc=drc` and `--gc=orc`, and nothing on the control
+built from `99d28088c`. A hook on a distinct type replaces the base type's operation for that
+type, as the reference's `tyDistinct` arm does (liftdestructors 1193-1199).
+
+`onClone` is the reference's `=dup`: a copy into a sink position calls it instead of `onCopy`
+(injectdestructors `passCopyToSink` 479-520). Measured on both compilers with a struct of an
+`int32` and a string, the number of `onClone` calls per shape, the reference being Nim 2.2.2
+`--mm:orc`: `[a, a]` with `a` read afterwards 2 and 2, an object literal field 1 and 1,
+`xs.push(a)` 1 and 1 (`add`), `Map.set` 1 and 1 (`Table.[]=`), a tuple literal 1 and 1, `[a, a]`
+returned from a function 2 and 2, and none in `const b = a`, `b = a`, a call argument and returning
+a parameter. Corpus `userCloneHook` pins `[a, a]`, an object literal field, `const b = a`, `b = a` and returning a
+parameter; 300,000 rounds of the
+clone path hold RSS at 2 MB under both GC modes. A type without `onClone` still gets a generated
+`<T>Dup` that nothing calls (`emitDup`, `destructorLifting.ms`).
 
 On C, corpus `hookReceiverSpellings` counts `onCopy` once, `onMove` twice and `onMoved` three times
-for a struct, whether the receiver is `this ref x: S` or `Var<S>`. Class values are assigned by
-pointer, so in the same program only `onDestroy` runs on them.
+for a struct, whether the receiver is `this ref x: S` or `Var<S>`.
 
-Still accepted without running, or caught late (measured 2026-10-04, same compiler):
+Limits, measured on the same tree:
 
-- `onClone` is bound to nothing: no copy probed (struct or class assignment, `slice`) calls it.
-- A hook declared outside the type's module is not refused and never runs (measured with `onDestroy`
-  on a struct).
-- A hook on a `distinct int32` or `distinct string` type is accepted and never runs.
-- `onTrace` is called with the receiver only: `(this x: C)` runs under `--gc=orc`, and
-  `(this x: C, env: Ptr<void>)` fails in the C compiler ("too few arguments"). An extra parameter on
-  `onDestroy`, or a second parameter of another type on `onCopy`, fails the same way instead of at the
-  declaration.
-- A return value on `onDestroy` is accepted.
+- An array of a distinct type that has a hook is refused on C (`an array of the distinct type 'Fd'
+  would never run its lifecycle hooks …`), because `Fd[]` is the `int32` array and its destroy
+  never reaches the elements; the reference's `seq[Fd]` destroys each one. Binding it needs an array
+  identity per distinct type, which the C backend does not have. A struct that holds the `Fd`
+  (`FdCell[]`), a `Map<string, Fd>` and a struct field of type `Fd` run the hook. JS accepts the array.
+- A value that was moved from keeps its plain fields, so a hook can see them. Control `./msc`:
+  `const h: Holder = { r: mk(8), tag: "t" }` with a struct `R` whose `onDestroy` prints `id` prints
+  `destroy R 8` twice; the reference (`=destroy` on a `Holder(r: mk(8))`) prints it once, and after
+  `var b = move a` its `a.id` is 0 while ours is untouched (inbox card
+  `2026-10-04-wasmoved-keeps-plain-fields-and-a-hook-runs-twice.md`).
 
-Not measured: the hooks on JS beyond "compiles", generic extension hooks across modules after this
-check, `--hcr`.
+Not measured: `--hcr` and incremental builds with the new hook table; a hook of a std type restored
+from the prelude pack (the pack rebuilds the extension registry without the collect pass that binds
+hooks, so by reading it keeps the earlier registry lookup, which the std class hooks still go through
+with byte-identical C for `std/crypto`); a generic distinct type; an unannotated class method that
+returns a value (it stops in codegen with `unresolved type`, as any unannotated method return does).
 
 ### 6. Nullable Types and `Maybe<T>` (Deep Dive)
 
