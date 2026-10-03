@@ -963,6 +963,40 @@ export function arcCellName(pointee: Type): string {
 	return "msArcCell_" + hashToBase36(opTypeKey(pointee));
 }
 
+export enum PromiseAllShape {
+	None,
+	Int32,
+	Int64,
+	Boxed,
+}
+
+export function promiseAllShape(inner: Type | null): PromiseAllShape {
+	if (inner == null || inner.kind == TypeKind.Void) return PromiseAllShape.None;
+	if (inner.kind == TypeKind.Sink || inner.kind == TypeKind.Lent || inner.kind == TypeKind.Distinct) return promiseAllShape(inner.typeReturn);
+	const simple = getSimpleTypeDesc(inner);
+	if (simple != "") {
+		if (simple == "double" || simple == "bool" || simple == "MS_BOOL" || simple == "msString" || simple.endsWith("*")) return PromiseAllShape.None;
+		if (simple == "int32_t") return PromiseAllShape.Int32;
+		if (simple == "int64_t") return PromiseAllShape.Int64;
+		return PromiseAllShape.Boxed;
+	}
+	if (isAwaitable(inner)) return PromiseAllShape.None;
+	return match (inner.kind) {
+		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Cursor | TypeKind.Var
+			| TypeKind.Array | TypeKind.SizedArray | TypeKind.Span => PromiseAllShape.None,
+		TypeKind.Union => unwrapRefNullUnion(inner) != null ? PromiseAllShape.None : PromiseAllShape.Boxed,
+		_ => PromiseAllShape.Boxed,
+	};
+}
+
+export function promiseAllCellKey(arrT: Type): string {
+	return "pall|" + opTypeKey(arrT);
+}
+
+export function promiseAllCellName(arrT: Type): string {
+	return "msPromiseAllCell_" + hashToBase36(opTypeKey(arrT));
+}
+
 function typeInfoPointer(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 	if (!info.moduleLocal && hcrTypeInfoRef(g, info.cName)) return `&${info.cName}TypeInfo`;
 	const forwKey = "typeInfo:" + info.cName;
@@ -996,6 +1030,12 @@ export function typeInfoRef(g: CGen, type: Type | null): string {
 export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type): string {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
 	const info = demandedTypeInfo(g, arcCellKey(pointeeType), "Arc cell");
+	return info == null ? "NULL" : typeInfoPointer(g, info);
+}
+
+export function ensurePromiseAllCellTypeInfo(g: CGen, arrT: Type): string {
+	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
+	const info = demandedTypeInfo(g, promiseAllCellKey(arrT), "Promise.all cell");
 	return info == null ? "NULL" : typeInfoPointer(g, info);
 }
 
@@ -1047,6 +1087,13 @@ function refArrayCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 	return (bare != "" ? getArrayTypeName(bare) : arrCType) + "RefCell";
 }
 
+function promiseAllCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
+	const arrCType = getTypeDesc(g, info.subject);
+	const elemCName = arrCType.slice(0, arrCType.length - 5);
+	const bare = typeCacheGet(g.typeCache, "bare:" + elemCName);
+	return (bare != "" ? getArrayTypeName(bare) : arrCType) + "PallCell";
+}
+
 function objectTypeInfoLabel(info: Readonly<CTypeInfoDemand>): string {
 	const t = info.subject;
 	if (t.kind == TypeKind.GenericInstance || t.sym == null || t.typeName.indexOf("__", 0) >= 0 || isAnonTypeName(t.typeName)) return info.cName;
@@ -1058,7 +1105,7 @@ function typeInfoLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 		TypeInfoKind.RefArrayCell => refArrayCellLabel(g, info),
 		TypeInfoKind.Object => objectTypeInfoLabel(info),
 		TypeInfoKind.ArcCell => mangle(getTypeDesc(g, info.subject)) + "Arc",
-		TypeInfoKind.PromiseAllCell => info.cName,
+		TypeInfoKind.PromiseAllCell => promiseAllCellLabel(g, info),
 	};
 }
 
@@ -1918,48 +1965,23 @@ export function genClFullCastNrvo(g: CGen, t: Type, nrvoType: string): string { 
 export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 	if (innerType == null || innerType.kind == TypeKind.Void) return "";
 	const innerDesc = getTypeDesc(g, innerType);
-
-	// Pre-instantiated in runtime (combinator.h / system.h) — no emission needed,
-	// and the transform's dispatch name already matches.
-	if (innerDesc == "double" || innerDesc == "bool" || innerDesc == "MS_BOOL"
-		|| innerDesc == "msString" || innerDesc.endsWith("*")) {
-		return "";
-	}
-
-	// int32 / int64 — array types are custom (int32_tArray / int64_tArray). Force-emit
-	// the array typedef so the payload struct is complete for sizeof() inside the macro.
-	if (innerDesc == "int32_t") {
-		genArrayType(g, createArray(innerType));
-		emitPromiseAllInstance(g, "msFuture_int32", "int32_t", "int32_t", "int32_tArray", "int32_tArray__Content", "MS_COPY_SAME", "msNumberArrayDestroy", "int32_tArrayPallCell");
+	const shape = promiseAllShape(innerType);
+	if (shape == PromiseAllShape.None) return "";
+	const arrT = createArray(innerType);
+	genArrayType(g, arrT);
+	const arrTypeInfo = ensurePromiseAllCellTypeInfo(g, arrT);
+	if (shape == PromiseAllShape.Int32) {
+		emitPromiseAllInstance(g, "msFuture_int32", "int32_t", "int32_t", "int32_tArray", "int32_tArray__Content", "MS_COPY_SAME", arrTypeInfo);
 		return "msPromiseAllFor_msFuture_int32";
 	}
-	if (innerDesc == "int64_t") {
-		genArrayType(g, createArray(innerType));
-		emitPromiseAllInstance(g, "msFuture_int64", "int64_t", "int64_t", "int64_tArray", "int64_tArray__Content", "MS_COPY_SAME", "msNumberArrayDestroy", "int64_tArrayPallCell");
+	if (shape == PromiseAllShape.Int64) {
+		emitPromiseAllInstance(g, "msFuture_int64", "int64_t", "int64_t", "int64_tArray", "int64_tArray__Content", "MS_COPY_SAME", arrTypeInfo);
 		return "msPromiseAllFor_msFuture_int64";
 	}
-
-	// Arrays-of-arrays: Promise<T[]>[] → Promise<T[][]> — not a common use case.
-	// Caller falls back to generic msPromiseAll.
-	if (innerDesc.endsWith("Array")) return "";
-
-	// Structs and other named value types. A struct-like Promise<T> value is BOXED
-	// (generic future, heap box in the void* slot — asyncBridge/spawnLower emit
-	// msSinkBoxStruct), so collect is MS_COPY_BOXED_MOVE: move the bits out of the
-	// box, free the shell — refs transfer to the slot, no per-type Copy hook.
-	genArrayType(g, createArray(innerType));
 	const futName = "msFuture_" + mangle(innerDesc);
-	const arrName = arrayCTypeName(createArray(innerType));
+	const arrName = arrayCTypeName(arrT);
 	const payloadName = getArrayContentType(arrName);
-	let destroyFn = innerType.kind == TypeKind.Function ? "msClosureArrayDestroy" : "msNumberArrayDestroy";
-	if (innerType.kind == TypeKind.Struct && innerType.typeName != "" && hasAsgnFlag(innerType)) {
-		const walker = requireOpByKey(createArray(innerType), AttachedOp.AttachedDestructor);
-		destroyFn = opCName(walker);
-		ensureDrcProto(g, destroyFn, walker);
-	}
-	const bare = typeCacheGet(g.typeCache, "bare:" + innerDesc);
-	const cellName = (bare != "" ? getArrayTypeName(bare) : arrName) + "PallCell";
-	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, "MS_COPY_BOXED_MOVE", destroyFn, cellName);
+	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, "MS_COPY_BOXED_MOVE", arrTypeInfo);
 	return "msPromiseAllFor_" + futName;
 }
 
@@ -1968,7 +1990,7 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 // storage element `dstElem`). Guarded by #ifndef — idempotent across modules.
 // Pre-instantiated types (msFuture_double / msFuture_bool / msFuture_ptr in
 // combinator.h, msFuture_msString in system.h) are skipped at call sites.
-function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem: string, arrName: string, payloadName: string, copyStmt: string, destroyFn: string, cellName: string): void {
+function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem: string, arrName: string, payloadName: string, copyStmt: string, arrTypeInfo: string): void {
 	const guard = "msPromiseAllFor_" + futName + "_DEFINED";
 	// Emit into GlobalVars (runs after Types + SeqTypes) so the array payload's
 	// full struct definition is visible to sizeof(payloadType) inside the macro
@@ -1976,7 +1998,7 @@ function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem:
 	const b = sec(g, CSection.GlobalVars);
 	addLine(b, "#ifndef " + guard);
 	addLine(b, "#define " + guard);
-	addLine(b, "MS_PROMISE_ALL_FOR_NAMED(" + srcT + ", " + futName + ", " + dstElem + ", " + arrName + ", " + payloadName + ", " + copyStmt + ", " + destroyFn + ", \"" + cellName + "\");");
+	addLine(b, "MS_PROMISE_ALL_FOR_TI(" + srcT + ", " + futName + ", " + dstElem + ", " + arrName + ", " + payloadName + ", " + copyStmt + ", " + arrTypeInfo + ");");
 	addLine(b, "#endif");
 	addNewline(b);
 }

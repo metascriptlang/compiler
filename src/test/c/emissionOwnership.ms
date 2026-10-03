@@ -50,3 +50,34 @@ test "a foreign type's hooks are defined in its declaring module, not in the mod
 	assert origin.contains("main.ms");
 	assert !origin.contains("lib.ms");
 }
+
+test "a Promise.all result cell has one TypeInfo definition however many modules collect into it" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/tag.ms", entrySource: `
+			export struct Tag { label: string; n: int32; }
+			export async function mk(l: string, n: int32): Promise<Tag> { return { label: l, n }; }
+		` },
+		{ entryPath: "src/other.ms", entrySource: `
+			import { Tag, mk } from "./tag";
+			export async function gather(): Promise<int32> {
+				const ts = await Promise.all([mk("c", 1), mk("d", 2)]);
+				return ts.length;
+			}
+		` },
+		{ entryPath: "src/main.ms", entrySource: `
+			import { Tag, mk } from "./tag";
+			import { gather } from "./other";
+			async function main(): Promise<void> {
+				const ts = await Promise.all([mk("a", 1), mk("b", 2)]);
+				console.log(ts[0].label + ts[1].label + (await gather()).toString());
+			}
+			main();
+		` },
+	];
+	const c = compileProjectToC(entries, "src/main.ms");
+	assert !c.startsWith("ERROR:");
+	assert occurrences(c, "MS_PROMISE_ALL_FOR_TI(") == 2;
+	assert occurrences(c, "\nmsTypeInfo msPromiseAllCell_") == 1;
+	assert occurrences(c, "extern msTypeInfo msPromiseAllCell_") >= 1;
+	assert !c.contains("_allArrTI");
+}
