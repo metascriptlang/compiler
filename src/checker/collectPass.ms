@@ -4,7 +4,7 @@ import { inferredType, noneType, emptyType, createStruct, createEnum, createType
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, reexportExt } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, reexportExt } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -408,12 +408,6 @@ export function stampDecl(ctx: CheckerContext, sym: Symbol, node: Node): void {
 
 export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): void {
 	stampDecl(ctx, sym, node);
-	match (node.kind) {
-		NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ClassDecl
-		| NodeKind.EnumDecl | NodeKind.TypeAliasDecl | NodeKind.ActorDecl =>
-			recordGlobalTypeOwner(sym.name, sym.modulePath),
-		_ => {},
-	};
 	const existing = lookupLocal(ctx.table, sym.name);
 	if (existing != null && existing != sym && ctx.importSet.has(existing)
 			&& existing.symbolKind == SymbolKind.Function && sym.symbolKind == SymbolKind.Function) {
