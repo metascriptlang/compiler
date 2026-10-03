@@ -11,7 +11,7 @@ import {
 	TryCatchStmtData, ThrowStmtData,
 } from "../../ast/node";
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
-import { raiserNil, raiserInt } from "../../raiser/value";
+import { raiserNil, raiserInt, raiserString } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet,
 	declareLocal, declareLocalStr, regIsFixedLocal,
@@ -265,7 +265,7 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 }
 
 // --- For-Of Statement ---
-// for (const x of arr) body → let __i = 0; while (__i < arr.length) { x = arr[__i]; body; __i++; }
+// for (const x of arr) body → let __i = 0; while (__i < arr.length) { x = arr[__i]; body; raise if arr.length changed; __i++; }
 
 function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as ForOfStmtData;
@@ -299,6 +299,13 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	compileStmt(s, d.forOfBody);
 
 	patchLoopContinues(s);
+
+	const nowReg = allocReg(s);
+	const messageReg = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.ArrayLen, nowReg, arrReg, 0));
+	emitInst(s, raiserABC(RaiserOpcode.BeqI64, nowReg, lenReg, 2));
+	emitLoadConst(s, messageReg, raiserString("the length of the array changed while iterating over it"));
+	emitInst(s, raiserABC(RaiserOpcode.Throw, messageReg, 0, 0));
 
 	// Increment index: __i++
 	const oneReg = allocReg(s);

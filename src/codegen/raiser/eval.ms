@@ -399,6 +399,13 @@ test "engine: explicit exit coerces its number and aborts module initialization"
 	assert ctx.exitValue.intVal == 7;
 }
 
+test "engine: for-of raises when its body changes the array length" {
+	const ctx = evalOrcVM("function run(mode: int32): string { const arr: int32[] = [1, 2, 3]; let seen = ''; try { for (const x of arr) { seen = seen + String(x) + ','; if (seen.length > 20) break; if (mode == 0) arr.push(x); if (mode == 1 && x == 1) { arr.push(9); continue; } if (mode == 2) { arr.push(9); break; } } } catch (e) { return 'raised after ' + seen; } return 'finished ' + seen; }"
+		+ " console.log(run(0)); console.log(run(1)); console.log(run(2)); console.log(run(3));");
+	assert ctx.error == "";
+	assert ctx.output == "raised after 1,\nraised after 1,\nfinished 1,\nfinished 1,2,3,\n";
+}
+
 test "engine: struct assignment preserves the source value" {
 	const r = evalFull("struct S { x: int32; } let a: S = { x: 1 };"
 		+ " let b = a; b.x = 2; return a.x * 10 + b.x;");
