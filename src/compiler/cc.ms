@@ -754,9 +754,19 @@ function planTokens(line: string): string[] {
 	return tokens;
 }
 
+function adoptDriverObject(tokens: string[], input: string, output: string): void {
+	const stem = withoutExtension(basename(input));
+	for (let k = 0; k < tokens.length; k += 1) {
+		const token = tokens[k];
+		if (token == output || token.indexOf(stem, 0) < 0) continue;
+		if (token.startsWith("-object-file-name=")) tokens[k] = `-object-file-name=${output}`;
+		else if (token.endsWith(`${stem}.obj`) || token.endsWith(`${stem}.o`)) tokens[k] = output;
+	}
+}
+
 function capturePlan(command: ToolCommand, argv: string[], isLink: boolean, input: string, output: string, outputStem: string, deps: string): CcPlan {
 	const r = execFileResult(command.path, argv);
-	if (!r.started || r.exitCode != 0 || r.signal != 0) return NO_PLAN;
+	if (!r.started || r.signal != 0) return NO_PLAN;
 	const lines: string[] = [];
 	for (const raw of `${r.errorOutput}\n${r.output}`.split("\n")) {
 		const line = raw.trim();
@@ -768,6 +778,7 @@ function capturePlan(command: ToolCommand, argv: string[], isLink: boolean, inpu
 	if (lines.length != 1) return NO_PLAN;
 	const tokens = planTokens(lines[0]);
 	if (tokens.length < 2) return NO_PLAN;
+	if (!isLink) adoptDriverObject(tokens, input, output);
 	let inputs = 0;
 	let outputs = 0;
 	let depFiles = 0;
@@ -775,9 +786,10 @@ function capturePlan(command: ToolCommand, argv: string[], isLink: boolean, inpu
 		if (token.indexOf(PLAN_TAG, 0) < 0) continue;
 		if (token == input) inputs += 1;
 		else if (token == output) outputs += 1;
+		else if (!isLink && token == `-object-file-name=${output}`) continue;
 		else if (deps != "" && token == deps) depFiles += 1;
 		else if (!isLink && token == basename(input)) continue;
-		else if (outputStem != "" && token.indexOf(outputStem, 0) >= 0) continue;
+		else if (outputStem != "" && token.indexOf(basename(outputStem), 0) >= 0) continue;
 		else return NO_PLAN;
 	}
 	if (inputs != 1 || (!isLink && outputs != 1) || depFiles != (deps != "" ? 1 : 0)) return NO_PLAN;
@@ -794,12 +806,14 @@ function planArgs(plan: Readonly<CcPlan>, inputs: string[], output: string, deps
 			for (const input of inputs) args.push(input);
 		} else if (token == plan.output) {
 			args.push(output);
+		} else if (plan.outputStem == "" && token == `-object-file-name=${plan.output}`) {
+			args.push(`-object-file-name=${output}`);
 		} else if (plan.deps != "" && token == plan.deps) {
 			args.push(deps);
 		} else if (plan.outputStem == "" && token == basename(plan.input)) {
 			args.push(basename(inputs[0]));
-		} else if (plan.outputStem != "" && token.indexOf(plan.outputStem, 0) >= 0) {
-			args.push(token.replaceAll(plan.outputStem, realStem));
+		} else if (plan.outputStem != "" && token.indexOf(basename(plan.outputStem), 0) >= 0) {
+			args.push(token.replaceAll(plan.outputStem, realStem).replaceAll(basename(plan.outputStem), basename(realStem)));
 		} else {
 			args.push(token);
 		}
@@ -1074,14 +1088,14 @@ test "a driver plan line splits into quoted, escaped and bare arguments" {
 test "a link plan takes every object at the input's place and the output's stem in derived names" {
 	const plan: CcPlan = {
 		exe: "zig",
-		args: ["lld-link", "-OUT:/t/msc-plan-output.dll", "-PDB:/t/msc-plan-output.pdb", "/t/msc-plan-input.o", "-lc"],
+		args: ["lld-link", "-OUT:/t/msc-plan-output.dll", "-PDB:/t/msc-plan-output.pdb", "-PDBALTPATH:msc-plan-output.pdb", "/t/msc-plan-input.o", "-lc"],
 		input: "/t/msc-plan-input.o",
 		output: "/t/msc-plan-output.dll",
 		outputStem: "/t/msc-plan-output",
 		deps: "",
 	};
 	const args = planArgs(plan, ["a.o", "b.o"], "out/app.logic.dll", "");
-	assert args.join(" ") == "lld-link -OUT:out/app.logic.dll -PDB:out/app.logic.pdb a.o b.o -lc";
+	assert args.join(" ") == "lld-link -OUT:out/app.logic.dll -PDB:out/app.logic.pdb -PDBALTPATH:app.logic.pdb a.o b.o -lc";
 }
 
 test "a compile plan renames the input, its main-file name, the object and the dependency file" {
@@ -1095,4 +1109,10 @@ test "a compile plan renames the input, its main-file name, the object and the d
 	};
 	const args = planArgs(plan, ["cache/logic.c"], "cache/logic.o.tmp.1", "cache/logic.d.tmp.1");
 	assert args.join(" ") == "-cc1 -main-file-name logic.c -dependency-file cache/logic.d.tmp.1 -o cache/logic.o.tmp.1 -x c cache/logic.c";
+}
+
+test "a Windows compile plan writes the object zig would have staged in its own temp directory" {
+	const tokens = ["-cc1", "-object-file-name=C:/zig/tmp/7a1d-msc-plan-input.obj", "-o", "C:\\zig\\tmp\\7a1d-msc-plan-input.obj", "-x", "c", "C:/t/msc-plan-input.c"];
+	adoptDriverObject(tokens, "C:/t/msc-plan-input.c", "C:/t/msc-plan-output.o");
+	assert tokens.join(" ") == "-cc1 -object-file-name=C:/t/msc-plan-output.o -o C:/t/msc-plan-output.o -x c C:/t/msc-plan-input.c";
 }
