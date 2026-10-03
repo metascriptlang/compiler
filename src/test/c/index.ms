@@ -38,3 +38,4 @@ import "./buildIsolation";
 import "./aggregateLifecycle";
 import "./referenceTransfer";
 import "./sliceBounds";
+import "./sameNameGenericInstances";
