@@ -1310,3 +1310,23 @@ test "engine: a same-element span pointer still reads its first element" {
 	assert ctx.error == "", ctx.error;
 	assert ctx.output == "258\n";
 }
+
+test "engine: a span pointer reaches the struct element it addresses" {
+	const ctx = evalOrcVM("struct P { a: uint32; } let ps: P[] = [{ a: 1 }, { a: 2 }]; const v: Span<P> = ps;"
+		+ " const p = v as Ptr<P>; p.a = 9; console.log(`${ps[0].a} ${p[0].a} ${p[].a}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "9 9 9\n";
+}
+
+test "engine: an empty span has no element to point at" {
+	const ctx = evalOrcVM("struct P { a: uint32; } const none: P[] = []; const v: Span<P> = none; const p = v as Ptr<P>; console.log('reached');");
+	assert ctx.error.includes("out of bounds"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: element pointers compare by identity" {
+	const ctx = evalOrcVM("struct P { a: uint32; } let ps: P[] = [{ a: 1 }, { a: 2 }];"
+		+ " const p = ps[1] as Ptr<P>; const q = ps[1] as Ptr<P>; const r = ps[0] as Ptr<P>; console.log(`${p == q} ${p == r}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "true false\n";
+}
