@@ -2230,7 +2230,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					asLoc.line, asLoc.column);
 			}
 			if (srcType != null && isReadonlyView(srcType) && node.nodeType != null) node.nodeType = propagateReadonlyView(node.nodeType);
-			if (!reportedErrorSince(ctx, operandMark)) checkPointerAddress(ctx, d.asExpr, targetType);
+			if (!reportedErrorSince(ctx, operandMark)) checkPointerAddress(ctx, node, d.asExpr, targetType);
 			return;
 		},
 		NodeKind.SpreadExpr => {
