@@ -1,14 +1,16 @@
-import { Node, NodeKind, ArrayAccessData, BinaryExprData, UpdateExprData, MemberExprData, SpreadExprData, SourceLocation, Type, TypeKind } from "../../ast/node";
-import { TransformContext } from "../context";
+import { Node, NodeKind, ArrayAccessData, BinaryExprData, UpdateExprData, MemberExprData, SpreadExprData, SourceLocation, Type, TypeKind, TypeFlag, DeclKind, ExprStmtData } from "../../ast/node";
+import { TransformContext, freshTempSym } from "../context";
 import { addError } from "../../checker/context";
-import { peelTransparentInstance } from "../../checker/types";
-import { walkNode, isAssignOp } from "../walker";
-import { makeBinary, makeCall, makeMember, makeArrayAccess, runtimeRef, isRuntimeProcCall } from "../util";
+import { peelTransparentInstance, distinctBody } from "../../checker/types";
+import { walkNode, walkExpandBlocks, isAssignOp } from "../walker";
+import { makeBinary, makeCall, makeMember, makeArrayAccess, runtimeRef, isRuntimeProcCall, makeVarDecl, makeIdentResolved, makeExprStmt } from "../util";
 import { cloneIfPure } from "./intArithJS";
 
 export function lowerAccessJS(program: Node, ctx: TransformContext): Node {
+	stabilizeElementPlaces(program, ctx);
 	return walkNode(program, (node: Node): Node => rewriteAccess(node, ctx));
 }
+
 
 function rewriteAccess(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.ArrayAccess) return checkedAccess(node);
@@ -86,6 +88,53 @@ function checkedAccess(node: Node): Node {
 	if (access == null) access = makeCall(runtimeRef(span ? "msSpanAt" : "msArrayAt", loc), [d.array, d.index], loc);
 	access.nodeType = node.nodeType;
 	return access;
+}
+
+
+// Destination parts are evaluated once, as Nim does before a store
+// (injectdestructors.nim stabilizeBracketIndex): a clone re-runs effects, and
+// an array hoisted into a temp initializer becomes a detached value copy.
+function stabilizeElementPlaces(program: Node, ctx: TransformContext): void {
+	walkExpandBlocks(program, (stmt: Node): Node[] => stabilizeStmt(stmt, ctx), ctx);
+}
+
+function stabilizeStmt(stmt: Node, ctx: TransformContext): Node[] {
+	if (stmt.kind != NodeKind.ExprStmt) return [stmt];
+	const ed = stmt.data as ExprStmtData;
+	if (ed.expr == null || ed.expr.kind != NodeKind.BinaryExpr) return [stmt];
+	const bd = ed.expr.data as BinaryExprData;
+	if (bd.operator != "=" || bd.left.kind != NodeKind.ArrayAccess || isRange((bd.left.data as ArrayAccessData).index)) return [stmt];
+	const ad = bd.left.data as ArrayAccessData;
+	if (indexedType(ad.array) == null) return [stmt];
+	const loc = bd.left.location;
+	if (isSpan(ad.array)) {
+		if (cloneIfPure(ad.array) != null) return [stmt];
+		const sym = freshTempSym(ctx, "rcdst", ad.array.nodeType);
+		const decl = makeVarDecl(sym.name, ad.array, DeclKind.Const, loc);
+		decl.resolvedSym = sym;
+		ad.array = makeIdentResolved(sym, loc);
+		return [decl, stmt];
+	}
+	if (cloneIfPure(ad.array) != null || cloneIfPure(ad.index) != null) return [stmt];
+	if (elementIsValueJS(bd.left.nodeType)) return [stmt];
+	const store = makeCall(runtimeRef("msChkStore", loc), [ad.array, ad.index, bd.right], loc);
+	store.nodeType = bd.right.nodeType;
+	return [makeExprStmt(store, loc)];
+}
+
+// Mirrors needsValueCopy in codegen/js/valueCopy.ms, the authority: a
+// value-typed element stores through msValAssign at emission, never through
+// msChkStore, which would alias the stored value instead of copying it in.
+function elementIsValueJS(t: Type | null): boolean {
+	let base = distinctBody(t);
+	while (base != null) {
+		t = base;
+		base = distinctBody(t);
+	}
+	if (t != null && t.kind == TypeKind.Struct && t.typeFlags.has(TypeFlag.IsMaybe) && t.typeReturn != null) t = t.typeReturn;
+	if (t == null) return false;
+	if (t.kind == TypeKind.Struct) return t.typeFlags.has(TypeFlag.IsStruct);
+	return t.kind == TypeKind.Tuple || t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray;
 }
 
 function refuseReadOnlyPlace(target: Node, ctx: TransformContext): void {
