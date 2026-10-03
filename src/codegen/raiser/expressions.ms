@@ -17,7 +17,7 @@ import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserS
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier } from "../../checker/types";
+import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import {
@@ -657,7 +657,13 @@ function isPointerTyped(node: Node): boolean {
 }
 
 function heldByLocation(s: RaiserCompState, pointee: Type | null): boolean {
-	return pointee != null && !needsValueAssign(s, pointee);
+	const t = skipModifier(pointee);
+	if (t == null) return false;
+	if (t.kind == TypeKind.GenericInstance) {
+		const body = peelToStructOrUnion(t);
+		if (body != null && body.kind == TypeKind.Struct) return false;
+	}
+	return !needsValueAssign(s, t);
 }
 
 function derefTarget(s: RaiserCompState, target: Node): Node | null {
