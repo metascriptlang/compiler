@@ -111,7 +111,27 @@ function namedFailure(label, outcome) {
 	return { asked: BigInt(asked), position: BigInt(position) };
 }
 
-for (const [name, op] of Object.entries(OPS).filter(([, op]) => op <= OPS.cells)) {
+{
+	const name = "seeds";
+	const single = await run(OPS.seeds, 1);
+	check(`[${name}] a single round runs`, single.ok);
+	for (const count of [2, 163, 164, 500]) {
+		const outcome = await run(OPS.seeds, count);
+		check(`[${name}] ${count} rounds run and leave the heap position at ${single.value} (${outcome.ok ? `${outcome.units} CU` : outcome.error})`,
+			outcome.ok && outcome.value === single.value);
+	}
+	const first = await firstFailure(OPS.seeds);
+	check(`[${name}] some count runs out of compute`, first !== null);
+	if (first !== null) {
+		const last = await run(OPS.seeds, first - 1);
+		check(`[${name}] ${first - 1} rounds still run, ${last.units} CU, heap position unchanged`, last.ok && last.value === single.value);
+		const failed = await run(OPS.seeds, first);
+		check(`[${name}] ${first} rounds fail on the compute budget, not on the heap`,
+			!failed.ok && failed.named === null && /ComputationalBudgetExceeded|exceeded CUs meter/.test(`${failed.error}\n${failed.logs.join("\n")}`));
+	}
+}
+
+for (const [name, op] of Object.entries(OPS).filter(([, op]) => op > OPS.seeds && op <= OPS.cells)) {
 	check(`[${name}] a single round runs`, (await run(op, 1)).ok);
 	const first = await firstFailure(op);
 	check(`[${name}] some count exhausts the heap`, first !== null);

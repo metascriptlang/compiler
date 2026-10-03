@@ -3,10 +3,11 @@
 import {
 	Instruction,
 	ProgramError,
-	Seeds,
 	failWith,
+	findProgramAddress,
 	instructionData,
 	logU64,
+	programAddress,
 	programId,
 } from "std/solana";
 
@@ -14,11 +15,11 @@ extern function msSolAlloc(size: uint64): uint64;
 
 function seedsLoop(count: uint64): Result<uint64, ProgramError> {
 	const program = programId();
-	const found = try Seeds.empty(2).addText("pet").addPubkey(program).findProgramAddress(program);
+	const found = try findProgramAddress(["pet", program]);
 	for (let index: uint64 = 0; index < count; index++) {
-		const _key = try Seeds.empty(2).addText("pet").addPubkey(program).withBump(found.bump).createProgramAddress(program);
+		const _key = try programAddress(["pet", program, [found.bump]]);
 	}
-	logU64(count);
+	logU64(msSolAlloc(0));
 	return Result.ok(0);
 }
 
