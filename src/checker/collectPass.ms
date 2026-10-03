@@ -4,7 +4,7 @@ import { inferredType, noneType, emptyType, createStruct, createEnum, createType
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, bindUserHook, isLifecycleHookName, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, reexportExt } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -1119,27 +1119,15 @@ function propagateImportedExtensions(
 	if (ctx.extensionRegistry == null) return;
 	if (primary == null) return;
 
-	// Per-overload extensions
-	if (expInfo.overloadExtReceiverTypes != null) {
-		let ovIdx = 0;
-		while (ovIdx < expInfo.overloadExtReceiverTypes.length
-				&& ovIdx < primary.overloads.length) {
-			if (expInfo.overloadExtReceiverTypes[ovIdx] != "") {
-				const ovSym = primary.overloads[ovIdx];
-				registerExtension(ctx.extensionRegistry, createExtMethod(
-					alias, expInfo.overloadExtReceiverTypes[ovIdx], sourcePath,
-					ovSym.symbolType, expInfo.overloadExtIsStatic[ovIdx],
-					ovSym, 1));
-			}
-			ovIdx = ovIdx + 1;
+	for (let ovIdx = 0; ovIdx < expInfo.overloadExts.length && ovIdx < primary.overloads.length; ovIdx += 1) {
+		const ovExt = expInfo.overloadExts[ovIdx];
+		if (ovExt != null) {
+			registerExtension(ctx.extensionRegistry, reexportExt(ovExt, alias, sourcePath, primary.overloads[ovIdx], 1));
 		}
 	}
 
-	// Primary extension
-	if (expInfo.extReceiverType != "") {
-		registerExtension(ctx.extensionRegistry, createExtMethod(
-			alias, expInfo.extReceiverType, sourcePath,
-			primary.symbolType, expInfo.extIsStatic, primary, 1));
+	if (expInfo.ext != null) {
+		registerExtension(ctx.extensionRegistry, reexportExt(expInfo.ext, alias, sourcePath, primary, 1));
 	}
 }
 
@@ -1317,30 +1305,19 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 	const modExports = findModuleExports(ctx.exportRegistry, sourcePath);
 	if (modExports == null) return;
 	for (const expInfo of modExports.symbols) {
-		if (expInfo.extReceiverType == "") continue;
-		// Derive original method name: class methods have mangled names
-		// (GPUInstance_release) but extensions use original names (release).
-		let methName = expInfo.name;
-		const prefix = expInfo.extReceiverType + "_";
-		if (methName.length > prefix.length && methName.startsWith(prefix)) {
-			methName = methName.slice(prefix.length, methName.length);
-		}
+		const ext = expInfo.ext;
+		if (ext == null) continue;
 		const methSym = expInfo.sym;
+		const methName = ext.sym != null && ext.sym.name == expInfo.name ? ext.methodName : expInfo.name;
 		noteImported(ctx, methSym);
 		if (markExported) exportSymAs(ctx, methSym, expInfo.name);
-		registerExtension(ctx.extensionRegistry, createExtMethod(methName, expInfo.extReceiverType, sourcePath, methSym.symbolType, expInfo.extIsStatic, methSym, 0));
-		if (expInfo.overloadExtReceiverTypes != null) {
-			let ovi = 0;
-			while (ovi < expInfo.overloadExtReceiverTypes.length && ovi < methSym.overloads.length) {
-				const ovRecv = expInfo.overloadExtReceiverTypes[ovi];
-				if (ovRecv != "") {
-					const ovSym = methSym.overloads[ovi];
-					if (markExported) exportSymAs(ctx, ovSym, expInfo.name);
-					const ovStatic = expInfo.overloadExtIsStatic != null && ovi < expInfo.overloadExtIsStatic.length ? expInfo.overloadExtIsStatic[ovi] : false;
-					registerExtension(ctx.extensionRegistry, createExtMethod(methName, ovRecv, sourcePath, ovSym.symbolType, ovStatic, ovSym, 0));
-				}
-				ovi = ovi + 1;
-			}
+		registerExtension(ctx.extensionRegistry, reexportExt(ext, methName, sourcePath, methSym, 0));
+		for (let ovi = 0; ovi < expInfo.overloadExts.length && ovi < methSym.overloads.length; ovi += 1) {
+			const ovExt = expInfo.overloadExts[ovi];
+			if (ovExt == null) continue;
+			const ovSym = methSym.overloads[ovi];
+			if (markExported) exportSymAs(ctx, ovSym, expInfo.name);
+			registerExtension(ctx.extensionRegistry, reexportExt(ovExt, methName, sourcePath, ovSym, 0));
 		}
 	}
 }
@@ -1580,7 +1557,7 @@ export function extractDirectives(program: Node): string[] {
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core"; // registers parser callback
 import { lookupSymbol } from "./symbol";
-import { createContext, findExtension, registerModuleExports } from "./context";
+import { createContext, findAllExtensionsByName, registerModuleExports } from "./context";
 
 function collectFromSource(input: string): CheckerContext {
 	const ctx = createContext();
@@ -1626,14 +1603,16 @@ test "static member is reachable through its receiver, not as a free name" {
 	const src = "class K {} function m(this typeof K, x: int32): int32 { return x; }";
 	const ctx = collectFromSource(src);
 	assert lookupSymbol(ctx.table, "m") == null;
-	assert findExtension(ctx.extensionRegistry, "K", "m") != null;
+	const exts = findAllExtensionsByName(ctx.extensionRegistry, "m");
+	assert exts.length == 1 && exts[0].isStatic;
 }
 
 test "instance extension stays a free name" {
 	const src = "function m(this s: string): int32 { return 1; }";
 	const ctx = collectFromSource(src);
 	assert lookupSymbol(ctx.table, "m") != null;
-	assert findExtension(ctx.extensionRegistry, "string", "m") != null;
+	const exts = findAllExtensionsByName(ctx.extensionRegistry, "m");
+	assert exts.length == 1 && !exts[0].isStatic;
 }
 
 test "a static and an instance extension sharing a name in one module coexist" {
@@ -1643,8 +1622,9 @@ test "a static and an instance extension sharing a name in one module coexist" {
 	const free = lookupSymbol(ctx.table, "p");
 	assert free != null;
 	assert free.overloads.length == 0;
-	assert findExtension(ctx.extensionRegistry, "K", "p") != null;
-	assert findExtension(ctx.extensionRegistry, "string", "p") != null;
+	const exts = findAllExtensionsByName(ctx.extensionRegistry, "p");
+	assert exts.length == 2;
+	assert exts[0].isStatic != exts[1].isStatic;
 	assert ctx.errors.length == 0;
 }
 
@@ -1654,8 +1634,10 @@ test "a static member and a same-module free function get distinct emitted names
 	const ctx = collectFromSource(src);
 	assert ctx.errors.length == 0;
 	const free = lookupSymbol(ctx.table, "m");
-	const ext = findExtension(ctx.extensionRegistry, "K", "m");
-	assert free != null && ext != null && ext.sym != null;
+	const exts = findAllExtensionsByName(ctx.extensionRegistry, "m");
+	assert exts.length == 1;
+	const ext = exts[0];
+	assert free != null && ext.isStatic && ext.sym != null;
 	assert free.disamb != ext.sym.disamb;
 }
 
@@ -1664,9 +1646,11 @@ test "two same-named static members in one module get distinct emitted names" {
 		+ " function f(this typeof B, x: int32): int32 { return x; }";
 	const ctx = collectFromSource(src);
 	assert ctx.errors.length == 0;
-	const fa = findExtension(ctx.extensionRegistry, "A", "f");
-	const fb = findExtension(ctx.extensionRegistry, "B", "f");
-	assert fa != null && fb != null && fa.sym != null && fb.sym != null;
+	const fs = findAllExtensionsByName(ctx.extensionRegistry, "f");
+	assert fs.length == 2;
+	const fa = fs[0];
+	const fb = fs[1];
+	assert fa.sym != null && fb.sym != null;
 	assert fa.sym.disamb != fb.sym.disamb;
 }
 
@@ -1769,18 +1753,15 @@ test "collect extension method" {
 	const ctx = collectFromSource("function trim(this s: string) { return s; }");
 	// Should be registered as both a symbol and an extension
 	assert lookupSymbol(ctx.table, "trim") != null;
-	const ext = findExtension(ctx.extensionRegistry, "string", "trim");
-	assert ext != null;
-	if (ext != null) {
-		assert ext.methodName == "trim";
-		assert ext.receiverTypeName == "string";
-	}
+	const exts = findAllExtensionsByName(ctx.extensionRegistry, "trim");
+	assert exts.length == 1;
+	assert exts[0].methodName == "trim";
+	assert !exts[0].isStatic;
 }
 
 test "non-extension not registered" {
 	const ctx = collectFromSource("function foo() { return 1; }");
-	const ext = findExtension(ctx.extensionRegistry, "", "foo");
-	assert ext == null;
+	assert findAllExtensionsByName(ctx.extensionRegistry, "foo").length == 0;
 }
 
 test "re-export with alias marks alias exported" {
@@ -1934,7 +1915,7 @@ test "re-export preserves original location and records sgSymRecord" {
 	defining.location = origLoc;
 	const fakeExport: ExportedSymInfo = {
 		name: "get", sym: defining, extReceiverType: "", extIsStatic: false,
-		overloadExtReceiverTypes: [], overloadExtIsStatic: [],
+		overloadExtReceiverTypes: [], overloadExtIsStatic: [], ext: null, overloadExts: [],
 	};
 	registerModuleExports(ctx.exportRegistry, "/test/hub/accessors", [fakeExport]);
 

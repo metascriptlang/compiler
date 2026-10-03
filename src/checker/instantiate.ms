@@ -14,7 +14,7 @@ import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFla
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
-import { CheckerContext, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, resetUserHooks } from "./context";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, nominalTypeSym } from "./context";
 import { createContext } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceName, monoInstanceNameOf } from "../monomorphize/registry";
@@ -160,7 +160,7 @@ function instantiateExtensionHooks(genericSym: Symbol, instanceName: string, ins
 		if (!hasExtensionByName(registry, hookName)) continue;
 		for (const m of findAllExtensionsByName(registry, hookName)) {
 			const hookSym = m.sym;
-			if (m.isStatic || hookSym == null || m.receiverTypeName != genericSym.name || hookSym.modulePath != genericSym.modulePath) continue;
+			if (m.isStatic || hookSym == null || hookSym.modulePath != genericSym.modulePath) continue;
 			if (hookSym.declNode == null || hookSym.declNode.kind != NodeKind.FunctionDecl) continue;
 			if (hookSym.state == SymbolState.Shaping) {
 				settled = false;
@@ -174,6 +174,7 @@ function instantiateExtensionHooks(genericSym: Symbol, instanceName: string, ins
 			}
 			let formal = fnType.typeChildren[0];
 			while ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr) && formal.typeReturn != null) formal = formal.typeReturn;
+			if (formal.kind != TypeKind.GenericInstance || nominalTypeSym(formal) != genericSym) continue;
 			if (!hasGenericParams(formal)) {
 				if (formal.kind != TypeKind.GenericInstance || monoInstanceName(formal) != instanceName) continue;
 				_instanceHooks.set(key, { owner: genericSym, sym: hookSym });

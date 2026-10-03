@@ -12,7 +12,7 @@ import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, wri
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
-import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
+import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym } from "./context";
 import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
@@ -1353,7 +1353,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 							node.resolvedSym = target;
 							d.callee.resolvedSym = target;
 						}
-						sgRecordSym(ctx, d.callee.location.line, d.callee.location.column + 1, d.callee.location.column + 1 + me.property.length, winner.sym, getExtFnType(winner), SymbolKind.Method, me.property, winner.receiverTypeName, false);
+						sgRecordSym(ctx, d.callee.location.line, d.callee.location.column + 1, d.callee.location.column + 1 + me.property.length, winner.sym, getExtFnType(winner), SymbolKind.Method, me.property, extReceiverDisplay(winner), false);
 						if (!hasFlag(winner.sym, SymbolFlag.NativeMethod)) {
 							node.flags = node.flags.incl(NodeFlag.ExtCall);
 						}
@@ -1384,7 +1384,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 					// Actor: flag for Sendable checking + Promise<T> wrapping for non-void returns
 					// Check both direct Actor symbols (e.g. Worker.staticMethod) and
 					// variables holding actor instances (e.g. w.method where w: Ref<Worker>)
-					const receiverSym = winner.receiverTypeName != "" ? lookupSymbol(ctx.table, winner.receiverTypeName) : null;
+					const receiverSym = extReceiverSym(winner);
 					const isActorReceiver = !isStaticAccess && (
 						(me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Actor)
 						|| (objType != null && objType.kind == TypeKind.Ref && objType.sym != null && objType.sym.symbolKind == SymbolKind.Actor)
@@ -4444,7 +4444,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				// Also mark the imported symbol (may be a different object than ext.sym)
 				const importedSym = lookupSymbol(ctx.table, ext.sym.name);
 				if (importedSym != null) markUsedIn(ctx, importedSym);
-				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, ext.sym, getExtFnType(ext), SymbolKind.Method, d.property, ext.receiverTypeName, false);
+				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, ext.sym, getExtFnType(ext), SymbolKind.Method, d.property, extReceiverDisplay(ext), false);
 			}
 			// Instance extension: strip receiver param (index 0) so checkCallExpr
 			// sees only user-visible params. The receiver is already in MemberExpr.object.
@@ -4456,7 +4456,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			}
 			if (!ext.isStatic && isReadonlyView(objType) && !arrayView
 					&& !(extFnT.typeChildren.length > 0 && isReadonlyView(extFnT.typeChildren[0]))) {
-				addError(ctx, "cannot call '" + d.property + "' on " + typeDisplayName(objType) + " — a read-only view; a method callable through the view declares its receiver read-only: '" + d.property + "(this: Readonly<" + ext.receiverTypeName + ">)' on the class, or 'function " + d.property + "(this x: Readonly<" + ext.receiverTypeName + ">)' as an extension (PARALOCK E24)", node.location.line, node.location.column);
+				addError(ctx, "cannot call '" + d.property + "' on " + typeDisplayName(objType) + " — a read-only view; a method callable through the view declares its receiver read-only: '" + d.property + "(this: Readonly<" + extReceiverDisplay(ext) + ">)' on the class, or 'function " + d.property + "(this x: Readonly<" + extReceiverDisplay(ext) + ">)' as an extension (PARALOCK E24)", node.location.line, node.location.column);
 			}
 			if (!ext.isStatic && extFnT.typeChildren.length > 0) {
 				let srcType = extFnT;
@@ -4632,32 +4632,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				&& d.property != "setDynamicField"
 				&& ctx.extensionRegistry != null) {
 			const setExts = findAllExtensionsByName(ctx.extensionRegistry, "setDynamicField");
-			// Strict receiver-name match (mirrors the BinaryExpr synthesis path):
-			// `findFirstMatchingExt` is too lenient when the ext's declared
-			// receiver type is parameterized (e.g. `Ref<JsonValueData>`), so we
-			// compare `receiverTypeName` directly against the actual receiver's
-			// type name + alias-sym name. Without this guard, an unrelated ext
-			// (e.g. JsonValue's setDynamicField) would suppress legitimate
-			// "Property does not exist" errors on alias-typed receivers like
-			// `MacroInvocationData`.
-			if (setExts.length > 0) {
-				const recvNames: string[] = [];
-				if (objType.typeName != "") recvNames.push(objType.typeName);
-				if (resolvedObjType.typeName != "" && resolvedObjType.typeName != objType.typeName) {
-					recvNames.push(resolvedObjType.typeName);
-				}
-				if (objType.sym != null && objType.sym.name != "") {
-					let already = false;
-					for (const n of recvNames) { if (n == objType.sym.name) already = true; }
-					if (!already) recvNames.push(objType.sym.name);
-				}
-				for (const e of setExts) {
-					if (e.receiverTypeName == "") continue;
-					for (const rn of recvNames) {
-						if (e.receiverTypeName == rn) { suppressDynWrite = true; break; }
-					}
-					if (suppressDynWrite) break;
-				}
+			for (const e of setExts) {
+				if (extDeclaresReceiver(e, objType) || extDeclaresReceiver(e, resolvedObjType)) { suppressDynWrite = true; break; }
 			}
 		}
 		// Disc re-read on a positively-narrowed DU variant: the object's flow

@@ -270,7 +270,8 @@ import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { writeFile, ensureDir } from "std/fs";
 import { lookupSymbol } from "./symbol";
-import { findExtension } from "./context";
+import { findAllExtensionsByName, findFirstMatchingExt } from "./context";
+import { stringType } from "./types";
 test "single file checked" {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/a.ms", entrySource: "const x = 1;" });
@@ -400,7 +401,7 @@ function preludeDeclaresWhatMainBinds(backendExt: string): boolean {
 	const main = lookupModuleCtx(moduleIdentity(mainPath, config, provider));
 	if (main == null) return false;
 	const math = lookupSymbol(main.table, "Math");
-	const trim = findExtension(main.extensionRegistry, "string", "trim");
+	const trim = findFirstMatchingExt(findAllExtensionsByName(main.extensionRegistry, "trim"), stringType());
 	if (math == null || trim == null || trim.sym == null) return false;
 	return scopeSymbolOf(math.modulePath, "Math") == math && scopeSymbolOf(trim.sym.modulePath, "trim") == trim.sym;
 }

@@ -8,6 +8,8 @@ import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, literalBase, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, peelThrough, PEEL_ALL, isValuePointee, classParentOf } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf, lookupCtorDefaults } from "./symbol";
 import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, findExtension } from "./context";
+import { innermostFunctionScope } from "./symbol";
+import { extDeclaresReceiver } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -914,30 +916,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					}
 					if (!propertyExists) {
 						const setExts = findAllExtensionsByName(ctx.extensionRegistry, "setDynamicField");
-						// Stricter receiver match: a `setDynamicField` ext only matches
-						// when its declared `receiverTypeName` lines up with the actual
-						// receiver's name (or its un-peeled alias). The generic
-						// `findFirstMatchingExt` is too permissive — when the ext's
-						// receiver type is parameterized (Ref<...>), unification can bind
-						// against unrelated types and yield false positives that would
-						// route ordinary field writes through the protocol.
 						let extMatch = false;
-						if (setExts.length > 0) {
-							const recvNames: string[] = [];
-							if (recvType.typeName != "") recvNames.push(recvType.typeName);
-							if (probeType.typeName != "" && probeType.typeName != recvType.typeName) recvNames.push(probeType.typeName);
-							if (recvType.sym != null && recvType.sym.name != "") {
-								let alreadyIn = false;
-								for (const n of recvNames) { if (n == recvType.sym.name) alreadyIn = true; }
-								if (!alreadyIn) recvNames.push(recvType.sym.name);
-							}
-							for (const e of setExts) {
-								if (e.receiverTypeName == "") continue;
-								for (const rn of recvNames) {
-									if (e.receiverTypeName == rn) { extMatch = true; break; }
-								}
-								if (extMatch) break;
-							}
+						for (const e of setExts) {
+							if (extDeclaresReceiver(e, recvType) || extDeclaresReceiver(e, probeType)) { extMatch = true; break; }
 						}
 						if (extMatch) {
 							if (d.operator != "=") {
