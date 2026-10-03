@@ -149,14 +149,15 @@ export function lowerHcrIndirection(
 				return n;
 			}
 			if (n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr && n.kind != NodeKind.NewExpr) return n;
-			const sym = n.kind == NodeKind.NewExpr ? constructorInitOf(n) : n.resolvedSym;
+			const constructed = constructedClassOf(n);
+			const sym = n.kind == NodeKind.NewExpr || constructed != null ? constructorInitOf(constructed) : n.resolvedSym;
 			if (sym == null) return n;
 			if (n.kind == NodeKind.MemberExpr) {
 				const baseSym = (n.data as MemberExprData).object.resolvedSym;
 				if (baseSym == null || baseSym.symbolKind != SymbolKind.Module) return n;
 			}
-			const isVariable = n.kind != NodeKind.NewExpr && isModuleGlobalVar(sym);
-			const text = n.kind == NodeKind.NewExpr ? sym.name : referenceText(n);
+			const isVariable = constructed == null && isModuleGlobalVar(sym);
+			const text = constructed != null ? sym.name : referenceText(n);
 			const symbol = isVariable
 				? mangledGlobalName(sym, referenceName(sym, text))
 				: mangledFunctionName(sym, referenceName(sym, text), sym.overloadIdx);
@@ -216,8 +217,13 @@ export function lowerHcrIndirection(
 	return program;
 }
 
-function constructorInitOf(n: Node): Symbol | null {
-	const classSym = (n.data as NewExprData).newCallee.resolvedSym;
+function constructedClassOf(n: Node): Symbol | null {
+	if (n.kind == NodeKind.NewExpr) return (n.data as NewExprData).newCallee.resolvedSym;
+	if (n.kind == NodeKind.Identifier && (n.data as IdentifierData).name == "super") return n.resolvedSym;
+	return null;
+}
+
+function constructorInitOf(classSym: Symbol | null): Symbol | null {
 	if (classSym == null || classSym.instantiatedFrom != null) return null;
 	const entry = lookupCtorDefaults(classSym, classSym.name);
 	return entry != null ? entry.initSym : null;
