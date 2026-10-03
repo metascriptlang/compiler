@@ -451,7 +451,10 @@ cmd_land() {
   qd=${MSC_LAND_QUEUE:-$HOME/metascript/.wt/queue}
   if [ "$wait" -eq 1 ]; then
     while [ ! -e "$qd/$name.done" ] && [ ! -e "$qd/$name.red" ]; do
-      [ -n "$(queued_for "$qd" "$name")" ] || die "land: nothing queued for $name and no result in $qd"
+      if [ -z "$(queued_for "$qd" "$name")" ]; then
+        [ -e "$qd/$name.done" ] || [ -e "$qd/$name.red" ] || die "land: nothing queued for $name and no result in $qd"
+        break
+      fi
       runner_alive "$qd" || start_runner
       sleep "${MSC_LAND_QUEUE_WAIT_POLL:-30}"
     done
