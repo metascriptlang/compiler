@@ -80,6 +80,24 @@ export function registerEngineBodyCtxFn(fn: (definingModulePath: string) => Chec
 	_engineBodyCtxFn = fn;
 }
 
+// The checked scope a routine declared in another module is compiled against: the module's own
+// context, or the prelude's for a module the prelude holds (its modules share one table and keep
+// no context of their own). `null` when neither holds it; the caller's scope is never a substitute.
+export function declaringModuleCtx(ctx: CheckerContext, sym: Symbol): CheckerContext | null {
+	if (sym.modulePath == "" || sym.modulePath == ctx.modulePath) return ctx;
+	const defining = lookupModuleCtx(sym.modulePath);
+	if (defining != null) return defining;
+	const prelude = ctx.preludeCtx != null ? ctx.preludeCtx : ctx;
+	let scope: Scope | null = prelude.table.current;
+	while (scope != null) {
+		for (const held of scope.symbols.values()) {
+			if (held.modulePath == sym.modulePath) return prelude;
+		}
+		scope = scope.parent;
+	}
+	return null;
+}
+
 export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext): CheckerContext {
 	if (definingModulePath == "" || definingModulePath == ctx.modulePath) return ctx;
 	if (isEngineCheckMode()) {

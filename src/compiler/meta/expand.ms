@@ -55,12 +55,12 @@ import {
 } from "../../ast/node";
 import { CheckerContext, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
-import { lookupModuleCtx } from "../../checker/instantiate";
 import { isUnresolvedType } from "../../checker/types";
+import { lookupModuleCtx, declaringModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
-import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
+import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
 import "./decorators";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -1652,9 +1652,9 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 
 	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(loc));
 
-	setMacroDeclModulePath(macroSym.modulePath);
-	const result = callMacroEngineCompiler(program, ctx, "__macroBody");
-	setMacroDeclModulePath("");
+	const declCtx = declaringModuleCtx(ctx, macroSym);
+	if (declCtx == null) throw new Error(`internal: macro '${macroName}' is declared in '${macroSym.modulePath}', which has no checked scope`);
+	const result = callMacroEngineCompiler(program, ctx, "__macroBody", declCtx);
 	if (result == null as unknown as EngineMacroResult || result.funcIdx < 0) return null;
 	let broken = false;
 	if (result.errors != null && result.errors.length > 0) {

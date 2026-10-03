@@ -27,7 +27,7 @@ import { synthToken } from "../../compiler/meta/bridge";
 import { genericTypeInstMark, takeGenericTypeInstsFrom } from "../../parser/context";
 import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
-import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, getMacroDeclModulePath, callComptimeHelperPreparer } from "../../compiler/meta/callbacks";
+import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
 import { callWithComptimeHostPolicy } from "../../compiler/meta/hostPolicy";
@@ -246,18 +246,11 @@ function seedWireEnums(seeds: Symbol[]): void {
 	}
 }
 
-export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string): EngineMacroResult {
-	return compileIntoEngineSeeded(program, token, macroFnName, []);
-}
-
-function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, leadSeeds: Symbol[]): EngineMacroResult {
+export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext): EngineMacroResult {
 	if (_engineToken != token) {
 		_engine = freshEngine();
 		_engineToken = token;
 	}
-	const declPath = getMacroDeclModulePath();
-	const declCtx = declPath == "" || declPath == token.modulePath ? token : lookupModuleCtx(declPath);
-	if (declCtx == null) throw new Error(`internal: macro declaring module '${declPath}' has no checked scope`);
 	const seeds = moduleScopeSymbols(declCtx.table);
 	const exts = seedExtensionsOf(declCtx, null);
 	seedWireEnums(seeds);
@@ -342,7 +335,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 }
 
 export function evalProgramViaEngine(program: Node, token: CheckerContext, fnName: string): RaiserContext {
-	const result = compileIntoEngineSeeded(program, token, fnName, enclosingTypeAliases(token.table));
+	const result = compileMacroIntoEngine(program, token, fnName, token);
 	if (result == null as unknown as EngineMacroResult) return createContext();
 	if (result.errors != null) {
 		for (const e of result.errors) {
@@ -1319,7 +1312,7 @@ function __macroBody(t: string): number {
 }
 `);
 	assert wrapperPr.ok;
-	const r = compileMacroIntoEngine(wrapperPr.value, outerCtx, "__macroBody");
+	const r = compileMacroIntoEngine(wrapperPr.value, outerCtx, "__macroBody", outerCtx);
 	let found = false;
 	for (const e of r.errors) {
 		if (e.message.indexOf("noSuchMemberAnywhere", 0) >= 0) found = true;

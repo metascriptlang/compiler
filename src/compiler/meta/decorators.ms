@@ -13,12 +13,12 @@ import { registerApplyDecorators, registerDecoratorDefers, registerApplyDecorate
 import { collectOneStatement, collectTopLevel, getDeclName } from "../../checker/collectPass";
 import { isBuiltinDirective, isIntrinsicDecorator, intrinsicOnly, recordFieldDecorators, resolveDecoratorSymbol } from "../../checker/decoratorHelpers";
 import { ensureShaped, fillForwardSymbol } from "../../checker/resolvePass";
-import { lookupModuleCtx } from "../../checker/instantiate";
+import { declaringModuleCtx } from "../../checker/instantiate";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { fieldInitAssignment } from "../../transform/lowering/ctorLower";
 import { parseSource } from "../../parser/statements/validation";
 import { sgQueryAtPosition } from "../../checker/suggest";
-import { callMacroEngineCompiler, callMacroBodyPreparer, setMacroDeclModulePath, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
+import { callMacroEngineCompiler, callMacroBodyPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import {
 	clearObjectHeap, clearArrayHeap, RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap,
 	raiserString, raiserBool, raiserNil, raiserArray,
@@ -387,11 +387,9 @@ function kindLabel(kind: NodeKind): string {
 }
 
 function declaringCtx(ctx: CheckerContext, sym: Symbol): CheckerContext {
-	if (sym.modulePath != "" && sym.modulePath != ctx.modulePath) {
-		const other = lookupModuleCtx(sym.modulePath);
-		if (other != null) return other;
-	}
-	return ctx;
+	const declCtx = declaringModuleCtx(ctx, sym);
+	if (declCtx == null) throw new Error(`internal: decorator '${sym.name}' is declared in '${sym.modulePath}', which has no checked scope`);
+	return declCtx;
 }
 
 function arrowReturnText(t: string): string {
@@ -639,9 +637,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	const program = buildWrapper(ctx, sym, decl, md, isFactory, shape, loc);
 	if (program == null) return target;
 	const decoratorSourcePath = sym.modulePath != "" ? sym.modulePath : regCtx.modulePath;
-	setMacroDeclModulePath(decoratorSourcePath);
-	const result = callMacroEngineCompiler(program, ctx, applyFnName);
-	setMacroDeclModulePath("");
+	const result = callMacroEngineCompiler(program, ctx, applyFnName, regCtx);
 	if (result == null) {
 		addError(ctx, `decorator '${name}' evaluator unavailable`, loc.line, loc.column);
 		return target;
