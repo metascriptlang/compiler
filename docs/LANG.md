@@ -1490,6 +1490,16 @@ const data = expr as { value: number };   // Type narrowing (borrow, no copy)
 const len = (x as string).length;
 ```
 
+`as` does not extract a payload from a struct or a tagged union. For example,
+`Result<string, string> as int32` is a checker error; comparing that Result with
+`0` is also an error because the operands have no overlap. Narrow with `r.ok`
+and read the selected field instead.
+
+Measured on C and JS, 2026-10-03: the rejected cast names `Result<string, string>`
+and `int32`; the rejected comparison names the operator and both types. The valid
+`Result<int32, string>` branch prints `7` on both backends. Regression contract:
+`src/test/checker3pass/scenarios/resultCarrierConversions.ms`.
+
 ## MetaScript-Specific Syntax
 
 ### Move Semantics
