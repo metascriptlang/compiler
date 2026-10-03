@@ -1253,6 +1253,14 @@ export function isSlotUnion(t: Type): boolean {
 	return !allStrLit;
 }
 
+function flatUnionTakesNull(t: Type): boolean {
+	if (t.typeChildren == null) return false;
+	for (const m of t.typeChildren) {
+		if (m != null && m.kind == TypeKind.Null) return true;
+	}
+	return false;
+}
+
 // The projection twin of widenVariantToUnion: a flow-narrowed reference whose
 // DECLARED type is a tagged union types as the member, but its C storage is
 // still the union struct — codegen needs a node selecting the active slot.
@@ -1500,6 +1508,10 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	if (isMaybeType(formal) && isMaybeType(exprType)) {
 		const widenedMaybe = widenMaybePayload(expr, formal, exprType);
 		if (widenedMaybe != null as unknown as Node) return widenedMaybe;
+	}
+	if (exprType.kind == TypeKind.Null && formal.kind == TypeKind.Union && flatUnionTakesNull(formal)) {
+		expr.nodeType = formal;
+		return expr;
 	}
 	// A variant value meeting a union formal converts HERE so every fit
 	// position (var init, assign, return, ternary, call arg) shares the one
