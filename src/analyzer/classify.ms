@@ -12,7 +12,7 @@ import { attachedOpSym } from "../transform/util";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp } from "../ast/node";
 import { canFormAcycle } from "../transform/cycles";
 import { monoInstanceName } from "../monomorphize/registry";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, anonUnionCName, hashToBase36, typeKey, requireOpByKey, hookPrototype, setOpByKey, resetHookSyms } from "../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, anonUnionCName, hashToBase36, typeKey, requireOpByKey, getOpByKey, hookPrototype, setOpByKey, resetHookSyms } from "../codegen/c/types";
 
 // ===== RC Classification Kind =====
 
@@ -296,7 +296,11 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", true),
 		TypeKind.Struct => classifyObject(t, ctx),
 		TypeKind.TypeReference => noRcInfo(),
-		TypeKind.Distinct | TypeKind.Sink => { if (t.typeReturn != null) { return classifyType(t.typeReturn, ctx); } else { return noRcInfo(); } },
+		TypeKind.Distinct => {
+			if (getOpByKey(t, AttachedOp.AttachedDestructor) != null) return makeOpsInfo(RcKind.Named, t.typeName, t, false);
+			return t.typeReturn != null ? classifyType(t.typeReturn, ctx) : noRcInfo();
+		},
+		TypeKind.Sink => { if (t.typeReturn != null) { return classifyType(t.typeReturn, ctx); } else { return noRcInfo(); } },
 		TypeKind.Union => {
 			// Anonymous nullable-Ref union (`Ref<T> | Null` / `Ptr<T> | Null`):
 			// codegen lowers this to a bare T* (see types.ms unwrapRefNullUnion +
