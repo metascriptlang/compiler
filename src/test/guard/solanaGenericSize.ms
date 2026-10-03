@@ -211,8 +211,8 @@ const BOUNDS: Bound[] = [
 	{ family: "selectInstruction", copies: 1, most: 224 },
 	{ family: "External_read", copies: 2, most: 192 },
 	{ family: "ExternalMutable_read", copies: 2, most: 192 },
-	{ family: "external", copies: 2, most: 448 },
-	{ family: "externalMutable", copies: 2, most: 544 },
+	{ family: "external", copies: 2, most: 176 },
+	{ family: "externalMutable", copies: 2, most: 248 },
 ];
 
 const ONE_COPY: Bound[] = [
