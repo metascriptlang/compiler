@@ -923,6 +923,39 @@ function watchWarmDependency(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function watchLink(): void {
+	const tag = "hcrWatchLink";
+	const dir = freshDir(`${TMP}/watchLink`);
+	for (const f of ["app.ms", "logic.ms", "logicBodyEdit.ms"]) copy(`${FIXTURES}/${f}`, `${dir}/${f}`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr"], "cold build failed");
+	const temp = freshDir(`${TMP}/watchLinkTemp`);
+	ensureDir(`${temp}/msc-plan`);
+	let planted = false;
+	for (const f of readDir(`${dir}/out/debug/.cache`)) {
+		if (planted || !f.endsWith(".o")) continue;
+		copy(`${dir}/out/debug/.cache/${f}`, `${temp}/msc-plan/msc-plan-input.o`);
+		planted = true;
+	}
+	need(tag, planted, "the cold build left no object to plant at the plan input");
+	put(`${dir}/replay.txt`, "logicBodyEdit.ms logic.ms\n");
+	const prevTemp = env.get("TEMP");
+	const prevTmpdir = env.get("TMPDIR");
+	env.set("TEMP", temp);
+	env.set("TMPDIR", temp);
+	const watched = msc(dir, ["build", "app.ms", "--hcr", "--watch-replay=replay.txt"]);
+	env.set("TEMP", prevTemp);
+	env.set("TMPDIR", prevTmpdir);
+	const statuses: string[] = [];
+	for (const line of lines(both(watched))) {
+		if (line.startsWith("watch: build ")) statuses.push(line);
+	}
+	if (statuses.length != 2 || statuses[1].contains(" failed ")) {
+		console.log(both(watched));
+		failWith(tag, "a linked watch build failed after its session captured link plans over a real placeholder object");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function typeInfoLocality(): void {
 	const tag = "hcrTypeInfoLocality";
 	const dir = freshDir(`${TMP}/typeInfoLocality`);
@@ -1079,6 +1112,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
 	{ name: "hcrTypeInfoLocality", run: typeInfoLocality },
+	{ name: "hcrWatchLink", run: watchLink },
 	{ name: "hcrImageNameCollision", run: imageNameCollision },
 	{ name: "hcrArrayOwner", run: arrayOwner },
 ];
