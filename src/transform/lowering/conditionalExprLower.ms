@@ -31,16 +31,16 @@
 // Runs AFTER optionalChain/nullishCoalesce (which produce ternaries) and
 // lowerOperators (so overloaded struct-returning operators are CallExprs here).
 
-import { Node, NodeKind, NodeFlag, DeclKind, Type, TypeKind, Symbol, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, TypeKind, Symbol, FunctionDeclData, BlockStmtData, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { peelTransparentInstance, PEEL_MAX_DEPTH } from "../../checker/types";
-import { readonlyDataConstBinding } from "../../checker/constFold";
-import { walkExpandBlocksHooked, expandingInsideTry, mapExprChildren, mapChildren, hasEffect } from "../walker";
-import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, extractBodyStmts, syntheticToken } from "../util";
-import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter } from "../testUtil";
+import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect } from "../walker";
+import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken } from "../util";
+import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
+import { checkProgram } from "../../checker/checkPass";
+import { createTransformContextWithChecker } from "../context";
 import { nodeHasPositionalNew } from "./newExprLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
 import { isLowerableSpreadLiteral, expandSpreadLiteral } from "../desugar/arraySpreadLower";
@@ -533,6 +533,10 @@ function lowerTernaryInVar(stmt: Node, ctx: TransformContext): Node[] {
 	const vd = stmt.data as VariableDeclData;
 	const cd = vd.initializer.data as ConditionalExprData;
 	const loc = stmt.location;
+	if (stmt.resolvedSym == null) {
+		if (stmt.nodeType == null) return [stmt];
+		throw new Error(`internal: ternary initializer of '${vd.declName}' reached lowering without its symbol`);
+	}
 	const result: Node[] = [];
 	cd.ternaryCondition = hoistRaisingCalls(cd.ternaryCondition, result, ctx);
 	let tempType = stmt.nodeType;
@@ -544,16 +548,8 @@ function lowerTernaryInVar(stmt: Node, ctx: TransformContext): Node[] {
 	letDecl.resolvedSym = stmt.resolvedSym;
 	letDecl.nodeType = tempType;
 	result.push(letDecl);
-	// A generic template body is unchecked until instantiation, so its decls
-	// carry no symbols here; only the instantiated copies do.
-	const thenTarget = stmt.resolvedSym != null
-		? makeTypedIdentResolved(stmt.resolvedSym, null, loc)
-		: makeIdent(vd.declName, loc);
-	thenTarget.resolvedSym = stmt.resolvedSym;
-	const elseTarget = stmt.resolvedSym != null
-		? makeTypedIdentResolved(stmt.resolvedSym, null, loc)
-		: makeIdent(vd.declName, loc);
-	elseTarget.resolvedSym = stmt.resolvedSym;
+	const thenTarget = makeTypedIdentResolved(stmt.resolvedSym, null, loc);
+	const elseTarget = makeTypedIdentResolved(stmt.resolvedSym, null, loc);
 	const thenStmt = branchValueStmt(thenTarget, cd.ternaryConsequent, loc);
 	const elseStmt = branchValueStmt(elseTarget, cd.ternaryAlternate, loc);
 	result.push(makeIf(cd.ternaryCondition, makeBlock([thenStmt], loc), makeBlock([elseStmt], loc), loc));
@@ -749,7 +745,18 @@ test "ternary in stmt becomes if" { assert firstStmtKindAfter("a ? b : c;", lowe
 
 test "non-ternary ExprStmt unchanged" { assert firstStmtKindAfter("f();", lowerConditionalExpr) == NodeKind.ExprStmt; }
 
-test "pure var-init ternary lowers to let + if" { assert stmtCountAfter("const x = a ? b : c;", lowerConditionalExpr) == 2; }
+function checkedFnBodyCount(input: string): int32 {
+	const pr = parseInput(input);
+	if (!pr.ok) return -1;
+	const cc = checkProgram(pr.value);
+	const stmts = getStmts(lowerConditionalExpr(pr.value, createTransformContextWithChecker(cc)));
+	if (stmts.length == 0 || stmts[0].kind != NodeKind.FunctionDecl) return -1;
+	return ((stmts[0].data as FunctionDeclData).fnBody.data as BlockStmtData).statements.length;
+}
+
+test "pure var-init ternary lowers to let + if" { assert checkedFnBodyCount("function pick(a: boolean, b: number, c: number): number { const x = a ? b : c; return x; }") == 3; }
+
+test "an unchecked ternary initializer is left as written" { assert stmtCountAfter("const x = a ? b : c;", lowerConditionalExpr) == 1; }
 
 test "call-arg ternary hoisted" { assert stmtCountAfter("f(a ? b : c);", lowerConditionalExpr) == 3; }
 
