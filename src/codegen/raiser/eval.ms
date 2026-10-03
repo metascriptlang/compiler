@@ -255,18 +255,11 @@ function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnNa
 		_engine = freshEngine();
 		_engineToken = token;
 	}
-	const seeds: Symbol[] = [];
-	for (const s of leadSeeds) seeds.push(s);
-	for (const s of moduleScopeSymbols(token.table)) seeds.push(s);
-	const exts = seedExtensionsOf(token, null);
 	const declPath = getMacroDeclModulePath();
-	if (declPath != "") {
-		const declCtx = lookupModuleCtx(declPath);
-		if (declCtx != null) {
-			for (const s of moduleScopeSymbols(declCtx.table)) seeds.push(s);
-			for (const e of seedExtensionsOf(declCtx, null)) exts.push(e);
-		}
-	}
+	const declCtx = declPath == "" || declPath == token.modulePath ? token : lookupModuleCtx(declPath);
+	if (declCtx == null) throw new Error(`internal: macro declaring module '${declPath}' has no checked scope`);
+	const seeds = moduleScopeSymbols(declCtx.table);
+	const exts = seedExtensionsOf(declCtx, null);
 	seedWireEnums(seeds);
 	_pendingHelperErrors = [];
 	takeRaiserCompileErrors(); // reset: stale entries from an earlier compile must not leak in

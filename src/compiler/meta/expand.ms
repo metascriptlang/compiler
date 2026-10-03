@@ -1654,6 +1654,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 
 	setMacroDeclModulePath(macroSym.modulePath);
 	const result = callMacroEngineCompiler(program, ctx, "__macroBody");
+	setMacroDeclModulePath("");
 	if (result == null as unknown as EngineMacroResult || result.funcIdx < 0) return null;
 	let broken = false;
 	if (result.errors != null && result.errors.length > 0) {

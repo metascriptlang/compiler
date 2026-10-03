@@ -641,6 +641,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	const decoratorSourcePath = sym.modulePath != "" ? sym.modulePath : regCtx.modulePath;
 	setMacroDeclModulePath(decoratorSourcePath);
 	const result = callMacroEngineCompiler(program, ctx, applyFnName);
+	setMacroDeclModulePath("");
 	if (result == null) {
 		addError(ctx, `decorator '${name}' evaluator unavailable`, loc.line, loc.column);
 		return target;
