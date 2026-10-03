@@ -1366,7 +1366,7 @@ for phase in "${PHASES[@]}"; do
   { reds_of "$lane" "$log" "$rc"; grep -q '^TIMEOUT after ' "$log" && echo "timed out"; } | sort -u >"$OUT/$lane.red.all"
   split_flaky keep <"$OUT/$lane.red.all" >"$OUT/$lane.flaky"
   split_flaky drop <"$OUT/$lane.red.all" >"$OUT/$lane.red"
-  if [ "$rc" -ne 0 ] && [ ! -s "$OUT/$lane.red" ]; then echo "$lane: exit $rc with no named failure" >"$OUT/$lane.red"; fi
+  if [ "$rc" -ne 0 ] && [ ! -s "$OUT/$lane.red.all" ]; then echo "$lane: exit $rc with no named failure" >"$OUT/$lane.red"; fi
   known_of "$lane" | scope_known "$lane" >"$OUT/$lane.known"
   comm -23 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.new"
   comm -13 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.fixed"
