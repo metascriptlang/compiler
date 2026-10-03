@@ -2562,14 +2562,52 @@ export function tupleTypeName(t: Type | null): string {
 	return "msTuple_" + _stdHashToBase36(key);
 }
 
+const BUILTIN_TYPE_NAMES: string[] = ["Result", "Promise", "Iterator", "IteratorResult"];
+
+// A name the compiler spells itself: it already encodes its owner and arguments, so it is its own
+// identity and carries no declaring symbol.
+export function isCompilerSpelledTypeName(name: string): boolean {
+	if (name.startsWith("$")) return true;
+	if (name.indexOf("__", 0) >= 0) return true;
+	if (name.indexOf(".", 0) >= 0) return true;
+	if (name.startsWith("{") || name.startsWith("(") || name.startsWith("|") || name.startsWith("__anon")) return true;
+	return name.startsWith("Maybe_") || name.startsWith("msTuple_") || name.startsWith("msAnon_")
+		|| name.startsWith("msUnion_") || name.startsWith("msLockedCell_");
+}
+
+export function nominalTypeKey(t: Type): string {
+	const sym = t.sym;
+	if (sym != null) return `${sym.modulePath}:${sym.name}:${sym.disamb}`;
+	if (isCompilerSpelledTypeName(t.typeName) || BUILTIN_TYPE_NAMES.includes(t.typeName)) return t.typeName + "{" + t.typeNames.join(",") + "}";
+	throw new Error(`internal: named type '${t.typeName}' (kind ${t.kind as number}) has no declaring symbol`);
+}
+
+function isNominalKind(k: TypeKind): boolean {
+	return k == TypeKind.Struct || k == TypeKind.Union || k == TypeKind.Enum || k == TypeKind.Distinct;
+}
+
+function genericHeadKey(gi: Type): string {
+	let base: Type | null = gi.typeExtra;
+	let hops = 0;
+	while (base != null && hops < 8
+			&& (base.kind == TypeKind.Ref || base.kind == TypeKind.Ptr || base.kind == TypeKind.GenericInstance)) {
+		base = base.kind == TypeKind.GenericInstance ? base.typeExtra : base.typeReturn;
+		hops = hops + 1;
+	}
+	if (base != null && base.typeName != "") return nominalTypeKey(base);
+	return gi.typeName;
+}
+
 // Structural key for tuple naming. tupleTypeName is the SINGLE source of the
 // msTuple_<hash> name, so this key need only be internally stable.
 function typeKey(t: Type): string {
 	if (t == null) return "null";
+	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKey(t.typeReturn);
+	if (t.typeName != "" && isNominalKind(t.kind)) return nominalTypeKey(t);
 	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.GenericInstance) return t.typeName;
 	return match (t.kind) {
 		TypeKind.GenericInstance => {
-			let k = t.typeName + "<";
+			let k = genericHeadKey(t) + "<";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
@@ -2639,6 +2677,16 @@ function typeKey(t: Type): string {
 		TypeKind.Var => "Var(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
 		TypeKind.Sink => "Sink(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
 		TypeKind.Cursor => "Cursor(" + (t.typeReturn != null ? typeKey(t.typeReturn) : "any") + ")",
+		TypeKind.Struct => {
+			let k = "anon(";
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				if (i > 0) k = k + ",";
+				k = k + (i < t.typeNames.length ? t.typeNames[i] : "") + ":" + (t.typeChildren[i] != null ? typeKey(t.typeChildren[i]) : "any");
+				i += 1;
+			}
+			return k + ")";
+		},
 		_ => t.kind.toString(),
 	};
 }
@@ -4914,4 +4962,30 @@ test "a defaulted binding sheds null" {
 	assert destrDefaultedType(createUnion([stringType(), nullType()])) == stringType();
 	assert destrDefaultedType(int32Type()) == int32Type();
 	assert destrDefaultedType(null) == null;
+}
+
+import { makeSymbol } from "./symbol";
+
+test "a tuple names its nominal members by declaring symbol" {
+	const a = createStruct("TupleCell", ["text"], [stringType()], false);
+	a.sym = makeSymbol("TupleCell", SymbolKind.Struct, a, false);
+	a.sym.modulePath = "/m/a.ms";
+	const b = createStruct("TupleCell", ["count"], [int32Type()], false);
+	b.sym = makeSymbol("TupleCell", SymbolKind.Struct, b, false);
+	b.sym.modulePath = "/m/b.ms";
+	const sameAsA = createStruct("TupleCell", ["text"], [stringType()], false);
+	sameAsA.sym = a.sym;
+	assert tupleTypeName(createTuple([a, int32Type()])) != tupleTypeName(createTuple([b, int32Type()]));
+	assert tupleTypeName(createTuple([a, int32Type()])) == tupleTypeName(createTuple([sameAsA, int32Type()]));
+}
+
+test "a tuple refuses a named member that has no declaring symbol" {
+	const orphan = createStruct("OrphanCell", ["v"], [int32Type()], false);
+	let refused = "";
+	try {
+		tupleTypeName(createTuple([orphan, int32Type()]));
+	} catch (e) {
+		refused = e.message;
+	}
+	assert refused.contains("OrphanCell");
 }
