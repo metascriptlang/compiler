@@ -144,11 +144,13 @@ export function fromCodePoint(cp: number): string {
 }
 
 // Number/bool to string (called by builtinLower .toString())
+@compilerFunc
 export function msNumberToString(n: number): string {
 	@emit(`return String(${n});`);
 	unreachable;
 }
 
+@compilerFunc
 export function msNumberToStringRadix(n: number, radix: number): string {
 	@emit(`return ${n}.toString(${radix});`);
 	unreachable;
@@ -164,21 +166,25 @@ export function msIntToString(n: int64): string {
 	unreachable;
 }
 
+@compilerFunc
 export function msUint64ToString(n: uint64): string {
 	@emit(`return String(${n});`);
 	unreachable;
 }
 
+@compilerFunc
 export function msIntToStringRadix(n: int64, radix: number): string {
 	@emit(`return ${n}.toString(${radix});`);
 	unreachable;
 }
 
+@compilerFunc
 export function msUint64ToStringRadix(n: uint64, radix: number): string {
 	@emit(`return ${n}.toString(${radix});`);
 	unreachable;
 }
 
+@compilerFunc
 export function msBoolToString(b: boolean): string {
 	@emit(`return ${b} ? "true" : "false";`);
 	unreachable;
@@ -195,6 +201,7 @@ export function msStringHash(s: string): int32 {
 }
 
 // .length on string → UTF-16 code units (LANG.md Index-Space Contract) = native.
+@compilerFunc
 export function msStringLength(s: string): int32 {
 	@emit(`return ${s}.length;`);
 	unreachable;
