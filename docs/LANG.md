@@ -2716,6 +2716,53 @@ that parameter ("… its address is taken implicitly only for an extern C functi
 parameter 'ref x: S' or 'x: S'"), a struct of another type, and the initializer of a
 `Ptr<S> | null` variable ("… its address is never taken implicitly"). Measured 2026-09-25.
 
+#### Lifecycle hooks of a type
+
+A struct or class takes over a lifecycle operation by declaring a hook, as a method of the class or
+as an extension function in the module that declares the type (`function onDestroy(this x: T)`).
+The six names are `onDestroy`, `onCopy`, `onMove`, `onMoved`, `onTrace` and `onClone`; user hooks run
+where the DRC runs, so on C and never on JS.
+
+The receiver names the type the hook belongs to, and the checker refuses a hook whose receiver
+cannot be that type, at its declaration, with an error that names the hook and the shapes it takes.
+Measured 2026-10-04 on a compiler built from tree `d9a6aa3984132575a9084cdd2df4734432c3aa92`, with `struct S` and `class C`:
+
+| receiver | on a struct `S` | on a class `C` |
+|---|---|---|
+| `this x: S` | `onDestroy`, `onClone` | every hook |
+| `this ref x: S`, `this x: Var<S>` | every hook but `onClone` | refused |
+| `this x: Readonly<T>` | `onDestroy`, `onClone` | `onDestroy`, `onClone` |
+| `Ptr<T>`, `Ref<T>`, `Cursor<T>`, `Borrow<T>`, `T[]`, `T \| null`, a primitive, an enum, an alias of the type | refused | refused |
+
+A bare generic parameter is refused too (measured with `onDestroy`). A hook that writes its receiver
+(`onCopy`, `onMove`, `onMoved`, `onTrace`) takes the struct by reference, because `this x: S` would be
+a copy of the destination. A class is already the reference to its object, so `this ref x: C` and
+`Var<C>` would point at that reference: `onDestroy` then read its own parameter through a misaligned
+address and crashed at scope exit (measured on the compiler before the check, `--gc=drc`).
+
+Before the check, `onDestroy` accepted every refused shape on C. Its hook never ran for `Ptr<T>`,
+`Ref<T>`, `Cursor<T>`, `Borrow<T>`, `T[]`, a primitive, an enum, a bare `T` or an alias, and ran as
+`T`'s hook for `T | null`. Every hook accepted `Ptr<S>` on C and JS.
+
+On C, corpus `hookReceiverSpellings` counts `onCopy` once, `onMove` twice and `onMoved` three times
+for a struct, whether the receiver is `this ref x: S` or `Var<S>`. Class values are assigned by
+pointer, so in the same program only `onDestroy` runs on them.
+
+Still accepted without running, or caught late (measured 2026-10-04, same compiler):
+
+- `onClone` is bound to nothing: no copy probed (struct or class assignment, `slice`) calls it.
+- A hook declared outside the type's module is not refused and never runs (measured with `onDestroy`
+  on a struct).
+- A hook on a `distinct int32` or `distinct string` type is accepted and never runs.
+- `onTrace` is called with the receiver only: `(this x: C)` runs under `--gc=orc`, and
+  `(this x: C, env: Ptr<void>)` fails in the C compiler ("too few arguments"). An extra parameter on
+  `onDestroy`, or a second parameter of another type on `onCopy`, fails the same way instead of at the
+  declaration.
+- A return value on `onDestroy` is accepted.
+
+Not measured: the hooks on JS beyond "compiles", generic extension hooks across modules after this
+check, `--hcr`.
+
 ### 6. Nullable Types and `Maybe<T>` (Deep Dive)
 
 MetaScript uses a unified `T | null` syntax for all nullable types. Under the hood, the compiler chooses the optimal representation based on the inner type — no user intervention needed.
