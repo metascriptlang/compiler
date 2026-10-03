@@ -230,7 +230,23 @@ function nativeDependencyPaths(srcPath: string, compileCmd: string): string[] {
 	return dependencyPathsIn(nativeDepFile(srcPath, compileCmd));
 }
 
+const _dependenciesByStamp = new HashMap<string, string>();
+
 function dependencyPathsIn(path: string): string[] {
+	const stamp = changeStamp(path);
+	if (stamp == "") return parseDependencyFile(path);
+	const known = _dependenciesByStamp.get(path);
+	const prefix = `${stamp}|`;
+	if (known != null && known.startsWith(prefix)) {
+		const listed = known.substring(prefix.length, known.length);
+		return listed == "" ? [] : listed.split("\n");
+	}
+	const paths = parseDependencyFile(path);
+	_dependenciesByStamp.set(path, `${prefix}${paths.join("\n")}`);
+	return paths;
+}
+
+function parseDependencyFile(path: string): string[] {
 	const result: string[] = [];
 	if (!exists(path)) return result;
 	const content = try readFile(path) catch "";
@@ -336,10 +352,27 @@ export function fullCompileCmd(ccOption: number, mode: number, extraFlags: strin
 // fingerprint and collide in the global content-addressed cache (`~/.metascript/cache/objects/`).
 // Exported so parallel compile workers can compute per-item fingerprints explicitly
 // (avoids any shared module-state read-after-write races).
+const _sourceIdentityByStamp = new HashMap<string, string>();
+
+function sourceIdentity(path: string): string {
+	const stamp = changeStamp(path);
+	if (stamp == "") return readSourceIdentity(path);
+	const known = _sourceIdentityByStamp.get(path);
+	const prefix = `${stamp}|`;
+	if (known != null && known.startsWith(prefix)) return known.substring(prefix.length, known.length);
+	const identity = readSourceIdentity(path);
+	_sourceIdentityByStamp.set(path, `${prefix}${identity}`);
+	return identity;
+}
+
+function readSourceIdentity(path: string): string {
+	const src = try readFile(path) catch "";
+	return `${hashContent(src)}:${src.byteLength}`;
+}
+
 export function computeFingerprint(srcPath: string, compileCmd: string): string {
-	const src = try readFile(srcPath) catch "";
 	registerNativeProjectDep(srcPath);
-	let result = `${hashContent(src)}:${src.byteLength}:${compileCmd}:${VERSION}:${platform}:${objectStamp()}`;
+	let result = `${sourceIdentity(srcPath)}:${compileCmd}:${VERSION}:${platform}:${objectStamp()}`;
 	const deps = nativeDependencyPaths(srcPath, compileCmd);
 	if (deps.length == 0) return result + `:dependencies-unresolved:${srcPath}`;
 	for (const path of deps) {
@@ -1069,6 +1102,29 @@ test "a file rewritten to the same size at once hashes to its new content" {
 	assert hashFile(path) == hashFileContent(path);
 	remove(path);
 	assert hashFile(path) == "absent";
+}
+
+test "a dependency file rewritten to the same size at once lists its new paths" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-deps-stamp-${performance.now()}.d`;
+	writeFile(path, "native: a.h b.h\n");
+	assert dependencyPathsIn(path).join(",") == "a.h,b.h";
+	assert dependencyPathsIn(path).join(",") == "a.h,b.h";
+	writeFile(path, "native: c.h d.h\n");
+	assert dependencyPathsIn(path).join(",") == "c.h,d.h";
+	remove(path);
+	assert dependencyPathsIn(path).length == 0;
+}
+
+test "a native source rewritten to the same size at once moves its fingerprint" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-native-stamp-${performance.now()}.c`;
+	writeFile(path, "int a;\n");
+	const before = computeFingerprint(path, "cc");
+	assert computeFingerprint(path, "cc") == before;
+	writeFile(path, "int b;\n");
+	assert computeFingerprint(path, "cc") != before;
+	remove(path);
 }
 
 test "a runtime or vendor file edit moves the support-tree stamp" {
