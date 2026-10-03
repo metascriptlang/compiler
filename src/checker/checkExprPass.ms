@@ -675,7 +675,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (isAsgn) { reportSharedWrite(ctx, d.left); }
 			if (isAsgn && !isLocation(d.left) && d.left.kind != NodeKind.ArrayLiteral && d.left.kind != NodeKind.ObjectLiteral
 					&& d.left.nodeType != null && d.left.nodeType.kind != TypeKind.Error) {
-				addError(ctx, "this expression cannot be assigned to — only a variable, a field or an element can", d.left.location.line, d.left.location.column);
+				addError(ctx, "this expression cannot be assigned to — it is not a variable, nor a field or element reached from one or through a reference", d.left.location.line, d.left.location.column);
 			}
 			// Block assignment to read-only properties
 			if (isAsgn && d.left.kind == NodeKind.MemberExpr) {

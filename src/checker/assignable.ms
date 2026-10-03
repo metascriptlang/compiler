@@ -34,9 +34,18 @@ export struct WriteCheck {
 function isDeclaredValueStorage(t: Type | null): boolean {
 	if (t == null) return false;
 	return match (t.kind) {
-		TypeKind.Struct => t.sym != null && t.sym.symbolKind == SymbolKind.Struct,
 		TypeKind.GenericInstance => t.typeExtra != null && isDeclaredValueStorage(t.typeExtra),
-		TypeKind.SizedArray | TypeKind.Array => true,
+		TypeKind.Array => true,
+		_ => holdsInlineValue(t),
+	};
+}
+
+function holdsInlineValue(t: Type | null): boolean {
+	if (t == null) return false;
+	return match (t.kind) {
+		TypeKind.Struct => t.sym != null && t.sym.symbolKind == SymbolKind.Struct,
+		TypeKind.GenericInstance => t.typeExtra != null && holdsInlineValue(t.typeExtra),
+		TypeKind.SizedArray => true,
 		_ => false,
 	};
 }
@@ -76,8 +85,12 @@ export function checkWrite(target: Node, asRefArg: boolean): WriteCheck {
 }
 
 export function isLocation(node: Node): boolean {
-	const k = node.kind;
-	return k == NodeKind.Identifier || k == NodeKind.MemberExpr || k == NodeKind.ArrayAccess || k == NodeKind.HiddenDeref;
+	if (node.kind == NodeKind.Identifier || node.kind == NodeKind.HiddenDeref) return true;
+	let base: Node | null = null;
+	if (node.kind == NodeKind.MemberExpr) base = (node.data as MemberExprData).object;
+	else if (node.kind == NodeKind.ArrayAccess) base = (node.data as ArrayAccessData).array;
+	if (base == null) return false;
+	return !holdsInlineValue(base.nodeType) || isLocation(base);
 }
 
 export function readonlyPrefixType(target: Node): Type | null {
