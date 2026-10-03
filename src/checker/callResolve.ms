@@ -3866,15 +3866,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		if (needsDeref && d.object.kind != NodeKind.HiddenDeref) {
 			const tok = createToken(TokenKind.Ident, "", node.location.line);
 			const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
-			// ONE C-level peel. Field resolution peeled everything (Var AND Ref)
-			// to find the struct, but a single HiddenDeref emits `(*obj)`. The
-			// object's nodeType flavor differs between read sites (checker
-			// already peeled Var) and write sites (still Var) — the SYMBOL's
-			// declared type is the stable anchor for Var params.
-			const symT = d.object.resolvedSym != null ? d.object.resolvedSym.symbolType : null;
-			if (symT != null && symT.kind == TypeKind.Var && symT.typeReturn != null) {
-				derefNode.nodeType = symT.typeReturn;
-			} else if ((ptrType.kind == TypeKind.Var || ptrType.kind == TypeKind.Ref) && ptrType.typeReturn != null) {
+			if ((ptrType.kind == TypeKind.Var || ptrType.kind == TypeKind.Ref) && ptrType.typeReturn != null) {
 				derefNode.nodeType = ptrType.typeReturn;
 			} else {
 				derefNode.nodeType = resolvedObjType;

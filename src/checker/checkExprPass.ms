@@ -634,13 +634,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// synthesis instead of widening to x's declared type.
 			const boundary = ctx.readonlyBoundary;
 			const capturedView = boundary != null && isCapturableValue(sym) && isCapturedAcross(ctx.table, d.name, sym, boundary);
-			if (ctx.initTracker.leftPartOfAsgn > 0) {
-				node.nodeType = capturedView ? propagateReadonlyView(sym.symbolType) : sym.symbolType; return;
-			}
-			// Var (out/ref) params auto-deref on reads (reference parity: tyVar use).
 			let readType = sym.symbolType;
 			if (readType != null && readType.kind == TypeKind.Var && readType.typeReturn != null) {
 				readType = readType.typeReturn;
+			}
+			if (ctx.initTracker.leftPartOfAsgn > 0) {
+				node.nodeType = capturedView ? propagateReadonlyView(readType) : readType; return;
 			}
 			const flowType = getFlowTypeOfReference(node, readType);
 			node.nodeType = capturedView ? propagateReadonlyView(flowType) : flowType;
