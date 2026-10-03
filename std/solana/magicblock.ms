@@ -2,7 +2,6 @@ import {
 	Account,
 	Bytes,
 	InstructionAccount,
-	MAX_CPI_ACCOUNTS,
 	createProgramAccountSeeded,
 	invokeList,
 	putPubkey,
@@ -32,6 +31,9 @@ when (testBuild) {
 	import { HostAccount, invocations, run, signerIs, textBytes } from "./host";
 }
 
+const MAX_COMMIT_ACCOUNTS: uint64 = 16;
+const MAX_TASK_ACCOUNTS: uint64 = 16;
+
 export function magicProgram(this typeof Pubkey): Pubkey {
 	return @comptime { return pubkeyOf("Magic11111111111111111111111111111111111111"); };
 }
@@ -49,7 +51,7 @@ function scheduleCommit(
 ): Result<uint64, ProgramError> {
 	if (!payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
 	const prefix: uint64 = feeVault === null ? 2 : 3;
-	if (prefix + (committed.length as uint64) > MAX_CPI_ACCOUNTS) {
+	if (prefix + (committed.length as uint64) > MAX_COMMIT_ACCOUNTS) {
 		return Result.err(ProgramError.invalidArgument());
 	}
 	let metas: InstructionAccount[16];
@@ -171,7 +173,7 @@ function scheduled(
 ): Result<uint64, ProgramError> {
 	if (!payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
 	const count = taskAccounts.length as uint64;
-	if (1 + count > MAX_CPI_ACCOUNTS) { return Result.err(ProgramError.invalidArgument()); }
+	if (1 + count > MAX_TASK_ACCOUNTS) { return Result.err(ProgramError.invalidArgument()); }
 	let metas: InstructionAccount[16];
 	metas[0] = InstructionAccount.writableSigner(payer);
 	let storage: uint8[1024] = [];

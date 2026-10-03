@@ -12,9 +12,9 @@ export macro invokeSigned(
 		error("accounts must be written as a list at the call: " +
 			"[InstructionAccount.writable(vault), InstructionAccount.readonlySigner(owner)]", accounts);
 	}
-	if (accounts.elements.length > 16) {
-		error("a CPI lists at most 16 accounts here, and the list has " +
-			(accounts.elements.length as int32) + "; a longer list is invokeList over a run-time list", accounts);
+	if (accounts.elements.length > 64) {
+		error("a CPI lists at most 64 accounts, the runtime's limit on the account infos it takes, " +
+			"and the list has " + (accounts.elements.length as int32), accounts);
 	}
 	const blanks: Node[] = [];
 	let position = 0;

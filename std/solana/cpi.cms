@@ -19,7 +19,7 @@ extern function msSolInvokeSigned(
 	signerCount: uint64,
 ): uint64;
 
-export const MAX_CPI_ACCOUNTS: uint64 = 16;
+export const MAX_CPI_ACCOUNTS: uint64 = 64;
 
 // The runtime's SolAccountMeta: the key is the address of the account's key in the input buffer.
 export struct InstructionAccount {
@@ -106,7 +106,7 @@ export function invokeList(
 	if (accounts.length > MAX_CPI_ACCOUNTS as int32) {
 		return Result.err(ProgramError.invalidArgument());
 	}
-	let infos: CpiAccount[16];
+	let infos: CpiAccount[64];
 	return invokeCpi(program, accounts, infos[0..accounts.length], data, length, signers);
 }
 

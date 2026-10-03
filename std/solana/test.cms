@@ -1421,8 +1421,8 @@ function forwarded(first: Account, signers: Span<SignerSeeds> = []): Result<uint
 }
 
 function listed(first: Account, count: uint64): Result<uint64, ProgramError> {
-	let metas: InstructionAccount[17];
-	for (let index = 0; index < 17; index++) {
+	let metas: InstructionAccount[65];
+	for (let index = 0; index < 65; index++) {
 		metas[index] = InstructionAccount.flagged(first, index % 2 == 0, index % 3 == 0);
 	}
 	let storage: uint8[4] = [];
@@ -1482,7 +1482,8 @@ function invokeStep(): Result<uint64, ProgramError> {
 		);
 	}
 	if (op == 7) { return listed(a, 3); }
-	if (op == 8) { return listed(a, 17); }
+	if (op == 8) { return listed(a, 65); }
+	if (op == 10) { return listed(a, 64); }
 	if (op == 9) {
 		return invoke(
 			keyOf(9),
@@ -1554,7 +1555,18 @@ test "sixteen accounts are sent, in order, and the sixteenth keeps its own flags
 	assert !sent.accounts[15].writable && sent.accounts[15].signer;
 }
 
-test "a run-time list sends its accounts, and one past sixteen or data past its buffer is refused" {
+test "a run-time list sends sixty-four accounts in order with their own flags" {
+	assert invokeRun(10) == 0;
+	const sent = invocations()[0];
+	assert sent.accounts.length == 64;
+	for (let index = 0; index < 64; index++) {
+		assert sent.accounts[index].key.equals(keyOf(1));
+		assert sent.accounts[index].writable == (index % 2 == 0);
+		assert sent.accounts[index].signer == (index % 3 == 0);
+	}
+}
+
+test "a run-time list sends its accounts, and one past sixty-four or data past its buffer is refused" {
 	assert invokeRun(7) == 0;
 	const sent = invocations()[0];
 	assert sent.accounts.length == 3;
