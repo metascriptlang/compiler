@@ -285,6 +285,8 @@ function watchWarm(): void {
 		{ file: "boxCtor.ms", target: "box.ms", warm: true, fails: false },
 		{ file: "boxOverride.ms", target: "box.ms", warm: false, fails: false },
 		{ file: "boxNoHook.ms", target: "box.ms", warm: false, fails: false },
+		{ file: "logicStd.ms", target: "logic.ms", warm: true, fails: false },
+		{ file: "logicBody.ms", target: "logic.ms", warm: true, fails: false },
 	];
 	replayMatchesCold(tag, dir, `${FIXTURES}/watchWarm`, ["logic.ms", "view.ms", "shapes.ms", "box.ms"], steps);
 	console.log("ok   hcrWatchWarm");
