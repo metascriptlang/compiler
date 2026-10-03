@@ -18,16 +18,10 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
-import { lookupSymbol, getCtorParamTypes, hasFlag, overloadWinner, SymbolFlag } from "../../checker/symbol";
+import { getCtorParamTypes, hasFlag, SymbolFlag } from "../../checker/symbol";
 
-// Holds the active ctx for the current walk. Closure over `ctx` would be
-// cleaner but walkNode's visitor signature is fixed to (node) => node.
-let activeCtx: TransformContext | null = null;
-
-export function lowerRestParams(program: Node, ctx: TransformContext): Node {
-	activeCtx = ctx;
+export function lowerRestParams(program: Node, _ctx: TransformContext): Node {
 	walkNode(program, lowerRest);
-	activeCtx = null;
 	return program;
 }
 
@@ -97,18 +91,6 @@ function lowerRest(node: Node): Node {
 		return node;
 	}
 	let sym = callee.resolvedSym;
-	// Synthetic calls inserted by earlier transforms (stringConcatFlatten,
-	// nativeLower) emit bare Identifier callees with no resolvedSym. Look the
-	// name up in the global symbol table so varargs packing still applies.
-	if (sym == null && callee.kind == NodeKind.Identifier
-		&& activeCtx != null && activeCtx.checkerCtx != null) {
-		const id = callee.data as IdentifierData;
-		const found = lookupSymbol(activeCtx.checkerCtx.table, id.name);
-		if (found != null) {
-			sym = found;
-			callee.resolvedSym = found;
-		}
-	}
 	if (sym == null) return node;
 	sym = overloadWinner(sym, d.resolvedOverloadIdx);
 	if (sym.builtinKind != "" || hasFlag(sym, SymbolFlag.ImportC)) return node;
