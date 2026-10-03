@@ -843,6 +843,11 @@ when (testBuild) {
 			const typed = try external<Mint>(0);
 			return signed(transferTokens(from, to, typed, authority, 250), ["auth", [5]]);
 		}
+		if (op == 15) {
+			const system = try account(4);
+			const program = try account(5);
+			return createAssociatedToken(payer, target, authority, mint, system, program);
+		}
 		if (op == 0) { return mintTo(token, mint, target, authority, 500); }
 		if (op == 1) {
 			const extended = Pubkey.token2022Program();
@@ -935,6 +940,26 @@ when (testBuild) {
 		const program = created.accounts[5];
 		assert program.key.equals(Pubkey.tokenProgram()) && !program.writable;
 		assert created.data.length == 1 && created.data[0] == 1;
+	}
+
+	test "createAssociatedToken sends discriminator 0 with the six accounts and their flags" {
+		const accounts = cpiAccounts();
+		accounts[1].lamports = 0;
+		accounts[3].lamports = 10000000;
+		assert resultOf(accounts, 15, cpiEntry) == 0;
+		const created = invocations()[0];
+		assert created.program.equals(Pubkey.associatedTokenProgram());
+		assert created.accounts.length == 6;
+		assert created.accounts[0].key.equals(keyOf(4)) && created.accounts[0].writable;
+		assert created.accounts[0].signer;
+		assert created.accounts[1].key.equals(keyOf(2)) && created.accounts[1].writable;
+		assert !created.accounts[1].signer;
+		assert created.accounts[2].key.equals(keyOf(3)) && !created.accounts[2].writable;
+		assert !created.accounts[2].signer;
+		assert created.accounts[3].key.equals(keyOf(1)) && !created.accounts[3].writable;
+		assert created.accounts[4].key.equals(keyOf(0)) && !created.accounts[4].writable;
+		assert created.accounts[5].key.equals(Pubkey.tokenProgram()) && !created.accounts[5].writable;
+		assert created.data.length == 1 && created.data[0] == 0 && created.signers == 0;
 	}
 
 	function authSigner(): uint8[][] {
