@@ -2562,7 +2562,7 @@ export function tupleTypeName(t: Type | null): string {
 	return "msTuple_" + _stdHashToBase36(key);
 }
 
-const BUILTIN_TYPE_NAMES: string[] = ["Result", "Promise", "Iterator", "IteratorResult"];
+const BUILTIN_TYPE_NAMES: string[] = ["Result", "Promise", "Iterator", "IteratorResult", "BitSet"];
 
 // A name the compiler spells itself: it already encodes its owner and arguments, so it is its own
 // identity and carries no declaring symbol.
@@ -2575,11 +2575,17 @@ export function isCompilerSpelledTypeName(name: string): boolean {
 		|| name.startsWith("msUnion_") || name.startsWith("msLockedCell_");
 }
 
+export function hasTypeIdentity(t: Type): boolean {
+	if (t.sym != null) return true;
+	if (t.kind == TypeKind.Distinct && t.typeFlags.has(TypeFlag.BrandWiden)) return true;
+	return isCompilerSpelledTypeName(t.typeName) || BUILTIN_TYPE_NAMES.includes(t.typeName);
+}
+
 export function nominalTypeKey(t: Type): string {
 	const sym = t.sym;
 	if (sym != null) return `${sym.modulePath}:${sym.name}:${sym.disamb}`;
-	if (isCompilerSpelledTypeName(t.typeName) || BUILTIN_TYPE_NAMES.includes(t.typeName)) return t.typeName + "{" + t.typeNames.join(",") + "}";
-	throw new Error(`internal: named type '${t.typeName}' (kind ${t.kind as number}) has no declaring symbol`);
+	if (!hasTypeIdentity(t)) throw new Error(`internal: named type '${t.typeName}' (kind ${t.kind as number}) has no declaring symbol`);
+	return t.typeName + "{" + t.typeNames.join(",") + "}";
 }
 
 function isNominalKind(k: TypeKind): boolean {
@@ -2603,7 +2609,7 @@ function genericHeadKey(gi: Type): string {
 function typeKey(t: Type): string {
 	if (t == null) return "null";
 	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKey(t.typeReturn);
-	if (t.typeName != "" && isNominalKind(t.kind)) return nominalTypeKey(t);
+	if (t.typeName != "" && isNominalKind(t.kind)) return t.typeName + "_" + _stdHashToBase36(nominalTypeKey(t));
 	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.GenericInstance) return t.typeName;
 	return match (t.kind) {
 		TypeKind.GenericInstance => {
@@ -3201,13 +3207,13 @@ function copyTypeForSubst(t: Type): Type {
 	result.typeFlags = t.typeFlags;
 	result.typeValue = t.typeValue;
 	result.callConv = t.callConv;
+	result.sym = t.sym;
 	for (let ci = 0; ci < t.typeChildren.length; ci += 1) {
 		result.typeChildren.push(null as unknown as Type);
 		result.typeChildren[ci] = t.typeChildren[ci];
 	}
 	for (let ni = 0; ni < t.typeNames.length; ni += 1) {
 		result.typeNames.push("");
-	result.sym = t.sym;
 		result.typeNames[ni] = t.typeNames[ni];
 	}
 	for (let oi = 0; oi < t.attachedOps.length; oi += 1) {
