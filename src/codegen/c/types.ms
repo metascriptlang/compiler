@@ -6,7 +6,7 @@
 
 import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { genericParamsOf, enumStorageKind } from "../../checker/types";
+import { genericParamsOf, enumStorageKind, isValueStorage } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
@@ -767,12 +767,7 @@ export function isPointerType(t: Type): boolean {
 // Reference parity: value types that can't be nil in C.
 // Used by codegen to emit {0} instead of MS_NIL, and memset instead of NULL assignment.
 export function isNilableValueType(t: Type): boolean {
-	if (t == null) return false;
-	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return isNilableValueType(t.typeReturn);
-	const k = t.kind;
-	return k == TypeKind.Struct || k == TypeKind.Array || k == TypeKind.GenericInstance
-		|| k == TypeKind.Tuple || k == TypeKind.String || k == TypeKind.Function
-		|| k == TypeKind.Union;
+	return isValueStorage(t);
 }
 
 // ===== ccgIntroducedPtr (Reference: reference codegen utils parity) =====

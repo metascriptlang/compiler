@@ -3570,6 +3570,15 @@ function genericScan(t: Type | null, active: TypeVisitSet): boolean {
 
 // ===== Type Query Helpers =====
 
+export function isValueStorage(t: Type | null): boolean {
+	if (t == null) return false;
+	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return isValueStorage(t.typeReturn);
+	const k = t.kind;
+	return k == TypeKind.Struct || k == TypeKind.Array || k == TypeKind.GenericInstance
+		|| k == TypeKind.Tuple || k == TypeKind.String || k == TypeKind.Function
+		|| k == TypeKind.Union;
+}
+
 export function isNumeric(t: Type | null): boolean {
 	if (t == null) return false;
 	return t.kind == TypeKind.Number || t.kind == TypeKind.Int8 ||
