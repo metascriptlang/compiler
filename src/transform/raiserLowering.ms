@@ -29,6 +29,7 @@ import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerBorrow } from "./lowering/borrowLower";
 import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
+import { insertVarParamDerefs } from "./native/varParamDeref";
 import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerAggregateEquality, lowerUserOperators } from "./lowering/operatorLower";
 import { liftDestructors } from "./lowering/destructorLifting";
@@ -70,5 +71,6 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerUserOperators(result, ctx);
 	result = unwrapMaybe(result, ctx);
 	result = liftDestructors(result, ctx, false);
+	result = insertVarParamDerefs(result, ctx);
 	return result;
 }

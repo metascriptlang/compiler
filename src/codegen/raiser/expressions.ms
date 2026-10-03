@@ -9,13 +9,14 @@ import {
 	CallExprData, IdentifierData, MemberExprData,
 	ConditionalExprData, TypeAssertionData, UpdateExprData,
 	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
-	MoveExprData, VariableDeclData, AwaitExprData, NewExprData,
+	MoveExprData, OutExprData, VariableDeclData, AwaitExprData, NewExprData,
 	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData
 } from "../../ast/node";
-import { RaiserOpcode, RaiserConvClass, raiserABC, convOperand } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserConvClass, raiserABC, raiserABx, convOperand } from "../../raiser/bytecode";
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
+import { nonNullMemberOfNullable } from "../../checker/compat";
 import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
@@ -512,6 +513,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			const d = node.data as MoveExprData;
 			return compileExpr(s, d.moveArg);
 		},
+		NodeKind.OutExpr => { return compileExpr(s, (node.data as OutExprData).outArg); },
 		NodeKind.AwaitExpr => {
 			const d = node.data as AwaitExprData;
 			const futReg = compileExpr(s, d.awaitArg);
@@ -526,9 +528,19 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		// (jsgen.ms:81-82). Without these arms the chain `o.inner.msg` on a
 		// Ref<Struct> field silently fell through to LoadConst nil, breaking
 		// every @comptime access on cross-module Ref<Struct> types.
-		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
+		NodeKind.HiddenDeref => {
 			const hd = node.data as HiddenDerefData;
-			return compileExpr(s, hd.expr);
+			const pointer = compileExpr(s, hd.expr);
+			if (!heldByLocation(s, node.nodeType)) return pointer;
+			const dest = allocReg(s);
+			emitInst(s, raiserABC(RaiserOpcode.LoadDeref, dest, pointer, 0));
+			return dest;
+		},
+		NodeKind.HiddenAddr => {
+			const hd = node.data as HiddenDerefData;
+			const t = skipModifier(node.nodeType);
+			if ((t != null && t.kind == TypeKind.Borrow) || !heldByLocation(s, hd.expr.nodeType)) return compileExpr(s, hd.expr);
+			return compileAddress(s, hd.expr);
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			const hd = node.data as HiddenStdConvData;
@@ -637,6 +649,64 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 	return -1;
 }
 
+function isPointerTyped(node: Node): boolean {
+	let t = skipModifier(node.nodeType);
+	const nonNull = t != null ? nonNullMemberOfNullable(t) : null;
+	if (nonNull != null) t = nonNull;
+	return t != null && t.kind == TypeKind.Ptr;
+}
+
+function heldByLocation(s: RaiserCompState, pointee: Type | null): boolean {
+	return pointee != null && !needsValueAssign(s, pointee);
+}
+
+function derefTarget(s: RaiserCompState, target: Node): Node | null {
+	if (target.kind == NodeKind.HiddenDeref) {
+		if (!heldByLocation(s, target.nodeType)) return null;
+		return (target.data as HiddenDerefData).expr;
+	}
+	if (target.kind == NodeKind.ArrayAccess) {
+		const d = target.data as ArrayAccessData;
+		const held = skipModifier(d.array.nodeType);
+		if (held != null && held.kind == TypeKind.Ptr && heldByLocation(s, target.nodeType)) return d.array;
+	}
+	return null;
+}
+
+function compileAddress(s: RaiserCompState, place: Node): int32 {
+	const dest = allocReg(s);
+	if (place.kind == NodeKind.Identifier) {
+		const global = resolveGlobal(s, place.resolvedSym);
+		if (global >= 0) {
+			emitInst(s, raiserABx(RaiserOpcode.AddrGlobal, dest, global));
+			return dest;
+		}
+		const local = resolveLocal(s, (place.data as IdentifierData).name);
+		if (local >= 0) {
+			emitInst(s, raiserABC(RaiserOpcode.AddrReg, dest, local, 0));
+			return dest;
+		}
+	} else if (place.kind == NodeKind.ArrayAccess) {
+		const d = place.data as ArrayAccessData;
+		const held = skipModifier(d.array.nodeType);
+		if (held != null && held.kind == TypeKind.Ptr) return compileExpr(s, d.array);
+		const arrReg = compileExpr(s, d.array);
+		const idxReg = compileExpr(s, d.index);
+		emitInst(s, raiserABC(RaiserOpcode.AddrIndex, dest, arrReg, idxReg));
+		return dest;
+	} else if (place.kind == NodeKind.MemberExpr) {
+		const d = place.data as MemberExprData;
+		const objReg = compileExpr(s, d.object);
+		emitInst(s, raiserABC(RaiserOpcode.AddrField, dest, objReg, addConst(s, raiserString(d.property))));
+		return dest;
+	} else if (place.kind == NodeKind.HiddenDeref) {
+		return compileExpr(s, (place.data as HiddenDerefData).expr);
+	}
+	const msg = `internal: the Raiser VM has no address for a ${place.kind.toString()}`;
+	queueRaiserCompileError(msg, place.location.line, place.location.column);
+	return emitTrapNil(s, msg);
+}
+
 function refuseByteView(s: RaiserCompState, node: Node, source: Type | null, target: Type | null): int32 {
 	const refusal = byteViewRefusal(source, target);
 	if (refusal == "") return -1;
@@ -663,8 +733,14 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	if (op == "=") {
 		const assigned = compileValueAssign(s, d.left, d.right);
 		if (assigned >= 0) return assigned;
-		if (d.left.kind == NodeKind.HiddenDeref || isRefParamTarget(d.left)) {
-			const msg = "cannot assign through a pointer or ref parameter at comptime: the Raiser VM writes in place only into a struct or an array";
+		const through = derefTarget(s, d.left);
+		if (through != null) {
+			const srcReg = emitValueCopy(s, compileExpr(s, d.right), d.left.nodeType);
+			emitInst(s, raiserABC(RaiserOpcode.StoreDeref, compileExpr(s, through), 0, srcReg));
+			return srcReg;
+		}
+		if (isRefParamTarget(d.left)) {
+			const msg = "internal: a ref parameter reached the Raiser assignment without its deref";
 			queueRaiserCompileError(msg, node.location.line, node.location.column);
 			return emitTrapNil(s, msg);
 		}
@@ -730,6 +806,17 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		const valReg = compileExpr(s, otherSide);
 		const dest = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.IsKind, dest, valReg, RaiserValueKind.Nil as number));
+		if (op == "===" || op == "==") return dest;
+		const negated = allocReg(s);
+		emitLogicalNot(s, negated, dest);
+		return negated;
+	}
+
+	if (isEqOp && (isPointerTyped(d.left) || isPointerTyped(d.right))) {
+		const lReg = compileExpr(s, d.left);
+		const rReg = compileExpr(s, d.right);
+		const dest = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.SameLoc, dest, lReg, rReg));
 		if (op == "===" || op == "==") return dest;
 		const negated = allocReg(s);
 		emitLogicalNot(s, negated, dest);
@@ -970,6 +1057,22 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as BinaryExprData;
 	const op = d.operator;
 
+	const through = derefTarget(s, d.left);
+	if (through != null) {
+		const ptrReg = compileExpr(s, through);
+		const tmpReg = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.LoadDeref, tmpReg, ptrReg, 0));
+		const strConcat = op == "+=" && (exprIsString(s, d.left) || exprIsString(s, d.right));
+		const rhsReg = strConcat ? compileStringPart(s, d.right) : compileExpr(s, d.right);
+		if (strConcat) {
+			emitInst(s, raiserABC(RaiserOpcode.ConcatStr, tmpReg, tmpReg, rhsReg));
+		} else {
+			emitCompoundArith(s, op, tmpReg, tmpReg, rhsReg, d.left);
+		}
+		emitInst(s, raiserABC(RaiserOpcode.StoreDeref, ptrReg, 0, tmpReg));
+		return tmpReg;
+	}
+
 	if (d.left.kind == NodeKind.Identifier) {
 		const id = d.left.data as IdentifierData;
 		const global = resolveGlobal(s, d.left.resolvedSym);
@@ -1031,6 +1134,12 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 // instructions to land each result in its expected callee slot. Shared by
 // CallHost (extern) and direct user-function-call paths since both follow
 // the same calling convention (args sit at dest+1 .. dest+argCount).
+function hostValues(args: Node[]): Node[] {
+	const values: Node[] = [];
+	for (const a of args) values.push(a.kind == NodeKind.HiddenAddr ? (a.data as HiddenDerefData).expr : a);
+	return values;
+}
+
 function emitCallArgs(s: RaiserCompState, dest: number, args: Node[]): void {
 	const argCount = args.length;
 	for (let i = 0; i < argCount; i = i + 1) { allocReg(s); }
@@ -1250,7 +1359,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		if (sym.nativeName != "") {
 			checkHostBridgeCoverage(sym, d.callee);
 			const dest = allocReg(s);
-			emitCallArgs(s, dest, d.arguments);
+			emitCallArgs(s, dest, hostValues(d.arguments));
 			const nameIdx = addConst(s, raiserString(sym.nativeName));
 			emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, d.arguments.length));
 			return dest;
@@ -1274,7 +1383,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 			if (!isStatic) allArgs.push(md.object);
 			for (const a of d.arguments) { allArgs.push(a); }
 			const dest = allocReg(s);
-			emitCallArgs(s, dest, allArgs);
+			emitCallArgs(s, dest, hostValues(allArgs));
 			const nameIdx = addConst(s, raiserString(sym.nativeName));
 			emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, allArgs.length));
 			return dest;
@@ -1399,6 +1508,16 @@ function compileUpdateExpr(s: RaiserCompState, node: Node): int32 {
 	const refusedOp = refusePointerOp(s, node);
 	if (refusedOp >= 0) return refusedOp;
 	const d = node.data as UpdateExprData;
+
+	const through = derefTarget(s, d.updateArg);
+	if (through != null) {
+		const ptrReg = compileExpr(s, through);
+		const oldReg = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.LoadDeref, oldReg, ptrReg, 0));
+		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg);
+		emitInst(s, raiserABC(RaiserOpcode.StoreDeref, ptrReg, 0, newReg));
+		return d.isPrefix ? newReg : oldReg;
+	}
 
 	if (d.updateArg.kind == NodeKind.Identifier) {
 		const id = d.updateArg.data as IdentifierData;
@@ -1587,7 +1706,13 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 	if (refusedOp >= 0) return refusedOp;
 	const d = node.data as ArrayAccessData;
 	const held = skipModifier(d.array.nodeType);
-	if (held != null && held.kind == TypeKind.Ptr) return compileExpr(s, d.array);
+	if (held != null && held.kind == TypeKind.Ptr) {
+		const pointer = compileExpr(s, d.array);
+		if (!heldByLocation(s, node.nodeType)) return pointer;
+		const dest = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.LoadDeref, dest, pointer, 0));
+		return dest;
+	}
 	if (d.index.kind == NodeKind.BinaryExpr) {
 		const bd = d.index.data as BinaryExprData;
 		if (bd.operator == ".." || bd.operator == "...") return compileArraySlice(s, d, bd);
