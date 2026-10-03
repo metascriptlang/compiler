@@ -81,16 +81,18 @@ test "an unprojected discriminant is not writable even through a parameter" {
 }
 
 test "only a variable, a field or an element is an assignment target" {
-	const head = "class C { v: int32 = 0; get(): int32 { return this.v; } }\nfunction g(): int32 { return 1; }\nlet x: int32 = 0;\nconst c = new C();\n";
-	for (const body of ["g() = 4;", "(g()) = 5;", "c.get() = 6;", "g() += 1;"]) {
-		const c = compileToCWithStd(head + body);
-		assert !c.ok && c.error.contains("cannot be assigned to"), body;
+	const head = "struct Inner { v: int32; }\nstruct P { v: int32; inner: Inner; }\nclass C { v: int32 = 0; inner: Inner = { v: 0 }; get(): int32 { return this.v; } }\n"
+		+ "let p: P = { v: 1, inner: { v: 1 } };\nlet x: int32 = 0;\nconst c = new C();\n"
+		+ "function g(): int32 { return 1; }\nfunction h(): P { return p; }\nfunction getC(): C { return c; }\n";
+	for (const body of ["g() = 4;", "(g()) = 5;", "c.get() = 6;", "g() += 1;", "h().v = 5;", "h().inner.v = 5;"]) {
+		const cr = compileToCWithStd(head + body);
+		assert !cr.ok && cr.error.contains("cannot be assigned to"), body;
 		const js = compileProjectToJSWithStd([{ entryPath: "test/target.ms", entrySource: head + body }], "test/target.ms");
 		assert js.startsWith("ERROR:") && js.contains("cannot be assigned to"), body;
 	}
-	const ok = head + "(x) = 7;\nc.v = 2;\nx += g();\nconsole.log(x, c.v);";
-	const c = compileToCWithStd(ok);
-	assert c.ok, c.ok ? "" : c.error;
+	const ok = head + "(x) = 7;\nc.v = 2;\nx += g();\ngetC().v = 3;\ngetC().inner.v = 4;\np.inner.v = 5;\nconsole.log(x, c.v, c.inner.v, p.inner.v);";
+	const cr = compileToCWithStd(ok);
+	assert cr.ok, cr.ok ? "" : cr.error;
 	const js = compileProjectToJSWithStd([{ entryPath: "test/target.ms", entrySource: ok }], "test/target.ms");
 	assert !js.startsWith("ERROR:"), js;
 }
