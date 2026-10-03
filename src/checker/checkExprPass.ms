@@ -12,7 +12,7 @@ import {
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
-import { writeRefusal, readonlyPrefixType, readonlyRootType } from "./assignable";
+import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType } from "./assignable";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
@@ -673,6 +673,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
 			}
 			if (isAsgn) { reportSharedWrite(ctx, d.left); }
+			if (isAsgn && !isLocation(d.left) && d.left.kind != NodeKind.ArrayLiteral && d.left.kind != NodeKind.ObjectLiteral
+					&& d.left.nodeType != null && d.left.nodeType.kind != TypeKind.Error) {
+				addError(ctx, "this expression cannot be assigned to — only a variable, a field or an element can", d.left.location.line, d.left.location.column);
+			}
 			// Block assignment to read-only properties
 			if (isAsgn && d.left.kind == NodeKind.MemberExpr) {
 				const md = d.left.data as MemberExprData;

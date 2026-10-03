@@ -75,6 +75,11 @@ export function checkWrite(target: Node, asRefArg: boolean): WriteCheck {
 	return { verdict: WriteVerdict.Writable, root: sym };
 }
 
+export function isLocation(node: Node): boolean {
+	const k = node.kind;
+	return k == NodeKind.Identifier || k == NodeKind.MemberExpr || k == NodeKind.ArrayAccess || k == NodeKind.HiddenDeref;
+}
+
 export function readonlyPrefixType(target: Node): Type | null {
 	let cur: Node | null = target;
 	while (cur != null) {
