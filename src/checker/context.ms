@@ -25,10 +25,6 @@ export interface JsImportEntry {
 export interface ExportedSymInfo {
 	name: string;
 	sym: Symbol;
-	extReceiverType: string;
-	extIsStatic: boolean;
-	overloadExtReceiverTypes: string[];
-	overloadExtIsStatic: boolean[];
 	ext: ExtensionMethod | null;
 	overloadExts: (ExtensionMethod | null)[];
 	converterTargetType: Type; // resolved converter target (null when unresolved / not a converter)
@@ -126,8 +122,6 @@ export function findExportedSymbol(registry: ExportRegistry, modulePath: string,
 
 export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistry, modulePath: string, ctx: CheckerContext, exportedName: string = ""): ExportedSymInfo {
 	// Extension receiver metadata for primary symbol
-	let extRecv = "";
-	let extStatic = false;
 	let primaryExt: ExtensionMethod | null = null;
 	if (extensionRegistry != null && sym.symbolKind == SymbolKind.Function) {
 		const ext = findExtensionByType(extensionRegistry, sym.name, sym.symbolType);
@@ -138,14 +132,8 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 			// extension entry (release). Fall back to symbol identity match.
 			primaryExt = findExtensionBySym(extensionRegistry, sym);
 		}
-		if (primaryExt != null) {
-			extRecv = primaryExt.receiverTypeName;
-			extStatic = primaryExt.isStatic;
-		}
 	}
 
-	const ovExtRecvs: string[] = [];
-	const ovExtStatics: boolean[] = [];
 	const ovExts: (ExtensionMethod | null)[] = [];
 	for (const ov of sym.overloads) {
 		let ovExt: ExtensionMethod | null = null;
@@ -154,8 +142,6 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 			if (ovExt == null && primaryExt != null) ovExt = findExtensionBySym(extensionRegistry, ov);
 		}
 		ovExts.push(ovExt);
-		ovExtRecvs.push(ovExt != null ? ovExt.receiverTypeName : "");
-		ovExtStatics.push(ovExt != null ? ovExt.isStatic : false);
 	}
 
 	let mConverterTargetType: Type = null as unknown as Type;
@@ -166,8 +152,6 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 
 	return {
 		name: exportedName != "" ? exportedName : sym.name, sym,
-		extReceiverType: extRecv, extIsStatic: extStatic,
-		overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics,
 		ext: primaryExt, overloadExts: ovExts,
 		converterTargetType: mConverterTargetType,
 	};
@@ -260,7 +244,6 @@ export function collectExports(ctx: CheckerContext, modulePath: string): Exporte
 //   Storing the same Type in both causes double-decref on destruction (DRC double ownership).
 export class ExtensionMethod {
 	methodName: string;
-	receiverTypeName: string;
 	sourcePath: string;
 	fnType: Type;           // fallback only — use getExtFnType(ext), never read directly
 	isStatic: boolean;
@@ -289,16 +272,16 @@ export function createExtensionRegistry(): ExtensionRegistry {
 // Create an ExtensionMethod with proper ownership invariant enforced.
 // When sym is provided, fnType is set to noneType() — sym.symbolType is authoritative.
 // This prevents double-decref when both fnType and sym.symbolType reference the same Type.
-export function createExtMethod(methodName: string, receiverTypeName: string, sourcePath: string, fnType: Type, isStatic: boolean, sym: Symbol, scopeDepth: number): ExtensionMethod {
+export function createExtMethod(methodName: string, sourcePath: string, fnType: Type, isStatic: boolean, sym: Symbol, scopeDepth: number): ExtensionMethod {
 	return {
-		methodName, receiverTypeName, sourcePath,
+		methodName, sourcePath,
 		fnType: sym != null ? noneType() : fnType,
 		isStatic, sym, scopeDepth,
 	};
 }
 
 export function reexportExt(ext: ExtensionMethod, methodName: string, sourcePath: string, sym: Symbol, scopeDepth: number): ExtensionMethod {
-	return createExtMethod(methodName, ext.receiverTypeName, sourcePath, ext.fnType, ext.isStatic, sym, scopeDepth);
+	return createExtMethod(methodName, sourcePath, ext.fnType, ext.isStatic, sym, scopeDepth);
 }
 
 export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
@@ -388,7 +371,7 @@ export function findExtensionBySym(registry: ExtensionRegistry, sym: Symbol): Ex
 
 // findAllExtensionsByName — find ALL extensions with a given method name (any receiver).
 // Standard reference pattern: candidates are collected by name, then filtered by type compatibility
-// at the call site using isAssignable (not string comparison on receiverTypeName).
+// at the call site using isAssignable (not a name comparison).
 let _faeCount: float64 = 0;
 let _faeTime: float64 = 0;
 export function findAllExtensionsByNameProfile(): float64[] { return [_faeCount, _faeTime]; }
@@ -450,7 +433,7 @@ function addPlainOperatorCandidate(cands: ExtensionMethod[], sym: Symbol): void 
 		if (cands[i].sym == sym) return;
 		i = i + 1;
 	}
-	cands.push(createExtMethod(sym.name, "", "", noneType(), false, sym, 1));
+	cands.push(createExtMethod(sym.name, "", noneType(), false, sym, 1));
 }
 
 function pickBestOperatorCandidate(cands: ExtensionMethod[], argTypes: Type[]): ExtensionMethod {
@@ -543,7 +526,7 @@ export function stripReceiverParam(fnType: Type): Type {
 
 // ===== Receiver Matching (shared by checker + LSP) =====
 // Standard reference pattern: compare nominal types by identity using isAssignable,
-// not string-based receiverTypeName comparison.
+// not a name comparison.
 
 export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boolean {
 	if (ext.isStatic) return false;
@@ -1580,7 +1563,7 @@ test "create empty" {
 
 test "register and find" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const m: ExtensionMethod = { methodName: "trim", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, m);
 	const found = findAllExtensionsByName(r, "trim");
 	assert found.length == 1;
@@ -1594,9 +1577,9 @@ test "not found" {
 
 test "extension name lookups keep registration order across truncation" {
 	const r = createExtensionRegistry();
-	const a: ExtensionMethod = { methodName: "m", receiverTypeName: "A", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	const x: ExtensionMethod = { methodName: "other", receiverTypeName: "A", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	const b: ExtensionMethod = { methodName: "m", receiverTypeName: "B", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const a: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const x: ExtensionMethod = { methodName: "other", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const b: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, a);
 	registerExtension(r, x);
 	registerExtension(r, b);
@@ -1611,7 +1594,7 @@ test "extension name lookups keep registration order across truncation" {
 	truncateExtensions(r, 0);
 	assert !hasExtensionByName(r, "m");
 	assert !hasExtensionByName(r, "other");
-	const c: ExtensionMethod = { methodName: "m", receiverTypeName: "C", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
+	const c: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, c);
 	assert findAllExtensionsByName(r, "m").length == 1;
 	assert findAllExtensionsByName(r, "m")[0] == c;
@@ -1620,7 +1603,7 @@ test "extension name lookups keep registration order across truncation" {
 function staticExtOf(owner: Symbol | null): ExtensionMethod {
 	const sym = makeSymbol("m", SymbolKind.Function, noneType(), false);
 	sym.staticOwner = owner;
-	return { methodName: "m", receiverTypeName: "", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym };
+	return { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym };
 }
 
 test "static ext filter keeps only statics owned by that symbol" {
@@ -1629,7 +1612,7 @@ test "static ext filter keeps only statics owned by that symbol" {
 	const mine = staticExtOf(owner);
 	const theirs = staticExtOf(sameNamed);
 	const ownerless = staticExtOf(null);
-	const inst: ExtensionMethod = { methodName: "m", receiverTypeName: "T", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: makeSymbol("m", SymbolKind.Function, noneType(), false) };
+	const inst: ExtensionMethod = { methodName: "m", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: makeSymbol("m", SymbolKind.Function, noneType(), false) };
 	inst.sym!.staticOwner = owner;
 	const got = filterStaticExtsByOwner([mine, theirs, ownerless, inst], owner);
 	assert got.length == 1;
@@ -1644,7 +1627,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], ext: null, overloadExts: [] };
+	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), ext: null, overloadExts: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -1662,7 +1645,7 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], ext: null, overloadExts: [] };
+	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), ext: null, overloadExts: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");
@@ -1670,7 +1653,7 @@ test "missing symbol returns null" {
 }
 
 function namedExportInfo(name: string): ExportedSymInfo {
-	return { name, sym: makeSymbol(name, SymbolKind.Function, noneType(), false), extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], ext: null, overloadExts: [] };
+	return { name, sym: makeSymbol(name, SymbolKind.Function, noneType(), false), ext: null, overloadExts: [] };
 }
 
 test "the name index keeps registration order across export updates" {
@@ -1810,7 +1793,7 @@ test "getStaticExtTypeName" {
 
 test "static extension in registry" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "floor", receiverTypeName: "Math", sourcePath: "", fnType: noneType(), isStatic: true, sym: null };
+	const m: ExtensionMethod = { methodName: "floor", sourcePath: "", fnType: noneType(), isStatic: true, sym: null };
 	registerExtension(r, m);
 	const found = findAllExtensionsByName(r, "floor");
 	assert found.length == 1;
@@ -1819,7 +1802,7 @@ test "static extension in registry" {
 
 test "instance extension isStatic false" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "", fnType: noneType(), isStatic: false, sym: null };
+	const m: ExtensionMethod = { methodName: "trim", sourcePath: "", fnType: noneType(), isStatic: false, sym: null };
 	registerExtension(r, m);
 	const found = findAllExtensionsByName(r, "trim");
 	assert found.length == 1;

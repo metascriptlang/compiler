@@ -1166,7 +1166,7 @@ test "exported static extension carries its signature" {
 	dbEnsureExportsRegistered(db, "/test/use.ms", visited, 0);
 	const make = findExportedSymbol(db.exportRegistry, "/test/box.ms", "make");
 	assert make != null;
-	assert make.extIsStatic;
+	assert make.ext != null && make.ext.isStatic;
 	assert make.sym.symbolType.kind == TypeKind.Function;
 	assert make.sym.symbolType.typeChildren.length == 2;
 }

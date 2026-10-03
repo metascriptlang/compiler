@@ -101,7 +101,6 @@ function setupExtensionCtx(input: string, ext: ExtensionMethod): Node {
 function makeTrimExt(): ExtensionMethod {
 	const ext: ExtensionMethod = {
 		methodName: "trim",
-		receiverTypeName: "string",
 		sourcePath: "",
 		fnType: createFunction([], [], inferredType()),
 		isStatic: false,
@@ -113,7 +112,6 @@ function makeTrimExt(): ExtensionMethod {
 function makePushExt(): ExtensionMethod {
 	const ext: ExtensionMethod = {
 		methodName: "push",
-		receiverTypeName: "Array",
 		sourcePath: "",
 		fnType: createFunction([inferredType()], ["x"], inferredType()),
 		isStatic: false,
@@ -185,7 +183,6 @@ test "static extension no receiver prepend" {
 	const cc = createContext();
 	const ext: ExtensionMethod = {
 		methodName: "floor",
-		receiverTypeName: "Math",
 		sourcePath: "",
 		fnType: createFunction([inferredType()], ["x"], inferredType()),
 		isStatic: true,

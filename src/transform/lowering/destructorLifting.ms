@@ -36,7 +36,7 @@ import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
-import { CheckerContext, newSym, addError, lookupUserHook, getGlobalTypeOwner } from "../../checker/context";
+import { CheckerContext, newSym, extReceiverSym, findAllExtensionsByName } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
@@ -915,7 +915,7 @@ function ensureClassHooks(body: Type, lctx: LiftCtx, loc: SourceLocation): void 
 // Maps each lifecycle op to its user-facing method name. A user hook is any
 // method/extension with that name on the receiver type — class methods and
 // free-function extensions both land in the extension registry (collectPass),
-// keyed by (receiverTypeName, methodName) with the real callable sym attached.
+// each with the real callable sym attached; the receiver is the extension's first-parameter type.
 // Reference: Nim binds `=destroy`/`=copy`/… to the type and getAttachedOp
 // retrieves by type — never by reconstructing a symbol name.
 
@@ -943,9 +943,9 @@ function getUserDefinedHookSym(typeName: string, declSym: Symbol | null, hook: s
 	// to the emitted definition (a stale-path sym links to an undefined symbol).
 	const typeModulePath = declSym != null ? declSym.modulePath : "";
 	let fallback: Symbol | null = null;
-	for (const m of lctx.checkerCtx.extensionRegistry.methods) {
-		if (m.receiverTypeName != typeName || m.methodName != methodName || m.isStatic) continue;
-		if (m.sym == null) continue;
+	for (const m of findAllExtensionsByName(lctx.checkerCtx.extensionRegistry, methodName)) {
+		if (m.isStatic || m.sym == null) continue;
+		if (declSym == null || extReceiverSym(m) != declSym) continue;
 		if (typeModulePath != "" && m.sym.modulePath == typeModulePath) return m.sym;
 		if (fallback == null) fallback = m.sym;
 	}

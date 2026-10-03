@@ -502,11 +502,10 @@ function lowerBound(program: Node, ctx: TransformContext): Node {
 	return lowerOperators(program, ctx);
 }
 
-function makeOpExt(receiverType: string, opName: string): ExtensionMethod {
+function makeOpExt(opName: string): ExtensionMethod {
 	const fnType = createFunction([inferredType(), inferredType()], ["a", "b"], inferredType());
 	return {
 		methodName: opName,
-		receiverTypeName: receiverType,
 		sourcePath: "",
 		fnType,
 		isStatic: false,
@@ -517,7 +516,7 @@ function makeOpExt(receiverType: string, opName: string): ExtensionMethod {
 function setupCtx(typeName: string, opName: string): TransformContext {
 	const checkerCtx = createContext();
 	const registry = createExtensionRegistry();
-	registerExtension(registry, makeOpExt(typeName, opName));
+	registerExtension(registry, makeOpExt(opName));
 	checkerCtx.extensionRegistry = registry;
 	const objType = createStruct(typeName, [], [], true);
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, objType, false));
@@ -660,8 +659,8 @@ test "explicit != overrides derivation from ==" {
 	// User defines both == and !== — !== uses explicit, not derived
 	const checkerCtx = createContext();
 	const registry = createExtensionRegistry();
-	registerExtension(registry, makeOpExt("Token", "=="));
-	registerExtension(registry, makeOpExt("Token", "!=="));
+	registerExtension(registry, makeOpExt("=="));
+	registerExtension(registry, makeOpExt("!=="));
 	checkerCtx.extensionRegistry = registry;
 	const objType = createStruct("Token", [], [], true);
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, objType, false));

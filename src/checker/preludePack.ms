@@ -39,7 +39,7 @@ import { readFile, writeFile, exists, readDir, remove, removeAll, ensureDir, ren
 import { env, argv } from "std/process";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 
-const PACK_MAGIC = "MSPK3";
+const PACK_MAGIC = "MSPK4";
 
 // Same dual-hash formula as compiler/cache.ms hashContent — keys are written
 // and read by this module only, so the formula just has to be self-consistent.
@@ -530,7 +530,7 @@ export function writePreludeDeps(key: string, stamp: string, snap: PreludeDepsSn
 //     locLine locCol locEndLine locEndCol inScope
 //     name modulePath nativeName builtinKind headerPath jsModulePath
 //     typeIdx overloadsCsv staticCsv declIdx dpCsv disamb exportName
-//   E methodName receiverTypeName sourcePath isStatic scopeDepth symIdx fnTypeIdx
+//   E methodName sourcePath isStatic scopeDepth symIdx fnTypeIdx
 //   C converterSymIdx targetTypeIdx
 //   P compilerFuncName symIdx
 //   D includeDirectives
@@ -764,7 +764,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	if (ctx.extensionRegistry != null) {
 		for (const ext of ctx.extensionRegistry.methods) {
 			const fnRef = ext.sym == null && ext.fnType != null ? idxType(ext.fnType) : -1;
-			lines.push(`E\t${escapeP(ext.methodName)}\t${escapeP(ext.receiverTypeName)}\t${escapeP(ext.sourcePath)}\t${ext.isStatic ? 1 : 0}\t${ext.scopeDepth as int32}\t${idxSym(ext.sym)}\t${fnRef}`);
+			lines.push(`E\t${escapeP(ext.methodName)}\t${escapeP(ext.sourcePath)}\t${ext.isStatic ? 1 : 0}\t${ext.scopeDepth as int32}\t${idxSym(ext.sym)}\t${fnRef}`);
 		}
 	}
 
@@ -1306,11 +1306,11 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	}
 
 	for (const f of extRows) {
-		const symRef = f[6].parseInt() as int32;
-		const fnRef = f[7].parseInt() as int32;
+		const symRef = f[5].parseInt() as int32;
+		const fnRef = f[6].parseInt() as int32;
 		const extSym = symRef >= 0 && symRef < syms.length ? syms[symRef] : null as unknown as Symbol;
 		const extType = fnRef >= 0 && fnRef < types.length ? types[fnRef] : noneType();
-		const ext = createExtMethod(unescapeP(f[1]), unescapeP(f[2]), unescapeP(f[3]), extType, f[4] == "1", extSym, f[5].parseInt() as int32);
+		const ext = createExtMethod(unescapeP(f[1]), unescapeP(f[2]), extType, f[3] == "1", extSym, f[4].parseInt() as int32);
 		registerExtension(ctx.extensionRegistry, ext);
 	}
 
@@ -1448,7 +1448,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		ctx.includeDirectives = "runtime/core/system.h\nruntime/io/streams.h";
 		ctx.compilerFlags = "-Ivendor/x -O2";
 		ctx.compileDirectives = "vendor/crypto/a.c vendor/io/b.c";
-		registerExtension(ctx.extensionRegistry, createExtMethod("pkExt", "string", "std/pk/test.ms", noneType(), true, sym, 0));
+		registerExtension(ctx.extensionRegistry, createExtMethod("pkExt", "std/pk/test.ms", noneType(), true, sym, 0));
 		ctx.compilerFuncs.set("pkRuntimeName", sym);
 
 		const key = preludePackKey("stdpath-should-not-matter-for-roundtrip", ".test");

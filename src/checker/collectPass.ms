@@ -485,8 +485,7 @@ export function collectFunction(ctx: CheckerContext, node: Node): void {
 	node.resolvedSym = sym;
 	// Register extension (instance or static) with direct sym link
 	if (extTypeName != "" && ctx.extensionRegistry != null) {
-		registerExtension(ctx.extensionRegistry, createExtMethod(d.fnName, extTypeName, "", noneType(), isStaticExtensionFlag(d.fnFlags), sym, 1));
-		if (isLifecycleHookName(d.fnName) && !isStaticExtensionFlag(d.fnFlags) && !isGenericFn(d.fnFlags)) bindUserHook(extTypeName, d.fnName, sym);
+		registerExtension(ctx.extensionRegistry, createExtMethod(d.fnName, "", noneType(), isStaticExtensionFlag(d.fnFlags), sym, 1));
 	}
 }
 
@@ -803,8 +802,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 		methodSym.defaultParams = md.methodDefaults;
 	}
 	if (md.methodIsStatic) methodSym.staticOwner = classSym;
-	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, className, "", fnType, md.methodIsStatic, methodSym, 1));
-	if (isLifecycleHookName(md.methodName) && !md.methodIsStatic && !isExternClass && !isGenericFn(md.methodFlags)) bindUserHook(className, md.methodName, methodSym);
+	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, "", fnType, md.methodIsStatic, methodSym, 1));
 	if (!md.methodIsStatic && !isExternClass && builtinKind == "") {
 		dispatchRecordMethod(classSym, md.methodName, methodSym);
 	}
@@ -1915,8 +1913,7 @@ test "re-export preserves original location and records sgSymRecord" {
 	defining.modulePath = "/test/hub/accessors";
 	defining.location = origLoc;
 	const fakeExport: ExportedSymInfo = {
-		name: "get", sym: defining, extReceiverType: "", extIsStatic: false,
-		overloadExtReceiverTypes: [], overloadExtIsStatic: [], ext: null, overloadExts: [],
+		name: "get", sym: defining, ext: null, overloadExts: [],
 	};
 	registerModuleExports(ctx.exportRegistry, "/test/hub/accessors", [fakeExport]);
 
