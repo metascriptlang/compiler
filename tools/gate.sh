@@ -413,7 +413,7 @@ queue_lock() {
   local m tmp="$GATES_DIR/.m.$$" try
   for try in 1 2; do
     rm -rf "$tmp"; mkdir -p "$tmp/$$" || die "gate queue: cannot create $tmp"
-    mv -T "$tmp" "$GATES_DIR/.lock" 2>/dev/null && return 0
+    perl -e 'rename($ARGV[0], $ARGV[1]) or exit 1' "$tmp" "$GATES_DIR/.lock" 2>/dev/null && return 0
     rm -rf "$tmp"
     for m in "$GATES_DIR/.lock"/*; do
       [ -e "$m" ] || continue
