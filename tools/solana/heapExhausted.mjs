@@ -1,0 +1,134 @@
+import { readFileSync } from "node:fs";
+import {
+	AccountRole,
+	address,
+	appendTransactionMessageInstruction,
+	createKeyPairSignerFromPrivateKeyBytes,
+	createTransactionMessage,
+	lamports,
+	pipe,
+	setTransactionMessageFeePayerSigner,
+	setTransactionMessageLifetimeUsingBlockhash,
+	signTransactionMessageWithSigners,
+} from "@solana/kit";
+import { LiteSVM } from "litesvm";
+
+const [programPath] = process.argv.slice(2);
+if (!programPath) {
+	console.error("usage: node heapExhausted.mjs <heapProbe.so>   (msc build tools/solana/heapProbe.ms --os=solana --output=heapProbe.so)");
+	process.exit(2);
+}
+
+const HEAP = 32 * 1024;
+const BUDGET = 1_400_000;
+const LARGEST_COUNT = 60_000;
+const NAMED = /std\/solana: the (\d+) KiB program heap is exhausted \(asked (\d+) more bytes at (\d+)\)/;
+const OPS = { seeds: 1, builders: 2, cells: 3, request: 4, wrap: 5 };
+
+const svm = new LiteSVM();
+const program = (await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(9))).address;
+svm.addProgramFromFile(program, programPath);
+const payer = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(1));
+svm.airdrop(payer.address, lamports(10_000_000_000n));
+const budget = new Uint8Array(5);
+budget[0] = 2;
+new DataView(budget.buffer).setUint32(1, BUDGET, true);
+
+let failures = 0;
+
+function check(what, condition) {
+	console.log(`${what}: ${condition ? "ok" : "FAILED"}`);
+	if (!condition) failures++;
+}
+
+check("the host simulator says the same thing",
+	readFileSync(new URL("../../runtime/solana/host.c", import.meta.url), "utf8")
+		.includes("the 32 KiB program heap is exhausted (asked %llu more bytes at %llu)"));
+
+async function run(op, count) {
+	const message = pipe(
+		createTransactionMessage({ version: 0 }),
+		(m) => setTransactionMessageFeePayerSigner(payer, m),
+		(m) => setTransactionMessageLifetimeUsingBlockhash({ blockhash: svm.latestBlockhash(), lastValidBlockHeight: 1000n }, m),
+		(m) => appendTransactionMessageInstruction({ programAddress: address("ComputeBudget111111111111111111111111111111"), accounts: [], data: budget }, m),
+		(m) => appendTransactionMessageInstruction({
+			programAddress: program,
+			accounts: [{ address: program, role: AccountRole.READONLY }],
+			data: new Uint8Array([op, count & 0xff, count >> 8]),
+		}, m),
+	);
+	const result = svm.sendTransaction(await signTransactionMessageWithSigners(message));
+	svm.expireBlockhash();
+	const failed = result.constructor.name === "FailedTransactionMetadata";
+	const meta = failed ? result.meta() : result;
+	const logs = meta.logs();
+	const named = logs.map((line) => NAMED.exec(line)).find((found) => found !== undefined && found !== null) ?? null;
+	return {
+		ok: !failed,
+		error: failed ? result.err().toString() : "",
+		units: Number(meta.computeUnitsConsumed()),
+		logs,
+		named,
+	};
+}
+
+async function firstFailure(op) {
+	if ((await run(op, LARGEST_COUNT)).ok) return null;
+	let passes = 0;
+	let fails = LARGEST_COUNT;
+	while (fails - passes > 1) {
+		const middle = Math.floor((passes + fails) / 2);
+		if ((await run(op, middle)).ok) passes = middle;
+		else fails = middle;
+	}
+	return fails;
+}
+
+function namedFailure(label, outcome) {
+	check(`${label}: the instruction fails`, !outcome.ok && outcome.error.includes("ProgramFailedToComplete"));
+	check(`${label}: the log names the exhausted heap`, outcome.named !== null);
+	check(`${label}: the failure is not an access violation`, !outcome.logs.some((line) => /Access violation|Overlapping copy/.test(line)));
+	check(`${label}: ${outcome.units} CU, not the whole ${BUDGET} budget`, outcome.units < BUDGET);
+	if (outcome.named === null) return null;
+	const [, kib, asked, position] = outcome.named;
+	check(`${label}: the log states the heap size (${kib} KiB)`, Number(kib) * 1024 === HEAP);
+	return { asked: BigInt(asked), position: BigInt(position) };
+}
+
+for (const [name, op] of Object.entries(OPS).filter(([, op]) => op <= OPS.cells)) {
+	check(`[${name}] a single round runs`, (await run(op, 1)).ok);
+	const first = await firstFailure(op);
+	check(`[${name}] some count exhausts the heap`, first !== null);
+	if (first === null) continue;
+	check(`[${name}] ${first - 1} rounds still run`, (await run(op, first - 1)).ok);
+	const failed = namedFailure(`[${name}] ${first} rounds`, await run(op, first));
+	if (failed !== null) {
+		check(`[${name}] the request that failed did not fit (${failed.asked} bytes at ${failed.position})`,
+			failed.asked % 8n === 0n && failed.position + failed.asked > BigInt(HEAP) && failed.position <= BigInt(HEAP));
+	}
+}
+
+{
+	const name = "request";
+	const first = await firstFailure(OPS.request);
+	check(`[${name}] some size exhausts the heap`, first !== null);
+	if (first !== null) {
+		check(`[${name}] ${first - 1} bytes still run`, (await run(OPS.request, first - 1)).ok);
+		const failed = namedFailure(`[${name}] ${first} bytes`, await run(OPS.request, first));
+		if (failed !== null) {
+			check(`[${name}] the last size that fits fills the heap to its end`, failed.position + BigInt(first - 1) === BigInt(HEAP));
+			check(`[${name}] the log reports the request rounded to 8 (${failed.asked})`, failed.asked === BigInt(Math.ceil(first / 8) * 8));
+		}
+	}
+}
+
+for (const count of [1, 8, 4096]) {
+	const label = `[wrap] a request for 2^64 - ${count} bytes`;
+	const failed = namedFailure(label, await run(OPS.wrap, count));
+	if (failed !== null) {
+		check(`${label}: the log reports the size asked`, failed.asked === 2n ** 64n - BigInt(count));
+	}
+}
+
+console.log(failures === 0 ? "heap exhaustion: every check passed" : `heap exhaustion: ${failures} check(s) FAILED`);
+process.exit(failures === 0 ? 0 : 1);
