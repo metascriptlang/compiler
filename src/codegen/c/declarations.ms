@@ -9,7 +9,7 @@ import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, aliveSetHasDecl, internString, addCGenError,
-	setLocalSymName,
+	setLocalSymName, factClaimGeneric, factSkipTypeInfo,
 } from "./context";
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
@@ -109,7 +109,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	if (g.preparingDeclarations) {
 		if (isGenericInstance && g.preparationFacts != null
 				&& (!g.preparationFacts.genericOwners.has(name) || sym.modulePath == g.modulePath)) {
-			g.preparationFacts.genericOwners.set(name, g.modulePath);
+			factClaimGeneric(g.preparationFacts, name, g.modulePath);
 		}
 		return;
 	}
@@ -614,9 +614,9 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 			const skipBase = d.declName.slice(0, nameLen - 8);
 			if (g.preparingDeclarations) {
 				if (g.preparationFacts == null) return;
-				g.preparationFacts.skippedTypeInfos.add(skipBase);
+				factSkipTypeInfo(g.preparationFacts, skipBase);
 				const skipCBase = typeInfoCBase(g, d, skipBase);
-				if (skipCBase != "") g.preparationFacts.skippedTypeInfos.add(skipCBase);
+				if (skipCBase != "") factSkipTypeInfo(g.preparationFacts, skipCBase);
 			}
 			return;
 		}

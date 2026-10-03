@@ -14,6 +14,7 @@ import { CheckerContext, CheckerError, GcMode, findExportedSymbol } from "../../
 import {
 	CGen, CSection, AliveSet, CEmissionFacts,
 	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline, assembleOutput, extract, nameSetAdd, undefPlatformMacros,
+	replayFactWrites,
 } from "./context";
 import { genDecl, registerDeclCName } from "./declarations";
 import { mangleModuleName } from "./names";
@@ -79,6 +80,11 @@ export function prepareCModuleEmission(program: Node, ctx: CheckerContext, modul
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) registerDeclCName(g, stmt);
 	for (const stmt of pd.programStmts) genDecl(g, stmt, false);
+	registerTypeInfoDemands(aliveSet, facts);
+}
+
+export function replayCModuleEmission(aliveSet: AliveSet, facts: CEmissionFacts, writes: string[]): void {
+	replayFactWrites(facts, writes);
 	registerTypeInfoDemands(aliveSet, facts);
 }
 

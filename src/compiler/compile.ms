@@ -20,9 +20,9 @@ import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen
 import { takeRaiserCompileErrors } from "../codegen/raiser/context";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { RaiserValueKind } from "../raiser/value";
-import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
+import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
 import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
-import { aliveSetHasDecl, aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts } from "../codegen/c/context";
+import { aliveSetHasDecl, aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
@@ -739,6 +739,16 @@ function emissionOverlapped(results: ModuleEmissionResult[]): boolean {
 		}
 	}
 	return false;
+}
+
+function copyModuleOutput(output: Readonly<CModuleOutput>): CModuleOutput {
+	const copy = new CModuleOutput();
+	copy.code = output.code;
+	copy.modulePath = output.modulePath;
+	copy.hasDatInit = output.hasDatInit;
+	copy.hasInit = output.hasInit;
+	copy.hasDeinit = output.hasDeinit;
+	return copy;
 }
 
 function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, workers: int32, isTestBuild: boolean, hcrEntry: string, emitter: ModuleEmitter = emitModuleJob): ModuleEmissionResult[] {
@@ -2753,10 +2763,22 @@ setGlobalHookOwners(sharedHookOwners);
 	// Phase C: Codegen + compile each module
 	setConcurrentTypeQueries(true);
 	const emissionFacts = new CEmissionFacts();
+	const aliveKey = session.keep ? aliveSetFingerprint(aliveSet) : "";
 	for (const p of processed) {
 		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
-		prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
-		if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) emissionFacts.hcrCoreUnits.add(p.modPath);
+		const prepared = session.keep ? session.prepareMemos.get(p.modPath) : null;
+		if (prepared != null && prepared.program == p.program && prepared.alive == aliveKey && prepared.before == emissionFacts.trace) {
+			replayCModuleEmission(aliveSet, emissionFacts, prepared.writes);
+		} else {
+			const before = emissionFacts.trace;
+			emissionFacts.writes = [];
+			prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
+			const recorded = emissionFacts.writes;
+			const writes: string[] = recorded != null ? recorded : [];
+			emissionFacts.writes = null;
+			if (session.keep) session.prepareMemos.set(p.modPath, { program: p.program, alive: aliveKey, before, writes });
+		}
+		if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) factCoreUnit(emissionFacts, p.modPath);
 	}
 	if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts);
 	const emissionJobs: ModuleEmissionJob[] = [];
@@ -2766,7 +2788,42 @@ setGlobalHookOwners(sharedHookOwners);
 	}
 	const emitStart = performance.now();
 	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
-	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr ? entryPath : "");
+	const imagePaths: string[] = [];
+	for (const module of hcrModules) imagePaths.push(module.modulePath);
+	imagePaths.sort();
+	const emitKey = `${aliveKey}|${emissionFacts.trace}|${imagePaths.join(",")}`;
+	const freshJobs: ModuleEmissionJob[] = [];
+	const freshSlots: int32[] = [];
+	const reusedEmits = new HashSet<string>();
+	for (const job of emissionJobs) {
+		const memo = session.keep && emissionFacts.hcrCoreUnits.has(job.modPath) ? session.emitMemos.get(job.modPath) : null;
+		if (memo != null && memo.program == job.program && memo.key == emitKey) {
+			freshSlots.push(-1);
+			continue;
+		}
+		freshSlots.push(freshJobs.length as int32);
+		freshJobs.push({ slot: freshJobs.length as int32, program: job.program, ctx: job.ctx, modPath: job.modPath, weight: job.weight });
+	}
+	const freshResults = emitModulesBounded(freshJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr ? entryPath : "");
+	const emissionResults: ModuleEmissionResult[] = [];
+	for (let ei = 0; ei < emissionJobs.length; ei += 1) {
+		const job = emissionJobs[ei];
+		if (freshSlots[ei] >= 0) {
+			const fresh = freshResults[freshSlots[ei]];
+			fresh.slot = ei as int32;
+			emissionResults.push(fresh);
+			if (session.keep && emissionFacts.hcrCoreUnits.has(job.modPath) && fresh.completed && fresh.failure == "" && fresh.output.errors.length == 0) {
+				session.emitMemos.set(job.modPath, { program: job.program, key: emitKey, output: copyModuleOutput(fresh.output), compileCmd: "", baseFp: "" });
+			}
+			continue;
+		}
+		const reused = new ModuleEmissionResult();
+		reused.slot = ei as int32;
+		reused.output = copyModuleOutput(session.emitMemos.get(job.modPath)!.output);
+		reused.completed = true;
+		emissionResults.push(reused);
+		reusedEmits.add(job.modPath);
+	}
 	let codegenTime: float64 = performance.now() - emitStart;
 	if (opts.showTime) {
 		console.log(`    emit workers=${emitWidth} overlap=${emissionOverlapped(emissionResults)}`);
@@ -2847,7 +2904,13 @@ setGlobalHookOwners(sharedHookOwners);
 			const upFlag = userProjectFlag(p.modPath, opts.projectRoot, resolveRuntimeDir());
 			if (upFlag != "") modFlags = appendFlag(modFlags, upFlag);
 			const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, modFlags, opts.ccBinary);
-			const baseFp = moduleCompileFp(cCode, compileCmd);
+			const emitMemo = session.keep ? session.emitMemos.get(p.modPath) : null;
+			const reuseFp = emitMemo != null && reusedEmits.has(p.modPath) && emitMemo.compileCmd == compileCmd;
+			const baseFp = reuseFp ? emitMemo!.baseFp : moduleCompileFp(cCode, compileCmd);
+			if (emitMemo != null && !reuseFp && emitMemo.program == p.program) {
+				emitMemo.compileCmd = compileCmd;
+				emitMemo.baseFp = baseFp;
+			}
 			const modFp = moduleObjectFp(p.modPath, baseFp);
 			const oFile = stableOFileFp(p.modPath, modFp);
 
