@@ -54,3 +54,4 @@ import "./comptimeBlockStaticType";
 import "./arraySpliceEmit";
 import "./raiseChecks";
 import "./inlineFunctions";
+import "./pointerAddress";
