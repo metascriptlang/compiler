@@ -79,3 +79,18 @@ test "an unprojected discriminant is not writable even through a parameter" {
 	const c = compileToCWithStd(source);
 	assert !c.ok;
 }
+
+test "only a variable, a field or an element is an assignment target" {
+	const head = "class C { v: int32 = 0; get(): int32 { return this.v; } }\nfunction g(): int32 { return 1; }\nlet x: int32 = 0;\nconst c = new C();\n";
+	for (const body of ["g() = 4;", "(g()) = 5;", "c.get() = 6;", "g() += 1;"]) {
+		const c = compileToCWithStd(head + body);
+		assert !c.ok && c.error.contains("cannot be assigned to"), body;
+		const js = compileProjectToJSWithStd([{ entryPath: "test/target.ms", entrySource: head + body }], "test/target.ms");
+		assert js.startsWith("ERROR:") && js.contains("cannot be assigned to"), body;
+	}
+	const ok = head + "(x) = 7;\nc.v = 2;\nx += g();\nconsole.log(x, c.v);";
+	const c = compileToCWithStd(ok);
+	assert c.ok, c.ok ? "" : c.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/target.ms", entrySource: ok }], "test/target.ms");
+	assert !js.startsWith("ERROR:"), js;
+}
