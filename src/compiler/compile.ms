@@ -3177,7 +3177,7 @@ setGlobalHookOwners();
 	const tD = performance.now();
 
 	// Emscripten: auto-enable Asyncify when DCE detects async code (promise module alive)
-	if (opts.targetOs == "emcc" && aliveSet.computed) {
+	if (opts.targetOs == "emcc" && aliveSet.enabled) {
 		let hasAsync = false;
 		for (const mp of aliveModules) {
 			if (mp.endsWith("promise/index.cms")) { hasAsync = true; }

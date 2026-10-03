@@ -28,6 +28,7 @@ import { isBakeableAggregateConst, functionDeclIsAlive } from "../../checker/rea
 
 
 
+
 export function genDecl(g: CGen, node: Readonly<Node>, exported: boolean): void {
 	if (node == null) return;
 	if (g.preparingDeclarations && node.kind != NodeKind.FunctionDecl
@@ -575,7 +576,7 @@ function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 	}
 	// Other statements go to ModuleInit — use shared initProc for consistent temp counter
 	const atExit = node.flags.has(NodeFlag.GlobalDestroys);
-	if (atExit && !aliveSetHasModule(g.aliveSet, g.modulePath)) return;
+	if (atExit && g.aliveSet.enabled && !aliveSetHasModule(g.aliveSet, g.modulePath)) return;
 	const p = atExit ? g.deinitProc : g.initProc;
 	const target = atExit ? CSection.ModuleDeinit : CSection.ModuleInit;
 	genStmt(g, p, node);
@@ -753,7 +754,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, staticPfx: string, cType: string): boolean {
 	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return false;
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
+	if (g.aliveSet.enabled && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
 	const body = cType.slice(0, cType.length - 1);
 	if (isHcrImageModule(g, g.modulePath) && g.emissionFacts.hcrTypeInfoOwners.has(body)) return false;
 	const od = d.initializer.data as ObjectLiteralData;
@@ -790,7 +791,7 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	const arrT = t0.kind == TypeKind.Ref ? t0.typeReturn : t0;
 	if (arrT == null || arrT.kind != TypeKind.Array) return false;
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
+	if (g.aliveSet.enabled && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
 	const arrCType = cType.slice(0, cType.length - 1);
 	const typeInfo = ensureRefArrayCellTypeInfo(g, arrT);
 	const viaRegistry = isHcrImageModule(g, g.modulePath);

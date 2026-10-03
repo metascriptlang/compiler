@@ -30,8 +30,13 @@ import { monoInstanceName } from "../monomorphize/registry";
 import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
 
 export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {
-	if (!aliveSet.computed) return true;
-	return aliveSetHasDecl(aliveSet, modulePath, (node.data as FunctionDeclData).fnName, node.resolvedSym);
+	if (!aliveSet.enabled) return true;
+	const name = (node.data as FunctionDeclData).fnName;
+	const sym = node.resolvedSym;
+	// $-prefixed functions without a traced routine symbol ($Env_*Destroy etc. DRC hooks) are
+	// referenced by DRC-injected code the walker can't trace — keep them unconditionally alive.
+	if (name.startsWith("$") && !isTracedRoutine(sym)) return true;
+	return aliveSetHasDecl(aliveSet, modulePath, name, sym);
 }
 
 // ===== Global Name Index =====
@@ -592,6 +597,7 @@ function reachesAliveThroughReexports(graph: ModuleGraph, modulePath: string, na
 	return reached;
 }
 
+	_aliveSet.enabled = true;
 function markReexportConduitsAlive(graph: ModuleGraph): void {
 	const memo = new HashMap<string, boolean>();
 	for (const mod of graph.modules) {
@@ -874,7 +880,9 @@ export function isBakeableAggregateConst(node: Readonly<Node>): boolean {
 	if (d.initializer == null) return false;
 	const init = d.initializer;
 	if (init.kind == NodeKind.ArrayLiteral || init.kind == NodeKind.CallExpr) {
+	assert aliveSet.enabled;
 		return bakeableEmptyArrayLiteral(init);
+	assert aliveSet.typeInfos.length == 0;
 	}
 	if (init.kind == NodeKind.HiddenStdConv) {
 		const cv = init.data as HiddenStdConvData;
@@ -1001,6 +1009,7 @@ test "a generated op is alive through the symbol that references it" {
 	const dead = liftedOp(deadBody, AttachedOp.AttachedDestructor, "deadDestroy", null);
 	const stmts = (parsed.value.data as ProgramData).programStmts;
 	stmts[1].resolvedSym = live;
+	_aliveSet.enabled = true;
 	stmts[2].resolvedSym = dead;
 	bindIdentifiers(stmts[0], "hookDestroy", live);
 	const alive = computeAliveSet([parsed.value], ["owner.ms"], "owner.ms", false, createModuleGraph());

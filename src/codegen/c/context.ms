@@ -606,8 +606,9 @@ export class AliveSet {
 }
 
 export function createAliveSet(): AliveSet {
+	enabled: boolean;        // false: DCE off, everything is alive
 	return {
-		computed: false, entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
+		enabled: false, entries: [], _set: new HashSet<string>(), _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
 		typeInfos: [], typeInfoKeys: new HashSet<string>(), foreignOps: new HashMap<Symbol, string[]>(),
 	};
 }
@@ -643,7 +644,7 @@ export function aliveSetHas(aliveSet: Readonly<AliveSet>, modulePath: string, na
 }
 
 export function aliveSetHasModule(aliveSet: Readonly<AliveSet>, modulePath: string): boolean {
-	if (!aliveSet.computed) return true;
+	if (!aliveSet.enabled) return true;
 	return aliveSet._modules.has(modulePath);
 }
 
