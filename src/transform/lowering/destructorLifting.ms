@@ -1861,20 +1861,23 @@ function generateSizedArrayEq(name: string, t: Type, lctx: LiftCtx, loc: SourceL
 	const bSym = makeSymbol("b", SymbolKind.Variable, t, false);
 	const counter = "$i_" + lctx.tempCounter.toString();
 	lctx.tempCounter = lctx.tempCounter + 1;
-	const ai = makeArrayAccess(makeTypedIdentResolved(aSym, t, loc), makeIdent(counter, loc), loc);
-	const bi = makeArrayAccess(makeTypedIdentResolved(bSym, t, loc), makeIdent(counter, loc), loc);
+	const counterSym = liftTempSym(lctx, counter, numberType());
+	const ai = makeArrayAccess(makeTypedIdentResolved(aSym, t, loc), makeTypedIdentResolved(counterSym, null, loc), loc);
+	const bi = makeArrayAccess(makeTypedIdentResolved(bSym, t, loc), makeTypedIdentResolved(counterSym, null, loc), loc);
 	ai.nodeType = elem;
 	bi.nodeType = elem;
 	const differs = makeUnary("!", fieldEqExpr(ai, bi, elem, lctx, loc), loc);
-	const next = makeBinary(makeIdent(counter, loc), "+", makeNumber(1, loc), loc);
+	const next = makeBinary(makeTypedIdentResolved(counterSym, null, loc), "+", makeNumber(1, loc), loc);
 	const step = makeBlock([
 		makeIf(differs, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), null, loc),
-		makeExprStmt(makeAssign(makeIdent(counter, loc), next, loc), loc),
+		makeExprStmt(makeAssign(makeTypedIdentResolved(counterSym, null, loc), next, loc), loc),
 	], loc);
 	const length = makeNumber(t.typeValue as number, loc);
-	const bound = makeBinary(makeIdent(counter, loc), "<", length, loc);
+	const bound = makeBinary(makeTypedIdentResolved(counterSym, null, loc), "<", length, loc);
+	const counterDecl = makeVarDecl(counter, makeNumber(0, loc), DeclKind.Let, loc);
+	counterDecl.resolvedSym = counterSym;
 	const buf: Node[] = [
-		makeVarDecl(counter, makeNumber(0, loc), DeclKind.Let, loc),
+		counterDecl,
 		makeWhile(bound, step, loc),
 		makeReturn(makeBool(true, loc), loc),
 	];
