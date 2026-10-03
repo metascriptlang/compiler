@@ -53,13 +53,23 @@ static inline msRefHeader* msHeader(void* p) {
 	return (msRefHeader*)((char*)p - sizeof(msRefHeader));
 }
 
-/* Runtime subtype test: walks the msTypeInfo.base chain (Nim `of` analog). */
+/* Runtime subtype test: display check (constant time); the exact-self compare
+ * first keeps zero-display hand-written runtime TypeInfos correct and the
+ * exact hit at one compare. Targets at display-overflow depth fall back to
+ * the base walk. */
 static inline bool msIsInstance(void* p, const msTypeInfo* target) {
 	if (p == NULL) return false;
 	const msTypeInfo* t = msHeader(p)->type;
-	while (t != NULL) {
-		if (t == target) return true;
-		t = t->base;
+	if (t == target) return true;
+	if (t == NULL) return false;
+	if (target->depth <= t->depth && target->depth < MS_TYPE_DISPLAY_MAX
+			&& t->display[target->depth] == target) return true;
+	if (target->depth >= MS_TYPE_DISPLAY_MAX) {
+		const msTypeInfo* b = t->base;
+		while (b != NULL) {
+			if (b == target) return true;
+			b = b->base;
+		}
 	}
 	return false;
 }
