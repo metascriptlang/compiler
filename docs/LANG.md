@@ -139,7 +139,7 @@ const masked = flags & 0x00FF00FF;
 const shifted = byte << 4;
 ```
 
-**Type Promotion Rules**: A numeric conversion is implicit only when no value of the source can lose information. Sized integers widen into any integer type whose range contains them (`uint8` → `int16`/`int32`/`int64`, `uint16` → `int32`/`int64`, `uint32` → `int64`, and every same-signedness widening), `int8`..`uint16` widen into `float32`, `int8`..`uint32` into `float64`/`number`, `float32` into `float64`/`number`, and `number` ↔ `float64` alias. Every other numeric conversion — narrowing, a sign change that can alter a value, a wider integer into a float, `float64`/`number` → `float32`, and any float → integer at run time — is the programmer's word: `as`. The rule holds at every slot: declarations, assignments, returns, arguments (functions, methods, extensions, generic methods such as `Map.set`), union members, `sink` parameters, and the operands of arithmetic, comparison and compound-assignment operators.
+**Type Promotion Rules**: A numeric conversion is implicit only when no value of the source can lose information. Sized integers widen into any integer type whose range contains them (`uint8` → `int16`/`int32`/`int64`, `uint16` → `int32`/`int64`, `uint32` → `int64`, and every same-signedness widening), `int8`..`uint16` widen into `float32`, `int8`..`uint32` into `float64`/`number`, `float32` into `float64`/`number`, and `number` ↔ `float64` alias. Every other numeric conversion — narrowing, a sign change that can alter a value, a wider integer into a float, `float64`/`number` → `float32`, and any float → integer at run time — is the programmer's word: `as`. The rule holds at every slot: declarations, assignments, returns, arguments (functions, methods, extensions, generic methods such as `Map.set`), union members, `sink` parameters, and the operands of arithmetic, comparison and compound-assignment operators. Into a union, a number goes into the one member that holds it implicitly (`int16` into `int32 | string`, `int32` into `number | string`); when two members hold it (`int32` into `int64 | number`) the conversion is refused and `as` names the member.
 
 Constants follow Nim's literal rule, with one safety addition:
 
@@ -147,7 +147,9 @@ Constants follow Nim's literal rule, with one safety addition:
 - A typed constant keeps its declared type: `const MAX: int64 = 100` narrows into `int32` only through `as`.
 - A float — literal or constant — never becomes an integer implicitly: `const i: int32 = 3.0` is refused; write `3`.
 - An integer a float cannot hold exactly is refused even as a literal (`const f: float32 = 16777217`), and so is a `uint64`/`int64` past what the slot holds. `16777217 as float32` rounds on the programmer's word.
-- A literal beside a `float32` operand is `float32`, so `x / 1000.0` and `x * 2` stay `float32`.
+- A float literal or an untyped float constant goes into a `float32` slot rounded once, as Nim does: `const K = 0.1; const f: float32 = K` and `step(1.0 / 60.0)` with a `float32` parameter compile, and every backend holds the same `0.10000000149011612`. A float that would round to infinity is refused, literal or constant (`const f: float32 = 1e39`); Nim yields `inf`.
+- A literal or an untyped constant beside a `float32` operand is `float32`, so `x / 1000.0`, `x * 2` and `x * K` with `const K = 0.1` stay `float32`. Nim keeps such an expression `float64` and narrows it at the slot, which the rule above refuses; the literal is rounded instead, once, where the source shows it.
+- A compound assignment `x op= y` converts `y` to the type of `x` as an assignment would (Nim's `+=`(x: var T, y: T)): `int32 += int64` and `float32 *= number` need `as`, `uint8 -= 1` and `number += int32` do not.
 
 An `out` argument is written in place, so its variable must have exactly the parameter's type. Measured refusals name the rule, the value when it is a constant, and the fix:
 
@@ -160,9 +162,12 @@ error: implicit int64 → number conversion in 'save' arg 0 may lose integer pre
 error: operator '+' would convert the int64 operand to number implicitly, which may lose integer precision above 2^53 — write an explicit 'as number' on it
 error: 'f' arg 0: an out parameter of type number is written in place, so the variable must be number, not int64 — declare it as number and convert after the call
 error: number out of range: '18446744073709551615' — an integer literal without a declared type is at most int64; declare the type that holds it (e.g. 'const x: uint64 = 18446744073709551615')
+error: number out of range: '1e+39' is outside the float32 range (±3.4028235e38) — float32 would hold Infinity; keep the value in a 'number'
+error: implicit int32 conversion into 'int64 | number' fits both int64 and number — write an explicit 'as int64' or 'as number'
+error: implicit int64 → int32 conversion in '+=' narrows — write an explicit 'as int32'
 ```
 
-Pins: `src/test/handoff/numericLattice.ms`, `numericConstants.ms`, `literalCoercion.ms`, `src/test/js/float32.ms`; corpus `1022`, `1031`.
+Pins: `src/test/handoff/numericLattice.ms`, `numericConstants.ms`, `literalCoercion.ms`, `src/test/js/float32.ms`; corpus `1022`, `1031`, `1032`, `1034`.
 
 ### Float Types
 
@@ -171,7 +176,7 @@ Pins: `src/test/handoff/numericLattice.ms`, `numericConstants.ms`, `literalCoerc
 | `float32` | 32-bit | `float` |
 | `float64` | 64-bit | `double` |
 
-`number` is `float64`. The `float32` type is available for interop with C APIs or GPU buffers that require single-precision. A `float32` has the same bits on every backend: JS rounds each float32 the program produces with `Math.fround` (a literal at compile time, every arithmetic result, every `as float32`, a 64-bit integer through a single-rounding helper), and C compiles with `-ffp-contract=off`, so `a * b + c` rounds the product the way JS does — measured `0.1 * 10 - 1` is `0` on both. Not covered and not measured here: `sin`, `exp` and the other math library calls, which each backend takes from its own platform library.
+`number` is `float64`. The `float32` type is available for interop with C APIs or GPU buffers that require single-precision. A `float32` has the same bits on every backend: JS rounds each float32 the program produces with `Math.fround` (a literal at compile time, every arithmetic result, every `as float32`, a 64-bit integer through a single-rounding helper), and C compiles with `-ffp-contract=off`, so `a * b + c` rounds the product the way JS does — measured `0.1 * 10 - 1` is `0` on both. The Raiser (macros, `--target=raiser`) rounds after every float32 operation and converts a `uint64` as unsigned, so corpus `1031`–`1033` print the same on C, JS and the Raiser. Not covered and not measured here: `sin`, `exp` and the other math library calls, which each backend takes from its own platform library.
 
 > **Reserved keywords**: `int`, `float`, and `double` are reserved by the lexer (they cannot be used as identifiers) but are **not currently usable as type names** — use the sized forms (`int32`, `float32`, `float64`). The unsized aliases are reserved for a future revision.
 
