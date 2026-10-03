@@ -10,7 +10,7 @@ import {
 import { ProgramError } from "./error";
 import { findProgramAddressOf } from "./macro";
 import { Pubkey, pubkeyOf } from "./pubkey";
-import { SeedTable, bytesAddress, emptyTable, findAt, tableAddress } from "./seed";
+import { SeedTable, bytesAddress, findAt, tableAddress } from "./seed";
 
 when (testBuild) {
 	import { account, failWith, instructionData, programId } from "./core";
@@ -219,7 +219,7 @@ export function undelegate(delegated: Account, buffer: Account, payer: Account, 
 		["undelegate-buffer", delegated],
 	);
 	if (!canonical.key.equals(buffer.key())) { return Result.err(ProgramError.invalidSeeds()); }
-	let seeds = emptyTable();
+	let seeds: SeedTable = { slices: [], bump: [0], count: 0 };
 	const count = try parseSeeds(callbackData, 8, seeds);
 	const expected = try findAt(
 		tableAddress(seeds.slices),

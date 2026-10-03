@@ -8,7 +8,6 @@ import {
 	SeedSlice,
 	SeedTable,
 	createAddressWithBump,
-	emptyTable,
 	fillWithBump,
 	findAt,
 	ownProgram,
@@ -781,7 +780,7 @@ export function createProgramAccountSeeded(
 	seeds: Span<SeedSlice>,
 	bump: uint8,
 ): Result<uint64, ProgramError> {
-	let signed = emptyTable();
+	let signed: SeedTable = { slices: [], bump: [0], count: 0 };
 	if (!fillWithBump(signed, tableAddress(seeds), seeds.length as uint64, bump)) {
 		return Result.err(ProgramError.maxSeedLengthExceeded());
 	}
@@ -1194,7 +1193,7 @@ export function createPdaOf<T>(
 	if (found.key != (target as Account).key()) {
 		return Result.err(ProgramError.constraintSeeds());
 	}
-	let signed = emptyTable();
+	let signed: SeedTable = { slices: [], bump: [0], count: 0 };
 	if (!fillWithBump(signed, tableAddress(seeds), seeds.length as uint64, found.bump)) {
 		return Result.err(ProgramError.maxSeedLengthExceeded());
 	}

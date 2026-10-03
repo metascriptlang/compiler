@@ -77,16 +77,24 @@ function fits(table: uint64, count: uint64, limit: uint64): boolean {
 	return true;
 }
 
+function createChecked(
+	table: uint64,
+	count: uint64,
+	program: uint64,
+): Result<Pubkey, ProgramError> {
+	let key = Pubkey.zero();
+	const status = msSolCreateProgramAddress(table, count, program, msSolSpanAddress(key.bytes));
+	if (status != 0) { return Result.err(ProgramError.invalidSeeds()); }
+	return Result.ok(key);
+}
+
 export function createAt(
 	table: uint64,
 	count: uint64,
 	program: uint64,
 ): Result<Pubkey, ProgramError> {
 	if (!fits(table, count, MAX_SEEDS)) { return Result.err(ProgramError.maxSeedLengthExceeded()); }
-	let key = Pubkey.zero();
-	const status = msSolCreateProgramAddress(table, count, program, msSolSpanAddress(key.bytes));
-	if (status != 0) { return Result.err(ProgramError.invalidSeeds()); }
-	return Result.ok(key);
+	return createChecked(table, count, program);
 }
 
 export function findAt(
@@ -125,10 +133,6 @@ export function findAddress(
 	return findAt(tableAddress(seeds), seeds.length as uint64, program);
 }
 
-export function emptyTable(): SeedTable {
-	return { slices: [], bump: [0], count: 0 };
-}
-
 // The bump byte lives in the caller's table; returning the table by value would leave it dangling.
 export function fillWithBump(
 	ref into: SeedTable,
@@ -149,9 +153,9 @@ export function createAddressWithBump(
 	bump: uint8,
 	program: uint64,
 ): Result<Pubkey, ProgramError> {
-	let signed = emptyTable();
+	let signed: SeedTable = { slices: [], bump: [0], count: 0 };
 	if (!fillWithBump(signed, tableAddress(seeds), seeds.length as uint64, bump)) {
 		return Result.err(ProgramError.maxSeedLengthExceeded());
 	}
-	return createAt(msSolTableAddress(signed.slices), signed.count, program);
+	return createChecked(msSolTableAddress(signed.slices), signed.count, program);
 }
