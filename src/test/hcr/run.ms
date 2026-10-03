@@ -762,6 +762,39 @@ function stepCrash(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function crossImageNew(): void {
+	const tag = "hcrCrossImageNew";
+	const dir = freshDir(`${TMP}/crossNew`);
+	for (const f of readDir(`${FIXTURES}/crossNew`)) copy(`${FIXTURES}/crossNew/${f}`, `${dir}/${f}`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr"], "an image that constructs another image's classes did not build");
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	if (!succeeded(ran) || !both(ran).contains("NEW kept 3")) {
+		console.log(both(ran));
+		failWith(tag, "msc run --hcr could not construct classes declared in another image");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function exitDestroy(): void {
+	const tag = "hcrExitDestroy";
+	const dir = freshDir(`${TMP}/exitDestroy`);
+	for (const f of readDir(`${FIXTURES}/exitDestroy`)) copy(`${FIXTURES}/exitDestroy/${f}`, `${dir}/${f}`);
+	const want = ["EXIT run app logic", "EXIT destroy app", "EXIT destroy logic"];
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr"], "the --hcr build failed");
+	for (const args of [["run", "app.ms"], ["run", "--hcr", "app.ms"]]) {
+		const ran = msc(dir, args);
+		const seen: string[] = [];
+		for (const line of lines(both(ran))) {
+			if (line.startsWith("EXIT ")) seen.push(line);
+		}
+		if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+			console.log(both(ran));
+			failWith(tag, `msc ${args.join(" ")}: module globals were not destroyed once each at exit, entry first`);
+		}
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function reloadOff(): void {
 	const tag = "hcrReloadOff";
 	const dir = freshDir(`${TMP}/reloadOff`);
@@ -1120,6 +1153,8 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrLiftKinds", run: liftKinds },
 	{ name: "hcrRun", run: runCommand },
 	{ name: "hcrStepCrash", run: stepCrash },
+	{ name: "hcrCrossImageNew", run: crossImageNew },
+	{ name: "hcrExitDestroy", run: exitDestroy },
 	{ name: "hcrRegistryVariables", run: registryVariables },
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
 	{ name: "hcrFunctionValues", run: functionValues },
