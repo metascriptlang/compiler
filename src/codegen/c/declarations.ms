@@ -27,6 +27,7 @@ import { isBakeableAggregateConst, functionDeclIsAlive } from "../../checker/rea
 // ===== genDecl — main declaration dispatcher =====
 
 
+
 export function genDecl(g: CGen, node: Readonly<Node>, exported: boolean): void {
 	if (node == null) return;
 	if (g.preparingDeclarations && node.kind != NodeKind.FunctionDecl

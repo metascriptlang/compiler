@@ -1,12 +1,12 @@
 // Global Dead Code Elimination — Reachability Analysis
 //
 // Computes an AliveSet of symbols by walking ASTs from roots (main, top-level
-// stmts, test decls, exported symbols); symbol-less TypeInfo and hook
-// declarations are still keyed "modulePath:name".
+// stmts, test decls, exported symbols); symbol-less TypeInfo declarations are
+// still keyed "modulePath:name".
 
 import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, HiddenStdConvData,
 	ExportDeclData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
-	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
+	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData, IdentifierData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
 import {
@@ -23,9 +23,9 @@ import {
 	aliveSetModuleCount,
 } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
-import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey } from "../codegen/c/types";
-import { hasFlag, SymbolFlag, lookupCtorDefaults } from "./symbol";
-import { classParentOf, hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance } from "./types";
+import { isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey } from "../codegen/c/types";
+import { hasFlag, SymbolFlag } from "./symbol";
+import { hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance, unwrapRef } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
@@ -152,15 +152,6 @@ function walkBody(node: Node, modulePath: string): void {
 	// Identifier — mark its declaration alive
 	if (k == NodeKind.Identifier) {
 		const sym = node.resolvedSym;
-		if (sym != null && hasFlag(sym, SymbolFlag.GeneratedOp) && sym.modulePath == "") {
-			noteOpUse(sym, modulePath);
-			markAndWalk(modulePath, sym.name);
-			const hookMod = nameIndexLookup(sym.name);
-			if (hookMod != "" && hookMod != modulePath) {
-				markAndWalk(hookMod, sym.name);
-			}
-			return;
-		}
 		if (sym != null) markReferenced(sym, modulePath);
 		return;
 	}
@@ -287,31 +278,26 @@ function markPromiseAllResult(resultType: Type, modulePath: string): void {
 	markReferenced(requireOpByKey(createArray(elem), AttachedOp.AttachedDestructor), modulePath);
 }
 
-// Union narrow/project sites make codegen emit variant Copy/Destroy calls by
-// name with no AST edge — any walked node typed Union pins its variants' hooks.
+// Union narrow/project sites make codegen emit variant Copy/Destroy calls with no AST
+// edge — any walked node typed Union pins its variants' ops.
 function markUnionHookEdges(t: Type): void {
 	for (const vt of t.typeChildren) {
 		if (vt == null) continue;
 		let vbase = vt;
 		if ((vt.kind == TypeKind.Ref || vt.kind == TypeKind.Ptr) && vt.typeReturn != null) vbase = vt.typeReturn;
-		const vn = hookBaseCName(vbase.typeName, vbase, null);
-		if (vn.length == 0) continue;
-		for (const hn of [vn + "Copy", vn + "Destroy", vn + "Trace"]) {
-			const h = nameIndexLookup(hn);
-			if (h != "") {
-				markAndWalk(h, hn);
-			}
-		}
+		markOpEdge(getOpByKey(vbase, AttachedOp.AttachedAsgn));
+		markOpEdge(getOpByKey(vbase, AttachedOp.AttachedDestructor));
+		markOpEdge(getOpByKey(vbase, AttachedOp.AttachedTrace));
 	}
 	if (t.typeName.length > 0) {
-		const un = hookBaseCName(t.typeName, t, null);
-		for (const uhn of [un + "Copy", un + "Sink", un + "WasMoved"]) {
-			const uh = nameIndexLookup(uhn);
-			if (uh != "") {
-				markAndWalk(uh, uhn);
-			}
-		}
+		markOpEdge(getOpByKey(t, AttachedOp.AttachedAsgn));
+		markOpEdge(getOpByKey(t, AttachedOp.AttachedSink));
+		markOpEdge(getOpByKey(t, AttachedOp.AttachedWasMoved));
 	}
+}
+
+function markOpEdge(op: Symbol | null): void {
+	if (op != null) markSymAndWalk(op, "");
 }
 
 // Allocation site → <T>TypeInfo edge. The emitted allocation references the
@@ -353,25 +339,18 @@ function markTypeInfoOf(type: Type | null, modulePath: string): void {
 	if (t.kind != TypeKind.Struct && t.kind != TypeKind.TypeReference && t.kind != TypeKind.GenericInstance && t.kind != TypeKind.Union) return;
 	if (t.kind == TypeKind.GenericInstance && t.typeName != "" && t.typeChildren.length > 0) {
 		const mono = monoInstanceName(t);
-		for (const hn of [mono + "TypeInfo", mono + "Destroy", mono + "Trace"]) {
-			const h = nameIndexLookup(hn);
-			if (h != "") {
-				markAndWalk(h, hn);
-			}
-		}
-		markTypeInfoOf(classParentOf(t), modulePath);
+		const monoInfo = mono + "TypeInfo";
+		const monoHome = nameIndexLookup(monoInfo);
+		if (monoHome != "") markAndWalk(monoHome, monoInfo);
+		markOpEdge(getOpByKey(t, AttachedOp.AttachedDestructor));
+		markOpEdge(getOpByKey(t, AttachedOp.AttachedTrace));
 	}
 	if (t.kind == TypeKind.Union) {
 		markUnionHookEdges(t);
 	}
 	if (t.kind == TypeKind.Struct && (isAnonTypeName(t.typeName) || t.typeName.startsWith("__anon")) && t.typeNames.length > 0) {
-		const an = isAnonTypeName(t.typeName) ? anonTypeName(t) : t.typeName;
-		for (const hn of [an + "Destroy", an + "Trace"]) {
-			const h = nameIndexLookup(hn);
-			if (h != "") {
-				markAndWalk(h, hn);
-			}
-		}
+		markOpEdge(getOpByKey(t, AttachedOp.AttachedDestructor));
+		markOpEdge(getOpByKey(t, AttachedOp.AttachedTrace));
 		return;
 	}
 	const tn = t.typeName;
@@ -480,7 +459,7 @@ function markSymAndWalk(sym: Symbol, modulePath: string): void {
 	_visitedSyms.add(sym);
 	aliveSetAddSym(_aliveSet, sym);
 	const home = sym.modulePath != "" ? sym.modulePath : modulePath;
-	aliveSetAddModule(_aliveSet, home);
+	if (home != "") aliveSetAddModule(_aliveSet, home);
 	markDispatchOverrides(dispatchEntryFor(sym));
 	let di = _symDeclHead.get(sym) ?? -1;
 	if (di < 0 && sym.instantiatedFrom != null) {
@@ -536,10 +515,10 @@ function walkDecl(di: int32): void {
 		|| (found.kind == NodeKind.ClassDecl && found.resolvedSym != null
 			&& found.resolvedSym.symbolKind == SymbolKind.Actor);
 	if (isActorOrigin) {
-		const acName = hookBaseCNameOfSym(name, found.resolvedSym);
 		markAndWalk(modulePath, name + "TypeInfo");
-		markAndWalk(modulePath, acName + "Destroy");
-		markAndWalk(modulePath, acName + "Trace");
+		const actorBody = unwrapRef(found.resolvedSym.symbolType);
+		markOpEdge(getOpByKey(actorBody, AttachedOp.AttachedDestructor));
+		markOpEdge(getOpByKey(actorBody, AttachedOp.AttachedTrace));
 	}
 }
 
@@ -722,10 +701,12 @@ export function computeAliveSet(
 				}
 			}
 
-			// Root 2: HCR root functions.
-			if (bare.kind == NodeKind.FunctionDecl && bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
-				markSymAndWalk(bare.resolvedSym, modulePath);
-				continue;
+			// Root 2: exported root functions.
+			if (bare.kind == NodeKind.FunctionDecl) {
+				if (bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
+					markSymAndWalk(bare.resolvedSym, modulePath);
+					continue;
+				}
 			}
 
 			// Root 3: TestDecl nodes — in test mode (all modules) or entry module (build mode).
@@ -982,6 +963,7 @@ test "a computed alive set keeps the side-effect imports of the entry and their 
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
 import { createStruct, createRef, createUnion, nullType, stringType } from "./types";
+import { liftedOp, resetHookSyms } from "../codegen/c/types";
 import { aliveSetHas } from "../codegen/c/context";
 import { makeSymbol, setFlag } from "./symbol";
 import { ExprStmtData } from "../ast/node";
@@ -1000,32 +982,27 @@ test "nullable reference allocation keeps its concrete TypeInfo alive" {
 	assert aliveSetHas(alive, "owner.ms", "HolderTypeInfo");
 }
 
-function generatedHookProgram(source: string, hookName: string): Node | null {
-	const parsed = parseSource(source);
-	if (!parsed.ok) return null;
-	const hook = makeSymbol(hookName, SymbolKind.Function, null, false);
-	setFlag(hook, SymbolFlag.GeneratedOp);
-	for (const stmt of (parsed.value.data as ProgramData).programStmts) {
-		if (stmt.kind == NodeKind.FunctionDecl) stmt.resolvedSym = hook;
-		else ((stmt.data as ExprStmtData).expr.data as CallExprData).callee.resolvedSym = hook;
-	}
-	return parsed.value;
+function bindIdentifiers(node: Node, name: string, sym: Symbol): void {
+	if (node.kind == NodeKind.Identifier && (node.data as IdentifierData).name == name) node.resolvedSym = sym;
+	forEachChild(node, (child: Node): void => {
+		bindIdentifiers(child, name, sym);
+	});
 }
 
-test "a frame hook nothing calls stays dead" {
-	const program = generatedHookProgram("function $Env_deadSharedDestroy(): void {}", "$Env_deadSharedDestroy");
-	assert program != null;
-	if (program == null) return;
-	const alive = computeAliveSet([program], ["owner.ms"], "owner.ms", false, createModuleGraph());
-	assert !functionDeclIsAlive(alive, "owner.ms", (program.data as ProgramData).programStmts[0]);
-}
-
-test "a frame hook a live statement calls stays alive" {
-	const program = generatedHookProgram("function $Env_liveSharedDestroy(): void {}\n$Env_liveSharedDestroy();", "$Env_liveSharedDestroy");
-	assert program != null;
-	if (program == null) return;
-	const alive = computeAliveSet([program], ["owner.ms"], "owner.ms", false, createModuleGraph());
-	assert functionDeclIsAlive(alive, "owner.ms", (program.data as ProgramData).programStmts[0]);
+test "a generated op is alive through the symbol that references it" {
+	const parsed = parseSource("function main(): void { hookDestroy(); } function hookDestroy(): void {} function deadDestroy(): void {}");
+	assert parsed.ok;
+	if (!parsed.ok) return;
+	resetHookSyms();
+	const live = liftedOp(createStruct("HookLive", ["v"], [stringType()], true), AttachedOp.AttachedDestructor, "hookDestroy", null);
+	const dead = liftedOp(createStruct("HookDead", ["v"], [stringType()], true), AttachedOp.AttachedDestructor, "deadDestroy", null);
+	const stmts = (parsed.value.data as ProgramData).programStmts;
+	stmts[1].resolvedSym = live;
+	stmts[2].resolvedSym = dead;
+	bindIdentifiers(stmts[0], "hookDestroy", live);
+	const alive = computeAliveSet([parsed.value], ["owner.ms"], "owner.ms", false, createModuleGraph());
+	assert aliveSetHasSym(alive, live);
+	assert !aliveSetHasSym(alive, dead);
 }
 
 function importGraph(edges: string[][]): ModuleGraph {
