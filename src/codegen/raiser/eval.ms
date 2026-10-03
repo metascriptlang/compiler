@@ -467,6 +467,20 @@ test "engine: a class field with no initializer holds its type's zero value" {
 	assert vm.output == "0 0 false [] 0 0 []\n";
 }
 
+test "engine: a method called inside a function binds its receiver as this" {
+	const vm = evalOrcVM("class Reg { tag: string = \"reg\"; n: int32 = 3;"
+		+ " echo(name: string): string { return this.tag + \":\" + name; }"
+		+ " plain(): string { return this.tag; }"
+		+ " bump(): int32 { this.n = this.n + 1; return this.n; } }"
+		+ " function viaLocal(): string { const r = new Reg(); return r.echo(\"x\") + \" \" + r.plain(); }"
+		+ " function viaParam(r: Reg): string { const b = r.bump(); return r.echo(\"y\") + \" \" + b.toString(); }"
+		+ " function viaClosure(): string { const r = new Reg(); const inner = (): int32 => r.bump(); inner(); return inner().toString(); }"
+		+ " const t = new Reg();"
+		+ " console.log(`${t.echo(\"t\")} ${viaLocal()} ${viaParam(new Reg())} ${viaClosure()}`);");
+	assert vm.error == "";
+	assert vm.output == "reg:t reg:x reg reg:y 4 5\n";
+}
+
 test "engine: new Array(n) holds n distinct zero elements" {
 	const vm = evalOrcVM("struct E { h: int64; key: string; }"
 		+ " let es: Vec<E> = new Array(3); es[2].h = 5;"
