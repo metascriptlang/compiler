@@ -6,8 +6,6 @@ import {
 	Mutable,
 	Program,
 	ProgramError,
-	Pubkey,
-	Seeds,
 	System,
 	Writable,
 	WritableSigner,
@@ -22,6 +20,7 @@ import {
 	instruction,
 	leBytes,
 	pdaWithBump,
+	signed,
 } from "std/solana";
 import {
 	Mint,
@@ -30,7 +29,6 @@ import {
 	createAssociatedFor,
 	expectAssociated,
 	transferTokens,
-	transferTokensSigned,
 } from "std/solana/token";
 import { Escrow, EscrowError, EscrowOp, MakeArgs, escrowError } from "./layout";
 
@@ -70,10 +68,6 @@ export struct RefundAccounts {
 	systemProgram: Program<System>;
 }
 
-function escrowSigner(maker: Pubkey, seed: uint64, bump: uint8): Seeds {
-	return Seeds.empty(4).addText("escrow").addPubkey(maker).addU64(seed).withBump(bump);
-}
-
 function make(): Result<uint64, ProgramError> {
 	const a = try args<MakeArgs>();
 	if (a.deposit == 0 || a.receive == 0) {
@@ -108,7 +102,7 @@ function make(): Result<uint64, ProgramError> {
 		x.makerAtaA,
 		vault,
 		x.mintA,
-		x.maker.asSigner(),
+		x.maker as Account,
 		a.deposit,
 	);
 	return Result.ok(a.deposit);
@@ -135,20 +129,18 @@ function take(): Result<uint64, ProgramError> {
 		x.takerAtaB,
 		x.makerAtaB,
 		x.mintB,
-		x.taker.asSigner(),
+		x.taker as Account,
 		receive,
 	);
 	const held = (try x.vault.read()).amount;
-	const signer = escrowSigner(escrow.maker, escrow.seed, verified.bump);
-	const _released = try transferTokensSigned(
-		x.vault,
-		x.takerAtaA,
-		x.mintA,
-		escrowAccount,
-		held,
-		signer,
+	const _released = try signed(
+		transferTokens(x.vault, x.takerAtaA, x.mintA, escrowAccount, held),
+		["escrow", escrow.maker, leBytes(escrow.seed), [verified.bump]],
 	);
-	const _vaultClosed = try closeTokenAccount(x.vault, x.maker, escrowAccount, signer);
+	const _vaultClosed = try signed(
+		closeTokenAccount(x.vault, x.maker, escrowAccount),
+		["escrow", escrow.maker, leBytes(escrow.seed), [verified.bump]],
+	);
 	const _escrowClosed = try close(x.escrow, x.maker);
 	return Result.ok(held);
 }
@@ -167,20 +159,13 @@ function refund(): Result<uint64, ProgramError> {
 	const _vault = try expectAssociated(x.vault.key(), escrowAccount.key(), x.mintA);
 	const _ownAta = try expectAssociated(x.makerAtaA.key(), x.maker.key(), x.mintA);
 	const held = (try x.vault.read()).amount;
-	const signer = escrowSigner(escrow.maker, escrow.seed, verified.bump);
-	const _returned = try transferTokensSigned(
-		x.vault,
-		x.makerAtaA,
-		x.mintA,
-		escrowAccount,
-		held,
-		signer,
+	const _returned = try signed(
+		transferTokens(x.vault, x.makerAtaA, x.mintA, escrowAccount, held),
+		["escrow", escrow.maker, leBytes(escrow.seed), [verified.bump]],
 	);
-	const _vaultClosed = try closeTokenAccount(
-		x.vault,
-		x.maker.asWritable(),
-		escrowAccount,
-		signer,
+	const _vaultClosed = try signed(
+		closeTokenAccount(x.vault, x.maker.asWritable(), escrowAccount),
+		["escrow", escrow.maker, leBytes(escrow.seed), [verified.bump]],
 	);
 	const _escrowClosed = try close(x.escrow, x.maker.asWritable());
 	return Result.ok(held);
@@ -204,7 +189,7 @@ when (!testBuild) {
 }
 
 when (testBuild) {
-	import { Discriminator, findProgramAddressOf, instructionDiscriminator } from "std/solana";
+	import { Discriminator, Pubkey, findProgramAddressOf, instructionDiscriminator } from "std/solana";
 	import { HostAccount, invocations, run, signerIs, textBytes } from "std/solana/host";
 	import { associatedTokenAddress } from "std/solana/token";
 

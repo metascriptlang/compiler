@@ -11,6 +11,7 @@ extern function msSolStringAddress(text: string): uint64;
 extern function msSolStringLength(text: string): uint64;
 extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 extern function msSolTableAddress(table: Span<SeedSlice>): uint64 from "msSolSpanAddress";
+extern function msSolSignersAddress(table: Span<SignerSeeds>): uint64 from "msSolSpanAddress";
 extern function msSolCreateProgramAddress(
 	seeds: uint64,
 	seedCount: uint64,
@@ -32,6 +33,16 @@ const MAX_SEED_LENGTH: uint64 = 32;
 export struct SeedSlice {
 	address: uint64;
 	length: uint64;
+}
+
+export struct SignerSeeds {
+	address: uint64;
+	length: uint64;
+}
+
+export struct Signing {
+	table: uint64;
+	count: uint64;
 }
 
 export struct ProgramAddress {
@@ -57,6 +68,14 @@ export function seedKey(address: uint64): SeedSlice {
 	return { address: address, length: 32 };
 }
 
+export function signerOf(seeds: Span<SeedSlice>): SignerSeeds {
+	return { address: msSolTableAddress(seeds), length: seeds.length as uint64 };
+}
+
+export function unsigned(): Signing {
+	return { table: 0, count: 0 };
+}
+
 export function tableAddress(table: Span<SeedSlice>): uint64 {
 	return msSolTableAddress(table);
 }
@@ -75,6 +94,11 @@ function fits(table: uint64, count: uint64, limit: uint64): boolean {
 		if (msSolLoadU64(table + index * 16 + 8) > MAX_SEED_LENGTH) { return false; }
 	}
 	return true;
+}
+
+export function signingOf(signers: Span<SignerSeeds>): Signing {
+	if (signers.length == 0) { return unsigned(); }
+	return { table: msSolSignersAddress(signers), count: signers.length as uint64 };
 }
 
 function createChecked(
@@ -158,4 +182,9 @@ export function createAddressWithBump(
 		return Result.err(ProgramError.maxSeedLengthExceeded());
 	}
 	return createChecked(msSolTableAddress(signed.slices), signed.count, program);
+}
+
+export function signingOfBumped(ref signed: SeedTable, ref one: SignerSeeds[1]): Signing {
+	one[0] = { address: msSolTableAddress(signed.slices), length: signed.count };
+	return { table: msSolSignersAddress(one), count: 1 };
 }

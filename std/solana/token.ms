@@ -6,8 +6,6 @@ import {
 	Instruction,
 	Program,
 	ProgramAddress,
-	Seeds,
-	Signer,
 	System,
 	Writable,
 	WritableSigner,
@@ -16,7 +14,7 @@ import {
 import { ProgramError } from "./error";
 import { isTokenProgram, tokenInstruction } from "./mint";
 import { Pubkey } from "./pubkey";
-import { SeedSlice, bytesAddress, findAddress, seedBytes } from "./seed";
+import { SeedSlice, SignerSeeds, bytesAddress, findAddress, seedBytes } from "./seed";
 
 export { initializeMint2 } from "./mint";
 export { createMintPda } from "./macro";
@@ -33,7 +31,7 @@ when (testBuild) {
 		writableSigner,
 	} from "./core";
 	import { HostAccount, invocations, logs, run, signerIs, textBytes } from "./host";
-	import { accounts, findProgramAddressOf } from "./macro";
+	import { accounts, findProgramAddressOf, signed } from "./macro";
 }
 
 export enum TokenAccountState {
@@ -306,7 +304,7 @@ export function mintTo(
 	destination: Account,
 	authority: Account,
 	amount: uint64,
-	signer: Seeds,
+	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
 	const instruction = try tokenInstruction(program, 3, 9);
 	instruction.addWritable(mint);
@@ -314,7 +312,7 @@ export function mintTo(
 	instruction.addReadonlySigner(authority);
 	instruction.appendU8(7);
 	instruction.appendU64(amount);
-	return instruction.invokeSigned(signer);
+	return instruction.invoke(signers);
 }
 
 export function transferChecked(
@@ -325,7 +323,7 @@ export function transferChecked(
 	authority: Account,
 	amount: uint64,
 	decimals: uint8,
-	signer: Seeds,
+	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
 	const instruction = try tokenInstruction(program, 4, 10);
 	instruction.addWritable(source);
@@ -335,7 +333,7 @@ export function transferChecked(
 	instruction.appendU8(12);
 	instruction.appendU64(amount);
 	instruction.appendU8(decimals);
-	return instruction.invokeSigned(signer);
+	return instruction.invoke(signers);
 }
 
 export function closeAccount(
@@ -343,14 +341,14 @@ export function closeAccount(
 	account: Account,
 	destination: Account,
 	authority: Account,
-	signer: Seeds,
+	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
 	const instruction = try tokenInstruction(program, 3, 1);
 	instruction.addWritable(account);
 	instruction.addWritable(destination);
 	instruction.addReadonlySigner(authority);
 	instruction.appendU8(9);
-	return instruction.invokeSigned(signer);
+	return instruction.invoke(signers);
 }
 
 export function associatedTokenAddress(
@@ -376,7 +374,7 @@ function createAssociated(
 	systemProgram: Account,
 	program: Account,
 	discriminator: uint8,
-	signer: Seeds,
+	signers: Span<SignerSeeds>,
 ): Result<uint64, ProgramError> {
 	if (!isTokenProgram(program.key())) { return Result.err(ProgramError.incorrectProgramId()); }
 	const instruction = Instruction.forProgram(Pubkey.associatedTokenProgram(), 6, 1);
@@ -387,7 +385,7 @@ function createAssociated(
 	instruction.addReadonly(systemProgram);
 	instruction.addReadonly(program);
 	instruction.appendU8(discriminator);
-	return instruction.invokeSigned(signer);
+	return instruction.invoke(signers);
 }
 
 export function createAssociatedToken(
@@ -397,9 +395,9 @@ export function createAssociatedToken(
 	mint: Account,
 	systemProgram: Account,
 	program: Account,
-	signer: Seeds,
+	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
-	return createAssociated(payer, associated, wallet, mint, systemProgram, program, 0, signer);
+	return createAssociated(payer, associated, wallet, mint, systemProgram, program, 0, signers);
 }
 
 export function createAssociatedTokenIdempotent(
@@ -409,9 +407,9 @@ export function createAssociatedTokenIdempotent(
 	mint: Account,
 	systemProgram: Account,
 	program: Account,
-	signer: Seeds,
+	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
-	return createAssociated(payer, associated, wallet, mint, systemProgram, program, 1, signer);
+	return createAssociated(payer, associated, wallet, mint, systemProgram, program, 1, signers);
 }
 
 export function acceptsOwner(this typeof Mint, owner: Pubkey): boolean {
@@ -471,19 +469,9 @@ export function transferTokens(
 	from: ExternalMutable<TokenAccount>,
 	to: ExternalMutable<TokenAccount>,
 	mint: External<Mint>,
-	authority: Signer,
-	amount: uint64,
-): Result<uint64, ProgramError> {
-	return transferTokensSigned(from, to, mint, authority as Account, amount, Seeds.none());
-}
-
-export function transferTokensSigned(
-	from: ExternalMutable<TokenAccount>,
-	to: ExternalMutable<TokenAccount>,
-	mint: External<Mint>,
 	authority: Account,
 	amount: uint64,
-	signer: Seeds,
+	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
 	const decimals = try mintDecimals(mint);
 	return transferChecked(
@@ -494,7 +482,7 @@ export function transferTokensSigned(
 		authority,
 		amount,
 		decimals,
-		signer,
+		signers,
 	);
 }
 
@@ -503,20 +491,20 @@ export function mintTokens(
 	to: ExternalMutable<TokenAccount>,
 	authority: Account,
 	amount: uint64,
-	signer: Seeds,
+	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
 	const target = mint as Account;
-	return mintTo(target.owner(), target, to as Account, authority, amount, signer);
+	return mintTo(target.owner(), target, to as Account, authority, amount, signers);
 }
 
 export function closeTokenAccount(
 	account: ExternalMutable<TokenAccount>,
 	destination: Writable,
 	authority: Account,
-	signer: Seeds,
+	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
 	const closing = account as Account;
-	return closeAccount(closing.owner(), closing, destination as Account, authority, signer);
+	return closeAccount(closing.owner(), closing, destination as Account, authority, signers);
 }
 
 export function createAssociatedFor(
@@ -537,7 +525,6 @@ export function createAssociatedFor(
 		mint as Account,
 		systemProgram as Account,
 		tokenProgram,
-		Seeds.none(),
 	);
 }
 
@@ -811,73 +798,65 @@ when (testBuild) {
 		const target = try account(1);
 		const authority = try account(2);
 		const payer = try account(3);
-		const none = Seeds.none();
 		const token = Pubkey.tokenProgram();
-		const signing = Seeds.empty(2).addText("auth").addU8(5);
-		if (op == 7) { return mintTo(token, mint, target, authority, 500, signing); }
-		if (op == 8) { return transferChecked(token, payer, mint, target, authority, 250, 6, signing); }
-		if (op == 9) { return closeAccount(token, target, payer, authority, signing); }
+		if (op == 7) {
+			return signed(mintTo(token, mint, target, authority, 500), ["auth", [5]]);
+		}
+		if (op == 8) {
+			return signed(
+				transferChecked(token, payer, mint, target, authority, 250, 6),
+				["auth", [5]],
+			);
+		}
+		if (op == 9) {
+			return signed(closeAccount(token, target, payer, authority), ["auth", [5]]);
+		}
 		if (op == 10) {
 			const system = try account(4);
 			const program = try account(5);
-			return createAssociatedToken(payer, target, authority, mint, system, program, signing);
+			return signed(
+				createAssociatedToken(payer, target, authority, mint, system, program),
+				["auth", [5]],
+			);
 		}
 		if (op == 11) {
 			const system = try account(4);
 			const program = try account(5);
-			return createAssociatedTokenIdempotent(
-				payer,
-				target,
-				authority,
-				mint,
-				system,
-				program,
-				signing,
+			return signed(
+				createAssociatedTokenIdempotent(payer, target, authority, mint, system, program),
+				["auth", [5]],
 			);
 		}
 		if (op == 12) {
-			return mintTokens(try externalMutable<Mint>(0), try externalMutable<TokenAccount>(1), authority, 500, signing);
+			const minting = try externalMutable<Mint>(0);
+			const receiving = try externalMutable<TokenAccount>(1);
+			return signed(mintTokens(minting, receiving, authority, 500), ["auth", [5]]);
 		}
 		if (op == 13) {
-			return closeTokenAccount(
-				try externalMutable<TokenAccount>(1),
-				try writable(3),
-				authority,
-				signing,
-			);
+			const closing = try externalMutable<TokenAccount>(1);
+			const destination = try writable(3);
+			return signed(closeTokenAccount(closing, destination, authority), ["auth", [5]]);
 		}
 		if (op == 14) {
-			return transferTokensSigned(
-				try externalMutable<TokenAccount>(3),
-				try externalMutable<TokenAccount>(1),
-				try external<Mint>(0),
-				authority,
-				250,
-				signing,
-			);
+			const from = try externalMutable<TokenAccount>(3);
+			const to = try externalMutable<TokenAccount>(1);
+			const typed = try external<Mint>(0);
+			return signed(transferTokens(from, to, typed, authority, 250), ["auth", [5]]);
 		}
-		if (op == 0) { return mintTo(token, mint, target, authority, 500, none); }
+		if (op == 0) { return mintTo(token, mint, target, authority, 500); }
 		if (op == 1) {
 			const extended = Pubkey.token2022Program();
-			return transferChecked(extended, payer, mint, target, authority, 250, 6, none);
+			return transferChecked(extended, payer, mint, target, authority, 250, 6);
 		}
-		if (op == 2) { return closeAccount(token, target, payer, authority, none); }
+		if (op == 2) { return closeAccount(token, target, payer, authority); }
 		if (op == 3) { return initializeMint2(token, mint, 6, authority.key(), null); }
 		if (op == 4) { return initializeMint2(token, mint, 6, authority.key(), payer.key()); }
 		if (op == 5) {
 			const system = try account(4);
 			const program = try account(5);
-			return createAssociatedTokenIdempotent(
-				payer,
-				target,
-				authority,
-				mint,
-				system,
-				program,
-				none,
-			);
+			return createAssociatedTokenIdempotent(payer, target, authority, mint, system, program);
 		}
-		return mintTo(keyOf(3), mint, target, authority, 500, none);
+		return mintTo(keyOf(3), mint, target, authority, 500);
 	}
 
 	function cpiEntry(): void {
@@ -1070,6 +1049,7 @@ when (testBuild) {
 }
 
 when (testBuild) {
+	import { Signer } from "./core";
 	export struct TransferAccounts {
 		owner: Signer;
 		from: ExternalMutable<TokenAccount>;
@@ -1083,7 +1063,7 @@ when (testBuild) {
 		if (op == 1) {
 			const _checked = try expectAssociated(x.from.key(), x.owner.key(), x.mint);
 		}
-		return transferTokens(x.from, x.to, x.mint, x.owner, 250);
+		return transferTokens(x.from, x.to, x.mint, x.owner as Account, 250);
 	}
 
 	function typedTransferEntry(): void {

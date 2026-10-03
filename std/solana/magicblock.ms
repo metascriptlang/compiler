@@ -1,40 +1,23 @@
-import {
-	Account,
-	Bytes,
-	Instruction,
-	Seeds,
-	assignTo,
-	createAccount,
-	createProgramAccountSeeded,
-} from "./core";
+import { Account, Bytes, Instruction, createProgramAccountSeeded } from "./core";
 import { ProgramError } from "./error";
 import { findProgramAddressOf } from "./macro";
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { SeedTable, bytesAddress, findAt, tableAddress } from "./seed";
 
+export { DelegationAccounts, DelegationConfig, anyValidator, delegationProgram, onValidator } from "./delegation";
+export { delegate } from "./macro";
+
 when (testBuild) {
 	import { account, failWith, instructionData, programId } from "./core";
-	import { findProgramAddress } from "./macro";
+	import {
+		DelegationAccounts,
+		DelegationConfig,
+		anyValidator,
+		delegationProgram,
+		onValidator,
+	} from "./delegation";
+	import { delegate, findProgramAddress } from "./macro";
 	import { HostAccount, invocations, run, signerIs, textBytes } from "./host";
-}
-
-export struct DelegationAccounts {
-	payer: Account;
-	delegated: Account;
-	ownerProgram: Account;
-	buffer: Account;
-	delegationRecord: Account;
-	delegationMetadata: Account;
-	systemProgram: Account;
-}
-
-export struct DelegationConfig {
-	commitFrequencyMs: uint32;
-	validator: Pubkey;
-}
-
-export function delegationProgram(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"); };
 }
 
 export function magicProgram(this typeof Pubkey): Pubkey {
@@ -43,81 +26,6 @@ export function magicProgram(this typeof Pubkey): Pubkey {
 
 export function magicContext(this typeof Pubkey): Pubkey {
 	return @comptime { return pubkeyOf("MagicContext1111111111111111111111111111111"); };
-}
-
-export function anyValidator(this typeof DelegationConfig): DelegationConfig {
-	const unlimited: uint32 = 0xffffffff;
-	const config: DelegationConfig = { commitFrequencyMs: unlimited, validator: Pubkey.zero() };
-	return config;
-}
-
-export function onValidator(this typeof DelegationConfig, validator: Pubkey): DelegationConfig {
-	const unlimited: uint32 = 0xffffffff;
-	const config: DelegationConfig = { commitFrequencyMs: unlimited, validator: validator };
-	return config;
-}
-
-function closeBuffer(payer: Account, buffer: Account): Result<uint64, ProgramError> {
-	const reclaimed = buffer.lamports();
-	payer.setLamports(payer.lamports() + reclaimed);
-	buffer.setLamports(0);
-	const _emptied = try buffer.resize(0);
-	buffer.assign(Pubkey.systemProgram());
-	return Result.ok(reclaimed);
-}
-
-export function delegate(accounts: DelegationAccounts, seeds: Seeds, bump: uint8, config: DelegationConfig): Result<uint64, ProgramError> {
-	if (!accounts.payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
-	const ownerKey = accounts.ownerProgram.key();
-	const bufferAddress = try findProgramAddressOf(ownerKey, ["buffer", accounts.delegated]);
-	if (!bufferAddress.key.equals(accounts.buffer.key())) { return Result.err(ProgramError.invalidSeeds()); }
-	const dataLength = accounts.delegated.dataLength();
-	const bufferSigner = Seeds.empty(2)
-		.addText("buffer")
-		.addAccountKey(accounts.delegated)
-		.withBump(bufferAddress.bump);
-	const _bufferCreated = try createAccount(
-		accounts.payer,
-		accounts.buffer,
-		0,
-		dataLength,
-		ownerKey,
-		bufferSigner,
-	);
-	const _copied = try accounts.buffer.data().copyFrom(accounts.delegated.data());
-	accounts.delegated.data().fillWith(0);
-
-	const signer = seeds.withBump(bump);
-	if (!accounts.delegated.owner().equals(Pubkey.systemProgram())) {
-		accounts.delegated.assign(Pubkey.systemProgram());
-	}
-	const _assigned = try assignTo(accounts.delegated, Pubkey.delegationProgram(), signer);
-
-	const seedCount = seeds.seedCount();
-	const instruction = Instruction.forProgram(Pubkey.delegationProgram(), 7, 49 + 36 * seedCount);
-	instruction.addWritableSigner(accounts.payer);
-	instruction.addWritableSigner(accounts.delegated);
-	instruction.addReadonly(accounts.ownerProgram);
-	instruction.addWritable(accounts.buffer);
-	instruction.addWritable(accounts.delegationRecord);
-	instruction.addWritable(accounts.delegationMetadata);
-	instruction.addReadonly(accounts.systemProgram);
-	instruction.appendU64(0);
-	instruction.appendU32(config.commitFrequencyMs);
-	instruction.appendU32(seedCount as uint32);
-	for (let index: uint64 = 0; index < seedCount; index++) {
-		const seed = seeds.seedAt(index);
-		instruction.appendU32(seed.length as uint32);
-		instruction.appendBytes(seed);
-	}
-	if (config.validator.isZero()) {
-		instruction.appendU8(0);
-	} else {
-		instruction.appendU8(1);
-		instruction.appendPubkey(config.validator);
-	}
-	const _delegated = try instruction.invokeSigned(signer);
-	return closeBuffer(accounts.payer, accounts.buffer);
 }
 
 function scheduleCommit(
@@ -328,10 +236,6 @@ when (testBuild) {
 		return true;
 	}
 
-	function petSeeds(): Seeds {
-		return Seeds.empty(1).addText("pet");
-	}
-
 	function petKey(): Pubkey {
 		const derived = findProgramAddressOf(programKey(), ["pet"]);
 		if (derived.ok) { return derived.value.key; }
@@ -352,7 +256,7 @@ when (testBuild) {
 			delegationMetadata: try account(5),
 			systemProgram: try account(6),
 		};
-		return delegate(delegation, petSeeds(), derived.bump, config);
+		return delegate(delegation, ["pet"], derived.bump, config);
 	}
 
 	function delegateEntry(): void {

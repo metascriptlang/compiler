@@ -39,11 +39,6 @@ function vrfList(args: Bytes): Result<uint64, ProgramError> {
 	return requestRandomness(try request(), key(99), 6, metas, args);
 }
 
-function vrfSingle(args: Bytes): Result<uint64, ProgramError> {
-	const callback = try account(6);
-	return requestRandomness(try request(), key(99), 6, callback, args);
-}
-
 function crankList(args: Bytes): Result<uint64, ProgramError> {
 	const payer = try signerAccount(0);
 	const task = Instruction.forProgram(programId(), 2, args.length);
@@ -63,8 +58,7 @@ function dispatch(): Result<uint64, ProgramError> {
 	const op = try data.readU8(0);
 	const args = try data.range(1, data.length - 1);
 	if (op == 0) { return vrfList(args); }
-	if (op == 1) { return vrfSingle(args); }
-	if (op == 2) { return crankList(args); }
+	if (op == 1) { return crankList(args); }
 	return crankSingle(args);
 }
 

@@ -3,7 +3,6 @@
 import {
 	AccountMeta,
 	Clock,
-	Seeds,
 	account,
 	clock,
 	failWith,
@@ -324,7 +323,7 @@ function logSlot(): void {
 function payStep(): Result<uint64, ProgramError> {
 	const source = try account(0);
 	const destination = try account(1);
-	return transfer(source, destination, 10, Seeds.none());
+	return transfer(source, destination, 10);
 }
 
 function payTen(): void {

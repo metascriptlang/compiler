@@ -30,6 +30,7 @@ import {
 	writable,
 	writableSigner,
 } from "./core";
+import { delegateAt } from "./delegation";
 import { createMintPdaAt } from "./mint";
 import {
 	bytesAddress,
@@ -39,6 +40,7 @@ import {
 	seedBytes,
 	seedKey,
 	seedText,
+	signerOf,
 } from "./seed";
 
 export macro instruction(): Node {
@@ -538,9 +540,11 @@ export macro emitEvent(value: Node): Node {
 	};
 }
 
+const SEED_LIST_REQUIRED = "seeds must be written as a list at the call: [\"pet\", mint, [bump]]";
+
 macro seedTable(list: Node): Node {
 	if (list.kind !== NodeKind.ArrayLiteral) {
-		error("seeds must be written as a list at the call: [\"pet\", mint, [bump]]", list);
+		error(SEED_LIST_REQUIRED, list);
 	}
 	const slices: Node[] = [];
 	let position = 0;
@@ -855,6 +859,139 @@ export macro createMintPda(
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
 		}, program, decimals, mintAuthority, freezeAuthority],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+export macro signed(call: Node, seeds: Node): Node {
+	if (call.kind !== NodeKind.CallExpr) {
+		error("signed(call, seeds): the first argument is the call that signs, written " +
+			"with its own arguments: signed(transfer(from, to, 10), [\"vault\", [bump]])", call);
+	}
+	let callee: Node = call.callee;
+	let calleeName = "the callee";
+	if (callee.kind === NodeKind.Identifier) {
+		calleeName = callee.name;
+		callee = { kind: NodeKind.Identifier, line: callee.line, column: callee.column, name: callee.name };
+	}
+	if (callee.kind === NodeKind.MemberExpr) {
+		calleeName = callee.property;
+		callee = {
+			kind: NodeKind.MemberExpr,
+			line: callee.line,
+			column: callee.column,
+			object: callee.object,
+			property: callee.property,
+			isOptional: callee.isOptional,
+		};
+	}
+	const shape = call.callee.nodeType;
+	let takesSigners = false;
+	if (shape != null && shape.kind === NodeKind.TypeFunction && shape.typExprParams.length > 0) {
+		const last = shape.typExprParams[shape.typExprParams.length - 1];
+		if (last.kind === NodeKind.TypeArray) {
+			const element = last.typExprElement;
+			takesSigners = element.kind === NodeKind.TypeObject &&
+				element.typExprTypeName == "SignerSeeds";
+		}
+	}
+	if (!takesSigners) {
+		error("signed(call, seeds): " + calleeName + " takes no signers; only a call whose last " +
+			"parameter is `signers: Span<SignerSeeds>` can be signed", call);
+	}
+	if (seeds.kind !== NodeKind.ArrayLiteral) { error(SEED_LIST_REQUIRED, seeds); }
+	if (seeds.elements.length == 0) {
+		error("signed(call, seeds): a signer needs at least one seed", seeds);
+	}
+	let signers = 0;
+	let position = 0;
+	while (position < seeds.elements.length) {
+		const candidate = seeds.elements[position];
+		let holdsSeeds = false;
+		if (candidate.kind === NodeKind.ArrayLiteral) {
+			let inner = 0;
+			while (inner < candidate.elements.length) {
+				const seed = candidate.elements[inner];
+				const written = seed.nodeType;
+				let isByte = seed.kind === NodeKind.NumberLiteral;
+				if (!isByte && written != null && written.kind === NodeKind.Identifier) {
+					isByte = written.name == "uint8" || written.name == "int8";
+				}
+				if (!isByte) { holdsSeeds = true; }
+				inner = inner + 1;
+			}
+		}
+		if (holdsSeeds) { signers = signers + 1; }
+		position = position + 1;
+	}
+	if (signers != 0 && signers != seeds.elements.length) {
+		error("signed(call, seeds): a list of signers holds only lists of seeds, " +
+			"and this list also holds a seed", seeds);
+	}
+	const lists: Node[] = signers == 0 ? [seeds] : seeds.elements;
+	const table: Node[] = [];
+	position = 0;
+	while (position < lists.length) {
+		const list = lists[position];
+		table.push({
+			kind: NodeKind.CallExpr,
+			line: list.line,
+			column: list.column,
+			callee: bindSym("signerOf"),
+			arguments: [{
+				kind: NodeKind.CallExpr,
+				line: list.line,
+				column: list.column,
+				callee: bindSym("seedTable"),
+				arguments: [list],
+				isDirectCall: false,
+				resolvedOverloadIdx: -1,
+			}],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		});
+		position = position + 1;
+	}
+	const kept: Node[] = [];
+	position = 0;
+	while (position < call.arguments.length - 1) {
+		kept.push(call.arguments[position]);
+		position = position + 1;
+	}
+	const signing: Node = {
+		kind: NodeKind.CallExpr,
+		line: call.line,
+		column: call.column,
+		callee: callee,
+		arguments: kept.concat([{
+			kind: NodeKind.ArrayLiteral,
+			line: seeds.line,
+			column: seeds.column,
+			elements: table,
+		}]),
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+	signing.typeArg = call.typeArg;
+	return signing;
+}
+
+export macro delegate(accounts: Node, seeds: Node, bump: Node, config: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: accounts.line,
+		column: accounts.column,
+		callee: bindSym("delegateAt"),
+		arguments: [accounts, {
+			kind: NodeKind.CallExpr,
+			line: seeds.line,
+			column: seeds.column,
+			callee: bindSym("seedTable"),
+			arguments: [seeds],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		}, bump, config],
 		isDirectCall: false,
 		resolvedOverloadIdx: -1,
 	};

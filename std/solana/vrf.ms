@@ -1,14 +1,8 @@
-import {
-	Account,
-	AccountMeta,
-	Bytes,
-	Instruction,
-	Seeds,
-	programId,
-} from "./core";
+import { Account, AccountMeta, Bytes, Instruction, programId } from "./core";
 import { ProgramError } from "./error";
-import { findProgramAddress, findProgramAddressOf } from "./macro";
+import { findProgramAddress, findProgramAddressOf, signed } from "./macro";
 import { Pubkey, pubkeyOf } from "./pubkey";
+import { SeedSlice, SignerSeeds, seedBytes, seedText, signerOf } from "./seed";
 
 when (testBuild) {
 	import { account, failWith, instructionData } from "./core";
@@ -41,10 +35,7 @@ function requested(
 	callbackDiscriminator: uint64,
 	callbackAccounts: Span<AccountMeta>,
 	callbackArguments: Bytes,
-	payerSigner: Seeds,
-): Result<uint64, ProgramError> {
-	const identity = try findProgramAddress(["identity"]);
-	if (!identity.key.equals(accounts.programIdentity.key())) { return Result.err(ProgramError.invalidSeeds()); }
+): Instruction {
 	const metaCount = callbackAccounts.length as uint64;
 	const instruction = Instruction.forProgram(
 		Pubkey.vrfProgram(),
@@ -67,22 +58,7 @@ function requested(
 	}
 	instruction.appendU32(callbackArguments.length as uint32);
 	instruction.appendBytes(callbackArguments);
-	const identitySigner = Seeds.empty(2).addText("identity").addU8(identity.bump);
-	if (payerSigner.address == 0) { return instruction.invokeSigned(identitySigner); }
-	const signers: Seeds[2] = [identitySigner, payerSigner];
-	return instruction.invokeSigned(signers);
-}
-
-export function requestRandomness(accounts: RandomnessRequest, callerSeed: Pubkey, callbackDiscriminator: uint64, callbackAccount: Account, callbackArguments: Bytes): Result<uint64, ProgramError> {
-	const callbackAccounts: AccountMeta[1] = [AccountMeta.writable(callbackAccount.key())];
-	return requested(
-		accounts,
-		callerSeed,
-		callbackDiscriminator,
-		callbackAccounts,
-		callbackArguments,
-		Seeds.none(),
-	);
+	return instruction;
 }
 
 export function requestRandomness(
@@ -91,33 +67,25 @@ export function requestRandomness(
 	callbackDiscriminator: uint64,
 	callbackAccounts: Span<AccountMeta>,
 	callbackArguments: Bytes,
+	payerSigners: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
-	return requested(
+	const identity = try findProgramAddress(["identity"]);
+	if (!identity.key.equals(accounts.programIdentity.key())) { return Result.err(ProgramError.invalidSeeds()); }
+	if (payerSigners.length > 1) { return Result.err(ProgramError.invalidArgument()); }
+	const instruction = requested(
 		accounts,
 		callerSeed,
 		callbackDiscriminator,
 		callbackAccounts,
 		callbackArguments,
-		Seeds.none(),
 	);
-}
-
-export function requestRandomness(
-	accounts: RandomnessRequest,
-	callerSeed: Pubkey,
-	callbackDiscriminator: uint64,
-	callbackAccounts: Span<AccountMeta>,
-	callbackArguments: Bytes,
-	payerSigner: Seeds,
-): Result<uint64, ProgramError> {
-	return requested(
-		accounts,
-		callerSeed,
-		callbackDiscriminator,
-		callbackAccounts,
-		callbackArguments,
-		payerSigner,
-	);
+	if (payerSigners.length == 0) {
+		return signed(instruction.invoke(), ["identity", [identity.bump]]);
+	}
+	const bump: uint8[1] = [identity.bump];
+	const identitySeeds: SeedSlice[2] = [seedText("identity"), seedBytes(bump)];
+	const both: SignerSeeds[2] = [signerOf(identitySeeds), payerSigners[0]];
+	return instruction.invoke(both);
 }
 
 export function verifyVrfCallback(identity: Account): Result<uint64, ProgramError> {
@@ -186,7 +154,9 @@ when (testBuild) {
 		const callback: uint64 = 0x0807060504030201;
 		const args = try data.range(1, 2);
 		if (op == 0) {
-			return requestRandomness(request, keyOf(99), callback, try account(5), args);
+			const callbackAccount = try account(5);
+			const one: AccountMeta[1] = [AccountMeta.writable(callbackAccount.key())];
+			return requestRandomness(request, keyOf(99), callback, one, args);
 		}
 		const metas: AccountMeta[3] = [
 			AccountMeta.writable(keyOf(11)),
@@ -194,14 +164,13 @@ when (testBuild) {
 			AccountMeta.writable(keyOf(13)),
 		];
 		if (op == 2) {
-			const signer = payerSeeds().withBump(try vrfPayerBump());
-			return requestRandomness(request, keyOf(99), callback, metas, args, signer);
+			const bump = try vrfPayerBump();
+			return signed(
+				requestRandomness(request, keyOf(99), callback, metas, args),
+				["vrf-payer", [bump]],
+			);
 		}
 		return requestRandomness(request, keyOf(99), callback, metas, args);
-	}
-
-	function payerSeeds(): Seeds {
-		return Seeds.empty(1).addText("vrf-payer");
 	}
 
 	function vrfPayerBump(): Result<uint8, ProgramError> {
