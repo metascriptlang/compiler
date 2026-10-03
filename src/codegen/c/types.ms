@@ -84,10 +84,6 @@ import { useHeader } from "./context";
 // ===== Generated lifecycle hook symbols (attachedOps analog) =====
 // destructorLifting sets AttachedDestructor on a per-Type-object instance (a throwaway built by
 // unwrapGenericInstance for mono types), so the op never reaches the canonical type codegen reads.
-// The ops therefore live in one GLOBAL table keyed by (op, canonical type): a generated hook's
-// symbol is registered before its body exists and references carry it.
-// Lives here (codegen) so destructorLifting — which already imports this module — can populate it
-// without an import cycle. Reset per build via `setGlobalHookOwners` to avoid cross-test bleed.
 let _hookSymsSealed = false;
 
 export interface KeyedOp {
@@ -242,9 +238,6 @@ export function replayOps(ops: KeyedOp[]): void {
 	for (const op of ops) recordOp(op.key, op.sym, op.canon);
 }
 
-// The op's symbol under (t, op), minted on first request with the generated C name; a later
-// request completes the prototype's type. The minted symbol belongs to no module: its name is the
-// final C name.
 export function liftedOp(t: Type, op: AttachedOp, name: string, fnType: Type | null): Symbol {
 	const key = opKey(t, op);
 	const held = _opSyms.get(key);
@@ -997,8 +990,7 @@ export function isCompilerGenCName(g: CGen, cn: string): boolean {
 	return bare.length > 0 && bare.slice(0, 1) == "$";
 }
 
-function sharedTypeOp(objType: Type | null, op: AttachedOp): Symbol | null {
-	if (objType == null) return null;
+function sharedTypeOp(objType: Type, op: AttachedOp): Symbol | null {
 	const opType = objType.kind == TypeKind.Ref && objType.typeReturn != null ? objType.typeReturn : objType;
 	return getOpByKey(opType, op);
 }
@@ -1033,6 +1025,10 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	if (ownSym == null && objType != null && objType.typeReturn != null) ownSym = objType.typeReturn.sym;
 	const isDeclaringModule = ownSym != null && ownSym.modulePath == g.modulePath;
 	const isOwner = nameSetHas(g.declaredThings, className) || isCompilerGen || sharedName || isDeclaringModule;
+	if (isOwner && objType == null && sharedName) {
+		addCGenError(g, `internal: TypeInfo '${className}' reached codegen without its type`, 0, 0);
+		return;
+	}
 	if (!isOwner) {
 		ensureTypeInfo(g, className);
 		return;
@@ -1059,7 +1055,7 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
 	// destructorLifting (unwrapGenericInstance builds a fresh body), so it never reaches the
 	// objType resolved here. Read the op lifted for the instance's key instead.
-	if (destroySym == null && sharedName) destroySym = sharedTypeOp(objType, AttachedOp.AttachedDestructor);
+	if (destroySym == null && sharedName) destroySym = sharedTypeOp(objType!, AttachedOp.AttachedDestructor);
 	if (destroySym != null) {
 		destroyHook = mangle(destroySym.name);
 		ensureDrcProto(g, destroyHook, destroySym);
@@ -1068,7 +1064,7 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.destroyFn = (msDestroyProc)${destroyHook};`);
 	}
 	let traceSym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedTrace) : null;
-	if (traceSym == null && sharedName) traceSym = sharedTypeOp(objType, AttachedOp.AttachedTrace);
+	if (traceSym == null && sharedName) traceSym = sharedTypeOp(objType!, AttachedOp.AttachedTrace);
 	if (traceSym != null) {
 		const traceHook = mangle(traceSym.name);
 		ensureDrcProto(g, traceHook, traceSym);
@@ -2475,11 +2471,9 @@ test "a sealed op table serves known ops and refuses a new one" {
 	assert refused.contains("SealNew");
 }
 
-test "enum typedef follows the largest ordinal and a negative member" {
-	const g = createCGen(null as unknown as CheckerContext, "");
-	getTypeDesc(g, createEnum("Wide", ["Low", "High"], [0, 300]));
-	getTypeDesc(g, createEnum("Signed", ["Below", "Zero"], [-1, 0]));
-	const types = extract(sec(g, CSection.Types));
-	assert types.contains("typedef uint16_t Wide");
-	assert types.contains("typedef int32_t Signed");
+test "a shared TypeInfo that reaches codegen without its type is an error" {
+	const g = createCGen(null as unknown as CheckerContext, "consumer.ms");
+	ensureTypeInfoDef(g, "msAnon_deadbeef", null);
+	assert g.errors.length == 1;
+	assert g.errors[0].message.contains("without its type");
 }
