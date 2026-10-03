@@ -270,7 +270,6 @@ export class ExtensionMethod {
 
 export class ExtensionRegistry {
 	methods: ExtensionMethod[];
-	staticReceivers: string[];
 	// methods[] chained by methodName in registration order (-1 ends a chain);
 	// registerExtension and truncateExtensions keep it in step with methods[].
 	byNameHead: HashMap<string, int32>;
@@ -281,7 +280,7 @@ export class ExtensionRegistry {
 
 export function createExtensionRegistry(): ExtensionRegistry {
 	return {
-		methods: [], staticReceivers: [],
+		methods: [],
 		byNameHead: new HashMap<string, int32>(), byNameTail: new HashMap<string, int32>(),
 		byNameNext: [], byNamePrev: [],
 	};
@@ -338,12 +337,6 @@ export function registerExtension(registry: ExtensionRegistry, method: Extension
 		registry.byNameHead.set(method.methodName, idx);
 	}
 	registry.byNameTail.set(method.methodName, idx);
-	if (method.isStatic) {
-		for (const known of registry.staticReceivers) {
-			if (known == method.receiverTypeName) return;
-		}
-		registry.staticReceivers.push(method.receiverTypeName);
-	}
 }
 
 // Drop every extension registered after the first `count` (instantiation
@@ -416,19 +409,14 @@ function findAllExtensionsByNameInner(registry: ExtensionRegistry, methodName: s
 	return results;
 }
 
-export function hasStaticExtForReceiver(registry: ExtensionRegistry, receiverName: string): boolean {
-	if (receiverName == "") return false;
-	for (const known of registry.staticReceivers) {
-		if (known == receiverName) return true;
-	}
-	return false;
+export function isStaticExtOf(ext: ExtensionMethod, owner: Symbol): boolean {
+	return ext.isStatic && ext.sym != null && ext.sym.staticOwner == owner;
 }
 
-export function filterStaticExtsByReceiverName(exts: ExtensionMethod[], receiverName: string): ExtensionMethod[] {
+export function filterStaticExtsByOwner(exts: ExtensionMethod[], owner: Symbol): ExtensionMethod[] {
 	const results: ExtensionMethod[] = [];
-	if (receiverName == "") return results;
 	for (const e of exts) {
-		if (e.isStatic && e.receiverTypeName == receiverName) results.push(e);
+		if (isStaticExtOf(e, owner)) results.push(e);
 	}
 	return results;
 }
@@ -558,21 +546,7 @@ export function stripReceiverParam(fnType: Type): Type {
 // not string-based receiverTypeName comparison.
 
 export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boolean {
-	// Static extensions: string-based matching (receiver not in typeChildren)
-	if (ext.isStatic) {
-		if (ext.receiverTypeName == typeNameOf(objType)) return true;
-		// Type-alias fallback (mirrors the instance-branch fallback below): when
-		// the receiver expression is `Buffer` (a `type Buffer = string` alias),
-		// objType resolves to the underlying `string` and typeNameOf returns
-		// "string", but objType.sym is the Buffer alias symbol (stamped by
-		// collectTypeAlias). Without this, static extensions like Buffer.alloc()
-		// fail to match, NodeFlag.ExtCall isn't set, extensionMethodLower skips
-		// the rewrite, and codegen emits buggy closure dispatch.
-		if (objType != null && objType.sym != null
-				&& objType.sym.symbolKind == SymbolKind.TypeAlias
-				&& ext.receiverTypeName == objType.sym.name) return true;
-		return false;
-	}
+	if (ext.isStatic) return false;
 	if (objType == null) return false;
 	// Instance extensions: type-based matching on first param (sym.typ is authoritative).
 	const fnType = getExtFnType(ext);
@@ -1612,17 +1586,6 @@ test "not found" {
 	assert findAllExtensionsByName(r, "nope").length == 0;
 }
 
-test "namespace receiver is name-keyed, not kind-keyed" {
-	const r = createExtensionRegistry();
-	const inst: ExtensionMethod = { methodName: "trim", receiverTypeName: "String", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	const stat: ExtensionMethod = { methodName: "fromCharCode", receiverTypeName: "String", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym: null };
-	registerExtension(r, inst);
-	registerExtension(r, stat);
-	assert hasStaticExtForReceiver(r, "String");
-	assert !hasStaticExtForReceiver(r, "helper");
-	assert !hasStaticExtForReceiver(r, "");
-}
-
 test "extension name lookups keep registration order across truncation" {
 	const r = createExtensionRegistry();
 	const a: ExtensionMethod = { methodName: "m", receiverTypeName: "A", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
@@ -1648,16 +1611,23 @@ test "extension name lookups keep registration order across truncation" {
 	assert findAllExtensionsByName(r, "m")[0] == c;
 }
 
-test "static ext filter keeps only statics of that receiver" {
-	const stat: ExtensionMethod = { methodName: "m", receiverTypeName: "String", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym: null };
-	const otherRecv: ExtensionMethod = { methodName: "m", receiverTypeName: "Buffer", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym: null };
-	const inst: ExtensionMethod = { methodName: "m", receiverTypeName: "String", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: null };
-	const all: ExtensionMethod[] = [stat, otherRecv, inst];
-	const got = filterStaticExtsByReceiverName(all, "String");
+function staticExtOf(owner: Symbol | null): ExtensionMethod {
+	const sym = makeSymbol("m", SymbolKind.Function, noneType(), false);
+	sym.staticOwner = owner;
+	return { methodName: "m", receiverTypeName: "", sourcePath: "/a.ms", fnType: noneType(), isStatic: true, sym };
+}
+
+test "static ext filter keeps only statics owned by that symbol" {
+	const owner = makeSymbol("T", SymbolKind.Class, noneType(), false);
+	const sameNamed = makeSymbol("T", SymbolKind.Class, noneType(), false);
+	const mine = staticExtOf(owner);
+	const theirs = staticExtOf(sameNamed);
+	const ownerless = staticExtOf(null);
+	const inst: ExtensionMethod = { methodName: "m", receiverTypeName: "T", sourcePath: "/a.ms", fnType: noneType(), isStatic: false, sym: makeSymbol("m", SymbolKind.Function, noneType(), false) };
+	inst.sym!.staticOwner = owner;
+	const got = filterStaticExtsByOwner([mine, theirs, ownerless, inst], owner);
 	assert got.length == 1;
-	assert got[0].receiverTypeName == "String";
-	assert got[0].isStatic;
-	assert filterStaticExtsByReceiverName(all, "").length == 0;
+	assert got[0] == mine;
 }
 
 test "create empty registry" {

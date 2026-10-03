@@ -256,6 +256,7 @@ export class Symbol {
 	item: int32;
 	instantiatedFrom: Symbol | null;
 	borrowedFrom: Symbol | null;
+	staticOwner: Symbol | null;
 }
 
 // ===== Node Flags (Standard parity: TNodeFlags) =====

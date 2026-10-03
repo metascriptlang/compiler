@@ -12,7 +12,7 @@ import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, wri
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
-import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym } from "./context";
+import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner } from "./context";
 import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
@@ -477,7 +477,7 @@ function genericArgOrder(ctx: CheckerContext, args: Node[], isGeneric: boolean):
 	return order;
 }
 
-function isTypeLevelAccess(ctx: CheckerContext, obj: Node): boolean {
+function isTypeLevelAccess(ctx: CheckerContext, obj: Node, property: string): boolean {
 	const sym = obj.resolvedSym;
 	if (sym == null) return false;
 	if (sym.symbolKind == SymbolKind.Class
@@ -489,7 +489,14 @@ function isTypeLevelAccess(ctx: CheckerContext, obj: Node): boolean {
 	if (sym.symbolKind != SymbolKind.Function) return false;
 	if (obj.kind != NodeKind.Identifier) return false;
 	if (ctx.extensionRegistry == null) return false;
-	return hasStaticExtForReceiver(ctx.extensionRegistry, sym.name);
+	return staticExtsOwnedBy(ctx, findAllExtensionsByName(ctx.extensionRegistry, property), sym).length > 0;
+}
+
+function staticExtsOwnedBy(ctx: CheckerContext, exts: ExtensionMethod[], owner: Symbol): ExtensionMethod[] {
+	for (const e of exts) {
+		if (e.isStatic && e.sym != null) ensureShaped(e.sym, ctx);
+	}
+	return filterStaticExtsByOwner(exts, owner);
 }
 
 function getCalleeName(callee: Node): string {
@@ -1332,10 +1339,10 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			if (objType != null && !isNamespaceQualified) {
 				const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
 				// Type-level access (e.g., Buffer.method()) — only static extensions apply.
-				const isStaticAccess = isTypeLevelAccess(ctx, me.object);
+				const isStaticAccess = isTypeLevelAccess(ctx, me.object, me.property);
 				let filtered = filterExtsByReceiverType(allByName, objType);
-				if (filtered.length == 0 && isStaticAccess && me.object.resolvedSym != null) {
-					filtered = filterStaticExtsByReceiverName(allByName, me.object.resolvedSym.name);
+				if (isStaticAccess && me.object.resolvedSym != null) {
+					for (const owned of staticExtsOwnedBy(ctx, allByName, me.object.resolvedSym)) filtered.push(owned);
 				}
 				if (isStaticAccess && filtered.length > 1) {
 					const staticOnly: ExtensionMethod[] = [];
@@ -4035,7 +4042,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// skip instance field resolution — go to static method lookup.
 	// Allows field/method name coexistence: result.ok (field) vs Result.ok() (static method).
 	// TypeAlias included for patterns like Buffer.alloc() where Buffer is `type Buffer = string`.
-	const isStaticClassAccess = isTypeLevelAccess(ctx, d.object);
+	const isStaticClassAccess = isTypeLevelAccess(ctx, d.object, d.property);
 	let propType = isStaticClassAccess ? inferredType() : getProperty(resolvedObjType, d.property);
 	// Engine (macro-body) view of Node.nodeType: the VM wire carries a type-AST
 	// Node tree (mapTypeToAst), not the checker Type the class declares. Type
@@ -4414,25 +4421,9 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				d.object = derefNode;
 			}
 		}
-		// Static extension fallback: match 'typeof Type'
-		if (ext == null && objType.typeName != "") {
-			const staticType = createTypeRef("typeof " + objType.typeName);
-			ext = findFirstMatchingExt(allByName, staticType);
-		}
-		if (ext == null && objType.typeName == "") {
-			const tn = typeNameOf(objType);
-			if (tn != "") {
-				const staticType = createTypeRef("typeof " + tn);
-				ext = findFirstMatchingExt(allByName, staticType);
-			}
-		}
-		// Static extension on type alias: try the symbol name directly (e.g., Buffer.alloc
-		// where Buffer is `type Buffer = string` — objType resolves to string, but
-		// the extension is registered as `this typeof Buffer`).
 		if (ext == null && isStaticClassAccess && d.object.resolvedSym != null) {
-			const symName = d.object.resolvedSym.name;
-			const aliasType = createTypeRef(symName);
-			ext = findFirstMatchingExt(allByName, aliasType);
+			const owned = staticExtsOwnedBy(ctx, allByName, d.object.resolvedSym);
+			if (owned.length > 0) ext = owned[0];
 		}
 		if (ext != null) {
 			// Direct sym link — no name-based lookup needed

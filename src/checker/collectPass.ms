@@ -802,6 +802,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	if (md.methodDefaults != null && md.methodDefaults.length > 0) {
 		methodSym.defaultParams = md.methodDefaults;
 	}
+	if (md.methodIsStatic) methodSym.staticOwner = classSym;
 	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, className, "", fnType, md.methodIsStatic, methodSym, 1));
 	if (isLifecycleHookName(md.methodName) && !md.methodIsStatic && !isExternClass && !isGenericFn(md.methodFlags)) bindUserHook(className, md.methodName, methodSym);
 	if (!md.methodIsStatic && !isExternClass && builtinKind == "") {
