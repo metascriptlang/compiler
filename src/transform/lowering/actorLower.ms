@@ -682,7 +682,9 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 				nameLocation: loc,
 			}, syntheticToken(loc));
 			// Build proper Function type with actor Ref as first param (codegen needs it for Watchdog* this)
-			const actorRefType = createRef(createStruct(name, [], [], true));
+			const actorBody = createStruct(name, [], [], true);
+			actorBody.sym = lowered.actorSym;
+			const actorRefType = createRef(actorBody);
 			const ctorTypeChildren: Type[] = [actorRefType];
 			if (m.nodeType != null && m.nodeType.typeChildren != null) {
 				for (const tc of m.nodeType.typeChildren) ctorTypeChildren.push(tc);
