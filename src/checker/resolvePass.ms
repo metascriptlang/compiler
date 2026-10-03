@@ -39,6 +39,12 @@ interface ForwardOwner {
 const _forwardNullables: ForwardNullable[] = [];
 const _forwardOwners: ForwardOwner[] = [];
 
+function declaresType(t: Type | null, sym: Symbol): boolean {
+	let peeled = t;
+	while (peeled != null && peeled.kind == TypeKind.Alias) peeled = peeled.typeReturn;
+	return peeled != null && peeled.sym == sym;
+}
+
 function isUnresolvedAlias(t: Type | null): boolean {
 	if (t == null || t.kind != TypeKind.Inferred || t.sym == null) return false;
 	return t.sym.symbolKind == SymbolKind.TypeAlias;
@@ -1931,7 +1937,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	// NOTE: only checks own fields (inherited fields can't reference child by name — they were resolved in parent's scope).
 	for (let fi = 0; fi < mergedTypes.length; fi += 1) {
 		const ft = mergedTypes[fi];
-		if (ft != null && isStructType(ft) && ft.typeName == d.interfaceName) {
+		if (ft != null && isStructType(ft) && declaresType(ft, sym)) {
 			mergedTypes[fi] = createRef(ft);
 			const fieldName = fi < mergedNames.length ? mergedNames[fi] : "?";
 			addError(ctx, "self-referential value field '" + fieldName + "' in '" + d.interfaceName + "' — a struct cannot contain itself by value (infinite size); use an interface/class (reference type), Ptr<" + d.interfaceName + ">, or an index into an owning array", node.location.line, 0);
@@ -1944,7 +1950,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 		if (wi >= fieldTypes.length) break;
 		const wft = fieldTypes[wi];
 		if (wft != null && wft.kind == TypeKind.Ref && wft.typeReturn != null
-			&& wft.typeReturn.typeName == d.interfaceName) {
+			&& declaresType(wft.typeReturn, sym)) {
 			let wLine = node.location.line;
 			let wCol = node.location.column;
 			if (node.paramLocations != null && wi < node.paramLocations.length) {
@@ -2449,7 +2455,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 					memberTypes.push(propType);
 					// Same owning self-ref hazard as interface fields (resolveInterface).
 					if (propType.kind == TypeKind.Ref && propType.typeReturn != null
-						&& propType.typeReturn.typeName == d.className) {
+						&& declaresType(propType.typeReturn, sym)) {
 						warnOwningSelfRef(ctx, pd.propName, d.className, member.location.line, member.location.column);
 					}
 				} else {
