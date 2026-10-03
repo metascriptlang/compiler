@@ -126,3 +126,4 @@ import "./genericInstanceCast";
 import "./comptimeCallFold";
 import "./readonlyViewRefArgument";
 import "./nullFirstTernaryArg";
+import "./fieldVisibility";
