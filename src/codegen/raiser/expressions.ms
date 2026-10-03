@@ -18,7 +18,7 @@ import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
 import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
-import { byteViewRefusal, NO_BYTE_MEMORY } from "../../checker/byteViews";
+import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
 	resolveFunc, isLocalString, isEnumName, findEnumConstant,
@@ -645,7 +645,17 @@ function refuseByteView(s: RaiserCompState, node: Node, source: Type | null, tar
 	return emitTrapNil(s, msg);
 }
 
+function refusePointerOp(s: RaiserCompState, node: Node): int32 {
+	const refusal = pointerOpRefusal(node);
+	if (refusal == "") return -1;
+	const msg = refusal + " on the Raiser VM" + NO_ADDRESS_ARITHMETIC;
+	queueRaiserCompileError(msg, node.location.line, node.location.column);
+	return emitTrapNil(s, msg);
+}
+
 function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
+	const refusedOp = refusePointerOp(s, node);
+	if (refusedOp >= 0) return refusedOp;
 	const d = node.data as BinaryExprData;
 	const op = d.operator;
 
@@ -1386,6 +1396,8 @@ function emitStepped(s: RaiserCompState, fromReg: int32, updateOp: string, targe
 }
 
 function compileUpdateExpr(s: RaiserCompState, node: Node): int32 {
+	const refusedOp = refusePointerOp(s, node);
+	if (refusedOp >= 0) return refusedOp;
 	const d = node.data as UpdateExprData;
 
 	if (d.updateArg.kind == NodeKind.Identifier) {
@@ -1571,6 +1583,8 @@ function compileArraySlice(s: RaiserCompState, d: ArrayAccessData, bd: BinaryExp
 }
 
 function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
+	const refusedOp = refusePointerOp(s, node);
+	if (refusedOp >= 0) return refusedOp;
 	const d = node.data as ArrayAccessData;
 	if (d.index.kind == NodeKind.BinaryExpr) {
 		const bd = d.index.data as BinaryExprData;
