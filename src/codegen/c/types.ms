@@ -13,8 +13,8 @@ import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, CTypeInfoDemand, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet, addCGenError } from "./context";
 import { SymbolFlag, hasFlag, lookupSymbolReadonly, makeSymbol, setFlag } from "../../checker/symbol";
-import { mangle, mangledTypeName, mangledFunctionName, mangleQualified, mangleModuleName, mangleFieldName, safeName, resolveOverloadWinner, OverloadWinner } from "./names";
-import { cStringLiteral, escapeCString } from "./literals";
+import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleQualified, mangleModuleName, mangleFieldName, safeName } from "./names";
+import { cStringLiteral } from "./literals";
 import { getGlobalTypeOwner, getGlobalTypeOwnerByShape, CheckerContext, newSym } from "../../checker/context";
 
 // Struct C-name resolution: a sym-less named struct (macro-wire / mono
@@ -50,7 +50,7 @@ export function hookBaseCNameOfSym(typeName: string, sym: Symbol | null): string
 	// Compiler-generated spellings ($Env_*, msAnon_*, monomorphized "__") are already
 	// unique and get mangled once at emission; mangling them here too would spell the
 	// definition and its references differently.
-	if (typeName.slice(0, 1) == "$") return typeName;
+	if (typeName.slice(0, 1) == "$") return ownedGeneratedName(sym) ? mangledTypeName(sym, typeName) : typeName;
 	if (typeName.indexOf("__", 0) >= 0) return typeName;
 	if (sym != null) return mangledTypeName(sym, typeName);
 	return typeName;
@@ -58,7 +58,7 @@ export function hookBaseCNameOfSym(typeName: string, sym: Symbol | null): string
 
 export function hookBaseCName(typeName: string, t: Type | null, cc: Readonly<CheckerContext> | null): string {
 	if (typeName == "") return "";
-	if (typeName.slice(0, 1) == "$") return typeName;
+	if (typeName.slice(0, 1) == "$") return t != null && t.typeName == typeName && ownedGeneratedName(t.sym) ? mangledTypeName(t.sym, typeName) : typeName;
 	if (typeName.indexOf("__", 0) >= 0) return typeName;
 	const named = t != null && t.typeName == typeName;
 	if (named && t.sym != null) return mangledTypeName(t.sym, typeName);

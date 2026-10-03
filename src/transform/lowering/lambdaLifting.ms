@@ -493,6 +493,10 @@ function makeEnvStruct(state: LiftState, envName: string, fieldSyms: Symbol[], f
 		fields.push(sym == null ? UP_FIELD : `${sym.name}${i}`);
 	}
 	const envDecl = makeInterfaceDeclFromTypes(envName, fields, fieldTypes, resolvedTypes, loc);
+	const envSym = mintSym(state.ctx, SymbolKind.Interface, envName, createRef(envDecl.nodeType!));
+	envSym.declNode = envDecl;
+	envSym.location = loc;
+	envDecl.nodeType!.sym = envSym;
 	state.envFieldSyms.set(envDecl.nodeType!, fieldSyms);
 	return envDecl;
 }

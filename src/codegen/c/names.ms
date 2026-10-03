@@ -208,12 +208,16 @@ export function isSharedStructuralName(name: string): boolean {
 	return false;
 }
 
+export function ownedGeneratedName(sym: Readonly<Symbol> | null): boolean {
+	return sym != null && sym.modulePath != "";
+}
+
 export function mangledTypeName(sym: Readonly<Symbol> | null, name: string): string {
 	if (sym != null) {
 		const early = symExternOrImportName(sym, name);
 		if (early != "") return early;
 	}
-	if (name.length > 0 && name.slice(0, 1) == "$") return mangle(name);
+	if (name.length > 0 && name.slice(0, 1) == "$") return ownedGeneratedName(sym) ? mangleQualified(name, mangleModuleName(sym!.modulePath)) : mangle(name);
 	if (name.indexOf("__", 0) >= 0) return mangle(name);
 	if (isSharedStructuralName(name)) return mangle(name);
 	if (sym != null && sym.modulePath != "") {
