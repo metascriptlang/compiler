@@ -1,5 +1,5 @@
 import { Node, NodeKind, bindSym } from "std/meta";
-import { blankAccount, invokeCpi } from "./cpi";
+import { invokeCpi } from "./cpi";
 
 export macro invokeSigned(program: Node, accounts: Node, data: Node, signers: Node): Node {
 	if (accounts.kind !== NodeKind.ArrayLiteral) {
@@ -14,14 +14,31 @@ export macro invokeSigned(program: Node, accounts: Node, data: Node, signers: No
 	let position = 0;
 	while (position < accounts.elements.length) {
 		const element = accounts.elements[position];
+		const zeros: Node[] = [];
+		let field = 0;
+		while (field < 9) {
+			zeros.push({
+				kind: NodeKind.NumberLiteral,
+				line: element.line,
+				column: element.column,
+				value: 0,
+				isFloat: false,
+				intVal: 0,
+				outOfRangeText: "",
+				isBitPattern: false,
+			});
+			field = field + 1;
+		}
 		blanks.push({
-			kind: NodeKind.CallExpr,
+			kind: NodeKind.ObjectLiteral,
 			line: element.line,
 			column: element.column,
-			callee: bindSym("blankAccount"),
-			arguments: [],
-			isDirectCall: false,
-			resolvedOverloadIdx: -1,
+			properties: zeros,
+			keys: [
+				"key", "lamports", "dataLength", "data", "owner", "rentEpoch", "signer", "writable",
+				"executable",
+			],
+			keyLocations: [],
 		});
 		position = position + 1;
 	}

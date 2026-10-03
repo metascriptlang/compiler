@@ -51,35 +51,6 @@ export struct CpiInstruction {
 	dataLength: uint64;
 }
 
-export function blankAccount(): CpiAccount {
-	return {
-		key: 0,
-		lamports: 0,
-		dataLength: 0,
-		data: 0,
-		owner: 0,
-		rentEpoch: 0,
-		signer: 0,
-		writable: 0,
-		executable: 0,
-	};
-}
-
-function infoOf(meta: InstructionAccount): CpiAccount {
-	const record = meta.key - 8;
-	return {
-		key: meta.key,
-		lamports: record + 72,
-		dataLength: msSolLoadU64(record + 80),
-		data: record + 88,
-		owner: record + 40,
-		rentEpoch: 0,
-		signer: msSolLoadU8(record + 1),
-		writable: msSolLoadU8(record + 2),
-		executable: msSolLoadU8(record + 3),
-	};
-}
-
 export function invokeCpi(
 	program: Pubkey,
 	metas: Span<InstructionAccount>,
@@ -91,7 +62,18 @@ export function invokeCpi(
 	if (count > MAX_CPI_ACCOUNTS || infos.length != metas.length || data.overflowed()) {
 		return Result.err(ProgramError.invalidArgument());
 	}
-	for (let index = 0; index < metas.length; index++) { infos[index] = infoOf(metas[index]); }
+	for (let index = 0; index < metas.length; index++) {
+		const record = metas[index].key - 8;
+		infos[index].key = metas[index].key;
+		infos[index].lamports = record + 72;
+		infos[index].dataLength = msSolLoadU64(record + 80);
+		infos[index].data = record + 88;
+		infos[index].owner = record + 40;
+		infos[index].rentEpoch = 0;
+		infos[index].signer = msSolLoadU8(record + 1);
+		infos[index].writable = msSolLoadU8(record + 2);
+		infos[index].executable = msSolLoadU8(record + 3);
+	}
 	const instruction: CpiInstruction[1] = [{
 		program: msSolSpanAddress(program.bytes),
 		accounts: msSolMetasAddress(metas),
