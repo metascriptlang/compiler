@@ -172,7 +172,9 @@ void msAtomicRefArraySetLen(msRefArray* arr, int64_t newLen);
 void msAtomicRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount);
 void msAtomicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item);
 void msNumberArraySplice(msNumberArray* arr, int64_t start, int64_t deleteCount);
+void msNumberArraySplice3(msNumberArray* arr, int64_t start, int64_t deleteCount, double item);
 void msStringArraySplice(msStringArray* arr, int64_t start, int64_t deleteCount);
+void msStringArraySplice3(msStringArray* arr, int64_t start, int64_t deleteCount, msString item);
 
 /* ===== Uint8 Array (binary-compatible with msString for zero-copy bridge) ===== */
 
@@ -193,6 +195,7 @@ void msUint8ArrayPush(msUint8Array* arr, uint8_t value);
 uint8_t msUint8ArrayAt(msUint8Array* arr, int64_t idx);
 msUint8Array msUint8ArrayNew(int64_t cap);
 msString msAsString(msUint8Array* arr);
+void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, uint8_t item);
 
 /* ===== Generic Typed Array Macro (Standard reference sequence pattern) ===== */
 /* Generates per-type array struct: { int64_t len; struct { int64_t cap; T data[]; }* p; }
