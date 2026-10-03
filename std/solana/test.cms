@@ -1012,3 +1012,103 @@ test "createPda signs with its seeds and the found bump" {
 		assert signerIs(calls[0], 0, [textBytes("counter"), [derived.value.bump]]);
 	}
 }
+
+function sameBytes(left: uint8[], right: uint8[]): boolean {
+	if (left.length != right.length) { return false; }
+	for (let index = 0; index < left.length; index++) {
+		if (left[index] != right[index]) { return false; }
+	}
+	return true;
+}
+
+function systemKey(): Pubkey { return Pubkey.systemProgram(); }
+
+function recordedStep(): Result<uint64, ProgramError> {
+	const op = try instructionData().readU8(0);
+	const first = try account(0);
+	const second = try account(1);
+	if (op == 0) { return createAccount(first, second, 100, 8, keyOf(9)); }
+	if (op == 1) { return assignTo(second, keyOf(9)); }
+	if (op == 2) { return transfer(first, second, 10); }
+	if (op == 3) { return allocate(second, 16); }
+	return createProgramAccount(first, second, 16, keyOf(9));
+}
+
+function recordedEntry(): void { codeOf(recordedStep()); }
+
+function recordedRun(op: uint8, target: HostAccount): uint64 {
+	const accounts = [wallet(1, 10000000), target];
+	const input: uint8[] = [op];
+	return run(programKey(), accounts, input, recordedEntry).result;
+}
+
+function owner9(): uint8[] {
+	const bytes: uint8[] = [9];
+	while (bytes.length < 32) { bytes.push(0); }
+	return bytes;
+}
+
+function joined(head: uint8[], tail: uint8[]): uint8[] {
+	const bytes: uint8[] = [];
+	for (const value of head) { bytes.push(value); }
+	for (const value of tail) { bytes.push(value); }
+	return bytes;
+}
+
+test "createAccount sends the System program two writable signers and 52 bytes" {
+	assert recordedRun(0, blank(keyOf(2))) == 0;
+	const calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 0;
+	const sent = calls[0];
+	assert sent.program.equals(systemKey());
+	assert sent.accounts.length == 2;
+	assert sent.accounts[0].key.equals(keyOf(1)) && sent.accounts[0].writable && sent.accounts[0].signer;
+	assert sent.accounts[1].key.equals(keyOf(2)) && sent.accounts[1].writable && sent.accounts[1].signer;
+	const head: uint8[] = [0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(sent.data, joined(head, owner9()));
+}
+
+test "assign, transfer and allocate send the System program their accounts and data" {
+	assert recordedRun(1, wallet(2, 5000)) == 0;
+	let sent = invocations()[0];
+	assert sent.program.equals(systemKey()) && sent.accounts.length == 1;
+	assert sent.accounts[0].key.equals(keyOf(2)) && sent.accounts[0].writable && sent.accounts[0].signer;
+	const assignHead: uint8[] = [1, 0, 0, 0];
+	assert sameBytes(sent.data, joined(assignHead, owner9()));
+
+	assert recordedRun(2, wallet(2, 5000)) == 0;
+	sent = invocations()[0];
+	assert sent.program.equals(systemKey()) && sent.accounts.length == 2;
+	assert sent.accounts[0].key.equals(keyOf(1)) && sent.accounts[0].writable && sent.accounts[0].signer;
+	assert sent.accounts[1].key.equals(keyOf(2)) && sent.accounts[1].writable && !sent.accounts[1].signer;
+	const transferBytes: uint8[] = [2, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(sent.data, transferBytes);
+
+	assert recordedRun(3, wallet(2, 5000)) == 0;
+	sent = invocations()[0];
+	assert sent.program.equals(systemKey()) && sent.accounts.length == 1;
+	assert sent.accounts[0].key.equals(keyOf(2)) && sent.accounts[0].writable && sent.accounts[0].signer;
+	const allocateBytes: uint8[] = [8, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(sent.data, allocateBytes);
+}
+
+test "createProgramAccount creates a blank target in one call and tops up, allocates and assigns a funded one" {
+	assert recordedRun(4, blank(keyOf(2))) == 0;
+	let calls = invocations();
+	assert calls.length == 1;
+	const createHead: uint8[] = [0, 0, 0, 0, 0, 75, 15, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(calls[0].data, joined(createHead, owner9()));
+
+	assert recordedRun(4, wallet(2, 1)) == 0;
+	calls = invocations();
+	assert calls.length == 3;
+	const topUp: uint8[] = [2, 0, 0, 0, 255, 74, 15, 0, 0, 0, 0, 0];
+	assert sameBytes(calls[0].data, topUp);
+	assert calls[0].accounts.length == 2 && calls[0].accounts[0].key.equals(keyOf(1));
+	assert calls[0].accounts[1].key.equals(keyOf(2)) && calls[0].accounts[1].writable;
+	const allocateBytes: uint8[] = [8, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(calls[1].data, allocateBytes) && calls[1].accounts.length == 1;
+	const assignHead: uint8[] = [1, 0, 0, 0];
+	assert sameBytes(calls[2].data, joined(assignHead, owner9())) && calls[2].accounts.length == 1;
+	assert calls[2].accounts[0].key.equals(keyOf(2)) && calls[2].accounts[0].signer;
+}
