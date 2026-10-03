@@ -2748,42 +2748,50 @@ C functions have no JS linkage.
 
 #### Taking an address: `x as Ptr<T>`
 
-`x as Ptr<T>` on a value is the reference's `addr x`: the place where `x` lives,
-never its bits read as an address. The rules live in `checkPointerAddress`
-(`src/checker/pointerAddress.ms`); the JS and Raiser VM refusals in
+`x as Ptr<T>` keeps the two meanings the reference spells `addr x` and `cast[ptr T](x)`: a value stored
+inline (a struct, a sized array, a tuple) or a Span element is addressed; an integer is the address it
+holds, read as before (`address as Ptr<Pubkey>`, `(address + 96) as Ptr<T>` in std/solana). The rules
+live in `checkPointerAddress` (`src/checker/pointerAddress.ms`); the JS and Raiser VM refusals in
 `byteViewRefusal` / `pointerOpRefusal` (`src/checker/byteViews.ms`).
 
 | Written | Native (C) | JS | Raiser VM |
 |---|---|---|---|
-| `n as Ptr<int32>`, `s as Ptr<S>`, `xs[i] as Ptr<T>`, `s.f as Ptr<F>` | address of the location | `[base, index]` location | a VM location (register, global, element, field); a struct or array is its object |
-| `view as Ptr<T>` (`Span<T>`) | `&view[0]`; an empty span raises the bound error | same, raises the same | element 0; an empty span raises the same |
+| `s as Ptr<S>`, `xs[i] as Ptr<S>`, `s.f as Ptr<F>` for a struct, sized array or tuple | address of the location | `[base, index]` location | the object |
+| `view as Ptr<T>` (`Span<T>`) | `&view[0]`; an empty span raises the bound error | same, raises the same | a VM location of element 0; raises the same |
 | `view as Ptr<void>` | the data pointer, `null` for an empty array | refused | refused |
-| `n as Ptr<U>`, `U ≠ T` (byte view) | `cast[ptr U](addr n)`: `uint32 258 as Ptr<uint8>` reads `2 1` | refused at compile time | refused, traps |
-| `p as Ptr<Ptr<T>>` on a `Ptr<T>` variable | the pointer's own address (`T**`) | refused | refused |
-| const binding or value-type parameter | `Readonly<Ptr<T>>`: reads compile, a write is refused | same | same |
-| a call or a literal (`mk() as Ptr<S>`) | refused: no address | refused | refused |
-| `xs as Ptr<uint8>` for `T[]` / `string` | refused: the handle is not the elements; write `xs as Span<T> as Ptr<…>` | refused | refused |
+| `s as Ptr<U>`, `U` not the type of `s` | `cast[ptr U](addr s)`: a struct `{ a: 258 }` reads `2 1` | refused at compile time | refused, traps |
+| `n as Ptr<T>` for an integer | the address `n` holds (`cast[ptr T](n)`), unchanged | refused at compile time | refused, traps |
+| `p as Ptr<U>` for a pointer `p` | a pointer cast; `Ptr<Ptr<T>>` is `T**` | same pointee only | same pointee only |
+| a `const` binding or value-type parameter of a struct | `Readonly<Ptr<S>>`: reads compile, a write is refused | same | same |
+| a call or a literal of a struct (`mk() as Ptr<S>`) | refused: no address | refused | refused |
+| `xs as Ptr<U>` for `T[]` / `string`, `U` not the handle type and not `void` | refused, as the reference refuses casting a `seq` (`isCastable`); write `xs as Span<T> as Ptr<…>` | refused | refused |
 | `view as Span<U>`, `U ≠ T` | refused, as the reference refuses `cast[openArray[U]]` | refused | refused |
 | `p + n`, `q - p`, `p < q`, `p[i]` with `i ≠ 0`, `p += n` | pointer arithmetic | refused: no address arithmetic | refused, traps |
 | `p == q`, `p[]`, `p[0]`, `p.f` | as C | location identity and access | location identity and access |
+
+A `ref` / `out` argument of any type reaches the caller's location on the Raiser VM too (`RegAddr`,
+`ElemAddr`, `FieldAddr`, `GlobalAddr`; `src/codegen/raiser/CLAUDE.md`).
 
 An array of `Ptr<T>` holds addresses and never counts them (the reference's `ptr` has no
 hooks): before, `const slots: Ptr<Pet>[] = [a as Ptr<Pet>]` aborted at scope exit by
 decrementing a stack address.
 
-Measured 2026-10-03 on tree `20fcc562` with `msc run` (C, `--gc=orc`, `--target=js`,
+Measured 2026-10-03 on tree `ee6fccbb` with `msc run` (C, `--gc=orc`, `--target=js`,
 `--target=raiser`): corpus `679-typedPointerLocations` (every lane) and
 `687-nativePointerAddresses` (native lanes) print their oracles; `src/test/c/pointerAddress.ms`,
 `src/test/js/byteViews.ms` and the raiser engine tests in `src/codegen/raiser/eval.ms` hold the
-refusals. Before, on installed `e5e932d0`: `n as Ptr<int32>` and `uint32 as Ptr<uint8>`
-segfaulted on C (the value was taken as the address), `uint8[] as Ptr<uint8>` read the array
-header (`2 0`), and on JS a byte view printed `[object Object]` and `p + 1` gave `NaN`.
+refusals. Before, on installed `e5e932d0`: `uint8[] as Ptr<uint8>` read the array header
+(`2 0`), and on JS a byte view printed `[object Object]` and `p + 1` gave `NaN`. The integer forms
+of std/solana and Hibernal (`address as Ptr<Pubkey>`, `records[seat] as Ptr<PetAccount>`,
+`(address + 24) as Ptr<uint64>`) print the same as installed `e5e932d0` (`i1 9 6 8 7 6`).
 
 Rejected: a refusal of only the direct `Span<T> as Ptr<U>` cast on JS — an intermediate typed
 pointer (`span as Ptr<T> as Ptr<void> as Ptr<uint8>`) bypassed it, and the Raiser VM (including
 `@comptime`) read the element object as the byte (`r1 [object]`, a comptime fold of `258`'s first
 byte to `1`). A runtime pointer offset on JS (throw when the storage is not an array) was dropped
-too: the reference's JS backend has no pointer arithmetic, so it was a mechanism of our own.
+too: the reference's JS backend has no pointer arithmetic, so it was a mechanism of our own. Rejected too: reading an integer variable's own address for `n as Ptr<T>` (a draft of
+this arc). It silently turned std/solana's `load(123456)` from reading memory at `123456` into
+returning `123456`, so the integer keeps the reference's `cast` meaning.
 
 Not checked: a `Ptr<T>` outliving its target. Returning a local's address reads `0` on C and the
 old value on JS; a pointer into a `T[]` that grows crashes C and writes the old storage on JS.
