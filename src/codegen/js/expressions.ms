@@ -20,7 +20,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym } from "../../transform/util";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, uniqueClassInUnion } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, uniqueClassInUnion } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -693,7 +693,8 @@ export function emitTypeAssertion(gen: JSGenerator, node: Node): void {
 	}
 	emit(gen, "((v) => (v == null || v instanceof ");
 	emitNode(gen, classReference(target, node.location));
-	emit(gen, ") ? v : (() => { throw new Error(\"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + escapeJSString(target.name) + "\"); })())(");
+	const shown = target.instantiatedFrom != null ? namedTypeDisplay(checkedConversionBody(node)!) : target.name;
+	emit(gen, ") ? v : (() => { throw new Error(\"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + escapeJSString(shown) + "\"); })())(");
 	emitNode(gen, d.asExpr);
 	emit(gen, ")");
 }
@@ -769,10 +770,20 @@ function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData
 	return true;
 }
 
-function checkedConversionTarget(node: Node): Symbol | null {
+function checkedConversionBody(node: Node): Type | null {
 	if (!node.flags.has(NodeFlag.ObjCheck) || node.nodeType == null) return null;
 	const t = node.nodeType.kind == TypeKind.Union ? unwrapRefNullUnion(node.nodeType) : node.nodeType;
-	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn.sym : null;
+	return t != null && t.kind == TypeKind.Ref ? t.typeReturn : null;
+}
+
+function checkedConversionTarget(node: Node): Symbol | null {
+	const body = checkedConversionBody(node);
+	if (body == null) return null;
+	if (body.kind != TypeKind.GenericInstance) return body.sym;
+	if (hasGenericParams(body)) return null;
+	const instance = node.typeExpr != null ? node.typeExpr.resolvedSym : null;
+	if (instance == null || instance.instantiatedFrom == null) throw new Error(`internal: the checked conversion to ${typeDisplayName(body)} has no instance class`);
+	return instance;
 }
 
 // ===== Move Expression (no-op in JS) =====

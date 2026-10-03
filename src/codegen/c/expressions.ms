@@ -1780,7 +1780,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		if (node.flags.has(NodeFlag.ObjCheck) && node.nodeType != null) {
 			const checkedRef = node.nodeType.kind == TypeKind.Union ? unwrapRefNullUnion(node.nodeType) : node.nodeType;
 			const checkedClass = checkedRef != null && checkedRef.kind == TypeKind.Ref ? checkedRef.typeReturn : null;
-			if (checkedClass == null || checkedClass.kind != TypeKind.Struct) {
+			if (checkedClass == null || (checkedClass.kind != TypeKind.Struct && checkedClass.kind != TypeKind.GenericInstance)) {
 				addCGenError(g, "internal: checked conversion `as " + d.asType + "` has no class target at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
 				ctx.results.push("MS_NIL");
 				return;
