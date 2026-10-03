@@ -1113,8 +1113,13 @@ function responseFileBody(args: string[]): string {
 	return body;
 }
 
-export function linkObjects(oFiles: string[], outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
-	ensureDir(dirname(outBinary));
+interface LinkCommand {
+	command: ToolCommand;
+	prefix: string[];
+	flagArgs: string[];
+}
+
+function linkCommand(extraFlags: string, ccOption: number, ccBinary: string): Result<LinkCommand, ProcessError> {
 	const resolved = compilerCommand(ccOption, ccBinary, _hasCppCompile);
 	if (!resolved.ok) return Result.err(resolved.error);
 	const command = resolved.value;
@@ -1125,6 +1130,21 @@ export function linkObjects(oFiles: string[], outBinary: string, extraFlags: str
 	const flags = appendParsedFlags(command.path, flagArgs, extraFlags);
 	if (!flags.ok) return Result.err(flags.error);
 	if (!flagArgs.includes("-nostdlib") && !flagArgs.includes("-nodefaultlibs")) flagArgs.push("-lm");
+	return Result.ok({ command, prefix, flagArgs });
+}
+
+export function warmLinkPlan(outBinary: string, extraFlags: string, ccOption: number, ccBinary: string): void {
+	const link = linkCommand(extraFlags, ccOption, ccBinary);
+	if (link.ok) linkPlanFor(link.value.command, link.value.prefix, link.value.flagArgs, outBinary);
+}
+
+export function linkObjects(oFiles: string[], outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
+	ensureDir(dirname(outBinary));
+	const link = linkCommand(extraFlags, ccOption, ccBinary);
+	if (!link.ok) return Result.err(link.error);
+	const command = link.value.command;
+	const prefix = link.value.prefix;
+	const flagArgs = link.value.flagArgs;
 	const bulk: string[] = [];
 	for (const oFile of oFiles) bulk.push(oFile);
 	for (const arg of flagArgs) bulk.push(arg);
