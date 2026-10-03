@@ -23,7 +23,7 @@ import {
 	aliveSetModuleCount,
 } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
-import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey } from "../codegen/c/types";
+import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey } from "../codegen/c/types";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
@@ -313,9 +313,9 @@ function markTypeInfoEdge(node: Node, modulePath: string): void {
 }
 
 function markTypeInfoHooks(t: Type, modulePath: string): void {
-	const destroy = getAttachedOp(t, AttachedOp.AttachedDestructor);
+	const destroy = getOpByKey(t, AttachedOp.AttachedDestructor) ?? getAttachedOp(t, AttachedOp.AttachedDestructor);
 	if (destroy != null) markReferenced(destroy, modulePath);
-	const trace = getAttachedOp(t, AttachedOp.AttachedTrace);
+	const trace = getOpByKey(t, AttachedOp.AttachedTrace) ?? getAttachedOp(t, AttachedOp.AttachedTrace);
 	if (trace != null) markReferenced(trace, modulePath);
 }
 
