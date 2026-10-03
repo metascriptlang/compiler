@@ -1,10 +1,3 @@
-// ^ the prelude std/meta/node `nodeCache` module-global box: module-level RC
-// values are never destroyed at exit (open compiler-side question, test
-// CLAUDE.md §3.6). Every native binary carries this survivor; the ledger only
-// surfaces it when the program has other ref-array activity (the runner skips
-// destroy==0 types), which this program's JSON stringify/parse provides. Same
-// survivor as 302/505/609 — probe-attributed 2026-08-08: 9/9 JSON-internal
-// cells balance, decode path is clean.
 enum EvKind { Click, Key, Wheel }
 
 interface ClickEv { kind: EvKind.Click; x: int32; }

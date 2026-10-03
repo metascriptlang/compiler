@@ -889,36 +889,6 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 	return n;
 }
 
-// ===== Node Cache (DRC-safe: Node in struct fields ONLY here) =====
-
-interface NodeCacheEntry {
-	key: number;
-	node: Node;
-}
-
-const nodeCache: NodeCacheEntry[] = [];
-
-export function nodeCacheGet(key: number): Node {
-	let i = 0;
-	while (i < nodeCache.length) {
-		if (nodeCache[i].key == key) return nodeCache[i].node;
-		i = i + 1;
-	}
-	return null as unknown as Node;
-}
-
-export function nodeCacheStore(key: number, node: Node): void {
-	let i = 0;
-	while (i < nodeCache.length) {
-		if (nodeCache[i].key == key) {
-			nodeCache[i].node = node;
-			return;
-		}
-		i = i + 1;
-	}
-	nodeCache.push({ key, node });
-}
-
 export function isEmptyBlock(node: Readonly<Node>): boolean {
 	if (node == null) return true;
 	if (node.kind != NodeKind.BlockStmt) return false;
