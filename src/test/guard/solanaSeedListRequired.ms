@@ -1,8 +1,8 @@
 // GUARD-OS solana
-// GUARD-CHECK-FAIL solanaSeedListRequired.ms:15:
-// GUARD-CHECK-FAIL solanaSeedListRequired.ms:16:
-// GUARD-CHECK-FAIL solanaSeedListRequired.ms:17:
-// GUARD-CHECK-FAIL solanaSeedListRequired.ms:18:
+// GUARD-CHECK-FAIL solanaSeedListRequired.ms:21:
+// GUARD-CHECK-FAIL solanaSeedListRequired.ms:22:
+// GUARD-CHECK-FAIL solanaSeedListRequired.ms:23:
+// GUARD-CHECK-FAIL solanaSeedListRequired.ms:24:
 // GUARD-CHECK-FAIL seeds must be written as a list at the call: ["pet", mint, [bump]]
 // A seed list is written at the call. A name that holds a list is not one: nothing an
 // author can keep points at the memory the seeds are read from.
