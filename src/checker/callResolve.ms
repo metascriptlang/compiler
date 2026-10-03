@@ -729,6 +729,13 @@ function checkNewArgs(ctx: CheckerContext, args: Node[]): void {
 	for (const arg of args) { callCheckExpr(ctx, arg, null); }
 }
 
+function typeNewCallee(ctx: CheckerContext, callee: Node): void {
+	const sym = lookupSymbol(ctx.table, (callee.data as IdentifierData).name);
+	if (sym == null) return;
+	callee.resolvedSym = sym;
+	callee.nodeType = sym.symbolType;
+}
+
 export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): Type {
 	const d = node.data as NewExprData;
 	// new BuiltinType<...>() — construct value types (Map, Set) and Promise
@@ -755,6 +762,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			checkArcPointeeSendable(ctx, pointee, d.newCallee.location.line, d.newCallee.location.column);
 		}
 		const arcType = createArc(pointee);
+			typeNewCallee(ctx, d.newCallee);
 			node.nodeType = arcType;
 			return arcType;
 		}
@@ -778,6 +786,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 				checkLockedPayloadSendable(ctx, payload, d.newCallee.location.line, d.newCallee.location.column);
 			}
 			const lockedType = createLocked(payload);
+			typeNewCallee(ctx, d.newCallee);
 			node.nodeType = lockedType;
 			return lockedType;
 		}
@@ -786,6 +795,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		const newSym = lookupSymbol(ctx.table, id.name);
 		if (expected != null && (expected.kind == TypeKind.Struct || expected.kind == TypeKind.GenericInstance)
 				&& expected.typeName == id.name && (newSym == null || !hasFlag(newSym, SymbolFlag.HasConstructor))) {
+			typeNewCallee(ctx, d.newCallee);
 			node.nodeType = expected;
 			checkNewArgs(ctx, d.newArguments);
 			return expected;
@@ -797,6 +807,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			&& expected.typeReturn != null && expected.typeReturn.kind == TypeKind.Array)
 			? expected.typeReturn : expected;
 		if (expected != null && expectedArrInner != null && expectedArrInner.kind == TypeKind.Array && id.name == "Array") {
+			typeNewCallee(ctx, d.newCallee);
 			node.nodeType = expected;
 			checkNewArgs(ctx, d.newArguments);
 			return expected;
@@ -819,6 +830,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 					sgRecordSym(ctx, d.newCallee.location.line, ltCol + 1, ltCol + 1 + trimmed.length, typeArgSym, typeArgSym.symbolType, typeArgSym.symbolKind, trimmed, "", false);
 				}
 				const arrType = createRef(createArray(elemType));
+				typeNewCallee(ctx, d.newCallee);
 				node.nodeType = arrType;
 				checkNewArgs(ctx, d.newArguments);
 				return arrType;
