@@ -43,7 +43,7 @@ export function lowerNativeAccess(program: Node, ctx: TransformContext): Node {
 	// Pre-pass: propagate SizedArray type from declarations/assignments to ArrayLiteral initializers.
 	// Without this, ArrayLiterals infer TypeKind.Array and get heap-allocated by rewriteArrayLiteral.
 	walkNode(program, propagateSizedArrayType);
-	checkVariantReads(program, ctx);
+	checkVariantReads(program, ctx, false);
 	walkNode(program, (n: Node): Node => { return rewriteAccess(n, ctx); });
 	return program;
 }
