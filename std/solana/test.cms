@@ -38,6 +38,9 @@ import {
 	pubkeyOf,
 	instructionData,
 	logPubkey,
+	clock,
+	returnData,
+	setReturnData,
 	programId,
 	ProgramAddress,
 	Bytes,
@@ -48,7 +51,7 @@ import {
 	invokeSigned,
 } from "./index";
 import { SignerSeeds } from "./seed";
-import { HostAccount, invocations, logs, run, signerIs, textBytes } from "./host";
+import { HostAccount, invocations, logs, run, setClock, signerIs, textBytes } from "./host";
 import {
 	accounts,
 	args,
@@ -532,6 +535,126 @@ test "emitEvent logs Anchor's event discriminator and the Borsh fields as Progra
 		if (line == expected) { found = true; }
 	}
 	assert found;
+}
+
+export struct Wide {
+	small: uint8;
+	signedSmall: int8;
+	flag: boolean;
+	short: uint16;
+	signedShort: int16;
+	word: uint32;
+	signedWord: int32;
+	long: uint64;
+	signedLong: int64;
+	owner: Pubkey;
+}
+
+export struct Edge {
+	owner: Pubkey;
+	largest: uint64;
+	smallest: int64;
+	flag: boolean;
+	lowest: int8;
+	lowestShort: int16;
+	lowestWord: int32;
+}
+
+function wideEntry(): void {
+	const wide: Wide = {
+		small: 171,
+		signedSmall: -5,
+		flag: true,
+		short: 0x0102,
+		signedShort: -300,
+		word: 0x01020304,
+		signedWord: -70000,
+		long: 0x0102030405060708,
+		signedLong: -9000000000000,
+		owner: patternedKey(),
+	};
+	emitEvent<Wide>(wide);
+	const edge: Edge = {
+		owner: patternedKey(),
+		largest: 0xffffffffffffffff,
+		smallest: -9223372036854775807 - 1,
+		flag: false,
+		lowest: -128,
+		lowestShort: -32768,
+		lowestWord: -2147483647 - 1,
+	};
+	emitEvent<Edge>(edge);
+}
+
+test "emitEvent writes every field width, signed or not, in declaration order" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], wideEntry).result == 0;
+	const wide = "Program data: G5rYD/n75SGr+wECAdT+BAMCAZDu/v8IBwYFBAMCAQBwMobQ9///" +
+		"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=";
+	const edge = "Program data: 196v8E6Mk6EBAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fIP//////////" +
+		"AAAAAAAAAIAAgACAAAAAgA==";
+	const lines = logs();
+	assert lines.length == 2;
+	assert lines[0] == wide && lines[1] == edge;
+}
+
+function returnDataEntry(): void {
+	const payload: uint8[3] = [7, 8, 9];
+	setReturnData(payload);
+	const found = returnData();
+	if (found === null) { failWith(ProgramError.custom(1)); return; }
+	if (!found.program.equals(programId())) { failWith(ProgramError.custom(2)); return; }
+	if (found.data.length != 3) { failWith(ProgramError.custom(3)); return; }
+	const first = found.data.readU8(0);
+	const last = found.data.readU8(2);
+	if (!first.ok || first.value != 7 || !last.ok || last.value != 9) { failWith(ProgramError.custom(4)); }
+}
+
+function fullReturnDataEntry(): void {
+	let big: uint8[1024] = [];
+	for (let index = 0; index < 1024; index++) { big[index] = ((index * 7) & 0xff) as uint8; }
+	setReturnData(big);
+	const found = returnData();
+	if (found === null) { failWith(ProgramError.custom(1)); return; }
+	if (found.data.length != 1024) { failWith(ProgramError.custom(3)); return; }
+	for (let index = 0; index < 1024; index++) {
+		const byte = found.data.readU8(index as uint64);
+		if (!byte.ok || byte.value != ((index * 7) & 0xff)) { failWith(ProgramError.custom(5)); return; }
+	}
+	const word = found.data.readU64(8);
+	if (!word.ok || word.value != 0x69625b544d463f38) { failWith(ProgramError.custom(6)); }
+}
+
+function noReturnDataEntry(): void {
+	if (returnData() !== null) { failWith(ProgramError.custom(7)); }
+}
+
+test "returnData reads back the program, the length and every byte, up to the 1,024 the runtime holds" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], returnDataEntry).result == 0;
+	assert run(programKey(), none, [], fullReturnDataEntry).result == 0;
+	assert run(programKey(), none, [], noReturnDataEntry).result == 0;
+}
+
+test "clock reads every field the runtime wrote" {
+	setClock({
+		slot: 77,
+		epochStartTimestamp: -5,
+		epoch: 3,
+		leaderScheduleEpoch: 4,
+		unixTimestamp: 1700000000,
+	});
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], clockEntry).result == 0;
+}
+
+function clockEntry(): void {
+	const now = clock();
+	if (now.slot != 77) { failWith(ProgramError.custom(1)); }
+	if (now.epochStartTimestamp != -5) { failWith(ProgramError.custom(2)); }
+	if (now.epoch != 3) { failWith(ProgramError.custom(3)); }
+	if (now.leaderScheduleEpoch != 4) { failWith(ProgramError.custom(4)); }
+	if (now.unixTimestamp != 1700000000) { failWith(ProgramError.custom(5)); }
 }
 
 function payEntry(): void {
