@@ -16,7 +16,7 @@ import {
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
-import { makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym, runtimeRef, makeHiddenAddr } from "../transform/util";
+import { makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym } from "../transform/util";
 import { testLoc, testFnRef } from "./inject";
 import { testVarSym, symListHas, symListAdd } from "./scope";
 
@@ -265,7 +265,7 @@ test "keeps apart two variables spelled alike" {
 test "a call named like a wasMoved op that is not one pairs with nothing" {
 	const loc = testLoc();
 	const x = testVarSym("x");
-	const lookalike = makeExprStmt(makeCall(runtimeRef("noteWasMoved", loc), [makeIdentResolved(x, loc)], loc), loc);
+	const lookalike = makeExprStmt(makeCall(testFnRef("noteWasMoved", loc), [makeIdentResolved(x, loc)], loc), loc);
 	const result = optimizeBlock([lookalike, makeDestroyCallForTest(x)]);
 	assert result.length == 2;
 }

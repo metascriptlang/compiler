@@ -12,7 +12,8 @@ import { Node, NodeKind, makeLoc, ExprStmtData, CallExprData, IdentifierData, Sy
 import { RcInfo, RcKind, noRcInfo, classifyType } from "./classify";
 import { hasFlag, makeSymbol, SymbolFlag } from "../checker/symbol";
 import { CfgCache, createCfgCache } from "./cfg";
-import { TransformContext, createTransformContext } from "../transform/context";
+import { TransformContext } from "../transform/context";
+import { makeCtx } from "../transform/testUtil";
 import { makeExprStmt, makeNull, attachedOpSym } from "../transform/util";
 import { createArray, stringType } from "../checker/types";
 
@@ -376,7 +377,7 @@ export function hasPre(dctx: DrcContext): boolean {
 // ===== Test Helpers =====
 
 function testDrcCtx(): DrcContext {
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	return createDrcContext(ctx);
 }
 

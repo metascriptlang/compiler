@@ -21,8 +21,8 @@
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
 //   TypeInfo   TypeName_typeInfo                  — msTypeInfo for ORC runtime
 
-import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, createNodeAt, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState } from "../../ast/node";
-import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
+import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState } from "../../ast/node";
+import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet } from "../context";
 import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily } from "../../codegen/c/types";
@@ -34,7 +34,7 @@ import { canFormAcycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { CheckerContext, newSym, addError, lookupUserHook, getGlobalTypeOwner } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
-import { parseInput } from "../testUtil";
+import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
 import { sizedArrayHookName } from "../../analyzer/classify";
 
@@ -2720,7 +2720,7 @@ function liftWithChecker(input: string): Node {
 	const pr = parseInput(input);
 	if (!pr.ok) return null as unknown as Node;
 	const checkerCtx = checkProgram(pr.value);
-	const ctx = createTransformContextWithChecker(checkerCtx);
+	const ctx = checkedCtx(checkerCtx);
 	return liftDestructors(pr.value, ctx, true);
 }
 
@@ -2754,7 +2754,7 @@ function liftWithCompare(input: string): Node {
 	const pr = parseInput(input);
 	if (!pr.ok) return null as unknown as Node;
 	const checkerCtx = checkProgram(pr.value);
-	const ctx = createTransformContextWithChecker(checkerCtx);
+	const ctx = checkedCtx(checkerCtx);
 	const lowered = lowerOperators(pr.value, ctx);
 	return liftDestructors(lowered, ctx, true);
 }

@@ -13,7 +13,7 @@ import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFla
 import { forEachChild } from "../ast/visitor";
 import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } from "../checker/symbol";
-import { TransformContext, createTransformContext, freshTempSym, createTransformContextWithChecker } from "../transform/context";
+import { TransformContext, createTransformContext, freshTempSym } from "../transform/context";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved,
@@ -31,6 +31,7 @@ import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } 
 import { inferCursors } from "./cursors";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
+import { checkedCtx, bindCStd } from "../transform/testUtil";
 
 // ===== DRC Modes (standard ProcessMode parity) =====
 
@@ -2570,7 +2571,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 
 function testDrcContext(input: string): DrcContext {
 	const ctx = checkSource(input);
-	const tctx = createTransformContextWithChecker(ctx);
+	const tctx = checkedCtx(ctx);
 	return createDrcContext(tctx);
 }
 
@@ -2684,6 +2685,7 @@ test "number type needs no cleanup" {
 
 test "callCanThrow false for ms-prefixed runtime calls" {
 	const loc = testLoc();
+	bindCStd();
 	const call = makeCall(runtimeRef("msStringDecref", loc), [], loc);
 	assert !callCanThrow(call);
 }
@@ -2727,6 +2729,7 @@ test "setNeedsTryIfRaises finds a user call in an if condition" {
 
 test "setNeedsTryIfRaises finds a user call passed to a runtime call" {
 	const loc = testLoc();
+	bindCStd();
 	const inner = makeCall(testFnRef("parseExpr", loc), [], loc);
 	const outer = makeCall(runtimeRef("msStringDecref", loc), [inner], loc);
 	assert scanSetsNeedsTry(makeExprStmt(outer, loc));
@@ -2734,6 +2737,7 @@ test "setNeedsTryIfRaises finds a user call passed to a runtime call" {
 
 test "setNeedsTryIfRaises leaves scopes alone for a runtime-only statement" {
 	const loc = testLoc();
+	bindCStd();
 	const stmt = makeExprStmt(makeCall(runtimeRef("msStringDecref", loc), [], loc), loc);
 	assert !scanSetsNeedsTry(stmt);
 }
