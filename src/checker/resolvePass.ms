@@ -1688,9 +1688,21 @@ function refuseHookReceiver(ctx: CheckerContext, node: Node, paramTypes: Type[])
 	const recv = paramTypes[0];
 	if (recv == null || isUnresolvedType(recv)) return;
 	const fault = hookReceiverFault(d.fnName, key, getExtReceiverText(d.fnFlags), recv);
-	if (fault == "") return;
-	const loc = node.paramLocations != null && node.paramLocations.length > 0 && node.paramLocations[0] != null ? node.paramLocations[0] : node.location;
-	addError(ctx, "signature for '" + d.fnName + "' must take its receiver as " + hookReceiverShapes(d.fnName) + ": " + fault, loc.line, loc.column);
+	if (fault != "") {
+		const loc = node.paramLocations != null && node.paramLocations.length > 0 && node.paramLocations[0] != null ? node.paramLocations[0] : node.location;
+		addError(ctx, "signature for '" + d.fnName + "' must take its receiver as " + hookReceiverShapes(d.fnName) + ": " + fault, loc.line, loc.column);
+		return;
+	}
+	refuseHookOutsideItsModule(ctx, node, key);
+}
+
+function refuseHookOutsideItsModule(ctx: CheckerContext, node: Node, typeName: string): void {
+	const d = node.data as FunctionDeclData;
+	const hookSym = node.resolvedSym;
+	const typeSym = lookupSymbol(ctx.table, typeName);
+	if (hookSym == null || typeSym == null || hookSym.modulePath == "" || typeSym.modulePath == "") return;
+	if (hookSym.modulePath == typeSym.modulePath) return;
+	addError(ctx, "type bound operation '" + d.fnName + "' can be defined only in the same module with its type (" + typeName + "): declare it in the module that declares '" + typeName + "'", d.nameLocation.line, d.nameLocation.column);
 }
 
 function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: string, line: int32, col: int32): void {
