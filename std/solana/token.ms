@@ -32,7 +32,14 @@ when (testBuild) {
 	} from "./core";
 	import { external, externalMutable } from "./typed";
 	import { HostAccount, invocations, logs, run, signerIs, textBytes } from "./host";
-	import { accounts, findProgramAddressOf, signed } from "./macro";
+	import {
+		accounts,
+		associated,
+		findProgramAddressOf,
+		signed,
+		tokenAuthority,
+		tokenMint,
+	} from "./macro";
 }
 
 export enum TokenAccountState {
@@ -1148,5 +1155,71 @@ when (testBuild) {
 	test "expectAssociated refuses a token account that is not the owner's associated account" {
 		assert resultOf(goodMint(), 1, typedTransferEntry) ==
 			ProgramError.accountNotAssociatedTokenAccount().code;
+	}
+
+	export struct DecoratedTokens {
+		owner: Signer;
+		mint: External<Mint>;
+		@associated(mint, owner) own: ExternalMutable<TokenAccount>;
+		@tokenMint(mint) @tokenAuthority(owner) plain: ExternalMutable<TokenAccount>;
+	}
+
+	function decoratedStep(): Result<uint64, ProgramError> {
+		const x = try accounts<DecoratedTokens>();
+		return Result.ok((try x.own.read()).amount + (try x.plain.read()).amount);
+	}
+
+	function decoratedEntry(): void {
+		const result = decoratedStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function ataOf(wallet: uint64, mint: uint64, program: Pubkey): Pubkey {
+		const found = associatedTokenAddress(keyOf(wallet), keyOf(mint), program);
+		return found.ok ? found.value.key : Pubkey.zero();
+	}
+
+	function decorated(program: Pubkey, ownerWord: uint64, ownAt: Pubkey, plainMint: uint64, plainOwner: uint64): HostAccount[] {
+		let owner = holderOf(3, Pubkey.systemProgram(), []);
+		owner.signer = true;
+		let own = holderOf(5, program, tokenAccountData(1, ownerWord, 900, 1));
+		own.key = ownAt;
+		return [
+			owner,
+			holderOf(1, program, mintData(7, 500, 6)),
+			own,
+			holderOf(6, program, tokenAccountData(plainMint, plainOwner, 0, 1)),
+		];
+	}
+
+	test "@associated checks the token account's authority, then that it sits at the associated address of the authority and the mint" {
+		for (const program of [Pubkey.tokenProgram(), Pubkey.token2022Program()]) {
+			const good = decorated(program, 3, ataOf(3, 1, program), 1, 3);
+			assert resultOf(good, 0, decoratedEntry) == 0;
+			const otherOwner = decorated(program, 4, ataOf(3, 1, program), 1, 3);
+			assert resultOf(otherOwner, 0, decoratedEntry) ==
+				ProgramError.constraintTokenOwner().code;
+			const elsewhere = decorated(program, 3, keyOf(66), 1, 3);
+			assert resultOf(elsewhere, 0, decoratedEntry) ==
+				ProgramError.constraintAssociated().code;
+			const otherProgram = program == Pubkey.tokenProgram()
+				? Pubkey.token2022Program()
+				: Pubkey.tokenProgram();
+			const derivedByAnother = decorated(program, 3, ataOf(3, 1, otherProgram), 1, 3);
+			assert resultOf(derivedByAnother, 0, decoratedEntry) ==
+				ProgramError.constraintAssociated().code;
+		}
+	}
+
+	test "@tokenAuthority and @tokenMint check the fields of the token account, the authority first" {
+		const program = Pubkey.token2022Program();
+		const own = ataOf(3, 1, program);
+		assert resultOf(decorated(program, 3, own, 1, 3), 0, decoratedEntry) == 0;
+		assert resultOf(decorated(program, 3, own, 2, 3), 0, decoratedEntry) ==
+			ProgramError.constraintTokenMint().code;
+		assert resultOf(decorated(program, 3, own, 1, 4), 0, decoratedEntry) ==
+			ProgramError.constraintTokenOwner().code;
+		assert resultOf(decorated(program, 3, own, 2, 4), 0, decoratedEntry) ==
+			ProgramError.constraintTokenOwner().code;
 	}
 }

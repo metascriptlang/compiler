@@ -29,6 +29,7 @@ import {
 	writableSigner,
 	transferLamports,
 	Mutable,
+	Owned,
 	Program,
 	Signer,
 	Writable,
@@ -65,13 +66,18 @@ import { SignerSeeds } from "./seed";
 import { HostAccount, invocations, logs, run, setClock, signerIs, textBytes } from "./host";
 import {
 	accounts,
+	address,
 	args,
+	bump,
+	constraint,
 	emitEvent,
 	findProgramAddress,
 	findProgramAddressOf,
+	hasOne,
 	instruction,
 	programAddress,
 	programAddressOf,
+	seeds,
 	signed,
 } from "./macro";
 import { anchorIdl } from "./idl";
@@ -1601,6 +1607,12 @@ function safeBytes(owner: Pubkey, limit: uint8, bump: uint8): uint8[] {
 	return bytes;
 }
 
+function safeAddress(owner: Pubkey): ProgramAddress {
+	const derived = findProgramAddressOf(programKey(), ["safe", owner]);
+	if (derived.ok) { return derived.value; }
+	return { key: Pubkey.zero(), bump: 0 };
+}
+
 function atKey(account: HostAccount, key: Pubkey): HostAccount {
 	return { ...account, key: key };
 }
@@ -1613,6 +1625,199 @@ function safeAt(key: Pubkey, owner: Pubkey, limit: uint8, bump: uint8): HostAcco
 	return atKey(holder(1, programKey(), safeBytes(owner, limit, bump), false, true), key);
 }
 
+function systemAccountKey(): HostAccount {
+	return atKey(holder(5, Pubkey.systemProgram(), [], false, false), Pubkey.systemProgram());
+}
+
+function ownerWallet(): HostAccount {
+	return holder(2, Pubkey.systemProgram(), [], true, false);
+}
+
+function pinnedSafe(limit: uint8): HostAccount {
+	const found = safeAddress(keyOf(2));
+	return safeAt(found.key, keyOf(2), limit, found.bump);
+}
+
+export struct PinnedSafe {
+	owner: Signer;
+	@seeds("safe", owner) @bump(safe.bump) safe: Mutable<Safe>;
+}
+
+export struct CanonicalSafe {
+	owner: Signer;
+	@seeds("safe", owner) @bump safe: Mutable<Safe>;
+}
+
+function pinnedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<PinnedSafe>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function canonicalStep(): Result<uint64, ProgramError> {
+	const x = try accounts<CanonicalSafe>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function pinnedEntry(): void { codeOf(pinnedStep()); }
+function canonicalEntry(): void { codeOf(canonicalStep()); }
+
+test "@seeds with @bump(account.field) accepts the address the stored bump gives and nothing else" {
+	const found = safeAddress(keyOf(2));
+	assert run(programKey(), [ownerWallet(), pinnedSafe(9)], [], pinnedEntry).result == 0;
+	const wrongBump = [ownerWallet(), safeAt(found.key, keyOf(2), 9, found.bump - 1)];
+	assert run(programKey(), wrongBump, [], pinnedEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const elsewhere = [ownerWallet(), safeAt(keyOf(77), keyOf(2), 9, found.bump)];
+	assert run(programKey(), elsewhere, [], pinnedEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const otherSeed = [holder(3, Pubkey.systemProgram(), [], true, false), pinnedSafe(9)];
+	assert run(programKey(), otherSeed, [], pinnedEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+test "a bare @bump accepts the canonical address only" {
+	assert run(programKey(), [ownerWallet(), pinnedSafe(9)], [], canonicalEntry).result == 0;
+	const found = safeAddress(keyOf(2));
+	const elsewhere = [ownerWallet(), safeAt(keyOf(77), keyOf(2), 9, found.bump)];
+	assert run(programKey(), elsewhere, [], canonicalEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+export struct OwnedSafe {
+	owner: Signer;
+	@hasOne(owner) safe: Mutable<Safe>;
+	@hasOne(owner, ProgramError.userError(3)) other: Owned<Safe>;
+}
+
+function ownedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<OwnedSafe>();
+	return Result.ok(x.safe.data().limit + x.other.data().limit);
+}
+
+function ownedSafeEntry(): void { codeOf(ownedStep()); }
+
+test "@hasOne compares the account's field of that name to the key of the sibling, with Anchor's code or the one given" {
+	const mine = pinnedSafe(9);
+	const second = readOnly(safeAt(keyOf(8), keyOf(2), 4, 0));
+	assert run(programKey(), [ownerWallet(), mine, second], [], ownedSafeEntry).result == 0;
+	const stranger = safeAt(mine.key, keyOf(9), 9, 0);
+	assert run(programKey(), [ownerWallet(), stranger, second], [], ownedSafeEntry).result ==
+		ProgramError.constraintHasOne().code;
+	const strangers = readOnly(safeAt(keyOf(8), keyOf(9), 4, 0));
+	assert run(programKey(), [ownerWallet(), mine, strangers], [], ownedSafeEntry).result ==
+		ProgramError.userError(3).code;
+}
+
+export struct Addressed {
+	safe: Owned<Safe>;
+	@address(safe.owner) payer: Signer;
+	@address(Pubkey.systemProgram(), ProgramError.userError(4)) system: Account;
+}
+
+function addressedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Addressed>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function addressedEntry(): void { codeOf(addressedStep()); }
+
+test "@address compares the field's key to a key, a field of another account's data or a call, with Anchor's code or the one given" {
+	const safe = readOnly(safeAt(keyOf(8), keyOf(2), 4, 0));
+	const system = holder(5, Pubkey.systemProgram(), [], false, false);
+	const payer = ownerWallet();
+	const accounts = [safe, payer, systemAccountKey()];
+	assert run(programKey(), accounts, [], addressedEntry).result == 0;
+	const stranger = [safe, holder(3, Pubkey.systemProgram(), [], true, false), accounts[2]];
+	assert run(programKey(), stranger, [], addressedEntry).result ==
+		ProgramError.constraintAddress().code;
+	const elsewhere = [safe, payer, system];
+	assert run(programKey(), elsewhere, [], addressedEntry).result ==
+		ProgramError.userError(4).code;
+}
+
+export struct Bounded {
+	@constraint(safe.limit > 5) @constraint(safe.limit < 100, ProgramError.userError(5))
+	safe: Owned<Safe>;
+}
+
+function boundedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Bounded>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function boundedEntry(): void { codeOf(boundedStep()); }
+
+test "@constraint holds a condition over the accounts and their data, with ConstraintRaw or the error given" {
+	const inside = [readOnly(safeAt(keyOf(8), keyOf(2), 50, 0))];
+	assert run(programKey(), inside, [], boundedEntry).result == 0;
+	const low = [readOnly(safeAt(keyOf(8), keyOf(2), 5, 0))];
+	assert run(programKey(), low, [], boundedEntry).result == ProgramError.constraintRaw().code;
+	const high = [readOnly(safeAt(keyOf(8), keyOf(2), 100, 0))];
+	assert run(programKey(), high, [], boundedEntry).result == ProgramError.userError(5).code;
+}
+
+export struct Ordered {
+	owner: Signer;
+	@address(Pubkey.systemProgram()) @constraint(safe.limit > 5) @hasOne(owner) @seeds("safe", owner) @bump(safe.bump)
+	safe: Mutable<Safe>;
+}
+
+function orderedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Ordered>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function orderedEntry(): void { codeOf(orderedStep()); }
+
+test "a field's constraints run seeds, has_one, constraint, address, whatever order they are written in" {
+	const found = safeAddress(keyOf(2));
+	const wrongAll = safeAt(safeAddress(keyOf(3)).key, keyOf(9), 1, found.bump);
+	assert run(programKey(), [ownerWallet(), wrongAll], [], orderedEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const wrongRelation = safeAt(found.key, keyOf(9), 1, found.bump);
+	assert run(programKey(), [ownerWallet(), wrongRelation], [], orderedEntry).result ==
+		ProgramError.constraintHasOne().code;
+	const wrongLimit = safeAt(found.key, keyOf(2), 1, found.bump);
+	assert run(programKey(), [ownerWallet(), wrongLimit], [], orderedEntry).result ==
+		ProgramError.constraintRaw().code;
+	const mine = safeAt(found.key, keyOf(2), 50, found.bump);
+	assert run(programKey(), [ownerWallet(), mine], [], orderedEntry).result ==
+		ProgramError.constraintAddress().code;
+}
+
+export struct Chained {
+	@constraint(safe.limit > 5) safe: Owned<Safe>;
+	@address(Pubkey.systemProgram()) @constraint(safe.limit > 100) second: Account;
+	last: Signer;
+}
+
+function chainedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Chained>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function chainedEntry(): void { codeOf(chainedStep()); }
+
+test "every field is verified by its type before any constraint runs, and a field's constraints precede the next field's" {
+	const system = systemAccountKey();
+	const stranger = holder(5, Pubkey.systemProgram(), [], false, false);
+	const signedLast = holder(6, Pubkey.systemProgram(), [], true, false);
+	const unsignedLast = holder(6, Pubkey.systemProgram(), [], false, false);
+	const low = readOnly(safeAt(keyOf(8), keyOf(2), 1, 0));
+	const high = readOnly(safeAt(keyOf(8), keyOf(2), 120, 0));
+	assert run(programKey(), [low, stranger, unsignedLast], [], chainedEntry).result ==
+		ProgramError.accountNotSigner().code;
+	assert run(programKey(), [low, stranger, signedLast], [], chainedEntry).result ==
+		ProgramError.constraintRaw().code;
+	assert run(programKey(), [high, stranger, signedLast], [], chainedEntry).result ==
+		ProgramError.constraintAddress().code;
+	const middle = readOnly(safeAt(keyOf(8), keyOf(2), 50, 0));
+	assert run(programKey(), [middle, system, signedLast], [], chainedEntry).result ==
+		ProgramError.constraintRaw().code;
+	assert run(programKey(), [middle, stranger, signedLast], [], chainedEntry).result ==
+		ProgramError.constraintRaw().code;
+	assert run(programKey(), [high, system, signedLast], [], chainedEntry).result == 0;
+}
 
 export struct TwoTypes {
 	counter: Mutable<Counter>;
