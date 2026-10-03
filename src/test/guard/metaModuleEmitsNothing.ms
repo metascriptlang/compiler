@@ -1,9 +1,7 @@
 // std/meta is the compile-time API: a program that only uses macros emits nothing from it, on the
 // host and on `--os=solana`, and what only a macro body uses stays out of its module's C. A
 // program that calls a std/meta function at run time still emits the module.
-// NIM-REF CG-15 (emission on demand), CG-19 (compile-time-only declarations emit no code); the
-// reference never generates a routine or a variable whose type is the compile-time node type
-// (semstmts.nim:2702, ccgstmts.nim:140, ccgexprs.nim:3596).
+// NIM-REF CG-15 (emission on demand), CG-19 (compile-time-only declarations emit no code).
 //
 // WHY A SUBPROCESS: the observable is which modules reach the emitted C of a multi-module
 // program. The compiler under test is $MSC, else `./msc`; the C is read from `--emit=c`.

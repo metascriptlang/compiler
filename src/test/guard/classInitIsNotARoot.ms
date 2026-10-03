@@ -2,8 +2,8 @@
 // like an exported symbol. A module whose only use is an import of a class nobody constructs is
 // not emitted; `new` of the class, a subclass of it in another module, and an `@exportName`
 // function nobody calls all still emit their definition.
-// NIM-REF CG-6 (only `exportc` roots a proc at its declaration, ccgexprs.nim nkProcDef branch),
-// CG-15 (emission on demand).
+// NIM-REF CG-6 (only an exported C symbol roots a function at its declaration), CG-15
+// (emission on demand).
 //
 // WHY A SUBPROCESS: the observable is which modules reach the emitted C of a multi-module
 // program. The compiler under test is $MSC, else `./msc`; the C is read from `--emit=c`.
