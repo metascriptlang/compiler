@@ -3,7 +3,7 @@
 
 import { bareAfterDelim, splitTopLevel } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData } from "../ast/node";
+import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData } from "../ast/node";
 
 // =====================================================================
 // Type Storage Schema — what each Type field means per TypeKind
@@ -2670,16 +2670,31 @@ function heldObjectOrUnknown(t: Type | null): Type | null {
 }
 
 function isRuntimeCheckedClass(t: Type): boolean {
-	const body = t.kind == TypeKind.Ref ? t.typeReturn : null;
-	return body != null && body.kind == TypeKind.Struct && body.sym != null && body.sym.symbolKind == SymbolKind.Class;
+	return runtimeClassSym(t.kind == TypeKind.Ref ? t.typeReturn : null) != null;
+}
+
+export function runtimeClassSym(body: Type | null): Symbol | null {
+	if (body == null) return null;
+	const instance = body.kind == TypeKind.GenericInstance;
+	const cls = instance ? genericInstanceClass(body) : body;
+	if (cls == null || cls.kind != TypeKind.Struct || cls.sym == null || cls.sym.symbolKind != SymbolKind.Class) return null;
+	return instance && cls.sym.symFlags.has(SymbolFlag.ImportC) ? null : cls.sym;
+}
+
+function genericInstanceClass(gi: Type): Type | null {
+	const base: Type | null = gi.typeExtra;
+	return base != null && base.kind == TypeKind.Ref ? base.typeReturn : base;
 }
 
 function isClassOrSubclass(sub: Type, sup: Type): boolean {
-	const supSym = sup.typeReturn != null ? sup.typeReturn.sym : null;
+	const supBody = sup.typeReturn;
+	const supSym = runtimeClassSym(supBody);
 	if (supSym == null) return false;
 	let cur: Type | null = sub.kind == TypeKind.Ref ? sub.typeReturn : sub;
 	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
-		if (cur.sym == supSym) return true;
+		if (cur.kind == TypeKind.GenericInstance) cur = genericInstanceClass(cur);
+		if (cur == null) return false;
+		if (cur.sym == supSym) return supBody.kind != TypeKind.GenericInstance;
 		const base: Type | null = cur.typeExtra;
 		cur = base != null && base.kind == TypeKind.Ref ? base.typeReturn : base;
 	}
