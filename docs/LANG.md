@@ -2778,7 +2778,7 @@ decrementing a stack address.
 
 Measured 2026-10-03 on tree `ee6fccbb` with `msc run` (C, `--gc=orc`, `--target=js`,
 `--target=raiser`): corpus `679-typedPointerLocations` (every lane) and
-`687-nativePointerAddresses` (native lanes) print their oracles; `src/test/c/pointerAddress.ms`,
+`691-nativePointerAddresses` (native lanes) print their oracles; `src/test/c/pointerAddress.ms`,
 `src/test/js/byteViews.ms` and the raiser engine tests in `src/codegen/raiser/eval.ms` hold the
 refusals. Before, on installed `e5e932d0`: `uint8[] as Ptr<uint8>` read the array header
 (`2 0`), and on JS a byte view printed `[object Object]` and `p + 1` gave `NaN`. The integer forms
