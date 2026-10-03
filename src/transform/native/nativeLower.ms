@@ -13,13 +13,14 @@
 //
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
-import { Node, NodeKind, NodeFlag, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, createNode, makeLoc } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, SourceLocation, createNode, makeLoc } from "../../ast/node";
 import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, isUnknownType, isUncountedPtrElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext, createTransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef, makeTypedIdent, makeArrayAccess, makeHiddenSubConv, isRuntimeProcCall } from "../util";
+import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef, makeTypedIdentResolved, makeArrayAccess, makeHiddenSubConv, isRuntimeProcCall } from "../util";
 import { checkVariantReads } from "./unionProjectLower";
+import { makeSymbol } from "../../checker/symbol";
 
 // reference array: a Ref<Array> receiver reaching access/length lowering (e.g. a node
 // synthesized by forOfLower after the checker already ran) is a msXxxArray* pointer, but
@@ -395,11 +396,15 @@ function rewriteArrayLiteral(node: Node): Node {
 
 // ===== Tests =====
 
+function testLocal(name: string, t: Type, loc: SourceLocation): Node {
+	return makeTypedIdentResolved(makeSymbol(name, SymbolKind.Variable, t, false), t, loc);
+}
+
 function loweredAccess(arrType: Type, boundChecks: boolean): Node {
 	const loc = makeLoc(1, 1);
 	const ctx = createTransformContext();
 	ctx.boundChecks = boundChecks;
-	return rewriteAccess(makeArrayAccess(makeTypedIdent("xs", arrType, loc), makeNumber(0, loc), loc), ctx);
+	return rewriteAccess(makeArrayAccess(testLocal("xs", arrType, loc), makeNumber(0, loc), loc), ctx);
 }
 
 function leafRef(): Type {
@@ -438,7 +443,7 @@ function loweredNarrowing(rangeChecks: boolean): Node {
 	const loc = makeLoc(1, 1);
 	const ctx = createTransformContext();
 	ctx.rangeChecks = rangeChecks;
-	const narrowing = makeHiddenSubConv(makeTypedIdent("u", int32Type(), loc), int32Type(), loc);
+	const narrowing = makeHiddenSubConv(testLocal("u", int32Type(), loc), int32Type(), loc);
 	narrowing.variantSlot = 1;
 	return rewriteAccess(narrowing, ctx);
 }
