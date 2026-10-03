@@ -966,13 +966,13 @@ const BUILD_FAILED: int32 = 2;
 
 function buildOneJob(job: Readonly<BuildJob>): int32 {
 	if (job.cmd == "") { return BUILD_OK; }
-	let b = runCapture(job.cmd);
+	let b = runCapture(job.cmd + " 2>&1");
 	const jsLane = job.lane == "js" || job.lane == "esm";
 	let builtOk = jsLane ? b.exitCode == 0 : nativeBuildOk(b.output);
 	let retried = false;
 	if (!builtOk && isToolchainRace(b.output)) {
 		retried = true;
-		b = runCapture(job.cmd);
+		b = runCapture(job.cmd + " 2>&1");
 		builtOk = jsLane ? b.exitCode == 0 : nativeBuildOk(b.output);
 	}
 	if (!builtOk) {
