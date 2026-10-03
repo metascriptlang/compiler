@@ -91,6 +91,7 @@ import "./enumRelations";
 import "./errorChannelFit";
 import "./exportIdentity";
 import "./flowInvalidation";
+import "./genericBinding";
 import "./genericContextBinding";
 import "./importedHeaderDeclarations";
 import "./localDeclarationIdentity";
