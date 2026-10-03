@@ -1,7 +1,7 @@
 // Compile-time folds behind the std value routines: each expands, per instantiated type,
 // into one step per field, element or variant.
 
-import { Node, NodeKind, TypeKind, getType, getTypeImpl, typeKind } from "std/meta";
+import { Node, NodeKind, TypeKind, getType, getTypeImpl, typeKind, stringValue } from "std/meta";
 
 export macro equalsFold(a: Node, b: Node): Node {
 	const ln = a.line;
@@ -35,6 +35,13 @@ export macro equalsFold(a: Node, b: Node): Node {
 	return { kind: NodeKind.SpliceMany, line: ln, column: col, spliceNodes: steps };
 }
 
+function typeofTag(name: string): string {
+	if (name == "string") return "string";
+	if (name == "boolean") return "boolean";
+	if (name == "int8" || name == "int16" || name == "int32" || name == "uint8" || name == "uint16" || name == "uint32" || name == "float32" || name == "float64" || name == "number") return "number";
+	return "";
+}
+
 export macro dumpFold(x: Node, color: Node): Node {
 	const ln = x.line;
 	const col = x.column;
@@ -46,6 +53,21 @@ export macro dumpFold(x: Node, color: Node): Node {
 	const append = (value: Node): Node => ({ kind: NodeKind.ExprStmt, line: ln, column: col,
 		expr: { kind: NodeKind.BinaryExpr, line: ln, column: col, operator: "=", left: ident("out"),
 			right: { kind: NodeKind.BinaryExpr, line: ln, column: col, operator: "+", left: ident("out"), right: value } } });
+	const discriminated = (u: Node): boolean => {
+		for (let i = 0; i < u.typExprMembers.length; i = i + 1) {
+			const m = u.typExprMembers[i];
+			if (m.kind != NodeKind.TypeGeneric || m.typExprBase.name != "Ref") return false;
+			const v = m.typExprArgs[0];
+			if (v.kind != NodeKind.TypeObject || v.typExprFieldNames.length == 0 || v.typExprFieldTypes[0].kind != NodeKind.StringLiteral) return false;
+		}
+		return u.typExprMembers.length > 0;
+	};
+	const primitiveOnly = (u: Node): boolean => {
+		for (let i = 0; i < u.typExprMembers.length; i = i + 1) {
+			if (u.typExprMembers[i].kind != NodeKind.Identifier) return false;
+		}
+		return u.typExprMembers.length > 0;
+	};
 	const shallow = getType(x);
 	if (shallow == null) error("dump of a type the compiler could not name", x);
 	const isRef = shallow.kind == NodeKind.TypeGeneric && shallow.typExprBase.name == "Ref";
@@ -86,6 +108,30 @@ export macro dumpFold(x: Node, color: Node): Node {
 		&& ((t.typExprMembers[0].kind == NodeKind.Identifier && t.typExprMembers[0].name == "null")
 			|| (t.typExprMembers[1].kind == NodeKind.Identifier && t.typExprMembers[1].name == "null"))) {
 		steps.push(append(call("nullableDump", [x, color])));
+	} else if (t != null && t.kind == NodeKind.TypeUnion && discriminated(t)) {
+		let chain: Node | null = null;
+		for (let i = t.typExprMembers.length - 1; i >= 0; i = i - 1) {
+			const variant = t.typExprMembers[i].typExprArgs[0];
+			const disc = variant.typExprFieldNames[0];
+			const test: Node = { kind: NodeKind.BinaryExpr, line: ln, column: col, operator: "==", left: field(x, disc), right: lit(stringValue(variant.typExprFieldTypes[0])) };
+			const step: Node = { kind: NodeKind.BlockStmt, line: ln, column: col, statements: [append(call("valueDump", [x, color]))] };
+			chain = chain == null
+				? { kind: NodeKind.IfStmt, line: ln, column: col, condition: test, consequent: step }
+				: { kind: NodeKind.IfStmt, line: ln, column: col, condition: test, consequent: step, alternate: chain };
+		}
+		steps.push(chain as Node);
+	} else if (t != null && t.kind == NodeKind.TypeUnion && primitiveOnly(t)) {
+		let chain: Node | null = null;
+		for (let i = t.typExprMembers.length - 1; i >= 0; i = i - 1) {
+			const tag = typeofTag(t.typExprMembers[i].name);
+			if (tag == "") continue;
+			const test: Node = { kind: NodeKind.BinaryExpr, line: ln, column: col, operator: "==", left: { kind: NodeKind.UnaryExpr, line: ln, column: col, unaryOp: "typeof", operand: x }, right: lit(tag) };
+			const step: Node = { kind: NodeKind.BlockStmt, line: ln, column: col, statements: [append(call("valueDump", [x, color]))] };
+			chain = chain == null
+				? { kind: NodeKind.IfStmt, line: ln, column: col, condition: test, consequent: step }
+				: { kind: NodeKind.IfStmt, line: ln, column: col, condition: test, consequent: step, alternate: chain };
+		}
+		if (chain != null) steps.push(chain as Node);
 	} else if (t != null && t.kind == NodeKind.TypeUnion && t.typExprMembers.length == 2
 		&& t.typExprMembers[0].kind == NodeKind.TypeObject && t.typExprMembers[0].typExprFieldNames.length > 0
 		&& t.typExprMembers[0].typExprFieldNames[0] == "ok") {

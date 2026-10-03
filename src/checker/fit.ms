@@ -389,8 +389,23 @@ export function synthExplicitDump(ctx: CheckerContext, node: Node): void {
 	node.resolvedSym = call.resolvedSym;
 }
 
+// A union the std dump can read: one whose variants lead with a string-literal field, or one holding only primitives.
+function foldableUnion(u: Type): boolean {
+	if (isStringLike(u) || unwrapRefNullUnion(u) != null || u.typeChildren.length == 0) return false;
+	let tagged = true;
+	let primitive = true;
+	for (const m of u.typeChildren) {
+		if (m == null || m.kind == TypeKind.Null) return false;
+		const body = unwrapRef(m);
+		if (body.kind != TypeKind.Struct || body.sym != null || body.typeChildren.length == 0 || body.typeChildren[0] == null || body.typeChildren[0].kind != TypeKind.StringLiteral) tagged = false;
+		if (!isPrimitiveUnionMember(m)) primitive = false;
+	}
+	return tagged || primitive;
+}
+
 function dumpedShape(t: Type, shape: Type): boolean {
 	if (shape.kind == TypeKind.Tuple || shape.kind == TypeKind.SizedArray || isResult(shape)) return true;
+	if (shape.kind == TypeKind.Union && foldableUnion(shape)) return true;
 	if (isValueStructShape(shape)) return true;
 	const bare = skipModifier(t) ?? t;
 	if (bare.kind == TypeKind.Ref && bare.typeReturn != null && bare.typeReturn.kind == TypeKind.GenericInstance) return false;
