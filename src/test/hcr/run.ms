@@ -1018,6 +1018,7 @@ if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsRe
 const SHARD = (env.get("HCR_SHARD") == "" ? "0/1" : env.get("HCR_SHARD")).split("/");
 const SHARD_INDEX = SHARD[0].parseInt() as int32;
 const SHARD_COUNT = SHARD.length == 2 ? SHARD[1].parseInt() as int32 : 0;
+const ONLY = env.get("HCR_ONLY") == "" ? [] as string[] : env.get("HCR_ONLY").split(",");
 if (SHARD_COUNT < 1 || SHARD_INDEX < 0 || SHARD_INDEX >= SHARD_COUNT) {
 	console.log(`hcr: HCR_SHARD must be <index>/<count> with 0 <= index < count, got '${env.get("HCR_SHARD")}'`);
 	exit(2);
