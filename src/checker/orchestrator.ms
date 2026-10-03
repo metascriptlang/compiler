@@ -572,6 +572,26 @@ test "a dynamic field write is routed only through the setDynamicField declared 
 	assert dynamicWriteErrorsWith("function r(b: BoxB): number { return b.zzz; }") > 0;
 }
 
+function aliasReceiverErrorWith(mainSource: string): string {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/a.ms", entrySource: "export type Hash = int64;\nexport function show(this h: Hash): string { return \"\"; }" });
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export struct Hash { x: int32; }" });
+	entries.push({ entryPath: "/src/main.ms", entrySource: "import { show } from \"./a\";\nimport { Hash as HashB } from \"./b\";\n" + mainSource });
+	const graph = loadModuleGraph("/src/main.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const main = findModule(graph, "/src/main.ms");
+	if (main == null) return "no module";
+	for (const e of main.errors) {
+		if (e.severity == ErrorSeverity.Error) return e.message;
+	}
+	return "";
+}
+
+test "an extension declared on an alias is not found on a struct that spells the alias's name" {
+	assert aliasReceiverErrorWith("function f(h: HashB): string { return h.show(); }").indexOf("does not exist") >= 0;
+	assert aliasReceiverErrorWith("function f(h: int64): string { return h.show(); }") == "";
+}
+
 function hierarchyErrorsWith(mainSource: string): int32 {
 	const dog = "export class Dog extends Animal { name: string = \"d\"; }\n";
 	const entries: MapEntry[] = [];
