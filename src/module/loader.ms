@@ -158,11 +158,26 @@ function headerDepHash(s: string): string {
 // not: cache unregistered, MSC_NO_HEADER_CACHE=1, non-filesystem provider
 // (Trans-Am, pure map providers whose entries may not mirror disk), or a
 // source that cannot contain a .h import at all.
+function mayImportHeader(source: string): boolean {
+	return importsHeaderIn(source, "\"") || importsHeaderIn(source, "'");
+}
+
+function importsHeaderIn(source: string, quote: string): boolean {
+	let at = source.indexOf(`.h${quote}`);
+	while (at >= 0) {
+		const open = source.lastIndexOf(quote, at);
+		let k = open - 1;
+		while (k >= 0 && (source.charAt(k) == " " || source.charAt(k) == "\t" || source.charAt(k) == "\n" || source.charAt(k) == "\r")) k -= 1;
+		if (open >= 0 && k >= 3 && source.substring(k - 3, k + 1) == "from") return true;
+		at = source.indexOf(`.h${quote}`, at + 3);
+	}
+	return false;
+}
+
 function headerCacheEngage(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean): string {
 	if (_hcLookupFn == null) return "";
 	if (provider.taReadFn != null || !provider.useFileSystem) return "";
 	if (env.get("MSC_NO_HEADER_CACHE") != "") return "";
-	if (source.indexOf(".h") < 0) return "";
 	const t = headerTarget();
 	return _hcKeyFn(source, modulePath, compactReplacement, t != null ? `${t.os}-${t.cpu}` : "");
 }
@@ -177,6 +192,10 @@ export function headerTarget(): TargetInfo {
 export function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean = false, outErrors: ModuleError[] = null as unknown as ModuleError[]): string {
 	const _ih0 = performance.now();
 	_inlineN = _inlineN + 1;
+	if (!mayImportHeader(source)) {
+		_inlineMs = _inlineMs + (performance.now() - _ih0);
+		return source;
+	}
 	const key = headerCacheEngage(source, modulePath, provider, compactReplacement);
 	if (key != "") {
 		const hit = _hcLookupFn(key);
@@ -999,6 +1018,40 @@ test "C header import inlines declarations" {
 	const appMod = findModule(graph, "/src/app.ms");
 	assert appMod != null;
 	assert appMod.errors.length == 0;
+}
+
+test "C header import in single quotes inlines declarations" {
+	const entries: MapEntry[] = [];
+	const quote = "'";
+	entries.push(makeEntry("/src/app.ms", `import { foo } from ${quote}./lib.h${quote};`));
+	entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
+	const graph = loadModuleGraph("/src/app.ms", createMapProvider(entries));
+	assert graph.errors.length == 0;
+	const appMod = findModule(graph, "/src/app.ms");
+	assert appMod != null;
+	assert appMod.source.indexOf("extern") >= 0;
+}
+
+test "a module whose only header names are @include directives keeps its source" {
+	const source = "@include(\"runtime/core/string.h\")\nimport { x } from \"./other.ms\";\nexport const y = x;\n";
+	assert inlineHeaderImports(source, "/src/app.ms", createMapProvider([])) == source;
+}
+
+test "C header import with spaces and a tab before the specifier inlines declarations" {
+	const entries: MapEntry[] = [];
+	const quote = "\"";
+	entries.push(makeEntry("/src/app.ms", `import { foo } from  \t${quote}./lib.h${quote};`));
+	entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
+	const graph = loadModuleGraph("/src/app.ms", createMapProvider(entries));
+	assert graph.errors.length == 0;
+	const appMod = findModule(graph, "/src/app.ms");
+	assert appMod != null;
+	assert appMod.source.indexOf("extern") >= 0;
+}
+
+test "a module that names .has and .hash but imports no header keeps its source" {
+	const source = "import { x } from \"./other.ms\";\nconst s = new HashSet<string>();\nconsole.log(`${s.has(\"a\")} ${x.hash}`);\n";
+	assert inlineHeaderImports(source, "/src/app.ms", createMapProvider([])) == source;
 }
 
 test "C header import keeps every later line where the source has it" {
