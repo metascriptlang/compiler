@@ -1,6 +1,6 @@
 // @stdout: native 5 2 1 | 7 8 | 2 1 | 1 2 | 4 3 | 7 8 1 true 1
 // @skip-js: a byte view, a pointer variable's address, pointer arithmetic and an array of addresses have no JS location; JS refuses them at compile time
-// @xfail(raiser): the Raiser VM has no slot address for a scalar, so writes through a scalar pointer trap
+// @skip-raiser: a byte view, a pointer variable's address and pointer arithmetic are refused on the Raiser VM (no byte memory, no address arithmetic)
 struct Pair { left: int32; right: int32; }
 
 function viewed(): string {

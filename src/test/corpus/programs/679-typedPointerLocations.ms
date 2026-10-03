@@ -1,5 +1,4 @@
 // @stdout: pointers 11 55 99 44 | 7 | 9 11 4 5 | true | 2
-// @xfail(raiser): scalar pointer writes are unsupported by the Raiser VM
 struct Pet { a: uint32; b: uint8; }
 struct Holder { ptr: Ptr<Pet>; }
 function setByte(ref value: uint8): void { value = 99; }

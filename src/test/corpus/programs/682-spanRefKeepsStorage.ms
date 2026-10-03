@@ -1,5 +1,4 @@
 // @stdout: refs 11 99 33 44 | 11 22 99 44 | 1 77 3
-// @xfail(raiser): scalar ref writes are unsupported by the Raiser VM
 struct Item { value: uint32; }
 
 function put(ref value: uint8): void { value = 99; }

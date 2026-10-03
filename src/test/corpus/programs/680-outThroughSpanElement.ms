@@ -1,5 +1,4 @@
 // @stdout: 1 42 3 7 5 9 | 3 | 10 11
-// @xfail(raiser): the Raiser VM refuses an out write into a scalar ("writes in place only into a struct or an array")
 function setInt(out v: int32, n: int32): void {
 	v = n;
 }
