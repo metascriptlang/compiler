@@ -125,9 +125,12 @@ void msFutureRaiseFrom(msFutureBase* f) {
 	msRaiseAwaitedError(err);
 }
 
+void (*msFatalTrap)(void) = NULL;
+
 _Noreturn void msRaiseIndexError(int64_t idx, int64_t len) {
 	fprintf(stderr, "Error: index %lld out of bounds (length %lld)\n",
 		(long long)idx, (long long)len);
+	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
@@ -136,22 +139,26 @@ _Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target) {
 	fprintf(stderr, "Error: invalid object conversion: %s is not %s\n",
 		(t != NULL && t->name != NULL) ? t->name : "<untyped>",
 		target->name != NULL ? target->name : "<untyped>");
+	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseSliceError(int64_t start, int64_t end, int64_t len) {
 	fprintf(stderr, "Error: slice %lld..%lld out of bounds (length %lld)\n",
 		(long long)start, (long long)end, (long long)len);
+	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseDivByZero(void) {
 	fprintf(stderr, "Error: division by zero\n");
+	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseOverflow(void) {
 	fprintf(stderr, "Error: over- or underflow\n");
+	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
@@ -159,6 +166,7 @@ _Noreturn void msRaiseOverflow(void) {
 _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 	fprintf(stderr, "Error: value %lld not in range %lld .. %lld\n",
 		(long long)val, (long long)lo, (long long)hi);
+	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
@@ -168,18 +176,21 @@ _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi) {
 	}
 	fprintf(stderr, "Error: value %.17g not in range %lld .. %lld\n",
 		val, (long long)lo, (long long)hi);
+	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected) {
 	fprintf(stderr, "Error: invalid union conversion: value holds member %lld, target expects %lld\n",
 		(long long)tag, (long long)expected);
+	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseStrLitError(msString s, msString target) {
 	fprintf(stderr, "Error: invalid union conversion: \"%.*s\" is not %.*s\n", (int)s.len, s.p != NULL ? s.p->data : "",
 		(int)target.len, target.p != NULL ? target.p->data : "");
+	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
@@ -212,12 +223,14 @@ _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag) {
 	if (seen < tag || tag < 0) end = start;
 	fprintf(stderr, "Error: %.*s%.*s'\n", (int)head.len, head.p != NULL ? head.p->data : "",
 		(int)(end - start), text + start);
+	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msMapFatal(msString msg) {
 	fprintf(stderr, "fatal error: %.*s\n",
 		(int)msg.len, (msg.p != NULL) ? msg.p->data : "");
+	if (msFatalTrap != NULL) msFatalTrap();
 	exit(2);
 }
 

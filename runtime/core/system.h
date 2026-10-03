@@ -111,6 +111,7 @@ void msDiscardCurrentException(void);
 void msThrow(msString msg);
 void msTestErrorFlag(void);
 void msExit(int32_t code);
+extern void (*msFatalTrap)(void);
 
 #ifndef MS_TEST_BUILD
 static inline void msAssertFail(const char* msg, const char* file, int line) {
