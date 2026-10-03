@@ -12,7 +12,7 @@ import {
 	MoveExprData, VariableDeclData, AwaitExprData, NewExprData,
 	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData
 } from "../../ast/node";
-import { RaiserOpcode, RaiserConvClass, raiserABC } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserConvClass, raiserABC, convOperand } from "../../raiser/bytecode";
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
@@ -171,7 +171,8 @@ function shiftCountBits(bits: int32): int32 {
 function convClassOf(t: Type | null): int32 {
 	if (t == null) return -1;
 	return match (peelDistinct(t).kind) {
-		TypeKind.Number | TypeKind.Float32 | TypeKind.Float64 => RaiserConvClass.F64 as int32,
+		TypeKind.Number | TypeKind.Float64 => RaiserConvClass.F64 as int32,
+		TypeKind.Float32 => RaiserConvClass.F32 as int32,
 		TypeKind.Int64 => RaiserConvClass.I64 as int32,
 		TypeKind.Int32 => RaiserConvClass.I32 as int32,
 		TypeKind.Int16 => RaiserConvClass.I16 as int32,
@@ -187,6 +188,10 @@ function convClassOf(t: Type | null): int32 {
 // Signed int32 stays unwrapped: C-debug traps on its overflow and JS keeps the
 // double (docs/JS-NUMERIC.md §5), so there is no wrapped value to match.
 function emitWrapToWidth(s: RaiserCompState, reg: int32, t: Type | null): void {
+	if (t != null && peelDistinct(t).kind == TypeKind.Float32) {
+		emitInst(s, raiserABC(RaiserOpcode.Conv, reg, reg, RaiserConvClass.F32 as int32));
+		return;
+	}
 	const bits = intBandBits(t);
 	if (bits == 0) return;
 	if (isUnsignedBand(t)) {
@@ -196,9 +201,9 @@ function emitWrapToWidth(s: RaiserCompState, reg: int32, t: Type | null): void {
 	}
 }
 
-function emitConvTo(s: RaiserCompState, srcReg: int32, cls: int32): int32 {
+function emitConvTo(s: RaiserCompState, srcReg: int32, cls: int32, fromCls: int32): int32 {
 	const dest = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.Conv, dest, srcReg, cls));
+	emitInst(s, raiserABC(RaiserOpcode.Conv, dest, srcReg, convOperand(cls as RaiserConvClass, fromCls)));
 	return dest;
 }
 
@@ -206,7 +211,17 @@ function emitNumericConv(s: RaiserCompState, reg: int32, from: Type | null, to: 
 	const fromCls = convClassOf(from);
 	const toCls = convClassOf(to);
 	if (fromCls < 0 || toCls < 0 || fromCls == toCls) return reg;
-	return emitConvTo(s, reg, toCls);
+	return emitConvTo(s, reg, toCls, fromCls);
+}
+
+function isUint64Type(t: Type | null): boolean {
+	return t != null && peelDistinct(t).kind == TypeKind.Uint64;
+}
+
+function compileStringPart(s: RaiserCompState, node: Node): int32 {
+	const reg = compileExpr(s, node);
+	if (!isUint64Type(node.nodeType)) return reg;
+	return emitConvTo(s, reg, RaiserConvClass.Str as int32, RaiserConvClass.U64 as int32);
 }
 
 function bitwiseOpcode(op: string): RaiserOpcode {
@@ -240,13 +255,14 @@ function compoundBaseOpcode(op: string): RaiserOpcode {
 
 function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int32, rhs: int32, target: Node): void {
 	if (!isFloatExpr(target)) {
-		emitInst(s, raiserABC(compoundBaseOpcode(op), dest, lhs, rhs));
+		emitInst(s, raiserABC(unsignedOpcode(compoundBaseOpcode(op), target.nodeType), dest, lhs, rhs));
 		emitWrapToWidth(s, dest, target.nodeType);
 		return;
 	}
 	const base = op.slice(0, op.length - 1);
 	if (base != "%") {
 		emitInst(s, raiserABC(arithmeticOpcodeF64(base), dest, lhs, rhs));
+		emitWrapToWidth(s, dest, target.nodeType);
 		return;
 	}
 	const out = allocReg(s);
@@ -256,6 +272,16 @@ function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int
 	emitInst(s, raiserABC(RaiserOpcode.Move, a2, rhs, 0));
 	emitInst(s, raiserABC(RaiserOpcode.CallHost, out, addConst(s, raiserString("fmod")), 2));
 	emitInst(s, raiserABC(RaiserOpcode.Move, dest, out, 0));
+	emitWrapToWidth(s, dest, target.nodeType);
+}
+
+function unsignedOpcode(opc: RaiserOpcode, t: Type | null): RaiserOpcode {
+	if (!isUint64Type(t)) return opc;
+	return match (opc) {
+		RaiserOpcode.DivI64 => RaiserOpcode.DivU64,
+		RaiserOpcode.ModI64 => RaiserOpcode.ModU64,
+		_ => opc,
+	};
 }
 
 // --- String type inference (checker-resolved type first, AST as fallback) ---
@@ -301,7 +327,8 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			const d = node.data as NumberLiteralData;
 			const reg = allocReg(s);
 			if (isFloatExpr(node)) {
-				emitLoadConst(s, reg, raiserFloat(d.value));
+				const narrow = node.nodeType != null && peelDistinct(node.nodeType).kind == TypeKind.Float32;
+				emitLoadConst(s, reg, raiserFloat(narrow ? (d.value as float32) as float64 : d.value));
 			} else {
 				emitLoadConst(s, reg, raiserInt(d.intVal));
 			}
@@ -610,8 +637,8 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 
 	// String concat: "+" where either operand is a string
 	if (op == "+" && (exprIsString(s, d.left) || exprIsString(s, d.right))) {
-		const lReg = compileExpr(s, d.left);
-		const rReg = compileExpr(s, d.right);
+		const lReg = compileStringPart(s, d.left);
+		const rReg = compileStringPart(s, d.right);
 		const dest = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.ConcatStr, dest, lReg, rReg));
 		return dest;
@@ -714,6 +741,10 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		emitLoadConst(s, dest, raiserBool(true));
 		if (useFloat) {
 			emitInst(s, raiserABC(comparisonOpcodeF64(op), lReg, rReg, 1));
+		} else if ((isUint64Type(d.left.nodeType) || isUint64Type(d.right.nodeType)) && op != "==" && op != "===" && op != "!=" && op != "!==") {
+			const swapped = op == ">" || op == ">=";
+			const strict = op == "<" || op == ">";
+			emitInst(s, raiserABC(strict ? RaiserOpcode.BltU64 : RaiserOpcode.BleU64, swapped ? rReg : lReg, swapped ? lReg : rReg, 1));
 		} else {
 			emitInst(s, raiserABC(comparisonOpcode(op), lReg, rReg, 1));
 		}
@@ -729,7 +760,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		const nameIdx = addConst(s, raiserString(op == "**" ? "pow" : "fmod"));
 		emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, 2));
 		const resultCls = convClassOf(node.nodeType);
-		if (resultCls >= 0 && resultCls != (RaiserConvClass.F64 as int32)) return emitConvTo(s, dest, resultCls);
+		if (resultCls >= 0 && resultCls != (RaiserConvClass.F64 as int32)) return emitConvTo(s, dest, resultCls, RaiserConvClass.F64 as int32);
 		return dest;
 	}
 
@@ -738,9 +769,9 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		if (useFloat) {
 			emitInst(s, raiserABC(arithmeticOpcodeF64(op), dest, lReg, rReg));
 		} else {
-			emitInst(s, raiserABC(arithmeticOpcode(op), dest, lReg, rReg));
-			emitWrapToWidth(s, dest, node.nodeType);
+			emitInst(s, raiserABC(unsignedOpcode(arithmeticOpcode(op), node.nodeType), dest, lReg, rReg));
 		}
+		emitWrapToWidth(s, dest, node.nodeType);
 		return dest;
 	}
 
@@ -888,9 +919,10 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 		const global = resolveGlobal(s, d.left.resolvedSym);
 		const targetReg = global >= 0 ? compileExpr(s, d.left) : resolveLocal(s, id.name);
 		if (targetReg >= 0) {
-			const rhsReg = compileExpr(s, d.right);
+			const strConcat = op == "+=" && (exprIsString(s, d.left) || exprIsString(s, d.right));
+			const rhsReg = strConcat ? compileStringPart(s, d.right) : compileExpr(s, d.right);
 			// String concat: += on string variable
-			if (op == "+=" && (exprIsString(s, d.left) || exprIsString(s, d.right))) {
+			if (strConcat) {
 				emitInst(s, raiserABC(RaiserOpcode.ConcatStr, targetReg, targetReg, rhsReg));
 			} else {
 				emitCompoundArith(s, op, targetReg, targetReg, rhsReg, d.left);
@@ -907,8 +939,9 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 		const nameIdx = addConst(s, raiserString(md.property));
 		const tmpReg = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.LoadField, tmpReg, objReg, nameIdx));
-		const rhsReg = compileExpr(s, d.right);
-		if (op == "+=" && (exprIsString(s, d.left) || exprIsString(s, d.right))) {
+		const strConcat = op == "+=" && (exprIsString(s, d.left) || exprIsString(s, d.right));
+		const rhsReg = strConcat ? compileStringPart(s, d.right) : compileExpr(s, d.right);
+		if (strConcat) {
 			emitInst(s, raiserABC(RaiserOpcode.ConcatStr, tmpReg, tmpReg, rhsReg));
 		} else {
 			emitCompoundArith(s, op, tmpReg, tmpReg, rhsReg, d.left);
@@ -1015,7 +1048,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		if (d.arguments.length <= 1) {
 			let lastReg = 0;
 			for (let i = 0; i < d.arguments.length; i = i + 1) {
-				lastReg = compileExpr(s, d.arguments[i]);
+				lastReg = compileStringPart(s, d.arguments[i]);
 				emitInst(s, raiserABC(RaiserOpcode.Print, lastReg, 0, 0));
 			}
 			return lastReg;
@@ -1026,11 +1059,11 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		const emptyReg = allocReg(s);
 		emitLoadConst(s, emptyReg, raiserString(""));
 		const acc = allocReg(s);
-		const firstReg = compileExpr(s, d.arguments[0]);
+		const firstReg = compileStringPart(s, d.arguments[0]);
 		emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, firstReg, emptyReg));
 		for (let i = 1; i < d.arguments.length; i = i + 1) {
 			emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, acc, spaceReg));
-			const argReg = compileExpr(s, d.arguments[i]);
+			const argReg = compileStringPart(s, d.arguments[i]);
 			emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, acc, argReg));
 		}
 		emitInst(s, raiserABC(RaiserOpcode.Print, acc, 0, 0));
@@ -1462,7 +1495,7 @@ function isToStringCall(node: Node): boolean {
 function compileToStringCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
-	const objReg = compileExpr(s, md.object);
+	const objReg = compileStringPart(s, md.object);
 	const emptyReg = allocReg(s);
 	emitLoadConst(s, emptyReg, raiserString(""));
 	const dest = allocReg(s);

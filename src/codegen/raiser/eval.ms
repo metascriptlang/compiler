@@ -641,6 +641,24 @@ test "engine: compound assignment on a float field, element or global uses float
 	assert ctx.output == "1.75 1.5 10.75\n";
 }
 
+test "engine: a float32 rounds after every operation that produces one" {
+	const ctx = evalOrcVM("let c: float32 = 16777216; c++; const old = c++; const a: float32 = 0.1;"
+		+ " let b: float32 = a * 3; b += 0.7; function narrow(v: number): float32 { return v as float32; }"
+		+ " const p: float32 = 0.1; const q: float32 = 10; const r: float32 = -1; const big: int64 = 1152921573326323713;"
+		+ " console.log(`${c} ${old} ${a} ${b} ${narrow(0.1)} ${p * q + r} ${big as float32}`);");
+	assert ctx.error == "";
+	assert ctx.output == "16777216 16777216 0.10000000149011612 1 0.10000000149011612 0 1152921642045800400\n";
+}
+
+test "engine: a uint64 past int64 compares, divides and prints unsigned" {
+	const ctx = evalOrcVM("function big(): uint64 { return 18446744073709551615; } function one(): uint64 { return 1; }"
+		+ " const a = big(); const b = one(); let s = 'u='; s += a; let q = a; q /= 3; let m = a; m %= 7;"
+		+ " console.log(`${b < a} ${a > b} ${a <= b} ${a >= b} ${a / 2} ${a % 10} ${a} ${a.toString()} ${a as number} ${a as float32} ${s} ${q} ${m}`);"
+		+ " console.log(a);");
+	assert ctx.error == "";
+	assert ctx.output == "true true false true 9223372036854775807 5 18446744073709551615 18446744073709551615 18446744073709552000 18446744073709552000 u=18446744073709551615 6148914691236517205 1\n18446744073709551615\n";
+}
+
 test "engine: increment and decrement on a float step by one" {
 	const ctx = evalOrcVM("struct P { x: number; }"
 		+ " function run(): void { let p: P = { x: 1.75 }; const xs: number[] = [1.5]; let k: number = 0.5;"

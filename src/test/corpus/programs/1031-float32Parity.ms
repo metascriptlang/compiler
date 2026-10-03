@@ -1,7 +1,6 @@
 // Parity program — float32 and double arithmetic give the same bits on every
 // backend: JS rounds each float32 result, C never fuses a*b+c into one rounding.
 //
-// @xfail(raiser): the Raiser VM keeps a float32 as a double, evaluates float `+=` and `++` wrongly and prints a uint64 past int64 as signed — the same on main 25449d19; the Raiser numeric slice that follows this arc removes this marker
 // @stdout: 0.10000000149011612 1 16777216 16777216 0.10000000149011612 1152921642045800400 18446744073709552000 16777216 0 0
 // @exit: 0
 
