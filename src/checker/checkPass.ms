@@ -3800,10 +3800,10 @@ function packContentView(shared: CheckerContext): CheckerContext {
 
 // Discover the stdPath from the compiler's install location so prelude
 // (console, print, Result, etc.) loads for `msc check` regardless of cwd.
-function standalonePreludeCtx(): CheckerContext {
+export function standalonePreludeCtx(backendExt: string = ".cms"): CheckerContext {
 	const root = resolveRuntimeDir();
 	const stdPath = root != "" ? join(root, "std") : "";
-	return preludeContextFor(stdPath, ".cms");
+	return preludeContextFor(stdPath, backendExt);
 }
 
 // Convenience wrapper — creates empty registry. For inline tests and CLI tools
@@ -3813,6 +3813,11 @@ export function checkProgram(program: Node): CheckerContext {
 	// see module-level FunctionDecls/ImportDecls beyond the @comptime body.
 	setOuterProgramForComptime(program);
 	return checkProgramCore(program, standalonePreludeCtx(), null, null, null, null, 0, null);
+}
+
+export function checkProgramJs(program: Node): CheckerContext {
+	setOuterProgramForComptime(program);
+	return checkProgramCore(program, standalonePreludeCtx(".jms"), null, null, null, null, 0, null);
 }
 
 export function checkProgramWithRegistry(program: Node, registry: ExportRegistry, graph: ModuleGraph, mod: Module, preludeCtx: CheckerContext): CheckerContext {

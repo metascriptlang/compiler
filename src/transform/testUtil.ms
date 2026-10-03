@@ -2,10 +2,13 @@
 // DRY: parseInput, firstStmtKindAfter, stmtCountAfter, firstExprKindAfter
 
 import { Node, NodeKind, ProgramData, ExprStmtData, CallExprData, FunctionDeclData, BlockStmtData } from "../ast/node";
-import { TransformContext, createTransformContext } from "./context";
+import { TransformContext, createTransformContext, createTransformContextWithChecker } from "./context";
 import { lex } from "../lexer/lexer";
 import { parseProgram } from "../parser/statements/core";
 import { createState } from "../parser/context";
+import { CheckerContext } from "../checker/context";
+import { standalonePreludeCtx } from "../checker/checkPass";
+import { bindCompilerFuncs } from "./util";
 
 export function parseInput(input: string): Result<Node, string> {
 	const lr = lex(input);
@@ -13,8 +16,29 @@ export function parseInput(input: string): Result<Node, string> {
 	return parseProgram(createState(lr.value));
 }
 
+export function bindStdFuncs(checkerCtx: CheckerContext): void {
+	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
+}
+
+export function bindCStd(): void {
+	bindStdFuncs(standalonePreludeCtx(".cms"));
+}
+
+export function checkedCtx(checkerCtx: CheckerContext): TransformContext {
+	bindStdFuncs(checkerCtx);
+	return createTransformContextWithChecker(checkerCtx);
+}
+
 export function makeCtx(): TransformContext {
+	bindCStd();
 	return createTransformContext();
+}
+
+export function makeJsCtx(): TransformContext {
+	bindStdFuncs(standalonePreludeCtx(".jms"));
+	const ctx = createTransformContext();
+	ctx.jsBackend = true;
+	return ctx;
 }
 
 export function getStmts(prog: Node): Node[] {
