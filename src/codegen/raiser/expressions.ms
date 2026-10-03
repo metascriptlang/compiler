@@ -18,6 +18,7 @@ import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
 import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
+import { byteViewRefusal, NO_BYTE_MEMORY } from "../../checker/byteViews";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
 	resolveFunc, isLocalString, isEnumName, findEnumConstant,
@@ -496,6 +497,8 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		NodeKind.ConditionalExpr => { return compileConditionalExpr(s, node); },
 		NodeKind.TypeAssertion => {
 			const d = node.data as TypeAssertionData;
+			const refused = refuseByteView(s, node, d.asExpr.nodeType, node.nodeType);
+			if (refused >= 0) return refused;
 			const reg = compileExpr(s, d.asExpr);
 			return emitNumericConv(s, reg, d.asExpr.nodeType, node.nodeType);
 		},
@@ -529,6 +532,8 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			const hd = node.data as HiddenStdConvData;
+			const refused = refuseByteView(s, node, hd.convExpr.nodeType, hd.convType);
+			if (refused >= 0) return refused;
 			const reg = compileExpr(s, hd.convExpr);
 			if (isSpanType(hd.convType) && exprIsString(s, hd.convExpr)) return compileStringBytes(s, reg);
 			return emitNumericConv(s, reg, hd.convExpr.nodeType, hd.convType);
@@ -630,6 +635,14 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 		return result;
 	}
 	return -1;
+}
+
+function refuseByteView(s: RaiserCompState, node: Node, source: Type | null, target: Type | null): int32 {
+	const refusal = byteViewRefusal(source, target);
+	if (refusal == "") return -1;
+	const msg = refusal + " on the Raiser VM" + NO_BYTE_MEMORY;
+	queueRaiserCompileError(msg, node.location.line, node.location.column);
+	return emitTrapNil(s, msg);
 }
 
 function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
