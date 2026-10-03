@@ -635,10 +635,18 @@ function extReceiverFormal(ext: ExtensionMethod): Type | null {
 	return addressed(withoutReadonlyView(fnType.typeChildren[0]));
 }
 
+export function declaredTypeSym(t: Type): Symbol | null {
+	const nominal = nominalTypeSym(t);
+	if (nominal != null) return nominal;
+	const s = addressed(t);
+	if ((s.kind == TypeKind.Union || s.kind == TypeKind.Distinct) && s.sym != null && s.sym.symbolKind == SymbolKind.TypeAlias) return s.sym;
+	return null;
+}
+
 // The declaration that owns the extension's receiver: its first parameter's type, never a spelling.
 export function extReceiverSym(ext: ExtensionMethod): Symbol | null {
 	const formal = extReceiverFormal(ext);
-	return formal == null ? null : nominalTypeSym(formal);
+	return formal == null ? null : declaredTypeSym(formal);
 }
 
 // True when the extension is declared for exactly `t` (not for a base of it, not by assignability).
@@ -1807,4 +1815,14 @@ test "instance extension isStatic false" {
 	const found = findAllExtensionsByName(r, "trim");
 	assert found.length == 1;
 	assert !found[0].isStatic;
+}
+
+import { createUnion, numberType, stringType } from "./types";
+
+test "a named union is owned by its declaring alias symbol, an anonymous one by none" {
+	const named = createUnion([numberType(), stringType()]);
+	assert declaredTypeSym(named) == null;
+	const alias = makeSymbol("U", SymbolKind.TypeAlias, named, false);
+	named.sym = alias;
+	assert declaredTypeSym(named) == alias;
 }
