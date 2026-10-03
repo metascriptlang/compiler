@@ -423,7 +423,8 @@ function isArrayAccessCall(node: Readonly<Node>): boolean {
 		|| isRuntimeProcSym(sym, "msNumberArrayAccess") || isRuntimeProcSym(sym, "msRefArrayAccess")
 		|| isRuntimeProcSym(sym, "msUint8ArrayAccess") || isRuntimeProcSym(sym, "msSizedArrayAccess")
 		|| isRuntimeProcSym(sym, "msArrayAccessUnchecked") || isRuntimeProcSym(sym, "msRefArrayAccessUnchecked")
-		|| isRuntimeProcSym(sym, "msSizedArrayAccessUnchecked");
+		|| isRuntimeProcSym(sym, "msSizedArrayAccessUnchecked") || isRuntimeProcSym(sym, "msSpanAccess")
+		|| isRuntimeProcSym(sym, "msSpanAccessUnchecked");
 }
 
 // Check if an AST node produces a C lvalue (can have & applied directly).
