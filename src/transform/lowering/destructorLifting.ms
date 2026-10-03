@@ -32,7 +32,7 @@ import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
-import { CheckerContext, newSym, lookupUserHook, getGlobalTypeOwner } from "../../checker/context";
+import { CheckerContext, newSym, addError, lookupUserHook, getGlobalTypeOwner } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
@@ -118,6 +118,7 @@ class LiftCtx {
 	refCellTraces: Type[];
 	scannedTypes: HashSet<Type>;
 	arrayRootEpochs: HashMap<Type, int32>;
+	refusedArrayElems: NameSet;
 	jsBackend: boolean;
 }
 
@@ -2434,7 +2435,28 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 	}
 }
 
+function hookedDistinctElement(t: Type | null, lctx: LiftCtx, seen: HashSet<Type>): Type | null {
+	if (t == null || seen.has(t)) return null;
+	seen.add(t);
+	const elem = t.kind == TypeKind.Array ? t.typeReturn : null;
+	if (elem != null && elem.kind == TypeKind.Distinct && elem.typeName != "" && hasAnyUserHook(elem.typeName, lctx, elem)) return elem;
+	for (const child of t.typeChildren) {
+		const hit = hookedDistinctElement(child, lctx, seen);
+		if (hit != null) return hit;
+	}
+	return hookedDistinctElement(t.typeReturn, lctx, seen);
+}
+
+function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	if (lctx.jsBackend || lctx.checkerCtx == null) return;
+	const elem = hookedDistinctElement(t, lctx, new HashSet<Type>());
+	if (elem == null || nameSetContains(lctx.refusedArrayElems, elem.typeName)) return;
+	nameSetAdd(lctx.refusedArrayElems, elem.typeName);
+	addError(lctx.checkerCtx, "an array of the distinct type '" + elem.typeName + "' would never run its lifecycle hooks, because it is stored as an array of its base type: keep the values in a struct and make the array of those", loc.line, loc.column);
+}
+
 function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	refuseArrayOfHookedDistinct(t, lctx, loc);
 		// Consumer path — emitTypeInfo=false so we don't duplicate TypeInfo
 		// with the defining module's emission or codegen's ensureTypeInfoDef.
 		//
@@ -2591,6 +2613,7 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		refCellTraces: [],
 		scannedTypes: new HashSet<Type>(),
 		arrayRootEpochs: new HashMap<Type, int32>(),
+		refusedArrayElems: createNameSet(),
 		jsBackend: jsBackend,
 	};
 }
