@@ -1,4 +1,4 @@
-import { Node, NodeKind, Type, TypeKind, TypeAssertionData, HiddenStdConvData } from "../ast/node";
+import { Node, NodeKind, Type, TypeKind, TypeAssertionData, HiddenStdConvData, BinaryExprData, ArrayAccessData, UpdateExprData, NumberLiteralData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError } from "./context";
 import { skipModifier, peelTransparentInstance, typeDisplayName, hasGenericParams } from "./types";
@@ -62,6 +62,33 @@ export function byteViewRefusal(sourceType: Type | null, targetType: Type | null
 	return "cannot convert " + typeDisplayName(source) + " to " + typeDisplayName(dest);
 }
 
+function isPointer(t: Type | null): boolean {
+	const b = castType(t);
+	return b != null && b.kind == TypeKind.Ptr;
+}
+
+function literalZero(node: Node): boolean {
+	return node.kind == NodeKind.NumberLiteral && (node.data as NumberLiteralData).value == 0;
+}
+
+export function pointerOpRefusal(node: Node): string {
+	if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		const op = d.operator;
+		const arithmetic = op == "+" || op == "-" || op == "+=" || op == "-=" || op == "<" || op == "<=" || op == ">" || op == ">=";
+		if (arithmetic && (isPointer(d.left.nodeType) || isPointer(d.right.nodeType))) return "cannot apply '" + op + "' to a pointer";
+	} else if (node.kind == NodeKind.UpdateExpr) {
+		const d = node.data as UpdateExprData;
+		if (isPointer(d.updateArg.nodeType)) return "cannot apply '" + d.updateOp + "' to a pointer";
+	} else if (node.kind == NodeKind.ArrayAccess) {
+		const d = node.data as ArrayAccessData;
+		if (isPointer(d.array.nodeType) && !literalZero(d.index)) return "cannot index a pointer past the element it addresses";
+	}
+	return "";
+}
+
+export const NO_ADDRESS_ARITHMETIC = ": a location there has no address arithmetic; index the Span it came from instead";
+
 export const NO_BYTE_MEMORY = ": no byte representation or recoverable typed location for this conversion";
 
 function checkPointerCast(ctx: CheckerContext, node: Node, expr: Node, target: Type | null): void {
@@ -77,9 +104,11 @@ function checkNode(ctx: CheckerContext, node: Node): void {
 		const d = node.data as HiddenStdConvData;
 		checkPointerCast(ctx, node, d.convExpr, d.convType);
 	}
+	const opRefusal = pointerOpRefusal(node);
+	if (opRefusal != "") addError(ctx, opRefusal + " on JS" + NO_ADDRESS_ARITHMETIC, node.location.line, node.location.column);
 	forEachChild(node, (child: Node): void => { checkNode(ctx, child); });
 }
 
-export function refusePointerCastsOnJs(ctx: CheckerContext, program: Node): void {
+export function refusePointerOpsOnJs(ctx: CheckerContext, program: Node): void {
 	checkNode(ctx, program);
 }
