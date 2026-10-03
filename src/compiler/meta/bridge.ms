@@ -63,7 +63,7 @@ import {
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType } from "../../checker/types";
-import { hasFlag, isTypeSymbol, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, isTypeSymbol, SymbolFlag, overloadWinner } from "../../checker/symbol";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -563,6 +563,13 @@ function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap): RaiserValue {
 	return raiserObject(handle);
 }
 
+function setTypeFields(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, handle: int64, t: Type, loc: SourceLocation, includeTypeAst: boolean): void {
+	heapObjectSetField(objHeap, handle, "typeHandle", raiserInt(registerBoundType(t) as int64));
+	if (includeTypeAst) {
+		setNode(objHeap, arrHeap, handle, "nodeType", mapTypeToAst(t, loc), false);
+	}
+}
+
 // ===== nodeToValue: AST Node → RaiserValue =====
 //
 // MAINTENANCE: nodeToValue and readNodeFromObject (further down) are paired.
@@ -667,6 +674,14 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
 			setNode(objHeap, arrHeap, handle, "callee", d.callee);
+			if (node.resolvedSym != null) {
+				const winner = overloadWinner(node.resolvedSym, d.resolvedOverloadIdx);
+				const calleeVal = heapObjectGetField(objHeap, handle, "callee");
+				if (winner != node.resolvedSym && winner.symbolType != null && calleeVal.kind == RaiserValueKind.Object) {
+					setTypeFields(objHeap, arrHeap, calleeVal.intVal, winner.symbolType, d.callee.location, includeTypeAst);
+					heapObjectSetField(objHeap, calleeVal.intVal, "resolvedSym", symbolToValue(winner, objHeap));
+				}
+			}
 			setNodes(objHeap, arrHeap, handle, "arguments", d.arguments);
 			setStr(objHeap, handle, "typeArg", node.typeArg);
 		},
@@ -1130,11 +1145,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 	};
 
 	if (node.nodeType != null) {
-		heapObjectSetField(objHeap, handle, "typeHandle", raiserInt(registerBoundType(node.nodeType) as int64));
-		if (includeTypeAst) {
-			const typeAst = mapTypeToAst(node.nodeType, node.location);
-			setNode(objHeap, arrHeap, handle, "nodeType", typeAst, false);
-		}
+		setTypeFields(objHeap, arrHeap, handle, node.nodeType, node.location, includeTypeAst);
 	} else if (includeTypeAst && node.nodeTypeAst != null) {
 		setNode(objHeap, arrHeap, handle, "nodeType", node.nodeTypeAst, false);
 	}
@@ -3464,6 +3475,50 @@ test "nodeToValue — different SymbolKinds preserved correctly" {
 	const symVal = heapObjectGetField(objH, v.intVal, "resolvedSym");
 	const kindVal = heapObjectGetField(objH, symVal.intVal, "symbolKind");
 	assert kindVal.intVal == SymbolKind.Function as int64;
+}
+
+function makeOverloadedCall(winnerIdx: number): Node[] {
+	const loc = makeLoc(1, 0);
+	const first = makeSymbol("f", SymbolKind.Function);
+	first.symbolType = makePrimType(TypeKind.Function);
+	first.symbolType.typeChildren = [makePrimType(TypeKind.Int32)];
+	const second = makeSymbol("f", SymbolKind.Function);
+	second.modulePath = "other";
+	second.symbolType = makePrimType(TypeKind.Function);
+	second.symbolType.typeChildren = [makePrimType(TypeKind.Int32), makePrimType(TypeKind.String)];
+	first.overloads = [second];
+	const callee = createNodeAt(NodeKind.Identifier, { name: "f" }, loc);
+	callee.resolvedSym = first;
+	callee.nodeType = first.symbolType;
+	const call = createNodeAt(NodeKind.CallExpr, {
+		callee, arguments: [], isDirectCall: true, resolvedOverloadIdx: winnerIdx,
+	}, loc);
+	call.resolvedSym = first;
+	return [call, callee];
+}
+
+test "nodeToValue — a call's callee shows the overload the call resolved to" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const parts = makeOverloadedCall(1);
+	const v = nodeToValue(parts[0], objH, arrH);
+	const calleeVal = heapObjectGetField(objH, v.intVal, "callee");
+	const params = heapObjectGetField(objH, heapObjectGetField(objH, calleeVal.intVal, "nodeType").intVal, "typExprParams");
+	assert heapArrayLen(arrH, params.intVal) == 2;
+	assert boundTypeOfObject(objH, calleeVal.intVal) == parts[0].resolvedSym.overloads[0].symbolType;
+	const symVal = heapObjectGetField(objH, calleeVal.intVal, "resolvedSym");
+	assert heapObjectGetField(objH, symVal.intVal, "modulePath").strVal == "other";
+}
+
+test "nodeToValue — a call that resolved to the first overload keeps its callee" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const parts = makeOverloadedCall(0);
+	const v = nodeToValue(parts[0], objH, arrH);
+	const calleeVal = heapObjectGetField(objH, v.intVal, "callee");
+	const params = heapObjectGetField(objH, heapObjectGetField(objH, calleeVal.intVal, "nodeType").intVal, "typExprParams");
+	assert heapArrayLen(arrH, params.intVal) == 1;
+	assert boundTypeOfObject(objH, calleeVal.intVal) == parts[1].nodeType;
 }
 
 test "valueToNode — drops resolvedSym field (forward-only design)" {
