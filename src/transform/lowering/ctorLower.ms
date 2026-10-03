@@ -17,7 +17,7 @@ import {
 import { TransformContext, newLoweredSym } from "../context";
 import { makeAssign, makeMember, makeExprStmt, makeTypedIdent, makeTypedIdentResolved, makeBlock, makeCall, makeIdent } from "../util";
 import { createFunction, voidType } from "../../checker/types";
-import { getCtorParamTypes, parentClassSymOf } from "../../checker/symbol";
+import { getCtorParamTypes, parentClassSymOf, initFnName } from "../../checker/symbol";
 import { lowerMethodToFunction } from "./methodToFunction";
 import { parseInput, getStmts, makeCtx } from "../testUtil";
 
@@ -124,6 +124,9 @@ function synthesizeCtor(classNode: Node, cd: ClassDeclData, ctx: TransformContex
 	// type is already present; without it `this` lifts as void*.
 	ctorNode.nodeType = createFunction([], [], voidType());
 	ctorNode.paramSyms = [thisSym];
+	const className = (classNode.data as ClassDeclData).className;
+	ctorNode.resolvedSym = newLoweredSym(ctx, SymbolKind.Function, initFnName(className), ctorNode.nodeType);
+	ctorNode.resolvedSym.declNode = ctorNode;
 	cd.classBody.push(ctorNode);
 }
 

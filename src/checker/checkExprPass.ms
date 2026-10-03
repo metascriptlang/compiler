@@ -196,7 +196,7 @@ function isDeclaringCtorThisWrite(ctx: CheckerContext, object: Node, declaring: 
 	if (receiverNode == null || receiverNode.kind != NodeKind.Identifier) return false;
 	if ((receiverNode.data as IdentifierData).name != "this") return false;
 	const fn = ctx.currentFunction;
-	if (fn == null || fn.name != "constructor" || fn.symbolKind != SymbolKind.Method) return false;
+	if (fn == null || fn.declNode == null || fn.declNode.kind != NodeKind.ConstructorDecl) return false;
 	if (fn.symbolType == null || fn.symbolType.kind != TypeKind.Function || fn.symbolType.typeChildren.length == 0) return false;
 	const receiver = unwrapRef(fn.symbolType.typeChildren[0]);
 	if (receiver == null || receiver.sym == null) return false;

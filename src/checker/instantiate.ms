@@ -7,10 +7,9 @@
 import { methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, classParentOf, runtimeClassSym, genericParamNamesOf } from "./types";
-import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
-import { splitTopLevel } from "../utils/string";
-import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind, registerCtorDefaults, resetCtorRegistry } from "./symbol";
+import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
+import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks } from "./resolvePass";
+import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
@@ -1088,8 +1087,11 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], typ
 		const ctorChildren: Type[] = [thisType];
 		for (const pt of resolvedParamTypes) { ctorChildren.push(pt); }
 		const ctorFnType = createFunction(ctorChildren, ctorParams, null as unknown as Type);
-		const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorFnType, false);
+		const ctorSym = newSym(bodyCtx, SymbolKind.Function, initFnName(mangledClass), ctorFnType);
 		ctorSym.state = SymbolState.Checked;
+		ctorSym.declNode = ctorDeclNode;
+		ctorSym.location = ctorDeclNode.location;
+		ctorDeclNode.resolvedSym = ctorSym;
 		const outerGensym = beginGensymUnit();
 		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
 		rewindTemplateGensym(outerGensym);
