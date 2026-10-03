@@ -470,10 +470,15 @@ Three edges that a single image resolved by the linker needed a mechanism across
   Other Windows architectures fail at compile time with a named `#error`; ELF and Mach-O use
   native cross-library TLS.
 - **TypeInfo identity.** `instanceof` on a class from another module emitted `extern msTypeInfo
-  …TypeInfo`, which fails a split link. Every class and interface of a project module is
-  reached through `#define <C>TypeInfo (*_ms_hcr_tiN)`, resolved in DatInit from
-  `msHcrTypeInfo(owner, name)`: registered once by name and returned at the same address
-  across generations, as the reference registers type info in its registry.
+  …TypeInfo`, which fails a split link. The TypeInfo of a project module's class, interface
+  or boxed array cell is reached through `#define <C>TypeInfo (*_ms_hcr_ti_<C>)`, resolved
+  in DatInit from `msHcrTypeInfo(owner, name)`: registered once by name and returned at the
+  same address across generations, as the reference registers type info in its registry.
+  An image declares that pointer only when its own code uses the TypeInfo, as the reference
+  declares another module's type info only where it is used, so an edit that gives a module a
+  new type leaves its importers' C unchanged. Until 2026-10-03 every image declared every project TypeInfo, and an array edit
+  in `logic` reloaded `app` too (`hcrTypeInfoLocality`, red on the old compiler for an array
+  cell and for a class).
 - **DRC hooks.** A lifecycle operation has one definition, in the module whose lowering
   first needs it. Another project image that calls it reaches it through the owner's handle
   table: after DCE the owner appends every generated operation another image uses
