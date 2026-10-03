@@ -550,6 +550,28 @@ test "a class is not assignable to a same-named class of another module" {
 	assert mainErrorsWith("const x: BoxA = new BoxA(1);\nconst y: BoxB = new BoxB(\"q\");") == 0;
 }
 
+function dynamicWriteErrorsWith(mainSource: string): int32 {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/a.ms", entrySource: "export class Box { n: number = 0; }\nexport function setDynamicField(this b: Box, key: string, value: number): void { b.n = value; }" });
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export class Box { s: string = \"\"; }" });
+	entries.push({ entryPath: "/src/main.ms", entrySource: "import { Box as BoxA } from \"./a\";\nimport { Box as BoxB } from \"./b\";\n" + mainSource });
+	const graph = loadModuleGraph("/src/main.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	const main = findModule(graph, "/src/main.ms");
+	if (main == null) return -1;
+	let errors = 0;
+	for (const e of main.errors) {
+		if (e.severity == ErrorSeverity.Error) errors += 1;
+	}
+	return errors;
+}
+
+test "a dynamic field write is routed only through the setDynamicField declared for that receiver's own type" {
+	assert dynamicWriteErrorsWith("function w(b: BoxA): void { b.zzz = 1; }") == 0;
+	assert dynamicWriteErrorsWith("function w(b: BoxB): void { b.zzz = 1; }") > 0;
+	assert dynamicWriteErrorsWith("function r(b: BoxB): number { return b.zzz; }") > 0;
+}
+
 function hierarchyErrorsWith(mainSource: string): int32 {
 	const dog = "export class Dog extends Animal { name: string = \"d\"; }\n";
 	const entries: MapEntry[] = [];
