@@ -180,10 +180,7 @@ function isMatchingReference(source: Node, target: Node): boolean {
 	if (source.kind != target.kind) return false;
 	match (source.kind) {
 		NodeKind.Identifier => {
-			// Symbol identity is required. If either side lacks resolvedSym
-			// (e.g., the reference wasn't visited by the checker yet, or it's
-			// synthetic) we conservatively return false — this means we
-			// might miss a narrowing, but we'll never apply the wrong one.
+			// Symbol identity only: a side without a symbol never matches.
 			if (source.resolvedSym == null || target.resolvedSym == null) {
 				return false;
 			}
@@ -1200,7 +1197,10 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 		if (patternWritesInto(d.left, refNode)) return declared;
 		if (d.operator != "=") return null;
 		if (!isMatchingReference(d.left, refNode)) {
-			return assignsUncheckedName(d.left, refNode) ? declared : null;
+			if (leavesNameUnbound(d.left, refNode)) {
+				throw new Error(`internal: assignment to '${(d.left.data as IdentifierData).name}' at ${d.left.location.line}:${d.left.location.column} reached flow narrowing with no symbol bound by position`);
+			}
+			return null;
 		}
 		const rhs = skipHiddenConv(d.right);
 		if (rhs == null || rhs.nodeType == null) return declared;
@@ -1221,7 +1221,7 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 	return null;
 }
 
-function assignsUncheckedName(left: Node, refNode: Node): boolean {
+function leavesNameUnbound(left: Node, refNode: Node): boolean {
 	if (left.kind != NodeKind.Identifier || refNode.kind != NodeKind.Identifier) return false;
 	if (left.resolvedSym != null) return false;
 	return (left.data as IdentifierData).name == (refNode.data as IdentifierData).name;
@@ -1247,10 +1247,6 @@ function sameLocation(part: Node | null, target: Node): boolean {
 	if (p == null || t == null) return false;
 	if (isMatchingReference(p, t)) return true;
 	if (p.kind != t.kind) return false;
-	if (t.kind == NodeKind.Identifier) {
-		return t.resolvedSym == null
-			&& (t.data as IdentifierData).name == (p.data as IdentifierData).name;
-	}
 	if (t.kind == NodeKind.MemberExpr) {
 		const pd = p.data as MemberExprData;
 		const td = t.data as MemberExprData;
