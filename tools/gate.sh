@@ -90,7 +90,7 @@ never known, and never known-now-green — a program that fails half the time ca
 answer either question. Putting one there needs a run that shows both outcomes.
 
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
-env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (default 1800, 0 = do not wait)
+env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (default 1800, 0 = refuse at once, < 0 = skip the load check)
       GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers
       MSCORPUS_BUILD_JOBS optional corpus build ceiling, kept across phases
       these limits do not cap aggregate processes or compiler-internal parallelism
@@ -976,6 +976,7 @@ load1() {
 }
 admit() {
   local max=${GATE_WAIT_MAX:-1800} waited=0 n l
+  [ "$max" -ge 0 ] || return 0
   n=$(cores)
   while :; do
     l=$(load1)
