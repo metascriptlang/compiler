@@ -1499,6 +1499,34 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 }
 
 
+test "preludePack: a macro symbol keeps its MacroDecl declaration node" {
+	const prevHome = pkEnterPrivateCache();
+	try {
+		const ctx = makeTestCtx();
+		const sym = makeSymbolState("pkMacro", SymbolKind.Macro, null, false, SymbolState.Hollow);
+		sym.state = SymbolState.Checked;
+		sym.nameId = getIdentId(ctx.table.identCache, sym.name);
+		(ctx.table.current.symbols as Map<int32, Symbol>).set(sym.nameId, sym);
+		const noStmts: Node[] = [];
+		const body = createNodeAt(NodeKind.BlockStmt, { statements: noStmts } as NodeData, makeLoc(3, 1));
+		sym.declNode = createNodeAt(NodeKind.MacroDecl, { macroDeclName: "pkMacro", macroDeclParams: ["value"], macroDeclParamTypes: ["Node"], macroDeclReturnType: "Node", macroDeclBody: body } as NodeData, makeLoc(2, 1));
+		const key = preludePackKey("macro-decl", ".test");
+		writePreludePack(key, PK_STAMP, ctx);
+		const loaded = tryLoadPreludePack(key, PK_STAMP);
+		assert loaded != null;
+		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkMacro"));
+		assert got != null;
+		assert got.declNode != null;
+		assert got.declNode.kind == NodeKind.MacroDecl;
+		const md = got.declNode.data as MacroDeclData;
+		assert md.macroDeclName == "pkMacro";
+		assert md.macroDeclParams.length == 1;
+		remove(`${packRoot()}/${key}.pk`);
+	} finally {
+		pkLeavePrivateCache(prevHome);
+	}
+}
+
 test "preludePack: exhaustive per-kind node roundtrip" {
 	const prevHome = pkEnterPrivateCache();
 	try {

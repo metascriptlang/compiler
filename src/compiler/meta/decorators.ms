@@ -422,15 +422,11 @@ function containsArrow(t: string): boolean {
 	return false;
 }
 
-function declaringName(sym: Symbol): string {
-	return sym.name;
-}
-
-function macroDeclNode(regCtx: CheckerContext, sym: Symbol): Node {
-	if (sym.declNode != null && sym.declNode.kind == NodeKind.MacroDecl) return sym.declNode;
-	const ds = lookupSymbol(regCtx.table, declaringName(sym));
-	if (ds != null && ds.declNode != null && ds.declNode.kind == NodeKind.MacroDecl) return ds.declNode;
-	return null as unknown as Node;
+function macroDeclNode(sym: Symbol): Node {
+	if (sym.declNode == null || sym.declNode.kind != NodeKind.MacroDecl) {
+		throw new Error(`internal: macro '${sym.name}' reaches the decorator expander without its declaration node`);
+	}
+	return sym.declNode;
 }
 
 function macroDeclReturnRaw(decl: Node): string {
@@ -563,7 +559,7 @@ function buildWrapper(ctx: CheckerContext, sym: Symbol, decl: Node, md: MacroInv
 			paramList = paramList + params[i];
 			if (i < types.length && types[i] != "") paramList = paramList + ": " + types[i];
 		}
-		macroBody = callMacroBodyPreparer(cloneNodeForCheck(macroDecl.macroDeclBody), ctx, sym, declaringName(sym));
+		macroBody = callMacroBodyPreparer(cloneNodeForCheck(macroDecl.macroDeclBody), ctx, sym, sym.name);
 	}
 	const arity = decoratorArity(sym, decl, isMacro, isFactory);
 	const pr = parseSource(wrapperSource(isMacro, paramList, shape, arity));
@@ -630,7 +626,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	const isMacro = sym.symbolKind == SymbolKind.Macro;
 	const isFactory = md.macroHasParens;
 	const regCtx = declaringCtx(ctx, sym);
-	const decl = isMacro ? macroDeclNode(regCtx, sym) : (null as unknown as Node);
+	const decl = isMacro ? macroDeclNode(sym) : (null as unknown as Node);
 	if (!isMacro && (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function)) ensureShaped(sym, regCtx);
 	const shape = isMacro
 		? classifyReturnText(macroReturnText(decl, isFactory))
