@@ -220,6 +220,69 @@ export function compileToJS(source: string, target: TargetInfo = hostTargetInfo(
 	return Result.ok(generateJS(transformed, []));
 }
 
+// compileToJS with the JS prelude read from disk: a lowering that synthesizes a call to a
+// prelude routine (a string for-of's byte reads, a bigint conversion) needs the routine declared.
+export function compileToJSWithStd(source: string, target: TargetInfo = hostTargetInfo()): CompileResult {
+	resetBuildState();
+	const modPath = canonicalModulePath("test/e2e.ms");
+	const entries: MapEntry[] = [{ entryPath: modPath, entrySource: source }];
+	const provider = createMapProvider(entries);
+	provider.useFileSystem = true;
+	const root = resolveRuntimeDir();
+	const stdPath = root != "" ? join(root, "std") : "std";
+	const config = createDefaultConfig(Backend.JS, stdPath);
+	const graph = loadModuleGraphWithConfig(modPath, provider, config);
+
+	const mod = findModule(graph, modPath);
+	if (mod == null) return Result.err("module not found");
+	const loadErr = loadFailure(mod);
+	if (loadErr != "") return Result.err(loadErr);
+
+	checkModuleGraph(graph, stdPath, ".jms", platform, target);
+
+	const unit = checkedUnit(modPath);
+	if (unit == null) return Result.err(uncheckedError(mod));
+	const checkerCtx = unit.ctx;
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
+	placeOwnedInstances([unit], true);
+
+	const transformed = transformProgram(unit.program, checkerCtx, true);
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
+	return Result.ok(generateJS(transformed, []));
+}
+
+function isIdentChar(c: string): boolean {
+	return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "_" || c == "$";
+}
+
+// A prelude routine is named by its declaring module in a JS module, which carries the
+// absolute path of the checkout; a test that pins the call shape reads it without that suffix.
+function stripRuntimeMangle(js: string): string {
+	let out = "";
+	let i = 0;
+	while (i < js.length) {
+		const at = js.indexOf("__Z", i);
+		if (at < 0) {
+			out = out + js.slice(i, js.length);
+			break;
+		}
+		let start = at;
+		while (start > i && isIdentChar(js.charAt(start - 1))) start -= 1;
+		let end = at;
+		while (end < js.length && isIdentChar(js.charAt(end))) end += 1;
+		const token = js.slice(start, end);
+		out = out + js.slice(i, start) + (token.startsWith("ms") ? token.slice(0, at - start) : token);
+		i = end;
+	}
+	return out;
+}
+
+export function compileToJSBare(source: string, target: TargetInfo = hostTargetInfo()): CompileResult {
+	const r = compileToJSWithStd(source, target);
+	if (!r.ok) return r;
+	return Result.ok(stripRuntimeMangle(r.value));
+}
+
 export function compileTestBuildToJS(source: string): CompileResult {
 	resetBuildState();
 	const modPath = canonicalModulePath("test/e2e.ms");

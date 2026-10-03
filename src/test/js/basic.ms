@@ -1,6 +1,6 @@
 // E2E: JS Backend
 
-import { compileToJS, compileProjectToJSWithStd, MapEntry } from "../helpers";
+import { compileToJS, compileToJSWithStd, compileProjectToJSWithStd, MapEntry } from "../helpers";
 
 
 test "E2E JS: const variable" {
@@ -195,13 +195,13 @@ console.log(k.w.toString());
 // sized array kept its typed representation only when it had no initializer.
 
 test "E2E JS: sized array literal is a typed array" {
-	const js = compileToJS("function main(): void { const fixed: uint8[4] = [10, 20, 30, 40]; console.log(fixed[0]); }");
+	const js = compileToJSWithStd("function main(): void { const fixed: uint8[4] = [10, 20, 30, 40]; console.log(fixed[0]); }");
 	assert js.ok;
 	assert js.value.contains("new Uint8Array([10, 20, 30, 40])");
 }
 
 test "E2E JS: sequence literal stays a plain array" {
-	const js = compileToJS("function main(): void { const seq: uint8[] = [10, 20, 30, 40]; console.log(seq[0]); }");
+	const js = compileToJSWithStd("function main(): void { const seq: uint8[] = [10, 20, 30, 40]; console.log(seq[0]); }");
 	assert js.ok;
 	assert !js.value.contains("new Uint8Array([");
 }
