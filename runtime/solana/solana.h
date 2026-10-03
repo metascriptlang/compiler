@@ -73,9 +73,8 @@ static inline uint64_t msSolAlloc(uint64_t size) {
 
 #endif
 
-static inline void msSolParse(void) {
+static inline void msSolParseBody(void) {
     msSolanaContext* context = msSolContext();
-    if (context->accountTable != 0) return;
     const uint8_t* cursor = (const uint8_t*)context->input;
     uint64_t count = *(const uint64_t*)cursor;
     cursor += 8;
@@ -100,6 +99,24 @@ static inline void msSolParse(void) {
     cursor += context->instructionDataLength;
     context->programId = (uint64_t)cursor;
 }
+
+#ifdef MSOS_SOLANA
+
+__attribute__((weak, noinline)) void msSolParseInput(void) {
+    msSolParseBody();
+}
+
+static inline void msSolParse(void) {
+    if (msSolContext()->accountTable == 0) msSolParseInput();
+}
+
+#else
+
+static inline void msSolParse(void) {
+    if (msSolContext()->accountTable == 0) msSolParseBody();
+}
+
+#endif
 
 static inline uint64_t msSolAccountCount(void) {
     msSolParse();
