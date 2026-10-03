@@ -235,5 +235,14 @@ enqueue v; ea=$?
 rv=$(waitfor v 60)
 check "S17 v landed" '[ "$ea" = 0 ] && [ "$rv" = 0 ] && onmain v.txt'
 
+echo "== S18 a runner started without MSC_WT_ROOT beside a stray .wt in the main checkout still finds the queued worktree"
+IDLE=30; setup; mkwt x
+mkdir -p "$R/.wt"
+(cd "$T/ws" && env -u MSC_WT_ROOT nohup bash "$R/tools/landQueue.sh" >/dev/null 2>&1 &)
+for i in $(seq 1 40); do [ -d "$MSC_LAND_QUEUE/runner.lock" ] && break; sleep 0.25; done
+(export MSC_WT_ROOT=$T/ws/.wt; enqueue x; waitfor x 60 >"$T/ctl/rx")
+check "S18 x landed" '[ "$(cat "$T/ctl/rx")" = 0 ] && onmain x.txt'
+unset IDLE; export MSC_LAND_QUEUE_IDLE=2
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -77,7 +77,7 @@ run_item() {
   fi
   log "$name: land, try $tries"
   printf '\n===== %s try %s\n' "$(date '+%F %T')" "$tries" >>"$Q/$name.land.log"
-  (WT_CWD="$worktree" bash "$WT_TOOL" land "$name" >>"$Q/$name.land.log" 2>&1)
+  (WT_CWD="$worktree" bash "$WT_TOOL" land "$worktree" >>"$Q/$name.land.log" 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ]; then
     log "$name: $(tail -1 "$Q/$name.land.log")"
