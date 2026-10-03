@@ -23,7 +23,7 @@ The worked example is Anchor's escrow: `examples/escrow/layout.ms` (shared by pr
 | `std/solana/arithmetic.ms` | `when (solana)` | signed `/ % /= %=` through unsigned division |
 | `std/solana/idl.ms` | compile time | `anchorIdl<Op>(spec)`: the program's Anchor IDL as a string literal |
 | `std/solana/host.cms` | C, host | the simulator: builds the runtime's input buffer, runs an entry function, reads the accounts back, runs System, Token and Associated Token CPIs |
-| `std/solana/index.cms` / `index.ms` | C / JS | `std/solana` on chain is `core` and the macros; for a JS client it is the neutral modules |
+| `std/solana/index.cms` / `index.ms` | C / JS | `std/solana` on chain is `pubkey`, `error`, `discriminator`, `core` and the macros; for a JS client it is the neutral modules |
 
 ## 2. A program
 
@@ -114,9 +114,7 @@ Each row is a workaround the toolkit carries until the compiler card under `~/me
 | `enum E: uint8` does not parse | account fields store `uint8` and expose the enum through an extension | `2026-10-01-enum-storage-width` |
 | A `this ref` call or a `ref` argument through `Readonly<Ptr<T>>` still writes; a field write through it is refused | `Owned<T>.data()` returns `Readonly<Ptr<T>>`; a mutating `this ref` call through it is caught by review, not by the checker | `2026-10-01-readonly-ptr-write-accepted` |
 | Converting into a proof type is not restricted to its module | proofs come only from the verifiers by convention; review is the guard | `2026-10-01-proof-conversion-outside-module` |
-| `import { A } from "./a"` written before `export * from "./a"` drops `A` from the re-export | `std/solana/core.cms` puts its `export *` lines before its imports | `2026-10-01-export-star-after-import-drops-the-name` |
-| `export *` keeps one of a same-named overload set: an extension in a second module, or a static beside a same-named free function, is lost through a hub | proofs and verifiers live in `core.cms` beside `Account`; `AccountMeta` statics are `writableKey`/`readonlyKey` | `2026-10-01-export-star-drops-same-named-extension-of-second-module` |
-| An exported `@delegate` whose base is in another module has "no implementation" at the use | delegates sit in `core.cms` with `Account` | `2026-10-01-delegate-base-in-another-module` |
+| A static beside a same-named free function was lost through an `export *` hub (fixed on main `afbc710a`) | `AccountMeta` statics keep the published names `writableKey`/`readonlyKey`; Pinocchio's are `writable`/`readonly` (`pinocchio-0.9.3/src/instruction.rs:154-160`) | `2026-10-01-export-star-drops-same-named-extension-of-second-module` |
 | `msc test` on a module emits its uninstantiated generics (with `try` between generics, or instantiated from a type declared under `when (testBuild)`) | verifiers keep their generic part to `T.discriminator()` and `sizeof(T)`; proof tests live in `std/solana/test.cms` | `2026-10-01-msc-test-emits-uninstantiated-generic-with-try` |
 | A macro emitting a call to a generic function through `bindSym` crashes `msc` | `instruction<Op>()`, `args<T>()` and `accounts<T>()` emit plain identifiers for `selectInstruction` and `readArgs`, so a program imports both beside the macro | `2026-10-01-bindsym-of-a-generic-function-crashes-msc` |
 | A user macro named like a directive (`emit`) is silently dropped | the event macro is `emitEvent<E>(value)`, not Anchor's `emit` | `2026-10-01-macro-named-like-a-directive-is-silently-dropped` |
