@@ -668,6 +668,15 @@ destroy hook, exactly once. nimhcr does the same (`genTypeInfoAuxBase` registers
 through `hcrRegisterGlobal`, which returns the existing global, and the type-init code
 overwrites it).
 
+The instance-display candidate was exercised on macOS ARM64 on 2026-10-03:
+two `--hcr` builds and the thin host produced `HCR-INST first 9` followed by
+`HCR-INST reloaded 10` (`src/test/hcr/fixtures/instanceof/`, `instanceofReload` in
+the runner). The display uses registry TypeInfo addresses, so replacing the module
+does not replace class identity. Accepted images remain loaded, keeping the static
+display arrays valid. Depth-40, cross-module and generic down-conversion probes also
+passed on DRC/ORC. This is not a revalidation of the other HCR status rows or a
+quiet-machine performance measurement.
+
 Two gaps were measured before the fix. The fixture had four generations of a `shapes` module,
 and a `Square` built in generation 1 was kept alive:
 
