@@ -5,7 +5,9 @@
 // Re-exports the public API from all sub-modules.
 // analyzeProgram is the main entry point called from src/index.ms.
 
-import { Node, NodeKind, ProgramData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData } from "../ast/node";
+import { forEachChild } from "../ast/visitor";
+import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { CheckerContext, GcMode } from "../checker/context";
 import { createTransformContextWithChecker } from "../transform/context";
 import { createDrcContext, pushScope, popScope } from "./scope";
@@ -89,6 +91,36 @@ test "empty program" {
 	const result = analyzePipeline("");
 	assert result != null;
 	assert getStmtCount(result) == 0;
+}
+
+function destroyedGlobal(stmt: Node): string {
+	let found = "";
+	const visit = (n: Node): void => {
+		if (found != "") return;
+		if (n.kind == NodeKind.Identifier && n.resolvedSym != null && hasFlag(n.resolvedSym, SymbolFlag.Global)) {
+			found = n.resolvedSym.name;
+			return;
+		}
+		forEachChild(n, visit);
+	};
+	visit(stmt);
+	return found;
+}
+
+test "module globals are destroyed in reverse declaration order at program end" {
+	const result = analyzePipeline("const first: string[] = [\"a\"];\nconst second: string[] = [\"b\"];\nconsole.log(first.length + second.length);");
+	const stmts = (result.data as ProgramData).programStmts;
+	const exitBlock = stmts[stmts.length - 1];
+	assert exitBlock.kind == NodeKind.BlockStmt && exitBlock.flags.has(NodeFlag.GlobalDestroys);
+	const destroys = (exitBlock.data as BlockStmtData).statements;
+	assert destroys.length == 2;
+	assert destroyedGlobal(destroys[0]) == "second";
+	assert destroyedGlobal(destroys[1]) == "first";
+}
+
+test "a program without owned globals carries no global destroys" {
+	const result = analyzePipeline("const n = 1;\nfunction f(): string[] { return [\"x\"]; }\nconsole.log(f().length + n);");
+	for (const s of (result.data as ProgramData).programStmts) assert !s.flags.has(NodeFlag.GlobalDestroys);
 }
 
 // Phase E field-level move patterns are covered by the full integration test suite (2186+ tests).
