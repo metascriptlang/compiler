@@ -12,7 +12,7 @@ import {
 	seedKey,
 	seedText,
 	signerOf,
-	signingOfBumped,
+	signerOfBumped,
 	tableAddress,
 } from "./seed";
 
@@ -73,7 +73,7 @@ export function delegateAt(
 		return Result.err(ProgramError.maxSeedLengthExceeded());
 	}
 	let signer: SignerSeeds[1] = [{ address: 0, length: 0 }];
-	signingOfBumped(table, signer);
+	signerOfBumped(table, signer);
 	const dataLength = accounts.delegated.dataLength();
 	const bufferBump: uint8[1] = [bufferAddress.bump];
 	const bufferSigner: SeedSlice[3] = [bufferSeeds[0], bufferSeeds[1], seedBytes(bufferBump)];

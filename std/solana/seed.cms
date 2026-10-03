@@ -72,7 +72,7 @@ export function signerOf(seeds: Span<SeedSlice>): SignerSeeds {
 	return { address: msSolTableAddress(seeds), length: seeds.length as uint64 };
 }
 
-export function unsigned(): Signing {
+function unsigned(): Signing {
 	return { table: 0, count: 0 };
 }
 
@@ -184,7 +184,6 @@ export function createAddressWithBump(
 	return createChecked(msSolTableAddress(signed.slices), signed.count, program);
 }
 
-export function signingOfBumped(ref signed: SeedTable, ref one: SignerSeeds[1]): Signing {
+export function signerOfBumped(ref signed: SeedTable, ref one: SignerSeeds[1]): void {
 	one[0] = { address: msSolTableAddress(signed.slices), length: signed.count };
-	return { table: msSolSignersAddress(one), count: 1 };
 }

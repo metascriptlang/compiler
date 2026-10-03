@@ -4,8 +4,9 @@
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { ProgramError } from "./error";
 import { Discriminator } from "./discriminator";
-import { BorshBuffer, Bytes, storePubkey } from "./buffer";
+import { BorshBuffer, Bytes, borshBuffer, storePubkey } from "./buffer";
 import { InstructionAccount } from "./cpi";
+import { invokeSigned } from "./invoke";
 import {
 	SeedSlice,
 	SeedTable,
@@ -15,10 +16,9 @@ import {
 	fillWithBump,
 	findAt,
 	ownProgram,
+	signerOfBumped,
 	signingOf,
-	signingOfBumped,
 	tableAddress,
-	unsigned,
 } from "./seed";
 
 export { ProgramAddress } from "./seed";
@@ -50,6 +50,7 @@ extern function msSolLogComputeUnits(): void;
 extern function msSolRemainingComputeUnits(): uint64;
 extern function msSolStringAddress(text: string): uint64;
 extern function msSolStringLength(text: string): uint64;
+extern function msSolWordsAddress(words: Span<uint64>): uint64 from "msSolSpanAddress";
 extern function msSolInvokeSigned(instruction: uint64, accountInfos: uint64, accountInfoCount: uint64, signers: uint64, signerCount: uint64): uint64;
 extern function msSolGetClock(out: uint64): uint64;
 extern function msSolGetRent(out: uint64): uint64;
@@ -534,62 +535,6 @@ function invokeSigning(instruction: Instruction, signing: Signing): Result<uint6
 	return invokeWith(instruction, signing.table, signing.count);
 }
 
-function createAccountWith(
-	payer: Account,
-	target: Account,
-	lamports: uint64,
-	space: uint64,
-	newOwner: Pubkey,
-	signing: Signing,
-): Result<uint64, ProgramError> {
-	const instruction = Instruction.forProgram(Pubkey.systemProgram(), 2, 52);
-	instruction.addWritableSigner(payer);
-	instruction.addWritableSigner(target);
-	instruction.appendU32(0);
-	instruction.appendU64(lamports);
-	instruction.appendU64(space);
-	instruction.appendPubkey(newOwner);
-	return invokeSigning(instruction, signing);
-}
-
-function assignToWith(
-	target: Account,
-	newOwner: Pubkey,
-	signing: Signing,
-): Result<uint64, ProgramError> {
-	const instruction = Instruction.forProgram(Pubkey.systemProgram(), 1, 36);
-	instruction.addWritableSigner(target);
-	instruction.appendU32(1);
-	instruction.appendPubkey(newOwner);
-	return invokeSigning(instruction, signing);
-}
-
-function transferWith(
-	source: Account,
-	destination: Account,
-	lamports: uint64,
-	signing: Signing,
-): Result<uint64, ProgramError> {
-	const instruction = Instruction.forProgram(Pubkey.systemProgram(), 2, 12);
-	instruction.addWritableSigner(source);
-	instruction.addWritable(destination);
-	instruction.appendU32(2);
-	instruction.appendU64(lamports);
-	return invokeSigning(instruction, signing);
-}
-
-function allocateWith(
-	target: Account,
-	space: uint64,
-	signing: Signing,
-): Result<uint64, ProgramError> {
-	const instruction = Instruction.forProgram(Pubkey.systemProgram(), 1, 12);
-	instruction.addWritableSigner(target);
-	instruction.appendU32(8);
-	instruction.appendU64(space);
-	return invokeSigning(instruction, signing);
-}
-
 export function createAccount(
 	payer: Account,
 	target: Account,
@@ -598,8 +543,13 @@ export function createAccount(
 	newOwner: Pubkey,
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
-	const signing = signingOf(signers);
-	return createAccountWith(payer, target, lamports, space, newOwner, signing);
+	let storage: uint8[52] = [];
+	return invokeSigned(
+		Pubkey.systemProgram(),
+		[InstructionAccount.writableSigner(payer), InstructionAccount.writableSigner(target)],
+		borshBuffer(storage).u32(0).u64(lamports).u64(space).pubkey(newOwner),
+		signers,
+	);
 }
 
 export function assignTo(
@@ -607,8 +557,13 @@ export function assignTo(
 	newOwner: Pubkey,
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
-	const signing = signingOf(signers);
-	return assignToWith(target, newOwner, signing);
+	let storage: uint8[36] = [];
+	return invokeSigned(
+		Pubkey.systemProgram(),
+		[InstructionAccount.writableSigner(target)],
+		borshBuffer(storage).u32(1).pubkey(newOwner),
+		signers,
+	);
 }
 
 export function transfer(
@@ -617,8 +572,13 @@ export function transfer(
 	lamports: uint64,
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
-	const signing = signingOf(signers);
-	return transferWith(source, destination, lamports, signing);
+	let storage: uint8[12] = [];
+	return invokeSigned(
+		Pubkey.systemProgram(),
+		[InstructionAccount.writableSigner(source), InstructionAccount.writable(destination)],
+		borshBuffer(storage).u32(2).u64(lamports),
+		signers,
+	);
 }
 
 export function allocate(
@@ -626,38 +586,24 @@ export function allocate(
 	space: uint64,
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
-	const signing = signingOf(signers);
-	return allocateWith(target, space, signing);
+	let storage: uint8[12] = [];
+	return invokeSigned(
+		Pubkey.systemProgram(),
+		[InstructionAccount.writableSigner(target)],
+		borshBuffer(storage).u32(8).u64(space),
+		signers,
+	);
 }
 
 export function minimumBalance(dataLength: uint64): uint64 {
-	const out = msSolAlloc(24);
-	const _status = msSolGetRent(out);
-	const lamportsPerByte = msSolLoadU64(out);
-	const thresholdBits = msSolLoadU64(out + 8);
+	let rent: uint64[3] = [];
+	const _status = msSolGetRent(msSolWordsAddress(rent));
+	const lamportsPerByte = rent[0];
+	const thresholdBits = rent[1];
 	const twoBits: uint64 = 0x4000000000000000;
 	const bytes = dataLength + 128;
 	if (thresholdBits == twoBits) { return 2 * bytes * lamportsPerByte; }
 	return bytes * lamportsPerByte;
-}
-
-function createProgramAccountWith(
-	payer: Account,
-	target: Account,
-	space: uint64,
-	newOwner: Pubkey,
-	signing: Signing,
-): Result<uint64, ProgramError> {
-	const required = minimumBalance(space);
-	const current = target.lamports();
-	if (current == 0) {
-		return createAccountWith(payer, target, required, space, newOwner, signing);
-	}
-	if (required > current) {
-		const _funded = try transferWith(payer, target, required - current, unsigned());
-	}
-	const _allocated = try allocateWith(target, space, signing);
-	return assignToWith(target, newOwner, signing);
 }
 
 export function createProgramAccount(
@@ -667,8 +613,16 @@ export function createProgramAccount(
 	newOwner: Pubkey,
 	signers: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
-	const signing = signingOf(signers);
-	return createProgramAccountWith(payer, target, space, newOwner, signing);
+	const required = minimumBalance(space);
+	const current = target.lamports();
+	if (current == 0) {
+		return createAccount(payer, target, required, space, newOwner, signers);
+	}
+	if (required > current) {
+		const _funded = try transfer(payer, target, required - current);
+	}
+	const _allocated = try allocate(target, space, signers);
+	return assignTo(target, newOwner, signers);
 }
 
 export function createProgramAccountSeeded(
@@ -684,7 +638,8 @@ export function createProgramAccountSeeded(
 		return Result.err(ProgramError.maxSeedLengthExceeded());
 	}
 	let one: SignerSeeds[1] = [{ address: 0, length: 0 }];
-	return createProgramAccountWith(payer, target, space, newOwner, signingOfBumped(signed, one));
+	signerOfBumped(signed, one);
+	return createProgramAccount(payer, target, space, newOwner, one);
 }
 
 export function clock(): Clock {
@@ -1061,14 +1016,14 @@ function initialized(
 	target: Writable,
 	space: uint64,
 	discriminator: uint64,
-	signing: Signing,
+	signers: Span<SignerSeeds>,
 ): Result<Account, ProgramError> {
 	const funding = payer as Account;
 	const created = target as Account;
 	if (funding.key() == created.key()) {
 		return Result.err(ProgramError.tryingToInitPayerAsProgramAccount());
 	}
-	const _made = try createProgramAccountWith(funding, created, space, programId(), signing);
+	const _made = try createProgramAccount(funding, created, space, programId(), signers);
 	msSolStoreU64(created.address + 88, discriminator);
 	return claimExclusive(created);
 }
@@ -1078,7 +1033,7 @@ export function create<T>(
 	target: Writable,
 ): Result<Mutable<T>, ProgramError> {
 	const space = 8 + (sizeof(T) as uint64);
-	const created = try initialized(payer, target, space, T.discriminator().word(), unsigned());
+	const created = try initialized(payer, target, space, T.discriminator().word(), []);
 	return Result.ok(created as Mutable<T>);
 }
 
@@ -1098,7 +1053,8 @@ export function createPdaOf<T>(
 	const space = 8 + (sizeof(T) as uint64);
 	const discriminator = T.discriminator().word();
 	let one: SignerSeeds[1] = [{ address: 0, length: 0 }];
-	const created = try initialized(payer, target, space, discriminator, signingOfBumped(signed, one));
+	signerOfBumped(signed, one);
+	const created = try initialized(payer, target, space, discriminator, one);
 	return Result.ok({ account: created as Mutable<T>, bump: found.bump });
 }
 
@@ -1172,7 +1128,7 @@ export function realloc<T>(
 	const required = minimumBalance(space);
 	const held = target.lamports();
 	if (required > held) {
-		const _funded = try transferWith(funding, target, required - held, unsigned());
+		const _funded = try transfer(funding, target, required - held);
 	} else if (held > required) {
 		target.setLamports(required);
 		funding.setLamports(funding.lamports() + (held - required));
@@ -1262,7 +1218,7 @@ export function transferLamports(
 	to: Writable,
 	lamports: uint64,
 ): Result<uint64, ProgramError> {
-	return transferWith(from as Account, to as Account, lamports, unsigned());
+	return transfer(from as Account, to as Account, lamports);
 }
 
 export function asSigner(this proof: WritableSigner): Signer {
