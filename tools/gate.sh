@@ -8,7 +8,7 @@ EMITS='^src/(analyzer|ast|binder|checker|codegen|diagnostics|lexer|module|monomo
 RULES=(
   'tools|^tools/'
   'hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^runtime/hcr|^examples/hcrProbe/'
-  'tests|^src/test/(c|js|fixedbugs|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$'
+  'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$'
   "tests,corpus|$EMITS"
   'guard|^src/test/guard/'
   'corpus|^src/test/corpus/'
@@ -259,8 +259,8 @@ control_todo() {
       close(f ".key"); close(f ".sig"); print }'
 }
 
-TIERS="src/test/fixedbugs/index.ms src/test/c/index.ms src/test/js/index.ms src/test/handoff/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/fmt/index.ms src/test/helpers.ms"
-SHARDED_TIERS="src/test/fixedbugs/index.ms src/test/c/index.ms"
+TIERS="src/test/c/index.ms src/test/js/index.ms src/test/handoff/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/fmt/index.ms src/test/helpers.ms"
+SHARDED_TIERS="src/test/c/index.ms"
 TEST_SHARDS=${GATE_TEST_SHARDS:-3}
 
 test_jobs() {
@@ -740,9 +740,9 @@ std/core/date/index.cms|
 CASES
   log=$(mktemp) || return 1
   printf '%s\n' " FAIL  $TOP/src/test/c/json.ms" "  × parses numbers" \
-    "NORESULT src/test/fixedbugs/index.ms > no result" "error: 3 type error(s) found" >"$log"
+    "NORESULT src/test/handoff/index.ms > no result" "error: 3 type error(s) found" >"$log"
   got=$(reds_of tests "$log" 1 | paste -sd'|' -)
-  want="src/test/c/json.ms > parses numbers|src/test/fixedbugs/index.ms > no result"
+  want="src/test/c/json.ms > parses numbers|src/test/handoff/index.ms > no result"
   [ "$got" = "$want" ] || { printf 'FAIL reds tests: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   printf ' FAIL  %s/src/test/c/json.ms\n  × parses numbers\n\342\234[LSP-OPEN] /a.ms parse=1ms\n\223 %s/src/test/c/ok.ms\n FAIL  %s/src/test/c/bigint.ms\n  × unary plus\n' \
     "$TOP" "$TOP" "$TOP" >"$log"
@@ -754,10 +754,10 @@ CASES
   got=$(reds_of boundary "$log" 1 | paste -sd'|' -)
   want="setup: source baseline|when branch after a -d: value change"
   [ "$got" = "$want" ] || { printf 'FAIL reds boundary: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
-  printf '%s\n' 'LOSSY src/test/fixedbugs/bug228.ms: fmt changes `await` at 84:10 into `(` at 81:11 of the output' \
+  printf '%s\n' 'LOSSY src/test/handoff/x.ms: fmt changes `await` at 84:10 into `(` at 81:11 of the output' \
     'UNSTABLE src/test/lang/a.ms: second pass differs' '1648 files · 1 lossy · 1 unstable · 0 no-fmt' >"$log"
   got=$(reds_of fmt "$log" 1 | paste -sd'|' -)
-  want="src/test/fixedbugs/bug228.ms|src/test/lang/a.ms"
+  want="src/test/handoff/x.ms|src/test/lang/a.ms"
   [ "$got" = "$want" ] || { printf 'FAIL reds fmt: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   printf '%s\n' 'FAIL tools/gate.sh: self-test' 'FAIL tools/wt.sh: bash -n' 'ok   tools/x.sh: check' >"$log"
   got=$(reds_of tools "$log" 1 | paste -sd'|' -)
@@ -781,9 +781,9 @@ CASES
   rm -f "$log"
   [ "$got" = "x|y" ] || { printf 'FAIL bounded inside a pipeline: want "x|y", got "%s"\n' "$got"; bad=1; }
   got=$(TEST_SHARDS=3; test_jobs | awk '{ n++; if ($2 != "-") s++ } NR == 1 { first = $0 } END { printf "%d %d %s", n, s, first }')
-  [ "$got" = "12 6 src/test/fixedbugs/index.ms 0/3" ] || { printf 'FAIL test jobs with 3 shards: got "%s"\n' "$got"; bad=1; }
+  [ "$got" = "9 3 src/test/c/index.ms 0/3" ] || { printf 'FAIL test jobs with 3 shards: got "%s"\n' "$got"; bad=1; }
   got=$(TEST_SHARDS=1; test_jobs | awk '$2 != "-" { s++ } END { printf "%d %d", NR, s }')
-  [ "$got" = "8 0" ] || { printf 'FAIL test jobs unsharded: got "%s"\n' "$got"; bad=1; }
+  [ "$got" = "7 0" ] || { printf 'FAIL test jobs unsharded: got "%s"\n' "$got"; bad=1; }
   log=$(mktemp -d) || return 1
   printf 'ok k1\nfailed k2\nstale k3\nnew k4\n' >"$log/keys"
   printf 'k1\n' >"$log/ok.key"; printf 'ok\tc\tj\t0\t9\n' >"$log/ok.sig"

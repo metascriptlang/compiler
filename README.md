@@ -144,7 +144,6 @@ Counted from this tree on 2026-09-13:
 |---|---|
 | Compiler source (`src/`) | 1,016 files, 191,506 lines of MetaScript |
 | `test` blocks | 5,270 in `src/`, 585 in `std/` |
-| Regression programs (`src/test/fixedbugs/`) | 168 |
 | Corpus programs (`src/test/corpus/`) | 197: 128 compared byte-for-byte between C and JS, 69 with an RSS ceiling |
 | Lifecycle guards (`src/test/guard/`) | 130 probes |
 | Self-hosted `msc` | 12.0 MB |

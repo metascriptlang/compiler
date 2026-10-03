@@ -29,14 +29,11 @@ import "./lang/advanced";
 import "./lang/async";
 // comptime.ms runs end-to-end via `msc test src/test/lang/comptime.ms`;
 // regression-prevention guard for the underlying buildExportInfo behavior
-// lives in fixedbugs/bug028.ms.
+// lives in handoff/exportIdentity.ms.
 // import "./lang/comptime";
 import "./lang/syntax";
 import "./lang/whenStmt";
 import "./lang/multimod/main";
-
-// -- regression suite (one file per fixed bug) --
-import "./fixedbugs/index";
 
 // -- formatter roundtrip (parse(src) === parse(fmt(src))) --
 import "./fmt/index";
