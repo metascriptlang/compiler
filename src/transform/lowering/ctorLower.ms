@@ -14,13 +14,12 @@ import {
 	ExprStmtData, CallExprData, IdentifierData, FunctionDeclData, BinaryExprData, MemberExprData,
 	createNodeAt, SymbolKind, Symbol, Type,
 } from "../../ast/node";
-import { TransformContext, createTransformContext } from "../context";
+import { TransformContext, newLoweredSym } from "../context";
 import { makeAssign, makeMember, makeExprStmt, makeTypedIdent, makeTypedIdentResolved, makeBlock, makeCall, makeIdent } from "../util";
-import { createFunction, voidType, classParentOf } from "../../checker/types";
-import { instantiateParentClass } from "../../checker/instantiate";
-import { getCtorParamTypes, parentClassSymOf, makeSymbol } from "../../checker/symbol";
+import { createFunction, voidType } from "../../checker/types";
+import { getCtorParamTypes, parentClassSymOf } from "../../checker/symbol";
 import { lowerMethodToFunction } from "./methodToFunction";
-import { parseInput, getStmts } from "../testUtil";
+import { parseInput, getStmts, makeCtx } from "../testUtil";
 
 export function fieldInitAssignment(member: Node, receiverType: Type | null, thisSym: Symbol | null): Node {
 	const pd = member.data as PropertyDeclData;
@@ -111,8 +110,8 @@ function implicitSuperStmt(classNode: Node, cd: ClassDeclData, ctx: TransformCon
 function synthesizeCtor(classNode: Node, cd: ClassDeclData, ctx: TransformContext): void {
 	const loc = classNode.location;
 	const stmts: Node[] = [];
-	const thisSym = makeSymbol("this", SymbolKind.Parameter, classNode.nodeType, false);
-	const superStmt = implicitSuperStmt(classNode, cd, ctx);
+	const thisSym = newLoweredSym(ctx, SymbolKind.Parameter, "this", classNode.nodeType);
+	const superStmt = implicitSuperStmt(classNode, cd);
 	if (superStmt != null) stmts.push(superStmt);
 	for (const s of fieldInitStatements(classNode, cd, thisSym)) { stmts.push(s); }
 	const ctorNode = createNodeAt(NodeKind.ConstructorDecl, {
@@ -188,7 +187,7 @@ export function lowerCtorInit(program: Node, ctx: TransformContext): Node {
 function ctorStmtKinds(input: string): string {
 	const result = parseInput(input);
 	if (!result.ok) return "PARSE_ERROR";
-	const prog = lowerCtorInit(result.value, null as unknown as TransformContext);
+	const prog = lowerCtorInit(result.value, makeCtx());
 	const stmts = getStmts(prog);
 	if (stmts.length == 0) return "NO_STMTS";
 	const cd = stmts[0].data as ClassDeclData;
@@ -208,7 +207,7 @@ function ctorStmtKinds(input: string): string {
 function liftedInitNames(input: string): string {
 	const result = parseInput(input);
 	if (!result.ok) return "PARSE_ERROR";
-	const ctx = createTransformContext();
+	const ctx = makeCtx();
 	let prog = lowerCtorInit(result.value, ctx);
 	prog = lowerMethodToFunction(prog, ctx);
 	let out = "";
@@ -223,7 +222,7 @@ function liftedInitNames(input: string): string {
 function remainingInitializers(input: string): number {
 	const result = parseInput(input);
 	if (!result.ok) return -1;
-	const prog = lowerCtorInit(result.value, null as unknown as TransformContext);
+	const prog = lowerCtorInit(result.value, makeCtx());
 	const stmts = getStmts(prog);
 	const cd = stmts[0].data as ClassDeclData;
 	let n = 0;
@@ -238,7 +237,7 @@ function remainingInitializers(input: string): number {
 function synthesizedReceiverIsItsParam(input: string): boolean {
 	const result = parseInput(input);
 	if (!result.ok) return false;
-	const prog = lowerCtorInit(result.value, null as unknown as TransformContext);
+	const prog = lowerCtorInit(result.value, makeCtx());
 	const cd = getStmts(prog)[0].data as ClassDeclData;
 	for (const member of cd.classBody) {
 		if (member.kind != NodeKind.ConstructorDecl) continue;

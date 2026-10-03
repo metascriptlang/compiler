@@ -8,9 +8,8 @@ import {
 	AwaitExprData,
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
-import { makeSymbol } from "../../checker/symbol";
 import { booleanType, isStructType } from "../../checker/types";
-import { TransformContext } from "../context";
+import { TransformContext, newLoweredSym } from "../context";
 import {
 	makeVarDecl, makeReturn, makeTypedIdentResolved, makeExprStmt, makeAssign,
 	makeIf, makeBlock, makeWhile, makeBreak, makeBool, makeUnary, makeDefaultValue, extractBodyStmts,
@@ -61,7 +60,7 @@ function isInert(e: Node): boolean {
 function bindTemp(init: Node, declKind: DeclKind, t: Type | null, pre: Node[], loc: SourceLocation): Symbol {
 	const name = "__aw_" + _spillCtx.tempCounter.toString();
 	_spillCtx.tempCounter += 1;
-	const sym = makeSymbol(name, SymbolKind.Variable, t, declKind != DeclKind.Const);
+	const sym = newLoweredSym(_spillCtx, SymbolKind.Variable, name, t, declKind != DeclKind.Const);
 	const decl = makeVarDecl(name, init, declKind, loc);
 	decl.nodeType = t;
 	decl.resolvedSym = sym;
@@ -495,3 +494,10 @@ test "an await in a ternary condition spills before the branches" { assert first
 test "an if condition await spills before the if" { assert firstStmtKindAfter("if (await g()) { f(); }", lowerAwaitSpill) == NodeKind.VariableDecl; }
 
 test "an assignment from an await keeps its target" { assert firstStmtKindAfter("x = await g() + 1;", lowerAwaitSpill) == NodeKind.VariableDecl; }
+
+test "a spill temp is minted with its module's identity" {
+	const first = bodyAfter("async function f() { const v = (await p) + 1; }")[0];
+	assert first.kind == NodeKind.VariableDecl;
+	assert first.resolvedSym != null && first.resolvedSym.name.startsWith("__aw_");
+	assert first.resolvedSym.item > 0;
+}

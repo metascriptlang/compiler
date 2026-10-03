@@ -25,9 +25,9 @@
 // `!jsBackend` branch of the pipeline.
 
 import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ActorDeclData, SymbolKind, Type } from "../../ast/node";
-import { TransformContext } from "../context";
-import { makeSymbol, setFlag, SymbolFlag, initFnName, registerCtorInit } from "../../checker/symbol";
-import { newSym } from "../../checker/context";
+import { TransformContext, newLoweredSym } from "../context";
+import { setFlag, SymbolFlag, initFnName } from "../../checker/symbol";
+import { registerCtorInit } from "../../checker/instantiate";
 import { createFunction, voidType, noneType } from "../../checker/types";
 import { declGenericParams } from "../../checker/types";
 import { classInitCName, mangledTypeName } from "../../codegen/c/names";
@@ -136,8 +136,8 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 	// lifts. mutatedParams is left at 0 — ctor params don't currently feed
 	// param-mutation analysis (it runs over functions' bodies, not ctors). If
 	// that becomes a problem, propagate the bitfield here from the class symbol.
-	const initSym = ctx.checkerCtx != null ? newSym(ctx.checkerCtx, SymbolKind.Function, initName, fnNode.nodeType) : makeSymbol(initName, SymbolKind.Function, fnNode.nodeType, false);
-	if (ctx.checkerCtx != null && classNode.resolvedSym != null) registerCtorInit(classNode.resolvedSym, className, ctorNode.nodeType != null ? ctorNode.nodeType : createFunction([], [], voidType()), initSym);
+	const initSym = newLoweredSym(ctx, SymbolKind.Function, initName, fnNode.nodeType);
+	if (classNode.resolvedSym != null) registerCtorInit(classNode.resolvedSym, className, ctorNode.nodeType != null ? ctorNode.nodeType : createFunction([], [], voidType()), initSym);
 	setFlag(initSym, SymbolFlag.Exported);
 	setFlag(initSym, SymbolFlag.ClassInit);
 	if (classNode.resolvedSym != null) initSym.exportName = classInitCName(mangledTypeName(classNode.resolvedSym, className));

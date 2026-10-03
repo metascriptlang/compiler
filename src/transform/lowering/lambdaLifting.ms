@@ -22,7 +22,7 @@
 //   }
 
 import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, BooleanLiteralData, ObjectLiteralData, ArrayLiteralData, TestDeclData, Type, TypeKind } from "../../ast/node";
-import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, mintSym } from "../context";
+import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, mintSym, newLoweredSym } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import {
@@ -31,7 +31,7 @@ import {
 	makeNull, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr, extractBodyStmts,
 } from "../util";
 import { createPtr, createRef, voidType, isUnresolvedType } from "../../checker/types";
-import { hasFlag, SymbolFlag, makeSymbol } from "../../checker/symbol";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 import {
@@ -58,12 +58,12 @@ const UP_FIELD: string = "$up";
 // (`src/analyzer/inject.ms:isEnvParam`) recognizes the same prefix.
 const ENV_PARAM_NAME: string = "_envP";
 
-function freshEnvParamSym(): Symbol {
-	return makeSymbol(ENV_PARAM_NAME, SymbolKind.Parameter, createPtr(voidType()), false);
+function freshEnvParamSym(ctx: TransformContext): Symbol {
+	return newLoweredSym(ctx, SymbolKind.Parameter, ENV_PARAM_NAME, createPtr(voidType()));
 }
 
-function freshEnvVarSym(name: string, envStructType: Type | null): Symbol {
-	return makeSymbol(name, SymbolKind.Variable, envStructType != null ? createRef(envStructType) : createPtr(voidType()), false);
+function freshEnvVarSym(ctx: TransformContext, name: string, envStructType: Type | null): Symbol {
+	return newLoweredSym(ctx, SymbolKind.Variable, name, envStructType != null ? createRef(envStructType) : createPtr(voidType()));
 }
 
 function envVarRef(sym: Symbol, envStructType: Type, loc: SourceLocation): Node {
@@ -249,7 +249,7 @@ function typeToEnvStr(t: Type | null): string {
 	};
 }
 
-function createLiftState(): LiftState {
+function createLiftState(ctx: TransformContext): LiftState {
 	const state: LiftState = {
 		liftedFunctions: [],
 		envStructs: [],
@@ -269,7 +269,7 @@ function createLiftState(): LiftState {
 		sharedEnvActive: false,
 		sharedEnvName: "",
 		sharedEnvVarSym: null,
-		envParamSym: freshEnvParamSym(),
+		envParamSym: freshEnvParamSym(ctx),
 		sharedEnvStructType: null as unknown as Type,
 		sharedEnvCapturedSyms: createSymSet(),
 		sharedEnvCapturedIdents: [],
@@ -284,7 +284,7 @@ function createLiftState(): LiftState {
 		pendingLiftedSym: null,
 		liftOwnLocals: createSymSet(),
 		envFieldSyms: new HashMap<Type, Symbol[]>(),
-		ctx: null as unknown as TransformContext,
+		ctx,
 	};
 	return state;
 }
@@ -923,7 +923,7 @@ function openLoopEnv(body: Node, state: LiftState, loc: SourceLocation): Node {
 	const envDecl = makeEnvStruct(state, envName, fieldSyms, fieldTypes, resolved, loc);
 	state.envStructs.push(envDecl);
 	const structType = envDecl.nodeType!;
-	const envVarSym = freshEnvVarSym(`_envl${counter}_`, structType);
+	const envVarSym = freshEnvVarSym(state.ctx, `_envl${counter}_`, structType);
 	const hoisted = makeVarDecl(envVarSym.name, makeNull(loc), DeclKind.Let, loc);
 	hoisted.resolvedSym = envVarSym;
 	hoisted.nodeType = createRef(structType);
@@ -1101,7 +1101,7 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 		// Per-closure env path — own env struct, fresh alloc at closure creation.
 		// Used for module-level closures AND for closures inside loops (snapshot).
 		envName = `$Env_${state.currentFnName}_${counter}`;
-		envVarSym = freshEnvVarSym(`_env${counter}_`, null);
+		envVarSym = freshEnvVarSym(state.ctx, `_env${counter}_`, null);
 
 		const envFieldSyms: Symbol[] = [];
 		const envFieldTypes: string[] = [];
@@ -1157,7 +1157,7 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 	}
 	let selfEnvDecl: Node | null = null;
 	if (routine != null && refsRoutine(body, routine)) {
-		const selfEnvSym = freshEnvVarSym(`_self${counter}_`, envStructType);
+		const selfEnvSym = freshEnvVarSym(state.ctx, `_self${counter}_`, envStructType);
 		const selfEnvType = envStructType;
 		selfEnvDecl = ownEnvDecl(selfEnvSym, envParamSym, envName, envStructType, loc);
 		rewriteRoutineSelfRefs(body, routine, (ref: Node): Node => ownEnvClosure(liftedSym, selfEnvSym, selfEnvType, ref));
@@ -1179,7 +1179,7 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 					reportTransformError(state.ctx, `internal: the env of '${info.sym.name}' is not reachable from this closure`, ref.location);
 					return ref;
 				}
-				const reachSym = freshEnvVarSym(`_reach${counter}_${reachTypes.length}_`, target);
+				const reachSym = freshEnvVarSym(state.ctx, `_reach${counter}_${reachTypes.length}_`, target);
 				const decl = makeVarDecl(reachSym.name, pointer, DeclKind.Const, loc);
 				decl.resolvedSym = reachSym;
 				decl.nodeType = createRef(target);
@@ -1426,7 +1426,7 @@ function createSnapshotPairEnv(captures: SymSet, capturedIdents: Node[], state: 
 	}
 	const envDecl = makeEnvStruct(state, envName, envFieldSyms, envFieldTypes, envResolvedTypes, loc);
 	state.envStructs.push(envDecl);
-	return { envName, envVarSym: freshEnvVarSym(`_env${counter}_`, envDecl.nodeType!), envStructType: envDecl.nodeType!, fields: captures, fieldIdents: capturedIdents };
+	return { envName, envVarSym: freshEnvVarSym(state.ctx, `_env${counter}_`, envDecl.nodeType!), envStructType: envDecl.nodeType!, fields: captures, fieldIdents: capturedIdents };
 }
 
 // ===== Shared Env Setup (reference parity: getEnvTypeForOwner + rawClosureCreation) =====
@@ -1443,7 +1443,7 @@ function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapturedIdents
 	allCaptures = frameCaptures;
 	state.sharedEnvActive = true;
 	state.sharedEnvName = `$Env_${state.currentFnName}_shared`;
-	state.sharedEnvVarSym = freshEnvVarSym(`_env_${state.currentFnName}_`, null);
+	state.sharedEnvVarSym = freshEnvVarSym(state.ctx, `_env_${state.currentFnName}_`, null);
 	state.sharedEnvCapturedSyms = allCaptures;
 	state.sharedEnvCapturedIdents = allCapturedIdents;
 	const parentChainNames: string[] = [];
@@ -2197,7 +2197,7 @@ function liftCapturingClosureBody(
 	const routine = state.pendingRoutine;
 	state.pendingRoutine = null;
 	const outerEnvParamSym = state.envParamSym;
-	const ownEnvParamSym = freshEnvParamSym();
+	const ownEnvParamSym = freshEnvParamSym(state.ctx);
 	state.envParamSym = ownEnvParamSym;
 	defineParams(state.ss, node.paramSyms, params);
 	// Each capturing closure is its own env-owner (Nim parity). Locals
@@ -2375,12 +2375,11 @@ function normalizeArrowBodies(node: Node): Node {
 }
 
 export function lowerLambda(program: Node, ctx: TransformContext): Node {
-	const state = createLiftState();
+	const state = createLiftState(ctx);
 	normalizeArrowBodies(program);
 	// Pass 1: collect per-fn capture info upfront (Nim parity).
 	state.detection = detectPass(program);
 	state.splitLoopLocals = ctx.splitLoopLocals;
-	state.ctx = ctx;
 	collectRoutines(program, state);
 	// Pass 2: rewrite + lift closures, consuming Pass 1 results.
 	walkLift(program, state);

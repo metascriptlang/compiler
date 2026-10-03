@@ -1,8 +1,8 @@
 // Transform Context — shared state across all transforms
 
-import { CheckerContext, addError, newSym } from "../checker/context";
+import { CheckerContext, addError, newSym, createContext } from "../checker/context";
 import { Type, Symbol, SymbolKind, SymbolState, SourceLocation } from "../ast/node";
-import { makeSymbol } from "../checker/symbol";
+import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { noneType } from "../checker/types";
 
 // Pending tuple type entry — collected by operatorLower, consumed by destructorLifting.
@@ -120,7 +120,7 @@ export function freshTemp(ctx: TransformContext, prefix: string): string {
 }
 
 export function mintSym(ctx: TransformContext, kind: SymbolKind, name: string, t: Type | null): Symbol {
-	const sym = ctx.checkerCtx != null ? newSym(ctx.checkerCtx, kind, name, t) : makeSymbol(name, kind, t, false);
+	const sym = newSym(mintingChecker(ctx, name), kind, name, t);
 	sym.state = SymbolState.Checked;
 	return sym;
 }
@@ -138,7 +138,18 @@ export function freshOwnedSym(ctx: TransformContext, prefix: string, t: Type | n
 	const n = ctx.tempCounter;
 	ctx.tempCounter += 1;
 	const name = "__" + prefix + "_" + n.toString();
-	return makeSymbol(name, SymbolKind.Variable, t != null ? t : noneType(), false);
+	return newLoweredSym(ctx, SymbolKind.Variable, name, t != null ? t : noneType());
+}
+
+export function newLoweredSym(ctx: TransformContext, kind: SymbolKind, name: string, t: Type | null, mutable: boolean = false): Symbol {
+	const sym = newSym(mintingChecker(ctx, name), kind, name, t);
+	if (mutable) setFlag(sym, SymbolFlag.Mutable);
+	return sym;
+}
+
+export function mintingChecker(ctx: TransformContext, name: string): CheckerContext {
+	if (ctx.checkerCtx == null) throw new Error(`internal: symbol '${name}' minted by a transform with no checker context`);
+	return ctx.checkerCtx;
 }
 
 test "a name set keeps first-insertion order and ignores repeats" {
@@ -165,4 +176,24 @@ test "a symbol set keys by identity, not by spelling, in first-insertion order" 
 	assert symSetContains(ss, a);
 	assert !symSetContains(ss, makeSymbol("x", SymbolKind.Variable, null, false));
 	assert !symSetContains(ss, null);
+}
+
+test "a transform with no checker context refuses to mint a symbol" {
+	const ctx = createTransformContext();
+	let refused = "";
+	try {
+		freshTempSym(ctx, "t", null);
+	} catch (e) {
+		refused = (e as Error).message;
+	}
+	assert refused.includes("'$t_0' minted by a transform with no checker context"), refused;
+}
+
+test "symbols minted by a lowering take distinct ordinals from the checker context" {
+	const ctx = createTransformContextWithChecker(createContext());
+	const a = freshTempSym(ctx, "t", null);
+	const b = freshOwnedSym(ctx, "t", null);
+	const c = newLoweredSym(ctx, SymbolKind.Variable, "v", null, true);
+	assert a.item > 0 && b.item > a.item && c.item > b.item;
+	assert hasFlag(c, SymbolFlag.Mutable) && !hasFlag(b, SymbolFlag.Mutable);
 }
