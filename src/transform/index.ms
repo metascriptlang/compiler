@@ -102,7 +102,6 @@ import { liftDestructors } from "./lowering/destructorLifting";
 import { lowerPowerAssert } from "./powerAssert";
 import { lowerRestParams } from "./lowering/restParamLower";
 import { lowerActorPre, lowerActor } from "./lowering/actorLower";
-import { resolveRuntimeIdents } from "./lowering/runtimeIdentResolve";
 import { lowerEnumToString } from "./native/enumToStringLower";
 
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, preserveModuleConstants: boolean = false): Node {
@@ -197,11 +196,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// into its bit before any backend sees the operator.
 	result = lowerBitSet(result, ctx);
 	result = lowerDCE(result, ctx);
-	if (jsBackend) { result = resolveRuntimeIdents(result, ctx); }
-	// Must trail resolveRuntimeIdents: the synthesized `Math` receiver has to
-	// stay unbound, or it resolves to the prelude's own `class Math` and gets
-	// mangled as a module global. The 64-bit pass runs first so the width
-	// passes below never see the nodes it consumed.
+	// The 64-bit pass runs first so the width passes below never see the nodes
+	// it consumed.
 	if (jsBackend) { result = refuseUnfoldedSizeofJS(result, ctx); }
 	if (jsBackend) { result = lowerNumberBitwiseOperands(result, ctx); }
 	if (jsBackend) { result = injectRangeChecksJS(result, ctx); }
