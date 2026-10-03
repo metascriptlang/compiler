@@ -22,6 +22,7 @@ import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { callExpandMacroInvocation, callEvalComptimeBlock } from "./checkerCallbacks";
 import { findChar, splitTopLevel, fitsInt64Decimal, int64ToDecimal } from "../utils/string";
 import { basename } from "std/fs/path";
+import { checkPointerAddress } from "./pointerAddress";
 import { findCallTypeArg } from "../parser/context";
 import { markConsumedName, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { forEachChild } from "../ast/visitor";
@@ -2229,6 +2230,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					asLoc.line, asLoc.column);
 			}
 			if (srcType != null && isReadonlyView(srcType) && node.nodeType != null) node.nodeType = propagateReadonlyView(node.nodeType);
+			if (!reportedErrorSince(ctx, operandMark)) checkPointerAddress(ctx, d.asExpr, targetType);
 			return;
 		},
 		NodeKind.SpreadExpr => {
