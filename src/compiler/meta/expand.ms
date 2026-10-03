@@ -1635,7 +1635,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	}
 	if (params.length > decl.macroDeclParams.length) paramTypes.push("Node");
 	const emptyDefaults: Node[] = [];
-	const nodeInScope = lookupSymbol(regCtx.table, "Node") != null;
+	const nodeInScope = isMetaNodeSym(lookupSymbol(regCtx.table, "Node"));
 	const macroFn = createNode(NodeKind.FunctionDecl, {
 		fnName: "__macroBody",
 		params: params,
@@ -2145,6 +2145,7 @@ registerComptimeHelperPreparer((decl: Node): void => {
 
 import { makeSymbol, defineSymbol } from "../../checker/symbol";
 import { noneType } from "../../checker/types";
+import { isMetaNodeSym } from "./nodeSym";
 
 test "expand pass is no-op when no user macros" {
 	// Build a tiny Program manually to avoid the parseSource → check round trip

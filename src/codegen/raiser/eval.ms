@@ -234,7 +234,7 @@ const WIRE_ENUMS = ["NodeKind", "DeclKind", "ExternKind"];
 
 function seedWireEnums(seeds: Symbol[]): void {
 	let nodeSym: Symbol | null = null;
-	for (const s of seeds) if (s.name == "Node" && s.modulePath != "") nodeSym = s;
+	for (const s of seeds) if (isMetaNodeSym(s)) nodeSym = s;
 	if (nodeSym == null) return;
 	const nodeCtx = lookupModuleCtx(nodeSym.modulePath);
 	if (nodeCtx == null) return;
@@ -378,6 +378,7 @@ export function evalProgramViaEngine(program: Node, token: CheckerContext, fnNam
 }
 
 import { registerMacroEvaluator, registerMacroCompiler } from "../../compiler/meta/callbacks";
+import { isMetaNodeSym } from "../../compiler/meta/nodeSym";
 registerMacroEvaluator(evalASTFull);
 registerMacroCompiler(evalASTCompile);
 
