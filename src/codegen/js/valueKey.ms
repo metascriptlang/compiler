@@ -210,8 +210,8 @@ export function emitCollectionNew(gen: JSGenerator, node: Node): boolean {
 	const called = d.newCallee.resolvedSym;
 	const sym = called != null && called.instantiatedFrom != null ? called.instantiatedFrom : called;
 	if (sym == null || sym.declNode == null || !sym.declNode.flags.has(NodeFlag.ExternC)) return false;
-	const isMap = sym.name == "Map" || sym.name == "HashMap";
-	const isSet = sym.name == "Set" || sym.name == "HashSet";
+	const isMap = sym.builtinKind == "IndexableMap";
+	const isSet = sym.builtinKind == "SetCollection";
 	if (!isMap && !isSet) return false;
 	const keyType = keyTypeOfCollection(node.nodeType);
 	const shape = valueKeyShape(keyType);
@@ -242,7 +242,7 @@ function keyTypeOfCollection(t: Type | null): Type | null {
 export function emitCollectionFromPairs(gen: JSGenerator, node: Node): boolean {
 	const d = node.data as CallExprData;
 	const sym = d.callee.resolvedSym;
-	if (sym == null || (sym.name != "mapFromPairs" && sym.name != "hashMapFromPairs")) return false;
+	if (sym == null || sym.builtinKind != "MapFromPairs") return false;
 	if (sym.nativeName == null || sym.nativeName == "" || d.arguments.length != 2) return false;
 	const keyType = keyTypeOfCollection(node.nodeType);
 	const shape = valueKeyShape(keyType);

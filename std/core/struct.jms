@@ -9,6 +9,7 @@
 // MS name === JS name is the convention here. A `from "JsName"` clause on
 // extern class would be required to bind to a differently-named global.
 
+@builtin("SetCollection")
 export extern class Set<T> {
 	size: number;
 }
@@ -56,9 +57,12 @@ export extern function toItems<K, V>(this m: HashMap<K, V>): K[] from "Array.fro
 export extern function toPairs<K, V>(this m: HashMap<K, V>): Array<[K, V]> from "Array.from(#.entries())";
 export extern function forEach<K, V>(this m: HashMap<K, V>, fn: (value: V, key: K) => void): void from "#.forEach(#)";
 
+@builtin("MapFromPairs")
 export extern function mapFromPairs<K, V>(keys: K[], values: V[]): Map<K, V> from "new Map(#.map((k, i) => [k, #[i]]))";
+@builtin("MapFromPairs")
 export extern function hashMapFromPairs<K, V>(keys: K[], values: V[]): HashMap<K, V> from "new Map(#.map((k, i) => [k, #[i]]))";
 
+@builtin("SetCollection")
 export extern class HashSet<T> {
 	size: number;
 }
