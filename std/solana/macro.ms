@@ -17,8 +17,8 @@ import {
 	argsFit,
 	createPdaOf,
 	delegatedAccount,
-	eventWriter,
 	exclusiveWritable,
+	logEvent,
 	mutableAccount,
 	ownedAccount,
 	programAccount,
@@ -437,7 +437,8 @@ export macro emitEvent(value: Node): Node {
 		});
 		b = b + 1;
 	}
-	const methods: string[] = [];
+	const widths: Node[] = [];
+	const words: Node[] = [];
 	let total = 8;
 	let field = 0;
 	while (field < shape.typExprFieldNames.length) {
@@ -445,77 +446,102 @@ export macro emitEvent(value: Node): Node {
 		let typeName = "";
 		if (written.kind === NodeKind.Identifier) { typeName = written.name; }
 		if (written.kind === NodeKind.TypeObject) { typeName = written.typExprTypeName; }
-		let method = "";
 		let width = 0;
-		if (typeName == "uint8") { method = "u8"; width = 1; }
-		if (typeName == "int8") { method = "i8"; width = 1; }
-		if (typeName == "boolean") { method = "bool"; width = 1; }
-		if (typeName == "uint16") { method = "u16"; width = 2; }
-		if (typeName == "int16") { method = "i16"; width = 2; }
-		if (typeName == "uint32") { method = "u32"; width = 4; }
-		if (typeName == "int32") { method = "i32"; width = 4; }
-		if (typeName == "uint64") { method = "u64"; width = 8; }
-		if (typeName == "int64") { method = "i64"; width = 8; }
-		if (typeName == "Pubkey") { method = "pubkey"; width = 32; }
-		if (method == "") {
+		if (typeName == "uint8" || typeName == "int8" || typeName == "boolean") { width = 1; }
+		if (typeName == "uint16" || typeName == "int16") { width = 2; }
+		if (typeName == "uint32" || typeName == "int32") { width = 4; }
+		if (typeName == "uint64" || typeName == "int64") { width = 8; }
+		if (typeName == "Pubkey") { width = 32; }
+		if (width == 0) {
 			error("emitEvent<E>(value): field '" + shape.typExprFieldNames[field] +
 				"' is not fixed-size plain data (sized integer, boolean or Pubkey)", shape);
 		}
-		methods.push(method);
-		total = total + width;
-		field = field + 1;
-	}
-	let chain: Node = {
-		kind: NodeKind.CallExpr,
-		line: line,
-		column: column,
-		callee: bindSym("eventWriter"),
-		arguments: [{
-			kind: NodeKind.NumberLiteral,
+		const member: Node = {
+			kind: NodeKind.MemberExpr,
 			line: line,
 			column: column,
-			value: total as number,
-			isFloat: false,
-			intVal: total as int64,
-			outOfRangeText: "",
-			isBitPattern: false,
-		}, {
+			object: { kind: NodeKind.Identifier, line: line, column: column, name: value.name },
+			property: shape.typExprFieldNames[field],
+			isOptional: false,
+		};
+		let word: Node = {
 			kind: NodeKind.TypeAssertion,
 			line: line,
 			column: column,
-			asExpr: { kind: NodeKind.ArrayLiteral, line: line, column: column, elements: bytes },
-			asType: "uint8[8]",
-		}],
-		isDirectCall: false,
-		resolvedOverloadIdx: -1,
-	};
-	let at = 0;
-	while (at < methods.length) {
-		chain = {
-			kind: NodeKind.CallExpr,
+			asExpr: member,
+			asType: "uint64",
+		};
+		if (typeName == "boolean") {
+			word = {
+				kind: NodeKind.TypeAssertion,
+				line: line,
+				column: column,
+				asExpr: {
+					kind: NodeKind.ConditionalExpr,
+					line: line,
+					column: column,
+					ternaryCondition: member,
+					ternaryConsequent: {
+						kind: NodeKind.NumberLiteral,
+						line: line,
+						column: column,
+						value: 1,
+						isFloat: false,
+						intVal: 1,
+						outOfRangeText: "",
+						isBitPattern: false,
+					},
+					ternaryAlternate: {
+						kind: NodeKind.NumberLiteral,
+						line: line,
+						column: column,
+						value: 0,
+						isFloat: false,
+						intVal: 0,
+						outOfRangeText: "",
+						isBitPattern: false,
+					},
+				},
+				asType: "uint64",
+			};
+		}
+		if (typeName == "Pubkey") {
+			word = {
+				kind: NodeKind.CallExpr,
+				line: line,
+				column: column,
+				callee: bindSym("bytesAddress"),
+				arguments: [{
+					kind: NodeKind.MemberExpr,
+					line: line,
+					column: column,
+					object: member,
+					property: "bytes",
+					isOptional: false,
+				}],
+				isDirectCall: false,
+				resolvedOverloadIdx: -1,
+			};
+		}
+		widths.push({
+			kind: NodeKind.NumberLiteral,
 			line: line,
 			column: column,
-			callee: {
-				kind: NodeKind.MemberExpr,
-				line: line,
-				column: column,
-				object: chain,
-				property: methods[at],
-				isOptional: false,
-			},
-			arguments: [{
-				kind: NodeKind.MemberExpr,
-				line: line,
-				column: column,
-				object: { kind: NodeKind.Identifier, line: line, column: column, name: value.name },
-				property: shape.typExprFieldNames[at],
-				isOptional: false,
-			}],
-			isDirectCall: false,
-			resolvedOverloadIdx: -1,
-		};
-		at = at + 1;
+			value: width as number,
+			isFloat: false,
+			intVal: width as int64,
+			outOfRangeText: "",
+			isBitPattern: false,
+		});
+		words.push(word);
+		total = total + width;
+		field = field + 1;
 	}
+	if (total > 1024) {
+		error("emitEvent<E>(value): the event is " + (total as int32) +
+			" bytes with its discriminator, over the 1024 the std buffers", value);
+	}
+	const count = widths.length;
 	return {
 		kind: NodeKind.TypeAssertion,
 		line: line,
@@ -524,15 +550,26 @@ export macro emitEvent(value: Node): Node {
 			kind: NodeKind.CallExpr,
 			line: line,
 			column: column,
-			callee: {
-				kind: NodeKind.MemberExpr,
+			callee: bindSym("logEvent"),
+			arguments: [{
+				kind: NodeKind.TypeAssertion,
 				line: line,
 				column: column,
-				object: chain,
-				property: "finish",
-				isOptional: false,
-			},
-			arguments: [],
+				asExpr: { kind: NodeKind.ArrayLiteral, line: line, column: column, elements: bytes },
+				asType: "uint8[8]",
+			}, {
+				kind: NodeKind.TypeAssertion,
+				line: line,
+				column: column,
+				asExpr: { kind: NodeKind.ArrayLiteral, line: line, column: column, elements: widths },
+				asType: "uint8[" + (count as int32) + "]",
+			}, {
+				kind: NodeKind.TypeAssertion,
+				line: line,
+				column: column,
+				asExpr: { kind: NodeKind.ArrayLiteral, line: line, column: column, elements: words },
+				asType: "uint64[" + (count as int32) + "]",
+			}],
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
 		},

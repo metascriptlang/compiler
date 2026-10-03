@@ -598,6 +598,95 @@ test "emitEvent writes every field width, signed or not, in declaration order" {
 	assert lines[0] == wide && lines[1] == edge;
 }
 
+export struct Crowd {
+	key0: Pubkey;
+	key1: Pubkey;
+	key2: Pubkey;
+	key3: Pubkey;
+	key4: Pubkey;
+	key5: Pubkey;
+	key6: Pubkey;
+	key7: Pubkey;
+	key8: Pubkey;
+	key9: Pubkey;
+	key10: Pubkey;
+	key11: Pubkey;
+	key12: Pubkey;
+	key13: Pubkey;
+	key14: Pubkey;
+	key15: Pubkey;
+	key16: Pubkey;
+	key17: Pubkey;
+	key18: Pubkey;
+	key19: Pubkey;
+	key20: Pubkey;
+	key21: Pubkey;
+	key22: Pubkey;
+	key23: Pubkey;
+	key24: Pubkey;
+	key25: Pubkey;
+	key26: Pubkey;
+	key27: Pubkey;
+	key28: Pubkey;
+	key29: Pubkey;
+	key30: Pubkey;
+	first: uint64;
+	second: uint64;
+	third: uint64;
+}
+
+function crowdEntry(): void {
+	const crowd: Crowd = {
+		key0: patternedKey(),
+		key1: patternedKey(),
+		key2: patternedKey(),
+		key3: patternedKey(),
+		key4: patternedKey(),
+		key5: patternedKey(),
+		key6: patternedKey(),
+		key7: patternedKey(),
+		key8: patternedKey(),
+		key9: patternedKey(),
+		key10: patternedKey(),
+		key11: patternedKey(),
+		key12: patternedKey(),
+		key13: patternedKey(),
+		key14: patternedKey(),
+		key15: patternedKey(),
+		key16: patternedKey(),
+		key17: patternedKey(),
+		key18: patternedKey(),
+		key19: patternedKey(),
+		key20: patternedKey(),
+		key21: patternedKey(),
+		key22: patternedKey(),
+		key23: patternedKey(),
+		key24: patternedKey(),
+		key25: patternedKey(),
+		key26: patternedKey(),
+		key27: patternedKey(),
+		key28: patternedKey(),
+		key29: patternedKey(),
+		key30: patternedKey(),
+		first: 1,
+		second: 2,
+		third: 3,
+	};
+	emitEvent<Crowd>(crowd);
+}
+
+test "emitEvent holds an event of exactly the 1024 bytes its buffer has" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], crowdEntry).result == 0;
+	const lines = logs();
+	assert lines.length == 1;
+	const prefix = "Program data: ";
+	const line = lines[0];
+	assert line.length == prefix.length + 1368;
+	assert line.startsWith(prefix + "wsnqdi2Mq1oBAgMEBQYHCAkKCwwNDg8QERITFBUW");
+	assert line.endsWith("HR4fIAEAAAAAAAAAAgAAAAAAAAADAAAAAAAAAA==");
+}
+
 function returnDataEntry(): void {
 	const payload: uint8[3] = [7, 8, 9];
 	setReturnData(payload);
