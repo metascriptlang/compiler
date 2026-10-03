@@ -684,29 +684,39 @@ function liftKinds(): void {
 
 function runCommand(): void {
 	const tag = "hcrRun";
-	const dir = freshDir(`${TMP}/run`);
-	copy(`${FIXTURES}/run/app.ms`, `${dir}/app.ms`);
-	copy(`${FIXTURES}/indirect/logic.ms`, `${dir}/logic.ms`);
-	copy(`${FIXTURES}/indirect/logicBodyEdit.ms`, `${dir}/edit.txt`);
-	const copies = `${dir}/out/hcr/.hcr`;
-	const ended = `${copies}/999999998`;
-	const alive = `${copies}/${platform == "windows" ? "4" : "1"}`;
-	const foreign = `${copies}/notARun`;
-	for (const d of [`${ended}/core`, alive, foreign]) ensureDir(d);
-	for (const f of [`${ended}/core/app.core${sharedLibraryExt()}`, `${alive}/keep.txt`, `${foreign}/keep.txt`]) put(f, "x");
-	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
-	const seen: string[] = [];
-	for (const line of lines(both(ran))) {
-		if (line.startsWith("HCR-RUN ")) seen.push(line);
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	for (const via of [false, true]) {
+		const dir = freshDir(`${TMP}/run${via ? "Via" : ""}`);
+		copy(`${FIXTURES}/run/app.ms`, `${dir}/app.ms`);
+		if (via) {
+			copy(`${FIXTURES}/run/via.ms`, `${dir}/via.ms`);
+			put(`${dir}/app.ms`, read(`${dir}/app.ms`).replace(`from "./logic"`, `from "./via"`));
+		}
+		copy(`${FIXTURES}/indirect/logic.ms`, `${dir}/logic.ms`);
+		copy(`${FIXTURES}/indirect/logicBodyEdit.ms`, `${dir}/edit.txt`);
+		const copies = `${dir}/out/hcr/.hcr`;
+		const ended = `${copies}/999999998`;
+		const alive = `${copies}/${platform == "windows" ? "4" : "1"}`;
+		const foreign = `${copies}/notARun`;
+		for (const d of [`${ended}/core`, alive, foreign]) ensureDir(d);
+		for (const f of [`${ended}/core/app.core${sharedLibraryExt()}`, `${alive}/keep.txt`, `${foreign}/keep.txt`]) put(f, "x");
+		const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+		const seen: string[] = [];
+		for (const line of lines(both(ran))) {
+			if (line.startsWith("HCR-RUN ")) seen.push(line);
+		}
+		const want = ["HCR-RUN start value 10", "HCR-RUN reloaded logic value 73"];
+		if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+			console.log(both(ran));
+			env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+			failWith(tag, `msc run --hcr${via ? " (logic imported through via.ms)" : ""} did not rebuild the edited module alone into the running app`);
+		}
+		need(tag, !exists(ended), "the image copies of an ended run survived the next start");
+		need(tag, exists(`${alive}/keep.txt`), "the start removed the copies of a live process");
+		need(tag, exists(`${foreign}/keep.txt`), "the start removed a directory that is not a run");
 	}
-	const want = ["HCR-RUN start value 10", "HCR-RUN reloaded logic value 73"];
-	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
-		console.log(both(ran));
-		failWith(tag, "msc run --hcr did not rebuild the edited module into the running app");
-	}
-	need(tag, !exists(ended), "the image copies of an ended run survived the next start");
-	need(tag, exists(`${alive}/keep.txt`), "the start removed the copies of a live process");
-	need(tag, exists(`${foreign}/keep.txt`), "the start removed a directory that is not a run");
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
 	console.log(`ok   ${tag}`);
 }
 
