@@ -29,7 +29,7 @@ export function pointerAddressElement(source: Type | null, target: Type | null):
 	if (src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr || src.kind == TypeKind.Null) return null;
 	if (src.kind == TypeKind.Span) {
 		const item = skipModifier(src.typeReturn);
-		if (item != null && (item.kind == TypeKind.Ref || item.kind == TypeKind.Ptr)) return null;
+		if (item != null && item.kind == TypeKind.Ref) return null;
 		return src.typeReturn != null && sameType(src.typeReturn, elem) ? src.typeReturn : null;
 	}
 	return storedInline(src) && sameType(src, elem) ? src : null;

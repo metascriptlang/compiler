@@ -1324,6 +1324,13 @@ test "engine: an empty span has no element to point at" {
 	assert ctx.output == "";
 }
 
+test "engine: an empty span of pointers has no slot to point at" {
+	const ctx = evalOrcVM("struct P { a: uint32; } const none: Ptr<P>[] = []; const v: Span<Ptr<P>> = none;"
+		+ " const p = v as Ptr<Ptr<P>>; console.log('reached');");
+	assert ctx.error.includes("out of bounds"), ctx.error;
+	assert ctx.output == "";
+}
+
 test "engine: element pointers compare by identity" {
 	const ctx = evalOrcVM("struct P { a: uint32; } let ps: P[] = [{ a: 1 }, { a: 2 }];"
 		+ " const p = ps[1] as Ptr<P>; const q = ps[1] as Ptr<P>; const r = ps[0] as Ptr<P>; console.log(`${p == q} ${p == r}`);");

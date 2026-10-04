@@ -1,4 +1,4 @@
-// @stdout: pointers 11 55 99 44 | 9 11 4 5 | true | 2
+// @stdout: pointers 11 55 99 44 | 9 11 4 5 | true | 2 | slots 5 66
 struct Pet { a: uint32; b: uint8; }
 struct Holder { ptr: Ptr<Pet>; }
 function setByte(ref value: uint8): void { value = 99; }
@@ -23,6 +23,11 @@ function run(): void {
 	const direct = pets[1] as Ptr<Pet>;
 	const measured = (source(pets, calls)[2..3] as Span<Pet>) as Ptr<Pet>;
 	measured[0].a = 5;
-	console.log(`pointers ${bytes[0]} ${bytes[1]} ${bytes[2]} ${bytes[3]} | ${pets[0].a} ${pets[1].a} ${pets[1].b} ${pets[2].a} | ${holder.ptr == direct} | ${calls}`);
+	const pointerSlots: Ptr<Pet>[] = [pets[0] as Ptr<Pet>, pets[1] as Ptr<Pet>];
+	const slotView = pointerSlots[0..1] as Span<Ptr<Pet>>;
+	const slotPointer = slotView as Ptr<Ptr<Pet>>;
+	slotPointer[] = pets[2] as Ptr<Pet>;
+	slotPointer[][].b = 66;
+	console.log(`pointers ${bytes[0]} ${bytes[1]} ${bytes[2]} ${bytes[3]} | ${pets[0].a} ${pets[1].a} ${pets[1].b} ${pets[2].a} | ${holder.ptr == direct} | ${calls} | slots ${pointerSlots[0][].a} ${pets[2].b}`);
 }
 run();

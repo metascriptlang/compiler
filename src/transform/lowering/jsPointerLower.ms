@@ -24,7 +24,7 @@ function typedPointer(t: Type | null): boolean {
 	const b = bare(t);
 	if (b == null || b.kind != TypeKind.Ptr || b.typeReturn == null || b.typeReturn.kind == TypeKind.Void) return false;
 	const pointee = bare(b.typeReturn);
-	return pointee != null && pointee.kind != TypeKind.Ref && pointee.kind != TypeKind.Ptr;
+	return pointee != null && pointee.kind != TypeKind.Ref;
 }
 
 function untyped(node: Node): Node {
