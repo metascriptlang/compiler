@@ -11,7 +11,7 @@ import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, a
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
-	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth } from "./compat";
+	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses } from "./compat";
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
 import { checkArcPointeeSendable } from "./sendable";
 import { isLockedRef } from "./types";
@@ -33,7 +33,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, narrowsToMember } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -1149,7 +1149,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.nodeType = errorType();
 				return;
 			}
-			const nullishJoined = d.operator == "??" ? fitNullishArms(ctx, d, effLeft, effRight, expectedType) : null;
+			const nullishJoined = d.operator == "??" ? fitNullishArms(ctx, d, effLeft, effRight, expectedType, node == ctx.conversionOperand) : null;
 			if (nullishJoined != null) { node.nodeType = nullishJoined; return; }
 			node.nodeType = exactConstantType(ctx, node, inferBinaryOp(d.operator, effLeft!, effRight!));
 			if (d.operator == "??" && node.nodeType != null && isMaybeType(node.nodeType)) {
@@ -1978,7 +1978,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			checkExpr(ctx, d.ternaryConsequent, expectedType);
 			checkExpr(ctx, d.ternaryAlternate, expectedType);
 			ctx.condEvalDepth = ctx.condEvalDepth - 1;
-			node.nodeType = fitConditionalArms(ctx, d, expectedType); return;
+			node.nodeType = fitConditionalArms(ctx, d, expectedType, node == ctx.conversionOperand); return;
 		},
 		NodeKind.TypeAssertion => {
 			let d = node.data as TypeAssertionData;
@@ -2007,7 +2007,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const asFnBody = distinctCallTarget(targetType);
 			const innerExpected = (!isUnresolvedType(targetType)) ? (asFnBody != null ? asFnBody : targetType) : null;
 			const operandMark = ctx.errors.length;
+			const prevConversion = ctx.conversionOperand;
+			ctx.conversionOperand = isNumeric(targetType) && targetType.kind != TypeKind.Char ? d.asExpr : null as unknown as Node;
 			checkExpr(ctx, d.asExpr, innerExpected);
+			ctx.conversionOperand = prevConversion;
 			reportConstCast(ctx, d.asExpr, targetType);
 			let srcType = d.asExpr.nodeType;
 			const operandType = srcType;
@@ -2367,12 +2370,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 // Phase 5: resolve `super` identifier to the parent class symbol.
 // `super` is only valid inside an instance method (where "this" is in scope).
 // Walks: this → enclosing class type → typeExtra → parent class.
-function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expectedType: Type | null): Type | null {
-	if (expectedType != null
-		&& branchFitsSlot(ctx, d.ternaryConsequent.nodeType, expectedType)
-		&& branchFitsSlot(ctx, d.ternaryAlternate.nodeType, expectedType)) {
-		d.ternaryConsequent = fitNode(ctx, d.ternaryConsequent, expectedType, d.ternaryConsequent.nodeType);
-		d.ternaryAlternate = fitNode(ctx, d.ternaryAlternate, expectedType, d.ternaryAlternate.nodeType);
+function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expectedType: Type | null, converting: boolean): Type | null {
+	if (expectedType != null && ((converting && isNumeric(d.ternaryConsequent.nodeType) && isNumeric(d.ternaryAlternate.nodeType))
+		|| (branchFitsSlot(ctx, d.ternaryConsequent.nodeType, expectedType)
+		&& branchFitsSlot(ctx, d.ternaryAlternate.nodeType, expectedType)))) {
+		d.ternaryConsequent = fitArm(ctx, d.ternaryConsequent, expectedType, converting);
+		d.ternaryAlternate = fitArm(ctx, d.ternaryAlternate, expectedType, converting);
 		return d.ternaryConsequent.nodeType;
 	}
 	retypeEmptyArrayBranch(d.ternaryConsequent, d.ternaryAlternate.nodeType);
@@ -2387,19 +2390,33 @@ function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expecte
 	return joined;
 }
 
+function fitArm(ctx: CheckerContext, arm: Node, expectedType: Type, converting: boolean): Node {
+	const armType = arm.nodeType;
+	if (converting && armType != null && isNumeric(armType) && numericConvRefuses(armType, expectedType)
+		&& !isFittingNumericConstant(arm, expectedType)) {
+		return wrapInConv(arm, expectedType);
+	}
+	return fitNode(ctx, arm, expectedType, armType);
+}
+
 function nullishArmExpected(expectedType: Type | null): Type | null {
 	return expectedType != null && isMaybeType(expectedType) ? expectedType.typeReturn : expectedType;
 }
 
-function fitNullishArms(ctx: CheckerContext, d: BinaryExprData, leftType: Type | null, rightType: Type | null, expectedType: Type | null): Type | null {
+function fitNullishArms(ctx: CheckerContext, d: BinaryExprData, leftType: Type | null, rightType: Type | null, expectedType: Type | null, converting: boolean): Type | null {
 	if (rightType == null || rightType.kind == TypeKind.Null || isMaybeType(rightType) || nullishPayloadType(rightType) != null) return null;
 	const payload = nullishPayloadType(leftType);
 	if (payload == null) return null;
+	const target = nullishArmExpected(expectedType);
+	if (converting && target != null && isNumeric(payload) && isNumeric(target) && numericConvRefuses(payload, target)) {
+		d.right = fitJoinedBranch(ctx, d.right, payload);
+		return payload;
+	}
 	const payloadArm = createNodeAt(NodeKind.TypeAssertion, { asExpr: d.left, asType: "!" } as TypeAssertionData, d.left.location);
 	payloadArm.nodeType = payload;
 	payloadArm.flags = payloadArm.flags.incl(NodeFlag.Sem);
 	const arms = { ternaryCondition: d.left, ternaryConsequent: payloadArm, ternaryAlternate: d.right } as ConditionalExprData;
-	const joined = fitConditionalArms(ctx, arms, nullishArmExpected(expectedType));
+	const joined = fitConditionalArms(ctx, arms, nullishArmExpected(expectedType), converting);
 	d.right = arms.ternaryAlternate;
 	return joined;
 }
