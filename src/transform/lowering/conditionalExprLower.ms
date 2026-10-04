@@ -37,7 +37,7 @@ import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { peelTransparentInstance, PEEL_MAX_DEPTH } from "../../checker/types";
-import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect } from "../walker";
+import { walkExpandBlocksHooked, expandingInsideTry, mapExprChildren, mapChildren, hasEffect } from "../walker";
 import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, extractBodyStmts, syntheticToken } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter } from "../testUtil";
 import { nodeHasPositionalNew } from "./newExprLower";
@@ -451,8 +451,8 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 			if (d.initializer != null && d.initializer.kind == NodeKind.ConditionalExpr) {
 				return lowerTernaryInVar(stmt, ctx);
 			}
-			if (d.initializer != null && stmt.resolvedSym != null && !stmt.flags.has(NodeFlag.StaticStorage)
-				&& aggregateInitType(d.initializer) != null) {
+			if (functionDepth > 0 && d.initializer != null && stmt.resolvedSym != null
+				&& !stmt.flags.has(NodeFlag.StaticStorage) && aggregateInitType(d.initializer) != null) {
 				return expandAggregateDecl(stmt, ctx);
 			}
 		},
@@ -709,8 +709,17 @@ function bodyHasLoopContinue(node: Node): boolean {
 
 // ===== Entry Point =====
 
+let functionDepth = 0;
+
 export function lowerConditionalExpr(program: Node, ctx: TransformContext): Node {
-	walkExpandBlocks(program, expandConditionalStmt, ctx);
+	functionDepth = 0;
+	walkExpandBlocksHooked(
+		program,
+		expandConditionalStmt,
+		ctx,
+		(fn: Node): void => { functionDepth += 1; },
+		(fn: Node): void => { functionDepth -= 1; },
+	);
 	return program;
 }
 
