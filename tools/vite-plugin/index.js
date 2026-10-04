@@ -38,7 +38,7 @@ export default function metascript(options = {}) {
 		mkdirSync(outDir, { recursive: true });
 		// Vite reads the sourceMappingURL comment off the file it loads, so the
 		// map only has to exist beside the emitted module.
-		const args = ["build", entry, "--target=js", "--split", `--output=${outDir}`];
+		const args = ["build", entry, ...(options.compilerArgs ?? []), "--target=js", "--split", `--output=${outDir}`];
 		if (options.sourcemap !== false) args.push("--sourcemap");
 		try {
 			execFileSync(msc, args, {
