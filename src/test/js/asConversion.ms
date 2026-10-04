@@ -25,3 +25,15 @@ test "JS: an as from a bare union to a member tests its typeof tag with the C me
 	assert js.value.contains("typeof v === \"string\"");
 	assert js.value.contains("member 'string' is not accessible for type 'number | string' using '");
 }
+
+test "JS: an as up to a base class out of a union with a subclass member tests instanceof the base" {
+	const js = compileToJS("class Base { n: int32 = 1; }\nclass Child extends Base { k: int32 = 2; }\nfunction f(u: number | Base | Child): Base { return u as Base; }");
+	assert js.ok;
+	assert js.value.contains("v instanceof Base");
+}
+
+test "JS: a union access error names an array member by its element type" {
+	const js = compileToJS("function f(u: number | int32[]): number { return u as number; }");
+	assert js.ok;
+	assert js.value.contains("type 'number | int32[]'");
+}

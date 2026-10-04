@@ -131,3 +131,11 @@ test "E2E C: an as from a nullable union into a string-literal union tests membe
 	assert c.ok;
 	assert c.value.contains("msStrLitConv(");
 }
+
+const FAMILY = "class Base { n: int32 = 1; }\nclass Child extends Base { k: int32 = 2; }\n";
+
+test "E2E C: an as to a class out of a related-class union checks the object's class" {
+	const c = compileToC(FAMILY + "function f(u: Base | Child): Child { return u as Child; }");
+	assert c.ok;
+	assert c.value.contains("msObjDownConv");
+}
