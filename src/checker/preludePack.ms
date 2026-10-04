@@ -36,7 +36,7 @@ import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { getParserDefines, setParserDefines } from "../parser/context";
 import { defineIdentity, createDefineTable, defineSymbol } from "../compiler/defines";
 import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
-import { readFile, writeFile, exists, readDir, remove, ensureDir, rename } from "std/fs";
+import { readFile, writeFile, exists, readDir, remove, removeAll, ensureDir, rename } from "std/fs";
 import { env, argv } from "std/process";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 
@@ -131,7 +131,7 @@ function stdTreeHash(stdPath: string): string {
 
 export function preludePackKey(stdPath: string, backendExt: string): string {
 	const _k0 = performance.now();
-	const k = packHash(`${stdPath}|${backendExt}|${defaultGlobalImports().join("|")}|${defineIdentity(getParserDefines())}`);
+	const k = packHash(`${stdPath}|${backendExt}|${defaultGlobalImports().join("|")}|${defineIdentity(getParserDefines())}|${toolStamp()}`);
 	_keyMs = _keyMs + (performance.now() - _k0);
 	return k;
 }
@@ -157,7 +157,7 @@ export function packRoot(): string {
 	const home = env.get("HOME");
 	const base = home != "" ? home : env.get("USERPROFILE");
 	if (base == "") return "";
-	return `${base}/.metascript/cache/prelude`;
+	return `${base}/.metascript/cache/prelude/${PACK_MAGIC}`;
 }
 
 // Default ON (verified: unit 644, suite 3531/3531, corpus parity 814/0/0, SAN
@@ -511,7 +511,6 @@ export function writePreludeDeps(key: string, stamp: string, snap: PreludeDepsSn
 	if (packDisabled()) return;
 	const root = packRoot();
 	ensureDir(root);
-	ensurePackMarker(root);
 	const lines: string[] = [`K\t${key}\t${stamp}`];
 	for (const m of snap.mods) {
 		lines.push(`G\t${escapeP(m.path)}`);
@@ -546,10 +545,6 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	if (packDisabled()) return;
 	const root = packRoot();
 	ensureDir(root);
-	// Marker check BEFORE writing: on the very first run in a tree the marker
-	// does not exist yet, and tryLoad's wipe would otherwise delete an entry
-	// written earlier in the same process (write-before-load order).
-	ensurePackMarker(root);
 
 	const syms: Symbol[] = [];
 	const symIdx = new HashMap<Symbol, int32>();
@@ -558,9 +553,9 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	const nodes: Node[] = [];
 	const nodeIdx = new HashMap<Node, int32>();
 	const scopeSet = new HashSet<Symbol>();
-	const symPending: Symbol[] = [];
-	const typePending: Type[] = [];
-	const nodePending: Node[] = [];
+	let symCursor: int32 = 0;
+	let typeCursor: int32 = 0;
+	let nodeCursor: int32 = 0;
 
 	// Index at enqueue time so every later index read is guaranteed present
 	// (no Maybe at write sites). Worklist instead of mutual recursion — nested
@@ -570,21 +565,18 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		symIdx.set(s, syms.length as int32);
 		syms.push(s);
 		if (inScope) scopeSet.add(s);
-		symPending.push(s);
 	}
 
 	function enqType(t: Type | null): void {
 		if (t == null || typeIdx.has(t)) return;
 		typeIdx.set(t, types.length as int32);
 		types.push(t);
-		typePending.push(t);
 	}
 
 	function enqNode(n: Node | null): void {
 		if (n == null || nodeIdx.has(n)) return;
 		nodeIdx.set(n, nodes.length as int32);
 		nodes.push(n);
-		nodePending.push(n);
 	}
 
 	// Maybe-unwrapping helpers: a ternary `cond ? map.get(k) : -1` leaks the
@@ -662,9 +654,10 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	for (const members of ctx.preludeInterf.values()) {
 		for (const m of members) enqSym(m, false);
 	}
-	while (symPending.length > 0 || typePending.length > 0 || nodePending.length > 0) {
-		if (symPending.length > 0) {
-			const s = symPending.shift();
+	while (symCursor < syms.length || typeCursor < types.length || nodeCursor < nodes.length) {
+		if (symCursor < syms.length) {
+			const s = syms[symCursor];
+			symCursor += 1;
 			enqType(s.symbolType);
 			if (s.overloads != null) {
 				for (const ov of s.overloads) enqSym(ov, false);
@@ -678,8 +671,9 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			}
 			continue;
 		}
-		if (nodePending.length > 0) {
-			const n = nodePending.shift();
+		if (nodeCursor < nodes.length) {
+			const n = nodes[nodeCursor];
+			nodeCursor += 1;
 			enqType(n.nodeType);
 			enqSym(n.resolvedSym, false);
 			if (n.paramSyms != null) {
@@ -692,7 +686,8 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			nodeFields(n, walkSink);
 			continue;
 		}
-		const t = typePending.shift();
+		const t = types[typeCursor];
+		typeCursor += 1;
 		if (t.typeChildren != null) {
 			for (const c of t.typeChildren) enqType(c);
 		}
@@ -870,27 +865,12 @@ function splitTabs(line: string): string[] {
 	return out;
 }
 
-function ensurePackMarker(root: string): void {
-	const marker = `${root}/.version`;
-	const markerValue = PACK_MAGIC;
-	const stored = try readFile(marker) catch "";
-	if (stored == markerValue) return;
-	const entries = readDir(root);
-	for (const e of entries) {
-		if (e.length == 0) continue;
-		if (e == ".version") continue;
-		if (e.charAt(e.length - 1) == "/") continue;
-		remove(`${root}/${e}`);
-	}
-	writeFile(marker, markerValue);
-}
 
 export function tryLoadPreludePack(key: string, stamp: string): CheckerContext | null {
 	if (packDisabled()) return null;
 	const _l0 = performance.now();
 	const root = packRoot();
 	ensureDir(root);
-	ensurePackMarker(root);
 	const body = try readFile(`${root}/${key}.pk`) catch "";
 	if (!body.startsWith(`${PACK_MAGIC}\nV\t${stamp}\n`)) {
 		_loadMs = _loadMs + (performance.now() - _l0);
@@ -910,7 +890,6 @@ export function tryLoadPreludeDeps(key: string, stamp: string): PreludeDepsSnaps
 	if (packDisabled()) return null;
 	const root = packRoot();
 	ensureDir(root);
-	ensurePackMarker(root);
 	const body = try readFile(`${root}/${key}.deps`) catch "";
 	if (!body.startsWith(`K\t${key}\t${stamp}\n`)) return null;
 	const snap: PreludeDepsSnapshot = { mods: [], circulars: [] };
@@ -1377,15 +1356,17 @@ const PK_STAMP = "pk-test-stamp";
 
 function pkEnterPrivateCache(): string {
 	const prevHome = env.get("HOME");
-	env.set("HOME", "out/test/preludePackHome");
+	env.set("HOME", `out/test/preludePackHome.${performance.now()}`);
 	env.set("MSC_PRELUDE_PACK", "1");
 	return prevHome;
 }
 
 function pkLeavePrivateCache(prevHome: string): void {
+	const home = env.get("HOME");
 	env.delete("MSC_PRELUDE_PACK");
 	if (prevHome == "") env.delete("HOME");
 	else env.set("HOME", prevHome);
+	removeAll(home);
 }
 
 function pkCtxWithOneSym(): CheckerContext {
@@ -1672,33 +1653,83 @@ test "preludePack: the key follows the std PATH — the rows it guards are absol
 	assert preludePackKey("/one/std", ".keytest") != preludePackKey("/two/std", ".keytest");
 }
 
-test "preludePack: another compiler's pack is a miss, and its rewrite takes the same file" {
+test "preludePack: interleaved compilers keep their typed preludes" {
 	const prevHome = pkEnterPrivateCache();
+	const savedStamp = _toolStamp;
+	const savedStdHash = _stdTreeHash;
+	const savedStdPath = _stdTreeHashPath;
+	let firstKey = "";
+	let secondKey = "";
 	try {
-		const key = preludePackKey("stamp-probe", ".test");
-		const path = `${packRoot()}/${key}.pk`;
-		writePreludePack(key, "compiler-a", pkCtxWithOneSym());
-		assert tryLoadPreludePack(key, "compiler-a") != null;
-		assert tryLoadPreludePack(key, "compiler-b") == null;
-		assert exists(path), "a stamp miss deleted the other compiler's pack";
-		writePreludePack(key, "compiler-b", pkCtxWithOneSym());
-		assert tryLoadPreludePack(key, "compiler-b") != null;
-		assert tryLoadPreludePack(key, "compiler-a") == null;
-		remove(path);
+		_toolStamp = "compiler-a";
+		firstKey = preludePackKey("stamp-probe", ".test");
+		const firstStamp = preludePackStamp("stamp-probe");
+		writePreludePack(firstKey, firstStamp, pkCtxWithOneSym());
+		_toolStamp = "compiler-b";
+		secondKey = preludePackKey("stamp-probe", ".test");
+		const secondStamp = preludePackStamp("stamp-probe");
+		const second = pkCtxWithOneSym();
+		const secondSym = second.table.current.symbols.get(getIdentId(second.table.identCache, "pkStampFn"));
+		if (secondSym != null) secondSym.symbolType.kind = TypeKind.String;
+		writePreludePack(secondKey, secondStamp, second);
+		assert tryLoadPreludePack(firstKey, secondStamp) == null;
+		_toolStamp = "compiler-a";
+		const first = tryLoadPreludePack(preludePackKey("stamp-probe", ".test"), preludePackStamp("stamp-probe"));
+		assert first != null;
+		if (first != null) {
+			const sym = first.table.current.symbols.get(getIdentId(first.table.identCache, "pkStampFn"));
+			assert sym != null;
+			if (sym != null) assert sym.symbolType.kind == TypeKind.Int32;
+		}
+		_toolStamp = "compiler-b";
+		const other = tryLoadPreludePack(preludePackKey("stamp-probe", ".test"), preludePackStamp("stamp-probe"));
+		assert other != null;
+		if (other != null) {
+			const sym = other.table.current.symbols.get(getIdentId(other.table.identCache, "pkStampFn"));
+			assert sym != null;
+			if (sym != null) assert sym.symbolType.kind == TypeKind.String;
+		}
 	} finally {
+		remove(`${packRoot()}/${firstKey}.pk`);
+		remove(`${packRoot()}/${secondKey}.pk`);
+		_toolStamp = savedStamp;
+		_stdTreeHash = savedStdHash;
+		_stdTreeHashPath = savedStdPath;
 		pkLeavePrivateCache(prevHome);
 	}
 }
 
-test "preludePack: another compiler's deps file is a miss" {
+test "preludePack: interleaved compilers keep their dependency graphs" {
 	const prevHome = pkEnterPrivateCache();
+	const savedStamp = _toolStamp;
+	const savedStdHash = _stdTreeHash;
+	const savedStdPath = _stdTreeHashPath;
+	let firstKey = "";
+	let secondKey = "";
 	try {
-		const key = preludePackKey("deps-stamp-probe", ".depstest");
-		writePreludeDeps(key, "compiler-a", { mods: [{ path: "/std/core/a.ms", imports: [] }], circulars: [] });
-		assert tryLoadPreludeDeps(key, "compiler-a") != null;
-		assert tryLoadPreludeDeps(key, "compiler-b") == null;
-		remove(`${packRoot()}/${key}.deps`);
+		_toolStamp = "compiler-a";
+		firstKey = preludePackKey("deps-stamp-probe", ".depstest");
+		const firstStamp = preludePackStamp("deps-stamp-probe");
+		writePreludeDeps(firstKey, firstStamp, { mods: [{ path: "/std/core/a.ms", imports: [] }], circulars: [] });
+		_toolStamp = "compiler-b";
+		secondKey = preludePackKey("deps-stamp-probe", ".depstest");
+		const secondStamp = preludePackStamp("deps-stamp-probe");
+		writePreludeDeps(secondKey, secondStamp, { mods: [{ path: "/std/core/b.ms", imports: [] }], circulars: [] });
+		assert tryLoadPreludeDeps(firstKey, secondStamp) == null;
+		_toolStamp = "compiler-a";
+		const first = tryLoadPreludeDeps(preludePackKey("deps-stamp-probe", ".depstest"), preludePackStamp("deps-stamp-probe"));
+		assert first != null;
+		if (first != null) assert first.mods[0].path == "/std/core/a.ms";
+		_toolStamp = "compiler-b";
+		const second = tryLoadPreludeDeps(preludePackKey("deps-stamp-probe", ".depstest"), preludePackStamp("deps-stamp-probe"));
+		assert second != null;
+		if (second != null) assert second.mods[0].path == "/std/core/b.ms";
 	} finally {
+		remove(`${packRoot()}/${firstKey}.deps`);
+		remove(`${packRoot()}/${secondKey}.deps`);
+		_toolStamp = savedStamp;
+		_stdTreeHash = savedStdHash;
+		_stdTreeHashPath = savedStdPath;
 		pkLeavePrivateCache(prevHome);
 	}
 }
@@ -1720,19 +1751,34 @@ test "preludePack: a load leaves a peer's in-flight write alone" {
 	}
 }
 
-test "preludePack: a directory from another pack format is wiped once" {
+test "preludePack: a format keeps a peer's pack and in-flight write" {
 	const prevHome = pkEnterPrivateCache();
+	const base = `${env.get("HOME")}/.metascript/cache/prelude`;
+	const peer = `${base}/peer-format.pk`;
+	const pending = `${base}/peer-format.pk.tmp.1`;
+	const marker = `${base}/.version`;
+	const previousMarker = try readFile(marker) catch "";
 	try {
-		const root = packRoot();
-		ensureDir(root);
-		writeFile(`${root}/.version`, "MSPK0");
-		const stale = `${root}/stale.pk`;
-		writeFile(stale, "old format");
-		tryLoadPreludePack(preludePackKey("format-probe", ".test"), PK_STAMP);
-		assert !exists(stale);
-		const marker = try readFile(`${root}/.version`) catch "";
-		assert marker == PACK_MAGIC;
+		ensureDir(base);
+		writeFile(marker, "MSPK0");
+		writeFile(peer, "peer-owned pack");
+		writeFile(pending, "peer-owned in-flight write");
+		const key = preludePackKey("format-probe", ".test");
+		writePreludePack(key, PK_STAMP, pkCtxWithOneSym());
+		const loaded = tryLoadPreludePack(key, PK_STAMP);
+		assert loaded != null;
+		const saved = try readFile(peer) catch "";
+		const inFlight = try readFile(pending) catch "";
+		assert saved == "peer-owned pack";
+		assert inFlight == "peer-owned in-flight write";
+		const currentMarker = try readFile(marker) catch "";
+		assert currentMarker == "MSPK0";
+		remove(`${packRoot()}/${key}.pk`);
 	} finally {
+		remove(peer);
+		remove(pending);
+		if (previousMarker != "") writeFile(marker, previousMarker);
+		else remove(marker);
 		pkLeavePrivateCache(prevHome);
 	}
 }
