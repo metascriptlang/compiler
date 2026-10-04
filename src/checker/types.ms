@@ -2746,7 +2746,9 @@ export function unknownRefusal(t: Type | null): UnknownRefusal {
 }
 
 function isClassOrInterfaceObject(ref: Type): boolean {
-	if (isAtomicRef(ref) || getBuiltinKind(ref) != "") return false;
+	if (isAtomicRef(ref)) return false;
+	const builtin = getBuiltinKind(ref);
+	if (builtin != "" && builtin != "MetaNode") return false;
 	if (ref.sym != null && ref.sym.symbolKind == SymbolKind.Actor) return false;
 	const body = ref.typeReturn;
 	return body != null && (body.kind == TypeKind.Struct || body.kind == TypeKind.GenericInstance);
