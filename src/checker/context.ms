@@ -192,6 +192,10 @@ export function noteImported(ctx: CheckerContext, sym: Symbol): void {
 	for (const ov of sym.overloads) ctx.importSet.add(ov);
 }
 
+export function shadowedImportOf(ctx: CheckerContext, sym: Symbol): Symbol | null {
+	return ctx.shadowedImports.get(sym) ?? null;
+}
+
 export function markUsedIn(ctx: CheckerContext, sym: Symbol): void {
 	markUsed(sym);
 	if (ctx.importSet.has(sym)) ctx.usedImports.add(sym);
@@ -1234,6 +1238,7 @@ export class CheckerContext {
 	interfSet: HashSet<Symbol>;
 	interfNames: HashMap<Symbol, string>;
 	importSet: HashSet<Symbol>;
+	shadowedImports: HashMap<Symbol, Symbol>;
 	usedImports: HashSet<Symbol>;
 	preludeInterf: HashMap<string, Symbol[]>;
 	preludeExports: HashSet<Symbol>;
@@ -1314,6 +1319,7 @@ export function createContext(): CheckerContext {
 		interfSet: new HashSet<Symbol>(),
 		interfNames: new HashMap<Symbol, string>(),
 		importSet: new HashSet<Symbol>(),
+		shadowedImports: new HashMap<Symbol, Symbol>(),
 		usedImports: new HashSet<Symbol>(),
 		preludeInterf: new HashMap<string, Symbol[]>(),
 		preludeExports: new HashSet<Symbol>(),

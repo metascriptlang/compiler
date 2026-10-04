@@ -3198,6 +3198,7 @@ function packContentView(shared: CheckerContext): CheckerContext {
 	view.interf = shared.interf;
 	view.interfSet = shared.interfSet;
 	view.importSet = shared.importSet;
+	view.shadowedImports = shared.shadowedImports;
 	return view;
 }
 

@@ -12,7 +12,7 @@ import { isLocation, writeRefusal, readonlyRootType, writeThroughArc, writeThrou
 import { callCheckStmt, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
-import { markUsedIn, noteImported, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
+import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
 import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
@@ -1091,7 +1091,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			if (sym.symbolKind == SymbolKind.Function && isTemplateSym(sym) && !hasOverloads(sym)) {
 				return expandTemplate(ctx, sym, node, d, expectedType);
 			}
-			if (hasOverloads(sym)) {
+			if (hasOverloads(sym) || shadowedImportOf(ctx, sym) != null) {
 				needsOverloadScoring = true;
 				overloadSym = sym;
 			}
@@ -2736,8 +2736,9 @@ function literalRelations(paramTypes: Type[], args: Node[], argTypes: Type[]): i
 	return rels;
 }
 
-function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, expectedType: Type | null = null as unknown as Type): Type {
-	const impl = findOverloadImpl(sym);
+function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Node, expectedType: Type | null = null as unknown as Type): Type {
+	let sym = primary;
+	let impl = findOverloadImpl(sym);
 	if (impl == null) {
 		addError(ctx, `Overloaded function '${sym.name}' has no implementation — at least one definition must have a body`,
 			callNode.location.line, callNode.location.column);
@@ -2753,6 +2754,12 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	// Build candidate arrays: primary at [0], overloads at [1..n]
 	const candSyms: Symbol[] = [sym];
 	for (const o of sym.overloads) candSyms.push(o);
+	const ownCount = candSyms.length;
+	const gathered = shadowedImportOf(ctx, sym);
+	if (gathered != null) {
+		candSyms.push(gathered);
+		for (const o of gathered.overloads) candSyms.push(o);
+	}
 	const candidates: Type[] = [];
 	for (const cs of candSyms) candidates.push(cs.symbolType);
 
@@ -2916,9 +2923,14 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, callNode: Node, e
 	if (winnerType.kind == TypeKind.Function && winnerType.typeChildren != null) {
 		relateCallArgs(ctx, callNode, winnerType, argTypes, false);
 	}
+	const winnerSymFinal = candSyms[bestIdx];
+	if (gathered != null && bestIdx >= ownCount) {
+		sym = gathered;
+		impl = findOverloadImpl(sym) ?? winnerSymFinal;
+		bestIdx = bestIdx - ownCount;
+	}
 	d.resolvedOverloadIdx = bestIdx;
 	callNode.resolvedSym = sym;
-	const winnerSymFinal = candSyms[bestIdx];
 	if (winnerSymFinal.symbolKind == SymbolKind.Function && isTemplateSym(winnerSymFinal)) {
 		return expandTemplate(ctx, winnerSymFinal, callNode, d, expectedType);
 	}
@@ -3020,6 +3032,11 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 		if (set != sym) cands.push(set);
 		for (const o of set.overloads) {
 			if (o != sym) cands.push(o);
+		}
+		const gathered = shadowedImportOf(ctx, set);
+		if (gathered != null) {
+			cands.push(gathered);
+			for (const o of gathered.overloads) cands.push(o);
 		}
 	}
 	let best: Symbol | null = null;
