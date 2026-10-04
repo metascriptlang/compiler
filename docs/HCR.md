@@ -826,7 +826,7 @@ tree 5.8, check 7.1, prelude about 3), phase A 9.2, DCE 12 (name index 2.4, decl
 objects 3. The first save paid the compile-plan capture, a compile without a PCH (66 ms) and the
 first link plan (39 ms); preparing them right after the app starts (`b523e256`) took the first
 save from 136–142 to 84 ms in an A/B on the same host under Windows load 3–4, where later saves
-measured about 99 ms with either compiler. Windows was not measured again.
+measured about 99 ms with either compiler. The Windows numbers follow below.
 
 2026-10-03 22:3x, the same Windows host quiet (load 0.4–2.5), the compiler of `82731c8e`+branch,
 the same two-module app, ten saves (`out/lat2/lat2win.sh`): edit to visible 317–388 ms (median
