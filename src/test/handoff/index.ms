@@ -133,3 +133,4 @@ import "./typeNameValue";
 import "./routineInterface";
 import "./enumConversionRange";
 import "./deferBlockCheck";
+import "./forOfPattern";
