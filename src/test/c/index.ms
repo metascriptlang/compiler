@@ -50,3 +50,4 @@ import "./sizedArrayLiteral";
 import "./objectLiteralDestination";
 import "./comptimeBlockStaticType";
 import "./arraySpliceEmit";
+import "./raiseChecks";
