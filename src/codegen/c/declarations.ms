@@ -713,7 +713,7 @@ function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Type | null): 
 }
 
 import { createCGen, assembleOutput } from "./context";
-import { CheckerContext } from "../../checker/context";
+import { CheckerContext, isGenericFn } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 
