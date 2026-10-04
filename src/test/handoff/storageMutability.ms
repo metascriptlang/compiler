@@ -119,3 +119,15 @@ function swap(ref a: Arc<Ctr>): void { a = new Arc({ n: 3 }); }
 		assert js.startsWith("ERROR:") && js.contains("SHARE is immutable"), body;
 	}
 }
+
+test "an out argument written as `out b.val` reaches the field of a local" {
+	const head = "struct Inner { v: int32; }\nstruct Box { val: int32; inner: Inner; }\nfunction setInt(out x: int32): void { x = 42; }\nfunction h(): Box { return { val: 0, inner: { v: 0 } }; }\n";
+	const ok = head + "function run(): void { let b: Box = { val: 0, inner: { v: 0 } }; setInt(out b.val); setInt(out b.inner.v); console.log(b.val + b.inner.v); }\nrun();\n";
+	const cr = compileToCWithStd(ok);
+	assert cr.ok, cr.ok ? "" : cr.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/out.ms", entrySource: ok }], "test/out.ms");
+	assert !js.startsWith("ERROR:"), js;
+	const bad = head + "function run(): void { setInt(out h().val); }\nrun();\n";
+	const cb = compileToCWithStd(bad);
+	assert !cb.ok && cb.error.contains("requires a variable"), cb.ok ? "accepted" : cb.error;
+}
