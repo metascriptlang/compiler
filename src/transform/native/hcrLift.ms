@@ -3,7 +3,7 @@ import {
 	ProgramData, VariableDeclData, ExportDeclData, DecoratedDeclData, ExprStmtData,
 	MacroInvocationData, Symbol, Type, TypeKind, noFieldDecorators,
 } from "../../ast/node";
-import { createPtr, createStruct, booleanType, isUnresolvedType } from "../../checker/types";
+import { spelled, createPtr, createStruct, booleanType, isUnresolvedType } from "../../checker/types";
 import { makeSymbol, setFlag } from "../../checker/symbol";
 import { constantLiteralOf } from "../../checker/constFold";
 import { skipConvDfa } from "../../analyzer/alias";
@@ -120,7 +120,7 @@ function extractGlobal(stmt: Node, ctx: TransformContext, index: int32): HcrGlob
 		reportTransformError(ctx, `internal: HCR state lifting met module variable '${d.declName}' without a resolved type`, node.location);
 		return null as unknown as HcrGlobal;
 	}
-	const storageType = createStruct(`_ms_hcr_value${index}`, ["value"], [t], true);
+	const storageType = spelled(createStruct(`_ms_hcr_value${index}`, ["value"], [t], true));
 	const pointer = makeHcrSymbol(`_ms_hcr_v${index}`, createPtr(storageType));
 	setFlag(pointer, SymbolFlag.HcrCell);
 	const fresh = makeHcrSymbol(`_ms_hcr_new${index}`, booleanType());

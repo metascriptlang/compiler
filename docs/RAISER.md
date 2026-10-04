@@ -58,9 +58,14 @@ The bridge table is compiler-side, so Tier 1 exists only where a host compiler d
 
 A call to an extern with no bridge compiles with `raiser warning: no host bridge for '<name>'` at the call site and fails at runtime with `Unknown host function: <name>`. It is a warning, not an error, because std bodies the program never calls may contain unbridged externs.
 
-Host errors distinguish recoverable exceptions from fatal runtime checks (`hostRegistry.ms` `raiseFromHost`, `vm.ms` `vmHandleCallHost`). A failed union-member check is fatal: guest `catch` and `finally` cannot resume execution after an invalid read. Recoverable host errors still unwind normally.
-
-Measured 2026-10-07 on `wt/danger-bound-checks`: `./msc.final run --target=<c|js|raiser> src/test/corpus/programs/asTaggedUnionInTryStops.ms` and `asTaggedMaybeInTryStops.ms` each exit 1 after `before 3` and `before 7`, respectively; neither prints `caught` or `after`. The old Raiser candidate printed both. Both member diagnostics now match across C/JS/Raiser. `./msc.fatal test src/raiser/vm.ms --tests-in-dir` passes 186 tests, including a fatal host error followed by a recoverable one that prints `host failure` and `finally`. This does not verify value-named union conversions such as `Point | string`.
+`String(value)` uses the same checked text-conversion contract on every backend:
+the receiver's declared `toString` wins; a value payload otherwise calls the
+portable std dump. `msStringFromValue` remains the primitive/value bridge, not
+an object-dump fallback. On tree `0a2647053b60d7a5609baf31450c85c691d0d465`
+(2026-10-04), the missing Raiser declaration tag previously printed an empty
+string for a struct/class; the corrected declaration printed `label:hot` and
+`name:node 7 true raw`. The existing `stdValueDump` consumer also matched C/ORC/JS
+for direct `String`, method and interpolation forms; engine tier: 315/315.
 
 ## Execution budget
 

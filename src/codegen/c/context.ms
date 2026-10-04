@@ -668,10 +668,6 @@ export function factClaimGeneric(facts: CEmissionFacts, name: string, owner: str
 	noteFactWrite(facts, `g\t${name}\t${owner}`);
 }
 
-export function factSkipTypeInfo(facts: CEmissionFacts, name: string): void {
-	facts.skippedTypeInfos.add(name);
-	noteFactWrite(facts, `s\t${name}`);
-}
 
 export function factCoreUnit(facts: CEmissionFacts, modulePath: string): void {
 	facts.hcrCoreUnits.add(modulePath);
@@ -682,7 +678,6 @@ export function replayFactWrites(facts: CEmissionFacts, writes: string[]): void 
 	for (const write of writes) {
 		const fields = write.split("\t");
 		if (fields[0] == "g") factClaimGeneric(facts, fields[1], fields[2]);
-		else if (fields[0] == "s") factSkipTypeInfo(facts, fields[1]);
 		else if (fields[0] == "c") factCoreUnit(facts, fields[1]);
 	}
 }
@@ -693,11 +688,12 @@ function aliveSymKey(sym: Readonly<Symbol>): string {
 
 export function aliveSetFingerprint(aliveSet: AliveSet): string {
 	const entries: string[] = [];
-	for (const entry of aliveSet.entries) entries.push(entry);
+	entries.push(`enabled:${aliveSet.enabled}`);
+	aliveSet._modules.forEach((modulePath: string): void => { entries.push(`m:${modulePath}`); });
 	aliveSet._syms.forEach((sym: Symbol): void => { entries.push(aliveSymKey(sym)); });
 	entries.sort();
 	for (const info of aliveSet.typeInfos) {
-		entries.push(`t\t${info.key}\t${info.owner}\t${aliveSymKey(info.destroy)}\t${info.trace != null ? aliveSymKey(info.trace) : ""}`);
+		entries.push(`t\t${info.key}\t${info.owner}\t${info.destroy != null ? aliveSymKey(info.destroy) : ""}\t${info.trace != null ? aliveSymKey(info.trace) : ""}\t${info.baseKey}\t${info.moduleLocal}`);
 	}
 	const joined = entries.join("\n");
 	return `${hashToHex(djb2(joined))}${hashToHex(fingerprint(joined))}:${entries.length}:${aliveSet.computed}`;

@@ -6,7 +6,7 @@
 
 import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { spelled, genericParamsOf, nominalTypeKey, isNominalKind } from "../../checker/types";
+import { spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
@@ -1087,7 +1087,7 @@ function refArrayCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 	const arrT = info.subject.typeReturn!;
 	const arrCType = getTypeDesc(g, arrT);
 	const elem = arrayOpElement(arrT.typeReturn);
-	if (arrCType == "msRefArray" && opCName(info.destroy) == "msNumberArrayDestroy") return "msPtrArrayRefCell";
+	if (arrCType == "msRefArray" && isUncountedPtrElement(elem)) return "msPtrArrayRefCell";
 	if (arrCType == "msRefArray" && elem != null && (elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr)) {
 		if (elem.sym != null && elem.sym.symbolKind == SymbolKind.Actor) return "msPtrArrayRefCell";
 		if (isAtomicRef(elem)) return "msAtomicArrayRefCell";

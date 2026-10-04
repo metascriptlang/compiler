@@ -1,4 +1,4 @@
-// @stdout: plain={"x":1,"y":"a\"q"} generic={"item":3} nestedGeneric={"item":{"x":1,"y":"a\"q"}} arrays={"id":1,"fixed":[1,2,3],"names":["u","v"]} nullable={"id":1,"n":5},{"id":2,"n":null} tuple=[1,"a"] result={"ok":true,"value":1},{"ok":false,"error":"bad"} enum={"c":1,"d":2.5,"b":true} chain={"label":"a","next":{"label":"b","next":null}} forms={"x":1,"y":"a\"q"}|{"x":1,"y":"a\"q"} user=custom
+// @stdout: plain={"x":1,"y":"a\"q"} generic={"item":3} nestedGeneric={"item":{"x":1,"y":"a\"q"}} arrays={"id":1,"fixed":[1,2,3],"names":["u","v"]} nullable={"id":1,"n":5},{"id":2,"n":null} tuple=[1,"a"] result={"ok":true,"value":1},{"ok":false,"error":"bad"} enum={"c":1,"d":2.5,"b":true} chain={"label":"a","next":{"label":"b","next":null}} forms={"x":1,"y":"a\"q"}|{"x":1,"y":"a\"q"}|{"x":1,"y":"a\"q"} user=custom
 // @exit: 0
 // Parity program: the text of a value type without a user `toString` is one generic std routine
 // that folds the type's fields on every backend: a struct, a generic struct instance, a fixed
@@ -33,6 +33,6 @@ function main(): void {
 	first.next = new Chain();
 	first.next.label = "b";
 	const label: Label = { text: "t" };
-	console.log(`plain=${a} generic=${generic} nestedGeneric=${nested} arrays=${arrays} nullable=${present},${absent} tuple=${tuple} result=${ok},${bad} enum=${mixed} chain=${first} forms=${a}|${a.toString()} user=${label}`);
+	console.log(`plain=${a} generic=${generic} nestedGeneric=${nested} arrays=${arrays} nullable=${present},${absent} tuple=${tuple} result=${ok},${bad} enum=${mixed} chain=${first} forms=${a}|${a.toString()}|${String(a)} user=${label}`);
 }
 main();

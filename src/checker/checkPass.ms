@@ -3730,8 +3730,6 @@ function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude 
 	const ctorMark = ctorRoutineMark();
 	const outerDispatch = startDispatchCapture();
 	const ctx = _graphPreludeFn != null ? _graphPreludeFn(stdPath, backendExt) : buildPreludeContext(stdPath, backendExt);
-	const typeInstances = takeGenericTypeInstsFrom(typeInstMark);
-	for (const row of typeInstances) row.prelude = true;
 	return {
 		ctx,
 

@@ -775,7 +775,7 @@ reason printed (`watch: rebuilding from scratch: …`):
 
 | Input from other modules | Why it couples modules | Compared by |
 |---|---|---|
-| HCR export tables and the shapes of project types | table/layout changes alter already-lowered cross-image calls; TypeInfo macros are demand-local to an image (`hcrIndirect.ms` `lowerHcrIndirection`) | `hcrTablesFingerprint`, `projectTypesFingerprint` |
+| HCR export tables and the shapes of project types | table/layout changes alter already-lowered cross-image calls; TypeInfo macros are demand-local to an image (`hcrIndirect.ms` `lowerHcrIndirection`) | `hcrTypeRegistryFingerprint`, `projectTypesFingerprint` |
 | generic function instances routed to the module | an instance is emitted in its owner's unit, usually a std module: one `Map<string, Item>` in a project module put 84 lines naming `Item` into `std/core/struct.c` | `instancesFingerprint` per owner |
 | typed operation registrations | lowering retains operation Symbols needed by later emission; see `LowerClaims` / `sameClaims` in `buildSession.ms` and `opsFrom` / `replayOps` in `codegen/c/types.ms` | recorded per lowering, replayed when reused, compared when rerun; TypeInfo demand/ownership is rebuilt by reachability, not replayed from deleted owner tables |
 
@@ -787,6 +787,15 @@ Darwin arm64, with the stage-2 candidate:
 `tools/gate.sh --lanes suite,hcr,tests,fmt` reported `ok hcrWatchWarm`, `ok hcrArrayOwner`
 and no failures. The runner's `hcrIndirect` case was emission-only on this
 host; this is not a claim that its missing host adapter was exercised.
+
+The `7a4af78c` integration (tree `04a15a64ad58660e951bc93a9600205711ff892f`)
+keeps HCR's typed global-cell representation, not the retired `_GlobalState`
+store. Its synthesized storage types must carry explicit compiler-spelled
+identity (`hcrLift.ms`), and emission-cache fingerprints must include DCE's
+enabled state, live modules and nullable object/cell operations. The
+`hcrWatchWarm` consumer was red before the storage-type identity was supplied;
+`HCR_ONLY=hcrWatchWarm,hcrArrayOwner MSC=./msc-n2s-base ./msc-n2s-base run --target=raiser src/test/hcr/run.ms`
+then reported `ok hcrWatchWarm` and `ok hcrArrayOwner` on Darwin arm64.
 
 Measured on tree `8981c4823812`, Windows x64 with the machine at 65 % load of 32 threads, the
 `hcrWatchWarm` fixture (5 project and 46 std modules), `--watch-replay`, two rounds each:

@@ -7,7 +7,7 @@
 
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isPrimitiveUnionMember, isCountedRef, isUncountedPtrElement } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
-import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../transform/context";
+import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
 import { attachedOpSym } from "../transform/util";
 import { makeCtx } from "../transform/testUtil";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp } from "../ast/node";
