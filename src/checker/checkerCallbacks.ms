@@ -50,6 +50,13 @@ export function callCheckExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 	exprCheckerFn(ctx, node, expectedType);
 }
 
+export function checkInTypeSlot(ctx: CheckerContext, node: Node): void {
+	const saved = ctx.typeExprSlot;
+	ctx.typeExprSlot = node;
+	exprCheckerFn(ctx, node, null);
+	ctx.typeExprSlot = saved;
+}
+
 export function callCheckStmt(ctx: CheckerContext, node: Node): void {
 	stmtCheckerFn(ctx, node);
 }

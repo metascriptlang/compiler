@@ -7,12 +7,12 @@ import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefBase, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, innermostFunctionScope, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
-import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, findExtension, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor } from "./context";
+import { markUsedIn, refusesTypeAsValue, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, findExtension, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth } from "./compat";
-import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
+import { callCheckStmt, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -529,6 +529,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
 			markUsedIn(ctx, sym);
+			if (refusesTypeAsValue(ctx, node, sym, d.name)) { node.nodeType = errorType(); return; }
 			if (d.name == "this" && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor)) node.data = { name: sym.name };
 			if (hasFlag(sym, SymbolFlag.ComptimeNodeAlias)) {
 				addError(ctx, `'${d.name}' binds a compile-time JSX/Node and can only be consumed by a macro (e.g. element(${d.name})), not used as a runtime value`, node.location.line, node.location.column);
@@ -673,7 +674,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const rightExpected = d.operator == "=" ? leftType : (d.operator == "??" ? nullishArmExpected(expectedType) : wideOperandLiteralSlot(d.right));
 			const rhsGuarded = d.operator == "&&" || d.operator == "||" || d.operator == "??";
 			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth + 1;
-			checkExpr(ctx, d.right, rightExpected);
+			if (d.operator == "instanceof") checkInTypeSlot(ctx, d.right);
+			else checkExpr(ctx, d.right, rightExpected);
 			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth - 1;
 			let rightType = d.right.nodeType;
 			if (!isAsgn && d.operator != "??") {
@@ -1173,7 +1175,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				addError(ctx, "internal: ArrayAccess with null array sub-expression", node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
 			}
-			checkExpr(ctx, d.array, null);
+			checkInTypeSlot(ctx, d.array);
 			const arrayIsFunction = isFunctionShaped(d.array.nodeType) && !valueOfInPlace(ctx, d.array);
 			let arrType = d.array.nodeType;
 			// The index is a READ even when the ArrayAccess is on an assignment

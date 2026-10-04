@@ -582,7 +582,7 @@ test "a type parameter bound to a subclass and then to its base widens to that b
 test "imported enum available" {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/b.ms", entrySource: "export enum Color { Red, Green, Blue }" });
-	entries.push({ entryPath: "/src/a.ms", entrySource: "import { Color } from \"./b\"; const c = Color;" });
+	entries.push({ entryPath: "/src/a.ms", entrySource: "import { Color } from \"./b\"; const c = Color.Green;" });
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");

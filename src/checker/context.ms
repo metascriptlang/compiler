@@ -659,6 +659,17 @@ function nominalTypeSym(t: Type): Symbol | null {
 	return kind == SymbolKind.Class || kind == SymbolKind.Interface || kind == SymbolKind.Struct || kind == SymbolKind.Enum ? s.sym : null;
 }
 
+export function refusesTypeAsValue(ctx: CheckerContext, node: Node, sym: Symbol, name: string): boolean {
+	const k = sym.symbolKind;
+	const isType = k == SymbolKind.Class || k == SymbolKind.Actor || k == SymbolKind.Struct || k == SymbolKind.Interface || k == SymbolKind.Enum || k == SymbolKind.TypeAlias;
+	if (!isType || node == ctx.typeExprSlot || ctx.jsxMacroArgDepth > 0) return false;
+	const msg = k == SymbolKind.Class || k == SymbolKind.Actor
+		? `'${name}' names a ${k == SymbolKind.Actor ? "actor" : "class"}, which is not a value here — construct one with 'new ${name}(…)' or reach a static member ('${name}.x')`
+		: `'${name}' only refers to a type, but is being used as a value here`;
+	addError(ctx, msg, node.location.line, node.location.column);
+	return true;
+}
+
 export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type | null): ExtensionMethod[] {
 	const results: ExtensionMethod[] = [];
 	let cur: Type | null = objType;
@@ -1211,6 +1222,7 @@ export class CheckerContext {
 	condEvalDepth: int32;        // >0 while checking a conditionally-evaluated position (&&/|| rhs, ternary arm, loop condition) — hoisting out of one would run it unconditionally
 	inGenericContext: int32;     // >0 while checking members of a generic class pre-monomorphization — unbound-param diagnostics defer to instantiation
 	stmtPosExpr: Node;           // the expression that IS a statement: a macro there emits statements outright, so the expression-position rules (last element is the value, empty is an error) must not apply
+	typeExprSlot: Node;          // the operand being checked where a type name is accepted (a member's object, `new`'s callee, `instanceof`'s right side, a subscript's object); anywhere else a type name is not a value
 	disambTable: HashMap<string, int32>; // (module, name) → how many routines of that name were already declared here; source of Symbol.disamb
 	itemModule: int32;           // index of the module this context checks; -1 for a context outside a module graph
 	nextItem: int32;
@@ -1296,6 +1308,7 @@ export function createContext(): CheckerContext {
 		condEvalDepth: 0,
 		inGenericContext: 0,
 		stmtPosExpr: null as unknown as Node,
+		typeExprSlot: null as unknown as Node,
 		preludeCtx: null as unknown as CheckerContext,
 		instantiatingCtx: null as unknown as CheckerContext,
 		interf: [],

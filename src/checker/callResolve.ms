@@ -12,7 +12,7 @@ import { isLocation, writeRefusal, readonlyRootType, writeThroughArc, writeThrou
 import { callCheckStmt, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
-import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
+import { markUsedIn, noteImported, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
 import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
@@ -27,7 +27,7 @@ import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
 import { unionHasMemberOfKind, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
-import { callCheckExpr } from "./checkerCallbacks";
+import { callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
 // Used by `resolveGenericNewExpr` to read concrete type args from a contextual
@@ -683,7 +683,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		}
 		// Promise, Map, Set all resolve through resolveGenericNewExpr below
 	}
-	callCheckExpr(ctx, d.newCallee, null);
+	checkInTypeSlot(ctx, d.newCallee);
 	const calleeType = d.newCallee.nodeType;
 	// Pass the NewExpr's AST-resident typeArg so resolveGenericNewExpr can prefer
 	// it over the stale location-keyed side channel (important for cloned bodies).
@@ -3580,7 +3580,7 @@ function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {
 
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MemberExprData;
-	callCheckExpr(ctx, d.object, null);
+	checkInTypeSlot(ctx, d.object);
 	const declaredUnion = d.object.nodeType != null && d.object.nodeType.kind != TypeKind.Union ? declaredTagUnionOf(d.object) : null;
 	if (declaredUnion != null && !(isDiscriminatedUnion(declaredUnion) && getDiscriminantName(declaredUnion) == d.property)) {
 		const projected = narrowUnionToVariant(d.object, d.object.nodeType!);
@@ -3657,6 +3657,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			if (expInfo != null) {
 				const memSym = expInfo.sym;
 				noteImported(ctx, memSym);
+				if (refusesTypeAsValue(ctx, node, memSym, d.property)) return errorType();
 				node.resolvedSym = memSym;
 				node.nodeType = memSym.symbolType;
 				return memSym.symbolType;
