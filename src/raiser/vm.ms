@@ -1909,6 +1909,13 @@ test "sub: 100 - 42 = 58" { assert execBinOp(RaiserOpcode.SubI64, 100, 42).exitV
 
 test "mul: 6 * 7 = 42" { assert execBinOp(RaiserOpcode.MulI64, 6, 7).exitValue.intVal == 42; }
 
+test "unsigned add, sub and mul wrap past 64 bits" {
+	assert execBinOp(RaiserOpcode.MulU64, 4611686018427387904, 4).exitValue.intVal == 0;
+	assert execBinOp(RaiserOpcode.MulU64, -1, 3).exitValue.intVal == -3;
+	assert execBinOp(RaiserOpcode.AddU64, 4611686018427387904, 4611686018427387904).exitValue.intVal == -9223372036854775807 - 1;
+	assert execBinOp(RaiserOpcode.SubU64, 0, 1).exitValue.intVal == -1;
+}
+
 test "div: 84 / 2 = 42" { assert execBinOp(RaiserOpcode.DivI64, 84, 2).exitValue.intVal == 42; }
 
 test "mod: 17 % 5 = 2" { assert execBinOp(RaiserOpcode.ModI64, 17, 5).exitValue.intVal == 2; }
@@ -2512,7 +2519,7 @@ test "forward jumps are free; only back-edges consume the budget" {
 }
 
 test "every opcode reaches a branch of the dispatch" {
-	for (let i: int32 = 0; i <= (RaiserOpcode.ModU64 as int32); i += 1) {
+	for (let i: int32 = 0; i <= (RaiserOpcode.MulU64 as int32); i += 1) {
 		// a constant, a global and a copy plan give CallHost, LoadGlobal, StoreGlobal and CopyValue an operand to read
 		const mod = makeTestModule([raiserABC(i as RaiserOpcode, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [raiserString("missingFn")]);
 		mod.globalCount = 1;

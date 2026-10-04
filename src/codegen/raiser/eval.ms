@@ -687,6 +687,18 @@ test "engine: a uint64 past int64 compares, divides and prints unsigned" {
 	assert ctx.output == "true true false true 9223372036854775807 5 18446744073709551615 18446744073709551615 18446744073709552000 18446744073709552000 u=18446744073709551615 6148914691236517205 1\n18446744073709551615\n";
 }
 
+test "engine: unsigned sums and products past 64 bits wrap as on C" {
+	const ctx = evalOrcVM("function mul(a: uint64, b: uint64): uint64 { return a * b; }"
+		+ " function add(a: uint64, b: uint64): uint64 { return a + b; }"
+		+ " function sub(a: uint64, b: uint64): uint64 { return a - b; }"
+		+ " function mul32(a: uint32, b: uint32): uint32 { return a * b; }"
+		+ " const u = 0xFFFFFFFFFFFFFFFF as uint64; let k = u; k *= 5 as uint64;"
+		+ " console.log(`${mul(u, 3 as uint64)} ${add(u, 2 as uint64)} ${sub(1 as uint64, 2 as uint64)}`"
+		+ " + ` ${mul32(4000000000 as uint32, 4000000000 as uint32)} ${k}`);");
+	assert ctx.error == "";
+	assert ctx.output == "18446744073709551613 1 18446744073709551615 1983905792 18446744073709551611\n";
+}
+
 test "engine: increment and decrement on a float step by one" {
 	const ctx = evalOrcVM("struct P { x: number; }"
 		+ " function run(): void { let p: P = { x: 1.75 }; const xs: number[] = [1.5]; let k: number = 0.5;"
