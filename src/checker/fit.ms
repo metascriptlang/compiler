@@ -13,7 +13,7 @@ import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
 import { int64ToDecimal, uint64ToDecimal } from "../utils/string";
-import { viewRefusal } from "./assignable";
+import { isArrayShaped } from "./types";
 
 // ===== Operator Inference =====
 
@@ -339,7 +339,7 @@ export function synthStringify(ctx: CheckerContext, expr: Node, debug: boolean =
 	if (t == null) return null;
 	const peeled = peelToStructOrUnion(t);
 	const dumped = dumpedShape(t, valueShape(t));
-	if (!dumped && (peeled == null || (peeled.kind != TypeKind.Struct && peeled.kind != TypeKind.Union && peeled.kind != TypeKind.Enum && peeled.kind != TypeKind.Distinct))) return null;
+	if (!dumped && !isArrayShaped(t) && (peeled == null || (peeled.kind != TypeKind.Struct && peeled.kind != TypeKind.Union && peeled.kind != TypeKind.Enum && peeled.kind != TypeKind.Distinct))) return null;
 	const loc = expr.location;
 	const memberNode = createNodeAt(NodeKind.MemberExpr,
 		{ object: expr, property: "toString", isOptional: false }, loc);
@@ -376,7 +376,7 @@ export function synthExplicitDump(ctx: CheckerContext, node: Node): void {
 	const me = d.callee.data as MemberExprData;
 	if (me.property != "toString") return;
 	const sym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
-	if (sym == null || sym.name != "toString" || sym.declNode != null) return;
+	if (sym == null || sym.builtinKind != "ToStringMethod" || sym.declNode != null) return;
 	const receiver = me.object;
 	const t = receiver.nodeType;
 	if (t == null || !dumpedShape(t, valueShape(t))) return;
@@ -397,7 +397,7 @@ function foldableUnion(u: Type): boolean {
 	for (const m of u.typeChildren) {
 		if (m == null || m.kind == TypeKind.Null) return false;
 		const body = unwrapRef(m);
-		if (body.kind != TypeKind.Struct || body.sym != null || body.typeChildren.length == 0 || body.typeChildren[0] == null || body.typeChildren[0].kind != TypeKind.StringLiteral) tagged = false;
+		if (body.kind != TypeKind.Struct || body.typeChildren.length == 0 || body.typeChildren[0] == null || body.typeChildren[0].kind != TypeKind.StringLiteral) tagged = false;
 		if (!isPrimitiveUnionMember(m)) primitive = false;
 	}
 	return tagged || primitive;

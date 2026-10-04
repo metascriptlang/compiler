@@ -1,3 +1,5 @@
+export { toString } from "./shared";
+
 // MetaScript Array Prelude — Raiser Backend
 // Generic T[] methods only: Raiser values are dynamic, so one generic form
 // covers every element type (the C backend monomorphizes per element type

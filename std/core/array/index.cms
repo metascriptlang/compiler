@@ -19,6 +19,8 @@ export class Array<T> {
 	length: number;
 }
 
+export { toString } from "./shared";
+
 // ===== Number Array =====
 
 /**

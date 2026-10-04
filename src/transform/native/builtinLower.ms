@@ -179,12 +179,6 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		return cond;
 	}
 
-	// Array → msArrayToString (runtime helper)
-	if (tk == TypeKind.Array) {
-		const call = makeCall(runtimeRef("msArrayToString", loc), [obj], loc);
-		call.nodeType = stringType();
-		return call;
-	}
 	// Null → "null"
 	if (tk == TypeKind.Null) {
 		const s = makeString("null", loc);
@@ -241,6 +235,13 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 
 	if (builtinKind == "Echo") {
 		return rewriteEcho(node, ctx);
+	}
+
+	if (builtinKind == "ToStringMethod" && cd.callee.kind == NodeKind.MemberExpr) {
+		const member = cd.callee.data as MemberExprData;
+		if (member.object.nodeType != null) {
+			return lowerToString(node, member.object, peelTransparentInstance(member.object.nodeType), loc, ctx);
+		}
 	}
 
 	// String(x) → x.toString() → leverages existing .toString() infrastructure
