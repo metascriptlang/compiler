@@ -12,11 +12,11 @@ import {
 	FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData,
 	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
 	ExportDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData,
-	ForOfStmtData, DoWhileStmtData,
+	ForOfStmtData, DoWhileStmtData, HiddenDerefData, VariableDeclData, BinaryExprData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
-import { makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym, runtimeRef } from "../transform/util";
+import { makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym, runtimeRef, makeHiddenAddr } from "../transform/util";
 import { testLoc, testFnRef } from "./inject";
 import { testVarSym, symListHas, symListAdd } from "./scope";
 
@@ -66,7 +66,13 @@ function opCallTarget(stmt: Node, op: SymbolFlag): Symbol | null {
 	if (cd.callee == null || cd.callee.resolvedSym == null || !hasFlag(cd.callee.resolvedSym, op)) return null;
 	if (cd.arguments.length != 1) return null;
 	// Access arguments[0] inline — avoid local Node variable (DRC use-after-free on return)
-	if (cd.arguments[0] == null || cd.arguments[0].kind != NodeKind.Identifier) return null;
+	if (cd.arguments[0] == null) return null;
+	if (cd.arguments[0].kind == NodeKind.HiddenAddr) {
+		const inner = (cd.arguments[0].data as HiddenDerefData).expr;
+		if (inner == null || inner.kind != NodeKind.Identifier) return null;
+		return inner.resolvedSym;
+	}
+	if (cd.arguments[0].kind != NodeKind.Identifier) return null;
 	return cd.arguments[0].resolvedSym;
 }
 
@@ -91,6 +97,98 @@ function invalidateMentioned(moved: Symbol[], stmt: Node): void {
 		if (mentionsSym(stmt, moved[i])) moved.splice(i, 1);
 		else i += 1;
 	}
+}
+
+
+// ===== Pairs across a try/finally =====
+// A scope with a raising call keeps its destroys in a finally block, so a wasMoved at the end of the
+// try body pairs with the destroy there. The window closes at any call that can raise after the
+// wasMoved, and a variable whose own initialisation is followed by a raising call before its
+// wasMoved stays: that raise reaches the finally while the variable still owns its value.
+
+function isLifecycleCall(n: Node): boolean {
+	if (n.kind != NodeKind.CallExpr) return false;
+	const callee = (n.data as CallExprData).callee;
+	return callee != null && callee.resolvedSym != null
+		&& (hasFlag(callee.resolvedSym, SymbolFlag.WasMovedOp) || hasFlag(callee.resolvedSym, SymbolFlag.DestroyOp));
+}
+
+function mayRaise(n: Node): boolean {
+	if (n == null || isFunctionNode(n)) return false;
+	if ((n.kind == NodeKind.CallExpr && !isLifecycleCall(n)) || n.kind == NodeKind.NewExpr) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => { if (!found && mayRaise(c)) found = true; });
+	return found;
+}
+
+function isFunctionNode(n: Node): boolean {
+	return n.kind == NodeKind.FunctionDecl || n.kind == NodeKind.FunctionExpr || n.kind == NodeKind.ArrowFunction;
+}
+
+function leavesEarly(n: Node): boolean {
+	if (n == null || isFunctionNode(n)) return false;
+	if (n.kind == NodeKind.ReturnStmt || n.kind == NodeKind.BreakStmt || n.kind == NodeKind.ContinueStmt || n.kind == NodeKind.ThrowStmt) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => { if (!found && leavesEarly(c)) found = true; });
+	return found;
+}
+
+function assignedSym(stmt: Node): Symbol | null {
+	if (stmt.kind == NodeKind.VariableDecl) {
+		const vd = stmt.data as VariableDeclData;
+		return vd.initializer != null ? stmt.resolvedSym : null;
+	}
+	if (stmt.kind != NodeKind.ExprStmt) return null;
+	const e = (stmt.data as ExprStmtData).expr;
+	if (e == null || e.kind != NodeKind.BinaryExpr) return null;
+	const bd = e.data as BinaryExprData;
+	if (bd.operator != "=" || bd.left == null || bd.left.kind != NodeKind.Identifier) return null;
+	return bd.left.resolvedSym;
+}
+
+function pendingAtTryEnd(stmts: Node[]): Symbol[] {
+	const pending: Symbol[] = [];
+	const initialised: Symbol[] = [];
+	const exposed: Symbol[] = [];
+	for (const stmt of stmts) {
+		if (stmt == null) continue;
+		if (leavesEarly(stmt)) return [];
+		const wmVar = opCallTarget(stmt, SymbolFlag.WasMovedOp);
+		if (wmVar != null) {
+			if (symListHas(initialised, wmVar) && !symListHas(exposed, wmVar)) symListAdd(pending, wmVar);
+			continue;
+		}
+		if (opCallTarget(stmt, SymbolFlag.DestroyOp) != null) continue;
+		invalidateMentioned(pending, stmt);
+		const target = assignedSym(stmt);
+		if (target != null) symListAdd(initialised, target);
+		if (mayRaise(stmt)) {
+			pending.splice(0, pending.length);
+			for (const v of initialised) {
+				if (v != target) symListAdd(exposed, v);
+			}
+		} else if (stmt.kind == NodeKind.IfStmt) {
+			for (const v of collectIfMoved(stmt)) {
+				if (symListHas(initialised, v) && !symListHas(exposed, v)) symListAdd(pending, v);
+			}
+		}
+	}
+	return pending;
+}
+
+function elideFinallyDestroys(d: TryCatchStmtData): void {
+	if (d.hasCatchClause || d.tryBody == null || d.finallyBody == null) return;
+	if (d.tryBody.kind != NodeKind.BlockStmt || d.finallyBody.kind != NodeKind.BlockStmt) return;
+	const pending = pendingAtTryEnd((d.tryBody.data as BlockStmtData).statements);
+	if (pending.length == 0) return;
+	const fd = d.finallyBody.data as BlockStmtData;
+	const kept: Node[] = [];
+	for (const stmt of fd.statements) {
+		const target = stmt == null ? null : opCallTarget(stmt, SymbolFlag.DestroyOp);
+		if (target != null && symListHas(pending, target)) continue;
+		kept.push(stmt);
+	}
+	fd.statements = kept;
 }
 
 // ===== Block Optimization =====
@@ -171,6 +269,7 @@ function walkOptimize(node: Node): void {
 		NodeKind.DoWhileStmt => { walkOptimize((node.data as DoWhileStmtData).doBody); },
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
+			elideFinallyDestroys(d);
 			walkOptimize(d.tryBody);
 			walkOptimize(d.catchBody);
 			walkOptimize(d.finallyBody);
@@ -283,6 +382,15 @@ test "preserves standalone destroy" {
 test "extracts var from wasMoved call" {
 	const v = testVarSym("myVar");
 	assert opCallTarget(makeWmCall(v), SymbolFlag.WasMovedOp) == v;
+}
+
+test "a wasMoved on the address of a variable pairs with a destroy on the same address" {
+	const loc = testLoc();
+	const x = testVarSym("x");
+	const wm = makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym("RWasMoved", AttachedOp.AttachedWasMoved), null, loc), [makeHiddenAddr(makeIdentResolved(x, loc), loc)], loc), loc);
+	const ds = makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym("RDestroy", AttachedOp.AttachedDestructor), null, loc), [makeHiddenAddr(makeIdentResolved(x, loc), loc)], loc), loc);
+	assert opCallTarget(wm, SymbolFlag.WasMovedOp) == x;
+	assert optimizeBlock([wm, ds]).length == 1;
 }
 
 test "returns null for non-wasMoved" {
