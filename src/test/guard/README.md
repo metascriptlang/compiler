@@ -93,3 +93,7 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
 - **`solanaNumberArrayLiteral.ms`** (`GUARD-OS solana`) — a `number[]`/`float64[]` literal
   fills its elements one by one, as every other scalar literal does; SBF has no C varargs
   (NIM-REF TR-30). Proven RED on `36251885` (`undefined symbol: msNumberArrayFrom`).
+- **`solanaObjectLiteralFrame.ms`** (`GUARD-OS solana`) — an object literal that initializes a
+  local or is returned is built in that local or the caller's result slot, nested literals and
+  `Result.ok({...})` included (NIM-REF CG-46). Proven RED on `49046b457`: `settle` needs a 5,504-byte
+  SBF frame (limit 4,096); 2,624 on the fix.
