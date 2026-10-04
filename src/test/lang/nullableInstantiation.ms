@@ -253,3 +253,25 @@ test "nullableInstantiation: the wide union is unchanged without a cast" {
 	const a: number | string | null = "row";
 	assert narrowCastTakesWide(a) == "V";
 }
+
+test "nullableInstantiation: a nullable Map key keeps null apart from the zero value" {
+	const m = new Map<int32 | null, int32>();
+	m.set(0, 7);
+	m.set(null, 9);
+	assert m.size == 2;
+	assert (m.get(0) ?? -1) == 7;
+	assert (m.get(null) ?? -1) == 9;
+	assert m.delete(null);
+	assert !m.has(null) && m.has(0);
+}
+
+test "nullableInstantiation: a nullable HashMap key keeps null apart from the empty string" {
+	const m = new HashMap<string | null, int32>();
+	m.set("", 1);
+	m.set(null, 2);
+	assert m.size == 2;
+	assert (m.get("") ?? -1) == 1;
+	assert (m.get(null) ?? -1) == 2;
+	assert m.delete("");
+	assert m.has(null) && !m.has("");
+}
