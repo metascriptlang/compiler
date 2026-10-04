@@ -2003,32 +2003,25 @@ function scanCtrlFlowForArrayTypes(s: Node, lctx: LiftCtx): void {
 
 // ===== Anonymous Struct Type Scanning =====
 
-// Walk the AST to find anonymous struct types (typeName starts with "__anon").
-// These have no InterfaceDecl so processDecl doesn't see them.
-// Ensures lifecycle hooks are generated so DRC destroy calls link correctly.
-function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocation): void {
-	// Walk entire AST; ensure lifecycle hooks for ANY named struct that needs them.
-	// Covers anonymous structs (__anon*), programmatically-created structs
-	// (e.g. IteratorResult from createIterator), monomorphized class types
-	// (HashMap<K,V>, HashSet<K>), and any other type without a declared AST node.
-	const paramTypes: Type[] = [];
+function scanTypeForOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	while ((t.kind == TypeKind.Var || t.kind == TypeKind.Sink) && t.typeReturn != null) {
+		t = t.typeReturn;
+	}
+	if (lctx.scannedTypes.has(t)) return;
+	lctx.scannedTypes.add(t);
+	if (t.kind == TypeKind.Function) {
+		for (const pt of t.typeChildren) {
+			if (pt != null) scanTypeForOps(pt, lctx, loc);
+		}
+	}
+	liftTypeOps(t, lctx, loc);
+}
+
+function scanForAnonStructTypes(program: Node, lctx: LiftCtx): void {
 	walkNode(program, (node: Node): Node => {
-		if (node.kind == NodeKind.FunctionDecl && node.nodeType != null && node.nodeType.kind == TypeKind.Function) {
-			for (const pt of node.nodeType.typeChildren) {
-				if (pt != null) paramTypes.push(pt.kind == TypeKind.Var && pt.typeReturn != null ? pt.typeReturn : pt);
-			}
-		}
-		if (node.nodeType != null && !lctx.scannedTypes.has(node.nodeType)) {
-			lctx.scannedTypes.add(node.nodeType);
-			liftTypeOps(node.nodeType, lctx, node.location);
-		}
+		if (node.nodeType != null) scanTypeForOps(node.nodeType, lctx, node.location);
 		return node;
 	});
-	for (const pt of paramTypes) {
-		if (lctx.scannedTypes.has(pt)) continue;
-		lctx.scannedTypes.add(pt);
-		liftTypeOps(pt, lctx, loc);
-	}
 }
 
 function hookedDistinctElement(t: Type | null, lctx: LiftCtx, seen: HashSet<Type>): Type | null {
@@ -2105,7 +2098,7 @@ function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 		if (t.kind == TypeKind.Array
 			|| (t.kind == TypeKind.Ref && t.typeReturn != null
 				&& t.typeReturn.kind == TypeKind.Array)) {
-			scanTypeForArrays(t, lctx, new HashSet<Type>());
+			scanRootForArrays(t, lctx);
 		}
 		// A bare tuple local (reassigned or dropped) needs the same named hooks, but
 		// fillBody only emits them for tuples that appear as a struct field — pre-register
@@ -2257,8 +2250,7 @@ export function liftDestructors(program: Node, ctx: TransformContext, withHooks:
 
 		// Scan for anonymous struct types (from ObjectLiterals with no declaration).
 		// These have typeName like "__anon..." set by the checker but no InterfaceDecl.
-		const defaultLoc2 = makeLoc(0, 0);
-		scanForAnonStructTypes(program, lctx, defaultLoc2);
+		scanForAnonStructTypes(program, lctx);
 
 		// Scan for standalone array type usage
 		for (const stmt of pd.programStmts) {
