@@ -2,6 +2,7 @@
 // live in shared cores that take the type's constants (discriminator word, size), and the wrapper
 // only passes them and keeps the typed result. This builds a program that instantiates every
 // generic for nine account types and reads each copy's size from the `.debug` copy's symbol table.
+// The probe builds with --lto=off: the default LTO link inlines the wrappers and leaves no copies.
 //
 // WHY A SUBPROCESS: the observable is the size of linked functions, which only the SBF toolchain
 // produces. The compiler under test is $MSC, else `./msc`; the symbols are read with the
@@ -229,7 +230,7 @@ removeAll(dir);
 ensureDir(dir);
 writeFile(`${dir}/probe.ms`, probeSource());
 
-const built = execFileResult(msc, ["build", "probe.ms", "--os=solana", `--output=${program}`], dir);
+const built = execFileResult(msc, ["build", "probe.ms", "--os=solana", "--lto=off", `--output=${program}`], dir);
 if (built.exitCode != 0 && (built.output + built.errorOutput).includes("--os=solana requires ")) skip("no SBF toolchain on this host");
 if (built.exitCode != 0) {
 	report(`the probe did not build: ${built.output}${built.errorOutput}`);
