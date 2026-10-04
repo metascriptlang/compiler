@@ -64,9 +64,13 @@ function peelToGenericInstance(t: Type | null): Type | null {
 //      sides of the assignment, which is awkward for the common
 //      Map/Set/Box patterns.
 function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Type, astTypeArg: string, expectedType: Type | null): { type: Type, instance: Symbol | null } {
-	if (callee.kind != NodeKind.Identifier) return { type: calleeType, instance: null };
-	const calleeName = (callee.data as IdentifierData).name;
-	const ltCol = callee.location.column + calleeName.length;
+	const member = callee.kind == NodeKind.MemberExpr ? callee.data as MemberExprData : null;
+	const namespaceQualified = member != null && callee.resolvedSym != null
+		&& member.object.resolvedSym != null && member.object.resolvedSym.symbolKind == SymbolKind.Module;
+	if (callee.kind != NodeKind.Identifier && !namespaceQualified) return { type: calleeType, instance: null };
+	const calleeName = namespaceQualified ? callee.resolvedSym.name : (callee.data as IdentifierData).name;
+	const writtenLength = namespaceQualified ? member!.object.resolvedSym.name.length + 1 + member!.property.length : calleeName.length;
+	const ltCol = callee.location.column + writtenLength;
 	const calleeSym = callee.resolvedSym != null ? callee.resolvedSym : lookupSymbol(ctx.table, calleeName);
 	const genericParams = calleeSym != null ? symGenericParams(calleeSym) : builtinGenericParams(calleeName);
 	if (genericParams == "") return { type: calleeType, instance: null };

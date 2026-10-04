@@ -10,7 +10,7 @@ import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
-import { markUsedIn, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls } from "./context";
+import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -680,7 +680,9 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 	// Check for generic types: Name<A, B> or Name < A , B > (token-joined form)
 	const angleBracket = findChar(trimmed, "<");
 	if (angleBracket > 0 && trimmed.endsWith(">")) {
-		const baseName = trimmed.slice(0, angleBracket).trim();
+		const writtenName = trimmed.slice(0, angleBracket).trim();
+		const qualifiedSym = namespaceTypeSym(ctx, writtenName);
+		const baseName = qualifiedSym != null ? qualifiedSym.name : writtenName;
 		const argsText = trimmed.slice(angleBracket + 1, trimmed.length - 1).trim();
 		const args = splitTopLevel(argsText, ",");
 
@@ -734,7 +736,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			return createVar(resolveAnnotation(args[0], ctx, line, col));
 		}
 		// Generic interface/class resolution (Map, Set, user-defined generics)
-		const genericSym = lookupSymbol(ctx.table, baseName);
+		const genericSym = lookupTypeSym(ctx, writtenName);
 		const genericParams = genericSym != null ? symGenericParams(genericSym) : builtinGenericParams(baseName);
 		if (genericParams != "") {
 			// Check if ALL args are generic params of the enclosing function.
@@ -752,7 +754,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			if (allGenericParams && resolvedArgs.length > 0) {
 				// Return GenericInstance with GenericParam type args.
 				// This preserves hasGenericParams for unification + enables structural matching.
-				const baseSym = lookupSymbol(ctx.table, baseName);
+				const baseSym = lookupTypeSym(ctx, writtenName);
 				if (baseSym != null) {
 					markUsedIn(ctx, baseSym);
 					ensureShaped(baseSym, ctx);
@@ -772,7 +774,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			// instantiation path, producing the same concrete type.
 			recordGenericTypeInstantiation(baseName, genericSym, args, ctx);
 			// Build GenericInstance with structural type args
-			const baseSym2 = lookupSymbol(ctx.table, baseName);
+			const baseSym2 = lookupTypeSym(ctx, writtenName);
 			if (baseSym2 != null) {
 				markUsedIn(ctx, baseSym2);
 				ensureShaped(baseSym2, ctx);
@@ -796,7 +798,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			return emitUnresolvedTypeRef(ctx, baseName, line, col, mangledName);
 		}
 		// Non-generic: look up base type
-		const baseSym = lookupSymbol(ctx.table, baseName);
+		const baseSym = lookupTypeSym(ctx, writtenName);
 		if (baseSym != null) {
 			markUsedIn(ctx, baseSym);
 			// Demand-driven resolution: ensure the base symbol is shaped before using its type
@@ -823,7 +825,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			const enumName = trimmed.slice(0, lastDot).trim();
 			const memberName = trimmed.slice(lastDot + 1, trimmed.length).trim();
 			if (enumName != "" && memberName != "") {
-				const enumSym = lookupSymbol(ctx.table, enumName);
+				const enumSym = lookupTypeSym(ctx, enumName);
 				if (enumSym != null && enumSym.symbolType != null && enumSym.symbolType.kind == TypeKind.Enum) {
 					markUsedIn(ctx, enumSym);
 					ensureShaped(enumSym, ctx);
@@ -877,7 +879,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		"char" => charType(),
 		"cstring" => cstringType(),
 		_ => {
-			const sym = lookupSymbol(ctx.table, trimmed);
+			const sym = lookupTypeSym(ctx, trimmed);
 			if (sym != null && line > 0 && isGenericTypeDecl(sym)) {
 				const count = splitTopLevel(declGenericParams(sym.declNode), ",").length;
 				addError(ctx, `generic type '${trimmed}' requires ${count} type argument(s)`, line, col);
@@ -897,6 +899,23 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			return emitUnresolvedTypeRef(ctx, trimmed, line, col, "");
 		},
 	};
+}
+
+function namespaceTypeSym(ctx: CheckerContext, name: string): Symbol | null {
+	const dot = name.indexOf(".");
+	if (dot <= 0) return null;
+	const nsSym = lookupSymbol(ctx.table, name.slice(0, dot));
+	if (nsSym == null || nsSym.symbolKind != SymbolKind.Module || nsSym.modulePath == "") return null;
+	const exported = findExportedSymbol(ctx.exportRegistry, nsSym.modulePath, name.slice(dot + 1, name.length));
+	if (exported == null) return null;
+	markUsedIn(ctx, nsSym);
+	noteImported(ctx, exported.sym);
+	return exported.sym;
+}
+
+function lookupTypeSym(ctx: CheckerContext, name: string): Symbol | null {
+	const sym = lookupSymbol(ctx.table, name);
+	return sym != null ? sym : namespaceTypeSym(ctx, name);
 }
 
 function isGenericTypeDecl(sym: Symbol): boolean {
