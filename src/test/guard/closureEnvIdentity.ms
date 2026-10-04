@@ -13,7 +13,7 @@ import { work as workB, outer as outerB, nested as nestedB } from "./fixtures/cl
 import { work as workC, outer as outerC, nested as nestedC } from "./fixtures/closureEnv/c";
 
 function main(): void {
-	let t = 0;
+	let t: number = 0;
 	for (let i = 0; i < 3; i += 1) {
 		t += workA() + outerA() + nestedA();
 		t += workB() + outerB() + nestedB();
