@@ -2585,7 +2585,7 @@ export function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 	} else if (name == "passC") {
 		ctx.compilerFlags = appendFlag(ctx.compilerFlags, resolveModuleRelativeIncludes(arg0Str, getModuleDir(ctx.modulePath)));
 	} else if (name == "link") {
-		// Resolve @link paths relative to declaring module's directory (like @compile).
+		// Resolve a relative @link path from the declaring module's directory (like @compile).
 		// Prepend to link list (reference-aligned: linked first, like addExternalFileToLink).
 		const modDir = getModuleDir(ctx.modulePath);
 		const resolved = isAbsolute(arg0Str) || modDir == "" ? normalize(arg0Str) : normalize(modDir + "/" + arg0Str);
