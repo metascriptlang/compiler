@@ -41,6 +41,112 @@ Gate measurements on the shared Windows host are not an A/B speed comparison:
   (704-macroExprHoist, 762-bitSetMacro, bitSetVectorLifecycle), not changed C hashes;
   failure-inclusive selection deliberately kept them for execution. All 539
   successful C comparisons matched; JS signatures also matched.
+## Measured 2026-10-05 — independent output/configuration records
+
+The accepted slice is project build-record isolation, not a new native cache. Source
+tree `151cbd4023474de8cd5f1cdf4e50db530696185f`, binary SHA-256
+`523ad0cf317fde8a0f07a501050b2fe018698e98df4a349e18e2ed5dd0627408`;
+source-matched control `e5e932d0`, binary SHA-256
+`1aa962d7c04806883316bf9d65875ae5ea7e8839ba44ddeb691e7771858b67fc`.
+
+Shared Apple Silicon host, isolated HOME/local directories per compiler, global objects
+disabled (`MSC_NO_GLOBAL_CACHE=1`), and the same counted clang wrapper limited to two
+actual compiler processes. The app was `console.log(179);`, in a root containing spaces.
+Command: `<compiler> build main.ms --cc=<counted-clang> --lto=off --emit-jobs=1
+--colors=off --verbose --output=<A>`; B used `--release --output=<B>` in the same local
+cache. Prime A, build B, then measure returning to A; alternate compiler order between
+three pairs and return to B between pairs.
+
+| Return to A after B | Control | Candidate |
+|---|---:|---:|
+| Wall seconds, three runs | 2.007 / 2.095 / 2.089 | 1.084 / 1.099 / 1.206 |
+| Median seconds | **2.089** | **1.099** |
+| Dispatcher compilations / links, each return | 1 / 1 | **0 / 0** |
+| Preprocessor calls | 0 | 0 |
+| App stdout | `179` | `179` |
+
+This workload's median improved by about 47%; all three paired returns were faster.
+The deterministic gain is avoiding dispatcher preparation and linking after another
+output/configuration used the cache. Graph loading and checking still run. This is not
+a cold-build, cross-worktree object-reuse or general throughput claim.
+
+Consumer pin: `src/test/nativeBuildBoundary.ms`, group `project-cache`. Two independent
+roots (one with spaces) gave two old-control failures; the candidate passed
+eight contracts, including debug/release values `157`/`163` and changed-native-source
+invalidation to `167`. The final source check reported `OK no type errors in 367 module(s)`.
+C and JS app consumers both printed `179`.
+
+`src/compiler/cache.ms` passed 18 focused contracts. Its transitive test command was
+not fully green: the same 11 color-length assertions failed on unchanged control source
+and on the candidate (control 729 pass/11 fail; candidate 731 pass/11 fail). No color
+implementation was changed. A separate publication probe changed from
+`initial hit / stale success accepted` before the guard to
+`initial hit / changed source rejected` after it.
+
+The implementation is in `projectCacheChanged` / `writeProjectCache`; the external
+reference's per-output record choice is `compiler/extccomp.nim`
+`jsonBuildInstructionsFile` (1092–1096), with dependency/output validation in
+`changeDetectedViaJsonBuildInstructions` (1151–1169). Native/global object protocols,
+test-shard preparation and frontend persistence are unchanged. These measurements
+precede the land gate; installed behavior is not claimed by this table.
+
+## Rejected 2026-10-05 — bare native compiler input snapshots
+
+A direct-clang input-snapshot experiment also failed the end-to-end performance bar:
+three-run medians were control/candidate **0.712/1.184 s** unchanged and
+**2.513/2.606 s** empty-local. Native scheduling changed 32 misses to 32 hits, but that
+was not a speedup.
+
+Materialized compiler cache results alone were also insufficient for safety: editing
+external inline-assembly `.incbin` bytes should have changed output `97` to `98`,
+but the bare snapshot candidate returned `97` again. A no-asm language flag was
+rejected because it changes `__has_extension` behavior. Full AST reconstruction as
+an eligibility guard cost **14.183 s** for a C++ cold consumer. The user reduced the
+scope to independent build records; all native adapter/protocol source was removed.
+Do not reintroduce any of these experiments based only on cache-hit counts.
+
+## Measured 2026-10-03 — native restore succeeds, unconditional preprocessing regresses warm builds
+
+Unlanded candidate tree `73b5d67d1fde4cc9acc0a3c88436bc99993c7002`, binary SHA-256
+`75e4a4f5a370d57e34323e42babb24c48fb42fa29e8a2fa0b0fe344a902fddaa`; source-matched
+control `e5e932d0`, SHA-256 `1aa962d7c04806883316bf9d65875ae5ea7e8839ba44ddeb691e7771858b67fc`.
+Shared Apple Silicon host; isolated HOME/local caches and one counted clang driver limited
+to two actual C compiler processes. Command: `<compiler> build main.ms --cc=<counted-clang>
+--lto=off --emit-jobs=1 --colors=off --output=<app>`, with `HOME` and `MSC_CACHE_DIR`
+set to the isolated roots. Counters distinguish `-E` preprocessing from `-c` compilation.
+
+| Case | Control native/generated/dispatcher compiles; links; preprocesses | Candidate | App stdout |
+|---|---|---|---|
+| Cold root A | 32/15/1; 1; 0 | 32/15/1; 1; 79 | `42` |
+| Local-warm root A | 0/0/0; 0; 0 | 0/0/0; 0; 32 | `42` |
+| Empty local, warm global, root A | 32/15/1; 1; 0 | 0/15/1; 1; 47 | `42` |
+| Distinct entry/root B, candidate cold then empty-local/global-warm | not re-run | 32/15/1; 1; 79 → 0/15/1; 1; 47 | `30` |
+
+Interleaved unchanged builds with independent output paths: control **0.568 / 0.561 s**,
+candidate **3.297 / 3.674 s**, zero compilation/linking on both. The candidate's 32
+preprocessor calls remain on every warm project hit. These are shared-host observations,
+not throughput forecasts. Successful object restoration alone is not a performance win.
+
+The discarded experiment's `nativeBuildBoundary.ms` groups `cache-reuse` and
+`cache-races` ran **9 pass**, including seven control failures and two unchanged
+header-invalidation controls. Those experimental groups were removed with the
+native prototype on 2026-10-05; only the independent project-record consumer remains.
+The old failures covered two empty-local roots, include shadowing, optional headers,
+independent records and publication races.
+Both entry variants also printed identical C/JS output (`42`, `30`). Retained LSP
+valid/identical/invalid/identical/repaired input produced diagnostic counts `0/0/1/1/0`
+and changed hover `int32` to `string`; no query-hit or semantic-cutoff counter was exposed.
+
+Decision: do not land this preprocessing-per-lookup candidate as the cache performance fix.
+Dropping preprocessing without complete include-resolution knowledge is not safe:
+[direct-mode caches document the missing-header limitation](https://ccache.dev/manual/latest.html#_the_direct_mode).
+The native-input experiment was removed after the 2026-10-05 scope reduction.
+Its successful probes do not establish a permanent native cache contract.
+
+Not verified: inline cache suite, full gate, full runtime/vendor/target/GC invalidation
+matrix, concurrent publication matrix or installed behavior. Generated objects are still
+local-only, test dispatcher/link preparation remains unconditional, and normal select/corpus
+CLI processes do not retain a frontend query database.
 
 ## Measured 2026-09-26/27 — the dev-loop link tax is thin-LTO (Apple Silicon, 14-core)
 
