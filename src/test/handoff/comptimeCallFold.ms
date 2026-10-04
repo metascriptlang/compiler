@@ -80,6 +80,28 @@ test "comptimeCallFold: the JS backend folds the same call" {
 	assert js.includes("198535") && !js.includes("digitSum("), js.slice(0, 300);
 }
 
+test "comptimeCallFold: an exported @comptime function emits no run-time code" {
+	const c = cOf(`@comptime
+		export function rate690(n: uint64): uint64 { return n * 3; }
+		const R: uint64 = rate690(5);
+		console.log(R);`);
+	assert c.includes("15ULL") && mentions(c, "rate690__") == 0, c.slice(0, 300);
+	const js = compileProjectToJSWithStd([{ entryPath: "test/main.ms", entrySource: `@comptime
+		export function rate690(n: uint64): uint64 { return n * 3; }
+		const R: uint64 = rate690(5);
+		console.log(R);
+	` }], "test/main.ms");
+	assert !js.includes("rate690"), js.slice(0, 300);
+}
+
+test "comptimeCallFold: a @comptime function used as a run-time value is an error" {
+	const refused = "has no run-time code to reference as a value";
+	assert cOf(`const f = digitSum;
+		console.log(f("22"));`).includes(refused);
+	assert cOf(`function apply(g: (s: string) => uint64): uint64 { return g("22"); }
+		console.log(apply(digitSum));`).includes(refused);
+}
+
 struct Key690 {
 	a: uint64;
 	b: uint64;
