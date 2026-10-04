@@ -23,6 +23,7 @@ import {
 	close,
 	create,
 	createPda,
+	signed,
 	leBytes,
 	pda,
 	realloc,
@@ -33,6 +34,7 @@ import {
 	Program,
 	Signer,
 	Writable,
+	WritableSigner,
 	Delegated,
 	delegated,
 	pdaWithBump,
@@ -1325,6 +1327,84 @@ test "a signer of seventeen seeds or of a thirty-three byte seed is refused, six
 	const sixteen: uint8[] = [13];
 	assert run(programKey(), accounts, sixteen, signingEntry).result == 0;
 	assert invocations().length == 1 && invocations()[0].signerSeeds[0].length == 16;
+}
+
+macro forwardCreated(call: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: call.line,
+		column: call.column,
+		callee: bindSym("initializedCounter"),
+		arguments: [call],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+function initializedCounter(counter: Mutable<Counter>): Result<uint64, ProgramError> {
+	const at = counter.data();
+	at.value = 9;
+	return Result.ok(0);
+}
+
+function createCounter(
+	payer: WritableSigner,
+	target: Writable,
+	signers: Span<SignerSeeds> = [],
+): Result<Mutable<Counter>, ProgramError> {
+	return create<Counter>(payer, target, signers);
+}
+
+function createSignedStep(): Result<uint64, ProgramError> {
+	const op = try instructionData().readU8(0);
+	const bump = try instructionData().readU8(1);
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	if (op == 0) {
+		const counter = try signed(createCounter(payer, target), ["counter", [bump]]);
+		counter.data().value = 5;
+		return Result.ok(0);
+	}
+	if (op == 2) { return forwardCreated(try create<Counter>(payer, target)); }
+	const counter = try create<Counter>(payer, target);
+	counter.data().value = 7;
+	return Result.ok(0);
+}
+
+function createSignedEntry(): void { codeOf(createSignedStep()); }
+
+test "create signs with the seeds of its target" {
+	const derived = findProgramAddressOf(programKey(), ["counter"]);
+	assert derived.ok;
+	if (derived.ok) {
+		const bump = derived.value.bump;
+		const signing: uint8[] = [0, bump];
+		let pdaTarget = blank(derived.value.key);
+		pdaTarget.signer = false;
+		const accounts = [wallet(1, 10000000), pdaTarget];
+		assert run(programKey(), accounts, signing, createSignedEntry).result == 0;
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].program.equals(systemKey()) && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, [textBytes("counter"), [bump]]);
+		assert accounts[1].data.length == 8 + (sizeof(Counter) as int32);
+		assert accounts[1].data[8] == 5;
+		const tag = accountDiscriminator("Counter");
+		for (let index = 0; index < 8; index++) {
+			assert accounts[1].data[index] == tag.bytes[index];
+		}
+	}
+}
+
+test "create without seeds records no signer, and an explicit type argument under try is a macro argument" {
+	const unsigned: uint8[] = [4, 0];
+	const accounts = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), accounts, unsigned, createSignedEntry).result == 0;
+	assert invocations().length == 1 && invocations()[0].signers == 0;
+	assert accounts[1].data[8] == 7;
+	const tried: uint8[] = [2, 0];
+	const second = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), second, tried, createSignedEntry).result == 0;
+	assert second[1].data[8] == 9;
 }
 
 test "createProgramAccount signs the create, or the allocate and the assign of a prefunded account" {
