@@ -150,6 +150,7 @@ for (const variant of variants) {
 		const failed = result.constructor.name === "FailedTransactionMetadata";
 		const meta = failed ? result.meta() : result;
 		units[kase.name] = Number(meta.computeUnitsConsumed());
+		if (process.env.BENCH_LOGS) console.log(`--- ${variant.suite}:${variant.label} ${kase.name}\n${meta.logs().join("\n")}`);
 		if (failed) {
 			console.log(`FAIL ${variant.suite}:${variant.label} ${kase.name}: ${result.err().toString()}`);
 			console.log(meta.logs().join("\n"));
