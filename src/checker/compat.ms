@@ -163,6 +163,14 @@ export function isStructIntoPtr(source: Type | null, target: Type | null): boole
 	return s != null && t != null && s.kind == TypeKind.Struct && t.kind == TypeKind.Ptr;
 }
 
+export function isRefIntoValue(source: Type | null, target: Type | null): boolean {
+	const s = skipModifier(source);
+	let t = skipModifier(target);
+	if (t != null && t.kind == TypeKind.Union) t = nonNullMemberOfNullable(t);
+	return s != null && t != null && s.kind == TypeKind.Ref && !isAtomicRef(s) && s.typeReturn != null
+		&& isValuePointee(s.typeReturn) && t.kind != TypeKind.Ref && t.kind != TypeKind.Ptr;
+}
+
 export function isStructIntoRef(source: Type | null, target: Type | null): boolean {
 	const s = skipModifier(source);
 	let t = skipModifier(target);
@@ -510,11 +518,10 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			return isAssignable(source.typeReturn, target.typeReturn);
 		}
 	}
-	// Ref<T> → T auto-deref: self-referential fields are promoted to Ref<T>,
-	// but passing them to functions expecting T should work transparently.
 	// Arc<T> does NOT auto-unwrap — sharing the pointee unguarded defeats the atomic rc.
 	if (source.kind == TypeKind.Ref && !isAtomicRef(source) && source.typeReturn != null) {
 		if (source.typeReturn.kind == TypeKind.Array && target.kind == TypeKind.Array) return false;
+		if (isValuePointee(source.typeReturn)) return false;
 		return isAssignable(source.typeReturn, target);
 	}
 

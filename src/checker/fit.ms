@@ -5,7 +5,7 @@
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, isStructIntoRef, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
+import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds } from "./types";
@@ -1796,7 +1796,13 @@ export function branchFitsSlot(ctx: CheckerContext, exprType: Type | null, forma
 }
 
 function reportNotAssignable(ctx: CheckerContext, expr: Node, exprType: Type, formal: Type): void {
-	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + explainStructuralPrefix(exprType, formal), expr.location.line, expr.location.column);
+	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + explainStructuralPrefix(exprType, formal) + refDerefHint(expr, exprType, formal), expr.location.line, expr.location.column);
+}
+
+export function refDerefHint(expr: Node, exprType: Type | null, formal: Type | null): string {
+	if (!isRefIntoValue(exprType, formal)) return "";
+	if (expr.kind == NodeKind.Identifier) return " — a Ref is never dereferenced implicitly: write '" + (expr.data as IdentifierData).name + "[]'";
+	return " — a Ref is never dereferenced implicitly: dereference it with '[]'";
 }
 
 function doubleFitsIntTarget(v: number, target: Type): boolean {
