@@ -19,7 +19,7 @@ import {
 	makeTestModule, getFuncConst, getFuncConstLen, getFuncInst, getFuncCodeLen, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
 import { orcCollectCycles } from "./orc";
-import { copyTypedValue } from "./valueCopy";
+import { RaiserCopyKind, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
 import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink } from "./marshal";
@@ -2499,15 +2499,15 @@ test "forward jumps are free; only back-edges consume the budget" {
 	assert vm.exitValue.intVal == 0;
 }
 
-test "unknown opcode sets error" {
-	// Use an impossibly high opcode number by manually crafting instruction
-	const code: RaiserInstruction[] = [
-		{ op: 999 as RaiserOpcode, a: 0, b: 0, c: 0, cachedIdx: -1, line: 0 },
-		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
-	];
-	const consts: RaiserValue[] = [];
-	const vm = execModule(makeTestModule(code, consts));
-	assert vm.error != "";
+test "every opcode reaches a branch of the dispatch" {
+	for (let i: int32 = 0; i <= (RaiserOpcode.ModU64 as int32); i += 1) {
+		// a constant, a global and a copy plan give CallHost, LoadGlobal, StoreGlobal and CopyValue an operand to read
+		const mod = makeTestModule([raiserABC(i as RaiserOpcode, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [raiserString("missingFn")]);
+		mod.globalCount = 1;
+		mod.functions[0].copyPlans.push({ kind: RaiserCopyKind.Preserve, names: [], children: [] });
+		const vm = execModule(mod);
+		assert !vm.error.startsWith("Unknown opcode"), vm.error;
+	}
 }
 
 test "stack trace with function calls" {
