@@ -2227,7 +2227,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		const srcMaybe = d.convExpr.nodeType;
 		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && isMaybeType(d.convType)
 			&& d.convType.typeReturn != null && isTagCarriedUnion(d.convType.typeReturn)
-			&& srcMaybe != null && isMaybeType(srcMaybe)) {
+			&& srcMaybe != null && (isMaybeType(srcMaybe) || unwrapRefNullUnion(srcMaybe) != null)) {
 			const wvi = projSlot - 1;
 			const payloadC = getTypeDesc(g, d.convType.typeReturn);
 			const srcC = getTypeDesc(g, srcMaybe);
@@ -2235,8 +2235,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const tmp = `_mwiden${g.labels}_`;
 			emitProcLocalsLine(p, `${srcC} ${tmp};`);
 			emitStmtsLine(p, `${tmp} = ${inner};`);
-			const payload = `(${tmp}.present ? (${payloadC}){._tag=${wvi}, .v${wvi}=${tmp}.value} : (${payloadC}){._tag=${wvi}})`;
-			ctx.results.push(`((${targetC}){.value=${payload}, .present=${tmp}.present})`);
+			const present = isMaybeType(srcMaybe) ? `${tmp}.present` : `(${tmp} != NULL)`;
+			const value = isMaybeType(srcMaybe) ? `${tmp}.value` : tmp;
+			const payload = `(${present} ? (${payloadC}){._tag=${wvi}, .v${wvi}=${value}} : (${payloadC}){._tag=${wvi}})`;
+			ctx.results.push(`((${targetC}){.value=${payload}, .present=${present}})`);
 			return;
 		}
 		if (kind == NodeKind.HiddenSubConv && projSlot > 0 && isMaybeType(d.convType)
