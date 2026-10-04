@@ -96,3 +96,26 @@ test "only a variable, a field or an element is an assignment target" {
 	const js = compileProjectToJSWithStd([{ entryPath: "test/target.ms", entrySource: ok }], "test/target.ms");
 	assert !js.startsWith("ERROR:"), js;
 }
+
+test "an Arc interior binds no ref or out parameter, as it takes no write" {
+	const prelude = `struct Ctr { n: int32; }
+struct Holder { inner: Ctr; }
+function bump(ref c: Ctr): void { c.n = 9; }
+function reset(out c: Ctr): void { c = { n: 0 }; }
+function heal(this ref c: Ctr): void { c.n = 5; }
+function swap(ref a: Arc<Ctr>): void { a = new Arc({ n: 3 }); }
+`;
+	const refused = [
+		"const s: Arc<Ctr> = new Arc({ n: 1 }); bump(s[]);",
+		"const s: Arc<Ctr> = new Arc({ n: 1 }); reset(s[]);",
+		"const s: Arc<Ctr> = new Arc({ n: 1 }); s[].heal();",
+		"const h: Arc<Holder> = new Arc({ inner: { n: 2 } }); bump(h.inner);",
+	];
+	for (const body of refused) {
+		const source = prelude + `function run(): void { ${body} } run();`;
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/arc.ms", entrySource: source }], "test/arc.ms");
+		assert !c.ok && c.error.contains("SHARE is immutable"), body;
+		assert js.startsWith("ERROR:") && js.contains("SHARE is immutable"), body;
+	}
+}
