@@ -1571,7 +1571,7 @@ export function isReadonlyView(t: Type | null): boolean {
 	return t.typeFlags.has(TypeFlag.IsReadonly);
 }
 
-function copyTypeShallow(t: Type): Type {
+export function copyTypeShallow(t: Type): Type {
 	const c = emptyType();
 	c.kind = t.kind;
 	c.typeName = t.typeName;
