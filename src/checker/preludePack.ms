@@ -33,6 +33,8 @@ import { emptyType, noneType } from "./types";
 import { makeSymbolState } from "./symbol";
 import { attachedOpSym } from "../transform/util";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
+import { getParserDefines, setParserDefines } from "../parser/context";
+import { defineIdentity, createDefineTable, defineSymbol } from "../compiler/defines";
 import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
 import { readFile, writeFile, exists, readDir, remove, ensureDir, rename } from "std/fs";
 import { env, argv } from "std/process";
@@ -129,7 +131,7 @@ function stdTreeHash(stdPath: string): string {
 
 export function preludePackKey(stdPath: string, backendExt: string): string {
 	const _k0 = performance.now();
-	const k = packHash(`${stdPath}|${backendExt}|${defaultGlobalImports().join("|")}`);
+	const k = packHash(`${stdPath}|${backendExt}|${defaultGlobalImports().join("|")}|${defineIdentity(getParserDefines())}`);
 	_keyMs = _keyMs + (performance.now() - _k0);
 	return k;
 }
@@ -1733,4 +1735,16 @@ test "preludePack: a directory from another pack format is wiped once" {
 	} finally {
 		pkLeavePrivateCache(prevHome);
 	}
+}
+
+test "the prelude pack key moves with the parser defines" {
+	const saved = getParserDefines();
+	setParserDefines(createDefineTable());
+	const plain = preludePackKey("/std", ".cms");
+	const solana = createDefineTable();
+	defineSymbol(solana, "solana", "true");
+	setParserDefines(solana);
+	const keyed = preludePackKey("/std", ".cms");
+	setParserDefines(saved);
+	assert plain != keyed;
 }
