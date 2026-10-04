@@ -1,7 +1,13 @@
 @include("runtime/solana/solana.h");
 @compile("runtime/solana/host.c");
 
-import { Pubkey, pubkeyOf } from "./pubkey";
+import {
+	ASSOCIATED_TOKEN_PROGRAM_ID,
+	Pubkey,
+	TOKEN_2022_PROGRAM_ID,
+	TOKEN_PROGRAM_ID,
+	pubkeyOf,
+} from "./pubkey";
 import { ProgramError } from "./error";
 import { Bytes, putPubkey, putU32, putU64, storePubkey } from "./buffer";
 import { InstructionAccount } from "./cpi";
@@ -354,7 +360,7 @@ export function createAccount(
 	length = putU64(storage, length, space);
 	length = putPubkey(storage, length, newOwner);
 	return invokeSigned(
-		Pubkey.systemProgram(),
+		Pubkey.zero(),
 		[InstructionAccount.writableSigner(payer), InstructionAccount.writableSigner(target)],
 		storage,
 		length,
@@ -370,7 +376,7 @@ export function assignTo(
 	let storage: uint8[36] = [];
 	const length = putPubkey(storage, putU32(storage, 0, 1), newOwner);
 	return invokeSigned(
-		Pubkey.systemProgram(),
+		Pubkey.zero(),
 		[InstructionAccount.writableSigner(target)],
 		storage,
 		length,
@@ -387,7 +393,7 @@ export function transfer(
 	let storage: uint8[12] = [];
 	const length = putU64(storage, putU32(storage, 0, 2), lamports);
 	return invokeSigned(
-		Pubkey.systemProgram(),
+		Pubkey.zero(),
 		[InstructionAccount.writableSigner(source), InstructionAccount.writable(destination)],
 		storage,
 		length,
@@ -403,7 +409,7 @@ export function allocate(
 	let storage: uint8[12] = [];
 	const length = putU64(storage, putU32(storage, 0, 8), space);
 	return invokeSigned(
-		Pubkey.systemProgram(),
+		Pubkey.zero(),
 		[InstructionAccount.writableSigner(target)],
 		storage,
 		length,
@@ -550,10 +556,10 @@ export struct Token {}
 export struct Token2022 {}
 export struct AssociatedToken {}
 
-export function id(this typeof System): Pubkey { return Pubkey.systemProgram(); }
-export function id(this typeof Token): Pubkey { return Pubkey.tokenProgram(); }
-export function id(this typeof Token2022): Pubkey { return Pubkey.token2022Program(); }
-export function id(this typeof AssociatedToken): Pubkey { return Pubkey.associatedTokenProgram(); }
+export function id(this typeof System): Pubkey { return Pubkey.zero(); }
+export function id(this typeof Token): Pubkey { return TOKEN_PROGRAM_ID; }
+export function id(this typeof Token2022): Pubkey { return TOKEN_2022_PROGRAM_ID; }
+export function id(this typeof AssociatedToken): Pubkey { return ASSOCIATED_TOKEN_PROGRAM_ID; }
 
 export type Signer = distinct Account;
 export type WritableSigner = distinct Account;
@@ -624,9 +630,7 @@ function claimExclusive(address: uint64): boolean {
 	return true;
 }
 
-function delegationProgramId(): Pubkey {
-	return @comptime { return pubkeyOf("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"); };
-}
+export const DELEGATION_PROGRAM_ID: Pubkey = pubkeyOf("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh");
 
 function programDataFailure(
 	address: uint64,
@@ -722,7 +726,7 @@ export function delegatedFailure(
 	if (found.address == 0) { return ProgramError.accountNotEnoughKeys().code; }
 	return programDataFailure(
 		found.address,
-		msSolSpanAddress(delegationProgramId().bytes),
+		msSolSpanAddress(DELEGATION_PROGRAM_ID.bytes),
 		discriminator,
 		size,
 	);
@@ -960,7 +964,7 @@ export function closedProgramAccount(
 	if (total < moved) { return Result.err(ProgramError.arithmeticOverflow()); }
 	destination.setLamports(total);
 	target.setLamports(0);
-	target.assign(Pubkey.systemProgram());
+	target.assign(Pubkey.zero());
 	const _emptied = try target.resize(0);
 	return Result.ok(moved);
 }

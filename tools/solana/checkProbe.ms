@@ -7,6 +7,7 @@ import {
 	Program,
 	ProgramError,
 	Pubkey,
+	SYSTEM_PROGRAM_ID,
 	System,
 	Writable,
 	WritableSigner,
@@ -95,7 +96,7 @@ export struct Addressed {
 	peek: Owned<Pet>;
 	rolled: Delegated<Pet>;
 	fresh: Writable;
-	@address(Pubkey.systemProgram()) systemProgram: Account;
+	@address(SYSTEM_PROGRAM_ID) systemProgram: Account;
 }
 
 export struct Unaddressed {

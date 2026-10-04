@@ -28,17 +28,11 @@ export struct RandomnessRequest {
 	slotHashes: Account;
 }
 
-export function vrfProgram(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz"); };
-}
+export const VRF_PROGRAM_ID: Pubkey = pubkeyOf("Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz");
 
-export function vrfEphemeralQueue(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc"); };
-}
+export const VRF_EPHEMERAL_QUEUE_ID: Pubkey = pubkeyOf("5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc");
 
-export function vrfBaseQueue(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh"); };
-}
+export const VRF_BASE_QUEUE_ID: Pubkey = pubkeyOf("Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh");
 
 function requested(
 	storage: Span<uint8>,
@@ -81,7 +75,7 @@ export function requestRandomness(
 	let both: SignerSeeds[2] = [signerOf(identitySeeds), signerOf(identitySeeds)];
 	if (payerSigners.length == 1) { both[1] = payerSigners[0]; }
 	return invokeSigned(
-		Pubkey.vrfProgram(),
+		VRF_PROGRAM_ID,
 		[
 			InstructionAccount.writableSigner(accounts.payer),
 			InstructionAccount.readonlySigner(accounts.programIdentity),
@@ -116,7 +110,7 @@ export function requestRandomness(
 
 export function verifyVrfCallback(identity: Account): Result<uint64, ProgramError> {
 	if (!identity.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
-	const scoped = try findProgramAddressOf(Pubkey.vrfProgram(), ["identity", programId()]);
+	const scoped = try findProgramAddressOf(VRF_PROGRAM_ID, ["identity", programId()]);
 	if (!scoped.key.equals(identity.key())) { return Result.err(ProgramError.incorrectAuthority()); }
 	return Result.ok(0);
 }
@@ -135,7 +129,7 @@ when (testBuild) {
 	function holder(key: Pubkey, signer: boolean, writable: boolean): HostAccount {
 		return {
 			key: key,
-			owner: Pubkey.systemProgram(),
+			owner: Pubkey.zero(),
 			lamports: 1000,
 			data: [],
 			signer: signer,
@@ -151,7 +145,7 @@ when (testBuild) {
 	}
 
 	function scopedIdentity(): Pubkey {
-		const found = findProgramAddressOf(Pubkey.vrfProgram(), ["identity", programKey()]);
+		const found = findProgramAddressOf(VRF_PROGRAM_ID, ["identity", programKey()]);
 		if (found.ok) { return found.value.key; }
 		return Pubkey.zero();
 	}
@@ -160,8 +154,8 @@ when (testBuild) {
 		return [
 			holder(keyOf(1), true, true),
 			holder(identity, false, false),
-			holder(Pubkey.vrfEphemeralQueue(), false, true),
-			holder(Pubkey.systemProgram(), false, false),
+			holder(VRF_EPHEMERAL_QUEUE_ID, false, true),
+			holder(Pubkey.zero(), false, false),
 			holder(keyOf(4), false, false),
 			holder(keyOf(5), false, true),
 		];
@@ -255,10 +249,17 @@ when (testBuild) {
 		return value;
 	}
 
+	// ephemeral-vrf-sdk-0.4.1/src/consts.rs:4,7,10.
+	test "the VRF ids are the ones the SDK declares" {
+		assert VRF_PROGRAM_ID.toBase58() == "Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz";
+		assert VRF_BASE_QUEUE_ID.toBase58() == "Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh";
+		assert VRF_EPHEMERAL_QUEUE_ID.toBase58() == "5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc";
+	}
+
 	test "requestRandomness sends the scoped request with the program identity signing" {
 		assert requestRun(requestAccounts(identityOf(programKey())), 0) == 0;
 		const sent = invocations()[0];
-		assert sent.program.equals(Pubkey.vrfProgram()) && sent.signers == 1;
+		assert sent.program.equals(VRF_PROGRAM_ID) && sent.signers == 1;
 		const identity = findProgramAddressOf(programKey(), ["identity"]);
 		assert identity.ok;
 		if (identity.ok) { assert signerIs(sent, 0, [textBytes("identity"), [identity.value.bump]]); }
@@ -267,7 +268,7 @@ when (testBuild) {
 		assert sent.accounts[0].signer && sent.accounts[0].writable;
 		assert sent.accounts[1].key.equals(identityOf(programKey()));
 		assert sent.accounts[1].signer && !sent.accounts[1].writable;
-		assert sent.accounts[2].key.equals(Pubkey.vrfEphemeralQueue()) && sent.accounts[2].writable;
+		assert sent.accounts[2].key.equals(VRF_EPHEMERAL_QUEUE_ID) && sent.accounts[2].writable;
 		assert !sent.accounts[3].writable && !sent.accounts[4].writable;
 		assert sent.data.length == 92 + 34 + 2;
 		assert sent.data[0] == 10 && sent.data[1] == 0 && sent.data[7] == 0;
@@ -389,7 +390,7 @@ when (testBuild) {
 		assert callbackRun(holder(scopedIdentity(), true, false)) == 0;
 		const unsigned = holder(scopedIdentity(), false, false);
 		assert callbackRun(unsigned) == ProgramError.missingRequiredSignature().code;
-		const global = holder(identityOf(Pubkey.vrfProgram()), true, false);
+		const global = holder(identityOf(VRF_PROGRAM_ID), true, false);
 		assert callbackRun(global) == ProgramError.incorrectAuthority().code;
 	}
 }

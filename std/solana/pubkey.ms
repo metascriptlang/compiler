@@ -120,37 +120,14 @@ export function equals(this key: Pubkey, other: Pubkey): boolean {
 	return key == other;
 }
 
-export function systemProgram(this typeof Pubkey): Pubkey {
-	return Pubkey.zero();
-}
-
-export function tokenProgram(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"); };
-}
-
-export function token2022Program(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"); };
-}
-
-export function associatedTokenProgram(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"); };
-}
-
-export function rentSysvar(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("SysvarRent111111111111111111111111111111111"); };
-}
-
-export function clockSysvar(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("SysvarC1ock11111111111111111111111111111111"); };
-}
-
-export function slotHashesSysvar(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("SysvarS1otHashes111111111111111111111111111"); };
-}
-
-export function instructionsSysvar(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("Sysvar1nstructions1111111111111111111111111"); };
-}
+export const SYSTEM_PROGRAM_ID: Pubkey = pubkeyOf("11111111111111111111111111111111");
+export const TOKEN_PROGRAM_ID: Pubkey = pubkeyOf("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+export const TOKEN_2022_PROGRAM_ID: Pubkey = pubkeyOf("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+export const ASSOCIATED_TOKEN_PROGRAM_ID: Pubkey = pubkeyOf("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+export const RENT_ID: Pubkey = pubkeyOf("SysvarRent111111111111111111111111111111111");
+export const CLOCK_ID: Pubkey = pubkeyOf("SysvarC1ock11111111111111111111111111111111");
+export const SLOTHASHES_ID: Pubkey = pubkeyOf("SysvarS1otHashes111111111111111111111111111");
+export const INSTRUCTIONS_ID: Pubkey = pubkeyOf("Sysvar1nstructions1111111111111111111111111");
 
 test "base58 round-trips a program id" {
 	const text = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
@@ -166,7 +143,8 @@ test "the System program is 32 ones and the zero key" {
 	const parsed = Pubkey.parse("11111111111111111111111111111111");
 	assert parsed.ok;
 	if (parsed.ok) { assert parsed.value.isZero(); }
-	assert Pubkey.systemProgram().toBase58() == "11111111111111111111111111111111";
+	assert SYSTEM_PROGRAM_ID == Pubkey.zero();
+	assert SYSTEM_PROGRAM_ID.toBase58() == "11111111111111111111111111111111";
 }
 
 test "base58 refuses a character outside the alphabet and a key that is not 32 bytes" {
@@ -183,7 +161,40 @@ test "base58 refuses a character outside the alphabet and a key that is not 32 b
 test "compile-time ids equal the parsed ones" {
 	const parsed = Pubkey.parse("SysvarC1ock11111111111111111111111111111111");
 	assert parsed.ok;
-	if (parsed.ok) { assert Pubkey.clockSysvar() == parsed.value; }
+	if (parsed.ok) { assert CLOCK_ID == parsed.value; }
 	const associated = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
-	assert Pubkey.associatedTokenProgram().toBase58() == associated;
+	assert ASSOCIATED_TOKEN_PROGRAM_ID.toBase58() == associated;
+}
+
+// pinocchio-token-0.6.0/src/lib.rs:14, pinocchio-associated-token-account-0.4.0/src/lib.rs:5, spl-token-2022-interface-2.1.0/src/lib.rs:25.
+test "the program ids are the ones the reference declares" {
+	assert SYSTEM_PROGRAM_ID == Pubkey.zero();
+	assert SYSTEM_PROGRAM_ID.toBase58() == "11111111111111111111111111111111";
+	assert TOKEN_PROGRAM_ID.toBase58() == "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+	assert TOKEN_2022_PROGRAM_ID.toBase58() == "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+	assert ASSOCIATED_TOKEN_PROGRAM_ID.toBase58() == "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+}
+
+// pinocchio-0.9.3/src/sysvars: clock.rs:13, rent.rs:15, instructions.rs:11, slot_hashes/mod.rs:28.
+test "the sysvar ids are the bytes the reference declares" {
+	const clock: Pubkey = { bytes: [
+		6, 167, 213, 23, 24, 199, 116, 201, 40, 86, 99, 152, 105, 29, 94, 182,
+		139, 94, 184, 163, 155, 75, 109, 92, 115, 85, 91, 33, 0, 0, 0, 0,
+	] };
+	const rent: Pubkey = { bytes: [
+		6, 167, 213, 23, 25, 44, 92, 81, 33, 140, 201, 76, 61, 74, 241, 127,
+		88, 218, 238, 8, 155, 161, 253, 68, 227, 219, 217, 138, 0, 0, 0, 0,
+	] };
+	const instructions: Pubkey = { bytes: [
+		6, 167, 213, 23, 24, 123, 209, 102, 53, 218, 212, 4, 85, 253, 194, 192,
+		193, 36, 198, 143, 33, 86, 117, 165, 219, 186, 203, 95, 8, 0, 0, 0,
+	] };
+	const slotHashes: Pubkey = { bytes: [
+		6, 167, 213, 23, 25, 47, 10, 175, 198, 242, 101, 227, 251, 119, 204, 122,
+		218, 130, 197, 41, 208, 190, 59, 19, 110, 45, 0, 85, 32, 0, 0, 0,
+	] };
+	assert CLOCK_ID == clock;
+	assert RENT_ID == rent;
+	assert INSTRUCTIONS_ID == instructions;
+	assert SLOTHASHES_ID == slotHashes;
 }

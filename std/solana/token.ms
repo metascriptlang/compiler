@@ -15,7 +15,7 @@ import {
 import { ProgramError } from "./error";
 import { invokeSigned } from "./invoke";
 import { associatedTokenAddress, isTokenProgram } from "./mint";
-import { Pubkey } from "./pubkey";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, Pubkey, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./pubkey";
 import { SignerSeeds, bytesAddress, findAddress, seedBytes } from "./seed";
 
 export { associatedTokenAddress, initializeMint2 } from "./mint";
@@ -135,11 +135,11 @@ function stateOf(value: uint8): Result<TokenAccountState, ProgramError> {
 
 function mintBytes(account: Account): Result<Bytes, ProgramError> {
 	const data = account.data();
-	if (account.isOwnedBy(Pubkey.tokenProgram())) {
+	if (account.isOwnedBy(TOKEN_PROGRAM_ID)) {
 		if (data.length != 82) { return Result.err(ProgramError.invalidAccountData()); }
 		return Result.ok(data);
 	}
-	if (!account.isOwnedBy(Pubkey.token2022Program())) {
+	if (!account.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
 		return Result.err(ProgramError.invalidAccountOwner());
 	}
 	if (data.length != 82 && !(try hasExtensionLayout(data, 1))) {
@@ -150,11 +150,11 @@ function mintBytes(account: Account): Result<Bytes, ProgramError> {
 
 function tokenAccountBytes(account: Account): Result<Bytes, ProgramError> {
 	const data = account.data();
-	if (account.isOwnedBy(Pubkey.tokenProgram())) {
+	if (account.isOwnedBy(TOKEN_PROGRAM_ID)) {
 		if (data.length != 165) { return Result.err(ProgramError.invalidAccountData()); }
 		return Result.ok(data);
 	}
-	if (!account.isOwnedBy(Pubkey.token2022Program())) {
+	if (!account.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
 		return Result.err(ProgramError.invalidAccountData());
 	}
 	if (data.length != 165 && !(try hasExtensionLayout(data, 2))) {
@@ -276,7 +276,7 @@ export function mintExtension(
 	this account: Account,
 	kind: ExtensionType,
 ): Result<Bytes, ProgramError> {
-	if (!account.isOwnedBy(Pubkey.token2022Program())) {
+	if (!account.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
 		return Result.err(ProgramError.invalidAccountOwner());
 	}
 	const data = try withExtensions(account.data(), 82, 1);
@@ -312,7 +312,7 @@ export function tokenAccountExtension(
 	this account: Account,
 	kind: ExtensionType,
 ): Result<Bytes, ProgramError> {
-	if (!account.isOwnedBy(Pubkey.token2022Program())) {
+	if (!account.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
 		return Result.err(ProgramError.invalidAccountOwner());
 	}
 	const data = try withExtensions(account.data(), 165, 2);
@@ -410,7 +410,7 @@ function createAssociated(
 	let storage: uint8[1] = [];
 	const length = putU8(storage, 0, discriminator);
 	return invokeSigned(
-		Pubkey.associatedTokenProgram(),
+		ASSOCIATED_TOKEN_PROGRAM_ID,
 		[
 			InstructionAccount.writableSigner(payer),
 			InstructionAccount.writable(associated),
@@ -463,7 +463,7 @@ export function decode(this typeof Mint, data: Bytes): Result<Mint, ProgramError
 
 export function verify(this typeof Mint, index: int32): Result<Account, ProgramError> {
 	const found = try unchecked(index);
-	if (!found.isOwnedBy(Pubkey.tokenProgram()) && !found.isOwnedBy(Pubkey.token2022Program())) {
+	if (!found.isOwnedBy(TOKEN_PROGRAM_ID) && !found.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
 		return Result.err(ProgramError.accountOwnedByWrongProgram());
 	}
 	if (!mintReadable(found)) { return Result.err(ProgramError.accountDidNotDeserialize()); }
@@ -484,7 +484,7 @@ export function decode(this typeof TokenAccount, data: Bytes): Result<TokenAccou
 
 export function verify(this typeof TokenAccount, index: int32): Result<Account, ProgramError> {
 	const found = try unchecked(index);
-	if (!found.isOwnedBy(Pubkey.tokenProgram()) && !found.isOwnedBy(Pubkey.token2022Program())) {
+	if (!found.isOwnedBy(TOKEN_PROGRAM_ID) && !found.isOwnedBy(TOKEN_2022_PROGRAM_ID)) {
 		return Result.err(ProgramError.accountOwnedByWrongProgram());
 	}
 	if (!tokenAccountReadable(found)) { return Result.err(ProgramError.accountDidNotDeserialize()); }
@@ -756,7 +756,7 @@ when (testBuild) {
 	}
 
 	test "readMint reads a token mint's supply, decimals and authorities" {
-		const accounts = single(Pubkey.tokenProgram(), mintData(5, 1000000, 6));
+		const accounts = single(TOKEN_PROGRAM_ID, mintData(5, 1000000, 6));
 		assert resultOf(accounts, 0, readerEntry) == 0;
 		const lines = logs();
 		assert lines[0] == logged("0xf4240");
@@ -770,16 +770,16 @@ when (testBuild) {
 		assert resultOf(foreign, 0, readerEntry) == ProgramError.invalidAccountOwner().code;
 		const short = mintData(5, 1, 6);
 		short.pop();
-		const shortened = single(Pubkey.tokenProgram(), short);
+		const shortened = single(TOKEN_PROGRAM_ID, short);
 		assert resultOf(shortened, 0, readerEntry) == ProgramError.invalidAccountData().code;
 		const blank = mintData(5, 1, 6);
 		blank[45] = 0;
-		const uninitialized = single(Pubkey.tokenProgram(), blank);
+		const uninitialized = single(TOKEN_PROGRAM_ID, blank);
 		assert resultOf(uninitialized, 0, readerEntry) == ProgramError.uninitializedAccount().code;
 	}
 
 	test "readTokenAccount reads amount, state and the close authority at their byte offsets" {
-		const accounts = single(Pubkey.tokenProgram(), tokenAccountData(4, 8, 77, 2));
+		const accounts = single(TOKEN_PROGRAM_ID, tokenAccountData(4, 8, 77, 2));
 		assert resultOf(accounts, 1, readerEntry) == 0;
 		const lines = logs();
 		assert lines[0] == logged("0x4d");
@@ -789,41 +789,41 @@ when (testBuild) {
 	}
 
 	test "a token account with an unknown state byte is refused" {
-		const accounts = single(Pubkey.tokenProgram(), tokenAccountData(4, 8, 77, 3));
+		const accounts = single(TOKEN_PROGRAM_ID, tokenAccountData(4, 8, 77, 3));
 		assert resultOf(accounts, 1, readerEntry) == ProgramError.invalidAccountData().code;
 	}
 
 	test "mintExtension walks the Token-2022 TLV entries after byte 166" {
-		const accounts = single(Pubkey.token2022Program(), mint2022Data());
+		const accounts = single(TOKEN_2022_PROGRAM_ID, mint2022Data());
 		assert resultOf(accounts, 2, readerEntry) == 0;
 		assert logs()[0] == logged("0x40");
 		assert logs()[1] == logged("0x2c");
 	}
 
 	test "mintExtension reports a missing extension and refuses an account extension" {
-		const accounts = single(Pubkey.token2022Program(), mint2022Data());
+		const accounts = single(TOKEN_2022_PROGRAM_ID, mint2022Data());
 		assert resultOf(accounts, 3, readerEntry) == ProgramError.custom(48).code;
 		assert resultOf(accounts, 4, readerEntry) == ProgramError.invalidAccountData().code;
-		const plain = single(Pubkey.token2022Program(), mintData(5, 1, 0));
+		const plain = single(TOKEN_2022_PROGRAM_ID, mintData(5, 1, 0));
 		assert resultOf(plain, 3, readerEntry) == ProgramError.custom(48).code;
 	}
 
 	test "groupMemberPointer and tokenGroupMember decode Token-2022's layouts" {
-		const accounts = single(Pubkey.token2022Program(), mint2022Data());
+		const accounts = single(TOKEN_2022_PROGRAM_ID, mint2022Data());
 		assert resultOf(accounts, 5, readerEntry) == 0;
 		assert logs()[0] == logged("0x21") && logs()[1] == logged("0x2c");
 		assert resultOf(accounts, 6, readerEntry) == 0;
 		assert logs()[0] == logged("0x1") && logs()[1] == logged("0x37");
 		assert logs()[2] == logged("0x1092");
-		const unset = single(Pubkey.token2022Program(), memberMintData(Pubkey.zero(), 64));
+		const unset = single(TOKEN_2022_PROGRAM_ID, memberMintData(Pubkey.zero(), 64));
 		assert resultOf(unset, 5, readerEntry) == 0;
 		assert logs()[0] == logged("0x0") && logs()[1] == logged("0x2c");
 	}
 
 	test "a group member pointer of another length is refused, as bytemuck refuses it" {
-		const longer = single(Pubkey.token2022Program(), memberMintData(keyOf(33), 65));
+		const longer = single(TOKEN_2022_PROGRAM_ID, memberMintData(keyOf(33), 65));
 		assert resultOf(longer, 5, readerEntry) == ProgramError.invalidArgument().code;
-		const plain = single(Pubkey.tokenProgram(), mintData(5, 1, 0));
+		const plain = single(TOKEN_PROGRAM_ID, mintData(5, 1, 0));
 		assert resultOf(plain, 6, readerEntry) == ProgramError.invalidAccountOwner().code;
 	}
 
@@ -833,7 +833,7 @@ when (testBuild) {
 		const target = try account(1);
 		const authority = try account(2);
 		const payer = try account(3);
-		const token = Pubkey.tokenProgram();
+		const token = TOKEN_PROGRAM_ID;
 		if (op == 7) {
 			return signed(mintTo(token, mint, target, authority, 500), ["auth", [5]]);
 		}
@@ -885,7 +885,7 @@ when (testBuild) {
 		}
 		if (op == 0) { return mintTo(token, mint, target, authority, 500); }
 		if (op == 1) {
-			const extended = Pubkey.token2022Program();
+			const extended = TOKEN_2022_PROGRAM_ID;
 			return transferChecked(extended, payer, mint, target, authority, 250, 6);
 		}
 		if (op == 2) { return closeAccount(token, target, payer, authority); }
@@ -907,13 +907,13 @@ when (testBuild) {
 	function cpiAccounts(): HostAccount[] {
 		const program: HostAccount = {
 			...holderOf(6, keyOf(0), []),
-			key: Pubkey.tokenProgram(),
+			key: TOKEN_PROGRAM_ID,
 			writable: false,
 			executable: true,
 		};
 		return [
-			holderOf(1, Pubkey.tokenProgram(), mintData(7, 500, 6)),
-			holderOf(2, Pubkey.tokenProgram(), tokenAccountData(1, 3, 0, 1)),
+			holderOf(1, TOKEN_PROGRAM_ID, mintData(7, 500, 6)),
+			holderOf(2, TOKEN_PROGRAM_ID, tokenAccountData(1, 3, 0, 1)),
 			{ ...holderOf(3, keyOf(0), []), signer: true, writable: false },
 			{ ...holderOf(4, keyOf(0), tokenAccountData(1, 3, 900, 1)), signer: true },
 			{ ...holderOf(0, keyOf(0), []), writable: false, executable: true },
@@ -924,7 +924,7 @@ when (testBuild) {
 	test "mintTo, transferChecked and closeAccount carry the token program's accounts and data" {
 		assert resultOf(cpiAccounts(), 0, cpiEntry) == 0;
 		const minted = invocations()[0];
-		assert minted.program.equals(Pubkey.tokenProgram());
+		assert minted.program.equals(TOKEN_PROGRAM_ID);
 		assert minted.accounts.length == 3;
 		assert minted.accounts[0].writable && !minted.accounts[0].signer;
 		assert minted.accounts[1].key.equals(keyOf(2)) && minted.accounts[1].writable;
@@ -934,7 +934,7 @@ when (testBuild) {
 
 		assert resultOf(cpiAccounts(), 1, cpiEntry) == 0;
 		const moved = invocations()[0];
-		assert moved.program.equals(Pubkey.token2022Program());
+		assert moved.program.equals(TOKEN_2022_PROGRAM_ID);
 		assert moved.accounts[0].key.equals(keyOf(4)) && moved.accounts[0].writable;
 		assert moved.accounts[1].key.equals(keyOf(1)) && !moved.accounts[1].writable;
 		assert moved.accounts[2].key.equals(keyOf(2)) && moved.accounts[2].writable;
@@ -967,13 +967,13 @@ when (testBuild) {
 	test "createAssociatedTokenIdempotent sends discriminator 1 with the six accounts in order" {
 		assert resultOf(cpiAccounts(), 5, cpiEntry) == 0;
 		const created = invocations()[0];
-		assert created.program.equals(Pubkey.associatedTokenProgram());
+		assert created.program.equals(ASSOCIATED_TOKEN_PROGRAM_ID);
 		assert created.accounts.length == 6;
 		const funding = created.accounts[0];
 		assert funding.key.equals(keyOf(4)) && funding.signer && funding.writable;
 		assert created.accounts[1].key.equals(keyOf(2)) && created.accounts[1].writable;
 		const program = created.accounts[5];
-		assert program.key.equals(Pubkey.tokenProgram()) && !program.writable;
+		assert program.key.equals(TOKEN_PROGRAM_ID) && !program.writable;
 		assert created.data.length == 1 && created.data[0] == 1;
 	}
 
@@ -983,7 +983,7 @@ when (testBuild) {
 		accounts[3].lamports = 10000000;
 		assert resultOf(accounts, 15, cpiEntry) == 0;
 		const created = invocations()[0];
-		assert created.program.equals(Pubkey.associatedTokenProgram());
+		assert created.program.equals(ASSOCIATED_TOKEN_PROGRAM_ID);
 		assert created.accounts.length == 6;
 		assert created.accounts[0].key.equals(keyOf(4)) && created.accounts[0].writable;
 		assert created.accounts[0].signer;
@@ -993,7 +993,7 @@ when (testBuild) {
 		assert !created.accounts[2].signer;
 		assert created.accounts[3].key.equals(keyOf(1)) && !created.accounts[3].writable;
 		assert created.accounts[4].key.equals(keyOf(0)) && !created.accounts[4].writable;
-		assert created.accounts[5].key.equals(Pubkey.tokenProgram()) && !created.accounts[5].writable;
+		assert created.accounts[5].key.equals(TOKEN_PROGRAM_ID) && !created.accounts[5].writable;
 		assert created.data.length == 1 && created.data[0] == 0 && created.signers == 0;
 	}
 
@@ -1008,7 +1008,7 @@ when (testBuild) {
 				accounts[1].lamports = 0;
 				accounts[3].lamports = 10000000;
 			}
-			if (op == 14) { accounts[3].owner = Pubkey.tokenProgram(); }
+			if (op == 14) { accounts[3].owner = TOKEN_PROGRAM_ID; }
 			assert resultOf(accounts, op as uint8, cpiEntry) == 0;
 			const calls = invocations();
 			assert calls.length == 1 && calls[0].signers == 1;
@@ -1021,7 +1021,7 @@ when (testBuild) {
 
 	function mintPdaStep(): Result<uint64, ProgramError> {
 		const op = try instructionData().readU8(0);
-		const program = op == 0 ? Pubkey.tokenProgram() : Pubkey.systemProgram();
+		const program = op == 0 ? TOKEN_PROGRAM_ID : Pubkey.zero();
 		const payer = try writableSigner(0);
 		const mint = try writable(1);
 		const bump = try createMintPda(payer, mint, ["mint"], program, 6, keyOf(7), null);
@@ -1035,12 +1035,12 @@ when (testBuild) {
 
 	function mintPdaAccounts(mintKey: Pubkey): HostAccount[] {
 		const payer: HostAccount = {
-			...holderOf(1, Pubkey.systemProgram(), []),
+			...holderOf(1, Pubkey.zero(), []),
 			lamports: 10000000,
 			signer: true,
 		};
 		const mint: HostAccount = {
-			...holderOf(2, Pubkey.systemProgram(), []),
+			...holderOf(2, Pubkey.zero(), []),
 			key: mintKey,
 			lamports: 0,
 		};
@@ -1056,16 +1056,16 @@ when (testBuild) {
 	test "createMintPda creates the mint at its PDA for the token program, then initializes it" {
 		const accounts = mintPdaAccounts(mintKey());
 		assert resultOf(accounts, 0, mintPdaEntry) == 0;
-		assert accounts[1].owner.equals(Pubkey.tokenProgram()) && accounts[1].data.length == 82;
+		assert accounts[1].owner.equals(TOKEN_PROGRAM_ID) && accounts[1].data.length == 82;
 		assert accounts[1].lamports > 0;
 		const created = invocations()[0];
-		assert created.program.equals(Pubkey.systemProgram()) && created.data[0] == 0;
+		assert created.program.equals(Pubkey.zero()) && created.data[0] == 0;
 		assert created.data[12] == 82 && created.signers == 1;
 		const mintBump = findProgramAddressOf(keyOf(9), ["mint"]);
 		assert mintBump.ok;
 		if (mintBump.ok) { assert signerIs(created, 0, [textBytes("mint"), [mintBump.value.bump]]); }
 		const initialized = invocations()[1];
-		assert initialized.program.equals(Pubkey.tokenProgram());
+		assert initialized.program.equals(TOKEN_PROGRAM_ID);
 		assert initialized.accounts.length == 1 && initialized.accounts[0].key.equals(mintKey());
 		assert initialized.data[0] == 20 && initialized.data[1] == 6 && initialized.data[2] == 7;
 		assert initialized.data[34] == 0;
@@ -1089,7 +1089,7 @@ when (testBuild) {
 		const mint = keyOf(0x4d);
 		const tokenWord0: uint64 = 0x68c7bc0b9c46ed44;
 		const tokenWord3: uint64 = 0x04c88d35ee417be8;
-		const classic = associatedTokenAddress(wallet, mint, Pubkey.tokenProgram());
+		const classic = associatedTokenAddress(wallet, mint, TOKEN_PROGRAM_ID);
 		assert classic.ok;
 		if (classic.ok) {
 			assert classic.value.bump == 255;
@@ -1098,7 +1098,7 @@ when (testBuild) {
 		}
 		const extendedWord0: uint64 = 0xc080ac8fa7881df3;
 		const extendedWord3: uint64 = 0x08b979898d73f9d3;
-		const extended = associatedTokenAddress(wallet, mint, Pubkey.token2022Program());
+		const extended = associatedTokenAddress(wallet, mint, TOKEN_2022_PROGRAM_ID);
 		assert extended.ok;
 		if (extended.ok) {
 			const found = extended.value.key;
@@ -1132,34 +1132,34 @@ when (testBuild) {
 	}
 
 	function typedAccounts(mintOwner: Pubkey, mintData: uint8[]): HostAccount[] {
-		let owner = holderOf(3, Pubkey.systemProgram(), []);
+		let owner = holderOf(3, Pubkey.zero(), []);
 		owner.signer = true;
 		return [
 			owner,
-			holderOf(4, Pubkey.token2022Program(), tokenAccountData(1, 3, 900, 1)),
-			holderOf(5, Pubkey.token2022Program(), tokenAccountData(1, 6, 0, 1)),
+			holderOf(4, TOKEN_2022_PROGRAM_ID, tokenAccountData(1, 3, 900, 1)),
+			holderOf(5, TOKEN_2022_PROGRAM_ID, tokenAccountData(1, 6, 0, 1)),
 			holderOf(1, mintOwner, mintData),
 		];
 	}
 
 	function goodMint(): HostAccount[] {
-		return typedAccounts(Pubkey.token2022Program(), mintData(7, 500, 6));
+		return typedAccounts(TOKEN_2022_PROGRAM_ID, mintData(7, 500, 6));
 	}
 
 	test "typed token accounts verify through accounts<T>() and transfer with the mint's decimals" {
 		assert resultOf(goodMint(), 0, typedTransferEntry) == 0;
 		const moved = invocations()[0];
-		assert moved.program == Pubkey.token2022Program();
+		assert moved.program == TOKEN_2022_PROGRAM_ID;
 		const moveBytes: uint8[] = [12, 250, 0, 0, 0, 0, 0, 0, 0, 6];
 		assert sameBytes(moved.data, moveBytes);
 	}
 
 	test "a mint owned by another program or with a broken layout is refused with Anchor's codes" {
-		const foreign = typedAccounts(Pubkey.systemProgram(), mintData(7, 500, 6));
+		const foreign = typedAccounts(Pubkey.zero(), mintData(7, 500, 6));
 		assert resultOf(foreign, 0, typedTransferEntry) ==
 			ProgramError.accountOwnedByWrongProgram().code;
 		const short: uint8[] = [1, 2, 3];
-		const broken = typedAccounts(Pubkey.token2022Program(), short);
+		const broken = typedAccounts(TOKEN_2022_PROGRAM_ID, short);
 		assert resultOf(broken, 0, typedTransferEntry) ==
 			ProgramError.accountDidNotDeserialize().code;
 	}
@@ -1192,7 +1192,7 @@ when (testBuild) {
 	}
 
 	function decorated(program: Pubkey, ownerWord: uint64, ownAt: Pubkey, plainMint: uint64, plainOwner: uint64): HostAccount[] {
-		let owner = holderOf(3, Pubkey.systemProgram(), []);
+		let owner = holderOf(3, Pubkey.zero(), []);
 		owner.signer = true;
 		let own = holderOf(5, program, tokenAccountData(1, ownerWord, 900, 1));
 		own.key = ownAt;
@@ -1205,7 +1205,7 @@ when (testBuild) {
 	}
 
 	test "@associated checks the token account's authority, then that it sits at the associated address of the authority and the mint" {
-		for (const program of [Pubkey.tokenProgram(), Pubkey.token2022Program()]) {
+		for (const program of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID]) {
 			const good = decorated(program, 3, ataOf(3, 1, program), 1, 3);
 			assert resultOf(good, 0, decoratedEntry) == 0;
 			const otherOwner = decorated(program, 4, ataOf(3, 1, program), 1, 3);
@@ -1214,9 +1214,9 @@ when (testBuild) {
 			const elsewhere = decorated(program, 3, keyOf(66), 1, 3);
 			assert resultOf(elsewhere, 0, decoratedEntry) ==
 				ProgramError.constraintAssociated().code;
-			const otherProgram = program == Pubkey.tokenProgram()
-				? Pubkey.token2022Program()
-				: Pubkey.tokenProgram();
+			const otherProgram = program == TOKEN_PROGRAM_ID
+				? TOKEN_2022_PROGRAM_ID
+				: TOKEN_PROGRAM_ID;
 			const derivedByAnother = decorated(program, 3, ataOf(3, 1, otherProgram), 1, 3);
 			assert resultOf(derivedByAnother, 0, decoratedEntry) ==
 				ProgramError.constraintAssociated().code;
@@ -1224,7 +1224,7 @@ when (testBuild) {
 	}
 
 	test "@tokenAuthority and @tokenMint check the fields of the token account, the authority first" {
-		const program = Pubkey.token2022Program();
+		const program = TOKEN_2022_PROGRAM_ID;
 		const own = ataOf(3, 1, program);
 		assert resultOf(decorated(program, 3, own, 1, 3), 0, decoratedEntry) == 0;
 		assert resultOf(decorated(program, 3, own, 2, 3), 0, decoratedEntry) ==
@@ -1267,7 +1267,7 @@ when (testBuild) {
 	test "verifying a mint or a token account accepts exactly what decoding it accepts" {
 		let accepted = 0;
 		let refused = 0;
-		for (const owner of [Pubkey.tokenProgram(), Pubkey.token2022Program(), Pubkey.systemProgram()]) {
+		for (const owner of [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, Pubkey.zero()]) {
 			for (const length of [0, 44, 81, 82, 83, 164, 165, 166, 200, 355]) {
 				for (const tag of [0 as uint8, 1 as uint8, 2 as uint8, 3 as uint8]) {
 					const mintBytes = resized(mintData(7, 500, 6), length, 165, tag);

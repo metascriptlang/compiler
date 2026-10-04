@@ -2,6 +2,7 @@
 
 import {
 	Account,
+	DELEGATION_PROGRAM_ID,
 	Discriminator,
 	ProgramError,
 	Pubkey,
@@ -231,7 +232,7 @@ test "a program verifier checks the key, then that it is executable" {
 	assert run(programKey(), [wrong], [], systemProgramEntry).result ==
 		ProgramError.invalidProgramId().code;
 	let system = holder(1, keyOf(9), [], false, false);
-	system.key = Pubkey.systemProgram();
+	system.key = Pubkey.zero();
 	assert run(programKey(), [system], [], systemProgramEntry).result ==
 		ProgramError.invalidProgramExecutable().code;
 	system.executable = true;
@@ -426,7 +427,7 @@ function reallocStep(): Result<uint64, ProgramError> {
 }
 
 function wallet(seed: uint8, lamports: uint64): HostAccount {
-	let account = holder(seed, Pubkey.systemProgram(), [], true, true);
+	let account = holder(seed, Pubkey.zero(), [], true, true);
 	account.lamports = lamports;
 	return account;
 }
@@ -434,7 +435,7 @@ function wallet(seed: uint8, lamports: uint64): HostAccount {
 function blank(key: Pubkey): HostAccount {
 	return {
 		key: key,
-		owner: Pubkey.systemProgram(),
+		owner: Pubkey.zero(),
 		lamports: 0,
 		data: [],
 		signer: true,
@@ -479,7 +480,7 @@ test "close refunds every lamport, hands the account to the System program and e
 	const accounts = [counter, refund];
 	assert run(programKey(), accounts, [], closeEntry).result == 0;
 	assert accounts[0].lamports == 0 && accounts[1].lamports == 750;
-	assert accounts[0].owner == Pubkey.systemProgram() && accounts[0].data.length == 0;
+	assert accounts[0].owner == Pubkey.zero() && accounts[0].data.length == 0;
 	const self = [counter, counter];
 	assert run(programKey(), self, [], closeEntry).result == ProgramError.constraintClose().code;
 }
@@ -511,7 +512,7 @@ function bumpAccountsEntry(): void { codeOf(bumpAccountsStep()); }
 
 function systemProgramAccount(): HostAccount {
 	let account = holder(9, keyOf(0), [], false, false);
-	account.key = Pubkey.systemProgram();
+	account.key = Pubkey.zero();
 	account.executable = true;
 	return account;
 }
@@ -805,10 +806,6 @@ test "transferLamports moves lamports through the System program" {
 	assert run(programKey(), poor, [], payEntry).result != 0;
 }
 
-function delegationProgramKey(): Pubkey {
-	return @comptime { return pubkeyOf("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"); };
-}
-
 function counterAddress(): ProgramAddress {
 	const derived = findProgramAddressOf(programKey(), ["counter"]);
 	if (derived.ok) { return derived.value; }
@@ -839,7 +836,7 @@ function delegatedPdaEntry(): void { codeOf(delegatedPdaStep()); }
 
 test "a delegated verifier checks the delegation program as owner, then discriminator and size" {
 	const tag = counterTag();
-	const dlp = delegationProgramKey();
+	const dlp = DELEGATION_PROGRAM_ID;
 	const undelegated = [holder(1, programKey(), counterBytes(tag, 41, 48), false, false)];
 	assert run(programKey(), undelegated, [], delegatedEntry).result ==
 		ProgramError.accountOwnedByWrongProgram().code;
@@ -859,7 +856,7 @@ test "a delegated verifier checks the delegation program as owner, then discrimi
 
 test "a delegated account must sit at the program's PDA, with the canonical or the given bump" {
 	const bytes = counterBytes(counterTag(), 41, 48);
-	const dlp = delegationProgramKey();
+	const dlp = DELEGATION_PROGRAM_ID;
 	const address = counterAddress();
 	const atPda = [delegatedCounter(address.key, dlp, bytes)];
 	const canonical: uint8[] = [0];
@@ -893,7 +890,7 @@ function claimEntry(): void {
 test "accounts<T>() verifies a Delegated<T> field like delegated<T>()" {
 	const bytes = counterBytes(counterTag(), 41, 48);
 	const owner = holder(2, keyOf(9), [], true, false);
-	const pet = delegatedCounter(counterAddress().key, delegationProgramKey(), bytes);
+	const pet = delegatedCounter(counterAddress().key, DELEGATION_PROGRAM_ID, bytes);
 	assert run(programKey(), [owner, pet], [], claimEntry).result == 0;
 	const undelegated = delegatedCounter(counterAddress().key, programKey(), bytes);
 	assert run(programKey(), [owner, undelegated], [], claimEntry).result ==
@@ -1155,9 +1152,9 @@ function accountSeedEntry(): void { codeOf(accountSeedStep()); }
 test "an account is a seed through its key, whatever proof it carries" {
 	const accounts = [
 		holder(2, keyOf(9), [], true, false),
-		holder(3, Pubkey.systemProgram(), [], false, true),
+		holder(3, Pubkey.zero(), [], false, true),
 		holder(1, programKey(), counterBytes(counterTag(), 41, 48), false, true),
-		holder(4, Pubkey.systemProgram(), [], false, false),
+		holder(4, Pubkey.zero(), [], false, false),
 	];
 	assert run(programKey(), accounts, [], accountSeedEntry).result == 0;
 }
@@ -1456,7 +1453,7 @@ function sameBytes(left: uint8[], right: uint8[]): boolean {
 	return true;
 }
 
-function systemKey(): Pubkey { return Pubkey.systemProgram(); }
+function systemKey(): Pubkey { return Pubkey.zero(); }
 
 function recordedStep(): Result<uint64, ProgramError> {
 	const op = try instructionData().readU8(0);
@@ -1760,11 +1757,11 @@ function safeAt(key: Pubkey, owner: Pubkey, limit: uint8, bump: uint8): HostAcco
 }
 
 function systemAccountKey(): HostAccount {
-	return atKey(holder(5, Pubkey.systemProgram(), [], false, false), Pubkey.systemProgram());
+	return atKey(holder(5, Pubkey.zero(), [], false, false), Pubkey.zero());
 }
 
 function ownerWallet(): HostAccount {
-	return holder(2, Pubkey.systemProgram(), [], true, false);
+	return holder(2, Pubkey.zero(), [], true, false);
 }
 
 function pinnedSafe(limit: uint8): HostAccount {
@@ -1804,7 +1801,7 @@ test "@seeds with @bump(account.field) accepts the address the stored bump gives
 	const elsewhere = [ownerWallet(), safeAt(keyOf(77), keyOf(2), 9, found.bump)];
 	assert run(programKey(), elsewhere, [], pinnedEntry).result ==
 		ProgramError.constraintSeeds().code;
-	const otherSeed = [holder(3, Pubkey.systemProgram(), [], true, false), pinnedSafe(9)];
+	const otherSeed = [holder(3, Pubkey.zero(), [], true, false), pinnedSafe(9)];
 	assert run(programKey(), otherSeed, [], pinnedEntry).result ==
 		ProgramError.constraintSeeds().code;
 }
@@ -1845,7 +1842,7 @@ test "@hasOne compares the account's field of that name to the key of the siblin
 export struct Addressed {
 	safe: Owned<Safe>;
 	@address(safe.owner) payer: Signer;
-	@address(Pubkey.systemProgram(), ProgramError.userError(4)) system: Account;
+	@address(Pubkey.zero(), ProgramError.userError(4)) system: Account;
 }
 
 function addressedStep(): Result<uint64, ProgramError> {
@@ -1857,11 +1854,11 @@ function addressedEntry(): void { codeOf(addressedStep()); }
 
 test "@address compares the field's key to a key, a field of another account's data or a call, with ConstraintAddress or the error given" {
 	const safe = readOnly(safeAt(keyOf(8), keyOf(2), 4, 0));
-	const system = holder(5, Pubkey.systemProgram(), [], false, false);
+	const system = holder(5, Pubkey.zero(), [], false, false);
 	const payer = ownerWallet();
 	const accounts = [safe, payer, systemAccountKey()];
 	assert run(programKey(), accounts, [], addressedEntry).result == 0;
-	const stranger = [safe, holder(3, Pubkey.systemProgram(), [], true, false), accounts[2]];
+	const stranger = [safe, holder(3, Pubkey.zero(), [], true, false), accounts[2]];
 	assert run(programKey(), stranger, [], addressedEntry).result ==
 		ProgramError.constraintAddress().code;
 	const elsewhere = [safe, payer, system];
@@ -1900,7 +1897,7 @@ function counted(ordinal: uint32): ProgramError {
 export struct Lazy {
 	owner: Signer;
 	@hasOne(owner, counted(3)) @constraint(safe.limit > 5, counted(5)) safe: Owned<Safe>;
-	@address(Pubkey.systemProgram(), counted(4)) system: Account;
+	@address(Pubkey.zero(), counted(4)) system: Account;
 }
 
 function lazyStep(): Result<uint64, ProgramError> {
@@ -1912,7 +1909,7 @@ function lazyEntry(): void { codeOf(lazyStep()); }
 
 test "a custom error is built when its check fails and not before, as Anchor builds it in the failing branch" {
 	const system = systemAccountKey();
-	const stranger = holder(5, Pubkey.systemProgram(), [], false, false);
+	const stranger = holder(5, Pubkey.zero(), [], false, false);
 	const mine = readOnly(safeAt(keyOf(8), keyOf(2), 50, 0));
 	builtErrors = 0;
 	assert run(programKey(), [ownerWallet(), mine, system], [], lazyEntry).result == 0;
@@ -1932,7 +1929,7 @@ test "a custom error is built when its check fails and not before, as Anchor bui
 
 export struct Ordered {
 	owner: Signer;
-	@address(Pubkey.systemProgram()) @constraint(safe.limit > 5) @hasOne(owner) @seeds("safe", owner) @bump(safe.bump)
+	@address(Pubkey.zero()) @constraint(safe.limit > 5) @hasOne(owner) @seeds("safe", owner) @bump(safe.bump)
 	safe: Mutable<Safe>;
 }
 
@@ -1961,7 +1958,7 @@ test "a field's constraints run seeds, has_one, constraint, address, whatever or
 
 export struct Chained {
 	@constraint(safe.limit > 5) safe: Owned<Safe>;
-	@address(Pubkey.systemProgram()) @constraint(safe.limit > 100) second: Account;
+	@address(Pubkey.zero()) @constraint(safe.limit > 100) second: Account;
 	last: Signer;
 }
 
@@ -1974,9 +1971,9 @@ function chainedEntry(): void { codeOf(chainedStep()); }
 
 test "every field is verified by its type before any constraint runs, and a field's constraints precede the next field's" {
 	const system = systemAccountKey();
-	const stranger = holder(5, Pubkey.systemProgram(), [], false, false);
-	const signedLast = holder(6, Pubkey.systemProgram(), [], true, false);
-	const unsignedLast = holder(6, Pubkey.systemProgram(), [], false, false);
+	const stranger = holder(5, Pubkey.zero(), [], false, false);
+	const signedLast = holder(6, Pubkey.zero(), [], true, false);
+	const unsignedLast = holder(6, Pubkey.zero(), [], false, false);
 	const low = readOnly(safeAt(keyOf(8), keyOf(2), 1, 0));
 	const high = readOnly(safeAt(keyOf(8), keyOf(2), 120, 0));
 	assert run(programKey(), [low, stranger, unsignedLast], [], chainedEntry).result ==

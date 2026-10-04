@@ -1,5 +1,6 @@
 import {
 	Account,
+	DELEGATION_PROGRAM_ID,
 	InstructionAccount,
 	assignTo,
 	createAccount,
@@ -42,10 +43,6 @@ export struct DelegationConfig {
 	validator: Pubkey;
 }
 
-export function delegationProgram(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"); };
-}
-
 export function anyValidator(this typeof DelegationConfig): DelegationConfig {
 	const unlimited: uint32 = 0xffffffff;
 	const config: DelegationConfig = { commitFrequencyMs: unlimited, validator: Pubkey.zero() };
@@ -63,7 +60,7 @@ function closeBuffer(payer: Account, buffer: Account): Result<uint64, ProgramErr
 	payer.setLamports(payer.lamports() + reclaimed);
 	buffer.setLamports(0);
 	const _emptied = try buffer.resize(0);
-	buffer.assign(Pubkey.systemProgram());
+	buffer.assign(Pubkey.zero());
 	return Result.ok(reclaimed);
 }
 
@@ -100,10 +97,10 @@ export function delegateAt(
 	const _copied = try accounts.buffer.data().copyFrom(accounts.delegated.data());
 	accounts.delegated.data().fillWith(0);
 
-	if (!accounts.delegated.owner().equals(Pubkey.systemProgram())) {
-		accounts.delegated.assign(Pubkey.systemProgram());
+	if (!accounts.delegated.owner().equals(Pubkey.zero())) {
+		accounts.delegated.assign(Pubkey.zero());
 	}
-	const _assigned = try assignTo(accounts.delegated, Pubkey.delegationProgram(), signer);
+	const _assigned = try assignTo(accounts.delegated, DELEGATION_PROGRAM_ID, signer);
 
 	let storage: uint8[625] = [];
 	let length = putU64(storage, 0, 0);
@@ -120,7 +117,7 @@ export function delegateAt(
 		length = putPubkey(storage, length, config.validator);
 	}
 	const _delegated = try invokeSigned(
-		Pubkey.delegationProgram(),
+		DELEGATION_PROGRAM_ID,
 		[
 			InstructionAccount.writableSigner(accounts.payer),
 			InstructionAccount.writableSigner(accounts.delegated),

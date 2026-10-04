@@ -171,7 +171,15 @@ when (!testBuild) {
 }
 
 when (testBuild) {
-	import { Discriminator, Pubkey, findProgramAddressOf, instructionDiscriminator } from "std/solana";
+	import {
+		ASSOCIATED_TOKEN_PROGRAM_ID,
+		Discriminator,
+		Pubkey,
+		SYSTEM_PROGRAM_ID,
+		TOKEN_PROGRAM_ID,
+		findProgramAddressOf,
+		instructionDiscriminator,
+	} from "std/solana";
 	import { HostAccount, invocations, run, signerIs, textBytes } from "std/solana/host";
 	import { associatedTokenAddress } from "std/solana/token";
 
@@ -217,11 +225,11 @@ when (testBuild) {
 		data.push(6);
 		data.push(1);
 		zeros(data, 36);
-		return account(key, Pubkey.tokenProgram(), data, 1461600);
+		return account(key, TOKEN_PROGRAM_ID, data, 1461600);
 	}
 
 	function associatedKey(wallet: Pubkey, mint: Pubkey): Pubkey {
-		const found = associatedTokenAddress(wallet, mint, Pubkey.tokenProgram());
+		const found = associatedTokenAddress(wallet, mint, TOKEN_PROGRAM_ID);
 		return found.ok ? found.value.key : Pubkey.zero();
 	}
 
@@ -233,11 +241,11 @@ when (testBuild) {
 		zeros(data, 36);
 		data.push(1);
 		zeros(data, 56);
-		return account(associatedKey(wallet, mint), Pubkey.tokenProgram(), data, 2039280);
+		return account(associatedKey(wallet, mint), TOKEN_PROGRAM_ID, data, 2039280);
 	}
 
 	function wallet(key: Pubkey): HostAccount {
-		return { ...account(key, Pubkey.systemProgram(), [], 10000000000), signer: true };
+		return { ...account(key, SYSTEM_PROGRAM_ID, [], 10000000000), signer: true };
 	}
 
 	function executable(key: Pubkey): HostAccount {
@@ -245,7 +253,7 @@ when (testBuild) {
 	}
 
 	function blank(key: Pubkey): HostAccount {
-		return account(key, Pubkey.systemProgram(), [], 0);
+		return account(key, SYSTEM_PROGRAM_ID, [], 0);
 	}
 
 	function escrowKey(maker: Pubkey, seed: uint64): Pubkey {
@@ -291,9 +299,9 @@ when (testBuild) {
 			tokenAccount(maker, mintA, 1000),
 			blank(escrow),
 			blank(associatedKey(escrow, mintA)),
-			executable(Pubkey.associatedTokenProgram()),
-			executable(Pubkey.tokenProgram()),
-			executable(Pubkey.systemProgram()),
+			executable(ASSOCIATED_TOKEN_PROGRAM_ID),
+			executable(TOKEN_PROGRAM_ID),
+			executable(SYSTEM_PROGRAM_ID),
 		];
 	}
 
@@ -301,7 +309,7 @@ when (testBuild) {
 		const made = makeAccounts(7);
 		assert run(programKey(), made, makeData(7, 600, 300), entry).result == 0;
 		assert amountOf(made[3]) == 400;
-		assert made[5].owner == Pubkey.tokenProgram() && amountOf(made[5]) == 600;
+		assert made[5].owner == TOKEN_PROGRAM_ID && amountOf(made[5]) == 600;
 		assert made[4].owner == programKey() && made[4].data.length == 8 + 120;
 	}
 
@@ -325,7 +333,7 @@ when (testBuild) {
 		assert run(programKey(), taken, instructionData("Take"), entry).result == 0;
 		assert amountOf(taken[4]) == 600 && amountOf(taken[5]) == 200 && amountOf(taken[6]) == 300;
 		assert taken[7].lamports == 0 && taken[7].data.length == 0;
-		assert taken[7].owner == Pubkey.systemProgram();
+		assert taken[7].owner == SYSTEM_PROGRAM_ID;
 		assert taken[8].lamports == 0;
 		assert taken[1].lamports > makerBefore;
 	}

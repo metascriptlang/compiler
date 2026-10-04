@@ -73,6 +73,7 @@ const programSigner = await signerOf("program");
 const payer = await signerOf("payer");
 const PROGRAM = programSigner.address;
 
+const WK_CONST = { systemProgram: "SYSTEM_PROGRAM_ID", tokenProgram: "TOKEN_PROGRAM_ID", delegationProgram: "DELEGATION_PROGRAM_ID", associatedTokenProgram: "ASSOCIATED_TOKEN_PROGRAM_ID" };
 const WELL_KNOWN = { systemProgram: SYSTEM, tokenProgram: TOKEN, delegationProgram: DELEGATION, associatedTokenProgram: ASSOCIATED };
 const USER_KEYS = {
 	hydraProgram: addressFrom("user:hydraProgram"),
@@ -126,7 +127,7 @@ const isSigner = (field) => ["Signer", "WritableSigner"].includes(parseType(fiel
 function refText(ref) {
 	if (ref.field) return ref.field;
 	if (ref.data) return `${ref.data[0]}.${ref.data[1]}`;
-	if (ref.wk) return `Pubkey.${ref.wk}()`;
+	if (ref.wk) return WK_CONST[ref.wk];
 	if (ref.own) return "programId()";
 	if (ref.user) return `Pubkey.${ref.user}()`;
 	throw new Error("bad key reference");
@@ -399,7 +400,7 @@ function chainBody(shape) {
 function keyExpr(ref) {
 	if (ref.field) return `$accounts.${ref.field}.keyAddress()`;
 	if (ref.data) return `bytesAddress($accounts.${ref.data[0]}.data().${ref.data[1]}.bytes)`;
-	if (ref.wk) return `bytesAddress(Pubkey.${ref.wk}().bytes)`;
+	if (ref.wk) return `bytesAddress(${WK_CONST[ref.wk]}.bytes)`;
 	if (ref.own) return "bytesAddress(programId().bytes)";
 	if (ref.user) return `bytesAddress(Pubkey.${ref.user}().bytes)`;
 	throw new Error("bad key reference");
@@ -482,6 +483,10 @@ function programSource(shapes, datas, extra = "") {
 	Token,
 	Writable,
 	WritableSigner,
+	ASSOCIATED_TOKEN_PROGRAM_ID,
+	DELEGATION_PROGRAM_ID,
+	SYSTEM_PROGRAM_ID,
+	TOKEN_PROGRAM_ID,
 	account,
 	accountDiscriminator,
 	accounts,
@@ -501,7 +506,6 @@ function programSource(shapes, datas, extra = "") {
 	wordOf,
 } from "std/solana";
 import { Mint, TokenAccount } from "std/solana/token";
-import { delegationProgram } from "std/solana/delegation";
 ${form === "chain" ? 'import { exclusiveWritable } from "std/solana";\nimport { bytesAddress, seedBytes, seedKey, seedText } from "std/solana/seed";\nimport { anyCode, associatedCode, delegatedCode, failed, keysCode, mutableCode, ownedCode, programCode, seedsCanonicalCode, seedsGivenCode, signerCode, systemCode, tokenAuthorityCode, tokenMintCode, writableCode, writableSignerCode } from "./accountTableProto";\n' : ""}${form === "table" ? 'import { bytesAddress } from "std/solana/seed";\nimport { failed, verifiedAccounts, verifiedConstraints } from "./accountTableProto";\n' : ""}`;
 	const body = shapes.map((s) => `${structSource(s)}${handlerSource(s, datas)}`).join("\n");
 	const dispatch = shapes.map((s) => `\tif (op == ${s.op}) { result = ${s.handler}(); }`).join("\n");

@@ -1,6 +1,7 @@
 import {
 	Account,
 	Bytes,
+	DELEGATION_PROGRAM_ID,
 	InstructionAccount,
 	createProgramAccountSeeded,
 	invokeList,
@@ -15,7 +16,7 @@ import { findProgramAddressOf } from "./macro";
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { SeedTable, bytesAddress, findAt, tableAddress } from "./seed";
 
-export { DelegationAccounts, DelegationConfig, anyValidator, delegationProgram, onValidator } from "./delegation";
+export { DelegationAccounts, DelegationConfig, anyValidator, onValidator } from "./delegation";
 export { delegate } from "./macro";
 
 when (testBuild) {
@@ -24,7 +25,6 @@ when (testBuild) {
 		DelegationAccounts,
 		DelegationConfig,
 		anyValidator,
-		delegationProgram,
 		onValidator,
 	} from "./delegation";
 	import { delegate, findProgramAddress } from "./macro";
@@ -34,13 +34,9 @@ when (testBuild) {
 const MAX_COMMIT_ACCOUNTS: uint64 = 16;
 const MAX_TASK_ACCOUNTS: uint64 = 16;
 
-export function magicProgram(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("Magic11111111111111111111111111111111111111"); };
-}
+export const MAGIC_PROGRAM_ID: Pubkey = pubkeyOf("Magic11111111111111111111111111111111111111");
 
-export function magicContext(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("MagicContext1111111111111111111111111111111"); };
-}
+export const MAGIC_CONTEXT_ID: Pubkey = pubkeyOf("MagicContext1111111111111111111111111111111");
 
 function scheduleCommit(
 	payer: Account,
@@ -65,7 +61,7 @@ function scheduleCommit(
 	}
 	let storage: uint8[4] = [];
 	const length = putU32(storage, 0, discriminant);
-	return invokeList(Pubkey.magicProgram(), metas[0..at], storage, length);
+	return invokeList(MAGIC_PROGRAM_ID, metas[0..at], storage, length);
 }
 
 export function commit(payer: Account, committed: Account, magicContextAccount: Account): Result<uint64, ProgramError> {
@@ -137,9 +133,9 @@ function parseSeeds(data: Bytes, start: uint64, ref into: SeedTable): Result<uin
 
 export function undelegate(delegated: Account, buffer: Account, payer: Account, ownerProgramId: Pubkey, callbackData: Bytes): Result<uint64, ProgramError> {
 	if (!buffer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
-	if (!buffer.owner().equals(Pubkey.delegationProgram())) { return Result.err(ProgramError.invalidAccountOwner()); }
+	if (!buffer.owner().equals(DELEGATION_PROGRAM_ID)) { return Result.err(ProgramError.invalidAccountOwner()); }
 	const canonical = try findProgramAddressOf(
-		Pubkey.delegationProgram(),
+		DELEGATION_PROGRAM_ID,
 		["undelegate-buffer", delegated],
 	);
 	if (!canonical.key.equals(buffer.key())) { return Result.err(ProgramError.invalidSeeds()); }
@@ -194,7 +190,7 @@ function scheduled(
 	}
 	length = putU64(storage, length, taskData.length as uint64);
 	length = putSpan(storage, length, taskData);
-	return invokeList(Pubkey.magicProgram(), metas[0..(1 + taskAccounts.length)], storage, length);
+	return invokeList(MAGIC_PROGRAM_ID, metas[0..(1 + taskAccounts.length)], storage, length);
 }
 
 export function scheduleTask(
@@ -247,7 +243,7 @@ when (testBuild) {
 
 	function payerAccount(): HostAccount {
 		const payer: HostAccount = {
-			...holder(keyOf(1), Pubkey.systemProgram(), []),
+			...holder(keyOf(1), Pubkey.zero(), []),
 			lamports: 10000000,
 			signer: true,
 		};
@@ -256,7 +252,7 @@ when (testBuild) {
 
 	function programAccount(key: Pubkey): HostAccount {
 		const program: HostAccount = {
-			...holder(key, Pubkey.systemProgram(), []),
+			...holder(key, Pubkey.zero(), []),
 			writable: false,
 			executable: true,
 		};
@@ -308,10 +304,10 @@ when (testBuild) {
 			payerAccount(),
 			pet,
 			programAccount(programKey()),
-			holder(buffer, Pubkey.systemProgram(), []),
-			holder(keyOf(4), Pubkey.systemProgram(), []),
-			holder(keyOf(5), Pubkey.systemProgram(), []),
-			programAccount(Pubkey.systemProgram()),
+			holder(buffer, Pubkey.zero(), []),
+			holder(keyOf(4), Pubkey.zero(), []),
+			holder(keyOf(5), Pubkey.zero(), []),
+			programAccount(Pubkey.zero()),
 		];
 	}
 
@@ -320,17 +316,24 @@ when (testBuild) {
 		return run(programKey(), accounts, input, delegateEntry).result;
 	}
 
+	// magicblock-magic-program-api-0.10.1/src/lib.rs:9,18; magicblock-delegation-program-api-3.0.0/src/lib.rs:41.
+	test "the MagicBlock ids are the ones the program APIs declare" {
+		assert MAGIC_PROGRAM_ID.toBase58() == "Magic11111111111111111111111111111111111111";
+		assert MAGIC_CONTEXT_ID.toBase58() == "MagicContext1111111111111111111111111111111";
+		assert DELEGATION_PROGRAM_ID.toBase58() == "DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh";
+	}
+
 	test "delegate copies through a buffer, then sends the delegation program its seven accounts" {
 		const accounts = delegationAccounts();
 		assert delegateRun(accounts, 0) == 0;
 		const calls = invocations();
 		assert calls.length == 3;
-		assert calls[0].program.equals(Pubkey.systemProgram()) && calls[0].data[0] == 0;
+		assert calls[0].program.equals(Pubkey.zero()) && calls[0].data[0] == 0;
 		assert calls[0].accounts[1].key.equals(accounts[3].key);
-		assert calls[1].program.equals(Pubkey.systemProgram()) && calls[1].data[0] == 1;
+		assert calls[1].program.equals(Pubkey.zero()) && calls[1].data[0] == 1;
 		assert calls[1].accounts[0].key.equals(petKey()) && calls[1].signers == 1;
 		const sent = calls[2];
-		assert sent.program.equals(Pubkey.delegationProgram());
+		assert sent.program.equals(DELEGATION_PROGRAM_ID);
 		assert sent.accounts.length == 7;
 		assert sent.accounts[0].key.equals(keyOf(1));
 		assert sent.accounts[0].writable && sent.accounts[0].signer;
@@ -340,7 +343,7 @@ when (testBuild) {
 		assert !sent.accounts[2].writable && !sent.accounts[2].signer;
 		assert sent.accounts[3].writable && !sent.accounts[3].signer;
 		assert sent.accounts[4].writable && sent.accounts[5].writable;
-		assert sent.accounts[6].key.equals(Pubkey.systemProgram()) && !sent.accounts[6].writable;
+		assert sent.accounts[6].key.equals(Pubkey.zero()) && !sent.accounts[6].writable;
 		const args: uint8[] = [
 			0, 0, 0, 0, 0, 0, 0, 0,
 			255, 255, 255, 255,
@@ -375,10 +378,10 @@ when (testBuild) {
 	test "delegate zeroes the account, hands it to the delegation program and closes the buffer" {
 		const accounts = delegationAccounts();
 		assert delegateRun(accounts, 0) == 0;
-		assert accounts[1].owner.equals(Pubkey.delegationProgram());
+		assert accounts[1].owner.equals(DELEGATION_PROGRAM_ID);
 		assert accounts[1].data.length == 4 && accounts[1].data[0] == 0 && accounts[1].data[3] == 0;
 		assert accounts[3].lamports == 0 && accounts[3].data.length == 0;
-		assert accounts[3].owner.equals(Pubkey.systemProgram());
+		assert accounts[3].owner.equals(Pubkey.zero());
 	}
 
 	test "delegate to one validator ends the args with Some and the validator's key" {
@@ -394,7 +397,7 @@ when (testBuild) {
 		unsigned[0] = { ...unsigned[0], signer: false };
 		assert delegateRun(unsigned, 0) == ProgramError.missingRequiredSignature().code;
 		const misplaced = delegationAccounts();
-		misplaced[3] = holder(keyOf(3), Pubkey.systemProgram(), []);
+		misplaced[3] = holder(keyOf(3), Pubkey.zero(), []);
 		assert delegateRun(misplaced, 0) == ProgramError.invalidSeeds().code;
 		assert invocations().length == 0;
 	}
@@ -430,14 +433,14 @@ when (testBuild) {
 
 	function commitAccounts(): HostAccount[] {
 		const readonly: HostAccount = {
-			...holder(keyOf(5), Pubkey.delegationProgram(), []),
+			...holder(keyOf(5), DELEGATION_PROGRAM_ID, []),
 			writable: false,
 		};
 		return [
 			payerAccount(),
-			holder(Pubkey.magicContext(), Pubkey.magicProgram(), []),
-			holder(keyOf(3), Pubkey.systemProgram(), []),
-			holder(keyOf(4), Pubkey.delegationProgram(), []),
+			holder(MAGIC_CONTEXT_ID, MAGIC_PROGRAM_ID, []),
+			holder(keyOf(3), Pubkey.zero(), []),
+			holder(keyOf(4), DELEGATION_PROGRAM_ID, []),
 			readonly,
 		];
 	}
@@ -450,11 +453,11 @@ when (testBuild) {
 	test "commit sends discriminant 1 to the magic program: payer, magic context, then the account" {
 		assert commitRun(commitAccounts(), 0) == 0;
 		const sent = invocations()[0];
-		assert sent.program.equals(Pubkey.magicProgram());
+		assert sent.program.equals(MAGIC_PROGRAM_ID);
 		assert sent.accounts.length == 3;
 		assert sent.accounts[0].key.equals(keyOf(1));
 		assert sent.accounts[0].signer && sent.accounts[0].writable;
-		assert sent.accounts[1].key.equals(Pubkey.magicContext());
+		assert sent.accounts[1].key.equals(MAGIC_CONTEXT_ID);
 		assert sent.accounts[1].writable && !sent.accounts[1].signer;
 		assert sent.accounts[2].key.equals(keyOf(4)) && sent.accounts[2].writable;
 		const data: uint8[] = [1, 0, 0, 0];
@@ -543,10 +546,10 @@ when (testBuild) {
 
 	function scheduleAccounts(): HostAccount[] {
 		const readonly: HostAccount = {
-			...holder(keyOf(5), Pubkey.delegationProgram(), []),
+			...holder(keyOf(5), DELEGATION_PROGRAM_ID, []),
 			writable: false,
 		};
-		return [payerAccount(), holder(keyOf(4), Pubkey.delegationProgram(), []), readonly];
+		return [payerAccount(), holder(keyOf(4), DELEGATION_PROGRAM_ID, []), readonly];
 	}
 
 	function scheduleRun(op: uint8): uint64 {
@@ -581,7 +584,7 @@ when (testBuild) {
 	test "scheduleTask sends the magic program the payer, the task's accounts and the task encoded" {
 		assert scheduleRun(0) == 0;
 		const single = invocations()[0];
-		assert single.program.equals(Pubkey.magicProgram());
+		assert single.program.equals(MAGIC_PROGRAM_ID);
 		assert single.accounts.length == 2;
 		assert single.accounts[0].key.equals(keyOf(1));
 		assert single.accounts[0].writable && single.accounts[0].signer;
@@ -594,7 +597,7 @@ when (testBuild) {
 
 		assert scheduleRun(1) == 0;
 		const listed = invocations()[0];
-		assert listed.program.equals(Pubkey.magicProgram());
+		assert listed.program.equals(MAGIC_PROGRAM_ID);
 		assert listed.accounts.length == 3;
 		assert listed.accounts[1].key.equals(keyOf(4)) && listed.accounts[1].writable;
 		assert listed.accounts[2].key.equals(keyOf(5)) && !listed.accounts[2].writable;
@@ -633,7 +636,7 @@ when (testBuild) {
 	function countedRun(count: uint8, withVault: uint8): uint64 {
 		const accounts = commitAccounts();
 		for (let index = 0; index < 16; index++) {
-			accounts.push(holder(keyOf((20 + index) as uint8), Pubkey.delegationProgram(), []));
+			accounts.push(holder(keyOf((20 + index) as uint8), DELEGATION_PROGRAM_ID, []));
 		}
 		const input: uint8[] = [count, withVault];
 		return run(programKey(), accounts, input, countedEntry).result;
@@ -666,7 +669,7 @@ when (testBuild) {
 
 	function undelegateBuffer(): Pubkey {
 		const found = findProgramAddressOf(
-			Pubkey.delegationProgram(),
+			DELEGATION_PROGRAM_ID,
 			["undelegate-buffer", petKey()],
 		);
 		if (found.ok) { return found.value.key; }
@@ -675,14 +678,14 @@ when (testBuild) {
 
 	function undelegateAccounts(buffer: Pubkey): HostAccount[] {
 		const held: HostAccount = {
-			...holder(buffer, Pubkey.delegationProgram(), [7, 8, 9]),
+			...holder(buffer, DELEGATION_PROGRAM_ID, [7, 8, 9]),
 			signer: true,
 		};
 		return [
-			holder(petKey(), Pubkey.systemProgram(), []),
+			holder(petKey(), Pubkey.zero(), []),
 			held,
 			payerAccount(),
-			programAccount(Pubkey.systemProgram()),
+			programAccount(Pubkey.zero()),
 		];
 	}
 
