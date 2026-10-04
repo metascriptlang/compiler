@@ -8,7 +8,7 @@
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
-import { isUnknownType, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef } from "../../checker/types";
+import { isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -120,13 +120,9 @@ function strLitPayload(t: Type): Type | null {
 	return payload.kind != TypeKind.String && isStringLike(payload) ? payload : null;
 }
 
-function memberDisplayName(m: Type): string {
-	return m.kind == TypeKind.Ref && m.typeReturn != null ? typeDisplayName(m.typeReturn) : typeDisplayName(m);
-}
-
 function variantFailArgs(g: CGen, u: Type, slot: int32): string {
 	const labels: string[] = [];
-	for (const m of u.typeChildren) labels.push(memberDisplayName(m));
+	for (const m of u.typeChildren) labels.push(unionMemberDisplay(m));
 	const unionName = u.sym != null && u.sym.name != "" ? u.sym.name : labels.join(" | ");
 	const head = `member '${slot < labels.length ? labels[slot] : "?"}' is not accessible for type '${unionName}' using '`;
 	const joined = labels.join("|");

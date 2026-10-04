@@ -2675,6 +2675,11 @@ function isRuntimeCheckedClass(t: Type): boolean {
 	return runtimeClassSym(t.kind == TypeKind.Ref ? t.typeReturn : null) != null;
 }
 
+export function unionMemberDisplay(m: Type): string {
+	const body = m.kind == TypeKind.Ref ? m.typeReturn : null;
+	return body != null && (body.kind == TypeKind.Struct || body.kind == TypeKind.GenericInstance) ? typeDisplayName(body) : typeDisplayName(m);
+}
+
 export function runtimeClassSym(body: Type | null): Symbol | null {
 	if (body == null) return null;
 	const instance = body.kind == TypeKind.GenericInstance;

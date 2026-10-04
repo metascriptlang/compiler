@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, TypeKind, Type, SourceLocation, HiddenStdConvData, TypeAssertionData, MemberExprData, BinaryExprData, HiddenDerefData, ArrayAccessData } from "../../ast/node";
 import { narrowUnionToVariant, isSlotUnion, projectTagUnionMember, objectHolderSlots } from "../../checker/fit";
-import { isMaybeType, unwrapRefNullUnion, typeDisplayName, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType } from "../../checker/types";
+import { isMaybeType, unwrapRefNullUnion, typeDisplayName, unionMemberDisplay, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { TransformContext } from "../context";
@@ -95,25 +95,21 @@ function memberLabels(ut: Type): string[] {
 			const dot = stored.lastIndexOf(".");
 			labels.push(getDiscriminantName(ut) + " = " + (dot >= 0 ? stored.slice(dot + 1, stored.length) : stored));
 		} else {
-			labels.push(memberDisplay(ut.typeChildren[vi]));
+			labels.push(unionMemberDisplay(ut.typeChildren[vi]));
 		}
 	}
 	return labels;
 }
 
-function memberDisplay(t: Type): string {
-	return t.kind == TypeKind.Ref && t.typeReturn != null ? typeDisplayName(t.typeReturn) : typeDisplayName(t);
-}
-
 function unionDisplay(ut: Type): string {
 	if (ut.sym != null && ut.sym.name != "") return ut.sym.name;
 	const names: string[] = [];
-	for (const m of ut.typeChildren) names.push(memberDisplay(m));
+	for (const m of ut.typeChildren) names.push(unionMemberDisplay(m));
 	return names.join(" | ");
 }
 
 function accessHead(field: string, projection: Node, ut: Type): string {
-	const what = field != "" ? `field '${field}'` : `member '${memberDisplay((projection.data as HiddenStdConvData).convType)}'`;
+	const what = field != "" ? `field '${field}'` : `member '${unionMemberDisplay((projection.data as HiddenStdConvData).convType)}'`;
 	return `${what} is not accessible for type '${unionDisplay(ut)}' using '`;
 }
 

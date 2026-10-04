@@ -20,7 +20,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym } from "../../transform/util";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, runtimeClassSym } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -715,7 +715,7 @@ function namedTypeDisplay(t: Type): string {
 	if (t.sym != null && t.sym.name != "") return t.sym.name;
 	if (t.kind != TypeKind.Union) return typeDisplayName(t);
 	const names: string[] = [];
-	for (const m of t.typeChildren) names.push(m.kind == TypeKind.Ref && m.typeReturn != null ? typeDisplayName(m.typeReturn) : typeDisplayName(m));
+	for (const m of t.typeChildren) names.push(unionMemberDisplay(m));
 	return names.join(" | ");
 }
 
