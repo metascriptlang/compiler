@@ -2898,6 +2898,30 @@ export function skipModifier(t: Type | null): Type | null {
 	return cur;
 }
 
+export function isViewType(t: Type | null): boolean {
+	return holdsView(t, new TypeVisitSet());
+}
+
+function holdsView(t: Type | null, seen: TypeVisitSet): boolean {
+	if (t == null || !typeVisitAdd(seen, t)) return false;
+	return match (t.kind) {
+		TypeKind.Var | TypeKind.Span | TypeKind.Borrow => true,
+		TypeKind.Sink | TypeKind.Alias | TypeKind.Cursor => holdsView(t.typeReturn, seen),
+		TypeKind.Distinct | TypeKind.Array | TypeKind.SizedArray => holdsView(t.typeReturn, seen),
+		TypeKind.Ref => holdsView(t.typeReturn, seen),
+		TypeKind.GenericInstance => holdsView(t.typeExtra, seen),
+		TypeKind.Struct | TypeKind.Tuple | TypeKind.Union => anyChildHoldsView(t, seen),
+		_ => false,
+	};
+}
+
+function anyChildHoldsView(t: Type, seen: TypeVisitSet): boolean {
+	for (const child of t.typeChildren) {
+		if (holdsView(child, seen)) return true;
+	}
+	return false;
+}
+
 export function unwrapPointerLikeForVariant(t: Type | null): Type | null {
 	if (t == null) return null;
 	const k = t.kind;

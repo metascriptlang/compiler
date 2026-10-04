@@ -117,7 +117,7 @@ interface LiftState {
 	insideLoop: number;        // >0 when inside a loop body (disables last-use move optimization)
 	varTypes: VarTypeEntry[];  // Binding → type string for env field typing
 	capturedIdents: Node[];    // Parallel to the capture set: original Identifier nodes with resolvedSym
-	currentParams: SymSet;     // Current function's params (for pointer-in-env detection)
+	currentParams: SymSet;     // Current function's params (copied into the shared env at entry)
 	pendingEnvRewrites: PendingEnvRewrite[];  // Reference parity: outer-ref rewrites queued by liftClosure
 	activeEnvRewrites: PendingEnvRewrite[];   // Currently active rewrites (applied to subsequent stmts)
 	hoistedEnvDecls: Node[];  // Env VarDecls hoisted to function-level scope (reference parity)
@@ -248,17 +248,6 @@ function typeToEnvStr(t: Type | null): string {
 		_ => "",
 	};
 }
-
-// Check if a type would be pointer-promoted by ccgIntroducedPtr in the C codegen.
-// Mirrors the codegen check — Array, Union, Span are promoted to pointers as params.
-// Mirrors ccgIntroducedPtr in codegen/types.ms — kept in sync manually
-// (transform must not import codegen to avoid circular dependency).
-function isCcgPtrType(t: Type): boolean {
-	if (t == null) return false;
-	return t.kind == TypeKind.Array || t.kind == TypeKind.Span;
-}
-// Note: ccgIntroducedPtr also promotes GenericInstance and large Tuples.
-// Those are rare as captured params — add here if needed.
 
 function createLiftState(): LiftState {
 	const state: LiftState = {
@@ -518,18 +507,6 @@ function envFieldIndex(state: LiftState, envStructType: Type, sym: Symbol): int3
 	return -1;
 }
 
-// Check if an env struct field is a Ptr type (pointer-promoted param or grandparent capture).
-function isEnvPtrField(state: LiftState, envStructType: Type, sym: Symbol): boolean {
-	const i = envFieldIndex(state, envStructType, sym);
-	if (i < 0 || envStructType.typeChildren == null || i >= envStructType.typeChildren.length) return false;
-	const ft = envStructType.typeChildren[i];
-	if (ft == null || ft.kind != TypeKind.Ptr) return false;
-	// Only match ccgIntroducedPtr captures (Array, Union, Span stored as Ptr<T>).
-	// Regular Ptr-typed variables (void*, msAwaitGroup*, etc.) should NOT get extra deref.
-	const inner = ft.typeReturn;
-	return inner != null && (inner.kind == TypeKind.Array || inner.kind == TypeKind.Union || inner.kind == TypeKind.Span);
-}
-
 // Whether an env holds a field for the binding. Used by chain walk to decide
 // whether a capture lives in the current env or further up the `$up` chain.
 function envHasField(state: LiftState, envStructType: Type, sym: Symbol): boolean {
@@ -578,15 +555,9 @@ function chainWalkFrom(state: LiftState, access0: Node, curType0: Type, sym: Sym
 		curType = chainTypes[k];
 		k += 1;
 	}
-	let result = makeMember(access, envFieldName(state, curType, sym), loc);
+	const result = makeMember(access, envFieldName(state, curType, sym), loc);
 	const declaredFt = envFieldType(state, curType, sym);
 	result.nodeType = declaredFt != null ? declaredFt : nodeOriginalType;
-	// If the storing env keeps this field as a ccgIntroducedPtr (Array/Union/
-	// Span as `Ptr<T>`), one extra deref recovers T.
-	if (isEnvPtrField(state, curType, sym)) {
-		result = makeHiddenDeref(result, loc);
-		result.nodeType = declaredFt != null ? declaredFt : nodeOriginalType;
-	}
 	return result;
 }
 
@@ -644,14 +615,9 @@ function rewriteNode(
 			const cast = createNode(NodeKind.TypeAssertion, { asExpr: envIdent, asType: envTypeName }, syntheticToken(node.location));
 			cast.nodeType = ptrType;
 			const deref = makeHiddenDeref(cast, node.location);
-			let result = makeMember(deref, envFieldName(state, envStructType, sym), node.location);
+			const result = makeMember(deref, envFieldName(state, envStructType, sym), node.location);
 			const declaredFt = envFieldType(state, envStructType, sym);
 			result.nodeType = declaredFt != null ? declaredFt : node.nodeType;
-			// Ptr field (pointer-promoted param capture): extra deref to get T from T*
-			if (isEnvPtrField(state, envStructType, sym)) {
-				result = makeHiddenDeref(result, node.location);
-				result.nodeType = declaredFt != null ? declaredFt : node.nodeType;
-			}
 			return result;
 		}
 		return node;
@@ -688,14 +654,9 @@ function rewriteOuterRef(state: LiftState, node: Node, rewrite: PendingEnvRewrit
 			}
 			// Rewrite: x → _envN->field (env is Ref<Struct>, pointer in C)
 			const envIdent = envVarDeref(rewrite.envVarSym, rewrite.envStructType, node.location);
-			let result = makeMember(envIdent, envFieldName(state, rewrite.envStructType, sym), node.location);
+			const result = makeMember(envIdent, envFieldName(state, rewrite.envStructType, sym), node.location);
 			const declaredFt = envFieldType(state, rewrite.envStructType, sym);
 			result.nodeType = declaredFt != null ? declaredFt : node.nodeType;
-			// Ptr field (ccgIntroducedPtr capture): extra deref to get T from T*
-			if (isEnvPtrField(state, rewrite.envStructType, sym)) {
-				result = makeHiddenDeref(result, node.location);
-				result.nodeType = declaredFt != null ? declaredFt : node.nodeType;
-			}
 			return result;
 		}
 		return node;
@@ -1214,17 +1175,13 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 			// this env. They live in the parent env and are reached via the
 			// `$up` chain walk in `rewriteNode`.
 			const orig = findCapturedIdent(sym, state.capturedIdents);
-			const isCcgCapture = orig != null && orig.nodeType != null && isCcgPtrType(orig.nodeType);
-			const isGrandparent = !isCcgCapture
-				&& !isDirectParentVar(state.ss, sym)
+			const isGrandparent = !isDirectParentVar(state.ss, sym)
 				&& !isModuleLevelVar(state.ss, sym);
 			if (isGrandparent) continue;  // reached via chain walk
 			envFieldSyms.push(sym);
 			envFieldTypes.push(lookupVarType(state, sym));
 			if (orig != null && orig.nodeType != null) {
-				let resolvedType = orig.nodeType;
-				if (isCcgPtrType(resolvedType)) { resolvedType = createPtr(resolvedType); }
-				envResolvedTypes.push(resolvedType);
+				envResolvedTypes.push(orig.nodeType);
 			} else {
 				const resolvedFallback = lookupVarResolvedType(state, sym);
 				if (resolvedFallback != null) { envResolvedTypes.push(resolvedFallback); }
@@ -1450,17 +1407,11 @@ function makeEnvVarAndClosurePair(state: LiftState, envVarSym: Symbol, liftedSym
 		if (field < 0) continue;
 		envKeys.push(envStructType.typeNames[field]);
 		const orig = findCapturedIdent(sym, capturedIdents);
-		const isCcgCapture = orig != null && orig.nodeType != null && isCcgPtrType(orig.nodeType);
 		const isFnCapture = sym.symbolKind == SymbolKind.Function;
 		const ident = makeTypedIdentResolved(sym, orig != null ? orig.nodeType : null, loc);
 		let envVal: Node = ident;
 		if (isFnCapture) {
 			envVal = wrapFnAsClosure(ident, loc);
-		}
-		// ccgIntroducedPtr captures (Array, Union, Span) store pointer via HiddenAddr.
-		if (isCcgCapture) {
-			envVal = createNode(NodeKind.HiddenAddr, { expr: envVal }, syntheticToken(loc));
-			if (orig.nodeType != null) envVal.nodeType = createPtr(orig.nodeType);
 		}
 		if (symSetContains(state.lastUseCaptures, sym)) {
 			envValues.push(makeMoveExpr(envVal, loc));
@@ -1522,9 +1473,7 @@ function createSnapshotPairEnv(captures: SymSet, capturedIdents: Node[], state: 
 		envFieldSyms.push(sym);
 		envFieldTypes.push(lookupVarType(state, sym));
 		if (orig != null && orig.nodeType != null) {
-			let resolvedType = orig.nodeType;
-			if (isCcgPtrType(resolvedType)) { resolvedType = createPtr(resolvedType); }
-			envResolvedTypes.push(resolvedType);
+			envResolvedTypes.push(orig.nodeType);
 		} else {
 			const resolvedFallback = lookupVarResolvedType(state, sym);
 			if (resolvedFallback != null) { envResolvedTypes.push(resolvedFallback); }
@@ -1590,21 +1539,8 @@ function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapturedIdents
 		envFieldSyms.push(sym);
 		envFieldTypes.push(lookupVarType(state, sym));
 		const orig = findCapturedIdent(sym, state.sharedEnvCapturedIdents);
-		const isParamCapture = symSetContains(state.currentParams, sym);
 		if (orig != null && orig.nodeType != null) {
-			let resolvedType = orig.nodeType;
-			// Intentional divergence from standard reference (see CLAUDE.md):
-			// ccgIntroducedPtr params (Array, Span): store POINTER in shared env.
-			// A Union param is NOT one of them: its C repr is a payload pointer held in
-			// the frame slot, so addressing the slot outlives it once the closure escapes
-			// (reference lambdalifting.nim:216 — capture through a param is a copy).
-			// Standard ref copies param value + forbids capturing var params (illegalCapture).
-			// MetaScript arrays are reference types (JS semantics) — closure and caller must
-			// share the same array. Without Ptr, closure pushes to env copy, caller never sees changes.
-			if (isParamCapture && isCcgPtrType(resolvedType)) {
-				resolvedType = createPtr(resolvedType);
-			}
-			envResolvedTypes.push(resolvedType);
+			envResolvedTypes.push(orig.nodeType);
 		} else {
 			const fallback = lookupVarResolvedType(state, sym);
 			if (fallback != null) { envResolvedTypes.push(fallback); }
@@ -1664,11 +1600,7 @@ function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapturedIdents
 				continue;
 			}
 			const lhs = makeMember(envVarDeref(state.sharedEnvVarSym!, state.sharedEnvStructType, loc), envFieldName(state, state.sharedEnvStructType, sym), loc);
-			const isCcgParam = isParam && orig != null && orig.nodeType != null && isCcgPtrType(orig.nodeType);
-			if (isCcgParam) {
-				// Ptr field: LHS type must be Ptr<T> so DRC skips RC hooks (noRcInfo for Ptr)
-				lhs.nodeType = createPtr(orig.nodeType);
-			} else if (orig != null && orig.nodeType != null) {
+			if (orig != null && orig.nodeType != null) {
 				lhs.nodeType = orig.nodeType;
 			}
 			let rhs = makeTypedIdentResolved(sym, orig != null ? orig.nodeType : null, loc);
@@ -1676,11 +1608,6 @@ function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapturedIdents
 			const isFnCapture = sk == SymbolKind.Function;
 			if (isFnCapture) {
 				rhs = wrapFnAsClosure(rhs, loc);
-			}
-			// ccgIntroducedPtr params: store pointer via HiddenAddr (share, don't copy)
-			if (isCcgParam) {
-				rhs = createNode(NodeKind.HiddenAddr, { expr: rhs }, syntheticToken(loc));
-				rhs.nodeType = createPtr(orig.nodeType);
 			}
 			state.hoistedEnvDecls.push(makeExprStmt(makeAssign(
 				lhs, rhs, loc

@@ -368,3 +368,52 @@ test "E2E C: a fresh object returned through two casts to an unmanaged alias kee
 	assert c.value.contains("return ((void*)make");
 	assert !c.value.contains("msDecrefCyclic(dollartmp");
 }
+
+function occurrences(code: string, token: string): int32 {
+	return (code.split(token).length - 1) as int32;
+}
+
+test "E2E C: an explicit move empties an indexed field path once, at the move" {
+	const c = compileToC(`
+		struct Node { kids: Vec<int32>; }
+		struct Tree { nodes: Vec<Node>; }
+		function pick(): int32 { return 0; }
+		function f(): int32 {
+			let t: Tree = { nodes: [{ kids: [1, 2] }] };
+			const k = move t.nodes[pick()].kids;
+			return k.length;
+		}
+	`);
+	assert c.ok;
+	const reset = "msArrayNumberWasMoved(t_1_.nodes[dollarbracketTmp_";
+	assert occurrences(c.value, "msArrayNumberWasMoved(t_1_.nodes[") == 1;
+	assert c.value.contains(reset);
+	assert c.value.indexOf(reset) < c.value.indexOf("(k_1_ = dollarmove_");
+}
+
+test "E2E C: an explicit move into its own field captures the value before the old one is destroyed" {
+	const c = compileToC(`
+		struct Tree { kids: Vec<int32>; }
+		function f(): int32 {
+			let t: Tree = { kids: [3, 4] };
+			t.kids = move t.kids;
+			return t.kids.length;
+		}
+	`);
+	assert c.ok;
+	assert occurrences(c.value, "msArrayNumberWasMoved(t_1_.kids)") == 1;
+	assert c.value.indexOf("msArrayNumberWasMoved(t_1_.kids)") < c.value.indexOf("(t_1_.kids = dollarmove_");
+}
+
+test "E2E C: advancing through a moved next link resets the old link once" {
+	const c = compileToC(`
+		class Link { v: int32; next: Link | null = null; constructor(v: int32) { this.v = v; } }
+		function f(): int32 {
+			let cur: Link | null = new Link(1);
+			if (cur != null) cur = move cur.next;
+			return cur == null ? 0 : 1;
+		}
+	`);
+	assert c.ok;
+	assert occurrences(c.value, "msPtrWasMoved((*cur_1_).next)") == 1;
+}

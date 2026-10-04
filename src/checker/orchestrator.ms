@@ -16,9 +16,8 @@ import { isAssignableProfile } from "./compat";
 import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteTypeProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
 import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
-import { registerModuleProgram, instantiateProfile, instantiateTimings, lookupModuleCtx } from "./instantiate";
-import { cloneNodeForCheck } from "../monomorphize/clone";
-import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbParse, dbTypeCheck, dbCheckIsCurrent, dbGetCheckedProgram, TransAmDb } from "../compiler/transam/index";
+import { instantiateProfile, instantiateTimings, lookupModuleCtx } from "./instantiate";
+import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbTypeCheck, TransAmDb } from "../compiler/transam/index";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, resetGenericTypeInsts } from "../parser/context";
 import { opMark, opsFrom, replayOps, KeyedOp } from "../codegen/c/types";
 
@@ -163,7 +162,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	baseCtx.strictNullChecks = strictNullChecks;
 	lastPreludeCtx = baseCtx;
 
-	const _tf0 = performance.now();
+	const _tb0 = performance.now();
 	const db = kept != null ? kept : createTransAmDb(graph.loadOrder.length * 8 + 64);
 	if (kept == null) {
 		dbSetResolverConfig(db, resolverConfig);
@@ -176,14 +175,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		if (kept == null) session.preludeTypeInstances = preludeRows;
 	}
 	dbBindGraph(db, graph);
-	for (const path of graph.loadOrder) {
-		const mod = findModule(graph, path);
-		if (mod == null || mod.source == "" || preludeOwned.has(path)) continue;
-		const parsed = dbParse(db, path);
-		if (parsed == null) continue;
-		registerModuleProgram(path, kept != null && dbCheckIsCurrent(db, path) ? dbGetCheckedProgram(db, path) : cloneNodeForCheck(parsed));
-	}
-	const tFeed = performance.now() - _tf0;
+	const tBind = performance.now() - _tb0;
 
 	const _tc0 = performance.now();
 	const checked: { mod: Module, ctx: CheckerContext }[] = [];
@@ -226,7 +218,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	for (const c of checked) mirrorModuleErrors(c.mod, c.ctx);
 	const tCheck = performance.now() - _tc0;
 	if (graphTiming) {
-		console.log(`    prelude=${tPrelude}ms feed=${tFeed}ms check=${tCheck}ms`);
+		console.log(`    prelude=${tPrelude}ms bind=${tBind}ms check=${tCheck}ms`);
 		const pk = preludePackStats();
 		console.log(`    preludePack: hit=${pk[3]} key=${pk[0]}ms load=${pk[1]}ms write=${pk[2]}ms`);
 		const tp = threePassTimings();

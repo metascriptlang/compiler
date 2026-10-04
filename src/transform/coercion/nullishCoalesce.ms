@@ -3,13 +3,15 @@
 //
 // Must run AFTER optionalChain so obj?.prop ?? fallback is already lowered.
 
-import { Node, NodeKind, BinaryExprData, MemberExprData, TypeAssertionData, TypeKind, DeclKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, MemberExprData, TypeAssertionData, ConditionalExprData, ExprStmtData, TypeKind, DeclKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
 import { isMaybeType, unwrapMaybeType, peelTransparentInstance, isNumeric, isBoolType, isStringLike, unknownType, createPtr, voidType } from "../../checker/types";
 import { fitJoinedBranch, nullishPayloadType } from "../../checker/fit";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocks } from "../walker";
 import { makeNull, makeBinary, makeConditional, makeMember, makeVarDecl, makeAssign, makeIdentResolved } from "../util";
-import { firstExprKindAfter } from "../testUtil";
+import { firstExprKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
+import { cloneIfPure } from "./intArithJS";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 // ===== Main Entry Point =====
 
@@ -28,6 +30,10 @@ function lowerNullishStmt(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 // ===== Visitor =====
+
+export function rereadOperand(operand: Node): Node {
+	return cloneIfPure(operand) != null ? cloneNodeKeepSem(operand) : operand;
+}
 
 export function asUnknown(n: Node, loc: SourceLocation): Node {
 	const checked = createNodeAt(NodeKind.TypeAssertion, { asExpr: n, asType: "unknown" } as TypeAssertionData, loc);
@@ -77,6 +83,8 @@ function lowerNullish(left: Node, right: Node, loc: SourceLocation, resultType: 
 		temps.push(decl);
 		cond = makeBinary(makeAssign(makeIdentResolved(sym, loc), asUnknown(left, loc), loc), "!==", makeNull(loc), loc);
 		held = makeIdentResolved(sym, loc);
+	} else {
+		held = rereadOperand(left);
 	}
 
 	// Value-carried nullable (Maybe struct in C): when the fallback is non-null the
@@ -129,3 +137,23 @@ test "nullish coalesce becomes conditional" { assert firstExprKindAfter("x ?? 42
 test "other binary unchanged" { assert firstExprKindAfter("x + y;", lowerNullishCoalesce) == NodeKind.BinaryExpr; }
 
 test "logical or unchanged" { assert firstExprKindAfter("x || y;", lowerNullishCoalesce) == NodeKind.BinaryExpr; }
+
+function loweredArms(input: string): ConditionalExprData | null {
+	const parsed = parseInput(input);
+	if (!parsed.ok) return null;
+	const stmts = getStmts(lowerNullishCoalesce(parsed.value, makeCtx()));
+	if (stmts.length == 0 || stmts[0].kind != NodeKind.ExprStmt) return null;
+	const expr = (stmts[0].data as ExprStmtData).expr;
+	return expr.kind == NodeKind.ConditionalExpr ? expr.data as ConditionalExprData : null;
+}
+
+test "a pure left operand is read again through its own node" {
+	for (const input of ["x ?? 1;", "q.o ?? 1;", "q.rows[i].o ?? 1;"]) {
+		const arms = loweredArms(input);
+		assert arms != null, input;
+		if (arms != null) {
+			const tested = (arms.ternaryCondition.data as BinaryExprData).left;
+			assert arms.ternaryConsequent != tested && arms.ternaryConsequent.kind == tested.kind, input;
+		}
+	}
+}

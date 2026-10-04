@@ -227,3 +227,10 @@ test "E2E JS: actor decl emits a class with the synthetic pid field first" {
 	assert js.value.contains("pid = (globalThis.__msActorRegister || (globalThis.__msActorRegister = function (a) {");
 	assert js.value.contains("buf = \"\";");
 }
+
+test "E2E JS: a nullish read of a field through a ref parameter dereferences the pair once per read" {
+	const js = compileToJS("struct Q { o: int32 | null; }\nfunction rd(ref q: Q): int32 { return q.o ?? -1; }\nlet v: Q = { o: 4 };\nconst r = rd(v);");
+	assert js.ok;
+	assert js.value.contains("(q[0][q[1]].o !== null) ? q[0][q[1]].o :");
+	assert !js.value.contains("][0][q[0][q[1]][1]]");
+}

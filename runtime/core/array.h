@@ -214,12 +214,13 @@ msString msAsString(msUint8Array* arr);
 #define msArrDataOr0(p_) ((p_) ? (p_)->data : NULL)
 
 #define msGenericArrayPush(arr_ptr, ...) do { \
+	__typeof__((arr_ptr)->p->data[0]) msPushedValue_ = (__VA_ARGS__); \
 	if ((arr_ptr)->p == NULL || (((msArrayPayloadBase*)(arr_ptr)->p)->cap & ~MS_CAP_MASK) != 0 \
 		|| (arr_ptr)->len >= (int64_t)(((msArrayPayloadBase*)(arr_ptr)->p)->cap & MS_CAP_MASK)) { \
 		(arr_ptr)->p = (__typeof__((arr_ptr)->p))msArrayPrepareAdd( \
 			(arr_ptr)->len, (arr_ptr)->p, 1, sizeof((arr_ptr)->p->data[0])); \
 	} \
-	(arr_ptr)->p->data[(arr_ptr)->len] = (__VA_ARGS__); \
+	(arr_ptr)->p->data[(arr_ptr)->len] = msPushedValue_; \
 	(arr_ptr)->len++; \
 } while(0)
 

@@ -11,7 +11,7 @@
 //   deepAliases(dest, ri): boolean     — recursive self-alias check
 //   skipConvDfa(n): Node               — strip transparent wrappers
 
-import { Node, NodeKind, Symbol, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, SpreadExprData, BinaryExprData, UnaryExprData, ConditionalExprData, ExprStmtData, SymbolKind } from "../ast/node";
+import { Node, NodeKind, Symbol, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, SpreadExprData, BinaryExprData, UnaryExprData, ConditionalExprData, ExprStmtData, MoveExprData, OutExprData, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, setFlag, isCursorSym, makeSymbol } from "../checker/symbol";
 import { noneType } from "../checker/types";
@@ -263,6 +263,8 @@ export function deepAliases(dest: Node, ri: Node): boolean {
 		NodeKind.TypeAssertion => deepAliases(dest, (ri.data as TypeAssertionData).asExpr),
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => deepAliases(dest, (ri.data as HiddenStdConvData).convExpr),
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => deepAliases(dest, (ri.data as HiddenDerefData).expr),
+		NodeKind.MoveExpr => deepAliases(dest, (ri.data as MoveExprData).moveArg),
+		NodeKind.OutExpr => deepAliases(dest, (ri.data as OutExprData).outArg),
 		_ => aliases(dest, ri) != AliasKind.No,
 	};
 }
@@ -532,6 +534,25 @@ test "deepAliases: x in [x, 1] = true" {
 	attachSymToNodeAlias(dest, "x", symX);
 	attachSymToNodeAlias(arr, "x", symX);
 	assert deepAliases(dest, arr);
+}
+
+test "deepAliases: x behind a move or out argument = true" {
+	const symX = makeTestSym("x");
+	const symF = makeTestSym("f");
+	const symG = makeTestSym("g");
+	const dest = getExpr("x;");
+	attachSymToNodeAlias(dest, "x", symX);
+	for (const src of ["f(move x);", "f(g(move x));", "f(out x);"]) {
+		const call = getExpr(src);
+		attachSymToNodeAlias(call, "x", symX);
+		attachSymToNodeAlias(call, "f", symF);
+		attachSymToNodeAlias(call, "g", symG);
+		assert deepAliases(dest, call), src;
+	}
+	const other = getExpr("f(move y);");
+	attachSymToNodeAlias(other, "y", makeTestSym("y"));
+	attachSymToNodeAlias(other, "f", symF);
+	assert !deepAliases(dest, other);
 }
 
 test "deepAliases: null = false" {

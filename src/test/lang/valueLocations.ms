@@ -143,3 +143,251 @@ test "valueLocations: sequence assignment preserves its location across equal gr
 	assert field[].length == 3 && field[][1] == 5;
 	assert bag.n == 1;
 }
+
+struct MovedNode { kids: Vec<int32>; }
+struct MovedTree { nodes: Vec<MovedNode>; rows: Vec<Vec<int32>>; }
+struct MovedForest { trees: Vec<MovedTree>; }
+struct MovedHolder { kids: Vec<int32>; }
+
+let movedIndexReads: int32 = 0;
+function movedIndex(): int32 { movedIndexReads++; return 0; }
+function movedTree(): MovedTree { return { nodes: [{ kids: [1, 2] }], rows: [[3, 4]] }; }
+function movedForest(): MovedForest { return { trees: [movedTree()] }; }
+
+function declNestedFromCall(): int32 {
+	const kids = movedTree().nodes[movedIndex()].kids;
+	return kids.length;
+}
+function declNestedFromLocal(): int32 {
+	const tree = movedTree();
+	const kids = tree.nodes[movedIndex()].kids;
+	return kids.length;
+}
+function declOutermostFromLocal(): int32 {
+	const tree = movedTree();
+	const row = tree.rows[movedIndex()];
+	return row.length;
+}
+function declMiddleFromLocal(): int32 {
+	const forest = movedForest();
+	const kids = forest.trees[movedIndex()].nodes[0].kids;
+	return kids.length;
+}
+function declTwoIndices(): int32 {
+	const forest = movedForest();
+	const kids = forest.trees[movedIndex()].nodes[movedIndex()].kids;
+	return kids.length;
+}
+function assignNestedToLocal(): int32 {
+	const tree = movedTree();
+	let kids: Vec<int32> = [9];
+	kids = tree.nodes[movedIndex()].kids;
+	return kids.length;
+}
+function assignNestedToField(): int32 {
+	const tree = movedTree();
+	let holder: MovedHolder = { kids: [9] };
+	holder.kids = tree.nodes[movedIndex()].kids;
+	return holder.kids.length;
+}
+function forOfNestedFromCall(): int32 {
+	let sum: int32 = 0;
+	for (const kid of movedTree().nodes[movedIndex()].kids) sum += kid;
+	return sum;
+}
+function forOfMiddleFromCall(): int32 {
+	let sum: int32 = 0;
+	for (const kid of movedForest().trees[movedIndex()].nodes[0].kids) sum += kid;
+	return sum;
+}
+
+test "valueLocations: a declaration moving out of an indexed path evaluates each index once" {
+	movedIndexReads = 0;
+	assert declNestedFromCall() == 2 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert declNestedFromLocal() == 2 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert declOutermostFromLocal() == 2 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert declMiddleFromLocal() == 2 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert declTwoIndices() == 2 && movedIndexReads == 2;
+}
+
+test "valueLocations: an assignment moving out of an indexed path evaluates each index once" {
+	movedIndexReads = 0;
+	assert assignNestedToLocal() == 2 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert assignNestedToField() == 2 && movedIndexReads == 1;
+}
+
+test "valueLocations: a for-of over an indexed path of a fresh value evaluates each index once" {
+	movedIndexReads = 0;
+	assert forOfNestedFromCall() == 3 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert forOfMiddleFromCall() == 3 && movedIndexReads == 1;
+}
+
+struct MovedPair { n: int32; kids: Vec<int32>; }
+class MovedBox { kids: Vec<int32> = []; }
+class MovedLink {
+	v: int32;
+	next: MovedLink | null = null;
+	constructor(v: int32) { this.v = v; }
+}
+
+function movedChain(): MovedLink {
+	const head = new MovedLink(1);
+	const middle = new MovedLink(2);
+	middle.next = new MovedLink(3);
+	head.next = middle;
+	return head;
+}
+function linkCount(head: MovedLink | null): int32 {
+	let n: int32 = 0;
+	let cur = head;
+	while (cur != null) { n++; cur = cur.next; }
+	return n;
+}
+function explicitSelfField(): int32 {
+	let holder: MovedHolder = { kids: [1, 2] };
+	holder.kids = move holder.kids;
+	return holder.kids.length;
+}
+function explicitSelfElement(): int32 {
+	let tree = movedTree();
+	tree.nodes[0].kids = move tree.nodes[0].kids;
+	return tree.nodes[0].kids.length;
+}
+function explicitDecl(): int32 {
+	let tree = movedTree();
+	const kids = move tree.nodes[movedIndex()].kids;
+	return kids.length;
+}
+function explicitAssign(): int32 {
+	let tree = movedTree();
+	let kids: Vec<int32> = [9];
+	kids = move tree.nodes[movedIndex()].kids;
+	return kids.length;
+}
+function explicitReturn(): Vec<int32> {
+	let tree = movedTree();
+	return move tree.nodes[movedIndex()].kids;
+}
+function explicitTwoIndices(): int32 {
+	let forest = movedForest();
+	const kids = move forest.trees[movedIndex()].nodes[movedIndex()].kids;
+	return kids.length;
+}
+function explicitLoopTotal(): int32 {
+	let tree: MovedTree = { nodes: [{ kids: [1, 2] }, { kids: [3] }, { kids: [4, 5, 6] }], rows: [] };
+	let total: int32 = 0;
+	for (let i = 0; i < tree.nodes.length; i++) {
+		const kids = move tree.nodes[i].kids;
+		total += kids.length;
+	}
+	return total;
+}
+function explicitRefill(box: MovedBox): void {
+	const kids = move box.kids;
+	box.kids = [7, 8, 9];
+}
+function explicitAdvance(): int32 {
+	let cur: MovedLink | null = movedChain();
+	if (cur != null) cur = move cur.next;
+	return linkCount(cur);
+}
+function explicitAdvanceReturned(): MovedLink | null {
+	let cur: MovedLink | null = movedChain();
+	if (cur != null) {
+		cur = move cur.next;
+		return cur;
+	}
+	return null;
+}
+function explicitWalk(): int32 {
+	let cur: MovedLink | null = movedChain();
+	let seen: int32 = 0;
+	while (cur != null) {
+		seen = seen * 10 + cur.v;
+		cur = move cur.next;
+	}
+	return seen;
+}
+function explicitSiblingBefore(): int32 {
+	let holder: MovedHolder = { kids: [1, 2, 3] };
+	const pair: MovedPair = { n: holder.kids.length, kids: move holder.kids };
+	return pair.n * 10 + pair.kids.length;
+}
+function explicitSiblingThroughRef(ref holder: MovedHolder): int32 {
+	const pair: MovedPair = { n: holder.kids.length, kids: move holder.kids };
+	return pair.n * 10 + pair.kids.length;
+}
+async function explicitSiblingSuspended(): Promise<int32> {
+	let holder: MovedHolder = { kids: [1, 2, 3] };
+	await Promise.resolve(0);
+	const pair: MovedPair = { n: holder.kids.length, kids: move holder.kids };
+	return pair.n * 10 + pair.kids.length;
+}
+class MovedOwner {
+	kids: Vec<int32> = [1, 2, 3];
+	take(): int32 {
+		const pair: MovedPair = { n: this.kids.length, kids: move this.kids };
+		return pair.n * 10 + pair.kids.length;
+	}
+}
+function explicitAfterThrow(fail: boolean): int32 {
+	let tree = movedTree();
+	if (fail) throw new Error("before the move");
+	const kids = move tree.nodes[movedIndex()].kids;
+	return kids.length;
+}
+
+test "valueLocations: an explicit move into its own field path keeps the value" {
+	assert explicitSelfField() == 2;
+	assert explicitSelfElement() == 2;
+}
+
+test "valueLocations: an explicit move out of an indexed path evaluates each index once" {
+	movedIndexReads = 0;
+	assert explicitDecl() == 2 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert explicitAssign() == 2 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert explicitReturn().length == 2 && movedIndexReads == 1;
+	movedIndexReads = 0;
+	assert explicitTwoIndices() == 2 && movedIndexReads == 2;
+}
+
+test "valueLocations: an explicit move in a counted loop leaves the next element in place" {
+	assert explicitLoopTotal() == 6;
+}
+
+test "valueLocations: a field path written after an explicit move keeps the new value" {
+	const box = new MovedBox();
+	box.kids = [1, 2];
+	explicitRefill(box);
+	assert box.kids.length == 3 && box.kids[0] == 7;
+}
+
+test "valueLocations: an explicit move of a next link advances a linked list" {
+	assert explicitAdvance() == 2;
+	assert linkCount(explicitAdvanceReturned()) == 2;
+	assert explicitWalk() == 123;
+}
+
+test "valueLocations: a sibling read before an explicit move in one literal sees the value" {
+	assert explicitSiblingBefore() == 33;
+	let holder: MovedHolder = { kids: [1, 2, 3] };
+	assert explicitSiblingThroughRef(holder) == 33;
+	assert new MovedOwner().take() == 33;
+	assert await explicitSiblingSuspended() == 33;
+}
+
+test "valueLocations: a throw before an explicit move never evaluates the moved path" {
+	movedIndexReads = 0;
+	let caught = false;
+	try { explicitAfterThrow(true); } catch (e) { caught = true; }
+	assert caught && movedIndexReads == 0;
+	assert explicitAfterThrow(false) == 2 && movedIndexReads == 1;
+}

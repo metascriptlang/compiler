@@ -21,6 +21,30 @@ test "bindingOwnership: explicit moves require ownership transfer rather than im
 	}
 }
 
+test "bindingOwnership: an explicit move out of a path needs a location the mover may write" {
+	const shapes = "struct Node { kids: Vec<int32>; }\nstruct Tree { nodes: Vec<Node>; kids: Vec<int32>; }\nclass Box { readonly kids: Vec<int32> = []; }\n";
+	const refused = [
+		{ name: "a for-of element binding", body: "export function run(t: Tree): int32 { let n: int32 = 0; for (const node of t.nodes) { const k = move node.kids; n += k.length; } return n; }", refusal: "cannot mutate value-type loop variable 'node'" },
+		{ name: "a value parameter", body: "export function run(t: Tree): int32 { const k = move t.kids; return k.length; }", refusal: "cannot mutate value-type parameter 't'" },
+		{ name: "a const binding", body: "export function run(): int32 { const t: Tree = { nodes: [], kids: [1] }; const k = move t.kids; return k.length; }", refusal: "cannot write 't.kids' — 't' is const" },
+		{ name: "a readonly field", body: "export function run(b: Box): int32 { const k = move b.kids; return k.length; }", refusal: "cannot assign to 'kids' because it is a read-only property" },
+	];
+	for (const item of refused) {
+		const result = compileToC(shapes + item.body);
+		assert !result.ok && result.error.contains(item.refusal), item.name + (result.ok ? " compiled" : ": " + result.error);
+	}
+	const kept = [
+		{ name: "a const identifier", body: "export function run(): int32 { const v: Vec<int32> = [1]; const k = move v; return k.length; }" },
+		{ name: "a let binding's field", body: "export function run(): int32 { let t: Tree = { nodes: [], kids: [1] }; const k = move t.kids; return k.length; }" },
+		{ name: "a ref parameter's field", body: "export function run(ref t: Tree): int32 { const k = move t.kids; return k.length; }" },
+		{ name: "an indexed element's field", body: "export function run(): int32 { let t: Tree = { nodes: [{ kids: [1] }], kids: [] }; const k = move t.nodes[0].kids; return k.length; }" },
+	];
+	for (const item of kept) {
+		const result = compileToC(shapes + item.body);
+		assert result.ok, item.name + (result.ok ? "" : ": " + result.error);
+	}
+}
+
 test "binding ownership: imports and implicit prelude visibility do not become exports" {
 	const consumers = [
 		{ module: "std/core/array", name: "push", source: "import { k, push } from \"./library\"; const a: number[] = []; push(a, k); a.push(k);" },

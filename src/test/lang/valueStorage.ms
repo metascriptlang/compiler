@@ -171,6 +171,17 @@ function writableBindingRebind(p: int32): int32 {
 	return p;
 }
 
+function refSequenceSet(ref g: Vec<int32>, i: int32, x: int32): void { g[i] = x; }
+function refSequenceAdd(ref g: Vec<int32>): void { g[1] += 3; }
+function refSequenceSetRow(ref g: Vec<Vec<int32>>): void { g[1] = [7]; }
+function refSequenceSetCell(ref g: Vec<Vec<int32>>): void { g[1][0] = 7; }
+function refSequenceAddCell(ref g: Vec<Vec<int32>>): void { g[1][0] += 3; }
+function refSequenceReadCell(ref g: Vec<Vec<int32>>): int32 { return g[1][0] + g[1].length; }
+function refReferenceSetRow(ref g: int32[][]): void { g[1] = [7]; }
+function refReferenceSetCell(ref g: int32[][]): void { g[1][0] = 7; }
+function refReferenceAddCell(ref g: int32[][]): void { g[1][0] += 3; }
+function refReferenceReadCell(ref g: int32[][]): int32 { return g[1][0] + g[1].length; }
+
 test "valueStorage: union arrays preserve every active payload across repeated construction and teardown" {
 	for (let round: int32 = 0; round < 50; round++) {
 		const rows = variantRows(20);
@@ -563,4 +574,73 @@ test "valueStorage: aggregate-bitset locations start at independent zero values"
 	values[0] = values[0].incl(AggregateVectorFlag.F64);
 	assert values[0].has(AggregateVectorFlag.F64);
 	assert values[1].isEmpty();
+}
+
+test "valueStorage: a ref sequence parameter writes one index into the caller" {
+	let values: Vec<int32> = [1, 4, 0];
+	refSequenceSet(values, 1, 7);
+	refSequenceSet(values, 2, 9);
+	refSequenceAdd(values);
+	assert values[1] == 10 && values[2] == 9;
+	let rows: Vec<Vec<int32>> = [[1, 2, 3], [4, 5]];
+	refSequenceSetRow(rows);
+	assert rows[1].length == 1 && rows[1][0] == 7;
+	let shared: int32[][] = [[1, 2, 3], [4, 5]];
+	refReferenceSetRow(shared);
+	assert shared[1].length == 1 && shared[1][0] == 7;
+}
+
+test "valueStorage: a ref sequence parameter writes two indices into the caller" {
+	let rows: Vec<Vec<int32>> = [[1, 2, 3], [4, 5]];
+	refSequenceSetCell(rows);
+	refSequenceAddCell(rows);
+	assert rows[1][0] == 10 && rows[1][1] == 5;
+	let shared: int32[][] = [[1, 2, 3], [4, 5]];
+	refReferenceSetCell(shared);
+	refReferenceAddCell(shared);
+	assert shared[1][0] == 10 && shared[1][1] == 5;
+}
+
+test "valueStorage: a ref sequence parameter reads through two indices" {
+	let rows: Vec<Vec<int32>> = [[1], [4, 5]];
+	assert refSequenceReadCell(rows) == 6;
+	let shared: int32[][] = [[1], [4, 5]];
+	assert refReferenceReadCell(shared) == 6;
+}
+
+let pushedFlat: Vec<int32> = [];
+let pushedRows: Vec<Vec<int32>> = [];
+function pushIntoFlat(count: int32): int32 {
+	for (let j: int32 = 0; j < count; j++) pushedFlat.push(j);
+	return 99;
+}
+function pushIntoRow(count: int32): int32 {
+	for (let j: int32 = 0; j < count; j++) pushedRows[0].push(j);
+	return 99;
+}
+function pushIntoShared(ref values: int32[], count: int32): int32 {
+	for (let j: int32 = 0; j < count; j++) values.push(j);
+	return 99;
+}
+function pushedInOrder(values: Span<int32>, count: int32): boolean {
+	if (values.length != count + 2 || values[0] != 1 || values[count + 1] != 99) return false;
+	for (let j: int32 = 0; j < count; j++) if (values[j + 1] != j) return false;
+	return true;
+}
+
+test "valueStorage: a push whose value grows its receiver keeps every element" {
+	const counts: int32[] = [1, 3, 7, 15, 31];
+	for (const count of counts) {
+		pushedFlat = [1];
+		pushedFlat.push(pushIntoFlat(count));
+		assert pushedInOrder(pushedFlat, count);
+		pushedRows = [[1]];
+		pushedRows[0].push(pushIntoRow(count));
+		assert pushedInOrder(pushedRows[0], count);
+		let shared: int32[] = [1];
+		shared.push(pushIntoShared(shared, count));
+		assert pushedInOrder(shared, count);
+	}
+	pushedFlat = [];
+	pushedRows = [];
 }

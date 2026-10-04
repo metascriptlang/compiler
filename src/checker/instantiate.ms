@@ -46,15 +46,6 @@ export function lookupModuleCtx(modulePath: string): CheckerContext | null {
 	return _moduleCtxMap.get(modulePath);
 }
 
-// Module-level parsed Program registry. Populated post-parse by orchestrator.ms;
-// looked up by macro VM (src/compiler/meta/expand.ms) to find PRIVATE same-module
-// helpers (e.g. peelVariant, extractVariantKey in discDetect.ms) that the
-// ExportRegistry can't surface (only exported symbols).
-//
-// Lightweight — stores reference, no snapshot. Macro inject walks programStmts
-// for FunctionDecl reachable from macro body, then applies preprocessMacroBody
-// to each (so NodeKind.X → int literal rewrite reaches helper bodies).
-//
 // Stored here (not as Module field) because src/module/graph.ms is forbidden
 // from importing ast/ types. Same pattern as _moduleCtxMap above.
 let _moduleProgramMap: HashMap<string, Node> = new HashMap<string, Node>();
