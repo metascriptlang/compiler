@@ -2390,7 +2390,7 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 		markExpansion(ctx, stmt, expansionOf(ctx, stmt, sym.modulePath));
 		call.kind = expanded.kind;
 		call.data = expanded.data;
-		call.typeArg = expanded.typeArg;
+		if (expanded.typeArg != "") call.typeArg = expanded.typeArg;
 		if (expanded.location != null) call.location = expanded.location;
 		call.nodeType = null as unknown as Type;
 		call.resolvedSym = null;

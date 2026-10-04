@@ -1074,7 +1074,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// Identity is preserved — the parent (e.g. VariableDecl) still references this node.
 			node.kind = expandedValue.kind;
 			node.data = expandedValue.data;
-			node.typeArg = expandedValue.typeArg;
+			if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
 			if (expandedValue.location != null) node.location = expandedValue.location;
 			node.nodeType = null as unknown as Type;
 			node.resolvedSym = null;
