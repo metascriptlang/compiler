@@ -68,8 +68,10 @@ function enumLeaf<T>(v: T, color: boolean): string {
 	return stringify(jsonInt(v as int32), color);
 }
 
-function bigintLeaf(v: bigint): string {
-	return `${v}`;
+when (!bare && !solana) {
+	function bigintLeaf(v: bigint): string {
+		return `${v}`;
+	}
 }
 
 @compilerFunc
