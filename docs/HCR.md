@@ -888,6 +888,34 @@ row); on the compiler of `91dbf527` it fails at the first step that rebuilds fro
 Not verified: a live watch on macOS (no backend), a project with import cycles, and edits to
 `build.ms` during a watch (it is not re-read).
 
+### JavaScript bundler transport (Vite)
+
+JavaScript uses the bundler's module-update protocol, not the native image loader.
+`tools/vite-plugin/index.js` consumes the compiler's split-module manifest and keeps the
+source `.ms`/`.jms` identity in Vite. Returning an emitted `.js` identity instead makes an
+import and `import.meta.hot.accept("./logic.ms")` refer to different modules: Vite then
+reloads the page even though the consumer declared an acceptance boundary.
+
+Measured on 2026-10-04, plugin `12f036dc`, Windows, Vite 5.4.21 and Chromium 154:
+editing an imported `words.ms` changed the visible label `before` to `after` while the
+JavaScript consumer kept `Count: 2` and the same page-session UUID. A syntax error showed
+Vite's overlay while the previous code and count continued; repairing it updated the
+label without a page restart. In an established HMR session, restoring exactly the last
+good source also cleared the overlay without resetting the count. Production bundling
+kept maps pointing at `words.ms` and `logic.ms`. The smoke used real compiler-generated
+ES modules and a real Vite server/browser; it was not a Neon refresh implementation.
+
+Vite 5's client has its own startup recovery policy: if its first update arrives while
+an error overlay exists, it reloads the page. This happened when the first edit after
+opening the smoke page was invalid and the next edit repaired it. The plugin does not
+disable the overlay or patch that policy. A framework-owned overlay is a separate
+adapter concern.
+
+This transport does not promise state preservation without a consumer's HMR boundary.
+Component/template signatures, surviving state scopes and refresh cleanup belong to
+Neon; the compiler plugin knows none of them. Other Vite versions, other bundlers and
+Neon native/browser refresh parity were not verified in this smoke.
+
 ### Running an app
 
 `msc run app.ms --hcr` (`cmdRunHcr`, `src/compiler/compile.ms`) builds the host from
