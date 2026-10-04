@@ -936,7 +936,7 @@ export macro emit(value: Node): Node {
 	}
 	if (total > 1024) {
 		error("emit<E>(value): the event is " + (total as int32) +
-			" bytes with its discriminator, over the 1024 the std buffers", value);
+			" bytes with its discriminator, over the 1024 the std buffers", shape);
 	}
 	const count = widths.length;
 	return {
