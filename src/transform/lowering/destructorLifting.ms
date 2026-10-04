@@ -26,10 +26,9 @@ import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeType
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr } from "../../checker/types";
 import { hasTypeIdentity } from "../../checker/types";
 import { spelled } from "../../checker/types";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily } from "../../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily } from "../../codegen/c/types";
 import { liftedOp } from "../../codegen/c/types";
 import { opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
-import { hasUnionEq } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
