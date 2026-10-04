@@ -137,6 +137,22 @@ Measured 2026-10-03 on `wt/comptime-calls`: corpus `1054-comptimeCallFolds` prin
 
 Macros receive `Node` values (AST), walk them node-by-node, analyze/reclassify/restructure, and return transformed AST. The compiler's own typed `Node` is the macro's input and output. `node.nodeType` gives type info after phase 2. Exception: a bare module-level statement that calls a macro imported from an already-checked module expands while declarations are collected, so the declarations it emits are visible everywhere in the module; its arguments arrive untyped (no `nodeType`, no `resolvedSym`). Read types there through `getTypeImpl`, `getType` or `bindSym`, and literal values through `intValue` / `floatValue` / `stringValue`.
 
+### Macro body scope
+
+An imported macro's type annotations use its declaring module's checked scope.
+A caller's `import { Node as DomNode }` does not replace the macro's `std/meta.Node`,
+whether the imported class is ordinary or `extern`. Explicit expansion-site queries
+remain distinct; see [binding symbols](#binding-symbols-from-a-macro-body-bindsym).
+
+Measured 2026-10-05 with the candidate for `365a9bbb`: corpus
+[`1028`](../src/test/corpus/programs/1028-macroBySymbolAcrossModules/main.ms)
+prints `1 2 2 2 1 2 7` on C and JS, covering both aliases, a typed macro local,
+bare statement/expression/generic calls, and the caller's own runtime class value.
+The previous compiler rejects the same program with five macro-body type errors.
+Existing private/generic bound-symbol, export-star and nested-decorator consumers
+also pass C/JS; the nested decorator's dynamic caller query still prints `scoped=4`.
+Not measured here: packed/standalone prelude scope, ESM, ORC, SAN or a full language suite.
+
 ### The Core Concept: AST In -> Manipulate -> AST Out
 
 A macro is a function that receives `Node`, inspects it however it wants, builds new `Node` trees, and returns the result. The returned AST replaces the original in the compilation pipeline.
