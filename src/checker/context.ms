@@ -624,6 +624,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		// Unification failed (e.g., Array<T> class vs uint8[] array — different type kinds).
 		// Fall through to name-based matching below.
 	}
+	if (recvT.kind == TypeKind.Span) return isAssignable(objType, recvT);
 	// Concrete array extensions: element type compatibility is authoritative.
 	// Don't fall through to name-based matching (which matches all "Array" extensions
 	// regardless of element type — e.g., pop(number[]) would incorrectly match Bar[]).
