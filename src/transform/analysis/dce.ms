@@ -15,7 +15,7 @@
 // before destructorLifting). By this point if(true)/if(false) conditions are already
 // BooleanLiteral nodes from constant folding at step 2.
 
-import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, Symbol, TypeKind, SymbolKind, Type } from "../../ast/node";
+import { AttachedOp, Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, Symbol, TypeKind, SymbolKind, Type } from "../../ast/node";
 import { TransformContext, createTransformContextWithChecker, reportTransformError } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { createFunction, neverType, voidType, findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "../../checker/types";
@@ -23,7 +23,9 @@ import { lookupSymbol, makeSymbol, defineSymbol } from "../../checker/symbol";
 import { CheckerContext, createContext } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { getDeclName } from "../../checker/collectPass";
+import { getOpByKey } from "../../codegen/c/types";
 import { makeBlock } from "../util";
+import { lowerBuiltins } from "../native/builtinLower";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Helpers =====
@@ -84,10 +86,19 @@ function collectRefs(node: Node, refs: HashSet<Symbol>): void {
 }
 
 function enumOwnerOf(sym: Symbol): Symbol | null {
+	if (sym.symbolKind == SymbolKind.Function) return enumOfToStringOp(sym);
 	if (sym.symbolKind != SymbolKind.EnumMember) return null;
 	let t: Type | null = sym.symbolType;
 	if (t != null && t.kind == TypeKind.EnumLiteral) t = t.typeReturn;
 	return t != null && t.kind == TypeKind.Enum ? t.sym : null;
+}
+
+function enumOfToStringOp(sym: Symbol): Symbol | null {
+	const ft = sym.symbolType;
+	if (ft == null || ft.kind != TypeKind.Function || ft.typeChildren == null || ft.typeChildren.length != 1) return null;
+	const t = ft.typeChildren[0];
+	if (t.kind != TypeKind.Enum || t.sym == null) return null;
+	return getOpByKey(t, AttachedOp.AttachedToString) == sym ? t.sym : null;
 }
 
 // Returns true for declarations that can be eliminated if unreferenced.
@@ -585,6 +596,13 @@ function sweptStmtCount(input: string): int32 {
 test "unused enum removed" { assert sweptStmtCount("enum Color { Red, Green } const x = 1;") == 1; }
 
 test "an enum used only through a member stays" { assert sweptStmtCount("enum Color { Red, Green } const x = Color.Green;") == 2; }
+
+test "an enum reached only through its toString op stays" {
+	const pr = parseInput("enum Shade { Lo, Hi } const a: int32 = 1; const s: string = Shade[a];");
+	assert pr.ok;
+	const ctx = createTransformContextWithChecker(checkProgram(pr.value));
+	assert getStmts(lowerDCE(lowerBuiltins(pr.value, ctx), ctx)).length == 3;
+}
 
 test "a local that shares an enum's name does not keep the enum" {
 	assert sweptStmtCount("enum Color { Red } function f(): number { const Color = 1; return Color; } f();") == 2;
