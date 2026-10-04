@@ -99,3 +99,7 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   local or is returned is built in that local or the caller's result slot, nested literals and
   `Result.ok({...})` included (NIM-REF CG-46). Proven RED on `49046b457`: `settle` needs a 5,504-byte
   SBF frame (limit 4,096); 2,624 on the fix.
+- **`bareArenaReallocCopy.ms`** (`GUARD-OS bare`, `GUARD-ASAN`) — a freestanding realloc copies
+  only the old block's bytes, so a growing array, Map, Set or string never copies out of the block
+  it lands in; on SBF that copy stops the program with "Overlapping copy" (NIM-REF RT-31). Proven
+  RED on `bead8cc6a` (ASan `memcpy-param-overlap` in the arena's realloc).
