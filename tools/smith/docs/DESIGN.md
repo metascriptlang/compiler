@@ -1,8 +1,9 @@
 # Smith — design
 
-Status: direction approved (2026-10-03..05, in conversation); implementation
-not started. This file owns the agreed shape and the constraints that forced
-it. Evidence for every claim lives in `CSMITH-STUDY.md`.
+Status: direction approved (2026-10-03..05, in conversation); slice 1 built
+and proven 2026-10-05 (§Slice 1 — measured). This file owns the agreed shape,
+the constraints that forced it and the measurements behind the generator's
+surface. Evidence for the Csmith-derived claims lives in `CSMITH-STUDY.md`.
 
 ## Goal
 
@@ -71,11 +72,82 @@ graduate confirmed regressions into the corpus.
 4. **Reduction**: `creduce --not-c` + predicate; graduate one failure
    end-to-end into the corpus.
 
+## Slice 1 — measured
+
+Code: `tools/smith/` — `gen.ms` `generate`, `drive.ms` `runSeeds` /
+`rerunBundle`, `features.ms` `Features`, `rng.ms` `Rng` (splitmix64). Commands
+are in `../CLAUDE.md`.
+
+### Single-interpretation surface
+
+A generated program must print the same bytes on every lane. Which operations
+may be emitted raw was measured one case per program, built
+`--gc=drc` (C debug), `--gc=drc --danger --cc=clang` and `--target=js`
+(node 24.1.0), on the installed `msc` v0.3.1, BUILD `719e18ad2` (tree
+`da848ca9`), macOS arm64, 2026-10-05:
+
+| case | C debug | C danger | JS | generator |
+|---|---|---|---|---|
+| `int32`/`int64` `+ - *` and unary `-` overflow | panic | wraps | unwrapped value (`2147483648`) | `safeAdd/Sub/Mul/Neg<T>` |
+| `int8`/`int16`/unsigned `+ - *` overflow | wraps | wraps | wraps | raw |
+| integer `/` `%` by zero | panic | garbage (`0`, `-7`, `5.4707704e-315`) | throws | `safeDiv/Mod<T>` |
+| `int32`/`int64` `MIN / -1` | panic | wraps | throws | guarded in `safeDiv<T>` |
+| `int32` `MIN % -1` | `0` | `0` | `0` | zero guard only |
+| `<<` `>>` with count ≥ width or negative | masked (`1 << 32` = 1, `1 << -1` = MIN) | same | same | raw |
+| to a narrower signed type out of range, `uint32` → `int32` | panic `not in range` | truncates | throws | `conv<S>To<T>` |
+| `uint64` → `int64` | `-1`, no check | `-1` | `-1` | `conv` anyway: the reference range-checks |
+| signed → unsigned, runtime value | truncates | truncates | truncates | raw |
+| signed → unsigned, negative literal or a ternary with one | compile error `cannot convert -5 to uint64` | same | same | `wrap<S>To<T>` (`Shape` in `gen.ms`) |
+| `float64` → integer, NaN / ±inf / out of range | panic | garbage | throws | `convFloat64To<T>` |
+| `String(float64)`: `0.1+0.2`, `1e21`, `5e-324`, NaN, ±Infinity, `-0` | shortest round trip, JS spelling | same | same | raw |
+| operands and arguments with side effects | left to right | same | same | raw — no effect discipline |
+| `int32 < uint32` (implicit mixed signedness) | `false` | `false` | `true` | never emitted: the reference refuses it (inbox `2026-10-01-mixed-signedness-comparison-passes-the-checker.md`) |
+
+Not measured: the Raiser and SAN lanes, `--release`, Windows, Linux/gcc,
+`float32`, `int64` → `float64` rounding at the 2^53 edge.
+
+Spelling traps the generator encodes: `-128 as int8` is `-(128 as int8)` and
+fails to compile, so negative literals are written `((-128) as int8)`;
+`b < (X) && a > (Y)` parses as a generic call `b<…>(…)` (TypeScript reads two
+comparisons), so the safe-math helpers parenthesize every comparison. Both are
+queued on the arc card.
+
+### The loop, proven
+
+Subject `./msc` built from `wt/smith` `6e11ebbb` (tree `37d2c00c`, msc-hash
+`71d8eb80_3bd0c950:22933024`), default features, lanes c/orc/danger/js/esm,
+load average 30–39, 2026-10-05:
+
+| run | wall | result |
+|---|---|---|
+| `run 1 30` | 59 s | 26 clean, 4 findings — the same 4 seeds on two separate runs |
+| `run 1 10 --plant=backend` | 28 s | 10/10 wrong-code, split `c orc danger \| js esm` |
+| `run 1 10 --plant=opt` | 29 s | 10/10 wrong-code, `danger` alone (seeds 3 and 7 also split off `js esm`: the real JS finding below) |
+| `rerun` of all 24 bundles | — | 24/24 REPRODUCED: program byte-identical, every lane's output identical |
+| `rerun` of a bundle with one byte appended to `program.ms`, and with `MSC` set to another build | — | both VOID, naming the cause |
+
+The 4 unplanted findings are 2 compiler bugs, both reproduced on BUILD
+`719e18ad2` as well: JS `+=` `-=` `*=` on `uint64` do not wrap to 64 bits
+(seeds 3, 7, 24); C emits `--128` for `-((-128) as int8)` (also `int16`
+MIN), a clang error (seed 21).
+
+### Rejected
+
+- **A `MSCORPUS_DIR` knob in `src/test/corpus/run.ms`.** The runner resolves
+  `src/test/corpus/programs/` and `out/corpus/` against its cwd, so a sandbox
+  holding that tree (the idiom of `src/test/guard/corpusEntryNames.ms`) reaches
+  the same with no runner change and no gate on the runner path.
+- **The lane pair from the runner's parity line.** `compareParityGroup` takes
+  the first *finished* cell as base, so `A vs B` changes with scheduling (seed 3
+  read `js vs danger` on one run). The bundle records a canonical split instead:
+  lanes grouped by identical output (wrong-code) or by pass/fail (crash), in
+  `LANE_ORDER`.
+
 ## Open questions (design-level, decide before the slice that needs them)
 
-- Canonical print vs digest as the lane-comparison surface: lean canonical
-  print + byte-compare (the corpus contract), digest only as a bundle index —
-  collision evidence in CSMITH-STUDY §Oracle.
+- Canonical print vs digest as the lane-comparison surface: decided for slice 1
+  by the corpus contract — canonical print, byte-compared by the runner; the
+  bundle stores every lane's `out.log`, no digest.
 - How the generator samples DRC-relevant lifetime shapes without becoming a
   second analyzer: start structural (capture graphs, deterministic drop
   order), measure divergence yield, add machinery only on evidence.

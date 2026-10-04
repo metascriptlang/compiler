@@ -9,6 +9,22 @@ Read `docs/DESIGN.md` before changing anything. Every rule below exists because
 a measurement forced it — `docs/CSMITH-STUDY.md` holds the numbers. Update that
 file by re-measuring, never by editing a number from reading alone.
 
+## Commands — from the repo root
+
+```bash
+msc run tools/smith/main.ms gen 7                             # print the program for seed 7
+msc run tools/smith/main.ms run 1 30                          # seeds 1..30 through the corpus lanes
+msc run tools/smith/main.ms run 1 10 --plant=backend          # planted C↔JS divergence (opt: O0↔danger)
+msc run tools/smith/main.ms run 1 30 --features="types=int32,float64 depth=2"
+msc run tools/smith/main.ms rerun out/smith/bundles/<name>    # VOID / NOT REPRODUCED / REPRODUCED
+msc test tools/smith/gen.ms                                   # generator, features and rng contracts
+```
+
+The compiler under test follows the corpus convention: `MSC=<path>`, else `./msc`,
+else the installed `msc`; the installed `msc` runs the harness. `MSCORPUS_LANES`,
+`MSCORPUS_RAISER`, `MSCORPUS_JOBS`, `MSCORPUS_BUILD_JOBS` and
+`MSCORPUS_CELL_TIMEOUT_MS` (Smith's default 60000) pass through to the runner.
+
 ## Hard rules
 
 - **Nothing generated is committed.** Programs, bundles, logs and reduced
