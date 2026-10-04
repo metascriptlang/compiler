@@ -1675,6 +1675,14 @@ union stays whole and a call on it is rejected. Inside the branch the narrowed v
 directly as an operand, callee, condition or receiver; no `as` is needed (an explicit
 `v as int32` remains a no-op there).
 
+Separate `if (typeof x === "...")` branches each test the original stored union tag
+after the preceding branch rejoins; narrowing a read never changes the storage
+representation. `src/test/corpus/programs/sequentialTypeof.ms` printed
+`n:8 s:hi b:yes b:no` with `./msc-n2s-roots3 run --gc=orc src/test/corpus/programs/sequentialTypeof.ms`,
+`./msc-n2s-roots3 run --target=js src/test/corpus/programs/sequentialTypeof.ms`, and
+`./msc-n2s-roots3 run --target=raiser src/test/corpus/programs/sequentialTypeof.ms`
+(source tree `80e7b14e66bc590e0a38b4ce1bbf181cc9d29977`).
+
 ### Struct Field Type Checking
 
 Object literal construction validates field types against the expected struct type (Gap 1).
@@ -3386,6 +3394,16 @@ c.toString()              // "Red"
 const p: Person = { name: "Alice", age: 30 };
 p.toString()              // plain JSON (no colors)
 ```
+
+Dynamic-array `.toString()` uses comma-separated element text. An empty array
+becomes `""`; an empty nested array or `null` element leaves an empty field
+between separators; a declared element `toString` takes precedence. The
+portable declaration is `std/core/array/shared.ms` `toString`. On source tree
+`80e7b14e66bc590e0a38b4ce1bbf181cc9d29977`, the three commands
+`./msc-n2s-roots3 run --gc=orc src/test/corpus/programs/arrayText.ms`,
+`./msc-n2s-roots3 run --target=js src/test/corpus/programs/arrayText.ms`, and
+`./msc-n2s-roots3 run --target=raiser src/test/corpus/programs/arrayText.ms`
+each printed `1,2,3|ab,c||1,2,,3|a,,b|label:x,label:y`.
 
 #### Custom String Format via Extension Methods
 
