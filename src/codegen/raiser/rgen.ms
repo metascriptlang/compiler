@@ -3,11 +3,11 @@
 
 
 import {
-	Node, NodeKind, ProgramData, FunctionDeclData, SymbolFlag, Symbol,
+	Node, NodeKind, ProgramData, FunctionDeclData, Symbol, SymbolFlag, DeclKind, VariableDeclData,
 	ExportDeclData, DecoratedDeclData, EnumDeclData,
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
-import { classDeclNodeOf, parentClassSymOf } from "../../checker/symbol";
+import { forEachChild } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
 import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
 import {
@@ -21,13 +21,12 @@ import {
 } from "../../raiser/module";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
-	RaiserFuncMap, RaiserFuncEntry, RaiserBuiltinMap, RaiserBuiltinEntry,
-	createCompState, emitInst, emitLoadConst, emitRet, allocReg, raiserClassKey,
+	RaiserFuncMap, RaiserFuncEntry, RaiserGlobalMap, RaiserBuiltinMap, RaiserBuiltinEntry,
+	createCompState, emitInst, emitLoadConst, emitRet, allocReg,
 	addConst, declareLocal, resetTemps, resolveFunc, emitClosurePair,
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
-	globalSymbolKey,
-	routineKey, resolveRoutine, RaiserCompState,
+	routineKey,
 } from "./context";
 import { compileStmt } from "./statements";
 import { compileExpr } from "./expressions";
@@ -92,7 +91,7 @@ function isExpressionBody(node: Node): boolean {
 
 // --- Compile a function body ---
 
-export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, fnName: string, params: string[], body: Node, arity: number, isMethod: boolean = false, globals: RaiserFuncMap | null = null): RaiserFunction {
+export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, fnName: string, params: string[], body: Node, arity: number, isMethod: boolean = false, globals: RaiserGlobalMap | null = null): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
 	s.enumMap = enumMap;
@@ -174,7 +173,7 @@ function storeZeroFields(s: RaiserCompState, thisReg: int32, classBody: Node[]):
 function compileClassInit(
 	funcMap: RaiserFuncMap, enumMap: RaiserFuncMap,
 	className: string, classBody: Node[],
-	ctorParams: string[], ctorBody: Node | null, globals: RaiserFuncMap | null = null
+	ctorParams: string[], ctorBody: Node | null, globals: RaiserGlobalMap | null = null
 ): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
@@ -375,18 +374,39 @@ interface RaiserProjectDecl {
 	ctorBody: Node;
 }
 
+function hasGlobal(globals: RaiserGlobalMap, symbol: Symbol): boolean {
+	for (const entry of globals.items) {
+		if (entry.symbol == symbol) return true;
+	}
+	return false;
+}
+
+function collectRaiserGlobals(node: Node, globals: RaiserGlobalMap, nextSlot: int32): int32 {
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null
+			&& node.resolvedSym.symFlags.has(SymbolFlag.Global) && !hasGlobal(globals, node.resolvedSym)) {
+		const d = node.data as VariableDeclData;
+		const index = nextSlot;
+		nextSlot += 1;
+		let initGuard: int32 = -1;
+		if (node.resolvedSym.symFlags.has(SymbolFlag.StaticLocal)
+			&& d.declKind == DeclKind.Const && d.initializer != null) {
+			initGuard = nextSlot;
+			nextSlot += 1;
+		}
+		globals.items.push({ symbol: node.resolvedSym, index, initGuard });
+	}
+	forEachChild(node, (child: Node): void => {
+		nextSlot = collectRaiserGlobals(child, globals, nextSlot);
+	});
+	return nextSlot;
+}
+
 export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModule {
 	const functions: RaiserFunction[] = [];
-	const globals: RaiserFuncMap = { items: [], symbolIndices: null };
+	const globals: RaiserGlobalMap = { items: [] };
+	let globalCount: int32 = 0;
 	for (const moduleInput of modules) {
-		const program = moduleInput.program.data as ProgramData;
-		for (const statement of program.programStmts) {
-			const declaration = unwrapToKind(statement, NodeKind.VariableDecl);
-			if (declaration == null || declaration.resolvedSym == null) continue;
-			const sym = declaration.resolvedSym;
-			if (!sym.symFlags.has(SymbolFlag.Global)) continue;
-			globals.items.push({ name: globalSymbolKey(sym), index: globals.items.length });
-		}
+		globalCount = collectRaiserGlobals(moduleInput.program, globals, globalCount);
 	}
 
 	// --- Pass 1: Global declaration collection ---
@@ -588,7 +608,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 	functions.push(entryFunc);
 
 	const compiled = createRaiserModule("project", functions, functions.length - 1);
-	compiled.globalCount = globals.items.length;
+	compiled.globalCount = globalCount;
 	return compiled;
 }
 

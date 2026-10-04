@@ -94,6 +94,16 @@ export interface RaiserFuncMap {
 	symbolIndices: HashMap<Symbol, int32> | null;
 }
 
+export interface RaiserGlobalEntry {
+	symbol: Symbol;
+	index: int32;
+	initGuard: int32;
+}
+
+export interface RaiserGlobalMap {
+	items: RaiserGlobalEntry[];
+}
+
 // --- Builtin registry ---
 // Maps builtin function names to their function indices in the module.
 
@@ -127,8 +137,7 @@ export interface RaiserCompState {
 	builtins: RaiserBuiltinMap;
 	copyTypes: Type[];
 	copyPlans: RaiserCopyPlan[];
-	classTypes: RaiserClassType[];
-	globals: RaiserFuncMap;
+	globals: RaiserGlobalMap;
 	scopedFunctions: boolean;
 }
 
@@ -156,30 +165,19 @@ export function routineKey(sym: Symbol): string {
 	return sym.modulePath + ":" + name + "#" + sym.disamb;
 }
 
-export function classSymOfType(t: Type | null): Symbol | null {
-	let cur = t;
-	if (cur != null && cur.kind == TypeKind.Ref && cur.typeReturn != null) cur = cur.typeReturn;
-	if (cur == null || cur.sym == null) return null;
-	return cur.sym;
-}
-
-export function raiserClassKey(classSym: Symbol): string {
-	const own = classSymOfType(classSym.symbolType);
-	const sym = own != null ? own : classSym;
-	if (sym.instantiatedFrom != null) return sym.name;
-	return sym.modulePath + ":" + sym.name + "#" + sym.disamb;
-}
-
-export function globalSymbolKey(sym: Symbol): string {
-	const name = sym.name;
-	return sym.modulePath + ":" + name + ":" + sym.disamb;
-}
 
 export function resolveGlobal(s: RaiserCompState, sym: Symbol | null): int32 {
 	if (sym == null || !sym.symFlags.has(SymbolFlag.Global)) return -1;
-	const key = globalSymbolKey(sym);
 	for (const entry of s.globals.items) {
-		if (entry.name == key) return entry.index;
+		if (entry.symbol == sym) return entry.index;
+	}
+	return -1;
+}
+
+export function resolveStaticInitGuard(s: RaiserCompState, sym: Symbol | null): int32 {
+	if (sym == null || !sym.symFlags.has(SymbolFlag.StaticLocal)) return -1;
+	for (const entry of s.globals.items) {
+		if (entry.symbol == sym) return entry.initGuard;
 	}
 	return -1;
 }

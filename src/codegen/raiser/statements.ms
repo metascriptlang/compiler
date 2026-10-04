@@ -19,7 +19,7 @@ import {
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, jumpTarget, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
 	resolveBuiltin, registerFunc, resolveFunc, emitClosurePair,
-	registerRaiserStmtCompiler, resolveGlobal, isRoutineSym, resolveRoutine, addConst,
+	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, isRoutineSym, resolveRoutine,
 } from "./context";
 import { compileExpr, exprIsString } from "./expressions";
 import { emitValueCopy, emitZeroValue } from "./valueCopy";
@@ -118,9 +118,25 @@ function compileBlock(s: RaiserCompState, node: Node): void {
 
 function compileVariableDecl(s: RaiserCompState, node: Node): void {
 	const d = node.data as VariableDeclData;
+	const initGuard = resolveStaticInitGuard(s, node.resolvedSym);
+	if (initGuard < 0) {
+		compileVariableDeclValue(s, node, d);
+		return;
+	}
+
+	const guardReg = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.LoadGlobal, guardReg, initGuard, 0));
+	const jumpToInit = emitBranchIfFalsy(s, guardReg);
+	const jumpPastInit = emitJumpPlaceholder(s);
+	patchJumpTo(s, jumpToInit, codeLen(s));
+	emitLoadConst(s, guardReg, raiserInt(1));
+	emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, guardReg, initGuard, 0));
+	compileVariableDeclValue(s, node, d);
+	patchJumpTo(s, jumpPastInit, codeLen(s));
+}
+
+function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDeclData): void {
 	if (d.initializer != null) {
-		// Check if initializer is a function reference (e.g., from non-capturing lambda lifting)
-		// Wrap in closure pair { fn: funcIdx, env: nil } so it can be passed around and called uniformly
 		if (d.initializer.kind == NodeKind.Identifier) {
 			const initId = d.initializer.data as IdentifierData;
 			const fIdx = resolveRoutine(s, d.initializer.resolvedSym, initId.name);
