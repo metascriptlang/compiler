@@ -828,6 +828,16 @@ first link plan (39 ms); preparing them right after the app starts (`b523e256`) 
 save from 136–142 to 84 ms in an A/B on the same host under Windows load 3–4, where later saves
 measured about 99 ms with either compiler. Windows was not measured again.
 
+2026-10-03 22:3x, the same Windows host quiet (load 0.4–2.5), the compiler of `82731c8e`+branch,
+the same two-module app, ten saves (`out/lat2/lat2win.sh`): edit to visible 317–388 ms (median
+about 340), warm build 285–351 ms. One warm build under temporary split probes
+(`out/winsplit5`): `logic` image link about 72 ms (WSL 14), cc 53–70, phase A 39–44, job loop
+35–44 (`@compile` directives 19.9), graph 30–33 (entry tree 14.7, check 8.4), DCE 19–25, runtime
+objects 14–18 — every phase 3–5× WSL, compute-only phases included. An image link spawned
+through the full zig driver rather than the replayed plan costs 214–382 ms with debug info and
+125–167 ms with `-s`, so the driver's own startup dominates that path; the plan replay is what
+a warm build uses.
+
 2026-10-04, Windows host (load 1–3 while another session's land gate ran), probe binary
 built from `f36d2bb7` inside an `out/gh1` copy with a `LINKDBG` print around the replayed
 image-link plan (`out/lat2/scripts/linkprobe.js`). The replayed `logic` image link is
