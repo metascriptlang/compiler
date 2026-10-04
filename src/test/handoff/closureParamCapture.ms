@@ -40,7 +40,7 @@ function envFieldKind(envDecl: Node, fieldName: string): TypeKind {
 	if (t == null) return TypeKind.Pending;
 	let i = 0;
 	while (i < t.typeNames.length) {
-		if (t.typeNames[i] == fieldName) {
+		if (t.typeNames[i] == fieldName || t.typeNames[i] == `${fieldName}${i}`) {
 			if (i < t.typeChildren.length && t.typeChildren[i] != null) {
 				return t.typeChildren[i].kind;
 			}
