@@ -2957,7 +2957,7 @@ function structBehindConversion(t: Type | null): Type | null {
 function refuseUnrelatedStructAs(ctx: CheckerContext, operand: Node, srcType: Type, targetType: Type, line: int32, column: int32): boolean {
 	if (operand.kind == NodeKind.ObjectLiteral) return false;
 	const target = structBehindConversion(targetType);
-	const source = structBehindConversion(srcType.kind == TypeKind.Ref && srcType.typeReturn != null ? srcType.typeReturn : srcType);
+	const source = structBehindConversion((srcType.kind == TypeKind.Ref || isMaybeType(srcType)) && srcType.typeReturn != null ? srcType.typeReturn : srcType);
 	if (target == null || source == null || !isValueStructDecl(target)) return false;
 	if (sameNominal(source, target) || valueStructBaseDepth(source, target) > 0 || valueStructBaseDepth(target, source) > 0) return false;
 	addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + ": a struct converts only to itself, a distinct of it, or a struct it extends", line, column);
