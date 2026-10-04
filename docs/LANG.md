@@ -1546,6 +1546,16 @@ and `int32`; the rejected comparison names the operator and both types. The vali
 `Result<int32, string>` branch prints `7` on both backends. Regression contract:
 `src/test/checker3pass/scenarios/resultCarrierConversions.ms`.
 
+An `as` from an object to an object type that is not a leading prefix of it reads the object's own
+fields: the cast takes the object's type, the way an `as` from a union takes the member's. So
+`(c as { label: string }).label` is `c.label`, a write through `const v = c as { label: string }`
+lands in `c`, and a field the view leaves out (`.r`) stays readable where TypeScript refuses it.
+A view field the object holds with another representation (`int32` against `number`) is an error at
+the cast. Rejected: keeping the view's type, because the view's own layout reads the wrong offset on
+C; a copy into the view, because it loses writes through the view. Decided by the person 2026-10-05.
+Measured on C (drc, orc) and JS, tree `d125e2de`, corpus `810-objectViewCast`:
+`iface=L write=M/M class=N alias=P pair=3M named=N`. Generic views were not probed.
+
 ## MetaScript-Specific Syntax
 
 ### Move Semantics
