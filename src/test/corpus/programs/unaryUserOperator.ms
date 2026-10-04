@@ -1,5 +1,4 @@
 // @stdout: runtime=555 const=555 module=555 tilde=66 tildeConst=66 float=0.5 narrow=-4 literal=-7 negFloat=-2.5
-// @xfail(raiser): a user operator overload on a built-in type is not lowered for Raiser (NIM-REF CT-27 Open), so Raiser prints the built-in results
 // note: a user unary operator on a built-in type runs like the binary ones: on a run-time value, on constants in a function and at module level, for `~` on int64 and `-` on float64; `int8` keeps the built-in beside a `-`(int32) that needs a conversion, and a negative literal stays a literal.
 function `-`(this a: int32): int32 { return 555; }
 function `~`(this a: int64): int64 { return 66; }
