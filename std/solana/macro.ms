@@ -1,4 +1,4 @@
-import { DeclKind, Node, NodeKind, bindSym, getImpl } from "std/meta";
+import { DeclKind, Node, NodeKind, bindSym, getImpl, getType } from "std/meta";
 import { eventDiscriminator, instructionDiscriminator } from "./discriminator";
 import { ProgramError } from "./error";
 import {
@@ -981,7 +981,7 @@ const KEY_REQUIRED = "a key is an account or a Pubkey";
 macro keyAddressOf(operand: Node): Node {
 	const line = operand.line;
 	const column = operand.column;
-	const written = operand.nodeType;
+	const written = getType(operand);
 	let name = "";
 	let inner = "";
 	if (written != null) {
@@ -1046,7 +1046,7 @@ macro seedTable(list: Node): Node {
 		const element = list.elements[position];
 		const line = element.line;
 		const column = element.column;
-		const written = element.nodeType;
+		const written = getType(element);
 		let builder: Node | null = null;
 		let argument: Node = element;
 		let description = "no known type";
@@ -1379,7 +1379,7 @@ export macro signed(call: Node, seeds: Node): Node {
 			isOptional: callee.isOptional,
 		};
 	}
-	const shape = call.callee.nodeType;
+	const shape = getType(call.callee);
 	let takesSigners = false;
 	if (shape != null && shape.kind === NodeKind.TypeFunction && shape.typExprParams.length > 0) {
 		const last = shape.typExprParams[shape.typExprParams.length - 1];
@@ -1406,7 +1406,7 @@ export macro signed(call: Node, seeds: Node): Node {
 			let inner = 0;
 			while (inner < candidate.elements.length) {
 				const seed = candidate.elements[inner];
-				const written = seed.nodeType;
+				const written = getType(seed);
 				let isByte = seed.kind === NodeKind.NumberLiteral;
 				if (!isByte && written != null && written.kind === NodeKind.Identifier) {
 					isByte = written.name == "uint8" || written.name == "int8";

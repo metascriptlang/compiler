@@ -81,6 +81,7 @@ import {
 	signed,
 } from "./macro";
 import { anchorIdl } from "./idl";
+import { Node, NodeKind, bindSym } from "std/meta";
 
 extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 extern function msSolProgramId(): uint64;
@@ -1185,6 +1186,30 @@ function ping(target: Account, signers: Span<SignerSeeds> = []): Result<uint64, 
 	);
 }
 
+macro forwardSigned(call: Node, seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: call.line,
+		column: call.column,
+		callee: bindSym("signed"),
+		arguments: [call, seeds],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+macro forwardFind(program: Node, seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: seeds.line,
+		column: seeds.column,
+		callee: bindSym("findProgramAddressOf"),
+		arguments: [program, seeds],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
 function signingStep(): Result<uint64, ProgramError> {
 	const op = try instructionData().readU8(0);
 	const first = try account(0);
@@ -1216,6 +1241,7 @@ function signingStep(): Result<uint64, ProgramError> {
 		]);
 	}
 	if (op == 8) { return signed(ping(second), ["k", first, second, [7]]); }
+	if (op == 14) { return forwardSigned(ping(second), ["k", first, second, [7]]); }
 	if (op == 9) { return signed(ping(second), [[7]]); }
 	if (op == 10) {
 		const wide: uint64 = 258;
@@ -1259,6 +1285,31 @@ test "a signer list takes a string, an account, a byte array, and a list of list
 	assert signerIs(calls[0], 0, [textBytes("a"), [2, 1, 0, 0, 0, 0, 0, 0]]);
 	assert signerIs(calls[0], 1, [[1], [2]]);
 	assert signerIs(calls[0], 2, [keyBytes(keyOf(1)), textBytes("z")]);
+}
+
+test "a signer list that a user macro forwards to signed reads its seed types" {
+	const accounts = [wallet(1, 10000), wallet(2, 5000)];
+	const input: uint8[] = [14];
+	run(programKey(), accounts, input, signingEntry);
+	const calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 1;
+	assert signerIs(calls[0], 0, [textBytes("k"), keyBytes(keyOf(1)), keyBytes(keyOf(2)), [7]]);
+}
+
+test "a seed list that a user macro forwards to the seed table reads its seed types" {
+	const program = hostProgram();
+	let five = Pubkey.zero();
+	five.bytes[0] = 5;
+	assert foundAt(
+		forwardFind(program, ["pk", five]),
+		pubkeyOf("65QKPW56NGMfywzKLBCHUcoXdHGiFG87TP7xLby1toZq"),
+		255,
+	);
+	assert foundAt(
+		forwardFind(program, ["pet", [7]]),
+		pubkeyOf("93PwUMspkoH1MnRnJgVx8hcRkw1uXygXkK6LaovKJwE5"),
+		255,
+	);
 }
 
 test "a signer of seventeen seeds or of a thirty-three byte seed is refused, sixteen seeds are sent" {
