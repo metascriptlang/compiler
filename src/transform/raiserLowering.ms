@@ -37,10 +37,8 @@ import { lowerBitSet } from "./lowering/bitSetLower";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
-	ctx.raiserBackend = true;
-	ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
-	let result = lowerPointerAddresses(program, ctx, false);
-	result = lowerBorrow(result, ctx);
+	ctx.keepBuiltinMemberCalls = true;  // Native opcode calls retain their checked receiver.
+	let result = lowerBorrow(program, ctx);
 	result = lowerImplicitConv(result, ctx);
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
