@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity } from "./types";
+import { isNumeric, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -509,7 +509,28 @@ export function resolveOperatorCall(table: SymbolTable, registry: ExtensionRegis
 			}
 		}
 	}
-	return pickBestOperatorCandidate(cands, argTypes);
+	const best = pickBestOperatorCandidate(cands, argTypes);
+	return best != null && builtinOperatorBeats(best, methodName, argTypes) ? null as unknown as ExtensionMethod : best;
+}
+
+function isNumberOperator(name: string): boolean {
+	return match (name) {
+		"+" | "-" | "*" | "/" | "%" | "**" | "&" | "|" | "^" | "~" | "<<" | ">>" | ">>>"
+			| "==" | "===" | "!=" | "!==" | "<" | "<=" | ">" | ">="
+			| "+=" | "-=" | "*=" | "/=" | "%=" | "**=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
+		_ => false,
+	};
+}
+
+function builtinOperatorBeats(user: ExtensionMethod, methodName: string, argTypes: Type[]): boolean {
+	if (!isNumberOperator(methodName)) return false;
+	for (const t of argTypes) {
+		if (!isNumeric(t) || !sameType(t, argTypes[0])) return false;
+	}
+	const ft = getExtFnType(user);
+	const userScore = scoreCandidatePriority(ft.typeChildren, argTypes, getMinArity(ft));
+	userScore.calleeScope = user.scopeDepth;
+	return cmpCandidates(scoreCandidatePriority(argTypes, argTypes, argTypes.length), userScore, null, null) > 0;
 }
 
 // Strip receiver (param[0]) from an extension's function type for overload scoring.

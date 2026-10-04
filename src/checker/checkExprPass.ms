@@ -1021,13 +1021,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const isArithmeticOp = d.operator == "+" || d.operator == "-" || d.operator == "*"
 				|| d.operator == "/" || d.operator == "%" || d.operator == "**";
 			if (isArithmeticOp && effLeft != null && effRight != null
-				&& (!isNumeric(effLeft) || !isNumeric(effRight))
 				&& !isStringLike(effLeft) && !isStringLike(effRight)
 				&& ctx.extensionRegistry != null) {
 				const opExt = resolveOperatorCall(ctx.table, ctx.extensionRegistry, d.operator, [effLeft, effRight]);
 				if (opExt != null) {
 					const opFnType = getExtFnType(opExt);
 					if (opFnType != null && opFnType.typeReturn != null) {
+						node.flags = node.flags.incl(NodeFlag.UserOp);
 						node.nodeType = opFnType.typeReturn; return;
 					}
 				}

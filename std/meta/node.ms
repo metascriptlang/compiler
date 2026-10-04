@@ -281,6 +281,7 @@ export enum NodeFlag {
 	ConvCheck,     // checker: this conversion narrows to a union member or into a string-literal union, tested at run time
 	NoFieldCheck,
 	GlobalDestroys,
+	UserOp,        // checker: this operator calls a declared routine, not the built-in
 }
 
 // ===== Node Kind Enum =====
