@@ -1804,6 +1804,12 @@ function compileArrayLiteral(s: RaiserCompState, node: Node): int32 {
 	}
 
 	emitInst(s, raiserABC(RaiserOpcode.NewArray, dest, elemCount, 0));
+	const sized = node.nodeType != null ? unwrapRef(node.nodeType) : null;
+	if (sized != null && sized.kind == TypeKind.SizedArray && sized.typeValue > elemCount) {
+		const tail = allocReg(s);
+		emitLoadConst(s, tail, raiserInt((sized.typeValue - elemCount) as int64));
+		emitZeroFill(s, dest, tail, sized.typeReturn);
+	}
 	return dest;
 }
 
