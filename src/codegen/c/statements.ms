@@ -6,6 +6,7 @@
 import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isStructType, unwrapRefNullUnion, isUnresolvedType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { statementCanRaise } from "../../checker/raises";
 import {
 	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
@@ -204,25 +205,6 @@ export function resolveEmitArgs(g: CGen, mi: Readonly<MacroInvocationData>, p: C
 	return result;
 }
 
-// Reference fixupCall/raiseExit parity: after a call that can raise, transfer to
-// the nearest enclosing error target when the exception flag is set — so
-// statements after a raising call do not run on the raise path (double-exec).
-// Conservative canRaise (every call) is the reference's documented fallback.
-// Inside a try → nearest error target; no enclosing try → BeforeRet_ epilogue
-// (raiseExit L==0). DRC lifecycle hooks are no-raise ABI — never checked.
-// A statement's top-level value can raise when it is a bare call, or an
-// assignment whose right-hand side is a call (the DRC pass splits
-// `const x = f()` into a no-init decl + a separate `x = f()` assignment).
-function exprTopIsRaisingCall(exprNode: Readonly<Node>): boolean {
-	if (exprNode == null) return false;
-	if (exprNode.kind == NodeKind.CallExpr) return true;
-	if (exprNode.kind == NodeKind.BinaryExpr) {
-		const d = exprNode.data as BinaryExprData;
-		if (d.operator == "=" && d.right != null && d.right.kind == NodeKind.CallExpr) return true;
-	}
-	return false;
-}
-
 function raiseTarget(p: CProc): string {
 	if (p.nestedTryStmts.length == 0) {
 		p.beforeRetNeeded = true;
@@ -231,9 +213,14 @@ function raiseTarget(p: CProc): string {
 	return p.nestedTryStmts[p.nestedTryStmts.length - 1].label;
 }
 
+// Reference fixupCall/raiseExit parity: after a call that can raise, transfer to
+// the nearest enclosing error target when the exception flag is set — so
+// statements after a raising call do not run on the raise path (double-exec).
+// Inside a try → nearest error target; no enclosing try → BeforeRet_ epilogue
+// (raiseExit L==0). DRC lifecycle hooks are no-raise ABI — never checked.
 export function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
 	if (p.suppressRaiseCheck) return;
-	if (!exprTopIsRaisingCall(exprNode)) return;
+	if (!statementCanRaise(exprNode)) return;
 	emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
 }
 
