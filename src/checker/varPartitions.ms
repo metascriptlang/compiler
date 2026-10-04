@@ -9,6 +9,7 @@ import {
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { isPrimitiveKind, isViewKind, isReadonlyView } from "./types";
+import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { CheckerContext, addError } from "./context";
 import { hasFlag, SymbolFlag } from "./symbol";
 
@@ -267,6 +268,7 @@ interface BorrowVar {
 	owned: boolean;
 	movable: boolean;
 	isView: boolean;
+	escaped: boolean;
 	borrowsFrom: int32[];
 	origins: Symbol[];
 	declLine: int32;
@@ -292,6 +294,7 @@ interface BorrowCheck {
 	vars: BorrowVar[];
 	sites: MutationSite[];
 	suspends: MutationSite[];
+	calls: MutationSite[];
 	scopeNodes: Node[];
 	scopeParents: int32[];
 	scope: int32;
@@ -337,7 +340,7 @@ function borrowCheckBody(ctx: CheckerContext, params: string[], body: Node | nul
 
 function borrowCheckUnit(ctx: CheckerContext, params: string[], root: Node, stmts: Node[]): void {
 	const b: BorrowCheck = {
-		ctx, p: createPartitions(), params, vars: [], sites: [], suspends: [],
+		ctx, p: createPartitions(), params, vars: [], sites: [], suspends: [], calls: [],
 		scopeNodes: [root], scopeParents: [-1], scope: 0, loops: [],
 	};
 	for (const s of stmts) { borrowLiveRanges(b, s); }
@@ -446,7 +449,7 @@ function registerBorrowVar(b: BorrowCheck, sym: Symbol, isParam: boolean, owned:
 	let scope: int32 = b.scope;
 	if (isParam) scope = 0;
 	b.vars.push({
-		scope, owned, movable, isView: holdsBorrow(sym.symbolType),
+		scope, owned, movable, isView: holdsBorrow(sym.symbolType), escaped: false,
 		borrowsFrom: [], origins: [], declLine: line, declCol: col, lastUseLine: line, reported: false,
 	});
 	return (b.vars.length - 1) as int32;
@@ -764,13 +767,13 @@ function borrowTraverse(b: BorrowCheck, node: Node | null): void {
 	if (k == NodeKind.ArrayLiteral) {
 		const elems = (node.data as ArrayLiteralData).elements;
 		for (const e of elems) { borrowTraverse(b, e); }
-		for (const e of elems) { handOffBorrow(b, e, line); }
+		for (const e of elems) { handOffBorrow(b, e, line, true); }
 		return;
 	}
 	if (k == NodeKind.ObjectLiteral) {
 		const props = (node.data as ObjectLiteralData).properties;
 		for (const pr of props) { borrowTraverse(b, pr); }
-		for (const pr of props) { handOffBorrow(b, pr, line); }
+		for (const pr of props) { handOffBorrow(b, pr, line, true); }
 		return;
 	}
 	forEachChild(node, (c: Node): void => { borrowTraverse(b, c); });
@@ -902,38 +905,39 @@ function borrowConnectStore(b: BorrowCheck, targets: Symbol[], destType: Type | 
 	}
 }
 
-function handOffBorrow(b: BorrowCheck, node: Node | null, line: int32): void {
+function handOffBorrow(b: BorrowCheck, node: Node | null, line: int32, escapes: boolean): void {
 	if (node == null) return;
 	const k = node.kind;
 	if (k == NodeKind.HiddenStdConv || k == NodeKind.HiddenSubConv) {
-		handOffBorrow(b, (node.data as HiddenStdConvData).convExpr, line);
+		handOffBorrow(b, (node.data as HiddenStdConvData).convExpr, line, escapes);
 		return;
 	}
 	if (k == NodeKind.TypeAssertion) {
-		handOffBorrow(b, (node.data as TypeAssertionData).asExpr, line);
+		handOffBorrow(b, (node.data as TypeAssertionData).asExpr, line, escapes);
 		return;
 	}
 	if (k == NodeKind.ConditionalExpr) {
 		const d = node.data as ConditionalExprData;
-		handOffBorrow(b, d.ternaryConsequent, line);
-		handOffBorrow(b, d.ternaryAlternate, line);
+		handOffBorrow(b, d.ternaryConsequent, line, escapes);
+		handOffBorrow(b, d.ternaryAlternate, line, escapes);
 		return;
 	}
 	const sym = k == NodeKind.Identifier ? node.resolvedSym : null;
 	if (sym == null) return;
-	handOffSym(b, sym, line);
+	handOffSym(b, sym, line, escapes);
 }
 
-function handOffSym(b: BorrowCheck, sym: Symbol, line: int32): void {
+function handOffSym(b: BorrowCheck, sym: Symbol, line: int32, escapes: boolean): void {
 	const id = variableId(b.p, sym);
 	if (id < 0 || !b.vars[id].movable || b.vars[id].isView || !ownsMemory(sym.symbolType, 0)) return;
 	mutateBorrow(b, sym, line);
+	if (escapes) b.vars[id].escaped = true;
 }
 
 function captureHandOff(b: BorrowCheck, node: Node | null, line: int32): void {
 	if (node == null) return;
 	if (node.kind == NodeKind.Identifier) {
-		if (node.resolvedSym != null) handOffSym(b, node.resolvedSym!, line);
+		if (node.resolvedSym != null) handOffSym(b, node.resolvedSym!, line, true);
 		return;
 	}
 	forEachChild(node, (c: Node): void => { captureHandOff(b, c, line); });
@@ -964,7 +968,7 @@ function bindBorrowLocal(b: BorrowCheck, sym: Symbol, init: Node, line: int32, c
 		return;
 	}
 	borrowConnectStore(b, [sym], sym.symbolType, init);
-	handOffBorrow(b, init, line);
+	handOffBorrow(b, init, line, false);
 }
 
 function assignBorrow(b: BorrowCheck, left: Node | null, right: Node | null, line: int32): void {
@@ -980,7 +984,9 @@ function assignBorrow(b: BorrowCheck, left: Node | null, right: Node | null, lin
 	borrowRoots(left, roots);
 	for (const r of roots) { mutateBorrow(b, r, line); }
 	borrowConnectStore(b, roots, left.nodeType, right);
-	handOffBorrow(b, right, line);
+	let outward = left.kind != NodeKind.Identifier;
+	for (const r of roots) { if (hasFlag(r, SymbolFlag.Global)) outward = true; }
+	handOffBorrow(b, right, line, outward);
 }
 
 function callBorrowEffects(b: BorrowCheck, node: Node, line: int32): void {
@@ -991,9 +997,11 @@ function callBorrowEffects(b: BorrowCheck, node: Node, line: int32): void {
 	let calleeSym = node.resolvedSym;
 	if (calleeSym == null && callee != null) calleeSym = callee.resolvedSym;
 	const magic = calleeSym != null && calleeSym.builtinKind != "";
+	if (!magic) b.calls.push({ time: b.p.abstractTime, line });
 	let offset: int32 = 0;
 	if (callee != null && callee.kind == NodeKind.MemberExpr) {
 		const recv = (callee.data as MemberExprData).object;
+		if (isMutatingArrayMethod((callee.data as MemberExprData).property)) mutateBorrowRoots(b, recv, line);
 		if (formals.length == d.arguments.length + 1) {
 			offset = 1;
 			argBorrowEffect(b, recv, formals[0], magic, line);
@@ -1012,11 +1020,21 @@ function argBorrowEffect(b: BorrowCheck, arg: Node | null, formal: Type | null, 
 	if (formal != null && (formal.kind == TypeKind.Var || formal.kind == TypeKind.Sink
 			|| (formal.kind == TypeKind.Span && !isReadonlyView(formal)))) {
 		mutateBorrowRoots(b, arg, line);
+		if (formal.kind == TypeKind.Sink) escapeBorrowRoots(b, arg);
 		return;
 	}
 	if (magic || (formal != null && isReadonlyView(formal))) return;
 	const t = formal != null && formal.kind != TypeKind.Varargs ? formal : arg.nodeType;
 	if (containsPointer(t, 0)) mutateBorrowRoots(b, arg, line);
+}
+
+function escapeBorrowRoots(b: BorrowCheck, arg: Node | null): void {
+	const roots: Symbol[] = [];
+	borrowRoots(arg, roots);
+	for (const r of roots) {
+		const id = variableId(b.p, r);
+		if (id >= 0) b.vars[id].escaped = true;
+	}
 }
 
 
@@ -1160,6 +1178,62 @@ function checkBorrowedLocations(b: BorrowCheck): void {
 				bv.declLine, bv.declCol);
 			b.vars[i].reported = true;
 			break;
+		}
+		if (!b.vars[i].reported) checkFragileSource(b, i);
+	}
+}
+
+function checkFragileSource(b: BorrowCheck, viewId: int32): void {
+	const bv = b.vars[viewId];
+	let fragileName: string = "";
+	let escaped = false;
+	for (const sid of bv.borrowsFrom) {
+		if ((b.p.vars[sid].flags & VF_IS_PARAM) != 0 && containsPointer(b.p.vars[sid].sym.symbolType, 0)) {
+			fragileName = b.p.vars[sid].sym.name;
+			break;
+		}
+		if (b.vars[sid].escaped) {
+			fragileName = b.p.vars[sid].sym.name;
+			escaped = true;
+			break;
+		}
+	}
+	if (fragileName == "") {
+		for (const o of bv.origins) {
+			const oid = variableId(b.p, o);
+			if (oid < 0) continue;
+			if ((b.p.vars[oid].flags & VF_IS_PARAM) != 0 && containsPointer(o.symbolType, 0)) {
+				fragileName = o.name;
+				break;
+			}
+			if (b.vars[oid].escaped) {
+				fragileName = o.name;
+				escaped = true;
+				break;
+			}
+		}
+	}
+	if (fragileName == "") return;
+	const name = b.p.vars[viewId].sym.name;
+	for (const s of b.sites) {
+		if (s.time >= b.p.vars[viewId].aliveStart && s.time <= b.p.vars[viewId].aliveEnd) {
+			addError(b.ctx, "'" + name + "' borrows from '" + fragileName
+				+ "', which a call can change through an alias the checker cannot see (a parameter the caller may alias, or a source handed to a global, field or closure), and the change is at line " + s.line
+				+ ": take the view again after the call, or copy it first with [...x]",
+				bv.declLine, bv.declCol);
+			b.vars[viewId].reported = true;
+			return;
+		}
+	}
+	if (!escaped) return;
+	for (const c of b.calls) {
+		if (c.time >= b.p.vars[viewId].aliveStart && c.time <= b.p.vars[viewId].aliveEnd) {
+			addError(b.ctx, "'" + name + "' borrows from '" + fragileName
+				+ "', which escaped to memory a call can reach, and the call is at line " + c.line
+				+ ": take the view again after the call, or copy it first with [...x]",
+				bv.declLine, bv.declCol);
+			b.vars[viewId].reported = true;
+			return;
 		}
 	}
 }
