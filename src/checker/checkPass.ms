@@ -2,7 +2,7 @@
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
 import { refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion } from "./visibility";
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion } from "./types";
@@ -44,6 +44,7 @@ import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
+import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
 import { reportConverterCycles } from "./converterCycle";
 import { parseSource } from "../parser/statements/validation";
@@ -862,7 +863,61 @@ function markBodyIdentifiersUsed(ctx: CheckerContext, body: Node): void {
 		const sym = lookupSymbol(ctx.table, d.name);
 		if (sym != null) markUsedIn(ctx, sym);
 	}
+	for (const text of writtenTypes(body)) markTypeNamesUsed(ctx, text);
 	forEachChild(body, (child: Node): void => { markBodyIdentifiersUsed(ctx, child); });
+}
+
+function writtenTypes(node: Node): string[] {
+	const texts: string[] = node.typeArg != "" ? [node.typeArg] : [];
+	match (node.kind) {
+		NodeKind.VariableDecl => { texts.push((node.data as VariableDeclData).declType); },
+		NodeKind.TypeAssertion => { texts.push((node.data as TypeAssertionData).asType); },
+		NodeKind.SizeofExpr => { texts.push((node.data as SizeofExprData).sizeofType); },
+		NodeKind.TypeAnnotation => { texts.push((node.data as TypeAnnotationData).annotationType); },
+		NodeKind.ArrowFunction => {
+			const d = node.data as ArrowFunctionData;
+			for (const t of d.arrowParamTypes) texts.push(t);
+			texts.push(d.arrowReturnType);
+		},
+		NodeKind.FunctionExpr => {
+			const d = node.data as FunctionExprData;
+			for (const t of d.funcExprParamTypes) texts.push(t);
+			texts.push(d.funcExprReturnType);
+		},
+		NodeKind.FunctionDecl => {
+			const d = node.data as FunctionDeclData;
+			for (const t of d.fnParamTypes) texts.push(t);
+			texts.push(d.fnReturnType);
+		},
+		_ => {},
+	};
+	return texts;
+}
+
+function markTypeNamesUsed(ctx: CheckerContext, text: string): void {
+	let i = 0;
+	while (i < text.length) {
+		const ch = text.charCodeAt(i);
+		if (ch == "\"".code || ch == "'".code) {
+			const close = text.indexOf(text.charAt(i), i + 1);
+			i = close < 0 ? text.length : close + 1;
+			continue;
+		}
+		if (!isLetter(ch)) { i += 1; continue; }
+		const start = i;
+		while (i < text.length && isAlphanumeric(text.charCodeAt(i))) i += 1;
+		if (start > 0 && text.charAt(start - 1) == ".") continue;
+		if (namesAMember(text, i)) continue;
+		const sym = lookupSymbol(ctx.table, text.slice(start, i));
+		if (sym != null) markUsedIn(ctx, sym);
+	}
+}
+
+function namesAMember(text: string, end: int32): boolean {
+	let j = end;
+	while (j < text.length && text.charAt(j) == " ") j += 1;
+	if (j < text.length && text.charAt(j) == "?") j += 1;
+	return j < text.length && text.charAt(j) == ":";
 }
 
 function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
