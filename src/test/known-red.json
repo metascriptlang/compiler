@@ -18,6 +18,7 @@
     "775-bitSetIterate [esm]": {"since":"52ae61ea","note":"runs but stdout misses 'A,C|A,C|W3,W39||X5,X70,X99||{A, C}|{}|{X5, X70…'; measured 2026-09-21"}
   },
   "flaky": {
+    "1026-spawnChildErrorReachesTheAwait": {"since":"609e4ed8","note":"hangs at random, card 2026-10-03-spawn-child-error-orc-rare-hang.md; [orc] cell TIMEOUT after 300s in the merge gate of de96bc57 while [c]/[danger] passed; an --gc=orc build by the main 609e4ed8 compiler hung 3 of 480 runs (12 concurrent, 30s limit), the candidate 6 of 480, 2026-10-05"},
     "405-lockedSharedCounter": {"since":"3a5b991e","note":"hangs at random: green on [danger] and [san] while [drc] hit cell TIMEOUT after 300s in the same run, 2026-09-21"},
     "410-awaitStructSpawnStored": {"since":"e5f0ec68","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; installed msc e5f0ec68 hung 4 of 5 default runs, and [drc]/[orc] hit cell TIMEOUT after 300s while [danger] passed in the same run, 2026-09-24"},
     "419-leakSendMovedArgAsync": {"since":"3a5b991e","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; cell TIMEOUT after 300s on [danger], 2026-09-21"},
