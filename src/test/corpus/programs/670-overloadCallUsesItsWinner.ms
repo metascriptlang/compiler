@@ -5,7 +5,7 @@ struct Box { value: int32; }
 struct Crate { weight: int32; }
 struct Meta { a: int32; }
 
-function pick(values: Span<int32>): int32 { return values.length as int32; }
+function pick(values: Readonly<Span<int32>>): int32 { return values.length as int32; }
 function pick(box: Box): int32 { return box.value; }
 
 function count(metas: Span<Meta>): uint64 { return metas.length as uint64; }
@@ -24,8 +24,8 @@ function total(n: int64, acc: int64): int64 {
 }
 
 function take(box: Box): int32 { return box.value; }
-function take(values: Span<int32>): int32 { return values.length as int32; }
-function lone(values: Span<int32>): int32 { return values.length as int32; }
+function take(values: Readonly<Span<int32>>): int32 { return values.length as int32; }
+function lone(values: Readonly<Span<int32>>): int32 { return values.length as int32; }
 
 function main(): void {
 	const items: int32[2] = [4, 5];

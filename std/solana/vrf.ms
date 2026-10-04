@@ -38,7 +38,7 @@ function requested(
 	accounts: RandomnessRequest,
 	callerSeed: Pubkey,
 	callbackDiscriminator: uint64,
-	callbackAccounts: Span<AccountMeta>,
+	callbackAccounts: Readonly<Span<AccountMeta>>,
 	callbackArguments: Bytes,
 	payerSigner: Seeds,
 ): Result<uint64, ProgramError> {
@@ -88,7 +88,7 @@ export function requestRandomness(
 	accounts: RandomnessRequest,
 	callerSeed: Pubkey,
 	callbackDiscriminator: uint64,
-	callbackAccounts: Span<AccountMeta>,
+	callbackAccounts: Readonly<Span<AccountMeta>>,
 	callbackArguments: Bytes,
 ): Result<uint64, ProgramError> {
 	return requested(
@@ -105,7 +105,7 @@ export function requestRandomness(
 	accounts: RandomnessRequest,
 	callerSeed: Pubkey,
 	callbackDiscriminator: uint64,
-	callbackAccounts: Span<AccountMeta>,
+	callbackAccounts: Readonly<Span<AccountMeta>>,
 	callbackArguments: Bytes,
 	payerSigner: Seeds,
 ): Result<uint64, ProgramError> {

@@ -563,7 +563,7 @@ export function invokeSigned(this instruction: Instruction, signer: Seeds): Resu
 
 export function invokeSigned(
 	this instruction: Instruction,
-	signers: Span<Seeds>,
+	signers: Readonly<Span<Seeds>>,
 ): Result<uint64, ProgramError> {
 	const table = msSolAlloc(16 * (signers.length as uint64));
 	let entry = table;

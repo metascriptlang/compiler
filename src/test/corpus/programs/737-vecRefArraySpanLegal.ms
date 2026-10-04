@@ -10,7 +10,7 @@ function check(name: string, ok: boolean): boolean {
 	return ok;
 }
 
-function takeSpan(s: Span<int32>): int32 { return s.length; }
+function takeSpan(s: Readonly<Span<int32>>): int32 { return s.length; }
 
 function literalBoth(): boolean {
 	const r: int32[] = [1, 2];
@@ -26,7 +26,7 @@ function refArrayToSpan(): boolean {
 
 function vecToSpan(): boolean {
 	const v: Vec<int32> = [1, 2, 3];
-	const s: Span<int32> = v;
+	const s: Readonly<Span<int32>> = v;
 	return takeSpan(v) == 3 && s.length == 3;
 }
 
