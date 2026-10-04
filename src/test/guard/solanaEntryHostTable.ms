@@ -1,13 +1,12 @@
 // The host simulator parses an instruction the way the SBF entry does: the account table is not
-// taken from the program heap, and it holds at most MS_SOL_MAX_ACCOUNTS (255) accounts, the
-// reference entry's default, with the accounts past it skipped (instruction data and program id are
-// still found behind them).
+// taken from the program heap, it holds the 255 accounts the runtime sends at most
+// (MS_SOL_MAX_ACCOUNTS), and an instruction of 256 is refused before the program runs.
 // RED MEANS: reading the accounts moved the heap position (the table was allocated again), the
-// 256th account of an instruction was kept, or a skipped account shifted the instruction data.
+// 255th account was lost or the instruction data shifted, or 256 accounts reached the program.
 @include("runtime/solana/solana.h");
 
 import { ProgramError, Pubkey, account, accountCount, instructionData, programId } from "std/solana";
-import { HostAccount, run } from "std/solana/host";
+import { HostAccount, REFUSED, run } from "std/solana/host";
 import { exit } from "std/process";
 
 extern function msSolAlloc(size: uint64): uint64;
@@ -20,6 +19,7 @@ let lastKept = false;
 let pastTheLast = false;
 let dataLength: uint64 = 0;
 let program = false;
+let entered = 0;
 
 function report(what: string): void {
 	console.log(`GUARD-FAIL ${what}`);
@@ -64,6 +64,7 @@ function sees(index: int32): boolean {
 }
 
 function reads(): void {
+	entered += 1;
 	heapBefore = msSolAlloc(0);
 	counted = accountCount();
 	lastKept = counted > 0 && sees(counted - 1);
@@ -89,10 +90,12 @@ if (!lastKept || pastTheLast) { report("255 accounts: the last account is missin
 if (heapAfter != heapBefore) { report(`255 accounts: reading them moved the heap by ${heapAfter - heapBefore} bytes`); }
 if (dataLength != 3 || !program) { report(`255 accounts: instruction data ${dataLength} bytes, program id ${program}`); }
 
-probe(256);
-if (counted != 255) { report(`256 accounts: the program sees ${counted}, the limit is 255`); }
-if (!lastKept || pastTheLast) { report("256 accounts: the 255th account is missing or the 256th is kept"); }
-if (dataLength != 3 || !program) { report(`256 accounts: instruction data ${dataLength} bytes, program id ${program} behind the skipped account`); }
+const enteredBeforeRefusal = entered;
+const refused = run(programKey(), accountsOf(256), [1, 2, 3], reads);
+if (refused.result != REFUSED || !refused.fault.startsWith("MaxAccountsExceeded:")) {
+	report(`256 accounts: the host did not refuse the instruction: ${refused.result} ${refused.fault}`);
+}
+if (entered != enteredBeforeRefusal) { report("256 accounts: the program ran before the refusal"); }
 
 if (failed != 0) { exit(1); }
 console.log("GUARD-OK");
