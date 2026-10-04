@@ -20,7 +20,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym } from "../../transform/util";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, uniqueClassInUnion } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, runtimeClassSym } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -740,9 +740,19 @@ function classReference(sym: Symbol, location: SourceLocation): Node {
 }
 
 function openClassTest(gen: JSGenerator, cls: Symbol, member: Type, union: Type, pass: string, location: SourceLocation): void {
+	const shown = escapeJSString(typeDisplayName(member));
 	emit(gen, "((v) => (" + pass + "v instanceof ");
 	emitNode(gen, classReference(cls, location));
-	emit(gen, ") ? v : (() => { throw new Error(\"member '" + escapeJSString(typeDisplayName(member)) + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + typeof v + \"'\"); })())(");
+	emit(gen, ") ? v : (() => { throw new Error(v !== null && typeof v === \"object\" && !Array.isArray(v) && v.constructor !== Object ? \"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + shown + "\" : \"member '" + shown + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + typeof v + \"'\"); })())(");
+}
+
+function classTarget(node: Node, payload: Type): Symbol | null {
+	const body = payload.kind == TypeKind.Ref ? payload.typeReturn : null;
+	const cls = runtimeClassSym(body);
+	if (cls == null || body == null || body.kind != TypeKind.GenericInstance) return cls;
+	const instance = node.typeExpr != null ? node.typeExpr.resolvedSym : null;
+	if (instance == null) throw new Error(`internal: the union conversion to ${typeDisplayName(body)} has no instance class`);
+	return instance;
 }
 
 function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData): boolean {
@@ -768,7 +778,7 @@ function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData
 		return true;
 	}
 	if (union == null) return false;
-	const cls = uniqueClassInUnion(union, payload);
+	const cls = classTarget(node, payload);
 	if (cls != null) {
 		openClassTest(gen, cls, payload, union, pass, node.location);
 		emitNode(gen, d.asExpr);
