@@ -3,7 +3,7 @@
 // Handles function, enum, interface (struct), class, export, and import declarations.
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
-import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, HiddenStdConvData, DeclKind, TypeKind, Type, Symbol, SymbolKind, BlockStmtData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, HiddenStdConvData, DeclKind, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types";
 import {
@@ -562,15 +562,7 @@ function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 	const atExit = node.flags.has(NodeFlag.GlobalDestroys);
 	const p = atExit ? g.deinitProc : g.initProc;
 	const target = atExit ? CSection.ModuleDeinit : CSection.ModuleInit;
-	if (atExit) {
-		for (const one of (node.data as BlockStmtData).statements) {
-			const owner = one.resolvedSym;
-			if (owner != null && g.aliveSet.entries.length > 0 && !aliveSetHasDecl(g.aliveSet, g.modulePath, owner.name, owner)) continue;
-			genStmt(g, p, one);
-		}
-	} else {
-		genStmt(g, p, node);
-	}
+	genStmt(g, p, node);
 	const locals = readProcLocals(p);
 	const stmts = readProcStmts(p);
 	clearProcBuffers(p);

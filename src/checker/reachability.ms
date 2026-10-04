@@ -6,7 +6,7 @@
 
 import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDeclData, HiddenStdConvData,
 	ExportDeclData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
-	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData, BlockStmtData } from "../ast/node";
+	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
 import {
@@ -733,9 +733,7 @@ export function computeAliveSet(
 				if (ed.exportedDecl != null) initStmt = ed.exportedDecl;
 			}
 			if (bare.kind == NodeKind.BlockStmt && bare.flags.has(NodeFlag.GlobalDestroys)) {
-				const walked: boolean[] = [];
-				for (let i = 0; i < (bare.data as BlockStmtData).statements.length; i += 1) walked.push(false);
-				globalDestroys.push({ modulePath, block: bare, walked });
+				globalDestroys.push({ modulePath, block: bare, walked: false });
 				continue;
 			}
 			if (isTopLevelStatement(initStmt)) {
@@ -768,24 +766,18 @@ export function computeAliveSet(
 interface GlobalDestroysBlock {
 	modulePath: string;
 	block: Node;
-	walked: boolean[];
+	walked: boolean;
 }
 
-// A module's global destroys are no root: each global's destroy is alive exactly when the
-// global is, so a module that is otherwise dead stays dead.
+// A module's global destroys are no root: they run only in a module that is alive for another
+// reason, so a module holding nothing but globals stays dead.
 function markAliveGlobalDestroys(pending: GlobalDestroysBlock[]): boolean {
 	let walked = false;
 	for (const entry of pending) {
-		const destroys = (entry.block.data as BlockStmtData).statements;
-		for (let i = 0; i < destroys.length; i += 1) {
-			if (entry.walked[i]) continue;
-			const one = destroys[i];
-			const owner = one.resolvedSym;
-			if (owner != null ? !aliveSetHasSym(_aliveSet, owner) : !aliveSetHasModule(_aliveSet, entry.modulePath)) continue;
-			entry.walked[i] = true;
-			walkBody(one, entry.modulePath);
-			walked = true;
-		}
+		if (entry.walked || !aliveSetHasModule(_aliveSet, entry.modulePath)) continue;
+		entry.walked = true;
+		walkBody(entry.block, entry.modulePath);
+		walked = true;
 	}
 	return walked;
 }
