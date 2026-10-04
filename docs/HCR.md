@@ -293,6 +293,14 @@ A bad image is retried. A candidate rejected during load/handover/init is unload
 candidate that fails after publication rolls back to old. Compile failures never reach the
 runtime.
 
+Step 9 (purge) is not implemented: no reference unloads with proof (nimhcr unloads at once,
+cr.h is window 0, Erlang's `soft_purge` refuses while anything points in), so every accepted
+generation stays mapped and its copy stays on disk for the life of the run. The run reports
+what it holds: `lastReload().generations` counts accepted reloads and
+`lastReload().retainedBytes` the bytes of module image copies under the run's HCR copy
+directory. Both only grow; a budget policy on top of them would be a NEW MECHANISM and has
+not been built. Pin: hcr `hcrRetainReport`.
+
 State migration is deliberately outside this lifecycle. A future `code_change`-style API
 may suspend users, transform state and resume them, but initial HCR rejects layout changes.
 
@@ -819,6 +827,22 @@ objects 3. The first save paid the compile-plan capture, a compile without a PCH
 first link plan (39 ms); preparing them right after the app starts (`b523e256`) took the first
 save from 136–142 to 84 ms in an A/B on the same host under Windows load 3–4, where later saves
 measured about 99 ms with either compiler. Windows was not measured again.
+
+2026-10-04, Windows host (load 1–3 while another session's land gate ran), probe binary
+built from `f36d2bb7` inside an `out/gh1` copy with a `LINKDBG` print around the replayed
+image-link plan (`out/lat2/scripts/linkprobe.js`). The replayed `logic` image link is
+`zig lld-link -lldmingw … -DEBUG -PDB:…` and takes 86–111 ms warm (six-run A/B on the real
+objects, `out/gh1/abgh.sh`): as-is with `-DEBUG` about 101 ms median, `-DEBUG` removed 74–79 ms,
+so the PDB costs about 25–30 ms of the link. `-DEBUG:GHASH` at the link alone (no compile-side
+change) about 100 ms; with `-gcodeview-ghash` on every watch-session compile plus
+`-DEBUG:GHASH` in the plan args, 82–86 ms — at most 5 ms, inside noise, and it would touch
+every watch compile's flags. Rejected. `zig lld-link` warns `/debug:fastlink unsupported;
+using /debug:full`, and the zig driver refuses `-Wl,-DEBUG:GHASH` outright, so GHASH can only
+ride the captured plan. Also measured, same probe run: `@compile` gather opens 375–700
+change-stamps per warm rebuild (about 10–19 ms; the split's 19.9 ms), mostly shared vendor
+headers re-stamped once per std module's fingerprint; a per-build stamp memo would need
+write-invalidation (the `.d` of a just-compiled source is re-read at collect) and was not
+built.
 
 A writer that empties the file before writing it (`cat new > logic.ms` from Git Bash, whose fork
 takes more than the 60 ms settle) can let a build read the empty file. That build fails with
