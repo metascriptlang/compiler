@@ -3,6 +3,7 @@
 
 import { Pubkey } from "./pubkey";
 import { ProgramError } from "./error";
+import { ProgramAddress } from "./pda";
 
 extern function msSolProgramId(): uint64;
 extern function msSolLoadU64(address: uint64): uint64;
@@ -33,11 +34,6 @@ export struct SignerSeeds {
 export struct Signing {
 	table: uint64;
 	count: uint64;
-}
-
-export struct ProgramAddress {
-	key: Pubkey;
-	bump: uint8;
 }
 
 export struct SeedTable {

@@ -1,7 +1,6 @@
 import {
 	Account,
 	InstructionAccount,
-	ProgramAddress,
 	Writable,
 	WritableSigner,
 	createProgramAccountSeeded,
@@ -10,6 +9,7 @@ import {
 	putU8,
 } from "./core";
 import { invoke } from "./invoke";
+import { ProgramAddress } from "./pda";
 import { ProgramError } from "./error";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, Pubkey, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./pubkey";
 import {

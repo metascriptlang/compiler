@@ -24,7 +24,6 @@ import {
 	tableAddress,
 } from "./seed";
 
-export { ProgramAddress } from "./seed";
 export {
 	Bytes,
 	putBool,
