@@ -1913,6 +1913,18 @@ test "a float converted to a signed integer out of its range stops, as on C" {
 	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.I32).error.indexOf("not in range") >= 0;
 }
 
+test "a float converted to its bits keeps the IEEE pattern" {
+	assert execConv(raiserFloat(1.5), RaiserConvClass.F64Bits).exitValue.intVal == 4609434218613702656;
+	assert execConv(raiserFloat(-1.0), RaiserConvClass.F64Bits).exitValue.intVal == -4616189618054758400;
+}
+
+test "a reference converted to its identity bits is its handle, and nil is zero" {
+	assert execConv(raiserObject(7), RaiserConvClass.HandleBits).exitValue.intVal == 7;
+	assert execConv(raiserArray(3), RaiserConvClass.HandleBits).exitValue.intVal == 3;
+	assert execConv(raiserNil(), RaiserConvClass.HandleBits).exitValue.intVal == 0;
+	assert execConv(raiserString("k"), RaiserConvClass.HandleBits).error.startsWith("no identity bits");
+}
+
 test "a float in a signed integer's range converts by truncation" {
 	assert execConv(raiserFloat(127.9), RaiserConvClass.I8).exitValue.intVal == 127;
 	assert execConv(raiserFloat(-9.5), RaiserConvClass.I64).exitValue.intVal == -9;

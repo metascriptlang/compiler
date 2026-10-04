@@ -779,6 +779,18 @@ test "engine: nested structs and tuples compare by value" {
 	assert ctx.output == "true false true false\n";
 }
 
+test "engine: the hash builtins give the bits of the native 128-bit mix and float layout" {
+	const ctx = evalOrcVM("@builtin(\"HiXorLo\") extern function hiXorLo(a: uint64, b: uint64): uint64;"
+		+ " @builtin(\"Float64Bits\") extern function float64Bits(d: number): uint64;"
+		+ " console.log(`${hiXorLo(0x123456789abcdef0 as uint64, 0xfedcba9876543210 as uint64)}`"
+		+ " + ` ${hiXorLo(0xa0761d6478bd642f as uint64, 0xe7037ed1a0b428db as uint64)}`"
+		+ " + ` ${hiXorLo(0xFFFFFFFFFFFFFFFF as uint64, 0xFFFFFFFFFFFFFFFF as uint64)}`"
+		+ " + ` ${float64Bits(1.5)} ${float64Bits(-1.0)}`);");
+	assert ctx.error == "";
+	assert ctx.output == "3562955285811542818 2302960717771869484 18446744073709551615"
+		+ " 4609434218613702656 13830554455654793216\n";
+}
+
 test "orc: correct result + no error on object program" {
 	const vm = evalOrcVM("function mk(): { x: number } { return { x: 7 }; } const o = mk(); return o.x;");
 	assert vm.error == "";
