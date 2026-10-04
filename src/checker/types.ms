@@ -1694,8 +1694,7 @@ export function refSubstInner(t: Type): Type | null {
 export function rebuildRefLike(t: Type, inner: Type | null): Type {
 	if (isLockedRef(t)) return createLocked(inner);
 	if (isAtomicRef(t)) return createArc(inner);
-	const rebuilt = createRef(inner);
-	return isReadonlyView(t) ? createReadonlyView(rebuilt) : rebuilt;
+	return createRef(inner);
 }
 
 // The annotation spelling that re-resolves to this Ref class, or "" for a plain
@@ -3114,7 +3113,7 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 			},
 			_ => t,
 		};
-	return result;
+	return isReadonlyView(t) ? createReadonlyView(result) : result;
 }
 
 // Multi-binding substitution in ONE tree walk. Semantically identical to
@@ -3196,7 +3195,7 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 			},
 			_ => t,
 		};
-	return result;
+	return isReadonlyView(t) ? createReadonlyView(result) : result;
 }
 
 function substituteChildrenInPlaceAll(copy: Type, names: string[], concretes: Type[], seen: Cursor<Type>[]): void {
