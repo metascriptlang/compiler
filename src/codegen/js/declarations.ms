@@ -51,15 +51,15 @@ function isExternFlag(flags: string): boolean {
 	return false;
 }
 
-export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
-	// Skip extern functions — they're type declarations, not runtime code.
-	// The actual implementation comes from @import (e.g., node:process).
+function emittableFunctionDecl(node: Node): boolean {
 	const d = node.data as FunctionDeclData;
-	if (isExternFlag(d.fnFlags)) return;
-	// Tier 1: body-less overload signatures are typecheck-only, skip emission
-	if (d.fnFlags.indexOf("overload", 0) >= 0) return;
-	if (isGenericFn(d.fnFlags) || (node.nodeType != null && hasGenericParams(node.nodeType))) return;
-	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.CompileTime)) return;
+	if (isExternFlag(d.fnFlags) || d.fnFlags.indexOf("overload", 0) >= 0 || isGenericFn(d.fnFlags)) return false;
+	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.CompileTime)) return false;
+	return node.nodeType == null || !hasGenericParams(node.nodeType);
+}
+
+export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
+	if (!emittableFunctionDecl(node)) return;
 	emitIndent(gen);
 	emitFunctionDeclInner(gen, node);
 }
@@ -404,9 +404,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	// Compile-time-only — no runtime JS (mirrors the bare-decl skip in jsgen.ms)
 	if (inner.kind == NodeKind.MacroDecl) return;
 	if (inner.kind == NodeKind.ComptimeBlock) return;
-	if (inner.kind == NodeKind.FunctionDecl && inner.resolvedSym != null && hasFlag(inner.resolvedSym, SymbolFlag.CompileTime)) return;
-	// Skip extern functions — imported via @import, not compiled
-	if (inner.kind == NodeKind.FunctionDecl && isExternFlag((inner.data as FunctionDeclData).fnFlags)) return;
+	if (inner.kind == NodeKind.FunctionDecl && !emittableFunctionDecl(inner)) return;
 	if (gen.bundleMode) {
 		// Bundle mode: emit declaration without `export`, track exported name
 		let exportName = "";
