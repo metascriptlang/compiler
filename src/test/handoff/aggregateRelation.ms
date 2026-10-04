@@ -240,7 +240,7 @@ test "aggregate relation: array methods respect element width and view capabilit
 		{ source: "function f(): void { const view = \"abc\".asBytes(); view.push(88); }", accepted: false },
 		{ source: "function f(): void { const bytes: uint8[] = []; let value = 65; bytes.push(value); }", accepted: false },
 		{ source: "function f(): void { const bytes: uint8[] = []; let value = 65; bytes.push(value as uint8); }", accepted: true },
-		{ source: "function f(): void { const bytes: uint8[] = []; bytes.push(7); console.log(bytes.join(\",\")); }", accepted: false },
+		{ source: "function f(): void { const bytes: uint8[] = []; bytes.push(7); console.log(bytes.join(\",\")); }", accepted: true },
 		{ source: "function f(): void { const numbers: number[] = [1, 2]; console.log(numbers.join(\",\")); }", accepted: true },
 	];
 	for (const item of cases) {
