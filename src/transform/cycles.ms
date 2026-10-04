@@ -29,7 +29,8 @@ function typeIdentity(t: Type): string {
 	}
 	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span) return typeKey(t);
 	if (t.typeName != "" && !isAnonTypeName(t.typeName)) {
-		return t.kind == TypeKind.Struct || t.kind == TypeKind.Union ? nominalTypeKey(t) : t.typeName;
+		if (t.kind != TypeKind.Struct && t.kind != TypeKind.Union) return t.typeName;
+		return t.sym != null && t.sym.instantiatedFrom != null ? t.typeName : nominalTypeKey(t);
 	}
 	if (t.typeNames.length > 0) return anonTypeName(t);
 	return "";
