@@ -269,11 +269,13 @@ function setHookReturnType(fnNode: Node, t: Type): void {
 }
 
 // ===== Reference defaultOp =====
-// Primitives: copy/sink => assign, destroy/wasMoved => no-op
+// Primitives: copy/sink => assign, destroy => no-op, wasMoved => zero the field
 
 function defaultOp(hook: string, x: Node, y: Node, buf: NodeBuf, loc: SourceLocation): void {
 	if (hook == "copy" || hook == "sink") {
 		buf.items.push(makeExprStmt(makeAssign(x, y, loc), loc));
+	} else if (hook == "wasMoved") {
+		genCall("msPlainWasMoved", hook, x, y, buf, loc);
 	}
 }
 
