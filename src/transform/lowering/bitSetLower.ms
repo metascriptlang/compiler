@@ -1,9 +1,9 @@
-import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, UnaryExprData, TypeAssertionData, NumberLiteralData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, Type, TypeKind, SourceLocation, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, UnaryExprData, TypeAssertionData, NumberLiteralData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, ArrowFunctionData, Type, TypeKind, SourceLocation, createNodeAt } from "../../ast/node";
 import { bitSetElemType, setRepr, booleanType, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { TransformContext, freshTempSym } from "../context";
-import { walkNode, walkExpandBlocks, replaceInExpr } from "../walker";
-import { makeBinary, makeUnary, makeNumber, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeIf, makeBreak, makeBool, runtimeRef } from "../util";
+import { walkNode, walkExpandBlocks, mapExprChildren } from "../walker";
+import { makeBinary, makeUnary, makeNumber, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeIf, makeBreak, makeBool, makeReturn, runtimeRef } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
 import { DeclKind } from "../../ast/node";
 
@@ -312,7 +312,7 @@ function lowerArrayZero(node: Node, repr: Type): Node {
 
 // ===== dispatch =====
 
-function lowerCall(node: Node): Node {
+function lowerCall(node: Node, ctx: TransformContext): Node {
 	const d = node.data as CallExprData;
 	if (d.arguments.length == 0) return node;
 	const recv = d.arguments[0];
@@ -321,6 +321,7 @@ function lowerCall(node: Node): Node {
 	if (repr == null) return node;
 	const name = setOpName(d.callee);
 	if (name == "") return node;
+	if (ctx.keepBuiltinMemberCalls && name == "SetSize") return node;
 	if (repr.kind == TypeKind.SizedArray) return lowerArrayCall(node, name, recv, repr);
 	return lowerWordCall(node, name, recv, repr);
 }
@@ -342,8 +343,8 @@ function lowerBinary(node: Node): Node {
 	return node;
 }
 
-function lowerNode(node: Node): Node {
-	if (node.kind == NodeKind.CallExpr) return lowerCall(node);
+function lowerNode(node: Node, ctx: TransformContext): Node {
+	if (node.kind == NodeKind.CallExpr) return lowerCall(node, ctx);
 	if (node.kind == NodeKind.BinaryExpr) return lowerBinary(node);
 	if (node.kind == NodeKind.TypeAssertion) {
 		const repr = arrayRepr(node.nodeType);
@@ -381,31 +382,39 @@ function hoistOperand(operand: Node, pre: Node[], ctx: TransformContext): Node {
 }
 
 function hoistArrayOperands(expr: Node, pre: Node[], ctx: TransformContext): Node {
-	return replaceInExpr(expr, (node: Node): Node => {
-		if (!isArrayOp(node)) return node;
-		if (node.kind == NodeKind.CallExpr) {
-			const d = node.data as CallExprData;
-			for (let i = 0; i < d.arguments.length; i += 1) d.arguments[i] = hoistOperand(d.arguments[i], pre, ctx);
-			return node;
-		}
-		const d = node.data as BinaryExprData;
-		d.left = hoistOperand(d.left, pre, ctx);
-		d.right = hoistOperand(d.right, pre, ctx);
-		return node;
-	});
+	if (expr == null || expr.kind == NodeKind.ArrowFunction || expr.kind == NodeKind.FunctionExpr) return expr;
+	mapExprChildren(expr, (child: Node): Node => hoistArrayOperands(child, pre, ctx));
+	if (!isArrayOp(expr)) return expr;
+	if (expr.kind == NodeKind.CallExpr) {
+		const d = expr.data as CallExprData;
+		for (let i = 0; i < d.arguments.length; i += 1) d.arguments[i] = hoistOperand(d.arguments[i], pre, ctx);
+		return expr;
+	}
+	const d = expr.data as BinaryExprData;
+	d.left = hoistOperand(d.left, pre, ctx);
+	d.right = hoistOperand(d.right, pre, ctx);
+	return expr;
 }
 
-function containsImpureArrayOp(expr: Node): boolean {
-	let found = false;
-	replaceInExpr(expr, (node: Node): Node => {
-		if (!isArrayOp(node)) return node;
-		if (node.kind == NodeKind.CallExpr) {
-			for (const arg of (node.data as CallExprData).arguments) { if (cloneIfPure(arg) == null) found = true; }
-		} else {
-			const d = node.data as BinaryExprData;
-			if (cloneIfPure(d.left) == null || cloneIfPure(d.right) == null) found = true;
+export function isImpureArrayOp(node: Node): boolean {
+	if (!isArrayOp(node)) return false;
+	if (node.kind == NodeKind.CallExpr) {
+		for (const arg of (node.data as CallExprData).arguments) {
+			if (cloneIfPure(arg) == null) return true;
 		}
-		return node;
+		return false;
+	}
+	const d = node.data as BinaryExprData;
+	return cloneIfPure(d.left) == null || cloneIfPure(d.right) == null;
+}
+
+export function containsImpureArrayOp(expr: Node): boolean {
+	if (expr == null || expr.kind == NodeKind.ArrowFunction || expr.kind == NodeKind.FunctionExpr) return false;
+	if (isImpureArrayOp(expr)) return true;
+	let found = false;
+	mapExprChildren(expr, (child: Node): Node => {
+		if (!found && containsImpureArrayOp(child)) found = true;
+		return child;
 	});
 	return found;
 }
@@ -447,7 +456,22 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 	return pre;
 }
 
+function normalizeImpureArrowBodies(program: Node, ctx: TransformContext): Node {
+	return walkNode(program, (node: Node): Node => {
+		if (node.kind != NodeKind.ArrowFunction) return node;
+		const d = node.data as ArrowFunctionData;
+		if (d.arrowBody == null || d.arrowBody.kind == NodeKind.BlockStmt
+				|| !containsImpureArrayOp(d.arrowBody)) return node;
+		const pre: Node[] = [];
+		const result = hoistArrayOperands(d.arrowBody, pre, ctx);
+		pre.push(makeReturn(result, d.arrowBody.location));
+		d.arrowBody = makeBlock(pre, d.arrowBody.location);
+		return node;
+	});
+}
+
 export function lowerBitSet(program: Node, ctx: TransformContext): Node {
+	program = normalizeImpureArrowBodies(program, ctx);
 	walkExpandBlocks(program, expandStmt, ctx);
-	return walkNode(program, (n: Node): Node => { return lowerNode(n); });
+	return walkNode(program, (n: Node): Node => { return lowerNode(n, ctx); });
 }

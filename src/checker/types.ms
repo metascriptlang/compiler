@@ -47,7 +47,7 @@ import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, At
 //   Result         — boolean-disc match-type Union; GI typeChildren = [ok, err]
 //   Ref/Ptr/Borrow — typeReturn = referent type
 //   Array/Span     — typeReturn = element type
-//   SizedArray     — typeReturn = element, typeValue = element count
+//   SizedArray/Set — typeReturn = element, typeValue = element/member count
 //
 // =====================================================================
 
@@ -1823,9 +1823,17 @@ export function genericInstanceAbiRepr(t: Type): Type {
 
 export const BITSET_MAX_MEMBERS: int32 = 65536;
 
-export function bitSetRepr(elem: Type | null): Type | null {
-	if (elem == null) return null;
-	const members = elem.typeNames.length;
+function bitSetMemberCount(elem: Type): int32 {
+	let memberType = elem;
+	if (memberType.kind == TypeKind.Enum && memberType.typeNames.length == 0
+			&& memberType.sym != null && memberType.sym.symbolType != null
+			&& memberType.sym.symbolType.kind == TypeKind.Enum) {
+		memberType = memberType.sym.symbolType;
+	}
+	return memberType.typeNames.length;
+}
+
+function bitSetReprForMembers(members: int32): Type | null {
 	if (members <= 8) return createPrimitive(TypeKind.Uint8);
 	if (members <= 16) return createPrimitive(TypeKind.Uint16);
 	if (members <= 32) return createPrimitive(TypeKind.Uint32);
@@ -1834,9 +1842,14 @@ export function bitSetRepr(elem: Type | null): Type | null {
 	return null;
 }
 
+export function bitSetRepr(elem: Type | null): Type | null {
+	if (elem == null) return null;
+	return bitSetReprForMembers(bitSetMemberCount(elem));
+}
+
 export function setRepr(t: Type | null): Type | null {
 	if (t == null || t.kind != TypeKind.Set) return null;
-	return bitSetRepr(t.typeReturn);
+	return t.typeValue > 0 ? bitSetReprForMembers(t.typeValue) : bitSetRepr(t.typeReturn);
 }
 
 export function peelToRepr(t: Type | null): Type | null {
@@ -1861,6 +1874,7 @@ export function createBitSet(elem: Type): Type {
 	t.kind = TypeKind.Set;
 	t.typeName = "BitSet";
 	t.typeReturn = elem;
+	t.typeValue = bitSetMemberCount(elem);
 	return t;
 }
 

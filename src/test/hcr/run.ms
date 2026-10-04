@@ -187,10 +187,24 @@ function firstWarmBuild(): void {
 	copy(`${FIXTURES}/logicBodyEdit.ms`, `${dir}/logic.ms`);
 	mustBuild(tag, dir, build, "body-edit build failed");
 	let relinked = 0;
+	const changed: string[] = [];
 	for (const key of linkKeys(dir)) {
-		if (!cold.includes(key)) relinked += 1;
+		if (!cold.includes(key)) {
+			relinked += 1;
+			changed.push(key);
+		}
 	}
 	need(tag, cold.length > 0, "the cold build left no link keys");
+	if (relinked != 1) {
+		for (const key of changed) {
+			const name = key.split("\n")[0];
+			let before = "(no cold entry)";
+			for (const entry of cold) {
+				if (entry.split("\n")[0] == name) before = entry;
+			}
+			console.log(`${tag}: ${name} changed\n--- cold\n${before}\n--- warm\n${key}`);
+		}
+	}
 	need(tag, relinked == 1, `the first warm build relinked ${relinked} images, expected only logic's`);
 
 	const plain = freshDir(`${TMP}/firstWarmPlain`);
@@ -756,6 +770,61 @@ function stepCrash(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function crossImageNew(): void {
+	const tag = "hcrCrossImageNew";
+	const dir = freshDir(`${TMP}/crossNew`);
+	for (const f of readDir(`${FIXTURES}/crossNew`)) copy(`${FIXTURES}/crossNew/${f}`, `${dir}/${f}`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr"], "an image that constructs another image's classes did not build");
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	if (!succeeded(ran) || !both(ran).contains("NEW kept 3 child")) {
+		console.log(both(ran));
+		failWith(tag, "msc run --hcr could not construct classes declared in another image");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function exitDestroy(): void {
+	const tag = "hcrExitDestroy";
+	const dir = freshDir(`${TMP}/exitDestroy`);
+	for (const f of readDir(`${FIXTURES}/exitDestroy`)) copy(`${FIXTURES}/exitDestroy/${f}`, `${dir}/${f}`);
+	const want = ["EXIT run app logic", "EXIT destroy app", "EXIT destroy logic"];
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr"], "the --hcr build failed");
+	for (const args of [["run", "app.ms"], ["run", "--hcr", "app.ms"]]) {
+		const ran = msc(dir, args);
+		const seen: string[] = [];
+		for (const line of lines(both(ran))) {
+			if (line.startsWith("EXIT ")) seen.push(line);
+		}
+		if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+			console.log(both(ran));
+			failWith(tag, `msc ${args.join(" ")}: module globals were not destroyed once each at exit, entry first`);
+		}
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function retainReport(): void {
+	const tag = "hcrRetainReport";
+	const dir = freshDir(`${TMP}/retainReport`);
+	for (const f of readDir(`${FIXTURES}/retain`)) copy(`${FIXTURES}/retain/${f}`, `${dir}/${f}`);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("RETAIN ")) seen.push(line);
+	}
+	const want = [
+		"RETAIN start 2",
+		"RETAIN gen 1 bytes 3",
+		"RETAIN gen 2 bytes 4",
+		"RETAIN gen 3 bytes 5",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "lastReload() did not report growing generations and retained copy bytes");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function reloadOff(): void {
 	const tag = "hcrReloadOff";
 	const dir = freshDir(`${TMP}/reloadOff`);
@@ -931,6 +1000,39 @@ function watchWarmDependency(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function watchLink(): void {
+	const tag = "hcrWatchLink";
+	const dir = freshDir(`${TMP}/watchLink`);
+	for (const f of ["app.ms", "logic.ms", "logicBodyEdit.ms"]) copy(`${FIXTURES}/${f}`, `${dir}/${f}`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr"], "cold build failed");
+	const temp = freshDir(`${TMP}/watchLinkTemp`);
+	ensureDir(`${temp}/msc-plan`);
+	let planted = false;
+	for (const f of readDir(`${dir}/out/debug/.cache`)) {
+		if (planted || !f.endsWith(".o")) continue;
+		copy(`${dir}/out/debug/.cache/${f}`, `${temp}/msc-plan/msc-plan-input.o`);
+		planted = true;
+	}
+	need(tag, planted, "the cold build left no object to plant at the plan input");
+	put(`${dir}/replay.txt`, "logicBodyEdit.ms logic.ms\n");
+	const prevTemp = env.get("TEMP");
+	const prevTmpdir = env.get("TMPDIR");
+	env.set("TEMP", temp);
+	env.set("TMPDIR", temp);
+	const watched = msc(dir, ["build", "app.ms", "--hcr", "--watch-replay=replay.txt"]);
+	env.set("TEMP", prevTemp);
+	env.set("TMPDIR", prevTmpdir);
+	const statuses: string[] = [];
+	for (const line of lines(both(watched))) {
+		if (line.startsWith("watch: build ")) statuses.push(line);
+	}
+	if (statuses.length != 2 || statuses[1].contains(" failed ")) {
+		console.log(both(watched));
+		failWith(tag, "a linked watch build failed after its session captured link plans over a real placeholder object");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function typeInfoLocality(): void {
 	const tag = "hcrTypeInfoLocality";
 	const dir = freshDir(`${TMP}/typeInfoLocality`);
@@ -1081,12 +1183,16 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrLiftKinds", run: liftKinds },
 	{ name: "hcrRun", run: runCommand },
 	{ name: "hcrStepCrash", run: stepCrash },
+	{ name: "hcrCrossImageNew", run: crossImageNew },
+	{ name: "hcrExitDestroy", run: exitDestroy },
+	{ name: "hcrRetainReport", run: retainReport },
 	{ name: "hcrRegistryVariables", run: registryVariables },
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
 	{ name: "hcrFunctionValues", run: functionValues },
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
 	{ name: "hcrTypeInfoLocality", run: typeInfoLocality },
+	{ name: "hcrWatchLink", run: watchLink },
 	{ name: "hcrImageNameCollision", run: imageNameCollision },
 	{ name: "hcrArrayOwner", run: arrayOwner },
 ];

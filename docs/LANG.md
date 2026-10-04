@@ -2413,6 +2413,10 @@ What a reload keeps and what it refuses:
   	await sleepAsync(16);
   }
   ```
+- **Nothing is ever unloaded.** Every accepted reload keeps every earlier generation's images
+  mapped, so a long session accumulates them. `lastReload().generations` counts the reloads the
+  run has accepted and `lastReload().retainedBytes` the bytes of module image copies it holds
+  under its HCR copy directory. Both only grow; restart the program to release them.
 - **A program that never imports `std/hcr` is refused by `msc run --hcr`**: nothing would call
   `reload()`, so `error: app.ms never imports std/hcr, …` stops the build and the watch waits
   for the save that adds the import.
@@ -2421,10 +2425,10 @@ What a reload keeps and what it refuses:
   source builds for production, and the loop's `reload()` costs no call there. `--hcr` defines
   `hcr` for `when`.
 
-On 2026-10-03 the whole `src/test/hcr/run.ms` passed on Linux x64 (WSL Ubuntu, 25 cases,
-`hcrStepCrash` included); on Windows x64 17 of its 26 cases were run and passed (watch,
-crash rollback, registry, function values, dependencies); the gate runs the rest on Windows. Linux watch timing, macOS watch and iOS remain
-unverified/unimplemented respectively. Architecture, measurements and limits: [`HCR.md`](HCR.md).
+On 2026-10-04 the whole `src/test/hcr/run.ms` passed on Linux x64 (WSL Ubuntu, 30 cases,
+`hcrRetainReport` included) and on Windows x64 (30 ok + 1 skip: `hcrCoreLinkClang`, whose
+clang targets msvc, which `--hcr` does not build). Linux watch timing, macOS watch and iOS
+remain unverified/unimplemented respectively. Architecture, measurements and limits: [`HCR.md`](HCR.md).
 
 ## Strings and Characters
 

@@ -8,9 +8,9 @@ import {
 	ForStmtData, ForOfStmtData, MacroInvocationData, StringLiteralData,
 	AssertStmtData, isEmptyBlock, Type,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt, jsTypedArrayName, escapeJSString } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt, escapeJSString } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
-import { emitCopyOnRead } from "./valueCopy";
+import { emitCopyOnRead, jsDefaultValue } from "./valueCopy";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // A failing assert must abandon the rest of its test body — the C harness does
@@ -40,38 +40,6 @@ export function emitAssertStmt(gen: JSGenerator, node: Node): void {
 	emit(gen, " }\n");
 }
 
-// Emit default initializer for uninitialized variable based on type.
-// Reference: createVar — typed arrays for numeric, inline literal for small, arrayConstr for large.
-function jsDefaultValue(t: Type): string {
-	if (t == null) return "";
-	if (t.kind == TypeKind.SizedArray) {
-		const size = t.typeValue;
-		const elemType = t.typeReturn;
-		let fill = "null";
-		if (elemType != null) {
-			const typedName = jsTypedArrayName(elemType.kind);
-			if (typedName != "") return `new ${typedName}(${size})`;
-			const elemInit = jsDefaultValue(elemType);
-			if (elemInit != "") fill = elemInit;
-		}
-		if (size > 32) return `new Array(${size}).fill(${fill})`;
-		let out = "[";
-		for (let i = 0; i < size; i += 1) {
-			if (i > 0) out = out + ", ";
-			out = out + fill;
-		}
-		return out + "]";
-	}
-	if (t.kind == TypeKind.Number || t.kind == TypeKind.Float32 || t.kind == TypeKind.Float64
-		|| t.kind == TypeKind.Int8 || t.kind == TypeKind.Int16 || t.kind == TypeKind.Int32
-		|| t.kind == TypeKind.Uint8 || t.kind == TypeKind.Uint16 || t.kind == TypeKind.Uint32) {
-		return "0";
-	}
-	if (t.kind == TypeKind.Int64 || t.kind == TypeKind.Uint64) return "0n";
-	if (t.kind == TypeKind.Boolean) return "false";
-	if (t.kind == TypeKind.String) return "\"\"";
-	return "";
-}
 
 function emitDefaultInit(gen: JSGenerator, t: Type): void {
 	const v = jsDefaultValue(t);
@@ -94,7 +62,9 @@ function emitVariableDeclCore(gen: JSGenerator, node: Node): void {
 		emit(gen, " = ");
 		emitCopyOnRead(gen, d.initializer);
 	} else {
-		emitDefaultInit(gen, node.nodeType!);
+		let declType = node.nodeType;
+		if (declType == null && node.resolvedSym != null) declType = node.resolvedSym.symbolType;
+		if (declType != null) emitDefaultInit(gen, declType);
 	}
 }
 

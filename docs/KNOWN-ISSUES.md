@@ -366,8 +366,49 @@ C:  "assigning to 'void *' from incompatible type 'msSizedArray_uint8_t_3'"
 JS: 2,1
 ```
 
-`elemArrayCName` has no `SizedArray` arm either — the same second naming path as L21's first
-cell. The array band of a set (`BitSet<E100>[]`) inherits it.
+The missing `SizedArray` arm in `src/codegen/c/types.ms` `elemArrayCName` also affected
+the aggregate band of `BitSet<E>`. Descriptor emission and array-element naming now
+share `sizedArrayCName`.
+
+Aggregate-set storage was re-measured with `src/test/corpus/programs/bitSetVectorLifecycle.ms`:
+the previous compiler rejects both65-member (9-byte) and100-member (13-byte) vector
+elements as incompatible with `void*`; the corrected candidate runs C/DRC, C/ORC
+and JS with the exact aggregate outputs `aggregate65 3 3 true false 0 1 true` and
+`aggregate100 3 3 true false 0 1 true`. Commands: `msc build <program> --gc=drc`,
+`--gc=orc`, and `--target=js`, followed by the executable or Node.
+`src/test/lang/valueStorage.ms` additionally exercises return and nested-vector copies.
+Measured source tree: `6c946045e400db6ea97f13c0270d5ecad7519a30`
+(`e3a0426e`, built with DRC/danger/LTO-off).
+
+This is candidate proof, not installed-compiler or downstream lifecycle proof. The
+raw `uint8[3][]` example above and fixed arrays containing managed references were
+not re-run by this correction; the aggregate-set result does not certify those cases.
+
+### Aggregate `BitSet` collection keys — corrected candidate, measured 2026-10-02
+
+For65/100-member sets, JS represented the value as `Uint8Array` but selected native
+`Map`/`Set`, so independently constructed equal sets occupied separate slots. C used
+value hash/equality. A second C defect surfaced when the set was a struct/tuple field:
+generic `hash<T>` cast its aggregate representation to an integer and generated equality
+applied C `==` to the representation struct.
+
+The corrected implementation keeps set generic relation aligned with the reference and
+ranks the full declared receiver type before scope, so `hash<E>(BitSet<E>)` beats bare
+`hash<T>`. Generated composite equality delegates Set fields through their representation's
+existing equality hook. JS routes aggregate Set keys through the existing
+`ValueMap`/`ValueSet` canonical-key and value-copy machinery.
+
+`src/test/corpus/programs/774-bitSetHashKey.ms` runs direct65/100-member keys plus
+struct/tuple keys with the exact same overwrite, lookup, deletion and deduplication
+oracle on C/DRC, C/ORC, bundled JS and split ESM. Legitimate renewal proof also ran
+`hashReceiver8`/`hashReceiver65`; `src/checker/compat.ms` passed20 files/539 tests.
+Commands used the frozen `mscReceiver.exe` candidate
+(SHA256 `0adc3217bf79372456fe4edb29fcc41dfae72117746fa8f8ed7c89baf2ab0e1e`);
+receipts are `out/bitset-contract/legitimate-receiver-*`.
+Source commit `0ac0b83c`, tree `68fc5b80b2cb47e89b9d866feff3493c16ec45a0`.
+
+This is candidate proof, not the full BitSet matrix, normal gate, installed compiler or
+downstream Scene lifecycle proof.
 
 ## L24. Compound bitwise assignment `|=` / `&=` / `^=` / `<<=` does not lex (LIVE, measured 2026-09-13)
 

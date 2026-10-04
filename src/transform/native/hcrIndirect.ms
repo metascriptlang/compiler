@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, BlockStmtData, IdentifierData, MemberExprData, ObjectLiteralData, createNode, SourceLocation, SymbolKind, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, BlockStmtData, IdentifierData, MemberExprData, NewExprData, ObjectLiteralData, Symbol, createNode, SourceLocation, SymbolKind, Type, TypeKind } from "../../ast/node";
 import { exportedFunctionOf } from "../../checker/decoratorHelpers";
 import { hasGenericParams, createPtr, createStruct, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -10,6 +10,7 @@ import { syntheticToken, makeHiddenDeref, makeTypedIdent, makeMember, makeCall, 
 import { AliveSet, CEmissionFacts } from "../../codegen/c/context";
 import { functionDeclIsAlive } from "../../checker/reachability";
 import { hcrStorageDecl } from "./hcrLift";
+import { lookupCtorDefaults } from "../../checker/instantiate";
 
 export struct HcrIndirectModule {
 	moduleId: string;
@@ -147,15 +148,16 @@ export function lowerHcrIndirection(
 				(n.data as ObjectLiteralData).properties[0] = makeTypedIdent(value, target.nodeType, target.location);
 				return n;
 			}
-			if (n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr) return n;
-			const sym = n.resolvedSym;
+			if (n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr && n.kind != NodeKind.NewExpr) return n;
+			const constructed = constructedClassOf(n);
+			const sym = n.kind == NodeKind.NewExpr || constructed != null ? constructorInitOf(constructed) : n.resolvedSym;
 			if (sym == null) return n;
 			if (n.kind == NodeKind.MemberExpr) {
 				const baseSym = (n.data as MemberExprData).object.resolvedSym;
 				if (baseSym == null || baseSym.symbolKind != SymbolKind.Module) return n;
 			}
-			const isVariable = isModuleGlobalVar(sym);
-			const text = referenceText(n);
+			const isVariable = constructed == null && isModuleGlobalVar(sym);
+			const text = constructed != null ? sym.name : referenceText(n);
 			const symbol = isVariable
 				? mangledGlobalName(sym, referenceName(sym, text))
 				: mangledFunctionName(sym, referenceName(sym, text), sym.overloadIdx);
@@ -213,6 +215,18 @@ export function lowerHcrIndirection(
 	for (const stmt of registrations) emitted.push(stmt);
 	pd.programStmts = emitted;
 	return program;
+}
+
+function constructedClassOf(n: Node): Symbol | null {
+	if (n.kind == NodeKind.NewExpr) return (n.data as NewExprData).newCallee.resolvedSym;
+	if (n.kind == NodeKind.Identifier && (n.data as IdentifierData).name == "super") return n.resolvedSym;
+	return null;
+}
+
+function constructorInitOf(classSym: Symbol | null): Symbol | null {
+	if (classSym == null || classSym.instantiatedFrom != null) return null;
+	const entry = lookupCtorDefaults(classSym, classSym.name);
+	return entry != null ? entry.initSym : null;
 }
 
 function referenceText(n: Node): string {

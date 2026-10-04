@@ -16,7 +16,7 @@ import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } f
 import { TransformContext, createTransformContext, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
-	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeIf, makeFnDecl, runtimeRef,
+	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef,
 } from "../transform/util";
 import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -2500,6 +2500,24 @@ function processClass(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 
 // ===== Program Entry Point =====
 
+function destroyHcrCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): Node[] {
+	const storage = cell.symbolType != null ? cell.symbolType.typeReturn : null;
+	if (storage == null || storage.kind != TypeKind.Struct || storage.typeChildren.length != 1) {
+		dctx.ctx.errors.push(`DRC: HCR cell '${cell.name}' does not point at a one-field storage struct`);
+		return [];
+	}
+	const valueType = storage.typeChildren[0];
+	const rcInfo = classifyRc(valueType, dctx);
+	if (!rcInfo.needsCleanup) return [];
+	const value = makeMember(makeHiddenDeref(makeIdentResolved(cell, loc), loc), "value", loc);
+	value.nodeType = valueType;
+	const tmpSym = freshTempSym(dctx.ctx, "hcrExit", valueType);
+	const tmp = makeVarDecl(tmpSym.name, value, DeclKind.Const, loc);
+	tmp.nodeType = valueType;
+	tmp.resolvedSym = tmpSym;
+	return [tmp, makeDestroyCall(tmpSym, rcInfo, loc)];
+}
+
 export function injectProgram(program: Node, dctx: DrcContext): Node {
 	if (program.kind != NodeKind.Program) return program;
 	const d = program.data as ProgramData;
@@ -2507,6 +2525,10 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	// Reference parity: globals at top scope (s.parent == nil) go to
 	// graph.globalDestructors, destroyed in reverse at program end; the top
 	// scope's other variables go to scope.final, destroyed where its body ends.
+	const cells: Symbol[] = [];
+	for (const s of d.programStmts) {
+		if (s.kind == NodeKind.VariableDecl && s.resolvedSym != null && hasFlag(s.resolvedSym, SymbolFlag.HcrCell)) cells.push(s.resolvedSym);
+	}
 	pushScope(dctx, false, false);
 	dctx.finallyProtectedVars = collectFinallyVars(program);
 	dctx.currentFuncBody = program;
@@ -2514,9 +2536,16 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	d.programStmts = processStmtList(d.programStmts, dctx, program.location);
 	const moduleScope = popScope(dctx);
 	for (const s of generateCleanup(moduleScope, program.location)) d.programStmts.push(s);
+	const exits: Node[] = [];
 	if (dctx.globalsToDestroy.length > 0) {
 		const exitScope: DrcScope = { varsToCleanup: dctx.globalsToDestroy, wasMoved: [], preStmts: [], pendingStmts: [], needsTry: false, isLoop: false, isFunction: false };
-		const destroys = makeBlock(generateCleanup(exitScope, program.location), program.location);
+		for (const s of generateCleanup(exitScope, program.location)) exits.push(s);
+	}
+	for (let i = cells.length - 1; i >= 0; i -= 1) {
+		for (const s of destroyHcrCell(cells[i], program.location, dctx)) exits.push(s);
+	}
+	if (exits.length > 0) {
+		const destroys = makeBlock(exits, program.location);
 		destroys.flags = destroys.flags.incl(NodeFlag.GlobalDestroys);
 		d.programStmts.push(destroys);
 	}

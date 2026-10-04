@@ -428,3 +428,139 @@ test "valueStorage: a const Ptr<T> writes its pointee" {
 	p.a = 7;
 	assert owner.a == 7;
 }
+
+enum ByteVectorFlag { Changed, Paint }
+enum WordVectorFlag { Changed, Paint, C, D, E, F, G, H, High }
+interface ByteSetVectorOwner { bits: Vec<BitSet<ByteVectorFlag>>; }
+interface WordSetVectorOwner { bits: Vec<BitSet<WordVectorFlag>>; }
+
+test "valueStorage: replacing a nonempty byte-bitset vector preserves reusable field storage" {
+	const owner: ByteSetVectorOwner = { bits: [] };
+	const changed = (0 as BitSet<ByteVectorFlag>).incl(ByteVectorFlag.Changed);
+	for (let i: int32 = 0; i < 8; i++) { owner.bits.push(changed); }
+	assert owner.bits[7].has(ByteVectorFlag.Changed);
+	owner.bits = new Array(0);
+	assert owner.bits.length == 0;
+	owner.bits.push((0 as BitSet<ByteVectorFlag>).incl(ByteVectorFlag.Paint));
+	assert owner.bits.length == 1;
+	assert owner.bits[0].has(ByteVectorFlag.Paint);
+	assert !owner.bits[0].has(ByteVectorFlag.Changed);
+}
+
+test "valueStorage: replacing a nonempty word-bitset vector retains high ordinal bits" {
+	const owner: WordSetVectorOwner = { bits: [] };
+	const changed = (0 as BitSet<WordVectorFlag>).incl(WordVectorFlag.Changed);
+	for (let i: int32 = 0; i < 8; i++) { owner.bits.push(changed); }
+	assert owner.bits[7].has(WordVectorFlag.Changed);
+	owner.bits = new Array(0);
+	assert owner.bits.length == 0;
+	owner.bits.push((0 as BitSet<WordVectorFlag>).incl(WordVectorFlag.High));
+	assert owner.bits.length == 1;
+	assert owner.bits[0].has(WordVectorFlag.High);
+	assert !owner.bits[0].has(WordVectorFlag.Changed);
+}
+
+enum AggregateVectorFlag {
+	F0, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, F13, F14, F15,
+	F16, F17, F18, F19, F20, F21, F22, F23, F24, F25, F26, F27, F28, F29, F30, F31,
+	F32, F33, F34, F35, F36, F37, F38, F39, F40, F41, F42, F43, F44, F45, F46, F47,
+	F48, F49, F50, F51, F52, F53, F54, F55, F56, F57, F58, F59, F60, F61, F62, F63,
+	F64,
+}
+
+
+
+struct AggregateBitSetKey { bits: BitSet<AggregateVectorFlag>; id: int32; }
+
+test "valueStorage: equal aggregate-bitset map keys overwrite and delete one entry" {
+	const first = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F0).incl(AggregateVectorFlag.F64);
+	const equal = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F64).incl(AggregateVectorFlag.F0);
+	const map: HashMap<BitSet<AggregateVectorFlag>, int32> = new HashMap();
+	map.set(first, 17);
+	map.set(equal, 23);
+	assert map.size == 1;
+	const found = map.get(first);
+	assert found != null;
+	if (found != null) { assert found == 23; }
+	assert map.delete(equal);
+	assert !map.has(first);
+}
+
+test "valueStorage: equal aggregate-bitset set members occupy one slot" {
+	const first = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F0).incl(AggregateVectorFlag.F64);
+	const equal = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F64).incl(AggregateVectorFlag.F0);
+	const set: HashSet<BitSet<AggregateVectorFlag>> = new HashSet();
+	set.add(first);
+	set.add(equal);
+	assert set.size == 1;
+	assert set.delete(equal);
+	assert !set.has(first);
+}
+
+test "valueStorage: struct keys compare aggregate-bitset fields by their values" {
+	const first = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F0).incl(AggregateVectorFlag.F64);
+	const equal = (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F64).incl(AggregateVectorFlag.F0);
+	const map: HashMap<AggregateBitSetKey, int32> = new HashMap();
+	map.set({ bits: first, id: 7 }, 17);
+	const found = map.get({ bits: equal, id: 7 });
+	assert found != null;
+	if (found != null) { assert found == 17; }
+	assert !map.has({ bits: equal, id: 8 });
+}
+
+
+test "valueStorage: conditional word-bitset storage is typed and lazy" {
+	let calls: int32 = 0;
+	const makeValue = (): BitSet<WordVectorFlag> => {
+		calls += 1;
+		return (0 as BitSet<WordVectorFlag>).incl(WordVectorFlag.High);
+	};
+	const selected = true ? (0 as BitSet<WordVectorFlag>) : makeValue();
+	assert selected.isEmpty();
+	assert calls == 0;
+}
+
+test "valueStorage: conditional aggregate-bitset storage is typed and lazy" {
+	let calls: int32 = 0;
+	const makeValue = (): BitSet<AggregateVectorFlag> => {
+		calls += 1;
+		return (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F64);
+	};
+	const selected = true ? (0 as BitSet<AggregateVectorFlag>) : makeValue();
+	assert selected.isEmpty();
+	assert calls == 0;
+}
+
+test "valueStorage: aggregate-bitset arrow bodies hoist inside their own scope" {
+	const makeBase = (): BitSet<AggregateVectorFlag> => (0 as BitSet<AggregateVectorFlag>).incl(AggregateVectorFlag.F0);
+	const deferred = (): BitSet<AggregateVectorFlag> => makeBase().incl(AggregateVectorFlag.F64);
+	const value = deferred();
+	assert value.has(AggregateVectorFlag.F0);
+	assert value.has(AggregateVectorFlag.F64);
+}
+
+struct WordSetZeroHolder { bits: BitSet<WordVectorFlag>; }
+struct AggregateSetZeroHolder { bits: BitSet<AggregateVectorFlag>; }
+
+test "valueStorage: word-bitset locations start at the zero value" {
+	let local: BitSet<WordVectorFlag>;
+	const holder: WordSetZeroHolder = {};
+	const values: Vec<BitSet<WordVectorFlag>> = new Array(3);
+	assert local.isEmpty();
+	assert holder.bits.isEmpty();
+	assert values[0].isEmpty();
+	assert values[2].isEmpty();
+}
+
+test "valueStorage: aggregate-bitset locations start at independent zero values" {
+	let local: BitSet<AggregateVectorFlag>;
+	const holder: AggregateSetZeroHolder = {};
+	let values: Vec<BitSet<AggregateVectorFlag>> = new Array(3);
+	assert local.isEmpty();
+	assert holder.bits.isEmpty();
+	assert values[0].isEmpty();
+	assert values[2].isEmpty();
+	values[0] = values[0].incl(AggregateVectorFlag.F64);
+	assert values[0].has(AggregateVectorFlag.F64);
+	assert values[1].isEmpty();
+}

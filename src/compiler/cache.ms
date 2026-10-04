@@ -15,11 +15,11 @@
 
 import { env, platform, argv, cwd, execFileCapture, findOnPath } from "std/process";
 import { exists, isDir, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, changeStamp, remove, removeAll, readDir, ensureDir } from "std/fs";
-import { join, dirname, normalize } from "std/fs/path";
+import { join, dirname, normalize, isAbsolute } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace } from "./io";
-import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey } from "./cc";
+import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, buildPch } from "./cc";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 import { VERSION } from "./usage";
 
@@ -38,6 +38,13 @@ function hashFileContent(path: string): string {
 
 const _hashByStamp = new HashMap<string, string>();
 
+const SETTLED_SECONDS = 2;
+
+function settled(path: string): boolean {
+	const modified = modifiedTime(path);
+	return modified >= 0 && modified <= nowSeconds() - SETTLED_SECONDS;
+}
+
 function hashFile(path: string): string {
 	const stamp = changeStamp(path);
 	if (stamp == "") return hashFileContent(path);
@@ -45,7 +52,7 @@ function hashFile(path: string): string {
 	const prefix = `${stamp}|`;
 	if (known != null && known.startsWith(prefix)) return known.substring(prefix.length, known.length);
 	const hash = hashFileContent(path);
-	_hashByStamp.set(path, `${prefix}${hash}`);
+	if (settled(path)) _hashByStamp.set(path, `${prefix}${hash}`);
 	return hash;
 }
 
@@ -230,18 +237,28 @@ function nativeDependencyPaths(srcPath: string, compileCmd: string): string[] {
 }
 
 const _dependenciesByStamp = new HashMap<string, string>();
+let _ownedHeaderPrefix = "";
+
+export function setToolchainHeaderRoot(root: string): void {
+	_ownedHeaderPrefix = root == "" ? "" : foldedPath(`${root}/`);
+}
+
+function foldedPath(path: string): string {
+	const slashed = path.replaceAll("\\", "/");
+	return platform == "windows" ? slashed.toLowerCase() : slashed;
+}
 
 function dependencyPathsIn(path: string): string[] {
 	const stamp = changeStamp(path);
 	if (stamp == "") return parseDependencyFile(path);
 	const known = _dependenciesByStamp.get(path);
-	const prefix = `${stamp}|`;
+	const prefix = `${stamp}|${_ownedHeaderPrefix}|`;
 	if (known != null && known.startsWith(prefix)) {
 		const listed = known.substring(prefix.length, known.length);
 		return listed == "" ? [] : listed.split("\n");
 	}
 	const paths = parseDependencyFile(path);
-	_dependenciesByStamp.set(path, `${prefix}${paths.join("\n")}`);
+	if (settled(path)) _dependenciesByStamp.set(path, `${prefix}${paths.join("\n")}`);
 	return paths;
 }
 
@@ -249,40 +266,86 @@ function parseDependencyFile(path: string): string[] {
 	const result: string[] = [];
 	if (!exists(path)) return result;
 	const content = try readFile(path) catch "";
-	let colon = 0;
-	while (colon < content.length && content.charAt(colon) != ":") colon = colon + 1;
-	if (colon == content.length) return result;
-	let current = "";
+	const n = content.byteLength;
+	const colon = content.byteIndexOf(":");
+	if (colon < 0) return result;
+	let start = -1;
+	let escaped = false;
 	let i = colon + 1;
-	while (i < content.length) {
-		const c = content.charAt(i);
-		if (c == "\\") {
-			if (i + 1 < content.length && content.charAt(i + 1) == "\n") {
-				i = i + 2;
+	while (i < n) {
+		const b = content.byteAt(i);
+		if (b == "\\".code && i + 1 < n) {
+			const next = content.byteAt(i + 1);
+			if (next == "\n".code || next == "\r".code) {
+				if (start >= 0) pushDependency(result, dependencyToken(content.byteSlice(start, i), escaped));
+				start = -1;
+				escaped = false;
+				i = next == "\r".code && i + 2 < n && content.byteAt(i + 2) == "\n".code ? i + 3 : i + 2;
 				continue;
 			}
-			if (i + 2 < content.length && content.charAt(i + 1) == "\r" && content.charAt(i + 2) == "\n") {
-				i = i + 3;
-				continue;
-			}
-			if (i + 1 < content.length) {
-				current = current + content.charAt(i + 1);
-				i = i + 2;
-				continue;
-			}
+			if (start < 0) start = i;
+			escaped = true;
+			i = i + 2;
+			continue;
 		}
-		if (c == " " || c == "\t" || c == "\n" || c == "\r") {
-			if (current != "") {
-				result.push(current);
-				current = "";
-			}
-		} else {
-			current = current + c;
+		if (b == " ".code || b == "\t".code || b == "\n".code || b == "\r".code) {
+			if (start >= 0) pushDependency(result, dependencyToken(content.byteSlice(start, i), escaped));
+			start = -1;
+			escaped = false;
+		} else if (start < 0) {
+			start = i;
 		}
 		i = i + 1;
 	}
-	if (current != "") result.push(current);
+	if (start >= 0) pushDependency(result, dependencyToken(content.byteSlice(start, n), escaped));
 	return result;
+}
+
+export function writePchManifest(depFile: string, manifest: string): boolean {
+	const tokens = parseDependencyFile(depFile);
+	let first = 0;
+	while (first < tokens.length && !tokens[first].endsWith(":")) first += 1;
+	if (first == tokens.length) first = -1;
+	let body = "";
+	for (let i = first + 1; i < tokens.length; i += 1) {
+		const path = isAbsolute(tokens[i]) ? tokens[i] : join(cwd(), tokens[i]);
+		body = body + `${path}\t${hashFile(path)}\n`;
+	}
+	if (body == "") return false;
+	return atomicWriteFile(manifest, body);
+}
+
+export function pchManifestCurrent(manifest: string): boolean {
+	const body = try readFile(manifest) catch "";
+	if (body == "") return false;
+	for (const line of body.split("\n")) {
+		if (line == "") continue;
+		const tab = line.indexOf("\t", 0);
+		if (tab <= 0 || hashFile(line.slice(0, tab)) != line.slice(tab + 1, line.length)) return false;
+	}
+	return true;
+}
+
+function pushDependency(result: string[], path: string): void {
+	if (_ownedHeaderPrefix != "" && foldedPath(path).startsWith(_ownedHeaderPrefix)) return;
+	result.push(path);
+}
+
+function dependencyToken(raw: string, escaped: boolean): string {
+	if (!escaped) return raw;
+	let out = "";
+	let from = 0;
+	let i = 0;
+	while (i < raw.byteLength) {
+		if (raw.byteAt(i) == "\\".code && i + 1 < raw.byteLength) {
+			out = out + raw.byteSlice(from, i);
+			from = i + 1;
+			i = i + 2;
+		} else {
+			i = i + 1;
+		}
+	}
+	return out + raw.byteSlice(from, raw.byteLength);
 }
 
 export function nativeDependenciesKnown(srcPath: string, compileCmd: string): boolean {
@@ -360,7 +423,7 @@ function sourceIdentity(path: string): string {
 	const prefix = `${stamp}|`;
 	if (known != null && known.startsWith(prefix)) return known.substring(prefix.length, known.length);
 	const identity = readSourceIdentity(path);
-	_sourceIdentityByStamp.set(path, `${prefix}${identity}`);
+	if (settled(path)) _sourceIdentityByStamp.set(path, `${prefix}${identity}`);
 	return identity;
 }
 
@@ -462,6 +525,7 @@ function ccContentIdentity(ccOption: number, ccBinary: string): string {
 }
 
 export function objectStoreKey(source: string, ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): string {
+	if (storeRoot() == "") return "";
 	const args = objectCompileArgsKey(ccOption, ccBinary, isCpp, mode, extraFlags);
 	return hashContent(`${STORE_FORMAT}\n${platform}\n${source}\n${ccContentIdentity(ccOption, ccBinary)}\n${args}`);
 }
@@ -1329,6 +1393,26 @@ test "a file rewritten to the same size at once hashes to its new content" {
 	assert hashFile(path) == "absent";
 }
 
+test "a file written within the settle window is not remembered by its change stamp" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-settle-${performance.now()}.d`;
+	writeFile(path, "native: a.h\n");
+	hashFile(path);
+	dependencyPathsIn(path);
+	sourceIdentity(path);
+	assert _hashByStamp.get(path) == null;
+	assert _dependenciesByStamp.get(path) == null;
+	assert _sourceIdentityByStamp.get(path) == null;
+	remove(path);
+}
+
+test "a settled file is remembered by its change stamp" {
+	const path = join(resolveRuntimeDir(), "runtime/core/system.h");
+	assert settled(path);
+	hashFile(path);
+	assert _hashByStamp.get(path) != null;
+}
+
 test "a dependency file rewritten to the same size at once lists its new paths" {
 	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
 	const path = `${base}/msc-deps-stamp-${performance.now()}.d`;
@@ -1339,6 +1423,30 @@ test "a dependency file rewritten to the same size at once lists its new paths" 
 	assert dependencyPathsIn(path).join(",") == "c.h,d.h";
 	remove(path);
 	assert dependencyPathsIn(path).length == 0;
+}
+
+test "a dependency file reads escaped spaces, line continuations and CRLF as clang writes them" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-deps-escape-${performance.now()}.d`;
+	writeFile(path, "native: C:/a.h \\\r\n  C:/my\\ dir/b.h \\\n  c\\\\d.h\te.h\r\n");
+	assert parseDependencyFile(path).join("|") == "C:/a.h|C:/my dir/b.h|c\\d.h|e.h";
+	writeFile(path, "native:\n");
+	assert parseDependencyFile(path).length == 0;
+	remove(path);
+}
+
+test "a dependency under the C compiler's own install is left to the compiler identity" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const path = `${base}/msc-deps-owned-${performance.now()}.d`;
+	writeFile(path, "native: C:/tools/Zig/lib/libc/include/stdio.h C:/proj/runtime/core/system.h C:/tools/zigx/lib/a.h\n");
+	setToolchainHeaderRoot("C:\\tools\\zig\\lib");
+	const owned = parseDependencyFile(path).join("|");
+	setToolchainHeaderRoot("");
+	const all = parseDependencyFile(path).join("|");
+	remove(path);
+	assert all == "C:/tools/Zig/lib/libc/include/stdio.h|C:/proj/runtime/core/system.h|C:/tools/zigx/lib/a.h";
+	if (platform == "windows") assert owned == "C:/proj/runtime/core/system.h|C:/tools/zigx/lib/a.h";
+	else assert owned == all;
 }
 
 test "a native source rewritten to the same size at once moves its fingerprint" {
@@ -1595,4 +1703,19 @@ test "the C compiler identity moves with its path, size, mtime and version" {
 	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000001, "0.16.0") != base;
 	assert compilerIdentity("zig cc", "/opt/zig/zig", 177108480, 1700000000, "0.16.1") != base;
 	assert compilerIdentity("clang", "/opt/zig/zig", 177108480, 1700000000, "0.16.0") != base;
+}
+
+test "a precompiled header goes stale when a header it includes changes in place" {
+	const dir = `out/test/pchManifest${performance.now()}`;
+	ensureDir(dir);
+	const inner = (value: string): string => `#ifndef INNER_H\n#define INNER_H\n#define INNER_VALUE ${value}\n#endif\n`;
+	writeFile(`${dir}/inner.h`, inner("41"));
+	writeFile(`${dir}/rt.h`, "#ifndef RT_H\n#define RT_H\n#include \"inner.h\"\nstatic inline int rtValue(void) { return INNER_VALUE; }\n#endif\n");
+	writeFile(`${dir}/prefix.h`, "#include \"rt.h\"\n");
+	assert buildPch(`${dir}/prefix.h`, `${dir}/prefix.pch`, `${dir}/prefix.pch.d`, `-iquote${dir}`, 0, 0, "");
+	assert writePchManifest(`${dir}/prefix.pch.d`, `${dir}/prefix.pch.deps`);
+	assert pchManifestCurrent(`${dir}/prefix.pch.deps`);
+	writeFile(`${dir}/inner.h`, inner("42"));
+	assert !pchManifestCurrent(`${dir}/prefix.pch.deps`);
+	assert !pchManifestCurrent(`${dir}/absent.pch.deps`);
 }

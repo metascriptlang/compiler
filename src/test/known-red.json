@@ -27,8 +27,6 @@
   },
   "fmt": {},
   "guard": {
-    "moveIntoBorrowParam [drc]": {"since":"4573591e","note":"x is destroyed after look(move x) into a borrowing param: C prints '  +4z+' for 'a+++4z+'. Red again on origin/main c441aebe+ (an origin/main build, macOS, 2026-10-04) after b5857d025 dropped the entry as green; card 2026-09-30-move-into-borrow-param-destroys-source.md"},
-    "moveIntoBorrowParam [orc]": {"since":"4573591e","note":"x is destroyed after look(move x) into a borrowing param: C prints '  +4z+' for 'a+++4z+'. Red again on origin/main c441aebe+ (an origin/main build, macOS, 2026-10-04) after b5857d025 dropped the entry as green; card 2026-09-30-move-into-borrow-param-destroys-source.md"}
   },
   "hcr": {},
   "san": {

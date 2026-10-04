@@ -1,9 +1,9 @@
 // Transform Utilities — node-building helpers for AST transforms
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
-import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, SymbolKind, CallExprData, HiddenStdConvData } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike } from "../checker/types";
+import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, setRepr } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { lookupHookSym, requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
@@ -295,6 +295,19 @@ export function makeNull(loc: SourceLocation): Node {
 export function makeDefaultValue(t: Type | null, loc: SourceLocation): Node {
 	if (t == null) return makeNull(loc);
 	const k = t.kind;
+	if (k == TypeKind.Set) {
+		const repr = setRepr(t);
+		if (repr != null) return makeDefaultValue(repr, loc);
+	}
+	if (k == TypeKind.Array || k == TypeKind.SizedArray) {
+		const elements: Node[] = [];
+		if (k == TypeKind.SizedArray) {
+			for (let i = 0; i < t.typeValue; i += 1) elements.push(makeDefaultValue(t.typeReturn, loc));
+		}
+		const lit = createNode(NodeKind.ArrayLiteral, { elements } as ArrayLiteralData, syntheticToken(loc));
+		lit.nodeType = t;
+		return lit;
+	}
 	// Numeric types → 0
 	if (k == TypeKind.Number || k == TypeKind.Float64 || k == TypeKind.Float32
 		|| k == TypeKind.Int8 || k == TypeKind.Int16 || k == TypeKind.Int32 || k == TypeKind.Int64

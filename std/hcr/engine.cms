@@ -1,7 +1,7 @@
 import { exit } from "../process";
 import { writeStderr } from "../io";
-import { readDir, removeAll } from "../fs";
 import { ReloadKind, ReloadResult } from "./types";
+import { fileSize, readDir, removeAll } from "../fs";
 
 @include("runtime/hcrEngine.h");
 
@@ -43,6 +43,7 @@ extern function msHcrGuardText(): string;
 extern function msHcrRestoreTypeInfos(moduleId: cstring): void;
 extern function msDrainUntilIdle(): void;
 extern function msReportOrphanFailures(): int32;
+extern function msHcrCoreDeinit(): void;
 
 interface HcrImage {
 	handle: Ptr<void>;
@@ -93,16 +94,18 @@ let launchStem = "";
 let entryId = "";
 let copyRoot = "";
 let generation: int32 = 0;
+let retainedGenerations: int32 = 0;
+let retainedBytes: int64 = 0;
 let coreIdentity: uint64 = 0;
 let bundleIdentity: uint64 = 0;
 let pending = false;
-let last: ReloadResult = { kind: ReloadKind.NoChange, modules: [], reason: "" };
+let last: ReloadResult = { kind: ReloadKind.NoChange, modules: [], reason: "", generations: 0, retainedBytes: 0 };
 const modules: HcrModule[] = [];
 let undo: HcrUndo[] = [];
 const discovering: string[] = [];
 
 function result(kind: ReloadKind, names: string[], reason: string): ReloadResult {
-	return { kind, modules: names, reason };
+	return { kind, modules: names, reason, generations: retainedGenerations, retainedBytes: retainedBytes };
 }
 
 function corePath(): string {
@@ -190,6 +193,8 @@ function copyLoad(source: string): HcrLoad {
 	if (msHcrMakeDir(dir) == 0) return { image: empty, failure: `cannot load ${source} (${msHcrFailureText()})` };
 	const copy = `${dir}/${baseName(source)}`;
 	if (msHcrCopyImage(source, copy) == 0) return { image: empty, failure: `cannot load ${source} (${msHcrFailureText()})` };
+	const copied = fileSize(copy);
+	if (copied >= 0) retainedBytes = retainedBytes + (copied as int64);
 	const handle = hcrOpen(copy);
 	if (hcrIsNull(handle) != 0) return { image: empty, failure: `cannot load ${source} (${msHcrFailureText()})` };
 	const image = describe(handle);
@@ -284,7 +289,17 @@ export function start(): int32 {
 		if (msHcrCallInitStatus(required(item.image, "Init000")) != 0) fatal(`initialization of module '${item.module.moduleId}' threw`);
 	}
 	msDrainUntilIdle();
-	return msReportOrphanFailures() != 0 ? 1 : 0;
+	const code = msReportOrphanFailures() != 0 ? 1 : 0;
+	destroyGlobals();
+	return code;
+}
+
+function destroyGlobals(): void {
+	for (let i = modules.length - 1; i >= 0; i -= 1) {
+		const raw = symbolOf(modules[i].image.handle, "Deinit000");
+		if (hcrIsNull(raw) == 0 && msHcrCallInitStatus(raw) != 0) fatal(`module '${modules[i].moduleId}' threw while destroying its globals`);
+	}
+	msHcrCoreDeinit();
 }
 
 function release(candidates: HcrCandidate[]): void {
@@ -546,6 +561,7 @@ function performReload(): ReloadResult {
 			accepted.push({ module: candidates[i].module, image: previousImages[i], identity: previousIdentities[i], isNew: candidates[i].isNew });
 		}
 		undo = accepted;
+		retainedGenerations = retainedGenerations + 1;
 		return result(ReloadKind.Reloaded, names, reset.length > 0 ? "reset variables: " + reset.join(", ") : "");
 	}
 	for (let i = 0; i < candidates.length; i += 1) {

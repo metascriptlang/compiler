@@ -730,9 +730,13 @@ export struct CcPlan {
 	output: string;
 	outputStem: string;
 	deps: string;
+	implib: string;
+	implibStub: string;
 }
 
-export const NO_PLAN: CcPlan = { exe: "", args: [], input: "", output: "", outputStem: "", deps: "" };
+export const NO_PLAN: CcPlan = { exe: "", args: [], input: "", output: "", outputStem: "", deps: "", implib: "", implibStub: "" };
+
+const IMPLIB_FLAG = "-Wl,--out-implib,";
 
 const PLAN_TAG = "msc-plan-";
 let _planDir = "";
@@ -753,6 +757,15 @@ function planDir(): string {
 	_planDir = join(temp, "msc-plan");
 	ensureDir(_planDir);
 	return _planDir;
+}
+
+export function toolchainHeaderRoot(ccOption: number, ccBinary: string): string {
+	const command = compilerInvocation(ccOption, ccBinary);
+	if (!command.ok || !isZigDriver(command.value)) return "";
+	let path = command.value.path;
+	const found = findOnPath(path);
+	if (found != "") path = found;
+	return `${dirname(path)}/lib`;
 }
 
 function isZigDriver(command: ToolCommand): boolean {
@@ -808,7 +821,7 @@ function adoptDriverObject(tokens: string[], input: string, output: string): voi
 	}
 }
 
-function capturePlan(command: ToolCommand, argv: string[], isLink: boolean, input: string, output: string, outputStem: string, deps: string): CcPlan {
+function capturePlan(command: ToolCommand, argv: string[], isLink: boolean, input: string, output: string, outputStem: string, deps: string, implib: string = "", implibStub: string = ""): CcPlan {
 	const r = execFileResult(command.path, argv);
 	if (!r.started || r.signal != 0) return NO_PLAN;
 	const lines: string[] = [];
@@ -834,12 +847,13 @@ function capturePlan(command: ToolCommand, argv: string[], isLink: boolean, inpu
 		else if (deps != "" && token == deps) depFiles += 1;
 		else if (!isLink && token == basename(input)) continue;
 		else if (outputStem != "" && token.indexOf(basename(outputStem), 0) >= 0) continue;
+		else if (implibStub != "" && token.indexOf(implibStub, 0) >= 0) continue;
 		else return NO_PLAN;
 	}
 	if (inputs != 1 || (!isLink && outputs != 1) || depFiles != (deps != "" ? 1 : 0)) return NO_PLAN;
 	const args: string[] = [];
 	for (let k = isLink ? 0 : 1; k < tokens.length; k += 1) args.push(tokens[k]);
-	return { exe: isLink ? command.path : tokens[0], args, input, output, outputStem, deps };
+	return { exe: isLink ? command.path : tokens[0], args, input, output, outputStem, deps, implib, implibStub };
 }
 
 function planArgs(plan: Readonly<CcPlan>, inputs: string[], output: string, deps: string): string[] {
@@ -856,6 +870,8 @@ function planArgs(plan: Readonly<CcPlan>, inputs: string[], output: string, deps
 			args.push(deps);
 		} else if (plan.outputStem == "" && token == basename(plan.input)) {
 			args.push(basename(inputs[0]));
+		} else if (plan.implibStub != "" && token.indexOf(plan.implibStub, 0) >= 0) {
+			args.push(token.replaceAll(plan.implibStub, plan.implib));
 		} else if (plan.outputStem != "" && token.indexOf(basename(plan.outputStem), 0) >= 0) {
 			args.push(token.replaceAll(plan.outputStem, realStem).replaceAll(basename(plan.outputStem), basename(realStem)));
 		} else {
@@ -877,7 +893,7 @@ export function compilePlanFor(cFile: string, hasDeps: boolean, extraFlags: stri
 	const key = `${parts.value.command.path}\n${argv.join("\n")}`;
 	const known = _plans.get(key);
 	if (known != null) return known;
-	if (!exists(input)) writeFile(input, "");
+	writeFile(input, "");
 	argv.push("-###");
 	const plan = capturePlan(parts.value.command, argv, false, input, output, "", deps);
 	_plans.set(key, plan);
@@ -890,18 +906,29 @@ function linkPlanFor(command: ToolCommand, prefix: string[], flagArgs: string[],
 	const input = join(dir, `${PLAN_TAG}input.o`);
 	const stem = join(dir, `${PLAN_TAG}output`);
 	const output = `${stem}${outBinary.substring(withoutExtension(outBinary).length, outBinary.length)}`;
+	const implibStub = join(dir, `${PLAN_TAG}implib.lib`);
+	let implib = "";
+	const keyArgs: string[] = [];
 	const argv: string[] = [];
 	for (const arg of prefix) argv.push(arg);
 	argv.push(input);
-	for (const arg of flagArgs) argv.push(arg);
+	for (const arg of flagArgs) {
+		keyArgs.push(arg);
+		if (arg.startsWith(IMPLIB_FLAG)) {
+			implib = arg.substring(IMPLIB_FLAG.length, arg.length);
+			argv.push(`${IMPLIB_FLAG}${implibStub}`);
+		} else {
+			argv.push(arg);
+		}
+	}
 	argv.push("-o");
 	argv.push(output);
-	const key = `${command.path}\n${argv.join("\n")}`;
+	const key = `${command.path}\n${prefix.join("\n")}\n${keyArgs.join("\n")}\n${output}`;
 	const known = _plans.get(key);
 	if (known != null) return known;
-	if (!exists(input)) writeFile(input, "");
+	writeFile(input, "");
 	argv.push("-###");
-	const plan = capturePlan(command, argv, true, input, output, stem, "");
+	const plan = capturePlan(command, argv, true, input, output, stem, "", implib, implib != "" ? implibStub : "");
 	_plans.set(key, plan);
 	return plan;
 }
@@ -916,7 +943,7 @@ export function includePrefix(source: string): string {
 	return source.substring(0, end);
 }
 
-export function buildPch(header: string, pch: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): boolean {
+export function buildPch(header: string, pch: string, depFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): boolean {
 	const parts = objectCompileArgs(ccOption, ccBinary, false, mode, extraFlags);
 	if (!parts.ok || !isZigDriver(parts.value.command)) return false;
 	const args: string[] = [];
@@ -931,6 +958,9 @@ export function buildPch(header: string, pch: string, extraFlags: string, mode: 
 	args.push(header);
 	args.push("-o");
 	args.push(tmp);
+	args.push("-MD");
+	args.push("-MF");
+	args.push(depFile);
 	for (const arg of parts.value.trail) args.push(arg);
 	if (!runCc(parts.value.command, args).ok) {
 		remove(tmp);
@@ -1153,8 +1183,13 @@ function responseFileBody(args: string[]): string {
 	return body;
 }
 
-export function linkObjects(oFiles: string[], outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
-	ensureDir(dirname(outBinary));
+interface LinkCommand {
+	command: ToolCommand;
+	prefix: string[];
+	flagArgs: string[];
+}
+
+function linkCommand(extraFlags: string, ccOption: number, ccBinary: string): Result<LinkCommand, ProcessError> {
 	const resolved = compilerCommand(ccOption, ccBinary, _hasCppCompile);
 	if (!resolved.ok) return Result.err(resolved.error);
 	const command = resolved.value;
@@ -1165,6 +1200,21 @@ export function linkObjects(oFiles: string[], outBinary: string, extraFlags: str
 	const flags = appendParsedFlags(command.path, flagArgs, extraFlags);
 	if (!flags.ok) return Result.err(flags.error);
 	if (!flagArgs.includes("-nostdlib") && !flagArgs.includes("-nodefaultlibs")) flagArgs.push("-lm");
+	return Result.ok({ command, prefix, flagArgs });
+}
+
+export function warmLinkPlan(outBinary: string, extraFlags: string, ccOption: number, ccBinary: string): void {
+	const link = linkCommand(extraFlags, ccOption, ccBinary);
+	if (link.ok) linkPlanFor(link.value.command, link.value.prefix, link.value.flagArgs, outBinary);
+}
+
+export function linkObjects(oFiles: string[], outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
+	ensureDir(dirname(outBinary));
+	const link = linkCommand(extraFlags, ccOption, ccBinary);
+	if (!link.ok) return Result.err(link.error);
+	const command = link.value.command;
+	const prefix = link.value.prefix;
+	const flagArgs = link.value.flagArgs;
 	const bulk: string[] = [];
 	for (const oFile of oFiles) bulk.push(oFile);
 	for (const arg of flagArgs) bulk.push(arg);
@@ -1246,9 +1296,26 @@ test "a link plan takes every object at the input's place and the output's stem 
 		output: "/t/msc-plan-output.dll",
 		outputStem: "/t/msc-plan-output",
 		deps: "",
+		implib: "",
+		implibStub: "",
 	};
 	const args = planArgs(plan, ["a.o", "b.o"], "out/app.logic.dll", "");
 	assert args.join(" ") == "lld-link -OUT:out/app.logic.dll -PDB:out/app.logic.pdb -PDBALTPATH:app.logic.pdb a.o b.o -lc";
+}
+
+test "a link plan writes its import library where the link asked, never where the capture did" {
+	const plan: CcPlan = {
+		exe: "zig",
+		args: ["lld-link", "-DLL", "-OUT:/t/msc-plan-output.dll", "-IMPLIB:/t/msc-plan-implib.lib", "/t/msc-plan-input.o"],
+		input: "/t/msc-plan-input.o",
+		output: "/t/msc-plan-output.dll",
+		outputStem: "/t/msc-plan-output",
+		deps: "",
+		implib: "out/app.core.lib",
+		implibStub: "/t/msc-plan-implib.lib",
+	};
+	const args = planArgs(plan, ["core.o"], "out/app.core.dll", "");
+	assert args.join(" ") == "lld-link -DLL -OUT:out/app.core.dll -IMPLIB:out/app.core.lib core.o";
 }
 
 test "a compile plan renames the input, its main-file name, the object and the dependency file" {
@@ -1259,6 +1326,8 @@ test "a compile plan renames the input, its main-file name, the object and the d
 		output: "/t/msc-plan-output.o",
 		outputStem: "",
 		deps: "/t/msc-plan-deps.d",
+		implib: "",
+		implibStub: "",
 	};
 	const args = planArgs(plan, ["cache/logic.c"], "cache/logic.o.tmp.1", "cache/logic.d.tmp.1");
 	assert args.join(" ") == "-cc1 -main-file-name logic.c -dependency-file cache/logic.d.tmp.1 -o cache/logic.o.tmp.1 -x c cache/logic.c";
@@ -1278,11 +1347,11 @@ test "a precompiled header zig serves from its cache after the header is rewritt
 	const source = `${dir}/use.c`;
 	writeFile(header, "#include <string.h>\n");
 	writeFile(source, "int size(void) { return (int)strlen(\"abc\"); }\n");
-	assert buildPch(header, `${dir}/first.pch`, "", 0, 0, "");
+	assert buildPch(header, `${dir}/first.pch`, `${dir}/first.pch.d`, "", 0, 0, "");
 	const nextSecond = (Math.floor(Date.now() / 1000) + 1) * 1000;
 	while (Date.now() < nextSecond) {}
 	writeFile(header, "#include <string.h>\n");
-	assert buildPch(header, `${dir}/second.pch`, "", 0, 0, "");
+	assert buildPch(header, `${dir}/second.pch`, `${dir}/second.pch.d`, "", 0, 0, "");
 	const parts = objectCompileArgs(0, "", false, 0, "");
 	assert parts.ok;
 	const args = objectCompileArgv(parts.value, source, `${dir}/use.o`, "");

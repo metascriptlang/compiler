@@ -60,11 +60,11 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, objectSearchDirs, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto } from "./cc";
+import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot } from "./cc";
 import { defineIdentity } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -1082,7 +1082,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 						hitOFiles.push(oFile);
 					} else {
 						const storeKey = objectStoreKey(nativeStoreSource(fullPath), ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags);
-						const stored = restoreNativeObject(fullPath, probeKey, storeKey, objectSearchDirs(ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags));
+						const stored = storeKey == "" ? "" : restoreNativeObject(fullPath, probeKey, storeKey, objectSearchDirs(ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags));
 						if (stored != "") {
 							if (verbose) verboseLog(`  @compile ${fullPath} → ${stored} ${dim("(stored)")}`);
 							hitOFiles.push(stored);
@@ -1195,18 +1195,41 @@ function pchFiles(cFile: string, flags: string, mode: number, ccOption: number, 
 	return [prefix, `${cacheDir()}/pch/${key}.h`, `${cacheDir()}/pch/${key}.pch`];
 }
 
+function currentPch(files: string[]): boolean {
+	return files.length == 3 && exists(files[2]) && pchManifestCurrent(`${files[2]}.deps`);
+}
+
 function existingPch(cFile: string, flags: string, mode: number, ccOption: number, ccBinary: string): string {
 	const files = pchFiles(cFile, flags, mode, ccOption, ccBinary);
-	return files.length == 3 && exists(files[2]) ? files[2] : "";
+	return currentPch(files) ? files[2] : "";
+}
+
+interface HcrWarmLink {
+	image: string;
+	flags: string;
+}
+
+let _hcrWarmJobs: ModuleCompileJob[] = [];
+let _hcrWarmLinks: HcrWarmLink[] = [];
+
+function warmHcrSession(opts: Readonly<CliOptions>): void {
+	for (const j of _hcrWarmJobs) compilePlanFor(j.cFile, j.depFile != "", j.flags, opts.mode, opts.ccCompiler, opts.ccBinary);
+	ensurePchs(_hcrWarmJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
+	for (const link of _hcrWarmLinks) warmLinkPlan(link.image, link.flags, opts.ccCompiler, opts.ccBinary);
+	_hcrWarmJobs = [];
+	_hcrWarmLinks = [];
 }
 
 function ensurePchs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string): void {
 	for (const j of jobs) {
 		if (j.modPath == "") continue;
 		const files = pchFiles(j.cFile, j.flags, mode, ccOption, ccBinary);
-		if (files.length != 3 || exists(files[2])) continue;
+		if (files.length != 3 || currentPch(files)) continue;
 		ensureDir(dirname(files[1]));
-		if (writeFile(files[1], files[0]).ok) buildPch(files[1], files[2], j.flags, mode, ccOption, ccBinary);
+		if (!writeFile(files[1], files[0]).ok) continue;
+		const depFile = `${files[2]}.${performance.now()}.d`;
+		if (buildPch(files[1], files[2], depFile, j.flags, mode, ccOption, ccBinary)) writePchManifest(depFile, `${files[2]}.deps`);
+		remove(depFile);
 	}
 }
 
@@ -1781,7 +1804,10 @@ test "HCR core image takes the target's shared-library extension, not the output
 }
 
 function linkHcrImage(objects: string[], externalInputs: string[], image: string, flags: string, opts: CliOptions): void {
-	if (isLinkCached(objects, externalInputs, flags, image, image)) return;
+	if (isLinkCached(objects, externalInputs, flags, image, image)) {
+		_hcrWarmLinks.push({ image, flags });
+		return;
+	}
 	const linked = linkObjects(objects, image, flags, opts.mode, opts.ccCompiler, opts.ccBinary);
 	if (!linked.ok) {
 		console.log(`${error("error")}: link failed for HCR image ${image} ${dim(`(exit ${linked.error.exitCode})`)}`);
@@ -2315,6 +2341,7 @@ export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: R
 	const run = openWatch(entryPath, opts, resolveSection);
 	while (true) {
 		watchBuild(run);
+		if (run.step == 1) warmHcrSession(opts);
 		if (!watchNext(run, (): boolean => false)) return;
 	}
 }
@@ -2361,6 +2388,7 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 		lockedUpdate(exited, (v: HostExit): HostExit => { return { code: code, done: true }; });
 		return code;
 	});
+	warmHcrSession(opts);
 	while (watchNext(run, (): boolean => lockedRead(exited, (v: HostExit): boolean => v.done))) watchBuild(run);
 	const code = await running;
 	exit(code);
@@ -2368,6 +2396,8 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 
 export function buildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection, session: BuildSession): BuildStatus {
 	startSessionBuild(session);
+	_hcrWarmJobs = [];
+	_hcrWarmLinks = [];
 	const lastBuilt = session.lastBuilt;
 	session.lastBuilt = false;
 	entryPath = canonicalModulePath(entryPath);
@@ -2381,6 +2411,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	// below runs too late for that, it only re-stamps the prelude context.
 	resolveTargetGcMode(opts);
 	resolveCC(opts);
+	setToolchainHeaderRoot(toolchainHeaderRoot(opts.ccCompiler, opts.ccBinary));
 	resolveLto(opts);
 	useDriverPlans(session.keep && opts.isHcr);
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
@@ -2935,10 +2966,14 @@ setGlobalHookOwners(sharedHookOwners);
 			}
 			const modFp = moduleObjectFp(p.modPath, baseFp);
 			const oFile = stableOFileFp(p.modPath, modFp);
+			if (session.keep && opts.isHcr && hcrModulePaths.includes(p.modPath)) {
+				_hcrWarmJobs.push({ cFile: stableCFileFp(p.modPath, baseFp), oFile, modPath: p.modPath, flags: modFlags, fp: modFp, baseFp, depFile: moduleDepFile(p.modPath, baseFp), cacheKey: "", slot: -1 });
+			}
 
-			const storeKey = isCCodeCached(p.modPath, modFp) ? "" : objectStoreKey(moduleStoreSource(cCode), opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags);
+			const cached = isCCodeCached(p.modPath, modFp);
+			const storeKey = cached ? "" : objectStoreKey(moduleStoreSource(cCode), opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags);
 			const stored = storeKey == "" ? "" : restoreModuleObject(p.modPath, baseFp, storeKey, objectSearchDirs(opts.ccCompiler, opts.ccBinary, false, opts.mode, modFlags));
-			if (storeKey == "") {
+			if (cached) {
 				oSlots.push([oFile]);
 				if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
 			} else if (stored != "") {
@@ -3202,6 +3237,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// binary will actually be built with.
 	resolveTargetGcMode(opts);
 	resolveCC(opts);
+	setToolchainHeaderRoot(toolchainHeaderRoot(opts.ccCompiler, opts.ccBinary));
 	resolveLto(opts);
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
 // Reference parity: global hook ownership registry shared across all modules.

@@ -1284,6 +1284,11 @@ run_sharded_lane() {
 
 build_lane() {
   env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
+  if [ ! -f "${CAND}_link.rsp" ]; then
+    say "gate: gen1's link was cached and wrote no link response file, linking it again"
+    rm -f "$CAND" "${CAND%.exe}.pdb"
+    env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
+  fi
   self_host_boot "$CAND" "$CC_FLAG"
 }
 
