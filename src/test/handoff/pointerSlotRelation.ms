@@ -215,3 +215,14 @@ test "pointerSlotRelation: a class or interface value keeps its plain name in a 
 	assert hasError("class A { n: int32 = 1; }\nclass B { s: string = \"\"; }\nconst b: B = new A();", "Type 'A' is not assignable to type 'B'");
 	assert hasError("interface I { n: int32; }\ninterface J { s: string; }\nconst i: I = { n: 1 };\nconst j: J = i;", "Type 'I' is not assignable to type 'J'");
 }
+
+test "pointerSlotRelation: a Ref of a value is never dereferenced implicitly; x[] reads it" {
+	const pre = "struct S { n: int32; }\nstruct Pair<T> { a: T; b: T; }\nfunction get2(x: S): int32 { return x.n; }\nfunction get(this x: S): int32 { return x.n; }\nfunction firstOf<T>(p: Pair<T>): T { return p.a; }\nconst v: Ref<S> = { n: 10 };\nconst pair: Ref<Pair<int32>> = { a: 1, b: 2 };\n";
+	const hint = "a Ref is never dereferenced implicitly: write 'v[]'";
+	assert hasError(pre + "const n = get2(v);", "got Ref<S>, expected S — " + hint);
+	assert hasError(pre + "const w: S = v;", "Type 'Ref<S>' is not assignable to type 'S' — " + hint);
+	assert hasError(pre + "const n = v.get();", "receiver: got Ref<S>, expected S — " + hint);
+	assert hasError(pre + "const one = firstOf(pair);", "write 'pair[]'");
+	assert hasError("struct P { a: int32; }\nstruct D extends P { b: int32; }\nfunction readP(p: P): int32 { return p.a; }\nconst r: Ref<D> = { a: 1, b: 2 };\nconst n = readP(r);", "got Ref<D>, expected P — a Ref is never dereferenced implicitly: write 'r[]'");
+	assert strictErrorCount(pre + "const n = get2(v[]) + v[].get() + firstOf(pair[]);\nconst w: S = v[];") == 0;
+}

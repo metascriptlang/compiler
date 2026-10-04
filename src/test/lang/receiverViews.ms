@@ -164,10 +164,10 @@ test "receiverViews: object type, class and generic receivers read the same as t
 	assert k.same() == same(k) && k.same() == 12;
 }
 
-test "receiverViews: a Ref<T> receiver on a T extension behaves like the free call" {
+test "receiverViews: a dereferenced Ref<T> receiver on a T extension behaves like the free call" {
 	const r: Ref<ReceiverValue> = { n: 13 };
-	assert r.get() == get(r);
-	assert r.get() == 13;
+	assert r[].get() == get(r[]);
+	assert r[].get() == 13;
 }
 
 test "receiverViews: an imported extension and a chained call" {
