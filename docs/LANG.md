@@ -1100,9 +1100,12 @@ const r = slot as Row | null;   // slot: number | Row | null — a Row converts,
   converts out of `Base | Child` to `Child`, and a held `Child` converts to `Base`. A member that
   holds no object stops with `Error: member 'Row' is not accessible for type 'number | Row' using
   'number'`, an object of another class with `Error: invalid object conversion: Base is not Child`.
-- JS holds no tag; it tests a class target with `instanceof` that class, the same test. Any other
-  target converts on JS without a test unless it is a string, number or boolean member, while C
-  tests the stored tag.
+- JS holds no tag; it tests what the value itself names: `instanceof` the class for a class
+  target, `typeof` for a primitive member, `Array.isArray` for the only array member, and a
+  non-array object of none of the union's classes for the only struct or interface member, with
+  the C message. A member that shares its runtime kind with another (`P | Q`, `int32 | float64`,
+  two array members) converts on JS without a test (a number member keeps the `typeof` test),
+  while C tests the stored tag.
 - `--danger` drops the membership test and the tag test, of a bare and of a nullable union
   (`Wire as Align | null`, `number | Row | null as Row | null`) alike, as it drops bound checks.
 
@@ -1128,12 +1131,17 @@ converts to `Row` (`3`), on C drc/orc/release/danger and JS alike (guard `asClas
 `Base | Child | null` holding a `Base` stops with `invalid object conversion: Base is not Child` on
 C drc/orc/release and on JS, and prints `0` under `--danger`; `Box<int32> | Box<string>` holding the
 string box stops on both, C naming the target `Box_…__int32` and JS `Box<int32>`. Before the change
-C stopped on each of those four valid conversions, and JS passed
-a related class member untested. Not covered: an object of another class in an interface member
-stops on C with `invalid object conversion: Named is not Row` and on JS with the `member … using
-'object'` text; an interface, array or struct target (`Row | Named` as `Named`, `Row | int32[]` as
-`int32[]`, `P | Q` as `P`) still tests the tag on C and nothing on JS; a tuple or function member
-was not probed.
+C stopped on each of those four valid conversions, and JS passed a related class member untested.
+Not covered: an object of another class in an interface member stops on C with `invalid object
+conversion: Named is not Row` and on JS with the `member … using 'object'` text; a tuple or
+function member was not probed.
+
+Members the JS value names, measured on the same tree: `int32 | string` as `int32`, `Row | int32[]`
+as `int32[]`, `Row | Named` as `Named` and `Point | string` as `Point` convert the held member and
+stop on the other with `member … is not accessible` on C and JS (guard `asMemberValueChecked`);
+before, JS let the wrong member through (`undefined` fields, a string truncated to `0` as an int32).
+Not covered: `P | Q` as `P` and `int32 | float64` as `int32` still test the tag on C and pass the
+wrong member on JS (`2` for a held `1.5` plus one).
 
 ### Discriminated Union Types
 
