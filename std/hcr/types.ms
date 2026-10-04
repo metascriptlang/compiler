@@ -11,6 +11,8 @@ export struct ReloadResult {
 	kind: ReloadKind;
 	modules: string[];
 	reason: string;
+	generations: int32;
+	retainedBytes: int64;
 }
 
 export function reloadKindName(kind: ReloadKind): string {

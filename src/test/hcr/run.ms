@@ -795,6 +795,28 @@ function exitDestroy(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function retainReport(): void {
+	const tag = "hcrRetainReport";
+	const dir = freshDir(`${TMP}/retainReport`);
+	for (const f of readDir(`${FIXTURES}/retain`)) copy(`${FIXTURES}/retain/${f}`, `${dir}/${f}`);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("RETAIN ")) seen.push(line);
+	}
+	const want = [
+		"RETAIN start 2",
+		"RETAIN gen 1 bytes 3",
+		"RETAIN gen 2 bytes 4",
+		"RETAIN gen 3 bytes 5",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "lastReload() did not report growing generations and retained copy bytes");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function reloadOff(): void {
 	const tag = "hcrReloadOff";
 	const dir = freshDir(`${TMP}/reloadOff`);
@@ -1155,6 +1177,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrStepCrash", run: stepCrash },
 	{ name: "hcrCrossImageNew", run: crossImageNew },
 	{ name: "hcrExitDestroy", run: exitDestroy },
+	{ name: "hcrRetainReport", run: retainReport },
 	{ name: "hcrRegistryVariables", run: registryVariables },
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
 	{ name: "hcrFunctionValues", run: functionValues },

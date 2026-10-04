@@ -23,7 +23,7 @@ when (hcr) {
 	}
 
 	export function lastReload(): ReloadResult {
-		return { kind: ReloadKind.NoChange, modules: [], reason: "" };
+		return { kind: ReloadKind.NoChange, modules: [], reason: "", generations: 0, retainedBytes: 0 };
 	}
 
 	export function step(body: () => void): ReloadKind {

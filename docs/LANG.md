@@ -2404,6 +2404,10 @@ What a reload keeps and what it refuses:
   	await sleepAsync(16);
   }
   ```
+- **Nothing is ever unloaded.** Every accepted reload keeps every earlier generation's images
+  mapped, so a long session accumulates them. `lastReload().generations` counts the reloads the
+  run has accepted and `lastReload().retainedBytes` the bytes of module image copies it holds
+  under its HCR copy directory. Both only grow; restart the program to release them.
 - **A program that never imports `std/hcr` is refused by `msc run --hcr`**: nothing would call
   `reload()`, so `error: app.ms never imports std/hcr, …` stops the build and the watch waits
   for the save that adds the import.
