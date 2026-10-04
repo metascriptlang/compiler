@@ -108,6 +108,15 @@ test "fieldVisibility: as converts a struct only to itself, a distinct of it or 
 	assert errorsOf(lib, pre + "const b = d as P;\nconst t = p as T;\nconst back = t as P;\nconst lit = { x: 9 } as P;\nconst raw = { x: 5 };\nconst adopted = raw as P;\nconsole.log(b.x, back.x, lit.x, adopted.x);\n").length == 0;
 }
 
+test "fieldVisibility: as takes a nullable struct to its payload and still refuses an unrelated one" {
+	const lib = "export struct P { x: int32; }\nexport struct Q { x: int32; }\n";
+	const pre = "import { P, Q } from \"./lib\";\nconst m = new Map<string, P>();\nm.set(\"a\", { x: 3 });\nfunction first(n: P | null): P { return n as P; }\nclass Store<K> { cells: Map<K, P> = new Map<K, P>(); at(k: K): P { return this.cells.get(k) as P; } }\n";
+	assert errorsOf(lib, pre + "const got = m.get(\"a\") as P;\nconst s = new Store<string>();\ns.cells.set(\"b\", { x: 4 });\nconsole.log(got.x, first(got).x, s.at(\"b\").x);\n").length == 0;
+	let refused = false;
+	for (const m of diagnostics(lib, pre + "const q = m.get(\"a\") as Q;\n")) { if (m.indexOf("cannot convert P | null to Q") >= 0) refused = true; }
+	assert refused;
+}
+
 function reports(library: string, main: string, needle: string): boolean {
 	for (const m of diagnostics(library, main)) {
 		if (m.indexOf(needle) >= 0) return true;
