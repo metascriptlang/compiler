@@ -152,6 +152,9 @@ export enum RaiserOpcode {
 	BleU64,           // ABC: if R[A] <= R[B] as uint64, skip C
 	DivU64,           // ABC: R[A] = R[B] / R[C] as uint64
 	ModU64,           // ABC: R[A] = R[B] % R[C] as uint64
+	AddU64,
+	SubU64,
+	MulU64,
 }
 
 export enum RaiserConvClass {

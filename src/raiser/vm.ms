@@ -959,6 +959,18 @@ function runStrandSlice(vm: RaiserVM): void {
 			} else {
 				setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) % (rhs.intVal as uint64)) as int64));
 			}
+		} else if (op == RaiserOpcode.AddU64) {
+			const lhs = getReg(vm, base + inst.b);
+			const rhs = getReg(vm, base + inst.c);
+			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) + (rhs.intVal as uint64)) as int64));
+		} else if (op == RaiserOpcode.SubU64) {
+			const lhs = getReg(vm, base + inst.b);
+			const rhs = getReg(vm, base + inst.c);
+			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) - (rhs.intVal as uint64)) as int64));
+		} else if (op == RaiserOpcode.MulU64) {
+			const lhs = getReg(vm, base + inst.b);
+			const rhs = getReg(vm, base + inst.c);
+			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) * (rhs.intVal as uint64)) as int64));
 		} else if (op == RaiserOpcode.NegI64) {
 			const val = getReg(vm, base + inst.b);
 			setReg(vm, base + inst.a, raiserInt(-val.intVal));

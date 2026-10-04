@@ -276,10 +276,13 @@ function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int
 }
 
 function unsignedOpcode(opc: RaiserOpcode, t: Type | null): RaiserOpcode {
-	if (!isUint64Type(t)) return opc;
+	if (!isUnsignedBand(t)) return opc;
 	return match (opc) {
-		RaiserOpcode.DivI64 => RaiserOpcode.DivU64,
-		RaiserOpcode.ModI64 => RaiserOpcode.ModU64,
+		RaiserOpcode.AddI64 => RaiserOpcode.AddU64,
+		RaiserOpcode.SubI64 => RaiserOpcode.SubU64,
+		RaiserOpcode.MulI64 => RaiserOpcode.MulU64,
+		RaiserOpcode.DivI64 => isUint64Type(t) ? RaiserOpcode.DivU64 : opc,
+		RaiserOpcode.ModI64 => isUint64Type(t) ? RaiserOpcode.ModU64 : opc,
 		_ => opc,
 	};
 }
