@@ -2230,6 +2230,17 @@ export function rearmLiteralForRecheck(lit: Node, formal: Type | null): void {
 	}
 }
 
+function rearmUnfitProperties(ctx: CheckerContext, lit: Node, bound: Type): void {
+	const od = lit.data as ObjectLiteralData;
+	for (let i = 0; i < od.properties.length && i < od.keys.length; i += 1) {
+		const v = od.properties[i];
+		if (v == null || v.nodeType == null || !takesContext(ctx, v)) continue;
+		const ft = getProperty(bound, od.keys[i]);
+		if (ft == null || isUnresolvedType(ft) || ft.kind == TypeKind.Error) continue;
+		if (slotRefuses(v.nodeType, ft)) clearCheckerState(v);
+	}
+}
+
 function bindingsCoverDecl(eb: UnifyBindings, declNode: Node): boolean {
 	const names = extractGenericNames(getGenericDeclFlags(declNode));
 	if (names.length == 0) return true;
@@ -2493,6 +2504,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			let skipConstruct = false;
 			for (const c of conflicted) { if (c == pi) skipConstruct = true; }
 			if (!skipConstruct) {
+				rearmUnfitProperties(ctx, arg, substitutedObject);
 				rearmLiteralForRecheck(arg, calleeType.typeChildren[pi]);
 				callCheckExpr(ctx, arg, substituted);
 			}
