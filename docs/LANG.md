@@ -2799,14 +2799,21 @@ see [Raiser's measured location matrix](RAISER.md#memory-model). Raw-pointer
 escape and invalidation by storage growth remain unchecked, not covered by
 that matrix.
 
-The suspension result above is not a general lifetime-safety claim. On
-2026-10-04–05, tree `3bde5de03042d08b3af9df5a71abcb25f09b37fd`, the shared-machine
-SAN run (`MSCORPUS_SAN=1 MSCORPUS_ONLY=928-stateMachineClosureShares`, candidate
-as `MSC`) reports a new closure/frame leak: `alloc=3 destroy=2` for the
-generator's closure environment; the immutable `0f1ecc06` compiler passes.
-Retaining an owning closure in the frame it captures forms the cycle.
-A direct `--gc=orc` build with `--passC="-DMS_SLAB_MAX=0 -DMS_DRC_LEDGER"`
-balances that environment (3/3); this does not establish safety under DRC.
+The suspension result above is not a general lifetime-safety claim. A nested
+`function` or `const` arrow inside an `async` function or a generator is rebuilt
+at each resume and never stored in the frame (NIM-REF TR-35). Measured
+2026-10-05 with `--gc=drc`, ASan and `-DMS_DRC_LEDGER`, generator and `async`
+alike: a routine made before a suspension, between two, still in scope when the
+caller stops early, inside a suspending loop, called by a sibling routine,
+capturing a string, capturing a local of its own state, or yielded out balances
+its frame and closure environment; before, each left the frame and one
+environment undestroyed, on `0f1ecc06` as well. Corpus
+`928-stateMachineClosureShares` pins these under SAN.
+
+Not covered, still leaking under `--gc=drc` (collected under `--gc=orc`): a
+closure held in a `let` that is alive at a suspension, and a routine that
+captures a per-iteration binding of a suspending loop. Both are values the frame
+stores; the standard reference leaks the `let` case under ARC as well.
 
 Rejected: a refusal of only the direct `Span<T> as Ptr<U>` cast on JS — an intermediate typed
 pointer (`span as Ptr<T> as Ptr<void> as Ptr<uint8>`) bypassed it, and the Raiser VM (including
