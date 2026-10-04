@@ -343,6 +343,7 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 		if (d.interfaceFieldTypes[i] != "") {
 			field = field + ": " + (optional && !keptType ? unoptionalized(d.interfaceFieldTypes[i]) : d.interfaceFieldTypes[i]);
 		}
+		if (d.interfaceFieldVisibility != null && i < d.interfaceFieldVisibility.length && d.interfaceFieldVisibility[i] == "private") field = "private " + field;
 		// Find a trailing comment for this field.
 		let attached: Token = null as unknown as Token;
 		for (let j = 0; j < inline.length; j += 1) {
