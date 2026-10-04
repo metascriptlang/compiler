@@ -70,6 +70,7 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	if (cd.callee.kind == NodeKind.MemberExpr) {
 		const me2 = cd.callee.data as MemberExprData;
 		if (me2.property == "toString") {
+			if (sym != null && sym.declNode != null) return node;
 			if (me2.object.nodeType != null) {
 				return lowerToString(node, me2.object, peelTransparentInstance(me2.object.nodeType), loc, ctx);
 			}
