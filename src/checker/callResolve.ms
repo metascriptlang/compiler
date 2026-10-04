@@ -4035,6 +4035,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// Map/Set methods — resolved via class-aware field delegation bridge below.
 	// No hardcoded dispatch: Map and Set classes declare @builtin methods in std/core/structure.
 
+	if (isUnresolvedType(propType) && ctx.inGenericContext > 0 && resolvedObjType.kind == TypeKind.GenericParam) return propType;
 	// Class method lookup: ClassName_methodName in symbol table (methods are standalone procs).
 	// Filters by static/instance: static access (SymbolKind.Class) only matches static methods,
 	// instance access only matches instance methods. Checks overloads if primary doesn't match.
