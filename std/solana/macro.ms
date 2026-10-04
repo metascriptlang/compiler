@@ -1,5 +1,5 @@
 import { DeclKind, Node, NodeKind, bindSym, getImpl, getType } from "std/meta";
-import { eventDiscriminator, instructionDiscriminator } from "./discriminator";
+import { eventDiscriminator, instructionDiscriminator, word } from "./discriminator";
 import { ProgramError } from "./error";
 import {
 	argBool,
@@ -33,7 +33,7 @@ import {
 	writable,
 	writableSigner,
 } from "./core";
-import { createPdaOf, readArgs, selectInstruction, wordOf } from "./typed";
+import { createPdaOf, readArgs, selectInstruction } from "./typed";
 import { delegateAt } from "./delegation";
 import {
 	associatedMatches,
@@ -480,13 +480,11 @@ export macro accounts(): Node {
 			callee = bindSym("ownedAccount");
 			if (base == "Mutable") { callee = bindSym("mutableAccount"); }
 			if (base == "Delegated") { callee = bindSym("delegatedAccount"); }
-			// Read at run time: a @comptime block calls the first overload of `discriminator` for every
-			// account type (compiler card 2026-10-04-comptime-block-calls-the-first-overload-by-name).
 			const discriminator: Node = {
 				kind: NodeKind.CallExpr,
 				line: line,
 				column: column,
-				callee: bindSym("wordOf"),
+				callee: bindSym("word"),
 				arguments: [{
 					kind: NodeKind.CallExpr,
 					line: line,
@@ -518,7 +516,22 @@ export macro accounts(): Node {
 				},
 				asType: "uint64",
 			};
-			extra = [discriminator, size];
+			extra = [{
+				kind: NodeKind.ComptimeBlock,
+				line: line,
+				column: column,
+				comptimeBody: {
+					kind: NodeKind.BlockStmt,
+					line: line,
+					column: column,
+					statements: [{
+						kind: NodeKind.ReturnStmt,
+						line: line,
+						column: column,
+						argument: discriminator,
+					}],
+				},
+			}, size];
 		}
 		let check: Node | null = null;
 		if (callee != null) {
