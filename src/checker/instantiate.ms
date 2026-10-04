@@ -24,6 +24,9 @@ import { beginGensymUnit, rewindTemplateGensym } from "./template";
 import { getIdentId } from "./idents";
 import { fitJoinedBranch, settleYields, isSyncGeneratorFlags } from "./fit";
 import { bindFunctionFlow } from "../binder/index";
+import { CheckedInstantiation } from "./context";
+import { TypeFlag } from "../ast/node";
+import { sameType } from "./compat";
 
 // ===== Module-Path → CheckerContext Registry =====
 // When a generic body (function or class constructor) is cloned and re-checked
@@ -321,27 +324,68 @@ export function drainPendingInstances(moduleCtxs: CheckerContext[]): Node[] {
 
 export function forgetInstances(ctx: CheckerContext): void {
 	ctx.generatedInstances = [];
-	ctx.procInstCache = new HashMap<Symbol, Symbol[]>();
-	ctx.typeInstCache = new HashMap<Symbol, Symbol[]>();
+	ctx.procInstCache = new HashMap<Symbol, CheckedInstantiation[]>();
+	ctx.typeInstCache = new HashMap<Symbol, CheckedInstantiation[]>();
 }
 
 // ===== Helpers =====
 
-function cachedInstance(host: CheckerContext, generic: Symbol, instanceName: string): Symbol | null {
-	const instances = host.procInstCache.get(generic);
+const _instanceLeft: Type[] = [];
+const _instanceRight: Type[] = [];
+
+export function sameInstanceType(a: Type | null, b: Type | null): boolean {
+	if (a == b) return true;
+	if (a == null || b == null || a.kind != b.kind) return false;
+	if (a.typeFlags.excl(TypeFlag.HasAsgn).excl(TypeFlag.HasGenericParam)
+		!= b.typeFlags.excl(TypeFlag.HasAsgn).excl(TypeFlag.HasGenericParam)) return false;
+	for (let i = 0; i < _instanceLeft.length; i += 1) {
+		if (_instanceLeft[i] == a && _instanceRight[i] == b) return true;
+	}
+	_instanceLeft.push(a);
+	_instanceRight.push(b);
+	const result = sameInstanceTypeBody(a, b);
+	_instanceLeft.pop();
+	_instanceRight.pop();
+	return result;
+}
+
+function sameInstanceTypeBody(a: Type, b: Type): boolean {
+	if (a.kind == TypeKind.GenericInstance) {
+		return sameInstanceType(a.typeExtra, b.typeExtra) && sameInstanceArgs(a.typeChildren, b.typeChildren);
+	}
+	if (a.kind == TypeKind.Struct || a.kind == TypeKind.Enum || a.kind == TypeKind.Distinct) {
+		if (a.sym != null || b.sym != null) return a.sym != null && a.sym == b.sym;
+		if (a.typeFlags.has(TypeFlag.Spelled)) return a.typeName == b.typeName;
+		if (a.typeName != "" || b.typeName != "") return false;
+	}
+	if (!sameType(a, b)) return false;
+	if (!sameInstanceType(a.typeReturn, b.typeReturn)) return false;
+	return sameInstanceArgs(a.typeChildren, b.typeChildren);
+}
+
+export function sameInstanceArgs(a: Type[], b: Type[]): boolean {
+	if (a.length != b.length) return false;
+	for (let i = 0; i < a.length; i += 1) {
+		if (!sameInstanceType(a[i], b[i])) return false;
+	}
+	return true;
+}
+
+function cachedInstance(cache: HashMap<Symbol, CheckedInstantiation[]>, generic: Symbol, types: Type[]): Symbol | null {
+	const instances = cache.get(generic);
 	if (instances == null) return null;
 	for (const inst of instances) {
-		if (inst.name == instanceName) return inst;
+		if (sameInstanceArgs(inst.concreteTypes, types)) return inst.sym;
 	}
 	return null;
 }
 
-function cacheInstance(host: CheckerContext, generic: Symbol, inst: Symbol): void {
-	let instances: Symbol[] = [];
-	const known = host.procInstCache.get(generic);
+function cacheInstance(cache: HashMap<Symbol, CheckedInstantiation[]>, generic: Symbol, inst: Symbol, types: Type[]): void {
+	let instances: CheckedInstantiation[] = [];
+	const known = cache.get(generic);
 	if (known != null) instances = known;
-	instances.push(inst);
-	host.procInstCache.set(generic, instances);
+	instances.push({ sym: inst, concreteTypes: types });
+	cache.set(generic, instances);
 }
 
 // Deduplicate unify bindings (K=string may appear twice from HashMap<K,V> + K params)
@@ -719,6 +763,14 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	ctx.genericInstDepth = ctx.genericInstDepth + 1;
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);
+	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
+	const existing = cachedInstance(host.procInstCache, sym, dedup.types);
+	if (existing != null) {
+		ctx.genericInstDepth = ctx.genericInstDepth - 1;
+		_igfHits = _igfHits + 1;
+		return existing;
+	}
+
 	// Extension method disambiguation: two overloads with the same function name and
 	// generic arity (e.g. `set<K,V>(this Map<K,V>)` and `set<K,V>(this HashMap<K,V>)`)
 	// produce distinct mangled names. Without this prefix, `set__string_int32` collides
@@ -734,15 +786,8 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	}
 	const mangledName = mangleMonoName(monoRoutineBaseName(mangleBase, sym.modulePath, sym.disamb), dedup.types) + readonlyViewSuffix(dedup.types);
 
-	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
-	const bodyCtx = pickBodyCtx(sym.modulePath, ctx);
-	const existing = cachedInstance(host, sym, mangledName);
-	if (existing != null) {
-		ctx.genericInstDepth = ctx.genericInstDepth - 1;
-		_igfHits = _igfHits + 1;
-		return existing;
-	}
 
+	const bodyCtx = pickBodyCtx(sym.modulePath, ctx);
 	const _ig0 = performance.now();
 	_igfMisses = _igfMisses + 1;
 	const fnNode = unwrapToFunctionDecl(sym.declNode);
@@ -785,7 +830,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	instSym.nameId = getIdentId(host.table.identCache, mangledName);
 	instSym.instantiatedFrom = sym;
 	if (hasFlag(sym, SymbolFlag.Borrow)) setFlag(instSym, SymbolFlag.Borrow);
-	cacheInstance(host, sym, instSym);
+	cacheInstance(host.procInstCache, sym, instSym, dedup.types);
 	cloned.resolvedSym = instSym;
 
 	// Reference parity (semProcBody): check body in the DEFINING module's scope
@@ -949,15 +994,11 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	}
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);
-	const mangledClass = monoInstanceNameOf(classSym.name, classSym.modulePath, dedup.types);
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
+	const existing = cachedInstance(host.typeInstCache, classSym, dedup.types);
+	if (existing != null) return existing;
+	const mangledClass = monoInstanceNameOf(classSym.name, classSym.modulePath, dedup.types);
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
-	let instances: Symbol[] = [];
-	const known = host.typeInstCache.get(classSym);
-	if (known != null) instances = known;
-	for (const inst of instances) {
-		if (inst.name == mangledClass) return inst;
-	}
 
 	const classDeclNode = classSym.declNode;
 	if (classDeclNode == null || classDeclNode.kind != NodeKind.ClassDecl) {
@@ -984,8 +1025,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	instSym.nameId = getIdentId(host.table.identCache, mangledClass);
 	instSym.instantiatedFrom = classSym;
 	substStruct.sym = instSym;
-	instances.push(instSym);
-	host.typeInstCache.set(classSym, instances);
+	cacheInstance(host.typeInstCache, classSym, instSym, dedup.types);
 	const classBody: Node[] = instanceFieldInits(classData, dedup.names, dedup.types, substStruct, classSym, ctx, loc);
 	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, instSym, dedup.names, dedup.types, mangledClass, createRef(canonicalInstance(structBase, concreteTypes, classSym)), ctx, loc));
 	// Set classNode.nodeType to the concrete (instantiated) class type so the

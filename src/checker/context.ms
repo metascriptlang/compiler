@@ -1168,6 +1168,11 @@ export function sgSortRecords(records: SgSymRecord[]): void {
 	}
 }
 
+export interface CheckedInstantiation {
+	sym: Symbol;
+	concreteTypes: Type[];
+}
+
 // LSP DiagnosticSeverity parity
 export enum Severity {
 	Error,    // 1 in LSP
@@ -1258,8 +1263,8 @@ export class CheckerContext {
 	inTryExpr: boolean;          // true when checking tryArg of TryExpr or body of TryCatchStmt (V2 await guard)
 	genericInstDepth: int32;     // recursion depth for on-demand instantiation (limit 50)
 	generatedInstances: Node[];  // on-demand instantiated function ASTs to inject into program
-	procInstCache: HashMap<Symbol, Symbol[]>;
-	typeInstCache: HashMap<Symbol, Symbol[]>;
+	procInstCache: HashMap<Symbol, CheckedInstantiation[]>;
+	typeInstCache: HashMap<Symbol, CheckedInstantiation[]>;
 	pendingHoisted: Node[];      // statements an expression-position macro emitted ahead of its value; a stack — each statement-list walk takes a high-water mark on entry and drains only what was queued above it, so a block nested in the value cannot take the call site's prefix
 	pendingTrailing: Node[];
 	condEvalDepth: int32;        // >0 while checking a conditionally-evaluated position (&&/|| rhs, ternary arm, loop condition) — hoisting out of one would run it unconditionally
@@ -1345,8 +1350,8 @@ export function createContext(): CheckerContext {
 		inTryExpr: false,
 		genericInstDepth: 0,
 		generatedInstances: [],
-		procInstCache: new HashMap<Symbol, Symbol[]>(),
-		typeInstCache: new HashMap<Symbol, Symbol[]>(),
+		procInstCache: new HashMap<Symbol, CheckedInstantiation[]>(),
+		typeInstCache: new HashMap<Symbol, CheckedInstantiation[]>(),
 		pendingHoisted: [],
 		pendingTrailing: [],
 		disambTable: new HashMap<string, int32>(),
