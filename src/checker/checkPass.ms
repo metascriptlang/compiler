@@ -23,7 +23,7 @@ import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/me
 import { isAssignable, nonNullMemberOfNullable } from "./compat";
 import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType, findViewType, ownedAlternativeOf } from "./types";
 setConditionalAssignFn(isAssignable);
-import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseSuspendingViewParam } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, forgetInstances, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults } from "./instantiate";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
@@ -2037,6 +2037,12 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	// doesn't leak across function body boundaries.
 	const affineSnap = saveConsumeState(ctx.affineTracker);
 	openScope(ctx.table, ScopeKind.Function);
+	let declFlags = "";
+	let flagsDecl = sym != null ? sym.declNode : null;
+	while (flagsDecl != null && flagsDecl.kind == NodeKind.DecoratedDecl) flagsDecl = (flagsDecl.data as DecoratedDeclData).decoratedNode;
+	if (flagsDecl != null && flagsDecl.kind == NodeKind.FunctionDecl) declFlags = (flagsDecl.data as FunctionDeclData).fnFlags;
+	else if (flagsDecl != null && flagsDecl.kind == NodeKind.MethodDecl) declFlags = (flagsDecl.data as MethodDeclData).methodFlags;
+	const suspends = declFlags.indexOf("async") >= 0 || declFlags.indexOf("generator") >= 0;
 	let i = 0;
 	for (const param of params) {
 		let paramType = inferredType();
@@ -2052,6 +2058,10 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		if (param.indexOf("_destr") == 0 && (paramType == null || paramType.kind == TypeKind.Inferred || paramType.kind == TypeKind.Unknown)) {
 			const at = (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) ? paramLocs[i] : body.location;
 			addError(ctx, "a destructured parameter needs a type annotation", at.line, at.column);
+		}
+		if (suspends) {
+			const at = (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) ? paramLocs[i] : body.location;
+			refuseSuspendingViewParam(ctx, param, paramType, at.line, at.column);
 		}
 		const paramSym = makeSymbol(param, SymbolKind.Parameter, paramType, false);
 		// Set declaration location for go-to-definition

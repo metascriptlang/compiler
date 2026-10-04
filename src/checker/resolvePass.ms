@@ -287,6 +287,20 @@ export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line:
 	return t;
 }
 
+export function refuseNestedView(ctx: CheckerContext, what: string, t: Type | null, line: int32, col: int32): void {
+	const view = nestedViewType(t);
+	if (view == null) return;
+	addError(ctx, what + " of type " + typeDisplayName(t!) + " cannot hold " + typeDisplayName(view)
+		+ " inside it: a view borrows memory its source can free while the container still holds it — use " + ownedAlternativeOf(view), line, col);
+}
+export function refuseSuspendingViewParam(ctx: CheckerContext, name: string, t: Type | null, line: int32, col: int32): void {
+	const view = findViewType(t);
+	if (view == null) return;
+	const what = view.kind == TypeKind.Var ? "a ref/out parameter" : "a " + typeDisplayName(view) + " view";
+	addError(ctx, "parameter '" + name + "' of an async or generator function cannot be " + what
+		+ ": its parameters are captured into the frame the function suspends in, and the memory they point at can change or die across an await or yield — take the view again after each await, or pass a copy with [...x]", line, col);
+}
+
 export function bindFromExplicitTypeArgs(node: Node, paramNames: string[], ctx: CheckerContext): UnifyBindings {
 	const result = createUnifyBindings();
 	if (paramNames.length == 0) return result;
