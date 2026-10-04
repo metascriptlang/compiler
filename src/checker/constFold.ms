@@ -149,6 +149,33 @@ export function isCompileTimeValue(expr: Node, depth: int32): boolean {
 	};
 }
 
+export function isUserOperatorConstant(expr: Node, depth: int32): boolean {
+	return userOperatorIn(expr, depth) && overCompileTimeValues(expr, depth);
+}
+
+function userOperatorIn(expr: Node, depth: int32): boolean {
+	if (expr == null || depth > CONSTANT_CHAIN_LIMIT) return false;
+	if (expr.flags.has(NodeFlag.UserOp)) return true;
+	return match (expr.kind) {
+		NodeKind.BinaryExpr => userOperatorIn((expr.data as BinaryExprData).left, depth + 1) || userOperatorIn((expr.data as BinaryExprData).right, depth + 1),
+		NodeKind.UnaryExpr => userOperatorIn((expr.data as UnaryExprData).operand, depth + 1),
+		NodeKind.TypeAssertion => userOperatorIn((expr.data as TypeAssertionData).asExpr, depth + 1),
+		NodeKind.HiddenStdConv => userOperatorIn((expr.data as HiddenStdConvData).convExpr, depth + 1),
+		_ => false,
+	};
+}
+
+function overCompileTimeValues(expr: Node, depth: int32): boolean {
+	if (expr == null || depth > CONSTANT_CHAIN_LIMIT) return false;
+	return match (expr.kind) {
+		NodeKind.BinaryExpr => overCompileTimeValues((expr.data as BinaryExprData).left, depth + 1) && overCompileTimeValues((expr.data as BinaryExprData).right, depth + 1),
+		NodeKind.UnaryExpr => overCompileTimeValues((expr.data as UnaryExprData).operand, depth + 1),
+		NodeKind.TypeAssertion => overCompileTimeValues((expr.data as TypeAssertionData).asExpr, depth + 1),
+		NodeKind.HiddenStdConv => overCompileTimeValues((expr.data as HiddenStdConvData).convExpr, depth + 1),
+		_ => isCompileTimeValue(expr, depth),
+	};
+}
+
 function allCompileTimeValues(nodes: Node[], depth: int32): boolean {
 	for (const n of nodes) {
 		if (!isCompileTimeValue(n, depth)) return false;
