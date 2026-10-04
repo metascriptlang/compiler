@@ -868,6 +868,10 @@ function objLitTarget(dest: string, shape: ObjLitShape): string {
 }
 
 export function buildsInPlace(g: CGen, node: Readonly<Node>, destCType: string): boolean {
+	if (node != null && node.kind == NodeKind.CallExpr) {
+		const ret = getCalleeReturnType(node);
+		return ret != null && isNrvoReturnType(ret, getCalleeFuncType(node)) && getTypeDesc(g, ret) == destCType;
+	}
 	if (node == null || node.kind != NodeKind.ObjectLiteral || node.flags.has(NodeFlag.Closure)) return false;
 	const shape = objLitShape(g, node, false);
 	if (shape.cType == "" || shape.isClassObj || shape.isRefUnion) return false;
@@ -2592,11 +2596,10 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 	const nrvoType = (nrvoRet != null && isNrvoReturnType(nrvoRet, nrvoFuncType)) ? nrvoRet : null;
 
 	if (nrvoType != null) {
-		// NRVO: allocate temp, pass &tmp as first arg, read tmp after call
+		// NRVO: pass the result slot as first arg, read it after call
 		const cType = getTypeDesc(g, nrvoType);
-		const tmp = getTemp(p, cType);
-		if (nrvoTempNeedsZero(cType)) emitStmtsLine(p, `(${tmp.snippet}) = (${cType}){0};`);
-		const nrvoArg = "&" + tmp.snippet;
+		const slot = nrvoSlot(p, ctx, node, cType);
+		const nrvoArg = "&" + slot;
 		let fullArgs = "";
 		if (argsStr != "") {
 			fullArgs = `${nrvoArg}, ${argsStr}`;
@@ -2609,7 +2612,7 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 		const callWithEnv = `((${clFull})${fnExpr})(${fullArgs}, ${envExpr})`;
 		const callNoEnv = `((${clHalf})${fnExpr})(${fullArgs})`;
 		emitStmtsLine(p, `(${envExpr} ? ${callWithEnv} : ${callNoEnv});`);
-		ctx.results.push(tmp.snippet);
+		ctx.results.push(slot);
 		return;
 	}
 
@@ -2638,15 +2641,21 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 	ctx.results.push(`(${envExpr} ? ${callWithEnv} : ${callNoEnv})`);
 }
 
-function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, calleeName: string, argsStr: string, retType: Type | null, funcType: Type | null): void {
+function nrvoSlot(p: CProc, ctx: ExprEvalCtx, node: Readonly<Node>, cType: string): string {
+	const dest = destOf(ctx, node);
+	if (dest != "") return dest;
+	const tmp = getTemp(p, cType);
+	if (nrvoTempNeedsZero(cType)) emitStmtsLine(p, `(${tmp.snippet}) = (${cType}){0};`);
+	return tmp.snippet;
+}
+
+function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, node: Readonly<Node>, calleeName: string, argsStr: string, retType: Type | null, funcType: Type | null): void {
 	if (retType != null && isNrvoReturnType(retType, funcType)) {
-		const cType = getTypeDesc(g, retType);
-		const tmp = getTemp(p, cType);
-		if (nrvoTempNeedsZero(cType)) emitStmtsLine(p, `(${tmp.snippet}) = (${cType}){0};`);
-		let nrvoArgs = "&" + tmp.snippet;
+		const slot = nrvoSlot(p, ctx, node, getTypeDesc(g, retType));
+		let nrvoArgs = "&" + slot;
 		if (argsStr != "") nrvoArgs = `${nrvoArgs}, ${argsStr}`;
 		emitStmtsLine(p, `${calleeName}(${nrvoArgs});`);
-		ctx.results.push(tmp.snippet);
+		ctx.results.push(slot);
 		return;
 	}
 	ctx.results.push(`${calleeName}(${argsStr})`);
@@ -2743,7 +2752,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		// On-demand cross-module prototype (reference parity: genProcPrototype)
 		ensureCrossModuleProto(g, ovCalleeName, ovType, emitSym != null ? emitSym : sym);
 		const ovRet = (ovType != null && ovType.kind == TypeKind.Function) ? ovType.typeReturn : null;
-		emitNrvoOrValueCall(g, p, ctx, ovCalleeName, argsStr, ovRet, ovType);
+		emitNrvoOrValueCall(g, p, ctx, node, ovCalleeName, argsStr, ovRet, ovType);
 		return;
 	}
 
@@ -3040,7 +3049,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		}
 	}
 
-	emitNrvoOrValueCall(g, p, ctx, finalCallee, argsStr, getCalleeReturnType(node), getCalleeFuncType(node));
+	emitNrvoOrValueCall(g, p, ctx, node, finalCallee, argsStr, getCalleeReturnType(node), getCalleeFuncType(node));
 }
 // ===== genExprAssign — evaluate expression and assign to dest =====
 // For statement-level: `dest = expr;`
