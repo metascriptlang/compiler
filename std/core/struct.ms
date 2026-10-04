@@ -79,6 +79,7 @@ export function hashString(s: string): int64 {
 // hashWangYi1 — hiXorLo is the full
 // 128-bit product of two uint64, high half XOR low half (msHiXorLo in
 // runtime/core/system.h). Every key type reaches this one mixing site.
+@builtin("HiXorLo")
 extern function msHiXorLo(a: uint64, b: uint64): uint64;
 
 // 0 marks an empty Map/Set slot, so a key that mixes to 0 takes the sentinel.
@@ -91,7 +92,9 @@ export function hashWangYi1(x: uint64): int64 {
 	return h;
 }
 
+@builtin("PtrBits")
 extern function msPtrBits(p: Ptr<void>): uint64;
+@builtin("Float64Bits")
 extern function msFloat64Bits(d: number): uint64;
 
 export function hashNumber(n: number): int64 { return hashWangYi1(msFloat64Bits(n + 0.0)); }

@@ -1050,6 +1050,42 @@ function compileSetSizeCall(s: RaiserCompState, node: Node): int32 {
 	return emitIntBinary(s, RaiserOpcode.AddI64, low, emitSetCard32(s, high));
 }
 
+function emitCarry(s: RaiserCompState, sum: int32, addend: int32): int32 {
+	const carry = emitIntConst(s, 1);
+	emitInst(s, raiserABC(RaiserOpcode.BltU64, sum, addend, 1));
+	emitLoadConst(s, carry, raiserInt(0));
+	return carry;
+}
+
+function compileHiXorLoCall(s: RaiserCompState, node: Node): int32 {
+	const d = node.data as CallExprData;
+	const a = compileExpr(s, d.arguments[0]);
+	const b = compileExpr(s, d.arguments[1]);
+	const half = emitIntConst(s, 32);
+	const lowMask = emitIntConst(s, 0xFFFFFFFF);
+	const aHigh = emitIntBinary(s, RaiserOpcode.ShiftRightU, a, half);
+	const aLow = emitIntBinary(s, RaiserOpcode.BitAnd, a, lowMask);
+	const bHigh = emitIntBinary(s, RaiserOpcode.ShiftRightU, b, half);
+	const bLow = emitIntBinary(s, RaiserOpcode.BitAnd, b, lowMask);
+	const highHigh = emitIntBinary(s, RaiserOpcode.MulU64, aHigh, bHigh);
+	const highLow = emitIntBinary(s, RaiserOpcode.MulU64, aHigh, bLow);
+	const lowHigh = emitIntBinary(s, RaiserOpcode.MulU64, aLow, bHigh);
+	const lowLow = emitIntBinary(s, RaiserOpcode.MulU64, aLow, bLow);
+	const partial = emitIntBinary(s, RaiserOpcode.AddU64, lowLow,
+		emitIntBinary(s, RaiserOpcode.ShiftLeft, highLow, half));
+	const firstCarry = emitCarry(s, partial, lowLow);
+	const low = emitIntBinary(s, RaiserOpcode.AddU64, partial,
+		emitIntBinary(s, RaiserOpcode.ShiftLeft, lowHigh, half));
+	const secondCarry = emitCarry(s, low, partial);
+	let high = emitIntBinary(s, RaiserOpcode.AddU64, highHigh,
+		emitIntBinary(s, RaiserOpcode.ShiftRightU, highLow, half));
+	high = emitIntBinary(s, RaiserOpcode.AddU64, high,
+		emitIntBinary(s, RaiserOpcode.ShiftRightU, lowHigh, half));
+	high = emitIntBinary(s, RaiserOpcode.AddU64, high, firstCarry);
+	high = emitIntBinary(s, RaiserOpcode.AddU64, high, secondCarry);
+	return emitIntBinary(s, RaiserOpcode.BitXor, high, low);
+}
+
 function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 
@@ -1080,6 +1116,16 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	}
 	if (builtinKind == "SetSize" && d.arguments.length == 1) {
 		return compileSetSizeCall(s, node);
+	}
+	if (builtinKind == "HiXorLo" && d.arguments.length == 2) {
+		return compileHiXorLoCall(s, node);
+	}
+	if (builtinKind == "Float64Bits" && d.arguments.length == 1) {
+		const value = compileExpr(s, d.arguments[0]);
+		return emitConvTo(s, value, RaiserConvClass.F64Bits as int32, RaiserConvClass.F64 as int32);
+	}
+	if (builtinKind == "PtrBits" && d.arguments.length == 1) {
+		return emitConvTo(s, compileExpr(s, d.arguments[0]), RaiserConvClass.HandleBits as int32, -1);
 	}
 
 	// spawn(fn) / sleepAsync(ms) / waitFor(h) / Promise.resolve(v) — the async

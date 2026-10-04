@@ -27,6 +27,7 @@ import { RaiserHostFn, RaiserPrintSink } from "./marshal";
 @include("runtime/promise/dispatch.h");
 extern function msMonoTimeMs(): int64;
 extern function msSleepMs(ms: int32): void;
+extern function msFloat64Bits(d: float64): uint64;
 
 // --- VM State ---
 
@@ -1640,6 +1641,20 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 	const src = getReg(vm, vm.baseReg + inst.b);
 	const cls = convTarget(inst.c);
 	const fromUnsigned = convSource(inst.c) == (RaiserConvClass.U64 as int32);
+	if (cls == RaiserConvClass.F64Bits) {
+		setReg(vm, vm.baseReg + inst.a, raiserInt(msFloat64Bits(asNum(src)) as int64));
+		return;
+	}
+	if (cls == RaiserConvClass.HandleBits) {
+		if (src.kind == RaiserValueKind.Nil) {
+			setReg(vm, vm.baseReg + inst.a, raiserInt(0));
+		} else if (src.kind == RaiserValueKind.Object || src.kind == RaiserValueKind.Array) {
+			setReg(vm, vm.baseReg + inst.a, raiserInt(src.intVal));
+		} else {
+			vmError(vm, `no identity bits for a value of kind ${src.kind}`);
+		}
+		return;
+	}
 	if (cls == RaiserConvClass.F64 || cls == RaiserConvClass.F32) {
 		setReg(vm, vm.baseReg + inst.a, raiserFloat(convToFloat(src, fromUnsigned, cls == RaiserConvClass.F32)));
 		return;
