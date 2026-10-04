@@ -1347,25 +1347,28 @@ function initializedCounter(counter: Mutable<Counter>): Result<uint64, ProgramEr
 	return Result.ok(0);
 }
 
-function createCounter(
-	payer: WritableSigner,
-	target: Writable,
-	signers: Span<SignerSeeds> = [],
-): Result<Mutable<Counter>, ProgramError> {
-	return create<Counter>(payer, target, signers);
-}
-
 function createSignedStep(): Result<uint64, ProgramError> {
 	const op = try instructionData().readU8(0);
 	const bump = try instructionData().readU8(1);
 	const payer = try writableSigner(0);
 	const target = try writable(1);
 	if (op == 0) {
-		const counter = try signed(createCounter(payer, target), ["counter", [bump]]);
+		const counter = try signed(create<Counter>(payer, target), ["counter", [bump]]);
 		counter.data().value = 5;
 		return Result.ok(0);
 	}
+	if (op == 1) {
+		const made = signed(create<Counter>(payer, target), ["counter", [bump]]);
+		const counter = try made;
+		counter.data().value = 6;
+		return Result.ok(0);
+	}
 	if (op == 2) { return forwardCreated(try create<Counter>(payer, target)); }
+	if (op == 3) {
+		const counter = try forwardSigned(create<Counter>(payer, target), ["counter", [bump]]);
+		counter.data().value = 8;
+		return Result.ok(0);
+	}
 	const counter = try create<Counter>(payer, target);
 	counter.data().value = 7;
 	return Result.ok(0);
