@@ -65,11 +65,14 @@ test "comptimeCallFold: calls inside @comptime code are not checked as run-time 
 	assert c.includes("198536ULL") && c.includes("198535ULL"), c.slice(0, 300);
 }
 
-test "comptimeCallFold: an overloaded @comptime function is refused by name" {
-	assert cOf(`@comptime function pick(n: int32): int32 { return n; }
-		@comptime function pick(s: string): int32 { return s.length; }
-		const X: int32 = pick(9);
-		console.log(X);`).includes("'pick' is @comptime and overloaded");
+test "comptimeCallFold: an overloaded @comptime function folds the overload each call resolved to" {
+	const c = cOf(`@comptime function pick(n: uint64): uint64 { return n + 7000; }
+		@comptime function pick(s: string): uint64 { return (s.length as uint64) + 9000; }
+		const X: uint64 = pick(9);
+		const Y: uint64 = pick("abcd");
+		console.log(X, Y);`);
+	assert c.includes("7009ULL") && c.includes("9004ULL"), c.slice(0, 300);
+	assert callsLeft(c, "pick__") == 0, c.slice(0, 300);
 }
 
 test "comptimeCallFold: the JS backend folds the same call" {
