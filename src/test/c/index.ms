@@ -48,6 +48,7 @@ import "./matchGuardConstFold";
 import "./literalUnionBranchJoin";
 import "./sizedArrayLiteral";
 import "./objectLiteralDestination";
+import "./returnedCallResultSlot";
 import "./comptimeBlockStaticType";
 import "./arraySpliceEmit";
 import "./raiseChecks";
