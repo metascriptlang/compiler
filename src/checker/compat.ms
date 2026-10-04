@@ -645,7 +645,7 @@ export function needsStdConv(source: Type, target: Type): boolean {
 	}
 	// Array/SizedArray/String to Span coercion requires struct initializer
 	if (target.kind == TypeKind.Span) {
-		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray) return true;
+		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray) return sameElement(source.typeReturn, target.typeReturn);
 		if ((source.kind == TypeKind.String || source.kind == TypeKind.StringLiteral) && target.typeReturn != null && target.typeReturn.kind == TypeKind.Char) return true;
 	}
 	// String/StringLiteral → CString requires msStringToCString extraction
@@ -1239,7 +1239,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			&& actual.typeReturn.kind == TypeKind.Array ? actual.typeReturn : actual;
 		if (seq.kind == TypeKind.Array || seq.kind == TypeKind.SizedArray) {
 			const elemRel = typeRelation(formal.typeReturn, seq.typeReturn);
-			if (elemRel != TypeRelation.None) return TypeRelation.Subtype;
+			if (elemRel >= TypeRelation.Generic) return TypeRelation.Subtype;
 		}
 	}
 	// Error type = suppress cascading
