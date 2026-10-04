@@ -70,3 +70,24 @@ test "a type argument that declares getDynamicField still reads through it besid
 	assert new Other<int32>(1).item == 1;
 	assert new Reader<Bag>({ keys: ["a", "b"] }).color() == "color@2";
 }
+
+struct DerefCell { a: uint64; b: uint64; }
+
+function derefThrough<T>(at: Ptr<T>): T {
+	return at[];
+}
+
+function derefTwice<T>(at: Ptr<T>, f: (value: T) => uint64): uint64 {
+	const value: T = at[];
+	return f(value) + f(derefThrough<T>(at));
+}
+
+export function derefWordAt(address: uint64): uint64 {
+	return derefThrough<uint64>(address as Ptr<uint64>);
+}
+
+test "an explicit deref in a generic body reads the pointee of each instance" {
+	let cells: DerefCell[1] = [{ a: 7, b: 9 }];
+	assert derefThrough<DerefCell>(cells[0] as Ptr<DerefCell>).b == 9;
+	assert derefTwice<DerefCell>(cells[0] as Ptr<DerefCell>, (value: DerefCell): uint64 => value.a) == 14;
+}
