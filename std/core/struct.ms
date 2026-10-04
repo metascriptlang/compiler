@@ -360,6 +360,16 @@ export function* toItems<K, V>(this m: HashMap<K, V>): Iterator<K> {
 	}
 }
 
+export function* toPairs<K, V>(this m: HashMap<K, V>): Iterator<[K, V]> {
+	for (const entry of m.data) {
+		if (m.writing) { msMapFatal("concurrent map iteration and map write"); }
+		if (entry.hcode != 0) {
+			const pair: [K, V] = [entry.key, entry.value];
+			yield pair;
+		}
+	}
+}
+
 // Bulk-construction helper for HashMap (unordered counterpart of mapFromPairs).
 export function hashMapFromPairs<K, V>(keys: K[], values: V[]): HashMap<K, V> {
 	const m = new HashMap<K, V>();
@@ -718,6 +728,16 @@ export function* toItems<K, V>(this m: Map<K, V>): Iterator<K> {
 	for (const entry of m.entries) {
 		if (m.writing) { msMapFatal("concurrent map iteration and map write"); }
 		if (entry.hcode != 0) yield entry.key;
+	}
+}
+
+export function* toPairs<K, V>(this m: Map<K, V>): Iterator<[K, V]> {
+	for (const entry of m.entries) {
+		if (m.writing) { msMapFatal("concurrent map iteration and map write"); }
+		if (entry.hcode != 0) {
+			const pair: [K, V] = [entry.key, entry.value];
+			yield pair;
+		}
 	}
 }
 
