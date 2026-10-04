@@ -79,6 +79,21 @@ Ownership measurements from the 2026-10-03 root sweep:
 The explicit `new Arc(...)` constructor was separately checked on C; this does
 not claim JS constructor support or coverage of every atomic-container operation.
 
+Generic distinct value-read recovery (2026-10-04), source tree
+`f34e8238f2e2952c4d9f54986cf0dd8caf083dce`: the old root-sweep candidate
+rejects `genericDistinctValueRead` on C and JS because integer arithmetic and unary
+reads reach fitting as `float64`/`number`. Preserving the substituted distinct body
+before inspecting a generic template restores the existing value-read protocol;
+the new C/ORC/JS consumer prints `generic-distinct-value 14 21 3 true 4`.
+`MSC=./msc-next MSCORPUS_ONLY=genericDistinctValueRead MSCORPUS_LANES=c,orc,js
+MSCORPUS_BUILD_JOBS=1 MSCORPUS_JOBS=1 ./msc-next run --target=raiser
+src/test/corpus/run.ms` reports `4 pass · 0 fail · 0 xfail · 0 xpass`.
+`msc-next test <file> --tests-in-dir` passes `lang/macroHiddenConversions` 9/9,
+`handoff/valueOfProtocol` 19/19 and `c/protocols` 31/31; the macro file also
+passes with `--target=js` (9 local tests, 70 including std dependencies).
+This covers integer/float bodies, operand order, single evaluation and protocol
+visibility/refusal; it does not establish a full integration gate.
+
 ### Pipeline tests (`c/*.ms`, `js/*.ms`)
 
 Test the FULL pipeline (parse → check → transform → analyze → codegen)
