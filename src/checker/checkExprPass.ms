@@ -583,6 +583,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			node.kind = expandedValue.kind;
 			node.data = expandedValue.data;
+			node.typeArg = expandedValue.typeArg;
 			if (expandedValue.location != null) node.location = expandedValue.location;
 			node.nodeType = null as unknown as Type;
 			node.resolvedSym = null;
@@ -2340,6 +2341,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 				node.kind = expandedValue.kind;
 				node.data = expandedValue.data;
+				node.typeArg = expandedValue.typeArg;
 				if (expandedValue.location != null) node.location = expandedValue.location;
 				node.nodeType = null as unknown as Type;
 				node.resolvedSym = null;
