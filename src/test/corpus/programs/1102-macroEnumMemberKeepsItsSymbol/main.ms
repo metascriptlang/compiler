@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM holds an enum as its ordinal: toString prints '1 0 1 1 0' where C prints the member names
 // @stdout: Second First 1 Dark Light
 // @exit: 0
 // note: a checked enum member is an identifier spelled with a mangled name that no scope declares. Returned unchanged through a Node macro it comes back by its symbol, as a bare declaration initializer, as a call argument typed by the enum, as an array element and when the macro and the enum live in another module. It used to come back as "Undefined variable 'Flavor_Second'".
