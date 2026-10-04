@@ -33,12 +33,43 @@ export function hash<T>(this x: T): int64 {
 export macro hashOf(t: Node): Node {
 	let tt = t.nodeType;
 	const parts: Node[] = [];
-	if (tt.kind == NodeKind.TypeGeneric && tt.typExprBase.name == "tuple") {
+	let nullable = false;
+	if (tt.kind == NodeKind.TypeUnion) {
+		for (const m of tt.typExprMembers) {
+			if (m.kind == NodeKind.Identifier && m.name == "null") nullable = true;
+		}
+	}
+	if (nullable) {
+		const present: Node = {
+			kind: NodeKind.BinaryExpr, line: t.line, column: t.column, operator: "!==", left: t,
+			right: { kind: NodeKind.NullLiteral, line: t.line, column: t.column, nullPlaceholder: true },
+		};
+		const absent: Node = {
+			kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asType: "int64",
+			asExpr: { kind: NodeKind.NumberLiteral, line: t.line, column: t.column, value: 0, isFloat: false, intVal: 0, outOfRangeText: "", isBitPattern: false },
+		};
+		const valueHash: Node = {
+			kind: NodeKind.CallExpr, line: t.line, column: t.column,
+			callee: { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: t, property: "hash", isOptional: false },
+			arguments: [],
+		};
+		parts.push({ kind: NodeKind.ConditionalExpr, line: t.line, column: t.column, ternaryCondition: present, ternaryConsequent: valueHash, ternaryAlternate: absent });
+		parts.push({
+			kind: NodeKind.CallExpr, line: t.line, column: t.column,
+			callee: { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: present, property: "hash", isOptional: false },
+			arguments: [],
+		});
+	} else if (tt.kind == NodeKind.TypeGeneric && tt.typExprBase.name == "tuple") {
 		let i = 0;
 		while (i < tt.typExprArgs.length) {
-			parts.push({
+			const element: Node = {
 				kind: NodeKind.ArrayAccess, line: t.line, column: t.column, array: t,
 				index: { kind: NodeKind.NumberLiteral, line: t.line, column: t.column, value: i, isFloat: false, intVal: i, outOfRangeText: "", isBitPattern: false },
+			};
+			parts.push({
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: element, property: "hash", isOptional: false },
+				arguments: [],
 			});
 			i = i + 1;
 		}
@@ -58,17 +89,17 @@ export macro hashOf(t: Node): Node {
 			error("hash: no hash for this key type — give it `hash(this k: K): int64`", t);
 		}
 		for (const f of tt.typExprFieldNames) {
-			parts.push({ kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: t, property: f, isOptional: false });
+			const field: Node = { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: t, property: f, isOptional: false };
+			parts.push({
+				kind: NodeKind.CallExpr, line: t.line, column: t.column,
+				callee: { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: field, property: "hash", isOptional: false },
+				arguments: [],
+			});
 		}
 	}
 	const zero: Node = { kind: NodeKind.NumberLiteral, line: t.line, column: t.column, value: 0, isFloat: false, intVal: 0, outOfRangeText: "", isBitPattern: false };
 	let acc: Node = { kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: zero, asType: "int64" };
-	for (const part of parts) {
-		const partHash: Node = {
-			kind: NodeKind.CallExpr, line: t.line, column: t.column,
-			callee: { kind: NodeKind.MemberExpr, line: t.line, column: t.column, object: part, property: "hash", isOptional: false },
-			arguments: [],
-		};
+	for (const partHash of parts) {
 		acc = {
 			kind: NodeKind.CallExpr, line: t.line, column: t.column,
 			callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "hashCombine" },
