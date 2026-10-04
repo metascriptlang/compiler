@@ -253,3 +253,29 @@ test "receiverViews: enum static extensions coexist with members and members win
 	assert StaticMood.first() == StaticMood.Calm;
 	assert (StaticMood.Calm as int32) == 0;
 }
+
+function spanViewPut(this storage: Span<uint8>, at: int32, value: uint8): void {
+	storage[at] = value;
+}
+
+function spanViewSum(this storage: Readonly<Span<uint8>>): int32 {
+	let total: int32 = 0;
+	for (let i = 0; i < storage.length; i++) total += storage[i] as int32;
+	return total;
+}
+
+struct SpanViewFrame { bytes: uint8[4]; }
+
+test "receiverViews: a Span receiver takes a sized array, a Vec and an array as the free call does" {
+	let sized: uint8[4] = [7, 0, 0, 0];
+	let vec: Vec<uint8> = [1, 2];
+	const shared: uint8[] = [3, 4];
+	let frame: SpanViewFrame = { bytes: [1, 1, 1, 1] };
+	sized.spanViewPut(1, 9);
+	vec.spanViewPut(0, 5);
+	shared.spanViewPut(1, 6);
+	frame.bytes.spanViewPut(2, 8);
+	assert sized[1] == 9 && vec[0] == 5 && shared[1] == 6 && frame.bytes[2] == 8;
+	assert sized.spanViewSum() == spanViewSum(sized) && sized.spanViewSum() == 16;
+	assert vec.spanViewSum() == 7 && shared.spanViewSum() == 9 && frame.bytes.spanViewSum() == 11;
+}
