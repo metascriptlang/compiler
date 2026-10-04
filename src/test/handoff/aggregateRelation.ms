@@ -10,6 +10,10 @@ test "aggregate relation: storage wrappers preserve element identity at every sl
 	const pairs = [
 		{ source: "Dog[]", target: "Animal[]", accepted: false },
 		{ source: "Dog[]", target: "Span<Animal>", accepted: false },
+		{ source: "uint8[4]", target: "Span<int32>", accepted: false },
+		{ source: "Vec<uint8>", target: "Span<int32>", accepted: false },
+		{ source: "int32[4]", target: "Span<uint8>", accepted: false },
+		{ source: "Vec<int32>", target: "Span<number>", accepted: false },
 		{ source: "Dog[2]", target: "Animal[2]", accepted: false },
 		{ source: "Animal[]", target: "(Animal | null)[]", accepted: false },
 		{ source: "Dog[]", target: "Dog[]", accepted: true },
@@ -79,6 +83,26 @@ test "aggregate relation: a refused generic instance is named with its type argu
 		assert !c.ok, item.name;
 		assert c.error.contains(item.message), item.name + ": " + c.error;
 	}
+}
+
+test "aggregate relation: a sized array or a Vec converts to a Span of its own element only" {
+	const pre = "function wide(storage: Span<int32>): int32 { return storage[0]; }\n"
+		+ "function firstOf<T>(storage: Span<T>): T { return storage[0]; }\n"
+		+ "let sized: uint8[4] = [7, 1, 0, 0];\n"
+		+ "let vec: Vec<uint8> = [7, 1];\n";
+	const cases = [
+		{ name: "a sized array into a wider Span", source: pre + "wide(sized);", message: "got uint8[4], expected Span<int32>" },
+		{ name: "a Vec into a wider Span", source: pre + "wide(vec);", message: "got Vec<uint8>, expected Span<int32>" },
+		{ name: "a sized array bound to a wider Span local", source: pre + "const view: Span<int32> = sized;", message: "'uint8[4]' is not assignable to type 'Span<int32>'" },
+		{ name: "a generic Span keeps the sized array's element against a string slot", source: pre + "const s: string = firstOf(sized);", message: "'uint8' is not assignable to type 'string'" },
+		{ name: "a generic Span keeps the Vec's element against a string slot", source: pre + "const s: string = firstOf(vec);", message: "'uint8' is not assignable to type 'string'" },
+	];
+	for (const item of cases) {
+		const c = compileToC(item.source);
+		assert !c.ok, item.name;
+		assert c.error.contains(item.message), item.name + ": " + c.error;
+	}
+	assert strictErrorCount(pre + "const a: uint8 = firstOf(sized); const b: uint8 = firstOf(vec); const view: Span<uint8> = sized;") == 0;
 }
 
 test "aggregate relation: scalar inference cannot widen writable array elements in either argument order" {
