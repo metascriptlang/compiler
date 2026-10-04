@@ -4218,7 +4218,8 @@ function sizeOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 		if (sr != null) return sizeOfTypeAt(tg, sr, depth);
 	}
 	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) {
-		return sizeOfTypeAt(tg, t.typeReturn, depth) * t.typeValue;
+		const storageCount = t.typeValue == 0 ? 1 : t.typeValue;
+		return sizeOfTypeAt(tg, t.typeReturn, depth) * storageCount;
 	}
 	if (t.kind == TypeKind.GenericInstance) {
 		if (isAwaitable(t)) return ps;

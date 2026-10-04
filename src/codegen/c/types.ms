@@ -1910,7 +1910,7 @@ function genSizedArrayType(g: CGen, t: Type): string {
 	ensureForwardDecl(g, name);
 	const b = sec(g, CSection.Types);
 	addLine(b, `struct ${name} {`);
-	addLine(b, `    ${elemType} data[${size}];`);
+	addLine(b, `    ${elemType} data[${size == 0 ? 1 : size}];`);
 	addLine(b, "};");
 	addNewline(b);
 
