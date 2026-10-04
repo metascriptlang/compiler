@@ -37,6 +37,7 @@ import { defineIdentity, createDefineTable, defineSymbol } from "../compiler/def
 import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
 import { readFile, writeFile, exists, readDir, remove, removeAll, ensureDir, rename } from "std/fs";
 import { env, argv } from "std/process";
+import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 
 const PACK_MAGIC = "MSPK4";
@@ -151,12 +152,21 @@ export function preludePackStats(): float64[] {
 	return [_keyMs, _loadMs, _writeMs, _lastHit ? 1 : 0];
 }
 
-export function packRoot(): string {
+function packBase(): string {
 	if (env.get("MSC_NO_GLOBAL_CACHE") != "") return "";
 	const home = env.get("HOME");
 	const base = home != "" ? home : env.get("USERPROFILE");
 	if (base == "") return "";
-	return `${base}/.metascript/cache/prelude/${PACK_MAGIC}`;
+	return `${base}/.metascript/cache/prelude`;
+}
+
+// One directory per pack format: compilers that read different formats keep their packs side
+// by side and none deletes another's. Within a format the stamp inside each pack separates
+// compiler builds, and a foreign stamp is a miss, never a deletion.
+export function packRoot(): string {
+	const base = packBase();
+	if (base == "") return "";
+	return `${base}/${PACK_MAGIC}`;
 }
 
 // Default ON (verified: unit 644, suite 3531/3531, corpus parity 814/0/0, SAN
@@ -795,6 +805,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 	if (packDebug) console.log(`[pack] bytes=${blob.byteLength} at ms=${performance.now() - _w0}`);
 	const okw = atomicWritePack(`${root}/${key}.pk`, blob);
 	if (packDebug) console.log(`[pack] write ok=${okw ? 1 : 0} total ms=${performance.now() - _w0}`);
+	collectStaleEntries(packBase(), nowSeconds());
 	_writeMs = _writeMs + (performance.now() - _w0);
 }
 
@@ -1788,15 +1799,26 @@ test "preludePack: a format keeps a peer's pack and in-flight write" {
 		writeFile(pending, "peer-owned in-flight write");
 		const key = preludePackKey("format-probe", ".test");
 		writePreludePack(key, PK_STAMP, pkCtxWithOneSym());
-		const loaded = tryLoadPreludePack(key, PK_STAMP);
-		assert loaded != null;
+		assert tryLoadPreludePack(key, PK_STAMP) != null;
+		const own = packRoot();
+		for (const foreign of ["MSPK2", "MSPK9"]) {
+			ensureDir(`${base}/${foreign}`);
+			writeFile(`${base}/${foreign}/${key}.pk`, "another compiler's pack");
+		}
+		assert tryLoadPreludePack(key, PK_STAMP) != null;
+		writePreludePack(key, PK_STAMP, pkCtxWithOneSym());
+		assert exists(`${own}/${key}.pk`);
+		for (const foreign of ["MSPK2", "MSPK9"]) {
+			assert exists(`${base}/${foreign}/${key}.pk`), `${foreign} lost its pack`;
+		}
 		const saved = try readFile(peer) catch "";
 		const inFlight = try readFile(pending) catch "";
+		const currentMarker = try readFile(marker) catch "";
 		assert saved == "peer-owned pack";
 		assert inFlight == "peer-owned in-flight write";
-		const currentMarker = try readFile(marker) catch "";
 		assert currentMarker == "MSPK0";
-		remove(`${packRoot()}/${key}.pk`);
+		remove(`${own}/${key}.pk`);
+		remove(`${own}/${key}.deps`);
 	} finally {
 		remove(peer);
 		remove(pending);
