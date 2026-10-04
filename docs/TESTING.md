@@ -317,6 +317,20 @@ Convention, applied by `corpus/run.ms` and `guard/run.ms` alike:
   fixpoint claim, nor an isolation of every source/bootstrap change between the
   earlier candidates and this tree. Syncing remains a separate operation.
 
+  A second measured bootstrap on source tree
+  `80e7b14e66bc590e0a38b4ce1bbf181cc9d29977` used
+  `./msc-n2s-roots3 build src/index.ms --gc=drc --danger --lto=off --cc=clang --output=msc-n2s-staticfix`,
+  then the same command with `./msc-n2s-staticfix` as builder and
+  `--output=msc-n2s-static-stage2`. Both built 349 modules. Stage 1 compiled
+  the corrected Symbol-keyed Raiser global code but
+  `./msc-n2s-staticfix run --target=raiser src/test/corpus/programs/255-staticStorage.ms`
+  printed `static-storage FAIL builds=9`. The same command using
+  `./msc-n2s-static-stage2` printed `static-storage PASS`. A native probe
+  of the corrected Raiser source emitted the value global and its guard with
+  `LoadGlobal` / `StoreGlobal` on both slots.
+  C/DRC, C/ORC and JS printed `static-storage PASS`; SAN subset 255 passed
+  1/1. This is not an installed-binary, HCR or whole-gate verdict.
+
 Other rules that make these numbers real:
 
 ## What a run costs
