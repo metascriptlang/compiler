@@ -1,7 +1,7 @@
 import { platform } from "std/process";
-import { TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity } from "./types";
+import { isNumeric, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
-import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
+import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { Node, NodeKind, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData } from "../ast/node";
@@ -190,6 +190,10 @@ export function noteImported(ctx: CheckerContext, sym: Symbol): void {
 	if (sym.modulePath == ctx.modulePath || ctx.ownModules.has(sym.modulePath)) return;
 	ctx.importSet.add(sym);
 	for (const ov of sym.overloads) ctx.importSet.add(ov);
+}
+
+export function shadowedImportOf(ctx: CheckerContext, sym: Symbol): Symbol | null {
+	return ctx.shadowedImports.get(sym) ?? null;
 }
 
 export function markUsedIn(ctx: CheckerContext, sym: Symbol): void {
@@ -505,7 +509,28 @@ export function resolveOperatorCall(table: SymbolTable, registry: ExtensionRegis
 			}
 		}
 	}
-	return pickBestOperatorCandidate(cands, argTypes);
+	const best = pickBestOperatorCandidate(cands, argTypes);
+	return best != null && builtinOperatorBeats(best, methodName, argTypes) ? null as unknown as ExtensionMethod : best;
+}
+
+function isNumberOperator(name: string): boolean {
+	return match (name) {
+		"+" | "-" | "*" | "/" | "%" | "**" | "&" | "|" | "^" | "~" | "<<" | ">>" | ">>>"
+			| "==" | "===" | "!=" | "!==" | "<" | "<=" | ">" | ">="
+			| "+=" | "-=" | "*=" | "/=" | "%=" | "**=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
+		_ => false,
+	};
+}
+
+function builtinOperatorBeats(user: ExtensionMethod, methodName: string, argTypes: Type[]): boolean {
+	if (!isNumberOperator(methodName)) return false;
+	for (const t of argTypes) {
+		if (!isNumeric(t) || !sameType(t, argTypes[0])) return false;
+	}
+	const ft = getExtFnType(user);
+	const userScore = scoreCandidatePriority(ft.typeChildren, argTypes, getMinArity(ft));
+	userScore.calleeScope = user.scopeDepth;
+	return cmpCandidates(scoreCandidatePriority(argTypes, argTypes, argTypes.length), userScore, null, null) > 0;
 }
 
 // Strip receiver (param[0]) from an extension's function type for overload scoring.
@@ -657,6 +682,16 @@ function nominalTypeSym(t: Type): Symbol | null {
 	if (s.sym == null || (s.kind != TypeKind.Struct && s.kind != TypeKind.Enum)) return null;
 	const kind = s.sym.symbolKind;
 	return kind == SymbolKind.Class || kind == SymbolKind.Interface || kind == SymbolKind.Struct || kind == SymbolKind.Enum ? s.sym : null;
+}
+
+export function refusesTypeAsValue(ctx: CheckerContext, node: Node, sym: Symbol, name: string): boolean {
+	const k = sym.symbolKind;
+	if (!isTypeSymbol(sym) || node == ctx.typeExprSlot || ctx.jsxMacroArgDepth > 0) return false;
+	const msg = k == SymbolKind.Class || k == SymbolKind.Actor
+		? `'${name}' names a ${k == SymbolKind.Actor ? "actor" : "class"}, which is not a value here — construct one with 'new ${name}(…)' or reach a static member ('${name}.x')`
+		: `'${name}' only refers to a type, but is being used as a value here`;
+	addError(ctx, msg, node.location.line, node.location.column);
+	return true;
 }
 
 export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type | null): ExtensionMethod[] {
@@ -1183,7 +1218,8 @@ export class CheckerContext {
 	compilerFuncs: HashMap<string, Symbol>;       // @compilerFunc — name the compiler synthesizes a call under → its declared symbol
 	extensionRegistry: ExtensionRegistry;
 	macroConverters: MacroConverter[];              // in-scope compile-time converters, registration order
-	converterTargetTypes: HashMap<Symbol, Type>;    // converter symbol → target type resolved in the DECLARING module
+	converterTargetTypes: HashMap<Symbol, Type>;
+	expansionFriends: HashMap<Node, string[]>;    // converter symbol → target type resolved in the DECLARING module
 	runtimeConverters: Symbol[];
 	macroExpansionDepth: int32;                  // Phase B+ eager: recursion limit for macros that produce macros
 	jsxMacroArgDepth: int32;                     // JSX leak guard: >0 while checking a macro's args (JSX there is consumed, not leaked)
@@ -1215,6 +1251,8 @@ export class CheckerContext {
 	condEvalDepth: int32;        // >0 while checking a conditionally-evaluated position (&&/|| rhs, ternary arm, loop condition) — hoisting out of one would run it unconditionally
 	inGenericContext: int32;     // >0 while checking members of a generic class pre-monomorphization — unbound-param diagnostics defer to instantiation
 	stmtPosExpr: Node;           // the expression that IS a statement: a macro there emits statements outright, so the expression-position rules (last element is the value, empty is an error) must not apply
+	typeExprSlot: Node;          // the operand being checked where a type name is accepted (a member's object, `new`'s callee, `instanceof`'s right side, a subscript's object); anywhere else a type name is not a value
+	calleeExpr: Node;            // the callee of the call being checked: a @comptime routine named there is folded, named anywhere else it is a run-time value
 	disambTable: HashMap<string, int32>; // (module, name) → how many routines of that name were already declared here; source of Symbol.disamb
 	itemModule: int32;           // index of the module this context checks; -1 for a context outside a module graph
 	nextItem: int32;
@@ -1227,6 +1265,7 @@ export class CheckerContext {
 	interfSet: HashSet<Symbol>;
 	interfNames: HashMap<Symbol, string>;
 	importSet: HashSet<Symbol>;
+	shadowedImports: HashMap<Symbol, Symbol>;
 	usedImports: HashSet<Symbol>;
 	preludeInterf: HashMap<string, Symbol[]>;
 	preludeExports: HashSet<Symbol>;
@@ -1262,6 +1301,7 @@ export function createContext(): CheckerContext {
 		extensionRegistry: createExtensionRegistry(),
 		macroConverters: [],
 		converterTargetTypes: new HashMap<Symbol, Type>(),
+		expansionFriends: new HashMap<Node, string[]>(),
 		runtimeConverters: [],
 		macroExpansionDepth: 0,
 		jsxMacroArgDepth: 0,
@@ -1299,12 +1339,15 @@ export function createContext(): CheckerContext {
 		condEvalDepth: 0,
 		inGenericContext: 0,
 		stmtPosExpr: null as unknown as Node,
+		typeExprSlot: null as unknown as Node,
+		calleeExpr: null as unknown as Node,
 		preludeCtx: null as unknown as CheckerContext,
 		instantiatingCtx: null as unknown as CheckerContext,
 		interf: [],
 		interfSet: new HashSet<Symbol>(),
 		interfNames: new HashMap<Symbol, string>(),
 		importSet: new HashSet<Symbol>(),
+		shadowedImports: new HashMap<Symbol, Symbol>(),
 		usedImports: new HashSet<Symbol>(),
 		preludeInterf: new HashMap<string, Symbol[]>(),
 		preludeExports: new HashSet<Symbol>(),

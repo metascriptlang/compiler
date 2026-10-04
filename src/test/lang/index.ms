@@ -34,6 +34,7 @@ import "./exportSymbols";
 import "./functionCarriers";
 import "./generatorControl";
 import "./genericCallbacks";
+import "./genericRoutineInstances";
 import "./lexicalIdentity";
 import "./macroCodecWitness";
 import "./macroConverterValues";

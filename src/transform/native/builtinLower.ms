@@ -22,7 +22,7 @@ import {
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringSym,
 	makeHiddenAddr, runtimeRef,
 } from "../util";
-import { rewriteEcho, buildStructToString, buildUnionToString, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
+import { rewriteEcho, buildStructToString, buildUnionText, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
 import { isSlotUnion } from "../../checker/fit";
 import { charToString, stringifyCharOperand } from "./stringOpLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
@@ -126,6 +126,24 @@ function lowerEnumReverseIndex(node: Node, ctx: TransformContext): Node {
 // Every type has a compiler-provided default. User extensions take priority.
 // Resolution: user extension > number > boolean > enum > string > struct/class > array > fallback
 
+function memberToString(v: Node, loc: SourceLocation, ctx: TransformContext): Node {
+	const vt = v.nodeType;
+	if (vt == null) throw new Error("internal: a union member reached toString without a type");
+	const t = peelTransparentInstance(vt);
+	const tn = typeNameOf(t);
+	if (ctx.checkerCtx != null && tn != "") {
+		const ext = findExtension(ctx.checkerCtx.extensionRegistry, tn, "toString");
+		if (ext != null && ext.sym != null) {
+			const direct = makeCall(makeTypedIdentResolved(ext.sym, null, loc), [v], loc);
+			direct.nodeType = stringType();
+			return direct;
+		}
+	}
+	const call = makeCall(makeMember(v, "toString", loc), [], loc);
+	call.nodeType = stringType();
+	return lowerToString(call, v, t, loc, ctx);
+}
+
 function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLocation, ctx: TransformContext): Node {
 	const base = literalBase(objType);
 	if (base != objType) return lowerToString(callNode, obj, base, loc, ctx);
@@ -195,7 +213,7 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 		cond.nodeType = stringType();
 		return cond;
 	}
-	if (isSlotUnion(objType)) return ctx.jsBackend ? callNode : buildUnionToString(obj, objType, loc, ctx);
+	if (isSlotUnion(objType)) return ctx.jsBackend ? callNode : buildUnionText(obj, objType, "msUnionToString_", (v: Node): Node => memberToString(v, loc, ctx), loc, ctx);
 	// Struct/Class → plain JSON string (reuses console.log's struct→string path)
 	const inner = unwrapRef(objType);
 	if (inner.kind == TypeKind.Struct && inner.typeName != "") {

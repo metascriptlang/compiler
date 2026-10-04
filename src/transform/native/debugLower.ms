@@ -71,7 +71,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 		cond.nodeType = stringType();
 		return cond;
 	}
-	if (isSlotUnion(t) && !hasToStringExtension(t, ctx)) return ctx.jsBackend ? arg : buildUnionToString(arg, t, loc, ctx);
+	if (isSlotUnion(t) && !hasToStringExtension(t, ctx)) return ctx.jsBackend ? arg : buildUnionText(arg, t, "msUnionDebug_", (v: Node): Node => echoCoerceArg(v, loc, ctx), loc, ctx);
 	// Struct/Class/Union → check toString() extension first, then fall back to JSON debug format
 	const inner = unwrapRef(t);
 	if ((inner.kind == TypeKind.Struct || inner.kind == TypeKind.Union) && inner.typeName != "") {
@@ -129,14 +129,14 @@ function hasToStringExtension(t: Type, ctx: TransformContext): boolean {
 
 // A tagged union stringifies the member its tag selects, one generated helper per union
 // type, the way a case object's fields are visited through a case on its discriminator.
-export function buildUnionToString(arg: Node, ut: Type, loc: SourceLocation, ctx: TransformContext): Node {
-	const call = makeCall(makeTypedIdentResolved(ensureUnionToStringFn(ut, ctx, loc), null, loc), [arg], loc);
+export function buildUnionText(arg: Node, ut: Type, prefix: string, memberText: (v: Node) => Node, loc: SourceLocation, ctx: TransformContext): Node {
+	const call = makeCall(makeTypedIdentResolved(ensureUnionTextFn(ut, prefix, memberText, ctx, loc), null, loc), [arg], loc);
 	call.nodeType = stringType();
 	return call;
 }
 
-function ensureUnionToStringFn(ut: Type, ctx: TransformContext, loc: SourceLocation): Symbol {
-	const name = "msUnionToString_" + hashToBase36(typeKey(ut));
+function ensureUnionTextFn(ut: Type, prefix: string, memberText: (v: Node) => Node, ctx: TransformContext, loc: SourceLocation): Symbol {
+	const name = prefix + hashToBase36(typeKey(ut));
 	const existing = existingDumpFn(name);
 	if (existing != null) return existing;
 	const sym = mintSym(ctx, SymbolKind.Function, name, null);
@@ -149,7 +149,7 @@ function ensureUnionToStringFn(ut: Type, ctx: TransformContext, loc: SourceLocat
 		const member = ut.typeChildren[vi];
 		const read = makeIdentResolved(valueSym, loc);
 		read.nodeType = ut;
-		const ret = makeReturn(echoCoerceArg(projectTagUnionMember(read, ut, member), loc, ctx), loc);
+		const ret = makeReturn(memberText(projectTagUnionMember(read, ut, member)), loc);
 		if (vi == last) { stmts.push(ret); continue; }
 		const tag = makeMember(makeIdentResolved(valueSym, loc), "_tag", loc);
 		tag.nodeType = int32Type();

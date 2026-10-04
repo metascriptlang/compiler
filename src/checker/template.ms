@@ -12,6 +12,7 @@
 // A parameter referenced N times duplicates its argument expression N times.
 // Body locals are gensym-renamed (declaration + references) for hygiene.
 
+import { befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import {
 	Node, NodeKind, IdentifierData, CallExprData,
 	FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, VariableDeclData,
@@ -143,11 +144,15 @@ function expandTemplateInner(ctx: CheckerContext, sym: Symbol, callNode: Node, c
 		callNode.data = { spliceNodes: bd.statements } as SpliceManyData;
 		callNode.nodeType = voidType();
 		callNode.resolvedSym = null;
+		markExpansion(ctx, callNode, expansionOf(ctx, callNode, sym.modulePath));
 		return voidType();
 	}
 
 	// Check the expanded expression in the caller's context
+	const friends = expansionOf(ctx, callNode, sym.modulePath);
+	const friendScope = befriend(ctx, friends);
 	callCheckExpr(ctx, expandedExpr, expectedType);
+	unfriend(friendScope, friends);
 
 	// Mutate the call node in place (same pattern as macro eager expansion)
 	callNode.kind = expandedExpr.kind;

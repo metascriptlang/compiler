@@ -5,8 +5,8 @@
 // routing it through the sequence path does not typecheck at all — the symptom
 // is a clang error on a missing member, not a wrong value.
 //
-// Both halves are asserted: a sized array must not reach the push helper, and a
-// sequence must still use it.
+// Both halves are asserted: a sized array must not reach the payload helpers, and a
+// sequence allocates its payload once for every element before storing each one.
 
 import { compileToC } from "../helpers";
 
@@ -23,7 +23,7 @@ function main(): void {
 	assert !c.value.contains("msGenericArrayPush");
 }
 
-test "sequence literal keeps the push path" {
+test "sequence literal sizes its payload once and assigns each element in place" {
 	const c = compileToC(`
 function main(): void {
 	const seq: uint8[] = [10, 20, 30, 40];
@@ -31,5 +31,23 @@ function main(): void {
 }
 `);
 	assert c.ok;
-	assert c.value.contains("msGenericArrayPush");
+	assert c.value.contains("msArrayPayloadNew(4, sizeof(");
+	assert c.value.contains(".len = 4;");
+	assert c.value.contains(".p->data[3] = 40");
+	assert !c.value.contains("msGenericArrayPush");
+}
+
+test "a number or reference sequence literal sizes its payload once" {
+	const c = compileToC(`
+class Box { v: int32 = 0; }
+function main(): void {
+	const xs: number[] = [1.5, 2, 3];
+	const boxes: Box[] = [new Box(), new Box()];
+	console.log(xs[0] + boxes.length);
+}
+`);
+	assert c.ok;
+	assert c.value.contains("msArrayPayloadNew(3, sizeof(");
+	assert c.value.contains("msArrayPayloadNew(2, sizeof(");
+	assert !c.value.contains("msGenericArrayPush");
 }

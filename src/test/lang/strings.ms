@@ -130,6 +130,29 @@ test "a char converts to its character through toString and String" {
 	assert c.toString(16) == "62";
 }
 
+struct TextPoint { x: int32; y: int32 }
+struct TextSize { w: int32 }
+
+struct TextPrice { cents: int32 }
+
+function toString(this p: TextPrice): string {
+	return "$" + (p.cents / 100).toString();
+}
+
+function textShape(k: int32): TextPoint | TextSize | TextPrice | string {
+	if (k == 0) return { x: 1, y: 2 };
+	if (k == 1) return { w: 7 };
+	if (k == 3) return { cents: 500 } as TextPrice;
+	return "none";
+}
+
+test "a union converts through the toString of the member its tag selects" {
+	assert String(textShape(0)) == "{\"x\":1,\"y\":2}";
+	assert textShape(1).toString() == "{\"w\":7}";
+	assert String(textShape(2)) == "none";
+	assert String(textShape(3)) == "$5";
+}
+
 test "a lone byte of 0x80 or more converts to U+FFFD" {
 	const hi = byteChar("\u{00E9}", 0);
 	assert String(hi) == "\u{FFFD}";

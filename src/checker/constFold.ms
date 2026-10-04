@@ -1,5 +1,5 @@
 import {
-	Node, NodeKind, SourceLocation, DeclKind, SymbolKind, SymbolFlag, Type, TypeKind, createNode,
+	Node, NodeKind, NodeFlag, SourceLocation, DeclKind, SymbolKind, SymbolFlag, Type, TypeKind, createNode,
 	BinaryExprData, UnaryExprData, VariableDeclData, PropertyDeclData, TypeAssertionData, HiddenStdConvData,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	MemberExprData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, SpreadExprData, HiddenDerefData,
@@ -95,7 +95,7 @@ export function isUntypedIntegerConstant(expr: Node, depth: int32): boolean {
 	}
 	if (expr.kind == NodeKind.BinaryExpr) {
 		const d = expr.data as BinaryExprData;
-		return isUntypedIntegerConstant(d.left, depth + 1) && isUntypedIntegerConstant(d.right, depth + 1);
+		return !expr.flags.has(NodeFlag.UserOp) && isUntypedIntegerConstant(d.left, depth + 1) && isUntypedIntegerConstant(d.right, depth + 1);
 	}
 	if (expr.kind == NodeKind.UnaryExpr) return isUntypedIntegerConstant((expr.data as UnaryExprData).operand, depth + 1);
 	return false;
@@ -116,7 +116,7 @@ export function isUntypedConstant(expr: Node, depth: int32): boolean {
 	}
 	if (expr.kind == NodeKind.BinaryExpr) {
 		const d = expr.data as BinaryExprData;
-		return isUntypedConstant(d.left, depth + 1) && isUntypedConstant(d.right, depth + 1);
+		return !expr.flags.has(NodeFlag.UserOp) && isUntypedConstant(d.left, depth + 1) && isUntypedConstant(d.right, depth + 1);
 	}
 	if (expr.kind == NodeKind.UnaryExpr) return isUntypedConstant((expr.data as UnaryExprData).operand, depth + 1);
 	return false;
@@ -136,7 +136,7 @@ export function isCompileTimeValue(expr: Node, depth: int32): boolean {
 		NodeKind.ArrayLiteral => allCompileTimeValues((expr.data as ArrayLiteralData).elements, depth),
 		NodeKind.ObjectLiteral => allCompileTimeValues((expr.data as ObjectLiteralData).properties, depth),
 		NodeKind.SpreadExpr => isCompileTimeValue((expr.data as SpreadExprData).spreadArg, depth),
-		NodeKind.BinaryExpr => isCompileTimeValue((expr.data as BinaryExprData).left, depth) && isCompileTimeValue((expr.data as BinaryExprData).right, depth),
+		NodeKind.BinaryExpr => !expr.flags.has(NodeFlag.UserOp) && isCompileTimeValue((expr.data as BinaryExprData).left, depth) && isCompileTimeValue((expr.data as BinaryExprData).right, depth),
 		NodeKind.UnaryExpr => isCompileTimeValue((expr.data as UnaryExprData).operand, depth),
 		NodeKind.ConditionalExpr => isCompileTimeValue((expr.data as ConditionalExprData).ternaryCondition, depth)
 			&& isCompileTimeValue((expr.data as ConditionalExprData).ternaryConsequent, depth)
@@ -189,7 +189,7 @@ export function exactUntypedInteger(expr: Node, depth: int32): Node {
 		},
 		NodeKind.BinaryExpr => {
 			const d = expr.data as BinaryExprData;
-			if (isComparisonOperator(d.operator)) return none;
+			if (isComparisonOperator(d.operator) || expr.flags.has(NodeFlag.UserOp)) return none;
 			const left = exactUntypedInteger(d.left, depth + 1);
 			if (left == null) return none;
 			const right = exactUntypedInteger(d.right, depth + 1);
@@ -307,6 +307,121 @@ export function constantLiteralOf(expr: Node, depth: int32): Node {
 		_ => {},
 	};
 	return none;
+}
+
+function constBindingInitializer(ident: Node): Node {
+	const none = null as unknown as Node;
+	const sym = ident.resolvedSym;
+	if (sym == null || sym.symbolKind != SymbolKind.Variable || sym.symFlags.has(SymbolFlag.Mutable)) return none;
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.VariableDecl) return none;
+	const d = decl.data as VariableDeclData;
+	return d.declKind == DeclKind.Const && readonlyDataTypeShape(decl.nodeType, 0) ? d.initializer : none;
+}
+
+function isScalarLiteral(node: Node): boolean {
+	return node != null && (node.kind == NodeKind.NumberLiteral || node.kind == NodeKind.BooleanLiteral);
+}
+
+function scalarTreeOf(expr: Node, depth: int32): Node {
+	const tree = constantTreeOf(expr, depth);
+	return isScalarLiteral(tree) ? tree : null as unknown as Node;
+}
+
+function constantTreeOf(expr: Node, depth: int32): Node {
+	const none = null as unknown as Node;
+	if (expr == null || depth > CONSTANT_CHAIN_LIMIT) return none;
+	const scalar = constantLiteralOf(expr, depth);
+	if (scalar != null) return scalar;
+	match (expr.kind) {
+		NodeKind.Identifier => {
+			const initializer = constBindingInitializer(expr);
+			return initializer != null ? constantTreeOf(initializer, depth + 1) : none;
+		},
+		NodeKind.ArrayLiteral => {
+			if (!readonlyDataTypeShape(expr.nodeType, 0)) return none;
+			const elements: Node[] = [];
+			for (const e of (expr.data as ArrayLiteralData).elements) {
+				const folded = constantTreeOf(e, depth + 1);
+				if (folded == null) return none;
+				elements.push(folded);
+			}
+			const copy = createNode(NodeKind.ArrayLiteral, { elements: elements }, syntheticToken(expr.location));
+			copy.nodeType = expr.nodeType;
+			return copy;
+		},
+		NodeKind.ObjectLiteral => {
+			if (!readonlyDataTypeShape(expr.nodeType, 0)) return none;
+			const od = expr.data as ObjectLiteralData;
+			const properties: Node[] = [];
+			for (const p of od.properties) {
+				const folded = constantTreeOf(p, depth + 1);
+				if (folded == null) return none;
+				properties.push(folded);
+			}
+			const copy = createNode(NodeKind.ObjectLiteral, { properties: properties, keys: od.keys.slice(0), keyLocations: od.keyLocations.slice(0) }, syntheticToken(expr.location));
+			copy.nodeType = expr.nodeType;
+			return copy;
+		},
+		NodeKind.ArrayAccess => {
+			const d = expr.data as ArrayAccessData;
+			const array = constantTreeOf(d.array, depth + 1);
+			const index = scalarTreeOf(d.index, depth + 1);
+			if (array == null || array.kind != NodeKind.ArrayLiteral || index == null || index.kind != NodeKind.NumberLiteral) return none;
+			const nd = index.data as NumberLiteralData;
+			const elements = (array.data as ArrayLiteralData).elements;
+			if (nd.isFloat || nd.intVal < 0 || nd.intVal >= elements.length as int64) return none;
+			return elements[nd.intVal as int32];
+		},
+		NodeKind.MemberExpr => {
+			const d = expr.data as MemberExprData;
+			const object = constantTreeOf(d.object, depth + 1);
+			if (object == null || object.kind != NodeKind.ObjectLiteral) return none;
+			const od = object.data as ObjectLiteralData;
+			const at = od.keys.indexOf(d.property);
+			return at >= 0 ? od.properties[at] : none;
+		},
+		NodeKind.HiddenStdConv => {
+			const inner = scalarTreeOf((expr.data as HiddenStdConvData).convExpr, depth + 1);
+			return inner != null ? retypedLiteral(inner, expr.nodeType, expr.location) : none;
+		},
+		NodeKind.TypeAssertion => {
+			const inner = scalarTreeOf((expr.data as TypeAssertionData).asExpr, depth + 1);
+			return inner != null ? retypedLiteral(inner, expr.nodeType, expr.location) : none;
+		},
+		NodeKind.BinaryExpr => {
+			const d = expr.data as BinaryExprData;
+			const left = scalarTreeOf(d.left, depth + 1);
+			const right = left != null ? scalarTreeOf(d.right, depth + 1) : none;
+			if (right == null) return none;
+			const folded = foldBinaryLiterals(d.operator, left, right, expr);
+			return folded != expr ? folded : none;
+		},
+		NodeKind.UnaryExpr => {
+			const d = expr.data as UnaryExprData;
+			const operand = scalarTreeOf(d.operand, depth + 1);
+			if (operand == null) return none;
+			const folded = foldUnaryLiteral(d.unaryOp, operand, expr);
+			return folded != expr ? folded : none;
+		},
+		_ => {},
+	};
+	return none;
+}
+
+export function foldConstInitializer(binding: Node): void {
+	const d = binding.data as VariableDeclData;
+	if (d.declKind != DeclKind.Const || d.initializer == null || !readonlyDataTypeShape(binding.nodeType, 0)) return;
+	if (isScalarLiteral(d.initializer) || readonlyDataInitializer(d.initializer, 0)) return;
+	const folded = constantTreeOf(d.initializer, 0);
+	if (folded == null) return;
+	if (isScalarLiteral(folded)) {
+		const typed = retypedLiteral(folded, binding.nodeType, d.initializer.location);
+		if (typed != null) d.initializer = typed;
+		return;
+	}
+	if (binding.nodeType != null) folded.nodeType = binding.nodeType;
+	d.initializer = folded;
 }
 
 
@@ -450,7 +565,7 @@ function isComparisonOperator(op: string): boolean {
 
 export function foldBinaryLiterals(op: string, left: Node, right: Node, node: Node): Node {
 	const loc = node.location;
-	if (left.kind != right.kind) return node;
+	if (left.kind != right.kind || node.flags.has(NodeFlag.UserOp)) return node;
 
 	const result = match (left.kind) {
 		NodeKind.NumberLiteral => {

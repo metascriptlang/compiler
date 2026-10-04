@@ -390,8 +390,7 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 	const existing = lookupLocal(ctx.table, sym.name);
 	if (existing != null && existing != sym && ctx.importSet.has(existing)
 			&& existing.symbolKind == SymbolKind.Function && sym.symbolKind == SymbolKind.Function) {
-		sym.overloads.push(existing);
-		for (const ov of existing.overloads) sym.overloads.push(ov);
+		ctx.shadowedImports.set(sym, existing);
 		redefineSymbol(ctx.table, sym.name, sym);
 		return;
 	}

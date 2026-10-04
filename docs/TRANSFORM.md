@@ -114,14 +114,13 @@ Order is the exact `index.ms` sequence. **Backend**: `both` / `C` (C + Raiser, i
 | 33 | cstringConvLower | `native/cstringConvLower.ms` | both | cstring conversion — C emits `ms*` helpers, JS emits `toJSStr`/`fromJSStr` |
 | 34 | operatorLower | `lowering/operatorLower.ms` | both | binary ops → function calls when an operator overload exists |
 | 35 | stringOpLower | `native/stringOpLower.ms` | both | string operators → runtime function calls |
-| 36 | subscriptLower | `lowering/subscriptLower.ms` | both | custom `obj[idx]` → `` `[]`(obj, idx) `` |
-| 37 | spanLower | `lowering/spanLower.ms` | C | `HiddenStdConv` (Array → Span) → explicit struct initializers |
-| 38 | spanParamExpand | `native/spanParamExpand.ms` | C | expand `Span<T>` params into `(ptr, len)` at call/decl sites |
-| 39 | conditionalExprLower | `lowering/conditionalExprLower.ms` | C | ternary in statement position → if/else |
-| 40 | updateExprLower | `lowering/updateExprLower.ms` | C | `x++` / `--x` in statement position → assignment |
-| 41 | nullableLower | `native/nullableLower.ms` | C | `Maybe<T>` structural rewrites |
-| 42 | dce | `analysis/dce.ms` | both | dead-code elimination — alive-symbol set (single-module stub: all alive) |
-| 43 | liftDestructors | `lowering/destructorLifting.ms` | C | per-type `_destroy`/`_copy`/`_sink`/`_wasMoved` generated from field types (cycle-aware) |
+| 36 | spanLower | `lowering/spanLower.ms` | C | `HiddenStdConv` (Array → Span) → explicit struct initializers |
+| 37 | spanParamExpand | `native/spanParamExpand.ms` | C | expand `Span<T>` params into `(ptr, len)` at call/decl sites |
+| 38 | conditionalExprLower | `lowering/conditionalExprLower.ms` | C | ternary in statement position → if/else |
+| 39 | updateExprLower | `lowering/updateExprLower.ms` | C | `x++` / `--x` in statement position → assignment |
+| 40 | nullableLower | `native/nullableLower.ms` | C | `Maybe<T>` structural rewrites |
+| 41 | dce | `analysis/dce.ms` | both | dead-code elimination — alive-symbol set (single-module stub: all alive) |
+| 42 | liftDestructors | `lowering/destructorLifting.ms` | C | per-type `_destroy`/`_copy`/`_sink`/`_wasMoved` generated from field types (cycle-aware) |
 
 > `dce` and `liftDestructors` are not AST rewrites in the usual sense — `dce` produces an
 > alive-symbol set the codegen queries; `liftDestructors` emits per-type lifecycle hook functions
@@ -167,5 +166,5 @@ Other compilers carry transforms MetaScript deliberately does NOT:
 | dateLower | Too specialized — one type doesn't justify a transform |
 | astValidator | Defensive post-pass — better to fix transforms than validate after them |
 
-(Earlier-skipped `subscriptLower`, `arrayMethodInline`, and method-call lowering have since been
-implemented — see the pipeline table above.)
+(Earlier-skipped `arrayMethodInline` and method-call lowering have since been implemented — see
+the pipeline table above; a declared `[]`/`[]=` is resolved as a call by the checker.)

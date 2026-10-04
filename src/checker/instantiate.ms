@@ -4,6 +4,7 @@
 // immediately clone the function body, substitute types, and register
 // the specialized version. No separate monomorphize pass needed.
 
+import { methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
@@ -826,6 +827,8 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		// symbols into scope so resolveAnnotation("Item") finds the user type during re-check.
 		// Without this, HashMap<string, Item[]> methods resolve "Item" to Unknown.
 		const callerScope = openInstanceScope(bodyCtx, dedup.names, dedup.types);
+		bodyCtx.table.current.friendModules.push(sym.modulePath);
+		bodyCtx.table.current.privateAccess = methodOwnerClass(bodyCtx, sym);
 		const injectedSyms: Symbol[] = [];
 		for (const ct of dedup.types) {
 			injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
@@ -921,6 +924,7 @@ function instanceFieldInits(classData: ClassDeclData, names: string[], types: Ty
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 	const callerScope = openInstanceScope(bodyCtx, names, types);
+	bodyCtx.table.current.privateAccess = classSym;
 	const injectedSyms: Symbol[] = [];
 	for (const ct of types) {
 		injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
@@ -1100,6 +1104,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], typ
 		clearCheckerState(clonedBody);
 		bindFunctionFlow(clonedBody, clonedBody);
 		const callerScope = openInstanceScope(bodyCtx, names, types);
+		bodyCtx.table.current.privateAccess = classSym;
 		// Inject concrete type symbols (parity with instantiateGenericFunction).
 		const injectedSyms: Symbol[] = [];
 		for (const ct of types) {

@@ -1,10 +1,11 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
+import { refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion } from "./visibility";
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType } from "./types";
+import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
 import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
@@ -37,7 +38,7 @@ import { writableViewRefusal } from "./assignable";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
-import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, macroDeclOf, markNamesUsed } from "./callResolve";
+import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
 import { checkActorStaticField } from "./sendable";
@@ -482,6 +483,17 @@ function collectSplicedDecl(ctx: CheckerContext, node: Node): void {
 }
 
 function spliceStmtMany(ctx: CheckerContext, node: Node, splice: Node): void {
+	const friends = expansionFriendsOf(ctx, splice);
+	if (friends.length == 0) {
+		spliceStmtManyNode(ctx, node, splice);
+		return;
+	}
+	const scope = befriend(ctx, friends);
+	spliceStmtManyNode(ctx, node, splice);
+	unfriend(scope, friends);
+}
+
+function spliceStmtManyNode(ctx: CheckerContext, node: Node, splice: Node): void {
 	const sd = splice.data as SpliceManyData;
 	if (ctx.condEvalDepth > 0) {
 		addError(ctx, "macro emits statements at a conditionally evaluated position: they would run even when this branch does not — give the call its own statement",
@@ -525,6 +537,17 @@ function spliceStmtMany(ctx: CheckerContext, node: Node, splice: Node): void {
 }
 
 export function checkStmt(ctx: CheckerContext, node: Node): void {
+	const friends = expansionFriendsOf(ctx, node);
+	if (friends.length == 0) {
+		checkStmtNode(ctx, node);
+		return;
+	}
+	const scope = befriend(ctx, friends);
+	checkStmtNode(ctx, node);
+	unfriend(scope, friends);
+}
+
+function checkStmtNode(ctx: CheckerContext, node: Node): void {
 	match (node.kind) {
 		NodeKind.VariableDecl => checkVariableDecl(ctx, node),
 		NodeKind.FunctionDecl => {
@@ -569,6 +592,9 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 			ctx.stmtPosExpr = d.expr;
 			checkExpr(ctx, d.expr, null);
 			ctx.stmtPosExpr = prevStmtPos;
+			if (d.expr.kind == NodeKind.MacroInvocation && invokedMacroSym(ctx, d.expr) == null && !isDirectiveInvocation(d.expr)) {
+				addError(ctx, "invalid directive '@" + (d.expr.data as MacroInvocationData).macroName + "': no macro or compiler directive has this name", d.expr.location.line, d.expr.location.column);
+			}
 			if (d.expr.kind == NodeKind.SpliceMany) {
 				spliceStmtMany(ctx, node, d.expr);
 				return;
@@ -979,6 +1005,7 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	sym.state = SymbolState.Checking;
 
 	openScope(ctx.table, ScopeKind.Class);
+	ctx.table.current.privateAccess = sym;
 	// Register the class's generic parameters (e.g. T in `class Set<T>`) so member
 	// bodies — notably the constructor — can resolve them. Without this, a body
 	// expression like `new Map<T, T>()` inside the constructor fails lookupSymbol("T"),
@@ -1078,6 +1105,7 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 	}
 
 	openScope(ctx.table, ScopeKind.Class);
+	ctx.table.current.privateAccess = sym;
 	const prevActorName = ctx.currentActorName;
 	ctx.currentActorName = d.actorName;
 	for (const member of d.actorBody) {
@@ -1103,8 +1131,19 @@ function checkGenericOverride(ctx: CheckerContext, d: MethodDeclData, className:
 }
 
 function checkClassMember(ctx: CheckerContext, node: Node, className: string, classType: Type): void {
-	// DecoratedDecl wrapping a class member — unwrap and check the inner node
 	if (node == null) return;
+	const friends = expansionFriendsOf(ctx, node);
+	if (friends.length == 0) {
+		checkClassMemberNode(ctx, node, className, classType);
+		return;
+	}
+	const scope = befriend(ctx, friends);
+	checkClassMemberNode(ctx, node, className, classType);
+	unfriend(scope, friends);
+}
+
+function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string, classType: Type): void {
+	// DecoratedDecl wrapping a class member — unwrap and check the inner node
 	if (node.kind == NodeKind.DecoratedDecl) {
 		const dd = node.data as DecoratedDeclData;
 		if (dd.decoratedNode != null) checkClassMember(ctx, dd.decoratedNode, className, classType);
@@ -1508,6 +1547,19 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 		for (const prop of opd.patternProps) {
 			if (prop.kind == NodeKind.ObjectPatternProp) takenKeys.push((prop.data as ObjectPatternPropData).propKey);
 		}
+		const sourceStruct = destructuredStruct(iterType);
+		const sourceOwner = declaringSymOf(iterType);
+		for (const prop of opd.patternProps) {
+			if (sourceStruct == null) break;
+			if (prop.kind == NodeKind.ObjectPatternProp) {
+				refusePrivateField(ctx, sourceOwner, (prop.data as ObjectPatternPropData).propKey, prop.location.line, prop.location.column);
+			} else if (prop.kind == NodeKind.SpreadExpr && sourceStruct.typeNames != null) {
+				const rest: string[] = [];
+				for (const n of sourceStruct.typeNames) { if (takenKeys.indexOf(n) < 0) rest.push(n); }
+				const hidden = hiddenPrivateField(ctx, sourceOwner, rest);
+				if (hidden != "") refusePrivateField(ctx, sourceOwner, hidden, prop.location.line, prop.location.column);
+			}
+		}
 		for (const prop of opd.patternProps) {
 			if (prop.kind == NodeKind.SpreadExpr) {
 				const inner = (prop.data as SpreadExprData).spreadArg;
@@ -1545,6 +1597,11 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 			}
 		}
 	}
+}
+
+function destructuredStruct(t: Type | null): Type | null {
+	const s = peelToStructOrUnion(t);
+	return s != null && s.kind == TypeKind.Struct ? s : null;
 }
 
 function checkForInStmt(ctx: CheckerContext, node: Node): void {
@@ -2342,6 +2399,7 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 		call.flags = call.flags.incl(NodeFlag.Sem);
 		out.push(stmt);
 	} else if (expanded.kind == NodeKind.SpliceMany) {
+		const friends = expansionOf(ctx, stmt, sym.modulePath);
 		const emittedStmts = (expanded.data as SpliceManyData).spliceNodes;
 		const endsInValue = spliceEndsInValue(expanded);
 		if (endsInValue) gensymSplicePrefix(ctx, expanded);
@@ -2352,9 +2410,11 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 				(stmt.data as ExprStmtData).expr = emittedStmt;
 				emittedStmt = stmt;
 			}
+			markExpansion(ctx, emittedStmt, friends);
 			expandCollectStmt(ctx, emittedStmt, out, true);
 		}
 	} else {
+		markExpansion(ctx, stmt, expansionOf(ctx, stmt, sym.modulePath));
 		call.kind = expanded.kind;
 		call.data = expanded.data;
 		if (expanded.location != null) call.location = expanded.location;
@@ -3170,6 +3230,7 @@ function packContentView(shared: CheckerContext): CheckerContext {
 	view.interf = shared.interf;
 	view.interfSet = shared.interfSet;
 	view.importSet = shared.importSet;
+	view.shadowedImports = shared.shadowedImports;
 	return view;
 }
 
