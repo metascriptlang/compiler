@@ -6,6 +6,7 @@ import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLoc
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase } from "./types";
+import { peelThrough, PEEL_ALL } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
 import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, findExtension } from "./context";
 import {
@@ -1777,11 +1778,28 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				const fieldNames: string[] = [];
 				const fieldTypes: Type[] = [];
 				let pi = 0;
+				let spreadSeen = false;
 				while (pi < d.properties.length) {
 					checkExpr(ctx, d.properties[pi], null);
 					const rawFt = d.properties[pi].nodeType;
 					const ft = rawFt != null ? closureStorageType(rawFt) : rawFt;
 					if (ft != rawFt) d.properties[pi] = fitNode(ctx, d.properties[pi], ft, rawFt);
+					const spreadFields = pi < d.keys.length && d.keys[pi] == "..." && d.properties[pi].kind == NodeKind.SpreadExpr
+						? spreadFieldsOf((d.properties[pi].data as SpreadExprData).spreadArg.nodeType) : null;
+					if (spreadFields != null) {
+						spreadSeen = true;
+						for (let fi = 0; fi < spreadFields.typeNames.length; fi += 1) {
+							const fname = spreadFields.typeNames[fi];
+							if (fname.startsWith("__") || fi >= spreadFields.typeChildren.length) continue;
+							const at = fieldNames.indexOf(fname);
+							if (at >= 0) fieldTypes[at] = spreadFields.typeChildren[fi];
+							else { fieldNames.push(fname); fieldTypes.push(spreadFields.typeChildren[fi]); }
+						}
+						pi = pi + 1;
+						continue;
+					}
+					const at = spreadSeen && pi < d.keys.length ? fieldNames.indexOf(d.keys[pi]) : -1;
+					if (at >= 0 && d.keys[pi] != "..." && d.keys[pi] != "__computed__") { fieldTypes[at] = ft!; pi = pi + 1; continue; }
 					if (pi < d.keys.length) { fieldNames.push(d.keys[pi]); }
 					fieldTypes.push(ft!);
 					pi = pi + 1;
@@ -3013,6 +3031,16 @@ function refuseUnrelatedStructAs(ctx: CheckerContext, operand: Node, srcType: Ty
 	if (sameNominal(source, target) || valueStructBaseDepth(source, target) > 0 || valueStructBaseDepth(target, source) > 0) return false;
 	addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + ": a struct converts only to itself, a distinct of it, or a struct it extends", line, column);
 	return true;
+}
+
+function spreadFieldsOf(t: Type | null): Type | null {
+	if (t == null) return null;
+	const base = unwrapRef(t);
+	const peeled = base == null ? null : peelThrough(base, PEEL_ALL);
+	const body = peeled == null ? base : peeled;
+	if (body == null || body.kind != TypeKind.Struct || body.typeNames == null || body.typeChildren == null) return null;
+	if (body.sym != null && hasFlag(body.sym, SymbolFlag.ImportC)) return null;
+	return body;
 }
 
 function viewedObject(t: Type | null): Type | null {
