@@ -116,6 +116,8 @@ test "module globals are destroyed in reverse declaration order at program end" 
 	assert destroys.length == 2;
 	assert destroyedGlobal(destroys[0]) == "second";
 	assert destroyedGlobal(destroys[1]) == "first";
+	assert destroys[0].resolvedSym != null && destroys[0].resolvedSym.name == "second";
+	assert destroys[1].resolvedSym != null && destroys[1].resolvedSym.name == "first";
 }
 
 test "a program without owned globals carries no global destroys" {

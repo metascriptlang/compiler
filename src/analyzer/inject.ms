@@ -2515,8 +2515,17 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	const moduleScope = popScope(dctx);
 	for (const s of generateCleanup(moduleScope, program.location)) d.programStmts.push(s);
 	if (dctx.globalsToDestroy.length > 0) {
-		const exitScope: DrcScope = { varsToCleanup: dctx.globalsToDestroy, wasMoved: [], preStmts: [], pendingStmts: [], needsTry: false, isLoop: false, isFunction: false };
-		const destroys = makeBlock(generateCleanup(exitScope, program.location), program.location);
+		const perGlobal: Node[] = [];
+		for (let i = dctx.globalsToDestroy.length - 1; i >= 0; i -= 1) {
+			const vi = dctx.globalsToDestroy[i];
+			const one: DrcScope = { varsToCleanup: [vi], wasMoved: [], preStmts: [], pendingStmts: [], needsTry: false, isLoop: false, isFunction: false };
+			const cleanup = generateCleanup(one, program.location);
+			if (cleanup.length == 0) continue;
+			const block = makeBlock(cleanup, program.location);
+			block.resolvedSym = vi.sym;
+			perGlobal.push(block);
+		}
+		const destroys = makeBlock(perGlobal, program.location);
 		destroys.flags = destroys.flags.incl(NodeFlag.GlobalDestroys);
 		d.programStmts.push(destroys);
 	}
