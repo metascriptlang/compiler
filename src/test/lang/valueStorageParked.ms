@@ -1,11 +1,11 @@
 
-// Parked from valueStorage.ms for two open compiler defects. The first four
-// tests hit the aggregate key-equality cold-path fallback: a synthesized `==`
-// on a Set-typed map/set key emits raw C operands when the op registry is
-// cold (card 2026-10-03-bitset-keyeq-cold-fallback). The last two hit the
-// alias-analysis symbol-loss defect (card
-// 2026-10-03-selfhost-noop-perturbation-flips-checker). Each group returns
-// with its card's fix; the file stays unregistered in the lang tier index.
+// Parked from valueStorage.ms for the alias-analysis symbol-loss defect
+// (card 2026-10-03-selfhost-noop-perturbation-flips-checker): the
+// `let copied = original; copied[0] = ...; copied = new Array(0)` shape loses
+// the field-path root's resolvedSym under a cold cache. The three key-equality
+// tests that were parked here returned to valueStorage.ms on 2026-10-04 (their
+// cold fallback did not reproduce on main e68761b9). This file stays
+// unregistered in the lang tier index until its card lands.
 enum AggregateVectorFlagParked {
 	F0, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, F13, F14, F15,
 	F16, F17, F18, F19, F20, F21, F22, F23, F24, F25, F26, F27, F28, F29, F30, F31,
@@ -43,42 +43,4 @@ test "valueStorage: nested aggregate-bitset vector copies retain independent inn
 	assert copied[0][0].has(AggregateVectorFlagParked.F0);
 	copied = new Array(0);
 	assert original[0][0].has(AggregateVectorFlagParked.F64);
-}
-
-struct AggregateBitSetKeyParked { bits: BitSet<AggregateVectorFlagParked>; id: int32; }
-
-test "valueStorage: equal aggregate-bitset map keys overwrite and delete one entry" {
-	const first = (0 as BitSet<AggregateVectorFlagParked>).incl(AggregateVectorFlagParked.F0).incl(AggregateVectorFlagParked.F64);
-	const equal = (0 as BitSet<AggregateVectorFlagParked>).incl(AggregateVectorFlagParked.F64).incl(AggregateVectorFlagParked.F0);
-	const map: HashMap<BitSet<AggregateVectorFlagParked>, int32> = new HashMap();
-	map.set(first, 17);
-	map.set(equal, 23);
-	assert map.size == 1;
-	const found = map.get(first);
-	assert found != null;
-	if (found != null) { assert found == 23; }
-	assert map.delete(equal);
-	assert !map.has(first);
-}
-
-test "valueStorage: equal aggregate-bitset set members occupy one slot" {
-	const first = (0 as BitSet<AggregateVectorFlagParked>).incl(AggregateVectorFlagParked.F0).incl(AggregateVectorFlagParked.F64);
-	const equal = (0 as BitSet<AggregateVectorFlagParked>).incl(AggregateVectorFlagParked.F64).incl(AggregateVectorFlagParked.F0);
-	const set: HashSet<BitSet<AggregateVectorFlagParked>> = new HashSet();
-	set.add(first);
-	set.add(equal);
-	assert set.size == 1;
-	assert set.delete(equal);
-	assert !set.has(first);
-}
-
-test "valueStorage: struct keys compare aggregate-bitset fields by their values" {
-	const first = (0 as BitSet<AggregateVectorFlagParked>).incl(AggregateVectorFlagParked.F0).incl(AggregateVectorFlagParked.F64);
-	const equal = (0 as BitSet<AggregateVectorFlagParked>).incl(AggregateVectorFlagParked.F64).incl(AggregateVectorFlagParked.F0);
-	const map: HashMap<AggregateBitSetKeyParked, int32> = new HashMap();
-	map.set({ bits: first, id: 7 }, 17);
-	const found = map.get({ bits: equal, id: 7 });
-	assert found != null;
-	if (found != null) { assert found == 17; }
-	assert !map.has({ bits: equal, id: 8 });
 }
