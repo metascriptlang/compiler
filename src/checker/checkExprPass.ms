@@ -484,6 +484,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// replaces the AST node AFTER the variable's symbol type is set.
 			markNamesUsed(ctx, node);
 			const expanded = callEvalComptimeBlock(node, ctx);
+			const staticType = expanded.nodeType;
 			let expandedValue = expanded;
 			const hoists = isHoistingSplice(ctx, node, expanded);
 			if (hoists) {
@@ -497,7 +498,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			node.resolvedSym = null;
 			node.flags = 0 as BitSet<NodeFlag>;
 			node.variantSlot = 0;
-			checkExpr(ctx, node, expectedType);
+			const valueType = expectedType != null || hoists || staticType == null || isUnresolvedType(staticType)
+				|| staticType.kind == TypeKind.Error || staticType.kind == TypeKind.Void || isNodeGraphType(staticType)
+				? expectedType : staticType;
+			checkExpr(ctx, node, valueType);
 			if (hoists) bindRefsToHoistedPrefix(node, expanded);
 			node.nodeType = node.nodeType; return;
 		},
