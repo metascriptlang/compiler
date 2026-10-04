@@ -236,3 +236,36 @@ test "macro source forms: getType on a call with an explicit type argument answe
 	assert !failed.ok;
 	assert failed.error == 7;
 }
+
+macro inheritTypeArgument(code: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: code.line,
+		column: code.column,
+		callee: bindSym("explicitFailure"),
+		arguments: [code],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+macro ownTypeArgument(code: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: code.line,
+		column: code.column,
+		callee: bindSym("explicitFailure"),
+		arguments: [code],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+		typeArg: "string",
+	};
+}
+
+test "macro source forms: a call a macro returns without type arguments takes the ones written at the macro call" {
+	assert resultCode(inheritTypeArgument<int32>(3)) == 2;
+}
+
+test "macro source forms: a call a macro builds with its own typeArg binds T from it" {
+	assert resultCode(ownTypeArgument(3)) == 2;
+}
