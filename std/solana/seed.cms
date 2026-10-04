@@ -13,19 +13,8 @@ extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 extern function msSolTableAddress(table: Span<SeedSlice>): uint64 from "msSolSpanAddress";
 extern function msSolSeedsAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
 extern function msSolSignersAddress(table: Readonly<Span<SignerSeeds>>): uint64 from "msSolSpanAddress";
-extern function msSolCreateProgramAddress(
-	seeds: uint64,
-	seedCount: uint64,
-	programId: uint64,
-	out: uint64,
-): uint64;
-extern function msSolTryFindProgramAddress(
-	seeds: uint64,
-	seedCount: uint64,
-	programId: uint64,
-	out: uint64,
-	bump: uint64,
-): uint64;
+extern function msSolSha256(slices: uint64, count: uint64, out: uint64): uint64;
+extern function msSolCurveValidatePoint(curve: uint64, point: uint64, result: uint64): uint64;
 
 const MAX_SEEDS: uint64 = 16;
 const MAX_SEED_LENGTH: uint64 = 32;
@@ -102,14 +91,30 @@ export function signingOf(signers: Readonly<Span<SignerSeeds>>): Signing {
 	return { table: msSolSignersAddress(signers), count: signers.length as uint64 };
 }
 
+const EDWARDS: uint64 = 0;
+
+function offCurve(input: Span<SeedSlice>, count: uint64, out: uint64): boolean {
+	const _hashed = msSolSha256(msSolTableAddress(input), count, out);
+	return msSolCurveValidatePoint(EDWARDS, out, 0) != 0;
+}
+
+function tail(ref input: SeedSlice[18], at: uint64, program: uint64): void {
+	input[at as int32] = { address: program, length: 32 };
+	input[(at + 1) as int32] = seedText("ProgramDerivedAddress");
+}
+
 function createChecked(
 	table: uint64,
 	count: uint64,
 	program: uint64,
 ): Result<Pubkey, ProgramError> {
+	let input: SeedSlice[18] = [];
+	if (count > 0) { msSolCopy(msSolTableAddress(input), table, count * 16); }
+	tail(input, count, program);
 	let key = Pubkey.zero();
-	const status = msSolCreateProgramAddress(table, count, program, msSolSpanAddress(key.bytes));
-	if (status != 0) { return Result.err(ProgramError.invalidSeeds()); }
+	if (!offCurve(input, count + 2, msSolSpanAddress(key.bytes))) {
+		return Result.err(ProgramError.invalidSeeds());
+	}
 	return Result.ok(key);
 }
 
@@ -130,18 +135,21 @@ export function findAt(
 	if (!fits(table, count, MAX_SEEDS - 1)) {
 		return Result.err(ProgramError.maxSeedLengthExceeded());
 	}
+	let input: SeedSlice[18] = [];
+	let bump: uint8[1] = [255];
+	if (count > 0) { msSolCopy(msSolTableAddress(input), table, count * 16); }
+	input[count as int32] = { address: msSolSpanAddress(bump), length: 1 };
+	tail(input, count + 1, program);
 	let found: ProgramAddress = { key: Pubkey.zero(), bump: 0 };
-	let bump: uint8[1] = [0];
-	const status = msSolTryFindProgramAddress(
-		table,
-		count,
-		program,
-		msSolSpanAddress(found.key.bytes),
-		msSolSpanAddress(bump),
-	);
-	if (status != 0) { return Result.err(ProgramError.invalidSeeds()); }
-	found.bump = bump[0];
-	return Result.ok(found);
+	const out = msSolSpanAddress(found.key.bytes);
+	for (let attempt = 0; attempt < 255; attempt++) {
+		bump[0] = (255 - attempt) as uint8;
+		if (offCurve(input, count + 3, out)) {
+			found.bump = bump[0];
+			return Result.ok(found);
+		}
+	}
+	return Result.err(ProgramError.invalidSeeds());
 }
 
 export function createAddress(

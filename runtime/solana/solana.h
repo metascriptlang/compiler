@@ -63,6 +63,7 @@ void msSolHostCopy(uint64_t destination, uint64_t source, uint64_t length);
 void msSolHostFill(uint64_t destination, uint8_t value, uint64_t length);
 int32_t msSolHostCompare(uint64_t left, uint64_t right, uint64_t length);
 uint64_t msSolHostSha256(uint64_t slices, uint64_t count, uint64_t out);
+uint64_t msSolHostCurveValidatePoint(uint64_t curve, uint64_t point, uint64_t result);
 uint64_t msSolHostCreateProgramAddress(uint64_t seeds, uint64_t count, uint64_t programId, uint64_t out);
 uint64_t msSolHostTryFindProgramAddress(uint64_t seeds, uint64_t count, uint64_t programId, uint64_t out, uint64_t bumpOut);
 uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint64_t accountInfoCount, uint64_t signers, uint64_t signerCount);
@@ -241,6 +242,10 @@ static inline uint64_t msSolSha256(uint64_t slices, uint64_t count, uint64_t out
     return ((uint64_t (*)(uint64_t, uint64_t, uint64_t))0x11f49d86ULL)(slices, count, out);
 }
 
+static inline uint64_t msSolCurveValidatePoint(uint64_t curve, uint64_t point, uint64_t result) {
+    return ((uint64_t (*)(uint64_t, uint64_t, uint64_t))0xaa2607caULL)(curve, point, result);
+}
+
 static inline void msSolSetReturnData(const uint8_t* data, int64_t length) {
     ((void (*)(uint64_t, uint64_t))0xa226d3ebULL)((uint64_t)data, (uint64_t)length);
 }
@@ -309,6 +314,10 @@ static inline uint64_t msSolGetRent(uint64_t out) {
 
 static inline uint64_t msSolSha256(uint64_t slices, uint64_t count, uint64_t out) {
     return msSolHostSha256(slices, count, out);
+}
+
+static inline uint64_t msSolCurveValidatePoint(uint64_t curve, uint64_t point, uint64_t result) {
+    return msSolHostCurveValidatePoint(curve, point, result);
 }
 
 static inline void msSolSetReturnData(const uint8_t* data, int64_t length) {
