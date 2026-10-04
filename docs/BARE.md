@@ -498,8 +498,8 @@ fails the build) and `solanaEntryHostTable.ms` (the host simulator).
 - **Here.** `MS_SOL_MAX_ACCOUNTS` is 255 unless `--passC=-DMS_SOL_MAX_ACCOUNTS=n` says otherwise
   (the reference's second macro argument); `0` and `256` and up are a build error. `msSolParse`
   keeps the first `n` accounts and walks past the rest to the instruction data. The host simulator
-  parses the same way into a static table, so a `run` with 256 accounts sees 255 where the runtime
-  would refuse the instruction.
+  parses accepted inputs the same way into a static table, but `run` refuses more than 255 accounts
+  with `REFUSED` and `MaxAccountsExceeded` before calling the program, as the runtime does.
 - **Measured** on the base `4e78ec143` plus this change, platform-tools v1.57, LiteSVM 1.4.1,
   `--os=solana`, the control built from the base tree at a path of the same length:
   - Frame: the entry's table is `r10-4096` to `r10-2056`, 2,040 bytes of the 4,096; the parser is
@@ -516,6 +516,10 @@ fails the build) and `solanaEntryHostTable.ms` (the host simulator).
   - `examples/escrow/program.ms`: `.so` 52,592 → 49,056 B, `.text` 51,960 → 48,512 B; make 35,695 →
     35,156 CU, take 32,647 → 32,139, refund 23,450 → 23,113, the refused make 611 → 552;
     `tools/solana/escrow.mjs` passes. `heapExhausted.mjs` passes all 173 checks.
+  - Host refusal rechecked with the HEAD-matched `e62958002` compiler and the corrected
+    `solanaEntryHostTable.ms` guard: 3 and 255 accounts preserve the table/data/program id;
+    256 returns `REFUSED` without entering the program. Command:
+    `/tmp/std-solana-control-e62958002 run src/test/guard/solanaEntryHostTable.ms`; output `GUARD-OK`.
 - **Not measured.** `--passC=-flto`, which could inline the program's `Init000` into the entry and
   add its frame to the table; a Windows host; a validator (LiteSVM only).
 
