@@ -56,6 +56,7 @@ import {
 import { CheckerContext, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { lookupModuleCtx } from "../../checker/instantiate";
+import { isUnresolvedType } from "../../checker/types";
 import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
@@ -1525,15 +1526,15 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 				addError(ctx, `Macro '${macroName}': getTypeArg() supports a single type argument, got '${typeArg}'`, node.location.line, node.location.column);
 				return node;
 			}
-			const argSym = lookupSymbol(ctx.table, typeArg);
-			if (argSym == null || argSym.symbolType == null) {
+			const argType = resolveAnnotation(typeArg, ctx, 0, 0);
+			if (argType == null || isUnresolvedType(argType)) {
 				addError(ctx, `Macro '${macroName}': getTypeArg() cannot resolve type '${typeArg}' at the call site`, node.location.line, node.location.column);
 				return node;
 			}
-			const at = peelToImpl(argSym.symbolType, ctx);
+			const at = peelToImpl(argType, ctx);
 			if (at == null) return node;
 			const implementation = mapTypeToAst(at, node.location, true);
-			implementation.nodeType = argSym.symbolType;
+			implementation.nodeType = argType;
 			return createNodeAt(NodeKind.TypeAssertion, {
 				asExpr: nodeToASTLiteral(implementation, node.location, false),
 				asType: "Node",
