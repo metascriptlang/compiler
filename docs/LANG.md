@@ -646,7 +646,7 @@ A `struct` or `interface` field takes `@name` or `@name(args)` decorators before
 struct Accounts {
     @signer @writable maker: Pubkey;
     @seeds("config", mint) @bump(config.bump) config: Pubkey;
-    @address(Pubkey.systemProgram()) vault: Pubkey;
+    @address(SYSTEM_PROGRAM_ID) vault: Pubkey;
 }
 ```
 

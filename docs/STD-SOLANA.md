@@ -185,7 +185,7 @@ A CPI lists its accounts and writes its data where the call is written, and take
 let storage: uint8[12] = [];
 const length = putU64(storage, putU32(storage, 0, 2), lamports);
 const sent = invoke(
-	Pubkey.systemProgram(),
+	SYSTEM_PROGRAM_ID,
 	[InstructionAccount.writableSigner(source), InstructionAccount.writable(destination)],
 	storage,
 	length,
