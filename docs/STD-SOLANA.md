@@ -269,7 +269,6 @@ Each row is a workaround the toolkit carries until the compiler card under `~/me
 
 | Gap | Workaround in std/solana | Card |
 |---|---|---|
-| A module-level `const` initialized by a `@comptime` call is not folded under `--os=solana` (E02) | well-known program ids are static functions returning a `@comptime { … }` block | `2026-10-01-solana-module-const-from-comptime-call` |
 | Every enum is 4 bytes; the reference sizes an enum by its range (1 byte up to 256 members) | account fields store `uint8` and expose the enum through an extension | `2026-10-01-enum-storage-width` |
 | A `private` struct field crashes msc on C and is not enforced on JS, so a proof cannot hide its `Account` | proofs come only from the verifiers by convention; review is the guard | `2026-10-01-proof-conversion-outside-module` |
 | `msc test` on a module emits its uninstantiated generics (with `try` between generics, or instantiated from a type declared under `when (testBuild)`) | verifiers keep their generic part to `T.discriminator()` and `sizeof(T)`; proof tests live in `std/solana/test.cms` | `2026-10-01-msc-test-emits-uninstantiated-generic-with-try` |
