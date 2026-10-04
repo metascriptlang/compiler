@@ -22,7 +22,7 @@ import {
 import { writeFile, ensureDir, exists, readDir, remove } from "std/fs";
 import { join, dirname, basename } from "std/fs/path";
 import { writeStderr } from "std/io";
-import { CliOptions, MODE_DANGER, buildCpu } from "./options";
+import { CliOptions, MODE_DANGER, buildCpu, newCliOptions, applyArgs } from "./options";
 import { renameReplace, atomicWriteFile, stopBuild } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
 import { managedZigCompiler } from "./toolchain";
@@ -234,7 +234,6 @@ function sbfCompilerBuiltins(): string {
 
 // Link SBF objects into a deployable Solana program (.so).
 //
-// One `ld.lld` invocation — no bitcode round-trip and no third-party linker.
 // The previous pipeline (clang -emit-llvm → llvm-link → `sbpf-linker` installed
 // via cargo) is gone: objects compiled for the real `sbf` target link directly,
 // and ld.lld ships inside platform-tools. --gc-sections drops unreferenced
@@ -244,7 +243,7 @@ function sbfCompilerBuiltins(): string {
 // The deploy artifact is the linked file passed through `llvm-objcopy --strip-all`, as
 // `cargo build-sbf` does; the unstripped link stays beside it as `<out>.debug`, the name
 // `cargo build-sbf --debug` gives its copy, unless `strip` asks for none.
-export function linkSolana(oFiles: string[], outBinary: string, strip: boolean): Result<void, ProcessError> {
+export function linkSolana(oFiles: string[], outBinary: string, clang: string, lto: string, mode: number, strip: boolean): Result<void, ProcessError> {
 	const lld = resolveSbfLinker();
 	if (lld == "") {
 		return Result.err({
@@ -258,6 +257,12 @@ export function linkSolana(oFiles: string[], outBinary: string, strip: boolean):
 		});
 	}
 	ensureDir(dirname(outBinary));
+	let inputs = oFiles;
+	if (sbfLto(lto)) {
+		const merged = mergeSbfBitcode(lld, clang, oFiles, outBinary, mode);
+		if (!merged.ok) return Result.err(merged.error);
+		inputs = [merged.value];
+	}
 	const scriptPath = `${outBinary}.ld`;
 	const w = writeFile(scriptPath, SBPF_LINK_SCRIPT);
 	if (!w.ok) {
@@ -299,7 +304,7 @@ export function linkSolana(oFiles: string[], outBinary: string, strip: boolean):
 		"-o",
 		unstripped,
 	];
-	for (const oFile of oFiles) args.push(oFile);
+	for (const oFile of inputs) args.push(oFile);
 	const builtins = sbfCompilerBuiltins();
 	if (builtins != "") args.push(builtins);
 	const r = execFileCapture(lld, args);
@@ -321,6 +326,23 @@ export function linkSolana(oFiles: string[], outBinary: string, strip: boolean):
 		}
 	}
 	return Result.ok(null);
+}
+
+function sbfLto(lto: string): boolean {
+	return lto == "thin" || lto == "full";
+}
+
+function mergeSbfBitcode(lld: string, clang: string, oFiles: string[], outBinary: string, mode: number): Result<string, ProcessError> {
+	const level = mode == MODE_DANGER ? "3" : "2";
+	const bitcode = `${outBinary}.lto.bc`;
+	const mergeArgs = ["--threads=1", "-r", "--plugin-opt=emit-llvm", `--lto-O${level}`, "-o", bitcode];
+	for (const oFile of oFiles) mergeArgs.push(oFile);
+	const m = execFileCapture(lld, mergeArgs);
+	if (!m.ok) return Result.err(m.error);
+	const object = `${outBinary}.lto.o`;
+	const c = runCc({ path: clang, args: [] }, ["-target", SBF_TARGET, `-O${level}`, "-fPIC", "-fdata-sections", "-ffunction-sections", "-c", bitcode, "-o", object]);
+	if (!c.ok) return Result.err(c.error);
+	return Result.ok(object);
 }
 
 export function getCompilerName(ccOption: number, ccBinary: string): string {
@@ -513,7 +535,7 @@ function ltoDefaultOn(cc: string, targetOs: string): boolean {
 // target", so it takes thin LTO where that links and drops it (with a notice)
 // where it cannot. An explicit --lto= against a proven-broken pair fails loud.
 export function resolveLto(opts: CliOptions): void {
-	const cc = getCompilerName(opts.ccCompiler, opts.ccBinary);
+	const cc = opts.targetOs == "solana" ? "clang" : getCompilerName(opts.ccCompiler, opts.ccBinary);
 	const ccName = isZigCC(cc) ? "zig cc" : cc;
 	if (opts.lto == "") {
 		if (opts.mode == MODE_DANGER && ltoDefaultOn(cc, opts.targetOs)) {
@@ -577,6 +599,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 		// Per-symbol sections so the --gc-sections at link time can strip what
 		// the program does not reach.
 		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
+		if (sbfLto(opts.lto)) flags = appendFlag(flags, "-flto");
 		const rtDir = resolveRuntimeDir();
 		if (rtDir != "") flags = appendFlag(appendFlag(flags, "-isystem"), quoteCcArg(`${rtDir}/runtime/freestanding`));
 		if (opts.passC != "") flags = appendFlag(flags, opts.passC);
@@ -1297,6 +1320,19 @@ export function archiveStatic(oFiles: string[], outArchive: string): Result<void
 // Get the runtime directory path (for -I include path).
 export function getRuntimeDir(): string {
 	return resolveRuntime();
+}
+
+test "an SBF build with LTO compiles bitcode, and one without LTO native objects" {
+	const lto = newCliOptions();
+	assert applyArgs(lto, ["--os=solana", "--danger"], 0).ok;
+	resolveLto(lto);
+	assert lto.lto == "thin";
+	assert cliCompileFlags(lto).indexOf("-flto", 0) >= 0;
+	const plain = newCliOptions();
+	assert applyArgs(plain, ["--os=solana"], 0).ok;
+	resolveLto(plain);
+	assert plain.lto == "off";
+	assert cliCompileFlags(plain).indexOf("-flto", 0) < 0;
 }
 
 test "a cross build without --cpu targets x86_64, --cpu names the triple's cpu" {

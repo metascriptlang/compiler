@@ -3199,7 +3199,7 @@ setGlobalHookOwners(sharedHookOwners);
 			throw new Error(BUILD_STOPPED);
 		}
 	} else if (opts.targetOs == "solana") {
-		const linkRes = linkSolana(oFiles, outBinary, opts.strip);
+		const linkRes = linkSolana(oFiles, outBinary, opts.ccBinary, opts.lto, opts.mode, opts.strip);
 		if (!linkRes.ok) {
 			printDiag(`${error("error")}: SBF link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 			if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
