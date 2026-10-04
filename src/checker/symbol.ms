@@ -382,6 +382,20 @@ export function moduleScopeSymbols(table: SymbolTable): Symbol[] {
 	return out;
 }
 
+// Type aliases bound between the current scope and the module scope: a generic
+// instance's parameters (`T` = the concrete type) and local aliases.
+export function enclosingTypeAliases(table: SymbolTable): Symbol[] {
+	const out: Symbol[] = [];
+	let scope = table.current;
+	while (scope != null && scope.scopeKind != ScopeKind.Module) {
+		for (const sym of scope.symbols.values()) {
+			if (sym.symbolKind == SymbolKind.TypeAlias) out.push(sym);
+		}
+		scope = scope.parent;
+	}
+	return out;
+}
+
 // ===== Overload Helpers =====
 
 export function hasOverloads(sym: Symbol): boolean {

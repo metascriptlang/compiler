@@ -600,6 +600,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// codegen, because the post-check evaluateComptimeBlocks pass
 			// replaces the AST node AFTER the variable's symbol type is set.
 			markNamesUsed(ctx, node);
+			if (insideGenericTemplate(ctx)) {
+				node.nodeType = expectedType != null ? expectedType : inferredType();
+				return;
+			}
 			const expanded = callEvalComptimeBlock(node, ctx);
 			const staticType = expanded.nodeType;
 			let expandedValue = expanded;
@@ -3239,4 +3243,11 @@ test "a write target crossing a graph back-edge is rejected" {
 	through.nodeType = null as unknown as Type;
 	assert !writeThroughGraphBackedge(edge);
 	assert writeThroughGraphBackedge(through);
+}
+
+function insideGenericTemplate(ctx: CheckerContext): boolean {
+	if (ctx.inGenericContext > 0) return true;
+	const current = ctx.currentFunction;
+	if (current == null || current.instantiatedFrom != null) return false;
+	return hasGenericParams(current.symbolType) || isGenericFn(routineFlags(current.declNode));
 }

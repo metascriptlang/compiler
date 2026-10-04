@@ -21,7 +21,7 @@ import { RaiserContext, createContext, load, execute } from "../../raiser/contex
 import { RaiserVM, execModule, createVM } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction } from "../../raiser/module";
 import { RaiserFuncMap } from "./context";
-import { moduleScopeSymbols, makeSymbolState } from "../../checker/symbol";
+import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
@@ -225,11 +225,17 @@ function seedWireEnums(seeds: Symbol[]): void {
 }
 
 export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string): EngineMacroResult {
+	return compileIntoEngineSeeded(program, token, macroFnName, []);
+}
+
+function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, leadSeeds: Symbol[]): EngineMacroResult {
 	if (_engineToken != token) {
 		_engine = freshEngine();
 		_engineToken = token;
 	}
-	const seeds = moduleScopeSymbols(token.table);
+	const seeds: Symbol[] = [];
+	for (const s of leadSeeds) seeds.push(s);
+	for (const s of moduleScopeSymbols(token.table)) seeds.push(s);
 	const exts = seedExtensionsOf(token, null);
 	const declPath = getMacroDeclModulePath();
 	if (declPath != "") {
@@ -313,7 +319,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 }
 
 export function evalProgramViaEngine(program: Node, token: CheckerContext, fnName: string): RaiserContext {
-	const result = compileMacroIntoEngine(program, token, fnName);
+	const result = compileIntoEngineSeeded(program, token, fnName, enclosingTypeAliases(token.table));
 	if (result == null as unknown as EngineMacroResult) return createContext();
 	if (result.errors != null) {
 		for (const e of result.errors) {
