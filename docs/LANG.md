@@ -1574,10 +1574,10 @@ Measured on C (msc b899f456). The JS backend does not check moves yet. It accept
 above, keeps the element, and does not empty a moved field (`h.f` still holds its value).
 
 A struct `onDestroy` hook must tolerate a zeroed, moved-from value: a moved-from value is reset field by
-field (plain fields too) and its hook still runs on the zeros, unless a `wasMoved`/destroy pair is elided,
-which happens only when no call that can raise lies between the move and the scope end. Hooks run on C only.
-Measured on C drc and orc (tree e9d78eecbad9d27d2e9d1fb61a6f812ed827ebc6): `const t = mk(9); const h = { r: t, tag: "t" };
-console.log("end");` prints `end`, `destroy R 9`, `destroy R 0`; without the `console.log` it prints `destroy R 9` once.
+field (plain fields too) and its hook still runs on the zeros. The `wasMoved`/destroy pair is elided only inside
+one block; a scope whose calls can raise keeps its destroys in a `finally`, so the pair stays. Hooks run on C only.
+Measured on C drc and orc (tree 1df797bce2240b8279206627046b90b5e5099429): `const t = mk(9); const h = { r: t, tag: "t" }; console.log("end");`
+prints `end`, `destroy R 9`, `destroy R 0`; with `t` a literal and no call in the function it prints `destroy R 4` once.
 ```typescript
 // Execute at scope end (LIFO order)
 function process(): void {
