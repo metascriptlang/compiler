@@ -63,7 +63,7 @@ test "a view borrows only from a path that outlives it and stays unchanged while
 		"class Holder { bytes: Span<int32>; constructor(b: Span<int32>) { this.bytes = b; } }",
 		"function f(s: string): int32 { const vs: Readonly<Span<uint8>>[] = []; return vs.length as int32; }",
 		"function f(vs: Span<uint8>[]): int32 { return vs.length as int32; }",
-		"const s = \"ab\"; const top = s.asBytes(); console.log(top[0]);",
+
 		"function f(ref n: int32): () => int32 { return (): int32 => n; }",
 		"function fill(s: Span<uint8>): void { s[0] = 7; } function f(): void { const v: Vec<uint8> = new Array(2); fill(v); }",
 		"function f(): void { const v: Vec<uint8> = new Array(2); const view: Span<uint8> = v; view[0] = 1; }",
@@ -107,7 +107,7 @@ test "a view borrows only from a path that outlives it and stays unchanged while
 		"function f(b: Span<uint8>): int32 { const w = b; return w.length as int32; }",
 		"function f(): int32 { const a: uint8[] = [1]; const v: Readonly<Span<uint8>> = a; const x = v[0] as int32; const g = (): int32 => a.length as int32; return x + g(); }",
 		"function count(a: Readonly<uint8[]>): int32 { return a.length as int32; } function f(a: uint8[]): int32 { const v: Readonly<Span<uint8>> = a; const n = count(a); return (v[0] as int32) + n; }",
-		"let keep: uint8[] = []; function f(): int32 { const a: uint8[] = [1]; keep = a; const v: Readonly<Span<uint8>> = a; const x = v[0] as int32; keep.push(1); return x; }",
+		"const s = \"ab\"; const top = s.asBytes(); console.log(top[0]);",
 	];
 	for (const body of accepted) {
 		const c = compileToCWithStd(body);

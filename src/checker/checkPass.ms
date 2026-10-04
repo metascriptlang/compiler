@@ -789,6 +789,7 @@ function refuseStoredView(ctx: CheckerContext, node: Node, d: VariableDeclData, 
 		refuseNestedView(ctx, "'" + d.declName + "'", varType, d.nameLocation.line, d.nameLocation.column);
 		return;
 	}
+	if (d.declKind == DeclKind.Const) return;
 	const view = findViewType(varType);
 	if (view == null) return;
 	addError(ctx, "'" + d.declName + "' lives for the whole program and cannot hold " + typeDisplayName(view)
