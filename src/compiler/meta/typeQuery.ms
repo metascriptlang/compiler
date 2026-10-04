@@ -1,11 +1,11 @@
 import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind, createNodeAt, makeLoc } from "../../ast/node";
 import { CheckerContext, addError } from "../../checker/context";
-import { lookupSymbol, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, hasFlag, isTypeSymbol, SymbolFlag } from "../../checker/symbol";
 import { builtinTypeNamed, ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { instantiateGenericBody, genericParamsOf, unwrapRefBase } from "../../checker/types";
 import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField } from "../../raiser/value";
 import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHeap } from "../../raiser/hostRegistry";
-import { mapTypeToAst, nodeToValue, boundSymAt, boundTypeOfObject } from "./bridge";
+import { mapTypeToAst, nodeToValue, boundSymAt, boundTypeOfObject, attachFieldTypeNodes } from "./bridge";
 import { sameType } from "../../checker/compat";
 import { activeMetaCtx, activeMetaLine, activeMetaColumn } from "./callbacks";
 import { boxString, unboxString } from "../../raiser/marshal";
@@ -144,7 +144,14 @@ function hostGetImpl(args: RaiserValue[]): RaiserValue {
 	if (sym == null) return namesBuiltinType(ctx, args[0]) ? raiserNil() : queryError(ctx, "node is not a symbol");
 	if (hasFlag(sym, SymbolFlag.Forward)) return queryError(ctx, stillDecoratedMessage(sym.name));
 	if (sym.declNode == null) return raiserNil();
-	return emitNode(sym.declNode);
+	const impl = emitNode(sym.declNode);
+	const objHeap = activeHostObjectHeap();
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap != null && arrHeap != null && isTypeSymbol(sym)) {
+		ensureShaped(sym, ctx);
+		if (sym.symbolType != null) attachFieldTypeNodes(impl, sym.declNode, unwrapRefBase(sym.symbolType), objHeap, arrHeap);
+	}
+	return impl;
 }
 
 function hostResolveType(args: RaiserValue[]): RaiserValue {

@@ -62,7 +62,7 @@ import {
 	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
-import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType } from "../../checker/types";
+import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase } from "../../checker/types";
 import { hasFlag, isTypeSymbol, SymbolFlag, overloadWinner } from "../../checker/symbol";
 import {
 	RaiserValueKind, RaiserValue,
@@ -436,6 +436,99 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], 
 //
 export function mapTypeToAst(t: Type | null, loc: SourceLocation, impl: boolean = false): Node {
 	return mapTypeToAstWith(t, loc, [], impl);
+}
+
+function namedTypeNode(name: string, sym: Symbol | null, loc: SourceLocation): Node {
+	const n = atomicTypeNode(name, loc);
+	if (sym != null) {
+		n.resolvedSym = sym;
+		n.flags = n.flags.incl(NodeFlag.BoundSym);
+	}
+	return n;
+}
+
+function isClassLike(sym: Symbol | null): boolean {
+	return sym != null && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor);
+}
+
+function isImplicitRef(inner: Type): boolean {
+	if (inner.kind == TypeKind.Array || inner.kind == TypeKind.Span) return true;
+	if (inner.kind == TypeKind.GenericInstance) return inner.typeExtra != null && isClassLike(unwrapRefBase(inner.typeExtra).sym);
+	return isClassLike(inner.sym);
+}
+
+export function fieldTypeNode(t: Type | null, loc: SourceLocation): Node {
+	if (t == null) return atomicTypeNode("<null>", loc);
+	if (t.kind == TypeKind.Ref && t.typeReturn != null && isImplicitRef(t.typeReturn)) return fieldTypeNode(t.typeReturn, loc);
+	const atomicName = atomicTypeName(t);
+	let result: Node;
+	if (atomicName != "") {
+		result = atomicTypeNode(atomicName, loc);
+	} else if (t.kind == TypeKind.Struct && isMaybeType(t) && t.typeReturn != null) {
+		result = createNodeAt(NodeKind.TypeUnion, {
+			typExprMembers: [fieldTypeNode(t.typeReturn, loc), atomicTypeNode("null", loc)],
+			discFieldName: "",
+			variantKeys: [],
+			discKind: "",
+		}, loc);
+	} else if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span) {
+		result = createNodeAt(NodeKind.TypeArray, {
+			typExprElement: fieldTypeNode(t.typeReturn, loc),
+			typExprSize: t.kind == TypeKind.SizedArray ? t.typeValue as number : -1,
+		}, loc);
+	} else if (t.kind == TypeKind.GenericInstance) {
+		const base = t.typeExtra != null ? unwrapRefBase(t.typeExtra) : null;
+		const args: Node[] = [];
+		for (const a of t.typeChildren) args.push(fieldTypeNode(a, loc));
+		result = createNodeAt(NodeKind.TypeGeneric, {
+			typExprBase: namedTypeNode(t.typeName, base != null ? base.sym : null, loc),
+			typExprArgs: args,
+		}, loc);
+	} else if (t.sym != null && isTypeSymbol(t.sym)) {
+		result = namedTypeNode(t.typeName != "" ? t.typeName : t.sym.name, t.sym, loc);
+	} else if ((t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr || t.kind == TypeKind.Borrow || t.kind == TypeKind.Sink
+			|| t.kind == TypeKind.Lent || t.kind == TypeKind.Var || t.kind == TypeKind.Distinct) && t.typeReturn != null) {
+		result = createNodeAt(NodeKind.TypeGeneric, {
+			typExprBase: atomicTypeNode(modifierName(t.kind), loc),
+			typExprArgs: [fieldTypeNode(t.typeReturn, loc)],
+		}, loc);
+	} else if (t.kind == TypeKind.Union) {
+		const members: Node[] = [];
+		for (const m of t.typeChildren) members.push(fieldTypeNode(m, loc));
+		result = createNodeAt(NodeKind.TypeUnion, { typExprMembers: members, discFieldName: "", variantKeys: [], discKind: "" }, loc);
+	} else {
+		return mapTypeToAst(t, loc);
+	}
+	result.nodeType = t;
+	return result;
+}
+
+function fieldTypeIn(shape: Type, name: string): Type | null {
+	for (let i = 0; i < shape.typeNames.length && i < shape.typeChildren.length; i = i + 1) {
+		if (shape.typeNames[i] == name) return shape.typeChildren[i];
+	}
+	return null;
+}
+
+export function attachFieldTypeNodes(impl: RaiserValue, decl: Node, shape: Type, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap): void {
+	if (impl.kind != RaiserValueKind.Object) return;
+	if (decl.kind == NodeKind.StructDecl || decl.kind == NodeKind.InterfaceDecl) {
+		const nodes: Node[] = [];
+		for (const name of (decl.data as InterfaceDeclData).interfaceFields) nodes.push(fieldTypeNode(fieldTypeIn(shape, name), decl.location));
+		heapObjectSetField(objHeap, impl.intVal, "typeExprs", serializeNodes(nodes, objHeap, arrHeap, false));
+		return;
+	}
+	if (decl.kind != NodeKind.ClassDecl) return;
+	const body = heapObjectGetField(objHeap, impl.intVal, "classBody");
+	if (body.kind != RaiserValueKind.Array) return;
+	for (let i = 0; i < heapArrayLen(arrHeap, body.intVal); i = i + 1) {
+		const member = heapArrayGet(arrHeap, body.intVal, i);
+		if (member.kind != RaiserValueKind.Object) continue;
+		const kind = heapObjectGetField(objHeap, member.intVal, "kind");
+		if (kind.kind != RaiserValueKind.Int || kind.intVal != NodeKind.PropertyDecl as int64) continue;
+		const node = fieldTypeNode(fieldTypeIn(shape, readStr(objHeap, member.intVal, "propName")), decl.location);
+		heapObjectSetField(objHeap, member.intVal, "typeExpr", nodeToValue(node, objHeap, arrHeap, false));
+	}
 }
 
 // ===== Serialization helpers (write to RaiserValue) =====
