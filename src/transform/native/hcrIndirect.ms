@@ -38,7 +38,7 @@ export function hcrFunctions(program: Node, aliveSet: Readonly<AliveSet>, module
 		const d = fn.data as FunctionDeclData;
 		const sym = fn.resolvedSym;
 		if (d.fnBody == null || d.fnFlags.indexOf("extern", 0) >= 0 || fn.nodeType == null || hasGenericParams(fn.nodeType) || isGenericFn(d.fnFlags)) continue;
-		if (sym != null && (hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.OverloadSig))) continue;
+		if (sym != null && (hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.CompileTime))) continue;
 		const symbol = mangledFunctionName(sym, d.fnName, sym != null ? sym.overloadIdx : 0);
 		if (facts.genericOwners.has(symbol) && facts.genericOwners.readonlyGet(symbol) != modulePath) continue;
 		if (seen.has(symbol)) continue;

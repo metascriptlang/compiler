@@ -1624,7 +1624,7 @@ function hcrFunctionSlot(info: ExportedSymInfo, fn: Symbol): string {
 
 function appendHcrFunctionExport(exports: HcrAbiExport[], moduleId: string, info: ExportedSymInfo, fn: Symbol): Result<void, string> {
 	if (hasFlag(fn, SymbolFlag.OverloadSig) || hasFlag(fn, SymbolFlag.Borrow)) return Result.ok(null);
-	if (hasGenericParams(fn.symbolType)) return Result.ok(null);
+	if (hasGenericParams(fn.symbolType) || hasFlag(fn, SymbolFlag.CompileTime)) return Result.ok(null);
 	if (fn.declNode != null && fn.declNode.kind == NodeKind.FunctionDecl && isGenericFn((fn.declNode.data as FunctionDeclData).fnFlags)) return Result.ok(null);
 	exports.push(createHcrAbiExport(moduleId, hcrFunctionSymbol(info, fn), hcrSignatureKey(fn.symbolType), hcrFunctionSlot(info, fn)));
 	return Result.ok(null);
