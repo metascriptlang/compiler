@@ -1886,6 +1886,18 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 		sgRecordSym(ctx, d.bindingLocation.line, d.bindingLocation.column, d.bindingLocation.column + d.forOfBinding.length, forSym, elemType, SymbolKind.Variable, d.forOfBinding, "", true);
 	}
 	checkStmt(ctx, d.forOfBody);
+	// Nim parity: skForVar is arAddressableConst (parampatterns.isAssignable) —
+	// same bucket as value params, so the same interior-write ban applies.
+	if (d.forOfPattern == null && isValueAggregateParam(elemType)) {
+		const forSym = node.resolvedSym;
+		if (forSym == null) {
+			addError(ctx, `internal: for-of binding '${d.forOfBinding}' has no checked symbol for mutation analysis`, node.location.line, node.location.column);
+		} else if (scanForMutation(d.forOfBody, forSym, true)) {
+			let mloc = findMutationLocation(d.forOfBody, forSym, true);
+			if (mloc.line <= 0) mloc = node.location;
+			addError(ctx, `cannot mutate value-type loop variable '${d.forOfBinding}': for-of binds a per-iteration copy; iterate by index to mutate the collection`, mloc.line, mloc.column);
+		}
+	}
 	exitLoopScope(ctx, saved);
 	restoreInitState(ctx.initTracker, oldInitState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
