@@ -75,6 +75,16 @@ test "comptimeCallFold: an overloaded @comptime function folds the overload each
 	assert callsLeft(c, "pick__") == 0, c.slice(0, 300);
 }
 
+test "comptimeCallFold: a @comptime block in a generic instance sees the type argument" {
+	const c = cOf(`struct P { x: int32; }
+		struct Q { y: int32; }
+		function code(this typeof P): uint64 { return 7101; }
+		function code(this typeof Q): uint64 { return 7202; }
+		function codeOf<T>(): uint64 { return @comptime { return T.code(); }; }
+		console.log(codeOf<P>(), codeOf<Q>());`);
+	assert c.includes("return 7101ULL;") && c.includes("return 7202ULL;"), c.slice(0, 300);
+}
+
 test "comptimeCallFold: the JS backend folds the same call" {
 	const js = compileProjectToJSWithStd([{ entryPath: "test/main.ms", entrySource: LIB + `
 		const PROGRAM: uint64 = digitSum("2222");
