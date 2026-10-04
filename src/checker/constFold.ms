@@ -97,7 +97,7 @@ export function isUntypedIntegerConstant(expr: Node, depth: int32): boolean {
 		const d = expr.data as BinaryExprData;
 		return !expr.flags.has(NodeFlag.UserOp) && isUntypedIntegerConstant(d.left, depth + 1) && isUntypedIntegerConstant(d.right, depth + 1);
 	}
-	if (expr.kind == NodeKind.UnaryExpr) return isUntypedIntegerConstant((expr.data as UnaryExprData).operand, depth + 1);
+	if (expr.kind == NodeKind.UnaryExpr) return !expr.flags.has(NodeFlag.UserOp) && isUntypedIntegerConstant((expr.data as UnaryExprData).operand, depth + 1);
 	return false;
 }
 
@@ -118,7 +118,7 @@ export function isUntypedConstant(expr: Node, depth: int32): boolean {
 		const d = expr.data as BinaryExprData;
 		return !expr.flags.has(NodeFlag.UserOp) && isUntypedConstant(d.left, depth + 1) && isUntypedConstant(d.right, depth + 1);
 	}
-	if (expr.kind == NodeKind.UnaryExpr) return isUntypedConstant((expr.data as UnaryExprData).operand, depth + 1);
+	if (expr.kind == NodeKind.UnaryExpr) return !expr.flags.has(NodeFlag.UserOp) && isUntypedConstant((expr.data as UnaryExprData).operand, depth + 1);
 	return false;
 }
 
@@ -137,7 +137,7 @@ export function isCompileTimeValue(expr: Node, depth: int32): boolean {
 		NodeKind.ObjectLiteral => allCompileTimeValues((expr.data as ObjectLiteralData).properties, depth),
 		NodeKind.SpreadExpr => isCompileTimeValue((expr.data as SpreadExprData).spreadArg, depth),
 		NodeKind.BinaryExpr => !expr.flags.has(NodeFlag.UserOp) && isCompileTimeValue((expr.data as BinaryExprData).left, depth) && isCompileTimeValue((expr.data as BinaryExprData).right, depth),
-		NodeKind.UnaryExpr => isCompileTimeValue((expr.data as UnaryExprData).operand, depth),
+		NodeKind.UnaryExpr => !expr.flags.has(NodeFlag.UserOp) && isCompileTimeValue((expr.data as UnaryExprData).operand, depth),
 		NodeKind.ConditionalExpr => isCompileTimeValue((expr.data as ConditionalExprData).ternaryCondition, depth)
 			&& isCompileTimeValue((expr.data as ConditionalExprData).ternaryConsequent, depth)
 			&& isCompileTimeValue((expr.data as ConditionalExprData).ternaryAlternate, depth),
@@ -199,7 +199,7 @@ export function exactUntypedInteger(expr: Node, depth: int32): Node {
 		NodeKind.UnaryExpr => {
 			const d = expr.data as UnaryExprData;
 			const operand = exactUntypedInteger(d.operand, depth + 1);
-			if (operand == null || (d.unaryOp != "-" && d.unaryOp != "+" && d.unaryOp != "~")) return none;
+			if (operand == null || expr.flags.has(NodeFlag.UserOp) || (d.unaryOp != "-" && d.unaryOp != "+" && d.unaryOp != "~")) return none;
 			const value = integerValueOf(operand);
 			if (d.unaryOp == "-" && value == signedMinValue(createPrimitive(TypeKind.Int64))) return none;
 			if (d.unaryOp == "~" && !integerValueFits(value, createPrimitive(TypeKind.Int32))) return none;
@@ -657,6 +657,7 @@ function foldBoolBinary(op: string, lb: boolean, rb: boolean, loc: SourceLocatio
 
 export function foldUnaryLiteral(op: string, operand: Node, node: Node): Node {
 	const loc = node.location;
+	if (node.flags.has(NodeFlag.UserOp)) return node;
 
 	match (operand.kind) {
 		NodeKind.BooleanLiteral => {

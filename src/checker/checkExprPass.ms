@@ -1210,12 +1210,14 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 			}
 			if ((d.unaryOp == "-" || d.unaryOp == "+" || d.unaryOp == "!" || d.unaryOp == "~")
-				&& operandType != null && !isNumeric(operandType) && !isStringLike(operandType)
+				&& operandType != null && !isStringLike(operandType)
+				&& !(d.unaryOp == "-" && d.operand.kind == NodeKind.NumberLiteral)
 				&& ctx.extensionRegistry != null) {
 				const unExt = resolveOperatorCall(ctx.table, ctx.extensionRegistry, d.unaryOp, [operandType]);
 				if (unExt != null) {
 					const unFnType = getExtFnType(unExt);
 					if (unFnType != null && unFnType.typeReturn != null) {
+						node.flags = node.flags.incl(NodeFlag.UserOp);
 						node.nodeType = unFnType.typeReturn; return;
 					}
 				}
