@@ -521,6 +521,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// bindSym: the macro pre-bound this identifier in its own module's
 			// scope — the user's scope must not re-resolve (or hijack) it.
 			const sym = resolveCalleeIdent(ctx, node);
+			if (sym == null && ctx.jsxMacroArgDepth > 0) {
+				const builtin = resolveAnnotation(d.name, ctx, 0, 0);
+				if (!isUnresolvedType(builtin) && builtin.kind != TypeKind.Null) { node.nodeType = builtin; return; }
+			}
 			if (sym == null) {
 					addError(ctx, `Undefined variable '${d.name}'`, node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
