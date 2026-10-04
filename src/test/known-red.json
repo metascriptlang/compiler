@@ -32,6 +32,7 @@
   },
   "suite": {},
   "tests": {
+
     "src/test/c/actor.ms > E2E C: 100 actors fan-out compiles": {"since":"3ed7bc2c","note":"E2E C tier, group \"compileToC returns not-ok\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
     "src/test/c/actor.ms > E2E C: S1/S3 — read-only field borrow in spawn thunk compiles": {"since":"3ed7bc2c","note":"E2E C tier, group \"compileToC returns not-ok\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
     "src/test/c/buffer.ms > E2E C: Buffer uses msStringConcat (no msBufferConcat)": {"since":"3ed7bc2c","note":"E2E C tier, group \"compileToC returns not-ok\" — 2026-09-21-e2e-c-tier-is-33-red-in-one-block.md"},
