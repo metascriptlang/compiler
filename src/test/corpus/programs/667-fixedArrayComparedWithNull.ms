@@ -1,4 +1,3 @@
-// @xfail(raiser): != null yields 1 on raiser (NIM-REF CT-25, fixed on wt/nim-raiser 2adb86ea, not landed)
 // @stdout: struct=false,true,false array=false,true,false,true
 // note: a value that is never null, a struct or a fixed array `T[N]`, compared with `null` answers false for `==` and true for `!=`, on either side of the operator. Same output on every backend.
 
