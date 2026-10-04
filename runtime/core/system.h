@@ -587,6 +587,26 @@ static inline void msFfiRelease(void* p) { msDecrefCyclic(p); }
 	__vv; \
 })
 
+#define msVariantHolds(mask, tag) ((((uint64_t)(mask)) >> (uint64_t)(tag)) & 1u)
+
+#define msVariantObject(u, mask, head, labels) (*({ \
+	__typeof__(u)* __vu = &(u); \
+	if (!msVariantHolds((mask), __vu->_tag)) msRaiseFieldError((head), (labels), (int64_t)__vu->_tag); \
+	__vu; \
+}))
+
+#define msVariantObjectVal(u, mask, head, labels) ({ \
+	__typeof__(u) __vv = (u); \
+	if (!msVariantHolds((mask), __vv._tag)) msRaiseFieldError((head), (labels), (int64_t)__vv._tag); \
+	__vv; \
+})
+
+#define msMaybeVariantObject(m, mask, head, labels) ({ \
+	__typeof__(m) __vm = (m); \
+	if (__vm.present && !msVariantHolds((mask), __vm.value._tag)) msRaiseFieldError((head), (labels), (int64_t)__vm.value._tag); \
+	__vm; \
+})
+
 /* Converting a double outside the destination's range, NaN included, is
    undefined in C (C11 6.3.1.4): the bounds are tested on the double first. */
 static inline double msCheckRangeF(double v, int64_t lo, int64_t hi) {
