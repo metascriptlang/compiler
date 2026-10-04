@@ -970,6 +970,14 @@ function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: int32, c
 	return inferredType();
 }
 
+export function boundAnnotationType(node: Node | null): Type | null {
+	if (node == null || !node.flags.has(NodeFlag.BoundSym)) return null;
+	if (node.resolvedSym == null || node.nodeType == null) {
+		throw new Error("internal: a bound type annotation has no checked symbol or type");
+	}
+	return node.nodeType;
+}
+
 // ===== TypeExpr Recording (standard parity: markUsed in semTypeNode) =====
 // Walks a positioned TypeExpr AST tree and records USE for every type identifier.
 // Does NOT resolve types — resolveAnnotation still handles that via string path.
@@ -980,7 +988,7 @@ export function resolveTypeExpr(node: Node | null, ctx: CheckerContext): void {
 	match (node.kind) {
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
-			const sym = lookupSymbol(ctx.table, d.name);
+			const sym = node.flags.has(NodeFlag.BoundSym) ? node.resolvedSym : lookupSymbol(ctx.table, d.name);
 			if (sym != null) {
 				sgRecordSym(ctx, node.location.line, node.location.column,
 					node.location.column + d.name.length,
@@ -1183,10 +1191,13 @@ export function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 // ===== Resolve Helpers =====
 
 // Resolve an array of type annotation strings into Type[], matching names 1:1
-function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerContext, line: int32, col: int32): Type[] {
+function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerContext, line: int32, col: int32, annotations: Node[] | null = null): Type[] {
 	const types: Type[] = [];
 	for (let i = 0; i < count; i += 1) {
-		if (i < typeStrs.length && typeStrs[i] != "") {
+		const bound = annotations != null && i < annotations.length ? boundAnnotationType(annotations[i]) : null;
+		if (bound != null) {
+			types.push(bound);
+		} else if (i < typeStrs.length && typeStrs[i] != "") {
 			types.push(resolveAnnotation(typeStrs[i], ctx, line, col));
 		} else {
 			types.push(inferredType());
@@ -1385,7 +1396,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 		}
 	}
 
-	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx, node.location.line, node.location.column);
+	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx, node.location.line, node.location.column, node.typeExprs);
 	resolveTypeExprs(node.typeExprs, ctx);
 
 	// Wrap out/ref param types in TypeKind.Var (reference parity: tyVar — both are T* in C)
@@ -1434,7 +1445,10 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	// narrowType reads this to narrow callers in conditions.
 	let returnType: Type;
 	let predicateSentinel: Type | null = null;
-	if (d.fnReturnType != "") {
+	const boundReturn = boundAnnotationType(node.typeExpr);
+	if (boundReturn != null) {
+		returnType = boundReturn;
+	} else if (d.fnReturnType != "") {
 		// Assertion function: `asserts paramName is Type` — strip `asserts `
 		// prefix and handle as a predicate with void return type and a distinct
 		// sentinel marker ("asserts:" prefix on typeName).

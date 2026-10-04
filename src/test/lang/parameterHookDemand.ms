@@ -1,6 +1,7 @@
 struct DemandPayload { text: string; count: int32; }
 struct DemandBox<T> { value: T; }
 interface DemandRef { text: string; }
+interface DemandRefHolder { value: Cursor<DemandRef>; }
 
 function demandHeap(text: string): string { return text + "!"; }
 function demandRead(p: DemandPayload): string { return p.text; }
@@ -20,6 +21,7 @@ function demandBorrow(p: Borrow<DemandPayload>): string { return p.text; }
 function demandCursor(p: Cursor<DemandPayload>): string { return p.text; }
 function demandReadonlyPtr(p: Readonly<Ptr<DemandPayload>>): string { return p.text; }
 function demandBorrowRef(p: Borrow<DemandRef>): string { return p.text; }
+function demandCursorRef(p: Cursor<DemandRef>): string { return p.text; }
 function demandCollect<T>(p: T): T[] { const values: T[] = []; values.push(p); return values; }
 
 test "parameter demand: value and readonly views preserve the caller payload" {
@@ -85,6 +87,9 @@ test "parameter demand: borrowed reference formals read the owned pointee" {
 	const p: DemandRef = { text: demandHeap("borrow-ref") };
 	assert demandBorrowRef(p as Borrow<DemandRef>) == "borrow-ref!";
 	assert p.text == "borrow-ref!";
+	assert demandCursorRef(p) == "borrow-ref!";
+	const holder: DemandRefHolder = { value: p };
+	assert holder.value.text == "borrow-ref!";
 }
 
 test "parameter demand: sized array values survive a generic sink into dynamic storage" {

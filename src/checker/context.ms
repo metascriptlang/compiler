@@ -802,10 +802,13 @@ export function dispatchEntryFor(sym: Symbol): DispMethodEntry | null {
 	return _dispBySym.get(sym) ?? null;
 }
 
-function classOwnSym(t: Type): Symbol | null {
-	let s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
-	if (s.kind == TypeKind.GenericInstance && s.typeExtra != null) s = s.typeExtra.kind == TypeKind.Ref && s.typeExtra.typeReturn != null ? s.typeExtra.typeReturn : s.typeExtra;
-	return s.sym;
+export function dispatchDeclaredEntry(classSym: Symbol, methodName: string): DispMethodEntry | null {
+	const entries = _dispByClass.get(classSym);
+	if (entries == null) return null;
+	for (const entry of entries) {
+		if (entry.methodName == methodName) return entry;
+	}
+	return null;
 }
 
 function dispDepthBelow(classSym: Symbol, root: Symbol): int32 {

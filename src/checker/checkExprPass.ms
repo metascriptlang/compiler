@@ -20,7 +20,7 @@ import { callCheckStmt, callDemandReturn, callLaterDeclarationNote, checkInTypeS
 import { checkArcPointeeSendable } from "./sendable";
 import { isLockedRef } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
-import { builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped } from "./resolvePass";
+import { boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { callExpandMacroInvocation, callEvalComptimeBlock } from "./checkerCallbacks";
@@ -40,6 +40,7 @@ import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, un
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
 import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump } from "./fit";
+import { declaredTagUnionOf } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -1213,6 +1214,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				return;
 			}
 			checkExpr(ctx, d.operand, unaryExpected);
+			if (d.unaryOp == "typeof") {
+				const storageType = declaredTagUnionOf(d.operand);
+				if (storageType != null) d.operand.nodeType = storageType;
+			}
 			if (d.unaryOp == "!") {
 				refuseFunctionTruthiness(ctx, d.operand);
 			} else if ((d.unaryOp == "-" || d.unaryOp == "+") && unaryArithFails(ctx, d.unaryOp, d.operand.nodeType)
@@ -2062,7 +2067,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				return;
 			}
 			const asLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
-			const targetType = (d.asType != "") ? resolveAnnotation(d.asType, ctx, asLoc.line, asLoc.column) : inferredType();
+			const boundTarget = boundAnnotationType(node.typeExpr);
+			const targetType = boundTarget != null ? boundTarget : (d.asType != "") ? resolveAnnotation(d.asType, ctx, asLoc.line, asLoc.column) : inferredType();
 			// TS parity: `expr as T` propagates T as contextual type to expr.
 			// Critical for object literals: `{ a: 1 } as Foo` must construct a Foo
 			// (not an anonymous struct that codegen then can't cast to Foo).
@@ -2152,6 +2158,15 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.nodeType = targetType;
 				node.flags = node.flags.incl(NodeFlag.Sem);
 				node.nodeType = targetType; return;
+			}
+			else if (srcType != null && targetType.kind == TypeKind.Borrow
+				&& targetType.typeReturn != null && srcType.kind != TypeKind.Borrow
+				&& isAssignable(srcType, targetType.typeReturn)) {
+				node.kind = NodeKind.HiddenStdConv;
+				node.data = { convExpr: d.asExpr, convType: targetType };
+				node.nodeType = targetType;
+				node.flags = node.flags.incl(NodeFlag.Sem);
+				return;
 			}
 			// String↔CString needs runtime conversion at the FFI boundary, not erasure.
 			else if (srcType != null

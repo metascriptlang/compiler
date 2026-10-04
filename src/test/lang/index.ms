@@ -67,5 +67,6 @@ import "./typeImplementationQuery";
 import "./parameterShadowing";
 import "./refParamDeref";
 import "./refParamWrites";
-import "./structFieldDecorators";
-import "./enumNames";
+import "./parameterHookDemand";
+import "./arrayText";
+import "./sequentialTypeof";

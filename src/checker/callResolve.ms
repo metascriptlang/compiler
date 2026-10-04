@@ -28,6 +28,7 @@ import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, su
 import { unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
+import { dispatchDeclaredEntry, dispatchEntryFor } from "./context";
 
 // Peel through Ref/Ptr to find a GenericInstance carrying type args.
 // Used by `resolveGenericNewExpr` to read concrete type args from a contextual
@@ -1335,7 +1336,18 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			node.resolvedSym = d.callee.resolvedSym;
 		}
 		// Extension resolution for method calls.
-		if (ctx.extensionRegistry != null) {
+		const methodSym = node.resolvedSym;
+		const methodOrigin = methodSym != null && methodSym.instantiatedFrom != null ? methodSym.instantiatedFrom : methodSym;
+		const methodEntry = methodOrigin != null ? dispatchEntryFor(methodOrigin) : null;
+		if (methodEntry != null && methodSym != null && methodSym.symbolType != null) {
+			node.flags = node.flags.incl(NodeFlag.ExtCall);
+			extPreResolved = true;
+			extRecvFormal = methodSym.symbolType.typeChildren.length > 0 ? methodSym.symbolType.typeChildren[0] : null;
+			isActorMethodCall = methodEntry.classSym.symbolKind == SymbolKind.Actor;
+			if (isActorMethodCall && calleeType != null && calleeType.typeReturn != null && calleeType.typeReturn.kind != TypeKind.Void) {
+				calleeType = createFunction(calleeType.typeChildren, calleeType.typeNames, createPromise(calleeType.typeReturn));
+			}
+		} else if (ctx.extensionRegistry != null) {
 			const me = d.callee.data as MemberExprData;
 			const objType = me.object.nodeType != null ? peelTransparentInstance(me.object.nodeType) : null;
 			const isNamespaceQualified = me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Module;
@@ -1574,6 +1586,13 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		}
 	}
 	const textSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
+	if (textSym != null && !isEngineCheckMode()
+		&& (ctx.currentFunction == null || !hasFlag(ctx.currentFunction, SymbolFlag.CompileTime))
+		&& (textSym.builtinKind == "MetaError" || textSym.builtinKind == "MetaWarning"
+			|| textSym.builtinKind == "MetaSplice" || textSym.builtinKind == "MetaGetTypeArg")) {
+		addError(ctx, `'${textSym.name}' can only be called at compile time`, node.location.line, node.location.column);
+		return errorType();
+	}
 	if (textSym != null && (textSym.builtinKind == "Echo" || (textSym.builtinKind == "ToString" && d.arguments.length == 1))) {
 		for (let ai = 0; ai < d.arguments.length; ai += 1) {
 			const text = synthStringify(ctx, d.arguments[ai], textSym.builtinKind == "Echo");
@@ -3989,7 +4008,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// reference parity: strip Ref/Ptr BEFORE field resolution, insert deref AFTER
 	// reference: skip pointer types → lookup field → make dereference
 	const nullablePtr = objType.kind == TypeKind.Union ? unwrapRefNullUnion(objType) : null;
-	const ptrType = (nullablePtr != null && isPointerInC(nullablePtr, ctx)) ? nullablePtr : objType;
+	let ptrType = (nullablePtr != null && isPointerInC(nullablePtr, ctx)) ? nullablePtr : objType;
+	while (ptrType.kind == TypeKind.Cursor && ptrType.typeReturn != null) ptrType = ptrType.typeReturn;
 	const needsDeref = isPointerInC(ptrType, ctx);
 	let resolvedObjType = objType;
 	if (needsDeref) {
@@ -4234,7 +4254,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		if (needsDeref && d.object.kind != NodeKind.HiddenDeref) {
 			const tok = createToken(TokenKind.Ident, "", node.location.line);
 			const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
-			if ((ptrType.kind == TypeKind.Var || ptrType.kind == TypeKind.Ref) && ptrType.typeReturn != null) {
+			if (ptrType.typeReturn != null) {
 				derefNode.nodeType = ptrType.typeReturn;
 			} else {
 				derefNode.nodeType = resolvedObjType;
@@ -4336,7 +4356,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// instance access only matches instance methods. Checks overloads if primary doesn't match.
 	if (resolvedObjType.typeName != "") {
 		const classMethName = resolvedObjType.typeName + "_" + d.property;
-		let classMethSym = lookupSymbol(ctx.table, classMethName);
+		const declaredMethod = resolvedObjType.sym != null ? dispatchDeclaredEntry(resolvedObjType.sym, d.property) : null;
+		let classMethSym = declaredMethod != null ? declaredMethod.sym : lookupSymbol(ctx.table, classMethName);
 		// Filter: instance methods have "this" as first param, static methods don't.
 		// If the found symbol doesn't match the access type, check overloads for one that does.
 		if (classMethSym != null && classMethSym.symbolKind == SymbolKind.Function) {
@@ -4354,12 +4375,6 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			callDemandReturn(ctx, classMethSym, node);
 			node.resolvedSym = classMethSym;
 			sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, classMethSym, classMethSym.symbolType, SymbolKind.Method, d.property, resolvedObjType.typeName, false);
-			if (needsDeref) {
-				const tok = createToken(TokenKind.Ident, "", node.location.line);
-				const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
-				derefNode.nodeType = resolvedObjType;
-				d.object = derefNode;
-			}
 			// Strip receiver param (index 0) for instance methods only — static methods have no "this"
 			const methType = classMethSym.symbolType;
 			if (methType.kind == TypeKind.Function && methType.typeChildren.length > 0 && methType.typeNames.length > 0 && methType.typeNames[0] == "this") {
@@ -4562,6 +4577,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			toStrFnType = createFunction([], [], stringType());
 		}
 		const toStrSym = makeSymbol("toString", SymbolKind.Function, toStrFnType, false);
+		toStrSym.builtinKind = "ToStringMethod";
 		toStrSym.modulePath = ctx.modulePath;
 		stampItem(ctx, toStrSym);
 		toStrSym.state = SymbolState.Shaped;
