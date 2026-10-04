@@ -66,6 +66,27 @@ extern function msAssertFail(msg: cstring, file: cstring, line: int32): void fro
 @compilerFunc @throws
 extern function msAwaitSlotResult(slot: Ptr<void>): Ptr<void> from "msAwaitSlotResult";
 
+@compilerFunc @throws
+extern function msAwaitGroupCheckFailed(group: Ptr<void>): void from "msAwaitGroupCheckFailed";
+
+@compilerFunc @throws
+extern function msFutureCheckErr(fut: Ptr<void>): boolean from "msFutureCheckErr";
+
+@compilerFunc @throws
+extern function msFutureRead(fut: Ptr<void>): Ptr<void> from "msFutureRead";
+
+@compilerFunc @throws
+extern function msFutureReadDouble(fut: Ptr<void>): number from "msFutureReadDouble";
+
+@compilerFunc @throws
+extern function msFutureReadInt32(fut: Ptr<void>): int32 from "msFutureReadInt32";
+
+@compilerFunc @throws
+extern function msFutureReadBool(fut: Ptr<void>): boolean from "msFutureReadBool";
+
+@compilerFunc @throws
+extern function msFutureReadString(fut: Ptr<void>): string from "msFutureReadString";
+
 @throws
 extern function msAbortThrow(): void from "msAbortThrow";
 
