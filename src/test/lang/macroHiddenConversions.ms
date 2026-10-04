@@ -31,6 +31,15 @@ test "macro callable source: an implicit read inside the const JSX is called exa
 	assert calls == 1;
 }
 
+test "macro callable source: an implicit float accessor keeps its concrete result type" {
+	let calls: int32 = 0;
+	const c = (() => { calls = calls + 1; return 1.5 as float64; }) as SourceAccessor<float64>;
+	const view = <p>{c * 2}</p>;
+	const v: float64 = firstSourceExpr(view);
+	assert v === 3;
+	assert calls == 1;
+}
+
 enum Tone { Low, High }
 
 function eqMaybe(m: int32 | null, v: int32): boolean { return m == v; }

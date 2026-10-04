@@ -452,15 +452,18 @@ function operandShape(t: Type | null): Type | null {
 	if (t == null) return null;
 	let s = skipModifier(t);
 	for (let depth = 0; depth < PEEL_MAX_DEPTH; depth += 1) {
+		const body = distinctBody(s);
+		if (body != null) {
+			s = skipModifier(body);
+			continue;
+		}
 		if (s.kind == TypeKind.GenericInstance) {
 			const base = s.typeExtra != null ? s.typeExtra : s.typeReturn;
 			if (base == null) return s;
 			s = skipModifier(base);
 			continue;
 		}
-		const body = distinctBody(s);
-		if (body == null) return s;
-		s = skipModifier(body);
+		return s;
 	}
 	return s;
 }
