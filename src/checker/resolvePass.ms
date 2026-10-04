@@ -283,6 +283,8 @@ export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line:
 	if (t.kind == TypeKind.Span) {
 		const elem = t.typeReturn != null ? typeDisplayName(t.typeReturn) : "T";
 		addError(ctx, "cannot return Span<" + elem + ">: a Span borrows memory owned by its source; return the owning container (Vec<" + elem + "> or " + elem + "[]) instead", line, col);
+	} else {
+		refuseNestedView(ctx, "a return value", t, line, col);
 	}
 	return t;
 }
@@ -1463,6 +1465,11 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 		}
 	}
 	refuseHookReceiverByValue(ctx, node, paramTypes);
+	for (let pi = 0; pi < paramTypes.length && pi < d.params.length; pi += 1) {
+		const pLoc = node.paramLocations != null && pi < node.paramLocations.length && node.paramLocations[pi] != null
+			? node.paramLocations[pi] : node.location;
+		refuseNestedView(ctx, "parameter '" + d.params[pi] + "'", paramTypes[pi], pLoc.line, pLoc.column);
+	}
 
 	const retLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
 	// Type predicate detection: fnReturnType is `"<paramName> is <typeText>"`
@@ -1598,6 +1605,13 @@ function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: str
 	addWarning(ctx, "owning self-referential field '" + fieldName + "' in '" + typeName + "': destroy recurses per node — a long chain overflows the stack; for non-owning links use Cursor<" + typeName + "> with an arena/array owner", line, col);
 }
 
+function refuseViewField(ctx: CheckerContext, fieldName: string, typeName: string, fieldType: Type | null, line: int32, col: int32): void {
+	const view = findViewType(fieldType);
+	if (view == null) return;
+	addError(ctx, "field '" + fieldName + "' of '" + typeName + "' cannot hold " + typeDisplayName(view)
+		+ ": a view borrows memory its source can free while the field still holds it — store " + ownedAlternativeOf(view), line, col);
+}
+
 function interfaceCycleChain(ctx: CheckerContext, currentName: string, targetName: string, visited: string[]): string {
 	for (const v of visited) {
 		if (v == currentName) return "";
@@ -1730,16 +1744,17 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	for (let wi = 0; wi < d.interfaceFields.length; wi += 1) {
 		if (wi >= fieldTypes.length) break;
 		const wft = fieldTypes[wi];
+		let wLine = node.location.line;
+		let wCol = node.location.column;
+		if (node.paramLocations != null && wi < node.paramLocations.length) {
+			wLine = node.paramLocations[wi].line;
+			wCol = node.paramLocations[wi].column;
+		}
 		if (wft != null && wft.kind == TypeKind.Ref && wft.typeReturn != null
 			&& wft.typeReturn.typeName == d.interfaceName) {
-			let wLine = node.location.line;
-			let wCol = node.location.column;
-			if (node.paramLocations != null && wi < node.paramLocations.length) {
-				wLine = node.paramLocations[wi].line;
-				wCol = node.paramLocations[wi].column;
-			}
 			warnOwningSelfRef(ctx, d.interfaceFields[wi], d.interfaceName, wLine, wCol);
 		}
+		refuseViewField(ctx, d.interfaceFields[wi], d.interfaceName, wft, wLine, wCol);
 	}
 
 	// Update sym type in-place — avoid temporary Type that shares typeChildren
@@ -2134,6 +2149,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				if (pd.propType != "") {
 					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
+					refuseViewField(ctx, pd.propName, d.className, staticType, member.location.line, member.location.column);
 				}
 				member.nodeType = staticType;
 				// Find matching staticFields entry and set its type
@@ -2155,6 +2171,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 						&& propType.typeReturn.typeName == d.className) {
 						warnOwningSelfRef(ctx, pd.propName, d.className, member.location.line, member.location.column);
 					}
+					refuseViewField(ctx, pd.propName, d.className, propType, member.location.line, member.location.column);
 				} else {
 					memberTypes.push(inferredType());
 				}
@@ -2347,6 +2364,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 				if (pd.propType != "") {
 					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
+					refuseViewField(ctx, pd.propName, d.actorName, staticType, member.location.line, member.location.column);
 				}
 				member.nodeType = staticType;
 				for (const sf of sym.staticFields) {
@@ -2363,6 +2381,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 				resolveTypeExpr(member.typeExpr, ctx);
 				member.nodeType = propType;
 				memberTypes.push(propType);
+				refuseViewField(ctx, pd.propName, d.actorName, propType, member.location.line, member.location.column);
 			} else {
 				memberTypes.push(inferredType());
 			}
