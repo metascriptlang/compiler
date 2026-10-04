@@ -158,7 +158,7 @@ export function undelegate(delegated: Account, buffer: Account, payer: Account, 
 	return delegated.data().copyFrom(buffer.data());
 }
 
-function scheduled(
+@noinline function scheduled(
 	payer: Account,
 	taskId: uint64,
 	intervalMillis: uint64,

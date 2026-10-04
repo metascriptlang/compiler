@@ -56,7 +56,7 @@ function requested(
 	return putSpan(storage, length, callbackArguments);
 }
 
-export function requestRandomness(
+@noinline export function requestRandomness(
 	accounts: RandomnessRequest,
 	callerSeed: Pubkey,
 	callbackDiscriminator: uint64,

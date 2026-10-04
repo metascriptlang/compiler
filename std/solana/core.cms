@@ -1035,7 +1035,7 @@ export function seedsCanonical(key: uint64, seeds: Span<SeedSlice>): Result<void
 
 const MAX_EVENT_BYTES: uint64 = 1024;
 
-export function logEvent(
+@noinline export function logEvent(
 	discriminator: Readonly<Span<uint8>>,
 	layout: Readonly<Span<uint8>>,
 	values: Readonly<Span<uint64>>,
