@@ -63,7 +63,7 @@ function _jsonParseTyped<T>(input: string): Result<T, string> {
 // `_jsonToIntArray<T>` / `_jsonToStructArray<T>` are the decode-side mirrors
 // (used by jsonValueToStruct macro).
 
-export function _jsonArrayOfInts<T>(arr: Span<T>): JsonValue {
+export function _jsonArrayOfInts<T>(arr: Readonly<Span<T>>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) {
@@ -73,7 +73,7 @@ export function _jsonArrayOfInts<T>(arr: Span<T>): JsonValue {
 	return jsonArray(items);
 }
 
-export function _jsonArrayOfStructs<T>(arr: Span<T>): JsonValue {
+export function _jsonArrayOfStructs<T>(arr: Readonly<Span<T>>): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) {
@@ -83,7 +83,7 @@ export function _jsonArrayOfStructs<T>(arr: Span<T>): JsonValue {
 	return jsonArray(items);
 }
 
-export function _jsonArrayOfEnums<T>(arr: Span<T>, ords: int32[], names: string[]): JsonValue {
+export function _jsonArrayOfEnums<T>(arr: Readonly<Span<T>>, ords: int32[], names: string[]): JsonValue {
 	const items: JsonValue[] = [];
 	let i = 0;
 	while (i < arr.length) {

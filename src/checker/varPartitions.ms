@@ -949,6 +949,7 @@ function ownsMemory(t: Type | null, depth: int32): boolean {
 		TypeKind.String => true,
 		TypeKind.StringLiteral | TypeKind.CString | TypeKind.Ptr | TypeKind.Null | TypeKind.Void
 			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.BooleanLiteral => false,
+		TypeKind.Ref => t.typeReturn != null && t.typeReturn.kind == TypeKind.Array,
 		TypeKind.Struct | TypeKind.Tuple | TypeKind.Union => {
 			for (const c of t.typeChildren) {
 				if (ownsMemory(c, depth + 1)) return true;
