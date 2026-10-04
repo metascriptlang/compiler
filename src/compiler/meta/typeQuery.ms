@@ -1,7 +1,7 @@
 import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind, createNodeAt, makeLoc } from "../../ast/node";
 import { CheckerContext, addError } from "../../checker/context";
 import { lookupSymbol, hasFlag, SymbolFlag } from "../../checker/symbol";
-import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
+import { builtinTypeNamed, ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { instantiateGenericBody, genericParamsOf, unwrapRefBase } from "../../checker/types";
 import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField } from "../../raiser/value";
 import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHeap } from "../../raiser/hostRegistry";
@@ -130,11 +130,19 @@ function hostGetType(args: RaiserValue[]): RaiserValue {
 	return emitTypeNode(result, t);
 }
 
+function namesBuiltinType(ctx: CheckerContext, v: RaiserValue): boolean {
+	const heap = activeHostObjectHeap();
+	if (heap == null || v.kind != RaiserValueKind.Object) return false;
+	if (heapObjectGetField(heap, v.intVal, "kind").intVal != (NodeKind.Identifier as int64)) return false;
+	const name = heapObjectGetField(heap, v.intVal, "name");
+	return name.kind == RaiserValueKind.String && builtinTypeNamed(ctx, name.strVal) != null;
+}
+
 function hostGetImpl(args: RaiserValue[]): RaiserValue {
 	const ctx = activeMetaCtx();
 	if (ctx == null || args.length < 1) return raiserNil();
 	const sym = boundSymOf(args[0]);
-	if (sym == null) return queryError(ctx, "node is not a symbol");
+	if (sym == null) return namesBuiltinType(ctx, args[0]) ? raiserNil() : queryError(ctx, "node is not a symbol");
 	if (hasFlag(sym, SymbolFlag.Forward)) return queryError(ctx, stillDecoratedMessage(sym.name));
 	if (sym.declNode == null) return raiserNil();
 	return emitNode(sym.declNode);
