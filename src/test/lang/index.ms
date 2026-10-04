@@ -64,3 +64,4 @@ import "./parameterShadowing";
 import "./refParamDeref";
 import "./refParamWrites";
 import "./structFieldDecorators";
+import "./enumNames";
