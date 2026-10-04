@@ -504,12 +504,28 @@ function isTypeLevelAccess(ctx: CheckerContext, obj: Node, property: string): bo
 	return staticExtsOwnedBy(ctx, findAllExtensionsByName(ctx.extensionRegistry, property), sym, null).length > 0;
 }
 
+function parentClassSym(classSym: Symbol): Symbol {
+	let inner = classSym.symbolType;
+	if (inner != null && inner.kind == TypeKind.Ref && inner.typeReturn != null) inner = inner.typeReturn;
+	if (inner != null && inner.typeExtra != null && inner.typeExtra.sym != null) return inner.typeExtra.sym;
+	return null as unknown as Symbol;
+}
+
 function staticExtsOwnedBy(ctx: CheckerContext, exts: ExtensionMethod[], owner: Symbol, objType: Type | null): ExtensionMethod[] {
 	for (const e of exts) {
 		if (e.isStatic && e.sym != null) ensureShaped(e.sym, ctx);
 	}
 	const owned = filterStaticExtsByOwner(exts, owner);
-	if (owned.length > 0 || owner.symbolKind != SymbolKind.TypeAlias || objType == null) return owned;
+	if (owned.length > 0) return owned;
+	if (owner.symbolKind == SymbolKind.Class) {
+		let base = parentClassSym(owner);
+		for (let hops = 0; base != null && hops < 64; hops += 1) {
+			const inherited = filterStaticExtsByOwner(exts, base);
+			if (inherited.length > 0) return inherited;
+			base = parentClassSym(base);
+		}
+	}
+	if (owner.symbolKind != SymbolKind.TypeAlias || objType == null) return owned;
 	const denoted = nominalTypeSym(objType);
 	return denoted != null && denoted != owner ? filterStaticExtsByOwner(exts, denoted) : owned;
 }
