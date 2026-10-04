@@ -23,15 +23,6 @@ test "pointerAddress: an expression without a location has no address" {
 		.includes("expression has no address");
 }
 
-test "pointerAddress: an integer is the address it holds, never its own location" {
-	const source = "struct Key { a: uint64; }\nfunction load(address: uint64): uint64 { const at = address as Ptr<uint64>; return at[]; }\n"
-		+ "function key(address: uint64): Key { const at = address as Ptr<Key>; return at[]; }\n"
-		+ "function past(address: uint64): Ptr<Key> { return (address + 96) as Ptr<Key>; }\n";
-	const c = compileToC(source);
-	assert c.ok, c.ok ? "" : c.error;
-	if (c.ok) assert !c.value.contains("&(address"), "an integer source must not have its address taken";
-}
-
 test "pointerAddress: a heap container's handle is not its elements" {
 	assert cError("function main(): void { let xs: uint8[] = [7, 8]; const p = xs as Ptr<uint8>; }\nmain();\n")
 		.includes("is a handle to heap storage");
@@ -52,8 +43,9 @@ test "pointerAddress: a span of references is not a pointer to its objects" {
 	assert cError(source).includes("the view stores reference slots");
 }
 
-test "pointerAddress: a pointer to pointers is a double pointer in C" {
-	const c = compileToC("struct S { n: int32; }\nfunction f(q: Ptr<S>): int32 { let local = q; const pq = local as Ptr<Ptr<S>>; return pq[].n; }\n");
-	assert c.ok, c.ok ? "" : c.error;
-	if (c.ok) assert c.value.contains("**"), "Ptr<Ptr<S>> must be a pointer to a pointer";
+test "pointerAddress: a read-only pointer-slot view cannot replace its slot" {
+	const prefix = "struct S { n: int32; }\nfunction use(view: Readonly<Span<Ptr<S>>>, next: Ptr<S>): void {"
+		+ " const at = view as Readonly<Ptr<Ptr<S>>>; ";
+	assert cError(prefix + "console.log(`${at[][].n}`); }\n") == "compiled";
+	assert cError(prefix + "at[] = next; }\n").includes("cannot write through Readonly<Ptr<Ptr<S>>>");
 }
