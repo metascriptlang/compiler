@@ -150,8 +150,8 @@ export function lowerHcrIndirection(
 				return n;
 			}
 			if (n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr && n.kind != NodeKind.NewExpr) return n;
-			const constructed = constructedClassOf(n);
-			const sym = n.kind == NodeKind.NewExpr || constructed != null ? constructorInitOf(constructed) : n.resolvedSym;
+			const constructed = n.kind == NodeKind.NewExpr ? (n.data as NewExprData).newCallee.resolvedSym : null;
+			const sym = n.kind == NodeKind.NewExpr ? constructorInitOf(constructed) : n.resolvedSym;
 			if (sym == null) return n;
 			if (n.kind == NodeKind.MemberExpr) {
 				const baseSym = (n.data as MemberExprData).object.resolvedSym;
@@ -216,12 +216,6 @@ export function lowerHcrIndirection(
 	for (const stmt of registrations) emitted.push(stmt);
 	pd.programStmts = emitted;
 	return program;
-}
-
-function constructedClassOf(n: Node): Symbol | null {
-	if (n.kind == NodeKind.NewExpr) return (n.data as NewExprData).newCallee.resolvedSym;
-	if (n.kind == NodeKind.Identifier && (n.data as IdentifierData).name == "super") return n.resolvedSym;
-	return null;
 }
 
 function constructorInitOf(classSym: Symbol | null): Symbol | null {
