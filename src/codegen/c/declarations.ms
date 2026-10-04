@@ -3,14 +3,14 @@
 // Handles function, enum, interface (struct), class, export, and import declarations.
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
-import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, DeclKind, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ProgramData, PropertyDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, HiddenStdConvData, DeclKind, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { hasGenericParams, isIntegerType, isNumeric, classParentOf } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHasDecl, aliveSetHasModule, internString, addCGenError,
-	setLocalSymName, factClaimGeneric,
+	setLocalSymName, factClaimGeneric, scopeMangledParam,
 } from "./context";
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
@@ -334,7 +334,6 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	}
 
 	if (node.nodeType != null && hasGenericParams(node.nodeType)) return;
-
 	const name = mangledTypeName(declTypeSym(node), d.className);
 
 	// Check if struct type already declared (by genObjectType for generic instances)
@@ -379,15 +378,6 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 		add(types, structDef);
 		addNewline(types);
 	}
-
-	// Emit methods (always, even if struct was already declared). ConstructorDecl
-	// never reaches this loop — methodToFunction lifts it out of classBody into a
-	// top-level `<Class>_init` FunctionDecl (mono instances included).
-	for (const member of d.classBody) {
-		if (member.kind == NodeKind.MethodDecl) {
-			genMethodAsFunction(g, member, name);
-		}
-	}
 }
 
 function initializerLiteralType(literal: Readonly<Node>, declType: Type | null): Type | null {
@@ -406,6 +396,11 @@ function staticFieldSymOf(owner: Symbol | null, qualifiedName: string): Symbol |
 
 function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>, owner: Symbol | null): void {
 	for (const member of d.classBody) {
+		const inner = member.kind == NodeKind.DecoratedDecl ? (member.data as DecoratedDeclData).decoratedNode : member;
+		if (inner != null && (inner.kind == NodeKind.MethodDecl || inner.kind == NodeKind.ConstructorDecl)) {
+			addCGenError(g, `internal: callable member in class '${d.className}' reached C codegen before methodToFunction`, inner.location.line, inner.location.column);
+			return;
+		}
 		if (member.kind != NodeKind.PropertyDecl) { continue; }
 		const pd = member.data as PropertyDeclData;
 		if (!pd.propIsStatic) { continue; }
@@ -432,72 +427,6 @@ function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>, owner: Symbo
 				},
 			};
 		}
-	}
-}
-
-// ===== Method as Free Function =====
-
-function genMethodAsFunction(g: CGen, node: Readonly<Node>, className: string): void {
-	const d = node.data as MethodDeclData;
-	// Use sym.name directly — matches how extensionMethodLower constructs the call name.
-	// Avoids safeName mismatch (e.g. "abort" → "abort_" on declaration but not call site).
-	const fallbackName = `${className}_${safeName(d.methodName)}`;
-	const methodOvIdx = node.resolvedSym != null ? node.resolvedSym.overloadIdx : 0;
-	const methodName = mangledFunctionName(node.resolvedSym, (node.resolvedSym != null && node.resolvedSym.name != "") ? node.resolvedSym.name : fallbackName, methodOvIdx);
-	const methodType = node.nodeType;
-	// Skip emission of generic method bodies (mirror the same guard in
-	// genFunctionDecl). When a generic static method is mono-instantiated for
-	// concrete T (Bug 10 fix), the mono instance lands in `_pendingInstances`
-	// as a synthesized FunctionDecl and gets emitted by the regular function
-	// path. The original generic method body — with deferred MacroInvocation
-	// or `void*` typed params from unresolved T — would otherwise emit broken
-	// C alongside the working mono instance. Type-level (GenericParam in
-	// tree) plus flag-level (`gen:` marker on methodFlags) — either skips.
-	if (hasGenericParams(methodType)) return;
-	if (isGenericFn(d.methodFlags)) return;
-	if (d.methodFlags == "extern" || d.methodFlags.indexOf("extern", 0) >= 0) return;
-	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ImportC)) return;
-	const cRetType = getTypeDesc(g, methodType.typeReturn);
-	// NRVO: methods returning large value-types (Result<T,E>, struct, tuple)
-	// must be emitted with `void` return + first param `Type* __result`. Caller
-	// codegen unconditionally injects `&dest` as the first argument when the
-	// return type is NRVO-qualified — without this, the function signature
-	// mismatches the call ABI and the receiver gets a stack pointer that
-	// dereferences into garbage. Mirrors `genFunctionDecl` line ~154.
-	const nrvo = isNrvoReturnType(methodType.typeReturn, methodType);
-	const actualRetType = nrvo ? "void" : cRetType;
-
-	// Fallback path. Post-`methodToFunction` transform (Phase 3, !jsBackend),
-	// MethodDecl no longer reaches codegen — it's lifted into a top-level
-	// FunctionDecl that goes through `genFunctionDecl`. This branch only fires
-	// if a future generic / extern / mono path leaks a MethodDecl past the
-	// transform. Kept as a no-op-equivalent emitter so we don't crash; if a
-	// param-promotion drift surfaces here, the right fix is to extend the
-	// transform's coverage, not to mirror logic into this branch.
-	let paramList = "";
-	if (nrvo) {
-		paramList = cRetType + "* __result";
-		if (d.methodParams.length > 0) paramList = paramList + ", ";
-	}
-	for (let i = 0; i < d.methodParams.length; i += 1) {
-		if (i > 0) paramList = paramList + ", ";
-		const pType = getTypeDesc(g, methodType.typeChildren[i]);
-		paramList = paramList + `${pType} ${safeName(d.methodParams[i])}`;
-	}
-	if (paramList == "") paramList = "void";
-
-	const proto = `${actualRetType} ${methodName}(${paramList})`;
-	addLine(sec(g, CSection.ProcHeaders), proto + ";");
-
-	if (d.methodBody != null) {
-		const p = createProc(methodName, null);
-		if (nrvo) p.isNrvo = true;
-		genStmt(g, p, d.methodBody);
-		const procs = sec(g, CSection.Procs);
-		addLine(procs, proto + " {");
-		emitProcBody(p, procs);
-		addLine(procs, "}");
-		addNewline(procs);
 	}
 }
 
@@ -789,12 +718,9 @@ function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Type | null): 
 		_ => { return ""; },
 	};
 }
-// isNrvoReturnType in types.ms (shared, Type-based NRVO detection)
 
-// ===== Tests =====
-
-import { createCGen, assembleOutput, scopeMangledParam } from "./context";
-import { CheckerContext, GcMode, isGenericFn } from "../../checker/context";
+import { createCGen, assembleOutput } from "./context";
+import { CheckerContext } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 
@@ -813,7 +739,6 @@ function declOutput(input: string): string {
 
 test "simple function" {
 	const result = declOutput("function foo(): void { return; }");
-	// genDecl with null CheckerContext may produce minimal output; covered by E2E tests
 	assert result.length >= 0;
 }
 
@@ -844,6 +769,5 @@ test "const global" {
 
 test "NRVO function signature" {
 	const result = declOutput("interface Point { x: number; y: number; } function makePoint(): Point { return { x: 0, y: 0 }; }");
-	// Should have void return + __result param in the output
 	assert result.length > 50;
 }

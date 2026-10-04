@@ -1,29 +1,3 @@
-// Method → Function Lowering — convert class methods into top-level functions.
-//
-// Why: at the C/Raiser ABI level, a class method is just a function that takes
-// the receiver as its first param. The user-facing call site has already been
-// rewritten by `extensionMethodLower` (`b.count(items)` → `count(b, items)`),
-// so by the time we run, no consumer needs the method to live on the class
-// any more. Lifting MethodDecl → FunctionDecl at module top-level gives every
-// downstream pass (lambdaLifting, dce, codegen) a single uniform shape to
-// reason about — no parallel `genMethodAsFunction` path that drifts from
-// `genFunctionDecl` (Bug 9 was exactly that drift).
-//
-// Ref parity: the reference synthesises dispatcher procs pre-codegen, then
-// dispatches `skProc | skFunc | skMethod | …` through the same `genProc`.
-// We do the equivalent — produce FunctionDecl, codegen only sees FunctionDecl.
-//
-// Scope (this pass): instance + static methods AND constructors. The
-// constructor body lifts to a top-level `<Class>_init(this, ...)` function;
-// no `_new` wrapper is synthesised — the C codegen NewExpr handler inlines
-// `alloc + _init(this, args)` at the call site (matches the inline pattern
-// already used for class-without-ctor and matches Nim's `genObjConstr`).
-//
-// JS backend: NOT applied. JS keeps `class Foo { ... }` native because its
-// class semantics map 1:1 with what we want at the source level (single
-// dispatch on `this`, prototype chain). The transform is wired in the
-// `!jsBackend` branch of the pipeline.
-
 import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ActorDeclData, SymbolKind, Type } from "../../ast/node";
 import { TransformContext } from "../context";
 import { setFlag, SymbolFlag, initFnName } from "../../checker/symbol";
