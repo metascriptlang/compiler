@@ -1,7 +1,7 @@
 @include("runtime/solana/solana.h");
 @compile("runtime/solana/host.c");
 
-import { Discriminator } from "./discriminator";
+import { Discriminator, word } from "./discriminator";
 import { ProgramError } from "./error";
 import {
 	Account,
@@ -47,21 +47,21 @@ export function program<P>(index: int32): Result<Program<P>, ProgramError> {
 
 export function owned<T>(index: int32): Result<Owned<T>, ProgramError> {
 	let found: Account = { address: 0 };
-	const failure = ownedFailure(index, wordOf(T.discriminator()), sizeof(T) as uint64, found);
+	const failure = ownedFailure(index, @comptime { return word(T.discriminator()); }, sizeof(T) as uint64, found);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(found as Owned<T>);
 }
 
 export function mutable<T>(index: int32): Result<Mutable<T>, ProgramError> {
 	let found: Account = { address: 0 };
-	const failure = mutableFailure(index, wordOf(T.discriminator()), sizeof(T) as uint64, found);
+	const failure = mutableFailure(index, @comptime { return word(T.discriminator()); }, sizeof(T) as uint64, found);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(found as Mutable<T>);
 }
 
 export function delegated<T>(index: int32): Result<Delegated<T>, ProgramError> {
 	let found: Account = { address: 0 };
-	const failure = delegatedFailure(index, wordOf(T.discriminator()), sizeof(T) as uint64, found);
+	const failure = delegatedFailure(index, @comptime { return word(T.discriminator()); }, sizeof(T) as uint64, found);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(found as Delegated<T>);
 }
@@ -93,7 +93,7 @@ export function create<T>(
 	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<Mutable<T>, ProgramError> {
 	const space = 8 + (sizeof(T) as uint64);
-	const created = try createdAccount(payer, target, space, wordOf(T.discriminator()), signers);
+	const created = try createdAccount(payer, target, space, @comptime { return word(T.discriminator()); }, signers);
 	return Result.ok(created as Mutable<T>);
 }
 
@@ -103,7 +103,7 @@ export function createPdaOf<T>(
 	seeds: Span<SeedSlice>,
 ): Result<Pda<T>, ProgramError> {
 	const space = 8 + (sizeof(T) as uint64);
-	const made = try createdPdaAccount(payer, target, seeds, space, wordOf(T.discriminator()));
+	const made = try createdPdaAccount(payer, target, seeds, space, @comptime { return word(T.discriminator()); });
 	return Result.ok({ account: made.account as Mutable<T>, bump: made.bump });
 }
 
