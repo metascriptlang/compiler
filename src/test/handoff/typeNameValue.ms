@@ -5,7 +5,7 @@ import { findModule, ErrorSeverity } from "../../module/graph";
 import { MapEntry, createMapProvider, loadModuleGraph } from "../../module/loader";
 import { resetBuildState } from "../../compiler/buildSession";
 
-const decls = "struct Pet { a: uint8; }\nclass Dog { n: int32 = 1; static make(): Dog { return new Dog(); } }\nenum Kind { A, B }\nfunction take(x: int32): int32 { return x; }\n";
+const decls = "struct Pet { a: uint8; }\nclass Dog { n: int32 = 1; static make(): Dog { return new Dog(); } }\nenum Kind { A, B }\ninterface Shape { w: int32; }\ntype Alias = { v: int32 };\nfunction take(x: int32): int32 { return x; }\nfunction accountKind(this typeof Pet): int32 { return 4; }\n";
 
 test "a type name in a value slot is refused before codegen" {
 	const refused = [
@@ -17,6 +17,9 @@ test "a type name in a value slot is refused before codegen" {
 		"const n = Kind + 1;",
 		"const c = Pet();",
 		"const t = `${Kind}`;",
+		"const sh = Shape;",
+		"const al = Alias;",
+		"function f<T>(x: T): void { const t = T; }\nf(1 as int32);",
 	];
 	for (const line of refused) {
 		assert hasError(decls + line, "only refers to a type, but is being used as a value here"), line;
@@ -25,7 +28,7 @@ test "a type name in a value slot is refused before codegen" {
 }
 
 test "a type name where a type is taken keeps compiling on C and JS" {
-	const src = decls + "const a = Dog.make();\nconst k: Kind = Kind.B;\nconst u: unknown = new Dog();\nconst isDog = u instanceof Dog;\nconst size = sizeof(Pet);\nconst name = Kind[k];\n";
+	const src = decls + "function kindOf<T>(x: T): int32 { return T.accountKind(); }\nconst ak = kindOf({ a: 1 } as Pet);\nconst a = Dog.make();\nconst k: Kind = Kind.B;\nconst u: unknown = new Dog();\nconst isDog = u instanceof Dog;\nconst size = sizeof(Pet);\nconst name = Kind[k];\n";
 	const c = compileToC(src);
 	assert c.ok, c.error;
 	const js = compileToJS(src);
