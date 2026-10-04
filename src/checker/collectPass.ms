@@ -262,6 +262,11 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	if (info.borrow) markBorrow(ctx, dd, sym);
 	if (info.compileTime && sym.symbolKind == SymbolKind.Function) setFlag(sym, SymbolFlag.CompileTime);
 	if (acceptsInline(ctx, dd)) setFlag(sym, SymbolFlag.Inline);
+	if (info.noInline) {
+		if (sym.symbolKind != SymbolKind.Function) addError(ctx, `@noinline applies to a function, not to '${declName}'`, node.location.line, node.location.column);
+		else if (hasFlag(sym, SymbolFlag.Inline)) addError(ctx, `'${declName}' cannot be both @inline and @noinline`, node.location.line, node.location.column);
+		else setFlag(sym, SymbolFlag.NoInline);
+	}
 }
 
 function acceptsInline(ctx: CheckerContext, dd: DecoratedDeclData): boolean {

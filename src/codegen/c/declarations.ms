@@ -145,7 +145,8 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	const isTypeBound = sym != null && isTypeBoundOp(sym);
 	const isPublicLinkage = isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance || isTypeBound || hcrCoreCallable;
 	const linkage = isPublicLinkage ? "" : (sym != null ? "MS_LIB_PRIVATE " : "static ");
-	const prefix = inlineCopy ? "static inline " : exportPrefix + linkage;
+	const outOfLine = sym != null && hasFlag(sym, SymbolFlag.NoInline) ? "__attribute__((noinline)) " : "";
+	const prefix = inlineCopy ? "static inline " : exportPrefix + outOfLine + linkage;
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
 	const actualRetType = nrvo ? "void" : cRetType;

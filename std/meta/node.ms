@@ -220,6 +220,7 @@ export enum SymbolFlag {
 	ClassInit,
 	Inline,
 	InheritsConstructor,
+	NoInline,
 }
 
 // ===== Symbol =====
