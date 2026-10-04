@@ -783,6 +783,50 @@ function crossImageNew(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function genericCtor(): void {
+	const tag = "hcrGenericCtor";
+	const dir = freshDir(`${TMP}/genericCtor`);
+	for (const f of readDir(`${FIXTURES}/genericCtor`)) copy(`${FIXTURES}/genericCtor/${f}`, `${dir}/${f}`);
+	const plain = msc(dir, ["run", "--target=js", "app.ms"]);
+	need(tag, succeeded(plain) && both(plain).contains("GENERIC plain 41:1 42:1 kept:1 stamp=3"), "generic constructor type variants failed on JavaScript");
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr"], "generic constructor calls across images did not build");
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("GENERIC ")) seen.push(line);
+	}
+	const want = [
+		"GENERIC before 41:1 42:1 kept:1 stamp=3",
+		"GENERIC after 41:2 42:2 kept:2 stamp=4",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "generic constructors did not run their newest bodies across image owners");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function genericOps(): void {
+	const tag = "hcrGenericOps";
+	for (const gc of ["drc", "orc"]) {
+		const dir = freshDir(`${TMP}/genericOps-${gc}`);
+		for (const f of readDir(`${FIXTURES}/genericOps`)) copy(`${FIXTURES}/genericOps/${f}`, `${dir}/${f}`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--gc=${gc}`], `${gc}: foreign generic lifecycle references did not build`);
+		const ran = msc(dir, ["run", "--hcr", `--gc=${gc}`, "app.ms"]);
+		let drops: int32 = 0;
+		let values = false;
+		for (const line of lines(both(ran))) {
+			if (line == "DROP") drops += 1;
+			if (line == "OPS 9 10 kept") values = true;
+		}
+		if (!succeeded(ran) || !values || drops != 3) {
+			console.log(both(ran));
+			failWith(tag, `${gc}: captured generic state must survive calls and destroy its three cells exactly once`);
+		}
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function exitDestroy(): void {
 	const tag = "hcrExitDestroy";
 	const dir = freshDir(`${TMP}/exitDestroy`);
@@ -1184,6 +1228,8 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrRun", run: runCommand },
 	{ name: "hcrStepCrash", run: stepCrash },
 	{ name: "hcrCrossImageNew", run: crossImageNew },
+	{ name: "hcrGenericCtor", run: genericCtor },
+	{ name: "hcrGenericOps", run: genericOps },
 	{ name: "hcrExitDestroy", run: exitDestroy },
 	{ name: "hcrRetainReport", run: retainReport },
 	{ name: "hcrRegistryVariables", run: registryVariables },

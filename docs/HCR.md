@@ -41,6 +41,8 @@ backend and DRC/ORC runtime.
 | Old-generation purge | Not built: no accepted image is unloaded (see "Accepted generations stay loaded") |
 | Function values across reloads | Windows x64 and Linux x64, `hcrFunctionValues`: a named function's value taken before a reload, a private one, one stored in a module-level object and code of the old generation all reach the newest generation; a closure keeps its own body; a held function writes the new cell after a type reset |
 | Construction across images | Windows x64 and Linux x64, `hcrCrossImageNew`: `new` of a class declared in another image, with and without a constructor, and `super(...)` into another image's class call the class's `_init` through the owner's table. The installed compiler (`4573591e`) fails the link with `Keeper…_init`, `Counter…_init` and `Base…_init` undefined |
+| Generic construction across images | Windows x64 candidate `02d3615a`, `hcrGenericCtor`: two image users share `Box<int32>`, another uses `Box<string>`, and an implicit generic constructor runs its field initializer. Editing constructor/initializer bodies reloads from `41:1 42:1 kept:1 stamp=3` to `41:2 42:2 kept:2 stamp=4`. JavaScript plain control matches; generic `super` and POSIX were not checked in this extension |
+| Generic TypeInfo lifecycle bindings | Windows x64 candidate `02d3615a`, `hcrGenericOps`: captured getter/setter environments and a self-referential generic cell use foreign destroy/trace hooks. DRC and ORC produce `OPS 9 10 kept` and three `onDestroy` calls; the targeted environment/cell ledger rows balance. A real Neon signal/owner/effect consumer now builds and reloads; this is not a full Neon UI refresh proof |
 | Module globals at exit | Windows x64 and Linux x64, `hcrExitDestroy`: `msc run --hcr` destroys each module global once at exit, entry module first, and prints what `msc run` prints. The engine calls each current image's `Deinit000`, then the core's `msHcrCoreDeinit`; a retired cell (type reset) is never destroyed. The installed compiler printed no destroy line |
 | Dependency reload | Windows x64 and Linux x64, `hcrFileDependency`: an edit of a `file:` dependency reloads its module image in the running app; `hcrImageNameCollision`: two modules mapping to one image name stop the build |
 | `msc run --hcr app.ms` | Windows x64 and Linux x64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
@@ -887,6 +889,41 @@ row); on the compiler of `91dbf527` it fails at the first step that rebuilds fro
 
 Not verified: a live watch on macOS (no backend), a project with import cycles, and edits to
 `build.ms` during a watch (it is not re-read).
+
+### JavaScript bundler transport (Vite)
+
+JavaScript uses the bundler's module-update protocol, not the native image loader.
+`tools/vite-plugin/index.js` consumes the compiler's split-module manifest and keeps the
+source `.ms`/`.jms` identity in Vite. Returning an emitted `.js` identity instead makes an
+import and `import.meta.hot.accept("./logic.ms")` refer to different modules: Vite then
+reloads the page even though the consumer declared an acceptance boundary.
+
+Measured on 2026-10-04, plugin `12f036dc`, Windows, Vite 5.4.21 and Chromium 154:
+editing an imported `words.ms` changed the visible label `before` to `after` while the
+JavaScript consumer kept `Count: 2` and the same page-session UUID. A syntax error showed
+Vite's overlay while the previous code and count continued; repairing it updated the
+label without a page restart. In an established HMR session, restoring exactly the last
+good source also cleared the overlay without resetting the count. Production bundling
+kept maps pointing at `words.ms` and `logic.ms`. The smoke used real compiler-generated
+ES modules and a real Vite server/browser; it was not a Neon refresh implementation.
+
+`compilerArgs` is an optional string array for extra compiler flags, placed before the
+plugin-owned JavaScript target, split mode and output directory. A framework wrapper
+supplies its development defines and omits them for production; the generic plugin
+does not select framework policy. A real conditional-compilation consumer measured
+`dev` in the Vite browser with `compilerArgs: ["-d:refreshProbe"]` and `production`
+from the compiler-generated production module when the arguments were omitted.
+
+Vite 5's client has its own startup recovery policy: if its first update arrives while
+an error overlay exists, it reloads the page. This happened when the first edit after
+opening the smoke page was invalid and the next edit repaired it. The plugin does not
+disable the overlay or patch that policy. A framework-owned overlay is a separate
+adapter concern.
+
+This transport does not promise state preservation without a consumer's HMR boundary.
+Component/template signatures, surviving state scopes and refresh cleanup belong to
+Neon; the compiler plugin knows none of them. Other Vite versions, other bundlers and
+Neon native/browser refresh parity were not verified in this smoke.
 
 ### Running an app
 

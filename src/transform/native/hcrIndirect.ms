@@ -118,6 +118,27 @@ export function lowerHcrIndirection(
 	const storageTypes = new HashMap<string, Type>();
 	let bindings = "";
 	let bindSlot: int32 = 0;
+	for (const entry of aliveSet.foreignOps.data) {
+		if (entry.hcode == 0 || !entry.value.includes(own.modulePath)) continue;
+		const op = entry.key;
+		const symbol = opCName(op);
+		if (ownFunctions.has(symbol)) continue;
+		const owner = owners.get(symbol);
+		if (owner == null || owner == own.moduleId) continue;
+		const key = "f:" + hcrSignatureKey(op.symbolType);
+		const id = owner + "\n" + symbol + "\n" + key;
+		if (bound.has(id)) continue;
+		const pointer = `_ms_hcr_bind_${mangleModuleName(own.modulePath)}_${bindSlot}`;
+		bindSlot += 1;
+		bound.set(id, pointer);
+		bindings = bindings + `${cString(owner)}, ${cString(symbol)}, ${cString(key)}, `;
+		emitted.push(makeEmitStmt(`/*VARSECTION*/static MsHcrCell* ${pointer};`, loc));
+		emitted.push(makeEmitStmt(
+			`/*DATINITSECTION*/  ${pointer} = msHcrBind(${cString(owner)}, ${cString(symbol)}, ${cString(key)});`,
+			loc,
+		));
+		emitted.push(makeEmitStmt(`/*VARSECTION*/#define ${symbol} ((__typeof__(&${symbol}))${pointer}->current)`, loc));
+	}
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		const fn = exportedFunctionOf(pd.programStmts[i]);
 		if (fn != null) {
@@ -225,7 +246,7 @@ function constructedClassOf(n: Node): Symbol | null {
 }
 
 function constructorInitOf(classSym: Symbol | null): Symbol | null {
-	if (classSym == null || classSym.instantiatedFrom != null) return null;
+	if (classSym == null) return null;
 	const entry = lookupCtorDefaults(classSym, classSym.name);
 	return entry != null ? entry.initSym : null;
 }

@@ -348,6 +348,7 @@ function markTypeInfoOf(type: Type | null, modulePath: string): void {
 				markAndWalk(h, hn);
 			}
 		}
+		markTypeInfoHooks(t, modulePath);
 	}
 	if (t.kind == TypeKind.Union) {
 		markUnionHookEdges(t);
@@ -360,6 +361,7 @@ function markTypeInfoOf(type: Type | null, modulePath: string): void {
 				markAndWalk(h, hn);
 			}
 		}
+		markTypeInfoHooks(t, modulePath);
 		return;
 	}
 	const tn = t.typeName;
@@ -376,7 +378,8 @@ function markTypeInfoOf(type: Type | null, modulePath: string): void {
 		markAndWalk(home, tiName);
 	}
 	if (t.kind != TypeKind.Struct) return;
-	markTypeInfoHooks(t, t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : (home != "" ? home : modulePath));
+	const sharedInstance = t.sym != null && (t.sym.instantiatedFrom != null || hasGenericParams(t.sym.symbolType));
+	markTypeInfoHooks(t, sharedInstance ? modulePath : (t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : (home != "" ? home : modulePath)));
 	let bt = t.typeExtra;
 	let depth = 0;
 	while (bt != null && depth < 64) {
