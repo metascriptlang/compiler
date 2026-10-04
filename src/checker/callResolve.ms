@@ -951,7 +951,10 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		addError(ctx, "a call has a null callee (a macro returned a CallExpr without one)", node.location.line, node.location.column);
 		return errorType();
 	}
+	const prevCallee = ctx.calleeExpr;
+	ctx.calleeExpr = d.callee;
 	callCheckExpr(ctx, d.callee, null);
+	ctx.calleeExpr = prevCallee;
 	// Phase 5: super(args) call — type-check args against parent class
 	// constructor signature. resolveSuper set callee.resolvedSym to the parent
 	// class symbol. Reuse getCtorParamTypes which returns user-only params (no

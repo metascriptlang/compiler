@@ -1226,6 +1226,7 @@ export class CheckerContext {
 	inGenericContext: int32;     // >0 while checking members of a generic class pre-monomorphization — unbound-param diagnostics defer to instantiation
 	stmtPosExpr: Node;           // the expression that IS a statement: a macro there emits statements outright, so the expression-position rules (last element is the value, empty is an error) must not apply
 	typeExprSlot: Node;          // the operand being checked where a type name is accepted (a member's object, `new`'s callee, `instanceof`'s right side, a subscript's object); anywhere else a type name is not a value
+	calleeExpr: Node;            // the callee of the call being checked: a @comptime routine named there is folded, named anywhere else it is a run-time value
 	disambTable: HashMap<string, int32>; // (module, name) → how many routines of that name were already declared here; source of Symbol.disamb
 	itemModule: int32;           // index of the module this context checks; -1 for a context outside a module graph
 	nextItem: int32;
@@ -1313,6 +1314,7 @@ export function createContext(): CheckerContext {
 		inGenericContext: 0,
 		stmtPosExpr: null as unknown as Node,
 		typeExprSlot: null as unknown as Node,
+		calleeExpr: null as unknown as Node,
 		preludeCtx: null as unknown as CheckerContext,
 		instantiatingCtx: null as unknown as CheckerContext,
 		interf: [],

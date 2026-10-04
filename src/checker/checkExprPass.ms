@@ -535,6 +535,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			markUsedIn(ctx, sym);
 			if (refusesTypeAsValue(ctx, node, sym, d.name)) { node.nodeType = errorType(); return; }
 			if (d.name == "this" && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor)) node.data = { name: sym.name };
+			if (sym.symbolKind == SymbolKind.Function && hasFlag(sym, SymbolFlag.CompileTime) && node != ctx.calleeExpr
+					&& !isEngineCheckMode() && ctx.compileTimeBodyDepth == 0) {
+				addError(ctx, `'${d.name}' is @comptime, so it runs only while compiling: call it with compile-time arguments; it has no run-time code to reference as a value`, node.location.line, node.location.column);
+				node.nodeType = errorType(); return;
+			}
 			if (hasFlag(sym, SymbolFlag.ComptimeNodeAlias)) {
 				addError(ctx, `'${d.name}' binds a compile-time JSX/Node and can only be consumed by a macro (e.g. element(${d.name})), not used as a runtime value`, node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
