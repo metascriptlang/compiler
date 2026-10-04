@@ -20,7 +20,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym } from "../../transform/util";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -728,8 +728,44 @@ function assertedUnion(d: TypeAssertionData): Type | null {
 	return isTagCarriedUnion(union) ? union : null;
 }
 
-function openTagTest(gen: JSGenerator, member: Type, union: Type, pass: string): void {
-	emit(gen, "((v) => (" + pass + "typeof v === \"" + typeofTagOf(member) + "\") ? v : (() => { throw new Error(\"member '" + escapeJSString(typeDisplayName(member)) + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + typeof v + \"'\"); })())(");
+function openTagTest(gen: JSGenerator, member: Type, union: Type, pass: string, location: SourceLocation): void {
+	openMemberTest(gen, member, union, pass + "typeof v === \"" + typeofTagOf(member) + "\"", [], location);
+}
+
+function openMemberTest(gen: JSGenerator, member: Type, union: Type, check: string, excluded: Symbol[], location: SourceLocation): void {
+	emit(gen, "((v) => (" + check);
+	for (const cls of excluded) {
+		emit(gen, " && !(v instanceof ");
+		emitNode(gen, classReference(cls, location));
+		emit(gen, ")");
+	}
+	emit(gen, ") ? v : (() => { throw new Error(\"member '" + escapeJSString(unionMemberDisplay(member)) + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + typeof v + \"'\"); })())(");
+}
+
+function jsMemberKind(t: Type): string {
+	if (t.kind == TypeKind.Null) return "null";
+	if (t.kind == TypeKind.Ref && runtimeClassSym(t.typeReturn) != null) return "class";
+	if (isArrayShaped(t) || t.kind == TypeKind.Tuple) return "array";
+	return typeofTagOf(t);
+}
+
+function soleMemberOfKind(union: Type, kind: string): boolean {
+	let n = 0;
+	for (const m of union.typeChildren) {
+		if (m != null && jsMemberKind(m) == kind) n += 1;
+	}
+	return n == 1;
+}
+
+function classMembers(union: Type): Symbol[] | null {
+	const classes: Symbol[] = [];
+	for (const m of union.typeChildren) {
+		if (m == null || jsMemberKind(m) != "class") continue;
+		const body = m.typeReturn;
+		if (body == null || body.kind == TypeKind.GenericInstance) return null;
+		classes.push(runtimeClassSym(body)!);
+	}
+	return classes;
 }
 
 function classReference(sym: Symbol, location: SourceLocation): Node {
@@ -772,7 +808,7 @@ function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData
 		if (union != null) {
 			for (const m of union.typeChildren) if (m.kind == TypeKind.String) stringSlot = m;
 		}
-		if (union != null && stringSlot != null) openTagTest(gen, stringSlot, union, pass);
+		if (union != null && stringSlot != null) openTagTest(gen, stringSlot, union, pass, node.location);
 		emitNode(gen, d.asExpr);
 		emit(gen, union != null && stringSlot != null ? "))" : ")");
 		return true;
@@ -785,8 +821,18 @@ function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData
 		emit(gen, ")");
 		return true;
 	}
-	if (payload.kind != TypeKind.String && payload.kind != TypeKind.Number && payload.kind != TypeKind.Boolean) return false;
-	openTagTest(gen, payload, union, pass);
+	const kind = jsMemberKind(payload);
+	if (kind == "null" || kind == "class") return false;
+	if (kind == "array") {
+		if (!soleMemberOfKind(union, kind)) return false;
+		openMemberTest(gen, payload, union, pass + "Array.isArray(v)", [], node.location);
+	} else if (kind == "object") {
+		const classes = classMembers(union);
+		if (!soleMemberOfKind(union, kind) || classes == null) return false;
+		openMemberTest(gen, payload, union, pass + "v !== null && typeof v === \"object\" && !Array.isArray(v)", classes, node.location);
+	} else {
+		openTagTest(gen, payload, union, pass, node.location);
+	}
 	emitNode(gen, d.asExpr);
 	emit(gen, ")");
 	return true;
