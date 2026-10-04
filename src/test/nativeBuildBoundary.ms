@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, or all");
 	exit(2);
 }
 
@@ -255,6 +255,72 @@ function writeWrapper(dir: string, toolValue: int32): string {
 	put(wrapper, `#!/bin/sh\nexec clang -DTOOL_VALUE=${toolValue} "$@"\n`);
 	need(chmod(wrapper, 493).ok, "chmod cc wrapper");
 	return wrapper;
+}
+
+function projectDriver(dir: string): string {
+	if (windows) {
+		const wrapper = `${dir}/project-cc.exe`;
+		const source = `${dir}/project-cc.c`;
+		const zig = `${homeDir()}/.metascript/zig/zig.exe`;
+		put(source,
+			"#include <process.h>\n#include <stdlib.h>\n#include <string.h>\n"
+			+ "int main(int argc, char **argv) {\n"
+			+ "  if (getenv(\"MSC_BOUNDARY_REJECT_DISPATCH\")) {\n"
+			+ "    int compile = 0;\n"
+			+ "    for (int i = 1; i < argc; i++) if (strcmp(argv[i], \"-c\") == 0) compile = 1;\n"
+			+ "    if (compile) for (int i = 1; i < argc; i++) if (strstr(argv[i], \"_dispatch.\")) return 98;\n"
+			+ "  }\n"
+			+ "  char **args = malloc(sizeof(char *) * (argc + 2));\n"
+			+ `  args[0] = "${zig}";\n`
+			+ "  args[1] = \"cc\";\n"
+			+ "  for (int i = 1; i < argc; i++) args[i + 1] = argv[i];\n"
+			+ "  args[argc + 1] = NULL;\n"
+			+ `  return (int)_spawnv(_P_WAIT, "${zig}", (const char * const *)args);\n`
+			+ "}\n");
+		need(command(dir, "project-driver", "gcc", [source, "-o", wrapper]).code == 0, "compile project driver");
+		return wrapper;
+	}
+	const wrapper = `${dir}/project-cc`;
+	put(wrapper, "#!/bin/sh\n"
+		+ "compile=\nfor a in \"$@\"; do [ \"$a\" = -c ] && compile=1; done\n"
+		+ "if [ -n \"$compile\" ] && [ -n \"$MSC_BOUNDARY_REJECT_DISPATCH\" ]; then\n"
+		+ "  for a in \"$@\"; do case \"$a\" in *_dispatch.*) exit 98 ;; esac; done\n"
+		+ "fi\n"
+		+ "exec clang \"$@\"\n");
+	need(chmod(wrapper, 493).ok, "chmod project driver");
+	return wrapper;
+}
+
+function runProjectCache(): void {
+	const savedCache = env.get("MSC_CACHE_DIR");
+	const savedReject = env.get("MSC_BOUNDARY_REJECT_DISPATCH");
+	const savedDisabled = env.get("MSC_NO_GLOBAL_CACHE");
+	const driver = projectDriver(root);
+	env.delete("MSC_BOUNDARY_REJECT_DISPATCH");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	for (const name of ["project outputs", "project outputs with spaces"]) {
+		const dir = fixture(name, "@compile(\"./native.c\");",
+			"#ifdef __OPTIMIZE__\nint probeValue(void) { return 163; }\n#else\nint probeValue(void) { return 157; }\n#endif\n");
+		env.set("MSC_CACHE_DIR", `${dir}/local`);
+		need(build(dir, "debug-a", "probe", [], driver) == 0, "project debug output");
+		need(value(dir) == "157", "project debug value");
+		need(build(dir, "debug-a-settled", "probe", [], driver) == 0, "project debug settled");
+		need(build(dir, "release-b", "probe-b", ["--release"], driver) == 0, "project release output");
+		need(value(dir, "probe-b") == "163", "project release value");
+		env.set("MSC_BOUNDARY_REJECT_DISPATCH", "1");
+		const returned = build(dir, "return-debug-a", "probe", [], driver);
+		env.delete("MSC_BOUNDARY_REJECT_DISPATCH");
+		recordTrue(`independent output and configuration skips dispatcher ${name}`, returned == 0);
+		if (returned == 0) record(`independent output preserves debug behavior ${name}`, "157", value(dir));
+		put(`${dir}/native.c`, "int probeValue(void) { return 167; }\n");
+		need(build(dir, "debug-source-changed", "probe", [], driver) == 0, "project changed source debug");
+		record(`retained debug record invalidates changed native source ${name}`, "167", value(dir));
+		need(build(dir, "release-source-changed", "probe-b", ["--release"], driver) == 0, "project changed source release");
+		record(`retained release record invalidates changed native source ${name}`, "167", value(dir, "probe-b"));
+	}
+	if (savedCache == "") env.delete("MSC_CACHE_DIR"); else env.set("MSC_CACHE_DIR", savedCache);
+	if (savedReject == "") env.delete("MSC_BOUNDARY_REJECT_DISPATCH"); else env.set("MSC_BOUNDARY_REJECT_DISPATCH", savedReject);
+	if (savedDisabled == "") env.delete("MSC_NO_GLOBAL_CACHE"); else env.set("MSC_NO_GLOBAL_CACHE", savedDisabled);
 }
 
 function runAudit(): void {
@@ -486,6 +552,7 @@ if (group == "link-cache" || group == "all") runLinkCache();
 if (group == "audit" || group == "all") runAudit();
 if (group == "comptime-cache" || group == "all") runComptimeCache();
 if (group == "object-store" || group == "all") runObjectStore();
+if (group == "project-cache" || group == "all") runProjectCache();
 
 let failures = 0;
 console.log(`root ${root}`);

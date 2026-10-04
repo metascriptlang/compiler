@@ -137,10 +137,14 @@ let _forceRebuild = false;
 let _nativeProjectDeps: string[] = [];
 let _nativeProjectDepSet: HashSet<string> = new HashSet<string>();
 let _buildStartedSeconds: number = 0;
+let _projectInputKey = "";
+let _projectInputHashes: string[] = [];
 
 // Initialize cache with build mode and force flag. Must be called before any cache operations.
 // Reference-aligned: cacheSuffix (_d/_r), optForceFullMake (force bypass).
 export function initCache(mode: number, forceRebuild: boolean): void {
+	_projectInputKey = "";
+	_projectInputHashes = [];
 	const envDir = env.get("MSC_CACHE_DIR");
 	if (envDir != "") {
 		_cacheDir = envDir;
@@ -160,11 +164,6 @@ export function initCache(mode: number, forceRebuild: boolean): void {
 
 function getCacheDir(): string {
 	if (_cacheDir != "") return _cacheDir;
-	// Reference parity (--nimcache): isolate the build cache per lane/config.
-	// Concurrent builds sharing one cache dir are CORRECT since fp-keying, but
-	// the project/link metadata is last-writer-wins — separate dirs (e.g. the
-	// SAN lane using an ASan driver) avoid pointless re-links. Env-based so
-	// runners can set it without new CLI surface.
 	const envDir = env.get("MSC_CACHE_DIR");
 	if (envDir != "") {
 		_cacheDir = envDir;
@@ -839,14 +838,12 @@ export function writeCompileCache(oFile: string, fp: string): void {
 // compile cmds, link files, linkcmd, configFiles, currentDir, cmdline, depfiles (hash each),
 // compiler binary hash.
 //
-// We track: cacheVersion, outputFile, cmdline (compile+link flags+mode+compiler), depfiles (hash each).
-// Stored as simple key=value lines in out/.cache_{d|r}/project.cache.
 
-const CACHE_VERSION = "v3";
+const CACHE_VERSION = "v4";
 
-// Build the project cache file path.
-function projectCacheFile(): string {
-	return `${getCacheDir()}/project.cache`;
+function projectCacheFile(inputs: string, outputFile: string, command: string): string {
+	const key = objectListKey([cwd(), join(cwd(), outputFile), command, inputs]);
+	return `${getCacheDir()}/project.${key}.cache`;
 }
 
 let _compilerHash = "";
@@ -890,6 +887,8 @@ function outputIdentity(path: string): string {
 	return stamp != "" ? `stamp:${stamp}` : hashFile(path);
 }
 const PRE_DEP = "dep:";
+const PRE_CWD = "cwd:";
+const PRE_INPUTS = "inputs:";
 
 // Parse a line from the cache file. Returns value after prefix, or "" if no match.
 function parseLineValue(line: string, prefix: string): string {
@@ -916,10 +915,6 @@ function splitLines(s: string): string[] {
 	return lines;
 }
 
-// Cached dep hashes from last projectCacheChanged call — reused by writeProjectCache
-// to avoid hashing every source file twice on successful builds.
-let _cachedDepHashes: string[] = [];
-
 function storedDepPath(entry: string): string {
 	let i = entry.length - 1;
 	while (i >= 0) {
@@ -927,11 +922,6 @@ function storedDepPath(entry: string): string {
 		i = i - 1;
 	}
 	return "";
-}
-
-function projectCacheMiss(cacheFile: string): boolean {
-	tryRemoveFile(cacheFile);
-	return true;
 }
 
 // Check if the project needs rebuilding.
@@ -945,19 +935,28 @@ export function projectCacheChanged(
 	mode: number,
 	flags: string
 ): boolean {
-	_cachedDepHashes = [];
-	const cacheFile = projectCacheFile();
-	if (_forceRebuild) return projectCacheMiss(cacheFile);
-	if (!exists(cacheFile) || !exists(outputFile)) return projectCacheMiss(cacheFile);
+	const currentCmd = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
+	const inputs = objectListKey(depPaths);
+	const cacheFile = projectCacheFile(inputs, outputFile, currentCmd);
+	_projectInputKey = cacheFile;
+	_projectInputHashes = [];
+	for (const path of depPaths) _projectInputHashes.push(hashFile(path));
+	if (_forceRebuild) return true;
+	if (!exists(cacheFile) || !exists(outputFile)) return true;
 	const cacheResult = readFile(cacheFile);
-	if (!cacheResult.ok) return projectCacheMiss(cacheFile);
-	const lines = splitLines(cacheResult.value);
+	if (!cacheResult.ok) return true;
+	const newline = cacheResult.value.indexOf("\n", 0);
+	if (newline < 0) return true;
+	const body = cacheResult.value.slice(newline + 1, cacheResult.value.length);
+	if (cacheResult.value.slice(0, newline) != hashContent(body)) return true;
+	const lines = splitLines(body);
 
-	// Parse header fields
 	let storedVersion = "";
 	let storedOutput = "";
 	let storedCmd = "";
 	let storedOutputHash = "";
+	let storedCwd = "";
+	let storedInputs = "";
 	const storedDeps: string[] = [];
 
 	for (const line of lines) {
@@ -969,36 +968,31 @@ export function projectCacheChanged(
 		if (val != "") { storedCmd = val; continue; }
 		val = parseLineValue(line, PRE_OUTHASH);
 		if (val != "") { storedOutputHash = val; continue; }
+		val = parseLineValue(line, PRE_CWD);
+		if (val != "") { storedCwd = val; continue; }
+		val = parseLineValue(line, PRE_INPUTS);
+		if (val != "") { storedInputs = val; continue; }
 		val = parseLineValue(line, PRE_DEP);
 		if (val != "") { storedDeps.push(val); }
 	}
 
-	const currentCmd = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
+	if (storedVersion != CACHE_VERSION) return true;
+	if (storedOutput != join(cwd(), outputFile)) return true;
+	if (storedCmd != currentCmd) return true;
+	if (storedCwd != cwd()) return true;
+	if (storedInputs != inputs) return true;
+	if (storedOutputHash != outputIdentity(outputFile)) return true;
 
-	// Reference-aligned: check cacheVersion, outputFile, cmdline
-	if (storedVersion != CACHE_VERSION) return projectCacheMiss(cacheFile);
-	if (storedOutput != outputFile) return projectCacheMiss(cacheFile);
-	if (storedCmd != currentCmd) return projectCacheMiss(cacheFile);
-
-	// Reference-aligned: check output binary modification (detect external tampering)
-	const currentOutputHash = outputIdentity(outputFile);
-	if (storedOutputHash != currentOutputHash) return projectCacheMiss(cacheFile);
-
-	if (storedDeps.length < depPaths.length) return projectCacheMiss(cacheFile);
+	if (storedDeps.length < depPaths.length) return true;
 	let di = 0;
 	while (di < depPaths.length) {
 		const path = depPaths[di];
-		const currentEntry = `${path}=${hashFile(path)}`;
-		if (storedDeps[di] != currentEntry) return projectCacheMiss(cacheFile);
-		_cachedDepHashes.push(currentEntry);
+		if (storedDeps[di] != `${path}=${_projectInputHashes[di]}`) return true;
 		di = di + 1;
 	}
 	while (di < storedDeps.length) {
 		const path = storedDepPath(storedDeps[di]);
-		if (path == "") return projectCacheMiss(cacheFile);
-		const currentEntry = `${path}=${hashFile(path)}`;
-		if (storedDeps[di] != currentEntry) return projectCacheMiss(cacheFile);
-		_cachedDepHashes.push(currentEntry);
+		if (path == "" || storedDeps[di] != `${path}=${hashFile(path)}`) return true;
 		di = di + 1;
 	}
 
@@ -1007,7 +1001,6 @@ export function projectCacheChanged(
 
 // Write the project cache after a successful build.
 // Reference-aligned: writeJsonBuildInstructions.
-// Reuses dep hashes from projectCacheChanged when available (avoids re-reading all sources).
 export function writeProjectCache(
 	depPaths: string[],
 	outputFile: string,
@@ -1016,28 +1009,127 @@ export function writeProjectCache(
 	mode: number,
 	flags: string
 ): void {
-	const allDeps: string[] = [];
+	if (!exists(outputFile)) return;
+	const command = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
+	const inputs = objectListKey(depPaths);
+	const record = projectCacheFile(inputs, outputFile, command);
 	const seen = new HashSet<string>();
-	for (const path of depPaths) {
+	let dependencies = "";
+	for (let i = 0; i < depPaths.length; i++) {
+		const path = depPaths[i];
+		const hash = hashFile(path);
+		if (_projectInputKey == record && (i >= _projectInputHashes.length || hash != _projectInputHashes[i])) return;
+		if (_buildStartedSeconds > 0 && (!exists(path) || modifiedTime(path) >= Math.floor(_buildStartedSeconds))) return;
 		if (seen.has(path)) continue;
 		seen.add(path);
-		allDeps.push(path);
+		dependencies = dependencies + `${PRE_DEP}${path}=${hash}\n`;
 	}
 	for (const path of _nativeProjectDeps) {
 		if (seen.has(path)) continue;
+		if (_buildStartedSeconds > 0 && modifiedTime(path) >= Math.floor(_buildStartedSeconds)) return;
 		seen.add(path);
-		allDeps.push(path);
+		dependencies = dependencies + `${PRE_DEP}${path}=${hashFile(path)}\n`;
 	}
 	let content = `${PRE_VERSION}${CACHE_VERSION}\n`;
-	content = content + `${PRE_OUTPUT}${outputFile}\n`;
-	content = content + `${PRE_CMDLINE}${buildCmdFingerprint(ccOption, ccBinary, mode, flags)}\n`;
+	content = content + `${PRE_OUTPUT}${join(cwd(), outputFile)}\n`;
+	content = content + `${PRE_CMDLINE}${command}\n`;
+	content = content + `${PRE_CWD}${cwd()}\n`;
+	content = content + `${PRE_INPUTS}${inputs}\n`;
 	content = content + `${PRE_OUTHASH}${outputIdentity(outputFile)}\n`;
-	if (_cachedDepHashes.length == allDeps.length) {
-		for (const entry of _cachedDepHashes) content = content + `${PRE_DEP}${entry}\n`;
-	} else {
-		for (const path of allDeps) content = content + `${PRE_DEP}${path}=${hashFile(path)}\n`;
+	content = content + dependencies;
+	atomicWriteFile(record, `${hashContent(content)}\n${content}`);
+}
+
+function withProjectRecordFixture(name: string, body: (dir: string) => void): void {
+	const savedDir = _cacheDir;
+	const savedForce = _forceRebuild;
+	const savedDeps = _nativeProjectDeps;
+	const savedDepSet = _nativeProjectDepSet;
+	const savedStarted = _buildStartedSeconds;
+	const savedKey = _projectInputKey;
+	const savedHashes = _projectInputHashes;
+	const dir = `${getCacheDir()}/project-record-${name}-${performance.now()}`;
+	ensureDir(dir);
+	_cacheDir = dir;
+	_forceRebuild = false;
+	_nativeProjectDeps = [];
+	_nativeProjectDepSet = new HashSet<string>();
+	_buildStartedSeconds = 0;
+	_projectInputKey = "";
+	_projectInputHashes = [];
+	try {
+		body(dir);
+	} finally {
+		removeAll(dir);
+		_cacheDir = savedDir;
+		_forceRebuild = savedForce;
+		_nativeProjectDeps = savedDeps;
+		_nativeProjectDepSet = savedDepSet;
+		_buildStartedSeconds = savedStarted;
+		_projectInputKey = savedKey;
+		_projectInputHashes = savedHashes;
 	}
-	atomicWriteFile(projectCacheFile(), content);
+}
+
+test "project records reject source changes between lookup and publication" {
+	withProjectRecordFixture("publication", (dir: string): void => {
+		const dep = `${dir}/entry.ms`;
+		const out = `${dir}/app`;
+		writeFile(dep, "original source");
+		writeFile(out, "output from original source");
+		writeProjectCache([dep], out, 0, "", 0, "-O0");
+		assert !projectCacheChanged([dep], out, 0, "", 0, "-O0");
+		writeFile(dep, "changed source");
+		writeProjectCache([dep], out, 0, "", 0, "-O0");
+		assert projectCacheChanged([dep], out, 0, "", 0, "-O0");
+	});
+}
+
+test "project records retain independent outputs and configurations on a miss" {
+	withProjectRecordFixture("alternate", (dir: string): void => {
+		const dep = `${dir}/entry.ms`;
+		const outA = `${dir}/a`;
+		const outB = `${dir}/b`;
+		writeFile(dep, "entry");
+		writeFile(outA, "debug-output");
+		writeFile(outB, "release-output");
+		writeProjectCache([dep], outA, 0, "", 0, "-O0");
+		writeProjectCache([dep], outB, 0, "", 1, "-O2");
+		assert !projectCacheChanged([dep], outA, 0, "", 0, "-O0");
+		assert !projectCacheChanged([dep], outB, 0, "", 1, "-O2");
+		assert projectCacheChanged([dep], outA, 0, "", 1, "-O2");
+		assert !projectCacheChanged([dep], outA, 0, "", 0, "-O0");
+		assert !projectCacheChanged([dep], outB, 0, "", 1, "-O2");
+	});
+}
+
+test "project records reject changed outputs, dependencies and corrupt metadata independently" {
+	withProjectRecordFixture("invalidation", (dir: string): void => {
+		const depA = `${dir}/a.ms`;
+		const depB = `${dir}/b.ms`;
+		const outA = `${dir}/a`;
+		const outB = `${dir}/b`;
+		writeFile(depA, "entry-a");
+		writeFile(depB, "entry-b");
+		writeFile(outA, "output-a");
+		writeFile(outB, "output-b");
+		writeProjectCache([depA], outA, 0, "", 0, "-O0");
+		writeProjectCache([depB], outB, 0, "", 0, "-O0");
+		writeFile(outA, "tampered");
+		assert projectCacheChanged([depA], outA, 0, "", 0, "-O0");
+		assert !projectCacheChanged([depB], outB, 0, "", 0, "-O0");
+		writeFile(outA, "output-a");
+		writeProjectCache([depA], outA, 0, "", 0, "-O0");
+		writeFile(depA, "changed-entry");
+		assert projectCacheChanged([depA], outA, 0, "", 0, "-O0");
+		assert !projectCacheChanged([depB], outB, 0, "", 0, "-O0");
+		writeFile(depA, "entry-a");
+		assert !projectCacheChanged([depA], outA, 0, "", 0, "-O0");
+		const record = projectCacheFile(objectListKey([depA]), outA, buildCmdFingerprint(0, "", 0, "-O0"));
+		writeFile(record, "corrupt");
+		assert projectCacheChanged([depA], outA, 0, "", 0, "-O0");
+		assert !projectCacheChanged([depB], outB, 0, "", 0, "-O0");
+	});
 }
 
 // ===== Per-Module C Code Cache (Layer 3) =====
