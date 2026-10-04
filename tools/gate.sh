@@ -142,7 +142,7 @@ build_ctl() {
   touch "$ctl_dir"
   printf '%s' "$key"
 }
-compiler_changed() { grep -E '^src/' | grep -vqE '^src/test/'; }
+compiler_changed() { grep -E '^src/' | grep -vE '^src/test/' >/dev/null; }
 
 tier_touched() {
   awk -v deps="$1" -v top="$2" 'BEGIN { while ((getline d < deps) > 0) mods[d] = 1 }
@@ -153,7 +153,7 @@ tier_touched() {
 tier_select() {
   local f dir deps emits="" t0=$SECONDS n=0 all
   all=$(set -- $TIERS; printf '%s' "$#")
-  if awk -F'\t' '{ print $2 }' "$OUT/why" | grep -Eq "$SELECT_BLIND"; then
+  if awk -F'\t' '{ print $2 }' "$OUT/why" | grep -E "$SELECT_BLIND" >/dev/null; then
     say "tier-select: blind paths in the diff, whole"; select_ledger tier-select 0 "$all" "$all" "" "" ""; return 1
   fi
   if awk -F'\t' '{ print $2 }' "$OUT/why" | compiler_changed; then
@@ -180,7 +180,7 @@ tier_select() {
 inert_range() {
   local paths
   paths=$(git diff --name-only --no-renames "$1" "$2") || return 2
-  ! printf '%s\n' "$paths" | grep -Ev "$INERT" | grep -q .
+  ! printf '%s\n' "$paths" | grep -Ev "$INERT" | grep . >/dev/null
 }
 
 digest() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi | cut -d' ' -f1; }
@@ -914,7 +914,7 @@ fi
 
 lanes=""
 for l in $ORDER; do
-  if printf '%s\n' $chosen | grep -qx "$l"; then lanes="$lanes $l"; fi
+  if printf '%s\n' $chosen | grep -x "$l" >/dev/null; then lanes="$lanes $l"; fi
 done
 lanes=${lanes# }
 
@@ -1055,7 +1055,7 @@ run_test_lane() {
     if [ "$shard" = - ]; then part=$(part_of "$1" "$f"); else part=$(part_of "$1" "$f.$shard"); fi
     cat "$part"
     [ "$(cat "$part.rc" 2>/dev/null)" = 0 ] || rc=1
-    if ! sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -Eq '^ *Test Files +[0-9]'; then
+    if ! sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -E '^ *Test Files +[0-9]' >/dev/null; then
       case "$noresult" in *" $f "*) ;; *) printf 'NORESULT %s > no result\n' "$f"; noresult="$noresult$f " ;; esac
       sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -E '^(error|internal|fatal)' | head -3
       rc=1
