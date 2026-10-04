@@ -642,7 +642,12 @@ function substituteTypeStrings(strs: string[], names: string[], types: Type[]): 
 	}
 }
 
-const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.WhenDeferred;
+const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.WhenDeferred | NodeFlag.ExplicitDeref;
+
+function isCheckerWrapper(node: Node): boolean {
+	if (node.kind == NodeKind.HiddenDeref) return !node.flags.has(NodeFlag.ExplicitDeref);
+	return node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.HiddenStdConv;
+}
 
 // ===== clearCheckerState =====
 // Collapse HiddenDeref/HiddenAddr/HiddenStdConv wrappers and clear resolvedSym/flags on a
@@ -668,7 +673,7 @@ function bindsInto(node: Node, redeclared: Symbol[]): boolean {
 
 function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void {
 	if (node == null) return;
-	while (node.kind == NodeKind.HiddenDeref || node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.HiddenStdConv) {
+	while (isCheckerWrapper(node)) {
 		const inner = node.kind == NodeKind.HiddenStdConv
 			? (node.data as HiddenStdConvData).convExpr
 			: (node.data as HiddenDerefData).expr;
@@ -676,6 +681,7 @@ function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void 
 		node.kind = inner.kind;
 		node.data = inner.data;
 		node.nodeType = inner.nodeType;
+		if (inner.flags.has(NodeFlag.ExplicitDeref)) node.flags = node.flags.incl(NodeFlag.ExplicitDeref);
 	}
 	// Enum member access is a mangled Identifier ("E_M") whose name is never bound
 	// in scope — resolvedSym is its ONLY resolution path (checkExprPass honors it,
