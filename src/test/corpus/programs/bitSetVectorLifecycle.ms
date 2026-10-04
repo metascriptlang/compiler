@@ -1,4 +1,5 @@
 // @xfail(c): card 2026-10-03-selfhost-noop-perturbation-flips-checker — the
+// @xfail(san): same card, same symbol loss — the ASan build hits it too.
 // @xfail(orc): `copy = new Array(0)` reassignment loses the field-path root's
 // @xfail(danger): resolvedSym in alias analysis under a cold cache; the two
 // valueStorageParked tests hold the same contract.
