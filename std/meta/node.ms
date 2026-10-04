@@ -283,6 +283,7 @@ export enum NodeFlag {
 	NoFieldCheck,
 	GlobalDestroys,
 	UserOp,        // checker: this operator calls a declared routine, not the built-in
+	ObjectSlot,    // checker: this union projection reads whichever slot holds an object, the conversion above it checks the class
 }
 
 // ===== Node Kind Enum =====
