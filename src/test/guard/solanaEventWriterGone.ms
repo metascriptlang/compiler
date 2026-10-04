@@ -1,7 +1,7 @@
 // GUARD-OS solana
 // GUARD-CHECK-FAIL solanaEventWriterGone.ms:7:
 // GUARD-CHECK-FAIL has no export 'EventWriter'
-// An event is serialized by emitEvent into a stack buffer the core owns: no writer value over a buffer
+// An event is serialized by emit into a stack buffer the core owns: no writer value over a buffer
 // is exported, so none can be built, returned or kept by a program.
 // RED MEANS: std/solana exports an event writer again.
 import { EventWriter, eventWriter } from "std/solana";

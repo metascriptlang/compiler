@@ -70,7 +70,7 @@ import {
 	args,
 	bump,
 	constraint,
-	emitEvent,
+	emit,
 	findProgramAddress,
 	findProgramAddressOf,
 	hasOne,
@@ -540,10 +540,10 @@ export struct Made {
 
 function emitEntry(): void {
 	const made: Made = { amount: 1234, maker: keyOf(7), done: true };
-	emitEvent<Made>(made);
+	emit<Made>(made);
 }
 
-test "emitEvent logs Anchor's event discriminator and the Borsh fields as Program data" {
+test "emit logs Anchor's event discriminator and the Borsh fields as Program data" {
 	const none: HostAccount[] = [];
 	assert run(programKey(), none, [], emitEntry).result == 0;
 	const expected = "Program data: " +
@@ -591,7 +591,7 @@ function wideEntry(): void {
 		signedLong: -9000000000000,
 		owner: patternedKey(),
 	};
-	emitEvent<Wide>(wide);
+	emit<Wide>(wide);
 	const edge: Edge = {
 		owner: patternedKey(),
 		largest: 0xffffffffffffffff,
@@ -601,10 +601,10 @@ function wideEntry(): void {
 		lowestShort: -32768,
 		lowestWord: -2147483647 - 1,
 	};
-	emitEvent<Edge>(edge);
+	emit<Edge>(edge);
 }
 
-test "emitEvent writes every field width, signed or not, in declaration order" {
+test "emit writes every field width, signed or not, in declaration order" {
 	const none: HostAccount[] = [];
 	assert run(programKey(), none, [], wideEntry).result == 0;
 	const wide = "Program data: G5rYD/n75SGr+wECAdT+BAMCAZDu/v8IBwYFBAMCAQBwMobQ9///" +
@@ -690,10 +690,10 @@ function crowdEntry(): void {
 		second: 2,
 		third: 3,
 	};
-	emitEvent<Crowd>(crowd);
+	emit<Crowd>(crowd);
 }
 
-test "emitEvent holds an event of exactly the 1024 bytes its buffer has" {
+test "emit holds an event of exactly the 1024 bytes its buffer has" {
 	const none: HostAccount[] = [];
 	assert run(programKey(), none, [], crowdEntry).result == 0;
 	const lines = logs();

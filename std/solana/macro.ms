@@ -807,13 +807,13 @@ export macro tokenAuthority(use: Node): Node {
 	error("@tokenAuthority is a field decorator that accounts<T>() reads; it is not called", use);
 }
 
-export macro emitEvent(value: Node): Node {
+export macro emit(value: Node): Node {
 	const shape = getTypeArg();
 	if (shape.kind !== NodeKind.TypeObject) {
-		error("emitEvent<E>(value): E must be the event struct", shape);
+		error("emit<E>(value): E must be the event struct", shape);
 	}
 	if (value.kind !== NodeKind.Identifier) {
-		error("emitEvent<E>(value): pass the event as a local variable", value);
+		error("emit<E>(value): pass the event as a local variable", value);
 	}
 	const line = value.line;
 	const column = value.column;
@@ -850,7 +850,7 @@ export macro emitEvent(value: Node): Node {
 		if (typeName == "uint64" || typeName == "int64") { width = 8; }
 		if (typeName == "Pubkey") { width = 32; }
 		if (width == 0) {
-			error("emitEvent<E>(value): field '" + shape.typExprFieldNames[field] +
+			error("emit<E>(value): field '" + shape.typExprFieldNames[field] +
 				"' is not fixed-size plain data (sized integer, boolean or Pubkey)", shape);
 		}
 		const member: Node = {
@@ -935,7 +935,7 @@ export macro emitEvent(value: Node): Node {
 		field = field + 1;
 	}
 	if (total > 1024) {
-		error("emitEvent<E>(value): the event is " + (total as int32) +
+		error("emit<E>(value): the event is " + (total as int32) +
 			" bytes with its discriminator, over the 1024 the std buffers", value);
 	}
 	const count = widths.length;

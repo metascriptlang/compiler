@@ -3,8 +3,8 @@
 // GUARD-CHECK-FAIL the event is 1032 bytes with its discriminator, over the 1024 the std buffers
 // An event is serialized in a stack buffer of 1024 bytes, so one that does not fit is refused where
 // it is written, with its size, instead of overrunning the buffer or taking the heap.
-// RED MEANS: emitEvent accepted an event the buffer cannot hold, or lost the error that names it.
-import { Pubkey, emitEvent, programId } from "std/solana";
+// RED MEANS: emit accepted an event the buffer cannot hold, or lost the error that names it.
+import { Pubkey, emit, programId } from "std/solana";
 
 struct Crowd {
 	key0: Pubkey;
@@ -76,6 +76,6 @@ function main(): void {
 		key30: programId(),
 		key31: programId(),
 	};
-	emitEvent<Crowd>(crowd);
+	emit<Crowd>(crowd);
 }
 main();

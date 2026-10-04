@@ -1,7 +1,7 @@
 // GUARD-OS solana
 // An event of exactly 1024 bytes with its discriminator, the largest the stack buffer holds, builds.
-// RED MEANS: emitEvent refuses an event that fits the buffer.
-import { Pubkey, emitEvent, programId } from "std/solana";
+// RED MEANS: emit refuses an event that fits the buffer.
+import { Pubkey, emit, programId } from "std/solana";
 
 struct Crowd {
 	key0: Pubkey;
@@ -77,6 +77,6 @@ function main(): void {
 		second: 2,
 		third: 3,
 	};
-	emitEvent<Crowd>(crowd);
+	emit<Crowd>(crowd);
 }
 main();

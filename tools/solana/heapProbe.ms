@@ -6,7 +6,7 @@ import {
 	Pubkey,
 	account,
 	clock,
-	emitEvent,
+	emit,
 	failWith,
 	findProgramAddress,
 	instructionData,
@@ -182,7 +182,7 @@ function logKeyLoop(count: uint64): Result<uint64, ProgramError> {
 
 function eventLoop(count: uint64): Result<uint64, ProgramError> {
 	const probed: Probed = { amount: 7, owner: programId(), done: true };
-	for (let index: uint64 = 0; index < count; index++) { emitEvent<Probed>(probed); }
+	for (let index: uint64 = 0; index < count; index++) { emit<Probed>(probed); }
 	logU64(msSolAlloc(0));
 	return Result.ok(0);
 }
