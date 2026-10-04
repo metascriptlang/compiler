@@ -12,7 +12,7 @@ import {
 	readProcStmts, emitLineDir, getTemp, fillLocalName, lookupLocalSymName, setLocalSymName, pushBlock, popBlock,
 	CSection, addLine, sec, nameSetAdd, nameSetHas, addCGenError, addUnloweredError,
 } from "./context";
-import { genExpr, shimCallArg } from "./expressions";
+import { genExpr, genExprInto, buildsInPlace, shimCallArg } from "./expressions";
 import { formatCNumber, formatCNumberLit } from "./literals";
 import { ensureCrossModuleProto } from "./forward";
 import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar } from "./names";
@@ -428,6 +428,10 @@ function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 			emitStmtsLine(p, `${varName} = &(${initSnippet});`);
 			p.indirectLocals.push(d.declName);
 			if (node.resolvedSym != null) p.indirectSyms.push(node.resolvedSym);
+		} else if (hoistDecl && buildsInPlace(g, d.initializer, cType)) {
+			emitProcLocalsLine(p, `${cType} ${varName};`);
+			const built = genExprInto(g, p, d.initializer, varName);
+			if (built != varName) emitStmtsLine(p, `${varName} = ${built};`);
 		} else {
 			const initSnippet = genExpr(g, p, d.initializer);
 			let finalInit = initSnippet;
@@ -651,7 +655,10 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		emitStmtsLine(p, "return;");
 		return;
 	}
-	if (d.argument != null) {
+	if (d.argument != null && isNrvo && p.returnType != null && buildsInPlace(g, d.argument, getTypeDesc(g, p.returnType))) {
+		const built = genExprInto(g, p, d.argument, "(*__result)");
+		if (built != "(*__result)") emitStmtsLine(p, `*__result = ${built};`);
+	} else if (d.argument != null) {
 		const snippet = genExpr(g, p, d.argument);
 		if (isNrvo) {
 			// C99 compound literal: (Type){ .f = v } needs the (Type) prefix.
