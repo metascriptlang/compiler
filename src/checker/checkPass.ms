@@ -28,7 +28,7 @@ import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveRetur
 import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, forgetInstances, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults } from "./instantiate";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
-import { declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance } from "./types";
+import { declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView } from "./types";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
@@ -38,7 +38,7 @@ import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
 import { foldUserOperatorConstant, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
-import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
+import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
@@ -1439,8 +1439,10 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 			&& !isUnresolvedType(d.forOfIterable.nodeType)
 			&& d.forOfIterable.nodeType.kind != TypeKind.Error) {
 		const loc = d.forOfIterable.location;
+		const pairs = d.forOfPattern != null && d.forOfPattern.kind == NodeKind.ArrayPattern
+			&& offersProtocol(ctx, d.forOfIterable.nodeType, "toPairs");
 		const memberNode = createNodeAt(NodeKind.MemberExpr,
-			{ object: d.forOfIterable, property: "toItems", isOptional: false }, loc);
+			{ object: d.forOfIterable, property: pairs ? "toPairs" : "toItems", isOptional: false }, loc);
 		const toItemsCall = createNodeAt(NodeKind.CallExpr,
 			{ callee: memberNode, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
 		checkExpr(ctx, toItemsCall, null);
@@ -1462,6 +1464,10 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 		elemType = propagateReadonlyView(elemType);
 	}
 	if (d.forOfPattern != null) {
+		if (d.forOfPattern.kind == NodeKind.ArrayPattern && !destructuresByPosition(elemType)) {
+			addError(ctx, `an array pattern needs each element to be a tuple or an array, and this for-of yields '${typeDisplayName(elemType)}'`,
+				d.forOfPattern.location.line, d.forOfPattern.location.column);
+		}
 		// Destructured for-of: define symbols for each pattern element
 		defineForOfPatternBindings(ctx, d.forOfPattern, elemType, d.forOfIsConst, true);
 	} else {
@@ -1487,6 +1493,13 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forOfBody);
 	restoreConsumeState(ctx.affineTracker, affineSnap);
+}
+
+function destructuresByPosition(t: Type): boolean {
+	if (isUnresolvedType(t) || t.kind == TypeKind.Error) return true;
+	const held = peelTransparentInstance(withoutReadonlyView(t));
+	const base = held.kind == TypeKind.Ref && held.typeReturn != null ? held.typeReturn : held;
+	return base.kind == TypeKind.Tuple || base.kind == TypeKind.Array || base.kind == TypeKind.SizedArray || base.kind == TypeKind.Span;
 }
 
 function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean, forVar: boolean): void {

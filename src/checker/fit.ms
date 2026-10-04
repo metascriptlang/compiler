@@ -1171,10 +1171,20 @@ export function operandReadsValue(ctx: CheckerContext, op: string, leftType: Typ
 
 export enum ReadNeed { Value, Items, Text, Slot }
 
+function protocolReceiver(t: Type): Type {
+	const src = withoutReadonlyView(t);
+	return (src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr) && src.typeReturn != null ? src.typeReturn : src;
+}
+
+export function offersProtocol(ctx: CheckerContext, t: Type, name: string): boolean {
+	if (ctx.extensionRegistry == null) return false;
+	const exts = findAllExtensionsByName(ctx.extensionRegistry, name);
+	return findFirstMatchingExt(exts, withoutReadonlyView(t)) != null || findFirstMatchingExt(exts, protocolReceiver(t)) != null;
+}
+
 function declaresOwnProtocol(ctx: CheckerContext, t: Type, name: string): boolean {
 	if (ctx.extensionRegistry == null) return false;
-	let src = withoutReadonlyView(t);
-	if ((src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr) && src.typeReturn != null) src = src.typeReturn;
+	const src = protocolReceiver(t);
 	const ext = findFirstMatchingExt(findAllExtensionsByName(ctx.extensionRegistry, name), src);
 	return ext != null && ext.receiverTypeName != "" && ext.receiverTypeName == typeNameOf(src);
 }
