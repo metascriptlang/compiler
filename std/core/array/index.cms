@@ -283,6 +283,17 @@ export function map<T, U>(this arr: T[], fn: (x: T, i: number) => U): U[] {
 	return out;
 }
 
+export function join<T>(this arr: T[], sep: string): string {
+	let out = "";
+	let i = 0;
+	while (i < arr.length) {
+		if (i > 0) out = out + sep;
+		out = out + `${arr[i]}`;
+		i = i + 1;
+	}
+	return out;
+}
+
 /**
  * Returns a copy of a section of an array.
  * Generic over element type — monomorphized per T, element-wise copy. The
