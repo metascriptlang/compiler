@@ -28,7 +28,7 @@ import { RaiserContext } from "../../raiser/context";
 import { unboxFloat } from "../../raiser/marshal";
 import { valueToNode, synthToken } from "./bridge";
 import { ensureHostTableLoaded } from "./hostTable";
-import { CheckerContext, addError } from "../../checker/context";
+import { CheckerContext, addError, isGenericFn } from "../../checker/context";
 import { pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 
 // --- Evaluate a single ComptimeBlock node ---
@@ -167,78 +167,53 @@ function hasComptimeBlock(node: Node | null): boolean {
 
 function walkNode(node: Node | null): Node {
 	if (node == null) return null as unknown as Node;
-	return match (node.kind) {
-		NodeKind.ComptimeBlock => evalComptimeBlock(node, null as unknown as CheckerContext),
+	match (node.kind) {
+		NodeKind.ComptimeBlock => {
+			const value = evalComptimeBlock(node, null as unknown as CheckerContext);
+			node.kind = value.kind;
+			node.data = value.data;
+			node.nodeType = value.nodeType;
+		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			const newInit = walkNode(d.initializer);
-			return createNode(NodeKind.VariableDecl, {
-				declName: d.declName, declType: d.declType,
-				initializer: newInit, declKind: d.declKind,
-				nameLocation: d.nameLocation,
-			}, synthToken(node.location));
+			d.initializer = walkNode(d.initializer);
 		},
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
-			const newExpr = walkNode(d.expr);
-			return createNode(NodeKind.ExprStmt, { expr: newExpr }, synthToken(node.location));
+			d.expr = walkNode(d.expr);
 		},
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
-			const newArg = walkNode(d.argument);
-			return createNode(NodeKind.ReturnStmt, { argument: newArg }, synthToken(node.location));
+			d.argument = walkNode(d.argument);
 		},
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
-			const newStmts: Node[] = [];
-			let i = 0;
-			while (i < d.statements.length) {
-				newStmts.push(walkNode(d.statements[i]));
-				i = i + 1;
-			}
-			return createNode(NodeKind.BlockStmt, { statements: newStmts }, synthToken(node.location));
+			for (let i = 0; i < d.statements.length; i += 1) d.statements[i] = walkNode(d.statements[i]);
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
-			const newBody = walkNode(d.fnBody);
-			return createNode(NodeKind.FunctionDecl, {
-				fnName: d.fnName, params: d.params, fnParamTypes: d.fnParamTypes,
-				fnBody: newBody, fnFlags: d.fnFlags, fnReturnType: d.fnReturnType,
-				fnDefaults: d.fnDefaults, nameLocation: d.nameLocation,
-			}, synthToken(node.location));
+			if (!isGenericFn(d.fnFlags)) d.fnBody = walkNode(d.fnBody);
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			const newCons = walkNode(d.consequent);
-			const newAlt = walkNode(d.alternate);
-			return createNode(NodeKind.IfStmt, {
-				condition: d.condition, consequent: newCons, alternate: newAlt,
-			}, synthToken(node.location));
+			d.consequent = walkNode(d.consequent);
+			d.alternate = walkNode(d.alternate);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			const newBody = walkNode(d.whileBody);
-			return createNode(NodeKind.WhileStmt, {
-				whileCondition: d.whileCondition, whileBody: newBody,
-			}, synthToken(node.location));
+			d.whileBody = walkNode(d.whileBody);
 		},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
-			const newDecl = walkNode(d.exportedDecl);
-			return createNode(NodeKind.ExportDecl, { exportedDecl: newDecl }, synthToken(node.location));
+			d.exportedDecl = walkNode(d.exportedDecl);
 		},
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
-			const newStmts: Node[] = [];
-			let i = 0;
-			while (i < d.programStmts.length) {
-				newStmts.push(walkNode(d.programStmts[i]));
-				i = i + 1;
-			}
-			return createNode(NodeKind.Program, { programStmts: newStmts }, synthToken(node.location));
+			for (let i = 0; i < d.programStmts.length; i += 1) d.programStmts[i] = walkNode(d.programStmts[i]);
 		},
-		_ => node,
-	};
+		_ => {},
+	}
+	return node;
 }
 
 // --- Public API ---
