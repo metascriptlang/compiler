@@ -2442,6 +2442,7 @@ extern function ok<T>(val: T): Result<T, any>;
 | `@comptime` | block, function | Evaluate a block, or every call of the function, while compiling; see [docs/LANG-METAPROGRAMMING.md](LANG-METAPROGRAMMING.md) "`@comptime` functions" | Verified on C and JS (2026-10-03) |
 | `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
 | `@inline` | module-level function, extension, operator | C gives every module that calls the routine its own `static inline` copy, so the C compiler can inline it without LTO; see [`@inline`](#inline) | Verified on C, JS and Raiser (2026-10-05) |
+| `@noinline` | function | Keep the function out of line on the C backend (`__attribute__((noinline))` on its prototype and definition); the JS backend emits it unchanged; anything but a function is an error ("@noinline applies to a function, not to 'x'"), and so is a function marked both `@inline` and `@noinline` | Verified on C and JS (2026-10-05) |
 
 ##### Which of the three a declaration wants
 
