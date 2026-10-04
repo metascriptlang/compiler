@@ -37,3 +37,21 @@ test "JS: a union access error names an array member by its element type" {
 	assert js.ok;
 	assert js.value.contains("type 'number | int32[]'");
 }
+
+test "JS: an as to the only array member of a union tests Array.isArray" {
+	const js = compileToJS("function f(u: number | int32[]): int32[] { return u as int32[]; }");
+	assert js.ok;
+	assert js.value.contains("Array.isArray(v)");
+}
+
+test "JS: an as to the only plain-object member of a union excludes the union's classes" {
+	const js = compileToJS("class Row { v: int32 = 1; }\ninterface Named { name: string; }\nfunction f(u: Row | Named): Named { return u as Named; }");
+	assert js.ok;
+	assert js.value.contains("!(v instanceof Row");
+}
+
+test "JS: an as to an int32 member tests the member before truncating" {
+	const js = compileToJS("function f(u: int32 | string): int32 { return u as int32; }");
+	assert js.ok;
+	assert js.value.contains("typeof v === \"number\"");
+}
