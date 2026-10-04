@@ -45,14 +45,14 @@ export interface EngineMacroResult {
 	errors: CheckerError[];
 }
 
-type MacroEngineCompilerFn = (program: Node, token: CheckerContext, macroFnName: string) => EngineMacroResult | null;
+type MacroEngineCompilerFn = (program: Node, token: CheckerContext, macroFnName: string, declaringCtx: CheckerContext) => EngineMacroResult | null;
 
-let macroEngineCompilerFn: MacroEngineCompilerFn = (program: Node, token: CheckerContext, macroFnName: string): EngineMacroResult | null => {
+let macroEngineCompilerFn: MacroEngineCompilerFn = (program: Node, token: CheckerContext, macroFnName: string, declaringCtx: CheckerContext): EngineMacroResult | null => {
 	return null;
 };
 
-export function callMacroEngineCompiler(program: Node, token: CheckerContext, macroFnName: string): EngineMacroResult | null {
-	return macroEngineCompilerFn(program, token, macroFnName);
+export function callMacroEngineCompiler(program: Node, token: CheckerContext, macroFnName: string, declaringCtx: CheckerContext): EngineMacroResult | null {
+	return macroEngineCompilerFn(program, token, macroFnName, declaringCtx);
 }
 
 export function registerMacroEngineCompiler(fn: MacroEngineCompilerFn): void {
@@ -79,15 +79,6 @@ export function registerComptimeHelperPreparer(fn: ComptimeHelperPreparerFn): vo
 	comptimeHelperPreparerFn = fn;
 }
 
-let _macroDeclModulePath = "";
-
-export function setMacroDeclModulePath(path: string): void {
-	_macroDeclModulePath = path;
-}
-
-export function getMacroDeclModulePath(): string {
-	return _macroDeclModulePath;
-}
 
 interface ActiveMetaFrame {
 	ctx: CheckerContext;
