@@ -74,7 +74,8 @@ Measured 2026-09-19 with `msc` v0.2.55 (`~/.metascript/BUILD` `bce99dbf`), each 
 | uncaught `throw` at top level | `unhandled exception: [object]`, rc 1 | — |
 | `"42".parseInt()`, `parseFloat`, `fromCodePoint` | `43 1.5 A` | same |
 | `substring` | unbridged: warning, then `Unknown host function` | correct |
-| `Promise.all`, `sleepAsync` | unbridged | correct |
+| `sleepAsync` | correct: a timer queue parks the strand and wakes it in deadline order (measured 2026-10-04, `a b done 2`) | same |
+| `Promise.all` | unbridged: `msPromiseAll` (measured 2026-10-04) | correct |
 | `new Set<int32>()` then `add` | `attempt to access a nil address` in `Set_add__int32`, after `msMapFatal` unbridged warnings | correct |
 | `msc run --target=raiser src/index.ms` (the whole compiler) | 16 type errors before codegen: `Undefined variable 'fetch'` ×14, `'Buffer'` ×1, `byteLength` arity ×1 | — |
 
