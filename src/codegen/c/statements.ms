@@ -18,7 +18,7 @@ import { formatCNumber, formatCNumberLit } from "./literals";
 import { ensureCrossModuleProto } from "./forward";
 import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar } from "./names";
 import { isRuntimeProcSym } from "../../transform/util";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, callOverloadWinner, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, callOverloadWinner, genClFullCastNrvo, genClHalfCastNrvo, zeroInit } from "./types";
 
 // ===== blockLeaveActions — emit finally cleanup on break/continue/return =====
 // Reference parity: when control flow exits through
@@ -510,14 +510,14 @@ function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 			emitStmtsLine(p, `${nrvoCall};`);
 		} else if (d.initializer.kind == NodeKind.NullLiteral
 			&& (isStructType(node.nodeType) || isStructCType(cType))) {
-			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType}){0};`); }
-			else { emitStmtsLine(p, `${cType} ${varName} = {0};`); }
+			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType})${zeroInit(varType)};`); }
+			else { emitStmtsLine(p, `${cType} ${varName} = ${zeroInit(varType)};`); }
 		} else if (d.initializer.kind == NodeKind.NullLiteral && isNumericCType(cType)) {
 			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = 0;`); }
 			else { emitStmtsLine(p, `${cType} ${varName} = 0;`); }
 		} else if (d.initializer.kind == NodeKind.ArrayLiteral && (d.initializer.data as ArrayLiteralData).elements.length == 0) {
-			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType}){0};`); }
-			else { emitStmtsLine(p, `${cType} ${varName} = (${cType}){0};`); }
+			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType})${zeroInit(varType)};`); }
+			else { emitStmtsLine(p, `${cType} ${varName} = (${cType})${zeroInit(varType)};`); }
 		} else if (d.initializer.kind == NodeKind.TypeAssertion && isUnionNarrowing(d.initializer)) {
 			const initSnippet = genExpr(g, p, d.initializer);
 			if (hoistDecl) { emitProcLocalsLine(p, `${cType}* ${varName};`); }
@@ -551,8 +551,8 @@ function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = 0;`); }
 			else { emitStmtsLine(p, `${cType} ${varName} = 0;`); }
 		} else if (isStructCType(cType)) {
-			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType}){0};`); }
-			else { emitStmtsLine(p, `${cType} ${varName} = {0};`); }
+			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType})${zeroInit(varType)};`); }
+			else { emitStmtsLine(p, `${cType} ${varName} = ${zeroInit(varType)};`); }
 		} else if (cType.byteLength > 0 && cType.charAt(cType.byteLength - 1) == "*") {
 			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = NULL;`); }
 			else { emitStmtsLine(p, `${cType} ${varName} = NULL;`); }

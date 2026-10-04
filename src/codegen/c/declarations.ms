@@ -15,7 +15,7 @@ import {
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
-import { enumCTypeName, getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, hcrTypeInfoRef, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
+import { enumCTypeName, getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, hcrTypeInfoRef, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp, zeroInit } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -190,7 +190,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 		// Reference parity (BeforeRet_): emit default return after DRC cleanup labels
 		// to satisfy C compiler's control flow analysis for non-void functions.
 		if (!nrvo && actualRetType != "void") {
-			addLine(procs, `  return (${actualRetType}){0};`);
+			addLine(procs, `  return (${actualRetType})${zeroInit(fnType.typeReturn)};`);
 		}
 		addLine(procs, "}");
 		addNewline(procs);
@@ -705,7 +705,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 			&& d.initializer.kind == NodeKind.NullLiteral
 			&& node.nodeType != null
 			&& isNilableValueType(node.nodeType)) {
-		addLine(sec(g, CSection.ModuleInit), `  ${varName} = (${cType}){0};`);
+		addLine(sec(g, CSection.ModuleInit), `  ${varName} = (${cType})${zeroInit(node.nodeType)};`);
 		return;
 	}
 	if (d.initializer != null

@@ -1842,6 +1842,25 @@ export function getArrayContentType(arrTypeName: string): string {
 
 // ===== Sized Array (Stack) =====
 
+export function zeroInit(t: Type | null): string {
+	return leadsWithEmptyAggregate(t, 0) ? "{}" : "{0}";
+}
+
+function leadsWithEmptyAggregate(t: Type | null, depth: int32): boolean {
+	if (t == null || depth > 16) return false;
+	if (t.kind == TypeKind.SizedArray) return t.typeValue == 0 || leadsWithEmptyAggregate(t.typeReturn, depth + 1);
+	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
+		for (const field of t.typeChildren) {
+			if (field != null && field.kind != TypeKind.Void) return leadsWithEmptyAggregate(field, depth + 1);
+		}
+		return false;
+	}
+	if (t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias || t.kind == TypeKind.GenericInstance) {
+		return leadsWithEmptyAggregate(t.typeReturn, depth + 1);
+	}
+	return false;
+}
+
 function sizedArrayCName(t: Type, elemType: string): string {
 	return `msSizedArray_${mangle(elemType)}_${t.typeValue}`;
 }

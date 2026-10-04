@@ -17,7 +17,7 @@ import {
 	isIndirectRef,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
+import { getTypeDesc, zeroInit, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
@@ -1047,7 +1047,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			}
 			if (nk == TypeKind.Set) {
 				const cType = getTypeDesc(g, node.nodeType);
-				ctx.results.push(`(${cType}){0}`);
+				ctx.results.push(`(${cType})${zeroInit(node.nodeType)}`);
 				return;
 			}
 			// Union(Ref<T>, Null) / Union(Ptr<T>, Null) is a pointer at C level — emit NULL,
@@ -1058,7 +1058,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			}
 			if (isNilableValueType(node.nodeType)) {
 				const cType = getTypeDesc(g, node.nodeType);
-				ctx.results.push(`(${cType}){0}`);
+				ctx.results.push(`(${cType})${zeroInit(node.nodeType)}`);
 				return;
 			}
 		}
@@ -1409,7 +1409,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		// Value-type new: struct/GenericInstance types → zero-initialized struct
 		if (node.nodeType != null && (node.nodeType.kind == TypeKind.Struct || node.nodeType.kind == TypeKind.GenericInstance) && d.newArguments.length == 0) {
 			const cType = getTypeDesc(g, node.nodeType);
-			ctx.results.push(`(${cType}){0}`);
+			ctx.results.push(`(${cType})${zeroInit(node.nodeType)}`);
 			return;
 		}
 		// Ref-type new: Ref<GenericInstance> → heap-allocate with monomorphized name
@@ -2598,7 +2598,7 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 	if (nrvoType != null) {
 		// NRVO: pass the result slot as first arg, read it after call
 		const cType = getTypeDesc(g, nrvoType);
-		const slot = nrvoSlot(p, ctx, node, cType);
+		const slot = nrvoSlot(p, ctx, node, nrvoType, cType);
 		const nrvoArg = "&" + slot;
 		let fullArgs = "";
 		if (argsStr != "") {
@@ -2641,17 +2641,17 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 	ctx.results.push(`(${envExpr} ? ${callWithEnv} : ${callNoEnv})`);
 }
 
-function nrvoSlot(p: CProc, ctx: ExprEvalCtx, node: Readonly<Node>, cType: string): string {
+function nrvoSlot(p: CProc, ctx: ExprEvalCtx, node: Readonly<Node>, t: Type, cType: string): string {
 	const dest = destOf(ctx, node);
 	if (dest != "") return dest;
 	const tmp = getTemp(p, cType);
-	if (nrvoTempNeedsZero(cType)) emitStmtsLine(p, `(${tmp.snippet}) = (${cType}){0};`);
+	if (nrvoTempNeedsZero(cType)) emitStmtsLine(p, `(${tmp.snippet}) = (${cType})${zeroInit(t)};`);
 	return tmp.snippet;
 }
 
 function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, node: Readonly<Node>, calleeName: string, argsStr: string, retType: Type | null, funcType: Type | null): void {
 	if (retType != null && isNrvoReturnType(retType, funcType)) {
-		const slot = nrvoSlot(p, ctx, node, getTypeDesc(g, retType));
+		const slot = nrvoSlot(p, ctx, node, retType, getTypeDesc(g, retType));
 		let nrvoArgs = "&" + slot;
 		if (argsStr != "") nrvoArgs = `${nrvoArgs}, ${argsStr}`;
 		emitStmtsLine(p, `${calleeName}(${nrvoArgs});`);
@@ -3313,7 +3313,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 
 	// Empty array: C99 compound literal zero-init
 	if (d.elements.length == 0) {
-		return `(${arrayTypeName}){0}`;
+		return `(${arrayTypeName})${zeroInit(node.nodeType)}`;
 	}
 
 	// A sequence allocates its payload once, then assigns each element in place
@@ -3321,7 +3321,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 	const isSizedArray = node.nodeType != null && node.nodeType.kind == TypeKind.SizedArray;
 	const tmp = getTemp(p, arrayTypeName);
 	const tmpName = tmp.snippet;
-	emitStmtsLine(p, `${tmpName} = (${arrayTypeName}){0};`);
+	emitStmtsLine(p, `${tmpName} = (${arrayTypeName})${zeroInit(node.nodeType)};`);
 	if (!isSizedArray) {
 		emitStmtsLine(p, `${tmpName}.p = (__typeof__(${tmpName}.p))msArrayPayloadNew(${d.elements.length}, sizeof(${tmpName}.p->data[0]));`);
 		emitStmtsLine(p, `${tmpName}.len = ${d.elements.length};`);
