@@ -7,17 +7,17 @@
 import { methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
+import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
 import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
-import { mintCtorRoutine, resetCtorRoutines } from "./ctorRoutine";
+import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf } from "./ctorRoutine";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, nominalTypeSym, newSym, stampItem } from "./context";
 import { createContext } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
-import { mangleMonoName, monoInstanceName, monoInstanceNameOf } from "../monomorphize/registry";
+import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
 import { checkRoutineBorrows } from "./varPartitions";
 import { beginGensymUnit, rewindTemplateGensym } from "./template";
@@ -117,22 +117,69 @@ export function resetInstantiationState(): void {
 	_moduleCtxMap = new HashMap<string, CheckerContext>();
 	_moduleProgramMap = new HashMap<string, Node>();
 	resetCtorRoutines();
-	_instanceHooks = new HashMap<string, InstanceHook>();
-	_hookScannedInstances = new HashMap<Symbol, HashSet<string>>();
-	resetUserHooks();
+	_instanceHooks = new HashMap<Symbol, InstanceHook[]>();
+	_hookScannedInstances = new HashMap<Symbol, Type[][]>();
+	_checkedInstances = new HashMap<Symbol, CheckedInstantiation>();
 }
 
 interface InstanceHook {
-	owner: Symbol;
+	concreteTypes: Type[];
+	methodName: string;
 	sym: Symbol;
 }
 
-let _instanceHooks: HashMap<string, InstanceHook> = new HashMap<string, InstanceHook>();
-let _hookScannedInstances: HashMap<Symbol, HashSet<string>> = new HashMap<Symbol, HashSet<string>>();
+let _instanceHooks: HashMap<Symbol, InstanceHook[]> = new HashMap<Symbol, InstanceHook[]>();
+let _hookScannedInstances: HashMap<Symbol, Type[][]> = new HashMap<Symbol, Type[][]>();
+let _checkedInstances: HashMap<Symbol, CheckedInstantiation> = new HashMap<Symbol, CheckedInstantiation>();
+const USER_HOOK_NAMES: string[] = ["onDestroy", "onCopy", "onMove", "onMoved", "onClone", "onTrace"];
 
-export function lookupInstanceHook(instanceName: string, methodName: string): Symbol | null {
-	const hook = _instanceHooks.get(instanceName + "." + methodName);
-	return hook != null ? hook.sym : null;
+export function checkedInstanceOf(sym: Symbol): CheckedInstantiation {
+	const inst = _checkedInstances.get(sym);
+	if (inst == null) throw new Error(`internal: instance '${sym.name}' has no retained checked arguments`);
+	return inst;
+}
+
+export function sameCheckedInstance(a: Symbol, b: Symbol): boolean {
+	if (a == b) return true;
+	return a.instantiatedFrom != null && a.instantiatedFrom == b.instantiatedFrom
+		&& sameInstanceArgs(checkedInstanceOf(a).concreteTypes, checkedInstanceOf(b).concreteTypes);
+}
+
+function instanceHook(owner: Symbol, types: Type[], methodName: string): Symbol | null {
+	const hooks = _instanceHooks.get(owner);
+	if (hooks == null) return null;
+	for (const hook of hooks) {
+		if (hook.methodName == methodName && sameInstanceArgs(hook.concreteTypes, types)) return hook.sym;
+	}
+	return null;
+}
+
+function recordInstanceHook(owner: Symbol, types: Type[], methodName: string, sym: Symbol): void {
+	let hooks = _instanceHooks.get(owner);
+	if (hooks == null) {
+		hooks = [];
+		_instanceHooks.set(owner, hooks);
+	}
+	for (const hook of hooks) {
+		if (hook.methodName == methodName && sameInstanceArgs(hook.concreteTypes, types)) {
+			hook.sym = sym;
+			return;
+		}
+	}
+	hooks.push({ concreteTypes: types, methodName, sym });
+}
+
+export function lookupInstanceHook(type: Type, methodName: string): Symbol | null {
+	let t = type;
+	while ((t.kind == TypeKind.Ref || t.kind == TypeKind.Var || t.kind == TypeKind.Ptr) && t.typeReturn != null) t = t.typeReturn;
+	if (t.kind == TypeKind.GenericInstance) {
+		const owner = nominalTypeSym(t);
+		return owner != null ? instanceHook(owner, t.typeChildren, methodName) : null;
+	}
+	if (t.sym != null && t.sym.instantiatedFrom != null) {
+		return instanceHook(t.sym.instantiatedFrom, checkedInstanceOf(t.sym).concreteTypes, methodName);
+	}
+	return null;
 }
 
 export function declaresUserHook(t: Type, ctx: CheckerContext): boolean {
@@ -164,19 +211,16 @@ function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, insta
 		}
 		ensureShaped(hookSym, ctx);
 		const inst = instantiateGenericFunction(hookSym, names, types, ctx, loc);
-		if (inst != null) _instanceHooks.set(instanceName + "." + md.methodName, { owner, sym: inst });
+		if (inst != null) recordInstanceHook(owner, types, md.methodName, inst);
 	}
 }
 
-function instantiateExtensionHooks(genericSym: Symbol, instanceName: string, instType: Type, ctx: CheckerContext, loc: SourceLocation): boolean {
+function instantiateExtensionHooks(genericSym: Symbol, instType: Type, ctx: CheckerContext, loc: SourceLocation): boolean {
 	const registry = pickBodyCtx(genericSym.modulePath, ctx).extensionRegistry;
 	if (registry == null) return true;
 	let settled = true;
-	for (const hookName of LIFECYCLE_HOOK_NAMES) {
-		const key = instanceName + "." + hookName;
-		const known = _instanceHooks.get(key);
-		if (known != null && known.owner == genericSym) continue;
-		if (known != null) _instanceHooks.delete(key);
+	for (const hookName of USER_HOOK_NAMES) {
+		if (instanceHook(genericSym, instType.typeChildren, hookName) != null) continue;
 		if (!hasExtensionByName(registry, hookName)) continue;
 		for (const m of findAllExtensionsByName(registry, hookName)) {
 			const hookSym = m.sym;
@@ -196,19 +240,30 @@ function instantiateExtensionHooks(genericSym: Symbol, instanceName: string, ins
 			while ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr) && formal.typeReturn != null) formal = formal.typeReturn;
 			if (formal.kind != TypeKind.GenericInstance || nominalTypeSym(formal) != genericSym) continue;
 			if (!hasGenericParams(formal)) {
-				if (formal.kind != TypeKind.GenericInstance || monoInstanceName(formal) != instanceName) continue;
-				_instanceHooks.set(key, { owner: genericSym, sym: hookSym });
+				if (!sameInstanceType(formal, instType)) continue;
+				recordInstanceHook(genericSym, instType.typeChildren, hookName, hookSym);
 				break;
 			}
 			const bindings = createUnifyBindings();
 			unifyType(formal, instType, bindings);
 			if (bindings.names.length == 0) continue;
 			const inst = instantiateGenericFunction(hookSym, bindings.names, bindings.types, ctx, loc);
-			if (inst != null) _instanceHooks.set(key, { owner: genericSym, sym: inst });
+			if (inst != null) recordInstanceHook(genericSym, instType.typeChildren, hookName, inst);
 			break;
 		}
 	}
 	return settled;
+}
+
+function markInstanceHookType(t: Type, owner: Symbol): void {
+	const hooks = _instanceHooks.get(owner);
+	if (hooks == null) return;
+	for (const hook of hooks) {
+		if (!sameInstanceArgs(hook.concreteTypes, t.typeChildren)) continue;
+		t.typeFlags = t.typeFlags.incl(TypeFlag.HasAsgn);
+		if (t.typeReturn != null) t.typeReturn.typeFlags = t.typeReturn.typeFlags.incl(TypeFlag.HasAsgn);
+		return;
+	}
 }
 
 function instantiateHooksInType(t: Type | null, ctx: CheckerContext, loc: SourceLocation, depth: int32): void {
@@ -226,16 +281,21 @@ function instantiateHooksInType(t: Type | null, ctx: CheckerContext, loc: Source
 	const base = t.typeExtra != null ? unwrapRef(t.typeExtra) : null;
 	const owner = base != null ? base.sym : null;
 	if (owner == null) return;
-	const name = monoInstanceName(t);
 	let scanned = _hookScannedInstances.get(owner);
 	if (scanned == null) {
-		scanned = new HashSet<string>();
+		scanned = [];
 		_hookScannedInstances.set(owner, scanned);
 	}
-	if (scanned.has(name)) return;
-	scanned.add(name);
+	for (const args of scanned) {
+		if (sameInstanceArgs(args, t.typeChildren)) {
+			markInstanceHookType(t, owner);
+			return;
+		}
+	}
+	const at = scanned.length;
+	scanned.push(t.typeChildren);
 	for (const arg of t.typeChildren) instantiateHooksInType(arg, ctx, loc, depth + 1);
-	const settled = instantiateExtensionHooks(owner, name, t, ctx, loc);
+	const settled = instantiateExtensionHooks(owner, t, ctx, loc);
 	if (t.typeReturn == null) {
 		const params = genericParamsOf(t);
 		if (params != "") instantiateGenericBody(t, params);
@@ -244,18 +304,8 @@ function instantiateHooksInType(t: Type | null, ctx: CheckerContext, loc: Source
 	if (body != null && body.kind == TypeKind.Struct) {
 		for (const field of body.typeChildren) instantiateHooksInType(field, ctx, loc, depth + 1);
 	}
-	if (!settled) scanned.delete(name);
-}
-
-function pendingInstanceKey(node: Node, name: string): string {
-	const owner = node.resolvedSym != null ? node.resolvedSym.modulePath : "";
-	return owner + "::" + name;
-}
-
-export function pendingInstanceKeyOf(node: Node): string {
-	if (node.kind == NodeKind.FunctionDecl) return pendingInstanceKey(node, (node.data as FunctionDeclData).fnName);
-	if (node.kind == NodeKind.ClassDecl) return pendingInstanceKey(node, (node.data as ClassDeclData).className);
-	return "";
+	markInstanceHookType(t, owner);
+	if (!settled) scanned.splice(at, 1);
 }
 
 export function instanceGenericOf(node: Node): Symbol | null {
@@ -265,18 +315,23 @@ export function instanceGenericOf(node: Node): Symbol | null {
 }
 
 export function distinctInstances(order: Node[]): Node[] {
-	const seen = new HashMap<Symbol, string[]>();
+	const seen = new HashMap<Symbol, CheckedInstantiation[]>();
 	const out: Node[] = [];
 	for (const node of order) {
 		const generic = instanceGenericOf(node);
 		if (generic == null) throw new Error(`internal: a generic instance of this build has no generic it was made from`);
-		const name = node.kind == NodeKind.ClassDecl ? (node.data as ClassDeclData).className : (node.data as FunctionDeclData).fnName;
-		let names: string[] = [];
-		const known = seen.get(generic);
-		if (known != null) names = known;
-		if (names.includes(name)) continue;
-		names.push(name);
-		seen.set(generic, names);
+		const inst = checkedInstanceOf(node.resolvedSym!);
+		let instances = seen.get(generic);
+		if (instances == null) {
+			instances = [];
+			seen.set(generic, instances);
+		}
+		let duplicate = false;
+		for (const held of instances) {
+			if (sameInstanceArgs(held.concreteTypes, inst.concreteTypes)) { duplicate = true; break; }
+		}
+		if (duplicate) continue;
+		instances.push(inst);
 		out.push(node);
 	}
 	return out;
@@ -384,8 +439,27 @@ function cacheInstance(cache: HashMap<Symbol, CheckedInstantiation[]>, generic: 
 	let instances: CheckedInstantiation[] = [];
 	const known = cache.get(generic);
 	if (known != null) instances = known;
-	instances.push({ sym: inst, concreteTypes: types });
+	const record: CheckedInstantiation = { sym: inst, concreteTypes: types };
+	instances.push(record);
+	_checkedInstances.set(inst, record);
 	cache.set(generic, instances);
+}
+
+export function retainCheckedInstances(ctxs: CheckerContext[]): void {
+	for (const ctx of ctxs) {
+		for (const instances of ctx.procInstCache.values()) {
+			for (const inst of instances) _checkedInstances.set(inst.sym, inst);
+		}
+		for (const instances of ctx.typeInstCache.values()) {
+			for (const inst of instances) {
+				_checkedInstances.set(inst.sym, inst);
+				const ctor = ctorRoutineOf(inst.sym);
+				if (ctor != null && ctor.instantiatedFrom != null && !_checkedInstances.has(ctor)) {
+					_checkedInstances.set(ctor, { sym: ctor, concreteTypes: inst.concreteTypes });
+				}
+			}
+		}
+	}
 }
 
 // Deduplicate unify bindings (K=string may appear twice from HashMap<K,V> + K params)
@@ -404,23 +478,6 @@ function deduplicateBindings(names: string[], types: Type[]): { names: string[],
 	return { names: outNames, types: outTypes };
 }
 
-function readonlyViewShape(t: Type | null, depth: int32): string {
-	if (t == null || depth > 8) return "";
-	const inner = t.kind == TypeKind.Array || t.kind == TypeKind.Ref ? readonlyViewShape(t.typeReturn, depth + 1) : "";
-	if (isReadonlyView(t)) return "r" + inner;
-	return inner == "" ? "" : "m" + inner;
-}
-
-function readonlyViewSuffix(types: Type[]): string {
-	let marked = false;
-	let suffix = "";
-	for (const t of types) {
-		const shape = readonlyViewShape(t, 0);
-		if (shape != "") marked = true;
-		suffix = suffix + "_" + (shape == "" ? "0" : shape);
-	}
-	return marked ? "__ro" + suffix : "";
-}
 
 // Add a type symbol to scope if not already present. Returns true if injected.
 // Prefers caller's authoritative symbol type; falls back to provided type.
@@ -784,7 +841,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 			if (recv != "") mangleBase = recv + "_" + sym.name;
 		}
 	}
-	const mangledName = mangleMonoName(monoRoutineBaseName(mangleBase, sym.modulePath, sym.disamb), dedup.types) + readonlyViewSuffix(dedup.types);
+	const mangledName = mangleMonoName(monoRoutineBaseName(mangleBase, sym.modulePath, sym.disamb), dedup.types);
 
 
 	const bodyCtx = pickBodyCtx(sym.modulePath, ctx);
@@ -1121,6 +1178,9 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, nam
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
 	const ctorSym = mintCtorRoutine(bodyCtx, instSym, mangledClass, thisType, resolvedParamTypes, fnParams, ctorDeclNode, fnDefaults);
 	ctorSym.state = SymbolState.Checked;
+	if (ctorNode.resolvedSym == null) throw new Error(`internal: generic constructor '${classSym.name}' has no routine symbol`);
+	ctorSym.instantiatedFrom = ctorNode.resolvedSym;
+	_checkedInstances.set(ctorSym, { sym: ctorSym, concreteTypes: types });
 
 	// Re-check constructor body with concrete types in the class's DEFINING module ctx
 	// (from _moduleCtxMap registry). This resolves private module-level symbols

@@ -105,9 +105,19 @@ export function monoInstanceNameOf(genericName: string, ownerPath: string, typeA
 	return mangleMonoName(monoBaseName(genericName, ownerPath), typeArgs);
 }
 
-// C-safe type key for name mangling and dedup.
+// Output spelling only; checked type arguments decide instance identity.
 export function monoTypeKey(t: Type | null): string {
 	if (t == null) return "null";
+	const key = monoTypeKeyBody(t);
+	return t.typeFlags.has(TypeFlag.IsReadonly) ? "ro_" + key : key;
+}
+
+function monoDeclaredName(t: Type): string {
+	const disamb = t.sym != null ? t.sym.disamb : 0;
+	return disamb == 0 ? t.typeName : t.typeName + "_u" + String(disamb);
+}
+
+function monoTypeKeyBody(t: Type): string {
 	return match (t.kind) {
 		TypeKind.Number => "number",
 		TypeKind.String => "string",
@@ -133,8 +143,9 @@ export function monoTypeKey(t: Type | null): string {
 		TypeKind.Struct | TypeKind.Enum => {
 			if (t.typeName == "") return "anon" + hashToBase36(monoStructuralKey(t));
 			const owner = monoOwnerPath(t);
-			if (owner != "") return t.typeName + "_" + hashToBase36(owner);
-			return t.typeName;
+			const name = monoDeclaredName(t);
+			if (owner != "") return name + "_" + hashToBase36(owner);
+			return name;
 		},
 		TypeKind.GenericInstance => {
 			let key = monoBaseName(t.typeName, monoGenericOwner(t));
@@ -153,8 +164,9 @@ export function monoTypeKey(t: Type | null): string {
 		TypeKind.Distinct => {
 			if (t.typeName == "") return "distinct_" + monoTypeKey(t.typeReturn);
 			const owner = monoOwnerPath(t);
-			if (owner != "") return "distinct_" + t.typeName + "_" + hashToBase36(owner);
-			return "distinct_" + t.typeName;
+			const name = monoDeclaredName(t);
+			if (owner != "") return "distinct_" + name + "_" + hashToBase36(owner);
+			return "distinct_" + name;
 		},
 		TypeKind.Function => {
 			let key = "fn";
@@ -166,8 +178,9 @@ export function monoTypeKey(t: Type | null): string {
 		TypeKind.Union => {
 			if (t.typeName != "") {
 				const owner = monoOwnerPath(t);
-				if (owner != "") return t.typeName + "_" + hashToBase36(owner);
-				return t.typeName;
+				const name = monoDeclaredName(t);
+				if (owner != "") return name + "_" + hashToBase36(owner);
+				return name;
 			}
 			let key = "union";
 			for (const child of t.typeChildren) {
@@ -182,10 +195,7 @@ export function monoTypeKey(t: Type | null): string {
 			}
 			return key;
 		},
-		// This key IS the instantiation cache key (mangleMonoName → lookupSymbol in
-		// instantiate.ms), so two distinct types sharing a key make the second
-		// instantiation reuse the first one's body. Keep the catch-all total by
-		// keying on the kind ordinal plus name or structure.
+		// Keep output spelling total for the remaining concrete type kinds.
 		_ => {
 			let key = "k" + (t.kind as number).toString();
 			if (t.typeName != "") key = key + "_" + hashToBase36(t.typeName);

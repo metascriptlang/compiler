@@ -402,7 +402,11 @@ export function stampDecl(ctx: CheckerContext, sym: Symbol, node: Node): void {
 	// Implementation parity: stamp module ownership — set once at creation
 	if (sym.modulePath == "") {
 		stampOwner(ctx, sym);
-		if (sym.symbolKind == SymbolKind.Variable) sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
+		const kind = sym.symbolKind;
+		if (kind == SymbolKind.Variable || kind == SymbolKind.Class || kind == SymbolKind.Struct
+			|| kind == SymbolKind.Interface || kind == SymbolKind.TypeAlias || kind == SymbolKind.Enum || kind == SymbolKind.Actor) {
+			sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
+		}
 	}
 }
 

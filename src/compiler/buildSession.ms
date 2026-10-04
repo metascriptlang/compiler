@@ -1,8 +1,8 @@
-import { Node, Type, Symbol, SymbolKind } from "../ast/node";
+import { Node, Type, TypeFlag, Symbol, SymbolKind } from "../ast/node";
 import { CModuleOutput } from "../codegen/c/index";
 import { forEachChild } from "../ast/visitor";
 import { CheckSession, createCheckSession } from "../checker/orchestrator";
-import { pendingInstanceKeyOf, resetInstantiationState } from "../checker/instantiate";
+import { resetInstantiationState, checkedInstanceOf } from "../checker/instantiate";
 import { resetDispatchRegistry } from "../checker/context";
 import { resetRaises } from "../checker/raises";
 import { resetDuVariantRegistry } from "../checker/types";
@@ -108,7 +108,7 @@ function mix(h: number, value: number): number {
 
 function typeShapeWithin(t: Type | null, seen: HashSet<Type>): string {
 	if (t == null) return "_";
-	let shape = monoTypeKey(t);
+	let shape = monoTypeKey(t) + "!" + String(t.typeFlags.excl(TypeFlag.HasAsgn).excl(TypeFlag.HasGenericParam) as uint64);
 	if (seen.has(t)) return shape;
 	seen.add(t);
 	if (t.typeNames != null && t.typeNames.length > 0) {
@@ -149,7 +149,14 @@ function foldTypes(session: BuildSession, node: Node, h: number): number {
 function instanceFingerprint(session: BuildSession, node: Node): string {
 	const memo = session.instanceFingerprints.get(node);
 	if (memo != null) return memo;
-	const fingerprint = pendingInstanceKeyOf(node) + "#" + String(foldTypes(session, node, transAmHashNode(node)));
+	let identity = "";
+	const sym = node.resolvedSym;
+	if (sym != null && sym.instantiatedFrom != null) {
+		const generic = sym.instantiatedFrom;
+		identity = generic.modulePath + ":" + String(generic.item) + ":" + String(generic.disamb);
+		for (const arg of checkedInstanceOf(sym).concreteTypes) identity = identity + "|" + typeShape(session, arg);
+	}
+	const fingerprint = identity + "#" + String(foldTypes(session, node, transAmHashNode(node)));
 	session.instanceFingerprints.set(node, fingerprint);
 	return fingerprint;
 }

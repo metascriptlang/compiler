@@ -931,9 +931,12 @@ function userHookMethodName(hook: string): string {
 	};
 }
 
-function getUserDefinedHookSym(typeName: string, declSym: Symbol | null, hook: string, lctx: LiftCtx): Symbol | null {
+function getUserDefinedHookSym(type: Type, hook: string, lctx: LiftCtx): Symbol | null {
 	const methodName = userHookMethodName(hook);
 	if (methodName == "") return null;
+	const instHook = lookupInstanceHook(type, methodName);
+	if (instHook != null) return instHook;
+	const declSym = unwrapRef(type).sym;
 	if (lctx.checkerCtx == null || lctx.checkerCtx.extensionRegistry == null) return null;
 	// A type may carry duplicate registry entries reached through different import
 	// paths — distinct Symbol instances whose modulePath differs only by spelling
@@ -950,11 +953,11 @@ function getUserDefinedHookSym(typeName: string, declSym: Symbol | null, hook: s
 		if (fallback == null) fallback = m.sym;
 	}
 	if (fallback != null) return fallback;
-	return lookupInstanceHook(typeName, methodName);
+	return null;
 }
 
-function hasUserDefinedHook(typeName: string, declSym: Symbol | null, hook: string, lctx: LiftCtx): boolean {
-	return getUserDefinedHookSym(typeName, declSym, hook, lctx) != null;
+function hasUserDefinedHook(type: Type, hook: string, lctx: LiftCtx): boolean {
+	return getUserDefinedHookSym(type, hook, lctx) != null;
 }
 
 // Reference parity: declaring any lifecycle hook makes the type need lifecycle
@@ -962,20 +965,20 @@ function hasUserDefinedHook(typeName: string, declSym: Symbol | null, hook: stri
 // uint32 GPU buffer) has no RC fields, so typeNeedsHooks alone would skip it —
 // the user hook would then never be wired into <T>Destroy.
 function hasAnyUserHook(t: Type, lctx: LiftCtx): boolean {
-	return hasUserDefinedHook(t.typeName, t.sym, "destroy", lctx)
-		|| hasUserDefinedHook(t.typeName, t.sym, "copy", lctx)
-		|| hasUserDefinedHook(t.typeName, t.sym, "sink", lctx)
-		|| hasUserDefinedHook(t.typeName, t.sym, "wasMoved", lctx)
-		|| hasUserDefinedHook(t.typeName, t.sym, "trace", lctx);
+	return hasUserDefinedHook(t, "destroy", lctx)
+		|| hasUserDefinedHook(t, "copy", lctx)
+		|| hasUserDefinedHook(t, "sink", lctx)
+		|| hasUserDefinedHook(t, "wasMoved", lctx)
+		|| hasUserDefinedHook(t, "trace", lctx);
 }
 
 function baseHookOwner(t: Type, hook: string, lctx: LiftCtx): Type | null {
 	let a = baseClassOf(t);
 	while (a != null) {
-		const own = hasUserDefinedHook(a.typeName, a.sym, hook, lctx);
+		const own = hasUserDefinedHook(a, hook, lctx);
 		const takes = hook == "destroy" || hook == "wasMoved"
 			? own
-			: own || hasUserDefinedHook(a.typeName, a.sym, "destroy", lctx);
+			: own || hasUserDefinedHook(a, "destroy", lctx);
 		if (takes) {
 			if (hook != "trace") return a;
 			return isCyclicType(a, lctx, createNameSet()) ? a : null;
@@ -1249,7 +1252,7 @@ function buildVariantChain(hook: string, objType: Type, s1: Symbol, s2: Symbol, 
 // classType is non-null for class types (= sym.symbolType = Ref<Struct>),
 // null for value types. When non-null, param types use classType so codegen
 // emits Doc* instead of Doc — matching the pointer the runtime passes.
-function generateHook(hook: string, typeName: string, cName: string, objType: Type, classType: Type | null, lctx: LiftCtx, loc: SourceLocation): Symbol {
+function generateHook(hook: string, typeName: string, cName: string, objType: Type, subject: Type, classType: Type | null, lctx: LiftCtx, loc: SourceLocation): Symbol {
 	const buf = newBuf();
 	const isTrace = hook == "trace";
 	const isUnary = hook == "destroy" || hook == "wasMoved" || isTrace;
@@ -1285,7 +1288,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// overflows the stack (see resolvePass owning-self-referential-field warning) —
 	// a user hook lets the author traverse iteratively instead. The author is
 	// therefore responsible for ALL owned fields. Same for copy/sink/wasMoved/trace.
-	const hookSym = getUserDefinedHookSym(typeName, objType.sym, hook, lctx);
+	const hookSym = getUserDefinedHookSym(subject, hook, lctx);
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
 		const u1 = userHookArg(hookSym, 0, s1, classType, loc);
@@ -1297,7 +1300,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			const u2 = userHookArg(hookSym, 1, s2, classType, loc);
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, u2], loc), loc));
 		}
-	} else if (hook == "sink" && hasUserDefinedHook(typeName, objType.sym, "destroy", lctx)) {
+	} else if (hook == "sink" && hasUserDefinedHook(subject, "destroy", lctx)) {
 		genOpCall(requireOpByKey(objType, AttachedOp.AttachedDestructor), "destroy", makeIdentResolved(s1, loc), null as unknown as Node, buf, loc);
 		buf.items.push(makeExprStmt(makeAssign(hookParamDeref(s1, loc), hookParamDeref(s2, loc), loc), loc));
 	} else {
@@ -1467,7 +1470,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 		}
 	}
 
-	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union && !(objType.kind == TypeKind.Distinct && hasAnyUserHook(objType, lctx))) return;
+	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union && !(objType.kind == TypeKind.Distinct && hasAnyUserHook(orig, lctx))) return;
 
 	if (isCrossModuleClass && !declaring) {
 		aliasLiftedOps(orig, objType);
@@ -1490,7 +1493,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	// unconditionally-emitted per-field call, so the empty-body hook must exist to link.
 	// Primitive/string unions (`type X = "a" | "b"` → msString) still skip — their hooks
 	// would touch `_tag` on a non-tagged value.
-	if (!typeNeedsHooks(objType, lctx, loc) && !hasAnyUserHook(objType, lctx)) {
+	if (!typeNeedsHooks(objType, lctx, loc) && !hasAnyUserHook(orig, lctx)) {
 		const isPlainValueAggregate = !isClassOrInterface
 			&& (objType.kind == TypeKind.Struct || isTaggedUnion(objType));
 		if (!isPlainValueAggregate) {
@@ -1502,13 +1505,13 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	const classType = isClassOrInterface ? refType : null;
 	let hasCycles = false;
 
-	const destroySym = generateHook("destroy",  typeName, cName, objType, classType, lctx, loc);
+	const destroySym = generateHook("destroy",  typeName, cName, objType, orig, classType, lctx, loc);
 	setOpByKey(objType, AttachedOp.AttachedDestructor, destroySym);
-	const copySym = generateHook("copy",     typeName, cName, objType, classType, lctx, loc);
+	const copySym = generateHook("copy",     typeName, cName, objType, orig, classType, lctx, loc);
 	setOpByKey(objType, AttachedOp.AttachedAsgn, copySym);
-	const sinkSym = generateHook("sink",     typeName, cName, objType, classType, lctx, loc);
+	const sinkSym = generateHook("sink",     typeName, cName, objType, orig, classType, lctx, loc);
 	setOpByKey(objType, AttachedOp.AttachedSink, sinkSym);
-	const wasMovedSym = generateHook("wasMoved", typeName, cName, objType, classType, lctx, loc);
+	const wasMovedSym = generateHook("wasMoved", typeName, cName, objType, orig, classType, lctx, loc);
 	setOpByKey(objType, AttachedOp.AttachedWasMoved, wasMovedSym);
 	setAttachedOp(objType, AttachedOp.AttachedDestructor, destroySym);
 	setAttachedOp(objType, AttachedOp.AttachedAsgn,       copySym);
@@ -1518,7 +1521,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	const visited: NameSet = createNameSet();
 	hasCycles = isCyclicType(objType, lctx, visited);
 	if (hasCycles) {
-		const traceSym = generateHook("trace", typeName, cName, objType, classType, lctx, loc);
+		const traceSym = generateHook("trace", typeName, cName, objType, orig, classType, lctx, loc);
 		setOpByKey(objType, AttachedOp.AttachedTrace, traceSym);
 		setAttachedOp(objType, AttachedOp.AttachedTrace, traceSym);
 	}

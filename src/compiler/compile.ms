@@ -49,7 +49,7 @@ import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, try
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
-import { drainPendingInstances, distinctInstances, placeInstance } from "../checker/instantiate";
+import { drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances } from "../checker/instantiate";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { opMark, opsFrom, replayOps } from "../codegen/c/types";
 import { dbLower } from "./transam/index";
@@ -1328,6 +1328,7 @@ function routeInstances(order: Node[], programOf: (path: string) => Node | null,
 }
 
 function placePendingInstances(programOf: (path: string) => Node | null, moduleCtxs: CheckerContext[], classesBesideGeneric: boolean = false): void {
+	retainCheckedInstances(moduleCtxs);
 	const _placed = routeInstances(drainPendingInstances(moduleCtxs), programOf, true, null, classesBesideGeneric);
 }
 
@@ -2573,6 +2574,7 @@ resetLiftedOps();
 			if (keeps) homes.set(instNode, modPath);
 		}
 	}
+	retainCheckedInstances(checkedModCtxs(checkedMods));
 	const instancesByOwner = routeInstances(routeOrder, (path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, !session.keep, homes);
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
