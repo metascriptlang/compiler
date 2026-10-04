@@ -405,6 +405,14 @@ when (testBuild) {
 		const context = try account(1);
 		const vault = try account(2);
 		const committed: Account[2] = [try account(3), try account(4)];
+		if (op == 6) {
+			const sent = try commit(payer, committed[0], context);
+			return Result.ok(sent);
+		}
+		if (op == 7) {
+			const sent = try commitAndUndelegate(payer, committed, context, vault);
+			return Result.ok(sent);
+		}
 		return match (op) {
 			0 => commit(payer, committed[0], context),
 			1 => commit(payer, committed, context),
@@ -453,6 +461,19 @@ when (testBuild) {
 		assert sameBytes(sent.data, data);
 	}
 
+	test "commit and commitAndUndelegate under try send what their returned forms send" {
+		assert commitRun(commitAccounts(), 6) == 0;
+		const one = invocations()[0];
+		assert one.accounts.length == 3 && one.accounts[2].key.equals(keyOf(4));
+		const data: uint8[] = [1, 0, 0, 0];
+		assert sameBytes(one.data, data);
+		assert commitRun(commitAccounts(), 7) == 0;
+		const vaulted = invocations()[0];
+		assert vaulted.accounts.length == 5 && vaulted.accounts[2].key.equals(keyOf(3));
+		const undelegate: uint8[] = [2, 0, 0, 0];
+		assert sameBytes(vaulted.data, undelegate);
+	}
+
 	test "a committed list keeps each account's flags, and a fee vault sits third" {
 		assert commitRun(commitAccounts(), 1) == 0;
 		const listed = invocations()[0];
@@ -496,6 +517,15 @@ when (testBuild) {
 		let relay: uint8[2] = [];
 		const relayed = putBytes(relay, 0, tail);
 		if (relayed != 2) { return Result.err(ProgramError.invalidInstructionData()); }
+		if (op == 2) {
+			const sent = try scheduleTask(payer, 7, 400, 3, try account(1), relay, programId());
+			return Result.ok(sent);
+		}
+		if (op == 3) {
+			const task: InstructionAccount[1] = [InstructionAccount.writable(try account(1))];
+			const sent = try scheduleTask(payer, 7, 400, 3, programId(), task, relay);
+			return Result.ok(sent);
+		}
 		if (op == 0) {
 			return scheduleTask(payer, 7, 400, 3, try account(1), relay, programId());
 		}
@@ -534,6 +564,18 @@ when (testBuild) {
 		];
 		const sent = head.concat(keyBytes(programKey()));
 		return sent;
+	}
+
+	test "scheduleTask under try sends what its return form sends, in both overloads" {
+		assert scheduleRun(0) == 0;
+		const returned = invocations()[0];
+		assert scheduleRun(2) == 0;
+		const tried = invocations()[0];
+		assert sameBytes(tried.data, returned.data) && tried.accounts.length == returned.accounts.length;
+		assert scheduleRun(3) == 0;
+		const listed = invocations()[0];
+		assert sameBytes(listed.data, returned.data) && listed.accounts.length == 2;
+		assert listed.accounts[1].key.equals(keyOf(4));
 	}
 
 	test "scheduleTask sends the magic program the payer, the task's accounts and the task encoded" {
