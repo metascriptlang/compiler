@@ -33,11 +33,13 @@ function concatStmts(a: Node[], b: Node[]): Node[] {
 
 function makeEnumToString(fnSym: Symbol | null, fnName: string, enumType: Type, loc: SourceLocation): Node {
 	const members = enumType.typeNames;
+	const values = enumType.typeChildren;
 	const cases: Node[] = [];
 	let i = 0;
 	while (i < members.length) {
 		const retStmt = makeReturn(makeString(members[i], loc), loc);
-		cases.push(makeSwitchCase([makeNumber(i, loc)], [retStmt], false, loc));
+		const value = values != null && i < values.length ? values[i].typeValue : i;
+		cases.push(makeSwitchCase([makeNumber(value, loc)], [retStmt], false, loc));
 		i = i + 1;
 	}
 	// Default case: return "<unknown>"
@@ -100,6 +102,16 @@ test "enum toString body has switch" {
 	const fn = rd.programStmts[1];
 	assert fn.kind == NodeKind.FunctionDecl;
 	assert fn.nodeType != null;
+}
+
+import { BlockStmtData, SwitchStmtData, SwitchCaseData, NumberLiteralData } from "../../ast/node";
+
+test "enum toString labels each case with the member's value" {
+	const fn = makeEnumToString(null, "Code_toString", createEnum("Code", ["Ok", "Bad"], [5, 9]), makeLoc(1, 1));
+	const body = (fn.data as FunctionDeclData).fnBody.data as BlockStmtData;
+	const cases = (body.statements[0].data as SwitchStmtData).switchCases;
+	assert ((cases[0].data as SwitchCaseData).caseTests[0].data as NumberLiteralData).value == 5;
+	assert ((cases[1].data as SwitchCaseData).caseTests[0].data as NumberLiteralData).value == 9;
 }
 
 import { parseSource } from "../../parser/statements/validation";
