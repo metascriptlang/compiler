@@ -993,7 +993,9 @@ variants`, 3 explicit type arguments, 2 `JSON_parse` instantiations on a discrim
 A single file still runs on its own with `msc test <file>`. Run that way, `msc test src/test/c/protocols.ms` is red on two tests the gate has never seen: `E2E C: JsonValue dynamic write via setDynamicField` (`protocols.ms:480`) and `E2E C: JsonValue dynamic access via protocol after migration` (`protocols.ms:499`), both failing `assert c.ok` (3119 passed, 2 failed across 146 files, installed `v0.2.55`). Not measured: which of these are stale
 test code and which are checker regressions.
 
-## L49. A type used only in an arrow's parameter annotation inside a generic body is reported unused (LIVE, measured 2026-09-19)
+## L49. A type used only in an arrow's parameter annotation inside a generic body is reported unused (RESOLVED 2026-10-05)
+
+**Status: RESOLVED — fixed 2026-10-05** (`b365e5bdf`): a generic body is not checked until an instance asks for it, so its uses are marked at the declaration, and that walk now reads the type names written in the body (annotations, `as`, `sizeof`, arrow and nested function signatures, explicit type arguments), not only identifiers. Measured on a stage-2 build of the fix, the three-module repro below: `'Host'` and `'HostNode'` no longer warn (base `0a5569a08` warns both); an unused import still warns. Pin: handoff `compileTimeNameUse` (`as`, a local annotation, an arrow parameter, a generic method). Not re-measured: Neon's own build, the LSP.
 
 ```ms
 // hostTypes.ms
