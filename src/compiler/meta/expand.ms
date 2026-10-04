@@ -55,10 +55,9 @@ import {
 } from "../../ast/node";
 import { CheckerContext, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
-import { hasGenericParams } from "../../checker/types";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
-import { rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
+import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
 import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
@@ -1698,19 +1697,15 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		return node;
 	}
 
-	// SERIALIZE A3 defer check — mirror of checkExprPass.ms:1663-1672. If any
-	// arg's type still contains a GenericParam, the surrounding function isn't
+	// SERIALIZE A3 defer check — the predicate the checker asks. If any
+	// arg's type still depends on a GenericParam, the surrounding function isn't
 	// monomorphized yet (we're inside a generic body that wasn't instantiated).
 	// Don't expand — let monomorphize generate concrete instances; a later
 	// expandMacros pass post-mono will fire on those with concrete types.
 	// Without this, expanding here would feed Identifier("T") (the generic
 	// param's type-AST name) to the macro, which would mis-classify T as an
 	// atomic type and emit garbage.
-	for (const arg of d.macroArgs) {
-		if (arg.nodeType != null && hasGenericParams(arg.nodeType)) {
-			return node;
-		}
-	}
+	if (anyArgIsParametric(d.macroArgs)) return node;
 
 	if (node.typeArg != "") resolveAnnotation(node.typeArg, ctx, node.location.line, node.location.column);
 	const compileMark = ctx.errors.length;

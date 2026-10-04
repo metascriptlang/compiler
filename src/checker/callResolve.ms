@@ -22,7 +22,7 @@ import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
+import { SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
 import { unionHasMemberOfKind, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
@@ -366,13 +366,18 @@ export function isDirectiveInvocation(node: Node): boolean {
 }
 
 // True iff any arg's nodeType still carries a GenericParam — the marker
-// for "this call lives inside an un-instantiated generic body". Drives
+// for "this call lives inside an un-instantiated generic body". A type named
+// as an argument (`m(Box)`) carries its own parameters, not the enclosing
+// body's, so it marks only when it is a type parameter itself. Drives
 // the SERIALIZE A3 defer convention: macro invocations with parametric
 // args wait for monomorphization to substitute concrete types, then
 // re-check eagerly expands.
 export function anyArgIsParametric(args: Node[]): boolean {
 	for (const arg of args) {
-		if (arg.nodeType != null && hasGenericParams(arg.nodeType)) return true;
+		if (arg.nodeType == null) continue;
+		const namesType = arg.resolvedSym != null && isTypeSymbol(arg.resolvedSym);
+		if (namesType && arg.nodeType.kind != TypeKind.GenericParam) continue;
+		if (hasGenericParams(arg.nodeType)) return true;
 	}
 	return false;
 }
