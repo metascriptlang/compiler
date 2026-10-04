@@ -11,6 +11,7 @@ import { syntheticToken, makeHiddenDeref, makeTypedIdent, makeMember, makeCall, 
 import { AliveSet, CEmissionFacts } from "../../codegen/c/context";
 import { functionDeclIsAlive } from "../../checker/reachability";
 import { hcrStorageDecl } from "./hcrLift";
+import { ctorRoutineOf } from "../../checker/ctorRoutine";
 
 export struct HcrIndirectModule {
 	moduleId: string;
@@ -225,8 +226,7 @@ function constructedClassOf(n: Node): Symbol | null {
 
 function constructorInitOf(classSym: Symbol | null): Symbol | null {
 	if (classSym == null || classSym.instantiatedFrom != null) return null;
-	const entry = lookupCtorDefaults(classSym, classSym.name);
-	return entry != null ? entry.initSym : null;
+	return ctorRoutineOf(classSym);
 }
 
 function referenceText(n: Node): string {
