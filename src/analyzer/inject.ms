@@ -1858,6 +1858,11 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	if (varType == null) return stmt;
 
 	const rcInfo = classifyRc(varType, dctx);
+	if (stmt.resolvedSym != null && hasFlag(stmt.resolvedSym, SymbolFlag.StaticLocal)) {
+		registerVar(dctx, rcInfo, false, stmt.resolvedSym);
+		if (d.initializer != null) d.initializer = processNode(d.initializer, dctx, rhsMode(d.initializer));
+		return stmt;
+	}
 
 	// Cursor detection must happen BEFORE the needsCleanup early-return.
 	// Even if the variable's own type doesn't need cleanup, it may be a pointer alias

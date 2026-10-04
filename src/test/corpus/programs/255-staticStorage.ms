@@ -12,6 +12,7 @@ function mk(tag: string): string {
 
 // Storage at module scope, initializer run once.
 function once1(): string { static const t = mk("A"); return t; }
+function onceLiteral(): string { static const text = "held"; return text; }
 
 // Same storage class, `let` spelling: keeps the reference's per-call init.
 function perCall(): string { static let t = mk("B"); return t; }
@@ -32,6 +33,7 @@ function main(): void {
 	if (once1() != "A1") ok = false;
 	if (once1() != "A1") ok = false;
 	if (once1() != "A1") ok = false;
+	if (onceLiteral() != "held" || onceLiteral() != "held") ok = false;
 
 	if (perCall() != "B2") ok = false;
 	if (perCall() != "B3") ok = false;
