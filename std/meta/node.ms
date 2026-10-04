@@ -285,6 +285,8 @@ export enum NodeFlag {
 	GlobalDestroys,
 	UserOp,        // checker: this operator calls a declared routine, not the built-in
 	ObjectSlot,    // checker: this union projection reads whichever slot holds an object, the conversion above it checks the class
+	CanRaise,      // raises inference: this statement's value holds a call that can raise
+	CannotRaise,   // raises inference: no call in this statement's value can raise
 }
 
 // ===== Node Kind Enum =====

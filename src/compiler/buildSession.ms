@@ -5,6 +5,7 @@ import { CheckSession, createCheckSession } from "../checker/orchestrator";
 import { GenericTypeInstRow, takeGenericTypeInstsFrom, resetAllSideChannels } from "../parser/context";
 import { pendingInstanceKeyOf, resetInstantiationState } from "../checker/instantiate";
 import { resetDispatchRegistry } from "../checker/context";
+import { resetRaises } from "../checker/raises";
 import { resetDuVariantRegistry } from "../checker/types";
 import { resetDuHashes } from "../analyzer/classify";
 import { resetLinkState } from "../utils/linkState";
@@ -98,6 +99,7 @@ export function resetBuildState(): void {
 	resetAllSideChannels();
 	resetInstantiationState();
 	resetDispatchRegistry();
+	resetRaises();
 	resetDuVariantRegistry();
 	resetDuHashes();
 	resetLinkState();

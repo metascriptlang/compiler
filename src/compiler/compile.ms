@@ -26,6 +26,7 @@ import { aliveSetHasDecl, aliveSetHasModule, createAliveSet, AliveSet, CEmission
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
+import { inferRaises, resetRaises } from "../checker/raises";
 import { collectFreestandingAsync, collectWritableModuleBindings, freestandingAsyncLoc, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { getSimpleTypeDesc, sealHookSyms, opCName } from "../codegen/c/types";
@@ -2767,6 +2768,8 @@ setGlobalHookOwners(sharedHookOwners);
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
+	if (opts.isHcr) resetRaises();
+	else inferRaises(transformedPrograms);
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths, hcrRootFunctions(hcrModulePaths));
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
@@ -3345,6 +3348,7 @@ setGlobalHookOwners(sharedHookOwners);
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
+	inferRaises(transformedPrograms);
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, filePath, true, graph);
 
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
