@@ -37,6 +37,8 @@ typedef struct {
     uint64_t instructionData;
     uint64_t instructionDataLength;
     uint64_t programId;
+    bool err;
+    void* currException;
 } msSolanaContext;
 
 msSolanaContext* msSolHostContext(void);

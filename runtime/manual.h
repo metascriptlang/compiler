@@ -54,6 +54,11 @@ static inline msRefHeader* msHeader(void* p) {
     return (msRefHeader*)((char*)p - sizeof(msRefHeader));
 }
 
+typedef struct {
+    const char* message;
+    int code;
+} msException;
+
 /* ===== Allocation ===== */
 
 #ifdef MSOS_BARE
@@ -80,6 +85,8 @@ typedef struct {
     uint64_t instructionData;
     uint64_t instructionDataLength;
     uint64_t programId;
+    bool err;
+    msException* currException;
 } msSolanaContext;
 
 static inline msSolanaContext* msSolanaCurrentContext(void) {
@@ -90,6 +97,8 @@ static inline void msSolanaEnter(const uint8_t* input) {
     msSolanaContext* context = msSolanaCurrentContext();
     context->input = (uint64_t)input;
     context->arenaPosition = sizeof(msSolanaContext);
+    context->err = false;
+    context->currException = (msException*)0;
 }
 
 static inline uint64_t msSolanaResult(void) {
@@ -383,13 +392,13 @@ typedef struct {
 #endif
 
 /* ===== Exception Handling (static, no TLS) ===== */
-typedef struct {
-    const char* message;
-    int code;
-} msException;
-
+#ifdef MSOS_SOLANA
+#define msErr (msSolanaCurrentContext()->err)
+#define msCurrException (msSolanaCurrentContext()->currException)
+#else
 static bool msErr = false;
 static msException* msCurrException = (msException*)0;
+#endif
 
 static inline void msClearException(void) {
     msErr = false;
