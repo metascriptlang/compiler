@@ -1169,7 +1169,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			&& (d.callee.data as IdentifierData).name == "super"
 			&& d.callee.resolvedSym != null) {
 		const parentSym = d.callee.resolvedSym;
-		const parentCtor = parentSym.symbolKind == SymbolKind.Function ? parentSym : ctorRoutineOf(parentSym);
+		const parentCtor = parentSym.symbolKind == SymbolKind.Function ? parentSym : ctorRoutineFor(ctx, parentSym);
 		if (parentCtor == null) {
 			addError(ctx, `internal: the parent class '${parentSym.name}' has no constructor routine for super()`, node.location.line, node.location.column);
 			return errorType();
