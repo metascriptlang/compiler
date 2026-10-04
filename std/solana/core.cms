@@ -34,7 +34,7 @@ extern function msSolTryFindProgramAddress(seeds: uint64, seedCount: uint64, pro
 extern function msSolInvokeSigned(instruction: uint64, accountInfos: uint64, accountInfoCount: uint64, signers: uint64, signerCount: uint64): uint64;
 extern function msSolGetClock(out: uint64): uint64;
 extern function msSolGetRent(out: uint64): uint64;
-extern function msSolSetReturnData(data: Span<uint8>): void;
+extern function msSolSetReturnData(data: Readonly<Span<uint8>>): void;
 extern function msSolGetReturnData(data: uint64, length: uint64, programId: uint64): uint64;
 
 const MAX_RETURN_DATA: uint64 = 1024;
@@ -557,7 +557,7 @@ function invokeWith(
 
 export function invokeSigned(this instruction: Instruction, signer: Seeds): Result<uint64, ProgramError> {
 	if (signer.address == 0) { return invokeWith(instruction, 0, 0); }
-	const one: Seeds[1] = [signer];
+	let one: Seeds[1] = [signer];
 	return instruction.invokeSigned(one);
 }
 
@@ -653,7 +653,7 @@ export function clock(): Clock {
 	return value;
 }
 
-export function setReturnData(data: Span<uint8>): void {
+export function setReturnData(data: Readonly<Span<uint8>>): void {
 	msSolSetReturnData(data);
 }
 
