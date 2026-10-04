@@ -1,4 +1,4 @@
-import { strictErrorCount } from "./helpers";
+import { strictErrorCount, hasError } from "./helpers";
 import { compileToC, compileToCWithStd } from "../helpers";
 
 test "pointerSlotRelation: cursor nullability does not make ordinary references nullable" {
@@ -199,4 +199,19 @@ test "pointerSlotRelation: a method call on a Ptr<T> or Var<T> receiver lowers a
 		assert !methodForm.startsWith("error:"), item.name + ": " + methodForm;
 		assert methodForm == receiverProgram(item.declarations, item.freeCall), item.name;
 	}
+}
+
+test "pointerSlotRelation: a struct value into a Ref slot is refused and the refusal names the Ref" {
+	const pre = "struct P { n: int32; s: string; }\nfunction mk(): P { return { n: 1, s: \"x\" }; }\nfunction one(): int32 { return 1; }\nfunction show(r: Ref<P>): int32 { return r.n; }\nstruct H { r: Ref<P>; }\n";
+	const refused = "Type 'P' is not assignable to type 'Ref<P>' — a struct value is never copied into a new Ref implicitly";
+	assert hasError(pre + "const r: Ref<P> = mk();", refused);
+	assert hasError(pre + "const h: H = { r: mk() };", refused);
+	assert hasError(pre + "const n = show(mk());", "got P, expected Ref<P>");
+	assert hasError(pre + "const c: Ref<int32> = one();", "type 'Ref<int32>'");
+	assert strictErrorCount(pre + "const r: Ref<P> = { ...mk() };\nconst h: H = { r: { n: 2, s: \"y\" } };") == 0;
+}
+
+test "pointerSlotRelation: a class or interface value keeps its plain name in a refusal" {
+	assert hasError("class A { n: int32 = 1; }\nclass B { s: string = \"\"; }\nconst b: B = new A();", "Type 'A' is not assignable to type 'B'");
+	assert hasError("interface I { n: int32; }\ninterface J { s: string; }\nconst i: I = { n: 1 };\nconst j: J = i;", "Type 'I' is not assignable to type 'J'");
 }
