@@ -31,7 +31,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -209,6 +209,13 @@ function checkedInstanceSym(ctx: CheckerContext, target: Type | null): Symbol | 
 	if (cls == null) return null;
 	const names = splitTopLevel(genericParamNamesOf(symGenericParams(cls)), ",").map((n: string): string => n.trim());
 	return instantiateClassConstructor(cls, names, body.typeChildren, ctx);
+}
+
+function stampCheckedInstance(ctx: CheckerContext, node: Node, target: Type): void {
+	const instance = checkedInstanceSym(ctx, target);
+	if (instance == null) return;
+	if (node.typeExpr == null) node.typeExpr = createNodeAt(NodeKind.Identifier, { name: instance.name } as IdentifierData, node.location);
+	node.typeExpr!.resolvedSym = instance;
 }
 
 export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
@@ -2020,10 +2027,17 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const nullableMember = targetType.kind == TypeKind.Union ? unwrapRefNullUnion(targetType) : null;
 			const projectedMember = nullableMember != null ? nullableMember : targetType;
 			if (srcType != null && isSlotUnion(srcType) && (targetType.kind != TypeKind.Union || isStrLitSet(targetType) || nullableMember != null)
-				&& !isUnresolvedType(targetType) && tagUnionMemberSlot(srcType, projectedMember) >= 0) {
-				node.data = { asExpr: checkedProjection(d.asExpr, srcType, projectedMember), asType: d.asType };
+				&& !isUnresolvedType(targetType) && (tagUnionMemberSlot(srcType, projectedMember) >= 0 || objectPathHolders(srcType, projectedMember).length > 0)) {
+				const projected = checkedProjection(d.asExpr, srcType, projectedMember);
+				if (projected.kind == NodeKind.TypeAssertion) {
+					node.data = { asExpr: (projected.data as TypeAssertionData).asExpr, asType: d.asType };
+					if (projected.flags.has(NodeFlag.ObjCheck)) node.flags = node.flags.incl(NodeFlag.ObjCheck);
+				} else {
+					node.data = { asExpr: projected, asType: d.asType };
+				}
 				node.nodeType = isReadonlyView(srcType) ? propagateReadonlyView(targetType) : targetType;
 				node.flags = node.flags.incl(NodeFlag.ConvCheck);
+				stampCheckedInstance(ctx, node, targetType);
 				return;
 			}
 			if (srcType != null && !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
@@ -2123,15 +2137,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				addError(ctx, "cannot check a conversion from unknown to " + typeDisplayName(targetType) + " — only a class has a runtime identity; convert to a class, or keep the value in a discriminated union", asLoc.line, asLoc.column);
 			} else if (objConv == ObjConv.Checked && !sameType(srcType, targetType)) {
 				node.flags = node.flags.incl(NodeFlag.ObjCheck);
-				const instance = checkedInstanceSym(ctx, targetType);
-				if (instance != null) {
-					if (node.typeExpr == null) node.typeExpr = createNodeAt(NodeKind.Identifier, { name: instance.name } as IdentifierData, node.location);
-					node.typeExpr!.resolvedSym = instance;
-				}
+				stampCheckedInstance(ctx, node, targetType);
 			}
 			if (srcType != null && !isUnresolvedType(targetType) && !reportedErrorSince(ctx, operandMark)
 				&& assertionNarrows(srcType, targetType)) {
 				node.flags = node.flags.incl(NodeFlag.ConvCheck);
+				stampCheckedInstance(ctx, node, targetType);
 			}
 			if (srcType != null && isReadonlyView(srcType) && node.nodeType != null) node.nodeType = propagateReadonlyView(node.nodeType);
 			return;

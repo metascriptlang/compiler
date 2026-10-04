@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
+import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
@@ -1296,19 +1296,69 @@ export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
 	return unionSlotOf(declared, exprType);
 }
 
-export function projectTagUnionMember(expr: Node, declared: Type, exprType: Type): Node {
+export function projectTagUnionMember(expr: Node, declared: Type, exprType: Type, convert: boolean = false): Node {
 	const vi = tagUnionMemberSlot(declared, exprType);
+	const holders = objectPathHolders(declared, exprType);
+	if (holders.length > 0) {
+		const k = vi >= 0 && holders.indexOf(vi) >= 0 ? vi : holders[0];
+		expr.nodeType = declared;
+		return objectMemberConversion(hiddenSlotConv(expr, declared.typeChildren[k], k), declared, exprType, holders, convert);
+	}
 	if (vi < 0) return null as unknown as Node;
 	expr.nodeType = declared;
 	return hiddenSlotConv(expr, declared.typeChildren[vi], vi);
 }
 
-export function narrowMaybePayload(expr: Node, carrier: Type, narrowed: Type): Node {
+export function narrowMaybePayload(expr: Node, carrier: Type, narrowed: Type, convert: boolean = false): Node {
 	const payload = isMaybeType(narrowed) ? narrowed.typeReturn : unwrapRefNullUnion(narrowed);
 	if (carrier.typeReturn == null || payload == null) return null as unknown as Node;
 	const vi = tagUnionMemberSlot(carrier.typeReturn, payload);
 	if (vi < 0) return null as unknown as Node;
+	const holders = isMaybeType(narrowed) ? [] as int32[] : objectPathHolders(carrier.typeReturn, payload);
+	if (holders.length > 0 && holders.indexOf(vi) >= 0) {
+		return objectMemberConversion(hiddenSlotConv(expr, narrowed, vi), carrier.typeReturn, narrowed, holders, convert);
+	}
 	return hiddenSlotConv(expr, narrowed, vi);
+}
+
+function isObjectRef(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null
+		&& (t.typeReturn.kind == TypeKind.Struct || t.typeReturn.kind == TypeKind.GenericInstance);
+}
+
+export function objectHolderSlots(declared: Type, target: Type): int32[] {
+	const holders: int32[] = [];
+	if (!isObjectRef(target) || runtimeClassSym(target.typeReturn) == null || declared.kind != TypeKind.Union || declared.typeChildren == null) return holders;
+	for (let i: int32 = 0; i < declared.typeChildren.length; i += 1) {
+		if (isObjectRef(declared.typeChildren[i])) holders.push(i);
+	}
+	return holders;
+}
+
+function holdersNeedObjectCheck(declared: Type, target: Type, holders: int32[]): boolean {
+	for (const h of holders) {
+		if (objectConversion(declared.typeChildren[h], target) == ObjConv.Checked) return true;
+	}
+	return false;
+}
+
+export function objectPathHolders(declared: Type, target: Type): int32[] {
+	const payload = target.kind == TypeKind.Union ? unwrapRefNullUnion(target) : target;
+	if (payload == null) return [] as int32[];
+	const own = tagUnionMemberSlot(declared, payload);
+	const holders = objectHolderSlots(declared, payload);
+	if (holders.length == 1 && holders[0] == own && !holdersNeedObjectCheck(declared, payload, holders)) return [] as int32[];
+	return holders;
+}
+
+function objectMemberConversion(read: Node, declared: Type, target: Type, holders: int32[], convert: boolean): Node {
+	read.flags = read.flags.incl(NodeFlag.ObjectSlot);
+	const conv = createNode(NodeKind.TypeAssertion, { asExpr: read, asType: "" } as NodeData, createToken(TokenKind.Ident, "", read.location.line));
+	conv.nodeType = target;
+	conv.flags = conv.flags.incl(NodeFlag.Sem);
+	const payload = target.kind == TypeKind.Union ? unwrapRefNullUnion(target) : target;
+	if (convert && payload != null && holdersNeedObjectCheck(declared, payload, holders)) conv.flags = conv.flags.incl(NodeFlag.ObjCheck);
+	return conv;
 }
 
 export function isStrLitSet(t: Type | null): boolean {
@@ -1337,7 +1387,7 @@ export function checkedAssertion(expr: Node, target: Type): Node {
 }
 
 export function checkedProjection(expr: Node, declared: Type, member: Type): Node {
-	const projected = projectTagUnionMember(expr, declared, member);
+	const projected = projectTagUnionMember(expr, declared, member, true);
 	if (projected != null as unknown as Node) projected.flags = projected.flags.incl(NodeFlag.ConvCheck);
 	return projected;
 }
