@@ -3,20 +3,21 @@
 // Follows standard reference implementation patterns for statement emission.
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
-import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isStructType, unwrapRefNullUnion, isUnresolvedType } from "../../checker/types";
+import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, UnaryExprData, ConditionalExprData, ObjectLiteralData, SpreadExprData, MoveExprData, HiddenDerefData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { isStructType, unwrapRefNullUnion, isUnresolvedType, mayHoldAddress, peelThrough, PEEL_ALL } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { statementCanRaise } from "../../checker/raises";
 import {
 	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
 	readProcStmts, emitLineDir, getTemp, fillLocalName, lookupLocalSymName, setLocalSymName, pushBlock, popBlock,
-	CSection, addLine, sec, nameSetAdd, nameSetHas, addCGenError, addUnloweredError,
+	CSection, addLine, sec, nameSetAdd, nameSetHas, addCGenError, addUnloweredError, isIndirectRef,
 } from "./context";
 import { genExpr, genExprInto, buildsInPlace, shimCallArg } from "./expressions";
 import { formatCNumber, formatCNumberLit } from "./literals";
 import { ensureCrossModuleProto } from "./forward";
 import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar } from "./names";
+import { isRuntimeProcSym } from "../../transform/util";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, callOverloadWinner, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
 
 // ===== blockLeaveActions — emit finally cleanup on break/continue/return =====
@@ -224,8 +225,117 @@ export function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
 	emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
 }
 
+function frameLocalRoot(p: CProc, n: Readonly<Node>): Symbol | null {
+	let cur = n;
+	while (cur != null) {
+		match (cur.kind) {
+			NodeKind.Identifier => {
+				const sym = cur.resolvedSym;
+				if (sym == null || sym.symbolKind != SymbolKind.Variable) return null;
+				if (hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.ForVar)) return null;
+				if (isIndirectRef(p, sym, (cur.data as IdentifierData).name)) return null;
+				return sym;
+			},
+			NodeKind.MemberExpr => {
+				const obj = (cur.data as MemberExprData).object;
+				if (!isValueKind(obj.nodeType, TypeKind.Struct)) return null;
+				cur = obj;
+			},
+			NodeKind.ArrayAccess => {
+				const ad = cur.data as ArrayAccessData;
+				if (!isValueKind(ad.array.nodeType, TypeKind.SizedArray) || !isPureIndex(ad.index)) return null;
+				cur = ad.array;
+			},
+			NodeKind.CallExpr => {
+				const cd = cur.data as CallExprData;
+				const sym = cd.callee.resolvedSym;
+				if (!isRuntimeProcSym(sym, "msSizedArrayAccess") && !isRuntimeProcSym(sym, "msSizedArrayAccessUnchecked")) return null;
+				if (cd.arguments.length != 3 || !isPureIndex(cd.arguments[1])) return null;
+				cur = cd.arguments[0];
+			},
+			_ => { return null; },
+		};
+	}
+	return null;
+}
+
+function isValueKind(t: Type | null, kind: TypeKind): boolean {
+	const peeled = t != null ? peelThrough(t, PEEL_ALL) : null;
+	return peeled != null && peeled.kind == kind;
+}
+
+function isPureIndex(n: Readonly<Node>): boolean {
+	let cur = n;
+	while (cur.kind == NodeKind.HiddenStdConv || cur.kind == NodeKind.HiddenSubConv) {
+		cur = (cur.data as HiddenStdConvData).convExpr;
+	}
+	return cur.kind == NodeKind.NumberLiteral || cur.kind == NodeKind.Identifier;
+}
+
+function readsFrameLocal(p: CProc, root: Symbol, n: Readonly<Node>): boolean {
+	if (n == null) return false;
+	if (mayHoldAddress(n.nodeType)) return true;
+	return match (n.kind) {
+		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral
+			| NodeKind.BigIntLiteral | NodeKind.SizeofExpr => false,
+		NodeKind.Identifier => n.resolvedSym == root
+			|| ((n.resolvedSym == null || n.resolvedSym.symbolKind != SymbolKind.Parameter)
+				&& isIndirectRef(p, n.resolvedSym, (n.data as IdentifierData).name)),
+		NodeKind.MemberExpr => readsFrameLocal(p, root, (n.data as MemberExprData).object),
+		NodeKind.ArrayAccess => readsFrameLocal(p, root, (n.data as ArrayAccessData).array)
+			|| readsFrameLocal(p, root, (n.data as ArrayAccessData).index),
+		NodeKind.BinaryExpr => readsFrameLocal(p, root, (n.data as BinaryExprData).left)
+			|| readsFrameLocal(p, root, (n.data as BinaryExprData).right),
+		NodeKind.UnaryExpr => readsFrameLocal(p, root, (n.data as UnaryExprData).operand),
+		NodeKind.ConditionalExpr => readsFrameLocal(p, root, (n.data as ConditionalExprData).ternaryCondition)
+			|| readsFrameLocal(p, root, (n.data as ConditionalExprData).ternaryConsequent)
+			|| readsFrameLocal(p, root, (n.data as ConditionalExprData).ternaryAlternate),
+		NodeKind.CallExpr => readsFrameLocal(p, root, (n.data as CallExprData).callee)
+			|| anyReadsFrameLocal(p, root, (n.data as CallExprData).arguments),
+		NodeKind.ObjectLiteral => anyReadsFrameLocal(p, root, (n.data as ObjectLiteralData).properties),
+		NodeKind.ArrayLiteral => anyReadsFrameLocal(p, root, (n.data as ArrayLiteralData).elements),
+		NodeKind.SpreadExpr => readsFrameLocal(p, root, (n.data as SpreadExprData).spreadArg),
+		NodeKind.MoveExpr => readsFrameLocal(p, root, (n.data as MoveExprData).moveArg),
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => readsFrameLocal(p, root, (n.data as HiddenDerefData).expr),
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => readsFrameLocal(p, root, (n.data as HiddenStdConvData).convExpr),
+		NodeKind.TypeAssertion => readsFrameLocal(p, root, (n.data as TypeAssertionData).asExpr),
+		_ => true,
+	};
+}
+
+function anyReadsFrameLocal(p: CProc, root: Symbol, nodes: Readonly<Node[]>): boolean {
+	for (const n of nodes) {
+		if (readsFrameLocal(p, root, n)) return true;
+	}
+	return false;
+}
+
+function assignTargetCType(g: CGen, left: Readonly<Node>): string {
+	let t = left.nodeType;
+	if (left.kind == NodeKind.Identifier && left.resolvedSym != null && left.resolvedSym.symbolType != null) {
+		t = left.resolvedSym.symbolType;
+	}
+	return t != null ? getTypeDesc(g, t) : "";
+}
+
+function assignsInPlace(g: CGen, p: CProc, d: Readonly<BinaryExprData>): boolean {
+	if (d.operator != "=" || d.right.kind != NodeKind.ObjectLiteral) return false;
+	const root = frameLocalRoot(p, d.left);
+	if (root == null || readsFrameLocal(p, root, d.right)) return false;
+	const destCType = assignTargetCType(g, d.left);
+	return destCType != "" && buildsInPlace(g, d.right, destCType);
+}
+
 function genExprStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as ExprStmtData;
+	if (d.expr.kind == NodeKind.BinaryExpr && assignsInPlace(g, p, d.expr.data as BinaryExprData)) {
+		const bd = d.expr.data as BinaryExprData;
+		const dest = genExpr(g, p, bd.left);
+		const built = genExprInto(g, p, bd.right, dest);
+		if (built != dest) emitStmtsLine(p, `${dest} = ${built};`);
+		emitCallRaiseCheck(p, d.expr);
+		return;
+	}
 	if (d.expr.kind == NodeKind.MacroInvocation) {
 		// @emit inside function body: emit raw C inline (Reference {.emit.} parity)
 		const mi = d.expr.data as MacroInvocationData;
