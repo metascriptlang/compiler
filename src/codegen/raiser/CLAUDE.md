@@ -33,7 +33,6 @@ Compiles the post-Phase-3 AST into Raiser bytecode: `parse → check → transfo
 
 Each probed on `msc run --target=raiser`:
 
-- `new Array<T>(n)` — `raiser runtime error: expected an array, got value kind Object`.
 - `class … extends` — `cannot evaluate 'super' at comptime: symbol kind is Class`.
 - `static` members — `cannot evaluate '<Class>' at comptime: symbol kind is Class`.
 - `out` argument — `cannot compile node kind OutExpr`.
