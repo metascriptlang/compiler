@@ -31,7 +31,7 @@ import {
 } from "../util";
 import { createSymSet, symSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
-import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
+import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, localsOutlivingSuspension, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
 import { stmtCountAfter } from "../testUtil";
 
 // ===== Variable Type Collection =====
@@ -438,6 +438,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	// 2. Collect the locals for hoisting
 	const locals = createSymSet();
 	collectStateLocals(body, ctx, locals);
+	const lifetimeLifted = localsOutlivingSuspension(body, locals, ctx);
 
 	const stateSym = mintSym(ctx, SymbolKind.Variable, "$state", numberType());
 	setFlag(stateSym, SymbolFlag.Mutable);
@@ -475,6 +476,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 
 	// 6. Convert the declarations of the locals that outlive a state to assignments
 	const lifted = localsSpanningStates(sc, locals);
+	for (const sym of lifetimeLifted.items) symSetAdd(lifted, sym);
 	// Also add yielded-future locals ($yf0, $yf1, ...) to the hoisted set
 	// with typed future types (Promise<T> from the yield variable type)
 	const yfs: YieldFuture[] = [];

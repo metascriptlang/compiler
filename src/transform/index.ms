@@ -142,6 +142,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); }
 	if (!jsBackend) { result = lowerActorPre(result, ctx); }
 	if (!jsBackend) { result = lowerSpawnGroup(result, ctx); }
+	result = lowerPointerAddresses(result, ctx, !jsBackend);
 	if (!jsBackend) { result = lowerAsync(result, ctx); }
 	if (!jsBackend) { result = lowerAsyncBridge(result, ctx); }
 	if (!jsBackend) { result = lowerGenerator(result, ctx); }
@@ -172,7 +173,6 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerOperators(result, ctx);
 	if (!jsBackend) { result = lowerBigIntOps(result, ctx); }
 	if (!jsBackend) { result = lowerStringOps(result, ctx); }
-	result = lowerPointerAddresses(result, ctx, !jsBackend);
 	if (jsBackend) { result = lowerJsPointers(result, ctx); }
 	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
 	result = spanLower(result, ctx);

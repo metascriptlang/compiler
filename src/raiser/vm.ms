@@ -365,7 +365,7 @@ function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue): void {
 	f.finished = true;
 	// Completion runs on the producing strand, whose heap dies with it — the
 	// value graph moves into storage the future owns.
-	const owned = copyGraph(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, value);
+	const owned = copyGraphWith(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, value, strandCopyMap(vm));
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 	copyValueInto(f.value, owned);
 	for (const w of f.waiters) {
@@ -675,6 +675,13 @@ function finishProgram(vm: RaiserVM, value: RaiserValue, abrupt: boolean): void 
 	vm.halted = true;
 }
 
+function strandCopyMap(vm: RaiserVM): RaiserCopyMap {
+	const map = createCopyMap();
+	map.sourceRegs = vm.regs.slots;
+	map.sourceGlobals = vm.globals;
+	return map;
+}
+
 function copyStrandGlobals(
 	vm: RaiserVM,
 	arrays: RaiserArrayHeap,
@@ -682,6 +689,7 @@ function copyStrandGlobals(
 	map: RaiserCopyMap,
 ): RaiserValue[] {
 	const globals: RaiserValue[] = [];
+	map.destGlobals = globals;
 	for (const value of vm.globals) {
 		const copied = copyGraphWith(vm.arrayHeap, vm.objectHeap, arrays, objects, value, map);
 		if (vm.gcMode == "orc") rcIncref(arrays, objects, copied);
@@ -709,7 +717,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	const sp: number[] = [];
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
-	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, createCopyMap());
+	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, strandCopyMap(vm));
 	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	vm.sched.strands.items.push(s);
 	return id;
@@ -737,7 +745,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const envField = heapObjectGetField(vm.objectHeap, closure.intVal, "env");
-	const copyMap = createCopyMap();
+	const copyMap = strandCopyMap(vm);
 	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, copyMap);
 	if (envField.kind == RaiserValueKind.Object) {
 		// C hands the thunk a borrow of the parent's captures and the analyzer
