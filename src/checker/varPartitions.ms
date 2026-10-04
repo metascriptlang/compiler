@@ -291,6 +291,7 @@ interface BorrowCheck {
 	params: string[];
 	vars: BorrowVar[];
 	sites: MutationSite[];
+	suspends: MutationSite[];
 	scopeNodes: Node[];
 	scopeParents: int32[];
 	scope: int32;
@@ -336,7 +337,7 @@ function borrowCheckBody(ctx: CheckerContext, params: string[], body: Node | nul
 
 function borrowCheckUnit(ctx: CheckerContext, params: string[], root: Node, stmts: Node[]): void {
 	const b: BorrowCheck = {
-		ctx, p: createPartitions(), params, vars: [], sites: [],
+		ctx, p: createPartitions(), params, vars: [], sites: [], suspends: [],
 		scopeNodes: [root], scopeParents: [-1], scope: 0, loops: [],
 	};
 	for (const s of stmts) { borrowLiveRanges(b, s); }
@@ -639,7 +640,11 @@ function borrowLiveRanges(b: BorrowCheck, node: Node | null): void {
 
 
 function borrowTraverse(b: BorrowCheck, node: Node | null): void {
-	if (node == null || isUnitBoundary(node.kind)) return;
+	if (node == null) return;
+	if (isUnitBoundary(node.kind)) {
+		captureHandOff(b, node, node.location.line);
+		return;
+	}
 	b.p.abstractTime += 1;
 	const k = node.kind;
 	const line = node.location.line;
@@ -748,6 +753,12 @@ function borrowTraverse(b: BorrowCheck, node: Node | null): void {
 		const arg = (node.data as MoveExprData).moveArg;
 		borrowTraverse(b, arg);
 		mutateBorrowRoots(b, arg, line);
+		return;
+	}
+	if (k == NodeKind.AwaitExpr || k == NodeKind.YieldExpr) {
+		const here = b.p.abstractTime;
+		forEachChild(node, (c: Node): void => { borrowTraverse(b, c); });
+		b.suspends.push({ time: here, line });
 		return;
 	}
 	if (k == NodeKind.ArrayLiteral) {
@@ -910,9 +921,22 @@ function handOffBorrow(b: BorrowCheck, node: Node | null, line: int32): void {
 	}
 	const sym = k == NodeKind.Identifier ? node.resolvedSym : null;
 	if (sym == null) return;
+	handOffSym(b, sym, line);
+}
+
+function handOffSym(b: BorrowCheck, sym: Symbol, line: int32): void {
 	const id = variableId(b.p, sym);
 	if (id < 0 || !b.vars[id].movable || b.vars[id].isView || !ownsMemory(sym.symbolType, 0)) return;
 	mutateBorrow(b, sym, line);
+}
+
+function captureHandOff(b: BorrowCheck, node: Node | null, line: int32): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.Identifier) {
+		if (node.resolvedSym != null) handOffSym(b, node.resolvedSym!, line);
+		return;
+	}
+	forEachChild(node, (c: Node): void => { captureHandOff(b, c, line); });
 }
 
 function ownsMemory(t: Type | null, depth: int32): boolean {
@@ -1112,12 +1136,24 @@ function checkBorrowedLocations(b: BorrowCheck): void {
 	for (let i = 0; i < b.vars.length; i += 1) {
 		const bv = b.vars[i];
 		if (!bv.isView || bv.reported || (b.p.vars[i].flags & VF_IS_PARAM) != 0) continue;
+		const name = b.p.vars[i].sym.name;
+		let suspended = false;
+		for (const sp of b.suspends) {
+			if (sp.time >= b.p.vars[i].aliveStart && sp.time <= b.p.vars[i].aliveEnd) {
+				addError(b.ctx, "'" + name + "' is read at line " + bv.lastUseLine + " across an await or yield at line " + sp.line
+					+ ": the view is captured into the frame the function suspends in, and its source can change or die while it runs — copy it with [...x] before the await, or take the view again after",
+					bv.declLine, bv.declCol);
+				b.vars[i].reported = true;
+				suspended = true;
+				break;
+			}
+		}
+		if (suspended) continue;
 		for (const sid of bv.borrowsFrom) {
 			const r = ufRoot(b.p, sid);
 			if (b.p.vars[r].con.kind != CK_ROOT_OF) continue;
 			const m = firstDangerousMutation(b.p.graphs[b.p.vars[r].con.target], b.p.vars[i]);
 			if (m < 0) continue;
-			const name = b.p.vars[i].sym.name;
 			addError(b.ctx, "'" + name + "' is read at line " + bv.lastUseLine + " after '" + b.p.vars[sid].sym.name
 				+ "', the source it borrows from, changes at line " + mutationLine(b, m)
 				+ ": a view does not survive a change to its source — take the view again after the change, or copy it first with [...x]",
