@@ -9,7 +9,7 @@ import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types"
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
-	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, aliveSetHasDecl, internString, addCGenError,
+	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHas, aliveSetHasDecl, aliveSetHasModule, internString, addCGenError,
 	setLocalSymName, factClaimGeneric, factSkipTypeInfo,
 } from "./context";
 import { genExpr } from "./expressions";
@@ -560,6 +560,7 @@ function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 	}
 	// Other statements go to ModuleInit — use shared initProc for consistent temp counter
 	const atExit = node.flags.has(NodeFlag.GlobalDestroys);
+	if (atExit && g.aliveSet.entries.length > 0 && !aliveSetHasModule(g.aliveSet, g.modulePath)) return;
 	const p = atExit ? g.deinitProc : g.initProc;
 	const target = atExit ? CSection.ModuleDeinit : CSection.ModuleInit;
 	genStmt(g, p, node);
