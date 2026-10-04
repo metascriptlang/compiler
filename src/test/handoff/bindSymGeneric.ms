@@ -15,7 +15,7 @@ export macro first(x: Node): Node {
 }
 
 const literalBinding = `const bound = bindSym("pick");`;
-const computedBinding = `const name = "pi" + "ck"; const bound = bindSym(name);`;
+const computedBinding = `const name = "pi" + "ck"; const bound = bindSym(name); if (bound == null) throw new Error("computed symbol is absent");`;
 
 function project(binding: string, main: string): MapEntry[] {
 	return [
@@ -40,14 +40,15 @@ test "bindSymGeneric: a literal bindSym of a generic instantiates at the call si
 	assert js.indexOf("ERROR", 0) < 0, js;
 }
 
-test "bindSymGeneric: a computed bindSym that misses is an error at the call, not a crash" {
+test "bindSymGeneric: a computed lookup observes caller imports and handles a missing symbol" {
 	const main = `
 import { first } from "./lib";
 const value: int32 = 4;
 console.log(first(value));
 `;
 	const missed = checkProjectDiagnostics(project(computedBinding, main), "test/main.ms");
-	assert missed.join("\n").contains("null callee"), missed.join("\n");
+	assert missed.length == 1, missed.join("\n");
+	assert missed[0].contains("computed symbol is absent"), missed.join("\n");
 	const imported = `
 import { first, pick } from "./lib";
 const value: int32 = 4;

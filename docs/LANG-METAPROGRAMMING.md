@@ -153,6 +153,20 @@ Existing private/generic bound-symbol, export-star and nested-decorator consumer
 also pass C/JS; the nested decorator's dynamic caller query still prints `scoped=4`.
 Not measured here: packed/standalone prelude scope, ESM, ORC, SAN or a full language suite.
 
+Integration check, 2026-10-05 on compiler `3fab156a`: macro-body checking rejects
+an unguarded computed binding used as a non-null callee, and a raw integer used
+for an enum-valued declaration field. These are invalid producer inputs, not
+loss of the declaring module's private-field access. The API contracts remain
+in `std/meta/index.ms` and `std/meta/node.ms`; do not bypass their nullable or
+enum types to make an expansion test pass.
+
+With the producer inputs corrected, the same compiler runs a declaration splice
+at module scope and inside a function on C and JS (`4`, then `7`); a guarded
+caller-visible computed binding prints `8` on both, while the absent binding
+reports the macro's single explicit error. Handoff `bindSymGeneric` is 3/3 and
+`fieldVisibility` 13/13, including the ordinary-caller private-access refusals.
+This focused check is not a fresh full-suite or SAN verdict.
+
 ### The Core Concept: AST In -> Manipulate -> AST Out
 
 A macro is a function that receives `Node`, inspects it however it wants, builds new `Node` trees, and returns the result. The returned AST replaces the original in the compilation pipeline.

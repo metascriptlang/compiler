@@ -137,11 +137,11 @@ test "fieldVisibility: a subclass reaches a protected member only through an ins
 }
 
 test "fieldVisibility: code a macro or template expands is checked with the macro's module as a friend" {
-	const lib = "import { Node, NodeKind, ClassDecoratorContext } from \"std/meta\";\nexport struct Account { address: uint64; }\nexport struct Signer { private account: Account; }\nexport function address(this s: Signer): uint64 { return s.account.address; }\n"
+	const lib = "import { Node, NodeKind, DeclKind, ClassDecoratorContext } from \"std/meta\";\nexport struct Account { address: uint64; }\nexport struct Signer { private account: Account; }\nexport function address(this s: Signer): uint64 { return s.account.address; }\n"
 		+ "export macro mint(value: Node): Node {\n\treturn { kind: NodeKind.TypeAssertion, line: 0, column: 0, asExpr: { kind: NodeKind.ObjectLiteral, line: 0, column: 0, keys: [\"account\"], properties: [value] }, asType: \"Signer\" };\n}\n"
 		+ "export macro peek(s: Node): Node {\n\treturn { kind: NodeKind.MemberExpr, line: 0, column: 0, object: s, property: \"account\", isOptional: false };\n}\n"
 		+ "export macro mintTwice(value: Node): Node {\n\treturn { kind: NodeKind.CallExpr, line: 0, column: 0, callee: { kind: NodeKind.Identifier, line: 0, column: 0, name: \"mint\" }, arguments: [value] };\n}\n"
-		+ "export macro declareProof(value: Node): Node {\n\treturn { kind: NodeKind.SpliceMany, line: 0, column: 0, spliceNodes: [{ kind: NodeKind.VariableDecl, line: 0, column: 0, declName: \"proof\", declType: \"Signer\", initializer: { kind: NodeKind.ObjectLiteral, line: 0, column: 0, keys: [\"account\"], properties: [value] }, declKind: 0, nameLocation: { line: 0, column: 0 } }] };\n}\n"
+		+ "export macro declareProof(value: Node): Node {\n\treturn { kind: NodeKind.SpliceMany, line: 0, column: 0, spliceNodes: [{ kind: NodeKind.VariableDecl, line: 0, column: 0, declName: \"proof\", declType: \"Signer\", initializer: { kind: NodeKind.ObjectLiteral, line: 0, column: 0, keys: [\"account\"], properties: [value] }, declKind: DeclKind.Const, nameLocation: { line: 0, column: 0 } }] };\n}\n"
 		+ "export macro sealed(value: Node, context: ClassDecoratorContext): Node {\n\treturn value;\n}\n"
 		+ "export template unwrapped(s: Signer): uint64 { return s.account.address; }\n"
 		+ "export template showProof(s: Signer): void {\n\tconst inner = s.account;\n\tconsole.log(inner.address);\n}\n";
