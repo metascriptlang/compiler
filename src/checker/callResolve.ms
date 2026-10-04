@@ -500,6 +500,7 @@ function isTypeLevelAccess(ctx: CheckerContext, obj: Node, property: string): bo
 		|| sym.symbolKind == SymbolKind.Enum) return true;
 	if (sym.symbolKind != SymbolKind.Function) return false;
 	if (obj.kind != NodeKind.Identifier) return false;
+	if (findStaticField(sym, property) != null) return true;
 	if (ctx.extensionRegistry == null) return false;
 	return staticExtsOwnedBy(ctx, findAllExtensionsByName(ctx.extensionRegistry, property), sym, null).length > 0;
 }
