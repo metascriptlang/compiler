@@ -25,7 +25,7 @@
 //
 // GUARD-CHECK-FAIL Type 'Vec<int32>' is not assignable to type 'int32[]'
 // GUARD-CHECK-FAIL Type 'int32[]' is not assignable to type 'Vec<int32>'
-// GUARD-CHECK-FAIL got int32[], expected Array
+// GUARD-CHECK-FAIL got int32[], expected Vec<int32>
 
 function takeVec(v: Vec<int32>): int32 { return v.length; }
 
