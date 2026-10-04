@@ -26,7 +26,7 @@ import {
 	resizedProgramAccount,
 	selectedInstruction,
 } from "./core";
-import { SeedSlice } from "./seed";
+import { SeedSlice, SignerSeeds } from "./seed";
 
 extern function msSolLoadU64(address: uint64): uint64;
 extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
@@ -90,9 +90,10 @@ export function readArgs<T>(fits: boolean, value: T): Result<T, ProgramError> {
 export function create<T>(
 	payer: WritableSigner,
 	target: Writable,
+	signers: Span<SignerSeeds> = [],
 ): Result<Mutable<T>, ProgramError> {
 	const space = 8 + (sizeof(T) as uint64);
-	const created = try createdAccount(payer, target, space, wordOf(T.discriminator()));
+	const created = try createdAccount(payer, target, space, wordOf(T.discriminator()), signers);
 	return Result.ok(created as Mutable<T>);
 }
 

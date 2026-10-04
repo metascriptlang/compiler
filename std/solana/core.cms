@@ -898,8 +898,9 @@ export function createdAccount(
 	target: Writable,
 	space: uint64,
 	discriminator: uint64,
+	signers: Span<SignerSeeds> = [],
 ): Result<Account, ProgramError> {
-	return initialized(payer, target, space, discriminator, []);
+	return initialized(payer, target, space, discriminator, signers);
 }
 
 export struct DerivedAccount {
