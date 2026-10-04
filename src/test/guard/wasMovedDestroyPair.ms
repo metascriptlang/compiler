@@ -1,4 +1,4 @@
-// optimizer.nim wasMovedDestroyPair: wasMoved(x); destroy(x) is elided unless a call that can raise lies between; JS runs no struct hooks, so no GUARD-JS lane.
+// optimizer.nim wasMovedDestroyPair: a pair inside one block is elided, a try-body wasMoved never pairs with a finally destroy; JS runs no struct hooks, so no GUARD-JS lane.
 
 struct R { id: int32; name: string; }
 struct Holder { r: R; tag: string; }
@@ -7,6 +7,11 @@ const log: string[] = [];
 
 function onDestroy(this x: R): void { log.push(x.id.toString()); }
 function mk(n: int32): R { return { id: n, name: "n" }; }
+
+function literal(): void {
+	const t: R = { id: 4, name: "n" };
+	const h: Holder = { r: t, tag: "t" };
+}
 
 function quiet(): void {
 	const t = mk(4);
@@ -29,6 +34,8 @@ function raisingBefore(): void {
 	const h: Holder = { r: t, tag: "t" };
 }
 
+literal();
+log.push("|");
 quiet();
 log.push("|");
 raisingAfter();
@@ -38,7 +45,7 @@ log.push("|");
 raisingBefore();
 
 const got = log.join(",");
-if (got == "4,|,end,9,0,|,8,|,mid,7,0") {
+if (got == "4,|,4,0,|,end,9,0,|,8,0,|,mid,7,0") {
 	console.log("GUARD-OK");
 } else {
 	console.log("GUARD-RED " + got);
