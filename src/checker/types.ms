@@ -992,20 +992,6 @@ export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
 	return found;
 }
 
-// `A | null` meeting `A | B | null`: the same subtyping one level down, under
-// the Maybe carrier. Returns the payload's slot in the wider union, or -1.
-export function maybePayloadWidenSlot(source: Type | null, target: Type | null): int32 {
-	if (source == null || target == null) return -1;
-	if (!isMaybeType(source) || !isMaybeType(target)) return -1;
-	const narrow = source.typeReturn;
-	const wide = target.typeReturn;
-	if (narrow == null || wide == null) return -1;
-	if (wide.kind != TypeKind.Union || wide.typeChildren == null) return -1;
-	if (narrow.kind == TypeKind.Union && !isAllStringLiteralUnion(narrow)) return -1;
-	if (unwrapRefNullUnion(wide) != null) return -1;
-	return variantIndexInUnion(wide, unwrapRef(narrow));
-}
-
 // Layout name for prefix/field signatures: literal types collapse to their base
 // (a "a" vs "b" string-literal discriminant is the SAME msString layout), while
 // genuinely different widths (int16 vs int32) stay distinct.

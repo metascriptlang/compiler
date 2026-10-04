@@ -5,10 +5,10 @@
 import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData } from "../ast/node";
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
+import { TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, extDeclaresReceiver } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult } from "./types";
+import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
@@ -1596,26 +1596,6 @@ function arrayDisplay(t: Type | null): string {
 // picks a temp's type from the STATIC type — so without this node it passes a
 // bare variant struct where the union is expected and clang only warns.
 // Reference: sigmatch.nim implicitConv(nkHiddenSubConv, ...).
-function structuralMemberIndex(formal: Type, exprType: Type): int32 {
-	if (!isTagCarriedUnion(formal) || isPrimitiveUnionMember(exprType)) return -1;
-	let found: int32 = -1;
-	let ci: int32 = 0;
-	for (const child of formal.typeChildren) {
-		if (child == null || child.kind == TypeKind.Null) return -1;
-		if (sameType(child, exprType)) {
-			if (found >= 0) return -1;
-			found = ci;
-		}
-		ci += 1;
-	}
-	return found;
-}
-
-export function unionSlotOf(formal: Type, exprType: Type): int32 {
-	const vi = variantIndexInUnion(formal, unwrapRef(exprType));
-	return vi >= 0 ? vi : structuralMemberIndex(formal, exprType);
-}
-
 function slotHoldsStructByValue(member: Type): boolean {
 	return inlineVariantStruct(member) != null;
 }
@@ -1865,8 +1845,8 @@ export function checkedProjection(expr: Node, declared: Type, member: Type): Nod
 
 export function assertIntoNullable(expr: Node, srcType: Type, target: Type): Node {
 	if (!isMaybeType(target) || target.typeReturn == null || srcType.kind == TypeKind.Null) return null as unknown as Node;
-	if (isMaybeType(srcType)) return widenMaybePayload(expr, target, srcType);
 	const payload = target.typeReturn;
+	if (isMaybeType(srcType) || (unwrapRefNullUnion(srcType) != null && isTagCarriedUnion(payload))) return widenMaybePayload(expr, target, srcType);
 	if (isSlotUnion(srcType) && tagUnionMemberSlot(srcType, payload) >= 0) {
 		return synthMaybeWrap(checkedAssertion(checkedProjection(expr, srcType, payload), payload), target, payload);
 	}
@@ -2025,6 +2005,10 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	if (instantiateGenericFnValue(ctx, expr, formal)) return fitNode(ctx, expr, formal, expr.nodeType);
 	const thunk = synthClosureThunk(expr, formal, exprType);
 	if (thunk != null as unknown as Node) return thunk;
+	if (isMaybeType(formal)) {
+		const widenedMaybe = widenMaybePayload(expr, formal, exprType);
+		if (widenedMaybe != null as unknown as Node) return widenedMaybe;
+	}
 	// Implicit T → Maybe<T> coercion (Nim-parity `some(val)` / `none(T)`).
 	// MUST run BEFORE the same-kind early return below — both Token and
 	// Maybe<Token> have kind=Struct, so kind-equality alone wouldn't distinguish
@@ -2040,10 +2024,6 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 			return expr;
 		}
 		return synthMaybeWrap(expr, formal, exprType);
-	}
-	if (isMaybeType(formal) && isMaybeType(exprType)) {
-		const widenedMaybe = widenMaybePayload(expr, formal, exprType);
-		if (widenedMaybe != null as unknown as Node) return widenedMaybe;
 	}
 	if (exprType.kind == TypeKind.Null && formal.kind == TypeKind.Union && flatUnionTakesNull(formal)) {
 		expr.nodeType = formal;

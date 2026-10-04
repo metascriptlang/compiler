@@ -1978,7 +1978,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			// `A | null` meeting `A | B | null`. Same reason the wrap above
 			// lives here: an argument never reaches fitNode, so the carrier
 			// widening has to be applied at this site too.
-			if (isMaybeType(paramType) && isMaybeType(peelTransparentInstance(argTypes[pi]))) {
+			if (isMaybeType(paramType)) {
 				const widenedArg = widenMaybePayload(args[pi], paramType, argTypes[pi]);
 				if (widenedArg != null as unknown as Node) {
 					args[pi] = widenedArg;

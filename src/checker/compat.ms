@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance } from "./types";
+import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, variantIndexInUnion, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -630,6 +630,35 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// (Target-is-union check moved earlier — see above the Ref auto-deref branch.)
 
 	return false;
+}
+
+export function structuralMemberIndex(formal: Type, exprType: Type): int32 {
+	if (!isTagCarriedUnion(formal) || isPrimitiveUnionMember(exprType)) return -1;
+	let found: int32 = -1;
+	let ci: int32 = 0;
+	for (const child of formal.typeChildren) {
+		if (child == null || child.kind == TypeKind.Null) return -1;
+		if (sameType(child, exprType)) {
+			if (found >= 0) return -1;
+			found = ci;
+		}
+		ci += 1;
+	}
+	return found;
+}
+
+// `A | null` meeting `A | B | null`: the same subtyping one level down, under
+// the Maybe carrier. Returns the payload's slot in the wider union, or -1.
+export function maybePayloadWidenSlot(source: Type | null, target: Type | null): int32 {
+	if (source == null || target == null || !isMaybeType(target)) return -1;
+	const narrow = isMaybeType(source) ? source.typeReturn : unwrapRefNullUnion(source);
+	const wide = target.typeReturn;
+	if (narrow == null || wide == null) return -1;
+	if (wide.kind != TypeKind.Union || wide.typeChildren == null) return -1;
+	if (narrow.kind == TypeKind.Union && !isAllStringLiteralUnion(narrow)) return -1;
+	if (unwrapRefNullUnion(wide) != null) return -1;
+	const vi = variantIndexInUnion(wide, unwrapRef(narrow));
+	return vi >= 0 ? vi : structuralMemberIndex(wide, narrow);
 }
 
 function isUnionAssignable(source: Type, target: Type): boolean {
