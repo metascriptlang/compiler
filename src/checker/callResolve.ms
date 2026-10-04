@@ -8,7 +8,7 @@ import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
-import { isLocation, writeRefusal, readonlyRootType } from "./assignable";
+import { isLocation, writeRefusal, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
 import { callCheckStmt, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
@@ -1774,7 +1774,11 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 					addError(ctx, "'" + calleeName + "' " + argLabel(pi, hasReceiver) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
 				} else {
 					const ro = readonlyRootType(lvArg);
-					const refusal = ro != null
+					const refusal = writeThroughArc(lvArg)
+						? "cannot pass an argument to a 'ref' or 'out' parameter through 'Arc<T>' — SHARE is immutable; shared mutable state is Locked<T> (PARALOCK Amendment I)"
+						: writeThroughGraphBackedge(lvArg)
+						? "cannot pass an argument to a 'ref' or 'out' parameter through a type/symbol back-edge into the AST — the graph is borrowed and its node exits are read-only (PARALOCK E24)"
+						: ro != null
 						? "cannot pass an argument to a 'ref' or 'out' parameter through " + typeDisplayName(ro) + " — a read-only view never converts back to the mutable type (PARALOCK E24)"
 						: writeRefusal(lvArg, true);
 					if (refusal != "") addError(ctx, refusal, lvArg.location.line, lvArg.location.column);

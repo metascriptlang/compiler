@@ -13,7 +13,7 @@ import {
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
-import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType } from "./assignable";
+import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
@@ -33,37 +33,6 @@ import { isTemplateSym, expandTemplate } from "./template";
 import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
-
-// PARALOCK Amendment I — SHARE is immutable: no write may reach through an
-// Arc<T> handle. Peels the member/index chain of a write target; the write
-// passes through every prefix's deref, so an Arc at ANY prefix position (the
-// root receiver `a.f = 1`, an interior field `holder.box.n = 1`, an indexed
-// element `a.arr[i] = 1`) makes the whole write shared-state mutation.
-// Writing the handle SLOT itself (`holder.box = otherArc`) is not affected —
-// its prefixes stop at `holder`. Member access through a Ref inserts
-// HiddenDeref (the deref node's type is the pointee), so the Arc test is
-// applied to the deref's inner expression, not the deref node.
-function writeThroughArc(target: Node): boolean {
-	let cur: Node | null = target;
-	while (cur != null) {
-		if (cur.kind == NodeKind.MemberExpr) {
-			const o = (cur.data as MemberExprData).object;
-			if (o != null && o.nodeType != null && isAtomicRef(o.nodeType)) return true;
-			cur = o;
-		} else if (cur.kind == NodeKind.ArrayAccess) {
-			const a = (cur.data as ArrayAccessData).array;
-			if (a != null && a.nodeType != null && isAtomicRef(a.nodeType)) return true;
-			cur = a;
-		} else if (cur.kind == NodeKind.HiddenDeref) {
-			const e = (cur.data as HiddenDerefData).expr;
-			if (e != null && e.nodeType != null && isAtomicRef(e.nodeType)) return true;
-			cur = e;
-		} else {
-			break;
-		}
-	}
-	return false;
-}
 
 function literalElemType(el: Node): Type | null {
 	if (el.kind != NodeKind.SpreadExpr) return el.nodeType;
@@ -123,23 +92,6 @@ function reportArcWrite(ctx: CheckerContext, target: Node): void {
 
 function reportReadonlyWrite(ctx: CheckerContext, ro: Type, verb: string, line: int32, column: int32): void {
 	addError(ctx, "cannot " + verb + " " + typeDisplayName(ro) + " — a read-only view never converts back to the mutable type (PARALOCK E24)", line, column);
-}
-
-function writeThroughGraphBackedge(target: Node): boolean {
-	let cur: Node | null = target;
-	while (cur != null) {
-		let base: Node | null = null;
-		if (cur.kind == NodeKind.MemberExpr) base = (cur.data as MemberExprData).object;
-		else if (cur.kind == NodeKind.ArrayAccess) base = (cur.data as ArrayAccessData).array;
-		else if (cur.kind == NodeKind.HiddenDeref) base = (cur.data as HiddenDerefData).expr;
-		else if (cur.kind == NodeKind.TypeAssertion) base = (cur.data as TypeAssertionData).asExpr;
-		else break;
-		if (base != null && base.nodeType != null && cur.nodeType != null
-				&& isSharedGraphType(base.nodeType) && isNodeGraphType(cur.nodeType)
-				&& cur != target) return true;
-		cur = base;
-	}
-	return false;
 }
 
 function reportSharedWrite(ctx: CheckerContext, target: Node): void {
