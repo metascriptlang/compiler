@@ -106,6 +106,70 @@ export function routineBindingSym(node: Node): Symbol | null {
 	return node.resolvedSym;
 }
 
+function isFrameNode(n: Node): boolean {
+	return isFuncBoundary(n) || n.kind == NodeKind.MethodDecl || n.kind == NodeKind.ConstructorDecl || n.kind == NodeKind.TestDecl;
+}
+
+export function refsAnySym(n: Node | null, syms: Symbol[]): boolean {
+	if (n == null || syms.length == 0) return false;
+	if (n.kind == NodeKind.Identifier) {
+		for (const s of syms) {
+			if (n.resolvedSym == s) return true;
+		}
+		return false;
+	}
+	let found = false;
+	forEachChild(n, (c: Node): void => {
+		if (!found && refsAnySym(c, syms)) found = true;
+	});
+	return found;
+}
+
+export function symIn(syms: Symbol[], sym: Symbol): boolean {
+	for (const s of syms) {
+		if (s == sym) return true;
+	}
+	return false;
+}
+
+function collectRoutineCandidates(n: Node | null, depth: number, splitLoopLocals: Symbol[], out: Symbol[]): void {
+	if (n == null) return;
+	if (depth > 0 && n.kind == NodeKind.VariableDecl) {
+		const sym = routineBindingSym(n);
+		if (sym != null && !refsAnySym((n.data as VariableDeclData).initializer, splitLoopLocals)) out.push(sym);
+	}
+	const inner = isFrameNode(n) ? depth + 1 : depth;
+	forEachChild(n, (c: Node): void => { collectRoutineCandidates(c, inner, splitLoopLocals, out); });
+}
+
+function collectForwardRefs(n: Node | null, candidates: SymSet, declared: Symbol[], forward: Symbol[]): void {
+	if (n == null) return;
+	if (n.kind == NodeKind.Identifier) {
+		const sym = n.resolvedSym;
+		if (sym != null && symSetContains(candidates, sym) && !symIn(declared, sym) && !symIn(forward, sym)) forward.push(sym);
+		return;
+	}
+	if (n.kind == NodeKind.VariableDecl && symSetContains(candidates, n.resolvedSym)) {
+		declared.push(n.resolvedSym!);
+	}
+	forEachChild(n, (c: Node): void => { collectForwardRefs(c, candidates, declared, forward); });
+}
+
+export function routineSyms(root: Node, depth: number, splitLoopLocals: Symbol[]): SymSet {
+	const routines = createSymSet();
+	const candidates: Symbol[] = [];
+	collectRoutineCandidates(root, depth, splitLoopLocals, candidates);
+	if (candidates.length == 0) return routines;
+	const candidateSet = createSymSet();
+	for (const s of candidates) symSetAdd(candidateSet, s);
+	const forward: Symbol[] = [];
+	collectForwardRefs(root, candidateSet, [], forward);
+	for (const s of candidates) {
+		if (!symIn(forward, s)) symSetAdd(routines, s);
+	}
+	return routines;
+}
+
 // True if `sym`'s defining frame index is < `_detectInitialMarkers`,
 // i.e., the var lives in F's own frame or one of F's ancestors — never in a
 // frame pushed during F's body walk.
