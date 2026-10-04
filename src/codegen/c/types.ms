@@ -1746,8 +1746,8 @@ function elemArrayCName(elem: Type): string {
 	if (elem.kind == TypeKind.Enum) return resolvedTypeCName(elem, true);
 	if (elem.kind == TypeKind.EnumLiteral) return (elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Enum) ? resolvedTypeCName(elem.typeReturn, true) : "int32_t";
 	if (elem.kind == TypeKind.Tuple) return tupleTypeName(elem);
+	if (elem.kind == TypeKind.SizedArray) return sizedArrayCTypeName(elem);
 	if (elem.kind == TypeKind.Array) return arrayCTypeName(elem);
-	if (elem.kind == TypeKind.SizedArray && elem.typeReturn != null) return sizedArrayCName(elem, elemArrayCName(elem.typeReturn));
 	if ((elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr || elem.kind == TypeKind.Var) && elem.typeReturn != null) return elemArrayCName(elem.typeReturn) + "*";
 	if (elem.kind == TypeKind.Function) return "msClosure";
 	if (elem.kind == TypeKind.Union) {
@@ -1800,26 +1800,8 @@ export function getArrayContentType(arrTypeName: string): string {
 
 // ===== Sized Array (Stack) =====
 
-export function zeroInit(t: Type | null): string {
-	return leadsWithEmptyAggregate(t, 0) ? "{}" : "{0}";
-}
-
-function leadsWithEmptyAggregate(t: Type | null, depth: int32): boolean {
-	if (t == null || depth > 16) return false;
-	if (t.kind == TypeKind.SizedArray) return t.typeValue == 0 || leadsWithEmptyAggregate(t.typeReturn, depth + 1);
-	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
-		for (const field of t.typeChildren) {
-			if (field != null && field.kind != TypeKind.Void) return leadsWithEmptyAggregate(field, depth + 1);
-		}
-		return false;
-	}
-	if (t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias || t.kind == TypeKind.GenericInstance) {
-		return leadsWithEmptyAggregate(t.typeReturn, depth + 1);
-	}
-	return false;
-}
-
-function sizedArrayCName(t: Type, elemType: string): string {
+function sizedArrayCTypeName(t: Type): string {
+	const elemType = t.typeReturn != null ? elemArrayCName(t.typeReturn) : "void*";
 	return `msSizedArray_${mangle(elemType)}_${t.typeValue}`;
 }
 
@@ -1827,7 +1809,7 @@ function genSizedArrayType(g: CGen, t: Type): string {
 	const elemType = getTypeDesc(g, t.typeReturn);
 	const size = t.typeValue;
 	const key = typeKey(t);
-	const name = sizedArrayCName(t, elemType);
+	const name = sizedArrayCTypeName(t);
 
 	if (typeCacheHas(g.typeCache, key)) return typeCacheGet(g.typeCache, key);
 	typeCacheSet(g.typeCache, key, name);
