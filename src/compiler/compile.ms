@@ -3570,7 +3570,12 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		const exports = findModuleExports(unitCtxs[ui].exportRegistry, modPath);
 		if (exports != null) {
 			for (const info of exports.symbols) {
-				if (info.sym.symbolKind == SymbolKind.Function && info.sym.modulePath == modPath && !isStaticExtensionSym(info.sym)) names.push(info.name);
+				if (info.sym.symbolKind == SymbolKind.Function && info.sym.modulePath == modPath && !isStaticExtensionSym(info.sym)) {
+					names.push(info.name);
+					for (const ov of info.sym.overloads) {
+						if (ov.modulePath == modPath) names.push(info.name);
+					}
+				}
 			}
 		}
 		modFunctionOwnerNames.push(names);
