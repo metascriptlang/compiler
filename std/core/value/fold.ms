@@ -57,7 +57,7 @@ export macro dumpFold(x: Node, color: Node): Node {
 		for (let i = 0; i < u.typExprMembers.length; i = i + 1) {
 			const m = u.typExprMembers[i];
 			if (m.kind != NodeKind.TypeGeneric || m.typExprBase.name != "Ref") return false;
-			const v = m.typExprArgs[0];
+			const v = getTypeImpl(m);
 			if (v.kind != NodeKind.TypeObject || v.typExprFieldNames.length == 0 || v.typExprFieldTypes[0].kind != NodeKind.StringLiteral) return false;
 		}
 		return u.typExprMembers.length > 0;
@@ -111,7 +111,7 @@ export macro dumpFold(x: Node, color: Node): Node {
 	} else if (t != null && t.kind == NodeKind.TypeUnion && discriminated(t)) {
 		let chain: Node | null = null;
 		for (let i = t.typExprMembers.length - 1; i >= 0; i = i - 1) {
-			const variant = t.typExprMembers[i].typExprArgs[0];
+			const variant = getTypeImpl(t.typExprMembers[i]);
 			const disc = variant.typExprFieldNames[0];
 			const test: Node = { kind: NodeKind.BinaryExpr, line: ln, column: col, operator: "==", left: field(x, disc), right: lit(stringValue(variant.typExprFieldTypes[0])) };
 			const step: Node = { kind: NodeKind.BlockStmt, line: ln, column: col, statements: [append(call("valueDump", [x, color]))] };

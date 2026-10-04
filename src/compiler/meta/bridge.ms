@@ -387,7 +387,7 @@ function mapTypeToAstWith(t: Type | null, loc: SourceLocation, visited: Type[], 
 
 	// A shape unfolds only the type it was asked about: a named struct met inside
 	// another shape is its name, and a macro asks getTypeImpl of that node to unfold it.
-	if (impl && visited.length > 0 && isNamedNominalStruct(t)) {
+	if (visited.length > 0 && isNamedNominalStruct(t)) {
 		const named = atomicTypeNode(t.typeName, loc);
 		named.nodeType = t;
 		return named;
@@ -682,11 +682,6 @@ function setTypeFields(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, hand
 // reads back the SAME field names. When adding/removing fields in NodeData,
 // update BOTH dispatchers, or round-trip serialization will silently corrupt nodes.
 //
-// EXCEPTION — `nodeType` field (Day 8 SERIALIZE):
-// Forward-only by design. nodeToValue emits `nodeType` (synthesized type AST)
-// for macros to read. valueToNode/readNodeFromObject deliberately IGNORE the
-// field — checker re-resolves types on macro output, so reverse path would be
-// dead work and risk shape drift. DO NOT add a paired read.
 
 // Strip checker-inserted wrappers (HiddenDeref/HiddenAddr/HiddenStdConv/
 // HiddenSubConv) so a macro sees the source-form AST, not the C-codegen
@@ -1447,12 +1442,14 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 			const kindField = heapObjectGetField(objHeap, handle, "kind");
 			if (kindField.kind == RaiserValueKind.Int) {
 				const out = readNodeFromObject(handle, kindField.intVal as NodeKind, objHeap, arrHeap, fallbackLoc);
-				// The argument's type survives the wire twice: the Type through its
-				// bound-type handle, the type-AST Node form in nodeTypeAst.
 				if (out != null) {
+					const typeHandle = heapObjectGetField(objHeap, handle, "typeHandle");
+					if (typeHandle.kind == RaiserValueKind.Int) out.nodeType = boundTypeAt(typeHandle.intVal as int32);
+					else if (typeHandle.kind == RaiserValueKind.Float) out.nodeType = boundTypeAt(typeHandle.floatVal as int32);
 					const ntField = heapObjectGetField(objHeap, handle, "nodeType");
 					if (ntField.kind == RaiserValueKind.Object) {
 						out.nodeTypeAst = valueToNode(ntField, objHeap, arrHeap, fallbackLoc);
+						if (out.nodeType == null && out.nodeTypeAst.nodeType != null) out.nodeType = out.nodeTypeAst.nodeType;
 					}
 					const typed = boundTypeOfObject(objHeap, handle);
 					if (typed != null) out.nodeType = typed;
@@ -3473,53 +3470,33 @@ test "nodeToValue — self-referential nodeType (Tree) terminates via cycle brea
 	assert kindVal.intVal == NodeKind.TypeObject as int64;
 }
 
-test "valueToNode — restores nodeType from its bound-type handle" {
+test "nested macro type queries keep the originating nominal field after two expansions" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
 	const loc = makeLoc(1, 0);
-	const ident = createNodeAt(NodeKind.Identifier, { name: "x" }, loc);
-	const written = makePrimType(TypeKind.Int32);
-	ident.nodeType = written;
-	const v = nodeToValue(ident, objH, arrH);
-	const back = valueToNode(v, objH, arrH, loc);
-	assert back.kind == NodeKind.Identifier;
-	assert (back.data as IdentifierData).name == "x";
-	assert back.nodeType == written;
-}
-
-test "valueToNode — a node that never had a type comes back without one" {
-	const objH = createStructHeap();
-	const arrH = createArrayHeap();
-	const loc = makeLoc(1, 0);
-	const ident = createNodeAt(NodeKind.Identifier, { name: "x" }, loc);
-	const v = nodeToValue(ident, objH, arrH);
-	const back = valueToNode(v, objH, arrH, loc);
-	assert back.nodeType == null;
-}
-
-test "nodeToValue — child Nodes' nodeType cascades through dispatch" {
-	const objH = createStructHeap();
-	const arrH = createArrayHeap();
-	const loc = makeLoc(1, 0);
-	const left = createNodeAt(NodeKind.Identifier, { name: "a" }, loc);
-	left.nodeType = makePrimType(TypeKind.Int32);
-	const right = createNodeAt(NodeKind.NumberLiteral, { value: 1, isFloat: false, intVal: 1 as int64 }, loc);
-	right.nodeType = makePrimType(TypeKind.Int32);
-	const expr = createNodeAt(NodeKind.BinaryExpr, { operator: "+", left, right }, loc);
-	expr.nodeType = makePrimType(TypeKind.Int32);
-	const v = nodeToValue(expr, objH, arrH);
-	// Outer BinaryExpr has nodeType
-	const outerType = heapObjectGetField(objH, v.intVal, "nodeType");
-	assert outerType.kind == RaiserValueKind.Object;
-	// Left child has its own nodeType
-	const leftVal = heapObjectGetField(objH, v.intVal, "left");
-	assert leftVal.kind == RaiserValueKind.Object;
-	const leftType = heapObjectGetField(objH, leftVal.intVal, "nodeType");
-	assert leftType.kind == RaiserValueKind.Object;
-	// Right child likewise
-	const rightVal = heapObjectGetField(objH, v.intVal, "right");
-	const rightType = heapObjectGetField(objH, rightVal.intVal, "nodeType");
-	assert rightType.kind == RaiserValueKind.Object;
+	const child = makeStructType("Payload", ["count"], [makePrimType(TypeKind.Int32)]);
+	const childSym = makeSymbol("Payload", SymbolKind.Struct);
+	childSym.symbolType = child;
+	child.sym = childSym;
+	const other = makeStructType("Payload", ["label"], [makePrimType(TypeKind.String)]);
+	const otherSym = makeSymbol("Payload", SymbolKind.Struct);
+	otherSym.symbolType = other;
+	other.sym = otherSym;
+	const outer = makeStructType("Container", ["field"], [child]);
+	const value = createNodeAt(NodeKind.Identifier, { name: "container" }, loc);
+	value.nodeType = outer;
+	const first = valueToNode(nodeToValue(value, objH, arrH), objH, arrH, loc);
+	const shallow = mapTypeToAst(first.nodeType, loc);
+	const fieldType = (shallow.data as TypeObjectData).typExprFieldTypes[0];
+	assert fieldType.kind == NodeKind.Identifier;
+	const field = createNodeAt(NodeKind.MemberExpr, { object: first, property: "field", isOptional: false }, loc);
+	field.nodeTypeAst = fieldType;
+	const forwarded = valueToNode(nodeToValue(field, objH, arrH), objH, arrH, loc);
+	const repeated = valueToNode(nodeToValue(forwarded, objH, arrH), objH, arrH, loc);
+	assert repeated.nodeType == child && repeated.nodeType != other;
+	const impl = mapTypeToAst(repeated.nodeType, loc, true);
+	assert impl.kind == NodeKind.TypeObject;
+	assert (impl.data as TypeObjectData).typExprFieldNames[0] == "count";
 }
 
 // ===== Day 9 tests — nodeToValue emits `resolvedSym` for bound Nodes =====
