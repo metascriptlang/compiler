@@ -30,6 +30,18 @@ Rejected: concatenating unchanged runs in `mangleModuleName` instead of individu
 characters, 75.266 vs 75.502 ms for 20,000 calls; no measured gain, reverted.
 Not measured here: an after-change full-gate speedup, peak RSS, or other hosts.
 
+Gate measurements on the shared Windows host are not an A/B speed comparison:
+- `tools/gate.sh --release` at `e68761b9`, tree `403f10323ef8ec76489cb5c355e7fb8809b6cf2e`:
+  GREEN, 0 new, **30m04s execution + 37m47s FIFO wait = 67m51s wall**. Lanes ran
+  in phases; summing concurrent lane durations does not give wall time.
+- The optimization land at `a98052a2`, tree `76f773b373ef73c7778d281ff1c5b51473f5ec85`:
+  GREEN build/suite/tests/selected corpus, **18m27s**, of which **13m52s** was
+  selection over 542 programs. Control/candidate signature files were byte-identical.
+  The selector's three C "differences" were known emit failures on both sides
+  (704-macroExprHoist, 762-bitSetMacro, bitSetVectorLifecycle), not changed C hashes;
+  failure-inclusive selection deliberately kept them for execution. All 539
+  successful C comparisons matched; JS signatures also matched.
+
 ## Measured 2026-09-26/27 — the dev-loop link tax is thin-LTO (Apple Silicon, 14-core)
 
 Battery: 22 runs, min-of-rounds, uptime recorded per run (logs in

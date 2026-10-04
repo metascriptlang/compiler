@@ -127,12 +127,12 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 
 **"Ship" means cutting a release per `docs/GIT-FLOW.md`.** Landing on `main` and publishing the binary with `tools/syncLocalBinary.ms` are not shipping, and neither asks for the full ladder.
 
-- **One command picks and runs the lanes** — `tools/gate.sh` maps the paths a change touches to lanes (the table at the top of the script), runs them one after another and stops at the first new red; `--dry-run` shows the choice and why, `--release` runs the full ladder, and `~/nerdtools/claude/tools/wt.sh land` calls it.
+- **One command picks and runs the lanes** — `tools/gate.sh` maps changed paths to lanes and runs `PHASES` in order, with independent lanes inside a phase running concurrently; a new red skips later phases. `--dry-run` shows the choice and why, `--release` runs the full ladder, and `~/nerdtools/claude/tools/wt.sh land` calls it.
 - **Known red is `src/test/known-red.json`** — each lane's failures are compared with it by name; the verdict reads `N red · K known · M new` and only `new` fails the gate. `tools/gate.sh --record` on a clean `main` rewrites that file; nobody edits it by hand, and a rerun on the same state answers nothing.
-- **The machine is shared** — the gate waits while load exceeds the core count and never runs two lanes at once; do not start a second heavy lane beside it.
+- **The machine is shared** — gates queue machine-wide FIFO in `~/.metascript/gates`; once admitted, a gate checks load before its phases and shares its worker/slot budget among concurrent lanes. Do not start a second heavy lane beside it. Measured phase and queue time: [`docs/BUILD-PERF.md`](docs/BUILD-PERF.md).
 - **The object cache stays** — no `rm -rf out` before a build or a suite; the cache is fingerprint-keyed and correct ([`docs/TESTING.md`](docs/TESTING.md)), and wiping it triggers the cold-build link race. Wipe only for a named stale-cache symptom.
 - **Adjacent lands share one gate** — commits that belong together land as one branch, gated once.
-- **The corpus lanes run on what the change alters** — the gate emits all programs with the merge-base compiler and the candidate and hands corpus and SAN only the programs whose C or JS differs; it runs them whole under `--lanes` / `--release`, or when the diff touches `runtime/`, `std/`, `vendor/` or the corpus runner ([`docs/TESTING.md`](docs/TESTING.md)).
+- **The corpus lanes run on what the change can alter** — the gate emits all programs with the merge-base compiler and candidate, selecting changed C/JS hashes, emit failures on either side, and touched programs. It runs them whole under `--lanes` / `--release`, or for blind paths such as `runtime/`, `std/`, `vendor/` and the corpus runner ([`docs/TESTING.md`](docs/TESTING.md)).
 - **Control and probe binaries answer one question** — build a control only for an A/B that needs one, read a probe from the cheapest lane that triggers it, and never gate either.
 
 ## Docs Rule — never edit `docs/*.md` from reading alone
