@@ -562,6 +562,7 @@ static inline int64_t  msCheckRangeI64(double v) { if(!(v>=-9223372036854775808.
 
 _Noreturn static inline void msRaiseDivByZero(void) { __builtin_trap(); }
 _Noreturn static inline void msRaiseOverflow(void) { __builtin_trap(); }
+_Noreturn static inline void msMapFatal(msString msg) { (void)msg; __builtin_trap(); }
 #include "runtime/core/checkedArith.h"
 
 /* ===== Boxing ===== */

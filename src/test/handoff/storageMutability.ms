@@ -187,3 +187,55 @@ test "an unprojected discriminant is not writable even through a parameter" {
 	const c = compileToCWithStd(source);
 	assert !c.ok;
 }
+
+test "only a variable, a field or an element is an assignment target" {
+	const head = "struct Inner { v: int32; }\nstruct P { v: int32; inner: Inner; }\nclass C { v: int32 = 0; inner: Inner = { v: 0 }; get(): int32 { return this.v; } }\n"
+		+ "let p: P = { v: 1, inner: { v: 1 } };\nlet x: int32 = 0;\nconst c = new C();\n"
+		+ "function g(): int32 { return 1; }\nfunction h(): P { return p; }\nfunction getC(): C { return c; }\n";
+	for (const body of ["g() = 4;", "(g()) = 5;", "c.get() = 6;", "g() += 1;", "h().v = 5;", "h().inner.v = 5;"]) {
+		const cr = compileToCWithStd(head + body);
+		assert !cr.ok && cr.error.contains("cannot be assigned to"), body;
+		const js = compileProjectToJSWithStd([{ entryPath: "test/target.ms", entrySource: head + body }], "test/target.ms");
+		assert js.startsWith("ERROR:") && js.contains("cannot be assigned to"), body;
+	}
+	const ok = head + "(x) = 7;\nc.v = 2;\nx += g();\ngetC().v = 3;\ngetC().inner.v = 4;\np.inner.v = 5;\nconsole.log(x, c.v, c.inner.v, p.inner.v);";
+	const cr = compileToCWithStd(ok);
+	assert cr.ok, cr.ok ? "" : cr.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/target.ms", entrySource: ok }], "test/target.ms");
+	assert !js.startsWith("ERROR:"), js;
+}
+
+test "an Arc interior binds no ref or out parameter, as it takes no write" {
+	const prelude = `struct Ctr { n: int32; }
+struct Holder { inner: Ctr; }
+function bump(ref c: Ctr): void { c.n = 9; }
+function reset(out c: Ctr): void { c = { n: 0 }; }
+function heal(this ref c: Ctr): void { c.n = 5; }
+function swap(ref a: Arc<Ctr>): void { a = new Arc({ n: 3 }); }
+`;
+	const refused = [
+		"const s: Arc<Ctr> = new Arc({ n: 1 }); bump(s[]);",
+		"const s: Arc<Ctr> = new Arc({ n: 1 }); reset(s[]);",
+		"const s: Arc<Ctr> = new Arc({ n: 1 }); s[].heal();",
+		"const h: Arc<Holder> = new Arc({ inner: { n: 2 } }); bump(h.inner);",
+	];
+	for (const body of refused) {
+		const source = prelude + `function run(): void { ${body} } run();`;
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/arc.ms", entrySource: source }], "test/arc.ms");
+		assert !c.ok && c.error.contains("SHARE is immutable"), body;
+		assert js.startsWith("ERROR:") && js.contains("SHARE is immutable"), body;
+	}
+}
+
+test "an out argument written as `out b.val` reaches the field of a local" {
+	const head = "struct Inner { v: int32; }\nstruct Box { val: int32; inner: Inner; }\nfunction setInt(out x: int32): void { x = 42; }\nfunction h(): Box { return { val: 0, inner: { v: 0 } }; }\n";
+	const ok = head + "function run(): void { let b: Box = { val: 0, inner: { v: 0 } }; setInt(out b.val); setInt(out b.inner.v); console.log(b.val + b.inner.v); }\nrun();\n";
+	const cr = compileToCWithStd(ok);
+	assert cr.ok, cr.ok ? "" : cr.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/out.ms", entrySource: ok }], "test/out.ms");
+	assert !js.startsWith("ERROR:"), js;
+	const bad = head + "function run(): void { setInt(out h().val); }\nrun();\n";
+	const cb = compileToCWithStd(bad);
+	assert !cb.ok && cb.error.contains("requires a variable"), cb.ok ? "accepted" : cb.error;
+}

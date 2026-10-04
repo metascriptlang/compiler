@@ -78,6 +78,11 @@ export enum ScopeKind {
 // ===== Symbol Flags (Standard reference implementation parity) =====
 
 // Flag helpers
+export function isTypeSymbol(sym: Readonly<Symbol>): boolean {
+	const k = sym.symbolKind;
+	return k == SymbolKind.Class || k == SymbolKind.Actor || k == SymbolKind.Struct || k == SymbolKind.Interface || k == SymbolKind.Enum || k == SymbolKind.TypeAlias;
+}
+
 export function hasFlag(sym: Readonly<Symbol>, flag: SymbolFlag): boolean {
 	return sym.symFlags.has(flag);
 }
@@ -117,6 +122,8 @@ export class Scope {
 	symbols: Map<int32, Symbol>;
 	scopeKind: ScopeKind;
 	parent: Cursor<Scope>;   // borrowed — allScopes owns all scopes
+	privateAccess: Symbol | null;
+	friendModules: string[];
 }
 
 // ===== Symbol Table =====
@@ -130,7 +137,7 @@ export class SymbolTable {
 // ===== Constructors =====
 
 export function createSymbolTable(): SymbolTable {
-	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null };
+	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null, privateAccess: null, friendModules: [] };
 	return { current: global, allScopes: [global], identCache: createIdentCache() };
 }
 
@@ -138,14 +145,14 @@ export function createSymbolTable(): SymbolTable {
 // All contexts sharing a cache get identical nameIds for the same string,
 // eliminating cross-context nameId mismatch during generic instantiation.
 export function createSymbolTableWithCache(cache: IdentCache): SymbolTable {
-	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null };
+	const global: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: ScopeKind.Global, parent: null, privateAccess: null, friendModules: [] };
 	return { current: global, allScopes: [global], identCache: cache };
 }
 
 // ===== Scope Operations =====
 
 export function openScope(table: SymbolTable, kind: ScopeKind): void {
-	const scope: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: kind, parent: table.current };
+	const scope: Scope = { symbols: new Map<int32, Symbol>(), scopeKind: kind, parent: table.current, privateAccess: null, friendModules: [] };
 	table.allScopes.push(scope);
 	table.current = scope;
 }

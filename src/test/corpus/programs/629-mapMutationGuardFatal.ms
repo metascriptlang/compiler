@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: attempt to access a nil address
 // @maxrss: 30
 // @stdout: map-guard-fatal armed
 // @exit: 2
@@ -8,11 +7,11 @@
 import { Map } from "std/core/struct";
 
 function main(): void {
-	const m = new Map<int32, int32>();
-	m.set(1 as int32, 10 as int32);
+	const m = new Map<string, int32>();
+	m.set("a", 10);
 	console.log("map-guard-fatal armed");
 	m.writing = true;
-	const v = m.get(1 as int32);
+	const v = m.get("a");
 	console.log(`SHOULD-NOT-REACH ${v}`);
 }
 main();

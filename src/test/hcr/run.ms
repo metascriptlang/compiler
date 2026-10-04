@@ -65,7 +65,7 @@ function failWith(tag: string, why: string): void {
 
 const WATCH_BACKEND = platform == "windows" || platform == "linux";
 const WATCH_CARD = "inbox card 2026-10-03-macos-fs-watch-backend.md";
-const WATCHING = ["hcrRun", "hcrSubdirModule", "hcrFileDependency", "hcrNewInstance", "hcrPrivateHelper", "hcrStepCrash"];
+const WATCHING = ["hcrRun", "hcrSubdirModule", "hcrFileDependency", "hcrNewInstance", "hcrPrivateHelper", "hcrStepCrash", "hcrCrossImageNew", "hcrExitDestroy", "hcrRetainReport"];
 let CURRENT = "";
 
 function msc(dir: string, args: string[]): ExecFileResult {

@@ -91,6 +91,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	// Tier 1: body-less overload signature — typecheck-only, skip codegen emission entirely.
 	// The implementation (same name, no 'overload' flag) emits the actual C function.
 	if (sym != null && (hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.Borrow))) return;
+	if (sym != null && hasFlag(sym, SymbolFlag.CompileTime)) return;
 
 	// Module-qualified name (Standard reference implementation parity)
 	const isMain = d.fnName == "main";
@@ -105,7 +106,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	// Determine C return type — MUST have nodeType (Decisive Checker mandate)
 	const fnType = node.nodeType;
 	if (fnType == null) return;
-	if (hasGenericParams(fnType)) return;
+	if (hasGenericParams(fnType) || isGenericFn(d.fnFlags)) return;
 	const isGenericInstance = d.fnName.indexOf("__") >= 0 && sym != null && sym.name.indexOf("__") >= 0;
 	if (g.preparingDeclarations) {
 		if (isGenericInstance && g.preparationFacts != null

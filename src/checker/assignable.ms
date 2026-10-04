@@ -9,9 +9,9 @@
 // stays legal. Mutating methods on those views are still found by name in
 // paramMutationAnalysis until method receivers become ordinary arguments.
 
-import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, HiddenStdConvData, OutExprData, TypeAssertionData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
-import { isReadonlyView } from "./types";
+import { isReadonlyView, isAtomicRef, isSharedGraphType, isNodeGraphType } from "./types";
 import { isValueAggregateParam } from "./paramMutationAnalysis";
 
 export enum WriteVerdict {
@@ -34,9 +34,18 @@ export struct WriteCheck {
 function isDeclaredValueStorage(t: Type | null): boolean {
 	if (t == null) return false;
 	return match (t.kind) {
-		TypeKind.Struct => t.sym != null && t.sym.symbolKind == SymbolKind.Struct,
 		TypeKind.GenericInstance => t.typeExtra != null && isDeclaredValueStorage(t.typeExtra),
-		TypeKind.SizedArray | TypeKind.Array => true,
+		TypeKind.Array => true,
+		_ => holdsInlineValue(t),
+	};
+}
+
+function holdsInlineValue(t: Type | null): boolean {
+	if (t == null) return false;
+	return match (t.kind) {
+		TypeKind.Struct => t.sym != null && t.sym.symbolKind == SymbolKind.Struct,
+		TypeKind.GenericInstance => t.typeExtra != null && holdsInlineValue(t.typeExtra),
+		TypeKind.SizedArray => true,
 		_ => false,
 	};
 }
@@ -73,6 +82,64 @@ export function checkWrite(target: Node, asRefArg: boolean): WriteCheck {
 	}
 	if (viewInterior && sym.symbolKind == SymbolKind.Parameter) return { verdict: WriteVerdict.ValueParamInterior, root: sym };
 	return { verdict: WriteVerdict.Writable, root: sym };
+}
+
+export function isLocation(node: Node): boolean {
+	if (node.kind == NodeKind.Identifier || node.kind == NodeKind.HiddenDeref) return true;
+	if (node.kind == NodeKind.OutExpr) return isLocation((node.data as OutExprData).outArg);
+	let base: Node | null = null;
+	if (node.kind == NodeKind.MemberExpr) base = (node.data as MemberExprData).object;
+	else if (node.kind == NodeKind.ArrayAccess) base = (node.data as ArrayAccessData).array;
+	if (base == null) return false;
+	return !holdsInlineValue(base.nodeType) || isLocation(base);
+}
+
+// PARALOCK Amendment I — SHARE is immutable: no write may reach through an
+// Arc<T> handle. Peels the member/index chain of a write target; the write
+// passes through every prefix's deref, so an Arc at ANY prefix position (the
+// root receiver `a.f = 1`, an interior field `holder.box.n = 1`, an indexed
+// element `a.arr[i] = 1`) makes the whole write shared-state mutation.
+// Writing the handle SLOT itself (`holder.box = otherArc`) is not affected —
+// its prefixes stop at `holder`. Member access through a Ref inserts
+// HiddenDeref (the deref node's type is the pointee), so the Arc test is
+// applied to the deref's inner expression, not the deref node.
+export function writeThroughArc(target: Node): boolean {
+	let cur: Node | null = target;
+	while (cur != null) {
+		if (cur.kind == NodeKind.MemberExpr) {
+			const o = (cur.data as MemberExprData).object;
+			if (o != null && o.nodeType != null && isAtomicRef(o.nodeType)) return true;
+			cur = o;
+		} else if (cur.kind == NodeKind.ArrayAccess) {
+			const a = (cur.data as ArrayAccessData).array;
+			if (a != null && a.nodeType != null && isAtomicRef(a.nodeType)) return true;
+			cur = a;
+		} else if (cur.kind == NodeKind.HiddenDeref) {
+			const e = (cur.data as HiddenDerefData).expr;
+			if (e != null && e.nodeType != null && isAtomicRef(e.nodeType)) return true;
+			cur = e;
+		} else {
+			break;
+		}
+	}
+	return false;
+}
+
+export function writeThroughGraphBackedge(target: Node): boolean {
+	let cur: Node | null = target;
+	while (cur != null) {
+		let base: Node | null = null;
+		if (cur.kind == NodeKind.MemberExpr) base = (cur.data as MemberExprData).object;
+		else if (cur.kind == NodeKind.ArrayAccess) base = (cur.data as ArrayAccessData).array;
+		else if (cur.kind == NodeKind.HiddenDeref) base = (cur.data as HiddenDerefData).expr;
+		else if (cur.kind == NodeKind.TypeAssertion) base = (cur.data as TypeAssertionData).asExpr;
+		else break;
+		if (base != null && base.nodeType != null && cur.nodeType != null
+				&& isSharedGraphType(base.nodeType) && isNodeGraphType(cur.nodeType)
+				&& cur != target) return true;
+		cur = base;
+	}
+	return false;
 }
 
 export function readonlyPrefixType(target: Node): Type | null {

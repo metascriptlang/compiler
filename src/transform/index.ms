@@ -23,11 +23,10 @@
 // 20. lambdaLifting         — closures with captures → lifted functions + env structs
 // 21. rvalueLower           — f().method() → { const tmp = f(); tmp.method() } (evalOnce pattern)
 // 22. extensionMethodLower  — obj.method(args) → method(obj, args) for UFCS extensions
-// 23. subscriptLower        — obj[idx] → `[]`(obj, idx) for custom subscript operators
-// 24. conditionalExprLower  — ternary→if in statement position
-// 25. updateExprLower       — x++/-- → assignment in statement position
-// 26. dce                   — dead code elimination (2-tier: statement + symbol level)
-// 27. destructorLifting     — generate per-type _destroy/_copy function bodies
+// 23. conditionalExprLower  — ternary→if in statement position
+// 24. updateExprLower       — x++/-- → assignment in statement position
+// 25. dce                   — dead code elimination (2-tier: statement + symbol level)
+// 26. destructorLifting     — generate per-type _destroy/_copy function bodies
 
 import { Node, NodeKind, ProgramData } from "../ast/node";
 import { CheckerContext } from "../checker/context";
@@ -85,7 +84,6 @@ import { lowerStaticInit } from "./lowering/staticLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerBuiltins } from "./native/builtinLower";
 import { lowerCStringConv } from "./native/cstringConvLower";
-import { lowerSubscript } from "./lowering/subscriptLower";
 import { lowerOperators } from "./lowering/operatorLower";
 import { lowerBigIntOps } from "./native/bigIntOpLower";
 import { lowerStringOps } from "./native/stringOpLower";
@@ -172,7 +170,6 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerOperators(result, ctx);
 	if (!jsBackend) { result = lowerBigIntOps(result, ctx); }
 	if (!jsBackend) { result = lowerStringOps(result, ctx); }
-	result = lowerSubscript(result, ctx);
 	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
 	result = spanLower(result, ctx);
 	if (!jsBackend) { result = spanParamExpand(result, ctx); }
