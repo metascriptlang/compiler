@@ -19,7 +19,7 @@ import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { fieldInitAssignment } from "../../transform/lowering/ctorLower";
 import { parseSource } from "../../parser/statements/validation";
 import { sgQueryAtPosition } from "../../checker/suggest";
-import { callMacroEngineCompiler, callMacroBodyPreparer, setMacroDeclModulePath, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
+import { callMacroEngineCompiler, callMacroBodyPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import {
 	clearObjectHeap, clearArrayHeap, RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap,
 	raiserString, raiserBool, raiserNil, raiserArray,
@@ -657,8 +657,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	const program = buildWrapper(ctx, sym, decl, md, isFactory, shape, loc);
 	if (program == null) return target;
 	const decoratorSourcePath = sym.modulePath != "" ? sym.modulePath : regCtx.modulePath;
-	setMacroDeclModulePath(decoratorSourcePath);
-	const result = callMacroEngineCompiler(program, ctx, applyFnName);
+	const result = callMacroEngineCompiler(program, ctx, applyFnName, regCtx);
 	if (result == null) {
 		addError(ctx, `decorator '${name}' evaluator unavailable`, loc.line, loc.column);
 		return target;
