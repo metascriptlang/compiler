@@ -3993,6 +3993,8 @@ function typeDisplayNameInner(t: Type | null): string {
 	if (t.kind == TypeKind.Set) return "BitSet<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Borrow && t.typeReturn != null) return "Borrow<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Span && t.typeReturn != null) return "Span<" + typeDisplayName(t.typeReturn) + ">";
+	if (t.kind == TypeKind.Array && t.typeReturn != null) return "Vec<" + typeDisplayName(t.typeReturn) + ">";
+	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) return typeDisplayName(t.typeReturn) + "[" + String(t.typeValue) + "]";
 	if (t.kind == TypeKind.Var && t.typeReturn != null) return "out " + typeDisplayName(t.typeReturn);
 	if (isMaybeType(t) && t.typeReturn != null) return typeDisplayName(t.typeReturn) + " | null";
 	const shape = namelessObjectShape(t);
