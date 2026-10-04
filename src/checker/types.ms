@@ -1532,6 +1532,15 @@ export function isAtomicRef(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Ref && t.typeFlags.has(TypeFlag.IsAtomic);
 }
 
+export function isValuePointee(pointee: Type): boolean {
+	if (pointee.kind == TypeKind.Void) return false;
+	if (pointee.kind == TypeKind.Struct || pointee.kind == TypeKind.GenericInstance) {
+		const decl = pointee.kind == TypeKind.GenericInstance && pointee.typeExtra != null ? pointee.typeExtra : pointee;
+		return decl.sym != null && decl.sym.symbolKind == SymbolKind.Struct;
+	}
+	return pointee.kind != TypeKind.Array && pointee.kind != TypeKind.Function;
+}
+
 // Locked<T> (PARALOCK I22) — the one sanctioned shared-mutable cell. ONE
 // allocation: atomic-rc header + inline ticket lock + typed payload, so the
 // handle IS an atomic Ref and every mechanism Arc already drives (atomic
@@ -3967,6 +3976,9 @@ function typeDisplayNameInner(t: Type | null): string {
 	// A generic instance erases to its base name, so two different
 	// instantiations render identically ("expected X, got X"). Spell the type
 	// arguments the user wrote.
+	if (t.kind == TypeKind.Ref && !isAtomicRef(t) && t.typeReturn != null && isValuePointee(t.typeReturn)) {
+		return "Ref<" + typeDisplayName(t.typeReturn) + ">";
+	}
 	if (t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.GenericInstance) {
 		return typeDisplayName(t.typeReturn);
 	}

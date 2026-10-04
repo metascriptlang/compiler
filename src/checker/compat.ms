@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName } from "./types";
+import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -161,6 +161,14 @@ export function isStructIntoPtr(source: Type | null, target: Type | null): boole
 	let t = skipModifier(target);
 	if (t != null && t.kind == TypeKind.Union) t = nonNullMemberOfNullable(t);
 	return s != null && t != null && s.kind == TypeKind.Struct && t.kind == TypeKind.Ptr;
+}
+
+export function isStructIntoRef(source: Type | null, target: Type | null): boolean {
+	const s = skipModifier(source);
+	let t = skipModifier(target);
+	if (t != null && t.kind == TypeKind.Union) t = nonNullMemberOfNullable(t);
+	return s != null && t != null && s.kind == TypeKind.Struct && t.kind == TypeKind.Ref
+		&& !isAtomicRef(t) && t.typeReturn != null && isValuePointee(t.typeReturn);
 }
 
 function isPointerShapedRepr(t: Type | null): boolean {
