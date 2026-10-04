@@ -63,7 +63,7 @@ import {
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType } from "../../checker/types";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, isTypeSymbol, SymbolFlag } from "../../checker/symbol";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -619,7 +619,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
 			setStr(objHeap, handle, "name", d.name);
-			if (node.resolvedSym != null && node.flags.has(NodeFlag.BoundSym)) {
+			if (node.resolvedSym != null && (node.flags.has(NodeFlag.BoundSym) || isTypeSymbol(node.resolvedSym))) {
 				heapObjectSetField(objHeap, handle, "symHandle", raiserInt(registerBoundSym(node.resolvedSym) as int64));
 			}
 		},

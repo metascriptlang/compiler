@@ -78,6 +78,11 @@ export enum ScopeKind {
 // ===== Symbol Flags (Standard reference implementation parity) =====
 
 // Flag helpers
+export function isTypeSymbol(sym: Readonly<Symbol>): boolean {
+	const k = sym.symbolKind;
+	return k == SymbolKind.Class || k == SymbolKind.Actor || k == SymbolKind.Struct || k == SymbolKind.Interface || k == SymbolKind.Enum || k == SymbolKind.TypeAlias;
+}
+
 export function hasFlag(sym: Readonly<Symbol>, flag: SymbolFlag): boolean {
 	return sym.symFlags.has(flag);
 }

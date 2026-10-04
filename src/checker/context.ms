@@ -1,7 +1,7 @@
 import { platform } from "std/process";
 import { TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
-import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
+import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { Node, NodeKind, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData } from "../ast/node";
@@ -661,8 +661,7 @@ function nominalTypeSym(t: Type): Symbol | null {
 
 export function refusesTypeAsValue(ctx: CheckerContext, node: Node, sym: Symbol, name: string): boolean {
 	const k = sym.symbolKind;
-	const isType = k == SymbolKind.Class || k == SymbolKind.Actor || k == SymbolKind.Struct || k == SymbolKind.Interface || k == SymbolKind.Enum || k == SymbolKind.TypeAlias;
-	if (!isType || node == ctx.typeExprSlot || ctx.jsxMacroArgDepth > 0) return false;
+	if (!isTypeSymbol(sym) || node == ctx.typeExprSlot || ctx.jsxMacroArgDepth > 0) return false;
 	const msg = k == SymbolKind.Class || k == SymbolKind.Actor
 		? `'${name}' names a ${k == SymbolKind.Actor ? "actor" : "class"}, which is not a value here — construct one with 'new ${name}(…)' or reach a static member ('${name}.x')`
 		: `'${name}' only refers to a type, but is being used as a value here`;
