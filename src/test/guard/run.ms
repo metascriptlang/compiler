@@ -173,6 +173,7 @@ interface Probe {
 	wantTsan: boolean;
 	wantAsan: boolean;
 	os: string;
+	osArgs: string[];
 }
 
 function firstWord(s: string): string {
@@ -205,7 +206,13 @@ function parseDirectives(probe: Probe, src: string): void {
 		if (line.startsWith("// GUARD-JS")) probe.wantJs = true;
 		if (line.startsWith("// GUARD-TSAN")) probe.wantTsan = true;
 		if (line.startsWith("// GUARD-ASAN")) probe.wantAsan = true;
-		if (line.startsWith(OS)) probe.os = firstWord(line.slice(OS.length, line.length));
+		if (line.startsWith(OS)) {
+			for (const word of line.slice(OS.length, line.length).trim().split(" ")) {
+				if (word == "") continue;
+				if (probe.os == "") probe.os = word;
+				else probe.osArgs.push(word);
+			}
+		}
 	}
 }
 
@@ -225,7 +232,7 @@ function discoverProbes(): Probe[] {
 	for (const name of names) {
 		const probe: Probe = {
 			name, path: `${GUARD_DIR}/${name}.ms`,
-			balance: [], balanceOrc: [], testBalance: [], checkfails: [], wantJs: false, wantTsan: false, wantAsan: false, os: "",
+			balance: [], balanceOrc: [], testBalance: [], checkfails: [], wantJs: false, wantTsan: false, wantAsan: false, os: "", osArgs: [],
 		};
 		parseDirectives(probe, readFileOr(probe.path, ""));
 		probes.push(probe);
@@ -345,7 +352,10 @@ function runOsLane(probe: Probe): void {
 		fail(tag, "GUARD-ASAN runs the binary, and only an --os=bare build runs on the host");
 		return;
 	}
-	const b = buildProbe(probe, probe.os, ["build", probe.path, `--os=${probe.os}`, `--output=${bin}`], buildLog);
+	const args = ["build", probe.path, `--os=${probe.os}`];
+	for (const arg of probe.osArgs) args.push(arg);
+	args.push(`--output=${bin}`);
+	const b = buildProbe(probe, probe.os, args, buildLog);
 	if (!succeeded(b) && both(b).contains(`--os=${probe.os} requires `)) {
 		unscoredOs.push(tag);
 		console.log(`skip ${tag}: this host lacks the ${probe.os} toolchain (${buildLog})`);
