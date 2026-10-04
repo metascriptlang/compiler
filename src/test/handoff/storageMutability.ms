@@ -77,6 +77,8 @@ test "a view borrows only from a path that outlives it and stays unchanged while
 		"function f(): int32 { const a: uint8[] = [1]; let t: int32 = 0; for (let i = 0; i < 3; i += 1) { const v: Readonly<Span<uint8>> = a; t += v.length as int32; a.push(1); } return t; }",
 		"function f(): int32 { const a: uint8[] = [1, 2]; const v: Readonly<Span<uint8>> = a; const i = a.indexOf(2); return (v[0] as int32) + (i as int32); }",
 		"function same(a: uint8[]): uint8[] { return a; } function f(): int32 { const a: uint8[] = [1]; const v: Readonly<Span<uint8>> = a; const b = same(a); b.push(2); return v[0] as int32; }",
+		"function f(): int32 { const s = \"ab\".repeat(2); const v = s.asBytes(); { const g = (): int32 => s.length as int32; console.log(g()); } return v[0] as int32; }",
+		"function f(): int32 { const a: uint8[] = [1]; const v: Readonly<Span<uint8>> = a; const g = (): int32 => a.length as int32; return (v[0] as int32) + g(); }",
 	];
 	for (const body of refused) {
 		const c = compileToCWithStd(body);
@@ -101,10 +103,50 @@ test "a view borrows only from a path that outlives it and stays unchanged while
 		"struct S { xs: uint8[]; } function f(s: S): int32 { const v: Readonly<Span<uint8>> = s.xs; return v[0] as int32; }",
 		"function f(): int32 { const v: Readonly<Span<uint8>> = [5, 6]; return v[1] as int32; }",
 		"function f(b: Span<uint8>): int32 { const w = b; return w.length as int32; }",
+		"function f(): int32 { const a: uint8[] = [1]; const v: Readonly<Span<uint8>> = a; const x = v[0] as int32; const g = (): int32 => a.length as int32; return x + g(); }",
 	];
 	for (const body of accepted) {
 		const c = compileToCWithStd(body);
 		const js = compileProjectToJSWithStd([{ entryPath: "test/borrow.ms", entrySource: body }], "test/borrow.ms");
+		assert c.ok, body + (c.ok ? "" : " — " + c.error);
+		assert !js.startsWith("ERROR:"), body + " — " + js;
+	}
+}
+
+test "an async or generator function refuses a view or ref parameter" {
+	const refused = [
+		"async function g(b: Readonly<Span<uint8>>): Promise<int32> { return b[0] as int32; }",
+		"async function g(b: Span<int32>): Promise<int32> { return b[0]; }",
+		"async function g(ref n: int32): Promise<void> { n = 1; }",
+		"function* g(b: Span<int32>): Iterator<int32> { yield b[0]; }",
+		"class C { async m(b: Span<int32>): Promise<int32> { return b[0]; } }",
+		"const g = async (b: Span<int32>): Promise<int32> => b[0];",
+	];
+	for (const body of refused) {
+		const c = compileToCWithStd(body);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/suspparam.ms", entrySource: body }], "test/suspparam.ms");
+		assert !c.ok, body;
+		assert js.startsWith("ERROR:"), body;
+	}
+}
+
+test "a view local does not live across an await or a yield" {
+	const refused = [
+		"async function f(a: uint8[]): Promise<int32> { const v: Readonly<Span<uint8>> = a; const h = spawn((): int32 => 1); await h; return v[0] as int32; }",
+		"function* f(a: uint8[]): Iterator<int32> { const v: Readonly<Span<uint8>> = a; yield 1; const n = v[0] as int32; yield n; }",
+	];
+	for (const body of refused) {
+		const c = compileToCWithStd(body);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/suspend.ms", entrySource: body }], "test/suspend.ms");
+		assert !c.ok, body;
+		assert js.startsWith("ERROR:"), body;
+	}
+	const accepted = [
+		"async function f(a: uint8[]): Promise<int32> { const v: Readonly<Span<uint8>> = a; const n = v[0] as int32; const h = spawn((): int32 => 1); await h; return n; }",
+	];
+	for (const body of accepted) {
+		const c = compileToCWithStd(body);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/suspend.ms", entrySource: body }], "test/suspend.ms");
 		assert c.ok, body + (c.ok ? "" : " — " + c.error);
 		assert !js.startsWith("ERROR:"), body + " — " + js;
 	}
