@@ -9,7 +9,7 @@
 // stays legal. Mutating methods on those views are still found by name in
 // paramMutationAnalysis until method receivers become ordinary arguments.
 
-import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, TypeAssertionData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, OutExprData, TypeAssertionData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
 import { isReadonlyView, isAtomicRef, isSharedGraphType, isNodeGraphType } from "./types";
 import { isValueAggregateParam } from "./paramMutationAnalysis";
@@ -86,6 +86,7 @@ export function checkWrite(target: Node, asRefArg: boolean): WriteCheck {
 
 export function isLocation(node: Node): boolean {
 	if (node.kind == NodeKind.Identifier || node.kind == NodeKind.HiddenDeref) return true;
+	if (node.kind == NodeKind.OutExpr) return isLocation((node.data as OutExprData).outArg);
 	let base: Node | null = null;
 	if (node.kind == NodeKind.MemberExpr) base = (node.data as MemberExprData).object;
 	else if (node.kind == NodeKind.ArrayAccess) base = (node.data as ArrayAccessData).array;
