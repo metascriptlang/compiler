@@ -2772,9 +2772,10 @@ live in `checkPointerAddress` (`src/checker/pointerAddress.ms`); the JS and Rais
 A `ref` / `out` argument of any type reaches the caller's location on the Raiser VM too (`RegAddr`,
 `ElemAddr`, `FieldAddr`, `GlobalAddr`; `src/codegen/raiser/CLAUDE.md`).
 
-An array of `Ptr<T>` holds addresses and never counts them (the reference's `ptr` has no
-hooks): before, `const slots: Ptr<Pet>[] = [a as Ptr<Pet>]` aborted at scope exit by
-decrementing a stack address.
+The plain-struct pointer arrays exercised here hold uncounted addresses: before,
+`const slots: Ptr<Pet>[] = [a as Ptr<Pet>]` aborted at scope exit by decrementing
+a stack address. This is not a blanket rule for every `Ptr<T>`; counted-pointee
+handling remains `isUncountedPtrElement` (`src/checker/types.ms`), unchanged here.
 
 Measured 2026-10-03 on tree `ee6fccbb` with `msc run` (C, `--gc=orc`, `--target=js`,
 `--target=raiser`): corpus `679-typedPointerLocations` (every lane) and
@@ -2784,6 +2785,19 @@ refusals. Before, on installed `e5e932d0`: `uint8[] as Ptr<uint8>` read the arra
 (`2 0`), and on JS a byte view printed `[object Object]` and `p + 1` gave `NaN`. The integer forms
 of std/solana and Hibernal (`address as Ptr<Pubkey>`, `records[seat] as Ptr<PetAccount>`,
 `(address + 24) as Ptr<uint64>`) print the same as installed `e5e932d0` (`i1 9 6 8 7 6`).
+
+Checked again on 2026-10-04, source tree
+`de24e7b64206d38fb57f76d36cf1a3c3086b3b9a`: a same-element
+`Span<Ptr<T>> as Ptr<Ptr<T>>` addresses the pointer slot, not its pointee.
+Corpus `679-typedPointerLocations` prints its `slots 5 66` oracle on C, JS and
+the Raiser VM after replacing a slot and writing through the selected pointer.
+An empty pointer span stops at that conversion with `index 0 out of bounds
+(length 0)` on checked C and JS, and the corresponding array-bound error on
+the Raiser VM. Native `--danger` retains its deliberate unchecked-index mode.
+`pointerLocationTransfer` also matches on C/DRC, C/ORC, JS and the Raiser VM;
+see [Raiser's measured location matrix](RAISER.md#memory-model). Raw-pointer
+escape and invalidation by storage growth remain unchecked, not covered by
+that matrix.
 
 Rejected: a refusal of only the direct `Span<T> as Ptr<U>` cast on JS — an intermediate typed
 pointer (`span as Ptr<T> as Ptr<void> as Ptr<uint8>`) bypassed it, and the Raiser VM (including

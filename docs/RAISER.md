@@ -31,6 +31,21 @@ Two regimes, chosen per VM by `gcMode`:
 
 **Strands own heaps.** Each strand has its own array and object heap; a future owns the heap its value lives in, the shape of C's future struct holding its value. `copyGraph` moves a value between heaps, preserving sharing and stopping on cycles through a source → destination map. Crossings: at `spawn`, the closure env and a copy of every global slot; at completion, the result into the future; at `await`, the result out to the reader. So a strand's writes to captured or global state are invisible to its parent.
 
+Location captures and future results were checked on 2026-10-04, source tree
+`de24e7b64206d38fb57f76d36cf1a3c3086b3b9a`: `msc run
+src/test/corpus/programs/pointerLocationTransfer.ms`, also with `--gc=orc`,
+`--target=js` and `--target=raiser`, print
+`location-transfer 42 parent field true | 42 parent field global | 41`.
+The matrix covers an element through a slice, a string register, a string field,
+a global, repeated addresses of one slot, and a plain struct across suspension.
+Before the fix, a captured element location crashed at heap transfer and a
+captured string register read `nil`; C also destroyed the local storage at the
+first suspension. The frame lifetime decision lives in
+`localsOutlivingSuspension` (`src/transform/lowering/generatorLower.ms`), shared
+by the iterator and async builders; heap transfer remains the model above.
+These probes do not establish safety for a raw pointer escaping its source's
+scope or surviving storage growth.
+
 ## std access — three tiers, scoped per role
 
 | Tier | What | Admission |
@@ -79,7 +94,7 @@ Measured 2026-09-19 with `msc` v0.2.55 (`~/.metascript/BUILD` `bce99dbf`), each 
 | `new Set<int32>()` then `add` | `attempt to access a nil address` in `Set_add__int32`, after `msMapFatal` unbridged warnings | correct |
 | `msc run --target=raiser src/index.ms` (the whole compiler) | 16 type errors before codegen: `Undefined variable 'fetch'` ×14, `'Buffer'` ×1, `byteLength` arity ×1 | — |
 
-The three wrong results on strands and exceptions have compiler inbox cards dated 2026-09-19. Codegen-side gaps (`new Array<T>(n)`, `extends`, `static`, `out`) are listed in `src/codegen/raiser/CLAUDE.md`.
+The three wrong results on strands and exceptions have compiler inbox cards dated 2026-09-19. Codegen-side gaps (`new Array<T>(n)`, `extends`, `static`) are listed in `src/codegen/raiser/CLAUDE.md`; `ref`/`out` locations are covered by the newer pointer probes above.
 
 Test lanes at the same commit: `msc test src/raiser/value.ms` 333/333, `src/raiser/vm.ms` 519/519, `src/codegen/raiser/eval.ms` 2449/2449 (each count includes the file's dependencies).
 
