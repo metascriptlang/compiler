@@ -52,6 +52,8 @@ Optional header directive:
 // GUARD-BALANCE <MangledType>   assert alloc==destroy for that type at exit
 // GUARD-OS <os>                 one [<os>] lane: build --os=<os>, never run; with
 //                               GUARD-CHECK-FAIL the build must fail with every tag
+// GUARD-ASAN                    with GUARD-OS bare: also build under ASan and run on the
+//                               host; GUARD-OK printed and no AddressSanitizer report
 ```
 
 Note: mangled type names are compiler-internal and can shift under transform

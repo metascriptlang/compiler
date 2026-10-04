@@ -17,6 +17,8 @@
 //                                        GUARD-OK printed + no ThreadSanitizer report (unscored without the toolchain)
 //   // GUARD-OS <os>                     one [<os>] lane instead: build --os=<os>; with GUARD-CHECK-FAIL the
 //                                        build must fail with every tag, else it must link (nothing is run)
+//   // GUARD-ASAN                        with GUARD-OS bare: also build --sanitize=address --cc=clang and run on the
+//                                        host; pass = exit 0 + GUARD-OK printed + no AddressSanitizer report
 // The double-destroy abort needs no directive — it is name-agnostic.
 //
 // Env: MSC=<path to msc> (default: ./msc, else installed msc)   GUARD_GC="drc orc" (default both)
@@ -169,6 +171,7 @@ interface Probe {
 	checkfails: string[];
 	wantJs: boolean;
 	wantTsan: boolean;
+	wantAsan: boolean;
 	os: string;
 }
 
@@ -201,6 +204,7 @@ function parseDirectives(probe: Probe, src: string): void {
 		if (line.startsWith(CHECK)) probe.checkfails.push(line.slice(CHECK.length, line.length));
 		if (line.startsWith("// GUARD-JS")) probe.wantJs = true;
 		if (line.startsWith("// GUARD-TSAN")) probe.wantTsan = true;
+		if (line.startsWith("// GUARD-ASAN")) probe.wantAsan = true;
 		if (line.startsWith(OS)) probe.os = firstWord(line.slice(OS.length, line.length));
 	}
 }
@@ -221,7 +225,7 @@ function discoverProbes(): Probe[] {
 	for (const name of names) {
 		const probe: Probe = {
 			name, path: `${GUARD_DIR}/${name}.ms`,
-			balance: [], balanceOrc: [], testBalance: [], checkfails: [], wantJs: false, wantTsan: false, os: "",
+			balance: [], balanceOrc: [], testBalance: [], checkfails: [], wantJs: false, wantTsan: false, wantAsan: false, os: "",
 		};
 		parseDirectives(probe, readFileOr(probe.path, ""));
 		probes.push(probe);
@@ -328,13 +332,17 @@ function runGcLane(probe: Probe, gc: string): void {
 
 // The invariant lives in a freestanding build whose binary the host cannot run,
 // so the lane only builds: an errorcheck probe must fail with every tag, any
-// other probe must link.
+// other probe must link. A bare binary can run; GUARD-ASAN runs it.
 function runOsLane(probe: Probe): void {
 	const tag = `${probe.name} [${probe.os}]`;
 	const bin = `${BIN_DIR}/${probe.name}.${probe.os}`;
 	const buildLog = `${LOG_DIR}/${probe.name}.${probe.os}.build`;
 	if (probe.balance.length > 0 || probe.balanceOrc.length > 0 || probe.testBalance.length > 0 || probe.wantJs) {
 		fail(tag, "GUARD-OS builds a binary the host cannot run; drop GUARD-BALANCE/GUARD-TEST-BALANCE/GUARD-JS");
+		return;
+	}
+	if (probe.wantAsan && probe.os != "bare") {
+		fail(tag, "GUARD-ASAN runs the binary, and only an --os=bare build runs on the host");
 		return;
 	}
 	const b = buildProbe(probe, probe.os, ["build", probe.path, `--os=${probe.os}`, `--output=${bin}`], buildLog);
@@ -354,6 +362,33 @@ function runOsLane(probe: Probe): void {
 	if (!succeeded(b)) {
 		const errs = firstErrorLines(both(b));
 		fail(tag, `build error${errs == "" ? "" : ": " + errs}`);
+		return;
+	}
+	ok(tag);
+	if (probe.wantAsan) runOsAsanLane(probe);
+}
+
+// A bare binary runs on the host, where ASan refuses the overlapping copy an SBF syscall refuses.
+function runOsAsanLane(probe: Probe): void {
+	const tag = `${probe.name} [${probe.os} asan]`;
+	const bin = `${BIN_DIR}/${probe.name}.${probe.os}.asan`;
+	const b = buildProbe(probe, `${probe.os} asan`, ["build", probe.path, `--os=${probe.os}`, "--sanitize=address", "--cc=clang", `--output=${bin}`], `${LOG_DIR}/${probe.name}.${probe.os}.asan.build`);
+	if (!succeeded(b)) {
+		const errs = firstErrorLines(both(b));
+		fail(tag, `build error${errs == "" ? "" : ": " + errs}`);
+		return;
+	}
+	const exe = binExecutable(bin);
+	if (exe == "") {
+		fail(tag, `build reported success but no binary at ${bin}`);
+		return;
+	}
+	const run = execFileResult(exe, []);
+	const merged = both(run);
+	writeFile(`${LOG_DIR}/${probe.name}.${probe.os}.asan.out`, merged);
+	const report = firstLineContaining(merged, "ERROR: AddressSanitizer");
+	if (report != "" || !succeeded(run) || !merged.contains("GUARD-OK")) {
+		fail(tag, report != "" ? report : status(run));
 		return;
 	}
 	ok(tag);
