@@ -14,7 +14,7 @@ import {
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth } from "./compat";
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
-import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
+import { builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { callExpandMacroInvocation, callEvalComptimeBlock } from "./checkerCallbacks";
@@ -522,8 +522,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// scope — the user's scope must not re-resolve (or hijack) it.
 			const sym = resolveCalleeIdent(ctx, node);
 			if (sym == null && ctx.jsxMacroArgDepth > 0) {
-				const builtin = resolveAnnotation(d.name, ctx, 0, 0);
-				if (!isUnresolvedType(builtin) && builtin.kind != TypeKind.Null) { node.nodeType = builtin; return; }
+				const builtin = builtinTypeNamed(ctx, d.name);
+				if (builtin != null) { node.nodeType = builtin; return; }
 			}
 			if (sym == null) {
 					addError(ctx, `Undefined variable '${d.name}'`, node.location.line, node.location.column);

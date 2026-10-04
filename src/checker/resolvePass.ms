@@ -385,6 +385,12 @@ export function registerTypeInstanceHooks(fn: TypeInstanceHooksFn): void {
 	typeInstanceHooksFn = fn;
 }
 
+export function builtinTypeNamed(ctx: CheckerContext, name: string): Type | null {
+	if (lookupSymbol(ctx.table, name) != null) return null;
+	const t = resolveAnnotation(name, ctx, 0, 0);
+	return isUnresolvedType(t) || t.kind == TypeKind.Null || t.sym != null ? null : t;
+}
+
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	let trimmed = text.trim();
 	if (trimmed == "") return inferredType();
