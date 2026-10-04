@@ -3069,6 +3069,25 @@ The compiler rewrites `for (const x of set)` → `for (const x of set.toItems())
 
 **Built-in `toItems()`**: `Set<T>` returns `T[]`, `Map<K, V>` returns `K[]` (keys by default, use `.values()` for values).
 
+**Entries of a Map**: an array pattern takes the entries, `toPairs()` (`Map` and `HashMap` yield `[K, V]`); one name
+keeps the keys. Measured 2026-10-05, C and JS print the same:
+
+```ms
+const ages = new Map<string, int32>();
+ages.set("alice", 30);
+ages.set("bob", 27);
+for (const [name, age] of ages) {
+    console.log(`${name} ${age}`);   // alice 30 / bob 27
+}
+for (const name of ages) {
+    console.log(name);                // alice / bob
+}
+```
+
+An array pattern needs a tuple or an array element: over a `Set<int32>` or an `int32[]` it is the error "an array
+pattern needs each element to be a tuple or an array". Raiser does not run a Map's for-of yet (the iteration is a
+generator; corpus `mapForOfEntries` is xfail there).
+
 **Custom iterables**: define a `toItems` extension method on any type:
 
 ```ms
@@ -3087,6 +3106,7 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 | Protocol | Synthesizes | Triggered when |
 |---|---|---|
 | `toItems(this T): U[]` | `for (x of obj)` → `for (x of obj.toItems())` | non-array obj in `for..of` |
+| `toPairs(this T): [K, V][]` | `for ([k, v] of obj)` → `for ([k, v] of obj.toPairs())` | non-array obj in `for..of` with an array pattern |
 | `toString(this T): string` | implicit string context | type concat with string |
 | `getDynamicField(this T, key: string): U` | `obj.foo` → `obj.getDynamicField("foo")` | `foo` not a real field of T |
 | `setDynamicField(this T, key: string, value: U): void` | `obj.foo = v` → `obj.setDynamicField("foo", v)` | `foo` not a real field of T, written |
