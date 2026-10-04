@@ -2,7 +2,7 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, makeLoc } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, makeLoc } from "../../ast/node";
 import { createUnifyBindings, unifyType } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
@@ -26,7 +26,7 @@ import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { genericTypeInstMark, takeGenericTypeInstsFrom } from "../../parser/context";
-import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, routineKey } from "./context";
+import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, getMacroDeclModulePath, callComptimeHelperPreparer } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
@@ -134,7 +134,6 @@ interface ComptimeEngine {
 	funcMap: RaiserFuncMap;
 	enumMap: RaiserFuncMap;
 	vm: RaiserVM;
-	seen: HashMap<string, int32>;
 	bodyCtxs: HashMap<CheckerContext, CheckerContext>;
 }
 
@@ -149,13 +148,12 @@ function freshEngine(): ComptimeEngine {
 	const entryFn = createRaiserFunction("__engineEntry", entryCode, entryConsts, 0, 0, 2);
 	const functions: RaiserFunction[] = [entryFn];
 	const image = createRaiserModule("comptime-engine", functions, 0);
-	const funcMap: RaiserFuncMap = { items: [] };
-	const enumMap: RaiserFuncMap = { items: [] };
+	const funcMap: RaiserFuncMap = { items: [], symbolIndices: new HashMap<Symbol, int32>() };
+	const enumMap: RaiserFuncMap = { items: [], symbolIndices: null };
 	const vm = createVM(image, "arena");
 	vm.printSink = (text: string): void => { writeStderr(text + "\n"); };
-	const seen: HashMap<string, int32> = new HashMap<string, int32>();
 	const bodyCtxs = new HashMap<CheckerContext, CheckerContext>();
-	return { image, funcMap, enumMap, vm, seen, bodyCtxs };
+	return { image, funcMap, enumMap, vm, bodyCtxs };
 }
 
 function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMethod[] {
@@ -195,7 +193,7 @@ function engineBodyCtx(definingModulePath: string): CheckerContext | null {
 
 registerEngineBodyCtxFn(engineBodyCtx);
 
-function compileProgramIntoEngine(program: Node, seeds: Symbol[], exts: ExtensionMethod[], wantFn: string): int32 {
+function compileProgramIntoEngine(program: Node, seeds: Symbol[], exts: ExtensionMethod[], wantFn: string, wantSym: Symbol | null = null): int32 {
 	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
 	defer registerRaiserOnDemand(previousOnDemand);
 	registerSeedSymbols(seeds, exts);
@@ -205,7 +203,7 @@ function compileProgramIntoEngine(program: Node, seeds: Symbol[], exts: Extensio
 	// whose nested transformForEngine overwrites _lastEngineCheckErrors — restore this
 	// program's own check errors so the caller reads them, not the last helper's (bug053).
 	const ownErrors = _lastEngineCheckErrors;
-	const idx = appendProgramToImage(_engine.image, _engine.funcMap, _engine.enumMap, transformed, wantFn);
+	const idx = appendProgramToImage(_engine.image, _engine.funcMap, _engine.enumMap, transformed, wantFn, wantSym);
 	_lastEngineCheckErrors = ownErrors;
 	return idx;
 }
@@ -281,26 +279,28 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const isClass = sym.symbolKind == SymbolKind.Class;
 	if (!isRoutineSym(sym) && !isClass) return -1;
 	const name = isClass ? sym.name + "_new" : sym.name;
-	const key = isClass ? routineKey(sym) + "_new" : routineKey(sym);
-	const seenIdx = _engine.seen.get(key);
+	const seenIdx = _engine.funcMap.symbolIndices!.get(sym);
 	if (seenIdx != null) return seenIdx;
 	if (sym.declNode == null) return -1;
-	_engine.seen.set(key, _engine.image.functions.length);
 	const seedCtx = seedCtxForSym(sym);
 	const seeds: Symbol[] = instanceTypeParamSeeds(sym);
 	let exts: ExtensionMethod[] = [];
 	if (seedCtx != null) {
 		for (const s of moduleScopeSymbols(seedCtx.table)) {
-			if (s.name != sym.name) seeds.push(s);
+			if (!isClass || s.name != sym.name) seeds.push(s);
 		}
-		exts = seedExtensionsOf(seedCtx, sym);
+		exts = seedExtensionsOf(seedCtx, isClass ? sym : null);
 	}
 	const clone = cloneNodeForCheck(sym.declNode);
+	let engineName = name;
+	if (clone.kind == NodeKind.FunctionDecl) {
+		engineName = "$comptime:helper";
+		(clone.data as FunctionDeclData).fnName = engineName;
+	}
 	callComptimeHelperPreparer(clone);
 	const decls: Node[] = [clone];
 	const program = createNode(NodeKind.Program, { programStmts: decls }, synthToken(sym.declNode.location));
-	const idx = compileProgramIntoEngine(program, seeds, exts, name);
-	if (!isClass && idx >= 0) _engine.funcMap.items.push({ name: key, index: idx });
+	const idx = compileProgramIntoEngine(program, seeds, exts, engineName, sym);
 	for (const e of _lastEngineCheckErrors) {
 		if (e.severity != Severity.Error) continue;
 		_pendingHelperErrors.push({

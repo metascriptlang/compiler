@@ -1075,12 +1075,6 @@ function evalCompileTimeCall(ctx: CheckerContext, node: Node, callType: Type): T
 	const callee = compileTimeCallee(node);
 	if (callee == null) return callType;
 	const d = node.data as CallExprData;
-	const set = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
-	if (set.overloads.length > 0) {
-		addError(ctx, `'${callee.name}' is @comptime and overloaded; the compile-time evaluator keys routines by name and would run the wrong overload, so give each @comptime overload its own name`, node.location.line, node.location.column);
-		node.nodeType = errorType();
-		return node.nodeType;
-	}
 	for (let i = 0; i < d.arguments.length; i += 1) {
 		const arg = d.arguments[i];
 		if (isCompileTimeValue(arg, 0)) continue;
@@ -3483,7 +3477,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	}
 	// Fill default args for extension overloads
 	// defaultOffset: 0 for static (parser stripped receiver from fnDefaults), 1 for non-static
-	const winnerType = candidates[idx];
+	let winnerType = candidates[idx];
 	if (winnerType.kind == TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
 		const ovDefaultOffset = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
@@ -3498,10 +3492,13 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 			const instSym = callInstantiateGeneric(extWinnerSym, recvBindings.names, recvBindings.types, ctx, callNode.location);
 			if (instSym != null) {
 				callNode.resolvedSym = instSym;
-				(callNode.data as CallExprData).callee.resolvedSym = instSym;
+				winnerType = stripReceiverParam(instSym.symbolType);
 			}
 		}
 	}
+	const callee = (callNode.data as CallExprData).callee;
+	callee.resolvedSym = callNode.resolvedSym;
+	callee.nodeType = winnerType;
 	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
 }
 

@@ -91,6 +91,7 @@ export interface RaiserFuncEntry {
 
 export interface RaiserFuncMap {
 	items: RaiserFuncEntry[];
+	symbolIndices: HashMap<Symbol, int32> | null;
 }
 
 // --- Builtin registry ---
@@ -139,13 +140,13 @@ export function createCompState(): RaiserCompState {
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
 	const funcEntries: RaiserFuncEntry[] = [];
-	const funcMap: RaiserFuncMap = { items: funcEntries };
+	const funcMap: RaiserFuncMap = { items: funcEntries, symbolIndices: null };
 	const enumItems: RaiserFuncEntry[] = [];
-	const enumMap: RaiserFuncMap = { items: enumItems };
+	const enumMap: RaiserFuncMap = { items: enumItems, symbolIndices: null };
 	const builtinItems: RaiserBuiltinEntry[] = [];
 	const builtins: RaiserBuiltinMap = { items: builtinItems };
 	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack,
-		funcMap, enumMap, builtins, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, scopedFunctions: false };
+		funcMap, enumMap, builtins, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [], symbolIndices: null }, scopedFunctions: false };
 }
 
 // Overloads share module and name and differ by the declaration-time disamb,
@@ -374,6 +375,10 @@ export function resolveFunc(s: RaiserCompState, name: string): int32 {
 
 export function resolveRoutine(s: RaiserCompState, sym: Symbol | null, name: string): int32 {
 	if (sym != null && isRoutineSym(sym)) {
+		if (s.funcMap.symbolIndices != null) {
+			const index = s.funcMap.symbolIndices.get(sym);
+			return index != null ? index : -1;
+		}
 		if (s.scopedFunctions && sym.modulePath != "") {
 			const exact = resolveFunc(s, routineKey(sym));
 			if (exact >= 0) return exact;
