@@ -810,9 +810,9 @@ export function execLoop(vm: RaiserVM): void {
 	execStrandLoop(vm);
 	// The host reads its result off the mirror once this returns (context.ms,
 	// expand.ms, the rgen tests), so whichever strand ran last, the mirror
-	// leaves pointing at the main strand's heap. exitValue needs no copy: both
-	// finishProgram call sites are guarded by strandFinish returning false,
-	// which is exactly the main strand.
+	// leaves pointing at the main strand's heap. exitValue needs no copy: a
+	// finishProgram call either comes from the main strand or is an abrupt Halt,
+	// whose operand is an integer exit code.
 	if (vm.sched.strands.items.length > 0) {
 		const main = vm.sched.strands.items[0];
 		vm.arrayHeap = main.arrayHeap;
@@ -899,7 +899,7 @@ function runStrandSlice(vm: RaiserVM): void {
 			setReg(vm, base + inst.a, raiserNil());
 		} else if (op == RaiserOpcode.Halt) {
 			const haltVal = getReg(vm, base + inst.a);
-			if (strandFinish(vm, haltVal)) {
+			if (inst.b != 1 && strandFinish(vm, haltVal)) {
 				vm.yielded = true;
 			} else {
 				finishProgram(vm, haltVal, inst.b == 1);
