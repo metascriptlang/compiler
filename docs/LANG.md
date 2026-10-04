@@ -3405,6 +3405,13 @@ portable declaration is `std/core/array/shared.ms` `toString`. On source tree
 `./msc-n2s-roots3 run --target=raiser src/test/corpus/programs/arrayText.ms`
 each printed `1,2,3|ab,c||1,2,,3|a,,b|label:x,label:y`.
 
+`String(xs)` and `` `${xs}` `` use that same checked method. On tree
+`4e18eddad4d988ba10db163a62ddd34142cdd369`,
+`./msc-n2s-static-stage2 run --gc=orc src/test/corpus/programs/arrayText.ms`,
+`./msc-n2s-static-stage2 run --target=js src/test/corpus/programs/arrayText.ms`, and
+`./msc-n2s-static-stage2 run --target=raiser src/test/corpus/programs/arrayText.ms`
+also printed `1,2,3 1,2,3 1,2,,3 1,2,,3 a,,b a,,b label:x,label:y label:x,label:y`.
+
 #### Custom String Format via Extension Methods
 
 Override the default format for any type by defining a `toString` extension method:
