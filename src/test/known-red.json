@@ -26,7 +26,10 @@
     "src/codegen/raiser/eval.ms > engine: two sleepers wake in deadline order, not spawn order": {"since":"e3f842ce","note":"fails at random, card 2026-10-03-raiser-eval-tests-flake.md; same 5 runs as the float32 case, wall-clock deadlines under load 30-60, 2026-10-03"}
   },
   "fmt": {},
-  "guard": {},
+  "guard": {
+    "moveIntoBorrowParam [drc]": {"since":"4573591e","note":"x is destroyed after look(move x) into a borrowing param: C prints '  +4z+' for 'a+++4z+'. Red again on origin/main c441aebe+ (an origin/main build, macOS, 2026-10-04) after b5857d025 dropped the entry as green; card 2026-09-30-move-into-borrow-param-destroys-source.md"},
+    "moveIntoBorrowParam [orc]": {"since":"4573591e","note":"x is destroyed after look(move x) into a borrowing param: C prints '  +4z+' for 'a+++4z+'. Red again on origin/main c441aebe+ (an origin/main build, macOS, 2026-10-04) after b5857d025 dropped the entry as green; card 2026-09-30-move-into-borrow-param-destroys-source.md"}
+  },
   "hcr": {},
   "san": {
     "704-macroExprHoist [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},
