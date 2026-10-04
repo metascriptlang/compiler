@@ -7,7 +7,7 @@
 // get wrapped with a runtime range check call.
 
 import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, Type, TypeKind } from "../../ast/node";
-import { integerRank, isIntegerType, peelToRepr } from "../../checker/types";
+import { integerRank, isIntegerType, peelToRepr, enumOrdinalBounds, createPrimitive } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeNumber, runtimeRef } from "../util";
@@ -89,8 +89,21 @@ function isFloatSource(src: Type | null): boolean {
 	return s.kind == TypeKind.Float32 || s.kind == TypeKind.Float64 || s.kind == TypeKind.Number;
 }
 
+function enumCovers(src: Type | null, dest: Type): boolean {
+	const s = peelToRepr(src);
+	if (s == null) return true;
+	const db = enumOrdinalBounds(dest);
+	if (s.kind == TypeKind.Enum) {
+		if (s == dest || (s.typeName != "" && s.typeName == dest.typeName && s.sym == dest.sym)) return true;
+		const sb = enumOrdinalBounds(s);
+		return sb[0] >= db[0] && sb[1] <= db[1];
+	}
+	return !isIntegerType(s) && s.kind != TypeKind.Number && s.kind != TypeKind.Float64 && s.kind != TypeKind.Float32;
+}
+
 export function rangeCheckHelper(src: Type | null, dest: Type, rangeChecks: boolean): string {
 	if (!rangeChecks) return "";
+	if (dest.kind == TypeKind.Enum) return dest.typeNames.length == 0 || enumCovers(src, dest) ? "" : "msCheckRangeI32";
 	if (dest.kind == TypeKind.Int64) return isFloatSource(src) ? "msCheckRangeI64" : "";
 	const fnName = getRangeCheckForTypeKind(dest.kind);
 	if (fnName == "" || isUnsignedKind(dest.kind) || destCovers(src, dest)) return "";
@@ -104,6 +117,10 @@ export function makeRangeCheckFor(
 	loc: SourceLocation,
 ): Node {
 	if (fnName == "msCheckRangeI64") return makeCall(runtimeRef(fnName, loc), [expr], loc);
+	if (dest.kind == TypeKind.Enum) {
+		const bounds = enumOrdinalBounds(dest);
+		return makeRangeCheck(expr, fnName, bounds[0], bounds[1], loc);
+	}
 	const lo = getRangeMinForKind(dest.kind);
 	return makeRangeCheck(expr, fnName, lo, getRangeMaxForKind(dest.kind), loc);
 }
@@ -122,17 +139,33 @@ function checkedConv(
 	return call;
 }
 
+function checkedEnumSource(ctx: TransformContext, expr: Node, dest: Type): Node {
+	const fnName = rangeCheckHelper(expr.nodeType, dest, ctx.rangeChecks);
+	if (fnName == "") return expr;
+	const call = makeRangeCheckFor(fnName, expr, dest, expr.location);
+	call.nodeType = createPrimitive(TypeKind.Int32);
+	return call;
+}
+
 function rangeCheckVisitor(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
 		const src = d.asExpr != null ? d.asExpr.nodeType : null;
 		if (node.nodeType == null) return node;
+		if (node.nodeType.kind == TypeKind.Enum && d.asExpr != null) {
+			d.asExpr = checkedEnumSource(ctx, d.asExpr, node.nodeType);
+			return node;
+		}
 		return checkedConv(ctx, d.asExpr, src, node.nodeType, node);
 	}
 	if (node.kind == NodeKind.HiddenStdConv) {
 		const d = node.data as HiddenStdConvData;
 		if (d.convType == null) return node;
 		const src = d.convExpr != null ? d.convExpr.nodeType : null;
+		if (d.convType.kind == TypeKind.Enum && d.convExpr != null) {
+			d.convExpr = checkedEnumSource(ctx, d.convExpr, d.convType);
+			return node;
+		}
 		return checkedConv(ctx, d.convExpr, src, d.convType, node);
 	}
 	return node;
