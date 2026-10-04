@@ -767,7 +767,14 @@ export function isPointerType(t: Type): boolean {
 // Reference parity: value types that can't be nil in C.
 // Used by codegen to emit {0} instead of MS_NIL, and memset instead of NULL assignment.
 export function isNilableValueType(t: Type): boolean {
-	return isValueStorage(t);
+	if (isValueStorage(t)) return true;
+	if (t == null) return false;
+	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return isNilableValueType(t.typeReturn);
+	if (t.kind == TypeKind.Set) {
+		const repr = setRepr(t);
+		return repr != null && isNilableValueType(repr);
+	}
+	return t.kind == TypeKind.SizedArray;
 }
 
 // ===== ccgIntroducedPtr (Reference: reference codegen utils parity) =====
