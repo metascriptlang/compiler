@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
+import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
@@ -1162,6 +1162,11 @@ function structuralMemberIndex(formal: Type, exprType: Type): int32 {
 	return found;
 }
 
+function unionSlotOf(formal: Type, exprType: Type): int32 {
+	const vi = variantIndexInUnion(formal, unwrapRef(exprType));
+	return vi >= 0 ? vi : structuralMemberIndex(formal, exprType);
+}
+
 function slotHoldsStructByValue(member: Type): boolean {
 	return inlineVariantStruct(member) != null;
 }
@@ -1181,8 +1186,7 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 		return null as unknown as Node;
 	}
 	const valueType = unwrapRef(exprType);
-	let vi = variantIndexInUnion(formal, valueType);
-	if (vi < 0) vi = structuralMemberIndex(formal, exprType);
+	const vi = unionSlotOf(formal, exprType);
 	if (vi < 0) return null as unknown as Node;
 	if (valueType == exprType && formal.typeChildren[vi].kind == TypeKind.Ref) return null as unknown as Node;
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
@@ -1289,10 +1293,7 @@ export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
 		if (child == exprType) return ci;
 		ci += 1;
 	}
-	const value = unwrapRef(exprType);
-	return value != null && value.kind == TypeKind.Struct
-		? variantIndexInUnion(declared, value)
-		: primitiveMemberIndexInUnion(declared, exprType);
+	return unionSlotOf(declared, exprType);
 }
 
 export function projectTagUnionMember(expr: Node, declared: Type, exprType: Type): Node {
