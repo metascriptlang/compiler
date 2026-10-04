@@ -95,6 +95,25 @@ export function requestRandomness(
 	);
 }
 
+export function requestRandomness(
+	accounts: RandomnessRequest,
+	callerSeed: Pubkey,
+	callbackDiscriminator: uint64,
+	callbackAccount: Account,
+	callbackArguments: Readonly<Span<uint8>>,
+	payerSigners: Span<SignerSeeds> = [],
+): Result<uint64, ProgramError> {
+	const callbackAccounts: AccountMeta[1] = [AccountMeta.writable(callbackAccount.key())];
+	return requestRandomness(
+		accounts,
+		callerSeed,
+		callbackDiscriminator,
+		callbackAccounts,
+		callbackArguments,
+		payerSigners,
+	);
+}
+
 export function verifyVrfCallback(identity: Account): Result<uint64, ProgramError> {
 	if (!identity.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
 	const scoped = try findProgramAddressOf(Pubkey.vrfProgram(), ["identity", programId()]);
@@ -162,6 +181,20 @@ when (testBuild) {
 		const tail = try data.range(1, data.length - 1);
 		let relay: uint8[1024] = [];
 		const kept = putBytes(relay, 0, tail) as int32;
+		if (op == 5 || op == 6) {
+			const callbackAccount = try account(5);
+			const args5 = relay[0..2];
+			if (op == 5) {
+				const sent = try requestRandomness(request, keyOf(99), callback, callbackAccount, args5);
+				return Result.ok(sent);
+			}
+			const bump = try vrfPayerBump();
+			const paid = try signed(
+				requestRandomness(request, keyOf(99), callback, callbackAccount, args5),
+				["vrf-payer", [bump]],
+			);
+			return Result.ok(paid);
+		}
 		if (op >= 3) {
 			return requestRandomness(request, keyOf(99), callback, [], relay[0..kept]);
 		}
@@ -280,6 +313,43 @@ when (testBuild) {
 		assert sent.accounts[0].signer && sent.accounts[0].writable;
 		assert sent.accounts[1].key.equals(identityOf(programKey())) && sent.accounts[1].signer;
 		assert u32At(sent.data, 84) == 3;
+	}
+
+	function sameInvocation(left: uint8[], right: uint8[]): boolean {
+		if (left.length != right.length) { return false; }
+		for (let index = 0; index < left.length; index++) {
+			if (left[index] != right[index]) { return false; }
+		}
+		return true;
+	}
+
+	test "the single callback account form sends the bytes of a one-account list, under try" {
+		assert requestRun(requestAccounts(identityOf(programKey())), 0) == 0;
+		const listed = invocations()[0];
+		assert requestRun(requestAccounts(identityOf(programKey())), 5) == 0;
+		const single = invocations()[0];
+		assert single.program.equals(listed.program) && single.signers == 1;
+		assert single.accounts.length == listed.accounts.length;
+		for (let index = 0; index < listed.accounts.length; index++) {
+			assert single.accounts[index].key.equals(listed.accounts[index].key);
+			assert single.accounts[index].signer == listed.accounts[index].signer;
+			assert single.accounts[index].writable == listed.accounts[index].writable;
+		}
+		assert sameInvocation(single.data, listed.data);
+		assert u32At(single.data, 84) == 1 && keyAt(single.data, 88).equals(keyOf(5));
+		assert single.data[120] == 0 && single.data[121] == 1;
+	}
+
+	test "the single callback account form signs next to a payer PDA, under signed and try" {
+		const accounts = requestAccounts(identityOf(programKey()));
+		accounts[0] = holder(vrfPayerKey(), false, true);
+		assert requestRun(accounts, 6) == 0;
+		const sent = invocations()[0];
+		assert sent.signers == 2;
+		const payer = findProgramAddressOf(programKey(), ["vrf-payer"]);
+		assert payer.ok;
+		if (payer.ok) { assert signerIs(sent, 1, [textBytes("vrf-payer"), [payer.value.bump]]); }
+		assert u32At(sent.data, 84) == 1 && keyAt(sent.data, 88).equals(keyOf(5));
 	}
 
 	function requestWith(length: int32): uint64 {
