@@ -13,7 +13,7 @@ import {
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { writeRefusal, readonlyPrefixType, readonlyRootType } from "./assignable";
-import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation, refuseSuspendingViewParam } from "./resolvePass";
+import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation, refuseSuspendingViewParam, bodyMentionsName } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { callExpandMacroInvocation, callEvalComptimeBlock } from "./checkerCallbacks";
@@ -2594,7 +2594,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 			// Contextual fallback: untyped param inherits expected param type
 			pType = ctxParamTypes[pi];
 		}
-		if (suspends) {
+		if (suspends && bodyMentionsName(body, p)) {
 			const at = paramLocs != null && pi < paramLocs.length && paramLocs[pi] != null ? paramLocs[pi] : fnNode.location;
 			refuseSuspendingViewParam(ctx, p, pType, at.line, at.column);
 		}
