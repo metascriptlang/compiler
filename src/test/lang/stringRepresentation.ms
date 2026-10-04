@@ -73,11 +73,9 @@ test "stringRepresentation: ArrayAccess === ArrayAccess across two arrays" {
 
 test "stringRepresentation: string byte views preserve contents for bound chained and empty consumers" {
 	for (const text of ["", "abc", "hello"]) {
-		const bytes = text.asBytes();
-		assert bytes.length == text.length;
-		assert bytes.asString() == text;
+		assert text.asBytes().length == text.length;
 		assert text.asBytes().asString() == text;
-		for (let i: int32 = 0; i < bytes.length; i++) assert bytes[i] == text.charCodeAt(i);
+		for (let i: int32 = 0; i < text.length; i++) assert text.asBytes()[i] == text.charCodeAt(i);
 	}
 	let sum: int32 = 0;
 	for (const byte of "xyz".asBytes()) sum += byte as int32;
@@ -136,14 +134,16 @@ test "stringRepresentation: asString result survives source realloc and heap reu
 }
 
 test "stringRepresentation: asBytes on a concat rvalue receiver" {
-	const rv = (temporaryStringJoined() + "!").asBytes();
+	const joined = temporaryStringJoined() + "!";
+	const rv = joined.asBytes();
 	assert rv.length == 6;
 	assert rv[0] == 104;
 	assert rv[5] == 33;
 }
 
 test "stringRepresentation: asBytes on a direct call rvalue receiver" {
-	const direct = temporaryStringJoined().asBytes();
+	const src = temporaryStringJoined();
+	const direct = src.asBytes();
 	assert direct.length == 5;
 	assert direct[4] == 111;
 }
@@ -224,10 +224,10 @@ test "stringRepresentation: span over a heap-built string, and a slice of that s
 	built = built + "cdc";
 	const s: Span<char> = built;
 	assert (s.length as int32) == 5;
-	assert stringSpanCount(built) == 2;
 	const inner = s[1..3];
 	assert (inner.length as int32) == 2;
 	assert (inner[0] as int32) == 98;
+	assert stringSpanCount(built) == 2;
 }
 
 test "stringRepresentation: Span<char> over a string walks with for..of" {
