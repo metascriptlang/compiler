@@ -520,6 +520,7 @@ export function mintClass(ctx: CheckerContext, node: Node): void {
 				const staticSym = makeSymbol(d.className + "." + pdm.propName, SymbolKind.Variable, inferredType(), !pdm.propIsReadonly);
 				setFlag(staticSym, SymbolFlag.Static);
 				staticSym.declNode = member;
+				member.resolvedSym = staticSym;
 				staticSym.modulePath = existing.modulePath;
 				existing.staticFields.push(staticSym);
 			}
@@ -574,6 +575,7 @@ export function fillClass(ctx: CheckerContext, node: Node): void {
 				const staticSym = makeSymbol(d.className + "." + pd.propName, SymbolKind.Variable, inferredType(), !pd.propIsReadonly);
 				setFlag(staticSym, SymbolFlag.Static);
 				staticSym.declNode = member;
+				member.resolvedSym = staticSym;
 				staticSym.modulePath = ctx.modulePath;
 				sym.staticFields.push(staticSym);
 			}
@@ -645,6 +647,7 @@ export function fillActor(ctx: CheckerContext, node: Node): void {
 				const staticSym = makeSymbol(d.actorName + "." + pd.propName, SymbolKind.Variable, inferredType(), !pd.propIsReadonly);
 				setFlag(staticSym, SymbolFlag.Static);
 				staticSym.declNode = member;
+				member.resolvedSym = staticSym;
 				staticSym.modulePath = ctx.modulePath;
 				sym.staticFields.push(staticSym);
 			}

@@ -2331,19 +2331,18 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 		} else if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (pd.propIsStatic) {
-				// Resolve static property type and update the staticFields symbol
 				let staticType = inferredType();
 				if (pd.propType != "") {
 					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
 				}
 				member.nodeType = staticType;
-				// Find matching staticFields entry and set its type
-				for (const sf of sym.staticFields) {
-					if (sf.name == d.className + "." + pd.propName) {
-						sf.symbolType = staticType;
-						sf.state = SymbolState.Shaped;
-					}
+				const sf = member.resolvedSym;
+				if (sf == null || sf.symbolKind != SymbolKind.Variable || !hasFlag(sf, SymbolFlag.Static)) {
+					addError(ctx, `internal: static field '${d.className}.${pd.propName}' has no declaration symbol`, member.location.line, member.location.column);
+				} else {
+					sf.symbolType = staticType;
+					sf.state = SymbolState.Shaped;
 				}
 			} else {
 				memberNames.push(pd.propName);
@@ -2551,11 +2550,12 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 					resolveTypeExpr(member.typeExpr, ctx);
 				}
 				member.nodeType = staticType;
-				for (const sf of sym.staticFields) {
-					if (sf.name == d.actorName + "." + pd.propName) {
-						sf.symbolType = staticType;
-						sf.state = SymbolState.Shaped;
-					}
+				const sf = member.resolvedSym;
+				if (sf == null || sf.symbolKind != SymbolKind.Variable || !hasFlag(sf, SymbolFlag.Static)) {
+					addError(ctx, `internal: static field '${d.actorName}.${pd.propName}' has no declaration symbol`, member.location.line, member.location.column);
+				} else {
+					sf.symbolType = staticType;
+					sf.state = SymbolState.Shaped;
 				}
 				continue;
 			}

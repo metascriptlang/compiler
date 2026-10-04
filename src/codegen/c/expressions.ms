@@ -1744,7 +1744,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 
 		// Static property access: emit global variable name (ClassName.prop → ClassName__prop)
 		if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.Static)) {
-			const staticCName = staticFieldCName(node.resolvedSym, node.resolvedSym.name);
+			const staticCName = staticFieldCName(node.resolvedSym);
 			// Declared in every module that reads it. The owning module also defines
 			// it, and an extern next to the definition is legal C — so this needs no
 			// knowledge of which module we are in, which a prelude symbol cannot give.

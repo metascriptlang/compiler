@@ -323,7 +323,7 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	// globals. Reachable because checkClassDecl resolves the class name to
 	// the same-named Function symbol.
 	if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function) {
-		genStaticFieldGlobals(g, d, node.resolvedSym);
+		genStaticFieldGlobals(g, d);
 		return;
 	}
 
@@ -340,10 +340,7 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	const classKey = "object:" + name;
 	const typeAlreadyDeclared = nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, classKey);
 	nameSetAdd(g.declaredThings, name);
-	genStaticFieldGlobals(g, d, node.resolvedSym);
-	const parent = node.nodeType != null ? classParentOf(node.nodeType) : null;
-	const parentInstance = parent != null && parent.kind == TypeKind.Ref ? parent.typeReturn : parent;
-	if (parentInstance != null && parentInstance.kind == TypeKind.GenericInstance) ensureTypeInfoDef(g, getTypeDesc(g, parentInstance), parentInstance);
+	genStaticFieldGlobals(g, d);
 
 	// Emit struct type definition (skip if already declared by genObjectType for generic instances)
 	if (!typeAlreadyDeclared) {
@@ -386,15 +383,7 @@ function initializerLiteralType(literal: Readonly<Node>, declType: Type | null):
 
 // Static field globals + initializer emission for a class body. Shared by the
 // normal class path and the merged callable-namespace attachment.
-function staticFieldSymOf(owner: Symbol | null, qualifiedName: string): Symbol | null {
-	if (owner == null) return null;
-	for (const sf of owner.staticFields) {
-		if (sf.name == qualifiedName) return sf;
-	}
-	return null;
-}
-
-function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>, owner: Symbol | null): void {
+function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>): void {
 	for (const member of d.classBody) {
 		const inner = member.kind == NodeKind.DecoratedDecl ? (member.data as DecoratedDeclData).decoratedNode : member;
 		if (inner != null && (inner.kind == NodeKind.MethodDecl || inner.kind == NodeKind.ConstructorDecl)) {
@@ -405,8 +394,12 @@ function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>, owner: Symbo
 		const pd = member.data as PropertyDeclData;
 		if (!pd.propIsStatic) { continue; }
 		const cType = member.nodeType != null ? getTypeDesc(g, member.nodeType) : "double";
-		const qualifiedName = d.className + "." + pd.propName;
-		const globalName = staticFieldCName(staticFieldSymOf(owner, qualifiedName), qualifiedName);
+		const fieldSym = member.resolvedSym;
+		if (fieldSym == null || !hasFlag(fieldSym, SymbolFlag.Static)) {
+			addCGenError(g, `internal: static field '${d.className}.${pd.propName}' has no declaration symbol`, member.location.line, member.location.column);
+			return;
+		}
+		const globalName = staticFieldCName(fieldSym);
 		addLine(sec(g, CSection.GlobalVars), `${cType} ${globalName};`);
 		if (pd.propInitializer != null) {
 			match (pd.propInitializer.kind) {

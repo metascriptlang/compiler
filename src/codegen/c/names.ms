@@ -231,12 +231,13 @@ export function classInitCName(classCName: string): string {
 }
 
 // Static field global name: "Counter.total" → "Counter__total__<module>"
-export function staticFieldCName(sym: Readonly<Symbol> | null, qualifiedName: string): string {
-	const dotIdx = qualifiedName.indexOf(".");
+export function staticFieldCName(sym: Readonly<Symbol>): string {
+	const name = sym.name;
+	const dotIdx = name.indexOf(".");
 	const base = dotIdx >= 0
-		? mangle(qualifiedName.slice(0, dotIdx)) + "__" + safeName(qualifiedName.slice(dotIdx + 1, qualifiedName.length))
-		: mangle(qualifiedName);
-	if (sym != null && sym.modulePath != "") return `${base}__${mangleModuleName(sym.modulePath)}`;
+		? mangle(name.slice(0, dotIdx)) + "__" + safeName(name.slice(dotIdx + 1, name.length))
+		: mangle(name);
+	if (sym.modulePath != "") return `${base}__${mangleModuleName(sym.modulePath)}`;
 	return base;
 }
 
