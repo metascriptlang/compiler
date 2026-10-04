@@ -434,7 +434,7 @@ Toolchain integration, entry points, freestanding headers, CLI automation.
 | `src/codegen/c/literals.ms` | `static const` string literals (`.rodata`, COW-safe) — correctness fix for all targets |
 | `src/checker/context.ms` | `osTarget` field on CheckerContext |
 | `src/compiler/compile.ms` | Solana toolchain setup (auto-detect BPF clang + sbpf-linker), force `--gc=manual` + release mode, graceful @compile failures, LLVM bitcode pipeline, BPF validation via `llc` |
-| `src/compiler/cc.ms` | `resolveBpfClang()`, `resolveSbpfLinker()`, `validateBpfBitcode()`, `linkSolana()` (llvm-link → sbpf-linker), `cliCompileFlags` BPF early-return with `-emit-llvm` |
+| `src/compiler/cc.ms` | `resolveBpfClang()`, `resolveSbpfLinker()`, `validateBpfBitcode()`, `linkSolana()` (`ld.lld`, after the LTO merge below), `cliCompileFlags` BPF early-return with `-emit-llvm` |
 | `src/compiler/options.ms` | `--os` target validation |
 | `src/index.ms` | Exclude bare/solana from zig cc auto-detection |
 | `std/process` | Critical fix: `exec()` now returns actual exit codes |
@@ -520,8 +520,57 @@ fails the build) and `solanaEntryHostTable.ms` (the host simulator).
     `solanaEntryHostTable.ms` guard: 3 and 255 accounts preserve the table/data/program id;
     256 returns `REFUSED` without entering the program. Command:
     `/tmp/std-solana-control-e62958002 run src/test/guard/solanaEntryHostTable.ms`; output `GUARD-OK`.
-- **Not measured.** `--passC=-flto`, which could inline the program's `Init000` into the entry and
-  add its frame to the table; a Windows host; a validator (LiteSVM only).
+- **Not measured.** A Windows host; a validator (LiteSVM only). LTO, which could have inlined the
+  program's `Init000` into the entry, is measured in the next section.
+
+### Solana programs link as one LTO module — measured 2026-10-05
+
+`--os=solana` takes `--lto=full` unless the build says `--lto=off` (`resolveLto`,
+`src/compiler/cc.ms`); `--lto=thin` is refused. Every module compiles to bitcode with `-flto`;
+`linkSolana` merges the bitcode with `ld.lld -r --lto-emit-llvm`, compiles the merged module once
+with the SBF clang at `-O2`, and links that object with `compiler_builtins` as before.
+
+- **Reference.** Anchor v2 benches its programs with `lto = "fat"` and `opt-level = 3`
+  (`anchor-next` `ff0514b6` `bench/Cargo.toml:48-52`).
+- **Why two steps.** One `ld.lld` link of the bitcode and `compiler_builtins` refuses every
+  builtins member (`libcompiler_builtins-….rlib(….rcgu.o) is incompatible with …`): lld's own LTO
+  code generator writes `Machine: Solana Bytecode Format`, while platform-tools' `compiler_builtins`
+  and the SBF clang's `-c` output are `EM_BPF`, flags `0x3` (`llvm-readelf -h`, platform-tools
+  v1.57). clang picks the input language by extension, so the merged file is named `.bc`.
+- **Why `-O2`.** A prototype that took the level from the environment, `.so` bytes and CU on
+  LiteSVM: `examples/anchorBench/helloworld.ms` 8,280 B / 2,249 CU at `-O2`, 9,576 / 2,368 at
+  `-Os`, 12,936 / 3,032 at `-Oz`; `vault.ms` 6,120 / 1,943 + 601, 6,672 / 2,098 + 662, 9,512 /
+  2,723 + 1,248; the escrow 31,592, 31,408 and 36,816 B (its CU at `-Os` and `-Oz` not measured).
+  `-Os` saves the escrow 184 bytes and loses bytes and CU on both bench programs.
+- **Frames.** An SBF function has 4,096 bytes of stack. clang reports a larger frame as
+  `Error: Function … overflows the maximum allowed frame space …` and still exits 0, so `runCc`
+  reads the message (`reportsSbfError`) and the build fails, merge step included. Inlining across
+  modules adds a callee's frame to its caller's: before the marks below, the magicblock core
+  `scheduled` overflowed by 896 bytes in `solanaAccountLists`, `solanaCpiFrame` and
+  `solanaOverloadedAggregateReturn`, and `entrypoint` by 64 in `solanaMemBuiltins`. The std cores
+  that build a CPI or an event on the stack are `@noinline` (`invokeList` in `std/solana/cpi.cms`,
+  `logEvent` in `core.cms`, `scheduled` in `magicblock.ms`, `requestRandomness` in `vrf.ms`), and
+  the emitted `MsMain` is `__attribute__((noinline))` under `--os=solana`, so the entry's frame is
+  the account table alone: the escrow's `entrypoint` is the same 11 instructions with and without
+  LTO (the table at `r10 - 0x1000`, a call to the parser, a call to `MsMain`). A CPI written beside
+  a one-byte buffer fits 51 accounts and fails the build at 52 (`solanaCpiFrame.ms`,
+  `solanaCpiFrameOverflow.ms`; 44 and 45 without LTO). `solanaGenericSize.ms` reads per-copy
+  symbol sizes and builds with `--lto=off`.
+- **Measured** on tree `e5ba345dad02` with a compiler built from it, platform-tools v1.57,
+  LiteSVM 1.4.1 with the features inactive on mainnet turned off
+  (`tools/solana/mainnetInactiveFeatures.json`), `--lto=off` → default:
+
+  | program | `.so` bytes | compute units |
+  |---|---|---|
+  | `examples/escrow/program.ms` | 45,984 → 31,600 (`.text` 45,312 → 30,992) | make 22,614 → 20,771, take 11,532 → 8,739, refund 8,344 → 6,522, the refused make 402 → 250 |
+  | `examples/anchorBench/helloworld.ms` | 12,832 → 8,288 | init 2,655 → 2,250 |
+  | `examples/anchorBench/vault.ms` | 10,264 → 6,128 | deposit 2,309 → 1,945, withdraw 885 → 602 |
+
+  `node tools/solana/escrow.mjs` passes on both escrow builds. The same `anchorBench.mjs` run on
+  Anchor v2's and Pinocchio's builds (`anchor-next` `ff0514b6`, `target/deploy`): helloworld v2
+  7,400 B / 1,438 CU, Pinocchio 9,000 / 1,735; vault v2 6,168 / 1,595 + 406, Pinocchio 5,072 /
+  1,229 + 57 (Pinocchio's vault checks no account).
+- **Not measured.** Hibernal's program; a validator; a Windows host; `-O3` in the merge step.
 
 ### Phase 3b: Module-Level DCE for Blockchain — TODO
 
