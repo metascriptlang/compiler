@@ -14,6 +14,7 @@
 // and keeps each type independently optimizable.
 
 // ===== Concurrent-access guard (Go writing-flag model) =====
+@builtin("MapFatal")
 extern function msMapFatal(msg: string): void;
 
 function hashMapEndWrite<K, V>(m: HashMap<K, V>): void { if (!m.writing) { msMapFatal("concurrent map writes"); } m.writing = false; }

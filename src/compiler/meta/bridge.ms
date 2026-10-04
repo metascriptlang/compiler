@@ -63,7 +63,7 @@ import {
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType } from "../../checker/types";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, isTypeSymbol, SymbolFlag } from "../../checker/symbol";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -619,7 +619,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
 			setStr(objHeap, handle, "name", d.name);
-			if (node.resolvedSym != null && node.flags.has(NodeFlag.BoundSym)) {
+			if (node.resolvedSym != null && (node.flags.has(NodeFlag.BoundSym) || isTypeSymbol(node.resolvedSym))) {
 				heapObjectSetField(objHeap, handle, "symHandle", raiserInt(registerBoundSym(node.resolvedSym) as int64));
 			}
 		},
@@ -936,6 +936,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStrs(objHeap, arrHeap, handle, "interfaceFields", d.interfaceFields);
 			setStrs(objHeap, arrHeap, handle, "interfaceFieldTypes", d.interfaceFieldTypes);
 			setStrs(objHeap, arrHeap, handle, "interfaceExtends", d.interfaceExtends);
+			setStrs(objHeap, arrHeap, handle, "interfaceFieldVisibility", d.interfaceFieldVisibility != null ? d.interfaceFieldVisibility : []);
 			setStr(objHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.ClassDecl => {
@@ -1768,6 +1769,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 				interfaceName, interfaceFields, interfaceFieldTypes,
 				interfaceExtends: readStrs(objHeap, arrHeap, h, "interfaceExtends"),
 				nameLocation: loc,
+				interfaceFieldVisibility: readStrs(objHeap, arrHeap, h, "interfaceFieldVisibility"),
 			}, loc);
 			decl.typeArg = readStr(objHeap, h, "typeArg");
 			return decl;
@@ -1780,6 +1782,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 				interfaceName, interfaceFields, interfaceFieldTypes,
 				interfaceExtends: readStrs(objHeap, arrHeap, h, "interfaceExtends"),
 				nameLocation: loc,
+				interfaceFieldVisibility: readStrs(objHeap, arrHeap, h, "interfaceFieldVisibility"),
 			}, loc);
 			decl.typeArg = readStr(objHeap, h, "typeArg");
 			return decl;

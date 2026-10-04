@@ -167,13 +167,13 @@ function exportersBefore(gen: JSGenerator, modulePath: string, baseName: string)
 	let before = 0;
 	for (let mi = 0; mi < gen.modExportKeys.length; mi += 1) {
 		const names = gen.modFunctionOwnerNames[mi];
-		let exports = false;
+		let routines = 0;
 		for (let ni = 0; ni < names.length; ni += 1) {
-			if (names[ni] == baseName) { exports = true; break; }
+			if (names[ni] == baseName) routines += 1;
 		}
-		if (!exports) continue;
+		if (routines == 0) continue;
 		if (gen.modExportKeys[mi] == modulePath) { return before; }
-		before += 1;
+		before += routines;
 	}
 	return -1;
 }

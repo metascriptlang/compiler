@@ -1,19 +1,20 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
+import { refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { peelTransparentInstance, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType } from "./types";
+import { peelTransparentInstance, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf } from "./symbol";
-import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags } from "./context";
+import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, findExtension } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
-	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView } from "./compat";
-import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
-import { writeRefusal, readonlyPrefixType, readonlyRootType } from "./assignable";
-import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
+	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth } from "./compat";
+import { callCheckStmt, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
+import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
+import { builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { callExpandMacroInvocation, callEvalComptimeBlock } from "./checkerCallbacks";
@@ -33,37 +34,6 @@ import { isTemplateSym, expandTemplate } from "./template";
 import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
-
-// PARALOCK Amendment I — SHARE is immutable: no write may reach through an
-// Arc<T> handle. Peels the member/index chain of a write target; the write
-// passes through every prefix's deref, so an Arc at ANY prefix position (the
-// root receiver `a.f = 1`, an interior field `holder.box.n = 1`, an indexed
-// element `a.arr[i] = 1`) makes the whole write shared-state mutation.
-// Writing the handle SLOT itself (`holder.box = otherArc`) is not affected —
-// its prefixes stop at `holder`. Member access through a Ref inserts
-// HiddenDeref (the deref node's type is the pointee), so the Arc test is
-// applied to the deref's inner expression, not the deref node.
-function writeThroughArc(target: Node): boolean {
-	let cur: Node | null = target;
-	while (cur != null) {
-		if (cur.kind == NodeKind.MemberExpr) {
-			const o = (cur.data as MemberExprData).object;
-			if (o != null && o.nodeType != null && isAtomicRef(o.nodeType)) return true;
-			cur = o;
-		} else if (cur.kind == NodeKind.ArrayAccess) {
-			const a = (cur.data as ArrayAccessData).array;
-			if (a != null && a.nodeType != null && isAtomicRef(a.nodeType)) return true;
-			cur = a;
-		} else if (cur.kind == NodeKind.HiddenDeref) {
-			const e = (cur.data as HiddenDerefData).expr;
-			if (e != null && e.nodeType != null && isAtomicRef(e.nodeType)) return true;
-			cur = e;
-		} else {
-			break;
-		}
-	}
-	return false;
-}
 
 function literalElemType(el: Node): Type | null {
 	if (el.kind != NodeKind.SpreadExpr) return el.nodeType;
@@ -123,23 +93,6 @@ function reportArcWrite(ctx: CheckerContext, target: Node): void {
 
 function reportReadonlyWrite(ctx: CheckerContext, ro: Type, verb: string, line: int32, column: int32): void {
 	addError(ctx, "cannot " + verb + " " + typeDisplayName(ro) + " — a read-only view never converts back to the mutable type (PARALOCK E24)", line, column);
-}
-
-function writeThroughGraphBackedge(target: Node): boolean {
-	let cur: Node | null = target;
-	while (cur != null) {
-		let base: Node | null = null;
-		if (cur.kind == NodeKind.MemberExpr) base = (cur.data as MemberExprData).object;
-		else if (cur.kind == NodeKind.ArrayAccess) base = (cur.data as ArrayAccessData).array;
-		else if (cur.kind == NodeKind.HiddenDeref) base = (cur.data as HiddenDerefData).expr;
-		else if (cur.kind == NodeKind.TypeAssertion) base = (cur.data as TypeAssertionData).asExpr;
-		else break;
-		if (base != null && base.nodeType != null && cur.nodeType != null
-				&& isSharedGraphType(base.nodeType) && isNodeGraphType(cur.nodeType)
-				&& cur != target) return true;
-		cur = base;
-	}
-	return false;
 }
 
 function reportSharedWrite(ctx: CheckerContext, target: Node): void {
@@ -612,6 +565,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// replaces the AST node AFTER the variable's symbol type is set.
 			markNamesUsed(ctx, node);
 			const expanded = callEvalComptimeBlock(node, ctx);
+			const staticType = expanded.nodeType;
 			let expandedValue = expanded;
 			const hoists = isHoistingSplice(ctx, node, expanded);
 			if (hoists) {
@@ -625,7 +579,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			node.resolvedSym = null;
 			node.flags = 0 as BitSet<NodeFlag>;
 			node.variantSlot = 0;
-			checkExpr(ctx, node, expectedType);
+			const valueType = expectedType != null || hoists || staticType == null || isUnresolvedType(staticType)
+				|| staticType.kind == TypeKind.Error || staticType.kind == TypeKind.Void || isNodeGraphType(staticType)
+				? expectedType : staticType;
+			checkExpr(ctx, node, valueType);
 			if (hoists) bindRefsToHoistedPrefix(node, expanded);
 			node.nodeType = node.nodeType; return;
 		},
@@ -649,6 +606,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// bindSym: the macro pre-bound this identifier in its own module's
 			// scope — the user's scope must not re-resolve (or hijack) it.
 			const sym = resolveCalleeIdent(ctx, node);
+			if (sym == null && ctx.jsxMacroArgDepth > 0) {
+				const builtin = builtinTypeNamed(ctx, d.name);
+				if (builtin != null) { node.nodeType = builtin; return; }
+			}
 			if (sym == null) {
 					addError(ctx, `Undefined variable '${d.name}'`, node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
@@ -657,7 +618,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
 			markUsedIn(ctx, sym);
+			if (refusesTypeAsValue(ctx, node, sym, d.name)) { node.nodeType = errorType(); return; }
 			if (d.name == "this" && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor)) node.data = { name: sym.name };
+			if (sym.symbolKind == SymbolKind.Function && hasFlag(sym, SymbolFlag.CompileTime) && node != ctx.calleeExpr
+					&& !isEngineCheckMode() && ctx.compileTimeBodyDepth == 0) {
+				addError(ctx, `'${d.name}' is @comptime, so it runs only while compiling: call it with compile-time arguments; it has no run-time code to reference as a value`, node.location.line, node.location.column);
+				node.nodeType = errorType(); return;
+			}
 			if (hasFlag(sym, SymbolFlag.ComptimeNodeAlias)) {
 				addError(ctx, `'${d.name}' binds a compile-time JSX/Node and can only be consumed by a macro (e.g. element(${d.name})), not used as a runtime value`, node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
@@ -726,6 +693,18 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (isAsgn && node != ctx.stmtPosExpr) {
 				addError(ctx, "assignment is a statement, not an expression - assign first, then use the variable: 'x = f(); while (x !== null) { ... }'", node.location.line, node.location.column);
 			}
+			if (d.operator == "=" && d.left.kind == NodeKind.ArrayAccess && (d.left.data as ArrayAccessData).array != null) {
+				const target = d.left.data as ArrayAccessData;
+				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
+				checkExpr(ctx, target.array, null);
+				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
+				if (target.array.nodeType != null && declaresSubscript(ctx, peelTransparentInstance(target.array.nodeType), "[]=")) {
+					const sargs: Node[] = [];
+					sargs.push(target.index);
+					sargs.push(d.right);
+					node.nodeType = rewriteAsMethodCall(ctx, node, target.array, "[]=", sargs); return;
+				}
+			}
 			if (isAsgn) {
 				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
 			}
@@ -740,6 +719,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
 			}
 			if (isAsgn) { reportSharedWrite(ctx, d.left); }
+			if (isAsgn && !isLocation(d.left) && d.left.kind != NodeKind.ArrayLiteral && d.left.kind != NodeKind.ObjectLiteral
+					&& d.left.nodeType != null && d.left.nodeType.kind != TypeKind.Error) {
+				addError(ctx, "this expression cannot be assigned to — it is not a variable, nor a field or element reached from one or through a reference", d.left.location.line, d.left.location.column);
+			}
 			// Block assignment to read-only properties
 			if (isAsgn && d.left.kind == NodeKind.MemberExpr) {
 				const md = d.left.data as MemberExprData;
@@ -763,7 +746,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const rightExpected = d.operator == "=" ? leftType : (d.operator == "??" ? nullishArmExpected(expectedType) : wideOperandLiteralSlot(d.right));
 			const rhsGuarded = d.operator == "&&" || d.operator == "||" || d.operator == "??";
 			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth + 1;
-			checkExpr(ctx, d.right, rightExpected);
+			if (d.operator == "instanceof") checkInTypeSlot(ctx, d.right);
+			else checkExpr(ctx, d.right, rightExpected);
 			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth - 1;
 			let rightType = d.right.nodeType;
 			if (!isAsgn && d.operator != "??") {
@@ -1096,13 +1080,13 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const isArithmeticOp = d.operator == "+" || d.operator == "-" || d.operator == "*"
 				|| d.operator == "/" || d.operator == "%" || d.operator == "**";
 			if (isArithmeticOp && effLeft != null && effRight != null
-				&& (!isNumeric(effLeft) || !isNumeric(effRight))
 				&& !isStringLike(effLeft) && !isStringLike(effRight)
 				&& ctx.extensionRegistry != null) {
 				const opExt = resolveOperatorCall(ctx.table, ctx.extensionRegistry, d.operator, [effLeft, effRight]);
 				if (opExt != null) {
 					const opFnType = getExtFnType(opExt);
 					if (opFnType != null && opFnType.typeReturn != null) {
+						node.flags = node.flags.incl(NodeFlag.UserOp);
 						node.nodeType = opFnType.typeReturn; return;
 					}
 				}
@@ -1263,7 +1247,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				addError(ctx, "internal: ArrayAccess with null array sub-expression", node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
 			}
-			checkExpr(ctx, d.array, null);
+			checkInTypeSlot(ctx, d.array);
 			const arrayIsFunction = isFunctionShaped(d.array.nodeType) && !valueOfInPlace(ctx, d.array);
 			let arrType = d.array.nodeType;
 			// The index is a READ even when the ArrayAccess is on an assignment
@@ -1336,6 +1320,25 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.flags = node.flags.excl(NodeFlag.Sem);
 				node.nodeType = null;
 				node.nodeType = checkCallExpr(ctx, node, null); return;
+			}
+			const subscriptRecv = subscriptOperandOf(arrType);
+			if (subscriptRecv != null && (declaresSubscript(ctx, arrType, "[]") || declaresSubscript(ctx, arrType, "[]="))) {
+				if (ctx.initTracker.leftPartOfAsgn > 0) {
+					addError(ctx, "'[]' of '" + typeDisplayName(subscriptRecv) + "' returns a value, so this subscript cannot be assigned to — only 'x[i] = v' writes, through a declared '[]='", node.location.line, node.location.column);
+					node.nodeType = errorType(); return;
+				}
+				if (!declaresSubscript(ctx, arrType, "[]")) {
+					addError(ctx, "type '" + typeDisplayName(subscriptRecv) + "' has no '[]' operator", node.location.line, node.location.column);
+					node.nodeType = errorType(); return;
+				}
+				const sargs: Node[] = [];
+				sargs.push(d.index);
+				node.nodeType = rewriteAsMethodCall(ctx, node, d.array, "[]", sargs); return;
+			}
+			if (subscriptRecv != null && !hasGenericParams(subscriptRecv)
+					&& (subscriptRecv.kind == TypeKind.Struct || subscriptRecv.kind == TypeKind.Boolean || isNumeric(subscriptRecv))) {
+				addError(ctx, "type '" + typeDisplayName(subscriptRecv) + "' has no '[]' operator", node.location.line, node.location.column);
+				node.nodeType = errorType(); return;
 			}
 			// reference array: deref Ref<Array> so element-type + nativeLower/codegen see the value array
 			if (arrType.kind == TypeKind.Ref && arrType.typeReturn != null && arrType.typeReturn.kind == TypeKind.Array) {
@@ -1490,6 +1493,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// (unsubstituted base) until we reach a Struct or Union. Handle nested
 			// GenericInstance (e.g., MyResult<T, E> = Ref<MyData<T, E>> where MyData
 			// is itself generic) by recursing through GI/Ref wrappers.
+			const literalOwnerSym = declaringSymOf(objExpected);
 			objExpected = peelToStructOrUnion(objExpected);
 			// A generic-containing expected type (un-instantiated formal like
 			// `{ v: T }` at a call site whose T is still unbound) must NOT be
@@ -1568,6 +1572,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					if (fieldExpected != null) {
 						d.properties[fi] = fitNode(ctx, d.properties[fi], fieldExpected, d.properties[fi].nodeType);
 					}
+					refuseHiddenFieldInLiteral(ctx, literalOwnerSym != null ? literalOwnerSym : objE.sym, keyName, d.properties[fi], node, d, fi);
 					// Record property key as reference to struct field
 					if (fi < d.keys.length && d.keyLocations != null && fi < d.keyLocations.length && fieldExpected != null) {
 						const keyLoc = d.keyLocations[fi];
@@ -1989,6 +1994,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			checkExpr(ctx, d.asExpr, innerExpected);
 			reportConstCast(ctx, d.asExpr, targetType);
 			let srcType = d.asExpr.nodeType;
+			const operandType = srcType;
+			const operandNode = d.asExpr;
+			let viaConverter = false;
 			// Record type annotation position for LSP
 			resolveTypeExpr(node.typeExpr, ctx);
 			if (srcType != null && srcType.kind == TypeKind.Function && targetType.kind == TypeKind.Function) {
@@ -2031,6 +2039,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& !slotTakesValue(srcType, targetType)) {
 				const asCall = convertsWithoutRoutine(srcType, targetType) ? null : tryApplyConverter(ctx, d.asExpr, srcType, targetType);
 				if (asCall != null) {
+					viaConverter = true;
 					node.data = { asExpr: asCall, asType: d.asType };
 					d = node.data as TypeAssertionData;
 					srcType = asCall.nodeType;
@@ -2098,6 +2107,16 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				} else if (targetBare.kind == TypeKind.CString) {
 					addError(ctx, "cannot cast unknown to cstring — unknown holds objects, never a C string; keep a C string as cstring or Ptr<void>", asLoc.line, asLoc.column);
 				}
+			}
+			if (operandType != null && !viaConverter && !reportedErrorSince(ctx, operandMark)) {
+				const adopted = tryAdoptAnonStruct(ctx, operandNode, targetType, operandType);
+				if (adopted != null as unknown as Node) {
+					node.data = { asExpr: adopted, asType: d.asType };
+					node.nodeType = targetType;
+					return;
+				}
+				if (reportedErrorSince(ctx, operandMark)) return;
+				if (refuseUnrelatedStructAs(ctx, operandNode, operandType, targetType, asLoc.line, asLoc.column)) return;
 			}
 			const objConv = reportedErrorSince(ctx, operandMark) ? ObjConv.None : objectConversion(srcType, targetType);
 			if (objConv == ObjConv.BadTarget) {
@@ -2280,11 +2299,14 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 					node.nodeType = errorType(); return;
 				}
+				const friends = expansionOf(ctx, node, macroSym.modulePath);
+				const friendScope = befriend(ctx, friends);
 				let expandedValue = expanded;
 				const hoists = isHoistingSplice(ctx, node, expanded);
 				if (hoists) {
 					expandedValue = unwrapSpliceManyAtExpr(ctx, node, expanded);
 					if (expandedValue == null) {
+						unfriend(friendScope, friends);
 						ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 						node.nodeType = errorType(); return;
 					}
@@ -2296,7 +2318,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				node.resolvedSym = null;
 				node.flags = 0 as BitSet<NodeFlag>;
 				node.variantSlot = 0;
+				if (node.kind == NodeKind.SpliceMany) markExpansion(ctx, node, friends);
 				checkExpr(ctx, node, expectedType);
+				unfriend(friendScope, friends);
 				if (hoists) bindRefsToHoistedPrefix(node, expanded);
 				ctx.macroExpansionDepth = ctx.macroExpansionDepth - 1;
 				node.nodeType = node.nodeType; return;
@@ -2392,6 +2416,22 @@ function resolveSuper(ctx: CheckerContext, node: Node): Type {
 // `obj.setDynamicField("foo", x)`). After mutation, checkCallExpr resolves
 // the extension method and validates argument types. Returns the call's
 // inferred type.
+function subscriptOperandOf(receiver: Type | null): Type | null {
+	const peeled = skipModifier(receiver);
+	if (peeled == null) return null;
+	const t = unwrapRefBase(peeled);
+	if (isStringLike(t) || isIndexableMapType(t)) return null;
+	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span || t.kind == TypeKind.Ptr
+			|| t.kind == TypeKind.Tuple || t.kind == TypeKind.CString) return null;
+	return t;
+}
+
+function declaresSubscript(ctx: CheckerContext, receiver: Type | null, op: string): boolean {
+	const t = subscriptOperandOf(receiver);
+	if (t == null || ctx.extensionRegistry == null) return false;
+	return findExtension(ctx.extensionRegistry, typeNameOf(t), op) != null;
+}
+
 function rewriteAsMethodCall(ctx: CheckerContext, node: Node, receiver: Node, methodName: string, args: Node[]): Type {
 	const tok = createToken(TokenKind.Ident, "", node.location.line);
 	const member: NodeData = { object: receiver, property: methodName, isOptional: false };
@@ -2903,6 +2943,46 @@ function createSyntheticToken(loc: SourceLocation): Token {
 // Register callback at module load time
 registerCheckExpr((ctx: CheckerContext, node: Node, expectedType: Type | null): void => { checkExpr(ctx, node, expectedType); });
 
+
+function structBehindConversion(t: Type | null): Type | null {
+	let s = skipModifier(t) ?? t;
+	let depth = 0;
+	while (s != null && s.kind == TypeKind.Distinct && s.typeReturn != null && depth < 16) {
+		s = s.typeReturn;
+		depth += 1;
+	}
+	return s != null && s.kind == TypeKind.Struct ? s : null;
+}
+
+function refuseUnrelatedStructAs(ctx: CheckerContext, operand: Node, srcType: Type, targetType: Type, line: int32, column: int32): boolean {
+	if (operand.kind == NodeKind.ObjectLiteral) return false;
+	const target = structBehindConversion(targetType);
+	const source = structBehindConversion(srcType.kind == TypeKind.Ref && srcType.typeReturn != null ? srcType.typeReturn : srcType);
+	if (target == null || source == null || !isValueStructDecl(target)) return false;
+	if (sameNominal(source, target) || valueStructBaseDepth(source, target) > 0 || valueStructBaseDepth(target, source) > 0) return false;
+	addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + ": a struct converts only to itself, a distinct of it, or a struct it extends", line, column);
+	return true;
+}
+
+function refuseHiddenFieldInLiteral(ctx: CheckerContext, ownerSym: Symbol | null, key: string, value: Node, literal: Node, d: ObjectLiteralData, index: int32): void {
+	let line = literal.location.line;
+	let column = literal.location.column;
+	if (d.keyLocations != null && index < d.keyLocations.length && d.keyLocations[index].line > 0) {
+		line = d.keyLocations[index].line;
+		column = d.keyLocations[index].column;
+	}
+	if (key == "...") {
+		const spreadSource = value.kind == NodeKind.SpreadExpr ? (value.data as SpreadExprData).spreadArg : value;
+		const srcOwner = declaringSymOf(spreadSource.nodeType);
+		const src = peelToStructOrUnion(spreadSource.nodeType);
+		if (src == null || src.kind != TypeKind.Struct || src.typeNames == null) return;
+		const hidden = hiddenPrivateField(ctx, srcOwner, src.typeNames);
+		if (hidden != "") refusePrivateField(ctx, srcOwner, hidden, value.location.line, value.location.column);
+		return;
+	}
+	if (key == "" || key == "__computed__") return;
+	refusePrivateField(ctx, ownerSym, key, line, column);
+}
 
 test "a write target crossing a graph back-edge is rejected" {
 	const graphT = createRef(createStruct("Symbol", [], [], false));

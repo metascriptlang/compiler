@@ -343,7 +343,7 @@ function rewriteMemberExpr(node: Node): Node {
 //   ["a", "b"] on string[]  →  CallExpr("msStringArrayFromArr", [2, "a", "b"])
 //                              (codegen rewrites to stack-local array + msStringArrayFromArr(arr, N)
 //                               — avoids variadic 16-byte struct ABI bug on aarch64-windows-gnu)
-// Other types (number[], object[], ref[]) stay as ArrayLiteral for codegen's Temp+Push pattern.
+// Other types (number[], object[], ref[]) stay as ArrayLiteral; codegen sizes their payload once.
 
 function rewriteArrayLiteral(node: Node): Node {
 	const d = node.data as ArrayLiteralData;

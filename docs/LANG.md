@@ -311,6 +311,24 @@ int       float     double                       (reserved, not yet usable as ty
 | `\|>` | PIPE_GT | Pipeline operator |
 | `sizeof` | SIZEOF | Size of Type in bytes |
 
+### Overloading an operator
+
+A function named by the operator in backticks, with the left operand as its `this`
+receiver, overloads that operator for its operand types:
+
+```ms
+export function `/`(this a: int32, b: int32): int32 { return a * 100 + b; }
+export function `/=`(this ref a: int32, b: int32): void { a = -a - b; }
+export function `%`(this a: int64, b: int64): int64 { return 77; }
+```
+
+On a built-in type a compound assignment is its own operator: `c /= b` calls a declared
+`/=`, and declaring `%` alone leaves `n %= v` on the built-in `%`. With the declarations
+above and `a = 10`, `b = 3` (`int32`), `w = 10`, `v = 3` (`int64`), `a / b`, `c /= b`,
+`w % v` and `n %= v` print `div=1003 divAssign=-13 modOnly=77 modAssign=1` on C and JS
+(corpus `compoundOperatorOverload`). Raiser does not apply a user overload on a built-in
+type yet and prints the built-in results.
+
 ### Punctuation
 | Token | Description |
 |-------|-------------|

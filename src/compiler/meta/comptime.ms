@@ -72,6 +72,7 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 	// (no ctx, e.g. evaluateComptimeBlocks): top-level statements, body
 	// must be self-contained.
 	let ctx: RaiserContext | null;
+	let staticType: Type | null = null;
 	if (checkerCtx != null) {
 		const fnBody = createNode(NodeKind.BlockStmt, { statements: finalStmts }, synthToken(loc));
 		const emptyDefaults: Node[] = [];
@@ -89,6 +90,7 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 		pushActiveMetaCtx(checkerCtx, loc.line, loc.column);
 		ctx = evalProgramViaEngine(program, checkerCtx, "__comptimeBody");
 		popActiveMetaCtx();
+		staticType = comptimeFn.nodeType != null ? comptimeFn.nodeType.typeReturn : null;
 	} else {
 		const program = createNode(NodeKind.Program, { programStmts: finalStmts }, synthToken(loc));
 		ctx = evalASTFull(program);
@@ -107,6 +109,7 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 
 	// Convert VM result back to an AST literal
 	const result = valueToNode(ctx.lastResult, ctx.objectHeap, ctx.arrayHeap, loc);
+	result.nodeType = staticType as unknown as Type;
 
 	// Reclaim VM heaps — prevents monotonic growth during long builds
 	clearObjectHeap(ctx.objectHeap);

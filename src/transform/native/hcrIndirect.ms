@@ -2,6 +2,7 @@ import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, BlockStmtData,
 import { exportedFunctionOf } from "../../checker/decoratorHelpers";
 import { hasGenericParams, createPtr, createStruct, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { isGenericFn } from "../../checker/context";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName } from "../../codegen/c/names";
 import { isNrvoReturnType, opCName } from "../../codegen/c/types";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
@@ -37,8 +38,8 @@ export function hcrFunctions(program: Node, aliveSet: Readonly<AliveSet>, module
 		if (fn == null || !functionDeclIsAlive(aliveSet, modulePath, fn)) continue;
 		const d = fn.data as FunctionDeclData;
 		const sym = fn.resolvedSym;
-		if (d.fnBody == null || d.fnFlags.indexOf("extern", 0) >= 0 || fn.nodeType == null || hasGenericParams(fn.nodeType)) continue;
-		if (sym != null && (hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.OverloadSig))) continue;
+		if (d.fnBody == null || d.fnFlags.indexOf("extern", 0) >= 0 || fn.nodeType == null || hasGenericParams(fn.nodeType) || isGenericFn(d.fnFlags)) continue;
+		if (sym != null && (hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.CompileTime))) continue;
 		const symbol = mangledFunctionName(sym, d.fnName, sym != null ? sym.overloadIdx : 0);
 		if (facts.genericOwners.has(symbol) && facts.genericOwners.readonlyGet(symbol) != modulePath) continue;
 		if (seen.has(symbol)) continue;

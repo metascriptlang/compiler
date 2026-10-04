@@ -105,3 +105,4 @@ import "./cases/awaitUnaryOperand";
 import "./cases/yieldArgument";
 import "./cases/matchCaseCommas";
 import "./cases/nestedTypeArgsWritten";
+import "./cases/structPrivateField";
