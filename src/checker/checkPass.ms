@@ -627,7 +627,8 @@ function checkStmtNode(ctx: CheckerContext, node: Node): void {
 		NodeKind.MatchStmt => checkMatchStmt(ctx, node),
 		NodeKind.DeferStmt => {
 			const d = node.data as DeferStmtData;
-			checkExpr(ctx, d.deferExpr, null);
+			if (d.deferExpr.kind == NodeKind.BlockStmt) checkBlock(ctx, d.deferExpr);
+			else checkExpr(ctx, d.deferExpr, null);
 		},
 		NodeKind.DecoratedDecl => checkDecoratedStmt(ctx, node),
 		NodeKind.DestructuringDecl => checkDestructuringDecl(ctx, node),
