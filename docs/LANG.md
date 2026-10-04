@@ -2799,6 +2799,15 @@ see [Raiser's measured location matrix](RAISER.md#memory-model). Raw-pointer
 escape and invalidation by storage growth remain unchecked, not covered by
 that matrix.
 
+The suspension result above is not a general lifetime-safety claim. On
+2026-10-04–05, tree `3bde5de03042d08b3af9df5a71abcb25f09b37fd`, the shared-machine
+SAN run (`MSCORPUS_SAN=1 MSCORPUS_ONLY=928-stateMachineClosureShares`, candidate
+as `MSC`) reports a new closure/frame leak: `alloc=3 destroy=2` for the
+generator's closure environment; the immutable `0f1ecc06` compiler passes.
+Retaining an owning closure in the frame it captures forms the cycle.
+A direct `--gc=orc` build with `--passC="-DMS_SLAB_MAX=0 -DMS_DRC_LEDGER"`
+balances that environment (3/3); this does not establish safety under DRC.
+
 Rejected: a refusal of only the direct `Span<T> as Ptr<U>` cast on JS — an intermediate typed
 pointer (`span as Ptr<T> as Ptr<void> as Ptr<uint8>`) bypassed it, and the Raiser VM (including
 `@comptime`) read the element object as the byte (`r1 [object]`, a comptime fold of `258`'s first
