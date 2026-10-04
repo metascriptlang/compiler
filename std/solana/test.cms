@@ -25,9 +25,18 @@ import {
 	Program,
 	Signer,
 	Writable,
+	Delegated,
+	delegated,
+	pdaWithBump,
+	pubkeyOf,
+	instructionData,
+	ProgramAddress,
+	Bytes,
+	borshBuffer,
 } from "./index";
 import { HostAccount, logs, run } from "./host";
 import { accounts, args, emitEvent, instruction } from "./macro";
+import { anchorIdl } from "./idl";
 
 
 export struct Counter {
@@ -221,6 +230,32 @@ test "instruction dispatch reads Anchor discriminators and Borsh arguments" {
 	assert made.result == ProgramError.custom(76).code;
 	const taken = run(programKey(), none, instructionBytes("TakeAll", []), dispatchEntry);
 	assert taken.result == 0;
+}
+
+export struct UploadArgs {
+	index: uint16;
+	chunk: Bytes;
+}
+
+function uploadStep(): Result<uint64, ProgramError> {
+	const upload = try args<UploadArgs>();
+	const last = try upload.chunk.readU8(upload.chunk.length - 1);
+	const code = (upload.index as uint32) * 1000 + (upload.chunk.length as uint32) * 10;
+	return Result.err(ProgramError.custom(code + (last as uint32)));
+}
+
+function uploadEntry(): void { codeOf(uploadStep()); }
+
+test "args<T>() reads a trailing Bytes field as Borsh's length-prefixed bytes" {
+	const none: HostAccount[] = [];
+	const upload = instructionBytes("Upload", [3, 0, 4, 0, 0, 0, 9, 8, 7, 6]);
+	assert run(programKey(), none, upload, uploadEntry).result == ProgramError.custom(3046).code;
+	const short = instructionBytes("Upload", [3, 0, 5, 0, 0, 0, 9, 8, 7, 6]);
+	assert run(programKey(), none, short, uploadEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
+	const noLength = instructionBytes("Upload", [3, 0, 4, 0]);
+	assert run(programKey(), none, noLength, uploadEntry).result ==
+		ProgramError.instructionDidNotDeserialize().code;
 }
 
 test "dispatch refuses short data, an unknown instruction and short or invalid arguments" {
@@ -446,4 +481,168 @@ test "transferLamports moves lamports through the System program" {
 	assert accounts[0].lamports == 700 && accounts[1].lamports == 305;
 	const poor = [wallet(1, 100), wallet(2, 5)];
 	assert run(programKey(), poor, [], payEntry).result != 0;
+}
+
+function delegationProgramKey(): Pubkey {
+	return @comptime { return pubkeyOf("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"); };
+}
+
+function counterAddress(): ProgramAddress {
+	const derived = counterSeeds().findProgramAddress(programKey());
+	if (derived.ok) { return derived.value; }
+	return { key: Pubkey.zero(), bump: 0 };
+}
+
+function delegatedCounter(key: Pubkey, owner: Pubkey, bytes: uint8[]): HostAccount {
+	return { ...holder(1, owner, bytes, false, false), key: key };
+}
+
+function delegatedEntry(): void {
+	const found = delegated<Counter>(0);
+	if (!found.ok) {
+		failWith(found.error);
+		return;
+	}
+	if (found.value.data().value != 41) { failWith(ProgramError.invalidAccountData()); }
+}
+
+function delegatedPdaStep(): Result<uint8, ProgramError> {
+	const found = try delegated<Counter>(0);
+	const pinned = try instructionData().readU8(0);
+	if (pinned == 0) { return pda(found, counterSeeds()); }
+	return pdaWithBump(found, counterSeeds(), pinned);
+}
+
+function delegatedPdaEntry(): void { codeOf(delegatedPdaStep()); }
+
+test "a delegated verifier checks the delegation program as owner, then discriminator and size" {
+	const tag = counterTag();
+	const dlp = delegationProgramKey();
+	const undelegated = [holder(1, programKey(), counterBytes(tag, 41, 48), false, false)];
+	assert run(programKey(), undelegated, [], delegatedEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+	const empty = [holder(1, dlp, [1, 2], false, false)];
+	assert run(programKey(), empty, [], delegatedEntry).result ==
+		ProgramError.accountDiscriminatorNotFound().code;
+	const other = accountDiscriminator("Other");
+	const mismatched = [holder(1, dlp, counterBytes(other, 41, 48), false, false)];
+	assert run(programKey(), mismatched, [], delegatedEntry).result ==
+		ProgramError.accountDiscriminatorMismatch().code;
+	const short = [holder(1, dlp, counterBytes(tag, 41, 20), false, false)];
+	assert run(programKey(), short, [], delegatedEntry).result ==
+		ProgramError.accountDidNotDeserialize().code;
+	const good = [holder(1, dlp, counterBytes(tag, 41, 48), false, false)];
+	assert run(programKey(), good, [], delegatedEntry).result == 0;
+}
+
+test "a delegated account must sit at the program's PDA, with the canonical or the given bump" {
+	const bytes = counterBytes(counterTag(), 41, 48);
+	const dlp = delegationProgramKey();
+	const address = counterAddress();
+	const atPda = [delegatedCounter(address.key, dlp, bytes)];
+	const canonical: uint8[] = [0];
+	assert run(programKey(), atPda, canonical, delegatedPdaEntry).result == 0;
+	const elsewhere = [delegatedCounter(keyOf(7), dlp, bytes)];
+	assert run(programKey(), elsewhere, canonical, delegatedPdaEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const given: uint8[] = [address.bump];
+	assert run(programKey(), atPda, given, delegatedPdaEntry).result == 0;
+	const wrongBump: uint8[] = [address.bump - 1];
+	assert run(programKey(), atPda, wrongBump, delegatedPdaEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+export struct ClaimAccounts {
+	owner: Signer;
+	pet: Delegated<Counter>;
+}
+
+function claimStep(): Result<uint64, ProgramError> {
+	const x = try accounts<ClaimAccounts>();
+	const _bump = try pda(x.pet, counterSeeds());
+	return Result.ok(x.pet.data().value);
+}
+
+function claimEntry(): void {
+	const result = claimStep();
+	if (!result.ok) { failWith(result.error); }
+}
+
+test "accounts<T>() verifies a Delegated<T> field like delegated<T>()" {
+	const bytes = counterBytes(counterTag(), 41, 48);
+	const owner = holder(2, keyOf(9), [], true, false);
+	const pet = delegatedCounter(counterAddress().key, delegationProgramKey(), bytes);
+	assert run(programKey(), [owner, pet], [], claimEntry).result == 0;
+	const undelegated = delegatedCounter(counterAddress().key, programKey(), bytes);
+	assert run(programKey(), [owner, undelegated], [], claimEntry).result ==
+		ProgramError.accountOwnedByWrongProgram().code;
+}
+
+test "borshBuffer writes Borsh little-endian fields and refuses a write past its capacity" {
+	const written = borshBuffer(14).u64(0x0102030405060708).bool(true).i32(-2).u8(9).written();
+	assert written.ok;
+	if (written.ok) {
+		const view = written.value;
+		assert view.length == 14;
+		const expected: uint8[] = [8, 7, 6, 5, 4, 3, 2, 1, 1, 254, 255, 255, 255, 9];
+		for (let index = 0; index < 14; index++) {
+			const byte = view.readU8(index as uint64);
+			assert byte.ok && byte.value == expected[index];
+		}
+	}
+	const keyed = borshBuffer(32).pubkey(keyOf(7)).written();
+	assert keyed.ok && keyed.value.length == 32;
+	const over = borshBuffer(8).u64(1).u8(2).written();
+	assert !over.ok;
+	const after = borshBuffer(8).u64(1).u8(2).u8(3).written();
+	assert !after.ok;
+}
+
+export enum GaugeOp {
+	Bump,
+}
+
+export struct Gauge {
+	level: uint16;
+	spare: uint16;
+}
+
+export enum GaugeMode {
+	Idle,
+	Hot,
+	Cold,
+}
+
+export struct Meter {
+	total: uint64;
+	gauges: Gauge[2];
+	modes: BitSet<GaugeMode>;
+	owner: Pubkey;
+	tags: uint8[3];
+}
+
+test "anchorIdl describes nested structs as defined types and fixed arrays as arrays" {
+	const idl = anchorIdl<GaugeOp>({
+		name: "gauges",
+		address: "",
+		Bump: [BumpAccounts],
+		accounts: [Meter],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const types = parsed.value.types;
+		assert types.length() == 2;
+		assert types.at(0).name.asString() == "Meter";
+		const gauges = types.at(0).type.fields.at(1).type.array;
+		assert gauges.at(0).defined.name.asString() == "Gauge" && gauges.at(1).asInt32() == 2;
+		assert types.at(0).type.fields.at(2).type.asString() == "u8";
+		const tags = types.at(0).type.fields.at(4).type.array;
+		assert tags.at(0).asString() == "u8" && tags.at(1).asInt32() == 3;
+		assert types.at(1).name.asString() == "Gauge";
+		assert types.at(1).serialization.asString() == "bytemuck";
+		assert types.at(1).type.fields.at(1).type.asString() == "u16";
+	}
 }

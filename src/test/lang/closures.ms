@@ -40,7 +40,7 @@ function applyToEach(arr: number[], f: NumFn): number[] {
 }
 
 function makeCounter(): NumFn {
-	let count = 0;
+	let count: number = 0;
 	return (inc: number): number => {
 		count += inc;
 		return count;

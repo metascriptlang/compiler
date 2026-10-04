@@ -148,6 +148,10 @@ export enum RaiserOpcode {
 	StrByteLen,
 	Sleep,
 	ArraySlice,       // ABC: R[A] = view of R[B] over [R[C], R[C+1]), bounds checked
+	BltU64,           // ABC: if R[A] < R[B] as uint64, skip C
+	BleU64,           // ABC: if R[A] <= R[B] as uint64, skip C
+	DivU64,           // ABC: R[A] = R[B] / R[C] as uint64
+	ModU64,           // ABC: R[A] = R[B] % R[C] as uint64
 }
 
 export enum RaiserConvClass {
@@ -160,6 +164,20 @@ export enum RaiserConvClass {
 	U32,
 	U16,
 	U8,
+	F32,
+	Str,
+}
+
+export function convOperand(to: RaiserConvClass, from: int32): int32 {
+	return (to as int32) | ((from + 1) << 4);
+}
+
+export function convTarget(c: number): RaiserConvClass {
+	return ((c as int32) & 15) as RaiserConvClass;
+}
+
+export function convSource(c: number): int32 {
+	return ((c as int32) >> 4) - 1;
 }
 
 export function convClassBits(cls: RaiserConvClass): int32 {

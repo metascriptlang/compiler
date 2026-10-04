@@ -159,6 +159,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 				d.casePatterns[i] = f(d.casePatterns[i]);
 				i += 1;
 			}
+			if (d.caseGuard != null) { d.caseGuard = f(d.caseGuard); }
 			d.caseBody = f(d.caseBody);
 		},
 		// Declarations with bodies

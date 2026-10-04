@@ -21,10 +21,15 @@
     "405-lockedSharedCounter": {"since":"3a5b991e","note":"hangs at random: green on [danger] and [san] while [drc] hit cell TIMEOUT after 300s in the same run, 2026-09-21"},
     "410-awaitStructSpawnStored": {"since":"e5f0ec68","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; installed msc e5f0ec68 hung 4 of 5 default runs, and [drc]/[orc] hit cell TIMEOUT after 300s while [danger] passed in the same run, 2026-09-24"},
     "419-leakSendMovedArgAsync": {"since":"3a5b991e","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; cell TIMEOUT after 300s on [danger], 2026-09-21"},
-    "746-spawnStoredUnawaited": {"since":"22d2cb8f","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; [danger] cell TIMEOUT after 300s at load ~45 with every thread in msSpawnWorkerRun → write; a --danger build by the origin/main 24422bf5 compiler hung 3 of 48 runs under 60s at load ~20, 2026-09-25"}
+    "746-spawnStoredUnawaited": {"since":"22d2cb8f","note":"hangs at random, card 2026-09-19-corpus-419-danger-hangs-at-random.md; [danger] cell TIMEOUT after 300s at load ~45 with every thread in msSpawnWorkerRun → write; a --danger build by the origin/main 24422bf5 compiler hung 3 of 48 runs under 60s at load ~20, 2026-09-25"},
+    "src/codegen/raiser/eval.ms > engine: a float32 rounds after every operation that produces one": {"since":"e3f842ce","note":"fails at random, card 2026-10-03-raiser-eval-tests-flake.md; one binary of main e3f842ce + wt/std-solana went 3 green / 2 red over 5 runs of eval.ms at load 30-60, 2026-10-03"},
+    "src/codegen/raiser/eval.ms > engine: two sleepers wake in deadline order, not spawn order": {"since":"e3f842ce","note":"fails at random, card 2026-10-03-raiser-eval-tests-flake.md; same 5 runs as the float32 case, wall-clock deadlines under load 30-60, 2026-10-03"}
   },
   "fmt": {},
-  "guard": {},
+  "guard": {
+    "moveIntoBorrowParam [drc]": {"since":"4573591e","note":"x is destroyed after look(move x) into a borrowing param: C prints '  +4z+' for 'a+++4z+'. Red again on origin/main c441aebe+ (an origin/main build, macOS, 2026-10-04) after b5857d025 dropped the entry as green; card 2026-09-30-move-into-borrow-param-destroys-source.md"},
+    "moveIntoBorrowParam [orc]": {"since":"4573591e","note":"x is destroyed after look(move x) into a borrowing param: C prints '  +4z+' for 'a+++4z+'. Red again on origin/main c441aebe+ (an origin/main build, macOS, 2026-10-04) after b5857d025 dropped the entry as green; card 2026-09-30-move-into-borrow-param-destroys-source.md"}
+  },
   "hcr": {},
   "san": {
     "704-macroExprHoist [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"},

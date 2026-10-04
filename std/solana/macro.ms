@@ -3,6 +3,8 @@ import { eventDiscriminator, instructionDiscriminator } from "./discriminator";
 import {
 	argBool,
 	argBoolValid,
+	argBytes,
+	argBytesFit,
 	argI16,
 	argI32,
 	argI64,
@@ -13,6 +15,7 @@ import {
 	argU64,
 	argU8,
 	argsFit,
+	delegatedAccount,
 	eventWriter,
 	exclusiveWritable,
 	mutableAccount,
@@ -105,9 +108,17 @@ export macro args(): Node {
 		if (typeName == "uint64") { width = 8; reader = bindSym("argU64"); }
 		if (typeName == "int64") { width = 8; reader = bindSym("argI64"); }
 		if (typeName == "Pubkey") { width = 32; reader = bindSym("argPubkey"); }
+		if (typeName == "Bytes") {
+			if (field != shape.typExprFieldNames.length - 1) {
+				error("args<T>(): Bytes field '" + shape.typExprFieldNames[field] +
+					"' must be the last field: Borsh prefixes it with its length", shape);
+			}
+			width = 4;
+			reader = bindSym("argBytes");
+		}
 		if (reader == null) {
 			error("args<T>(): field '" + shape.typExprFieldNames[field] +
-				"' is not fixed-size plain data (sized integer, boolean or Pubkey)", shape);
+				"' is not a sized integer, boolean, Pubkey or a last Bytes field", shape);
 		}
 		const at: Node = {
 			kind: NodeKind.NumberLiteral,
@@ -128,12 +139,12 @@ export macro args(): Node {
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
 		});
-		if (typeName == "boolean") {
+		if (typeName == "boolean" || typeName == "Bytes") {
 			checks.push({
 				kind: NodeKind.CallExpr,
 				line: shape.line,
 				column: shape.column,
-				callee: bindSym("argBoolValid"),
+				callee: typeName == "Bytes" ? bindSym("argBytesFit") : bindSym("argBoolValid"),
 				arguments: [at],
 				isDirectCall: false,
 				resolvedOverloadIdx: -1,
@@ -252,8 +263,10 @@ export macro accounts(): Node {
 				resolvedOverloadIdx: -1,
 			}];
 		}
-		if (base == "Owned" || base == "Mutable") {
-			callee = base == "Owned" ? bindSym("ownedAccount") : bindSym("mutableAccount");
+		if (base == "Owned" || base == "Mutable" || base == "Delegated") {
+			callee = bindSym("ownedAccount");
+			if (base == "Mutable") { callee = bindSym("mutableAccount"); }
+			if (base == "Delegated") { callee = bindSym("delegatedAccount"); }
 			const discriminator: Node = {
 				kind: NodeKind.CallExpr,
 				line: line,
@@ -351,7 +364,7 @@ export macro accounts(): Node {
 			error("accounts<T>(): field '" + decl.interfaceFields[field] + "' has type '" +
 				written + "'; use Signer, WritableSigner, Writable, SystemAccount, Account, " +
 				"Program<P>, " +
-				"Owned<T>, Mutable<T>, External<T> or ExternalMutable<T>", shape);
+				"Owned<T>, Mutable<T>, Delegated<T>, External<T> or ExternalMutable<T>", shape);
 		}
 		values.push({
 			kind: NodeKind.TypeAssertion,

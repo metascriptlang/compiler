@@ -658,6 +658,7 @@ export function computeAliveSet(
 	nameIndexBuild(programs, paths);
 	declIndexBuild(programs, paths);
 	aliveSetAddModule(_aliveSet, entryPath);
+	const globalDestroys: GlobalDestroysBlock[] = [];
 
 	// For each module, find roots and mark them alive
 	for (let m = 0; m < programs.length; m += 1) {
@@ -731,6 +732,10 @@ export function computeAliveSet(
 				const ed = bare.data as ExportDeclData;
 				if (ed.exportedDecl != null) initStmt = ed.exportedDecl;
 			}
+			if (bare.kind == NodeKind.BlockStmt && bare.flags.has(NodeFlag.GlobalDestroys)) {
+				globalDestroys.push({ modulePath, block: bare, walked: false });
+				continue;
+			}
 			if (isTopLevelStatement(initStmt)) {
 				walkBody(bare, modulePath);
 				continue;
@@ -754,7 +759,27 @@ export function computeAliveSet(
 	}
 
 	markImportedModulesAlive(graph);
+	while (markAliveGlobalDestroys(globalDestroys)) markImportedModulesAlive(graph);
 	return takeReachability();
+}
+
+interface GlobalDestroysBlock {
+	modulePath: string;
+	block: Node;
+	walked: boolean;
+}
+
+// A module's global destroys are no root: they run only in a module that is alive for another
+// reason, so a module holding nothing but globals stays dead.
+function markAliveGlobalDestroys(pending: GlobalDestroysBlock[]): boolean {
+	let walked = false;
+	for (const entry of pending) {
+		if (entry.walked || !aliveSetHasModule(_aliveSet, entry.modulePath)) continue;
+		entry.walked = true;
+		walkBody(entry.block, entry.modulePath);
+		walked = true;
+	}
+	return walked;
 }
 
 function takeReachability(): AliveSet {

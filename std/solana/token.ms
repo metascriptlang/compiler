@@ -6,18 +6,28 @@ import {
 	Instruction,
 	Program,
 	ProgramAddress,
-	ProgramError,
-	Pubkey,
 	Seeds,
 	Signer,
 	System,
 	Writable,
 	WritableSigner,
+	createProgramAccount,
+	programId,
 	unchecked,
 } from "./core";
+import { ProgramError } from "./error";
+import { Pubkey } from "./pubkey";
 
 when (testBuild) {
-	import { account, failWith, instructionData, logU64, readArgs } from "./core";
+	import {
+		account,
+		failWith,
+		instructionData,
+		logU64,
+		readArgs,
+		writable,
+		writableSigner,
+	} from "./core";
 	import { HostAccount, invocations, logs, run } from "./host";
 	import { accounts } from "./macro";
 }
@@ -33,6 +43,17 @@ export struct Mint {
 	supply: uint64;
 	decimals: uint8;
 	freezeAuthority: Pubkey | null;
+}
+
+export struct GroupMemberPointer {
+	authority: Pubkey | null;
+	memberAddress: Pubkey | null;
+}
+
+export struct TokenGroupMember {
+	mint: Pubkey;
+	group: Pubkey;
+	memberNumber: uint64;
 }
 
 export struct TokenAccount {
@@ -243,6 +264,30 @@ export function mintExtension(
 	return extensionIn(data, kind);
 }
 
+function maybeNull(key: Pubkey): Pubkey | null {
+	if (key.isZero()) { return null; }
+	return key;
+}
+
+export function groupMemberPointer(this account: Account): Result<GroupMemberPointer, ProgramError> {
+	const bytes = try account.mintExtension(ExtensionType.GroupMemberPointer);
+	if (bytes.length != 64) { return Result.err(ProgramError.invalidArgument()); }
+	return Result.ok({
+		authority: maybeNull(try bytes.readPubkey(0)),
+		memberAddress: maybeNull(try bytes.readPubkey(32)),
+	});
+}
+
+export function tokenGroupMember(this account: Account): Result<TokenGroupMember, ProgramError> {
+	const bytes = try account.mintExtension(ExtensionType.TokenGroupMember);
+	if (bytes.length != 72) { return Result.err(ProgramError.invalidArgument()); }
+	return Result.ok({
+		mint: try bytes.readPubkey(0),
+		group: try bytes.readPubkey(32),
+		memberNumber: try bytes.readU64(64),
+	});
+}
+
 export function tokenAccountExtension(
 	this account: Account,
 	kind: ExtensionType,
@@ -262,6 +307,28 @@ function tokenInstruction(
 ): Result<Instruction, ProgramError> {
 	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
 	return Result.ok(Instruction.forProgram(program, accountCount, dataLength));
+}
+
+export function createMintPda(
+	payer: WritableSigner,
+	mint: Writable,
+	seeds: Seeds,
+	program: Pubkey,
+	decimals: uint8,
+	mintAuthority: Pubkey,
+	freezeAuthority: Pubkey | null,
+): Result<uint8, ProgramError> {
+	const target = mint as Account;
+	if ((payer as Account).key() == target.key()) {
+		return Result.err(ProgramError.tryingToInitPayerAsProgramAccount());
+	}
+	const found = try seeds.findProgramAddress(programId());
+	if (found.key != target.key()) { return Result.err(ProgramError.constraintSeeds()); }
+	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
+	const signer = seeds.withBump(found.bump);
+	const _created = try createProgramAccount(payer as Account, target, 82, program, signer);
+	const _initialized = try initializeMint2(program, target, decimals, mintAuthority, freezeAuthority);
+	return Result.ok(found.bump);
 }
 
 export function initializeMint2(
@@ -606,6 +673,10 @@ when (testBuild) {
 	}
 
 	function mint2022Data(): uint8[] {
+		return memberMintData(keyOf(33), 64);
+	}
+
+	function memberMintData(authority: Pubkey, pointerLength: int32): uint8[] {
 		const bytes = mintData(5, 1, 0);
 		pushZeros(bytes, 83);
 		bytes.push(1);
@@ -613,9 +684,15 @@ when (testBuild) {
 		pushU16(bytes, 64);
 		pushZeros(bytes, 64);
 		pushU16(bytes, 22);
-		pushU16(bytes, 64);
-		pushKey(bytes, keyOf(33));
+		pushU16(bytes, pointerLength as uint64);
+		pushKey(bytes, authority);
 		pushKey(bytes, keyOf(44));
+		pushZeros(bytes, pointerLength - 64);
+		pushU16(bytes, 23);
+		pushU16(bytes, 72);
+		pushKey(bytes, keyOf(1));
+		pushKey(bytes, keyOf(55));
+		pushU64(bytes, 4242);
 		return bytes;
 	}
 
@@ -665,6 +742,21 @@ when (testBuild) {
 			const member = try holder.mintExtension(ExtensionType.GroupMemberPointer);
 			logU64(member.length);
 			logU64(try member.readU64(32));
+			return Result.ok(0);
+		}
+		if (op == 5) {
+			const pointer = try holder.groupMemberPointer();
+			const authority = pointer.authority;
+			const member = pointer.memberAddress;
+			if (authority === null) { logU64(0); } else { logU64(wordAt(authority, 0)); }
+			if (member !== null) { logU64(wordAt(member, 0)); }
+			return Result.ok(0);
+		}
+		if (op == 6) {
+			const member = try holder.tokenGroupMember();
+			logU64(wordAt(member.mint, 0));
+			logU64(wordAt(member.group, 0));
+			logU64(member.memberNumber);
 			return Result.ok(0);
 		}
 		const kind = op == 3 ? ExtensionType.TransferHook : ExtensionType.ImmutableOwner;
@@ -739,6 +831,25 @@ when (testBuild) {
 		assert resultOf(accounts, 4, readerEntry) == ProgramError.invalidAccountData().code;
 		const plain = single(Pubkey.token2022Program(), mintData(5, 1, 0));
 		assert resultOf(plain, 3, readerEntry) == ProgramError.custom(48).code;
+	}
+
+	test "groupMemberPointer and tokenGroupMember decode Token-2022's layouts" {
+		const accounts = single(Pubkey.token2022Program(), mint2022Data());
+		assert resultOf(accounts, 5, readerEntry) == 0;
+		assert logs()[0] == logged("0x21") && logs()[1] == logged("0x2c");
+		assert resultOf(accounts, 6, readerEntry) == 0;
+		assert logs()[0] == logged("0x1") && logs()[1] == logged("0x37");
+		assert logs()[2] == logged("0x1092");
+		const unset = single(Pubkey.token2022Program(), memberMintData(Pubkey.zero(), 64));
+		assert resultOf(unset, 5, readerEntry) == 0;
+		assert logs()[0] == logged("0x0") && logs()[1] == logged("0x2c");
+	}
+
+	test "a group member pointer of another length is refused, as bytemuck refuses it" {
+		const longer = single(Pubkey.token2022Program(), memberMintData(keyOf(33), 65));
+		assert resultOf(longer, 5, readerEntry) == ProgramError.invalidArgument().code;
+		const plain = single(Pubkey.tokenProgram(), mintData(5, 1, 0));
+		assert resultOf(plain, 6, readerEntry) == ProgramError.invalidAccountOwner().code;
 	}
 
 	function cpiStep(): Result<uint64, ProgramError> {
@@ -849,6 +960,67 @@ when (testBuild) {
 		const program = created.accounts[5];
 		assert program.key.equals(Pubkey.tokenProgram()) && !program.writable;
 		assert created.data.length == 1 && created.data[0] == 1;
+	}
+
+	function mintSeeds(): Seeds {
+		return Seeds.empty(1).addText("mint");
+	}
+
+	function mintPdaStep(): Result<uint64, ProgramError> {
+		const op = try instructionData().readU8(0);
+		const program = op == 0 ? Pubkey.tokenProgram() : Pubkey.systemProgram();
+		const payer = try writableSigner(0);
+		const mint = try writable(1);
+		const bump = try createMintPda(payer, mint, mintSeeds(), program, 6, keyOf(7), null);
+		return Result.ok(bump as uint64);
+	}
+
+	function mintPdaEntry(): void {
+		const result = mintPdaStep();
+		if (!result.ok) { failWith(result.error); }
+	}
+
+	function mintPdaAccounts(mintKey: Pubkey): HostAccount[] {
+		const payer: HostAccount = {
+			...holderOf(1, Pubkey.systemProgram(), []),
+			lamports: 10000000,
+			signer: true,
+		};
+		const mint: HostAccount = {
+			...holderOf(2, Pubkey.systemProgram(), []),
+			key: mintKey,
+			lamports: 0,
+		};
+		return [payer, mint];
+	}
+
+	function mintKey(): Pubkey {
+		const found = mintSeeds().findProgramAddress(keyOf(9));
+		if (found.ok) { return found.value.key; }
+		return Pubkey.zero();
+	}
+
+	test "createMintPda creates the mint at its PDA for the token program, then initializes it" {
+		const accounts = mintPdaAccounts(mintKey());
+		assert resultOf(accounts, 0, mintPdaEntry) == 0;
+		assert accounts[1].owner.equals(Pubkey.tokenProgram()) && accounts[1].data.length == 82;
+		assert accounts[1].lamports > 0;
+		const created = invocations()[0];
+		assert created.program.equals(Pubkey.systemProgram()) && created.data[0] == 0;
+		assert created.data[12] == 82 && created.signers == 1;
+		const initialized = invocations()[1];
+		assert initialized.program.equals(Pubkey.tokenProgram());
+		assert initialized.accounts.length == 1 && initialized.accounts[0].key.equals(mintKey());
+		assert initialized.data[0] == 20 && initialized.data[1] == 6 && initialized.data[2] == 7;
+		assert initialized.data[34] == 0;
+	}
+
+	test "createMintPda refuses another address and a program that is not a token program" {
+		assert resultOf(mintPdaAccounts(keyOf(3)), 0, mintPdaEntry) ==
+			ProgramError.constraintSeeds().code;
+		assert resultOf(mintPdaAccounts(mintKey()), 1, mintPdaEntry) ==
+			ProgramError.incorrectProgramId().code;
+		assert invocations().length == 0;
 	}
 
 	test "a CPI to a program that is not a token program is refused before it is sent" {

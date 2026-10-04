@@ -347,14 +347,25 @@ function msSliceSpan(v: unknown, start: number, end: number): unknown {
 
 @compilerFunc
 function msArrayAt(a: unknown, i: int64): unknown {
-	@emit(`if (!(${i} >= 0 && ${i} < ${a}.length)) throw new Error("index " + ${i} + " out of bounds (length " + ${a}.length + ")");
-	return ${a}[${i}];`);
+	@emit(`const _a = ${a}, _i = ${i};
+	if (!(_i >= 0 && _i < _a.length)) throw new Error("index " + _i + " out of bounds (length " + _a.length + ")");
+	return _a[_i];`);
 	unreachable;
 }
 
 @compilerFunc
 function msChkArray(a: unknown, i: int64): unknown {
-	@emit(`if (!(${i} >= 0 && ${i} < ${a}.length)) throw new Error("index " + ${i} + " out of bounds (length " + ${a}.length + ")");
-	return ${a};`);
+	@emit(`const _a = ${a}, _i = ${i};
+	if (!(_i >= 0 && _i < _a.length)) throw new Error("index " + _i + " out of bounds (length " + _a.length + ")");
+	return _a;`);
+	unreachable;
+}
+
+@compilerFunc
+function msChkStore(a: unknown, i: int64, v: unknown): unknown {
+	@emit(`const _a = ${a}, _i = ${i}, _v = ${v};
+	if (!(_i >= 0 && _i < _a.length)) throw new Error("index " + _i + " out of bounds (length " + _a.length + ")");
+	_a[_i] = _v;
+	return _v;`);
 	unreachable;
 }

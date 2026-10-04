@@ -58,7 +58,7 @@ import { walkNode, mapChildren } from "../../transform/walker";
 import { hasGenericParams } from "../../checker/types";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
-import { rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf } from "../../checker/callResolve";
+import { rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
 import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
@@ -69,8 +69,8 @@ import { RaiserContext } from "../../raiser/context";
 import { RaiserVM } from "../../raiser/vm";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
-import { valueToNode, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType } from "./bridge";
-import { ensureShaped } from "../../checker/resolvePass";
+import { valueToNode, takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType } from "./bridge";
+import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
 import { addWarning } from "../../checker/context";
 
@@ -865,8 +865,6 @@ function hasUserMacroInvocation(node: Node | null, ctx: CheckerContext): boolean
 	const k = node.kind;
 
 	if (k == NodeKind.MacroInvocation) {
-		const d = node.data as MacroInvocationData;
-		if (isBuiltinDirective(d.macroName)) return false;
 		return invokedMacroSym(ctx, node) != null;
 	}
 
@@ -1466,10 +1464,6 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			if (boundSym.symbolKind != SymbolKind.Macro) {
 				ensureShaped(boundSym, bindCtx);
 			}
-			if (hasGenericParams(boundSym.symbolType)) {
-				addError(ctx, `Macro '${macroName}': bindSym('${symName}') refers to a generic symbol — bind a concrete one (V1)`, node.location.line, node.location.column);
-				return node;
-			}
 			const bloc = node.location;
 			const bkeys: string[] = ["kind", "line", "column", "name", "symHandle"];
 			const bvalues: Node[] = [
@@ -1573,6 +1567,13 @@ interface MacroBuild {
 let _macroBuilds: HashMap<Symbol, MacroBuild[]> = new HashMap<Symbol, MacroBuild[]>();
 let _macroBuildsCtx: CheckerContext = null as unknown as CheckerContext;
 
+function errorsSince(ctx: CheckerContext, mark: int32): boolean {
+	for (let i = mark; i < ctx.errors.length; i += 1) {
+		if (ctx.errors[i].severity == Severity.Error) return true;
+	}
+	return false;
+}
+
 function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym: Symbol, macroName: string, decl: MacroDeclData, typeArg: string): CompiledMacro | null {
 	if (_macroBuildsCtx != ctx) {
 		_macroBuilds = new HashMap<Symbol, MacroBuild[]>();
@@ -1591,7 +1592,12 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	// body is shared by every call site, and getTypeArg() resolves per site.
 	let workBody = body;
 	if (typeArg != "") workBody = cloneNodeForCheck(body);
+	const bakeMark = ctx.errors.length;
 	bakeTypeIntrinsics(workBody, ctx, macroSym, macroName, typeArg);
+	if (errorsSince(ctx, bakeMark)) {
+		builds.push({ typeArg, compiled: null });
+		return null;
+	}
 	body = workBody;
 
 	const loc = body.location;
@@ -1658,8 +1664,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: int32): Node {
 	const d = node.data as MacroInvocationData;
 
-	// Built-in directives pass through unchanged
-	if (isBuiltinDirective(d.macroName)) return node;
+	if (isDirectiveInvocation(node)) return node;
 
 	// Not a known user macro — leave it alone (could be parsed but undefined)
 	const macroSym = invokedMacroSym(ctx, node);
@@ -1707,9 +1712,11 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		}
 	}
 
+	if (node.typeArg != "") resolveAnnotation(node.typeArg, ctx, node.location.line, node.location.column);
+	const compileMark = ctx.errors.length;
 	const cm = getOrCompileMacro(ctx, regCtx, macroSym, d.macroName, decl, node.typeArg);
 	if (cm == null) {
-		addError(ctx, `Macro '${d.macroName}' evaluator unavailable`, node.location.line, node.location.column);
+		if (!errorsSince(ctx, compileMark)) addError(ctx, `Macro '${d.macroName}' evaluator unavailable`, node.location.line, node.location.column);
 		return node;
 	}
 	const vm = cm.vm;
@@ -1792,6 +1799,10 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 
 	// Deserialize result
 	let result = valueToNode(vmCtx.lastResult, vmCtx.objectHeap, vmCtx.arrayHeap, node.location);
+	for (const refusal of takeWireRefusals()) {
+		const at = refusal.location.line > 0 ? refusal.location : node.location;
+		addError(ctx, `Macro '${d.macroName}': ${refusal.message}`, at.line, at.column);
+	}
 
 	// Reclaim VM heaps
 	clearObjectHeap(vmCtx.objectHeap);

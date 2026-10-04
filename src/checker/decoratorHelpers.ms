@@ -11,6 +11,7 @@ export interface DecoratorInfo {
 	compilerFunc: boolean;
 	throws: boolean;
 	borrow: boolean;
+	compileTime: boolean;
 }
 
 const passThroughDirectives: string[] = [
@@ -149,6 +150,7 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 	let isCompilerFunc = false;
 	let canThrow = false;
 	let borrows = false;
+	let atCompileTime = false;
 	for (let i = 0; i < dd.decorators.length; i += 1) {
 		const dec = dd.decorators[i];
 		if (dec.kind != NodeKind.MacroInvocation) continue;
@@ -156,6 +158,7 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 		if (name == "compilerFunc") isCompilerFunc = true;
 		if (name == "throws") canThrow = true;
 		if (name == "delegate") borrows = true;
+		if (name == "comptime") atCompileTime = true;
 	}
 	const exportDec = exportNameDecorator(dd.decorators);
 	const exportName = exportDec != null ? exportNameOf(exportDec, dd.decoratedNode) : "";
@@ -175,5 +178,6 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 		compilerFunc: isCompilerFunc,
 		throws: canThrow,
 		borrow: borrows,
+		compileTime: atCompileTime,
 	};
 }

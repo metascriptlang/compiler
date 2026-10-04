@@ -23,7 +23,7 @@ import {
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance,
 	nullableUnionOf, hasGenericParams,
-	isAtomicRef, peelToStructOrUnion, typeofTagOf, isTypeofTag,
+	isAtomicRef, peelToStructOrUnion, typeofTagOf, isTypeofTag, isNumeric,
 } from "./types";
 import { typeRelation, TypeRelation, sameType } from "./compat";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
@@ -1167,9 +1167,16 @@ function skipHiddenConv(n: Node): Node {
 	let walk: Node = n;
 	while (walk != null
 			&& (walk.kind == NodeKind.HiddenSubConv || walk.kind == NodeKind.HiddenStdConv)) {
-		walk = (walk.data as HiddenStdConvData).convExpr;
+		const inner = (walk.data as HiddenStdConvData).convExpr;
+		if (walk.kind == NodeKind.HiddenStdConv && convertsNumber(walk, inner)) return walk;
+		walk = inner;
 	}
 	return walk;
+}
+
+function convertsNumber(conv: Node, inner: Node): boolean {
+	return conv.nodeType != null && isNumeric(conv.nodeType) && inner != null && inner.nodeType != null
+		&& isNumeric(inner.nodeType) && inner.nodeType.kind != conv.nodeType.kind;
 }
 
 function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): Type | null {

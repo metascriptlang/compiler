@@ -11,17 +11,19 @@ import {
 	System,
 	Writable,
 	WritableSigner,
+	accounts,
+	args,
 	close,
 	createPda,
 	expectAddress,
 	expectHasOne,
 	externalMutable,
 	failWith,
+	instruction,
 	pdaWithBump,
 	readArgs,
 	selectInstruction,
 } from "std/solana";
-import { accounts, args, instruction } from "std/solana/macro";
 import {
 	Mint,
 	TokenAccount,

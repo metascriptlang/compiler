@@ -33,6 +33,14 @@
 
 #include "runtime/types.h"
 
+#ifndef MS_LIB_PRIVATE
+#if defined(_WIN32)
+#define MS_LIB_PRIVATE
+#else
+#define MS_LIB_PRIVATE __attribute__((visibility("hidden")))
+#endif
+#endif
+
 /* ===== RefHeader (same layout as drc.h) ===== */
 
 typedef struct {

@@ -540,24 +540,23 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 			const md = m.data as MethodDeclData;
 			// Lifecycle hooks — NOT message-dispatched. Emit as standalone _impl.
 			if (md.methodName == "onTerminate" || md.methodName == "onExit" || md.methodName == "onDown" || md.methodName == "onIdle") {
-				const implNativeName = name + "_" + md.methodName + "_impl";
+				const implName = name + "_" + md.methodName + "_impl";
 				const implNode = createNode(NodeKind.FunctionDecl, {
-					fnName: implNativeName,
+					fnName: implName,
 					params: md.methodParams,
 					fnParamTypes: md.methodParamTypes,
 					fnBody: md.methodBody,
 					fnFlags: "",
 					fnReturnType: "void",
 					fnDefaults: [],
-					nativeName: implNativeName,
+					nativeName: "",
 					nameLocation: md.nameLocation,
 				}, syntheticToken(loc));
 				implNode.nodeType = m.nodeType;
 				implNode.typeExprs = m.typeExprs;
 				implNode.paramLocations = m.paramLocations;
 				implNode.paramSyms = m.paramSyms;
-				const implSym = mintSym(ctx, SymbolKind.Function, implNativeName, m.nodeType != null ? m.nodeType : noneType());
-				implSym.nativeName = implNativeName;
+				const implSym = mintSym(ctx, SymbolKind.Function, implName, m.nodeType != null ? m.nodeType : noneType());
 				implNode.resolvedSym = implSym;
 				recordActorImpl(ctx, m, implSym);
 				result.push(implNode);
@@ -576,27 +575,26 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 				console.log(`warning: actor method '${name}.${md.methodName}' has ${argCount} args (max ${MS_MSG_MAX_ARGS} for inline message buffer)`);
 			}
 
-			// _impl handler: original body, nativeName for predictable C name.
+			// _impl handler: original body.
 			// Phase 5: skip if already extracted by lowerActorPre (sentinel "async_actor").
-			const implNativeName = name + "_" + md.methodName + "_impl";
+			const implName = name + "_" + md.methodName + "_impl";
 			if (md.methodFlags != "async_actor") {
 				const implNode = createNode(NodeKind.FunctionDecl, {
-					fnName: implNativeName,
+					fnName: implName,
 					params: md.methodParams,
 					fnParamTypes: md.methodParamTypes,
 					fnBody: wrapImplBodyWithShareRelease(md.methodBody, m, m.nodeType != null ? m.nodeType.typeChildren : null, isVoid, ctx, loc),
 					fnFlags: md.methodFlags,
 					fnReturnType: md.methodReturnType,
 					fnDefaults: [],
-					nativeName: implNativeName,
+					nativeName: "",
 					nameLocation: md.nameLocation,
 				}, syntheticToken(loc));
 				implNode.nodeType = m.nodeType;
 				implNode.typeExprs = m.typeExprs;
 				implNode.paramLocations = m.paramLocations;
 				implNode.paramSyms = m.paramSyms;
-				const implSym = mintSym(ctx, SymbolKind.Function, implNativeName, m.nodeType != null ? m.nodeType : noneType());
-				implSym.nativeName = implNativeName;
+				const implSym = mintSym(ctx, SymbolKind.Function, implName, m.nodeType != null ? m.nodeType : noneType());
 				implNode.resolvedSym = implSym;
 				if (m.nodeType != null) markValueLayoutParamsAsMutated(implSym, m.nodeType.typeChildren);
 				recordActorImpl(ctx, m, implSym);
@@ -680,7 +678,7 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 				fnFlags: "",
 				fnReturnType: "void",
 				fnDefaults: cd.ctorDefaults,
-				nativeName: name + "_constructor",
+				nativeName: "",
 				nameLocation: loc,
 			}, syntheticToken(loc));
 			// Build proper Function type with actor Ref as first param (codegen needs it for Watchdog* this)
@@ -691,7 +689,6 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 			}
 			fnNode.nodeType = createFunction(ctorTypeChildren, ctorParams, voidType());
 			const ctorSym = mintSym(ctx, SymbolKind.Function, name + "_constructor", fnNode.nodeType);
-			ctorSym.nativeName = name + "_constructor";
 			fnNode.resolvedSym = ctorSym;
 			lowered.ctor = ctorSym;
 			fnNode.typeExprs = m.typeExprs;
@@ -705,26 +702,25 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 // ===== Emit dispatch function =====
 
 function emitActorDispatch(d: ActorDeclData, name: string, actorType: Type, methods: Node[], ctx: TransformContext, loc: SourceLocation): Node {
-	const dispatchNativeName = name + "_dispatch";
+	const dispatchName = name + "_dispatch";
 	const dispatchParamSyms = actorParamSyms(ctx, ["this", "_dmsg"], [createPtr(voidType()), createPtr(voidType())]);
 	const dispatchBody = buildDispatchBody(methods, actorType, dispatchParamSyms[0], dispatchParamSyms[1], ctx, loc);
 	const fnNode = createNode(NodeKind.FunctionDecl, {
-		fnName: dispatchNativeName,
+		fnName: dispatchName,
 		params: ["this", "_dmsg"],
 		fnParamTypes: [name, "void"],
 		fnBody: dispatchBody,
 		fnFlags: "",
 		fnReturnType: "void",
 		fnDefaults: [],
-		nativeName: dispatchNativeName,
+		nativeName: "",
 		nameLocation: d.nameLocation,
 	}, syntheticToken(loc));
 	// Build Function type so codegen emits prototype (nodeType=null → skipped)
 	const dispatchType = createFunction([createPtr(voidType()), createPtr(voidType())], ["this", "_dmsg"], voidType());
 	fnNode.nodeType = dispatchType;
 	fnNode.paramSyms = dispatchParamSyms;
-	const dispatchSym = mintSym(ctx, SymbolKind.Function, dispatchNativeName, dispatchType);
-	dispatchSym.nativeName = dispatchNativeName;
+	const dispatchSym = mintSym(ctx, SymbolKind.Function, dispatchName, dispatchType);
 	setFlag(dispatchSym, SymbolFlag.NeverRaises);
 	fnNode.resolvedSym = dispatchSym;
 	return fnNode;
@@ -846,13 +842,12 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 			fnName: sysHandlerName, params: ["this", "_smsg"],
 			fnParamTypes: [name, "void"], fnBody: sysHandlerBody,
 			fnFlags: "", fnReturnType: "void", fnDefaults: [],
-			nativeName: sysHandlerName, nameLocation: d.nameLocation,
+			nativeName: "", nameLocation: d.nameLocation,
 		}, syntheticToken(loc));
 		const sysType = createFunction([createPtr(voidType()), createPtr(voidType())], ["this", "_smsg"], voidType());
 		sysHandlerNode.nodeType = sysType;
 		sysHandlerNode.paramSyms = sysParamSyms;
 		const sysSym = mintSym(ctx, SymbolKind.Function, sysHandlerName, sysType);
-		sysSym.nativeName = sysHandlerName;
 		sysHandlerNode.resolvedSym = sysSym;
 		result.push(sysHandlerNode);
 		lowered.sysMsg = sysSym;
@@ -1095,7 +1090,7 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 			if (!isAsync) continue;
 
 			// Extract as top-level FunctionDecl with fnFlags: "async"
-			const implNativeName = name + "_" + md.methodName + "_impl";
+			const implName = name + "_" + md.methodName + "_impl";
 			// Plain-ref MOVE release now covers ASYNC void methods too: the
 			// release wrapper puts the body in try/finally, and try×await
 			// splits since the finallyPath port (corpus 420) — the finally
@@ -1104,14 +1099,14 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 			// sender's frame), so they still pass isVoid=false.
 			const implVoid = md.methodReturnType == "" || md.methodReturnType == "void";
 			const implNode = createNode(NodeKind.FunctionDecl, {
-				fnName: implNativeName,
+				fnName: implName,
 				params: md.methodParams,
 				fnParamTypes: md.methodParamTypes,
 				fnBody: wrapImplBodyWithShareRelease(md.methodBody, m, m.nodeType != null ? m.nodeType.typeChildren : null, implVoid, ctx, actorNode.location),
 				fnFlags: "async",
 				fnReturnType: md.methodReturnType,
 				fnDefaults: [],
-				nativeName: implNativeName,
+				nativeName: "",
 				nameLocation: md.nameLocation,
 			}, syntheticToken(actorNode.location));
 			// Wrap return type in Promise<T> so asyncBridge can extract the inner type.
@@ -1129,8 +1124,7 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 			implNode.typeExprs = m.typeExprs;
 			implNode.paramLocations = m.paramLocations;
 			implNode.paramSyms = m.paramSyms;
-			const implSym = mintSym(ctx, SymbolKind.Function, implNativeName, implType != null ? implType : noneType());
-			implSym.nativeName = implNativeName;
+			const implSym = mintSym(ctx, SymbolKind.Function, implName, implType != null ? implType : noneType());
 			implNode.resolvedSym = implSym;
 			recordActorImpl(ctx, m, implSym);
 			extracted.push(implNode);

@@ -3,8 +3,6 @@
 import {
 	AccountMeta,
 	Clock,
-	ProgramError,
-	Pubkey,
 	Seeds,
 	account,
 	clock,
@@ -14,6 +12,8 @@ import {
 	transfer,
 	writableAccount,
 } from "./core";
+import { ProgramError } from "./error";
+import { Pubkey } from "./pubkey";
 
 extern function msSolHostInput(size: uint64): uint64;
 extern function msSolHostEnter(input: uint64): void;

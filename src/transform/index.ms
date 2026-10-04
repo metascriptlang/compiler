@@ -97,7 +97,7 @@ import { lowerNullable } from "./native/nullableLower";
 import { projectNarrowedUnions, checkVariantReadsJS } from "./native/unionProjectLower";
 import { unwrapMaybe } from "./native/maybeUnwrap";
 import { lowerDCE } from "./analysis/dce";
-import { liftDestructors, liftEqualityOps } from "./lowering/destructorLifting";
+import { liftDestructors } from "./lowering/destructorLifting";
 import { lowerPowerAssert } from "./powerAssert";
 import { lowerRestParams } from "./lowering/restParamLower";
 import { lowerActorPre, lowerActor } from "./lowering/actorLower";
@@ -133,7 +133,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerForLoop(result, ctx); }
 	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);
-	if (jsBackend) { result = lowerResultConstructors(result); }
+	result = lowerResultConstructors(result);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);
@@ -214,8 +214,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	// pass that can request an enum has already run, and DCE cannot sweep a
 	// definition whose only reference is a call the lowerings just created.
 	if (jsBackend) { result = lowerEnumToString(result, ctx); }
-	if (!jsBackend) { result = liftDestructors(result, ctx); }
-	if (jsBackend) { result = liftEqualityOps(result, ctx); }
+	result = liftDestructors(result, ctx, !jsBackend);
 	if (jsBackend) { result = dropLocalTypeLift(result, checkerCtx); }
 	return result;
 }

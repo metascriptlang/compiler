@@ -28,12 +28,12 @@
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, MemberExprData, ArrayAccessData, CallExprData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, cloneIdent, runtimeRef, makeMember, makeArrayAccess, makeNumber, makeHiddenDeref, makeHiddenAddr } from "../util";
+import { makeBinary, makeCall, cloneIdent, runtimeRef, makeMember, makeArrayAccess, makeNumber, makeHiddenDeref, makeHiddenAddr, isRuntimeProcCall } from "../util";
 import { truncateTo, isIntConvKind } from "./intConvJS";
 
 export function lowerIntArithJS(program: Node, ctx: TransformContext): Node {
@@ -311,5 +311,25 @@ export function cloneIfPure(node: Node): Node | null {
 		c.nodeType = node.nodeType;
 		return c;
 	}
+	if (node.kind == NodeKind.CallExpr && isCompilerCheckCall(node)) {
+		const d = node.data as CallExprData;
+		const args: Node[] = [];
+		for (const a of d.arguments) {
+			const c = cloneIfPure(a);
+			if (c == null) return null;
+			args.push(c);
+		}
+		const c = makeCall(cloneIdent(d.callee, node.location), args, node.location);
+		c.nodeType = node.nodeType;
+		c.resolvedSym = node.resolvedSym;
+		return c;
+	}
 	return null;
+}
+
+// A bound check the access lowering injected re-runs nothing the program can
+// observe, so a checked read stays clonable while its own operands are.
+function isCompilerCheckCall(node: Node): boolean {
+	return isRuntimeProcCall(node, "msChkIndex") || isRuntimeProcCall(node, "msChkArray")
+		|| isRuntimeProcCall(node, "msArrayAt") || isRuntimeProcCall(node, "msSpanAt");
 }

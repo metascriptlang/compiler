@@ -2,9 +2,9 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, createNode, createNodeAt } from "../ast/node";
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
+import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH } from "./types";
@@ -59,6 +59,11 @@ export function joinBranchTypes(types: Type[]): Type {
 	}
 	if (prepared.length == 0) return inferredType();
 	if (prepared.length == 1) return prepared[0];
+	let allStrings = true;
+	for (const p of prepared) {
+		if (!isStringLike(p)) { allStrings = false; break; }
+	}
+	if (allStrings) return stringType();
 	let allNumeric = true;
 	for (const p of prepared) {
 		if (!isNumeric(p) && p.kind != TypeKind.Enum) { allNumeric = false; break; }
@@ -679,6 +684,41 @@ export function literalAdoptsFloat32(lit: Node): boolean {
 	return (lit.data as NumberLiteralData).isFloat || (isNodeIntLit(lit) && intLiteralExactInFloat(lit, createPrimitive(TypeKind.Float32)));
 }
 
+export function constantAdoptsFloat32(expr: Node): Node {
+	const none = null as unknown as Node;
+	if (expr.kind == NodeKind.NumberLiteral || !isUntypedConstant(expr, 0)) return none;
+	const folded = foldedNumber(expr);
+	if (folded == null || !literalAdoptsFloat32(folded)) return none;
+	folded.nodeType = createPrimitive(TypeKind.Float32);
+	return folded;
+}
+
+export function compoundOperandRefuses(op: string, target: Type | null, operand: Type | null): boolean {
+	if (target == null || operand == null || !isNumeric(target) || !isNumeric(operand)) return false;
+	if (op == "<<=" || op == ">>=" || op == ">>>=" || op == "&&=" || op == "||=" || op == "??=" || op == "=" || compoundBase(op) == op) return false;
+	return numericConvRefuses(operand, target);
+}
+
+export function reportCompoundOperand(ctx: CheckerContext, op: string, target: Node, operand: Node, from: Type, to: Type): void {
+	const inferred = inferredFromInteger(target);
+	if (inferred == "") {
+		reportNumericConvConstAware(ctx, operand, from, to, " in '" + op + "'");
+		return;
+	}
+	addError(ctx, "implicit " + typeDisplayName(from) + " → " + typeDisplayName(to) + " conversion in '" + op + "' " + numericRefusalReason(from, to)
+		+ " — '" + inferred + "' is " + typeDisplayName(to) + ", inferred from its integer initializer; declare it '" + inferred + ": " + typeDisplayName(from)
+		+ "', or write an explicit 'as " + typeDisplayName(to) + "'", operand.location.line, operand.location.column);
+}
+
+function inferredFromInteger(target: Node): string {
+	if (target.kind != NodeKind.Identifier || target.resolvedSym == null || target.resolvedSym.declNode == null) return "";
+	const decl = target.resolvedSym.declNode;
+	if (decl.kind != NodeKind.VariableDecl) return "";
+	const vd = decl.data as VariableDeclData;
+	if (vd.declType != "" || vd.initializer == null || !isUntypedIntegerConstant(vd.initializer, 0)) return "";
+	return target.resolvedSym.name;
+}
+
 export function isFittingIntLiteral(expr: Node, target: Type): boolean {
 	if (isNodeIntLit(expr)) return literalFitsInType(expr, target, false);
 	if (expr.kind == NodeKind.UnaryExpr) {
@@ -1218,6 +1258,14 @@ export function isSlotUnion(t: Type): boolean {
 	return !allStrLit;
 }
 
+function flatUnionTakesNull(t: Type): boolean {
+	if (t.typeChildren == null) return false;
+	for (const m of t.typeChildren) {
+		if (m != null && m.kind == TypeKind.Null) return true;
+	}
+	return false;
+}
+
 // The projection twin of widenVariantToUnion: a flow-narrowed reference whose
 // DECLARED type is a tagged union types as the member, but its C storage is
 // still the union struct — codegen needs a node selecting the active slot.
@@ -1429,6 +1477,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	}
 	const constantFit = fitIntegerConstant(ctx, expr, exprType, formal);
 	if (constantFit != null) return constantFit.nodeType == formal ? constantFit : fitNode(ctx, constantFit, formal, constantFit.nodeType);
+	const carriedConstant = numericConstantForCarrier(expr, exprType, formal);
+	if (carriedConstant != null) return fitNode(ctx, carriedConstant, formal, carriedConstant.nodeType);
 	const payloadSlot = isMaybeType(formal) && formal.typeReturn != null && !isMaybeType(exprType) ? formal.typeReturn : formal;
 	if (!hasGenericParams(formal) && !slotTakesValue(exprType, payloadSlot)) {
 		const converted = tryApplyConverter(ctx, expr, exprType, formal);
@@ -1464,6 +1514,10 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 		const widenedMaybe = widenMaybePayload(expr, formal, exprType);
 		if (widenedMaybe != null as unknown as Node) return widenedMaybe;
 	}
+	if (exprType.kind == TypeKind.Null && formal.kind == TypeKind.Union && flatUnionTakesNull(formal)) {
+		expr.nodeType = formal;
+		return expr;
+	}
 	// A variant value meeting a union formal converts HERE so every fit
 	// position (var init, assign, return, ternary, call arg) shares the one
 	// wrap — no position can forget it. Nilable pointer unions collapse to a
@@ -1472,6 +1526,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 		&& unwrapRefNullUnion(formal) == null) {
 		const widened = widenVariantToUnion(expr, formal, exprType);
 		if (widened != null as unknown as Node) return widened;
+		const numeric = fitNumericIntoUnion(ctx, expr, exprType, formal);
+		if (numeric != null) return numeric;
 	}
 	if (formal.kind != TypeKind.Union && exprType.kind != TypeKind.Union) {
 		const projected = narrowUnionToVariant(expr, exprType);
@@ -1499,7 +1555,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 			reportNumericConvConstAware(ctx, expr, exprType, formal, "");
 			return expr;
 		}
-		return wrapInConv(expr, formal);
+		const rounded = float32ConstantLiteral(expr, formal);
+		return rounded != null ? rounded : wrapInConv(expr, formal);
 	}
 	// Narrowing integer conversion: wrap in HiddenStdConv
 	if (isNarrowingIntConv(exprType, formal) || refusesIntConv(exprType, formal)) {
@@ -1576,6 +1633,7 @@ function doubleFitsIntTarget(v: number, target: Type): boolean {
 
 const DOUBLES_ALL_INTEGRAL_FROM: number = 4503599627370496.0;
 const FLOAT32_MAX: number = 3.4028234663852886e38;
+const FLOAT32_ROUNDS_TO_INFINITY: number = 3.4028235677973366e38;
 
 function isFloatSlot(t: Type): boolean {
 	return t.kind == TypeKind.Float32 || t.kind == TypeKind.Float64 || t.kind == TypeKind.Number;
@@ -1600,8 +1658,15 @@ function roundedToFloat32(v: number): number {
 	return widened;
 }
 
-function doubleExactInFloat32(v: number): boolean {
-	return v != v || roundedToFloat32(v) == v;
+function float32Overflows(v: number): boolean {
+	return (v >= FLOAT32_ROUNDS_TO_INFINITY || v <= -FLOAT32_ROUNDS_TO_INFINITY) && v != Infinity && v != -Infinity;
+}
+
+export function reportFloat32LiteralRange(ctx: CheckerContext, lit: Node): void {
+	const v = (lit.data as NumberLiteralData).value;
+	if (!float32Overflows(v)) return;
+	addError(ctx, "number out of range: '" + floatValueText(v) + "' is outside the float32 range (±3.4028235e38) — float32 would hold Infinity; keep the value in a 'number'",
+		lit.location.line, lit.location.column);
 }
 
 function intExactInMantissa(magnitude: uint64, mantissaBits: int32): boolean {
@@ -1649,13 +1714,78 @@ function foldedNumber(expr: Node): Node {
 export function isFittingNumericConstant(expr: Node, target: Type): boolean {
 	if (isFittingIntLiteral(expr, target)) return true;
 	const slot = ownedValueSlot(target);
-	return isFloatSlot(slot) && isUntypedConstant(expr, 0) && constantExactInFloat(expr, slot);
+	return isFloatSlot(slot) && isUntypedConstant(expr, 0) && constantFitsFloat(expr, slot);
 }
 
-function constantExactInFloat(expr: Node, target: Type): boolean {
+export function float32ConstantLiteral(expr: Node, target: Type): Node {
+	const none = null as unknown as Node;
+	const slot = ownedValueSlot(target);
+	if (slot.kind != TypeKind.Float32 || !isUntypedConstant(expr, 0)) return none;
+	const folded = foldedNumber(expr);
+	if (folded == null || !constHoldsFloat(folded)) return none;
+	folded.nodeType = slot;
+	return folded;
+}
+
+export function fitNumericIntoUnion(ctx: CheckerContext, expr: Node, exprType: Type, formal: Type): Node {
+	const none = null as unknown as Node;
+	if (formal.kind != TypeKind.Union || exprType.kind == TypeKind.Union || hasGenericParams(formal) || unwrapRefNullUnion(formal) != null) return none;
+	if (variantIndexInUnion(formal, exprType) >= 0) return none;
+	const members = implicitNumericMembers(exprType, formal);
+	if (members.length == 0) return none;
+	if (members.length > 1) {
+		addError(ctx, "implicit " + typeDisplayName(exprType) + " conversion into '" + typeDisplayName(formal) + "' fits both " + typeDisplayName(members[0])
+			+ " and " + typeDisplayName(members[1]) + " — write an explicit 'as " + typeDisplayName(members[0]) + "' or 'as " + typeDisplayName(members[1]) + "'",
+			expr.location.line, expr.location.column);
+		return expr;
+	}
+	const widened = widenVariantToUnion(wrapInConv(expr, members[0]), formal, members[0]);
+	return widened != null ? widened : none;
+}
+
+function implicitNumericMembers(exprType: Type, formal: Type): Type[] {
+	const members: Type[] = [];
+	if (!isNumeric(exprType) || formal.typeChildren == null) return members;
+	let best = TypeRelation.None;
+	for (const member of formal.typeChildren) {
+		if (member == null || !isNumeric(member) || numericConvRefuses(exprType, member)) continue;
+		const rel = typeRelation(member, exprType);
+		if (rel == TypeRelation.None || (rel as number) < (best as number)) continue;
+		if ((rel as number) > (best as number)) {
+			members.length = 0;
+			best = rel;
+		}
+		members.push(member);
+	}
+	return members;
+}
+
+export function numericConstantForCarrier(expr: Node, exprType: Type | null, formal: Type | null): Node {
+	const none = null as unknown as Node;
+	if (formal == null || exprType == null || !isNumeric(exprType) || !slotRefuses(exprType, formal)) return none;
+	if (isMaybeType(formal) && formal.typeReturn != null) return numericConstantForMember(expr, exprType, formal.typeReturn);
+	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return none;
+	for (const member of formal.typeChildren) {
+		const fitted = numericConstantForMember(expr, exprType, member);
+		if (fitted != null) return fitted;
+	}
+	return none;
+}
+
+function numericConstantForMember(expr: Node, exprType: Type, member: Type | null): Node {
+	const none = null as unknown as Node;
+	if (member == null || !isNumeric(member) || !numericConvRefuses(exprType, member) || !isFittingNumericConstant(expr, member)) return none;
+	const folded = foldedNumber(expr);
+	if (folded == null) return none;
+	if (isIntegerType(member)) return typedIntegerLiteral((folded.data as NumberLiteralData).intVal, member, expr.location);
+	folded.nodeType = member;
+	return folded;
+}
+
+function constantFitsFloat(expr: Node, target: Type): boolean {
 	const folded = foldedNumber(expr);
 	if (folded == null) return false;
-	if (constHoldsFloat(folded)) return target.kind != TypeKind.Float32 || doubleExactInFloat32(constFloatValue(folded));
+	if (constHoldsFloat(folded)) return target.kind != TypeKind.Float32 || !float32Overflows(constFloatValue(folded));
 	return intExactInMantissa(constIntMagnitude(folded), mantissaBitsOf(target));
 }
 
@@ -1702,8 +1832,7 @@ function constantRefusal(expr: Node, from: Type, target: Type): string {
 			return "takes the float " + text + ", and a float never becomes an integer implicitly — " + spelled + asTarget;
 		}
 		if (target.kind != TypeKind.Float32) return "";
-		if (v > FLOAT32_MAX || v < -FLOAT32_MAX) return text + " is outside the float32 range (±3.4028235e38) — write " + asTarget;
-		if (!doubleExactInFloat32(v)) return "cannot hold " + text + " exactly (" + mantissaText(target) + ") — write " + asTarget;
+		if (float32Overflows(v)) return text + " is outside the float32 range (±3.4028235e38) — write " + asTarget;
 		return typedConstantRefusal(expr, from, target, text);
 	}
 	const d = folded.data as NumberLiteralData;

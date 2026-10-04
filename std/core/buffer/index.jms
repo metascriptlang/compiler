@@ -530,7 +530,7 @@ export function writeDoubleBE(this b: Buffer, v: number, o: number): number {
 }
 
 export function readUIntLE(this b: Buffer, o: number, byteLength: number): number {
-	let v = 0;
+	let v: number = 0;
 	let k = 0;
 	while (k < byteLength) {
 		v += b.byteAt(o + k) * Math.pow(2, k * 8);
@@ -539,7 +539,7 @@ export function readUIntLE(this b: Buffer, o: number, byteLength: number): numbe
 	return v;
 }
 export function readUIntBE(this b: Buffer, o: number, byteLength: number): number {
-	let v = 0;
+	let v: number = 0;
 	let k = 0;
 	while (k < byteLength) {
 		v = v * 256 + b.byteAt(o + k);

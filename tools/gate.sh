@@ -90,7 +90,7 @@ never known, and never known-now-green — a program that fails half the time ca
 answer either question. Putting one there needs a run that shows both outcomes.
 
 exit: 0 no new red · 1 new red or a stale known red · 2 usage · 75 machine busy past GATE_WAIT_MAX
-env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (default 1800, 0 = do not wait)
+env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (default 1800, 0 = refuse at once, < 0 = skip the load check)
       GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers
       MSCORPUS_BUILD_JOBS optional corpus build ceiling, kept across phases
       these limits do not cap aggregate processes or compiler-internal parallelism
@@ -142,7 +142,7 @@ build_ctl() {
   touch "$ctl_dir"
   printf '%s' "$key"
 }
-compiler_changed() { grep -E '^src/' | grep -vqE '^src/test/'; }
+compiler_changed() { grep -E '^src/' | grep -vE '^src/test/' >/dev/null; }
 
 tier_touched() {
   awk -v deps="$1" -v top="$2" 'BEGIN { while ((getline d < deps) > 0) mods[d] = 1 }
@@ -153,7 +153,7 @@ tier_touched() {
 tier_select() {
   local f dir deps emits="" t0=$SECONDS n=0 all
   all=$(set -- $TIERS; printf '%s' "$#")
-  if awk -F'\t' '{ print $2 }' "$OUT/why" | grep -Eq "$SELECT_BLIND"; then
+  if awk -F'\t' '{ print $2 }' "$OUT/why" | grep -E "$SELECT_BLIND" >/dev/null; then
     say "tier-select: blind paths in the diff, whole"; select_ledger tier-select 0 "$all" "$all" "" "" ""; return 1
   fi
   if awk -F'\t' '{ print $2 }' "$OUT/why" | compiler_changed; then
@@ -180,7 +180,7 @@ tier_select() {
 inert_range() {
   local paths
   paths=$(git diff --name-only --no-renames "$1" "$2") || return 2
-  ! printf '%s\n' "$paths" | grep -Ev "$INERT" | grep -q .
+  ! printf '%s\n' "$paths" | grep -Ev "$INERT" | grep . >/dev/null
 }
 
 digest() { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi | cut -d' ' -f1; }
@@ -413,7 +413,7 @@ queue_lock() {
   local m tmp="$GATES_DIR/.m.$$" try
   for try in 1 2; do
     rm -rf "$tmp"; mkdir -p "$tmp/$$" || die "gate queue: cannot create $tmp"
-    mv -T "$tmp" "$GATES_DIR/.lock" 2>/dev/null && return 0
+    perl -e 'rename($ARGV[0], $ARGV[1]) or exit 1' "$tmp" "$GATES_DIR/.lock" 2>/dev/null && return 0
     rm -rf "$tmp"
     for m in "$GATES_DIR/.lock"/*; do
       [ -e "$m" ] || continue
@@ -914,7 +914,7 @@ fi
 
 lanes=""
 for l in $ORDER; do
-  if printf '%s\n' $chosen | grep -qx "$l"; then lanes="$lanes $l"; fi
+  if printf '%s\n' $chosen | grep -x "$l" >/dev/null; then lanes="$lanes $l"; fi
 done
 lanes=${lanes# }
 
@@ -981,6 +981,7 @@ load1() {
 }
 admit() {
   local max=${GATE_WAIT_MAX:-1800} waited=0 n l
+  [ "$max" -ge 0 ] || return 0
   n=$(cores)
   while :; do
     l=$(load1)
@@ -1054,7 +1055,7 @@ run_test_lane() {
     if [ "$shard" = - ]; then part=$(part_of "$1" "$f"); else part=$(part_of "$1" "$f.$shard"); fi
     cat "$part"
     [ "$(cat "$part.rc" 2>/dev/null)" = 0 ] || rc=1
-    if ! sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -Eq '^ *Test Files +[0-9]'; then
+    if ! sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -E '^ *Test Files +[0-9]' >/dev/null; then
       case "$noresult" in *" $f "*) ;; *) printf 'NORESULT %s > no result\n' "$f"; noresult="$noresult$f " ;; esac
       sed $'s/\x1b\\[[0-9;]*m//g' "$part" | grep -E '^(error|internal|fatal)' | head -3
       rc=1
@@ -1375,7 +1376,7 @@ for phase in "${PHASES[@]}"; do
   { reds_of "$lane" "$log" "$rc"; grep -q '^TIMEOUT after ' "$log" && echo "timed out"; } | sort -u >"$OUT/$lane.red.all"
   split_flaky keep <"$OUT/$lane.red.all" >"$OUT/$lane.flaky"
   split_flaky drop <"$OUT/$lane.red.all" >"$OUT/$lane.red"
-  if [ "$rc" -ne 0 ] && [ ! -s "$OUT/$lane.red" ]; then echo "$lane: exit $rc with no named failure" >"$OUT/$lane.red"; fi
+  if [ "$rc" -ne 0 ] && [ ! -s "$OUT/$lane.red.all" ]; then echo "$lane: exit $rc with no named failure" >"$OUT/$lane.red"; fi
   known_of "$lane" | scope_known "$lane" >"$OUT/$lane.known"
   comm -23 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.new"
   comm -13 "$OUT/$lane.red" "$OUT/$lane.known" >"$OUT/$lane.fixed"

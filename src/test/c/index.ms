@@ -42,3 +42,5 @@ import "./sameNameGenericInstances";
 import "./asCoercionNullable";
 import "./nominalArrayLayout";
 import "./vecOfStructCopies";
+import "./matchGuardConstFold";
+import "./literalUnionBranchJoin";

@@ -128,6 +128,13 @@ void msLedgerDestroy(void* p, const msTypeInfo* type) {
 }
 #endif  /* MS_DRC_LEDGER */
 
+#ifndef MSGC_MANUAL
+#include "runtime/drc.h"
+
+_Thread_local msSlab msSlabTLS;
+MS_TLS_PUBLISH(msSlabTLS)
+#endif
+
 #ifdef MSGC_ORC
 
 #include "runtime/drc.h"

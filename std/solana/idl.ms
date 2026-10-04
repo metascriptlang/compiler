@@ -106,6 +106,7 @@ export macro anchorIdl(spec: Node): Node {
 				if (written == "int64") { idlType = "\"i64\""; }
 				if (written == "boolean") { idlType = "\"bool\""; }
 				if (written == "Pubkey") { idlType = "\"pubkey\""; }
+				if (written == "Bytes") { idlType = "\"bytes\""; }
 				if (idlType == "") {
 					error("anchorIdl: argument type '" + written + "' has no IDL type", spec);
 				}
@@ -157,34 +158,184 @@ export macro anchorIdl(spec: Node): Node {
 		}
 	}
 	json = json + "],\"types\":[";
-	const described: Node[] = accountTypes.concat(eventTypes);
+	const typeNames: string[] = [];
+	const typeZeroCopy: boolean[] = [];
+	let a = 0;
+	while (a < accountTypes.length) {
+		typeNames.push(accountTypes[a].name);
+		typeZeroCopy.push(true);
+		a = a + 1;
+	}
+	a = 0;
+	while (a < eventTypes.length) {
+		typeNames.push(eventTypes[a].name);
+		typeZeroCopy.push(false);
+		a = a + 1;
+	}
+	const laidNames: string[] = [];
+	const laidSizes: int32[] = [];
+	const laidAligns: int32[] = [];
+	const laidPacked: int32[] = [];
 	let d = 0;
-	while (d < described.length) {
-		const decl = getImpl(bindSym(described[d].name))!;
-		const zeroCopy = d < accountTypes.length;
-		json = json + (d > 0 ? "," : "") + "{\"name\":\"" + described[d].name + "\"";
+	while (d < typeNames.length) {
+		const typeName = typeNames[d];
+		const decl = getImpl(bindSym(typeName));
+		if (decl == null || decl!.kind == NodeKind.EnumDecl) {
+			error("anchorIdl: type '" + typeName + "' must be a struct visible where anchorIdl " +
+				"is called; import it there", spec);
+		}
+		const fields = decl!.interfaceFields;
+		const fieldTypes = decl!.interfaceFieldTypes;
+		const zeroCopy = typeZeroCopy[d];
+		json = json + (d > 0 ? "," : "") + "{\"name\":\"" + typeName + "\"";
 		if (zeroCopy) { json = json + ",\"serialization\":\"bytemuck\",\"repr\":{\"kind\":\"c\"}"; }
 		json = json + ",\"type\":{\"kind\":\"struct\",\"fields\":[";
 		let f = 0;
-		while (f < decl.interfaceFields.length) {
-			const written = decl.interfaceFieldTypes[f];
-			let idlType = "\"" + written + "\"";
-			if (written == "uint8") { idlType = "\"u8\""; }
-			if (written == "uint16") { idlType = "\"u16\""; }
-			if (written == "uint32") { idlType = "\"u32\""; }
-			if (written == "uint64") { idlType = "\"u64\""; }
-			if (written == "int8") { idlType = "\"i8\""; }
-			if (written == "int16") { idlType = "\"i16\""; }
-			if (written == "int32") { idlType = "\"i32\""; }
-			if (written == "int64") { idlType = "\"i64\""; }
-			if (written == "boolean") { idlType = "\"bool\""; }
-			if (written == "Pubkey") { idlType = "\"pubkey\""; }
-			json = json + (f > 0 ? "," : "") + "{\"name\":\"" + snakeCase(decl.interfaceFields[f]) +
+		while (f < fields.length) {
+			const written = fieldTypes[f];
+			const open = written.indexOf("[");
+			const element = open < 0 ? written : written.slice(0, open);
+			let count = "";
+			if (open >= 0) {
+				count = written.slice(open + 1, written.length - 1);
+				if (count == "" || element.indexOf("[") >= 0) {
+					error("anchorIdl: field '" + fields[f] + "' of '" + typeName + "' has type '" +
+						written + "'; an account or event field array must be one T[N]", spec);
+				}
+			}
+			let idlType = "";
+			if (element == "uint8") { idlType = "\"u8\""; }
+			if (element == "uint16") { idlType = "\"u16\""; }
+			if (element == "uint32") { idlType = "\"u32\""; }
+			if (element == "uint64") { idlType = "\"u64\""; }
+			if (element == "int8") { idlType = "\"i8\""; }
+			if (element == "int16") { idlType = "\"i16\""; }
+			if (element == "int32") { idlType = "\"i32\""; }
+			if (element == "int64") { idlType = "\"i64\""; }
+			if (element == "boolean") { idlType = "\"bool\""; }
+			if (element == "Pubkey") { idlType = "\"pubkey\""; }
+			if (element.startsWith("BitSet<") && element.endsWith(">")) {
+				const members = getImpl(bindSym(element.slice(7, element.length - 1)));
+				if (members == null || members!.kind != NodeKind.EnumDecl) {
+					error("anchorIdl: field '" + fields[f] + "' of '" + typeName + "' is a BitSet " +
+						"of an enum that is not visible where anchorIdl is called; import it there", spec);
+				}
+				const memberCount = members!.enumMembers.length;
+				idlType = "{\"array\":[\"u8\"," + ((memberCount + 7) / 8) + "]}";
+				if (memberCount <= 64) { idlType = "\"u64\""; }
+				if (memberCount <= 32) { idlType = "\"u32\""; }
+				if (memberCount <= 16) { idlType = "\"u16\""; }
+				if (memberCount <= 8) { idlType = "\"u8\""; }
+			}
+			if (idlType == "") {
+				const nested = getImpl(bindSym(element));
+				if (nested == null || nested!.kind == NodeKind.EnumDecl) {
+					error("anchorIdl: field '" + fields[f] + "' of '" + typeName + "' has type '" +
+						written + "', which has no IDL type: use sized integers, boolean, Pubkey, " +
+						"T[N] or a struct imported where anchorIdl is called (an enum is stored " +
+						"as uint8)", spec);
+				}
+				idlType = "{\"defined\":{\"name\":\"" + element + "\"}}";
+				let known = false;
+				let n = 0;
+				while (n < typeNames.length) {
+					if (typeNames[n] == element) { known = true; }
+					n = n + 1;
+				}
+				if (!known) {
+					typeNames.push(element);
+					typeZeroCopy.push(zeroCopy);
+				}
+			}
+			if (count != "") { idlType = "{\"array\":[" + idlType + "," + count + "]}"; }
+			json = json + (f > 0 ? "," : "") + "{\"name\":\"" + snakeCase(fields[f]) +
 				"\",\"type\":" + idlType + "}";
 			f = f + 1;
 		}
 		json = json + "]}}";
 		d = d + 1;
+	}
+	let progress = true;
+	while (progress) {
+		progress = false;
+		let l = 0;
+		while (l < typeNames.length) {
+			let done = false;
+			let m = 0;
+			while (m < laidNames.length) {
+				if (laidNames[m] == typeNames[l]) { done = true; }
+				m = m + 1;
+			}
+			const decl = getImpl(bindSym(typeNames[l]))!;
+			let offset = 0;
+			let structAlign = 1;
+			let ready = !done;
+			let f = 0;
+			while (ready && f < decl.interfaceFields.length) {
+				const written = decl.interfaceFieldTypes[f];
+				const open = written.indexOf("[");
+				const element = open < 0 ? written : written.slice(0, open);
+				const count = open < 0 ? 1 : written.slice(open + 1, written.length - 1).parseInt();
+				let size = 0;
+				let align = 1;
+				if (element == "uint8" || element == "int8" || element == "boolean") { size = 1; }
+				if (element == "uint16" || element == "int16") { size = 2; align = 2; }
+				if (element == "uint32" || element == "int32") { size = 4; align = 4; }
+				if (element == "uint64" || element == "int64") { size = 8; align = 8; }
+				if (element == "Pubkey") { size = 32; }
+				if (element.startsWith("BitSet<") && element.endsWith(">")) {
+					const members = getImpl(bindSym(element.slice(7, element.length - 1)))!;
+					const memberCount = members.enumMembers.length;
+					size = (memberCount + 7) / 8;
+					if (memberCount <= 64) { size = 8; align = 8; }
+					if (memberCount <= 32) { size = 4; align = 4; }
+					if (memberCount <= 16) { size = 2; align = 2; }
+					if (memberCount <= 8) { size = 1; align = 1; }
+				}
+				let packed = 0;
+				if (size == 0) {
+					let n = 0;
+					while (n < laidNames.length) {
+						if (laidNames[n] == element) {
+							size = laidSizes[n];
+							align = laidAligns[n];
+							packed = laidPacked[n];
+						}
+						n = n + 1;
+					}
+					if (size != 0 && packed != size && typeZeroCopy[l]) {
+						error("anchorIdl: '" + element + "' ends with " + (size - packed) +
+							" byte(s) of C padding, which sit between the fields of '" +
+							typeNames[l] + "' at '" + decl.interfaceFields[f] + "'; Anchor's " +
+							"zero-copy (bytemuck Pod) has none: add an explicit padding field " +
+							"to '" + element + "'", spec);
+					}
+				}
+				if (size == 0) {
+					ready = false;
+				} else {
+					const aligned = (offset + align - 1) / align * align;
+					if (aligned != offset && typeZeroCopy[l]) {
+						error("anchorIdl: '" + typeNames[l] + "' has " + (aligned - offset) +
+							" byte(s) of C padding before field '" + decl.interfaceFields[f] +
+							"'; Anchor's zero-copy (bytemuck Pod) has none and its clients read " +
+							"the fields back to back: order the fields by alignment or add an " +
+							"explicit padding field", spec);
+					}
+					offset = aligned + size * (count as int32);
+					if (align > structAlign) { structAlign = align; }
+				}
+				f = f + 1;
+			}
+			if (ready) {
+				laidNames.push(typeNames[l]);
+				laidSizes.push((offset + structAlign - 1) / structAlign * structAlign);
+				laidAligns.push(structAlign);
+				laidPacked.push(offset);
+				progress = true;
+			}
+			l = l + 1;
+		}
 	}
 	json = json + "]}";
 	return { kind: NodeKind.StringLiteral, line: spec.line, column: spec.column, value: json };

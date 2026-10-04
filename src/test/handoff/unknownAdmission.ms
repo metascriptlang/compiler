@@ -106,17 +106,16 @@ test "unknownAdmission: instanceof narrows unknown to a class" {
 	assert strictErrorCount(source) == 0;
 }
 
-test "unknownAdmission: unknown casts out to no interface, generic class, C string or value" {
+test "unknownAdmission: unknown casts out to a generic class instance" {
+	assert strictErrorCount(CLASSES + "function f(u: unknown): int32 { return (u as Box<int32>).v; }") == 0;
+}
+
+test "unknownAdmission: unknown casts out to no interface, C string or value" {
 	const refused = [
 		{
 			name: "an interface",
 			source: CLASSES + "function f(u: unknown): int32 { return (u as I).v; }",
-			needle: "only a non-generic class has a runtime identity",
-		},
-		{
-			name: "a generic class instance",
-			source: CLASSES + "function f(u: unknown): int32 { return (u as Box<int32>).v; }",
-			needle: "only a non-generic class has a runtime identity",
+			needle: "only a class has a runtime identity",
 		},
 		{
 			name: "a C string",

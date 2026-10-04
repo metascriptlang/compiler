@@ -108,7 +108,7 @@ typedef struct msSlab {
 	int32_t count[MS_SLAB_BUCKETS];    /* entries per bucket */
 } msSlab;
 
-static _Thread_local msSlab msSlabTLS;
+MS_TLS_EXTERN(msSlab, msSlabTLS);
 
 static inline int msSlabBucket(size_t totalSize) {
 	if (totalSize > MS_SLAB_MAX) return -1;

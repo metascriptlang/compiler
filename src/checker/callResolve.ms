@@ -7,11 +7,12 @@ import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
-import { writeRefusal } from "./assignable";
-import { callCheckStmt, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
+import { writeRefusal, readonlyRootType } from "./assignable";
+import { callCheckStmt, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
+import { isCompileTimeValue } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
-import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
+import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearCheckerState } from "./instantiate";
@@ -21,6 +22,7 @@ import { isContextSensitive } from "./speculate";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
+import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
 import { unionHasMemberOfKind, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
@@ -334,10 +336,32 @@ export function macroDeclOf(sym: Symbol | null): MacroDeclData | null {
 
 export function invokedMacroSym(ctx: CheckerContext, node: Node): Symbol | null {
 	const bound = node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null;
-	const sym = bound || macroDeclOf(node.resolvedSym) != null
-		? node.resolvedSym
-		: lookupSymbol(ctx.table, (node.data as MacroInvocationData).macroName);
+	if (bound || macroDeclOf(node.resolvedSym) != null) return macroDeclOf(node.resolvedSym) != null ? node.resolvedSym : null;
+	if (isDirectiveInvocation(node)) return null;
+	const sym = lookupSymbol(ctx.table, (node.data as MacroInvocationData).macroName);
 	return macroDeclOf(sym) != null ? sym : null;
+}
+
+export function markNamesUsed(ctx: CheckerContext, node: Node | null): void {
+	if (node == null) return;
+	let name = "";
+	if (node.kind == NodeKind.Identifier) name = (node.data as IdentifierData).name;
+	if (node.kind == NodeKind.CallExpr) {
+		const cd = node.data as CallExprData;
+		if (cd.callee.kind == NodeKind.Identifier && (cd.callee.data as IdentifierData).name == "bindSym"
+				&& cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.StringLiteral) {
+			name = (cd.arguments[0].data as StringLiteralData).value;
+		}
+	}
+	if (name != "") {
+		const sym = lookupSymbol(ctx.table, name);
+		if (sym != null) markUsedIn(ctx, sym);
+	}
+	forEachChild(node, (child: Node): void => { markNamesUsed(ctx, child); });
+}
+
+export function isDirectiveInvocation(node: Node): boolean {
+	return macroDeclOf(node.resolvedSym) == null && isBuiltinDirective((node.data as MacroInvocationData).macroName);
 }
 
 // True iff any arg's nodeType still carries a GenericParam — the marker
@@ -866,10 +890,60 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 	const _cc0 = performance.now();
 	const r = checkCallExprInner(ctx, node, expectedType);
 	_cceTime = _cceTime + (performance.now() - _cc0);
-	return r;
+	return evalCompileTimeCall(ctx, node, r);
+}
+
+function compileTimeCallee(node: Node): Symbol | null {
+	const d = node.data as CallExprData;
+	if (d.callee == null) return null;
+	const set = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
+	if (set == null) return null;
+	const idx = d.resolvedOverloadIdx;
+	const winner = idx > 0 && idx - 1 < set.overloads.length ? set.overloads[idx - 1] : set;
+	return hasFlag(winner, SymbolFlag.CompileTime) ? winner : null;
+}
+
+function evalCompileTimeCall(ctx: CheckerContext, node: Node, callType: Type): Type {
+	if (node.kind != NodeKind.CallExpr || isEngineCheckMode() || ctx.compileTimeBodyDepth > 0) return callType;
+	const callee = compileTimeCallee(node);
+	if (callee == null) return callType;
+	const d = node.data as CallExprData;
+	const set = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
+	if (set.overloads.length > 0) {
+		addError(ctx, `'${callee.name}' is @comptime and overloaded; the compile-time evaluator keys routines by name and would run the wrong overload, so give each @comptime overload its own name`, node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
+	for (let i = 0; i < d.arguments.length; i += 1) {
+		const arg = d.arguments[i];
+		if (isCompileTimeValue(arg, 0)) continue;
+		addError(ctx, `'${callee.name}' is @comptime, so it runs while compiling: argument ${(i + 1).toString()} must be a literal or a module-level const built from literals`, arg.location.line, arg.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
+	const loc = node.location;
+	const body = createNodeAt(NodeKind.BlockStmt, { statements: [createNodeAt(NodeKind.ReturnStmt, { argument: cloneNodeForCheck(node) }, loc)] }, loc);
+	const errorsBefore = errorCount(ctx);
+	const value = callEvalComptimeBlock(createNodeAt(NodeKind.ComptimeBlock, { comptimeBody: body }, loc), ctx);
+	if (errorCount(ctx) > errorsBefore) {
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
+	node.kind = value.kind;
+	node.data = value.data;
+	node.nodeType = null as unknown as Type;
+	node.resolvedSym = null;
+	node.flags = 0 as BitSet<NodeFlag>;
+	node.variantSlot = 0;
+	callCheckExpr(ctx, node, callType);
+	return node.nodeType;
 }
 function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
+	if (d.callee == null) {
+		addError(ctx, "a call has a null callee (a macro returned a CallExpr without one)", node.location.line, node.location.column);
+		return errorType();
+	}
 	callCheckExpr(ctx, d.callee, null);
 	// Phase 5: super(args) call — type-check args against parent class
 	// constructor signature. resolveSuper set callee.resolvedSym to the parent
@@ -1590,6 +1664,16 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			// not directly assignable to Maybe<T> — we want a struct literal.
 			// Generic-containing formals never wrap here — deferred to the
 			// post-binding reconciliation (Nim implicitConv, sigmatch.nim:2179).
+			const carriedConstant = numericConstantForCarrier(args[pi], argTypes[pi], paramType);
+			if (carriedConstant != null) {
+				args[pi] = carriedConstant;
+				argTypes[pi] = carriedConstant.nodeType!;
+			}
+			const numericMember = fitNumericIntoUnion(ctx, args[pi], argTypes[pi], paramType);
+			if (numericMember != null) {
+				args[pi] = numericMember;
+				argTypes[pi] = paramType;
+			}
 			const argHeld = peelTransparentInstance(argTypes[pi]);
 			if (isMaybeType(paramType) && paramType.typeReturn != null
 					&& !isMaybeType(argHeld)
@@ -1641,6 +1725,12 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				} else if (numericConvRefuses(argTypes[pi], paramType)) {
 					if (!isFittingNumericConstant(args[pi], paramType)) {
 						reportNumericConvConstAware(ctx, args[pi], argTypes[pi], paramType, " in '" + getCalleeName(d.callee) + "' " + argLabel(pi, hasReceiver));
+					} else {
+						const rounded = float32ConstantLiteral(args[pi], paramType);
+						if (rounded != null) {
+							args[pi] = rounded;
+							argTypes[pi] = rounded.nodeType!;
+						}
 					}
 				} else if (convertsImplicitly(argTypes[pi], paramType)) {
 				} else if (takesAddressAtCArg(argTypes[pi], paramType)) {
@@ -1677,7 +1767,10 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 					const calleeName = getCalleeName(d.callee);
 					addError(ctx, "'" + calleeName + "' " + argLabel(pi, hasReceiver) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
 				} else {
-					const refusal = writeRefusal(lvArg, true);
+					const ro = readonlyRootType(lvArg);
+					const refusal = ro != null
+						? "cannot pass an argument to a 'ref' or 'out' parameter through " + typeDisplayName(ro) + " — a read-only view never converts back to the mutable type (PARALOCK E24)"
+						: writeRefusal(lvArg, true);
 					if (refusal != "") addError(ctx, refusal, lvArg.location.line, lvArg.location.column);
 					const written = paramType.typeReturn;
 					if (written != null && argTypes[pi] != null && needsStdConv(argTypes[pi], written)) {
@@ -3801,15 +3894,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		if (needsDeref && d.object.kind != NodeKind.HiddenDeref) {
 			const tok = createToken(TokenKind.Ident, "", node.location.line);
 			const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
-			// ONE C-level peel. Field resolution peeled everything (Var AND Ref)
-			// to find the struct, but a single HiddenDeref emits `(*obj)`. The
-			// object's nodeType flavor differs between read sites (checker
-			// already peeled Var) and write sites (still Var) — the SYMBOL's
-			// declared type is the stable anchor for Var params.
-			const symT = d.object.resolvedSym != null ? d.object.resolvedSym.symbolType : null;
-			if (symT != null && symT.kind == TypeKind.Var && symT.typeReturn != null) {
-				derefNode.nodeType = symT.typeReturn;
-			} else if ((ptrType.kind == TypeKind.Var || ptrType.kind == TypeKind.Ref) && ptrType.typeReturn != null) {
+			if ((ptrType.kind == TypeKind.Var || ptrType.kind == TypeKind.Ref) && ptrType.typeReturn != null) {
 				derefNode.nodeType = ptrType.typeReturn;
 			} else {
 				derefNode.nodeType = resolvedObjType;

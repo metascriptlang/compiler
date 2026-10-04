@@ -5,12 +5,13 @@
 // json builders (jsonObject/jsonString/jsonNumber/jsonBool) + stringify from std/core/json.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol, createNode } from "../../ast/node";
-import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase } from "../../checker/types";
+import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, int32Type } from "../../checker/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension } from "../../checker/context";
-import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl, runtimeRef } from "../util";
-import { anonTypeName, isAnonTypeName } from "../../codegen/c/types";
+import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, typeHelperName, syntheticToken, makeNull, makeBlock, makeReturn, makeIf, makeFnDecl, runtimeRef, makeNumber } from "../util";
+import { anonTypeName, isAnonTypeName, hashToBase36, typeKey } from "../../codegen/c/types";
+import { isSlotUnion, projectTagUnionMember } from "../../checker/fit";
 import { charToString } from "./stringOpLower";
 import { SymbolKind } from "../../ast/node";
 
@@ -70,6 +71,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 		cond.nodeType = stringType();
 		return cond;
 	}
+	if (isSlotUnion(t) && !hasToStringExtension(t, ctx)) return ctx.jsBackend ? arg : buildUnionToString(arg, t, loc, ctx);
 	// Struct/Class/Union → check toString() extension first, then fall back to JSON debug format
 	const inner = unwrapRef(t);
 	if ((inner.kind == TypeKind.Struct || inner.kind == TypeKind.Union) && inner.typeName != "") {
@@ -119,6 +121,50 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	const placeholder = makeString("<" + fallbackName + ">", loc);
 	placeholder.nodeType = stringType();
 	return placeholder;
+}
+
+function hasToStringExtension(t: Type, ctx: TransformContext): boolean {
+	return ctx.checkerCtx != null && t.typeName != "" && findExtension(ctx.checkerCtx.extensionRegistry, t.typeName, "toString") != null;
+}
+
+// A tagged union stringifies the member its tag selects, one generated helper per union
+// type, the way a case object's fields are visited through a case on its discriminator.
+export function buildUnionToString(arg: Node, ut: Type, loc: SourceLocation, ctx: TransformContext): Node {
+	const call = makeCall(makeTypedIdentResolved(ensureUnionToStringFn(ut, ctx, loc), null, loc), [arg], loc);
+	call.nodeType = stringType();
+	return call;
+}
+
+function ensureUnionToStringFn(ut: Type, ctx: TransformContext, loc: SourceLocation): Symbol {
+	const name = "msUnionToString_" + hashToBase36(typeKey(ut));
+	const existing = existingDumpFn(name);
+	if (existing != null) return existing;
+	const sym = mintSym(ctx, SymbolKind.Function, name, null);
+	_dumpFnNames.push(name);
+	_dumpFnSyms.push(sym);
+	const valueSym = mintSym(ctx, SymbolKind.Parameter, "x", ut);
+	const stmts: Node[] = [];
+	const last = ut.typeChildren.length - 1;
+	for (let vi = 0; vi <= last; vi += 1) {
+		const member = ut.typeChildren[vi];
+		const read = makeIdentResolved(valueSym, loc);
+		read.nodeType = ut;
+		const ret = makeReturn(echoCoerceArg(projectTagUnionMember(read, ut, member), loc, ctx), loc);
+		if (vi == last) { stmts.push(ret); continue; }
+		const tag = makeMember(makeIdentResolved(valueSym, loc), "_tag", loc);
+		tag.nodeType = int32Type();
+		const isSlot = makeBinary(tag, "==", makeNumber(vi, loc), loc);
+		isSlot.nodeType = booleanType();
+		stmts.push(makeIf(isSlot, makeBlock([ret], loc), null, loc));
+	}
+	const fnNode = makeFnDecl(name, [valueSym], ["unknown"], makeBlock(stmts, loc), "", "string", loc);
+	if (fnNode.nodeType != null && fnNode.nodeType.typeChildren != null && fnNode.nodeType.typeChildren.length > 0) {
+		fnNode.nodeType.typeChildren[0] = ut;
+	}
+	if (fnNode.nodeType != null) sym.symbolType = fnNode.nodeType;
+	fnNode.resolvedSym = sym;
+	_dumpFnDecls.push(fnNode);
+	return sym;
 }
 
 function resolveDbgIdent(name: string, ctx: TransformContext, loc: SourceLocation): Node {

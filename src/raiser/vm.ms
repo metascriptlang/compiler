@@ -2,7 +2,7 @@
 // If/else dispatch loop. C backend has optional computed-goto fast path (vmDispatch.c).
 
 import {
-	RaiserOpcode, RaiserInstruction, RaiserConvClass, convClassBits, convClassSigned,
+	RaiserOpcode, RaiserInstruction, RaiserConvClass, convClassBits, convClassSigned, convTarget, convSource,
 	raiserABC, raiserABx, raiserAx,
 	getBx, getSignedAx
 } from "./bytecode";
@@ -945,6 +945,20 @@ function runStrandSlice(vm: RaiserVM): void {
 			} else {
 				setReg(vm, base + inst.a, raiserInt(lhs.intVal % rhs.intVal));
 			}
+		} else if (op == RaiserOpcode.DivU64) {
+			const lhs = getReg(vm, base + inst.b);
+			const rhs = getReg(vm, base + inst.c);
+			if (rhs.intVal == 0) { vmError(vm, "integer division by zero");
+			} else {
+				setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) / (rhs.intVal as uint64)) as int64));
+			}
+		} else if (op == RaiserOpcode.ModU64) {
+			const lhs = getReg(vm, base + inst.b);
+			const rhs = getReg(vm, base + inst.c);
+			if (rhs.intVal == 0) { vmError(vm, "integer modulo by zero");
+			} else {
+				setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) % (rhs.intVal as uint64)) as int64));
+			}
 		} else if (op == RaiserOpcode.NegI64) {
 			const val = getReg(vm, base + inst.b);
 			setReg(vm, base + inst.a, raiserInt(-val.intVal));
@@ -965,6 +979,14 @@ function runStrandSlice(vm: RaiserVM): void {
 			const lhs = getReg(vm, base + inst.a);
 			const rhs = getReg(vm, base + inst.b);
 			if (lhs.intVal <= rhs.intVal) vm.ip = vm.ip + inst.c;
+		} else if (op == RaiserOpcode.BltU64) {
+			const lhs = getReg(vm, base + inst.a);
+			const rhs = getReg(vm, base + inst.b);
+			if ((lhs.intVal as uint64) < (rhs.intVal as uint64)) vm.ip = vm.ip + inst.c;
+		} else if (op == RaiserOpcode.BleU64) {
+			const lhs = getReg(vm, base + inst.a);
+			const rhs = getReg(vm, base + inst.b);
+			if ((lhs.intVal as uint64) <= (rhs.intVal as uint64)) vm.ip = vm.ip + inst.c;
 		} else if (op == RaiserOpcode.BgtI64) {
 			const lhs = getReg(vm, base + inst.a);
 			const rhs = getReg(vm, base + inst.b);
@@ -1596,11 +1618,26 @@ function floatFitsSigned(f: float64, bits: int32): boolean {
 	return f > -limit - 1 && f < limit;
 }
 
+function convToFloat(src: RaiserValue, fromUnsigned: boolean, toFloat32: boolean): number {
+	if (src.kind != RaiserValueKind.Int) return toFloat32 ? (asNum(src) as float32) as float64 : asNum(src);
+	if (fromUnsigned) return toFloat32 ? ((src.intVal as uint64) as float32) as float64 : (src.intVal as uint64) as float64;
+	return toFloat32 ? (src.intVal as float32) as float64 : src.intVal as float64;
+}
+
 function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 	const src = getReg(vm, vm.baseReg + inst.b);
-	const cls = inst.c as RaiserConvClass;
-	if (cls == RaiserConvClass.F64) {
-		setReg(vm, vm.baseReg + inst.a, raiserFloat(asNum(src)));
+	const cls = convTarget(inst.c);
+	const fromUnsigned = convSource(inst.c) == (RaiserConvClass.U64 as int32);
+	if (cls == RaiserConvClass.F64 || cls == RaiserConvClass.F32) {
+		setReg(vm, vm.baseReg + inst.a, raiserFloat(convToFloat(src, fromUnsigned, cls == RaiserConvClass.F32)));
+		return;
+	}
+	if (cls == RaiserConvClass.Str) {
+		setReg(vm, vm.baseReg + inst.a, raiserString(fromUnsigned && src.kind == RaiserValueKind.Int ? `${src.intVal as uint64}` : raiserToString(src)));
+		return;
+	}
+	if (cls == RaiserConvClass.U64 && src.kind == RaiserValueKind.Float && src.floatVal >= 9223372036854775808.0 && src.floatVal < 18446744073709551616.0) {
+		setReg(vm, vm.baseReg + inst.a, raiserInt((src.floatVal as uint64) as int64));
 		return;
 	}
 	const bits = convClassBits(cls);

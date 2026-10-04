@@ -6,7 +6,7 @@
 // arg that already denotes a Var param passes its pointer raw. Generated
 // lifecycle ops are skipped: destructorLifting emits their derefs already.
 
-import { Node, NodeKind, NodeFlag, Type, TypeKind, CallExprData, OutExprData, HiddenDerefData } from "../../ast/node";
+import { Node, NodeKind, Type, TypeKind, CallExprData, OutExprData, HiddenDerefData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { mapChildren } from "../walker";
 import { makeHiddenDeref, makeHiddenAddr } from "../util";
@@ -42,12 +42,6 @@ function wrapVarUse(node: Node): Node {
 	return hd;
 }
 
-function isOwnVarDeref(deref: Node, operand: Node): boolean {
-	if (deref.flags.has(NodeFlag.ExplicitDeref)) return false;
-	if (operand.kind != NodeKind.Identifier || operand.resolvedSym == null || !isVarType(operand.resolvedSym.symbolType)) return false;
-	return operand.nodeType == null || isVarType(operand.nodeType) || deref.nodeType == operand.resolvedSym.symbolType.typeReturn;
-}
-
 function isForwardingVarIdent(n: Node): boolean {
 	if (n == null || n.kind != NodeKind.Identifier) return false;
 	if (n.resolvedSym != null) return isVarType(n.resolvedSym.symbolType);
@@ -78,7 +72,7 @@ function visit(node: Node): Node {
 	if (node.kind == NodeKind.Identifier) return wrapVarUse(node);
 	if (node.kind == NodeKind.HiddenDeref) {
 		const d = node.data as HiddenDerefData;
-		if (d.expr == null || isOwnVarDeref(node, d.expr)) return node;
+		if (d.expr == null) return node;
 		d.expr = visit(d.expr);
 		return node;
 	}
