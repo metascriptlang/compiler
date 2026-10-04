@@ -139,3 +139,5 @@ import "./routineInterface";
 import "./transformNodeTypes";
 import "./runtimeProcDeclared";
 import "./echoJsonValue";
+import "./instanceCacheIdentity";
+import "./instanceHookIdentity";
