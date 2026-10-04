@@ -40,7 +40,7 @@ import {
 } from "../util";
 import { numberType, createPtr, createPrimitive, hasDestructor, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
-import { isOnceLoop, collectIterationDecls } from "./lambdaLiftingDetect";
+import { isOnceLoop, collectIterationDecls, routineSyms, refsAnySym } from "./lambdaLiftingDetect";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 
@@ -226,6 +226,46 @@ export function localsOutlivingSuspension(body: Node, locals: SymSet, ctx: Trans
 	const live: Symbol[] = [];
 	extendStateLifetimes(body, locals, live, lifted, ctx);
 	return lifted;
+}
+
+function collectLocalRefs(node: Node | null, locals: SymSet, skip: SymSet, out: SymSet): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.Identifier) {
+		const sym = node.resolvedSym;
+		if (sym != null && symSetContains(locals, sym) && !symSetContains(skip, sym)) symSetAdd(out, sym);
+		return;
+	}
+	forEachChild(node, (child: Node): void => { collectLocalRefs(child, locals, skip, out); });
+}
+
+export function hoistStateRoutines(routines: SymSet, sc: StateCollector, locals: SymSet, lifted: SymSet, hoisted: Node[]): SymSet {
+	const moved = createSymSet();
+	for (const sym of routines.items) {
+		if (!symSetContains(lifted, sym)) continue;
+		let first: Node | null = null;
+		for (const st of sc.items) {
+			for (const stmt of st.stmts) {
+				if (first == null && stmt.kind == NodeKind.VariableDecl && stmt.resolvedSym == sym) first = stmt;
+			}
+		}
+		if (first == null || refsAnySym((first.data as VariableDeclData).initializer, pendingSplitLoopLocals)) continue;
+		for (const st of sc.items) {
+			const kept: Node[] = [];
+			for (const stmt of st.stmts) {
+				if (stmt.kind != NodeKind.VariableDecl || stmt.resolvedSym != sym) kept.push(stmt);
+			}
+			st.stmts = kept;
+		}
+		symSetAdd(moved, sym);
+		hoisted.push(first);
+	}
+	if (hoisted.length == 0) return lifted;
+	const result = createSymSet();
+	for (const sym of lifted.items) {
+		if (!symSetContains(moved, sym)) symSetAdd(result, sym);
+	}
+	for (const decl of hoisted) collectLocalRefs((decl.data as VariableDeclData).initializer, locals, routines, result);
+	return result;
 }
 
 function cloneStmts(stmts: Node[]): Node[] {
@@ -1002,6 +1042,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	const dtTypes: Type[] = [];
 	collectDeclTypes(body, dtSyms, dtTypes);
 	const lifetimeLifted = localsOutlivingSuspension(body, locals, ctx);
+	const routines = routineSyms(body, 1, []);
 
 	// 2. Extract body statements
 	const bodyStmts = extractBodyStmts(body);
@@ -1020,8 +1061,10 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	splitStmts(bodyStmts, sc, initState, doneState, loc, iterResultType);
 
 	// 5. Convert the declarations of the locals that outlive a state to assignments
-	const lifted = localsSpanningStates(sc, locals);
-	for (const sym of lifetimeLifted.items) symSetAdd(lifted, sym);
+	const spanning = localsSpanningStates(sc, locals);
+	for (const sym of lifetimeLifted.items) symSetAdd(spanning, sym);
+	const hoisted: Node[] = [];
+	const lifted = hoistStateRoutines(routines, sc, locals, spanning, hoisted);
 	for (const st of sc.items) {
 		convertDeclsToAssigns(st.stmts, lifted, loc);
 	}
@@ -1039,7 +1082,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
 
 	// 8. Build next() function body
-	const nextBody = makeBlock([loop], loc);
+	const nextBody = makeBlock([...hoisted, loop], loc);
 
 	// 9. Create next FunctionExpr with proper return type (IteratorResult<T>)
 	// Lambda lifting uses nodeType to determine the lifted function's return type.
