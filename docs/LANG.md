@@ -744,6 +744,14 @@ the Raiser with corpus `enumStorageWidth`: for `enum Kind { Empty, Pet }`,
 `sizeof` prints `1 2 4 4 2 6 12`. A struct field keeps that width in the account bytes a Solana
 program reads (`Pet { species: Species; level: uint8; hearts: uint16 }` is 4 bytes).
 
+An integer converted into an enum with `as` must lie between the enum's smallest and largest member
+value; a value in a gap between members passes. A constant outside is a compile error
+(`300 as Kind` → `cannot convert 300 to Kind`); a run-time value outside stops the program
+(`value 300 not in range 0 .. 2`, exit 1). `--danger` drops the run-time check. Measured 2026-10-04
+on C and JS with corpus `enumConversionRangeCheck` (a three-member enum, a value in a gap) and
+`enumConversionRangeCheckWide` (an `int64` into a two-byte enum); the Raiser converts without the
+check and prints the value past the enum.
+
 ### BitSet&lt;E&gt;
 
 A set of enum members whose bit position is the member's **ordinal**. The representation
