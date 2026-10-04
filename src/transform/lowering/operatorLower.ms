@@ -443,6 +443,12 @@ export function lowerOperators(program: Node, ctx: TransformContext): Node {
 	});
 }
 
+export function lowerUserOperators(program: Node, ctx: TransformContext): Node {
+	return walkNode(program, (node: Node): Node => {
+		return node.flags.has(NodeFlag.UserOp) ? lowerOperatorNode(node, ctx) : node;
+	});
+}
+
 export function lowerAggregateEquality(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, (node: Node): Node => {
 		if (node.kind != NodeKind.BinaryExpr || ctx.checkerCtx == null) return node;

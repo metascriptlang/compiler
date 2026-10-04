@@ -28,7 +28,7 @@ import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerBorrow } from "./lowering/borrowLower";
 import { lowerBitSet } from "./lowering/bitSetLower";
-import { lowerAggregateEquality } from "./lowering/operatorLower";
+import { lowerAggregateEquality, lowerUserOperators } from "./lowering/operatorLower";
 import { liftDestructors } from "./lowering/destructorLifting";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
@@ -60,6 +60,7 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerBitSet(result, ctx);
 	result = lowerAggregateEquality(result, ctx);
+	result = lowerUserOperators(result, ctx);
 	result = unwrapMaybe(result, ctx);
 	result = liftDestructors(result, ctx, false);
 	return result;
