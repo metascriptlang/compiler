@@ -82,20 +82,37 @@ function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: Source
 
 	const cond = makeUnary("!", makeMember(makeIdentResolved(rSym, loc), "done", loc), loc);
 	const bodyStmts: Node[] = [];
-	const itemDecl = makeVarDecl(d.forOfBinding, makeMember(makeIdentResolved(rSym, loc), "value", loc), boolToDeclKind(d.forOfIsConst), loc);
-	if (bindingSym != null) itemDecl.resolvedSym = bindingSym;
-	// Stamp the binding's resolved element type so downstream passes (generatorLower's
-	// collectDeclTypes → env field types, lambdaLifting's typeToEnvStr) see the
-	// monomorphized T. Without this, env fields fall back to `void*` and DRC hooks
-	// reference `<Type>__unknown` instead of `<Type>__string` etc.
-	if (resultType != null && resultType.typeChildren != null && resultType.typeChildren.length > 0) {
-		itemDecl.nodeType = resultType.typeChildren[0];
+	const itemType = resultType != null && resultType.typeChildren != null && resultType.typeChildren.length > 0 ? resultType.typeChildren[0] : null;
+	const itemDk = boolToDeclKind(d.forOfIsConst);
+	const patKind = d.forOfPattern != null ? d.forOfPattern.kind : NodeKind.Identifier;
+	if (patKind == NodeKind.ArrayPattern || patKind == NodeKind.ObjectPattern) {
+		const elemSym = freshTempSym(ctx, "elem", itemType != null ? itemType : noneType());
+		const elemDecl = makeVarDecl(elemSym.name, makeMember(makeIdentResolved(rSym, loc), "value", loc), DeclKind.Const, loc);
+		elemDecl.resolvedSym = elemSym;
+		if (itemType != null) elemDecl.nodeType = itemType;
+		bodyStmts.push(elemDecl);
+		const bindings = patKind == NodeKind.ArrayPattern
+			? expandArrayRet(d.forOfPattern, makeIdentResolved(elemSym, loc), itemDk, loc, ctx)
+			: expandObjectRet(d.forOfPattern, makeIdentResolved(elemSym, loc), itemDk, loc, ctx);
+		for (const b of bindings) { bodyStmts.push(b); }
+	} else {
+		const itemDecl = makeVarDecl(d.forOfBinding, makeMember(makeIdentResolved(rSym, loc), "value", loc), itemDk, loc);
+		if (bindingSym != null) itemDecl.resolvedSym = bindingSym;
+		// Stamp the binding's resolved element type so downstream passes (generatorLower's
+		// collectDeclTypes → env field types, lambdaLifting's typeToEnvStr) see the
+		// monomorphized T. Without this, env fields fall back to `void*` and DRC hooks
+		// reference `<Type>__unknown` instead of `<Type>__string` etc.
+		if (itemType != null) itemDecl.nodeType = itemType;
+		bodyStmts.push(itemDecl);
 	}
-	bodyStmts.push(itemDecl);
-	for (const s of extractBodyStmts(d.forOfBody)) { bodyStmts.push(s); }
-	bodyStmts.push(makeExprStmt(makeAssign(makeIdentResolved(rSym, loc), makeNextCallSym(iterSym, resultType, loc), loc), loc));
+	const userStmts = extractBodyStmts(d.forOfBody);
+	const nextAt = (): Node => makeExprStmt(makeAssign(makeIdentResolved(rSym, loc), makeNextCallSym(iterSym, resultType, loc), loc), loc);
+	const tail = appendLoopTail(userStmts, nextAt(), nextAt, bodySuspends(userStmts), ctx, loc);
+	for (const s of tail.tailStmts) { bodyStmts.push(s); }
 
-	stmts.push(makeWhile(cond, makeBlock(bodyStmts, loc), loc));
+	const loop = makeWhile(cond, makeBlock(bodyStmts, loc), loc);
+	(loop.data as WhileStmtData).whileLabel = tail.tailLabel;
+	stmts.push(loop);
 	return makeBlock(stmts, loc);
 }
 
