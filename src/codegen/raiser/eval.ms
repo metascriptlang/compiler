@@ -401,6 +401,17 @@ test "engine: explicit exit coerces its number and aborts module initialization"
 	assert ctx.exitValue.intVal == 7;
 }
 
+test "engine: exit inside a spawned strand ends the program with its code" {
+	const ctx = evalOrcVM("function quit(): int32 { exit(3); return 0; }"
+		+ " console.log('armed'); const f = spawn(() => quit());"
+		+ " let n: int32 = 0; while (n < 1000) { n += 1; }"
+		+ " console.log(`after ${await f}`);");
+	assert ctx.error == "";
+	assert ctx.output == "armed\n";
+	assert ctx.exitValue.kind == RaiserValueKind.Int;
+	assert ctx.exitValue.intVal == 3;
+}
+
 test "engine: for-of raises when its body changes the array length" {
 	const ctx = evalOrcVM("function run(mode: int32): string { const arr: int32[] = [1, 2, 3]; let seen = ''; try { for (const x of arr) { seen = seen + String(x) + ','; if (seen.length > 20) break; if (mode == 0) arr.push(x); if (mode == 1 && x == 1) { arr.push(9); continue; } if (mode == 2) { arr.push(9); break; } } } catch (e) { return 'raised after ' + seen; } return 'finished ' + seen; }"
 		+ " console.log(run(0)); console.log(run(1)); console.log(run(2)); console.log(run(3));");

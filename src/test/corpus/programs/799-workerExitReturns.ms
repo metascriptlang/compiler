@@ -1,4 +1,3 @@
-// @xfail(raiser): runs but exits 0: process.exit inside a spawned task does not end the program there
 // @exit: 3
 // @serial
 // @stdout: worker-exit armed 45

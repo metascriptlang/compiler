@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: attempt to access a nil address
+// @xfail(raiser): exits 2 with the C stdout, but the raiser cell keeps stderr apart, so the fatal message the C cell captures with stdout is missing from the compared output
 // @exit: 2
 // @serial
 // @stdout: worker-map-fatal armed 45
