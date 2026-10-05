@@ -107,8 +107,18 @@ function mutation(): boolean {
 	let cnt: bigint = 0n;
 	cnt++;
 	cnt++;
+	let bits: bigint = 6n;
+	bits |= 1n;
+	bits &= 5n;
+	bits ^= 2n;
+	bits <<= 70n;
+	bits >>= 68n;
+	let neg: bigint = -6n;
+	neg >>= 1n;
 	let ok = check("compound", acc.toString() == "30");
 	ok = check("increment", cnt.toString() == "2") && ok;
+	ok = check("compoundBitwise", bits.toString() == "28") && ok;
+	ok = check("compoundShiftNeg", neg.toString() == "-3") && ok;
 	return ok;
 }
 
