@@ -211,3 +211,46 @@ test "a conversion up to an alias of the base class keeps the instance" {
 	up.id = 9;
 	assert derived.id == 9;
 }
+
+// ===== A class extending a generic class instance =====
+
+class InstBase<U> {
+	u: U;
+	constructor(u: U) { this.u = u; }
+	get(): U { return this.u; }
+}
+
+class InstSub extends InstBase<int32> {
+	n: int32;
+	constructor(u: int32) { super(u + 1); this.n = u * 10; }
+}
+
+class InstLeaf extends InstSub {
+	constructor(u: int32) { super(u); }
+}
+
+class InstPair<U> extends InstBase<U> {
+	tag: string;
+	constructor(u: U, tag: string) { super(u); this.tag = tag; }
+}
+
+function instRead(b: InstBase<int32>): int32 { return b.get(); }
+
+test "a class extending an instance is that instance where one is expected" {
+	const s = new InstSub(2);
+	assert instRead(s) == 3;
+	const b: InstBase<int32> = s;
+	assert b.get() == 3;
+	assert instRead(new InstLeaf(4)) == 5;
+	assert instRead(new InstPair<int32>(7, "p")) == 7;
+}
+
+test "a class extending an instance reaches the instance's fields and methods" {
+	const s = new InstSub(2);
+	assert s.u == 3;
+	assert s.n == 20;
+	assert s.get() == 3;
+	const q = new InstPair<string>("x", "q");
+	assert q.get() == "x";
+	assert q.tag == "q";
+}
