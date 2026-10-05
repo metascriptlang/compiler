@@ -20,6 +20,7 @@ import { nonNullMemberOfNullable } from "../../checker/compat";
 import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
+import { dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
 	resolveFunc, isLocalString, isEnumName, findEnumConstant,
@@ -1403,11 +1404,16 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	// User function call: callee must be Identifier
 	if (d.callee.kind == NodeKind.Identifier) {
 		const calleeId = d.callee.data as IdentifierData;
+		if (calleeId.name == "super" && d.callee.resolvedSym != null && d.callee.resolvedSym.symbolKind == SymbolKind.Class) {
+			return compileSuperCall(s, node, d.callee.resolvedSym);
+		}
 		if (resolveGlobal(s, d.callee.resolvedSym) >= 0 || resolveLocal(s, calleeId.name) >= 0) return compileClosureCall(s, node);
 		let calleeSym = d.callee.resolvedSym;
 		if (calleeSym != null && calleeSym.overloads != null && calleeSym.overloads.length > 0) {
 			calleeSym = resolveOverloadWinner(calleeSym, d.resolvedOverloadIdx).winnerSym;
 		}
+		const overridden = overriddenMethodName(calleeSym);
+		if (overridden != "" && d.arguments.length > 0) return compileDispatchedCall(s, node, overridden);
 		let funcIdx = resolveRoutine(s, calleeSym, calleeId.name);
 		if (funcIdx < 0 && calleeSym != null) {
 			funcIdx = callRaiserOnDemand(calleeSym);
@@ -1422,6 +1428,54 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 
 	// Closure / indirect call: callee is a variable holding {fn, env} pair
 	return compileClosureCall(s, node);
+}
+
+function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int32 {
+	const d = node.data as CallExprData;
+	const body = superSym.symbolType != null ? unwrapRef(superSym.symbolType) : null;
+	const parent = body != null && body.sym != null ? body.sym : superSym;
+	const initName = parent.name + "_init";
+	let funcIdx = s.scopedFunctions && parent.modulePath != "" ? resolveFunc(s, parent.modulePath + ":" + initName) : -1;
+	if (funcIdx < 0) funcIdx = resolveFunc(s, initName);
+	const thisReg = resolveLocal(s, "this");
+	if (funcIdx < 0 || thisReg < 0) {
+		const msg = `cannot compile 'super(...)': no '${initName}' in the Raiser function table`;
+		queueRaiserCompileError(msg, node.location.line, node.location.column);
+		return emitTrapNil(s, msg);
+	}
+	const argRegs: int32[] = [thisReg];
+	for (const a of d.arguments) argRegs.push(compileExpr(s, a));
+	const dest = allocReg(s);
+	for (let i = 0; i < argRegs.length; i += 1) allocReg(s);
+	for (let i = 0; i < argRegs.length; i += 1) {
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + i, argRegs[i], 0));
+	}
+	emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, argRegs.length));
+	return dest;
+}
+
+function overriddenMethodName(sym: Symbol | null): string {
+	if (sym == null) return "";
+	const entry = dispatchEntryFor(sym);
+	if (entry == null || entry.overloaded) return "";
+	return dispatchOverridesFor(entry.classSym, entry.methodName).length > 0 ? entry.methodName : "";
+}
+
+function compileDispatchedCall(s: RaiserCompState, node: Node, methodName: string): int32 {
+	const d = node.data as CallExprData;
+	const argRegs: int32[] = [];
+	for (const a of d.arguments) argRegs.push(compileExpr(s, a));
+	const closureReg = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.LoadField, closureReg, argRegs[0], addConst(s, raiserString(methodName))));
+	const fnReg = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.LoadField, fnReg, closureReg, addConst(s, raiserString("fn"))));
+	const dest = allocReg(s);
+	for (let i = 0; i < argRegs.length; i += 1) allocReg(s);
+	for (let i = 0; i < argRegs.length; i += 1) {
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + i, argRegs[i], 0));
+	}
+	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnReg, argRegs.length));
+	return dest;
 }
 
 function compileClosureCall(s: RaiserCompState, node: Node): int32 {
