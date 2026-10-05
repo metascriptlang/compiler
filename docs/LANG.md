@@ -53,8 +53,10 @@ checker rejects it and names the alternative.
   (corpus `687`, `688`). An interface has no run-time identity to test, so `u as I` is
   refused: make `I` a class, or keep the values in a discriminated union. `u instanceof Box`
   without type arguments is refused for the same reason: no instance is built from the
-  generic itself. Not measured: a generic class with an `extends` clause, which does not
-  compile yet (`'super' requires the enclosing class to have an 'extends' clause`).
+  generic itself. An instance carries its parent: with `class Pair<U> extends Base<U>` and
+  `class Sub extends Base<int32>`, `u as Base<int32>` passes for a `Pair<int32>` and a `Sub`,
+  and `u as Base<string>` on a `Sub` stops with `invalid object conversion`, exit 1, on C and
+  JS (measured 2026-10-05).
 - `x as unknown as T` is two conversions, up then a tested down, never a reinterpret:
   `i as unknown as K` for an `int32` is refused — write `i as K`. `null as unknown as T`
   still works, because a `null` literal takes any type.
@@ -1065,6 +1067,28 @@ Measured 2026-09-30 with the identity-fix candidate: `msc-idfix run smoke.ms` on
 inserting one item and reading its map size. Pins `bug163`, `bug565`, `bug580` and `bug572`
 cover the nullable-set variant, same-name module boundaries and invariant type arguments.
 Full corpus and downstream deployment were not revalidated by this measurement.
+
+**A class extending a generic class instance.** `class Sub extends Base<int32>` and
+`class Pair<U> extends Base<U>` inherit the instance: a `Sub` passes where a `Base<int32>` is
+expected, reaches `get()` and `u` with `U = int32`, and `super(u)` runs `Base<int32>`'s
+constructor, one or two levels down. A generic class may extend a plain one the same way.
+
+```typescript
+class Base<U> { u: U; constructor(u: U) { this.u = u; } get(): U { return this.u; } }
+class Sub extends Base<int32> { constructor(u: int32) { super(u + 1); } }
+function read(b: Base<int32>): int32 { return b.get(); }
+read(new Sub(2));                                   // 3
+
+class Bad extends Base<int32> { get(): int32 { return 2; } }
+// error: Method 'Bad.get' overrides 'Base.get'; a method of a generic class cannot override or be overridden
+```
+
+An override pair where either class is generic is refused at the declaration: a call through a
+`Base<int32>` would need a dispatcher for each instance of `get`, which neither backend builds.
+A plain override among the non-generic classes below the instance dispatches as usual. Measured
+2026-10-05 on C and `--target=js` with corpus `classExtendsGenericInstance` (same output on
+both, and with `Base` imported from another module); the Raiser stops at `super(...)` for any
+class, generic or not. Not measured: JS multi-file output, where each module is its own file.
 
 
 A generic parameter is always a type. A value parameter (a "const generic") is refused by the parser:
