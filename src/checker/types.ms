@@ -2701,18 +2701,6 @@ export function objectConversion(src: Type | null, target: Type | null): ObjConv
 	return ObjConv.Checked;
 }
 
-export function uniqueClassInUnion(union: Type, member: Type): Symbol | null {
-	if (union.typeChildren == null || !isRuntimeCheckedClass(member) || member.typeReturn == null) return null;
-	const memberSym = member.typeReturn.sym;
-	for (const child of union.typeChildren) {
-		if (child == null) return null;
-		if (isRuntimeCheckedClass(child) && child.typeReturn != null && child.typeReturn.sym == memberSym) continue;
-		if (isPrimitiveUnionMember(child)) continue;
-		if (!isRuntimeCheckedClass(child) || isClassOrSubclass(child, member) || isClassOrSubclass(member, child)) return null;
-	}
-	return memberSym;
-}
-
 function heldTarget(t: Type | null): Type | null {
 	const bare = t != null ? skipModifier(t) : null;
 	if (bare == null) return null;
@@ -2730,6 +2718,11 @@ function heldObjectOrUnknown(t: Type | null): Type | null {
 
 function isRuntimeCheckedClass(t: Type): boolean {
 	return runtimeClassSym(t.kind == TypeKind.Ref ? t.typeReturn : null) != null;
+}
+
+export function unionMemberDisplay(m: Type): string {
+	const body = m.kind == TypeKind.Ref ? m.typeReturn : null;
+	return body != null && (body.kind == TypeKind.Struct || body.kind == TypeKind.GenericInstance) ? typeDisplayName(body) : typeDisplayName(m);
 }
 
 export function runtimeClassSym(body: Type | null): Symbol | null {

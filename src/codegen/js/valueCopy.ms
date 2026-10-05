@@ -14,22 +14,6 @@ import { isViewBinding } from "../../checker/symbol";
 import { distinctBody, setRepr } from "../../checker/types";
 import { emit, emitNode, JSGenerator, jsTypedArrayName } from "./emit";
 
-let ownerGen: JSGenerator | null = null;
-let copyKeys: string[] = [];
-let copyNames: string[] = [];
-let assignKeys: string[] = [];
-let assignNames: string[] = [];
-
-function registryFor(gen: JSGenerator): void {
-	if (ownerGen != gen) {
-		ownerGen = gen;
-		copyKeys = [];
-		copyNames = [];
-		assignKeys = [];
-		assignNames = [];
-	}
-}
-
 export function needsValueCopy(t: Type | null): boolean {
 	// Maybe<T> is unwrapped first: the C backend wraps non-pointer optionals in
 	// a { value, present } carrier, but the JS backend erases them to a native
@@ -139,16 +123,16 @@ function identFromKey(key: string): string {
 }
 
 function copyFnName(gen: JSGenerator, t: Type): string {
-	registryFor(gen);
+	const h = gen.helpers;
 	const key = typeKey(t);
 	let i = 0;
-	while (i < copyKeys.length) {
-		if (copyKeys[i] == key) return copyNames[i];
+	while (i < h.copyKeys.length) {
+		if (h.copyKeys[i] == key) return h.copyNames[i];
 		i += 1;
 	}
 	const name = "msValCopy_" + identFromKey(key);
-	copyKeys.push(key);
-	copyNames.push(name);
+	h.copyKeys.push(key);
+	h.copyNames.push(name);
 	gen.staticSlots.push(buildCopyFn(gen, t, name));
 	return name;
 }
@@ -243,16 +227,16 @@ export function valueCopyFnName(gen: JSGenerator, t: Type | null): string {
 // Assignment into a location that already holds a value copies in place:
 // every other pointer to that location keeps seeing it, as on C.
 function assignFnName(gen: JSGenerator, t: Type): string {
-	registryFor(gen);
+	const h = gen.helpers;
 	const key = typeKey(t);
 	let i = 0;
-	while (i < assignKeys.length) {
-		if (assignKeys[i] == key) return assignNames[i];
+	while (i < h.assignKeys.length) {
+		if (h.assignKeys[i] == key) return h.assignNames[i];
 		i += 1;
 	}
 	const name = "msValAssign_" + identFromKey(key);
-	assignKeys.push(key);
-	assignNames.push(name);
+	h.assignKeys.push(key);
+	h.assignNames.push(name);
 	gen.staticSlots.push(buildAssignFn(gen, t, name));
 	return name;
 }
@@ -312,16 +296,16 @@ function isSimpleLvalue(n: Node): boolean {
 // assignment to it rebinds to its own copy (C gives it an owned shadow,
 // CK-18/CK-30), it never writes through into the value it views.
 function storeFnName(gen: JSGenerator, t: Type): string {
-	registryFor(gen);
+	const h = gen.helpers;
 	const key = "store:" + typeKey(t);
 	let i = 0;
-	while (i < assignKeys.length) {
-		if (assignKeys[i] == key) return assignNames[i];
+	while (i < h.assignKeys.length) {
+		if (h.assignKeys[i] == key) return h.assignNames[i];
 		i += 1;
 	}
 	const name = "msValStore_" + identFromKey(typeKey(t));
-	assignKeys.push(key);
-	assignNames.push(name);
+	h.assignKeys.push(key);
+	h.assignNames.push(name);
 	gen.staticSlots.push("function " + name + "(o, k, v) { return o[k] = " + assignFnName(gen, t) + "(o[k], v); }\n");
 	return name;
 }

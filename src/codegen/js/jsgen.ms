@@ -4,7 +4,7 @@
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
 import { Node, NodeKind, ProgramData, HiddenDerefData, HiddenStdConvData, TryExprData, FunctionDeclData, ExportDeclData } from "../../ast/node";
-import { JSGenerator, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier } from "./emit";
+import { JSGenerator, JSHelpers, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier } from "./emit";
 import { SourceInfo, shiftLines } from "./sourcemap";
 import { forEachChild } from "../../ast/visitor";
 import {
@@ -271,9 +271,10 @@ export interface BundleModuleResult {
 	smap: SourceInfo;
 }
 
-export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean, sourceFile: string, sourcemap: boolean): BundleModuleResult {
+export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean, sourceFile: string, sourcemap: boolean, helpers: JSHelpers): BundleModuleResult {
 	const gen = createJSGenerator();
 	gen.bundleMode = true;
+	gen.helpers = helpers;
 	gen.bundleIsPrelude = isPrelude;
 	gen.smap = sourcemap;
 	gen.sourceFile = sourceFile;

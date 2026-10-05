@@ -14,20 +14,6 @@ import { distinctBody, setRepr } from "../../checker/types";
 import { emit, emitNode, emitJoinedNodes, JSGenerator } from "./emit";
 import { valueCopyFnName } from "./valueCopy";
 
-let ownerGen: JSGenerator | null = null;
-let keyKeys: string[] = [];
-let keyNames: string[] = [];
-let runtimeEmitted = false;
-
-function registryFor(gen: JSGenerator): void {
-	if (ownerGen != gen) {
-		ownerGen = gen;
-		keyKeys = [];
-		keyNames = [];
-		runtimeEmitted = false;
-	}
-}
-
 function valueKeyShape(t: Type | null): Type | null {
 	if (t == null) return null;
 	if (t.kind == TypeKind.Struct && t.typeFlags.has(TypeFlag.IsMaybe)) return valueKeyShape(t.typeReturn);
@@ -94,15 +80,16 @@ function partExpr(gen: JSGenerator, t: Type | null, src: string): string {
 }
 
 function keyFnName(gen: JSGenerator, shape: Type): string {
+	const h = gen.helpers;
 	const key = shapeKey(shape);
 	let i = 0;
-	while (i < keyKeys.length) {
-		if (keyKeys[i] == key) return keyNames[i];
+	while (i < h.keyKeys.length) {
+		if (h.keyKeys[i] == key) return h.keyNames[i];
 		i += 1;
 	}
 	const name = "msValueKey_" + identFromKey(key);
-	keyKeys.push(key);
-	keyNames.push(name);
+	h.keyKeys.push(key);
+	h.keyNames.push(name);
 	if (shape.kind == TypeKind.SizedArray) {
 		const part = partExpr(gen, shape.typeReturn, "v[j]");
 		const body = "let key = \"[\"; for (let j = 0; j < " + shape.typeValue.toString()
@@ -205,9 +192,8 @@ const RUNTIME = "function msValueKeys() {\n"
 	+ "}\n";
 
 function useRuntime(gen: JSGenerator): void {
-	registryFor(gen);
-	if (!runtimeEmitted) {
-		runtimeEmitted = true;
+	if (!gen.helpers.keyRuntime) {
+		gen.helpers.keyRuntime = true;
 		gen.staticSlots.push(RUNTIME);
 	}
 }

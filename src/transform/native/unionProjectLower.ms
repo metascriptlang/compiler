@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, TypeKind, Type, SourceLocation, HiddenStdConvData, TypeAssertionData, MemberExprData, BinaryExprData, HiddenDerefData, ArrayAccessData } from "../../ast/node";
-import { narrowUnionToVariant, isSlotUnion, projectTagUnionMember } from "../../checker/fit";
-import { isMaybeType, typeDisplayName, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType } from "../../checker/types";
+import { narrowUnionToVariant, isSlotUnion, projectTagUnionMember, objectHolderSlots } from "../../checker/fit";
+import { isMaybeType, unwrapRefNullUnion, typeDisplayName, unionMemberDisplay, isDiscriminatedUnion, getDiscriminantName, int32Type, booleanType, stringType } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { TransformContext } from "../context";
@@ -95,25 +95,21 @@ function memberLabels(ut: Type): string[] {
 			const dot = stored.lastIndexOf(".");
 			labels.push(getDiscriminantName(ut) + " = " + (dot >= 0 ? stored.slice(dot + 1, stored.length) : stored));
 		} else {
-			labels.push(memberDisplay(ut.typeChildren[vi]));
+			labels.push(unionMemberDisplay(ut.typeChildren[vi]));
 		}
 	}
 	return labels;
 }
 
-function memberDisplay(t: Type): string {
-	return t.kind == TypeKind.Ref && t.typeReturn != null ? typeDisplayName(t.typeReturn) : typeDisplayName(t);
-}
-
 function unionDisplay(ut: Type): string {
 	if (ut.sym != null && ut.sym.name != "") return ut.sym.name;
 	const names: string[] = [];
-	for (const m of ut.typeChildren) names.push(memberDisplay(m));
+	for (const m of ut.typeChildren) names.push(unionMemberDisplay(m));
 	return names.join(" | ");
 }
 
 function accessHead(field: string, projection: Node, ut: Type): string {
-	const what = field != "" ? `field '${field}'` : `member '${memberDisplay((projection.data as HiddenStdConvData).convType)}'`;
+	const what = field != "" ? `field '${field}'` : `member '${unionMemberDisplay((projection.data as HiddenStdConvData).convType)}'`;
 	return `${what} is not accessible for type '${unionDisplay(ut)}' using '`;
 }
 
@@ -125,6 +121,11 @@ export function checkVariantReads(program: Node, ctx: TransformContext): Node {
 
 function guardReads(node: Node, ctx: TransformContext): void {
 	if (node == null) return;
+	if (node.kind == NodeKind.HiddenSubConv && node.flags.has(NodeFlag.ObjectSlot)) {
+		guardObjectSlot(node);
+		forEachChild(node, (c: Node): void => guardReads(c, ctx));
+		return;
+	}
 	if (node.kind == NodeKind.TypeAssertion && !node.flags.has(NodeFlag.ConvCheck)) {
 		const cast = (node.data as TypeAssertionData).asExpr;
 		if (cast != null && cast.kind == NodeKind.HiddenSubConv && !cast.flags.has(NodeFlag.ConvCheck)) {
@@ -141,6 +142,7 @@ function guardReads(node: Node, ctx: TransformContext): void {
 }
 
 function guardProjection(p: Node, field: string, ctx: TransformContext, anySource: boolean): void {
+	if (p != null && p.flags.has(NodeFlag.ObjectSlot)) return;
 	const ut = checkedProjectionSource(p, anySource);
 	if (ut == null) return;
 	const d = p.data as HiddenStdConvData;
@@ -151,6 +153,31 @@ function guardProjection(p: Node, field: string, ctx: TransformContext, anySourc
 	const access = makeCall(runtimeRef(check, loc), [u, makeNumber(p.variantSlot - 1, loc), makeString(accessHead(field, p, ut), loc), makeString(labels, loc)], loc);
 	access.nodeType = ut;
 	d.convExpr = access;
+}
+
+function guardObjectSlot(p: Node): void {
+	const d = p.data as HiddenStdConvData;
+	const source = d.convExpr.nodeType;
+	const carried = source != null && isMaybeType(source);
+	const ut = carried ? source!.typeReturn : source;
+	const member = d.convType.kind == TypeKind.Union ? unwrapRefNullUnion(d.convType) : d.convType;
+	if (ut == null || member == null || !isSlotUnion(ut)) throw new Error(`internal: an object-slot projection to ${typeDisplayName(d.convType)} reads no tagged union`);
+	const holders = objectHolderSlots(ut, member);
+	if (holders.length == 0) throw new Error(`internal: '${unionDisplay(ut)}' has no slot holding ${typeDisplayName(member)}`);
+	let mask = 0;
+	for (const h of holders) {
+		if (h > 52) throw new Error(`internal: '${unionDisplay(ut)}' holds an object in slot ${h}, past the 53 slots a conversion check can name`);
+		let bit = 1;
+		for (let i = 0; i < h; i += 1) bit = bit * 2;
+		mask += bit;
+	}
+	const loc = p.location;
+	const u = d.convExpr;
+	const check = carried ? "msMaybeVariantObject" : isLocation(u) ? "msVariantObject" : "msVariantObjectVal";
+	const access = makeCall(runtimeRef(check, loc), [u, makeNumber(mask, loc), makeString(accessHead("", p, ut), loc), makeString(memberLabels(ut).join("|"), loc)], loc);
+	access.nodeType = source;
+	d.convExpr = access;
+	if (carried) p.flags = p.flags.incl(NodeFlag.NoFieldCheck);
 }
 
 export function checkVariantReadsJS(program: Node, ctx: TransformContext): Node {

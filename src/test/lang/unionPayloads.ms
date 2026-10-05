@@ -64,6 +64,20 @@ interface LaterSquare { kind: "square"; label: string; width: float64; }
 
 type LaterShape = LaterCircle | LaterSquare;
 
+class PayloadRow { value: int32; constructor(value: int32) { this.value = value; } }
+
+class PayloadBox<T> { held: T; constructor(held: T) { this.held = held; } }
+
+function rowOrList(list: boolean): PayloadRow | int32[] {
+	if (list) return [4, 5, 6];
+	return new PayloadRow(7);
+}
+
+function eitherBox(wide: boolean): PayloadBox<int32> | PayloadBox<string> {
+	if (wide) return new PayloadBox<string>("s");
+	return new PayloadBox<int32>(41);
+}
+
 test "unionPayloads: variant widens at var init" {
 	const c: VariantWideningCircle = { kind: "circle", r: 3.0 };
 	const a: VariantWideningShape = c;
@@ -141,4 +155,11 @@ test "unionPayloads: lifted consumers use later-declared variant payloads in bot
 		assert area(value) == (circle ? 4.0 : 9.0);
 		assert value.label == (circle ? "circle-payload" : "square-payload");
 	}
+}
+
+test "unionPayloads: as reads the slot that widening wrote for an array or a generic-instance member" {
+	assert (rowOrList(true) as int32[]).length == 3;
+	assert (rowOrList(false) as PayloadRow).value == 7;
+	assert (eitherBox(false) as PayloadBox<int32>).held + 1 == 42;
+	assert (eitherBox(true) as PayloadBox<string>).held == "s";
 }

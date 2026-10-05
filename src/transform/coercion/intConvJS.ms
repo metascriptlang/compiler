@@ -5,7 +5,7 @@
 // nodes into the operator that truncates, or the fraction survives the
 // conversion: `const x: int32 = f` emitted `3.9` on JS against `3` on C.
 
-import { Node, NodeKind, TypeAssertionData, HiddenStdConvData, BinaryExprData, ExprStmtData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, TypeAssertionData, HiddenStdConvData, BinaryExprData, ExprStmtData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeMember, makeNumber, runtimeRef } from "../util";
@@ -54,6 +54,7 @@ function materializeIntConv(node: Node): Node {
 		const d = node.data as TypeAssertionData;
 		if (node.nodeType == null || d.asType == "!") return node;
 		const kind = node.nodeType.kind;
+		if (node.flags.has(NodeFlag.ConvCheck)) return isIntConvKind(kind) ? truncateTo(node, kind, node.location) : node;
 		if (!isIntConvKind(kind)) {
 			if (isFloatKind(kind) && d.asExpr != null) {
 				const srcT = d.asExpr.nodeType;

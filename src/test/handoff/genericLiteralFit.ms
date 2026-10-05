@@ -48,3 +48,25 @@ test "a generic function passed as a value settles T the same way" {
 	assert hasError(src, "Type 'int32[]' is not assignable to type 'number[]'");
 	assert strictErrorCount(src) == 1;
 }
+
+const ACC = "type Accessor<T> = distinct (() => T);\nfunction accessor<T>(f: () => T): Accessor<T> { return f as Accessor<T>; }\ninterface Style { height?: number | null; width?: number | null; }\n";
+const BOXED = "function Boxed<T>(props: { each: () => T[]; children: (item: T) => string; style?: Accessor<Style> | null; ahead?: Accessor<number> | null }): string { return props.children(props.each()[0]); }\nconst xs: number[] = [7, 8];\n";
+const MEASURE = "function measure<T>(o: { item: T; frame: Style; style: Accessor<Style>; inner: { item: T; ahead: Accessor<number> } }): string { return \"m\"; }\n";
+
+test "an object literal property takes its struct field's type" {
+	assert strictErrorCount(ACC + MEASURE + "const s = measure({ item: 1, frame: { height: 7 }, style: accessor(() => ({ height: 40 })), inner: { item: 2, ahead: accessor(() => 2) } });") == 0;
+}
+
+test "a generic call property binds its own type parameter from the field" {
+	assert strictErrorCount(ACC + BOXED + "const s = Boxed({ each: () => xs, children: (item: number) => \"i\", style: accessor(() => ({ height: 40 })), ahead: accessor(() => 2) });") == 0;
+}
+
+test "a generic function passed as a value types the property the same way" {
+	assert strictErrorCount(ACC + BOXED + CC + "const s = createComponent(Boxed, { each: accessor(() => xs), children: (item: number) => \"i\", style: accessor(() => ({ height: 40 })), ahead: accessor(() => 2) });") == 0;
+}
+
+test "a property the field refuses is still reported against the field" {
+	const src = ACC + BOXED + CC + "const s = createComponent(Boxed, { each: accessor(() => xs), children: (item: number) => \"i\", ahead: accessor(() => \"far\") });";
+	assert hasError(src, "Type 'string' is not assignable to type 'number'");
+	assert strictErrorCount(src) == 1;
+}

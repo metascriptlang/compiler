@@ -100,7 +100,7 @@ function narrowAssertedCarrier(node: Node): Node {
 		(node.data as TypeAssertionData).asExpr = projected;
 		return node;
 	}
-	const narrowed = narrowMaybePayload(inner, carrier, target);
+	const narrowed = narrowMaybePayload(inner, carrier, target, true);
 	if (narrowed == null as unknown as Node) return node;
 	if (checked) narrowed.flags = narrowed.flags.incl(NodeFlag.ConvCheck);
 	return narrowed;
