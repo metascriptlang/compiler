@@ -6,6 +6,7 @@ import {
 import { FormatOptions } from "../options";
 import { Doc, docText, docGroup, docIndent, docLine, docSoftLine } from "../doc";
 import { callPrintNode } from "./callbacks";
+import { sourceByteAt } from "./literals";
 
 function printJsxChildren(children: Node[], options: FormatOptions): Doc[] {
 	const parts: Doc[] = [];
@@ -57,12 +58,18 @@ export function printJsxExpressionContainer(node: Node, options: FormatOptions):
 	return docGroup([docText("{"), callPrintNode(d.jsxExpr, options), docText("}")]);
 }
 
+function writtenInBraces(value: Node, options: FormatOptions): boolean {
+	let column = value.location.column - 1;
+	while (column > 0 && sourceByteAt(options.source, value.location.line, column) == " ".code) column = column - 1;
+	return sourceByteAt(options.source, value.location.line, column) == "{".code;
+}
+
 export function printJsxAttribute(node: Node, options: FormatOptions): Doc {
 	const d = node.data as JSXAttributeData;
 	const value = d.jsxAttrValue;
 	const isBare = value.kind == NodeKind.BooleanLiteral && value.location.line == node.location.line && value.location.column == node.location.column;
 	if (isBare) return docText(d.jsxAttrName);
-	if (value.kind == NodeKind.StringLiteral) {
+	if (value.kind == NodeKind.StringLiteral && !writtenInBraces(value, options)) {
 		return docGroup([docText(d.jsxAttrName + "="), callPrintNode(value, options)]);
 	}
 	return docGroup([docText(d.jsxAttrName + "={"), callPrintNode(value, options), docText("}")]);
