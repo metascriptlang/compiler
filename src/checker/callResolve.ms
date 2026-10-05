@@ -1676,7 +1676,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		}
 		if (hasGenericParams(calleeType) && !node.flags.has(NodeFlag.ExtStatic) && node.resolvedSym != null
 				&& node.resolvedSym.declNode != null && (declTakesReceiver(node.resolvedSym.declNode) || isGenericInstanceMethod(node.resolvedSym))) {
-			const extInst = tryInstantiateGenericCallee(ctx, node, calleeType!, argTypes, getGenericDeclFlags(node.resolvedSym.declNode), expectedType, extRecvBindings);
+			const recvBindings = extRecvBindings.names.length > 0 ? extRecvBindings : classReceiverBindings(node.resolvedSym, d.callee);
+			const extInst = tryInstantiateGenericCallee(ctx, node, calleeType!, argTypes, getGenericDeclFlags(node.resolvedSym.declNode), expectedType, recvBindings);
 			if (extInst != null) {
 				calleeType = stripReceiverParam(extInst);
 				d.callee.nodeType = calleeType;
@@ -2533,6 +2534,16 @@ function bindingsCoverDecl(eb: UnifyBindings, declNode: Node): boolean {
 		if (findBindingIndex(eb, gn) == -1) return false;
 	}
 	return true;
+}
+
+function classReceiverBindings(sym: Symbol, callee: Node): UnifyBindings {
+	const eb = createUnifyBindings();
+	const methType = sym.symbolType;
+	if (callee.kind != NodeKind.MemberExpr || methType == null || methType.kind != TypeKind.Function) return eb;
+	if (methType.typeNames.length == 0 || methType.typeNames[0] != "this") return eb;
+	const object = (callee.data as MemberExprData).object;
+	if (object != null && object.nodeType != null && hasGenericParams(methType.typeChildren[0])) unifyType(methType.typeChildren[0], object.nodeType, eb);
+	return eb;
 }
 
 function declTakesReceiver(declNode: Node): boolean {

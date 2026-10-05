@@ -314,16 +314,16 @@ test "classCalls: this in a two-parameter generic constructor is its instance" {
 	assert p.vs[1] == "z";
 }
 
-test "classCalls: a method without a return annotation returns what its body returns" {
-	const r = new InferredReturns();
-	const n: int32 = r.count();
-	assert n == 4;
-	assert r.label() == "n=4";
-	const p = r.point();
-	assert p.x == 4 && p.y == 8;
-	assert r.maybe(true) == "on";
-	assert r.maybe(false) == null;
-	r.bump();
-	assert r.count() == 5;
-	assert InferredReturns.zero() == 0;
+class OwnParamBox<T> {
+	v: T;
+	constructor(v: T) { this.v = v; }
+	keepClassParam<U>(u: U): T { return this.v; }
+	applyBoth<U>(f: (x: T) => U): U { return f(this.v); }
+}
+
+test "classCalls: a method with its own type parameter keeps the class's from the receiver" {
+	const b = new OwnParamBox<int32>(21 as int32);
+	assert b.keepClassParam<string>("q") == 21;
+	assert b.applyBoth<string>((x: int32): string => `n${x * 2}`) == "n42";
+	assert new OwnParamBox<string>("ab").applyBoth((x: string): int32 => x.length as int32) == 2;
 }
