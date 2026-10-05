@@ -15,7 +15,7 @@ import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
-import { escapeJSString } from "../codegen/js/emit";
+import { createJSHelpers, escapeJSString } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { takeRaiserCompileErrors } from "../codegen/raiser/context";
 import { createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
@@ -1467,6 +1467,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 	// Phase 2 — backend transform + codegen
 	let anyTopLevelAwait = false;
+	const helpers = createJSHelpers();
 	for (let ui = 0; ui < unitPaths.length; ui += 1) {
 		const modPath = unitPaths[ui];
 		const mod = findModule(graph, modPath);
@@ -1493,7 +1494,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 		const moduleId = replaceExt(relative(projectRoot, modPath), "");
 		const isPrelude = moduleId.startsWith("std/core/");
-		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, modPath, opts.sourcemap);
+		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude, modPath, opts.sourcemap, helpers);
 		if (hasTopLevelAwait(transformed)) anyTopLevelAwait = true;
 
 		const separator = `\n// --- Module: ${moduleId} ---\n`;

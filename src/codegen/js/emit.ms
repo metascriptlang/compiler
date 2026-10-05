@@ -12,6 +12,20 @@ import { mangleModuleName } from "../c/names";
 
 // ===== JS Generator =====
 
+export class JSHelpers {
+	copyKeys: string[];
+	copyNames: string[];
+	assignKeys: string[];
+	assignNames: string[];
+	keyKeys: string[];
+	keyNames: string[];
+	keyRuntime: boolean;
+}
+
+export function createJSHelpers(): JSHelpers {
+	return { copyKeys: [], copyNames: [], assignKeys: [], assignNames: [], keyKeys: [], keyNames: [], keyRuntime: false };
+}
+
 export class JSGenerator {
 	buf: string[];
 	indentLevel: int32;
@@ -25,6 +39,7 @@ export class JSGenerator {
 	importSourceToModuleIdKeys: string[];
 	thisName: string;
 	staticSlots: string[]; // module-scope storage for `static` decls written inside bodies
+	helpers: JSHelpers;
 	// Multi-file emit (one ES module per source module). Names derive from the
 	// export surface, imports derive from actual references — source import
 	// statements only contribute side-effect ordering.
@@ -61,7 +76,7 @@ export class JSGenerator {
 }
 
 export function createJSGenerator(): JSGenerator {
-	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", staticSlots: [],
+	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
 		multiFile: false, currentModulePath: "", importSpecKeys: [], importSpecVals: [], moduleSpecKeys: [], moduleSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [],
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
