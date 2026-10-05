@@ -263,6 +263,23 @@ TIERS="src/test/c/index.ms src/test/js/index.ms src/test/handoff/index.ms src/te
 SHARDED_TIERS="src/test/c/index.ms"
 TEST_SHARDS=${GATE_TEST_SHARDS:-3}
 
+guard_probe_names() {
+  local f b
+  for f in src/test/guard/*.ms; do
+    b=${f##*/}
+    b=${b%.ms}
+    [ "$b" = run ] || printf '%s\n' "$b"
+  done
+}
+
+unrun_claims() {
+  local name rc=0
+  while read -r name; do
+    [ -f "$1/done/$name" ] || { printf 'FAIL %s: no shard ran it\n' "$name"; rc=1; }
+  done < <(guard_probe_names)
+  return $rc
+}
+
 test_jobs() {
   local f i
   for f in $TIERS; do
@@ -790,6 +807,14 @@ CASES
   got=$(TEST_SHARDS=1; test_jobs | awk '$2 != "-" { s++ } END { printf "%d %d", NR, s }')
   [ "$got" = "7 0" ] || { printf 'FAIL test jobs unsharded: got "%s"\n' "$got"; bad=1; }
   log=$(mktemp -d) || return 1
+  mkdir -p "$log/done"
+  guard_probe_names | sed 1d | while read -r got; do : >"$log/done/$got"; done
+  want=$(guard_probe_names | head -1)
+  got=$(unrun_claims "$log"; printf 'rc=%s' "$?")
+  rm -rf "$log"
+  [ -n "$want" ] && [ "$got" = "FAIL $want: no shard ran it
+rc=1" ] || { printf 'FAIL guard claims: an unclaimed probe must be named, got "%s"\n' "$got"; bad=1; }
+  log=$(mktemp -d) || return 1
   printf 'ok k1\nfailed k2\nstale k3\nnew k4\n' >"$log/keys"
   printf 'k1\n' >"$log/ok.key"; printf 'ok\tc\tj\t0\t9\n' >"$log/ok.sig"
   printf 'k2\n' >"$log/failed.key"; printf 'failed\tc\tj\t1\t9\n' >"$log/failed.sig"
@@ -1263,12 +1288,18 @@ with_test_binary() {
 }
 
 run_sharded_lane() {
-  local lane=$1 var=$2 runner=$3 n=$4 i rc=0 part prc
+  local lane=$1 var=$2 runner=$3 n=$4 i rc=0 part prc claims="" name
+  if [ "$lane" = guard ]; then
+    claims="$OUT/guard.claims"
+    rm -rf "$claims" && mkdir -p "$claims/done"
+    guard_probe_names | while read -r name; do : >"$claims/$name"; done
+  fi
   for ((i = 0; i < n; i++)); do
     part="$OUT/$lane.$i.part"
-    (with_slot env -u FORCE_COLOR NO_COLOR=1 "$var=$i/$n" MSC="$CAND" "$CAND" run --target=raiser "$runner" >"$part" 2>&1; echo $? >"$part.rc") &
+    (with_slot env -u FORCE_COLOR NO_COLOR=1 "$var=$i/$n" GUARD_CLAIMS="$claims" MSC="$CAND" "$CAND" run --target=raiser "$runner" >"$part" 2>&1; echo $? >"$part.rc") &
   done
   wait
+  [ -z "$claims" ] || unrun_claims "$claims" || rc=1
   for ((i = 0; i < n; i++)); do
     part="$OUT/$lane.$i.part"
     cat "$part"
