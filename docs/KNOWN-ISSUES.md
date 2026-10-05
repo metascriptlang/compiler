@@ -410,15 +410,24 @@ Source commit `0ac0b83c`, tree `68fc5b80b2cb47e89b9d866feff3493c16ec45a0`.
 This is candidate proof, not the full BitSet matrix, normal gate, installed compiler or
 downstream Scene lifecycle proof.
 
-## L24. Compound bitwise assignment `|=` / `&=` / `^=` / `<<=` does not lex (LIVE, measured 2026-09-13)
+## ~~L24. Compound bitwise assignment `|=` / `&=` / `^=` / `<<=` does not lex~~ (FIXED, measured 2026-10-05)
+
+`&=`, `|=`, `^=`, `<<=`, `>>=` and `>>>=` store the binary `x op y` into `x` and read `x` once.
+Measured on a stage-2 build of `wt/solana-bit-assign` (base `b6b86a10f`, which still prints the
+old `Parse: Unexpected token: =`):
 
 ```
 let x: int32 = 3;
-x |= 4;  x &= 1;  x ^= 1;  x <<= 1;     error: Parse: Unexpected token: = at line 2   (each, both backends)
-x += 1;                                 4
+x |= 4;  x &= 5;  x ^= 1;  x <<= 2;  x >>= 1;       8 on C, JS and Raiser
+x >>>= 1;                                           4 on C and JS; Raiser has no `>>>`
+let y: int32 = 10;  y -= 4;                         6
 ```
 
-`>>=` and `-=` not measured. No token for the bitwise forms in `src/lexer/token.ms`.
+Corpus `bitwiseCompoundAssignment` gives the binary form's values on C, JS and Raiser for int32,
+uint32, int64, uint64, uint8, int8, int16 and uint16, calls `next()` once in `a[next()] |= v`,
+and covers a `BitSet<E>` over 4 and over 70 members. The operands follow the binary operator:
+`int32 |= int64` and `uint64 <<= int32` are refused as `|` and `<<` are, and `n |= 1` on a
+`number` is refused (`src/test/handoff/bitwiseCheck.ms`).
 
 ## L25. ~~`HashMap` is not defined on the JS backend~~ RETRACTED 2026-09-13 — it was the `msc run --target=js` path
 

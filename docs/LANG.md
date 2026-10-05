@@ -153,7 +153,7 @@ Constants follow Nim's literal rule, with one safety addition:
 - An integer a float cannot hold exactly is refused even as a literal (`const f: float32 = 16777217`), and so is a `uint64`/`int64` past what the slot holds. `16777217 as float32` rounds on the programmer's word.
 - A float literal or an untyped float constant goes into a `float32` slot rounded once, as Nim does: `const K = 0.1; const f: float32 = K` and `step(1.0 / 60.0)` with a `float32` parameter compile, and every backend holds the same `0.10000000149011612`. A float that would round to infinity is refused, literal or constant (`const f: float32 = 1e39`); Nim yields `inf`.
 - A literal or an untyped constant beside a `float32` operand is `float32`, so `x / 1000.0`, `x * 2` and `x * K` with `const K = 0.1` stay `float32`. Nim keeps such an expression `float64` and narrows it at the slot, which the rule above refuses; the literal is rounded instead, once, where the source shows it.
-- A compound assignment `x op= y` converts `y` to the type of `x` as an assignment would (Nim's `+=`(x: var T, y: T)): `int32 += int64` and `float32 *= number` need `as`, `uint8 -= 1` and `number += int32` do not.
+- A compound assignment `x op= y` converts `y` to the type of `x` as an assignment would (Nim's `+=`(x: var T, y: T)): `int32 += int64` and `float32 *= number` need `as`, `uint8 -= 1` and `number += int32` do not. The bitwise forms (`&=` `|=` `^=` `<<=` `>>=` `>>>=`) keep their binary operator's rule instead: both operands of one integer type, so `int64 |= int32` and `uint64 <<= int32` need `as` while `uint8 |= 0x80` does not, and `number |= 1` is refused.
 
 An `out` argument is written in place, so its variable must have exactly the parameter's type. Measured refusals name the rule, the value when it is a constant, and the fix:
 
@@ -261,6 +261,15 @@ int       float     double                       (reserved, not yet usable as ty
 | `*=` | STAR_EQUALS | Mul-assign |
 | `/=` | SLASH_EQUALS | Div-assign |
 | `%=` | PERCENT_EQUALS | Mod-assign |
+| `&=` | AMP_EQUALS | Bitwise-AND-assign |
+| `\|=` | PIPE_EQUALS | Bitwise-OR-assign |
+| `^=` | CARET_EQUALS | Bitwise-XOR-assign |
+| `<<=` | LT_LT_EQUALS | Left-shift-assign |
+| `>>=` | GT_GT_EQUALS | Right-shift-assign |
+| `>>>=` | GT_GT_GT_EQUALS | Unsigned-right-shift-assign |
+
+`x op= y` stores `x op y` into `x` and evaluates `x` once: `a[next()] |= 1` calls `next()` once
+(corpus `bitwiseCompoundAssignment`, C, JS and Raiser; Raiser has no `>>>` and no `>>>=`).
 
 ### Comparison
 | Operator | Token | Description |
@@ -326,7 +335,9 @@ On a built-in type a compound assignment is its own operator: `c /= b` calls a d
 `/=`, and declaring `%` alone leaves `n %= v` on the built-in `%`. With the declarations
 above and `a = 10`, `b = 3` (`int32`), `w = 10`, `v = 3` (`int64`), `a / b`, `c /= b`,
 `w % v` and `n %= v` print `div=1003 divAssign=-13 modOnly=77 modAssign=1` on C and JS
-(corpus `compoundOperatorOverload`). Raiser does not apply a user overload on a built-in
+(corpus `compoundOperatorOverload`). The bitwise forms follow the same rule: a declared
+`|=` on `int32` runs for `o |= b` (`orAssign=1003`), and a declared `^` on `uint32` alone
+leaves `y ^= one` built-in (`xorOnly=7 xorAssign=13`). Raiser does not apply a user overload on a built-in
 type yet and prints the built-in results.
 
 ### Punctuation
@@ -779,7 +790,7 @@ flags & TypeFlag.HasAsgn        // now a type error when `flags` is BitSet<NodeF
 ```
 
 `BitSet<E>` is a value type, so it has **no mutating methods**: every operation returns a new set,
-and adding in place is `s = s | Flag.Used` (`|=` does not lex, KNOWN-ISSUES L24). Only enums with
+and adding in place is `s |= Flag.Used`, the same as `s = s | Flag.Used`. Only enums with
 ordinal values participate — an enum with hand-assigned values (`A = 1, B = 2`) is already a flag
 encoding and keeps its numeric meaning.
 
