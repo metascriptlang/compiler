@@ -2673,20 +2673,24 @@ console.log(buf.length);        // 2 (TS compatibility)
 console.log(buf.byteLength);    // 4 (UTF-8 bytes)
 ```
 
-### 3. Zero-Copy String Views (`Span<char>`)
-To avoid heap allocations when parsing or processing strings, MetaScript allows viewing a `string` as a `Span<char>`.
+### 3. Zero-Copy String Views (`Readonly<Span<char>>`)
+To avoid heap allocations when parsing or processing strings, MetaScript allows viewing a `string` as a read-only `Span<char>`.
 
-- **Zero-Copy Slicing**: Slicing a string with `..` (exclusive) or `...` (inclusive) into a `Span` context performs pointer arithmetic instead of a heap copy.
-- **Unified Params**: Functions taking `Span<char>` can accept both `string` and `Span<char>` arguments zero-copy.
+- **Zero-Copy Slicing**: Slicing a string with `..` (exclusive) or `...` (inclusive) performs pointer arithmetic instead of a heap copy; the slice is a `Readonly<Span<char>>`.
+- **Unified Params**: Functions taking `Readonly<Span<char>>` accept a `string`, a string slice and a `Span<char>` zero-copy.
+- **Read-only**: a string is immutable, so it never reaches a writable `Span<char>` — an argument, a local, a field, an assignment, a `this` receiver or a generic `Span<T>` refuses it (`cannot view 'lit' as a writable Span — a string is immutable; a view that only reads is Readonly<Span<T>>`), and a write through a string slice is E24.
 
 ```typescript
-function parseIdent(view: Span<char>): void {
-    // Process characters without allocating tiny strings
+function parseIdent(view: Readonly<Span<char>>): int32 {
+    return view.length as int32;   // process characters without allocating tiny strings
 }
 
 const source = "function main()";
-parseIdent(source[0...7]); // Zero-copy view of "function"
+parseIdent(source[0...7]); // Zero-copy view of "function": 8
+parseIdent(source);        // 15
 ```
+
+Measured 2026-10-05 on C and JS (handoff `storageMutability` "a string reaches only a read-only Span, its slices too"). Before, a write through such a view hit the literal's read-only bytes (SIGBUS) or changed a built string on C only.
 
 ### 4. Borrowed References (`Borrow<T>`)
 To achieve peak performance with large structs, MetaScript provides the `Borrow<T>` type (similar to the standard reference `lent T` pattern).
@@ -3449,7 +3453,7 @@ If you receive bytes from an untrusted source, the parser itself will reject inv
 | :--- | :--- | :--- | :--- |
 | **Ownership** | Owned (Heap/RC) | Borrowed (View) | Owned (Heap/RC) |
 | **Slicing** | Returns new `string` (Copy) | Returns `Span<char>` (Zero-copy) | Returns new `uint8[]` (Copy) |
-| **Mutation** | Allowed (COW-protected) | Allowed (on source buffer) | Allowed (direct) |
+| **Mutation** | Allowed (COW-protected) | Allowed on a `char` buffer; a string's view is `Readonly<Span<char>>` | Allowed (direct) |
 | **Bridge** | `.asBytes()` → `uint8[]` | N/A | `.asString()` → `string` |
 | **Use Case** | Text processing, standard TS | Parsing, high-perf views | Binary I/O, protocols, hashing |
 
