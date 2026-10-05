@@ -352,7 +352,7 @@ export function createAccount(
 	lamports: uint64,
 	space: uint64,
 	newOwner: Pubkey,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	let storage: uint8[52] = [];
 	let length = putU32(storage, 0, 0);
@@ -371,7 +371,7 @@ export function createAccount(
 export function assignTo(
 	target: Account,
 	newOwner: Pubkey,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	let storage: uint8[36] = [];
 	const length = putPubkey(storage, putU32(storage, 0, 1), newOwner);
@@ -388,7 +388,7 @@ export function transfer(
 	source: Account,
 	destination: Account,
 	lamports: uint64,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	let storage: uint8[12] = [];
 	const length = putU64(storage, putU32(storage, 0, 2), lamports);
@@ -404,7 +404,7 @@ export function transfer(
 export function allocate(
 	target: Account,
 	space: uint64,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	let storage: uint8[12] = [];
 	const length = putU64(storage, putU32(storage, 0, 8), space);
@@ -433,7 +433,7 @@ export function createProgramAccount(
 	target: Account,
 	space: uint64,
 	newOwner: Pubkey,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	const required = minimumBalance(space);
 	const current = target.lamports();
@@ -884,7 +884,7 @@ function initialized(
 	target: Writable,
 	space: uint64,
 	discriminator: uint64,
-	signers: Span<SignerSeeds>,
+	signers: Readonly<Span<SignerSeeds>>,
 ): Result<Account, ProgramError> {
 	const funding = payer as Account;
 	const created = target as Account;
@@ -902,7 +902,7 @@ export function createdAccount(
 	target: Writable,
 	space: uint64,
 	discriminator: uint64,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<Account, ProgramError> {
 	return initialized(payer, target, space, discriminator, signers);
 }

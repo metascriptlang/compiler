@@ -90,7 +90,7 @@ export function readArgs<T>(fits: boolean, value: T): Result<T, ProgramError> {
 export function create<T>(
 	payer: WritableSigner,
 	target: Writable,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<Mutable<T>, ProgramError> {
 	const space = 8 + (sizeof(T) as uint64);
 	const created = try createdAccount(payer, target, space, wordOf(T.discriminator()), signers);

@@ -10,7 +10,7 @@ extern function msSolLoadU64(address: uint64): uint64;
 extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 extern function msSolMetasAddress(table: Span<InstructionAccount>): uint64 from "msSolSpanAddress";
 extern function msSolInfosAddress(table: Span<CpiAccount>): uint64 from "msSolSpanAddress";
-extern function msSolInstructionAddress(table: Span<CpiInstruction>): uint64 from "msSolSpanAddress";
+extern function msSolInstructionAddress(table: Readonly<Span<CpiInstruction>>): uint64 from "msSolSpanAddress";
 extern function msSolInvokeSigned(
 	instruction: uint64,
 	accountInfos: uint64,
@@ -56,7 +56,7 @@ export function invokeCpi(
 	infos: Span<CpiAccount>,
 	data: Readonly<Span<uint8>>,
 	length: uint64,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	const count = metas.length as uint64;
 	if (count > MAX_CPI_ACCOUNTS || infos.length != metas.length || length > (data.length as uint64)) {
@@ -101,7 +101,7 @@ export function invokeList(
 	accounts: Span<InstructionAccount>,
 	data: Readonly<Span<uint8>>,
 	length: uint64,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	if (accounts.length > MAX_CPI_ACCOUNTS as int32) {
 		return Result.err(ProgramError.invalidArgument());

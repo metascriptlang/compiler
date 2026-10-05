@@ -1045,7 +1045,7 @@ test "a seed list derives the address the heap seeds derived, kind by kind" {
 
 test "a seed list takes a byte array, a span and a heap array like a byte literal" {
 	const program = hostProgram();
-	const fixed: uint8[1] = [7];
+	let fixed: uint8[1] = [7];
 	const span: Span<uint8> = fixed;
 	const heap: uint8[] = [7];
 	const literal = findProgramAddressOf(program, ["pet", [7]]);
@@ -1173,7 +1173,7 @@ function counterSigner(): uint8[][] {
 	return [textBytes("counter"), [7]];
 }
 
-function ping(target: Account, signers: Span<SignerSeeds> = []): Result<uint64, ProgramError> {
+function ping(target: Account, signers: Readonly<Span<SignerSeeds>> = []): Result<uint64, ProgramError> {
 	let storage: uint8[1] = [];
 	const length = putU8(storage, 0, 3);
 	return invokeSigned(
@@ -1545,7 +1545,7 @@ test "createProgramAccount creates a blank target in one call and tops up, alloc
 	assert calls[2].accounts[0].key.equals(keyOf(2)) && calls[2].accounts[0].signer;
 }
 
-function forwarded(first: Account, signers: Span<SignerSeeds> = []): Result<uint64, ProgramError> {
+function forwarded(first: Account, signers: Readonly<Span<SignerSeeds>> = []): Result<uint64, ProgramError> {
 	let storage: uint8[4] = [];
 	const length = putU32(storage, 0, 5);
 	return invokeSigned(

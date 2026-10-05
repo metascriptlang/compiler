@@ -1391,7 +1391,7 @@ export macro signed(call: Node, seeds: Node): Node {
 	}
 	if (!takesSigners) {
 		error("signed(call, seeds): " + calleeName + " takes no signers; only a call whose last " +
-			"parameter is `signers: Span<SignerSeeds>` can be signed", call);
+			"parameter is `signers: Readonly<Span<SignerSeeds>>` can be signed", call);
 	}
 	if (seeds.kind !== NodeKind.ArrayLiteral) { error(SEED_LIST_REQUIRED, seeds); }
 	if (seeds.elements.length == 0) {

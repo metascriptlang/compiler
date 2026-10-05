@@ -326,7 +326,7 @@ export function mintTo(
 	destination: Account,
 	authority: Account,
 	amount: uint64,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
 	let storage: uint8[9] = [];
@@ -352,7 +352,7 @@ export function transferChecked(
 	authority: Account,
 	amount: uint64,
 	decimals: uint8,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
 	let storage: uint8[10] = [];
@@ -378,7 +378,7 @@ export function closeAccount(
 	account: Account,
 	destination: Account,
 	authority: Account,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
 	let storage: uint8[1] = [];
@@ -404,7 +404,7 @@ function createAssociated(
 	systemProgram: Account,
 	program: Account,
 	discriminator: uint8,
-	signers: Span<SignerSeeds>,
+	signers: Readonly<Span<SignerSeeds>>,
 ): Result<uint64, ProgramError> {
 	if (!isTokenProgram(program.key())) { return Result.err(ProgramError.incorrectProgramId()); }
 	let storage: uint8[1] = [];
@@ -432,7 +432,7 @@ export function createAssociatedToken(
 	mint: Account,
 	systemProgram: Account,
 	program: Account,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	return createAssociated(payer, associated, wallet, mint, systemProgram, program, 0, signers);
 }
@@ -444,7 +444,7 @@ export function createAssociatedTokenIdempotent(
 	mint: Account,
 	systemProgram: Account,
 	program: Account,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	return createAssociated(payer, associated, wallet, mint, systemProgram, program, 1, signers);
 }
@@ -506,7 +506,7 @@ export function transferTokens(
 	mint: External<Mint>,
 	authority: Account,
 	amount: uint64,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	const decimals = try mintDecimals(mint);
 	return transferChecked(
@@ -526,7 +526,7 @@ export function mintTokens(
 	to: ExternalMutable<TokenAccount>,
 	authority: Account,
 	amount: uint64,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	const target = mint as Account;
 	return mintTo(target.owner(), target, to as Account, authority, amount, signers);
@@ -536,7 +536,7 @@ export function closeTokenAccount(
 	account: ExternalMutable<TokenAccount>,
 	destination: Writable,
 	authority: Account,
-	signers: Span<SignerSeeds> = [],
+	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	const closing = account as Account;
 	return closeAccount(closing.owner(), closing, destination as Account, authority, signers);
