@@ -20,7 +20,6 @@ import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx, clearChec
 import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
-import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
@@ -1768,8 +1767,14 @@ function relateMethodCallArgs(ctx: CheckerContext, node: Node, calleeType: Type,
 function reportArrayReceiverWrite(ctx: CheckerContext, me: MemberExprData, recvFormal: Type): void {
 	const formal = skipModifier(recvFormal) ?? recvFormal;
 	const refusal = formal.kind == TypeKind.Span ? viewRefusal(me.object, formal)
-		: isMutatingArrayMethod(me.property) ? writeRefusal(me.object, WriteSite.Receiver, me.property) : "";
+		: writesThroughReceiver(formal) ? writeRefusal(me.object, WriteSite.Receiver, me.property) : "";
 	if (refusal != "") addError(ctx, refusal, me.object.location.line, me.object.location.column);
+}
+
+function writesThroughReceiver(formal: Type): boolean {
+	if (isReadonlyView(formal)) return false;
+	return formal.kind == TypeKind.Span
+		|| (formal.kind == TypeKind.Ref && formal.typeReturn != null && formal.typeReturn.kind == TypeKind.Array);
 }
 
 function sharesArrayReceiver(recvFormal: Type): boolean {
@@ -4299,9 +4304,6 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// Fall back to extension registry — standard-aligned type-based lookup
 	if (ctx.extensionRegistry != null) {
 		const allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
-		if (isReadonlyView(objType) && isMutatingArrayMethod(d.property)) {
-			addError(ctx, "'" + d.property + "' mutates its receiver, and " + typeDisplayName(objType) + " is a read-only view (PARALOCK E24)", node.location.line, node.location.column);
-		}
 		const recvLookupType = withoutReadonlyView(objType);
 		let ext = findFirstMatchingExt(allByName, recvLookupType);
 		let extObjType = recvLookupType;
@@ -4354,8 +4356,12 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			// Instance extension: strip receiver param (index 0) so checkCallExpr
 			// sees only user-visible params. The receiver is already in MemberExpr.object.
 			const extFnT = getExtFnType(ext);
-			if (!ext.isStatic && isReadonlyView(objType)
-					&& resolvedObjType.kind != TypeKind.Array && resolvedObjType.kind != TypeKind.SizedArray && resolvedObjType.kind != TypeKind.Span
+			const arrayView = resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.SizedArray || resolvedObjType.kind == TypeKind.Span;
+			if (!ext.isStatic && isReadonlyView(objType) && arrayView && extFnT.typeChildren.length > 0
+					&& writesThroughReceiver(skipModifier(extFnT.typeChildren[0]) ?? extFnT.typeChildren[0])) {
+				addError(ctx, "'" + d.property + "' mutates its receiver, and " + typeDisplayName(objType) + " is a read-only view (PARALOCK E24)", node.location.line, node.location.column);
+			}
+			if (!ext.isStatic && isReadonlyView(objType) && !arrayView
 					&& !(extFnT.typeChildren.length > 0 && isReadonlyView(extFnT.typeChildren[0]))) {
 				addError(ctx, "cannot call '" + d.property + "' on " + typeDisplayName(objType) + " — a read-only view; a method callable through the view declares its receiver read-only: '" + d.property + "(this: Readonly<" + ext.receiverTypeName + ">)' on the class, or 'function " + d.property + "(this x: Readonly<" + ext.receiverTypeName + ">)' as an extension (PARALOCK E24)", node.location.line, node.location.column);
 			}
