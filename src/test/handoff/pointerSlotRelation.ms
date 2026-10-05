@@ -85,9 +85,9 @@ test "pointer slot relation: forwarding a reference preserves one address layer"
 	const source = "extern function writeTyped(p: Ptr<int32> | null): int32; extern function writeOpaque(p: Ptr<void> | null): int32; extern function readBorrow(p: Borrow<int32>): int32; function forward(ref n: int32): int32 { writeTyped(n); writeOpaque(n); return readBorrow(n); }";
 	const c = compileToCWithStd(source);
 	assert c.ok, c.error;
-	assert c.value.contains("writeTyped(&((*n)))");
-	assert c.value.contains("writeOpaque(&((*n)))");
-	assert c.value.contains("readBorrow(&((*n)))");
+	assert c.value.contains("writeTyped((&((*n))))");
+	assert c.value.contains("writeOpaque((&((*n))))");
+	assert c.value.contains("readBorrow((&((*n))))");
 }
 
 test "pointer slot relation: reference cursors retain reference reads without scalar reinterpretation" {

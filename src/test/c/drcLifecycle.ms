@@ -251,7 +251,7 @@ test "E2E C: field behind a reference root is copied, never moved" {
 		}
 	`);
 	assert c.ok;
-	assert c.value.contains("msStringCopy(&(k_1_), (*r_1_).value)");
+	assert c.value.contains("msStringCopy((&(k_1_)), (*r_1_).value)");
 	assert !c.value.contains("msStringWasMoved((*r_1_).value)");
 }
 
@@ -312,7 +312,7 @@ test "E2E C: a narrowed local returned through an identity assertion is copied" 
 		}
 	`);
 	assert c.ok;
-	assert c.value.contains("Copy(&(dollarborrow");
+	assert c.value.contains("Copy((&(dollarborrow");
 	assert !c.value.contains("*__result = got_1_.value;");
 }
 
@@ -326,7 +326,7 @@ test "E2E C: a narrowed field returned through an identity assertion is copied" 
 		}
 	`);
 	assert c.ok;
-	assert c.value.contains("&((*slot).got.value));");
+	assert c.value.contains("(&((*slot).got.value)));");
 	assert !c.value.contains("*__result = (*slot).got.value;");
 }
 
@@ -342,7 +342,7 @@ test "E2E C: a narrowed captured local returned through an identity assertion is
 		}
 	`);
 	assert c.ok;
-	assert c.value.contains(").got1.value));");
+	assert c.value.contains(").got1.value)));");
 	assert !c.value.contains("*__result = (*_env");
 }
 
