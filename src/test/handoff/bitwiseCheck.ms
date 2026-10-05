@@ -189,3 +189,41 @@ test "~int32 result is int32" {
 	assert sym != null;
 	assert sym.symbolType.kind == TypeKind.Int32;
 }
+
+// ===== Compound bitwise assignment: the binary operator, stored into the target =====
+
+test "every bitwise compound assignment is valid on a sized integer" {
+	assert strictErrorCount("let a: uint8 = 1;\na |= 0x80;\na &= 0x0F;\na ^= 1;\na <<= 1;\na >>= 1;\na >>>= 1;") == 0;
+	assert strictErrorCount("let b: int64 = 1;\nconst k: int64 = 3;\nb <<= k;\nb >>= k;\nb |= k;") == 0;
+}
+
+test "a BitSet takes |= &= ^= with a member or a set" {
+	assert strictErrorCount("enum F { A, B }\nlet s = (0 as BitSet<F>).incl(F.A);\ns |= F.B;\ns &= F.A | F.B;\ns ^= F.A;") == 0;
+}
+
+test "a bitwise compound assignment keeps the binary same-size rule" {
+	assert hasError("let a: int32 = 1;\nconst w: int64 = 2;\na |= w;", "bitwise operator '|=' requires same integer size");
+	assert hasError("let u: uint64 = 1;\nconst c: int32 = 3;\nu <<= c;", "bitwise operator '<<=' requires same integer size");
+}
+
+test "a bitwise compound assignment needs an integer target" {
+	assert hasError("let n: number = 5;\nn |= 1;", "'|=' needs an integer target, got 'number'");
+	assert hasError("let f: float64 = 5;\nf <<= 1;", "bitwise operator '<<=' requires integer type, got 'float64'");
+}
+
+test "a bitwise compound assignment stores only what the target holds" {
+	assert hasError("enum E { A, B }\nlet e: E = E.A;\ne |= E.B;", "'|=' cannot store the 'BitSet<E>' result of '|' in 'E'");
+}
+
+test "a bitwise compound assignment is a statement" {
+	assert hasError("let a: int32 = 1;\nconst b = (a |= 2);", "assignment is a statement");
+}
+
+test "a bitwise compound assignment refuses what the binary operator refuses on bigint" {
+	assert hasError("let g: bigint = 5n;\ng >>>= 1n;", "operator '>>>=' is not allowed on bigint — use '>>='");
+	assert hasError("let g: bigint = 5n;\ng |= 1;", "cannot mix bigint and 'int32' in '|='");
+}
+
+test "a bitwise compound assignment is a mutation of a readonly parameter" {
+	assert hasError("function h(readonly x: uint8[]): void { x[0] |= 2; }", "cannot mutate readonly parameter 'x'");
+}
