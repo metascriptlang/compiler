@@ -397,6 +397,18 @@ test "multiple defaults via getLastParsedDefaults" {
 	assert (defs[2].data as NumberLiteralData).value == 2;
 }
 
+test "a default that parses its own parameter list keeps the outer list" {
+	const raw = parseParams("(a: int32, cb: (x: int32) => int32 = (x: int32): int32 => x + a, n: int32 = 2)", "testFn4");
+	assert raw.length == 6;
+	const defs = getLastParsedDefaults();
+	assert defs.length == 3;
+	assert defs[0] == null;
+	assert defs[1] != null && defs[1].kind == NodeKind.ArrowFunction;
+	assert defs[2] != null && defs[2].kind == NodeKind.NumberLiteral;
+	assert getLastParamLocations().length == 3;
+	assert getLastParamTypeExprs().length == 3;
+}
+
 test "no default returns empty array" {
 	parseParams("(x: number, y: string)", "testFn3");
 	const defs = getLastParsedDefaults();
