@@ -126,14 +126,18 @@ function firstLines(r: ExecFileResult): string {
 	return text.length > 240 ? text.slice(0, 240) : text;
 }
 
-function seedCount(home: string): int32 {
-	const prelude = `${home}/.metascript/cache/prelude`;
-	if (!exists(prelude)) return 0;
+function depsIn(dir: string): int32 {
+	if (!exists(dir)) return 0;
 	let n: int32 = 0;
-	for (const entry of readDir(prelude)) {
+	for (const entry of readDir(dir)) {
 		if (entry.endsWith(".deps")) n = n + 1;
+		else if (entry.endsWith("/")) n = n + depsIn(`${dir}/${entry.slice(0, entry.length - 1)}`);
 	}
 	return n;
+}
+
+function seedCount(home: string): int32 {
+	return depsIn(`${home}/.metascript/cache/prelude`);
 }
 
 function checkAlone(target: string): int32 {
@@ -188,7 +192,7 @@ env.delete("MSC_NO_GLOBAL_CACHE");
 
 removeAll(dir);
 ensureDir(dir);
-writeFile(`${dir}/host.ms`, "console.log(\"hi\");\n");
+writeFile(`${dir}/host.ms`, "import { cwd } from \"std/process\";\nconsole.log(cwd());\n");
 writeFile(`${dir}/chain.ms`, "import { logU64, instructionData } from \"std/solana\";\nfunction main(): void { logU64(instructionData().length as uint64); }\nmain();\n");
 writeFile(`${dir}/bare.ms`, "function answer(): int32 { return 42; }\nanswer();\n");
 
