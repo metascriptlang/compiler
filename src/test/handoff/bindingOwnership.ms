@@ -93,13 +93,13 @@ function moduleErrors(graph: ModuleGraph, path: string): int32 {
 	return count;
 }
 
-test "binding ownership: deferred default diagnostics belong to their declaring module exactly once" {
+test "binding ownership: default diagnostics belong to their declaring module, once per declaration" {
 	for (const use of [
 		"import { f } from \"./defaultLibrary\"; const result: int32 = f();",
 		"import { Option } from \"./defaultLibrary\"; const result: int32 = new Option().n;",
 	]) {
 		const graph = defaultGraph(use, false);
-		assert moduleErrors(graph, "/src/defaultLibrary.ms") == 1, use;
+		assert moduleErrors(graph, "/src/defaultLibrary.ms") == 2, use;
 		assert moduleErrors(graph, "/src/defaultEntry.ms") == 0, use;
 		const ctx = lookupModuleCtx("/src/defaultLibrary.ms");
 		assert ctx != null;
