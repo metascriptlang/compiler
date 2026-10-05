@@ -214,6 +214,10 @@ export function parseArgs(): CliOptions {
 	return opts;
 }
 
+function isPackageCommand(command: string): boolean {
+	return command == "add" || command == "remove" || command == "install" || command == "update" || command == "publish" || command == "login" || command == "logout" || command == "whoami" || command == "org";
+}
+
 function isMscOption(arg: string): boolean {
 	return arg.startsWith("-") && applyArgs(newCliOptions(), [arg], 0).ok;
 }
@@ -383,11 +387,13 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 				opts.command = arg;
 			} else if (positionalIdx == 1) {
 				opts.inputFile = arg;
-			} else {
+			} else if (isPackageCommand(opts.command)) {
 				opts.extraArgs.push(arg);
+			} else {
+				return Result.err(`unexpected argument '${arg}' after ${opts.inputFile}: msc ${opts.command} takes one file`);
 			}
 			positionalIdx += 1;
-		} else if (opts.command == "add" || opts.command == "remove" || opts.command == "install" || opts.command == "update" || opts.command == "publish" || opts.command == "login" || opts.command == "logout" || opts.command == "whoami" || opts.command == "org") {
+		} else if (isPackageCommand(opts.command)) {
 			// Package manager commands: pass unknown flags through
 			opts.extraArgs.push(arg);
 		} else {
