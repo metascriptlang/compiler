@@ -28,10 +28,10 @@ function carried(element: FieldElement): FieldElement {
 	for (let round = 0; round < 2; round++) {
 		for (let i = 0; i < 15; i++) {
 			out.limbs[i + 1] += out.limbs[i] >> 16;
-			out.limbs[i] = out.limbs[i] & LIMB_MASK;
+			out.limbs[i] &= LIMB_MASK;
 		}
 		out.limbs[0] += 38 * (out.limbs[15] >> 16);
-		out.limbs[15] = out.limbs[15] & LIMB_MASK;
+		out.limbs[15] &= LIMB_MASK;
 	}
 	return out;
 }
@@ -65,10 +65,10 @@ function canonical(element: FieldElement): FieldElement {
 	for (let round = 0; round < 2; round++) {
 		for (let i = 0; i < 15; i++) {
 			out.limbs[i + 1] += out.limbs[i] >> 16;
-			out.limbs[i] = out.limbs[i] & LIMB_MASK;
+			out.limbs[i] &= LIMB_MASK;
 		}
 		out.limbs[0] += 38 * (out.limbs[15] >> 16);
-		out.limbs[15] = out.limbs[15] & LIMB_MASK;
+		out.limbs[15] &= LIMB_MASK;
 	}
 	for (let round = 0; round < 2; round++) {
 		let borrow: uint64 = 0;
@@ -104,7 +104,7 @@ export function isEdwardsPoint(point: Readonly<Span<uint8>>): boolean {
 	for (let i = 0; i < 16; i++) {
 		y.limbs[i] = (point[2 * i] as uint64) | ((point[2 * i + 1] as uint64) << 8);
 	}
-	y.limbs[15] = y.limbs[15] & 0x7fff;
+	y.limbs[15] &= 0x7fff;
 	const one = small(1);
 	const ySquared = times(y, y);
 	const u = minus(ySquared, one);
