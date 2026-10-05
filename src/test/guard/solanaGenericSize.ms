@@ -252,10 +252,21 @@ function nameOf(name: string): string {
 	return cut < 0 ? name : name.slice(0, cut);
 }
 
+function isInstance(name: string): boolean {
+	return nameOf(name).indexOf("__") > 0;
+}
+
+function withoutLastPart(text: string): string {
+	const cut = text.lastIndexOf("_");
+	return cut < 0 ? text : text.slice(0, cut);
+}
+
 function familyOf(name: string): string {
 	const base = nameOf(name);
-	const cut = base.indexOf("_1");
-	return cut < 0 ? base : base.slice(0, cut);
+	let head = base.slice(0, base.indexOf("__"));
+	const last = head.slice(head.lastIndexOf("_") + 1);
+	if (last.length >= 2 && last.length <= 4 && last.startsWith("u") && last.slice(1).parseInt().toString() == last.slice(1)) head = withoutLastPart(head);
+	return withoutLastPart(head);
 }
 
 const sizes = new Map<string, int32[]>();
@@ -263,7 +274,7 @@ for (const line of symbols.split("\n")) {
 	const fields = fieldsOf(line);
 	if (fields.length < 8 || fields[3] != "FUNC") continue;
 	const name = fields[7];
-	const generic = nameOf(name).indexOf("_1") >= 0;
+	const generic = isInstance(name);
 	const key = generic ? `generic ${familyOf(name)}` : `plain ${nameOf(name)}`;
 	const list = sizes.get(key) ?? [];
 	list.push(fields[2].parseInt() as int32);
