@@ -450,3 +450,31 @@ function f(x: number): number {
               (return_statement (number)))
             (switch_default
               (return_statement (identifier)))))))))
+
+================================================================================
+Edge: Remainder and bitwise compound assignments
+================================================================================
+
+x %= 4;
+x &= m;
+x |= m;
+x ^= m;
+x <<= 2;
+x >>= 2;
+x >>>= 2;
+a[i] |= 1;
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement (assignment_expression left: (identifier) right: (number)))
+  (expression_statement (assignment_expression left: (identifier) right: (identifier)))
+  (expression_statement (assignment_expression left: (identifier) right: (identifier)))
+  (expression_statement (assignment_expression left: (identifier) right: (identifier)))
+  (expression_statement (assignment_expression left: (identifier) right: (number)))
+  (expression_statement (assignment_expression left: (identifier) right: (number)))
+  (expression_statement (assignment_expression left: (identifier) right: (number)))
+  (expression_statement
+    (assignment_expression
+      left: (subscript_expression object: (identifier) index: (identifier))
+      right: (number))))
