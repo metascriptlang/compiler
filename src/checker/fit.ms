@@ -407,6 +407,7 @@ function dumpedShape(t: Type, shape: Type): boolean {
 	if (shape.kind == TypeKind.Tuple || shape.kind == TypeKind.SizedArray || isResult(shape)) return true;
 	if (shape.kind == TypeKind.Union && foldableUnion(shape)) return true;
 	if (isValueStructShape(shape)) return true;
+	if (isMaybeType(shape) && shape.typeReturn != null && isValueStructShape(valueShape(shape.typeReturn))) return true;
 	const bare = skipModifier(t) ?? t;
 	if (bare.kind == TypeKind.Ref && bare.typeReturn != null && bare.typeReturn.kind == TypeKind.GenericInstance) return false;
 	const inner = peelToStructOrUnion(t);
