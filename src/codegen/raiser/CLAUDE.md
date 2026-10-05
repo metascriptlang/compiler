@@ -24,6 +24,7 @@ Compiles the post-Phase-3 AST into Raiser bytecode: `parse → check → transfo
 - **An assignment into a location that already holds a struct or an array writes into that object** (`emitValueAssign`, NIM-REF CG-40) — an element, a field, a global or local binding, `p[]` and a `ref` parameter, so every pointer to the location keeps seeing it; an array takes the source length first; a parameter or a for-of binding is a view and rebinds; an empty location takes a copy.
 - **A spawned strand gets a graph copy of the parent's global slots** — globals are strand-local snapshots, not shared mutable state.
 - **Spread is lowered before bytecode generation** — each source is evaluated once; array insertion goes through the VM `push` builtin.
+- **Loops arrive lowered** — `for` and `for..of` go through the loop lowering C uses before lambda lifting, so a closure made in a loop body gets the env of its own iteration; a labelled `break` or `continue` jumps to the loop carrying the label. The native `for` / `for..of` compilation serves only the untransformed `rgen.ms` path.
 - **Pending generic instances attach to their owning module before monomorphization, macro expansion and Raiser lowering** — on-demand compilation is scoped to the project image and restored afterwards.
 - **A function value is a closure pair `{ fn: funcIdx, env }`, `env = -1` when nothing is captured** — `compileClosureCall` branches on it at runtime and appends the env as the LAST argument, so it lands at `R[arity]`; a function identifier inside an expression stays a raw integer.
 - **Methods are top-level functions whose `this` is the closure env** — bound at `R[arity]`; `<Class>_new` creates the object, stores default properties and the method closures `{ fn, env: this }`, runs the constructor body and returns `this`; a method call is `LoadField` + `CallIndirect`.
@@ -36,6 +37,7 @@ Each probed on `msc run --target=raiser`:
 - `class … extends` — `cannot evaluate 'super' at comptime: symbol kind is Class`.
 - `static` members — `cannot evaluate '<Class>' at comptime: symbol kind is Class`.
 - `out` argument — `cannot compile node kind OutExpr`.
+- `for..of` over a string — `cannot evaluate 'msStringByteLength' at comptime: symbol kind is Function` (the VM has no string index either: `s[1]` stops with `expected an array, got value kind String`).
 - a write through a pointer or `ref` parameter to a value that is not a struct or an array (`ref n: int32`) — `cannot assign through a pointer or ref parameter at comptime` (it used to leave the caller's value unchanged).
 
 ## Tests
