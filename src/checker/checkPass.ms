@@ -38,6 +38,7 @@ import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
 import { inlineDecorator } from "./decoratorHelpers";
 import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
+import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
@@ -992,7 +993,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	const savedReturnTries = ctx.inferredReturnTries;
 	ctx.inferredReturnTries = [];
 
-	node.paramSyms = checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations!);
+	node.paramSyms = checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations!, d.fnDefaults);
 
 	// If return type was unknown (no annotation), use inferred type
 	if (sym.symbolType.kind == TypeKind.Function
@@ -1229,7 +1230,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			// like top-level generic fns at checkFunctionDecl:358).
 			if (!isGenericFn(d.methodFlags)) {
 				if (d.methodIsStatic) openStaticReceiverScope(ctx, classType.sym);
-				node.paramSyms = checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!);
+				node.paramSyms = checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!, d.methodDefaults);
 				if (d.methodIsStatic) closeScope(ctx.table);
 			} else if (isGenericFn(d.methodFlags)) {
 				markBodyIdentifiersUsed(ctx, d.methodBody);
@@ -1269,7 +1270,11 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			if (node.paramLocations != null) {
 				for (const loc of node.paramLocations) { ctorLocs.push(loc); }
 			}
-			node.paramSyms = checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, ctorFnType, false), ctorParams, d.ctorBody, ctorLocs);
+			const ctorDefaults: Node[] = [null as unknown as Node];
+			if (d.ctorDefaults != null) {
+				for (const def of d.ctorDefaults) ctorDefaults.push(def);
+			}
+			node.paramSyms = checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, ctorFnType, false), ctorParams, d.ctorBody, ctorLocs, ctorDefaults);
 		},
 		NodeKind.BlockStmt => checkStaticBlockMember(ctx, node, classType.sym),
 		_ => {},
@@ -2202,7 +2207,16 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 let _slowTrace: boolean = false;
 export function setSlowTrace(on: boolean): void { _slowTrace = on; }
 
-export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] {
+function checkDefaultInParamScope(ctx: CheckerContext, def: Node, paramType: Type): void {
+	if (paramType == null || hasGenericParams(paramType) || ctx.inGenericContext > 0) return;
+	const hoistMark = ctx.pendingHoisted.length;
+	const probe = cloneNodeForCheck(def);
+	checkExpr(ctx, probe, paramType);
+	if (probe.nodeType != null) fitNode(ctx, probe, paramType, probe.nodeType);
+	ctx.pendingHoisted.length = hoistMark;
+}
+
+export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[], defaults: Node[] | null = null): Symbol[] {
 	const paramSyms: Symbol[] = [];
 	const _fb0 = performance.now();
 	const savedFunction = ctx.currentFunction;
@@ -2235,6 +2249,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 			const at = (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) ? paramLocs[i] : body.location;
 			addError(ctx, "a destructured parameter needs a type annotation", at.line, at.column);
 		}
+		if (defaults != null && i < defaults.length && defaults[i] != null) checkDefaultInParamScope(ctx, defaults[i], paramType);
 		const paramSym = makeSymbol(param, SymbolKind.Parameter, paramType, false);
 		// Set declaration location for go-to-definition
 		if (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) {
