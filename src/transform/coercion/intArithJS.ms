@@ -230,6 +230,12 @@ function compoundBaseOf(op: string): string {
 		"+=" => "+",
 		"-=" => "-",
 		"*=" => "*",
+		"&=" => "&",
+		"|=" => "|",
+		"^=" => "^",
+		"<<=" => "<<",
+		">>=" => ">>",
+		">>>=" => ">>>",
 		_ => "",
 	};
 }
@@ -239,15 +245,21 @@ export function needsIntegerCompoundRewrite(d: BinaryExprData): boolean {
 	if (base == "") return false;
 	const t = peelToRepr(d.left.nodeType);
 	if (t == null || !isIntConvKind(t.kind)) return false;
+	if (isShiftOp(base)) return is64(t.kind) || subIntKind(t) != TypeKind.Unknown || (base == "<<" && t.kind == TypeKind.Uint32);
+	if (base == "&" || base == "|" || base == "^") return t.kind == TypeKind.Uint32;
 	if ((base == "/" || base == "%") && !cannotRaise(d.right, t)) return true;
 	if (base == "%" || is64(t.kind)) return false;
 	return base == "/" || t.kind == TypeKind.Uint32 || subIntKind(t) != TypeKind.Unknown;
 }
 
 function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: TransformContext): Node {
-	if (!needsIntegerCompoundRewrite(d)) return node;
 	const t = peelToRepr(d.left.nodeType);
 	if (t == null) return node;
+	if (base == ">>" && t.kind == TypeKind.Uint32) {
+		d.operator = ">>>=";
+		return node;
+	}
+	if (!needsIntegerCompoundRewrite(d) || (is64(t.kind) && isShiftOp(base))) return node;
 	const checked = (base == "/" || base == "%") && !cannotRaise(d.right, t);
 	const unsigned = t.kind == TypeKind.Uint32;
 	const narrow = subIntKind(t);
@@ -259,6 +271,11 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 		return node;
 	}
 	if (checked) return makeBinary(d.left, "=", checkedIntOp(base, readBack, d.right, t, d.left.nodeType, node.location), node.location);
+	if (isShiftOp(base) || base == "&" || base == "|" || base == "^") {
+		const bin = makeBinary(readBack, base, d.right, node.location);
+		const stored = isShiftOp(base) && narrow != TypeKind.Unknown ? shiftAtLeftWidth(bin, bin.data as BinaryExprData) : binaryAsUnsigned(bin);
+		return makeBinary(d.left, "=", stored, node.location);
+	}
 	// makeBinary carries the left operand's type onto the result, which is what
 	// keeps this synthesized node visible to the width table above.
 	const widened = base == "*" && unsigned

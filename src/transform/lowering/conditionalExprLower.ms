@@ -496,7 +496,11 @@ function expandWhileCond(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 function isAssignOperator(op: string): boolean {
-	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=";
+	return match (op) {
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" => true,
+		"&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
+		_ => false,
+	};
 }
 
 // Assignment statement: TS evaluates the target reference BEFORE the RHS.
