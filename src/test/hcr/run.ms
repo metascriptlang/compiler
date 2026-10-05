@@ -1149,6 +1149,7 @@ function fsWatch(): void {
 		"WATCH write before the first wait: true",
 		"WATCH write in a subdirectory: true",
 		"WATCH an in-place rewrite is seen: true",
+		"WATCH a delete is seen: true",
 		"WATCH a renamed save is reported closed: true",
 		"WATCH a missing file has no writer: true",
 		"WATCH a closed file proves no writer: false",

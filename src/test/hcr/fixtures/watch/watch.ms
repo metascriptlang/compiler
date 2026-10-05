@@ -1,4 +1,4 @@
-import { mkdir, writeFile, rename } from "std/fs";
+import { mkdir, writeFile, rename, remove } from "std/fs";
 import { watch, nextChanges, closeWatch, msIoRunOnce, writeSettled, FsChanges, FsWatch } from "std/fs/watch";
 import { platform } from "std/process";
 
@@ -12,7 +12,11 @@ function waitBatch(w: FsWatch): FsChanges {
 }
 
 function seenAfterWrite(w: FsWatch, root: string, name: string): boolean {
-	writeFile(`${root}/${name}`, `export const name = "${name}";`);
+	return seenAfter(w, name, (): void => { writeFile(`${root}/${name}`, `export const name = "${name}";`); });
+}
+
+function seenAfter(w: FsWatch, name: string, change: () => void): boolean {
+	change();
 	while (true) {
 		const batch = waitBatch(w);
 		if (batch.ended || (batch.paths.length == 0 && !batch.rescan)) return false;
@@ -42,6 +46,7 @@ if (!opened.ok) {
 	console.log(`WATCH write in a subdirectory: ${seenAfterWrite(w, "tree", "sub/logic.ms")}`);
 	if (platform == "darwin") {
 		console.log(`WATCH an in-place rewrite is seen: ${seenAfterWrite(w, "tree", "first.ms")}`);
+		console.log(`WATCH a delete is seen: ${seenAfter(w, "first.ms", (): void => { remove("tree/first.ms"); })}`);
 	}
 	const renamed = closedAfter(w, "saved.ms", (): void => {
 		writeFile("tree/saved.tmp", "export const saved = 1;");
