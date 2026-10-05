@@ -297,6 +297,17 @@ let _userHooks: HashMap<string, Symbol> = new HashMap<string, Symbol>();
 
 export function resetUserHooks(): void {
 	_userHooks = new HashMap<string, Symbol>();
+	_defaultsCheckedAtDeclaration = new HashSet<Node>();
+}
+
+let _defaultsCheckedAtDeclaration: HashSet<Node> = new HashSet<Node>();
+
+export function noteDefaultCheckedAtDeclaration(def: Node): void {
+	_defaultsCheckedAtDeclaration.add(def);
+}
+
+export function defaultCheckedAtDeclaration(def: Node): boolean {
+	return _defaultsCheckedAtDeclaration.has(def);
 }
 
 export function bindUserHook(typeName: string, hookName: string, sym: Symbol): void {
