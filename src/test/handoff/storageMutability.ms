@@ -53,6 +53,63 @@ test "a mutating array method writes the value storage of its receiver" {
 	assert !js.startsWith("ERROR:"), js;
 }
 
+test "an array receiver declared T[] writes the value storage it is called on, Vec<T> only reads it" {
+	const head = "struct Bag { items: Vec<int32>; }\nclass C { n: int32 = 1; }\nfunction zero(this arr: int32[]): void { arr[0] = 0; }\nfunction firstOf<T>(this arr: Vec<T>): T { return arr[0]; }\n";
+	const refused = [
+		"const v: Vec<int32> = [1, 2]; v.zero();",
+		"const bag: Bag = { items: [1] }; bag.items.zero();",
+		"const rows: Vec<Vec<int32>> = [[1]]; rows[0].zero();",
+	];
+	for (const body of refused) {
+		const source = head + `function run(): void { ${body} } run();`;
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/receiver.ms", entrySource: source }], "test/receiver.ms");
+		assert !c.ok && c.error.contains("cannot mutate") && c.error.contains("with 'zero'") && c.error.contains("is const (use 'let')"), body;
+		assert js.startsWith("ERROR:") && js.contains("is const (use 'let')"), body;
+	}
+	const param = head + "function relay(v: Vec<int32>): void { v.zero(); }";
+	const cp = compileToCWithStd(param);
+	assert !cp.ok && cp.error.contains("value parameters are read-only views"), cp.ok ? "accepted" : cp.error;
+	const legal = head + `function run(): void {
+	let w: Vec<int32> = [1, 2]; w.zero();
+	const shared: int32[] = [3, 4]; shared.zero();
+	const v: Vec<int32> = [5, 6];
+	const cs: Vec<C> = [new C()]; cs.firstOf().n = 7;
+	const words: Vec<string> = ["a", "b"];
+	console.log(w[0], shared[0], v.firstOf(), shared.firstOf(), cs[0].n, v.indexOf(6), v.includes(5), v.join(","),
+		v.slice(1).length, v.at(0), v.concat([7]).length, v.map((x: int32, i: number): int32 => x + 1)[0], words.join("-"));
+} run();`;
+	const c = compileToCWithStd(legal);
+	assert c.ok, c.ok ? "" : c.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/receiver.ms", entrySource: legal }], "test/receiver.ms");
+	assert !js.startsWith("ERROR:"), js;
+}
+
+test "a read-only array view refuses a receiver declared T[] or Span<T>" {
+	const head = "function zero(this arr: int32[]): void { arr[0] = 0; }\nfunction setFirst(this s: Span<int32>, x: int32): void { s[0] = x; }\nfunction firstOf<T>(this arr: Vec<T>): T { return arr[0]; }\n";
+	const refused = [
+		"const r: Readonly<int32[]> = [1, 2]; r.zero();",
+		"const r: Readonly<int32[]> = [1, 2]; r.push(3);",
+		"let t: int32[2] = [1, 2]; const rs: Readonly<Span<int32>> = t; rs.setFirst(5);",
+		"const items: int32[] = [1]; const f = spawn(() => { items.zero(); return 0; }); await f;",
+	];
+	for (const body of refused) {
+		const source = head + `async function run(): Promise<void> { ${body} } run();`;
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/receiver.ms", entrySource: source }], "test/receiver.ms");
+		assert !c.ok && c.error.contains("mutates its receiver") && c.error.contains("is a read-only view (PARALOCK E24)"), body;
+		assert js.startsWith("ERROR:") && js.contains("mutates its receiver"), body;
+	}
+	const legal = head + `function run(): void {
+	const r: Readonly<int32[]> = [1, 2];
+	console.log(r.firstOf(), r.indexOf(2), r.join(","), r.slice(0).length, r.at(1));
+} run();`;
+	const c = compileToCWithStd(legal);
+	assert c.ok, c.ok ? "" : c.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/receiver.ms", entrySource: legal }], "test/receiver.ms");
+	assert !js.startsWith("ERROR:"), js;
+}
+
 test "a writable Span over a value container writes that container" {
 	const head = "type Row = int32[2];\nstruct Holder { t: int32[4]; }\nfunction poke(s: Span<int32>, i: int32): void { s[i] = 42; }\nfunction peek(s: Readonly<Span<int32>>, i: int32): int32 { return s[i]; }\nfunction setFirst(this s: Span<int32>, x: int32): void { s[0] = x; }\nconst MODT: int32[4] = [3, 5, 7, 9];\n";
 	const refused = [
