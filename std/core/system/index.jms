@@ -23,6 +23,7 @@ export extern function clearTimeout(id: number): void;
 export extern function setInterval(fn: () => void, ms: number): number;
 export extern function clearInterval(id: number): void;
 
+@builtin("Result")
 export class Result<T, E> {
 	ok: boolean;
 	value: T;

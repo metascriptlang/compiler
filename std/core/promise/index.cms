@@ -3,6 +3,7 @@
 @compile("runtime/promise/combinator.c");
 // Engine compiled via std/net/index.cms (only when network I/O is used)
 
+@builtin("Promise")
 export class Promise<T> {
 	finished: boolean;
 	failed: boolean;

@@ -31,6 +31,7 @@ export struct IteratorResult<T> {
 	done: boolean;
 }
 
+@builtin("Iterator")
 export struct Iterator<T> {
 	next: () => IteratorResult<T>;
 }

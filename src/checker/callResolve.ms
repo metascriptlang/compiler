@@ -18,7 +18,7 @@ import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState } from "./instantiate";
 import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
-import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation } from "./resolvePass";
+import { bindFromExplicitTypeArgs, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { forEachChild } from "../ast/visitor";
@@ -777,7 +777,8 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		// new Arc(value): atomic-refcounted shared box. Pointee type is the explicit
 		// <T> if present, else inferred from the single argument. Represented as a
 		// Ref with the IsAtomic flag — codegen boxes the value via msAllocArc.
-		if (id.name == "Arc" && d.newArguments.length == 1) {
+		const head = builtinTypeHead(ctx, id.name);
+		if (head == "Arc" && d.newArguments.length == 1) {
 			const ltCol = d.newCallee.location.column + id.name.length;
 			const typeArgStr = node.typeArg;
 			let pointee = null as unknown as Type;
@@ -803,7 +804,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		// allocation — atomic-rc header + inline ticket lock + typed payload —
 		// so the handle is an atomic Ref like Arc and rides every mechanism Arc
 		// already drives. nativeLower boxes it via msBoxLocked.
-		if (id.name == "Locked" && d.newArguments.length == 1) {
+		if (head == "Locked" && d.newArguments.length == 1) {
 			const ltCol = d.newCallee.location.column + id.name.length;
 			const typeArgStr = node.typeArg;
 			let payload = null as unknown as Type;

@@ -9,7 +9,7 @@
 import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
-import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
+import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
@@ -693,61 +693,55 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		const baseName = qualifiedSym != null ? qualifiedSym.name : writtenName;
 		const argsText = trimmed.slice(angleBracket + 1, trimmed.length - 1).trim();
 		const args = splitTopLevel(argsText, ",");
+		const builtinHead = builtinTypeHead(ctx, writtenName, baseName);
 
-		if (baseName == "Result" && args.length == 2) {
+		if (builtinHead == "Result" && args.length == 2) {
 			return createResult(resolveAnnotation(args[0], ctx, line, col), resolveAnnotation(args[1], ctx, line, col));
 		}
-		if (baseName == "Promise" && args.length == 1) {
-			const inner = resolveAnnotation(args[0], ctx, line, col);
-			if (isAwaitable(inner)) {
-				const value = awaitedType(inner);
-				const flat = value != null ? "Promise<" + typeDisplayName(value) + ">" : "Promise<T>";
-				addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a promise, which is refused: write '${flat}' (an async function that returns a promise already gives '${flat}')`, line, col);
-				return value != null ? createPromise(value) : errorType();
-			}
-			return createPromise(inner);
+		if (builtinHead == "Promise" && args.length == 1) {
+			return createPromise(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Iterator" && args.length == 1) {
+		if (builtinHead == "Iterator" && args.length == 1) {
 			return createIterator(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Array" && args.length == 1) {
+		if (builtinHead == "Array" && args.length == 1) {
 			return createRef(createArray(resolveAnnotation(args[0], ctx, line, col)));
 		}
-		if (baseName == "Vec" && args.length == 1) {
+		if (builtinHead == "Vec" && args.length == 1) {
 			return createArray(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "BitSet" && args.length == 1) {
+		if (builtinHead == "BitSet" && args.length == 1) {
 			const elem = resolveAnnotation(args[0], ctx, line, col);
 			if (!bitSetElementAllowed(elem)) {
 				addError(ctx, "BitSet element must be an enum with ordinal members, got '" + typeDisplayName(elem) + "'", line, col);
 			}
 			return createBitSet(elem);
 		}
-		if (baseName == "Span" && args.length == 1) {
+		if (builtinHead == "Span" && args.length == 1) {
 			return createSpan(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Borrow" && args.length == 1) {
+		if (builtinHead == "Borrow" && args.length == 1) {
 			return createBorrow(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Ptr" && args.length == 1) {
+		if (builtinHead == "Ptr" && args.length == 1) {
 			return createPtr(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Cursor" && args.length == 1) {
+		if (builtinHead == "Cursor" && args.length == 1) {
 			return createCursor(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Ref" && args.length == 1) {
+		if (builtinHead == "Ref" && args.length == 1) {
 			return createRef(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Arc" && args.length == 1) {
+		if (builtinHead == "Arc" && args.length == 1) {
 			return createArc(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Locked" && args.length == 1) {
+		if (builtinHead == "Locked" && args.length == 1) {
 			return createLocked(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Readonly" && args.length == 1) {
+		if (builtinHead == "Readonly" && args.length == 1) {
 			return createReadonlyView(resolveAnnotation(args[0], ctx, line, col));
 		}
-		if (baseName == "Var" && args.length == 1) {
+		if (builtinHead == "Var" && args.length == 1) {
 			return createVar(resolveAnnotation(args[0], ctx, line, col));
 		}
 		// Generic interface/class resolution (Map, Set, user-defined generics)
@@ -925,6 +919,12 @@ function namespaceTypeSym(ctx: CheckerContext, name: string): Symbol | null {
 	markUsedIn(ctx, nsSym);
 	noteImported(ctx, exported.sym);
 	return exported.sym;
+}
+
+export function builtinTypeHead(ctx: CheckerContext, writtenName: string, baseName: string = ""): string {
+	const declared = lookupTypeSym(ctx, writtenName);
+	if (declared != null && isTypeSymbol(declared)) return declared.builtinKind;
+	return baseName != "" ? baseName : writtenName;
 }
 
 function lookupTypeSym(ctx: CheckerContext, name: string): Symbol | null {

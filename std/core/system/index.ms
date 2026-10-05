@@ -36,6 +36,7 @@ export extern function setInterval(fn: () => void, ms: number): number from "msS
 /** Cancels a repeating `setInterval`. Unknown handles are ignored. */
 export extern function clearInterval(id: number): void from "msClearInterval";
 
+@builtin("Result")
 export class Result<T, E> {
 	ok: boolean;
 	value: T;

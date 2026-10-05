@@ -375,7 +375,7 @@ export function getIteratorYieldType(t: Type): Type | null {
 export function isResult(t: Type | null): boolean {
 	if (t == null) return false;
 	if (t.kind == TypeKind.Result) return true;
-	return t.kind == TypeKind.GenericInstance && t.typeName == "Result";
+	return t.kind == TypeKind.GenericInstance && t.typeFlags.has(TypeFlag.Spelled) && t.typeName == "Result";
 }
 
 // Result's ok-type / err-type live on the GenericInstance's `typeChildren`
@@ -460,7 +460,7 @@ export function isAwaitable(t: Type | null): boolean {
 	if (t == null) return false;
 	const p = peelThrough(t, PEEL_ALIAS);
 	if (p == null || p.kind != TypeKind.GenericInstance) return false;
-	if (p.typeName == "Promise") return true;
+	if (p.typeFlags.has(TypeFlag.Spelled) && p.typeName == "Promise") return true;
 	// REPROMISE T2 Stage A: @affineAwaitable-annotated types carry both bits.
 	if (p.typeFlags.has(TypeFlag.AwaitableAffine)) return true;
 	return false;

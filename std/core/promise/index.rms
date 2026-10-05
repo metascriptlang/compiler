@@ -3,6 +3,7 @@
 // any other extern here reaches CallHost and needs a bridge in
 // src/compiler/meta/hostTable.ms.
 
+@builtin("Promise")
 export class Promise<T> {
 	finished: boolean;
 	failed: boolean;

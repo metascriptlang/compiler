@@ -9,6 +9,7 @@ export { toString } from "./shared";
 // push pattern. The remaining methods are portable MS over those two ops,
 // matching the C kernels' semantics (std/core/array/index.cms).
 
+@builtin("Array")
 export class Array<T> {
 	length: number;
 }
