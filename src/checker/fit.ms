@@ -1673,6 +1673,14 @@ export function widenMaybePayload(expr: Node, formal: Type, exprType: Type): Nod
 // Declared (pre-narrowing) tagged union of a reference — the checker-side twin
 // of codegen's duDeclaredUnionOfObject. Null-member and all-strlit unions are
 // excluded for the same repr reasons as primitiveMemberIndexInUnion.
+export function storedTypeOfNullRead(expr: Node, exprType: Type): Type {
+	if (exprType.kind != TypeKind.Null || expr.kind == NodeKind.NullLiteral) return exprType;
+	const stored = declaredTypeOfLocation(expr);
+	if (stored == null || stored.kind == TypeKind.Null) return exprType;
+	expr.nodeType = stored;
+	return stored;
+}
+
 function declaredTypeOfLocation(loc: Node): Type | null {
 	if (loc.kind == NodeKind.Identifier) return loc.resolvedSym != null && loc.resolvedSym.symbolType != null ? peelTransparentInstance(loc.resolvedSym.symbolType) : null;
 	if (loc.kind != NodeKind.MemberExpr) return null;
@@ -1964,6 +1972,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	const peeledFormal = peelTransparentInstance(formal);
 	const peeledExpr = peelTransparentInstance(exprType);
 	if (peeledFormal != formal || peeledExpr != exprType) return fitSlot(ctx, expr, peeledFormal, peeledExpr);
+	const stored = storedTypeOfNullRead(expr, exprType);
+	if (stored != exprType) return fitSlot(ctx, expr, formal, stored);
 	if (dropsReadonlyView(exprType, formal)) { reportReadonlyDrop(ctx, exprType, formal, expr.location.line, expr.location.column); return expr; }
 	const viewed = viewRefusal(expr, formal);
 	if (viewed != "") { addError(ctx, viewed, expr.location.line, expr.location.column); return expr; }
