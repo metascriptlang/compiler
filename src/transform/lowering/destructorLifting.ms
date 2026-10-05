@@ -26,7 +26,7 @@ import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, 
 import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, hookComplete, anonUnionCName, setOpByKey, aliasOpByKey, checkOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily } from "../../codegen/c/types";
-import { genericParamsOf } from "../../checker/types";
+import { genericParamsOf, classParentOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
@@ -948,13 +948,20 @@ function getBaseClass(typeName: string, lctx: LiftCtx): string {
 	const sym = lookupSymbol(lctx.checkerCtx.table, typeName);
 	if (sym == null) return "";
 	if (sym.symbolKind != SymbolKind.Class) return "";
-	const inner = unwrapRef(sym.symbolType);
-	if (inner.typeExtra == null) return "";
-	// typeExtra is the resolved base class type (Struct or Ref<Struct>)
-	const base = inner.typeExtra;
-	if (base.kind == TypeKind.Struct && base.typeName != "") return base.typeName;
-	if (base.kind == TypeKind.Ref && base.typeReturn != null && base.typeReturn.typeName != "") return base.typeReturn.typeName;
-	return "";
+	return classBaseName(unwrapRef(sym.symbolType));
+}
+
+function liftInstanceBaseOps(orig: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const base = classParentOf(orig);
+	if (base != null && unwrapRef(base).kind == TypeKind.GenericInstance) liftTypeOps(base, lctx, loc);
+}
+
+function classBaseName(classStruct: Type): string {
+	const base = classStruct.kind == TypeKind.Struct ? classStruct.typeExtra : null;
+	if (base == null) return "";
+	const body = base.kind == TypeKind.Ref && base.typeReturn != null ? base.typeReturn : base;
+	if (body.kind == TypeKind.GenericInstance) return monoInstanceName(body);
+	return body.kind == TypeKind.Struct ? body.typeName : "";
 }
 
 function baseClassType(typeName: string, lctx: LiftCtx): Type {
@@ -1483,10 +1490,10 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 
 // Emit a minimal msTypeInfo for a class/interface with no RC fields. Needed so
 // `msAllocTyped(sizeof(T), &TTypeInfo)` links; destroyFn / traceFn are null.
-function emitMinimalTypeInfo(cName: string, typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
+function emitMinimalTypeInfo(cName: string, typeName: string, objType: Type, loc: SourceLocation, lctx: LiftCtx): void {
 	const keys = ["name", "cname", "isCyclic", "traceFn", "destroyFn"];
 	const vals = [makeString(typeName, loc), makeString(cName, loc), makeBool(false, loc), makeNull(loc), makeNull(loc)];
-	const baseTypeName = getBaseClass(typeName, lctx);
+	const baseTypeName = classBaseName(objType);
 	if (baseTypeName != "") {
 		keys.push("base");
 		vals.push(makeString(baseTypeName, loc));
@@ -1499,11 +1506,11 @@ function emitMinimalTypeInfo(cName: string, typeName: string, lctx: LiftCtx, loc
 
 // Emit the full msTypeInfo for a class/interface with RC fields. destroyFn
 // points to the generated <T>Destroy; traceFn points to <T>Trace iff cyclic.
-function emitFullTypeInfo(cName: string, typeName: string, hasCycles: boolean, lctx: LiftCtx, loc: SourceLocation): void {
+function emitFullTypeInfo(cName: string, typeName: string, objType: Type, hasCycles: boolean, lctx: LiftCtx, loc: SourceLocation): void {
 	const traceFn = hasCycles ? makeTypedIdentResolved(attachedOpSym(cName + "Trace", AttachedOp.AttachedTrace), null, loc) : makeNull(loc);
 	const keys = ["name", "cname", "isCyclic", "traceFn", "destroyFn"];
 	const vals = [makeString(typeName, loc), makeString(cName, loc), makeBool(hasCycles, loc), traceFn, makeTypedIdentResolved(attachedOpSym(cName + "Destroy", AttachedOp.AttachedDestructor), null, loc)];
-	const baseTypeName = getBaseClass(typeName, lctx);
+	const baseTypeName = classBaseName(objType);
 	if (baseTypeName != "") {
 		keys.push("base");
 		vals.push(makeString(baseTypeName, loc));
@@ -1583,6 +1590,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	if (hooksOwned && (!emitTypeInfo || isTypeInfoGloballyOwned(cName))) return;
 	if (nameSetContains(lctx.generating, cName)) return;
 	nameSetAdd(lctx.generating, cName);
+	liftInstanceBaseOps(orig, lctx, loc);
 
 	// ----- Resolve category via symbol lookup (matches old ensureTypeHooks) -----
 	let isClassOrInterface = refType != null;
@@ -1653,7 +1661,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 			&& (objType.kind == TypeKind.Struct || isTaggedUnion(objType));
 		if (!isPlainValueAggregate) {
 			if (shouldEmitTypeInfo) {
-				emitMinimalTypeInfo(cName, typeName, lctx, loc);
+				emitMinimalTypeInfo(cName, typeName, objType, loc, lctx);
 				claimGlobalTypeInfo(cName);
 			}
 			nameSetAdd(lctx.trivial, cName);
@@ -1705,7 +1713,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	}
 
 	if (shouldEmitTypeInfo) {
-		emitFullTypeInfo(cName, typeName, hasCycles, lctx, loc);
+		emitFullTypeInfo(cName, typeName, objType, hasCycles, lctx, loc);
 		claimGlobalTypeInfo(cName);
 	}
 
