@@ -16,7 +16,7 @@ import { ProgramError } from "./error";
 import { invokeSigned } from "./invoke";
 import { associatedTokenAddress, isTokenProgram } from "./mint";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, Pubkey, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./pubkey";
-import { SignerSeeds, bytesAddress, findAddress, seedBytes } from "./seed";
+import { SignerSeeds } from "./seed";
 
 export { associatedTokenAddress, initializeMint2 } from "./mint";
 export { createMintPda } from "./macro";
