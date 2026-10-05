@@ -49,6 +49,10 @@ test "fmt jsx: bare attribute stays bare and braced true stays braced" {
 	assert fmt("const a = <input disabled on={true}/>;\n").contains("<input disabled on={true} />");
 }
 
+test "fmt jsx: a braced string attribute keeps its braces" {
+	assert fmt("const a = <input mode={\"x\"} m={ 'y' } label=\"z\"/>;\n").contains("<input mode={\"x\"} m={'y'} label=\"z\" />");
+}
+
 test "fmt fails loud on a node kind it cannot print" {
 	const inner = createNodeAt(NodeKind.Identifier, { name: "x" }, makeLoc(1, 1));
 	const hidden = createNodeAt(NodeKind.HiddenDeref, { expr: inner }, makeLoc(1, 1));
