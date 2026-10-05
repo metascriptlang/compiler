@@ -8,8 +8,8 @@ function firstByte(s: Span<uint8>): uint8 {
 }
 
 const dyn: uint8[] = [1, 2, 3];
-const fixed: uint8[3] = [3, 4, 5];
-const vec: Vec<uint8> = [7, 8];
+let fixed: uint8[3] = [3, 4, 5];
+let vec: Vec<uint8> = [7, 8];
 
 const p1: Packet = { view: dyn, tag: 0 };
 const p2: Packet = { view: fixed, tag: 0 };

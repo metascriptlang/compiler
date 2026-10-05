@@ -18,7 +18,7 @@ function selectedIndex(): int32 { locationReads++; return 1; }
 
 test "valueLocations: native stores copy value elements rather than sharing their source" {
 	let value: StoredValue = { n: 1 };
-	const owned: Vec<StoredValue> = [];
+	let owned: Vec<StoredValue> = [];
 	const shared: StoredValue[] = [];
 	const throughCall: StoredValue[] = [];
 	owned.push(value);
@@ -80,7 +80,7 @@ test "valueLocations: in-place aggregate assignment preserves nested locations w
 	let elements: StoredOuter[1] = [{ a: 1, inner: { v: 2, tags: [1] } }];
 	const view = elements[0] as Ptr<StoredOuter>;
 	const nested = elements[0].inner as Ptr<StoredInner>;
-	const source: StoredOuter = { a: 3, inner: { v: 4, tags: [9, 9] } };
+	let source: StoredOuter = { a: 3, inner: { v: 4, tags: [9, 9] } };
 	elements[0] = source;
 	assert view.a == 3 && nested.v == 4;
 	assert view.inner.tags.length == 2 && view.inner.tags[1] == 9;

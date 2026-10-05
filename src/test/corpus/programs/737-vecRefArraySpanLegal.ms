@@ -25,7 +25,7 @@ function refArrayToSpan(): boolean {
 }
 
 function vecToSpan(): boolean {
-	const v: Vec<int32> = [1, 2, 3];
+	let v: Vec<int32> = [1, 2, 3];
 	const s: Span<int32> = v;
 	return takeSpan(v) == 3 && s.length == 3;
 }

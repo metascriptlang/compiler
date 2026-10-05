@@ -12,7 +12,7 @@ function keep(xs: S[], x: S): void { xs.push(x); }
 function rebind(x: S): int32 { x = { n: 9 }; return x.n; }
 
 let v: S = { n: 1 };
-const vs: Vec<S> = [];
+let vs: Vec<S> = [];
 vs.push(v);
 const rs: S[] = [];
 keep(rs, v);

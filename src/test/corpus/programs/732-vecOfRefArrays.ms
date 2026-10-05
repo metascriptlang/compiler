@@ -27,7 +27,7 @@ function slotDetach(): boolean {
 
 function pushDetach(): boolean {
 	const a: Vec<int32[]> = [[1]];
-	const c: Vec<int32[]> = a;
+	let c: Vec<int32[]> = a;
 	c.push([5]);
 	return a.length == 1 && c.length == 2 && c[1][0] == 5;
 }

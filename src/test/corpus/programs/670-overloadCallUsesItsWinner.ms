@@ -28,9 +28,9 @@ function take(values: Span<int32>): int32 { return values.length as int32; }
 function lone(values: Span<int32>): int32 { return values.length as int32; }
 
 function main(): void {
-	const items: int32[2] = [4, 5];
+	let items: int32[2] = [4, 5];
 	const box: Box = { value: 9 };
-	const fixed: int32[2] = [4, 5];
+	let fixed: int32[2] = [4, 5];
 	const dyn: int32[] = [1, 2, 3];
 	let vec: Vec<int32> = [];
 	vec.push(1);

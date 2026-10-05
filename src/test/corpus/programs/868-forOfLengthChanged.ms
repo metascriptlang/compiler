@@ -96,7 +96,7 @@ function field(): string {
 }
 
 function vecPop(): string {
-	const v: Vec<int32> = [1, 2, 3];
+	let v: Vec<int32> = [1, 2, 3];
 	let seen = "";
 	try {
 		for (const x of v) { seen = seen + String(x) + ","; v.pop(); }

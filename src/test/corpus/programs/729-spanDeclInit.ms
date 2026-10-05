@@ -20,7 +20,7 @@ const heap: uint8[] = [7, 8, 9];
 const sHeap: Span<uint8> = heap;
 check("heap", describe(sHeap), "3:7");
 
-const sized: uint8[4] = [1, 2, 3, 4];
+let sized: uint8[4] = [1, 2, 3, 4];
 const sSized: Span<uint8> = sized;
 check("sized", describe(sSized), "4:1");
 
