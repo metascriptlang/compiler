@@ -47,6 +47,7 @@ import "./vecOfStructCopies";
 import "./matchGuardConstFold";
 import "./literalUnionBranchJoin";
 import "./sizedArrayLiteral";
+import "./sizedArrayResultSlot";
 import "./objectLiteralDestination";
 import "./returnedCallResultSlot";
 import "./comptimeBlockStaticType";
