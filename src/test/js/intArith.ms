@@ -259,3 +259,44 @@ test "int32 increment is left alone" {
 	assert result.ok;
 	assert result.value.contains("x++");
 }
+
+// ===== bitwise compound assignment =====
+
+test "int32 unsigned right shift stays inside int32" {
+	const result = compileToJS("function f(a: int32, b: int32): int32 { return a >>> b; }");
+	assert result.ok;
+	assert result.value.contains("(a >>> b) | 0");
+}
+
+test "uint32 compound or wraps and loses the compound form" {
+	const result = compileToJS("function f(b: uint32): uint32 { let a: uint32 = 1; a |= b; return a; }");
+	assert result.ok;
+	assert result.value.contains("(a | b) >>> 0");
+	assert !result.value.contains("|=");
+}
+
+test "uint32 compound right shift substitutes the unsigned operator" {
+	const result = compileToJS("function f(b: uint32): uint32 { let a: uint32 = 1; a >>= b; return a; }");
+	assert result.ok;
+	assert result.value.contains("a >>>= b");
+}
+
+test "uint8 compound left shift masks its count and wraps at a byte" {
+	const result = compileToJS("function f(b: uint8): uint8 { let a: uint8 = 1; a <<= b; return a; }");
+	assert result.ok;
+	assert result.value.contains("(a << (b & 7)) & 255");
+	assert !result.value.contains("<<=");
+}
+
+test "int32 compound or and left shift are left alone" {
+	const result = compileToJS("function f(b: int32): int32 { let a: int32 = 1; a |= b; a <<= b; return a; }");
+	assert result.ok;
+	assert result.value.contains("a |= b");
+	assert result.value.contains("a <<= b");
+}
+
+test "uint64 compound left shift masks its count and wraps at 64 bits" {
+	const result = compileToJS("function f(b: uint64): uint64 { let a: uint64 = 1; a <<= b; return a; }");
+	assert result.ok;
+	assert result.value.contains("BigInt.asUintN(64, (a << (b & 63n)))");
+}

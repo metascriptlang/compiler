@@ -1029,6 +1029,31 @@ test "%=" {
 	assert ctx.lastResult.intVal == 2;
 }
 
+test "|=" {
+	const ctx = evalRaiser("let x = 12; x |= 3; return x;");
+	assert ctx.lastResult.intVal == 15;
+}
+
+test "&=" {
+	const ctx = evalRaiser("let x = 12; x &= 6; return x;");
+	assert ctx.lastResult.intVal == 4;
+}
+
+test "^=" {
+	const ctx = evalRaiser("let x = 12; x ^= 6; return x;");
+	assert ctx.lastResult.intVal == 10;
+}
+
+test "<<=" {
+	const ctx = evalRaiser("let x = 3; x <<= 4; return x;");
+	assert ctx.lastResult.intVal == 48;
+}
+
+test ">>=" {
+	const ctx = evalRaiser("let x = 48; x >>= 4; return x;");
+	assert ctx.lastResult.intVal == 3;
+}
+
 test "+= in loop" {
 	const ctx = evalRaiser("let sum = 0; for (let i = 1; i <= 5; i++) { sum += i; } return sum;");
 	assert ctx.lastResult.intVal == 15;

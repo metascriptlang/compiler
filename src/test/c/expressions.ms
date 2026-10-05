@@ -78,3 +78,30 @@ test "E2E C: an explicit float32 step in a chain of as survives" {
 	assert c.ok;
 	assert c.value.indexOf("(double)((float)") >= 0;
 }
+
+test "E2E C: a signed compound left shift writes through the unsigned view with a masked count" {
+	const result = compileToC("export function f(b: int32): int32 { let a: int32 = 1; a <<= b; return a; }");
+	assert result.ok;
+	assert result.value.contains("*(uint32_t*)&(");
+	assert result.value.contains("<<= ((uint32_t)(b) & 31)");
+}
+
+test "E2E C: an unsigned compound right shift masks its count to the width" {
+	const result = compileToC("export function f(b: uint8): uint8 { let a: uint8 = 200; a >>= b; return a; }");
+	assert result.ok;
+	assert result.value.contains(">>= ((uint8_t)(b) & 7)");
+}
+
+test "E2E C: a signed compound unsigned right shift writes through the unsigned view" {
+	const result = compileToC("export function f(b: int8): int8 { let a: int8 = -1; a >>>= b; return a; }");
+	assert result.ok;
+	assert result.value.contains("*(uint8_t*)&(");
+	assert result.value.contains(">>= ((uint8_t)(b) & 7)");
+	assert !result.value.contains(">>>");
+}
+
+test "E2E C: a compound bitwise or stays the C operator" {
+	const result = compileToC("export function f(b: int32): int32 { let a: int32 = 1; a |= b; return a; }");
+	assert result.ok;
+	assert result.value.contains("|= b)");
+}

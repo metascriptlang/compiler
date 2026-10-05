@@ -11,6 +11,7 @@ import "./testSuspension";
 import "./accessCheck";
 import "./float32";
 import "./intConv";
+import "./intArith";
 import "./asConversion";
 import "./downConversion";
 import "./genericClassInstance";
