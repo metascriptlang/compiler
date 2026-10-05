@@ -135,7 +135,7 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 	}
 	if (source.kind == TypeKind.Struct) {
 		if (source == target) return false;
-		if (source.typeName != "" && source.typeName == target.typeName) return false;
+		if (sameNominal(source, target)) return false;
 		const sNames = source.typeNames;
 		const sChildren = source.typeChildren;
 		const tChildren = target.typeChildren;
@@ -427,7 +427,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Struct => isObjectAssignable(source, target),
 			TypeKind.Enum => sameNominal(source, target),
-			TypeKind.Distinct => source.typeName == target.typeName,
+			TypeKind.Distinct => sameDistinct(source, target),
 			TypeKind.EnumLiteral => sameEnumMember(source, target),
 			TypeKind.GenericInstance => {
 				if (!sameGenericBase(source, target)) {
@@ -607,7 +607,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 
 	// EnumLiteral → Enum (subtype: NodeKind.BinaryExpr assignable to NodeKind)
 	if (source.kind == TypeKind.EnumLiteral && target.kind == TypeKind.Enum) {
-		return source.typeName == target.typeName;
+		return source.typeReturn != null && sameNominal(source.typeReturn, target);
 	}
 	// Enum → EnumLiteral is NOT allowed (would lose specificity) — fall through to false
 	// Enum/EnumLiteral → Number/Int32 (enums are ints at runtime)
@@ -1076,6 +1076,11 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 		|| dst.kind == TypeKind.Unknown;
 }
 
+function sameDistinct(a: Type, b: Type): boolean {
+	if (isBrandDistinct(a) || isBrandDistinct(b)) return a.typeName == b.typeName;
+	return sameNominal(a, b);
+}
+
 export function sameNominal(a: Type, b: Type): boolean {
 	if (a.sym != null && b.sym != null) {
 		if (a.sym == b.sym) return true;
@@ -1159,7 +1164,8 @@ function sameTypeInner(a: Type, b: Type): boolean {
 	return match (a.kind) {
 		TypeKind.Struct => sameStructType(a, b),
 		TypeKind.Enum => sameNominal(a, b),
-		TypeKind.Distinct | TypeKind.GenericParam | TypeKind.StringLiteral | TypeKind.BooleanLiteral
+		TypeKind.Distinct => sameDistinct(a, b),
+		TypeKind.GenericParam | TypeKind.StringLiteral | TypeKind.BooleanLiteral
 			| TypeKind.TypeReference => a.typeName == b.typeName,
 		TypeKind.EnumLiteral => sameEnumMember(a, b),
 		TypeKind.GenericInstance => sameGenericBase(a, b) && sameTypeList(a.typeChildren, b.typeChildren),
@@ -1226,7 +1232,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				return TypeRelation.None;
 			},
 			TypeKind.Enum => sameNominal(formal, actual) ? TypeRelation.Exact : TypeRelation.None,
-			TypeKind.Distinct => formal.typeName == actual.typeName ? TypeRelation.Exact : TypeRelation.None,
+			TypeKind.Distinct => sameDistinct(formal, actual) ? TypeRelation.Exact : TypeRelation.None,
 			// Literal types carry their value in typeName — two different literals
 			// are different types (isAssignable :368/:384, sameType :651).
 			TypeKind.StringLiteral | TypeKind.BooleanLiteral => {
@@ -1367,7 +1373,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	// EnumLiteral cross-kind rules:
 	// formal=Enum(K), actual=EnumLiteral(K,A) → Subtype (literal narrows general enum)
 	if (formal.kind == TypeKind.Enum && actual.kind == TypeKind.EnumLiteral) {
-		if (formal.typeName == actual.typeName) return TypeRelation.Subtype;
+		if (actual.typeReturn != null && sameNominal(formal, actual.typeReturn)) return TypeRelation.Subtype;
 		return TypeRelation.None;
 	}
 	// formal=EnumLiteral(K,A), actual=Enum(K) → None (would lose specificity)

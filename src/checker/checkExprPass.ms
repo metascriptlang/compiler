@@ -1145,11 +1145,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& effLeft.kind != TypeKind.Null && effRight.kind != TypeKind.Null
 				&& !hasGenericParams(effLeft) && !hasGenericParams(effRight)
 				&& ((isStringLike(effLeft) && isStringLike(effRight))
-					|| (isStructOperand(effLeft) && isStructOperand(effRight) && typeNameOf(effLeft) == typeNameOf(effRight))
+					|| (isStructType(effLeft) && isStructType(effRight) && sameType(effLeft, effRight))
 					|| (effLeft.kind == TypeKind.Tuple && effRight.kind == TypeKind.Tuple)
 					|| (tplOpName == "!=" && effLeft.kind == TypeKind.SizedArray
 						&& effRight.kind == TypeKind.SizedArray)
-					|| (effLeft.kind == TypeKind.Ref && effRight.kind == TypeKind.Ref && typeNameOf(effLeft) == typeNameOf(effRight)))) {
+					|| (effLeft.kind == TypeKind.Ref && effRight.kind == TypeKind.Ref && sameType(effLeft, effRight)))) {
 				const opConc = ctx.extensionRegistry != null
 					? resolveOperatorCall(ctx.table, ctx.extensionRegistry, tplOpName, [effLeft, effRight])
 					: null as unknown as ExtensionMethod;

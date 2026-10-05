@@ -5,7 +5,7 @@
 import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData } from "../ast/node";
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
+import { TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, extDeclaresReceiver } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult } from "./types";
@@ -253,7 +253,7 @@ function equalityEntry(ctx: CheckerContext, left: Type, right: Type): string {
 	if (isMaybeType(a) || isMaybeType(b)) {
 		const carrier = isMaybeType(a) ? a : b;
 		const other = isMaybeType(a) ? b : a;
-		if (isMaybeType(other)) return typeNameOf(a) == typeNameOf(b) ? "nullableEquals" : "";
+		if (isMaybeType(other)) return sameType(a, b) ? "nullableEquals" : "";
 		return isUnknownType(other) ? "" : "nullableEquals";
 	}
 	if (isResult(a) && isResult(b)) return sameType(a, b) ? "resultEquals" : "";
@@ -421,18 +421,18 @@ function inferBitSetOp(op: string, leftType: Type, rightType: Type): Type | null
 	if (op != "|" && op != "&" && op != "^") return null;
 	const leftElem = bitSetElemType(leftType);
 	if (leftElem != null) {
-		if (rightType.kind == TypeKind.Enum && rightType.typeName == leftElem.typeName) return leftType;
+		if (rightType.kind == TypeKind.Enum && sameType(rightType, leftElem)) return leftType;
 		const rightElem = bitSetElemType(rightType);
-		if (rightElem != null && rightElem.typeName == leftElem.typeName) return leftType;
+		if (rightElem != null && sameType(rightElem, leftElem)) return leftType;
 		return null;
 	}
 	const rightElem = bitSetElemType(rightType);
 	if (rightElem != null) {
-		if (leftType.kind == TypeKind.Enum && leftType.typeName == rightElem.typeName) return rightType;
+		if (leftType.kind == TypeKind.Enum && sameType(leftType, rightElem)) return rightType;
 		return null;
 	}
 	if (leftType.kind == TypeKind.Enum && rightType.kind == TypeKind.Enum
-		&& leftType.typeName != "" && leftType.typeName == rightType.typeName
+		&& sameNominal(leftType, rightType)
 		&& isOrdinalEnum(leftType)) {
 		return createBitSet(leftType);
 	}
@@ -653,8 +653,7 @@ function reportOrdinalEnumMix(ctx: CheckerContext, op: string, leftType: Type, r
 	if (leftType == null || rightType == null) return false;
 	if (leftType.kind != TypeKind.Enum || rightType.kind != TypeKind.Enum) return false;
 	if (!isOrdinalEnum(leftType) && !isOrdinalEnum(rightType)) return false;
-	if (leftType.typeName == "" || rightType.typeName == "") return false;
-	if (leftType.typeName == rightType.typeName) return false;
+	if (sameNominal(leftType, rightType)) return false;
 	addError(ctx, "bitwise operator '" + op + "' on '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType) + "' mixes different enum sets", node.location.line, node.location.column);
 	return true;
 }
@@ -853,7 +852,7 @@ function arithOperandsOk(op: string, a: Type, b: Type): boolean {
 function sameSetElement(a: Type, b: Type): boolean {
 	const ea = bitSetElemType(a);
 	const eb = bitSetElemType(b);
-	return ea != null && eb != null && ea.typeName == eb.typeName;
+	return ea != null && eb != null && sameType(ea, eb);
 }
 
 function sameStructOperand(ao: Type, a: Type, bo: Type, b: Type): boolean {
@@ -893,7 +892,11 @@ function equalityOperandsOk(ao: Type, bo: Type): boolean {
 	if (a.kind == TypeKind.BooleanLiteral || b.kind == TypeKind.BooleanLiteral) return true;
 	const aEnum = a.kind == TypeKind.Enum || a.kind == TypeKind.EnumLiteral;
 	const bEnum = b.kind == TypeKind.Enum || b.kind == TypeKind.EnumLiteral;
-	if (aEnum && bEnum) return a.typeName == b.typeName;
+	if (aEnum && bEnum) {
+		const ea = a.kind == TypeKind.EnumLiteral ? a.typeReturn : a;
+		const eb = b.kind == TypeKind.EnumLiteral ? b.typeReturn : b;
+		return ea != null && eb != null && sameNominal(ea, eb);
+	}
 	if (aEnum || bEnum) return (aEnum ? b : a).kind == TypeKind.Void;
 	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
 	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
