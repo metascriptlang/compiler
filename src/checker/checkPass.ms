@@ -36,6 +36,7 @@ import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMuta
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
+import { inlineDecorator } from "./decoratorHelpers";
 import { foldUserOperatorConstant, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
@@ -409,6 +410,8 @@ function checkDecoratedStmt(ctx: CheckerContext, node: Node): void {
 	const k = ctx.table.current.scopeKind;
 	const local = k != ScopeKind.Module && k != ScopeKind.Global;
 	let after: Node[] = [];
+	const inlineDec = local && node.kind == NodeKind.DecoratedDecl ? inlineDecorator((node.data as DecoratedDeclData).decorators) : null;
+	if (inlineDec != null) addError(ctx, "@inline applies to a module-level function", inlineDec.location.line, inlineDec.location.column);
 	if (local && callDecoratorDefers(ctx, node)) {
 		if (!mintDecoratedLocalType(ctx, node)) return;
 		after = applyNestedDecorators(ctx, node);
@@ -810,6 +813,10 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 function checkStaticStorageDecl(ctx: CheckerContext, node: Node, d: VariableDeclData): void {
 	if (d.declKind == DeclKind.Var) {
 		addError(ctx, "'static var' is not supported — use 'static let'; hoisting rebuilds a var declaration without its symbol, so the slot would be emitted as an untyped frame local while every read resolved to module scope", d.nameLocation.line, d.nameLocation.column);
+		return;
+	}
+	if (ctx.currentFunction != null && hasFlag(ctx.currentFunction, SymbolFlag.Inline)) {
+		addError(ctx, "an @inline function is copied into every module that calls it, so it cannot own a 'static' slot; declare it at module scope", d.nameLocation.line, d.nameLocation.column);
 		return;
 	}
 	if (node.resolvedSym != null) {

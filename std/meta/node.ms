@@ -218,6 +218,7 @@ export enum SymbolFlag {
 	NeverRaises,
 	HcrCell, // pointer to a lifted module variable's registry storage; the analyzer destroys `(*ptr).value` at program end
 	ClassInit,
+	Inline,
 }
 
 // ===== Symbol =====

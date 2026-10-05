@@ -3892,6 +3892,7 @@ export function typeDisplayName(t: Type | null): string {
 }
 function typeDisplayNameInner(t: Type | null): string {
 	if (t == null) return "<null>";
+	if (t.kind == TypeKind.Function && t.callConv == CallingConvention.CcInline) return "@inline function";
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
 		return "..." + typeDisplayName(t.typeChildren[0]);
 	}

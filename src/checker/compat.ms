@@ -1,6 +1,6 @@
 // Type Compatibility - table-driven assignability checking
 
-import { Type, TypeKind, SymbolKind } from "../ast/node";
+import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
 import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName } from "./types";
 
@@ -734,9 +734,14 @@ function fnSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 	return isReinterpretUnsafe(a, b);
 }
 
+function leavesInlineConv(source: Type, target: Type): boolean {
+	return source.callConv == CallingConvention.CcInline && target.callConv != CallingConvention.CcInline;
+}
+
 // Function assignability: contravariant params, covariant return
 function isFunctionAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
+	if (leavesInlineConv(source, target)) return false;
 	if (source.typeChildren.length != target.typeChildren.length) return false;
 	// Check params (contravariant: target params assignable to source params)
 	let i = 0;
@@ -1170,8 +1175,9 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			TypeKind.Function => {
 				// Nim procTypeRel (sigmatch.nim:789): arity, then every param, then
 				// the return type, combined with minRel — the weakest component wins.
-				// callConv is deliberately not folded in (NIM-REF CK-52: MS has one
-				// closure repr, so it carries no discriminating information).
+				// callConv is folded in only for the inline convention (NIM-REF CK-52:
+				// MS has one closure repr, so the others carry no discriminating information).
+				if (leavesInlineConv(actual, formal)) return TypeRelation.None;
 				if (formal.typeChildren.length != actual.typeChildren.length) return TypeRelation.None;
 				let worst = TypeRelation.Exact;
 				for (let pi = 0; pi < formal.typeChildren.length; pi += 1) {
