@@ -4,7 +4,7 @@
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
 import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, UnaryExprData, ConditionalExprData, ObjectLiteralData, SpreadExprData, MoveExprData, HiddenDerefData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isStructType, unwrapRefNullUnion, isUnresolvedType, mayHoldAddress, peelThrough, PEEL_ALL, PEEL_ALIAS, hasAsgnFlag } from "../../checker/types";
+import { isStructType, unwrapRefNullUnion, isUnresolvedType, mayHoldAddress, peelThrough, PEEL_ALL, PEEL_ALIAS, hasAsgnFlag, isIntegerType, isFloatType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { statementCanRaise, callCanRaise } from "../../checker/raises";
 import {
@@ -334,6 +334,29 @@ function isPlainStruct(t: Type | null): boolean {
 	return v != null && v.kind == TypeKind.Struct && !hasAsgnFlag(v);
 }
 
+function storesAfterRaiseCheck(g: CGen, p: CProc, expr: Readonly<Node>): boolean {
+	const bd = expr.data as BinaryExprData;
+	if (p.suppressRaiseCheck || !statementCanRaise(expr)) return false;
+	if (p.nestedTryStmts.length == 0 && frameLocalRoot(p, bd.left) != null) return false;
+	const left = bd.left.nodeType;
+	const right = bd.right.nodeType;
+	if (left == null || right == null) return false;
+	if (isArithmetic(left) && isArithmetic(right)) {
+		return bd.operator == "=" || bd.operator == "+=" || bd.operator == "-=" || bd.operator == "*="
+			|| (bd.operator == "/=" && isIntegerType(left) == isIntegerType(right));
+	}
+	return bd.operator == "=" && isPlainStruct(left) && assignTargetCType(g, bd.left) == getTypeDesc(g, right);
+}
+
+function isArithmetic(t: Type): boolean {
+	const v = peelThrough(t, PEEL_ALIAS);
+	return isIntegerType(v) || isFloatType(v) || v.kind == TypeKind.Boolean || v.kind == TypeKind.Char;
+}
+
+function returnsInto(value: Readonly<Node>): boolean {
+	return value.kind == NodeKind.CallExpr && isNrvoReturnType(getCalleeReturnType(value), getCalleeFuncType(value));
+}
+
 function storeIsUnobservable(p: CProc, call: Readonly<Node>): boolean {
 	return p.nestedTryStmts.length == 0 || !callCanRaise(call);
 }
@@ -346,6 +369,19 @@ function genExprStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		const built = genExprInto(g, p, bd.right, dest);
 		if (built != dest) emitStmtsLine(p, `${dest} = ${built};`);
 		emitCallRaiseCheck(p, d.expr);
+		return;
+	}
+	if (d.expr.kind == NodeKind.BinaryExpr && storesAfterRaiseCheck(g, p, d.expr)) {
+		const bd = d.expr.data as BinaryExprData;
+		const dest = genExpr(g, p, bd.left);
+		let value = genExpr(g, p, bd.right);
+		if (!returnsInto(bd.right)) {
+			const tmp = getTemp(p, getTypeDesc(g, bd.right.nodeType!)).snippet;
+			emitStmtsLine(p, `${tmp} = ${value};`);
+			value = tmp;
+		}
+		emitCallRaiseCheck(p, d.expr);
+		emitStmtsLine(p, `${dest} ${bd.operator} ${value};`);
 		return;
 	}
 	if (d.expr.kind == NodeKind.MacroInvocation) {
