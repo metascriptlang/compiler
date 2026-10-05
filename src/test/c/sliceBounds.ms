@@ -26,7 +26,7 @@ test "a slice of a span checks its bounds" {
 }
 
 test "a slice of a string checks its bounds" {
-	const c = cFor("function f(t: string, a: int32, b: int32): int32 { const s: Span<char> = t[a..b]; return s.length as int32; }");
+	const c = cFor("function f(t: string, a: int32, b: int32): int32 { const s: Readonly<Span<char>> = t[a..b]; return s.length as int32; }");
 	assert c != "";
 	assert c.contains("msSliceLen(");
 }

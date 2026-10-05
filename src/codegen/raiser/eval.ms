@@ -1263,7 +1263,7 @@ test "engine: an empty slice passes at any start" {
 }
 
 test "engine: a string span views its bytes" {
-	const ctx = evalOrcVM("function n(v: Span<char>): int32 { let t = 0; for (let i = 0; i < v.length; i++) t += v[i] as int32; return t; }"
+	const ctx = evalOrcVM("function n(v: Readonly<Span<char>>): int32 { let t = 0; for (let i = 0; i < v.length; i++) t += v[i] as int32; return t; }"
 		+ " const s = 'hello'; console.log(`${n(s)} ${n(s[1..4])}`);");
 	assert ctx.error == "";
 	assert ctx.output == "532 317\n";

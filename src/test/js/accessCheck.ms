@@ -113,7 +113,7 @@ test "a spread span copies the view's elements" {
 }
 
 test "a string passed as a span is its byte view" {
-	const result = compileToJS("function n(xs: Span<char>): int32 { return xs.length; } function f(s: string): int32 { return n(s) + n(s[1..2]); }");
+	const result = compileToJS("function n(xs: Readonly<Span<char>>): int32 { return xs.length; } function f(s: string): int32 { return n(s) + n(s[1..2]); }");
 	assert result.ok;
 	assert result.value.contains("msSliceSpan(asBytes(s), 1, 2)");
 	assert !result.value.contains("msSpanOf(asBytes(");

@@ -13,7 +13,7 @@ function tail(xs: Span<int32>): int32 {
 	return sum(xs[1..xs.length]);
 }
 
-function byteSum(view: Span<char>): int32 {
+function byteSum(view: Readonly<Span<char>>): int32 {
 	let total = 0;
 	for (let i = 0; i < view.length; i++) total += view[i] as int32;
 	return total;
