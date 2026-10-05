@@ -11,7 +11,7 @@
 //   f("hello", ["a", "b", "c"]);
 
 import {
-	Node, NodeKind, NodeData, Type, TypeKind,
+	Node, NodeKind, NodeData, Type, TypeKind, SymbolKind,
 	CallExprData, IdentifierData, NewExprData,
 	createNode,
 } from "../../ast/node";
@@ -46,38 +46,39 @@ function makeArrayLit(elements: Node[], restType: Type, line: int32): Node {
 function lowerRestNew(node: Node): Node {
 	const d = node.data as NewExprData;
 	if (d.newCallee == null || d.newCallee.resolvedSym == null) return node;
+	d.newArguments = packCtorRest(d.newArguments, getCtorParamTypes(d.newCallee.resolvedSym), node.location.line);
+	return node;
+}
 
-	const ctorTypes = getCtorParamTypes(d.newCallee.resolvedSym);
-	if (ctorTypes == null || ctorTypes.length == 0) return node;
+function packCtorRest(args: Node[], ctorTypes: Type[] | null, line: int32): Node[] {
+	if (ctorTypes == null || ctorTypes.length == 0) return args;
 	const lastType = ctorTypes[ctorTypes.length - 1];
-	if (lastType == null || lastType.kind != TypeKind.Varargs) return node;
+	if (lastType == null || lastType.kind != TypeKind.Varargs) return args;
 
 	const restIdx = ctorTypes.length - 1;
 	const restType = lastType.typeChildren.length > 0
 		? lastType.typeChildren[0]
 		: null as unknown as Type;
 
-	if (d.newArguments.length <= restIdx) {
-		d.newArguments.push(makeArrayLit([], restType, node.location.line));
-		return node;
+	if (args.length <= restIdx) {
+		args.push(makeArrayLit([], restType, line));
+		return args;
 	}
 
 	const regularArgs: Node[] = [];
 	const restArgs: Node[] = [];
 	let j = 0;
-	while (j < d.newArguments.length) {
+	while (j < args.length) {
 		if (j < restIdx) {
-			regularArgs.push(d.newArguments[j]);
+			regularArgs.push(args[j]);
 		} else {
-			restArgs.push(d.newArguments[j]);
+			restArgs.push(args[j]);
 		}
 		j = j + 1;
 	}
 
-	regularArgs.push(makeArrayLit(restArgs, restType, node.location.line));
-	d.newArguments = regularArgs;
-
-	return node;
+	regularArgs.push(makeArrayLit(restArgs, restType, line));
+	return regularArgs;
 }
 
 function lowerRest(node: Node): Node {
@@ -90,6 +91,11 @@ function lowerRest(node: Node): Node {
 	// console.log is a flat-varargs intrinsic — every backend prints its args
 	// individually (C debugLower, JS native, Raiser loop); packing breaks all three.
 	if (isConsoleLogCallee(callee)) return node;
+	if (callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "super"
+		&& callee.resolvedSym != null && callee.resolvedSym.symbolKind == SymbolKind.Class) {
+		d.arguments = packCtorRest(d.arguments, getCtorParamTypes(callee.resolvedSym), node.location.line);
+		return node;
+	}
 	let sym = callee.resolvedSym;
 	// Synthetic calls inserted by earlier transforms (stringConcatFlatten,
 	// nativeLower) emit bare Identifier callees with no resolvedSym. Look the
