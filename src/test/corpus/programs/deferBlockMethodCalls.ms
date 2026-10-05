@@ -1,5 +1,4 @@
 // @stdout: set=2 map=2 array=1,7 box=2 local=10 nested=inner,outer loop=3
-// @xfail(raiser): the Raiser VM cannot hash an integer key yet (`Set<int32>`/`Map<int32, …>` stop in `hashWangYi1`: no host bridge for `msHiXorLo`)
 // note: a `defer { … }` block is checked like any other block, so a method call inside it resolves to the method; before, the block went unchecked and C emitted `seen->add(7)` on a struct with no such member.
 class Box {
 	n: int32 = 0;
