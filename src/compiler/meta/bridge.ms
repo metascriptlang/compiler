@@ -1309,8 +1309,8 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 					// One flag, by name, not the whole word: a macro that could set
 					// Sem/Transf/LL would forge pipeline state on a node the passes
 					// have never processed. Widen this list only per-flag.
-					const rawFlags = readInt(objHeap, handle, "flags") as int32;
-					if (rawFlags == NodeFlag.StaticStorage as int32) {
+					const rawFlags = (readInt(objHeap, handle, "flags") as uint32) as BitSet<NodeFlag>;
+					if (rawFlags.has(NodeFlag.StaticStorage)) {
 						out.flags = out.flags.incl(NodeFlag.StaticStorage);
 					}
 				}

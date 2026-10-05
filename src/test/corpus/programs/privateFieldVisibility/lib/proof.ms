@@ -1,4 +1,4 @@
-import { Node, NodeKind } from "std/meta";
+import { Node, NodeKind, DeclKind } from "std/meta";
 
 export struct Account { address: uint64; }
 export struct Signer { private account: Account; }
@@ -28,7 +28,7 @@ export macro declareProof(value: Node): Node {
 			kind: NodeKind.VariableDecl, line: 0, column: 0,
 			declName: "proof", declType: "Signer",
 			initializer: { kind: NodeKind.ObjectLiteral, line: 0, column: 0, keys: ["account"], properties: [value] },
-			declKind: 0, nameLocation: { line: 0, column: 0 },
+			declKind: DeclKind.Const, nameLocation: { line: 0, column: 0 },
 		}],
 	};
 }

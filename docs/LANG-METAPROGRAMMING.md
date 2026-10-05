@@ -167,6 +167,20 @@ reports the macro's single explicit error. Handoff `bindSymGeneric` is 3/3 and
 `fieldVisibility` 13/13, including the ordinary-caller private-access refusals.
 This focused check is not a fresh full-suite or SAN verdict.
 
+The flag wire is a set, not an enum ordinal. `valueToNode` in
+`src/compiler/meta/bridge.ms` preserves the allowed `StaticStorage` member of
+`Node.flags`; it does not copy processing flags from macro output. Reading the
+old ordinal protocol dropped a typed static flag, so the generated initializer
+ran once per call rather than once per site.
+
+Measured 2026-10-05 with the corrected decoder: corpus 704/705/706 prints each
+unchanged PASS oracle on C DRC, C ORC and JS; private-field corpus prints its
+unchanged oracle on those three cells and Raiser. The macro boundary handoff is
+5/5, including refusal of generated expressions carrying forged processing
+flags. Raiser still fails the existing static-hoist oracles (704 builds=5,
+705 builds=17, 706 builds=9); those existing xfails were not removed. Full SAN
+and the integration gate are separate checks.
+
 ### The Core Concept: AST In -> Manipulate -> AST Out
 
 A macro is a function that receives `Node`, inspects it however it wants, builds new `Node` trees, and returns the result. The returned AST replaces the original in the compilation pipeline.
