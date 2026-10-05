@@ -2435,10 +2435,45 @@ when (macos) {
 ### Condition grammar
 
 A closed grammar — flag names, literals, `!`, `&&`, `||`, comparisons
-(`==` `===` `!=` `!==` `<` `<=` `>` `>=`) and parentheses. Function calls and
-arbitrary expressions are rejected: conditions are resolved before any symbol
-table exists, so an identifier there is always a flag name, never a variable.
-Comparison is numeric when both sides are numeric, string otherwise.
+(`==` `===` `!=` `!==` `<` `<=` `>` `>=`), parentheses, and a type trait called
+with its type argument (`isPlainData<T>()`, below). Other calls and arbitrary
+expressions are rejected: flags are resolved before any symbol table exists, so an
+identifier there is always a flag name, never a variable. Comparison is numeric when
+both sides are numeric, string otherwise.
+
+### Type traits
+
+`std/typetraits` answers questions about a type while compiling. Each is a call with
+one type argument and no value: it folds to `true` or `false`, so it can stand in
+any expression, and in a `when` it picks a branch.
+
+| Trait | `true` for |
+|---|---|
+| `isPlainData<T>()` | a `T` that owns no managed memory (string, array, `Vec`, class, interface, closure) and declares no lifecycle hook, so its bytes can be copied or mapped as they are: numbers, booleans, enums, `Ptr<T>`, and structs, tuples and fixed arrays of those |
+| `needsCopy<T>()` | a `T` that every slot must hold its own copy of, because it can change in place: a value struct, tuple, `Vec` or fixed array; `false` for numbers, booleans, enums, strings and references (`T[]`, class, interface) |
+
+Inside a generic function a `when` that asks a trait is decided for each instance,
+with that instance's types; only the picked branch is type-checked and emitted for it.
+Flags in the same chain still decide at parse. A trait `when` belongs in a function
+body: at module level, where `when` selects declarations, it is an error.
+
+```typescript
+import { isPlainData } from "std/typetraits";
+
+function byteSize<T>(x: T): int32 {
+    when (isPlainData<T>()) {
+        return sizeof(T);       // int32 instance: 4
+    } else {
+        return x.length;        // string instance: never checked for int32
+    }
+}
+```
+
+Measured 2026-10-05 (`wt/solana-type-traits`, stage-2 candidate): corpus
+`typeTraitsPerInstance` (one generic instantiated with `int32`, a struct, a struct
+with a string, a `Vec`, a class and a string; a generic class method; a closure
+inside a generic) prints the same line on C (DRC, ORC, `--danger`), JS, ESM and
+the Raiser. A trait `when` builds under `--os=solana` (linked, not run).
 
 ### Flags
 
