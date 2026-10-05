@@ -2,9 +2,9 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { refuseMemberAccess, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt } from "../ast/node";
+import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
-import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
+import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
@@ -22,9 +22,9 @@ import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
+import { SymbolFlag, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
-import { expandTemplate, isTemplateSym, gensymSplicePrefix } from "./template";
+import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
@@ -521,11 +521,119 @@ function cloneDefaultNode(node: Node): Node {
 	return clone;
 }
 
+let defaultArgTemps: int32 = 0;
+
+function readEarlierParams(ctx: CheckerContext, cloned: Node, paramNames: string[], defIdx: number, args: Node[],
+	defaultOffset: number, paramTypes: Type[], receiverSlot: Node | null, reads: Node[]): Node {
+	const earlier: string[] = [];
+	for (let k = 0; k < defIdx && k < paramNames.length; k += 1) earlier.push(paramNames[k]);
+	const used = referencedParams(cloned, earlier);
+	let anyUsed = false;
+	for (const u of used) { if (u) anyUsed = true; }
+	if (!anyUsed) return cloned;
+	const subs: Node[] = [];
+	for (let k = 0; k < earlier.length; k += 1) {
+		const read = used[k] ? readOfParam(ctx, k, earlier[k], args, defaultOffset, paramTypes, receiverSlot, reads) : null;
+		subs.push(read != null ? read : createNodeAt(NodeKind.Identifier, { name: earlier[k] }, cloned.location));
+	}
+	return substituteParams(cloned, earlier, subs);
+}
+
+function readOfParam(ctx: CheckerContext, k: int32, name: string, args: Node[], defaultOffset: number, paramTypes: Type[],
+	receiverSlot: Node | null, reads: Node[]): Node | null {
+	while (reads.length <= k) reads.push(null as unknown as Node);
+	if (reads[k] != null) return cloneNodeKeepSem(reads[k]);
+	const argPos = k - defaultOffset;
+	let source: Node | null = null;
+	if (argPos >= 0 && argPos < args.length) {
+		source = args[argPos];
+	} else if (argPos < 0 && receiverSlot != null) {
+		source = (receiverSlot.data as MemberExprData).object;
+	}
+	if (source == null || source.nodeType == null) return null;
+	if (readsWithoutEffect(source)) {
+		reads[k] = source;
+		return cloneNodeKeepSem(source);
+	}
+	const formal = paramTypes != null && k < paramTypes.length ? paramTypes[k] : null;
+	if (formal != null && formal.kind == TypeKind.Var) {
+		addError(ctx, "a default value reads the ref parameter '" + name + "', so its argument must be a variable",
+			source.location.line, source.location.column);
+		return cloneNodeKeepSem(source);
+	}
+	const read = bindArgumentOnce(ctx, source);
+	if (argPos >= 0) {
+		args[argPos] = read.assign;
+	} else {
+		(receiverSlot!.data as MemberExprData).object = read.assign;
+	}
+	reads[k] = read.value;
+	return cloneNodeKeepSem(read.value);
+}
+
+function readsWithoutEffect(n: Node): boolean {
+	if (n.kind == NodeKind.Identifier) return n.resolvedSym != null;
+	return n.kind == NodeKind.NumberLiteral || n.kind == NodeKind.StringLiteral
+		|| n.kind == NodeKind.BooleanLiteral || n.kind == NodeKind.NullLiteral;
+}
+
+interface ArgumentBinding { assign: Node; value: Node; }
+
+function bindArgumentOnce(ctx: CheckerContext, source: Node): ArgumentBinding {
+	defaultArgTemps += 1;
+	const t = source.nodeType!;
+	const loc = source.location;
+	const name = "__dflt_" + String(defaultArgTemps);
+	const sym = makeSymbol(name, SymbolKind.Variable, t, true);
+	setFlag(sym, SymbolFlag.Used);
+	if (ctx.currentFunction == null) setFlag(sym, SymbolFlag.Global);
+	sym.modulePath = ctx.modulePath;
+	sym.location = loc;
+	const decl = createNodeAt(NodeKind.VariableDecl, { declName: name, declType: "", initializer: null as unknown as Node, declKind: DeclKind.Let, nameLocation: loc }, loc);
+	decl.resolvedSym = sym;
+	decl.nodeType = t;
+	decl.flags = decl.flags.incl(NodeFlag.Sem);
+	sym.declNode = decl;
+	ctx.pendingHoisted.push(decl);
+	const assign = createNodeAt(NodeKind.BinaryExpr, { operator: "=", left: boundRead(sym, loc), right: source }, loc);
+	assign.nodeType = t;
+	assign.flags = assign.flags.incl(NodeFlag.Sem);
+	return { assign, value: boundRead(sym, loc) };
+}
+
+export function takeDefaultArgTemps(ctx: CheckerContext, mark: int32): Node[] {
+	const taken: Node[] = [];
+	const kept: Node[] = [];
+	for (let i = mark; i < ctx.pendingHoisted.length; i += 1) {
+		const n = ctx.pendingHoisted[i];
+		if (isDefaultArgTemp(n)) taken.push(n); else kept.push(n);
+	}
+	ctx.pendingHoisted.length = mark;
+	for (const n of kept) ctx.pendingHoisted.push(n);
+	return taken;
+}
+
+function isDefaultArgTemp(n: Node): boolean {
+	if (n.kind != NodeKind.VariableDecl || n.resolvedSym == null || n.resolvedSym.declNode != n) return false;
+	const d = n.data as VariableDeclData;
+	return d.initializer == null && d.declType == "";
+}
+
+function boundRead(sym: Symbol, loc: SourceLocation): Node {
+	const id = createNodeAt(NodeKind.Identifier, { name: sym.name }, loc);
+	id.resolvedSym = sym;
+	id.nodeType = sym.symbolType;
+	id.flags = id.flags.incl(NodeFlag.Sem).incl(NodeFlag.BoundSym);
+	return id;
+}
+
 // Shared default-filling logic: clone defaults into args array.
 // Used by both function calls (fillDefaultArgsForNode) and constructor calls (checkNewExpr).
 function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[] | null,
-	totalParams: number, defaultOffset: number, paramTypes: Type[], definingModulePath: string = ""): void {
+	totalParams: number, defaultOffset: number, paramTypes: Type[], definingModulePath: string = "",
+	paramNames: string[] | null = null, receiverSlot: Node | null = null): void {
 	if (defaults == null) return;
+	const reads: Node[] = [];
 	// A default expression's free identifiers belong to the callee's module (where
 	// the function is defined), not the caller's. Resolve it in the defining
 	// module's ctx so an imported/private helper referenced by the default (e.g.
@@ -541,7 +649,10 @@ function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[] | null
 			defNode = defaults[defIdx];
 		}
 		if (defNode == null) break;
-		const cloned = cloneDefaultNode(defNode);
+		let cloned = cloneDefaultNode(defNode);
+		if (paramNames != null && defIdx > 0) {
+			cloned = readEarlierParams(ctx, cloned, paramNames, defIdx, args, defaultOffset, paramTypes, receiverSlot, reads);
+		}
 		// Type-check with expected param type so empty containers get correct type
 		// hint (e.g. `[]` for `string[]` param → msStringArray). `argIdx + defaultOffset`
 		// mirrors the `defaults[]` indexing two lines above — both arrays include the
@@ -577,11 +688,14 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 	// Pass parameter types so default expressions get correct type hints
 	// (e.g., empty array [] for string[] param → msStringArray, not msRefArray).
 	let paramTypes: Type[] = null as unknown as Type[];
+	let paramNames: string[] | null = null;
 	if (defSym != null && defSym.symbolType != null && defSym.symbolType.typeChildren != null) {
 		paramTypes = defSym.symbolType.typeChildren;
+		paramNames = defSym.symbolType.typeNames;
 	}
 	const definingModulePath = defSym != null ? defSym.modulePath : "";
-	fillDefaults(ctx, cd.arguments, fnDefaults, totalParams, defaultOffset, paramTypes, definingModulePath);
+	const receiverSlot = defaultOffset > 0 && cd.callee.kind == NodeKind.MemberExpr ? cd.callee : null;
+	fillDefaults(ctx, cd.arguments, fnDefaults, totalParams, defaultOffset, paramTypes, definingModulePath, paramNames, receiverSlot);
 }
 
 function instanceBindings(names: string[], args: Type[]): UnifyBindings {
@@ -805,13 +919,14 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		const classModule = d.newCallee.resolvedSym != null ? d.newCallee.resolvedSym.modulePath : "";
 		if (ctorEntry != null && ctorEntry.fnType != null && ctorEntry.fnType.typeChildren != null) {
 			fillDefaults(ctx, d.newArguments, ctorEntry.defaults,
-				ctorEntry.fnType.typeChildren.length, 0, ctorEntry.fnType.typeChildren, classModule);
+				ctorEntry.fnType.typeChildren.length, 0, ctorEntry.fnType.typeChildren, classModule, ctorEntry.fnType.typeNames);
 		} else if (d.newCallee.resolvedSym != null && d.newCallee.resolvedSym.defaultParams != null
 				&& d.newCallee.resolvedSym.defaultParams.length > 0) {
 			// Path 2: non-generic constructors — defaults on class sym
 			const defaults = d.newCallee.resolvedSym.defaultParams;
-			const ctorParamTypes = getCtorParamTypes(d.newCallee.resolvedSym);
-			fillDefaults(ctx, d.newArguments, defaults, defaults.length, 0, ctorParamTypes, classModule);
+			const ctorType = ctorFnTypeOf(d.newCallee.resolvedSym);
+			const ctorParamTypes = ctorType != null ? ctorType.typeChildren : null as unknown as Type[];
+			fillDefaults(ctx, d.newArguments, defaults, defaults.length, 0, ctorParamTypes, classModule, ctorType != null ? ctorType.typeNames : null);
 		}
 	}
 	if (generic.instance != null) d.newCallee.resolvedSym = generic.instance;

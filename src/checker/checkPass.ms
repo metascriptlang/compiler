@@ -1209,7 +1209,12 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 					ctx.staticInitBoundary = ctx.table.current;
 					openStaticReceiverScope(ctx, classType.sym);
 				}
+				const hoistMark = ctx.pendingHoisted.length;
 				checkExpr(ctx, pd.propInitializer, node.nodeType);
+				if (!pd.propIsStatic && takeDefaultArgTemps(ctx, hoistMark).length > 0) {
+					addError(ctx, "the initializer of field '" + pd.propName + "' passes an argument that a default value reads, and a field initializer has no statement to bind it in — pass a variable, or assign the field in the constructor",
+						pd.propInitializer.location.line, pd.propInitializer.location.column);
+				}
 				if (node.nodeType != null && pd.propInitializer.nodeType != null) {
 					pd.propInitializer = fitNode(ctx, pd.propInitializer, node.nodeType, pd.propInitializer.nodeType);
 				}

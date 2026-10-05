@@ -2753,11 +2753,14 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 			const unwrapped = awaitedType(bodyExpected);
 			if (unwrapped != null) bodyExpected = unwrapped;
 		}
+		const hoistMark = ctx.pendingHoisted.length;
 		checkExpr(ctx, body, bodyExpected);
 		const exprType = body.nodeType;
 		if (ctx.inferredReturn.kind == TypeKind.Inferred && exprType != null) {
 			ctx.inferredReturn = exprType;
 		}
+		const temps = takeDefaultArgTemps(ctx, hoistMark);
+		if (temps.length > 0) bodyIntoBlock(body, temps);
 	}
 	closeScope(ctx.table);
 	ctx.readonlyBoundary = savedBoundary;
@@ -3028,7 +3031,34 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, lookupCtorDefaults, pickBodyCtx } from "./instantiate";
-import { anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed } from "./callResolve";
+import { anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, takeDefaultArgTemps } from "./callResolve";
+
+function bodyIntoBlock(body: Node, temps: Node[]): void {
+	const value = createNodeAt(NodeKind.Identifier, { name: "" }, body.location);
+	value.kind = body.kind;
+	value.data = body.data;
+	value.nodeType = body.nodeType;
+	value.resolvedSym = body.resolvedSym;
+	value.flags = body.flags;
+	value.variantSlot = body.variantSlot;
+	value.typeArg = body.typeArg;
+	value.typeExpr = body.typeExpr;
+	value.flowNode = body.flowNode;
+	const valueless = body.nodeType == null || body.nodeType.kind == TypeKind.Void || body.nodeType.kind == TypeKind.Never;
+	const last = valueless
+		? createNodeAt(NodeKind.ExprStmt, { expr: value }, body.location)
+		: createNodeAt(NodeKind.ReturnStmt, { argument: value }, body.location);
+	const stmts: Node[] = [];
+	for (const t of temps) stmts.push(t);
+	stmts.push(last);
+	body.kind = NodeKind.BlockStmt;
+	body.data = { statements: stmts } as BlockStmtData;
+	body.nodeType = null;
+	body.resolvedSym = null;
+	body.typeArg = "";
+	body.typeExpr = null;
+	body.flowNode = null;
+}
 
 function createSyntheticToken(loc: SourceLocation): Token {
 	return createToken(TokenKind.Ident, "", loc.line);
