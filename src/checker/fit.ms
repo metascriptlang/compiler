@@ -13,6 +13,7 @@ import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
 import { int64ToDecimal, uint64ToDecimal } from "../utils/string";
+import { viewRefusal } from "./assignable";
 
 // ===== Operator Inference =====
 
@@ -1626,6 +1627,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	const peeledExpr = peelTransparentInstance(exprType);
 	if (peeledFormal != formal || peeledExpr != exprType) return fitSlot(ctx, expr, peeledFormal, peeledExpr);
 	if (dropsReadonlyView(exprType, formal)) { reportReadonlyDrop(ctx, exprType, formal, expr.location.line, expr.location.column); return expr; }
+	const viewed = viewRefusal(expr, formal);
+	if (viewed != "") { addError(ctx, viewed, expr.location.line, expr.location.column); return expr; }
 	if (isUnresolvedType(formal)) return expr;
 	const formalHeld = formal.kind == TypeKind.Union ? unwrapRefNullUnion(formal) : formal;
 	if (isUnknownType(formalHeld)) {

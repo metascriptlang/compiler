@@ -15,7 +15,7 @@ import {
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
 import { checkArcPointeeSendable } from "./sendable";
 import { isLockedRef } from "./types";
-import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
+import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
 import { builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
@@ -120,7 +120,7 @@ function reportSharedWrite(ctx: CheckerContext, target: Node): void {
 		reportReadonlyWrite(ctx, ro, "write through", target.location.line, target.location.column);
 		return;
 	}
-	const refusal = writeRefusal(target, false);
+	const refusal = writeRefusal(target, WriteSite.Assign);
 	if (refusal != "") addError(ctx, refusal, target.location.line, target.location.column);
 }
 
@@ -2272,7 +2272,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (roMove != null) {
 				addError(ctx, "cannot move out of " + typeDisplayName(roMove) + " — a read-only view is borrowed, not owned; to hand a value to a spawn thunk, list it in spawn(fn, { move: [x] }) (PARALOCK E24)", node.location.line, node.location.column);
 			} else if (d.moveArg.kind == NodeKind.MemberExpr || d.moveArg.kind == NodeKind.ArrayAccess) {
-				const refusal = writeRefusal(d.moveArg, false);
+				const refusal = writeRefusal(d.moveArg, WriteSite.Assign);
 				if (refusal != "") addError(ctx, refusal, d.moveArg.location.line, d.moveArg.location.column);
 				if (d.moveArg.kind == NodeKind.MemberExpr) reportReadonlyField(ctx, d.moveArg);
 			}

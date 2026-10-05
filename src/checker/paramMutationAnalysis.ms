@@ -62,26 +62,12 @@ function analyzeFunctionParams(node: Node, ctx: CheckerContext): void {
 	let bits: int32 = 0;
 	let i: int32 = 0;
 	while (i < d.params.length && i < 31) {
-		if (scanForMutation(d.fnBody, d.params[i], false)) {
+		if (scanForMutation(d.fnBody, d.params[i])) {
 			bits = bits | (1 << i);
 		}
 		i = i + 1;
 	}
 	sym.mutatedParams = bits;
-
-	const fnType = sym.symbolType;
-	if (fnType != null && fnType.typeChildren != null) {
-		let vi: int32 = 0;
-		while (vi < d.params.length && vi < fnType.typeChildren.length) {
-			if (isValueAggregateParam(fnType.typeChildren[vi])
-				&& scanForMutation(d.fnBody, d.params[vi], true)) {
-				let vloc = findMutationLocation(d.fnBody, d.params[vi], true);
-				if (vloc.line <= 0) vloc = node.location;
-				addError(ctx, `cannot mutate value-type parameter '${d.params[vi]}': value parameters are read-only views; copy it locally first`, vloc.line, vloc.column);
-			}
-			vi = vi + 1;
-		}
-	}
 
 	// Cross-check: readonly params must not be mutated
 	if (bits != 0 && d.fnFlags != "" && d.fnFlags.indexOf("rdonly:") >= 0) {
@@ -94,7 +80,7 @@ function analyzeFunctionParams(node: Node, ctx: CheckerContext): void {
 				for (const ip of idxParts) {
 					const idx = parseIntStr(ip.trim());
 					if (idx >= 0 && idx < d.params.length && (bits & (1 << (idx as int32))) != 0) {
-						const mutLoc = findMutationLocation(d.fnBody, d.params[idx], false);
+						const mutLoc = findMutationLocation(d.fnBody, d.params[idx]);
 						addError(ctx, `cannot mutate readonly parameter '${d.params[idx]}'`, mutLoc.line, mutLoc.column);
 					}
 				}
@@ -149,7 +135,7 @@ function getRootName(node: Node): string {
 
 // Find the source location of the first mutation of paramName in the subtree.
 // Used for readonly error reporting — points to the actual mutation site.
-export function findMutationLocation(node: Node | null, paramName: string, interiorOnly: boolean): SourceLocation {
+function findMutationLocation(node: Node | null, paramName: string): SourceLocation {
 	if (node == null) return makeLoc(0, 0);
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
@@ -157,118 +143,112 @@ export function findMutationLocation(node: Node | null, paramName: string, inter
 			|| d.operator == "*=" || d.operator == "/=" || d.operator == "%="
 			|| d.operator == "&=" || d.operator == "|=" || d.operator == "^="
 			|| d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>=") {
-			if (!interiorOnly && getRootName(d.left) == paramName) return node.location;
+			if (getRootName(d.left) == paramName) return node.location;
 		}
 	}
 	if (node.kind == NodeKind.UpdateExpr) {
 		const ua = (node.data as UpdateExprData).updateArg;
-		if (!interiorOnly && getRootName(ua) == paramName) return node.location;
+		if (getRootName(ua) == paramName) return node.location;
 	}
 	if (node.kind == NodeKind.HiddenAddr) {
-		if (!interiorOnly && getRootName((node.data as { expr: Node }).expr) == paramName) return node.location;
+		if (getRootName((node.data as { expr: Node }).expr) == paramName) return node.location;
 	}
 	if (node.kind == NodeKind.FunctionDecl) return makeLoc(0, 0);
 	if (node.kind == NodeKind.BlockStmt) {
 		for (const stmt of (node.data as BlockStmtData).statements) {
-			const loc = findMutationLocation(stmt, paramName, interiorOnly);
+			const loc = findMutationLocation(stmt, paramName);
 			if (loc.line > 0) return loc;
 		}
 	}
-	if (node.kind == NodeKind.ExprStmt) return findMutationLocation((node.data as ExprStmtData).expr, paramName, interiorOnly);
+	if (node.kind == NodeKind.ExprStmt) return findMutationLocation((node.data as ExprStmtData).expr, paramName);
 	if (node.kind == NodeKind.IfStmt) {
 		const d = node.data as IfStmtData;
-		let loc = findMutationLocation(d.condition, paramName, interiorOnly);
+		let loc = findMutationLocation(d.condition, paramName);
 		if (loc.line > 0) return loc;
-		loc = findMutationLocation(d.consequent, paramName, interiorOnly);
+		loc = findMutationLocation(d.consequent, paramName);
 		if (loc.line > 0) return loc;
-		return findMutationLocation(d.alternate, paramName, interiorOnly);
+		return findMutationLocation(d.alternate, paramName);
 	}
 	if (node.kind == NodeKind.WhileStmt) {
 		const d = node.data as WhileStmtData;
-		let loc = findMutationLocation(d.whileCondition, paramName, interiorOnly);
+		let loc = findMutationLocation(d.whileCondition, paramName);
 		if (loc.line > 0) return loc;
-		return findMutationLocation(d.whileBody, paramName, interiorOnly);
+		return findMutationLocation(d.whileBody, paramName);
 	}
 	if (node.kind == NodeKind.CallExpr) {
 		const d = node.data as CallExprData;
-		if (interiorOnly && d.callee.kind == NodeKind.MemberExpr) {
-			const md = d.callee.data as MemberExprData;
-			const ot = md.object.nodeType;
-			if (getRootName(md.object) == paramName && isMutatingArrayMethod(md.property)
-				&& ot != null && (ot.kind == TypeKind.Array || ot.kind == TypeKind.SizedArray)) return node.location;
-		}
-		const cloc = findMutationLocation(d.callee, paramName, interiorOnly);
+		const cloc = findMutationLocation(d.callee, paramName);
 		if (cloc.line > 0) return cloc;
 		for (const arg of d.arguments) {
-			const loc = findMutationLocation(arg, paramName, interiorOnly);
+			const loc = findMutationLocation(arg, paramName);
 			if (loc.line > 0) return loc;
 		}
 	}
 	if (node.kind == NodeKind.DoWhileStmt) {
 		const d = node.data as DoWhileStmtData;
-		const loc = findMutationLocation(d.doCondition, paramName, interiorOnly);
+		const loc = findMutationLocation(d.doCondition, paramName);
 		if (loc.line > 0) return loc;
-		return findMutationLocation(d.doBody, paramName, interiorOnly);
+		return findMutationLocation(d.doBody, paramName);
 	}
 	if (node.kind == NodeKind.ForStmt) {
 		const d = node.data as ForStmtData;
-		let loc = findMutationLocation(d.forInit, paramName, interiorOnly);
+		let loc = findMutationLocation(d.forInit, paramName);
 		if (loc.line > 0) return loc;
-		loc = findMutationLocation(d.forCondition, paramName, interiorOnly);
+		loc = findMutationLocation(d.forCondition, paramName);
 		if (loc.line > 0) return loc;
-		loc = findMutationLocation(d.forUpdate, paramName, interiorOnly);
+		loc = findMutationLocation(d.forUpdate, paramName);
 		if (loc.line > 0) return loc;
-		return findMutationLocation(d.forBody, paramName, interiorOnly);
+		return findMutationLocation(d.forBody, paramName);
 	}
 	if (node.kind == NodeKind.ForOfStmt) {
 		const d = node.data as ForOfStmtData;
-		const loc = findMutationLocation(d.forOfIterable, paramName, interiorOnly);
+		const loc = findMutationLocation(d.forOfIterable, paramName);
 		if (loc.line > 0) return loc;
-		return findMutationLocation(d.forOfBody, paramName, interiorOnly);
+		return findMutationLocation(d.forOfBody, paramName);
 	}
 	if (node.kind == NodeKind.SwitchStmt) {
 		const d = node.data as SwitchStmtData;
-		const loc = findMutationLocation(d.switchDisc, paramName, interiorOnly);
+		const loc = findMutationLocation(d.switchDisc, paramName);
 		if (loc.line > 0) return loc;
 		for (const c of d.switchCases) {
-			const cl = findMutationLocation(c, paramName, interiorOnly);
+			const cl = findMutationLocation(c, paramName);
 			if (cl.line > 0) return cl;
 		}
 	}
 	if (node.kind == NodeKind.SwitchCase) {
 		const d = node.data as SwitchCaseData;
 		for (const t of d.caseTests) {
-			const loc = findMutationLocation(t, paramName, interiorOnly);
+			const loc = findMutationLocation(t, paramName);
 			if (loc.line > 0) return loc;
 		}
 		for (const s of d.caseStmts) {
-			const loc = findMutationLocation(s, paramName, interiorOnly);
+			const loc = findMutationLocation(s, paramName);
 			if (loc.line > 0) return loc;
 		}
 	}
 	if (node.kind == NodeKind.TryCatchStmt) {
 		const d = node.data as TryCatchStmtData;
-		let loc = findMutationLocation(d.tryBody, paramName, interiorOnly);
+		let loc = findMutationLocation(d.tryBody, paramName);
 		if (loc.line > 0) return loc;
-		loc = findMutationLocation(d.catchBody, paramName, interiorOnly);
+		loc = findMutationLocation(d.catchBody, paramName);
 		if (loc.line > 0) return loc;
-		return findMutationLocation(d.finallyBody, paramName, interiorOnly);
+		return findMutationLocation(d.finallyBody, paramName);
 	}
-	if (node.kind == NodeKind.ReturnStmt) return findMutationLocation((node.data as ReturnStmtData).argument, paramName, interiorOnly);
-	if (node.kind == NodeKind.VariableDecl) return findMutationLocation((node.data as VariableDeclData).initializer, paramName, interiorOnly);
-	if (node.kind == NodeKind.MemberExpr) return findMutationLocation((node.data as MemberExprData).object, paramName, interiorOnly);
+	if (node.kind == NodeKind.ReturnStmt) return findMutationLocation((node.data as ReturnStmtData).argument, paramName);
+	if (node.kind == NodeKind.VariableDecl) return findMutationLocation((node.data as VariableDeclData).initializer, paramName);
+	if (node.kind == NodeKind.MemberExpr) return findMutationLocation((node.data as MemberExprData).object, paramName);
 	if (node.kind == NodeKind.ArrayAccess) {
 		const d = node.data as ArrayAccessData;
-		const loc = findMutationLocation(d.array, paramName, interiorOnly);
+		const loc = findMutationLocation(d.array, paramName);
 		if (loc.line > 0) return loc;
-		return findMutationLocation(d.index, paramName, interiorOnly);
+		return findMutationLocation(d.index, paramName);
 	}
-	if (node.kind == NodeKind.UnaryExpr) return findMutationLocation((node.data as UnaryExprData).operand, paramName, interiorOnly);
+	if (node.kind == NodeKind.UnaryExpr) return findMutationLocation((node.data as UnaryExprData).operand, paramName);
 	return makeLoc(0, 0);
 }
 
 // Returns true if paramName is mutated anywhere in the subtree
-export function scanForMutation(node: Node | null, paramName: string, interiorOnly: boolean): boolean {
+function scanForMutation(node: Node | null, paramName: string): boolean {
 	if (node == null) return false;
 
 	return match (node.kind) {
@@ -278,21 +258,21 @@ export function scanForMutation(node: Node | null, paramName: string, interiorOn
 				|| d.operator == "*=" || d.operator == "/=" || d.operator == "%="
 				|| d.operator == "&=" || d.operator == "|=" || d.operator == "^="
 				|| d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>=") {
-				if (!interiorOnly && getRootName(d.left) == paramName) return true;
+				if (getRootName(d.left) == paramName) return true;
 			}
-			return scanForMutation(d.left, paramName, interiorOnly) || scanForMutation(d.right, paramName, interiorOnly);
+			return scanForMutation(d.left, paramName) || scanForMutation(d.right, paramName);
 		},
 
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
-			if (!interiorOnly && getRootName(d.updateArg) == paramName) return true;
+			if (getRootName(d.updateArg) == paramName) return true;
 			return false;
 		},
 
 		NodeKind.HiddenAddr => {
 			const inner = (node.data as { expr: Node }).expr;
-			if (!interiorOnly && getRootName(inner) == paramName) return true;
-			return scanForMutation(inner, paramName, interiorOnly);
+			if (getRootName(inner) == paramName) return true;
+			return scanForMutation(inner, paramName);
 		},
 
 		// Skip nested function bodies — own scope, own params
@@ -301,82 +281,76 @@ export function scanForMutation(node: Node | null, paramName: string, interiorOn
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
 			for (const stmt of d.statements) {
-				if (scanForMutation(stmt, paramName, interiorOnly)) return true;
+				if (scanForMutation(stmt, paramName)) return true;
 			}
 			return false;
 		},
-		NodeKind.ExprStmt => scanForMutation((node.data as ExprStmtData).expr, paramName, interiorOnly),
-		NodeKind.ReturnStmt => scanForMutation((node.data as ReturnStmtData).argument, paramName, interiorOnly),
+		NodeKind.ExprStmt => scanForMutation((node.data as ExprStmtData).expr, paramName),
+		NodeKind.ReturnStmt => scanForMutation((node.data as ReturnStmtData).argument, paramName),
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			return scanForMutation(d.condition, paramName, interiorOnly)
-				|| scanForMutation(d.consequent, paramName, interiorOnly)
-				|| scanForMutation(d.alternate, paramName, interiorOnly);
+			return scanForMutation(d.condition, paramName)
+				|| scanForMutation(d.consequent, paramName)
+				|| scanForMutation(d.alternate, paramName);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			return scanForMutation(d.whileCondition, paramName, interiorOnly) || scanForMutation(d.whileBody, paramName, interiorOnly);
+			return scanForMutation(d.whileCondition, paramName) || scanForMutation(d.whileBody, paramName);
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
-			return scanForMutation(d.doCondition, paramName, interiorOnly) || scanForMutation(d.doBody, paramName, interiorOnly);
+			return scanForMutation(d.doCondition, paramName) || scanForMutation(d.doBody, paramName);
 		},
 		NodeKind.ForStmt => {
 			const d = node.data as ForStmtData;
-			return scanForMutation(d.forInit, paramName, interiorOnly)
-				|| scanForMutation(d.forCondition, paramName, interiorOnly)
-				|| scanForMutation(d.forUpdate, paramName, interiorOnly)
-				|| scanForMutation(d.forBody, paramName, interiorOnly);
+			return scanForMutation(d.forInit, paramName)
+				|| scanForMutation(d.forCondition, paramName)
+				|| scanForMutation(d.forUpdate, paramName)
+				|| scanForMutation(d.forBody, paramName);
 		},
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
-			return scanForMutation(d.forOfIterable, paramName, interiorOnly) || scanForMutation(d.forOfBody, paramName, interiorOnly);
+			return scanForMutation(d.forOfIterable, paramName) || scanForMutation(d.forOfBody, paramName);
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
-			if (scanForMutation(d.switchDisc, paramName, interiorOnly)) return true;
+			if (scanForMutation(d.switchDisc, paramName)) return true;
 			for (const c of d.switchCases) {
-				if (scanForMutation(c, paramName, interiorOnly)) return true;
+				if (scanForMutation(c, paramName)) return true;
 			}
 			return false;
 		},
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
 			for (const t of d.caseTests) {
-				if (scanForMutation(t, paramName, interiorOnly)) return true;
+				if (scanForMutation(t, paramName)) return true;
 			}
 			for (const s of d.caseStmts) {
-				if (scanForMutation(s, paramName, interiorOnly)) return true;
+				if (scanForMutation(s, paramName)) return true;
 			}
 			return false;
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
-			return scanForMutation(d.tryBody, paramName, interiorOnly)
-				|| scanForMutation(d.catchBody, paramName, interiorOnly)
-				|| scanForMutation(d.finallyBody, paramName, interiorOnly);
+			return scanForMutation(d.tryBody, paramName)
+				|| scanForMutation(d.catchBody, paramName)
+				|| scanForMutation(d.finallyBody, paramName);
 		},
-		NodeKind.VariableDecl => scanForMutation((node.data as VariableDeclData).initializer, paramName, interiorOnly),
+		NodeKind.VariableDecl => scanForMutation((node.data as VariableDeclData).initializer, paramName),
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
-			if (interiorOnly && d.callee.kind == NodeKind.MemberExpr) {
-				const md = d.callee.data as MemberExprData;
-				const ot = md.object.nodeType;
-				if (getRootName(md.object) == paramName && isMutatingArrayMethod(md.property)
-					&& ot != null && (ot.kind == TypeKind.Array || ot.kind == TypeKind.SizedArray)) return true;
-			}
-			if (scanForMutation(d.callee, paramName, interiorOnly)) return true;
+			if (scanForMutation(d.callee, paramName)) return true;
 			for (const arg of d.arguments) {
-				if (scanForMutation(arg, paramName, interiorOnly)) return true;
+				if (scanForMutation(arg, paramName)) return true;
 			}
 			return false;
 		},
-		NodeKind.MemberExpr => scanForMutation((node.data as MemberExprData).object, paramName, interiorOnly),
+		NodeKind.MemberExpr => scanForMutation((node.data as MemberExprData).object, paramName),
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
-			return scanForMutation(d.array, paramName, interiorOnly) || scanForMutation(d.index, paramName, interiorOnly);
+			return scanForMutation(d.array, paramName) || scanForMutation(d.index, paramName);
 		},
-		NodeKind.UnaryExpr => scanForMutation((node.data as UnaryExprData).operand, paramName, interiorOnly),
+		NodeKind.UnaryExpr => scanForMutation((node.data as UnaryExprData).operand, paramName),
 		_ => false,
 	};
 }

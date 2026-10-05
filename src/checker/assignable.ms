@@ -6,10 +6,9 @@
 // Otherwise the root decides: a `const` owns its value to the last field,
 // and a value parameter or a for-of binding is a read-only view of the
 // caller's storage. Rebinding a parameter (CK-18) or a loop binding (CK-30)
-// stays legal. Mutating methods on those views are still found by name in
-// paramMutationAnalysis until method receivers become ordinary arguments.
+// stays legal.
 
-import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, OutExprData, TypeAssertionData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, BinaryExprData, HiddenDerefData, OutExprData, TypeAssertionData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
 import { isReadonlyView, isAtomicRef, isSharedGraphType, isNodeGraphType } from "./types";
 import { isValueAggregateParam } from "./paramMutationAnalysis";
@@ -20,6 +19,13 @@ export enum WriteVerdict {
 	ConstInterior,
 	ValueParamInterior,
 	ForVarInterior,
+}
+
+export enum WriteSite {
+	Assign,
+	RefArg,
+	Receiver,
+	View,
 }
 
 export struct WriteCheck {
@@ -56,16 +62,34 @@ function reachesThroughReference(sym: Symbol): boolean {
 	return t.kind == TypeKind.Var || t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr;
 }
 
-// `asRefArg`: the lvalue is handed to a `ref` formal, which may write any of it
-// and rebind it.
-export function checkWrite(target: Node, asRefArg: boolean): WriteCheck {
+function sliceSource(node: Node): Node {
+	let cur = node;
+	while (cur.kind == NodeKind.ArrayAccess) {
+		const d = cur.data as ArrayAccessData;
+		if (d.index == null || d.index.kind != NodeKind.BinaryExpr || (d.index.data as BinaryExprData).operator != "..") break;
+		cur = d.array;
+	}
+	return cur;
+}
+
+function isValueContainer(t: Type | null): boolean {
+	return t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray);
+}
+
+export function checkWrite(target: Node, site: WriteSite): WriteCheck {
+	const asRefArg = site == WriteSite.RefArg;
 	let cur: Node = target;
 	let interior = false;
 	let deep = true;
+	if (site == WriteSite.View || site == WriteSite.Receiver) {
+		cur = sliceSource(target);
+		if (!isValueContainer(cur.nodeType)) return { verdict: WriteVerdict.Writable, root: null };
+		interior = true;
+	}
 	while (cur.kind != NodeKind.Identifier) {
 		let base: Node | null = null;
 		if (cur.kind == NodeKind.MemberExpr) base = (cur.data as MemberExprData).object;
-		else if (cur.kind == NodeKind.ArrayAccess) base = (cur.data as ArrayAccessData).array;
+		else if (cur.kind == NodeKind.ArrayAccess) base = sliceSource((cur.data as ArrayAccessData).array);
 		if (base == null || !isValueAggregateParam(base.nodeType)) return { verdict: WriteVerdict.Writable, root: null };
 		interior = true;
 		if (!isDeclaredValueStorage(base.nodeType)) deep = false;
@@ -171,15 +195,27 @@ export function lvalueText(node: Node): string {
 	return "…";
 }
 
-export function writeRefusal(target: Node, asRefArg: boolean): string {
-	const w = checkWrite(target, asRefArg);
-	if (w.root == null) return "";
+export function viewRefusal(source: Node, slot: Type | null): string {
+	if (slot == null || slot.kind != TypeKind.Span || isReadonlyView(slot)) return "";
+	return writeRefusal(source, WriteSite.View);
+}
+
+export function writeRefusal(target: Node, site: WriteSite, method: string = ""): string {
+	const w = checkWrite(target, site);
+	if (w.root == null || w.verdict == WriteVerdict.Writable) return "";
 	const name = w.root.name;
-	const what = asRefArg ? `pass '${lvalueText(target)}' to a 'ref' parameter` : w.verdict == WriteVerdict.ConstRebind ? `assign to '${name}'` : `write '${lvalueText(target)}'`;
-	return match (w.verdict) {
+	const text = lvalueText(target);
+	const what = match (site) {
+		WriteSite.RefArg => `pass '${text}' to a 'ref' parameter`,
+		WriteSite.Receiver => `mutate '${text}' with '${method}'`,
+		WriteSite.View => `view '${text}' as a writable Span`,
+		WriteSite.Assign => w.verdict == WriteVerdict.ConstRebind ? `assign to '${name}'` : `write '${text}'`,
+	};
+	const refusal = match (w.verdict) {
 		WriteVerdict.ConstRebind | WriteVerdict.ConstInterior => `cannot ${what} — '${name}' is const (use 'let')`,
 		WriteVerdict.ValueParamInterior => `cannot mutate value-type parameter '${name}': value parameters are read-only views; copy it locally first`,
 		WriteVerdict.ForVarInterior => `cannot mutate value-type loop variable '${name}': for-of binds a per-iteration copy; iterate by index to mutate the collection`,
-		_ => "",
+		WriteVerdict.Writable => "",
 	};
+	return site == WriteSite.View ? refusal + "; a view that only reads is Readonly<Span<T>>" : refusal;
 }

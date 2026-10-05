@@ -8,7 +8,7 @@ import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../mo
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
-import { isLocation, writeRefusal, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
+import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
 import { callCheckStmt, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
@@ -1744,6 +1744,7 @@ function relateCallArgs(ctx: CheckerContext, node: Node, calleeType: Type, argTy
 function relateMethodCallArgs(ctx: CheckerContext, node: Node, calleeType: Type, recvFormal: Type | null, argTypes: Type[], isActorMethodCall: boolean): void {
 	const d = node.data as CallExprData;
 	if (recvFormal == null || d.callee.kind != NodeKind.MemberExpr || sharesArrayReceiver(recvFormal)) {
+		if (recvFormal != null && d.callee.kind == NodeKind.MemberExpr) reportArrayReceiverWrite(ctx, d.callee.data as MemberExprData, recvFormal);
 		relateCallArgs(ctx, node, calleeType, argTypes, isActorMethodCall);
 		return;
 	}
@@ -1766,6 +1767,13 @@ function relateMethodCallArgs(ctx: CheckerContext, node: Node, calleeType: Type,
 	me.object = args[0];
 	for (let ai = 0; ai < d.arguments.length; ai += 1) d.arguments[ai] = args[ai + 1];
 	for (let ti = 0; ti < argTypes.length; ti += 1) argTypes[ti] = types[ti + 1];
+}
+
+function reportArrayReceiverWrite(ctx: CheckerContext, me: MemberExprData, recvFormal: Type): void {
+	const formal = skipModifier(recvFormal) ?? recvFormal;
+	const refusal = formal.kind == TypeKind.Span ? viewRefusal(me.object, formal)
+		: isMutatingArrayMethod(me.property) ? writeRefusal(me.object, WriteSite.Receiver, me.property) : "";
+	if (refusal != "") addError(ctx, refusal, me.object.location.line, me.object.location.column);
 }
 
 function sharesArrayReceiver(recvFormal: Type): boolean {
@@ -1808,6 +1816,8 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 		if (argTypes[pi] == null || argTypes[pi] == null) continue;
 		const foreignVarargs = hasRest && pi >= restParamIdx && node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.ImportC);
 		const formal: Type = skipModifier(paramType) ?? paramType;
+		const viewed = viewRefusal(args[pi], formal);
+		if (viewed != "") addError(ctx, viewed, args[pi].location.line, args[pi].location.column);
 		const formalHeld = formal.kind == TypeKind.Union ? unwrapRefNullUnion(formal) : formal;
 		if (isUnknownType(formalHeld) && !foreignVarargs) {
 			const refusal = unknownRefusal(argTypes[pi]);
@@ -1953,7 +1963,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 						? "cannot pass an argument to a 'ref' or 'out' parameter through a type/symbol back-edge into the AST — the graph is borrowed and its node exits are read-only (PARALOCK E24)"
 						: ro != null
 						? "cannot pass an argument to a 'ref' or 'out' parameter through " + typeDisplayName(ro) + " — a read-only view never converts back to the mutable type (PARALOCK E24)"
-						: writeRefusal(lvArg, true);
+						: writeRefusal(lvArg, WriteSite.RefArg);
 					if (refusal != "") addError(ctx, refusal, lvArg.location.line, lvArg.location.column);
 					const written = paramType.typeReturn;
 					if (written != null && argTypes[pi] != null && needsStdConv(argTypes[pi], written)) {

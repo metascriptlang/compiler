@@ -32,7 +32,7 @@ import { declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, pee
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
-import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMutationLocation } from "./paramMutationAnalysis";
+import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
@@ -1552,14 +1552,6 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 		sgRecordSym(ctx, d.bindingLocation.line, d.bindingLocation.column, d.bindingLocation.column + d.forOfBinding.length, forSym, elemType, SymbolKind.Variable, d.forOfBinding, "", true);
 	}
 	checkStmt(ctx, d.forOfBody);
-	// Nim parity: skForVar is arAddressableConst (parampatterns.isAssignable) —
-	// same bucket as value params, so the same interior-write ban applies.
-	if (d.forOfPattern == null && isValueAggregateParam(elemType)
-		&& scanForMutation(d.forOfBody, d.forOfBinding, true)) {
-		let mloc = findMutationLocation(d.forOfBody, d.forOfBinding, true);
-		if (mloc.line <= 0) mloc = node.location;
-		addError(ctx, `cannot mutate value-type loop variable '${d.forOfBinding}': for-of binds a per-iteration copy; iterate by index to mutate the collection`, mloc.line, mloc.column);
-	}
 	exitLoopScope(ctx, saved);
 	restoreInitState(ctx.initTracker, oldInitState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
