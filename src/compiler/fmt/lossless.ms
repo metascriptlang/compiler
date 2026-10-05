@@ -44,6 +44,20 @@ function sameToken(a: Token, b: Token): boolean {
 	return a.kind == b.kind && a.value == b.value;
 }
 
+function splitCloser(kind: TokenKind): TokenKind {
+	return match (kind) {
+		TokenKind.GtEq => TokenKind.Gt,
+		TokenKind.GtGtEq => TokenKind.GtGt,
+		TokenKind.GtGtGtEq => TokenKind.GtGtGt,
+		_ => TokenKind.Eof,
+	};
+}
+
+function splitAt(a: Token, b: Token[], j: int32): boolean {
+	const closer = splitCloser(a.kind);
+	return closer != TokenKind.Eof && j + 1 < b.length && b[j].kind == closer && b[j + 1].kind == TokenKind.Assign;
+}
+
 function describe(t: Token, kind: boolean): string {
 	let text = t.value != "" ? t.value : tokenKindToString(t.kind);
 	if (kind) text = tokenKindToString(t.kind) + " " + text;
@@ -59,15 +73,20 @@ export function checkLossless(source: string, formatted: string): Result<void, s
 	if (!after.ok) return Result.err("formatted output does not lex: " + after.error);
 	const a = significantTokens(before.value);
 	const b = significantTokens(after.value);
-	const n = a.length < b.length ? a.length : b.length;
-	for (let i = 0; i < n; i += 1) {
-		if (!sameToken(a[i], b[i])) {
-			const kind = a[i].value == b[i].value;
-			return Result.err("fmt changes " + describe(a[i], kind) + " into " + describe(b[i], kind) + " of the output");
+	let i = 0;
+	let j = 0;
+	while (i < a.length && j < b.length) {
+		if (splitAt(a[i], b, j)) {
+			j += 1;
+		} else if (!sameToken(a[i], b[j])) {
+			const kind = a[i].value == b[j].value;
+			return Result.err("fmt changes " + describe(a[i], kind) + " into " + describe(b[j], kind) + " of the output");
 		}
+		i += 1;
+		j += 1;
 	}
-	if (a.length > n) return Result.err("fmt drops " + describe(a[n], false) + " and everything after it");
-	if (b.length > n) return Result.err("fmt adds " + describe(b[n], false) + " of the output at the end");
+	if (i < a.length) return Result.err("fmt drops " + describe(a[i], false) + " and everything after it");
+	if (j < b.length) return Result.err("fmt adds " + describe(b[j], false) + " of the output at the end");
 	return Result.ok(null);
 }
 

@@ -75,7 +75,7 @@ function opPrecedence(op: string): number {
 		"&&" => 20,
 		"||" => 10,
 		"??" => 8,
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" => 5,
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => 5,
 		"|>" => 3,
 		_ => 0,
 	};
@@ -83,7 +83,7 @@ function opPrecedence(op: string): number {
 
 function isRightAssocOp(op: string): boolean {
 	return match (op) {
-		"**" | "=" | "+=" | "-=" | "*=" | "/=" | "%=" => true,
+		"**" | "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
 		_ => false,
 	};
 }
