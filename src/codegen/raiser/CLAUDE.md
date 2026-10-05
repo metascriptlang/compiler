@@ -28,14 +28,16 @@ Compiles the post-Phase-3 AST into Raiser bytecode: `parse → check → transfo
 - **Loops arrive lowered** — `for` and `for..of` go through the loop lowering C uses before lambda lifting, so a closure made in a loop body gets the env of its own iteration; a labelled `break` or `continue` jumps to the loop carrying the label. The native `for` / `for..of` compilation serves only the untransformed `rgen.ms` path.
 - **Pending generic instances attach to their owning module before monomorphization, macro expansion and Raiser lowering** — on-demand compilation is scoped to the project image and restored afterwards.
 - **A function value is a closure pair `{ fn: funcIdx, env }`, `env = -1` when nothing is captured** — `compileClosureCall` branches on it at runtime and appends the env as the LAST argument, so it lands at `R[arity]`; a function identifier inside an expression stays a raw integer.
-- **Methods are top-level functions whose `this` is the closure env** — bound at `R[arity]`; `<Class>_new` creates the object, stores default properties and the method closures `{ fn, env: this }`, runs the constructor body and returns `this`; a method call is `LoadField` + `CallIndirect`.
+- **Methods are top-level functions whose `this` is the closure env** — bound at `R[arity]`; `<Class>_new` creates the object, stores default properties and the method closures of its class chain, the most derived last (`{ fn, env: this }`, `env = -1` for a checked method that takes `this` as parameter 0), runs the constructor body and returns `this`; a method call is `LoadField` + `CallIndirect`.
+- **`super(...)` calls the parent's `<Class>_init(this, args)`** — the parent's default properties and constructor body on the same object; a checked call to a method that has overrides loads the method from the receiver (NIM-REF CG-17), other method calls stay direct.
 - **Registers are a bump allocator** — `resetTemps` after each top-level statement keeps the locals and reclaims the temps.
 
 ## Not handled
 
 Each probed on `msc run --target=raiser`:
 
-- `class … extends` — `cannot evaluate 'super' at comptime: symbol kind is Class`.
+- `instanceof` — `cannot evaluate operator 'instanceof' at comptime`: an object carries no class.
+- a rest parameter — `cannot compile node kind SpreadExpr at comptime`.
 - `static` members — `cannot evaluate '<Class>' at comptime: symbol kind is Class`.
 - `for..of` over a string — `cannot evaluate 'msStringByteLength' at comptime: symbol kind is Function` (the VM has no string index either: `s[1]` stops with `expected an array, got value kind String`).
 
