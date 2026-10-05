@@ -206,8 +206,9 @@ test "a bitwise compound assignment keeps the binary same-size rule" {
 	assert hasError("let u: uint64 = 1;\nconst c: int32 = 3;\nu <<= c;", "bitwise operator '<<=' requires same integer size");
 }
 
-test "a bitwise compound assignment needs an integer target" {
-	assert hasError("let n: number = 5;\nn |= 1;", "'|=' needs an integer target, got 'number'");
+test "a bitwise compound assignment takes the targets its binary operator takes" {
+	assert strictErrorCount("let n: number = 5;\nn |= 1;\nn &= 3;\nn ^= 1;\nn <<= 2;\nn >>= 1;\nn >>>= 1;") == 0;
+	assert hasWarning("let n: number = 5;\nn |= 1;", "bitwise operator '|=' on 'number' implicitly casts to int32");
 	assert hasError("let f: float64 = 5;\nf <<= 1;", "bitwise operator '<<=' requires integer type, got 'float64'");
 }
 
