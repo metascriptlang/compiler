@@ -145,12 +145,13 @@ const masked = flags & 0x00FF00FF;
 const shifted = byte << 4;
 ```
 
-**Type Promotion Rules**: A numeric conversion is implicit only when no value of the source can lose information. Sized integers widen into any integer type whose range contains them (`uint8` → `int16`/`int32`/`int64`, `uint16` → `int32`/`int64`, `uint32` → `int64`, and every same-signedness widening), `int8`..`uint16` widen into `float32`, `int8`..`uint32` into `float64`/`number`, `float32` into `float64`/`number`, and `number` ↔ `float64` alias. Every other numeric conversion — narrowing, a sign change that can alter a value, a wider integer into a float, `float64`/`number` → `float32`, and any float → integer at run time — is the programmer's word: `as`. The rule holds at every slot: declarations, assignments, returns, arguments (functions, methods, extensions, generic methods such as `Map.set`), union members, `sink` parameters, and the operands of arithmetic, comparison and compound-assignment operators. Into a union, a number goes into the member that holds it best, ranked as an overload is (`int16` into `int32 | string`, `int32` into `number | string`; `int32` into `int64 | number` takes `int64`, an integer widening over an integer → float conversion); when two members rank the same (`int16` into `float32 | number`) the conversion is refused and `as` names the member.
+**Type Promotion Rules**: A numeric conversion is implicit only when no value of the source can lose information. Sized integers widen into any integer type whose range contains them (`uint8` → `int16`/`int32`/`int64`, `uint16` → `int32`/`int64`, `uint32` → `int64`, and every same-signedness widening), `int8`..`uint16` widen into `float32`, `int8`..`uint32` into `float64`/`number`, `float32` into `float64`/`number`, and `number` ↔ `float64` alias. Every other numeric conversion — narrowing, a sign change that can alter a value, a wider integer into a float, `float64`/`number` → `float32`, and any float → integer at run time — is the programmer's word: `as`. The rule holds at every slot: declarations, assignments, returns, arguments (functions, methods, extensions, generic methods such as `Map.set`), union members, `sink` parameters, and the operands of arithmetic, comparison and compound-assignment operators. A comparison between a signed and an unsigned integer compiles only when one of the two types holds every value of the other (`uint8` with `int32`, `uint32` with `int64`) and then compares the values on every backend; `int32` with `uint32`, `int8` with `uint8` and any signed type with `uint64` need `as` on one side (corpus `mixedSignednessComparison`, handoff `relationalCheck`). Into a union, a number goes into the member that holds it best, ranked as an overload is (`int16` into `int32 | string`, `int32` into `number | string`; `int32` into `int64 | number` takes `int64`, an integer widening over an integer → float conversion); when two members rank the same (`int16` into `float32 | number`) the conversion is refused and `as` names the member.
 
 Constants follow Nim's literal rule, with one safety addition:
 
 - An untyped constant — a literal, or a `const` declared without a type — is a literal: it flows into any slot that holds its value exactly. An integer literal is `int32` when it fits and `int64` past that; an expression of untyped integer constants folds exactly in 64 bits, so `const x = 100000 * 100000` is the `int64` 10000000000.
-- Object literals joined by an array literal, a conditional, a `match` or an inferred return are joined field by field, as two numbers join: `[{ low: 11 }, { low: 4294967295 }]` is `{ low: int64 }[]` and prints 4294967295 on every backend. A field constant the joined field cannot hold is refused (`[{ low: u }, { low: -1 }]` with `u: uint32`, as `[u, -1]` is), and so is an element that is not a literal and has another field width (`[a, { low: 4294967295 }]` with `const a = { low: 11 }`). A spread joins with its element type (`[...int64s, 1]` is `int64[]`); a spread whose elements the array cannot hold as they are is refused.
+- Object literals joined by an array literal, a conditional, a `match` or an inferred return are joined field by field, as two numbers join: `[{ low: 11 }, { low: 4294967295 }]` is `{ low: int64 }[]` and prints 4294967295 on every backend. A field constant the joined field cannot hold is refused (`[{ low: u }, { low: -1 }]` with `u: uint32`, as `[u, -1]` is), and so is an element that is not a literal and has another field width (`[a, { low: 4294967295 }]` with `const a = { low: 11 }`). A spread joins with its element type (`[...int64s, 1]` is `int64[]`); a spread whose elements the array cannot hold as they are is refused, and so is one whose elements would each be converted into a union element (`[...strings, 3]`, which TypeScript types `(string | number)[]`).
+- Array literals joined the same way widen their element type: `[[1, 2], [3, 4294967295]]` is `int64[][]` and prints 4294967295 on every backend, one level deeper too, `[[], [1, 2]]` is `int32[][]`, and `c ? [1] : [4294967295]` is `int64[]`; a constant the joined element cannot hold (`[[-1], [u]]` with `u: uint64`) and an element that is not a literal (`[a, [4294967295]]` with `a: int32[]`) are refused (corpus `nestedArrayLiteralWidths`).
 - A typed constant keeps its declared type: `const MAX: int64 = 100` narrows into `int32` only through `as`.
 - A float — literal or constant — never becomes an integer implicitly: `const i: int32 = 3.0` is refused; write `3`.
 - An integer a float cannot hold exactly is refused even as a literal (`const f: float32 = 16777217`), and so is a `uint64`/`int64` past what the slot holds. `16777217 as float32` rounds on the programmer's word.
@@ -308,9 +309,12 @@ A `number` operand of a bitwise operator converts by ECMAScript ToInt32: `300000
 `-1294967296` and `~2147483648` is `2147483647`, with a warning (corpus `958-numberBitwiseToInt32`,
 `numberBitwiseOutsideInt32`). `>>>` on an `int32` or a `number` is the `uint32` TypeScript computes:
 `-1 >>> 0` is `4294967295`, the count is masked to 31 so `>>> 32` shifts by 0, and
-`const x: int32 = i >>> 1` needs `as int32` (corpus `unsignedShiftToUint32`). On any other integer
-type `>>>` shifts that type's own width and keeps the type (`940-unsignedShift`, `954-intArithWidths`).
-Each holds on C, JS and Raiser, measured 2026-10-05.
+`const x: int32 = i >>> 1` needs `as int32` (corpus `unsignedShiftToUint32`). The same rule holds at
+every width: `>>>` reads a signed operand's bits as the unsigned type of its own width, masks the count to
+that width and has that type, so an `int8` -1 `>>> 0` is the `uint8` 255, an `int16` -1 `>>> 1` the
+`uint16` 32767 and an `int64` -1 `>>> 0` the `uint64` 18446744073709551615; a signed target of `>>>=` is
+refused, and an unsigned operand keeps its type (corpus `unsignedShiftOfEveryWidth`, `940-unsignedShift`,
+`954-intArithWidths`). Each holds on C, JS and Raiser, measured 2026-10-05.
 
 ### Update
 | Operator | Token | Description |
@@ -2701,7 +2705,7 @@ Strings are **UTF-8 byte buffers on both backends** (C: `msString`; JS: byte arr
 ### 1. The `char` Primitive
 MetaScript introduces `char` as a first-class primitive for **byte-tier** work: an unsigned 8-bit value (0–255).
 
-- **Access**: `byteAt(i)` reads raw bytes; `s[i]` is TS-tier and returns a `string` (see §0).
+- **Access**: `byteAt(i)` reads raw bytes; `s[i]` is TS-tier and returns a `string` (see §0). A for-of over a string yields its UTF-8 bytes as `char`, so `for (const c of "héllo")` runs six times, on C, JS and Raiser (corpus `869-forOfStringBytes`, measured 2026-10-05).
 - **Literals**: Character literals use single quotes (e.g., `'a'`).
 - **Numeric**: `char` is a numeric type and can participate in arithmetic or be cast to `number`.
 - **Codepoints use `int32`, not `char` or `uint32`**: `char` is 8-bit (only U+0000–U+00FF). A full Unicode codepoint is 21-bit, so hold it in `int32` — the type `.code`, `s.charCodeAt(i)`, and `fromCodePoint()` all speak, matching Go's `rune`. Prefer `int32` over `uint32` here: signed stays cast-free with those APIs and leaves `-1` free as an "invalid/absent" sentinel, whereas `uint32` buys only a compile-time non-negativity guarantee at the cost of an `as uint32` cast at every codepoint boundary.
@@ -3329,7 +3333,7 @@ for (const name of ages) {
 
 An array pattern needs a tuple or an array element: over a `Set<int32>` or an `int32[]` it is the error "an array
 pattern needs each element to be a tuple or an array". Raiser does not run a Map's for-of yet (the iteration is a
-generator; corpus `mapForOfEntries` is xfail there).
+generator, and running one on the Raiser VM is a new mechanism; corpus `mapForOfEntries` is xfail there).
 
 **Custom iterables**: define a `toItems` extension method on any type:
 
