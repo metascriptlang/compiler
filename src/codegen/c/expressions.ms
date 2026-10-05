@@ -1672,6 +1672,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(genShift(g, node, d.operator, d.left.nodeType, left, finalRight));
 			return;
 		}
+		if ((d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>=") && integerTypeOf(d.left.nodeType) != null) {
+			ctx.results.push(genShiftAssign(d.operator, d.left.nodeType, left, finalRight));
+			return;
+		}
 		if (d.operator == "**") {
 			const rt = node.nodeType;
 			if (rt != null && isIntegerType(rt)) {
@@ -3197,6 +3201,15 @@ function genShift(g: CGen, node: Readonly<Node>, op: string, leftType: Type | nu
 	const resultType = node.nodeType != null ? getTypeDesc(g, node.nodeType) : `int${bits}_t`;
 	const operandType = op == "<<" ? countType : `int${bits}_t`;
 	return `((${resultType})${atLeftWidth(g, leftType, bits, resultType)}((${operandType})(${left}) ${op} ((${countType})(${right}) & ${bits - 1})))`;
+}
+
+function genShiftAssign(op: string, leftType: Type | null, left: string, right: string): string {
+	const bits = shiftOperandBits(leftType);
+	const unsignedType = `uint${bits}_t`;
+	const count = `((${unsignedType})(${right}) & ${bits - 1})`;
+	const lt = integerTypeOf(leftType);
+	if (op == ">>=" || (lt != null && isUnsignedInteger(lt))) return `(${left} ${op == "<<=" ? "<<=" : ">>="} ${count})`;
+	return `(*(${unsignedType}*)&(${left}) ${op == "<<=" ? "<<=" : ">>="} ${count})`;
 }
 
 // The operands go unsigned so C's promotion to int cannot overflow (uint16 *

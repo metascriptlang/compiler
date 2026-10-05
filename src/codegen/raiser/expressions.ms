@@ -238,8 +238,36 @@ function bitwiseOpcode(op: string): RaiserOpcode {
 function isCompoundAssignOp(op: string): boolean {
 	return match (op) {
 		"+=" | "-=" | "*=" | "/=" | "%=" => true,
+		"&=" | "|=" | "^=" | "<<=" | ">>=" => true,
 		_ => false,
 	};
+}
+
+function emitBitwise(s: RaiserCompState, op: string, dest: int32, lReg: int32, rReg: int32, t: Type | null): void {
+	const opc = bitwiseOpcode(op);
+	if (opc != RaiserOpcode.ShiftLeft && opc != RaiserOpcode.ShiftRight) {
+		emitInst(s, raiserABC(opc, dest, lReg, rReg));
+		return;
+	}
+	const bits = intBandBits(t);
+	const unsigned = isUnsignedBand(t);
+	const count = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.Move, count, rReg, 0));
+	if (bits > 0) emitInst(s, raiserABC(RaiserOpcode.NarrowU, count, shiftCountBits(bits), 0));
+	let left = lReg;
+	let shift = opc;
+	if (opc == RaiserOpcode.ShiftRight && unsigned) {
+		shift = RaiserOpcode.ShiftRightU;
+		if (bits > 0) {
+			left = allocReg(s);
+			emitInst(s, raiserABC(RaiserOpcode.Move, left, lReg, 0));
+			emitInst(s, raiserABC(RaiserOpcode.NarrowU, left, bits, 0));
+		}
+	}
+	emitInst(s, raiserABC(shift, dest, left, count));
+	if (opc == RaiserOpcode.ShiftLeft && bits > 0) {
+		emitInst(s, raiserABC(unsigned ? RaiserOpcode.NarrowU : RaiserOpcode.SignExtend, dest, bits, 0));
+	}
 }
 
 function compoundBaseOpcode(op: string): RaiserOpcode {
@@ -254,12 +282,16 @@ function compoundBaseOpcode(op: string): RaiserOpcode {
 }
 
 function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int32, rhs: int32, target: Node): void {
+	const base = op.slice(0, op.length - 1);
+	if (isBitwiseOp(base)) {
+		emitBitwise(s, base, dest, lhs, rhs, target.nodeType);
+		return;
+	}
 	if (!isFloatExpr(target)) {
 		emitInst(s, raiserABC(unsignedOpcode(compoundBaseOpcode(op), target.nodeType), dest, lhs, rhs));
 		emitWrapToWidth(s, dest, target.nodeType);
 		return;
 	}
-	const base = op.slice(0, op.length - 1);
 	if (base != "%") {
 		emitInst(s, raiserABC(arithmeticOpcodeF64(base), dest, lhs, rhs));
 		emitWrapToWidth(s, dest, target.nodeType);
@@ -712,30 +744,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 
 	// Bitwise operators
 	if (isBitwiseOp(op)) {
-		const opc = bitwiseOpcode(op);
-		if (opc != RaiserOpcode.ShiftLeft && opc != RaiserOpcode.ShiftRight) {
-			emitInst(s, raiserABC(opc, dest, lReg, rReg));
-			return dest;
-		}
-		const bits = intBandBits(node.nodeType);
-		const unsigned = isUnsignedBand(node.nodeType);
-		const count = allocReg(s);
-		emitInst(s, raiserABC(RaiserOpcode.Move, count, rReg, 0));
-		if (bits > 0) emitInst(s, raiserABC(RaiserOpcode.NarrowU, count, shiftCountBits(bits), 0));
-		let left = lReg;
-		let shift = opc;
-		if (opc == RaiserOpcode.ShiftRight && unsigned) {
-			shift = RaiserOpcode.ShiftRightU;
-			if (bits > 0) {
-				left = allocReg(s);
-				emitInst(s, raiserABC(RaiserOpcode.Move, left, lReg, 0));
-				emitInst(s, raiserABC(RaiserOpcode.NarrowU, left, bits, 0));
-			}
-		}
-		emitInst(s, raiserABC(shift, dest, left, count));
-		if (opc == RaiserOpcode.ShiftLeft && bits > 0) {
-			emitInst(s, raiserABC(unsigned ? RaiserOpcode.NarrowU : RaiserOpcode.SignExtend, dest, bits, 0));
-		}
+		emitBitwise(s, op, dest, lReg, rReg, node.nodeType);
 		return dest;
 	}
 
@@ -911,7 +920,7 @@ function compileLogicalExpr(s: RaiserCompState, node: Node): int32 {
 	return dest;
 }
 
-// --- Compound assignment (+=, -=, *=, /=, %=) ---
+// --- Compound assignment ---
 
 function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as BinaryExprData;

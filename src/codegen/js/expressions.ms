@@ -286,7 +286,7 @@ export function emitBinaryExpr(gen: JSGenerator, node: Node): void {
 			emit(gen, " = ");
 			emitCopyOnRead(gen, d.right);
 		}
-	} else if (d.operator == "+=" || d.operator == "-=" || d.operator == "*=" || d.operator == "/=" || d.operator == "%=") {
+	} else if (isAssignmentOp(d.operator)) {
 		emitNode(gen, d.left);
 		emit(gen, " ");
 		emit(gen, d.operator);
@@ -316,7 +316,11 @@ function emitOperand(gen: JSGenerator, node: Node): void {
 }
 
 function isAssignmentOp(op: string): boolean {
-	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=";
+	return match (op) {
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" => true,
+		"&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
+		_ => false,
+	};
 }
 
 // ===== Unary Expression =====
