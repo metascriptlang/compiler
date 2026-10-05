@@ -28,7 +28,7 @@ import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveRetur
 import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, forgetInstances, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults, instantiateParentClass } from "./instantiate";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
-import { declGenericParams, classParentOf, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView } from "./types";
+import { declGenericParams, symGenericParams, classParentOf, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView } from "./types";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
@@ -1177,8 +1177,13 @@ function checkGenericOverride(ctx: CheckerContext, d: MethodDeclData, className:
 	let baseDecl = base.sym.declNode;
 	if (baseDecl != null && baseDecl.kind == NodeKind.DecoratedDecl) baseDecl = (baseDecl.data as DecoratedDeclData).decoratedNode;
 	const baseGeneric = baseDecl != null && baseDecl.kind == NodeKind.MethodDecl && isGenericFn((baseDecl.data as MethodDeclData).methodFlags);
-	if (!baseGeneric && !isGenericFn(d.methodFlags)) return;
-	addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.classSym.name}.${d.methodName}'; a method with its own type parameters cannot override or be overridden`,
+	if (baseGeneric || isGenericFn(d.methodFlags)) {
+		addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.classSym.name}.${d.methodName}'; a method with its own type parameters cannot override or be overridden`,
+			d.nameLocation.line, d.nameLocation.column);
+		return;
+	}
+	if (symGenericParams(base.classSym) == "" && symGenericParams(classType.sym) == "") return;
+	addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.classSym.name}.${d.methodName}'; a method of a generic class cannot override or be overridden`,
 		d.nameLocation.line, d.nameLocation.column);
 }
 
