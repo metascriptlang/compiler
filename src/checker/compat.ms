@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee } from "./types";
+import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -393,7 +393,10 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			TypeKind.Distinct => source.typeName == target.typeName,
 			TypeKind.EnumLiteral => sameEnumMember(source, target),
 			TypeKind.GenericInstance => {
-				if (!sameGenericBase(source, target)) return differentGenericsFit(source, target);
+				if (!sameGenericBase(source, target)) {
+					const ancestor = classAncestorInstance(source, target);
+					return ancestor != null ? isAssignable(ancestor, target) : differentGenericsFit(source, target);
+				}
 				const limit = source.typeChildren.length < target.typeChildren.length ? source.typeChildren.length : target.typeChildren.length;
 				const invariant = isNominalType(source);
 				for (let gi = 0; gi < limit; gi += 1) {
@@ -405,6 +408,12 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			TypeKind.Tuple => isTupleAssignable(source, target),
 			_ => true,
 		};
+	}
+
+	if ((target.kind == TypeKind.GenericInstance && source.kind == TypeKind.Struct)
+			|| (target.kind == TypeKind.Struct && source.kind == TypeKind.GenericInstance)) {
+		const ancestor = classAncestorInstance(source, target);
+		if (ancestor != null) return isAssignable(ancestor, target);
 	}
 
 	// Generic-alias instance carries its resolved body in typeReturn

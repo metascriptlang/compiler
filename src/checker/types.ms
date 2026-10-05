@@ -2773,6 +2773,38 @@ function genericInstanceClass(gi: Type): Type | null {
 	return base != null && base.kind == TypeKind.Ref ? base.typeReturn : base;
 }
 
+export function classParentOf(t: Type | null): Type | null {
+	if (t == null) return null;
+	const s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	if (s.kind == TypeKind.GenericInstance) {
+		const cls = genericInstanceClass(s);
+		if (cls == null || cls.kind != TypeKind.Struct || cls.typeExtra == null) return null;
+		const names = splitTopLevel(genericParamsOf(s), ",");
+		if (names.length == 0 || names.length > s.typeChildren.length) return cls.typeExtra;
+		const args: Type[] = [];
+		for (let i = 0; i < names.length; i += 1) {
+			names[i] = names[i].trim();
+			args.push(s.typeChildren[i]);
+		}
+		return substituteAllParams(cls.typeExtra, names, args);
+	}
+	return s.kind == TypeKind.Struct ? s.typeExtra : null;
+}
+
+export function classAncestorInstance(t: Type | null, target: Type): Type | null {
+	const tgt = target.kind == TypeKind.Ref && target.typeReturn != null ? target.typeReturn : target;
+	const tgtClass = tgt.kind == TypeKind.GenericInstance ? genericInstanceClass(tgt) : tgt;
+	if (tgtClass == null || tgtClass.kind != TypeKind.Struct || tgtClass.sym == null || tgtClass.sym.symbolKind != SymbolKind.Class) return null;
+	let cur = classParentOf(t);
+	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		const body = cur.kind == TypeKind.Ref && cur.typeReturn != null ? cur.typeReturn : cur;
+		const cls = body.kind == TypeKind.GenericInstance ? genericInstanceClass(body) : body;
+		if (cls != null && cls.sym == tgtClass.sym && (body.kind == TypeKind.GenericInstance) == (tgt.kind == TypeKind.GenericInstance)) return body;
+		cur = classParentOf(body);
+	}
+	return null;
+}
+
 function isClassOrSubclass(sub: Type, sup: Type): boolean {
 	const supBody = sup.typeReturn;
 	const supSym = runtimeClassSym(supBody);
@@ -3442,7 +3474,11 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		// Affine and plain Promises share typeName "Promise" — their distinction
 		// is in flag bits, not in the name. Simple equality covers both.
 		const namesMatch = formal.typeName == concrete.typeName;
-		if (!namesMatch) return;
+		if (!namesMatch) {
+			const ancestor = classAncestorInstance(concrete, formal);
+			if (ancestor != null) unifyType(formal, ancestor, bindings);
+			return;
+		}
 		const limit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
 		for (let gi = 0; gi < limit; gi += 1) {
 			unifyType(formal.typeChildren[gi], concrete.typeChildren[gi], bindings);
@@ -3451,6 +3487,11 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	}
 	// GenericInstance vs Struct (either direction) — try base type matching
 	if (formal.kind == TypeKind.GenericInstance && concrete.kind == TypeKind.Struct) {
+		const ancestor = classAncestorInstance(concrete, formal);
+		if (ancestor != null) {
+			unifyType(formal, ancestor, bindings);
+			return;
+		}
 		if (formal.typeExtra != null) {
 			unifyType(formal.typeExtra, concrete, bindings);
 		}

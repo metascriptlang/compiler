@@ -35,6 +35,8 @@ export function parentClassSymOf(classSym: Symbol): Symbol {
 	if (t == null || t.typeExtra == null) return null as unknown as Symbol;
 	let p = t.typeExtra;
 	if (p.kind == TypeKind.Ref && p.typeReturn != null) p = p.typeReturn;
+	if (p.kind == TypeKind.GenericInstance && p.typeExtra != null) p = p.typeExtra;
+	if (p.kind == TypeKind.Ref && p.typeReturn != null) p = p.typeReturn;
 	if (p.sym == null) return null as unknown as Symbol;
 	return p.sym;
 }
