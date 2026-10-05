@@ -27,3 +27,9 @@ test "@noinline: anything but a function is refused" {
 		console.log(new Box().value);`);
 	assert c.includes("@noinline applies to a function"), c.slice(0, 400);
 }
+
+test "@noinline: a function marked @inline too is refused" {
+	const c = emitted(`@inline @noinline function both(a: int32): int32 { return a * 7; }
+		console.log(both(2));`);
+	assert c.includes("cannot be both @inline and @noinline"), c.slice(0, 400);
+}
