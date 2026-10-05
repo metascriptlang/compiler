@@ -1042,6 +1042,24 @@ test "a call through a closure parameter calls the closure, not a routine of the
 	assert unboxFloat(ctx.lastResult) == 41;
 }
 
+test "a closure made in a for-of reads the binding of its own iteration" {
+	const ctx = evalFull("function make(): string { const fs: (() => string)[] = []; for (const j of ['a', 'b']) { fs.push((): string => j); } let out = ''; for (const f of fs) { out = out + f(); } return out; } return make();");
+	assert ctx.lastError == "", ctx.lastError;
+	assert ctx.lastResult.strVal == "ab";
+}
+
+test "a closure made in a for loop that continues reads the counter of its own iteration" {
+	const ctx = evalFull("function make(): number { const fs: (() => number)[] = []; for (let i = 0; i < 6; i++) { if (i % 2 == 0) continue; fs.push((): number => i); } let acc = 0; for (const f of fs) { acc = acc * 10 + f(); } return acc; } return make();");
+	assert ctx.lastError == "", ctx.lastError;
+	assert unboxFloat(ctx.lastResult) == 135;
+}
+
+test "a function reads the global a module-level destructuring declares" {
+	const ctx = evalFull("function pair(): number[] { return [3, 4]; } let [p, q] = pair(); const f = (): number => q; function sum(): number { return p * 10 + q; } q = 5; return sum() * 10 + f();");
+	assert ctx.lastError == "", ctx.lastError;
+	assert unboxFloat(ctx.lastResult) == 355;
+}
+
 test "hand-written closure pair (no transforms)" {
 	const ctx = evalRaiserDirect("function lifted(_envP: unknown): number { return _envP.x; } const x = 99; const f = { fn: lifted, env: { x: x } }; return f();");
 	assert ctx.lastResult.intVal == 99;
