@@ -64,7 +64,6 @@ interface SharedFlowEntry {
 // fixed-point terminate.
 interface FlowLoopInfo {
 	loopNode: FlowNode;
-	refKey: string;
 	types: Type[];
 }
 
@@ -72,7 +71,6 @@ export interface FlowState {
 	reference: Node;                 // the reference expression whose type we're computing
 	declaredType: Type;              // the declared (pre-narrowing) type of the reference
 	depth: int32;                    // recursion guard; TypeScript caps at 2000
-	refKey: string;                  // cached getFlowCacheKey(reference); "" means not yet computed; "@nondotted" means unnarrowable
 	sharedFlows: SharedFlowEntry[];  // per-query Shared-flow cache
 	flowLoopStack: FlowLoopInfo[];   // in-progress loop analyses (re-entry detection)
 	// Phase 6 deferred fields (not yet used):
@@ -89,53 +87,25 @@ function createFlowState(refNode: Node, declaredType: Type): FlowState {
 		reference: refNode,
 		declaredType: declaredType,
 		depth: 0,
-		refKey: "",
 		sharedFlows: [],
 		flowLoopStack: [],
 	};
 }
 
-// Reference cache key. Used to distinguish loop analyses for different
-// references that share the same loop label. Returns the sentinel
-// "@nondotted" when the reference isn't a simple identifier or dotted
-// member-chain — non-dotted references bypass the loop cache entirely
-// (matches the reference `writeFlowCacheKey`).
-function getFlowCacheKey(refNode: Node): string {
-	if (refNode == null) return "@nondotted";
-	return writeFlowCacheKey(refNode);
+function isDottedReference(node: Node | null): boolean {
+	if (node == null) return false;
+	if (node.kind == NodeKind.Identifier) return true;
+	if (node.kind == NodeKind.MemberExpr) return isDottedReference((node.data as MemberExprData).object);
+	return false;
 }
 
-function writeFlowCacheKey(node: Node): string {
-	if (node == null) return "@nondotted";
-	match (node.kind) {
-		NodeKind.Identifier => {
-			const d = node.data as IdentifierData;
-			// Prefer symbol identity via a stable string form — the symbol
-			// pointer address isn't accessible in MetaScript, but the symbol's
-			// name + modulePath is unique enough for query-scoped caching.
-			if (node.resolvedSym != null) {
-				return "sym:" + node.resolvedSym.name + "@" + node.resolvedSym.modulePath;
-			}
-			return "name:" + d.name;
-		},
-		NodeKind.MemberExpr => {
-			const d = node.data as MemberExprData;
-			const base = writeFlowCacheKey(d.object);
-			if (base == "@nondotted") return "@nondotted";
-			return base + "." + d.property;
-		},
-		_ => { return "@nondotted"; },
-	};
-	return "@nondotted";
-}
-
-// The FlowLoopInfo on the stack for this (loopNode, refKey) that already holds a type.
+// Check if any FlowLoopInfo in the stack matches this loopNode.
 // Used to detect re-entry during back-edge recursion.
-function findPopulatedLoopInfo(stack: FlowLoopInfo[], loopNode: FlowNode, refKey: string): FlowLoopInfo {
+function findLoopInfo(stack: FlowLoopInfo[], loopNode: FlowNode): FlowLoopInfo {
 	let i = 0;
 	while (i < stack.length) {
 		const info = stack[i];
-		if (info.loopNode == loopNode && info.refKey == refKey && info.types.length > 0) return info;
+		if (info.loopNode == loopNode) return info;
 		i = i + 1;
 	}
 	return null as unknown as FlowLoopInfo;
@@ -700,7 +670,7 @@ function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 // back-edges (e.g., the end of the body, `continue` jumps).
 //
 // Algorithm:
-//   1. If we're already analyzing this (loopNode, refKey) pair — i.e., the
+//   1. If we're already analyzing this loopNode — i.e., the
 //      current call recursed into the same loop via a back-edge — return a
 //      union of the types accumulated so far, marked incomplete. This breaks
 //      the infinite recursion while producing a conservative result.
@@ -715,18 +685,14 @@ function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 // stabilizes within finitely many back-edge visits.
 
 function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
-	// Compute the reference cache key on first use.
-	if (state.refKey == "") {
-		state.refKey = getFlowCacheKey(state.reference);
-	}
 	// Non-dotted references can't be meaningfully narrowed across loops —
 	// conservatively return declared type.
-	if (state.refKey == "@nondotted") {
+	if (!isDottedReference(state.reference)) {
 		return flowType(state.declaredType, false);
 	}
-	// Re-entry detection: if this (loopNode, refKey) is already on the
+	// Re-entry detection: if this loopNode is already on the
 	// stack, return the current accumulated union.
-	const existing = findPopulatedLoopInfo(state.flowLoopStack, flow, state.refKey);
+	const existing = findLoopInfo(state.flowLoopStack, flow);
 	if (existing != null) {
 		return flowType(unionOfTypes(existing.types, state.declaredType), true);
 	}
@@ -736,7 +702,7 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 	// up at the LIST TAIL, while the back-edge sits at the head. To establish
 	// baseline narrowing without re-entering the loop label, we must walk
 	// pre-loop FIRST. Collect into an array and reverse.
-	const info: FlowLoopInfo = { loopNode: flow, refKey: state.refKey, types: [] };
+	const info: FlowLoopInfo = { loopNode: flow, types: [] };
 	let firstAnteType: FlowType = null as unknown as FlowType;
 	let widened = false;
 	const reversed: FlowNode[] = [];
