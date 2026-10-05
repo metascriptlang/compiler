@@ -513,7 +513,9 @@ function binaryOperandSkip(t: Type): boolean {
 
 function eqComparableOperand(orig: Type, shaped: Type): Type | null {
 	if (isMaybeType(orig) && orig.typeReturn != null) {
-		return hasGenericParams(orig.typeReturn) ? null : orig.typeReturn;
+		if (hasGenericParams(orig.typeReturn)) return null;
+		const payload = operandShape(orig.typeReturn);
+		return payload == null || binaryOperandSkip(payload) ? null : payload;
 	}
 	if (shaped.kind == TypeKind.Union && !hasGenericParams(orig)) return shaped;
 	return null;
@@ -582,6 +584,7 @@ export function isPayloadCarrier(t: Type | null): boolean {
 	if (isResult(t)) return true;
 	const s = operandShape(t);
 	if (s == null) return false;
+	if (isMaybeType(s)) return isPayloadCarrier(s.typeReturn);
 	if (s.kind == TypeKind.Struct) return true;
 	if (s.kind != TypeKind.Union || isStringLike(s) || s.typeChildren == null) return false;
 	let sawMember = false;
