@@ -347,7 +347,7 @@ export function createIterator(yieldType: Type): Type {
 
 export function isIterator(t: Type | null): boolean {
 	if (t == null) return false;
-	return t.typeName == "Iterator";
+	return t.typeFlags.has(TypeFlag.Spelled) && t.typeName == "Iterator";
 }
 
 export function getIteratorNextFnType(t: Type | null): Type | null {
@@ -4025,6 +4025,7 @@ function typeDisplayNameInner(t: Type | null): string {
 	// render the internal cell name. Print the spelling the user wrote.
 	if (isLockedRef(t)) return "Locked<" + typeDisplayName(lockedPayloadType(t)) + ">";
 	if (isReadonlyView(t)) return "Readonly<" + typeDisplayName(withoutReadonlyView(t)) + ">";
+	if (isIterator(t)) return "Iterator<" + typeDisplayName(getIteratorYieldType(t)) + ">";
 	// A generic instance erases to its base name, so two different
 	// instantiations render identically ("expected X, got X"). Spell the type
 	// arguments the user wrote.

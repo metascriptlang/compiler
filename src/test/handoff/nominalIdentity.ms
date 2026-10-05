@@ -1,5 +1,5 @@
 import { checkProjectDiagnostics, MapEntry } from "../helpers";
-import { strictErrorCount } from "./helpers";
+import { strictErrorCount, checkSource } from "./helpers";
 
 function errorsOf(main: string): string[] {
 	const entries: MapEntry[] = [
@@ -69,4 +69,19 @@ test "nominal identity: a type with no declaration is the same type only with th
 	for (const src of accepted) {
 		assert strictErrorCount(src) == 0, src;
 	}
+}
+
+test "nominal identity: a declared type named like a builtin sequence keeps the ending-return check" {
+	for (const name of ["Iterator", "Iterable", "Generator"]) {
+		const src = "struct " + name + " { n: int32 }\nfunction f(k: int32): " + name + " { if (k > 0) return { n: 1 }; }";
+		assert strictErrorCount(src) > 0, src;
+	}
+	assert strictErrorCount("function* nums(): Iterator<int32> { yield 1; }") == 0;
+}
+
+test "nominal identity: an iterator mismatch names both yield types" {
+	const ctx = checkSource("function* nums(): Iterator<int32> { yield 300; }\nconst it: Iterator<string> = nums();");
+	let all = "";
+	for (const e of ctx.errors) all = all + e.message + "\n";
+	assert all.contains("Iterator<int32>") && all.contains("Iterator<string>"), all;
 }
