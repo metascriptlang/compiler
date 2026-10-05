@@ -594,7 +594,7 @@ function orderedMapEnlarge<K, V>(m: Map<K, V>): void {
 
 function orderedMapCompact<K, V>(m: Map<K, V>): void {
 	const oldEntries = m.entries;
-	const newEntries: Vec<OrderedMapEntry<K, V>> = [];
+	let newEntries: Vec<OrderedMapEntry<K, V>> = [];
 	let i: int32 = 0;
 	while (i < oldEntries.length) {
 		if (oldEntries[i].hcode != 0) {
@@ -838,7 +838,7 @@ function orderedSetEnlarge<T>(s: Set<T>): void {
 
 function orderedSetCompact<T>(s: Set<T>): void {
 	const oldEntries = s.entries;
-	const newEntries: Vec<OrderedSetEntry<T>> = [];
+	let newEntries: Vec<OrderedSetEntry<T>> = [];
 	let i: int32 = 0;
 	while (i < oldEntries.length) {
 		if (oldEntries[i].hcode != 0) {
