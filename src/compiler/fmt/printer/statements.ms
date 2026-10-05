@@ -439,7 +439,7 @@ export function printTryCatchStmt(node: Node, options: FormatOptions): Doc {
 export function printDeferStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as DeferStmtData;
 	const parts: Doc[] = [docText("defer "), callPrintNode(d.deferExpr, options)];
-	if (options.semi) {
+	if (options.semi && d.deferExpr.kind != NodeKind.BlockStmt) {
 		parts.push(docText(";"));
 	}
 	return docGroup(parts);
