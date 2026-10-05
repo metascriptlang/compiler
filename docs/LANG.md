@@ -561,6 +561,14 @@ Math.floor(3.7);  // → floor(3.7), receiver not passed
 
 Instance: receiver prepended as first arg at call site. Static: receiver stripped, just a namespaced call.
 
+An array receiver says whether the method writes. `this arr: T[]` may write the array (`push`,
+`arr[i] = …`), so a value `Vec<T>` reaches it only from a writable place: a `const`, a value parameter
+or a `for..of` binding is refused (`cannot mutate 'v' with 'zero' — 'v' is const (use 'let')`), and a
+`Readonly<T[]>` is refused as a read-only view (PARALOCK E24). `this arr: Vec<T>` only reads and takes
+a `T[]`, a `Vec<T>` and a `Readonly<T[]>` alike; the std array readers (`indexOf`, `includes`, `join`,
+`slice`, `at`, `concat`, `map`, …) are declared that way. Measured 2026-10-05 on C, JS and Raiser
+(corpus `arrayReaderReceivers`, handoff `storageMutability`).
+
 ### Classes
 ```typescript
 class Point {
@@ -1870,7 +1878,7 @@ spawn(() => { c.n = 1; return c.n; }, { move: [c] });    // MOVE:   c is the thu
 spawn(() => lockedUpdate(gate, (v: int32): int32 => v + 1)); // SHARE:  writes go through a Locked<T> critical section
 ```
 
-- A captured binding is a **read-only view** inside the thunk: assignment, `++`, `out` arguments, `move`, the mutating array builtins (`push`, `splice`, …) and an `as` cast back to the mutable type are compile errors (`cannot write through Readonly<Counter> — … (PARALOCK E24)`). The view is deep and follows the value through aliases, `for..of`, destructuring, and struct copies that carry a ref; a POD struct copy is a plain value again.
+- A captured binding is a **read-only view** inside the thunk: assignment, `++`, `out` arguments, `move`, an array method whose receiver is `T[]` or `Span<T>` (`push`, `splice`, … or a user extension) and an `as` cast back to the mutable type are compile errors (`cannot write through Readonly<Counter> — … (PARALOCK E24)`). The view is deep and follows the value through aliases, `for..of`, destructuring, and struct copies that carry a ref; a POD struct copy is a plain value again.
 - A callee that only reads says so in its signature: `function readOnly(c: Readonly<Counter>)`. A class method says it with a TypeScript `this` parameter — `peek(this: Readonly<Counter>): int32 { return this.n; }` — and only such methods are callable through a view (`v.bump()` on a view: `a method callable through the view declares its receiver … (PARALOCK E24)`); inside, `this` is the view, so a write is E24. An extension spells the same receiver `function peek(this c: Readonly<Counter>): int32`. The `this` parameter must come first, name the enclosing class (`C` or `Readonly<C>`), and is refused on static methods, constructors, free functions and lambdas.
 - `{ move: [x, y] }` hands the listed bindings to the thunk on the parent thread at the spawn site. Inside the thunk they are owned and writable; a later use in the parent is an error (`'c' was moved into a spawn thunk and cannot be used afterwards`), rebinding a `let` revives it. Entries must be plain local names. `{ timeout: ms }` is the other option; any other key is an error.
 - `move x` *inside* the thunk is refused (`cannot move out of Readonly<…>`): it would reset the parent's slot from the child thread.
