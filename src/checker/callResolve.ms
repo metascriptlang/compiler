@@ -65,13 +65,15 @@ function peelToGenericInstance(t: Type | null): Type | null {
 //      Map/Set/Box patterns.
 function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Type, astTypeArg: string, expectedType: Type | null): { type: Type, instance: Symbol | null } {
 	const member = callee.kind == NodeKind.MemberExpr ? callee.data as MemberExprData : null;
-	const namespaceQualified = member != null && callee.resolvedSym != null
+	const bound = callee.resolvedSym != null && callee.resolvedSym.instantiatedFrom != null
+		? callee.resolvedSym.instantiatedFrom : callee.resolvedSym;
+	const namespaceQualified = member != null && bound != null
 		&& member.object.resolvedSym != null && member.object.resolvedSym.symbolKind == SymbolKind.Module;
 	if (callee.kind != NodeKind.Identifier && !namespaceQualified) return { type: calleeType, instance: null };
-	const calleeName = namespaceQualified ? callee.resolvedSym.name : (callee.data as IdentifierData).name;
+	const calleeName = namespaceQualified ? bound!.name : (callee.data as IdentifierData).name;
 	const writtenLength = namespaceQualified ? member!.object.resolvedSym.name.length + 1 + member!.property.length : calleeName.length;
 	const ltCol = callee.location.column + writtenLength;
-	const calleeSym = callee.resolvedSym != null ? callee.resolvedSym : lookupSymbol(ctx.table, calleeName);
+	const calleeSym = bound != null ? bound : lookupSymbol(ctx.table, calleeName);
 	const genericParams = calleeSym != null ? symGenericParams(calleeSym) : builtinGenericParams(calleeName);
 	if (genericParams == "") return { type: calleeType, instance: null };
 	// Try explicit type args first (sources 1 + 2 in priority comment above).
