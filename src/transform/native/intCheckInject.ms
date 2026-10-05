@@ -4,6 +4,7 @@
 //   a % b    → msModI32(a, b)
 //   a /= b   → msDivAssignI32(a, b)   (the left side is evaluated once)
 //   a ** b   → msPowI64(a, b)         (msPowWrapI64 under --danger)
+//   f %= b   → msModAssignF64(f, b)   (a float target; fmod, the left side evaluated once)
 //
 // Division by a literal that is neither 0 nor -1 cannot raise and stays an operator,
 // as do all divisions under --danger. An 8- or 16-bit operation runs at 32 bits
@@ -55,6 +56,12 @@ function intCheckVisitor(node: Node, ctx: TransformContext): Node {
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	if (d.operator == "**") return lowerIntPow(node, d, ctx);
+	const floatAssign = floatAssignHelper(d);
+	if (floatAssign != "") {
+		const call = makeCall(runtimeRef(floatAssign, node.location), [d.left, d.right], node.location);
+		call.nodeType = d.left.nodeType;
+		return call;
+	}
 	if (!ctx.rangeChecks) return node;
 	if (d.operator == "/" || d.operator == "%") {
 		const t = integerRepr(node.nodeType);
@@ -69,6 +76,13 @@ function intCheckVisitor(node: Node, ctx: TransformContext): Node {
 		return call;
 	}
 	return node;
+}
+
+function floatAssignHelper(d: BinaryExprData): string {
+	const t = peelToRepr(d.left.nodeType);
+	if (t == null) return "";
+	const isFloat = t.kind == TypeKind.Number || t.kind == TypeKind.Float64 || t.kind == TypeKind.Float32;
+	return d.operator == "%=" && isFloat ? "msModAssignF64" : "";
 }
 
 function lowerIntPow(node: Node, d: BinaryExprData, ctx: TransformContext): Node {

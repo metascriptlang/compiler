@@ -1,5 +1,6 @@
 /*
- * Checked integer division, modulo and power, and ToInt32. The includer declares
+ * Checked integer division, modulo and power, ToInt32, and the float `%=` C has
+ * no operator for. The includer declares
  * msRaiseDivByZero, msRaiseOverflow and msRaiseRangeError first
  * (runtime/core/system.h, runtime/manual.h).
  */
@@ -140,5 +141,7 @@ static inline int32_t msToInt32(double x) {
 	if (m < 0) m += 4294967296.0;
 	return (int32_t)(uint32_t)m;
 }
+
+#define msModAssignF64(lv, b) msDivAssign_(lv, b, fmod)
 
 #endif /* MS_CHECKED_ARITH_H */
