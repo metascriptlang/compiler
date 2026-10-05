@@ -6,6 +6,21 @@ import {
 	snakeCase,
 } from "./discriminator";
 
+function enumWidth(memberCount: int32, values: number[]): int32 {
+	let low = 0;
+	let high = memberCount - 1;
+	if (values.length == memberCount) {
+		for (const value of values) {
+			const v = value as int32;
+			if (v < low) { low = v; }
+			if (v > high) { high = v; }
+		}
+	}
+	if (low >= 0 && high <= 255) { return 1; }
+	if (low >= 0 && high <= 65535) { return 2; }
+	return 4;
+}
+
 export macro anchorIdl(spec: Node): Node {
 	const ops = getTypeArg();
 	if (ops.kind !== NodeKind.EnumDecl) {
@@ -228,12 +243,18 @@ export macro anchorIdl(spec: Node): Node {
 				if (memberCount <= 8) { idlType = "\"u8\""; }
 			}
 			if (idlType == "") {
+				const named = getImpl(bindSym(element));
+				if (named != null && named!.kind == NodeKind.EnumDecl) {
+					const width = enumWidth(named!.enumMembers.length, named!.enumValues);
+					idlType = width == 1 ? "\"u8\"" : width == 2 ? "\"u16\"" : "\"i32\"";
+				}
+			}
+			if (idlType == "") {
 				const nested = getImpl(bindSym(element));
-				if (nested == null || nested!.kind == NodeKind.EnumDecl) {
+				if (nested == null) {
 					error("anchorIdl: field '" + fields[f] + "' of '" + typeName + "' has type '" +
 						written + "', which has no IDL type: use sized integers, boolean, Pubkey, " +
-						"T[N] or a struct imported where anchorIdl is called (an enum is stored " +
-						"as uint8)", spec);
+						"an enum, T[N] or a struct imported where anchorIdl is called", spec);
 				}
 				idlType = "{\"defined\":{\"name\":\"" + element + "\"}}";
 				let known = false;
@@ -291,6 +312,13 @@ export macro anchorIdl(spec: Node): Node {
 					if (memberCount <= 32) { size = 4; align = 4; }
 					if (memberCount <= 16) { size = 2; align = 2; }
 					if (memberCount <= 8) { size = 1; align = 1; }
+				}
+				if (size == 0) {
+					const named = getImpl(bindSym(element));
+					if (named != null && named!.kind == NodeKind.EnumDecl) {
+						size = enumWidth(named!.enumMembers.length, named!.enumValues);
+						align = size;
+					}
 				}
 				let packed = 0;
 				if (size == 0) {

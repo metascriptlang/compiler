@@ -999,6 +999,95 @@ test "anchorIdl describes nested structs as defined types and fixed arrays as ar
 	}
 }
 
+export enum Species {
+	Cat,
+	Dog,
+}
+
+export enum PetWide {
+	Low = 0,
+	High = 300,
+}
+
+export enum PetSigned {
+	Below = -1,
+	Zero = 0,
+}
+
+export struct Pet {
+	hearts: uint16;
+	species: Species;
+	level: uint8;
+}
+
+export function discriminator(this typeof Pet): Discriminator {
+	return @comptime { return accountDiscriminator("Pet"); };
+}
+
+export struct Tally {
+	signed: PetSigned;
+	wide: PetWide;
+	spare: uint16;
+}
+
+export function discriminator(this typeof Tally): Discriminator {
+	return @comptime { return accountDiscriminator("Tally"); };
+}
+
+export enum PetOp {
+	Feed,
+}
+
+export struct FeedAccounts {
+	pet: Mutable<Pet>;
+}
+
+test "anchorIdl describes an enum field by the integer it is stored in" {
+	const idl = anchorIdl<PetOp>({
+		name: "pets",
+		address: "",
+		Feed: [FeedAccounts],
+		accounts: [Pet, Tally],
+		events: [],
+		errors: "",
+	});
+	const parsed = JSON.parseValue(idl);
+	assert parsed.ok;
+	if (parsed.ok) {
+		const types = parsed.value.types;
+		assert types.at(0).name.asString() == "Pet";
+		assert types.at(0).type.fields.at(1).type.asString() == "u8";
+		assert types.at(1).name.asString() == "Tally";
+		assert types.at(1).type.fields.at(0).type.asString() == "i32";
+		assert types.at(1).type.fields.at(1).type.asString() == "u16";
+	}
+	assert sizeof(Pet) == 4 && sizeof(Tally) == 8;
+}
+
+function feedEntry(): void {
+	const pet = mutable<Pet>(0);
+	if (!pet.ok) {
+		failWith(pet.error);
+		return;
+	}
+	const at = pet.value.data();
+	if (at.species == Species.Cat) at.species = Species.Dog;
+	at.level = at.level + 1;
+}
+
+test "an account with an enum field round-trips through the host at the enum's width" {
+	const bytes: uint8[] = [];
+	const tag = Pet.discriminator();
+	for (let i = 0; i < 8; i++) { bytes.push(tag.bytes[i]); }
+	bytes.push(7);
+	bytes.push(0);
+	bytes.push(0);
+	bytes.push(41);
+	const accounts = [holder(1, programKey(), bytes, false, true)];
+	assert run(programKey(), accounts, [], feedEntry).result == 0;
+	assert accounts[0].data[10] == 1 && accounts[0].data[11] == 42 && accounts[0].data[8] == 7;
+}
+
 function hostProgram(): Pubkey {
 	return pubkeyOf("9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu");
 }
