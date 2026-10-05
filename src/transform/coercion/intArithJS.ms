@@ -159,6 +159,7 @@ function shiftAtLeftWidth(node: Node, d: BinaryExprData): Node {
 function binaryAsUnsigned(node: Node): Node {
 	const d = node.data as BinaryExprData;
 	const t = peelToRepr(node.nodeType);
+	if (t != null && t.kind == TypeKind.Int32 && d.operator == ">>>") return truncateTo(node, t.kind, node.location);
 	if (t == null || t.kind != TypeKind.Uint32) return node;
 	if (d.operator == ">>") {
 		d.operator = ">>>";
@@ -245,7 +246,7 @@ export function needsIntegerCompoundRewrite(d: BinaryExprData): boolean {
 	if (base == "") return false;
 	const t = peelToRepr(d.left.nodeType);
 	if (t == null || !isIntConvKind(t.kind)) return false;
-	if (isShiftOp(base)) return is64(t.kind) || subIntKind(t) != TypeKind.Unknown || (base == "<<" && t.kind == TypeKind.Uint32);
+	if (isShiftOp(base)) return is64(t.kind) || subIntKind(t) != TypeKind.Unknown || (base == "<<" && t.kind == TypeKind.Uint32) || (base == ">>>" && t.kind == TypeKind.Int32);
 	if (base == "&" || base == "|" || base == "^") return t.kind == TypeKind.Uint32;
 	if ((base == "/" || base == "%") && !cannotRaise(d.right, t)) return true;
 	if (base == "%" || is64(t.kind)) return false;
