@@ -179,6 +179,22 @@ export function lookupInstanceHook(instanceName: string, methodName: string): Sy
 	return hook != null ? hook.sym : null;
 }
 
+export function declaresUserHook(t: Type, ctx: CheckerContext): boolean {
+	const owner = t.sym;
+	const name = owner != null ? owner.name : t.typeName;
+	if (name == "") return false;
+	const registry = owner != null ? pickBodyCtx(owner.modulePath, ctx).extensionRegistry : ctx.extensionRegistry;
+	const instanceName = t.kind == TypeKind.GenericInstance ? monoInstanceName(t) : "";
+	for (const hookName of LIFECYCLE_HOOK_NAMES) {
+		if (instanceName != "" && lookupInstanceHook(instanceName, hookName) != null) return true;
+		if (registry == null || !hasExtensionByName(registry, hookName)) continue;
+		for (const m of findAllExtensionsByName(registry, hookName)) {
+			if (!m.isStatic && m.receiverTypeName == name) return true;
+		}
+	}
+	return false;
+}
+
 function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, instanceName: string, names: string[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
 	for (const raw of classData.classBody) {
 		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;

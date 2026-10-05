@@ -2509,6 +2509,43 @@ export function needsValueCopy(t: Type | null): boolean {
 	return false;
 }
 
+const PLAIN_DATA_MAX_DEPTH = 64;
+
+export function isPlainDataType(t: Type | null, declaresHook: (owner: Type) => boolean): boolean {
+	return plainDataAt(t, declaresHook, 0);
+}
+
+function plainDataAt(t: Type | null, declaresHook: (owner: Type) => boolean, depth: int32): boolean {
+	if (t == null) return true;
+	if (depth > PLAIN_DATA_MAX_DEPTH || isAwaitable(t)) return false;
+	const base = distinctBody(t);
+	if (base != null) return plainDataAt(base, declaresHook, depth + 1);
+	const peeled = peelTransparentInstance(t);
+	if (peeled != t) return plainDataAt(peeled, declaresHook, depth + 1);
+	if (hasAsgnFlag(t)) return false;
+	if (isPrimitiveKind(t.kind)) return true;
+	return match (t.kind) {
+		TypeKind.Char | TypeKind.BooleanLiteral | TypeKind.EnumLiteral | TypeKind.CString
+			| TypeKind.Ptr | TypeKind.Borrow | TypeKind.Span | TypeKind.Set => true,
+		TypeKind.Distinct | TypeKind.Alias | TypeKind.Sink | TypeKind.SizedArray => plainDataAt(t.typeReturn, declaresHook, depth + 1),
+		TypeKind.Tuple => plainDataAll(t.typeChildren, declaresHook, depth),
+		TypeKind.Struct when (isMaybeType(t)) => plainDataAt(t.typeReturn, declaresHook, depth + 1),
+		TypeKind.Struct when (isStructType(t)) => !declaresHook(t) && plainDataAll(t.typeChildren, declaresHook, depth),
+		TypeKind.Union => !unionHasMemberOfKind(t, TypeKind.StringLiteral) && !declaresHook(t)
+			&& plainDataAll(t.typeChildren, declaresHook, depth),
+		TypeKind.GenericInstance => t.typeReturn != null && !hasAsgnFlag(t.typeReturn) && !declaresHook(t)
+			&& plainDataAt(t.typeReturn, declaresHook, depth + 1),
+		_ => false,
+	};
+}
+
+function plainDataAll(ts: Type[], declaresHook: (owner: Type) => boolean, depth: int32): boolean {
+	for (const c of ts) {
+		if (!plainDataAt(c, declaresHook, depth + 1)) return false;
+	}
+	return true;
+}
+
 // ===== Tuple Type Name (reference parity: deterministic name for structural types) =====
 // DJB2 hash of type structure → "msTuple_HASH". Same algorithm as C codegen
 // (types.ms:genTupleType) so generated comparison functions match struct names.
