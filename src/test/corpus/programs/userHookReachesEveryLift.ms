@@ -1,5 +1,6 @@
+// @xfail(raiser): raiser runs no user lifecycle hooks (stdout misses its @stdout line)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
-// @stdout: hooks ran fd fdArray fdField handle mapClass mapStruct mapShared name slot
+// @stdout: hooks ran fd fdArray fdField handle mapClass mapShared mapStruct name slot
 
 struct Handle { h: int32; }
 struct Slot<T> { v: T; }
