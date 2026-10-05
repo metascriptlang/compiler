@@ -361,3 +361,25 @@ test "a spread's elements join the array's element type and are judged by it" {
 	assert errorCount("const head: int32[] = [1];\nconst xs = [...head, 4294967295];\n") == 0;
 	assert errorCount("class A { n: int32 = 1; }\nclass D extends A { m: int32 = 2; }\nconst ds: D[] = [new D()];\nconst all: A[] = [...ds, new A()];\n") == 0;
 }
+
+test "an array of array literals widens the element type to hold every constant" {
+	const wide = ["const xs = [[1, 2], [3, 4294967295]];\nconst n: int32 = xs[0][0];\n",
+		"const xs = [[[1]], [[4294967295]]];\nconst n: int32 = xs[0][0][0];\n",
+		"function f(c: boolean) { return c ? [1] : [4294967295]; }\nconst n: int32 = f(true)[0];\n",
+		"const xs = [{ v: [1] }, { v: [4294967295] }];\nconst n: int32 = xs[0].v[0];\n"];
+	for (const src of wide) assert hasError(src, "int64 → int32");
+	assert errorCount("const xs = [[1, 2], [3, 4294967295]];\nconst n: int64 = xs[0][1];\n") == 0;
+	assert errorCount("const u: uint64 = 18446744073709551615;\nconst xs = [[1], [u]];\nconst n: uint64 = xs[0][0];\n") == 0;
+	assert errorCount("const xs = [[], [1, 2]];\nconst n: int32 = xs[0].length + xs[1][0];\n") == 0;
+}
+
+test "an array element the joined element type cannot hold is refused" {
+	assert hasError("const u: uint64 = 5;\nconst xs = [[-1], [u]];\n", "-1 is outside [0, 18446744073709551615]");
+	assert hasError("const a: int32[] = [1];\nconst xs = [a, [4294967295]];\n", "is not assignable to type 'int64[]'");
+}
+
+test "a spread whose elements would each need a conversion to the array's union element is refused" {
+	assert hasError("const s: string[] = [\"a\"];\nconst t = [...s, 3];\n", "a spread copies its elements into the array as they are: each 'string' would have to be converted");
+	assert hasError("const s: string[] = [\"a\"];\nconst t: (string | int32)[] = [...s, 3];\n", "a spread copies its elements");
+	assert errorCount("const s: string[] = [\"a\"];\nconst t = [...s, \"b\"];\n") == 0;
+}
