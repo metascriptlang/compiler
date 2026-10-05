@@ -53,6 +53,7 @@ function analyzeFunctionParams(node: Node, ctx: CheckerContext): void {
 	const d = node.data as FunctionDeclData;
 	const sym = node.resolvedSym;
 	if (sym == null || d.fnBody == null) return;
+	if (d.fnFlags.indexOf("overload", 0) >= 0 || d.fnFlags.indexOf("extern", 0) >= 0) return;
 
 	// Recurse into nested functions first
 	scanNestedFunctions(d.fnBody, ctx);
