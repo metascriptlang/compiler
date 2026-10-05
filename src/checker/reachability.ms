@@ -653,6 +653,7 @@ export function computeAliveSet(
 		for (const overload of sym.overloads) rootFunctions.add(overload);
 	}
 	_aliveSet = createAliveSet();
+	_aliveSet.computed = true;
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
 	nameIndexBuild(programs, paths);
@@ -784,7 +785,6 @@ function markAliveGlobalDestroys(pending: GlobalDestroysBlock[]): boolean {
 
 function takeReachability(): AliveSet {
 	const result = _aliveSet;
-	result.computed = true;
 	_aliveSet = createAliveSet();
 	_singleModule = "";
 	_visitedSet = new HashSet<string>();
@@ -963,6 +963,14 @@ test "a computed alive set that marked no name still drops a module nothing reac
 
 test "an alive set nobody computed keeps every module" {
 	assert aliveSetHasModule(createAliveSet(), "/other.ms");
+}
+
+test "a computed alive set keeps the side-effect imports of the entry and their chain" {
+	const graph = importGraph([["/entry.ms", "/direct.ms"], ["/entry.ms", "/chain.ms"], ["/chain.ms", "/chained.ms"]]);
+	const aliveSet = computeAliveSet([], [], "/entry.ms", false, graph);
+	assert aliveSetHasModule(aliveSet, "/direct.ms");
+	assert aliveSetHasModule(aliveSet, "/chained.ms");
+	assert !aliveSetHasModule(aliveSet, "/other.ms");
 }
 
 import { parseSource } from "../parser/statements/validation";

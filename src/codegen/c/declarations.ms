@@ -562,7 +562,7 @@ function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 	}
 	// Other statements go to ModuleInit — use shared initProc for consistent temp counter
 	const atExit = node.flags.has(NodeFlag.GlobalDestroys);
-	if (atExit && g.aliveSet.entries.length > 0 && !aliveSetHasModule(g.aliveSet, g.modulePath)) return;
+	if (atExit && !aliveSetHasModule(g.aliveSet, g.modulePath)) return;
 	const p = atExit ? g.deinitProc : g.initProc;
 	const target = atExit ? CSection.ModuleDeinit : CSection.ModuleInit;
 	genStmt(g, p, node);
