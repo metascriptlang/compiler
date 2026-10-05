@@ -769,6 +769,12 @@ function typeNewCallee(ctx: CheckerContext, callee: Node): void {
 	callee.nodeType = sym.symbolType;
 }
 
+function soleMethodCandidate(ctx: CheckerContext, method: Symbol, me: MemberExprData): boolean {
+	if (method.overloads.length > 0 || method.overloadIdx > 0) return false;
+	if (ctx.extensionRegistry == null || me.object.nodeType == null) return true;
+	return filterExtsByReceiverType(findAllExtensionsByName(ctx.extensionRegistry, me.property), peelTransparentInstance(me.object.nodeType)).length <= 1;
+}
+
 export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): Type {
 	const d = node.data as NewExprData;
 	// new BuiltinType<...>() — construct value types (Map, Set) and Promise
@@ -1339,7 +1345,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Extension resolution for method calls.
 		const methodSym = node.resolvedSym;
 		const methodOrigin = methodSym != null && methodSym.instantiatedFrom != null ? methodSym.instantiatedFrom : methodSym;
-		const methodEntry = methodOrigin != null ? dispatchEntryFor(methodOrigin) : null;
+		const methodEntry = methodOrigin != null && soleMethodCandidate(ctx, methodOrigin, d.callee.data as MemberExprData) ? dispatchEntryFor(methodOrigin) : null;
 		if (methodEntry != null && methodSym != null && methodSym.symbolType != null) {
 			node.flags = node.flags.incl(NodeFlag.ExtCall);
 			extPreResolved = true;
