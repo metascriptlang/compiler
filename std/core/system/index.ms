@@ -238,6 +238,9 @@ when (mscDeclaresRuntime) {
 	extern function msPtrWasMoved(p: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msPlainWasMoved(x: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msRefCopyCyclic(d: Ptr<void>, s: Ptr<void>): void;
 
 	@compilerFunc
