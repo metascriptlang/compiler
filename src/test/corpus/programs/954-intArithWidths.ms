@@ -1,5 +1,5 @@
 // @stdout: 44 44 false 1 -128 24464 | 127 0 2 32640 124 -8 | -3 -1 0 -128 | 4052555153018976267 1 1024 0 | 255 0 127 -128 0 65535
-// @xfail(raiser): Raiser keeps an 8/16-bit result unwrapped, computes ** in doubles and has no >>> (same on the baseline)
+// @xfail(raiser): Raiser computes an int64 ** in doubles (4052555153018976256)
 // note: an 8- or 16-bit result wraps at its own width whether or not it is stored (codegen-c-4: C printed 300 inline and 44 once stored, JS 300 always; uint16 65535 * 65535 overflowed C's promoted int). Division, a remainder and an integer power in range give the same value on every backend (codegen-c-9, codegen-c-10: `**` went through the double pow).
 
 function addU8(s: uint8, t: uint8): uint8 { return s + t; }

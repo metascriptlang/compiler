@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser bytecode compiler has no `>>>` (cannot evaluate operator at comptime)
 // @stdout: 2147483647 2147483647 100 20000 2147483646 2147483646 100 20000
 // note: `>>>` on an 8/16-bit integer converted to uint32 shifts the uint32 value, signed sources included.
 
