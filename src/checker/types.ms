@@ -2489,12 +2489,13 @@ export function valueCopyRepr(t: Type | null): Type | null {
 	const base = distinctBody(t);
 	if (base != null) return valueCopyRepr(base);
 	if (t != null && t.kind == TypeKind.Struct && t.typeFlags.has(TypeFlag.IsMaybe)) {
-		return t.typeReturn;
+		return valueCopyRepr(t.typeReturn);
 	}
 	if (t != null && t.kind == TypeKind.Set) {
 		const repr = setRepr(t);
 		if (repr != null) return repr;
 	}
+	if (t != null && t.kind == TypeKind.GenericInstance && isStructType(t.typeReturn)) return t.typeReturn;
 	return t;
 }
 

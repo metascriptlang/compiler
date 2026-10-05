@@ -11,7 +11,7 @@ import {
 	ArrayAccessData, BinaryExprData, ConditionalExprData, HiddenDerefData, MemberExprData, SpreadExprData, TypeAssertionData,
 } from "../../ast/node";
 import { isViewBinding } from "../../checker/symbol";
-import { needsValueCopy, setRepr, valueCopyRepr } from "../../checker/types";
+import { isStructType, needsValueCopy, setRepr, valueCopyRepr } from "../../checker/types";
 import { emit, emitNode, JSGenerator, jsTypedArrayName } from "./emit";
 
 export function jsDefaultValue(t: Type | null): string {
@@ -42,6 +42,7 @@ export function jsDefaultValue(t: Type | null): string {
 }
 
 function typeKey(t: Type): string {
+	if (t.kind == TypeKind.GenericInstance && isStructType(t.typeReturn)) return typeKey(t.typeReturn as Type);
 	if (t.kind == TypeKind.Struct) {
 		let key = "S:" + t.typeName + "(";
 		let i = 0;
