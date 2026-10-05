@@ -1324,11 +1324,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 							// Array — unwrap the Ref<Array> envelope on both sides so T binds to the
 							// element type, else the param stays generic and an object-literal arg
 							// never coerces to the element type.
-							let recvP = extType.typeChildren[0];
-							let objP = objType;
-							if (recvP.kind == TypeKind.Ref && recvP.typeReturn != null && recvP.typeReturn.kind == TypeKind.Array) recvP = recvP.typeReturn;
-							if (objP != null && objP.kind == TypeKind.Ref && objP.typeReturn != null && objP.typeReturn.kind == TypeKind.Array) objP = objP.typeReturn;
-							unifyType(recvP, objP, eb);
+							unifyArrayReceiver(extType.typeChildren[0], objType, eb);
 							if (winner.sym != null && winner.sym.declNode != null && winner.sym.declNode.kind == NodeKind.FunctionDecl) {
 								for (let ri = 0; ri < eb.names.length; ri += 1) reportUnmetConstraint(ctx, extType, ri, eb, me.property, node.location);
 							}
@@ -3363,7 +3359,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		let srcType = declType;
 		if (hasGenericParams(srcType)) {
 			const eb = createUnifyBindings();
-			unifyType(srcType.typeChildren[0], objType, eb);
+			unifyArrayReceiver(srcType.typeChildren[0], objType, eb);
 			if (eb.names.length > 0) {
 				srcType = instantiateGeneric(srcType, eb.names, eb.types);
 			}
@@ -3464,7 +3460,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 			&& extWinnerSym.builtinKind == "" && extWinnerSym.declNode.kind == NodeKind.FunctionDecl
 			&& isGenericFn((extWinnerSym.declNode.data as FunctionDeclData).fnFlags)) {
 		const recvBindings = createUnifyBindings();
-		unifyType(getExtFnType(exts[idx]).typeChildren[0], objType, recvBindings);
+		unifyArrayReceiver(getExtFnType(exts[idx]).typeChildren[0], objType, recvBindings);
 		if (recvBindings.names.length > 0 && bindingsCoverDecl(recvBindings, extWinnerSym.declNode)) {
 			const instSym = callInstantiateGeneric(extWinnerSym, recvBindings.names, recvBindings.types, ctx, callNode.location);
 			if (instSym != null) {
@@ -3518,12 +3514,18 @@ function inheritanceDepth(sourceType: Type, targetType: Type, ctx: CheckerContex
 	return -1;
 }
 
+function withoutArrayEnvelope(t: Type): Type {
+	return t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array ? t.typeReturn : t;
+}
+
+function unifyArrayReceiver(formal: Type, objType: Type | null, eb: UnifyBindings): void {
+	unifyType(withoutArrayEnvelope(formal), objType != null ? withoutArrayEnvelope(objType) : objType, eb);
+}
+
 function receiverRelation(formal: Type, objType: Type | null): TypeRelation {
 	if (objType == null) return TypeRelation.None;
-	let recvT = formal;
-	if (recvT.kind == TypeKind.Ref && recvT.typeReturn != null && recvT.typeReturn.kind == TypeKind.Array) recvT = recvT.typeReturn;
-	let objT = objType;
-	if (objT.kind == TypeKind.Ref && objT.typeReturn != null && objT.typeReturn.kind == TypeKind.Array) objT = objT.typeReturn;
+	const recvT = withoutArrayEnvelope(formal);
+	const objT = withoutArrayEnvelope(objType);
 	const rel = typeRelation(recvT, objT);
 	if (rel == TypeRelation.None && hasGenericParams(recvT)) return TypeRelation.Generic;
 	return rel;
