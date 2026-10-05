@@ -1950,6 +1950,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	for (const pt of mergedTypes) { propagateToOwner(target, pt); }
 	if (sym.symbolType.kind == TypeKind.Struct && declaresLifecycleHook(ctx, d.interfaceName)) target.typeFlags = target.typeFlags.incl(TypeFlag.HasAsgn);
 	node.nodeType = sym.symbolType;
+	if (sym.symbolType.kind == TypeKind.Struct) refuseValueRecursion(ctx, node, target, d);
 	// Record each OWN interface field DEF for symbol graph (inherited fields
 	// already recorded by parent's resolveInterface). Parser stores per-field
 	// source locations in node.paramLocations.
@@ -1965,6 +1966,36 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 		}
 		sgRecordSym(ctx, fieldLine, fieldCol, fieldCol + d.interfaceFields[ri].length, fieldSym, fieldTypes[ri], SymbolKind.Property, d.interfaceFields[ri], d.interfaceName, true);
 	}
+}
+
+function refuseValueRecursion(ctx: CheckerContext, node: Node, self: Type, d: InterfaceDeclData): void {
+	for (let fi = 0; fi < self.typeChildren.length; fi += 1) {
+		const ft = self.typeChildren[fi];
+		if (ft == null || ft == self || !holdsByValue(ft, self, [])) continue;
+		const fieldName = fi < self.typeNames.length ? self.typeNames[fi] : "?";
+		let at = node.location;
+		for (let oi = 0; oi < d.interfaceFields.length; oi += 1) {
+			if (d.interfaceFields[oi] == fieldName && node.paramLocations != null && oi < node.paramLocations.length && node.paramLocations[oi] != null) at = node.paramLocations[oi];
+		}
+		addError(ctx, "value field '" + fieldName + "' in '" + d.interfaceName + "' holds '" + d.interfaceName + "' by value through '" + typeDisplayName(ft)
+			+ "' — a struct cannot contain itself (infinite size); use an interface/class (reference type), Ptr<" + d.interfaceName + ">, or an index into an owning array", at.line, at.column);
+	}
+}
+
+function holdsByValue(t: Type | null, self: Type, seen: Type[]): boolean {
+	if (t == null) return false;
+	if (t == self) return true;
+	for (const s of seen) {
+		if (s == t) return false;
+	}
+	seen.push(t);
+	if (t.kind == TypeKind.Struct && isMaybeType(t)) return holdsByValue(t.typeReturn, self, seen);
+	if (t.kind == TypeKind.SizedArray || t.kind == TypeKind.Distinct || t.kind == TypeKind.GenericInstance) return holdsByValue(t.typeReturn, self, seen);
+	if (t.kind != TypeKind.Struct && t.kind != TypeKind.Tuple && t.kind != TypeKind.Union) return false;
+	for (const c of t.typeChildren) {
+		if (holdsByValue(c, self, seen)) return true;
+	}
+	return false;
 }
 
 export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
