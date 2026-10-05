@@ -950,6 +950,14 @@ test "putBytes and putSpan copy a view, keep the offset as the length and are re
 	assert putSpan(tight, putU8(tight, 0, 1), source) == 4;
 }
 
+test "the writers take a sized storage in method form" {
+	let storage: uint8[12] = [];
+	const length = storage.putU64(storage.putU32(0, 2), 513);
+	assert length == 12;
+	assert storage[0] == 2 && storage[4] == 1 && storage[5] == 2;
+	assert storage.putU8(12, 1) == 13;
+}
+
 export enum GaugeOp {
 	Bump,
 }
