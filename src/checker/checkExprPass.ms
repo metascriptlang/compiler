@@ -11,7 +11,7 @@ import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, a
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
-	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld } from "./compat";
+	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
 import { checkArcPointeeSendable } from "./sendable";
 import { isLockedRef } from "./types";
@@ -44,6 +44,18 @@ function literalElemType(el: Node): Type | null {
 	if (src != null && (src.kind == TypeKind.Array || src.kind == TypeKind.SizedArray || src.kind == TypeKind.Span)
 			&& src.typeReturn != null) return src.typeReturn;
 	return el.nodeType;
+}
+
+function refuseSpreadElements(ctx: CheckerContext, spread: Node, elem: Type | null): void {
+	const from = literalElemType(spread);
+	if (from == null || elem == null || isUnresolvedType(from) || isUnresolvedType(elem)) return;
+	if (hasGenericParams(from) || hasGenericParams(elem) || sameType(from, elem)) return;
+	const numeric = isNumeric(from) && isNumeric(elem);
+	if (numeric ? !numericConvRefuses(from, elem) : isAssignable(from, elem)) return;
+	const why = numeric ? `implicit ${typeDisplayName(from)} → ${typeDisplayName(elem)} conversion ${numericRefusalReason(from, elem)}`
+		: `'${typeDisplayName(from)}' is not assignable to '${typeDisplayName(elem)}'${explainStructuralPrefix(from, elem)}`;
+	addError(ctx, `a spread copies its elements into the array as they are: ${why} — convert them first, e.g. with map`,
+		spread.location.line, spread.location.column);
 }
 
 function isComparisonOp(op: string): boolean {
@@ -1959,7 +1971,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					&& !(elemType != null && isAwaitable(elemType))) {
 					const elemJoinTypes: Type[] = [];
 					for (const el of d.elements) {
-						const elType = el.nodeType;
+						const elType = literalElemType(el);
 						elemJoinTypes.push(elType!);
 					}
 					const joinedElem = joinBranchTypes(elemJoinTypes);
@@ -1989,6 +2001,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						si = si + 1;
 					}
 					elemType = storedElem;
+				}
+				for (const el of d.elements) {
+					if (el.kind == NodeKind.SpreadExpr) refuseSpreadElements(ctx, el, elemExpected != null ? elemExpected : elemType);
 				}
 				// Reference parity (semArrayConstr): error only on too-many elements.
 				// Too-few is allowed at literal level; type compatibility catches mismatches.
