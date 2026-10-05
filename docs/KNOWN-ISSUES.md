@@ -426,8 +426,12 @@ let y: int32 = 10;  y -= 4;                         6
 Corpus `bitwiseCompoundAssignment` gives the binary form's values on C, JS and Raiser for int32,
 uint32, int64, uint64, uint8, int8, int16 and uint16, calls `next()` once in `a[next()] |= v`,
 and covers a `BitSet<E>` over 4 and over 70 members. The operands follow the binary operator:
-`int32 |= int64` and `uint64 <<= int32` are refused as `|` and `<<` are, and `n |= 1` on a
-`number` is refused (`src/test/handoff/bitwiseCheck.ms`).
+`int32 |= int64` and `uint64 <<= int32` are refused as `|` and `<<` are (`src/test/handoff/bitwiseCheck.ms`).
+A `number` target takes what the binary takes and stores its int32 result, with the same warning:
+`n |= 2` on 5 gives 7, and `n >>>= 0` on -1 gives -1 as `n = n >>> 0` does (stage-2 build of
+`wt/solana-holes-6`, corpus `numberCompoundAssignment` on C, JS and Raiser, `940-unsignedShift` on C
+and JS; the base `450d986d2` refused `n |= 1`). A `number` outside int32 (3000000000.7) wraps on C and
+JS but stops the Raiser with `value 3000000000.7 not in range`, in the binary form as in the compound.
 
 ## L25. ~~`HashMap` is not defined on the JS backend~~ RETRACTED 2026-09-13 — it was the `msc run --target=js` path
 
