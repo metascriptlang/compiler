@@ -750,11 +750,17 @@ function finishRssCell(c: Cell): void {
 
 	let detail = "rss=" + rssMB + "MB exit=" + rawExit;
 	if (!exitOk) { detail = detail + " [exit≠" + c.spec.expectExit + " sig=" + signal + "]"; }
-	if (!outOk) { detail = detail + " [stdout missing '" + c.spec.stdoutSub + "']"; }
+	if (!outOk) { detail = detail + missingStdout(c, c.dir + "stdout.log", stdoutLog); }
 	if (!rssOk) { detail = detail + " [RSS>" + c.spec.maxRssMb + "MB]"; }
 	c.pass = exitOk && outOk && rssOk;
 	c.detail = detail;
 	c.finished = true;
+}
+
+function missingStdout(c: Cell, path: string, seen: string): string {
+	const again = readFileOr(path, "");
+	const found = again.contains(c.spec.stdoutSub) ? ", which has the line" : "";
+	return ` [stdout missing '${c.spec.stdoutSub}'; read ${seen.length} bytes of ${path}, a re-read ${again.length}${found}]`;
 }
 
 function finishParityCell(c: Cell): void {
@@ -764,7 +770,7 @@ function finishParityCell(c: Cell): void {
 	const outOk = c.spec.stdoutSub == "" || merged.contains(c.spec.stdoutSub);
 
 	let detail = "exit=" + rawExit;
-	if (!outOk) { detail = detail + " [stdout missing '" + c.spec.stdoutSub + "']"; }
+	if (!outOk) { detail = detail + missingStdout(c, c.dir + "out.log", merged); }
 	c.pass = exitOk && outOk;
 	c.detail = detail;
 	c.finished = true;
