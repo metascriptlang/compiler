@@ -994,12 +994,10 @@ export extern function hash<E>(this self: BitSet<E>): int64;
 
 export function toItems<E>(this self: BitSet<E>): E[] {
 	const result: E[] = [];
-	const bits = sizeof(BitSet<E>) * 8;
-	let i = 0;
-	while (i < bits) {
+	const count = self.size();
+	for (let i = 0; result.length < count; i++) {
 		const m = i as E;
 		if (self.has(m)) { result.push(m); }
-		i = i + 1;
 	}
 	return result;
 }
