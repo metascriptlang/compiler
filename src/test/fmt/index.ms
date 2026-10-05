@@ -48,6 +48,7 @@ import "./cases/asyncFlags";
 import "./cases/statementEndLines";
 import "./cases/awaitYieldAtom";
 import "./cases/assertEscape";
+import "./cases/deferBlock";
 import "./cases/externFunction";
 import "./cases/tryExprAtom";
 import "./cases/methodDefaults";
