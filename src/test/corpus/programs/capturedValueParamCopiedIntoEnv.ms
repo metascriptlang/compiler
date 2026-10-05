@@ -1,5 +1,4 @@
 // @stdout: env copy 9 40 3 | loop 4 5 | rebound 2 4 1 1 caller 2 | nested 7 | churn 32
-// @xfail(raiser): the Raiser VM shares one binding across the closures a loop makes (prints 'loop 6 6' where C prints 'loop 4 5', as 920-closureSiblingBindings)
 
 class Box {
 	n: int32;

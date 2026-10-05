@@ -1,4 +1,3 @@
-// @xfail(raiser): output differs from c: loopCapture=3,3,3,
 // Parity program — captured-variable mutation: the env must share ONE binding
 // with the declaring scope, and drc/orc/danger/js must agree on every
 // observation, including closures minted per loop iteration.

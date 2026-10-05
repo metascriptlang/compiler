@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot evaluate 'k' at comptime: symbol has no declaration node
 type IntFn = (x: int32) => Promise<int32>;
 
 const g1: IntFn = async (x) => { return x; };
