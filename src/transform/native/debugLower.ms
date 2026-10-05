@@ -5,7 +5,7 @@
 // arrives already converted by the checker's std dump call.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind } from "../../ast/node";
-import { isNumeric, isWideInteger, stringType, booleanType, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase } from "../../checker/types";
+import { getBuiltinKind, isNumeric, isWideInteger, stringType, booleanType, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase } from "../../checker/types";
 import { TransformContext } from "../context";
 import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, runtimeRef } from "../util";
 import { charToString } from "./stringOpLower";
@@ -84,7 +84,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 
 
 function isJsonValueData(t: Type): boolean {
-	return t.sym != null && t.sym.name == "JsonValueData" && t.sym.modulePath.endsWith("/std/serialize/json/types.ms");
+	return getBuiltinKind(t) == "JsonValueData";
 }
 
 function resolveDbgIdent(name: string, ctx: TransformContext, loc: SourceLocation): Node {

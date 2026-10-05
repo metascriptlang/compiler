@@ -14,6 +14,7 @@ export enum JsonKind {
 	Int,
 }
 
+@builtin("JsonValueData")
 export type JsonValueData = match (kind: JsonKind) {
 	JsonKind.Null   => {},
 	JsonKind.Bool   => { boolVal: boolean },
