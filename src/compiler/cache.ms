@@ -887,7 +887,25 @@ const PRE_OUTHASH = "outputHash:";
 
 function outputIdentity(path: string): string {
 	const stamp = changeStamp(path);
-	return stamp != "" ? `stamp:${stamp}` : hashFile(path);
+	if (stamp != "" && settled(path)) return `settled:${stamp}`;
+	return `content:${hashFileContent(path)}`;
+}
+
+function outputMatches(stored: string, path: string): boolean {
+	if (stored.startsWith("settled:")) return stored == `settled:${changeStamp(path)}`;
+	return stored.startsWith("content:") && stored == `content:${hashFileContent(path)}`;
+}
+
+function settleOutputLine(cacheFile: string, lines: string[], stored: string, path: string): void {
+	if (stored.startsWith("settled:")) return;
+	const settledIdentity = outputIdentity(path);
+	if (!settledIdentity.startsWith("settled:")) return;
+	const out: string[] = [];
+	for (const line of lines) {
+		if (line == "") continue;
+		out.push(line.startsWith(PRE_OUTHASH) ? `${PRE_OUTHASH}${settledIdentity}` : line);
+	}
+	atomicWriteFile(cacheFile, `${out.join("\n")}\n`);
 }
 const PRE_DEP = "dep:";
 
@@ -981,8 +999,7 @@ export function projectCacheChanged(
 	if (storedCmd != currentCmd) return projectCacheMiss(cacheFile);
 
 	// Reference-aligned: check output binary modification (detect external tampering)
-	const currentOutputHash = outputIdentity(outputFile);
-	if (storedOutputHash != currentOutputHash) return projectCacheMiss(cacheFile);
+	if (!outputMatches(storedOutputHash, outputFile)) return projectCacheMiss(cacheFile);
 
 	if (storedDeps.length < depPaths.length) return projectCacheMiss(cacheFile);
 	let di = 0;
@@ -1235,8 +1252,8 @@ export function isLinkCached(oFiles: string[], externalInputs: string[], linkFla
 	if (storedCmd != linkFlags) return false;
 	if (storedOFiles != objectListKey(oFiles)) return false;
 	if (storedInputs != externalInputKey(externalInputs)) return false;
-	const currentOutputHash = outputIdentity(outputFile);
-	if (storedOutputHash != currentOutputHash) return false;
+	if (!outputMatches(storedOutputHash, outputFile)) return false;
+	settleOutputLine(cFile, lines, storedOutputHash, outputFile);
 	return true;
 }
 
@@ -1465,6 +1482,40 @@ test "a link output rewritten to the same size at once is not taken as cached" {
 	const output = `${base}/msc-link-output-${performance.now()}.bin`;
 	writeFile(output, "first");
 	writeLinkCache([], [], "-flags", output, output);
+	assert isLinkCached([], [], "-flags", output, output);
+	writeFile(output, "other");
+	assert !isLinkCached([], [], "-flags", output, output);
+	remove(output);
+	remove(linkCacheFile(output));
+}
+
+test "a link output recorded inside the settle window is identified by its content" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const output = `${base}/msc-link-racy-${performance.now()}.bin`;
+	writeFile(output, "first");
+	assert outputIdentity(output).startsWith("content:");
+	for (let i: int32 = 0; i < 50; i += 1) {
+		writeFile(output, "first");
+		writeLinkCache([], [], "-flags", output, output);
+		writeFile(output, "other");
+		assert !isLinkCached([], [], "-flags", output, output);
+	}
+	remove(output);
+	remove(linkCacheFile(output));
+}
+
+test "a settled link output is trusted by its stamp and its record is upgraded once settled" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const output = `${base}/msc-link-settled-${performance.now()}.bin`;
+	writeFile(output, "first");
+	writeLinkCache([], [], "-flags", output, output);
+	const contentRecord = try readFile(linkCacheFile(output)) catch "";
+	assert contentRecord.includes(`${PRE_OUTHASH}content:`);
+	const until = performance.now() + (SETTLED_SECONDS + 1) * 1000;
+	while (performance.now() < until) {}
+	assert isLinkCached([], [], "-flags", output, output);
+	const settledRecord = try readFile(linkCacheFile(output)) catch "";
+	assert settledRecord.includes(`${PRE_OUTHASH}settled:`);
 	assert isLinkCached([], [], "-flags", output, output);
 	writeFile(output, "other");
 	assert !isLinkCached([], [], "-flags", output, output);
