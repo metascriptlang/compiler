@@ -77,6 +77,13 @@ function isStructInstance(t: Type): boolean {
 	return nominal != null && nominal.kind == TypeKind.Struct;
 }
 
+function maybeCarrierOf(side: Node): Node | null {
+	if (side.kind != NodeKind.MemberExpr) return null;
+	const md = side.data as MemberExprData;
+	if (md.property != "value" || md.object == null || md.object.nodeType == null || !isMaybeType(md.object.nodeType)) return null;
+	return md.object;
+}
+
 function hasValueEq(t: Type): boolean {
 	return isValueObject(t) || t.kind == TypeKind.SizedArray;
 }
@@ -277,7 +284,10 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	const hasNullLeft = isNullExpr(d.left);
 	const hasNullRight = isNullExpr(d.right);
 	if (isNullEqOp && (hasNullLeft || hasNullRight)) {
-		const valueType = hasNullLeft ? resolveType(ctx, d.right) : leftType;
+		const carrier = maybeCarrierOf(hasNullLeft ? d.right : d.left);
+		if (carrier != null && hasNullLeft) d.right = carrier;
+		else if (carrier != null) d.left = carrier;
+		const valueType = carrier != null ? carrier.nodeType : hasNullLeft ? resolveType(ctx, d.right) : leftType;
 		if (valueType != null && hasValueEq(valueType)) {
 			return makeBool(isNotEqual, loc);
 		}
