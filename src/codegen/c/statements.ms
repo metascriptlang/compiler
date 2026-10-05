@@ -4,9 +4,9 @@
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
 import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, UnaryExprData, ConditionalExprData, ObjectLiteralData, SpreadExprData, MoveExprData, HiddenDerefData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isStructType, unwrapRefNullUnion, isUnresolvedType, mayHoldAddress, peelThrough, PEEL_ALL } from "../../checker/types";
+import { isStructType, unwrapRefNullUnion, isUnresolvedType, mayHoldAddress, peelThrough, PEEL_ALL, PEEL_ALIAS, hasAsgnFlag } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { statementCanRaise } from "../../checker/raises";
+import { statementCanRaise, callCanRaise } from "../../checker/raises";
 import {
 	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
@@ -320,11 +320,22 @@ function assignTargetCType(g: CGen, left: Readonly<Node>): string {
 }
 
 function assignsInPlace(g: CGen, p: CProc, d: Readonly<BinaryExprData>): boolean {
-	if (d.operator != "=" || d.right.kind != NodeKind.ObjectLiteral) return false;
+	if (d.operator != "=" || (d.right.kind != NodeKind.ObjectLiteral && d.right.kind != NodeKind.CallExpr)) return false;
 	const root = frameLocalRoot(p, d.left);
 	if (root == null || readsFrameLocal(p, root, d.right)) return false;
+	if (d.right.kind == NodeKind.CallExpr && !(isPlainStruct(d.left.nodeType) && storeIsUnobservable(p, d.right))) return false;
 	const destCType = assignTargetCType(g, d.left);
 	return destCType != "" && buildsInPlace(g, d.right, destCType);
+}
+
+function isPlainStruct(t: Type | null): boolean {
+	const v = t != null ? peelThrough(t, PEEL_ALIAS) : null;
+	if (v != null && v.kind == TypeKind.GenericInstance) return isPlainStruct(v.typeReturn);
+	return v != null && v.kind == TypeKind.Struct && !hasAsgnFlag(v);
+}
+
+function storeIsUnobservable(p: CProc, call: Readonly<Node>): boolean {
+	return p.nestedTryStmts.length == 0 || !callCanRaise(call);
 }
 
 function genExprStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
