@@ -48,8 +48,9 @@
 // sanitizer — the ledger IS the leak signal in this lane.
 
 import { exec, execFileCapture, execFileResult, exit, env, platform, cmdExists, findOnPath } from "std/process";
-import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, rename, isDir } from "std/fs";
+import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, isDir } from "std/fs";
 import { writeStderr } from "std/io";
+import { isNotFound } from "std/io/errors";
 
 const PROG_DIR = "src/test/corpus/programs/";
 const OUT_DIR = "out/corpus/";
@@ -325,9 +326,18 @@ function progress(line: string): void {
 }
 
 function readFileOr(path: string, dflt: string): string {
-	const r = readFile(path);
-	if (r.ok) { return r.value; }
-	return dflt;
+	const deadline = performance.now() + 2000;
+	while (true) {
+		const r = readFile(path);
+		if (r.ok) { return r.value; }
+		if (isNotFound(r.error)) { return dflt; }
+		if (performance.now() >= deadline) {
+			progress(`  !! cannot read ${path}: ${r.error.message}`);
+			return dflt;
+		}
+		progress(`  · read of ${path} failed (${r.error.message}), retrying`);
+		pollSleep("0.05", 50);
+	}
 }
 
 function shellOut(cmd: string): string {
@@ -1000,8 +1010,24 @@ function buildOneJob(job: Readonly<BuildJob>): void {
 	const code = buildJobVerdict(job);
 	const ran = code != BUILD_FAILED && job.cmd != "" && runsOnBuildWorker(job.cell);
 	if (ran) { runCellOnWorker(job.cell); }
-	writeFile(builtMarker(job) + ".tmp", ran ? `${code} ran` : `${code}`);
-	rename(builtMarker(job) + ".tmp", builtMarker(job));
+	publishMarker(builtMarker(job), ran ? `${code} ran\n` : `${code}\n`);
+}
+
+// Written in place, never renamed: on Windows a scanner holding the fresh tmp
+// open without FILE_SHARE_DELETE failed about 1 in 280 renames (measured
+// 2026-10-05) and the lost marker stalled the main thread for good. A marker
+// counts only once its closing newline is there.
+function publishMarker(path: string, text: string): void {
+	const deadline = performance.now() + 5000;
+	while (true) {
+		const w = writeFile(path, text);
+		if (w.ok) { return; }
+		if (performance.now() >= deadline) {
+			writeStderr(`  !! cannot write ${path}: ${w.error.message} — the main thread waits on it forever\n`);
+			return;
+		}
+		pollSleep("0.05", 50);
+	}
 }
 
 function ranOnWorker(job: BuildJob): boolean {
@@ -1020,9 +1046,9 @@ function buildWorker(jobs: Readonly<BuildJob[]>, first: int32): number {
 
 function builtCode(job: BuildJob): int32 {
 	if (!exists(builtMarker(job))) { return BUILD_PENDING; }
-	const text = readFileOr(builtMarker(job), "").trim();
-	if (text == "") { return BUILD_PENDING; }
-	return text.split(" ")[0].parseInt() as int32;
+	const text = readFileOr(builtMarker(job), "");
+	if (!text.endsWith("\n")) { return BUILD_PENDING; }
+	return text.trim().split(" ")[0].parseInt() as int32;
 }
 
 function prepareClaims(jobs: BuildJob[]): void {
