@@ -1127,8 +1127,21 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	if (d.callee.kind == NodeKind.Identifier
 			&& (d.callee.data as IdentifierData).name == "super"
 			&& d.callee.resolvedSym != null) {
-		const parentSym = d.callee.resolvedSym;
-		const ctorParamTypes = getCtorParamTypes(parentSym);
+		let parentSym = d.callee.resolvedSym;
+		const parentInst = superInstance(d.callee.nodeType);
+		let ctorParamTypes = getCtorParamTypes(parentSym);
+		if (parentInst != null && !hasGenericParams(parentInst)) {
+			const names = splitTopLevel(genericParamNamesOf(symGenericParams(parentSym)), ",").map((n: string): string => n.trim());
+			const inst = instantiateClassConstructor(parentSym, names, parentInst.typeChildren, ctx);
+			if (inst != null) {
+				parentSym = inst;
+				d.callee.resolvedSym = inst;
+				ctorParamTypes = getCtorParamTypes(inst);
+			}
+		} else if (parentInst != null && ctorParamTypes != null) {
+			const names = splitTopLevel(genericParamNamesOf(symGenericParams(parentSym)), ",").map((n: string): string => n.trim());
+			ctorParamTypes = ctorParamTypes.map((t: Type): Type => substituteAllParams(t, names, parentInst.typeChildren));
+		}
 		const expectedCount = ctorParamTypes != null ? ctorParamTypes.length : 0;
 		if (d.arguments.length != expectedCount) {
 			addError(ctx, "super() expects " + expectedCount.toString() + " arguments, got " + d.arguments.length.toString(), node.location.line, node.location.column);
@@ -3495,6 +3508,11 @@ function formatCandidateSig(name: string, fnType: Type): string {
 		sig = sig + ": " + typeDisplayName(fnType.typeReturn);
 	}
 	return sig;
+}
+
+function superInstance(t: Type | null): Type | null {
+	const body = t != null && t.kind == TypeKind.Ref ? t.typeReturn : t;
+	return body != null && body.kind == TypeKind.GenericInstance ? body : null;
 }
 
 // Walk class inheritance chain from sourceType to targetType.
