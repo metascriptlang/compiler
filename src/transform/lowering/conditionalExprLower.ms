@@ -37,6 +37,7 @@ import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { peelTransparentInstance, PEEL_MAX_DEPTH } from "../../checker/types";
+import { readonlyDataConstBinding } from "../../checker/constFold";
 import { walkExpandBlocksHooked, expandingInsideTry, mapExprChildren, mapChildren, hasEffect } from "../walker";
 import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, extractBodyStmts, syntheticToken } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter } from "../testUtil";
@@ -202,6 +203,8 @@ function initializeAggregate(target: Node, literal: Node, initialized: Node[], c
 function expandAggregateDecl(stmt: Node, ctx: TransformContext): Node[] {
 	const d = stmt.data as VariableDeclData;
 	const initializer = d.initializer;
+	// The fields are written after the declaration, so the lowered binding is not read-only.
+	if (d.declKind == DeclKind.Const) d.declKind = DeclKind.Let;
 	d.initializer = initializer.kind == NodeKind.ObjectLiteral
 		? makeObjectLiteral([], [], stmt.location)
 		: createNode(NodeKind.ArrayLiteral, { elements: [] }, syntheticToken(stmt.location));
@@ -452,7 +455,8 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 				return lowerTernaryInVar(stmt, ctx);
 			}
 			if (functionDepth > 0 && d.initializer != null && stmt.resolvedSym != null
-				&& !stmt.flags.has(NodeFlag.StaticStorage) && aggregateInitType(d.initializer) != null) {
+				&& !stmt.flags.has(NodeFlag.StaticStorage) && aggregateInitType(d.initializer) != null
+				&& !(d.declKind == DeclKind.Const && readonlyDataConstBinding(stmt))) {
 				return expandAggregateDecl(stmt, ctx);
 			}
 		},
