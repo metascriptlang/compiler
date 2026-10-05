@@ -607,6 +607,25 @@ class Service {
 }
 ```
 
+A subclass that declares no constructor runs its parent's with the arguments of its `new`, as
+TypeScript's implicit `constructor(...args) { super(...args); }`: the parent's body runs first, then
+the subclass's field initializers. A missing argument takes the parent's default, evaluated in the
+parent's module, also in an explicit `super(...)`; a parent below a generic instance takes the
+instance's parameter types.
+
+```typescript
+class Base { u: int32; constructor(u: int32, w: string = "p") { this.u = u * 2; } }
+class Sub extends Base { n: int32 = 5; }
+const s = new Sub(7);                               // s.u == 14, s.n == 5
+```
+
+Measured 2026-10-05 on C, `--target=js` and `--target=raiser` with corpus `inheritedConstructor`
+(two levels, a default read from another module, `extends Box<int32>`, a generic subclass) and
+`superForwardsRestParameter` (a rest parameter, C and JS; the Raiser has no rest parameters).
+Before, C and the Raiser filled the fields positionally and skipped the parent's body, and JS threw
+"Must call super constructor". A call through the parent runs the subclass's override on all three
+backends (corpus `overrideDispatchThroughBase`); `instanceof` does not run on the Raiser.
+
 ### Interfaces
 
 Interfaces are **reference types** — heap-allocated, reference-counted via DRC. They work identically across JS and C backends. Interfaces can have both fields and method signatures.
@@ -1031,6 +1050,12 @@ try {
 }
 ```
 
+A call that raises leaves the target of its assignment unchanged: after `x = mk(-1)` raises inside a
+`try`, the handler and the code after it see the old `x`, whatever `x` holds (a number, a struct, a
+struct with a string field) and wherever it lives (a local, a field, an array element, a global set
+from a function the raise leaves). Measured 2026-10-05 on C (drc, orc, danger), `--target=js` and
+`--target=raiser` with corpus `raiseKeepsAssignedValue`; before, C stored the callee's zeroed result.
+
 ## Type System
 
 ### Type Annotations
@@ -1087,8 +1112,8 @@ An override pair where either class is generic is refused at the declaration: a 
 `Base<int32>` would need a dispatcher for each instance of `get`, which neither backend builds.
 A plain override among the non-generic classes below the instance dispatches as usual. Measured
 2026-10-05 on C and `--target=js` with corpus `classExtendsGenericInstance` (same output on
-both, and with `Base` imported from another module); the Raiser stops at `super(...)` for any
-class, generic or not. Not measured: JS multi-file output, where each module is its own file.
+both, and with `Base` imported from another module); the Raiser runs it too since the same day.
+Not measured: JS multi-file output, where each module is its own file.
 
 
 A generic parameter is always a type. A value parameter (a "const generic") is refused by the parser:
