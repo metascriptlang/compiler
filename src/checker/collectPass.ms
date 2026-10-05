@@ -331,6 +331,11 @@ function borrowMisuse(dd: DecoratedDeclData): string {
 function registerCompilerFunc(ctx: CheckerContext, sym: Symbol): void {
 	const key = sym.nativeName != "" ? sym.nativeName : sym.name;
 	if (key == "") return;
+	const existing = ctx.compilerFuncs.get(key);
+	if (existing != null && existing != sym) {
+		addError(ctx, `@compilerFunc '${key}' is declared twice: a synthesized call would read whichever declaration came last, flags included`, sym.location.line, sym.location.column);
+		return;
+	}
 	ctx.compilerFuncs.set(key, sym);
 }
 

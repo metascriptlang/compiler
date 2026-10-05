@@ -85,3 +85,12 @@ test "nominal identity: an iterator mismatch names both yield types" {
 	for (const e of ctx.errors) all = all + e.message + "\n";
 	assert all.contains("Iterator<int32>") && all.contains("Iterator<string>"), all;
 }
+
+test "nominal identity: one compiler routine has one declaration" {
+	const once = "@compilerFunc @throws\nextern function msProbeTwice(p: Ptr<void>): boolean;";
+	assert strictErrorCount(once) == 0;
+	const ctx = checkSource(once + "\n@compilerFunc\nextern function msProbeTwice(q: Ptr<void>): boolean;");
+	let all = "";
+	for (const e of ctx.errors) all = all + e.message + "\n";
+	assert all.contains("@compilerFunc 'msProbeTwice' is declared twice"), all;
+}
