@@ -4262,7 +4262,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			const tok = createToken(TokenKind.Ident, "", node.location.line);
 			const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
 			if (ptrType.typeReturn != null) {
-				derefNode.nodeType = ptrType.typeReturn;
+				const pointee = ptrType.typeReturn;
+				derefNode.nodeType = ptrType.kind == TypeKind.Ptr && pointee.kind == TypeKind.Ref && pointee.typeReturn != null ? pointee.typeReturn : pointee;
 			} else {
 				derefNode.nodeType = resolvedObjType;
 			}
