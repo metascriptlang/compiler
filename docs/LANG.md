@@ -153,7 +153,7 @@ Constants follow Nim's literal rule, with one safety addition:
 - An integer a float cannot hold exactly is refused even as a literal (`const f: float32 = 16777217`), and so is a `uint64`/`int64` past what the slot holds. `16777217 as float32` rounds on the programmer's word.
 - A float literal or an untyped float constant goes into a `float32` slot rounded once, as Nim does: `const K = 0.1; const f: float32 = K` and `step(1.0 / 60.0)` with a `float32` parameter compile, and every backend holds the same `0.10000000149011612`. A float that would round to infinity is refused, literal or constant (`const f: float32 = 1e39`); Nim yields `inf`.
 - A literal or an untyped constant beside a `float32` operand is `float32`, so `x / 1000.0`, `x * 2` and `x * K` with `const K = 0.1` stay `float32`. Nim keeps such an expression `float64` and narrows it at the slot, which the rule above refuses; the literal is rounded instead, once, where the source shows it.
-- A compound assignment `x op= y` converts `y` to the type of `x` as an assignment would (Nim's `+=`(x: var T, y: T)): `int32 += int64` and `float32 *= number` need `as`, `uint8 -= 1` and `number += int32` do not. The bitwise forms (`&=` `|=` `^=` `<<=` `>>=` `>>>=`) keep their binary operator's rule instead: both operands of one integer type, so `int64 |= int32` and `uint64 <<= int32` need `as` while `uint8 |= 0x80` does not, and `number |= 1` is refused.
+- A compound assignment `x op= y` converts `y` to the type of `x` as an assignment would (Nim's `+=`(x: var T, y: T)): `int32 += int64` and `float32 *= number` need `as`, `uint8 -= 1` and `number += int32` do not. The bitwise forms (`&=` `|=` `^=` `<<=` `>>=` `>>>=`) keep their binary operator's rule instead: both operands of one integer type, so `int64 |= int32` and `uint64 <<= int32` need `as` while `uint8 |= 0x80` does not. A `number` target takes what the binary takes (`n |= 2` on 5 stores 7), and `int32 >>>= k` is refused because `>>>` gives a `uint32` the target cannot hold.
 
 An `out` argument is written in place, so its variable must have exactly the parameter's type. Measured refusals name the rule, the value when it is a constant, and the fix:
 
@@ -269,7 +269,7 @@ int       float     double                       (reserved, not yet usable as ty
 | `>>>=` | GT_GT_GT_EQUALS | Unsigned-right-shift-assign |
 
 `x op= y` stores `x op y` into `x` and evaluates `x` once: `a[next()] |= 1` calls `next()` once
-(corpus `bitwiseCompoundAssignment`, C, JS and Raiser; Raiser has no `>>>` and no `>>>=`).
+(corpus `bitwiseCompoundAssignment` and, for `>>>=`, `940-unsignedShift`, on C, JS and Raiser).
 
 ### Comparison
 | Operator | Token | Description |
@@ -300,6 +300,14 @@ int       float     double                       (reserved, not yet usable as ty
 | `<<` | LT_LT | Left shift |
 | `>>` | GT_GT | Right shift |
 | `>>>` | GT_GT_GT | Unsigned right shift |
+
+A `number` operand of a bitwise operator converts by ECMAScript ToInt32: `3000000000.7 | 0` is
+`-1294967296` and `~2147483648` is `2147483647`, with a warning (corpus `958-numberBitwiseToInt32`,
+`numberBitwiseOutsideInt32`). `>>>` on an `int32` or a `number` is the `uint32` TypeScript computes:
+`-1 >>> 0` is `4294967295`, the count is masked to 31 so `>>> 32` shifts by 0, and
+`const x: int32 = i >>> 1` needs `as int32` (corpus `unsignedShiftToUint32`). On any other integer
+type `>>>` shifts that type's own width and keeps the type (`940-unsignedShift`, `954-intArithWidths`).
+Each holds on C, JS and Raiser, measured 2026-10-05.
 
 ### Update
 | Operator | Token | Description |
