@@ -527,6 +527,18 @@ test "an unknown flag outside run is an error" {
 	if (!r.ok) { assert r.error == "unknown option '--foo'"; }
 }
 
+test "an argument after the file is an error for a command that takes one file" {
+	const opts = newCliOptions();
+	const r = applyArgs(opts, ["build", "a.ms", "--os=solana", " --danger"], 0);
+	assert !r.ok;
+	if (!r.ok) { assert r.error == "unexpected argument ' --danger' after a.ms: msc build takes one file"; }
+	assert opts.mode != MODE_DANGER;
+	for (const command of ["build", "test", "check", "fmt"]) {
+		assert !applyArgs(newCliOptions(), [command, "a.ms", "b.ms"], 0).ok;
+		assert !applyArgs(newCliOptions(), ["--release", command, "a.ms", "--danger", "b.ms"], 0).ok;
+	}
+}
+
 test "a package command still takes flags through" {
 	const opts = parseForTest(["add", "pkg", "--dev", "x"]);
 	assert opts.extraArgs.length == 2 && opts.extraArgs[0] == "--dev";
