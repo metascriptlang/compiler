@@ -6,7 +6,8 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
-import { hasGenericParams } from "../../checker/types";
+import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
+import { monoInstanceName } from "../../monomorphize/registry";
 import { isGenericFn } from "../../checker/context";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
@@ -92,8 +93,11 @@ function jsBaseClassName(gen: JSGenerator, node: Node, declaredName: string): st
 	if (sym == null || sym.symbolType == null) return safeJsName(declaredName);
 	let inner = sym.symbolType;
 	if (inner.kind == TypeKind.Ref && inner.typeReturn != null) inner = inner.typeReturn;
-	if (inner.typeExtra == null || inner.typeExtra.sym == null) return safeJsName(declaredName);
-	const parent = inner.typeExtra.sym;
+	if (inner.typeExtra == null) return safeJsName(declaredName);
+	const parentType = unwrapRef(inner.typeExtra);
+	const parent = parentType.kind == TypeKind.GenericInstance || inner.typeExtra.sym == null ? runtimeClassSym(parentType) : inner.typeExtra.sym;
+	if (parent == null) return safeJsName(declaredName);
+	if (parentType.kind == TypeKind.GenericInstance && !hasGenericParams(parentType)) return jsSymbolName(gen, parent, monoInstanceName(parentType));
 	return jsSymbolName(gen, parent, parent.name);
 }
 

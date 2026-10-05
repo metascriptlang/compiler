@@ -25,7 +25,7 @@ import {
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey } from "../codegen/c/types";
 import { hasFlag, SymbolFlag } from "./symbol";
-import { hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance } from "./types";
+import { classParentOf, hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { lookupCtorDefaults } from "./instantiate";
@@ -343,6 +343,7 @@ function markTypeInfoOf(type: Type | null, modulePath: string): void {
 				markAndWalk(h, hn);
 			}
 		}
+		markTypeInfoOf(classParentOf(t), modulePath);
 	}
 	if (t.kind == TypeKind.Union) {
 		markUnionHookEdges(t);
@@ -377,6 +378,12 @@ function markTypeInfoOf(type: Type | null, modulePath: string): void {
 	while (bt != null && depth < 64) {
 		let inner = bt;
 		if (inner.kind == TypeKind.Ref && inner.typeReturn != null) inner = inner.typeReturn;
+		if (inner.kind == TypeKind.GenericInstance) {
+			markTypeInfoOf(inner, modulePath);
+			bt = classParentOf(inner);
+			depth += 1;
+			continue;
+		}
 		if (inner.kind != TypeKind.Struct || inner.typeName == "") break;
 		const btiName = inner.typeName + "TypeInfo";
 		if (inner.sym != null && inner.sym.modulePath != "") {

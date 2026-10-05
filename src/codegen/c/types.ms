@@ -6,7 +6,7 @@
 
 import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { genericParamsOf, enumStorageKind, isValueStorage } from "../../checker/types";
+import { genericParamsOf, enumStorageKind, isValueStorage, classParentOf, runtimeClassSym } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
@@ -1099,6 +1099,14 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 		ensureDrcProto(g, traceHook, traceSym);
 		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.isCyclic = MS_TRUE;`);
 		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.traceFn = (msTraceProc)${traceHook};`);
+	}
+	const parent = objType != null && objType.kind == TypeKind.GenericInstance && runtimeClassSym(objType) != null ? classParentOf(objType) : null;
+	const parentBody = parent != null && parent.kind == TypeKind.Ref ? parent.typeReturn : parent;
+	if (parentBody != null && (parentBody.kind == TypeKind.GenericInstance || parentBody.kind == TypeKind.Struct)) {
+		const baseName = getTypeDesc(g, parentBody);
+		if (parentBody.kind == TypeKind.GenericInstance) ensureTypeInfoDef(g, baseName, parentBody);
+		else ensureTypeInfo(g, baseName);
+		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.base = &${baseName}TypeInfo;`);
 	}
 }
 

@@ -5,7 +5,7 @@
 
 import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, DeclKind, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
-import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types";
+import { hasGenericParams, isIntegerType, isNumeric, classParentOf } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
@@ -352,6 +352,9 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	// to avoid re-emitting the forward decl / struct body.
 	nameSetAdd(g.declaredThings, name);
 	genStaticFieldGlobals(g, d, node.resolvedSym);
+	const parent = node.nodeType != null ? classParentOf(node.nodeType) : null;
+	const parentInstance = parent != null && parent.kind == TypeKind.Ref ? parent.typeReturn : parent;
+	if (parentInstance != null && parentInstance.kind == TypeKind.GenericInstance) ensureTypeInfoDef(g, getTypeDesc(g, parentInstance), parentInstance);
 
 	// Emit struct type definition (skip if already declared by genObjectType for generic instances)
 	if (!typeAlreadyDeclared) {
