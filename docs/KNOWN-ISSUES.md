@@ -419,7 +419,7 @@ old `Parse: Unexpected token: =`):
 ```
 let x: int32 = 3;
 x |= 4;  x &= 5;  x ^= 1;  x <<= 2;  x >>= 1;       8 on C, JS and Raiser
-x >>>= 1;                                           4 on C and JS; Raiser has no `>>>`
+x >>>= 1;                                           refused since 2026-10-05: `>>>` gives a uint32
 let y: int32 = 10;  y -= 4;                         6
 ```
 
@@ -427,11 +427,14 @@ Corpus `bitwiseCompoundAssignment` gives the binary form's values on C, JS and R
 uint32, int64, uint64, uint8, int8, int16 and uint16, calls `next()` once in `a[next()] |= v`,
 and covers a `BitSet<E>` over 4 and over 70 members. The operands follow the binary operator:
 `int32 |= int64` and `uint64 <<= int32` are refused as `|` and `<<` are (`src/test/handoff/bitwiseCheck.ms`).
-A `number` target takes what the binary takes and stores its int32 result, with the same warning:
-`n |= 2` on 5 gives 7, and `n >>>= 0` on -1 gives -1 as `n = n >>> 0` does (stage-2 build of
-`wt/solana-holes-6`, corpus `numberCompoundAssignment` on C, JS and Raiser, `940-unsignedShift` on C
-and JS; the base `450d986d2` refused `n |= 1`). A `number` outside int32 (3000000000.7) wraps on C and
-JS but stops the Raiser with `value 3000000000.7 not in range`, in the binary form as in the compound.
+A `number` target takes what the binary takes and stores its result, with the same warning:
+`n |= 2` on 5 gives 7 (stage-2 build of `wt/solana-holes-6`, corpus `numberCompoundAssignment` on C,
+JS and Raiser; the base `450d986d2` refused `n |= 1`). Since `wt/solana-holes-7` (2026-10-05) `>>>`
+on an int32 or a `number` is uint32, so `n >>>= 0` on -1 stores 4294967295 as TypeScript does and an
+int32 target of `>>>=` is refused; the Raiser evaluates `>>>` and `>>>=`, and a `number` outside int32
+(3000000000.7) wraps by ToInt32 there as on C and JS (corpus `940-unsignedShift`,
+`unsignedShiftToUint32`, `numberBitwiseOutsideInt32` on every lane; before, the Raiser stopped with
+`value 3000000000.7 not in range`).
 
 ## L25. ~~`HashMap` is not defined on the JS backend~~ RETRACTED 2026-09-13 — it was the `msc run --target=js` path
 
