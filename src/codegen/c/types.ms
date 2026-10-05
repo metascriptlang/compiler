@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
 import { genericParamsOf, enumStorageKind } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
@@ -869,7 +869,13 @@ export function isNrvoReturnType(retType: Type | null, funcType: Type | null): b
 	if (retType.kind == TypeKind.Span) return true;
 	if (isResult(retType)) return true;
 	if (retType.kind == TypeKind.Tuple) return true;
-	return false;
+	return hasArrayRepr(retType);
+}
+
+function hasArrayRepr(t: Type | null): boolean {
+	if (t != null && t.kind == TypeKind.Alias) return hasArrayRepr(t.typeReturn);
+	const repr = peelToRepr(t);
+	return repr != null && repr.kind == TypeKind.SizedArray;
 }
 
 // ===== NRVO Call-Site Detection (Standard reference pattern) =====
