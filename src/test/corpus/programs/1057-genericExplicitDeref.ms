@@ -1,5 +1,5 @@
 // @stdout: cell=9 twice=14 slot=7
-// note: `at[]` in a generic body is the pointee of each instance: a generic function, a generic called from a generic, a generic class method, and a scalar instance that is only compiled.
+// note: `at[]` in a generic body is the pointee of each instance: a generic function, a generic called from a generic and a generic class method. The scalar instance read from an integer address is lang/genericRoutineInstances.ms `derefWordAt`: JS refuses an integer address at compile time.
 
 struct Cell { a: uint64; b: uint64; }
 
@@ -10,10 +10,6 @@ function readThrough<T>(at: Ptr<T>): T {
 function readTwice<T>(at: Ptr<T>, f: (value: T) => uint64): uint64 {
 	const value: T = at[];
 	return f(value) + f(readThrough<T>(at));
-}
-
-function wordAt(address: uint64): uint64 {
-	return readThrough<uint64>(address as Ptr<uint64>);
 }
 
 class Slot<T> {
