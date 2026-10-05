@@ -22,3 +22,21 @@ test "null as unknown as Type pattern compiles" {
 	assert result.ok;
 	assert !result.value.contains("void* found");
 }
+
+test "null asserted to a non-nullable type narrows to that type" {
+	const decls = "class Foo { kind: number = 0; }\nclass Holder { f: Foo | null = null; }\n";
+	const field = "function reset(h: Holder): Foo {\n\th.f = null as unknown as Foo;\n\treturn h.f;\n}";
+	const local = "function fresh(): Foo {\n\tlet x: Foo | null = new Foo();\n\tx = null as unknown as Foo;\n\treturn x;\n}";
+	const init = "function declared(): Foo {\n\tlet y: Foo | null = null as unknown as Foo;\n\treturn y;\n}";
+	for (const body of [field, local, init]) {
+		const result = compileToC(decls + body);
+		assert result.ok, body + "\n" + (result.ok ? "" : result.error);
+	}
+}
+
+test "a bare null assigned to a nullable local narrows to null" {
+	const src = "class Foo { kind: number = 0; }\nfunction plain(): Foo {\n\tlet x: Foo | null = new Foo();\n\tx = null;\n\treturn x;\n}";
+	const result = compileToC(src);
+	assert !result.ok;
+	assert result.error.contains("Type 'null' is not assignable to type 'Foo'"), result.error;
+}

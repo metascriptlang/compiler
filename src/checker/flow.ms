@@ -22,7 +22,7 @@ import {
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance,
-	nullableUnionOf, hasGenericParams,
+	nullableUnionOf, hasGenericParams, isNullableShape,
 	isAtomicRef, peelToStructOrUnion, typeofTagOf, isTypeofTag, isNumeric,
 } from "./types";
 import { typeRelation, TypeRelation, sameType } from "./compat";
@@ -1219,7 +1219,8 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 }
 
 function assignedValueType(value: Node): Type {
-	return value.kind == NodeKind.NullLiteral ? nullType() : value.nodeType!;
+	const t = value.nodeType!;
+	return value.kind == NodeKind.NullLiteral && isNullableShape([t]) ? nullType() : t;
 }
 
 function stripHidden(n: Node | null): Node | null {
