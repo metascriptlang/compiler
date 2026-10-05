@@ -1918,6 +1918,16 @@ test "a float converted to a signed integer out of its range stops, as on C" {
 	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.I32).error.indexOf("not in range") >= 0;
 }
 
+test "a float wrapped to int32 takes the bitwise operand conversion of C and JS" {
+	assert execConv(raiserFloat(3000000000.7), RaiserConvClass.I32Wrap).exitValue.intVal == -1294967296;
+	assert execConv(raiserFloat(2147483648.0), RaiserConvClass.I32Wrap).exitValue.intVal == -2147483648;
+	assert execConv(raiserFloat(-2147483649.0), RaiserConvClass.I32Wrap).exitValue.intVal == 2147483647;
+	assert execConv(raiserFloat(-0.5), RaiserConvClass.I32Wrap).exitValue.intVal == 0;
+	assert execConv(raiserFloat(1e20), RaiserConvClass.I32Wrap).exitValue.intVal == 1661992960;
+	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.I32Wrap).exitValue.intVal == 0;
+	assert execConv(raiserInt(4294967297), RaiserConvClass.I32Wrap).exitValue.intVal == 1;
+}
+
 test "a float converted to its bits keeps the IEEE pattern" {
 	assert execConv(raiserFloat(1.5), RaiserConvClass.F64Bits).exitValue.intVal == 4609434218613702656;
 	assert execConv(raiserFloat(-1.0), RaiserConvClass.F64Bits).exitValue.intVal == -4616189618054758400;
