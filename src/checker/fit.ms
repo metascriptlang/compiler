@@ -252,7 +252,7 @@ export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type
 		},
 		"&" | "|" | "^" | "<<" | ">>" | ">>>" => {
 			const bitwise = inferBitwiseOp(leftType, rightType);
-			return op == ">>>" && bitwise.kind == TypeKind.Int32 ? createPrimitive(TypeKind.Uint32) : bitwise;
+			return op == ">>>" ? unsignedOfWidth(bitwise) : bitwise;
 		},
 		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&&=" | "||=" | "??="
 			| "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => voidType(),
@@ -271,6 +271,16 @@ export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type
 			return leftType;
 		},
 		_ => inferredType(),
+	};
+}
+
+function unsignedOfWidth(t: Type): Type {
+	return match (t.kind) {
+		TypeKind.Int8 => createPrimitive(TypeKind.Uint8),
+		TypeKind.Int16 => createPrimitive(TypeKind.Uint16),
+		TypeKind.Int32 => createPrimitive(TypeKind.Uint32),
+		TypeKind.Int64 => createPrimitive(TypeKind.Uint64),
+		_ => t,
 	};
 }
 
