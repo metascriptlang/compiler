@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot evaluate 'super' at comptime — constructing any subclass through super fails on the raiser, on main too
 // @stdout: sub u=3 n=20 total=23 get=3 read=3 | leaf get=5 m=3 read=5 twice=6,15 | pair get=7 read=7 tag=p | str get=xq | plain get=9 base=9
 // note: a class extending an instance of a generic class, `Sub extends Base<int32>`, a generic `Pair<U> extends Base<U>`, two levels below the instance with a plain override between the two, and a generic class extending a plain one: the subclass passes where the instance is expected, reaches the instance's methods and fields, and its `super(...)` runs the instance's constructor. Same output on C and JS.
 

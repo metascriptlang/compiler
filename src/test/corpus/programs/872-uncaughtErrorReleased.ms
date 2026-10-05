@@ -1,5 +1,5 @@
 // @exit: 1
-// @xfail(raiser): the Raiser VM cannot evaluate super in a constructor ('cannot evaluate super at comptime: symbol kind is Class')
+// @xfail(raiser): the Raiser reports the uncaught error as 'raiser runtime error: unhandled exception: second boom', where C prints 'Error: unhandled exception: second boom'
 // @stdout: caught first boom
 // @xfail(js): node reports the uncaught error with its own trace on stderr, where C prints 'Error: unhandled exception: second boom'
 // @xfail(esm): node reports the uncaught error with its own trace on stderr, where C prints 'Error: unhandled exception: second boom'

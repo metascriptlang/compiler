@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot evaluate 'super' at comptime — constructing any subclass fails on the raiser, on main too
 // @stdout: child=3 deep=5 protected=12 sibling=4
 // note: a method inherited from a parent that has fields, called through `this` inside the subclass, one and two levels below the parent, and a protected parent method reached the same way. Checking the subclass body must not re-shape the subclass and lose the parent's fields. Same output on every backend.
 
