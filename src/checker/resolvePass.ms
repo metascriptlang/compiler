@@ -2395,10 +2395,6 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 		}
 	}
 
-	if (hasGenerics) {
-		closeScope(ctx.table);
-	}
-
 	// Update inner struct in-place — avoid temporary Type that shares typeChildren
 	// (temporary's destructor would decref elements while inner still references them)
 	const inner = unwrapRef(sym.symbolType);
@@ -2429,6 +2425,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			inner.typeChildren = memberTypes;
 			for (const pt of memberTypes) { propagateToOwner(inner, pt); }
 			node.nodeType = sym.symbolType;
+			if (hasGenerics) closeScope(ctx.table);
 			return;
 		}
 		// Mutual / multi-step cycle (`A extends B`, `B extends A` — or longer chain).
@@ -2450,6 +2447,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				inner.typeChildren = memberTypes;
 				for (const pt of memberTypes) { propagateToOwner(inner, pt); }
 				node.nodeType = sym.symbolType;
+				if (hasGenerics) closeScope(ctx.table);
 				return;
 			}
 			const probeSym = lookupSymbol(ctx.table, cycleProbe);
@@ -2504,6 +2502,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 		}
 	}
 
+	if (hasGenerics) closeScope(ctx.table);
 	inner.typeNames = mergedNames;
 	inner.typeChildren = mergedTypes;
 	if (didMergeParent) {
