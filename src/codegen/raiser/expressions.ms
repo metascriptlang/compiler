@@ -224,6 +224,9 @@ function isUint64Type(t: Type | null): boolean {
 
 function compileStringPart(s: RaiserCompState, node: Node): int32 {
 	const reg = compileExpr(s, node);
+	if (node.nodeType != null && peelDistinct(node.nodeType).kind == TypeKind.Char) {
+		return emitConvTo(s, reg, RaiserConvClass.Str as int32, RaiserConvClass.Char as int32);
+	}
 	if (!isUint64Type(node.nodeType)) return reg;
 	return emitConvTo(s, reg, RaiserConvClass.Str as int32, RaiserConvClass.U64 as int32);
 }
