@@ -40,7 +40,7 @@ export const MAGIC_CONTEXT_ID: Pubkey = pubkeyOf("MagicContext111111111111111111
 
 function scheduleCommit(
 	payer: Account,
-	committed: Span<Account>,
+	committed: Readonly<Span<Account>>,
 	magicContextAccount: Account,
 	feeVault: Account | null,
 	discriminant: uint32,
@@ -71,7 +71,7 @@ export function commit(payer: Account, committed: Account, magicContextAccount: 
 
 export function commit(
 	payer: Account,
-	committed: Span<Account>,
+	committed: Readonly<Span<Account>>,
 	magicContextAccount: Account,
 ): Result<uint64, ProgramError> {
 	return scheduleCommit(payer, committed, magicContextAccount, null, 1);
@@ -79,7 +79,7 @@ export function commit(
 
 export function commit(
 	payer: Account,
-	committed: Span<Account>,
+	committed: Readonly<Span<Account>>,
 	magicContextAccount: Account,
 	feeVault: Account,
 ): Result<uint64, ProgramError> {
@@ -93,7 +93,7 @@ export function commitAndUndelegate(payer: Account, committed: Account, magicCon
 
 export function commitAndUndelegate(
 	payer: Account,
-	committed: Span<Account>,
+	committed: Readonly<Span<Account>>,
 	magicContextAccount: Account,
 ): Result<uint64, ProgramError> {
 	return scheduleCommit(payer, committed, magicContextAccount, null, 2);
@@ -101,7 +101,7 @@ export function commitAndUndelegate(
 
 export function commitAndUndelegate(
 	payer: Account,
-	committed: Span<Account>,
+	committed: Readonly<Span<Account>>,
 	magicContextAccount: Account,
 	feeVault: Account,
 ): Result<uint64, ProgramError> {

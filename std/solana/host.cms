@@ -90,7 +90,7 @@ function paddedLength(length: uint64): uint64 {
 	return (length + 7) / 8 * 8;
 }
 
-function serializedLength(accounts: HostAccount[], data: Span<uint8>): uint64 {
+function serializedLength(accounts: HostAccount[], data: Readonly<Span<uint8>>): uint64 {
 	let size: uint64 = 8;
 	for (let index = 0; index < accounts.length; index++) {
 		if (firstOccurrence(accounts, index) != index) {
@@ -102,7 +102,7 @@ function serializedLength(accounts: HostAccount[], data: Span<uint8>): uint64 {
 	return size + 8 + (data.length as uint64) + 32;
 }
 
-function serialized(program: Pubkey, accounts: HostAccount[], data: Span<uint8>): uint64 {
+function serialized(program: Pubkey, accounts: HostAccount[], data: Readonly<Span<uint8>>): uint64 {
 	const input = msSolHostInput(serializedLength(accounts, data));
 	msSolStoreU64(input, accounts.length as uint64);
 	let cursor = input + 8;
@@ -171,7 +171,7 @@ function readBack(accounts: HostAccount[], input: uint64, lengths: uint64[]): vo
 export function run(
 	program: Pubkey,
 	accounts: HostAccount[],
-	data: Span<uint8>,
+	data: Readonly<Span<uint8>>,
 	entry: () => void,
 ): HostRun {
 	if (accounts.length > MAX_INSTRUCTION_ACCOUNTS) {

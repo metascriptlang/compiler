@@ -68,7 +68,7 @@ extern function msSolWordsAddress(words: Span<uint64>): uint64 from "msSolSpanAd
 extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
 extern function msSolGetClock(out: uint64): uint64;
 extern function msSolGetRent(out: uint64): uint64;
-extern function msSolSetReturnData(data: Span<uint8>): void;
+extern function msSolSetReturnData(data: Readonly<Span<uint8>>): void;
 extern function msSolGetReturnData(data: uint64, length: uint64, programId: uint64): uint64;
 
 const MAX_RETURN_DATA: uint64 = 1024;
@@ -477,7 +477,7 @@ export function clock(): Clock {
 	return value;
 }
 
-export function setReturnData(data: Span<uint8>): void {
+export function setReturnData(data: Readonly<Span<uint8>>): void {
 	msSolSetReturnData(data);
 }
 

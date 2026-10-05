@@ -38,7 +38,7 @@ function requested(
 	storage: Span<uint8>,
 	callerSeed: Pubkey,
 	callbackDiscriminator: uint64,
-	callbackAccounts: Span<AccountMeta>,
+	callbackAccounts: Readonly<Span<AccountMeta>>,
 	callbackArguments: Readonly<Span<uint8>>,
 ): uint64 {
 	let length = putU64(storage, 0, 10);
@@ -60,7 +60,7 @@ export function requestRandomness(
 	accounts: RandomnessRequest,
 	callerSeed: Pubkey,
 	callbackDiscriminator: uint64,
-	callbackAccounts: Span<AccountMeta>,
+	callbackAccounts: Readonly<Span<AccountMeta>>,
 	callbackArguments: Readonly<Span<uint8>>,
 	payerSigners: Span<SignerSeeds> = [],
 ): Result<uint64, ProgramError> {
