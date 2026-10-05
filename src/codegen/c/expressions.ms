@@ -441,6 +441,22 @@ function isLvalueNode(node: Readonly<Node>): boolean {
 		|| isArrayAccessCall(node);
 }
 
+function isResultSlot(g: CGen, snippet: string, exprNode: Readonly<Node>): boolean {
+	if (exprNode.kind != NodeKind.CallExpr || exprNode.nodeType == null || !isCIdentifier(snippet)) return false;
+	const ret = getCalleeReturnType(exprNode);
+	return ret != null && isNrvoReturnType(ret, getCalleeFuncType(exprNode)) && getTypeDesc(g, ret) == getTypeDesc(g, exprNode.nodeType);
+}
+
+function isCIdentifier(s: string): boolean {
+	if (s.byteLength == 0) return false;
+	for (let i = 0; i < s.byteLength; i += 1) {
+		const c = s.byteAt(i);
+		const letter = (c >= "a".code && c <= "z".code) || (c >= "A".code && c <= "Z".code) || c == "_".code;
+		if (!letter && !(i > 0 && c >= "0".code && c <= "9".code)) return false;
+	}
+	return true;
+}
+
 // Emit `_clit<N>` tagged-union wrapper temp and return its address.
 // Layout: { unionT tmp; tmp._tag = varIdx; tmp.v<idx> = (cast?)snippet; }
 // `withCast` is true when the source value type differs from the variant
@@ -601,6 +617,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 	// Fallback: non-lvalue expressions (calls, constructors) cannot have & applied directly.
 	// Hoist to a temp local so we can take its address.
 	if (p != null && exprNode != null && !isLvalueNode(exprNode)) {
+		if (isResultSlot(g, snippet, exprNode)) return `&${snippet}`;
 		// When paramType (from implementation) resolves to a Union but exprNode.nodeType
 		// is a Struct variant (from overload), wrap in the full tagged union.
 		const resolvedParam = resolveSinkLent(paramType);
