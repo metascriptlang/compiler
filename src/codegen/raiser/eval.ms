@@ -520,6 +520,19 @@ test "engine: a method called inside a function binds its receiver as this" {
 	assert vm.output == "reg:t reg:x reg reg:y 4 5\n";
 }
 
+test "engine: super runs the parent constructor and a call through the base runs the override" {
+	const vm = evalOrcVM("class A { name: string; constructor(name: string) { this.name = name; }"
+		+ " speak(n: int32): string { return this.name + \".\" + n.toString(); }"
+		+ " intro(): string { return \"I \" + this.speak(1); } }"
+		+ " class B extends A { speak(n: int32): string { return this.name + \"!\" + n.toString(); } }"
+		+ " class C extends B { k: int32 = 4; constructor(name: string) { super(name + \"c\"); this.k = 5; } }"
+		+ " function talk(a: A): string { return a.speak(2); }"
+		+ " const all: A[] = [new A(\"a\"), new B(\"b\"), new C(\"x\")];"
+		+ " for (const a of all) { console.log(`${talk(a)} ${a.intro()}`); }");
+	assert vm.error == "";
+	assert vm.output == "a.2 I a.1\nb!2 I b!1\nxc!2 I xc!1\n";
+}
+
 test "engine: new Array(n) holds n distinct zero elements" {
 	const vm = evalOrcVM("struct E { h: int64; key: string; }"
 		+ " let es: Vec<E> = new Array(3); es[2].h = 5;"
