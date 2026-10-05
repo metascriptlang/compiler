@@ -12,7 +12,9 @@
 // of a shared core was inlined into the wrappers), a family lost its copies, the input parser is
 // inlined into more than one function, or dispatch pulled in a signed division.
 // RED PRE-FIX: createPdaOf 920 bytes a copy, realloc 824, close 752, verifiedPda 512 and 520,
-// selectInstruction 688, ownProgram 600, __divdi3 linked. GREEN POST-FIX: GUARD-OK.
+// selectInstruction 688, ownProgram 600, __divdi3 linked; a pass-through wrapper (close, realloc,
+// verifiedPda of a Delegated) that takes its result through a temporary measured 112 bytes, 16
+// when it hands the caller's result slot on. GREEN POST-FIX: GUARD-OK.
 
 import { execFileResult, cwd, exit, env, findOnPath } from "std/process";
 import { writeFile, ensureDir, removeAll, exists, readDir } from "std/fs";
@@ -196,10 +198,10 @@ struct Bound {
 }
 
 const BOUNDS: Bound[] = [
-	{ family: "close", copies: TYPES, most: 144 },
-	{ family: "realloc", copies: TYPES, most: 144 },
-	{ family: "Delegated_verifiedPda", copies: TYPES, most: 144 },
-	{ family: "Delegated_verifiedPdaWithBump", copies: TYPES, most: 144 },
+	{ family: "close", copies: TYPES, most: 16 },
+	{ family: "realloc", copies: TYPES, most: 16 },
+	{ family: "Delegated_verifiedPda", copies: TYPES, most: 16 },
+	{ family: "Delegated_verifiedPdaWithBump", copies: TYPES, most: 16 },
 	{ family: "owned", copies: TYPES, most: 224 },
 	{ family: "mutable", copies: TYPES, most: 224 },
 	{ family: "delegated", copies: TYPES, most: 224 },
