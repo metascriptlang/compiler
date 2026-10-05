@@ -783,7 +783,7 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 }
 
 // A literal bound without an annotation freezes as `__anonN__...` (anonStructName).
-function isAnonLiteralName(name: string): boolean {
+export function isAnonLiteralName(name: string): boolean {
 	return name.length > 6 && name.slice(0, 6) == "__anon";
 }
 

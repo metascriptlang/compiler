@@ -3,12 +3,12 @@
 // through the checkerCallbacks door.
 
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
-import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
+import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds } from "./types";
+import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
@@ -61,6 +61,8 @@ export function joinBranchTypes(types: Type[]): Type {
 	}
 	if (prepared.length == 0) return inferredType();
 	if (prepared.length == 1) return prepared[0];
+	const anonJoined = joinAnonLiteralStructs(prepared);
+	if (anonJoined != null) return anonJoined;
 	let allStrings = true;
 	for (const p of prepared) {
 		if (!isStringLike(p)) { allStrings = false; break; }
@@ -84,11 +86,72 @@ export function joinBranchTypes(types: Type[]): Type {
 	return canonicalizeBranchJoin(unionOfTypes(prepared, null));
 }
 
+function anonLiteralStruct(t: Type | null): Type | null {
+	if (t == null) return null;
+	const s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	return s.kind == TypeKind.Struct && isAnonLiteralName(s.typeName) ? s : null;
+}
+
+function fieldJoinHolds(fields: Type[], joined: Type): boolean {
+	if (isUnresolvedType(joined)) return false;
+	if (joined.kind != TypeKind.Union && !isMaybeType(joined)) return true;
+	for (const f of fields) {
+		if (!sameType(f, joined)) return false;
+	}
+	return true;
+}
+
+function joinAnonLiteralStructs(members: Type[]): Type | null {
+	const first = anonLiteralStruct(members[0]);
+	if (first == null) return null;
+	const boxed = members[0].kind == TypeKind.Ref;
+	const width = first.typeNames.length;
+	for (const m of members) {
+		const s = anonLiteralStruct(m);
+		if (s == null || (m.kind == TypeKind.Ref) != boxed) return null;
+		if (s.typeNames.length != width || s.typeChildren.length != width) return null;
+		for (let i = 0; i < width; i++) {
+			if (s.typeNames[i] != first.typeNames[i]) return null;
+		}
+	}
+	const joinedFields: Type[] = [];
+	for (let i = 0; i < width; i++) {
+		const fields: Type[] = [];
+		for (const m of members) fields.push((anonLiteralStruct(m) as Type).typeChildren[i]);
+		const fj = joinBranchTypes(fields);
+		if (!fieldJoinHolds(fields, fj)) return null;
+		joinedFields.push(fj);
+	}
+	for (const m of members) {
+		const s = anonLiteralStruct(m) as Type;
+		let same = true;
+		for (let i = 0; i < width; i++) {
+			if (!sameType(s.typeChildren[i], joinedFields[i])) { same = false; break; }
+		}
+		if (same) return m;
+	}
+	const joinedStruct = createStruct(anonStructName(first.typeNames, joinedFields), first.typeNames, joinedFields, false);
+	return boxed ? createRef(joinedStruct) : joinedStruct;
+}
+
+function rearmAnonLiteral(lit: Node): void {
+	lit.flags = lit.flags.excl(NodeFlag.Sem);
+	lit.nodeType = null;
+	for (const p of (lit.data as ObjectLiteralData).properties) {
+		if (p != null && p.kind == NodeKind.ObjectLiteral && anonLiteralStruct(p.nodeType) != null) rearmAnonLiteral(p);
+	}
+}
+
 export function fitJoinedBranch(ctx: CheckerContext, expr: Node, joined: Type | null): Node {
 	if (expr == null || joined == null || isUnresolvedType(joined)) return expr;
 	const bt = expr.nodeType;
 	if (bt == null || bt.kind == TypeKind.Never || bt.kind == TypeKind.Void || isUnresolvedType(bt)) return expr;
 	if (bt == joined || (sameType(bt, joined) && bt.callConv == joined.callConv)) return expr;
+	if (expr.kind == NodeKind.ObjectLiteral && anonLiteralStruct(bt) != null && anonLiteralStruct(joined) != null) {
+		rearmAnonLiteral(expr);
+		callCheckExpr(ctx, expr, joined);
+		return expr;
+	}
 	return fitNode(ctx, expr, joined, bt);
 }
 
