@@ -147,7 +147,7 @@ static inline int32_t msNumberOr(double a, int32_t b) { return msToInt32(a) | b;
 static inline int32_t msNumberXor(double a, int32_t b) { return msToInt32(a) ^ b; }
 static inline int32_t msNumberShl(double a, int32_t b) { return (int32_t)((uint32_t)msToInt32(a) << ((uint32_t)b & 31)); }
 static inline int32_t msNumberShr(double a, int32_t b) { return msToInt32(a) >> ((uint32_t)b & 31); }
-static inline int32_t msNumberShrU(double a, int32_t b) { return (int32_t)((uint32_t)msToInt32(a) >> ((uint32_t)b & 31)); }
+static inline uint32_t msNumberShrU(double a, int32_t b) { return (uint32_t)msToInt32(a) >> ((uint32_t)b & 31); }
 
 #define msModAssignF64(lv, b) msDivAssign_(lv, b, fmod)
 #define msAndAssignF64(lv, b) msDivAssign_(lv, b, msNumberAnd)

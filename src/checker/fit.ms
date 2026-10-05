@@ -187,10 +187,8 @@ export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type
 			return float64Type();
 		},
 		"&" | "|" | "^" | "<<" | ">>" | ">>>" => {
-			// Bitwise: promote to wider integer if both sides are integer
-			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
-			if (isIntegerType(leftType)) return leftType;
-			return int32Type();
+			const bitwise = inferBitwiseOp(leftType, rightType);
+			return op == ">>>" && bitwise.kind == TypeKind.Int32 ? createPrimitive(TypeKind.Uint32) : bitwise;
 		},
 		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&&=" | "||=" | "??="
 			| "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => voidType(),
@@ -210,6 +208,12 @@ export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type
 		},
 		_ => inferredType(),
 	};
+}
+
+function inferBitwiseOp(leftType: Type, rightType: Type): Type {
+	if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
+	if (isIntegerType(leftType)) return leftType;
+	return int32Type();
 }
 
 export function inferUnaryOp(op: string, operandType: Type): Type {
