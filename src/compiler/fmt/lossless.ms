@@ -114,6 +114,17 @@ test "lossless: a comment is a token" {
 	assert !checkLossless("// keep\nf();", "f();").ok;
 }
 
+test "lossless: a type-argument closer joined to = may print apart" {
+	assert checkLossless("let t: A<B<int32>>= v;", "let t: A<B<int32>> = v;\n").ok;
+	assert checkLossless("let t: A<int32>= v;", "let t: A<int32> = v;\n").ok;
+}
+
+test "lossless: a bitwise compound assignment keeps its operator" {
+	assert checkLossless("x >>>= 1;", "x >>>= 1;\n").ok;
+	assert !checkLossless("x >>= 1;", "x >> 1;\n").ok;
+	assert !checkLossless("x |= 1;", "x = 1;\n").ok;
+}
+
 test "lossless: the error names the first differing token" {
 	const r = checkLossless("try { f(); } finally { g(); }", "try { f(); } catch { } finally { g(); }");
 	assert !r.ok && r.error.contains("`finally` at 1:14");
