@@ -18,7 +18,7 @@ import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledG
 import { enumCTypeName, getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, hcrTypeInfoRef, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp, zeroInit } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
-import { isDrcLifecycleName } from "./forward";
+import { isDrcLifecycleName, copiesInline, inlineDeclOf } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isBakeableAggregateConst, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
@@ -84,9 +84,10 @@ function genExternDecl(g: CGen, node: Readonly<Node>): void {
 
 // ===== Function Declaration =====
 
-function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void {
+function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlineCopy: boolean = false): void {
 	const d = node.data as FunctionDeclData;
 	const sym = node.resolvedSym;
+	if (!inlineCopy && !g.preparingDeclarations && sym != null && copiesInline(g, sym)) return;
 
 	// Tier 1: body-less overload signature — typecheck-only, skip codegen emission entirely.
 	// The implementation (same name, no 'overload' flag) emits the actual C function.
@@ -132,7 +133,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 
 	const instanceAlreadyEmitted = isGenericInstance && (g.emittedInstances.has(name)
 		|| (g.emissionFacts.genericOwners.has(name) && g.emissionFacts.genericOwners.readonlyGet(name) != g.modulePath));
-	if (isGenericInstance && !instanceAlreadyEmitted) g.emittedInstances.add(name);
+	if (isGenericInstance && !instanceAlreadyEmitted && !inlineCopy) g.emittedInstances.add(name);
 
 	// main() is never static — called from dispatcher
 	// Lifted functions (sym === null) are always static
@@ -144,7 +145,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	const isTypeBound = sym != null && isTypeBoundOp(sym);
 	const isPublicLinkage = isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance || isTypeBound || hcrCoreCallable;
 	const linkage = isPublicLinkage ? "" : (sym != null ? "MS_LIB_PRIVATE " : "static ");
-	const prefix = exportPrefix + linkage;
+	const prefix = inlineCopy ? "static inline " : exportPrefix + linkage;
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
 	const actualRetType = nrvo ? "void" : cRetType;
@@ -155,7 +156,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	const hasNativeName = (sym != null && sym.nativeName != "") || (d.nativeName != null && d.nativeName != "");
 	if (isExternFn && hasNativeName) return;
 
-	if (!alreadyDeclared) {
+	if (!alreadyDeclared && !inlineCopy) {
 		addLine(sec(g, CSection.ProcHeaders), proto + ";");
 	}
 
@@ -164,7 +165,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 
 	// Emit function body to Procs
 	// Skip body for duplicate generic instances — forward decl already emitted above.
-	if (instanceAlreadyEmitted) return;
+	if (instanceAlreadyEmitted && !inlineCopy) return;
 	if (d.fnBody != null) {
 		const p = createProc(name, fnType.typeReturn);
 		p.suppressRaiseCheck = isDrcHookFn || (sym != null && hasFlag(sym, SymbolFlag.NeverRaises));
@@ -194,6 +195,13 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 		}
 		addLine(procs, "}");
 		addNewline(procs);
+	}
+}
+
+export function emitInlineCopies(g: CGen): void {
+	for (let i = 0; i < g.inlineCopies.length; i += 1) {
+		const decl = inlineDeclOf(g.inlineCopies[i]);
+		if (decl != null) genFunctionDecl(g, decl, false, true);
 	}
 }
 

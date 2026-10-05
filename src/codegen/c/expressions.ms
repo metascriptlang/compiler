@@ -21,7 +21,7 @@ import { getTypeDesc, zeroInit, isNrvoReturnType, getCalleeReturnType, getCallee
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
-import { ensureCrossModuleProto } from "./forward";
+import { ensureCrossModuleProto, copiesInline } from "./forward";
 import { useHeader } from "./context";
 import { GcMode, dispatchOverridesFor, dispatchEntryFor } from "../../checker/context";
 import { lookupCtorDefaults, CtorEntry } from "../../checker/instantiate";
@@ -1105,7 +1105,8 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// Ensure cross-module function has a forward declaration (needed for function
 			// pointers in closure literals — direct calls go through ensureCrossModuleProto)
 			const calleeName = mangledFunctionName(idSym, referenceName(idSym, d.name), idSym.overloadIdx);
-			if (idSym.symbolType != null && idSym.modulePath != null && idSym.modulePath != "" && idSym.modulePath != g.modulePath) {
+			if (idSym.symbolType != null && idSym.modulePath != null && idSym.modulePath != ""
+					&& (idSym.modulePath != g.modulePath || copiesInline(g, idSym))) {
 				ensureCrossModuleProto(g, calleeName, idSym.symbolType, idSym);
 			}
 			let emitted = calleeName;

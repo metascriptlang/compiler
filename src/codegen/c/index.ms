@@ -16,7 +16,7 @@ import {
 	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline, assembleOutput, extract, nameSetAdd, undefPlatformMacros,
 	replayFactWrites,
 } from "./context";
-import { genDecl, registerDeclCName } from "./declarations";
+import { genDecl, registerDeclCName, emitInlineCopies } from "./declarations";
 import { mangleModuleName } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
@@ -185,6 +185,7 @@ export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Read
 			genDecl(g, stmt, false);
 		}
 	}
+	emitInlineCopies(g);
 	emitOwnedTypeInfos(g);
 
 	// Emit test table (test builds only — after all TestDecl nodes processed)

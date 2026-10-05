@@ -4,10 +4,11 @@
 // would create circular imports if left in declarations.ms or index.ms.
 // Extracted to break cycles: expressions↔declarations, statements↔declarations, expressions↔index.
 
-import { Type, TypeKind, Symbol } from "../../ast/node";
+import { Type, TypeKind, Symbol, Node, NodeKind, FunctionDeclData, CallingConvention } from "../../ast/node";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, addCGenError } from "./context";
 import { lookupHookSym, ensureDrcProto, procHeader } from "./types";
+import { mangledFunctionName } from "./names";
 
 // ===== DRC forward prototypes =====
 
@@ -64,12 +65,47 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 		ensureDrcProto(g, calleeName, sym);
 		return;
 	}
+	if (sym != null && copiesInline(g, sym)) {
+		requestInlineCopy(g, calleeName, sym);
+		return;
+	}
 	if (sym != null && sym.modulePath != "" && sym.modulePath == g.modulePath) return;
 	const protoKey = "proto:" + calleeName;
 	if (nameSetHas(g.declaredProcs, protoKey)) return;
 	nameSetAdd(g.declaredProcs, protoKey);
 	const mutBits: int32 = sym != null ? sym.mutatedParams : 0;
 	addLine(sec(g, CSection.ProcHeaders), procHeader(g, calleeName, fnType, null, mutBits, isDrcLifecycleName(calleeName)) + ";");
+}
+
+export function copiesInline(g: CGen, sym: Symbol): boolean {
+	if (sym.symbolType == null || sym.symbolType.callConv != CallingConvention.CcInline) return false;
+	if (hasFlag(sym, SymbolFlag.ImportC)) return false;
+	return !g.emissionFacts.hcrModules.has(sym.modulePath);
+}
+
+export function inlineDeclOf(sym: Symbol): Node | null {
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.FunctionDecl || decl.resolvedSym != sym || decl.nodeType == null) return null;
+	if ((decl.data as FunctionDeclData).fnBody == null) return null;
+	return decl;
+}
+
+function requestInlineCopy(g: CGen, calleeName: string, sym: Symbol): void {
+	const key = "inline:" + calleeName;
+	if (nameSetHas(g.declaredProcs, key)) return;
+	nameSetAdd(g.declaredProcs, key);
+	const decl = inlineDeclOf(sym);
+	if (decl == null) {
+		addCGenError(g, `internal: @inline function '${sym.name}' has no declaration to copy into ${g.modulePath}`, 0, 0);
+		return;
+	}
+	const d = decl.data as FunctionDeclData;
+	if (mangledFunctionName(sym, d.fnName, sym.overloadIdx) != calleeName) {
+		addCGenError(g, `internal: @inline function '${sym.name}' is called as '${calleeName}' in ${g.modulePath}`, 0, 0);
+		return;
+	}
+	addLine(sec(g, CSection.ProcHeaders), "static inline " + procHeader(g, calleeName, decl.nodeType!, d.params, sym.mutatedParams, false) + ";");
+	g.inlineCopies.push(sym);
 }
 
 // useHeader + emitIncludeDirectives moved to context.ms to break types.ms ↔ forward.ms cycle.
