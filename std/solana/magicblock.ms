@@ -164,7 +164,7 @@ function scheduled(
 	intervalMillis: uint64,
 	iterations: uint64,
 	taskProgram: Pubkey,
-	taskAccounts: Span<InstructionAccount>,
+	taskAccounts: Readonly<Span<InstructionAccount>>,
 	taskData: Readonly<Span<uint8>>,
 ): Result<uint64, ProgramError> {
 	if (!payer.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
@@ -212,7 +212,7 @@ export function scheduleTask(
 	intervalMillis: uint64,
 	iterations: uint64,
 	targetProgram: Pubkey,
-	targetAccounts: Span<InstructionAccount>,
+	targetAccounts: Readonly<Span<InstructionAccount>>,
 	targetData: Readonly<Span<uint8>>,
 ): Result<uint64, ProgramError> {
 	return scheduled(payer, taskId, intervalMillis, iterations, targetProgram, targetAccounts, targetData);

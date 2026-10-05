@@ -8,7 +8,7 @@ import { SignerSeeds, signingOf } from "./seed";
 extern function msSolLoadU8(address: uint64): uint8;
 extern function msSolLoadU64(address: uint64): uint64;
 extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
-extern function msSolMetasAddress(table: Span<InstructionAccount>): uint64 from "msSolSpanAddress";
+extern function msSolMetasAddress(table: Readonly<Span<InstructionAccount>>): uint64 from "msSolSpanAddress";
 extern function msSolInfosAddress(table: Span<CpiAccount>): uint64 from "msSolSpanAddress";
 extern function msSolInstructionAddress(table: Readonly<Span<CpiInstruction>>): uint64 from "msSolSpanAddress";
 extern function msSolInvokeSigned(
@@ -52,7 +52,7 @@ export struct CpiInstruction {
 
 export function invokeCpi(
 	program: Pubkey,
-	metas: Span<InstructionAccount>,
+	metas: Readonly<Span<InstructionAccount>>,
 	infos: Span<CpiAccount>,
 	data: Readonly<Span<uint8>>,
 	length: uint64,
@@ -98,7 +98,7 @@ export function invokeCpi(
 
 export function invokeList(
 	program: Pubkey,
-	accounts: Span<InstructionAccount>,
+	accounts: Readonly<Span<InstructionAccount>>,
 	data: Readonly<Span<uint8>>,
 	length: uint64,
 	signers: Readonly<Span<SignerSeeds>> = [],
