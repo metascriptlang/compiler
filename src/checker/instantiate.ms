@@ -642,7 +642,7 @@ function substituteTypeStrings(strs: string[], names: string[], types: Type[]): 
 	}
 }
 
-const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter;
+const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.WhenDeferred;
 
 // ===== clearCheckerState =====
 // Collapse HiddenDeref/HiddenAddr/HiddenStdConv wrappers and clear resolvedSym/flags on a

@@ -5,7 +5,7 @@ import { refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfri
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion } from "./types";
+import { errorType, booleanType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
 import { isLifecycleHookName, getExtReceiverType, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
@@ -37,7 +37,7 @@ import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
 import { inlineDecorator } from "./decoratorHelpers";
-import { foldUserOperatorConstant, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
+import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
@@ -1692,6 +1692,58 @@ function drainHoisted(ctx: CheckerContext, stmts: Node[], at: int32, from: int32
 	return n + trailing;
 }
 
+function pickDeferredWhen(ctx: CheckerContext, node: Node): Node[] | null {
+	let at: Node | null = node;
+	while (at != null && at.kind == NodeKind.IfStmt && at.flags.has(NodeFlag.WhenDeferred)) {
+		const d = at.data as IfStmtData;
+		checkExpr(ctx, d.condition, booleanType());
+		const value = whenConditionValue(ctx, d.condition);
+		if (value < 0) return null;
+		if (value == 1) return (d.consequent.data as BlockStmtData).statements;
+		at = d.alternate;
+	}
+	if (at == null) return [];
+	return (at.data as BlockStmtData).statements;
+}
+
+function whenConditionValue(ctx: CheckerContext, cond: Node): int32 {
+	return match (cond.kind) {
+		NodeKind.BooleanLiteral => (cond.data as BooleanLiteralData).boolValue ? 1 : 0,
+		NodeKind.UnaryExpr => {
+			const v = whenConditionValue(ctx, (cond.data as UnaryExprData).operand);
+			return v < 0 ? v : 1 - v;
+		},
+		NodeKind.BinaryExpr => {
+			const b = cond.data as BinaryExprData;
+			const l = whenConditionValue(ctx, b.left);
+			const r = whenConditionValue(ctx, b.right);
+			if (l < 0 || r < 0) return -1;
+			return b.operator == "&&" ? l * r : (l + r > 0 ? 1 : 0);
+		},
+		NodeKind.CallExpr when (typeTraitOf(cond) != null) => -1,
+		_ => refuseWhenCondition(ctx, cond),
+	};
+}
+
+function refuseWhenCondition(ctx: CheckerContext, cond: Node): int32 {
+	if (cond.nodeType != null && cond.nodeType.kind == TypeKind.Error) return 0;
+	addError(ctx, "a 'when' condition is decided while compiling: it reads build flags and type traits such as isPlainData<T>(), not other calls", cond.location.line, cond.location.column);
+	return 0;
+}
+
+function spliceStatementsAt(stmts: Node[], at: int32, picked: Node[]): void {
+	const rebuilt: Node[] = [];
+	for (let k = 0; k < stmts.length; k += 1) {
+		if (k != at) {
+			rebuilt.push(stmts[k]);
+			continue;
+		}
+		for (const p of picked) rebuilt.push(p);
+	}
+	stmts.length = 0;
+	for (const r of rebuilt) stmts.push(r);
+}
+
 function checkBlock(ctx: CheckerContext, node: Node): void {
 	const d = node.data as BlockStmtData;
 	openScope(ctx.table, ScopeKind.Block);
@@ -1703,6 +1755,15 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 	let i = 0;
 	while (i < d.statements.length) {
 		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { break; }
+		if (d.statements[i].flags.has(NodeFlag.WhenDeferred)) {
+			const picked = pickDeferredWhen(ctx, d.statements[i]);
+			if (picked == null) {
+				i = i + 1;
+			} else {
+				spliceStatementsAt(d.statements, i, picked);
+			}
+			continue;
+		}
 		const _cs0 = performance.now();
 		checkStmt(ctx, d.statements[i]);
 		const _cs1 = performance.now();
