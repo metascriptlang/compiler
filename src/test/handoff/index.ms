@@ -141,3 +141,4 @@ import "./runtimeProcDeclared";
 import "./echoJsonValue";
 import "./instanceCacheIdentity";
 import "./instanceHookIdentity";
+import "./nominalIdentity";

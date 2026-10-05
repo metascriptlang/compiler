@@ -146,6 +146,17 @@ function textShape(k: int32): TextPoint | TextSize | TextPrice | string {
 	return "none";
 }
 
+function textMaybePoint(k: int32): TextPoint | null {
+	if (k == 0) return { x: 3, y: 4 };
+	return null;
+}
+
+test "a nullable struct converts through its payload or prints null" {
+	assert String(textMaybePoint(0)) == "{\"x\":3,\"y\":4}";
+	assert String(textMaybePoint(1)) == "null";
+	assert `${textMaybePoint(0)}` == "{\"x\":3,\"y\":4}";
+}
+
 test "a union converts through the toString of the member its tag selects" {
 	assert String(textShape(0)) == "{\"x\":1,\"y\":2}";
 	assert textShape(1).toString() == "{\"w\":7}";

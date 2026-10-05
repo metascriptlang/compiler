@@ -278,6 +278,18 @@ test "classCalls: a static and an instance method may share a name" {
 	assert s.of("x") == "inst:x";
 }
 
+class MixedOverloadBox {
+	describe(n: int32): string { return "int:" + n.toString(); }
+}
+
+function describe(this b: MixedOverloadBox, s: string): string { return "ext:" + s; }
+
+test "classCalls: a class method and an extension of its name overload together" {
+	const b = new MixedOverloadBox();
+	assert b.describe(5) == "int:5";
+	assert b.describe("x") == "ext:x";
+}
+
 test "classCalls: overloaded methods may differ in return type" {
 	const b = new MethodOverloadBox();
 	assert b.pick(4) == 5;
