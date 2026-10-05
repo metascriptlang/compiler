@@ -21,7 +21,7 @@ import {
 	makeReturn, makeIf, makeBinary, makeAssign, makeBool, makeUnary,
 	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType, runtimeRef,
 } from "../util";
-import { booleanType } from "../../checker/types";
+import { booleanType, int32Type } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 import { hashStringSigned } from "std/hash";
 
@@ -430,7 +430,7 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, lo
 
 function buildIfChain(cases: Node[], matchSym: Symbol, discType: Type, loc: SourceLocation, mode: string, varName: string, assignSym: Symbol | null, ctx: TransformContext): Node {
 	// String hash dispatch for >8 string cases
-	if (isAllStringCases(cases)) {
+	if (!ctx.raiserBackend && isAllStringCases(cases)) {
 		return buildHashSwitch(cases, matchSym, discType, loc, mode, varName, assignSym, ctx);
 	}
 
@@ -694,128 +694,83 @@ function isAllStringCases(cases: Node[]): boolean {
 	return stringCount > STRING_HASH_THRESHOLD;
 }
 
-// Hash bucket entry: a guarded if-body for one string pattern within a hash bucket.
 interface HashBucket {
 	hash: int32;
-	test: Node;      // the case label: a hash constant on C, the string literal on js
-	guards: Node[];  // chained if-guards for patterns sharing this hash
+	tests: Node[];
+	arms: int32[];
 }
 
-// Build switch(djb2(disc)) { case HASH: if (eq1) { body } else if (eq2) { body } break; ... }
-// Collision-safe: patterns sharing a hash are chained in the same case arm.
-// Return mode: matched arms `return`, so default body placed unconditionally after switch.
-// Stmt/assign mode: matched arms don't exit, so $matched flag guards the default body.
 function buildHashSwitch(cases: Node[], matchSym: Symbol, discType: Type, loc: SourceLocation, mode: string, varName: string, assignSym: Symbol | null, ctx: TransformContext): Node {
 	let defaultBody = makeBlock([], loc);
-	// return mode: matched arms exit via return — no flag needed, unconditional default is safe.
-	// stmt/assign mode: matched arms don't exit — need $matched flag to skip default.
-	// Pre-scan wildcards: the flag is only meaningful when some wildcard arm has a
-	// reachable, non-empty body (guarded or non-empty block). Without a real default
-	// to gate, the flag becomes dead stores + an empty `if (!$matched)` epilogue.
-	let hasRealDefault = false;
-	for (const c of cases) {
-		const pd = c.data as MatchCaseData;
-		if (!isWildcard(pd.casePatterns)) continue;
-		if (pd.caseGuard != null || !isEmptyBlock(pd.caseBody)) {
-			hasRealDefault = true;
-			break;
-		}
-	}
-	const needsFlag = mode != "return" && hasRealDefault;
-	const matchedSym = freshTempSym(ctx, "matched", booleanType());
-	const matchedName = matchedSym.name;
-
-	// Collect patterns into hash buckets — patterns with the same hash share a bucket.
+	const armTests: Node[][] = [];
+	const armBodies: Node[] = [];
 	const buckets: HashBucket[] = [];
 
-	for (let i = 0; i < cases.length; i += 1) {
-		const caseData = cases[i].data as MatchCaseData;
+	for (const c of cases) {
+		const caseData = c.data as MatchCaseData;
+		const body = wrapArmBody(caseData.caseBody, mode, varName, assignSym, loc, ctx);
 		if (isWildcard(caseData.casePatterns)) {
-			defaultBody = wrapArmBody(caseData.caseBody, mode, varName, assignSym, loc, ctx);
+			defaultBody = body;
 			continue;
 		}
-
-		for (let j = 0; j < caseData.casePatterns.length; j += 1) {
-			const pat = caseData.casePatterns[j];
-			const strData = pat.data as StringLiteralData;
-			// js switches on the string itself (reference jsgen genCaseJS), so there
-			// is no hash to collide and every pattern gets its own case label.
-			const hash = ctx.jsBackend ? (0 as int32) : hashStringSigned(strData.value);
-
-			const body = wrapArmBody(caseData.caseBody, mode, varName, assignSym, loc, ctx);
-			let guardedBlock = body;
-			if (needsFlag) {
-				const setMatched = makeExprStmt(makeAssign(makeIdentResolved(matchedSym, loc), makeBool(true, loc), loc), loc);
-				const guardedBodyStmts: Node[] = [];
-				guardedBodyStmts.push(setMatched);
-				guardedBodyStmts.push(body);
-				guardedBlock = makeBlock(guardedBodyStmts, loc);
-			}
-			const guard = makeBinary(makeTypedIdentResolved(matchSym, discType, loc), "===", pat, loc);
-			const guardedIf = ctx.jsBackend ? guardedBlock : makeIf(guard, guardedBlock, makeBlock([], loc), loc);
-
-			// Find existing bucket or create new one
-			let found = false;
-			let bi = 0;
-			while (!ctx.jsBackend && bi < buckets.length) {
+		const arm = armBodies.length;
+		armBodies.push(body);
+		if (ctx.jsBackend) {
+			armTests.push(caseData.casePatterns);
+			continue;
+		}
+		armTests.push([makeNumber(arm, loc)]);
+		for (const pat of caseData.casePatterns) {
+			const hash = hashStringSigned((pat.data as StringLiteralData).value);
+			let bucket = -1;
+			for (let bi = 0; bi < buckets.length; bi += 1) {
 				if (buckets[bi].hash == hash) {
-					buckets[bi].guards.push(guardedIf);
-					found = true;
+					bucket = bi;
 					break;
 				}
-				bi += 1;
 			}
-			if (!found) {
-				const guards: Node[] = [];
-				guards.push(guardedIf);
-				buckets.push({ hash, test: ctx.jsBackend ? pat : makeNumber(hash, loc), guards });
+			if (bucket < 0) {
+				bucket = buckets.length;
+				buckets.push({ hash, tests: [], arms: [] });
 			}
+			buckets[bucket].tests.push(pat);
+			buckets[bucket].arms.push(arm);
 		}
 	}
 
-	// Build switch cases from buckets — one case per unique hash value
-	const switchCases: Node[] = [];
-	for (let bi = 0; bi < buckets.length; bi += 1) {
-		const bucket = buckets[bi];
-		const caseStmts: Node[] = [];
-		// Chain all guards for this hash bucket (handles collisions)
-		for (let gi = 0; gi < bucket.guards.length; gi += 1) {
-			caseStmts.push(bucket.guards[gi]);
-		}
-		const tests: Node[] = [];
-		tests.push(bucket.test);
-		switchCases.push(makeSwitchCase(tests, caseStmts, false, loc));
+	const defaultInSwitch = mode != "return" && !isEmptyBlock(defaultBody);
+	const dispatchCases: Node[] = [];
+	for (let arm = 0; arm < armBodies.length; arm += 1) {
+		dispatchCases.push(makeSwitchCase(armTests[arm], [armBodies[arm]], false, loc));
 	}
-
-	// C cannot switch on a string, so it switches on msStringHash (a runtime symbol
-	// always linked). js switches on the string itself — reference jsgen genCaseJS —
-	// which is both native and strictly less work than hashing then comparing.
-	const discNode = makeTypedIdentResolved(matchSym, discType, loc);
-	let switchDisc = discNode;
-	if (!ctx.jsBackend) {
-		const hashCallArgs: Node[] = [];
-		hashCallArgs.push(discNode);
-		switchDisc = makeCall(runtimeRef("msStringHash", loc), hashCallArgs, loc);
+	if (defaultInSwitch) {
+		dispatchCases.push(makeSwitchCase([], [defaultBody], true, loc));
 	}
-	const switchNode = makeSwitch(switchDisc, switchCases, loc);
 
 	const stmts: Node[] = [];
-	if (needsFlag) {
-		// let $matched = false; switch(...) { ... } if (!$matched) { wildcard }
-		const matchedDecl2 = makeVarDecl(matchedName, makeBool(false, loc), DeclKind.Let, loc);
-		matchedDecl2.resolvedSym = matchedSym;
-		stmts.push(matchedDecl2);
-		stmts.push(switchNode);
-		const notMatched = makeUnary("!", makeIdentResolved(matchedSym, loc), loc);
-		stmts.push(makeIf(notMatched, defaultBody, makeBlock([], loc), loc));
+	const discNode = makeTypedIdentResolved(matchSym, discType, loc);
+	if (ctx.jsBackend) {
+		stmts.push(makeSwitch(discNode, dispatchCases, loc));
 	} else {
-		// return mode: matched arms return, so default body is only reachable when
-		// no case matched (or hash collision with guard failure). Unconditional placement
-		// keeps C compiler happy (guaranteed return path).
-		stmts.push(switchNode);
-		if (!isEmptyBlock(defaultBody)) {
-			stmts.push(defaultBody);
+		const armSym = freshTempSym(ctx, "arm", int32Type());
+		const armDecl = makeVarDecl(armSym.name, makeNumber(-1, loc), DeclKind.Let, loc);
+		armDecl.resolvedSym = armSym;
+		stmts.push(armDecl);
+		const hashCases: Node[] = [];
+		for (const bucket of buckets) {
+			let chain: Node = makeBlock([], loc);
+			for (let ti = bucket.tests.length - 1; ti >= 0; ti -= 1) {
+				const eq = makeBinary(makeTypedIdentResolved(matchSym, discType, loc), "===", bucket.tests[ti], loc);
+				const setArm = makeExprStmt(makeAssign(makeIdentResolved(armSym, loc), makeNumber(bucket.arms[ti], loc), loc), loc);
+				chain = makeIf(eq, makeBlock([setArm], loc), chain, loc);
+			}
+			hashCases.push(makeSwitchCase([makeNumber(bucket.hash, loc)], [chain], false, loc));
 		}
+		stmts.push(makeSwitch(makeCall(runtimeRef("msStringHash", loc), [discNode], loc), hashCases, loc));
+		stmts.push(makeSwitch(makeIdentResolved(armSym, loc), dispatchCases, loc));
+	}
+	if (!defaultInSwitch && !isEmptyBlock(defaultBody)) {
+		stmts.push(defaultBody);
 	}
 	return makeBlock(stmts, loc);
 }
@@ -841,11 +796,10 @@ test "few string arms stay as if-else" {
 	assert stmtCountAfter(src, lowerMatch) == 2;
 }
 
-test "hash switch stmt mode produces $matched guard" {
-	// >8 string arms in stmt match → hash switch with $matched flag
+test "hash switch stmt mode lowers into one block" {
 	const src = "match (cmd) { \"a\" => foo(), \"b\" => bar(), \"c\" => c(), \"d\" => d(), \"e\" => e(), \"f\" => f(), \"g\" => g(), \"h\" => h(), \"i\" => i(), _ => fallback() }";
 	const stmts = stmtCountAfter(src, lowerMatch);
-	// Top level: [VarDecl($match_temp), BlockStmt(VarDecl($matched) + Switch + If)]
+	// Top level: [VarDecl($match_temp), BlockStmt(VarDecl($arm) + Switch + Switch)]
 	assert stmts == 2;
 }
 

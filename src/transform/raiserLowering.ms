@@ -33,6 +33,7 @@ import { liftDestructors } from "./lowering/destructorLifting";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
+	ctx.raiserBackend = true;
 	ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
 	let result = lowerBorrow(program, ctx);
 	result = lowerImplicitConv(result, ctx);
