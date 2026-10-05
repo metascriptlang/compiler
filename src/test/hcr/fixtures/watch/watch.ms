@@ -40,6 +40,9 @@ if (!opened.ok) {
 	const w = opened.value;
 	console.log(`WATCH write before the first wait: ${seenAfterWrite(w, "tree", "first.ms")}`);
 	console.log(`WATCH write in a subdirectory: ${seenAfterWrite(w, "tree", "sub/logic.ms")}`);
+	if (platform == "darwin") {
+		console.log(`WATCH an in-place rewrite is seen: ${seenAfterWrite(w, "tree", "first.ms")}`);
+	}
 	const renamed = closedAfter(w, "saved.ms", (): void => {
 		writeFile("tree/saved.tmp", "export const saved = 1;");
 		rename("tree/saved.tmp", "tree/saved.ms");
