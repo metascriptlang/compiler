@@ -747,6 +747,7 @@ export class CGen {
 	unionsInProgress: string[];
 	deferredStructs: DeferredStructDef[];
 	inlineCopies: Symbol[];
+	deferredElements: Type[];
 }
 
 export interface TestEntry {
@@ -791,6 +792,7 @@ export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string): C
 		unionsInProgress: [],
 		deferredStructs: [],
 		inlineCopies: [],
+		deferredElements: [],
 	};
 }
 

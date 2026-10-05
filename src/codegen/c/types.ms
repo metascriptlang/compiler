@@ -1739,8 +1739,7 @@ function genArrayType(g: CGen, t: Type): string {
 	const elemKey = (resolvedElem != null) ? typeKey(resolvedElem) : "";
 	const selfRef = elemKey != "" && isBeingDefined(g, elemKey);
 
-	// getTypeDesc(elem) kept for its emission side-effect (element typedef) + the data[] type.
-	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : getTypeDesc(g, t.typeReturn);
+	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : elementTypeDesc(g, t.typeReturn);
 
 	const arrTypeName = arrayCTypeName(t);
 	typeCacheSet(g.typeCache, key, arrTypeName);
@@ -1764,6 +1763,31 @@ function genArrayType(g: CGen, t: Type): string {
 	}
 
 	return arrTypeName;
+}
+
+function elementTypeDesc(g: CGen, elem: Type | null): string {
+	if (elem == null || !holdsStructByValue(elem)) return getTypeDesc(g, elem);
+	const name = elemArrayCName(elem);
+	ensureForwardDecl(g, name);
+	g.deferredElements.push(elem);
+	return name;
+}
+
+function holdsStructByValue(t: Type): boolean {
+	if (isImportedType(t)) return false;
+	const peeled = peelTransparentInstance(t);
+	if (peeled != t) return holdsStructByValue(peeled);
+	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return holdsStructByValue(t.typeReturn);
+	if (t.kind == TypeKind.GenericInstance) return distinctInstanceRepr(t) == null && isStructType(peelToStructOrUnion(t.typeExtra));
+	return isStructType(t) || t.kind == TypeKind.Tuple;
+}
+
+export function defineDeferredElements(g: CGen): void {
+	while (g.deferredElements.length > 0) {
+		const pending = g.deferredElements;
+		g.deferredElements = [];
+		for (const t of pending) getTypeDesc(g, t);
+	}
 }
 
 // Returns the array type name for a given element type string (for use in expressions/statements).
