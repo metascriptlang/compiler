@@ -769,6 +769,16 @@ test "parens" { assert parseOk("(a + b) * c"); }
 test "** right assoc" { assert parseOk("a ** b ** c"); }
 
 test "assign right assoc" { assert parseOk("a = b = c"); }
+
+test "bitwise compound assignments bind loosest" {
+	assert exprOp("a |= b | c") == "|=";
+	assert exprOp("a &= b & c") == "&=";
+	assert exprOp("a ^= b ^ c") == "^=";
+	assert exprOp("a <<= b + 1") == "<<=";
+	assert exprOp("a >>= b >> 1") == ">>=";
+	assert exprOp("a >>>= b >>> 1") == ">>>=";
+	assert binLeftKind("a |= b |= c") == NodeKind.Identifier;
+}
 // Compound expressions
 test "complex mixed" { assert parseOk("f(a).b + g(c).d"); }
 

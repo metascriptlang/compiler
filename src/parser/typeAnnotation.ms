@@ -566,6 +566,12 @@ test "nested generics no space" { assert skipsType("Result<Array<number>>"); }
 
 test "triple nested generics" { assert skipsType("HashMap<string, Result<Array<number>>>"); }
 
+test "a closer joined to = leaves the =" {
+	assert skipsTo("Array<number>= x", TokenKind.Assign);
+	assert skipsTo("Result<Array<number>>= x", TokenKind.Assign);
+	assert skipsTo("A<B<Array<number>>>= x", TokenKind.Assign);
+}
+
 test "array in generic arg" { assert skipsType("Result<Node[], string>"); }
 
 test "array in both generic args" { assert skipsType("HashMap<string[], number[]>"); }
