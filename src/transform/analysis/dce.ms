@@ -622,6 +622,12 @@ test "an enum reached only through its toString op stays" {
 	assert getStmts(lowerDCE(lowerBuiltins(pr.value, ctx), ctx)).length == 3;
 }
 
+test "an enum named only by a type stays" {
+	assert sweptStmtCount("enum Shade { Lo, Hi } const n: int32 = 1; const s = n as Shade;") == 3;
+	assert sweptStmtCount("enum Shade { Lo, Hi } struct Lamp { shade: BitSet<Shade>; } const n: int32 = 1;") == 3;
+	assert sweptStmtCount("enum Shade { Lo, Hi } function lit(s: Shade): int32 { return s as int32; } const n: int32 = 1;") == 3;
+}
+
 test "a local that shares an enum's name does not keep the enum" {
 	assert sweptStmtCount("enum Color { Red } function f(): number { const Color = 1; return Color; } f();") == 2;
 }
