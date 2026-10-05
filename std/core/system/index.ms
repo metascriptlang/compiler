@@ -592,24 +592,6 @@ when (mscDeclaresRuntime) {
 	extern function msFutureFinished(fp: Ptr<void>): boolean;
 
 	@compilerFunc
-	extern function msFutureCheckErr(fp: Ptr<void>): boolean;
-
-	@compilerFunc
-	extern function msFutureRead(fp: Ptr<void>): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureReadBool(fp: Ptr<void>): boolean;
-
-	@compilerFunc
-	extern function msFutureReadDouble(fp: Ptr<void>): float64;
-
-	@compilerFunc
-	extern function msFutureReadInt32(fp: Ptr<void>): int32;
-
-	@compilerFunc
-	extern function msFutureReadString(fp: Ptr<void>): string;
-
-	@compilerFunc
 	extern function msFutureDrcDestroy(f: Ptr<void>): void;
 
 	@compilerFunc
@@ -737,9 +719,6 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msAwaitGroupCancel(g: Ptr<void>): void;
-
-	@compilerFunc
-	extern function msAwaitGroupCheckFailed(g: Ptr<void>): void;
 
 	@compilerFunc
 	extern function msAwaitGroupFree(g: Ptr<void>): void;
