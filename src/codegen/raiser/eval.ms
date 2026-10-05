@@ -260,6 +260,12 @@ function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnNa
 registerMacroEngineCompiler(compileMacroIntoEngine);
 
 function seedCtxForSym(sym: Symbol): CheckerContext {
+	// A body ctx re-checking a generic instance carries the instantiating module's path over
+	// the defining module's scope; a helper of the instantiating module takes that module's ctx.
+	if (_engineToken != null) {
+		const host = _engineToken.instantiatingCtx;
+		if (host != null && host != _engineToken && sym.modulePath == host.modulePath) return host;
+	}
 	if (sym.modulePath != "" && _engineToken != null && sym.modulePath != _engineToken.modulePath) {
 		const mc = lookupModuleCtx(sym.modulePath);
 		if (mc != null) return mc;
