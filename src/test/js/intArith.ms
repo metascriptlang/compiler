@@ -262,10 +262,14 @@ test "int32 increment is left alone" {
 
 // ===== bitwise compound assignment =====
 
-test "int32 unsigned right shift stays inside int32" {
-	const result = compileToJS("function f(a: int32, b: int32): int32 { return a >>> b; }");
-	assert result.ok;
-	assert result.value.contains("(a >>> b) | 0");
+test "an int32 or number unsigned right shift is the uint32 JS computes" {
+	const binary = compileToJS("function f(a: int32, b: int32): uint32 { return a >>> b; }");
+	assert binary.ok;
+	assert binary.value.contains("a >>> b");
+	assert !binary.value.contains("(a >>> b) | 0");
+	const stored = compileToJS("function f(a: number, b: int32): number { a >>>= b; return a; }");
+	assert stored.ok;
+	assert stored.value.contains("a >>>= b");
 }
 
 test "uint32 compound or wraps and loses the compound form" {
