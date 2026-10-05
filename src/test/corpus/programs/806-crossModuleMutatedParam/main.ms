@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot evaluate 'shapes' at comptime: symbol kind is Module
 // @stdout: mutparam 12 1 11 22 16
 // note: a callee that reassigns a struct or closure parameter takes it by pointer in C (the declaring module's mutatedParams). An importer used to read a per-module copy of the symbol whose mutatedParams was 0, declared the callee by value and passed the argument by value: C built and died with SIGBUS, JS was right. The namespace call is the same callee reached through `import * as`.
 import { P, bump, twice } from "./shapes";

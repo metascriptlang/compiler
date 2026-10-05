@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot evaluate 'headers' at comptime: symbol kind is Module (card 2026-09-26-raiser-namespace-import-module-symbol)
 // @stdout: owners 1 2 0 2 11 ab cd 42
 
 import { makeArr } from "./library";

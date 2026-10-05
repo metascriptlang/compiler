@@ -1,5 +1,5 @@
 // @stdout: ops div=1003 divAssign=-13 modOnly=77 modAssign=1 orAssign=1003 xorOnly=7 xorAssign=13
-// @xfail(raiser): raiser runtime error: cannot evaluate 'ops' at comptime: symbol kind is Module (a namespace-qualified call on Raiser)
+// @xfail(raiser): the Raiser applies the built-in operator for a declared compound one (`divAssign=3 … orAssign=11`); a namespace-qualified call runs there since wt/solana-holes-9
 // note: on a built-in type a compound assignment is its own operator: `c /= b` calls the declared `/=`, and `n %= v` keeps the built-in `%` because only `%` is declared; `o |= b` calls the declared `|=` and `y ^= one` keeps the built-in `^`. Same output on C, JS, ESM, orc and danger.
 import * as ops from "./lib/ops";
 function run(a: int32, b: int32, w: int64, v: int64): void {

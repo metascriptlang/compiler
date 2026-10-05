@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: cannot evaluate 'direct' at comptime: symbol kind is Module
 // @stdout: module abc
 
 import * as direct from "./library";
