@@ -2514,7 +2514,7 @@ function resolveSuper(ctx: CheckerContext, node: Node): Type {
 		addError(ctx, "'super' parent class has no resolvable name", node.location.line, node.location.column);
 		return errorType();
 	}
-	const parentSym = lookupSymbol(ctx.table, parentName);
+	const parentSym = parentType.sym != null && parentType.sym.symbolKind == SymbolKind.Class ? parentType.sym : lookupSymbol(ctx.table, parentName);
 	if (parentSym == null) {
 		addError(ctx, "'super' parent class '" + parentName + "' not found", node.location.line, node.location.column);
 		return errorType();
