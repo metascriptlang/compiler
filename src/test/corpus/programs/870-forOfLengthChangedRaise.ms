@@ -1,5 +1,5 @@
 // @stdout: array raised after 2: the length of the array changed while iterating over it
-// @xfail(raiser): the Raiser VM runs for-of itself and rejects a string iterable ('expected an array, got value kind String')
+// @xfail(raiser): the Raiser catches the length check's thrown string as a string, so `e.message` stops ('expected an object, got value kind String'); the string for-of itself runs there since wt/solana-holes-9
 // note: an uncaught length change of a for-of array ends the program with Nim's items message; a string that grows while iterated raises too, as Nim's items does for string. The loop used to read past the end or skip what was added.
 
 function grownString(): string {

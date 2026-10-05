@@ -1,5 +1,4 @@
-// @stdout: bytes 11 empty 0 codes 97,98,99, field 5 concat 4 skip 2 typed 3
-// @xfail(raiser): the Raiser VM runs for-of itself and rejects a string iterable ('expected an array, got value kind String')
+// @stdout: bytes 11 empty 0 codes 97,98,99, field 5 concat 4 skip 2 typed 3 chars <a>a!<b>b! break x
 // note: for-of over a string yields each UTF-8 byte as a char, as Nim's items does for string. The lowering used to read UTF-16 units as one-character strings into the char binding, which did not compile on C and split a surrogate pair on JS.
 
 class Named { name: string; constructor(n: string) { this.name = n; } }
@@ -46,4 +45,9 @@ function typedBinding(s: string): int32 {
 	return n;
 }
 
-console.log(`bytes ${count("héllo\u{1F600}!")} empty ${count("")} codes ${codes("abc")} field ${fieldBytes(new Named("abéc"))} concat ${concatBytes("a", "éb")} skip ${skipVowels("bead")} typed ${typedBinding("xyz")}`);
+let printed = "";
+for (const c of "ab") { console.log(c); printed = printed + "<" + c + ">" + `${c}!`; }
+let first = "";
+for (const c of "xyz") { if (c as int32 == 121) break; first = first + c; }
+
+console.log(`bytes ${count("héllo\u{1F600}!")} empty ${count("")} codes ${codes("abc")} field ${fieldBytes(new Named("abéc"))} concat ${concatBytes("a", "éb")} skip ${skipVowels("bead")} typed ${typedBinding("xyz")} chars ${printed} break ${first}`);
