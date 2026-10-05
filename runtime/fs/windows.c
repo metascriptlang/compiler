@@ -23,7 +23,7 @@
 #define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
 #endif
 
-static int _msFsLastErrno = 0;
+static _Thread_local int _msFsLastErrno = 0;
 
 int32_t msFsLastErrno(void) {
 	return (int32_t)_msFsLastErrno;

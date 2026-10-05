@@ -14,7 +14,7 @@
 #include <dirent.h>
 #include <errno.h>
 
-static int _msFsLastErrno = 0;
+static _Thread_local int _msFsLastErrno = 0;
 
 int32_t msFsLastErrno(void) {
 	return (int32_t)_msFsLastErrno;
