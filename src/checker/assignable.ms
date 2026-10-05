@@ -10,7 +10,7 @@
 
 import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, BinaryExprData, HiddenDerefData, OutExprData, TypeAssertionData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
-import { isReadonlyView, isAtomicRef, isSharedGraphType, isNodeGraphType } from "./types";
+import { isReadonlyView, isAtomicRef, isSharedGraphType, isNodeGraphType, isStringLike } from "./types";
 import { isValueAggregateParam } from "./paramMutationAnalysis";
 
 export enum WriteVerdict {
@@ -197,6 +197,10 @@ export function lvalueText(node: Node): string {
 
 export function viewRefusal(source: Node, slot: Type | null): string {
 	if (slot == null || slot.kind != TypeKind.Span || isReadonlyView(slot)) return "";
+	const root = sliceSource(source);
+	if (isStringLike(root.nodeType)) {
+		return `cannot view '${lvalueText(root)}' as a writable Span — a string is immutable; a view that only reads is Readonly<Span<T>>`;
+	}
 	return writeRefusal(source, WriteSite.View);
 }
 
