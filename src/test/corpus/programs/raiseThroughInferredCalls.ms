@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM has no `class … extends` (`class Square extends Shape`: "cannot evaluate 'super' at comptime: symbol kind is Class")
 // @stdout: chain 8 | deep 4 | deep caught -1 | recur 14
 // @stdout: finally ran
 // @stdout: binary caught big 7 | nested caught big 8
