@@ -46,6 +46,7 @@ import "./macroPrefixIdentity";
 import "./macroSourceForms";
 import "./matchDispatch";
 import "./nominalInstantiation";
+import "./nullable";
 import "./nullableInstantiation";
 import "./numericRepresentation";
 import "./receiverViews";
