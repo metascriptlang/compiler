@@ -1201,7 +1201,7 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 		if (!isMatchingReference(d.left, refNode)) return null;
 		const rhs = skipHiddenConv(d.right);
 		if (rhs == null || rhs.nodeType == null) return declared;
-		return constrainToDeclared(rhs.nodeType, declared);
+		return constrainToDeclared(assignedValueType(rhs), declared);
 	}
 	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
@@ -1213,9 +1213,13 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 		if (refNode.kind != NodeKind.Identifier) return null;
 		const sym = refNode.resolvedSym;
 		if (sym == null || sym.declNode != node) return null;
-		return constrainToDeclared(init.nodeType, declared);
+		return constrainToDeclared(assignedValueType(init), declared);
 	}
 	return null;
+}
+
+function assignedValueType(value: Node): Type {
+	return value.kind == NodeKind.NullLiteral ? nullType() : value.nodeType!;
 }
 
 function stripHidden(n: Node | null): Node | null {
