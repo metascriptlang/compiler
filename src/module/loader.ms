@@ -930,6 +930,19 @@ test "re-export from .h with prefix-colliding names does not double-export" {
 	assert inlined.indexOf("export export") < 0;
 }
 
+test "inlineHeaderImports reads import statements, never a string or a comment that spells one" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/tmp/msspelled/lp.h", "int linkProbe(int x);\nint otherProbe(int x);\n"));
+	const provider = createMapProvider(entries);
+	const spelled = "import { otherProbe } fr" + "om \"./lp.h\";";
+	const src = "const t = `" + spelled + "`;\nconst q = '" + spelled + "';\n/* " + spelled + " */\nimport { linkProbe } fr" + "om \"./lp.h\";\n";
+	const inlined = inlineHeaderImports(src, "/tmp/msspelled/main.ms", provider);
+	assert inlined.indexOf("extern function linkProbe(") >= 0;
+	assert inlined.indexOf("extern function otherProbe(") < 0;
+	assert inlined.indexOf("`" + spelled + "`") >= 0;
+	assert inlined.indexOf("'" + spelled + "'") >= 0;
+}
+
 test "A imports B chain" {
 	const entries: MapEntry[] = [];
 	entries.push(makeEntry("/src/a.ms", "import { foo } from \"./b\";"));
