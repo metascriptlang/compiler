@@ -192,7 +192,8 @@ export function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type
 			if (isIntegerType(leftType)) return leftType;
 			return int32Type();
 		},
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&&=" | "||=" | "??=" => voidType(),
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&&=" | "||=" | "??="
+			| "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => voidType(),
 		"??" => {
 			if (isMaybeType(leftType) && leftType.typeReturn != null) {
 				const joined = joinBranchTypes([leftType.typeReturn, rightType]);
@@ -336,6 +337,11 @@ export function isBitwiseBinaryOp(op: string): boolean {
 	return op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" || op == ">>>";
 }
 
+export function isBitwiseCompoundOp(op: string): boolean {
+	const base = compoundBase(op);
+	return base != op && isBitwiseBinaryOp(base);
+}
+
 export function isBitwiseAllowed(t: Type | null): boolean {
 	if (t == null) return false;
 	if (bitSetElemType(t) != null) return true;
@@ -380,14 +386,14 @@ export function rejectBigIntMix(ctx: CheckerContext, op: string, leftType: Type 
 	const leftBig = leftType != null && leftType.kind == TypeKind.BigInt;
 	const rightBig = rightType != null && rightType.kind == TypeKind.BigInt;
 	if (!leftBig && !rightBig) return false;
-	if (op == ">>>") {
-		addError(ctx, "operator '>>>' is not allowed on bigint — use '>>'", node.location.line, node.location.column);
+	if (compoundBase(op) == ">>>") {
+		addError(ctx, "operator '" + op + "' is not allowed on bigint — use '" + op.slice(1, op.length) + "'", node.location.line, node.location.column);
 		return true;
 	}
 	if (leftBig == rightBig) return false;
 	const isArith = op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "**"
 		|| op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=";
-	if (!isArith && !isBitwiseBinaryOp(op)) return false;
+	if (!isArith && !isBitwiseBinaryOp(op) && !isBitwiseCompoundOp(op)) return false;
 	const other = leftBig ? rightType : leftType;
 	if ((op == "+" || op == "+=") && other != null && isStringLike(other)) return false;
 	const otherName = other != null ? typeDisplayName(other) : "unknown";

@@ -34,7 +34,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -700,7 +700,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// Ref parity: leftPartOfAsgn
 			const isAsgn = d.operator == "=" || d.operator == "+=" || d.operator == "-=" ||
 				d.operator == "*=" || d.operator == "/=" || d.operator == "%=" ||
-				d.operator == "&&=" || d.operator == "||=" || d.operator == "??=";
+				d.operator == "&&=" || d.operator == "||=" || d.operator == "??=" ||
+				isBitwiseCompoundOp(d.operator);
 			if (isAsgn && node != ctx.stmtPosExpr) {
 				addError(ctx, "assignment is a statement, not an expression - assign first, then use the variable: 'x = f(); while (x !== null) { ... }'", node.location.line, node.location.column);
 			}
@@ -1062,6 +1063,19 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					d.right = wrapInConv(d.right, createPrimitive(TypeKind.Int32));
 					effRight = createPrimitive(TypeKind.Int32);
 				}
+			} else if (isBitwiseCompoundOp(d.operator)) {
+				const bitMark = ctx.errors.length;
+				if (effLeft != null && effLeft.kind == TypeKind.Number) {
+					addError(ctx, "'" + d.operator + "' needs an integer target, got 'number' — declare it with an integer type, or write 'x = x "
+						+ d.operator.slice(0, d.operator.length - 1) + " y'", node.location.line, node.location.column);
+				} else {
+					checkBitwiseOperands(ctx, d.operator, effLeft!, effRight!, node);
+				}
+				if (reportedErrorSince(ctx, bitMark)) { node.nodeType = errorType(); return; }
+				if (effRight != null && effRight.kind == TypeKind.Number) {
+					d.right = wrapInConv(d.right, createPrimitive(TypeKind.Int32));
+					effRight = createPrimitive(TypeKind.Int32);
+				}
 			}
 			if (d.operator == "+" && effLeft != null && effRight != null) {
 				if (effLeft.kind == TypeKind.CString && isStringLike(effRight)) {
@@ -1149,6 +1163,16 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				reportCompoundOperand(ctx, d.operator, d.left, d.right, effRight!, effLeft!);
 				node.nodeType = errorType();
 				return;
+			}
+			if (isBitwiseCompoundOp(d.operator) && effLeft != null && effRight != null) {
+				const base = d.operator.slice(0, d.operator.length - 1);
+				const stored = inferBinaryOp(base, effLeft, effRight);
+				if (stored != null && !isAssignable(stored, effLeft)) {
+					addError(ctx, "'" + d.operator + "' cannot store the '" + typeDisplayName(stored) + "' result of '" + base + "' in '"
+						+ typeDisplayName(effLeft) + "'", node.location.line, node.location.column);
+					node.nodeType = errorType();
+					return;
+				}
 			}
 			const nullishJoined = d.operator == "??" ? fitNullishArms(ctx, d, effLeft, effRight, expectedType, node == ctx.conversionOperand) : null;
 			if (nullishJoined != null) { node.nodeType = nullishJoined; return; }

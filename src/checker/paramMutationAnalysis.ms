@@ -154,7 +154,9 @@ export function findMutationLocation(node: Node | null, paramName: string, inter
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		if (d.operator == "=" || d.operator == "+=" || d.operator == "-="
-			|| d.operator == "*=" || d.operator == "/=" || d.operator == "%=") {
+			|| d.operator == "*=" || d.operator == "/=" || d.operator == "%="
+			|| d.operator == "&=" || d.operator == "|=" || d.operator == "^="
+			|| d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>=") {
 			if (!interiorOnly && getRootName(d.left) == paramName) return node.location;
 		}
 	}
@@ -273,7 +275,9 @@ export function scanForMutation(node: Node | null, paramName: string, interiorOn
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
 			if (d.operator == "=" || d.operator == "+=" || d.operator == "-="
-				|| d.operator == "*=" || d.operator == "/=" || d.operator == "%=") {
+				|| d.operator == "*=" || d.operator == "/=" || d.operator == "%="
+				|| d.operator == "&=" || d.operator == "|=" || d.operator == "^="
+				|| d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>=") {
 				if (!interiorOnly && getRootName(d.left) == paramName) return true;
 			}
 			return scanForMutation(d.left, paramName, interiorOnly) || scanForMutation(d.right, paramName, interiorOnly);
