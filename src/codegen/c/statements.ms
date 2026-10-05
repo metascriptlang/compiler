@@ -14,9 +14,10 @@ import {
 	CSection, addLine, sec, nameSetAdd, nameSetHas, addCGenError, addUnloweredError, isIndirectRef,
 } from "./context";
 import { genExpr, genExprInto, buildsInPlace, shimCallArg } from "./expressions";
-import { formatCNumber, formatCNumberLit } from "./literals";
+import { formatCNumber, formatCNumberLit, cBoolLiteral } from "./literals";
+import { readonlyDataConstBinding } from "../../checker/constFold";
 import { ensureCrossModuleProto } from "./forward";
-import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar } from "./names";
+import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar, mangleFieldName } from "./names";
 import { isRuntimeProcSym } from "../../transform/util";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, callOverloadWinner, genClFullCastNrvo, genClHalfCastNrvo, zeroInit } from "./types";
 
@@ -429,6 +430,57 @@ function genNestedGlobalVar(g: CGen, p: CProc, node: Readonly<Node>, d: Readonly
 	emitStmtsLine(p, `${varName} = ${genExpr(g, p, d.initializer)};`);
 }
 
+export function readonlyDataBracedInit(init: Readonly<Node>, t: Type | null): string {
+	match (init.kind) {
+		NodeKind.NumberLiteral => {
+			return formatCNumberLit(init.data as NumberLiteralData, init.nodeType);
+		},
+		NodeKind.BooleanLiteral => {
+			return cBoolLiteral((init.data as BooleanLiteralData).boolValue);
+		},
+		NodeKind.HiddenStdConv => {
+			return readonlyDataBracedInit((init.data as HiddenStdConvData).convExpr, t);
+		},
+		NodeKind.ArrayLiteral => {
+			// A sized array's C type is a struct with one `data[N]` member, so
+			// the element list needs the extra struct-level brace at every depth.
+			const ad = init.data as ArrayLiteralData;
+			const elemT = t != null && t.kind == TypeKind.SizedArray ? t.typeReturn : null;
+			let parts = "";
+			for (const e of ad.elements) {
+				const part = readonlyDataBracedInit(e, elemT);
+				if (part == "") return "";
+				parts = parts.length == 0 ? part : parts + ", " + part;
+			}
+			const arrayBraced = `{ ${parts} }`;
+			return t != null && t.kind == TypeKind.SizedArray ? `{ ${arrayBraced} }` : arrayBraced;
+		},
+		NodeKind.ObjectLiteral => {
+			const od = init.data as ObjectLiteralData;
+			let parts = "";
+			for (let i = 0; i < od.properties.length; i += 1) {
+				const part = readonlyDataBracedInit(od.properties[i], null);
+				if (part == "") return "";
+				const kv = `.${mangleFieldName(od.keys[i])} = ${part}`;
+				parts = parts.length == 0 ? kv : parts + ", " + kv;
+			}
+			return `{ ${parts} }`;
+		},
+		_ => { return ""; },
+	};
+}
+
+function genReadonlyDataLocal(g: CGen, p: CProc, node: Readonly<Node>, d: Readonly<VariableDeclData>): boolean {
+	if (g.checkerCtx == null || g.checkerCtx.targetOs != "solana" || d.declKind != DeclKind.Const
+			|| d.initializer == null || node.resolvedSym == null || !readonlyDataConstBinding(node)) return false;
+	const braced = readonlyDataBracedInit(d.initializer, node.nodeType);
+	if (braced == "") return false;
+	const varName = fillLocalName(p, safeName(d.declName), false);
+	setLocalSymName(p, node.resolvedSym, varName);
+	emitProcLocalsLine(p, `static const ${getTypeDesc(g, node.nodeType)} ${varName} = ${braced};`);
+	return true;
+}
+
 function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 	if (isComptimeOnlyVarDecl(node)) return;
 	const d = node.data as VariableDeclData;
@@ -440,6 +492,7 @@ function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 		genNestedGlobalVar(g, p, node, d);
 		return;
 	}
+	if (p != null && genReadonlyDataLocal(g, p, node, d)) return;
 	// Reference parity (fillLocalName + cpsLocals): all locals get unique C names and
 	// hoist to function top. Prevents name collisions from same-named VarDecls in sibling scopes.
 	const isTemp = d.declName.length > 0 && d.declName.byteAt(0) == "$".code;
