@@ -47,6 +47,18 @@ function literalElemType(el: Node): Type | null {
 	return el.nodeType;
 }
 
+function isComparisonOp(op: string): boolean {
+	return op == "<" || op == "<=" || op == ">" || op == ">=" || op == "==" || op == "!=" || op == "===" || op == "!==";
+}
+
+function declaredOperatorResult(ctx: CheckerContext, op: string, left: Type | null, right: Type | null): Type | null {
+	if (left == null || right == null || isStringLike(left) || isStringLike(right) || ctx.extensionRegistry == null) return null;
+	const ext = resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [left, right]);
+	if (ext == null) return null;
+	const fnType = getExtFnType(ext);
+	return fnType != null ? fnType.typeReturn : null;
+}
+
 function checkAssignTarget(ctx: CheckerContext, target: Node): void {
 	if (target.kind != NodeKind.ArrayLiteral) {
 		checkExpr(ctx, target, null);
@@ -1054,6 +1066,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 			}
 			if (isBitwiseBinaryOp(d.operator)) {
+				const userBitwise = declaredOperatorResult(ctx, d.operator, effLeft, effRight);
+				if (userBitwise != null) {
+					node.flags = node.flags.incl(NodeFlag.UserOp);
+					node.nodeType = userBitwise; return;
+				}
 				checkBitwiseOperands(ctx, d.operator, effLeft!, effRight!, node);
 				if (effLeft != null && effLeft.kind == TypeKind.Number) {
 					d.left = wrapInConv(d.left, createPrimitive(TypeKind.Int32));
@@ -1104,16 +1121,11 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			const isArithmeticOp = d.operator == "+" || d.operator == "-" || d.operator == "*"
 				|| d.operator == "/" || d.operator == "%" || d.operator == "**";
-			if (isArithmeticOp && effLeft != null && effRight != null
-				&& !isStringLike(effLeft) && !isStringLike(effRight)
-				&& ctx.extensionRegistry != null) {
-				const opExt = resolveOperatorCall(ctx.table, ctx.extensionRegistry, d.operator, [effLeft, effRight]);
-				if (opExt != null) {
-					const opFnType = getExtFnType(opExt);
-					if (opFnType != null && opFnType.typeReturn != null) {
-						node.flags = node.flags.incl(NodeFlag.UserOp);
-						node.nodeType = opFnType.typeReturn; return;
-					}
+			if (isArithmeticOp || isComparisonOp(d.operator)) {
+				const userResult = declaredOperatorResult(ctx, d.operator, effLeft, effRight);
+				if (userResult != null) {
+					node.flags = node.flags.incl(NodeFlag.UserOp);
+					node.nodeType = userResult; return;
 				}
 			}
 			const isRelational = d.operator == "<" || d.operator == ">" || d.operator == "<=" || d.operator == ">=";
