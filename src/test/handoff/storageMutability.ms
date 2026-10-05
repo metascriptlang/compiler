@@ -147,6 +147,45 @@ function run(): void {
 	assert !js.startsWith("ERROR:"), js;
 }
 
+test "a string reaches only a read-only Span, its slices too" {
+	const head = "struct Holder { s: Span<char>; }\nfunction poke(s: Span<char>): void { s[0] = 65 as char; }\nfunction setFirst(this s: Span<char>): void { s[0] = 66 as char; }\nfunction count<T>(s: Span<T>): int32 { return s.length as int32; }\nfunction title(): string { return \"abc\"; }\n";
+	const refused = [
+		"const lit = \"hello\"; poke(lit);",
+		"let built = \"x\".repeat(3); poke(built);",
+		"poke(title());",
+		"const lit = \"hello\"; poke(lit[1..3]);",
+		"const lit = \"hello\"; const w: Span<char> = lit;",
+		"let built = \"x\".repeat(3); let w: Span<char> = built[0..1]; w = built;",
+		"let built = \"x\".repeat(3); const h: Holder = { s: built };",
+		"const lit = \"hello\"; lit.setFirst();",
+		"const lit = \"hello\"; count(lit);",
+		"const lit = \"hello\"; const mid = lit[1..3]; mid[0] = 65 as char;",
+	];
+	for (const body of refused) {
+		const source = head + `function run(): void { ${body} } run();`;
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/text.ms", entrySource: source }], "test/text.ms");
+		assert !c.ok && (c.error.contains("a string is immutable") || c.error.contains("cannot write through Readonly<Span<char>>")), body;
+		assert js.startsWith("ERROR:"), body;
+	}
+	const legal = `struct Holder { s: Readonly<Span<char>>; }
+function peek(s: Readonly<Span<char>>): int32 { return s[0] as int32; }
+function size<T>(s: Readonly<Span<T>>): int32 { return s.length as int32; }
+function firstOf(this s: Readonly<Span<char>>): int32 { return s[0] as int32; }
+function run(): void {
+	const lit = "hello";
+	let built = "x".repeat(3);
+	const r: Readonly<Span<char>> = built;
+	const h: Holder = { s: lit[1..4] };
+	const mid = lit[1..3];
+	console.log(peek(lit), peek(built), peek(lit[1..2]), r.length, h.s.length, size(lit), lit.firstOf(), peek("raw"), mid[0]);
+} run();`;
+	const c = compileToCWithStd(legal);
+	assert c.ok, c.ok ? "" : c.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/text.ms", entrySource: legal }], "test/text.ms");
+	assert !js.startsWith("ERROR:"), js;
+}
+
 test "string byte views permit reads and detached writes but never mutable aliases" {
 	const refused = [
 		"const b = s.asBytes(); b[0] = 65;",
