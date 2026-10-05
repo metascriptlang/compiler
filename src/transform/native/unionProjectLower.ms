@@ -181,7 +181,7 @@ function guardObjectSlot(p: Node): void {
 	const loc = p.location;
 	const u = d.convExpr;
 	const check = carried ? "msMaybeVariantObject" : isLocation(u) ? "msVariantObject" : "msVariantObjectVal";
-	const access = makeCall(runtimeRef(check, loc), [u, makeNumber(mask, loc), makeString(accessHead("", p, ut), loc), makeString(memberLabels(ut).join("|"), loc)], loc);
+	const access = makeCall(generatedRef(check, loc), [u, makeNumber(mask, loc), makeString(accessHead("", p, ut), loc), makeString(memberLabels(ut).join("|"), loc)], loc);
 	access.nodeType = source;
 	d.convExpr = access;
 	if (carried) p.flags = p.flags.incl(NodeFlag.NoFieldCheck);
