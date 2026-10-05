@@ -190,6 +190,13 @@ test "macro source forms: the explicit type argument of a new expression a macro
 	assert forwardCell(new ExplicitCell<int32>()) == 0;
 }
 
+test "macro source forms: a new expression a macro forwards builds the instance a direct one builds" {
+	const direct = new ExplicitCell<string>();
+	direct.items.push("a");
+	assert cellCode(direct) == 1;
+	assert forwardCell(new ExplicitCell<string>()) == 0;
+}
+
 macro returnedCall(call: Node): Node { return call; }
 
 macro readCallType(call: Node): Node {
