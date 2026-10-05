@@ -2,8 +2,8 @@
 // GUARD-CHECK-FAIL overflows the maximum allowed frame space
 // GUARD-CHECK-FAIL compile failed for
 // A CPI written at the call builds its accounts in the caller's frame, so a list too long for the
-// 4 KB frame (45 accounts beside a one-byte buffer) fails the build, naming the function and its size;
-// the 44 that fit build in solanaCpiFrame.ms.
+// 4 KB frame (46 accounts beside a one-byte buffer) fails the build, naming the function and its size;
+// the 45 that fit build in solanaCpiFrame.ms.
 // RED MEANS: a CPI list stopped living in the caller's frame, or the frame check no longer fires.
 import { Account, InstructionAccount, ProgramError, account, failWith, invoke, programId, putU8 } from "std/solana";
 
@@ -25,6 +25,7 @@ function send(a: Account): Result<uint64, ProgramError> {
 		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
 		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
 		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
+		InstructionAccount.writable(a),
 	], storage, putU8(storage, 0, 1));
 }
 
