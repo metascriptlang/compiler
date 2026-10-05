@@ -10,7 +10,8 @@ import {
 	ConditionalExprData, TypeAssertionData, UpdateExprData,
 	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
 	MoveExprData, OutExprData, VariableDeclData, AwaitExprData, NewExprData,
-	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData
+	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData,
+	createNodeAt
 } from "../../ast/node";
 import { RaiserOpcode, RaiserConvClass, raiserABC, raiserABx, convOperand } from "../../raiser/bytecode";
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
@@ -1259,8 +1260,28 @@ function compileHiXorLoCall(s: RaiserCompState, node: Node): int32 {
 	return emitIntBinary(s, RaiserOpcode.BitXor, high, low);
 }
 
+function namespaceMemberIdent(node: Node): Node | null {
+	if (node.kind != NodeKind.MemberExpr || node.resolvedSym == null) return null;
+	const d = node.data as MemberExprData;
+	const ns = d.object.resolvedSym;
+	if (ns == null || ns.symbolKind != SymbolKind.Module) return null;
+	const ident = createNodeAt(NodeKind.Identifier, { name: `${ns.name}.${d.property}` }, node.location);
+	ident.resolvedSym = node.resolvedSym;
+	ident.nodeType = node.nodeType;
+	ident.flags = node.flags;
+	return ident;
+}
+
 function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
+	const nsCallee = namespaceMemberIdent(d.callee);
+	if (nsCallee != null) {
+		const written = d.callee;
+		d.callee = nsCallee;
+		const result = compileCallExpr(s, node);
+		d.callee = written;
+		return result;
+	}
 
 	// arr.push(val)
 	if (isArrayPush(d.callee)) {
@@ -1676,9 +1697,11 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 	const arrayType = zeroArrayType(node.nodeType);
 	if (arrayType != null && d.newArguments.length <= 1) return compileNewArray(s, node, arrayType);
 
-	if (d.newCallee.kind == NodeKind.Identifier) {
-		const classId = d.newCallee.data as IdentifierData;
-		const sym = d.newCallee.resolvedSym;
+	const nsCallee = namespaceMemberIdent(d.newCallee);
+	const newCallee = nsCallee != null ? nsCallee : d.newCallee;
+	if (newCallee.kind == NodeKind.Identifier) {
+		const classId = newCallee.data as IdentifierData;
+		const sym = newCallee.resolvedSym;
 		const ctorName = (sym != null ? sym.name : classId.name) + "_new";
 		let funcIdx = s.scopedFunctions && sym != null && sym.modulePath != ""
 			? resolveFunc(s, sym.modulePath + ":" + ctorName)
@@ -1792,6 +1815,8 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 
 function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as MemberExprData;
+	const nsMember = namespaceMemberIdent(node);
+	if (nsMember != null) return compileExpr(s, nsMember);
 
 	const sym = node.resolvedSym;
 	if (sym != null && sym.symFlags.has(SymbolFlag.Static) && !sym.symFlags.has(SymbolFlag.Mutable)
