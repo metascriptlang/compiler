@@ -92,12 +92,11 @@ test "E2E C: an unsigned compound right shift masks its count to the width" {
 	assert result.value.contains(">>= ((uint8_t)(b) & 7)");
 }
 
-test "E2E C: a signed compound unsigned right shift writes through the unsigned view" {
-	const result = compileToC("export function f(b: int8): int8 { let a: int8 = -1; a >>>= b; return a; }");
+test "E2E C: a signed compound left shift writes through the unsigned view" {
+	const result = compileToC("export function f(b: int8): int8 { let a: int8 = -1; a <<= b; return a; }");
 	assert result.ok;
 	assert result.value.contains("*(uint8_t*)&(");
-	assert result.value.contains(">>= ((uint8_t)(b) & 7)");
-	assert !result.value.contains(">>>");
+	assert result.value.contains("<<= ((uint8_t)(b) & 7)");
 }
 
 test "E2E C: a compound bitwise or stays the C operator" {
