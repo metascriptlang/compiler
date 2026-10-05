@@ -419,7 +419,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 				}
 				if (source.typeReturn != null && target.typeReturn != null
 					&& source.typeReturn.kind != TypeKind.GenericInstance
-					&& sameNominal(source.typeReturn, target.typeReturn)) {
+					&& (sameNominal(source.typeReturn, target.typeReturn) || isOwnGenericBase(source.typeReturn, target.typeReturn))) {
 					return true;
 				}
 				return isAssignable(source.typeReturn, target.typeReturn);
@@ -1082,6 +1082,7 @@ function sameDistinct(a: Type, b: Type): boolean {
 }
 
 export function sameNominal(a: Type, b: Type): boolean {
+	if (a == b) return true;
 	if (a.sym != null && b.sym != null) {
 		if (a.sym == b.sym) return true;
 		return a.sym.modulePath != "" && a.sym.modulePath == b.sym.modulePath
@@ -1090,7 +1091,13 @@ export function sameNominal(a: Type, b: Type): boolean {
 			&& a.sym.location.line == b.sym.location.line
 			&& a.sym.location.column == b.sym.location.column;
 	}
-	return a.typeName != "" && a.typeName == b.typeName;
+	return a.sym == null && b.sym == null && a.kind == b.kind
+		&& a.typeName != "" && a.typeName == b.typeName
+		&& sameNameList(a.typeNames, b.typeNames) && sameTypeList(a.typeChildren, b.typeChildren);
+}
+
+function isOwnGenericBase(base: Type, inst: Type): boolean {
+	return inst.kind == TypeKind.GenericInstance && inst.typeExtra != null && unwrapRefBase(inst.typeExtra) == base;
 }
 
 function sameGenericBase(a: Type, b: Type): boolean {

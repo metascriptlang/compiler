@@ -49,3 +49,24 @@ test "nominal identity: as between unions without a conversion is refused" {
 		assert strictErrorCount(src) == 0, src;
 	}
 }
+
+test "nominal identity: a type with no declaration is the same type only with the same contents" {
+	const refused = [
+		"function* nums(): Iterator<int32> { yield 300; }\nconst it: Iterator<string> = nums();",
+		"function* nums(): Iterator<int32> { yield 300; }\nfunction take(it: Iterator<string>): int32 { return 0; }\nconst n = take(nums());",
+		"class Cat { meow: string = \"m\"; }\nclass Car { speed: int32 = 1; }\nconst pc = { o: new Cat() };\nlet r = pc;\nr = { o: new Car() };",
+		"const small = { a: 1 as int8 };\nconst big = { a: 300 as int64 };\nlet r = small;\nr = big;",
+	];
+	for (const src of refused) {
+		assert strictErrorCount(src) > 0, src;
+	}
+	const accepted = [
+		"function* nums(): Iterator<int32> { yield 300; }\nconst it: Iterator<int32> = nums();",
+		"function one(): Result<int32, string> { return Result.ok(1); }\nconst r: Result<int32, string> = one();",
+		"async function seven(): Promise<int32> { return 7; }\nasync function run(): Promise<int32> { const p: Promise<int32> = seven(); return await p; }",
+		"const small = { a: 1 as int8 };\nlet r = small;\nr = { a: 2 as int8 };",
+	];
+	for (const src of accepted) {
+		assert strictErrorCount(src) == 0, src;
+	}
+}

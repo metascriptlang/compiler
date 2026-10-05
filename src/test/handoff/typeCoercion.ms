@@ -133,8 +133,10 @@ test "isReinterpretUnsafe: disjoint field names stay safe" {
 	assert !isReinterpretUnsafe(a, b);
 }
 
-test "isReinterpretUnsafe: same-named struct types skip the field walk" {
-	assert !isReinterpretUnsafe(numStrField("Same"), f32StrField("Same"));
+test "isReinterpretUnsafe: one struct type skips the field walk, a same-named one does not" {
+	const same = numStrField("Same");
+	assert !isReinterpretUnsafe(same, same);
+	assert isReinterpretUnsafe(numStrField("Same"), f32StrField("Same"));
 }
 
 test "isReinterpretUnsafe: nested struct field with union repr mismatch is unsafe" {
