@@ -2482,6 +2482,32 @@ export function hasDestructor(t: Type | null): boolean {
 	return getAttachedOp(t, AttachedOp.AttachedDestructor) != null;
 }
 
+// Maybe<T> is judged by its payload: the JS backend erases the C `{ value, present }`
+// carrier to a native `T | null`, so a copy made for the carrier would deep-copy a
+// plain nullable string (corpus 015 "p1=[object Object]").
+export function valueCopyRepr(t: Type | null): Type | null {
+	const base = distinctBody(t);
+	if (base != null) return valueCopyRepr(base);
+	if (t != null && t.kind == TypeKind.Struct && t.typeFlags.has(TypeFlag.IsMaybe)) {
+		return t.typeReturn;
+	}
+	if (t != null && t.kind == TypeKind.Set) {
+		const repr = setRepr(t);
+		if (repr != null) return repr;
+	}
+	return t;
+}
+
+export function needsValueCopy(t: Type | null): boolean {
+	t = valueCopyRepr(t);
+	if (t == null) return false;
+	if (t.kind == TypeKind.Struct) return t.typeFlags.has(TypeFlag.IsStruct);
+	if (t.kind == TypeKind.Tuple) return true;
+	if (t.kind == TypeKind.Array) return true;
+	if (t.kind == TypeKind.SizedArray) return true;
+	return false;
+}
+
 // ===== Tuple Type Name (reference parity: deterministic name for structural types) =====
 // DJB2 hash of type structure → "msTuple_HASH". Same algorithm as C codegen
 // (types.ms:genTupleType) so generated comparison functions match struct names.
