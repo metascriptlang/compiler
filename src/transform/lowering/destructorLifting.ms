@@ -1442,6 +1442,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 		aliasLiftedOps(orig, objType);
 		return;
 	}
+	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union && !(objType.kind == TypeKind.Distinct && hasAnyUserHook(orig, lctx))) return;
 	if (nameSetContains(lctx.generating, typeId)) return;
 	nameSetAdd(lctx.generating, typeId);
 
@@ -1460,8 +1461,6 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 			}
 		}
 	}
-
-	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union && !(objType.kind == TypeKind.Distinct && hasAnyUserHook(orig, lctx))) return;
 
 	if (isCrossModuleClass && !declaring) {
 		aliasLiftedOps(orig, objType);
