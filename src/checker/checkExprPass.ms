@@ -52,8 +52,10 @@ function refuseSpreadElements(ctx: CheckerContext, spread: Node, elem: Type | nu
 	if (from == null || elem == null || isUnresolvedType(from) || isUnresolvedType(elem)) return;
 	if (hasGenericParams(from) || hasGenericParams(elem) || sameType(from, elem)) return;
 	const numeric = isNumeric(from) && isNumeric(elem);
-	if (numeric ? !numericConvRefuses(from, elem) : isAssignable(from, elem)) return;
+	const wraps = !numeric && (isMaybeType(elem) || (elem.kind == TypeKind.Union && unwrapRefNullUnion(elem) == null));
+	if (numeric ? !numericConvRefuses(from, elem) : (!wraps && isAssignable(from, elem))) return;
 	const why = numeric ? `implicit ${typeDisplayName(from)} → ${typeDisplayName(elem)} conversion ${numericRefusalReason(from, elem)}`
+		: wraps ? `each '${typeDisplayName(from)}' would have to be converted to '${typeDisplayName(elem)}'`
 		: `'${typeDisplayName(from)}' is not assignable to '${typeDisplayName(elem)}'${explainStructuralPrefix(from, elem)}`;
 	addError(ctx, `a spread copies its elements into the array as they are: ${why} — convert them first, e.g. with map`,
 		spread.location.line, spread.location.column);
