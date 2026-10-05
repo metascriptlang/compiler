@@ -21,7 +21,7 @@ import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, reco
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag } from "./symbol";
+import { SymbolFlag, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, parentClassSymOf } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType } from "./types";
@@ -902,8 +902,14 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		}
 		ai = ai + 1;
 	}
-	// Fill default args for constructor calls — unified with fillDefaults (same as functions).
-	if (hasCtor) {
+	const declaringClass = hasCtor ? constructorDeclaringClass(d.newCallee.resolvedSym!) : null;
+	if (declaringClass != null) {
+		const defaults = declaringClass.defaultParams;
+		if (defaults != null && defaults.length > 0) {
+			const forwarding = ctorFnTypeOf(d.newCallee.resolvedSym!);
+			fillDefaults(ctx, d.newArguments, defaults, defaults.length, 0, ctorFormalTypes, declaringClass.modulePath, forwarding != null ? forwarding.typeNames : null);
+		}
+	} else if (hasCtor) {
 		// Path 1: monomorphized generic constructors (Set__string_new) via _ctorRegistry
 		// For GenericInstance types, compute mangled name from structure (typeName + type args).
 		// The GenericInstance keeps bare typeName ("Map") for type matching/unification;
@@ -1143,12 +1149,19 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			ctorParamTypes = ctorParamTypes.map((t: Type): Type => substituteAllParams(t, names, parentInst.typeChildren));
 		}
 		const expectedCount = ctorParamTypes != null ? ctorParamTypes.length : 0;
-		if (d.arguments.length != expectedCount) {
-			addError(ctx, "super() expects " + expectedCount.toString() + " arguments, got " + d.arguments.length.toString(), node.location.line, node.location.column);
-		}
 		for (let ai = 0; ai < d.arguments.length; ai += 1) {
 			const expected = (ctorParamTypes != null && ai < ctorParamTypes.length) ? ctorParamTypes[ai] : null;
 			callCheckExpr(ctx, d.arguments[ai], expected);
+		}
+		if (d.arguments.length < expectedCount) {
+			const owner = constructorDeclaringClass(parentSym) ?? parentSym;
+			const ownCtor = ctorFnTypeOf(parentSym);
+			if (owner.defaultParams != null && owner.defaultParams.length > 0) {
+				fillDefaults(ctx, d.arguments, owner.defaultParams, owner.defaultParams.length, 0, ctorParamTypes, owner.modulePath, ownCtor != null ? ownCtor.typeNames : null);
+			}
+		}
+		if (d.arguments.length != expectedCount) {
+			addError(ctx, "super() expects " + expectedCount.toString() + " arguments, got " + d.arguments.length.toString(), node.location.line, node.location.column);
 		}
 		node.nodeType = voidType();
 		return voidType();
@@ -3508,6 +3521,17 @@ function formatCandidateSig(name: string, fnType: Type): string {
 		sig = sig + ": " + typeDisplayName(fnType.typeReturn);
 	}
 	return sig;
+}
+
+function constructorDeclaringClass(classSym: Symbol): Symbol | null {
+	if (!hasFlag(classSym, SymbolFlag.InheritsConstructor)) return null;
+	let owner = classSym;
+	let depth = 0;
+	while (owner != null && hasFlag(owner, SymbolFlag.InheritsConstructor) && depth < 64) {
+		owner = parentClassSymOf(owner);
+		depth += 1;
+	}
+	return owner;
 }
 
 function superInstance(t: Type | null): Type | null {

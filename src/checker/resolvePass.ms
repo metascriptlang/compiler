@@ -10,7 +10,7 @@ import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention } from "../ast/node";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { peelToStructOrUnion, withoutReadonlyView, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
-import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
+import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag, ctorFnTypeOf } from "./symbol";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
@@ -2281,6 +2281,52 @@ function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext):
 	}
 }
 
+function declaresConstructor(body: Node[]): boolean {
+	for (const member of body) {
+		if (member.kind == NodeKind.ConstructorDecl) return true;
+		if (member.kind == NodeKind.DecoratedDecl) {
+			const inner = (member.data as DecoratedDeclData).decoratedNode;
+			if (inner != null && inner.kind == NodeKind.ConstructorDecl) return true;
+		}
+	}
+	return false;
+}
+
+function inheritConstructor(node: Node, sym: Symbol, parentSym: Symbol, parentType: Type): void {
+	const d = node.data as ClassDeclData;
+	if (!hasFlag(parentSym, SymbolFlag.HasConstructor) || declaresConstructor(d.classBody)) return;
+	const parentCtor = ctorFnTypeOf(parentSym);
+	if (parentCtor == null) return;
+	const instance = unwrapRef(parentType);
+	const names = instance.kind == TypeKind.GenericInstance
+		? splitTopLevel(genericParamNamesOf(symGenericParams(parentSym)), ",").map((n: string): string => n.trim())
+		: [];
+	const loc = node.location;
+	const params: string[] = [];
+	const paramTypes: Type[] = [];
+	const typeTexts: string[] = [];
+	const args: Node[] = [];
+	const locs: SourceLocation[] = [];
+	for (let i = 0; i < parentCtor.typeChildren.length; i += 1) {
+		const pt = names.length > 0 ? substituteAllParams(parentCtor.typeChildren[i], names, instance.typeChildren) : parentCtor.typeChildren[i];
+		const name = i < parentCtor.typeNames.length && parentCtor.typeNames[i] != "" ? parentCtor.typeNames[i] : "p" + i.toString();
+		params.push(name);
+		paramTypes.push(pt);
+		typeTexts.push(typeDisplayName(pt));
+		locs.push(loc);
+		const ref = createNodeAt(NodeKind.Identifier, { name }, loc);
+		args.push(pt.kind == TypeKind.Varargs ? createNodeAt(NodeKind.SpreadExpr, { spreadArg: ref }, loc) : ref);
+	}
+	const superCall = createNodeAt(NodeKind.CallExpr, { callee: createNodeAt(NodeKind.Identifier, { name: "super" }, loc), arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	const body = createNodeAt(NodeKind.BlockStmt, { statements: [createNodeAt(NodeKind.ExprStmt, { expr: superCall }, loc)] }, loc);
+	const ctorNode = createNodeAt(NodeKind.ConstructorDecl, { ctorParams: params, ctorParamTypes: typeTexts, ctorBody: body, ctorDefaults: [] }, loc);
+	ctorNode.nodeType = createFunction(paramTypes, params, voidType());
+	ctorNode.paramLocations = locs;
+	d.classBody.push(ctorNode);
+	setFlag(sym, SymbolFlag.HasConstructor);
+	setFlag(sym, SymbolFlag.InheritsConstructor);
+}
+
 export function resolveClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	const sym = lookupSymbol(ctx.table, d.className);
@@ -2498,6 +2544,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				mergedNames = newNames;
 				mergedTypes = newTypes;
 				didMergeParent = true;
+				if (parentSym != null) inheritConstructor(node, sym, parentSym, parentType);
 			}
 		}
 	}
