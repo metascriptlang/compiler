@@ -22,6 +22,74 @@ run();
 	}
 }
 
+test "a mutating array method writes the value storage of its receiver" {
+	const head = "struct Bag { items: Vec<int32>; shared: int32[]; }\nclass Box { items: Vec<int32> = []; }\ntype Loose = { items: Vec<int32> };\n";
+	const refused = [
+		"const v: Vec<int32> = [1]; v.push(2);",
+		"const bag: Bag = { items: [], shared: [] }; bag.items.push(1);",
+		"const rows: Vec<Vec<int32>> = [[1]]; rows[0].pop();",
+		"function grow<T>(x: T): int32 { const v: Vec<T> = [x]; v.push(x); return v.length; } grow(1);",
+	];
+	for (const body of refused) {
+		const source = head + `function run(): void { ${body} } run();`;
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/mutator.ms", entrySource: source }], "test/mutator.ms");
+		assert !c.ok && c.error.contains("is const (use 'let')"), body;
+		assert js.startsWith("ERROR:") && js.contains("is const (use 'let')"), body;
+	}
+	const legal = head + `function run(): void {
+	let v: Vec<int32> = [1]; v.push(2);
+	const a: int32[] = [1]; a.push(2);
+	const bag: Bag = { items: [], shared: [] }; bag.shared.push(3);
+	const box = new Box(); box.items.push(4);
+	const loose: Loose = { items: [] }; loose.items.push(5);
+	const byKey = new HashMap<string, int32[]>(); byKey.set("k", [1]);
+	const bucket = byKey.get("k"); if (bucket != null) bucket.push(6);
+	console.log(v.length, a.length, bag.shared[0], box.items[0], loose.items[0], byKey.get("k")!.length);
+} run();`;
+	const c = compileToCWithStd(legal);
+	assert c.ok, c.ok ? "" : c.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/mutator.ms", entrySource: legal }], "test/mutator.ms");
+	assert !js.startsWith("ERROR:"), js;
+}
+
+test "a writable Span over a value container writes that container" {
+	const head = "type Row = int32[2];\nstruct Holder { t: int32[4]; }\nfunction poke(s: Span<int32>, i: int32): void { s[i] = 42; }\nfunction peek(s: Readonly<Span<int32>>, i: int32): int32 { return s[i]; }\nfunction setFirst(this s: Span<int32>, x: int32): void { s[0] = x; }\nconst MODT: int32[4] = [3, 5, 7, 9];\n";
+	const refused = [
+		"const t: int32[4] = [1, 2, 3, 4]; poke(t, 1);",
+		"poke(MODT, 1);",
+		"const v: Vec<int32> = [1, 2]; poke(v, 0);",
+		"const h: Holder = { t: [1, 2, 3, 4] }; poke(h.t, 0);",
+		"const g: Row[2] = [[1, 2], [3, 4]]; poke(g[1], 0);",
+		"const t: int32[4] = [1, 2, 3, 4]; poke(t[1..3], 0);",
+		"const t: int32[4] = [1, 2, 3, 4]; t.setFirst(5);",
+		"const t: int32[4] = [1, 2, 3, 4]; const w: Span<int32> = t; w[0] = 1;",
+		"const t: int32[4] = [1, 2, 3, 4]; t[1..3][0] = 7;",
+		"const t: int32[4] = [1, 2, 3, 4]; let w: Span<int32> = t[0..1]; w = t;",
+	];
+	for (const body of refused) {
+		const source = head + `function run(): void { ${body} } run();`;
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/view.ms", entrySource: source }], "test/view.ms");
+		assert !c.ok && c.error.contains("is const (use 'let')"), body;
+		assert js.startsWith("ERROR:") && js.contains("is const (use 'let')"), body;
+	}
+	const param = head + "function relay(v: Vec<int32>): void { poke(v, 0); }";
+	const cp = compileToCWithStd(param);
+	assert !cp.ok && cp.error.contains("value parameters are read-only views"), cp.ok ? "accepted" : cp.error;
+	const legal = head + `function relay(s: Span<int32>): void { poke(s, 0); poke(s[1..2], 0); }
+function run(): void {
+	let t: int32[4] = [1, 2, 3, 4]; poke(t, 1); relay(t); t.setFirst(5);
+	const c: int32[4] = [9, 8, 7, 6]; const r: Readonly<Span<int32>> = c;
+	const a: int32[] = [1, 2]; poke(a, 0);
+	console.log(t[0], t[1], peek(c, 2), peek(MODT, 3), r[1], a[0]);
+} run();`;
+	const c = compileToCWithStd(legal);
+	assert c.ok, c.ok ? "" : c.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/view.ms", entrySource: legal }], "test/view.ms");
+	assert !js.startsWith("ERROR:"), js;
+}
+
 test "string byte views permit reads and detached writes but never mutable aliases" {
 	const refused = [
 		"const b = s.asBytes(); b[0] = 65;",
