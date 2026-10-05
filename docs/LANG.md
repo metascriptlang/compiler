@@ -148,6 +148,7 @@ const shifted = byte << 4;
 Constants follow Nim's literal rule, with one safety addition:
 
 - An untyped constant — a literal, or a `const` declared without a type — is a literal: it flows into any slot that holds its value exactly. An integer literal is `int32` when it fits and `int64` past that; an expression of untyped integer constants folds exactly in 64 bits, so `const x = 100000 * 100000` is the `int64` 10000000000.
+- Object literals joined by an array literal, a conditional, a `match` or an inferred return are joined field by field, as two numbers join: `[{ low: 11 }, { low: 4294967295 }]` is `{ low: int64 }[]` and prints 4294967295 on every backend. A field constant the joined field cannot hold is refused (`[{ low: u }, { low: -1 }]` with `u: uint32`, as `[u, -1]` is), and so is an element that is not a literal and has another field width (`[a, { low: 4294967295 }]` with `const a = { low: 11 }`). A spread joins with its element type (`[...int64s, 1]` is `int64[]`); a spread whose elements the array cannot hold as they are is refused.
 - A typed constant keeps its declared type: `const MAX: int64 = 100` narrows into `int32` only through `as`.
 - A float — literal or constant — never becomes an integer implicitly: `const i: int32 = 3.0` is refused; write `3`.
 - An integer a float cannot hold exactly is refused even as a literal (`const f: float32 = 16777217`), and so is a `uint64`/`int64` past what the slot holds. `16777217 as float32` rounds on the programmer's word.
@@ -171,7 +172,7 @@ error: implicit int16 conversion into 'float32 | number' fits both float32 and n
 error: implicit int64 → int32 conversion in '+=' narrows — write an explicit 'as int32'
 ```
 
-Pins: `src/test/handoff/numericLattice.ms`, `numericConstants.ms`, `literalCoercion.ms`, `src/test/js/float32.ms`; corpus `1022`, `1031`, `1032`, `1034`.
+Pins: `src/test/handoff/numericLattice.ms`, `numericConstants.ms`, `literalCoercion.ms`, `src/test/js/float32.ms`; corpus `1022`, `1031`, `1032`, `1034`, `anonymousLiteralFieldWidths`.
 
 ### Float Types
 
