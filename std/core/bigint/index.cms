@@ -17,6 +17,9 @@ when (!bare && !solana) {
 	@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum_core.c");
 	@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/constant_time.c");
 	@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c");
+	// bignum.c allocates through mbedtls_calloc/mbedtls_free, real functions under
+	// MBEDTLS_PLATFORM_MEMORY: only dead stripping lets an executable link without them.
+	@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform.c");
 
 	// The operator forms are synthesized by src/transform/native/bigIntOpLower.ms
 	// and reach C as bare calls against the header above.
