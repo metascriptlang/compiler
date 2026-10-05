@@ -137,32 +137,13 @@ export function anonStructName(fieldNames: string[], fieldTypes: Type[]): string
 	let i = 0;
 	while (i < fieldNames.length) {
 		const ft = i < fieldTypes.length ? fieldTypes[i] : null;
-		let suffix = "x";
-		if (ft != null) {
-			suffix = match (ft.kind) {
-				TypeKind.Number | TypeKind.Float64 => "n",
-				TypeKind.Float32 => "f",
-				TypeKind.String => "s",
-				TypeKind.Boolean => "b",
-				TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => "i",
-				TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "u",
-				TypeKind.Array => {
-					// Distinguish array element types to avoid struct name collision
-					// (e.g., string[] field vs unknown[] field producing the same anon struct name)
-					if (ft.typeReturn != null) {
-						return match (ft.typeReturn.kind) {
-							TypeKind.String => "As",
-							TypeKind.Number | TypeKind.Float64 => "An",
-							TypeKind.Boolean => "Ab",
-							_ => "x",
-						};
-					} else {
-						return "x";
-					}
-				},
-				_ => "x",
-			};
-		}
+		const suffix = ft == null ? "x" : match (ft.kind) {
+			TypeKind.Number | TypeKind.Float64 => "n",
+			TypeKind.Float32 => "f",
+			TypeKind.String => "s",
+			TypeKind.Boolean => "b",
+			_ => "x" + _stdHashToBase36(typeKey(ft)),
+		};
 		name = name + "__" + fieldNames[i] + suffix;
 		i = i + 1;
 	}
