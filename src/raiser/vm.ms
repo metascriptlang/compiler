@@ -1759,6 +1759,10 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 		setReg(vm, vm.baseReg + inst.a, raiserFloat(convToFloat(src, fromUnsigned, cls == RaiserConvClass.F32)));
 		return;
 	}
+	if (cls == RaiserConvClass.Str && convSource(inst.c) == (RaiserConvClass.Char as int32)) {
+		setReg(vm, vm.baseReg + inst.a, raiserString(fromCodePoint(src.intVal >= 0 && src.intVal < 0x80 ? src.intVal as int32 : 0xFFFD)));
+		return;
+	}
 	if (cls == RaiserConvClass.Str) {
 		setReg(vm, vm.baseReg + inst.a, raiserString(fromUnsigned && src.kind == RaiserValueKind.Int ? `${src.intVal as uint64}` : raiserToString(src)));
 		return;

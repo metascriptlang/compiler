@@ -179,6 +179,7 @@ export enum RaiserConvClass {
 	F64Bits,
 	HandleBits,
 	I32Wrap,
+	Char,
 }
 
 export function convOperand(to: RaiserConvClass, from: int32): int32 {
