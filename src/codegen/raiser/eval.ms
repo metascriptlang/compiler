@@ -419,6 +419,20 @@ test "engine: for-of raises when its body changes the array length" {
 	assert ctx.output == "raised after 1,\nraised after 1,\nfinished 1,\nfinished 1,2,3,\n";
 }
 
+test "engine: a for-of over a string yields its bytes as chars" {
+	const ctx = evalOrcVM("let n = 0; let sum = 0; for (const c of 'h\u00e9llo') { n += 1; sum += c as int32; } console.log(n, sum);"
+		+ " let s = 'ab'; let seen = ''; for (const c of s) { seen = seen + c + '|'; console.log(c); if (c as int32 == 97) continue; seen = seen + '!'; }"
+		+ " console.log(seen); for (const c of 'xyz') { if (c as int32 == 121) break; console.log(`${c}`); }");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "6 795\na\nb\na|b|!\nx\n", ctx.output;
+}
+
+test "engine: a for-of raises when the string it iterates changes length" {
+	const ctx = evalOrcVM("let s = 'abc'; let seen = ''; try { for (const c of s) { seen = seen + c; s = s + 'd'; } } catch (e) { console.log('raised after ' + seen); }");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "raised after a\n", ctx.output;
+}
+
 test "engine: struct assignment preserves the source value" {
 	const r = evalFull("struct S { x: int32; } let a: S = { x: 1 };"
 		+ " let b = a; b.x = 2; return a.x * 10 + b.x;");
