@@ -245,6 +245,7 @@ export function needsIntegerCompoundRewrite(d: BinaryExprData): boolean {
 	const base = compoundBaseOf(d.operator);
 	if (base == "") return false;
 	const t = peelToRepr(d.left.nodeType);
+	if (t != null && t.kind == TypeKind.Number) return base == ">>>";
 	if (t == null || !isIntConvKind(t.kind)) return false;
 	if (isShiftOp(base)) return is64(t.kind) || subIntKind(t) != TypeKind.Unknown || (base == "<<" && t.kind == TypeKind.Uint32) || (base == ">>>" && t.kind == TypeKind.Int32);
 	if (base == "&" || base == "|" || base == "^") return t.kind == TypeKind.Uint32;
@@ -274,6 +275,7 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 	if (checked) return makeBinary(d.left, "=", checkedIntOp(base, readBack, d.right, t, d.left.nodeType, node.location), node.location);
 	if (isShiftOp(base) || base == "&" || base == "|" || base == "^") {
 		const bin = makeBinary(readBack, base, d.right, node.location);
+		if (t.kind == TypeKind.Number) bin.nodeType = createPrimitive(TypeKind.Int32);
 		const stored = isShiftOp(base) && narrow != TypeKind.Unknown ? shiftAtLeftWidth(bin, bin.data as BinaryExprData) : binaryAsUnsigned(bin);
 		return makeBinary(d.left, "=", stored, node.location);
 	}

@@ -1082,12 +1082,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 			} else if (isBitwiseCompoundOp(d.operator)) {
 				const bitMark = ctx.errors.length;
-				if (effLeft != null && effLeft.kind == TypeKind.Number) {
-					addError(ctx, "'" + d.operator + "' needs an integer target, got 'number' — declare it with an integer type, or write 'x = x "
-						+ d.operator.slice(0, d.operator.length - 1) + " y'", node.location.line, node.location.column);
-				} else {
-					checkBitwiseOperands(ctx, d.operator, effLeft!, effRight!, node);
-				}
+				checkBitwiseOperands(ctx, d.operator, effLeft!, effRight!, node);
 				if (reportedErrorSince(ctx, bitMark)) { node.nodeType = errorType(); return; }
 				if (effRight != null && effRight.kind == TypeKind.Number) {
 					d.right = wrapInConv(d.right, createPrimitive(TypeKind.Int32));

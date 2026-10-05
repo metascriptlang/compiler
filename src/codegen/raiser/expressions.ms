@@ -16,7 +16,7 @@ import { RaiserOpcode, RaiserConvClass, raiserABC, convOperand } from "../../rai
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
-import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr } from "../../checker/types";
+import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
@@ -283,6 +283,12 @@ function compoundBaseOpcode(op: string): RaiserOpcode {
 
 function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int32, rhs: int32, target: Node): void {
 	const base = op.slice(0, op.length - 1);
+	if (isBitwiseOp(base) && convClassOf(target.nodeType) == (RaiserConvClass.F64 as int32)) {
+		const asInt = emitConvTo(s, lhs, RaiserConvClass.I32 as int32, RaiserConvClass.F64 as int32);
+		emitBitwise(s, base, dest, asInt, rhs, int32Type());
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest, emitConvTo(s, dest, RaiserConvClass.F64 as int32, RaiserConvClass.I32 as int32), 0));
+		return;
+	}
 	if (isBitwiseOp(base)) {
 		emitBitwise(s, base, dest, lhs, rhs, target.nodeType);
 		return;

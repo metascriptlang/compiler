@@ -5,6 +5,7 @@
 //   a /= b   → msDivAssignI32(a, b)   (the left side is evaluated once)
 //   a ** b   → msPowI64(a, b)         (msPowWrapI64 under --danger)
 //   f %= b   → msModAssignF64(f, b)   (a float target; fmod, the left side evaluated once)
+//   n |= b   → msOrAssignF64(n, b)    (a number target of & | ^ << >> >>>, as n = n | b)
 //
 // Division by a literal that is neither 0 nor -1 cannot raise and stays an operator,
 // as do all divisions under --danger. An 8- or 16-bit operation runs at 32 bits
@@ -12,7 +13,7 @@
 
 import { Node, NodeKind, BinaryExprData, UnaryExprData, HiddenStdConvData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
 import { peelToRepr, createPrimitive } from "../../checker/types";
-import { wrapInConv, isBitwiseBinaryOp } from "../../checker/fit";
+import { wrapInConv, isBitwiseBinaryOp, isBitwiseCompoundOp } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, runtimeRef } from "../util";
@@ -25,6 +26,10 @@ export function lowerNumberBitwiseOperands(program: Node, ctx: TransformContext)
 function toInt32Visitor(node: Node): Node {
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
+		if (isBitwiseCompoundOp(d.operator)) {
+			d.right = toInt32Operand(d.right);
+			return node;
+		}
 		if (!isBitwiseBinaryOp(d.operator)) return node;
 		d.left = toInt32Operand(d.left);
 		d.right = toInt32Operand(d.right);
@@ -82,7 +87,17 @@ function floatAssignHelper(d: BinaryExprData): string {
 	const t = peelToRepr(d.left.nodeType);
 	if (t == null) return "";
 	const isFloat = t.kind == TypeKind.Number || t.kind == TypeKind.Float64 || t.kind == TypeKind.Float32;
-	return d.operator == "%=" && isFloat ? "msModAssignF64" : "";
+	if (d.operator == "%=") return isFloat ? "msModAssignF64" : "";
+	if (t.kind != TypeKind.Number) return "";
+	return match (d.operator) {
+		"&=" => "msAndAssignF64",
+		"|=" => "msOrAssignF64",
+		"^=" => "msXorAssignF64",
+		"<<=" => "msShlAssignF64",
+		">>=" => "msShrAssignF64",
+		">>>=" => "msShrUAssignF64",
+		_ => "",
+	};
 }
 
 function lowerIntPow(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
