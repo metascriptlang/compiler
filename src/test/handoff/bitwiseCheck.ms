@@ -6,6 +6,7 @@
 // Float/string/boolean types are rejected at the checker phase.
 
 import { TypeKind } from "../../ast/node";
+import { typeDisplayName } from "../../checker/types";
 import { checkSource, errorCount, strictErrorCount, warningCount, hasError, hasWarning } from "./helpers";
 import { lookupSymbol } from "../../checker/symbol";
 import { Severity } from "../../checker/context";
@@ -215,6 +216,19 @@ test "a bitwise compound assignment takes the targets its binary operator takes"
 test "a bitwise compound assignment stores only what the target holds" {
 	assert hasError("enum E { A, B }\nlet e: E = E.A;\ne |= E.B;", "'|=' cannot store the 'BitSet<E>' result of '|' in 'E'");
 	assert hasError("let j: int32 = -1;\nj >>>= 1;", "'>>>=' cannot store the 'uint32' result of '>>>' in 'int32'");
+	assert hasError("let j: int8 = -1;\nj >>>= 1;", "'>>>=' cannot store the 'uint8' result of '>>>' in 'int8'");
+	assert hasError("let j: int64 = -1;\nj >>>= 1;", "'>>>=' cannot store the 'uint64' result of '>>>' in 'int64'");
+}
+
+test "an unsigned right shift of a signed integer is the unsigned type of its width" {
+	const cases = [["let i: int8 = -1;\nconst r = i >>> 0;", "uint8"], ["let i: int16 = -1;\nconst r = i >>> 1;", "uint16"],
+		["let i: int64 = -1;\nconst r = i >>> 0;", "uint64"], ["let i: uint8 = 255;\nconst r = i >>> 1;", "uint8"]];
+	for (const c of cases) {
+		const ctx = checkSource(c[0]);
+		assert ctx != null, c[0];
+		assert typeDisplayName(lookupSymbol(ctx.table, "r").symbolType) == c[1], c[0];
+	}
+	assert hasError("let i: int8 = -1;\nconst x: int8 = i >>> 1;", "implicit uint8 → int8 conversion may exceed the target's maximum");
 }
 
 test "an unsigned right shift of an int32 or a number is uint32" {
