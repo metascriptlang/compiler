@@ -28,6 +28,7 @@ import { RaiserHostFn, RaiserPrintSink } from "./marshal";
 extern function msMonoTimeMs(): int64;
 extern function msSleepMs(ms: int32): void;
 extern function msFloat64Bits(d: float64): uint64;
+extern function msToInt32(d: float64): int32;
 
 // --- VM State ---
 
@@ -1643,6 +1644,10 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 	const fromUnsigned = convSource(inst.c) == (RaiserConvClass.U64 as int32);
 	if (cls == RaiserConvClass.F64Bits) {
 		setReg(vm, vm.baseReg + inst.a, raiserInt(msFloat64Bits(asNum(src)) as int64));
+		return;
+	}
+	if (cls == RaiserConvClass.I32Wrap) {
+		setReg(vm, vm.baseReg + inst.a, raiserInt(msToInt32(asNum(src)) as int64));
 		return;
 	}
 	if (cls == RaiserConvClass.HandleBits) {
