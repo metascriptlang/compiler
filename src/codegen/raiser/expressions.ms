@@ -1260,8 +1260,8 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 
 	// User function call: callee must be Identifier
 	if (d.callee.kind == NodeKind.Identifier) {
-		if (resolveGlobal(s, d.callee.resolvedSym) >= 0) return compileClosureCall(s, node);
 		const calleeId = d.callee.data as IdentifierData;
+		if (resolveGlobal(s, d.callee.resolvedSym) >= 0 || resolveLocal(s, calleeId.name) >= 0) return compileClosureCall(s, node);
 		let calleeSym = d.callee.resolvedSym;
 		if (calleeSym != null && calleeSym.overloads != null && calleeSym.overloads.length > 0) {
 			calleeSym = resolveOverloadWinner(calleeSym, d.resolvedOverloadIdx).winnerSym;
