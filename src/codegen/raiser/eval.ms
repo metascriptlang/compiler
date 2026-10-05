@@ -1020,25 +1020,28 @@ function evalRaiserDirect(code: string): RaiserContext {
 	return ctx;
 }
 
-// --- Closure capture tests --- (commented out: lambda-lifted closures return 0 via Raiser VM)
-// Hand-written closure pairs work; lambda-lifting + full transform pipeline does not.
-// Root cause: post-lambda-lifting transforms (likely destructorLifting or DRC interaction)
-// corrupt the AST for the Raiser codegen path. Needs further investigation.
-//
-// testGroup("Raiser Phase 3: closures", () => {
-// 	test("capture local variable", () => {
-// 		const ctx = evalFull("function make(): number { const x = 42; const f = (): number => x; return f(); } return make();");
-// 		check(ctx.lastResult.intVal === 42);
-// 	});
-// 	test("capture in top-level scope", () => {
-// 		const ctx = evalFull("const x = 99; const f = (): number => x; return f();");
-// 		check(ctx.lastResult.intVal === 99);
-// 	});
-// 	test("capture block body top-level", () => {
-// 		const ctx = evalFull("const x = 77; const f = (): number => { return x; }; return f();");
-// 		check(ctx.lastResult.intVal === 77);
-// 	});
-// });
+test "a lambda-lifted closure reads a local it captured" {
+	const ctx = evalFull("function make(): number { const x = 42; const f = (): number => x; return f(); } return make();");
+	assert unboxFloat(ctx.lastResult) == 42;
+}
+
+test "a top-level closure reads a module binding" {
+	const ctx = evalFull("const x = 99; const f = (): number => { return x; }; return f();");
+	assert unboxFloat(ctx.lastResult) == 99;
+}
+
+test "a call through a local closure calls the closure, not a routine of the same name" {
+	const ctx = evalFull("function add(a: number, b: number): number { return a - b; } function make(k: number): number { const add = (x: number): number => x + k; return add(1); } return make(10);");
+	assert ctx.lastError == "", ctx.lastError;
+	assert unboxFloat(ctx.lastResult) == 11;
+}
+
+test "a call through a closure parameter calls the closure, not a routine of the same name" {
+	const ctx = evalFull("function add(a: number, b: number): number { return a - b; } function apply(add: (x: number) => number): number { return add(1); } return apply((x: number): number => x + 40);");
+	assert ctx.lastError == "", ctx.lastError;
+	assert unboxFloat(ctx.lastResult) == 41;
+}
+
 test "hand-written closure pair (no transforms)" {
 	const ctx = evalRaiserDirect("function lifted(_envP: unknown): number { return _envP.x; } const x = 99; const f = { fn: lifted, env: { x: x } }; return f();");
 	assert ctx.lastResult.intVal == 99;
