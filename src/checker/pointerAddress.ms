@@ -2,7 +2,7 @@ import { Node, NodeKind, Type, TypeKind, ArrayAccessData, createNodeAt } from ".
 import { skipModifier, peelTransparentInstance, typeDisplayName, isReadonlyView, createReadonlyView, isValueStorage } from "./types";
 import { sameType, nonNullMemberOfNullable } from "./compat";
 import { CheckerContext, addError } from "./context";
-import { writeRefusal } from "./assignable";
+import { writeRefusal, WriteSite } from "./assignable";
 
 function pointee(target: Type | null): Type | null {
 	let dest = skipModifier(target);
@@ -84,7 +84,7 @@ export function checkPointerAddress(ctx: CheckerContext, node: Node, expr: Node,
 		addError(ctx, "cannot take a typed pointer: expression has no address", expr.location.line, expr.location.column);
 		return;
 	}
-	const refusal = writeRefusal(place, true);
+	const refusal = writeRefusal(place, WriteSite.RefArg);
 	if (refusal == "" || node.nodeType == null || isReadonlyView(node.nodeType)) return;
 	const view = createReadonlyView(node.nodeType);
 	if (isReadonlyView(view)) {
