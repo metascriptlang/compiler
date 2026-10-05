@@ -1,7 +1,7 @@
 @include("runtime/solana/solana.h");
 @compile("runtime/solana/host.c");
 
-import { Discriminator, word } from "./discriminator";
+import { word } from "./discriminator";
 import { ProgramError } from "./error";
 import {
 	Account,
@@ -27,13 +27,6 @@ import {
 	selectedInstruction,
 } from "./core";
 import { SeedSlice, SignerSeeds } from "./seed";
-
-extern function msSolLoadU64(address: uint64): uint64;
-extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
-
-export function wordOf(discriminator: Discriminator): uint64 {
-	return msSolLoadU64(msSolSpanAddress(discriminator.bytes));
-}
 
 export struct Pda<T> {
 	account: Mutable<T>;
