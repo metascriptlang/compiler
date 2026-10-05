@@ -19,7 +19,7 @@ import {
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, jumpTarget, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
 	resolveBuiltin, registerFunc, resolveFunc, emitClosurePair,
-	registerRaiserStmtCompiler, resolveGlobal, isRoutineSym, resolveRoutine,
+	registerRaiserStmtCompiler, resolveGlobal, isRoutineSym, resolveRoutine, addConst,
 } from "./context";
 import { compileExpr, exprIsString } from "./expressions";
 import { emitValueCopy, emitZeroValue } from "./valueCopy";
@@ -272,8 +272,10 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as ForOfStmtData;
 
-	// Compile iterable (array)
 	const arrReg = compileExpr(s, d.forOfIterable);
+	const isString = exprIsString(s, d.forOfIterable);
+	const lenOp = isString ? RaiserOpcode.StrByteLen : RaiserOpcode.ArrayLen;
+	const readsLocation = isString && d.forOfIterable.kind == NodeKind.Identifier;
 
 	// Hidden index: __i = 0
 	const idxReg = allocReg(s);
@@ -289,24 +291,35 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	const loopStart = codeLen(s);
 	pushLoop(s, loopStart, d.forOfLabel);
 
+	const headReg = readsLocation ? compileExpr(s, d.forOfIterable) : arrReg;
 	// Condition: if idx < len, skip past the exit jump (continue loop)
-	emitInst(s, raiserABC(RaiserOpcode.ArrayLen, lenReg, arrReg, 0));
+	emitInst(s, raiserABC(lenOp, lenReg, headReg, 0));
 	emitInst(s, raiserABC(RaiserOpcode.BltI64, idxReg, lenReg, 1));
 	const exitJump = emitJumpPlaceholder(s);
 
-	// Load element: elem = arr[idx]
-	emitInst(s, raiserABC(RaiserOpcode.LoadIndex, elemReg, arrReg, idxReg));
+	if (isString) {
+		const callReg = allocReg(s);
+		allocReg(s);
+		allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.Move, callReg + 1, headReg, 0));
+		emitInst(s, raiserABC(RaiserOpcode.Move, callReg + 2, idxReg, 0));
+		emitInst(s, raiserABC(RaiserOpcode.CallHost, callReg, addConst(s, raiserString("msStringByteAt")), 2));
+		emitInst(s, raiserABC(RaiserOpcode.Move, elemReg, callReg, 0));
+	} else {
+		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, elemReg, arrReg, idxReg));
+	}
 
 	// Body
 	compileStmt(s, d.forOfBody);
 
 	patchLoopContinues(s);
 
+	const tailReg = readsLocation ? compileExpr(s, d.forOfIterable) : arrReg;
 	const nowReg = allocReg(s);
 	const messageReg = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.ArrayLen, nowReg, arrReg, 0));
+	emitInst(s, raiserABC(lenOp, nowReg, tailReg, 0));
 	emitInst(s, raiserABC(RaiserOpcode.BeqI64, nowReg, lenReg, 2));
-	emitLoadConst(s, messageReg, raiserString("the length of the array changed while iterating over it"));
+	emitLoadConst(s, messageReg, raiserString(`the length of the ${isString ? "string" : "array"} changed while iterating over it`));
 	emitInst(s, raiserABC(RaiserOpcode.Throw, messageReg, 0, 0));
 
 	// Increment index: __i++
