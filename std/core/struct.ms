@@ -50,7 +50,7 @@ export function toItems<T>(this iter: Iterator<T>): T[] {
 // Arrays normally hit the fast path in iterableElemType and never need this.
 // Exists as fallback: if the fast path fails, the checker's synthetic toItems() call resolves.
 // Uses while (not for-of) to avoid circular dependency.
-export function* toItems<T>(this arr: T[]): Iterator<T> {
+export function* toItems<T>(this arr: Vec<T>): Iterator<T> {
 	let i = 0;
 	while (i < arr.length) {
 		yield arr[i];
