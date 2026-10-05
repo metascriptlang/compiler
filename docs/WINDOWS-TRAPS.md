@@ -6,6 +6,14 @@ Only relevant when the dev box is Windows. On macOS/Linux hosts, skip.
   `cmd.exe`, which refuses extension-less binaries — an extension-less MSC
   once produced an 863-fail corpus run where every cell said "build failed"
   for a reason that had nothing to do with the compiler.
+- **A Windows C test driver forwarding to another compiler must re-quote argv.**
+  `_spawnv` joins the supplied strings into a command line; first-hop quoting
+  does not survive that second hop. The native-boundary drivers use the same
+  MS CRT escaping algorithm as `runtime/process.h` `_msAppendWinArg`. Measured
+  2026-10-05 on the `812f6661` integration candidate: the unquoted driver split
+  `project outputs/local` and Zig rejected trailing `.d.tmp` tokens as inputs;
+  the corrected driver passed 8/8 real project-cache cases in both spaced
+  directory variants, including debug/release reuse and source invalidation.
 - **msc spawns clang with the target's directory as cwd.** A stale
   `runtime/` / `std/` / `vendor/` tree parked next to your targets (a
   temp-dir graveyard from an older session did exactly this: an old
