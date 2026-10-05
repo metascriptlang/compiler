@@ -1414,8 +1414,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (d.index.kind == NodeKind.BinaryExpr) {
 				const bd = d.index.data as BinaryExprData;
 				if (bd.operator == ".." || bd.operator == "...") {
-					const elemType = (arrType.kind == TypeKind.String) ? charType() : getElementType(arrType);
-					accessType = createSpan(elemType);
+					accessType = arrType.kind == TypeKind.String ? createReadonlyView(createSpan(charType()))
+						: createSpan(getElementType(arrType));
 				} else if (arrType.kind == TypeKind.String) {
 					accessType = stringType();
 				} else {
