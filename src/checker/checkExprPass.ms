@@ -5,7 +5,7 @@ import { refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfri
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { peelTransparentInstance, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase } from "./types";
+import { peelTransparentInstance, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase } from "./types";
 import { spelled } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf } from "./symbol";
 import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue } from "./context";
@@ -2220,10 +2220,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				}
 				if (reportedErrorSince(ctx, operandMark)) return;
 				if (refuseUnrelatedStructAs(ctx, operandNode, operandType, targetType, asLoc.line, asLoc.column)) return;
-				if (refuseContainerReinterpret(ctx, operandNode, operandType, targetType, asLoc.line, asLoc.column)) return;
-				const viewed = srcType != null ? objectViewOf(ctx, d.asExpr, srcType, targetType, asLoc.line, asLoc.column) : null;
-				if (reportedErrorSince(ctx, operandMark)) return;
-				if (viewed != null) node.nodeType = viewed;
+				if (refuseUnionReinterpretAs(ctx, (node.data as TypeAssertionData).asExpr, operandNode, operandType, targetType, asLoc.line, asLoc.column)) return;
 			}
 			const objConv = reportedErrorSince(ctx, operandMark) ? ObjConv.None : objectConversion(srcType, targetType);
 			if (objConv == ObjConv.BadTarget) {
@@ -3291,36 +3288,16 @@ function refuseContainerReinterpret(ctx: CheckerContext, operand: Node, srcType:
 	return true;
 }
 
-function spreadFieldsOf(t: Type | null): Type | null {
-	if (t == null) return null;
-	const base = unwrapRef(t);
-	const peeled = base == null ? null : peelThrough(base, PEEL_ALL);
-	const body = peeled == null ? base : peeled;
-	if (body == null || body.kind != TypeKind.Struct || body.typeNames == null || body.typeChildren == null) return null;
-	if (body.sym != null && hasFlag(body.sym, SymbolFlag.ImportC)) return null;
-	return body;
+function carriesUnionTag(t: Type): boolean {
+	const bare = isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
+	return isTagCarriedUnion(bare) && unwrapRefNullUnion(bare) == null;
 }
 
-function viewedObject(t: Type | null): Type | null {
-	const bare = skipModifier(t);
-	if (bare == null || bare.kind == TypeKind.Union || isAtomicRef(bare)) return null;
-	const body = bare.kind == TypeKind.Ref && bare.typeReturn != null ? bare.typeReturn : bare;
-	return body.kind == TypeKind.Struct && body.typeNames != null ? body : null;
-}
-
-function objectViewOf(ctx: CheckerContext, operand: Node, srcType: Type, targetType: Type, line: int32, column: int32): Type | null {
-	if (operand.kind == NodeKind.ObjectLiteral || hasGenericParams(srcType) || hasGenericParams(targetType)) return null;
-	const source = viewedObject(srcType);
-	const target = viewedObject(targetType);
-	const targetBare = skipModifier(targetType);
-	if (source == null || target == null || targetBare == null || targetBare.kind != TypeKind.Ref || runtimeClassSym(target) != null) return null;
-	if (sameNominal(source, target) || isAssignable(srcType, targetType) || isAssignable(targetType, srcType)) return null;
-	const field = viewFieldNotHeld(source, target);
-	if (field == "") return srcType;
-	const at = source.typeNames.indexOf(field);
-	if (at < 0 || at >= source.typeChildren.length) return null;
-	addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + ": its field '" + field + "' is " + typeDisplayName(source.typeChildren[at]) + ", and an object type cast reads the object's own fields", line, column);
-	return null;
+function refuseUnionReinterpretAs(ctx: CheckerContext, converted: Node, operand: Node, srcType: Type, targetType: Type, line: int32, column: int32): boolean {
+	if (converted != operand || sameType(srcType, targetType) || !carriesUnionTag(targetType)) return false;
+	if (!carriesUnionTag(srcType) && unwrapRefNullUnion(srcType) == null) return false;
+	addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + ": no conversion exists between these unions — narrow to the member first", line, column);
+	return true;
 }
 
 function refuseHiddenFieldInLiteral(ctx: CheckerContext, ownerSym: Symbol | null, key: string, value: Node, literal: Node, d: ObjectLiteralData, index: int32): void {
