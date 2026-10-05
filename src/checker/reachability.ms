@@ -33,12 +33,7 @@ import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./conte
 
 export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {
 	if (!aliveSet.computed) return true;
-	const name = (node.data as FunctionDeclData).fnName;
-	const sym = node.resolvedSym;
-	// $-prefixed functions without a traced routine symbol ($Env_*Destroy etc. DRC hooks) are
-	// referenced by DRC-injected code the walker can't trace — keep them unconditionally alive.
-	if (name.startsWith("$") && !isTracedRoutine(sym)) return true;
-	return aliveSetHasDecl(aliveSet, modulePath, name, sym);
+	return aliveSetHasDecl(aliveSet, modulePath, (node.data as FunctionDeclData).fnName, node.resolvedSym);
 }
 
 // ===== Global Name Index =====
@@ -701,21 +696,10 @@ export function computeAliveSet(
 				}
 			}
 
-			// Root 2: Compiler-generated functions — always alive.
-			// Must match functionDeclIsAlive exemptions above exactly:
-			// $prefix without a traced routine symbol (DRC hooks), =prefix (operators),
-			// __prefix (builtinLower), DRC lifecycle suffixes, generic instantiations (__ in middle of name).
-			if (bare.kind == NodeKind.FunctionDecl) {
-				const fd2 = bare.data as FunctionDeclData;
-				const fn = fd2.fnName;
-				if (fn.length > 0 && fn.slice(0, 1) == "$" && !isTracedRoutine(bare.resolvedSym)) {
-					walkBody(bare, modulePath);
-					continue;
-				}
-				if (bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
-					markSymAndWalk(bare.resolvedSym, modulePath);
-					continue;
-				}
+			// Root 2: HCR root functions.
+			if (bare.kind == NodeKind.FunctionDecl && bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
+				markSymAndWalk(bare.resolvedSym, modulePath);
+				continue;
 			}
 
 			// Root 3: TestDecl nodes — in test mode (all modules) or entry module (build mode).
@@ -871,11 +855,6 @@ function bakeableEmptyArrayLiteral(init: Readonly<Node>): boolean {
 	return bakeableEmptyArrayLiteral(cd.arguments[0]);
 }
 
-// A routine reached only through its references; a DRC hook's references are injected later.
-export function isTracedRoutine(sym: Symbol | null): boolean {
-	return sym != null && sym.symbolKind == SymbolKind.Function && !hasFlag(sym, SymbolFlag.GeneratedOp);
-}
-
 export function isClosureThunkConv(node: Readonly<Node>): boolean {
 	if (node.kind != NodeKind.HiddenStdConv) return false;
 	const cv = node.data as HiddenStdConvData;
@@ -977,6 +956,8 @@ import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
 import { createStruct, createRef, createUnion, nullType, stringType } from "./types";
 import { aliveSetHas } from "../codegen/c/context";
+import { makeSymbol, setFlag } from "./symbol";
+import { ExprStmtData } from "../ast/node";
 
 test "nullable reference allocation keeps its concrete TypeInfo alive" {
 	const parsed = parseSource("const HolderTypeInfo = 0; let value = { label: \"held\" };");
@@ -990,6 +971,34 @@ test "nullable reference allocation keeps its concrete TypeInfo alive" {
 	allocation.nodeType = createUnion([createRef(body), nullType()]);
 	const alive = computeAliveSet([parsed.value], ["owner.ms"], "owner.ms", false, createModuleGraph());
 	assert aliveSetHas(alive, "owner.ms", "HolderTypeInfo");
+}
+
+function generatedHookProgram(source: string, hookName: string): Node | null {
+	const parsed = parseSource(source);
+	if (!parsed.ok) return null;
+	const hook = makeSymbol(hookName, SymbolKind.Function, null, false);
+	setFlag(hook, SymbolFlag.GeneratedOp);
+	for (const stmt of (parsed.value.data as ProgramData).programStmts) {
+		if (stmt.kind == NodeKind.FunctionDecl) stmt.resolvedSym = hook;
+		else ((stmt.data as ExprStmtData).expr.data as CallExprData).callee.resolvedSym = hook;
+	}
+	return parsed.value;
+}
+
+test "a frame hook nothing calls stays dead" {
+	const program = generatedHookProgram("function $Env_deadSharedDestroy(): void {}", "$Env_deadSharedDestroy");
+	assert program != null;
+	if (program == null) return;
+	const alive = computeAliveSet([program], ["owner.ms"], "owner.ms", false, createModuleGraph());
+	assert !functionDeclIsAlive(alive, "owner.ms", (program.data as ProgramData).programStmts[0]);
+}
+
+test "a frame hook a live statement calls stays alive" {
+	const program = generatedHookProgram("function $Env_liveSharedDestroy(): void {}\n$Env_liveSharedDestroy();", "$Env_liveSharedDestroy");
+	assert program != null;
+	if (program == null) return;
+	const alive = computeAliveSet([program], ["owner.ms"], "owner.ms", false, createModuleGraph());
+	assert functionDeclIsAlive(alive, "owner.ms", (program.data as ProgramData).programStmts[0]);
 }
 
 function importGraph(edges: string[][]): ModuleGraph {
