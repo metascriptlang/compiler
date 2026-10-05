@@ -3,7 +3,7 @@
 // Handles function, enum, interface (struct), class, export, and import declarations.
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
-import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, DeclKind, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, DeclKind, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types";
 import {
