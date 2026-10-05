@@ -214,6 +214,17 @@ test "a bitwise compound assignment takes the targets its binary operator takes"
 
 test "a bitwise compound assignment stores only what the target holds" {
 	assert hasError("enum E { A, B }\nlet e: E = E.A;\ne |= E.B;", "'|=' cannot store the 'BitSet<E>' result of '|' in 'E'");
+	assert hasError("let j: int32 = -1;\nj >>>= 1;", "'>>>=' cannot store the 'uint32' result of '>>>' in 'int32'");
+}
+
+test "an unsigned right shift of an int32 or a number is uint32" {
+	for (const src of ["let i: int32 = -1;\nconst r = i >>> 1;", "let n: number = -1;\nconst r = n >>> 1;", "const r = -1 >>> 0;"]) {
+		const ctx = checkSource(src);
+		assert ctx != null, src;
+		assert lookupSymbol(ctx.table, "r").symbolType.kind == TypeKind.Uint32, src;
+	}
+	assert strictErrorCount("let i: int32 = -1;\nconst u: uint32 = i >>> 0;") == 0;
+	assert hasError("let i: int32 = -1;\nconst x: int32 = i >>> 1;", "implicit uint32 → int32 conversion may exceed the target's maximum");
 }
 
 test "a bitwise compound assignment is a statement" {
