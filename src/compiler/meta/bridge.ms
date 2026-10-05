@@ -62,8 +62,8 @@ import {
 	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
-import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType } from "../../checker/types";
-import { hasFlag, isTypeSymbol, SymbolFlag, symbolCarried } from "../../checker/symbol";
+import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase } from "../../checker/types";
+import { hasFlag, isTypeSymbol, SymbolFlag, symbolCarried, overloadWinner } from "../../checker/symbol";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -1442,6 +1442,8 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 			const kindField = heapObjectGetField(objHeap, handle, "kind");
 			if (kindField.kind == RaiserValueKind.Int) {
 				const out = readNodeFromObject(handle, kindField.intVal as NodeKind, objHeap, arrHeap, fallbackLoc);
+				// The argument's type survives the wire twice: the Type through its
+				// bound-type handle, the type-AST Node form in nodeTypeAst.
 				if (out != null) {
 					const typeHandle = heapObjectGetField(objHeap, handle, "typeHandle");
 					if (typeHandle.kind == RaiserValueKind.Int) out.nodeType = boundTypeAt(typeHandle.intVal as int32);
@@ -3497,6 +3499,55 @@ test "nested macro type queries keep the originating nominal field after two exp
 	const impl = mapTypeToAst(repeated.nodeType, loc, true);
 	assert impl.kind == NodeKind.TypeObject;
 	assert (impl.data as TypeObjectData).typExprFieldNames[0] == "count";
+}
+
+test "valueToNode — restores nodeType from its bound-type handle" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const ident = createNodeAt(NodeKind.Identifier, { name: "x" }, loc);
+	const written = makePrimType(TypeKind.Int32);
+	ident.nodeType = written;
+	const v = nodeToValue(ident, objH, arrH);
+	const back = valueToNode(v, objH, arrH, loc);
+	assert back.kind == NodeKind.Identifier;
+	assert (back.data as IdentifierData).name == "x";
+	assert back.nodeType == written;
+}
+
+test "valueToNode — a node that never had a type comes back without one" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const ident = createNodeAt(NodeKind.Identifier, { name: "x" }, loc);
+	const v = nodeToValue(ident, objH, arrH);
+	const back = valueToNode(v, objH, arrH, loc);
+	assert back.nodeType == null;
+}
+
+test "nodeToValue — child Nodes' nodeType cascades through dispatch" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const left = createNodeAt(NodeKind.Identifier, { name: "a" }, loc);
+	left.nodeType = makePrimType(TypeKind.Int32);
+	const right = createNodeAt(NodeKind.NumberLiteral, { value: 1, isFloat: false, intVal: 1 as int64 }, loc);
+	right.nodeType = makePrimType(TypeKind.Int32);
+	const expr = createNodeAt(NodeKind.BinaryExpr, { operator: "+", left, right }, loc);
+	expr.nodeType = makePrimType(TypeKind.Int32);
+	const v = nodeToValue(expr, objH, arrH);
+	// Outer BinaryExpr has nodeType
+	const outerType = heapObjectGetField(objH, v.intVal, "nodeType");
+	assert outerType.kind == RaiserValueKind.Object;
+	// Left child has its own nodeType
+	const leftVal = heapObjectGetField(objH, v.intVal, "left");
+	assert leftVal.kind == RaiserValueKind.Object;
+	const leftType = heapObjectGetField(objH, leftVal.intVal, "nodeType");
+	assert leftType.kind == RaiserValueKind.Object;
+	// Right child likewise
+	const rightVal = heapObjectGetField(objH, v.intVal, "right");
+	const rightType = heapObjectGetField(objH, rightVal.intVal, "nodeType");
+	assert rightType.kind == RaiserValueKind.Object;
 }
 
 // ===== Day 9 tests — nodeToValue emits `resolvedSym` for bound Nodes =====

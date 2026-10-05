@@ -16,7 +16,7 @@
 //   reference comparisons  — template `>` = y < x           → derived from <
 //   reference comparisons  — template `>=` = y <= x         → derived from <=
 
-import { Node, NodeKind, BinaryExprData, ExprStmtData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, ExprStmtData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp, NodeFlag } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
 import { liftedOp, hookBaseCName, hasUnionEq, anonUnionCName, opTypeKey } from "../../codegen/c/types";
 import { walkNode } from "../walker";
@@ -399,6 +399,11 @@ export function lowerOperators(program: Node, ctx: TransformContext): Node {
 	});
 }
 
+export function lowerUserOperators(program: Node, ctx: TransformContext): Node {
+	return walkNode(program, (node: Node): Node => {
+		return node.flags.has(NodeFlag.UserOp) ? lowerOperatorNode(node, ctx) : node;
+	});
+}
 // ===== Tests =====
 
 import { createContext, createExtensionRegistry, registerExtension } from "../../checker/context";

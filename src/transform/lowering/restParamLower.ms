@@ -18,7 +18,7 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, SymbolFlag, overloadWinner } from "../../checker/symbol";
 import { ctorFormalTypes } from "../../checker/ctorRoutine";
 
 export function lowerRestParams(program: Node, _ctx: TransformContext): Node {

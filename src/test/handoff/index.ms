@@ -142,3 +142,6 @@ import "./echoJsonValue";
 import "./instanceCacheIdentity";
 import "./instanceHookIdentity";
 import "./nominalIdentity";
+import "./enumConversionRange";
+import "./deferBlockCheck";
+import "./forOfPattern";

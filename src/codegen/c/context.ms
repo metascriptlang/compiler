@@ -605,7 +605,7 @@ export class CTypeInfoDemand {
 }
 
 export class AliveSet {
-	enabled: boolean;
+	computed: boolean;       // reachability ran: what it did not mark is dead, even when nothing was marked by name
 	_modules: HashSet<string>;   // O(1) module-level lookup
 	_syms: HashSet<Symbol>;
 	typeInfos: CTypeInfoDemand[];
@@ -615,7 +615,7 @@ export class AliveSet {
 
 export function createAliveSet(): AliveSet {
 	return {
-		enabled: false, _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
+		computed: false, _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
 		typeInfos: [], typeInfoKeys: new HashSet<string>(), foreignOps: new HashMap<Symbol, string[]>(),
 	};
 }
@@ -638,7 +638,7 @@ export function aliveSetAddModule(aliveSet: AliveSet, modulePath: string): void 
 }
 
 export function aliveSetHasModule(aliveSet: Readonly<AliveSet>, modulePath: string): boolean {
-	if (!aliveSet.enabled) return true;
+	if (!aliveSet.computed) return true;
 	return aliveSet._modules.has(modulePath);
 }
 
@@ -688,7 +688,6 @@ function aliveSymKey(sym: Readonly<Symbol>): string {
 
 export function aliveSetFingerprint(aliveSet: AliveSet): string {
 	const entries: string[] = [];
-	entries.push(`enabled:${aliveSet.enabled}`);
 	aliveSet._modules.forEach((modulePath: string): void => { entries.push(`m:${modulePath}`); });
 	aliveSet._syms.forEach((sym: Symbol): void => { entries.push(aliveSymKey(sym)); });
 	entries.sort();

@@ -7,15 +7,16 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { firstPrivateField } from "./visibility";
-import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
+import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation } from "../ast/node";
+import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
-import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName } from "./context";
+import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
+import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
-import { isAssignable as isAssignableCheck, isValueStructDecl } from "./compat";
+import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
 import { mintCtorRoutine } from "./ctorRoutine";
 import { monoTypeKey } from "../monomorphize/registry";
 
@@ -1872,7 +1873,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
 	if (sym.symbolType.kind == TypeKind.Struct && parentTypes.length == 1 && isValueStructDecl(parentTypes[0])) target.typeExtra = parentTypes[0];
 	for (const pt of mergedTypes) { propagateToOwner(target, pt); }
-	if (sym.symbolType.kind == TypeKind.Struct && declaresLifecycleHook(ctx, d.interfaceName)) target.typeFlags = target.typeFlags.incl(TypeFlag.HasAsgn);
+	if (sym.symbolType.kind == TypeKind.Struct && declaresLifecycleHook(ctx, sym)) target.typeFlags = target.typeFlags.incl(TypeFlag.HasAsgn);
 	node.nodeType = sym.symbolType;
 	if (sym.symbolType.kind == TypeKind.Struct) refuseValueRecursion(ctx, node, target, d);
 	// Record each OWN interface field DEF for symbol graph (inherited fields
@@ -2029,7 +2030,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		distType.typeName = d.aliasName;
 		if (resolved.kind == TypeKind.Function) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BrandWiden);
 		if (hasFlag(sym, SymbolFlag.Borrow)) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BorrowDot);
-		if (declaresLifecycleHook(ctx, d.aliasName)) distType.typeFlags = distType.typeFlags.incl(TypeFlag.HasAsgn);
+		if (declaresLifecycleHook(ctx, sym)) distType.typeFlags = distType.typeFlags.incl(TypeFlag.HasAsgn);
 		assignType(sym.symbolType, distType);
 		node.nodeType = sym.symbolType;
 	} else if ((hasGenericAlias ? declaredByAnotherSymbol(resolved, sym) : resolved.sym != null)

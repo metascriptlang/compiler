@@ -71,3 +71,5 @@ import "./parameterHookDemand";
 import "./arrayText";
 import "./sequentialTypeof";
 import "./cborNestedTypeIdentity";
+import "./structFieldDecorators";
+import "./enumNames";

@@ -27,9 +27,8 @@ import { Node, NodeKind, FunctionDeclData, Symbol, CallExprData, ObjectLiteralDa
 import { createPtr, getSysType } from "../../checker/types";
 import { TransformContext, reportTransformError } from "../context";
 import { walkNode } from "../walker";
-import {
-	makeMember, makeConditional, makeBinary, makeNumber, makeNull, overloadWinner,
-} from "../util";
+import { makeMember, makeConditional, makeBinary, makeNumber, makeNull } from "../util";
+import { overloadWinner } from "../../checker/symbol";
 
 // Track which functions had Span params expanded (by function name → param indices)
 interface ExpandedParam {

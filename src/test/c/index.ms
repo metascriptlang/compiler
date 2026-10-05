@@ -53,3 +53,5 @@ import "./returnedCallResultSlot";
 import "./comptimeBlockStaticType";
 import "./nrvoOutTempZero";
 import "./emissionOwnership";
+import "./arraySpliceEmit";
+import "./raiseChecks";

@@ -33,7 +33,7 @@ import { lowerBorrow } from "./lowering/borrowLower";
 import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { insertVarParamDerefs } from "./native/varParamDeref";
 import { lowerBitSet } from "./lowering/bitSetLower";
-
+import { lowerUserOperators } from "./lowering/operatorLower";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -68,6 +68,7 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerLambda(result, ctx);
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerBitSet(result, ctx);
+	result = lowerUserOperators(result, ctx);
 	result = unwrapMaybe(result, ctx);
 
 	return result;

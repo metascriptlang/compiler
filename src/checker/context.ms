@@ -1001,12 +1001,15 @@ export function isLifecycleHookName(name: string): boolean {
 	return LIFECYCLE_HOOK_NAMES.includes(name);
 }
 
-export function declaresLifecycleHook(ctx: CheckerContext, typeName: string): boolean {
+export function declaresLifecycleHook(ctx: CheckerContext, typeSym: Symbol): boolean {
 	const registry = ctx.extensionRegistry;
 	if (registry == null) return false;
 	for (const hookName of LIFECYCLE_HOOK_NAMES) {
 		for (const m of findAllExtensionsByName(registry, hookName)) {
-			if (m.receiverTypeName == typeName && !m.isStatic && m.sym != null && m.sym.modulePath == ctx.modulePath) return true;
+			const decl = m.sym != null ? m.sym.declNode : null;
+			if (m.isStatic || decl == null || decl.kind != NodeKind.FunctionDecl || m.sym!.modulePath != ctx.modulePath) continue;
+			const receiver = getExtReceiverType((decl.data as FunctionDeclData).fnFlags);
+			if (receiver != "" && lookupSymbol(ctx.table, receiver) == typeSym) return true;
 		}
 	}
 	return false;

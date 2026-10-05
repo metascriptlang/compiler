@@ -342,9 +342,6 @@ export function isRuntimeProcCall(node: Node, procName: string): boolean {
 export function runtimeRef(procName: string, loc: SourceLocation): Node {
 	return makeTypedIdentResolved(runtimeProcSym(procName), null, loc);
 }
-export function overloadWinner(set: Symbol, idx: number): Symbol {
-	return idx > 0 && idx - 1 < set.overloads.length ? set.overloads[idx - 1] : set;
-}
 
 export function attachedOpSym(name: string, op: AttachedOp): Symbol {
 	const sym = runtimeProcSym(name);

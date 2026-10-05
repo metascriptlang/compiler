@@ -16,4 +16,5 @@ import "./asConversion";
 import "./downConversion";
 import "./genericClassInstance";
 import "./aliasNarrowingCast";
+import "./structFieldDecorators";
 import "./collectionIdentity";

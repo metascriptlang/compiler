@@ -24,7 +24,7 @@ import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState } from "../..
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
-import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
+import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, routineKey } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";

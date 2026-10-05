@@ -4,7 +4,7 @@ import { inferredType, noneType, emptyType, createStruct, createEnum, createType
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, reexportExt } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, reexportExt, isLifecycleHookName } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";

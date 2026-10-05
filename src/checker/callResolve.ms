@@ -1301,6 +1301,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// Replace current node contents with the expanded result.
 			// Identity is preserved — the parent (e.g. VariableDecl) still references this node.
 			adoptExpansionResult(node, expandedValue);
+			if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
 			node.nodeType = null as unknown as Type;
 			// Re-check the mutated node so its nodeType is set. This drives correct
 			// type inference for the parent (e.g., the VariableDecl declaring `x`).

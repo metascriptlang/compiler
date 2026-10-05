@@ -8,13 +8,13 @@ import { methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
-import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks } from "./resolvePass";
+import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf } from "./ctorRoutine";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, nominalTypeSym, newSym, stampItem } from "./context";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, nominalTypeSym, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName } from "./context";
 import { createContext } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
@@ -131,7 +131,6 @@ interface InstanceHook {
 let _instanceHooks: HashMap<Symbol, InstanceHook[]> = new HashMap<Symbol, InstanceHook[]>();
 let _hookScannedInstances: HashMap<Symbol, Type[][]> = new HashMap<Symbol, Type[][]>();
 let _checkedInstances: HashMap<Symbol, CheckedInstantiation> = new HashMap<Symbol, CheckedInstantiation>();
-const USER_HOOK_NAMES: string[] = ["onDestroy", "onCopy", "onMove", "onMoved", "onClone", "onTrace"];
 
 export function checkedInstanceOf(sym: Symbol): CheckedInstantiation {
 	const inst = _checkedInstances.get(sym);
@@ -219,7 +218,7 @@ function instantiateExtensionHooks(genericSym: Symbol, instType: Type, ctx: Chec
 	const registry = pickBodyCtx(genericSym.modulePath, ctx).extensionRegistry;
 	if (registry == null) return true;
 	let settled = true;
-	for (const hookName of USER_HOOK_NAMES) {
+	for (const hookName of LIFECYCLE_HOOK_NAMES) {
 		if (instanceHook(genericSym, instType.typeChildren, hookName) != null) continue;
 		if (!hasExtensionByName(registry, hookName)) continue;
 		for (const m of findAllExtensionsByName(registry, hookName)) {

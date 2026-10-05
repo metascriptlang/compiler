@@ -32,7 +32,7 @@ import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./conte
 import { checkedInstanceOf, sameInstanceArgs } from "./instantiate";
 
 export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {
-	if (!aliveSet.enabled) return true;
+	if (!aliveSet.computed) return true;
 	const name = (node.data as FunctionDeclData).fnName;
 	const sym = node.resolvedSym;
 	return aliveSetHasDecl(aliveSet, sym, name);
@@ -608,7 +608,7 @@ export function computeAliveSet(
 		for (const overload of sym.overloads) rootFunctions.add(overload);
 	}
 	_aliveSet = createAliveSet();
-	_aliveSet.enabled = true;
+	_aliveSet.computed = true;
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
 	declIndexBuild(programs, paths);
@@ -865,7 +865,7 @@ test "endsWith helper" {
 
 test "empty programs produce empty alive set" {
 	const aliveSet = computeAliveSet([], [], "/entry.ms", false, createModuleGraph());
-	assert aliveSet.enabled;
+	assert aliveSet.computed;
 	assert aliveSet.typeInfos.length == 0;
 }
 
@@ -1008,7 +1008,7 @@ function moduleAlive(graph: ModuleGraph, modulePath: string): boolean {
 	const add = (impl.data as ProgramData).programStmts[0];
 	add.resolvedSym = makeSymbol("add", SymbolKind.Function, null, false);
 	_aliveSet = createAliveSet();
-	_aliveSet.enabled = true;
+	_aliveSet.computed = true;
 	declIndexBuild([impl], ["/impl.ms"]);
 	aliveSetAddModule(_aliveSet, "/main.ms");
 	aliveSetAddModule(_aliveSet, "/impl.ms");

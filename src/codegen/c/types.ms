@@ -6,14 +6,14 @@
 
 import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement } from "../../checker/types";
+import { spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError } from "./context";
+import { CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet } from "./context";
 import { SymbolFlag, hasFlag, makeSymbol, setFlag } from "../../checker/symbol";
-import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName } from "./names";
+import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, OverloadWinner } from "./names";
 import { CheckerContext, newSym } from "../../checker/context";
 import { cStringLiteral } from "./literals";
 
@@ -1148,7 +1148,27 @@ export function emitOwnedTypeInfos(g: CGen): void {
 		}
 		if (viaRegistry && !info.moduleLocal) addLine(sec(g, CSection.DatInit), `  ${info.cName}TypeInfo = (msTypeInfo){ ${fields} };`);
 		else addLine(sec(g, CSection.GlobalVars), `${info.moduleLocal ? "static " : ""}msTypeInfo ${info.cName}TypeInfo = { ${fields} };`);
+		if (info.kind == TypeInfoKind.Object) emitTypeInfoDisplay(g, info);
 	}
+}
+
+function emitTypeInfoDisplay(g: CGen, info: Readonly<CTypeInfoDemand>): void {
+	const chain: string[] = [`&${info.cName}TypeInfo`];
+	let key = info.baseKey;
+	while (key != "") {
+		const base = demandedTypeInfo(g, key, "base class");
+		if (base == null) return;
+		chain.push(typeInfoPointer(g, base));
+		key = base.baseKey;
+	}
+	const displayName = info.cName + "TypeInfoDisplay";
+	addLine(sec(g, CSection.GlobalVars), `static const msTypeInfo* ${displayName}[${chain.length}];`);
+	const datInit = sec(g, CSection.DatInit);
+	for (let slot = 0; slot < chain.length; slot += 1) {
+		addLine(datInit, `  ${displayName}[${slot}] = ${chain[chain.length - 1 - slot]};`);
+	}
+	addLine(datInit, `  ${info.cName}TypeInfo.depth = ${chain.length - 1};`);
+	addLine(datInit, `  ${info.cName}TypeInfo.display = ${displayName};`);
 }
 
 // ===== Full Type Description =====
@@ -2462,4 +2482,13 @@ test "a hook base name comes from the type's own symbol, not from a table lookup
 		refused = e.message;
 	}
 	assert refused.contains("Stray");
+}
+
+test "enum typedef follows the largest ordinal and a negative member" {
+	const g = createCGen(null as unknown as CheckerContext, "");
+	getTypeDesc(g, createEnum("Wide", ["Low", "High"], [0, 300]));
+	getTypeDesc(g, createEnum("Signed", ["Below", "Zero"], [-1, 0]));
+	const types = extract(sec(g, CSection.Types));
+	assert types.contains("typedef uint16_t Wide");
+	assert types.contains("typedef int32_t Signed");
 }

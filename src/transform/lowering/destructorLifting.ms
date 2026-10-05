@@ -31,11 +31,11 @@ import { liftedOp } from "../../codegen/c/types";
 import { opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { genericParamsOf } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { lookupInstanceHook } from "../../checker/instantiate";
+import { lookupInstanceHook, pickBodyCtx } from "../../checker/instantiate";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
-import { CheckerContext, newSym, extReceiverSym, findAllExtensionsByName, hasExtensionByName, getExtFnType } from "../../checker/context";
+import { CheckerContext, newSym, extReceiverSym, findAllExtensionsByName, hasExtensionByName, getExtFnType, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
@@ -61,7 +61,7 @@ class LiftCtx {
 	refCellTraces: Type[];
 	scannedTypes: HashSet<Type>;
 	arrayRootEpochs: HashMap<Type, int32>;
-	refusedArrayElems: NameSet;
+	refusedArrayElems: HashSet<Type>;
 	jsBackend: boolean;
 }
 
@@ -744,7 +744,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 		},
 		TypeKind.Distinct | TypeKind.Alias => {
-			if (fieldType.kind == TypeKind.Distinct && hasAnyUserHook(fieldType.typeName, lctx, fieldType)) {
+			if (fieldType.kind == TypeKind.Distinct && hasAnyUserHook(fieldType, lctx)) {
 				if (hook != "trace") {
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					namedObjOp(hook, fieldType, xf, yf, buf, loc);
@@ -936,7 +936,7 @@ function getUserDefinedHookSym(type: Type, hook: string, lctx: LiftCtx): Symbol 
 	const instHook = lookupInstanceHook(type, methodName);
 	if (instHook != null) return instHook;
 	const declSym = unwrapRef(type).sym;
-	if (lctx.checkerCtx == null || lctx.checkerCtx.extensionRegistry == null) return null;
+	if (lctx.checkerCtx == null) return null;
 	// A type may carry duplicate registry entries reached through different import
 	// paths — distinct Symbol instances whose modulePath differs only by spelling
 	// (e.g. `crypto/index` vs `crypto/tls/../index`), each mangling to a different
@@ -944,8 +944,10 @@ function getUserDefinedHookSym(type: Type, hook: string, lctx: LiftCtx): Symbol 
 	// Prefer the sym whose module matches the type's so the emitted call resolves
 	// to the emitted definition (a stale-path sym links to an undefined symbol).
 	const typeModulePath = declSym != null ? declSym.modulePath : "";
+	const registry = pickBodyCtx(typeModulePath, lctx.checkerCtx).extensionRegistry;
+	if (registry == null) return null;
 	let fallback: Symbol | null = null;
-	for (const m of findAllExtensionsByName(lctx.checkerCtx.extensionRegistry, methodName)) {
+	for (const m of findAllExtensionsByName(registry, methodName)) {
 		if (m.isStatic || m.sym == null) continue;
 		if (declSym == null || extReceiverSym(m) != declSym) continue;
 		if (typeModulePath != "" && m.sym.modulePath == typeModulePath) return m.sym;
@@ -968,6 +970,7 @@ function hasAnyUserHook(t: Type, lctx: LiftCtx): boolean {
 		|| hasUserDefinedHook(t, "copy", lctx)
 		|| hasUserDefinedHook(t, "sink", lctx)
 		|| hasUserDefinedHook(t, "wasMoved", lctx)
+		|| hasUserDefinedHook(t, "dup", lctx)
 		|| hasUserDefinedHook(t, "trace", lctx);
 }
 
@@ -1395,17 +1398,6 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 //   - `refType` — non-null iff caller already knows this is a Ref<Struct> (class/interface).
 //     When null, the function looks up the symbol by name and infers class/interface status.
 
-function typeInfoDisplay(typeName: string, lctx: LiftCtx, loc: SourceLocation): Node {
-	const names: string[] = [];
-	let current = typeName;
-	while (current != "") {
-		names.push(current);
-		current = getBaseClass(current, lctx);
-	}
-	const entries: Node[] = [];
-	for (let i = names.length - 1; i >= 0; i -= 1) entries.push(makeString(names[i], loc));
-	return createNodeAt(NodeKind.ArrayLiteral, { elements: entries }, loc);
-}
 
 // Emit the <T>Dup hook. Ref types (class/interface) get the incref shortcut;
 // value types copy through <T>Copy. Signature identical to the paired Ref/val
@@ -1525,9 +1517,15 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 		setAttachedOp(objType, AttachedOp.AttachedTrace, traceSym);
 	}
 
-	const dupSym = emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
-	setOpByKey(objType, AttachedOp.AttachedDup, dupSym);
-	setAttachedOp(objType, AttachedOp.AttachedDup, dupSym);
+	const userDup = getUserDefinedHookSym(orig, "dup", lctx);
+	if (userDup != null) {
+		bindOpByKey(objType, AttachedOp.AttachedDup, userDup);
+		setAttachedOp(objType, AttachedOp.AttachedDup, userDup);
+	} else {
+		const dupSym = emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
+		setOpByKey(objType, AttachedOp.AttachedDup, dupSym);
+		setAttachedOp(objType, AttachedOp.AttachedDup, dupSym);
+	}
 	aliasLiftedOps(orig, objType);
 
 	nameSetAdd(lctx.generated, typeId);
@@ -2030,7 +2028,7 @@ function hookedDistinctElement(t: Type | null, lctx: LiftCtx, seen: HashSet<Type
 	if (t == null || seen.has(t)) return null;
 	seen.add(t);
 	const elem = t.kind == TypeKind.Array ? t.typeReturn : null;
-	if (elem != null && elem.kind == TypeKind.Distinct && elem.typeName != "" && hasAnyUserHook(elem.typeName, lctx, elem)) return elem;
+	if (elem != null && elem.kind == TypeKind.Distinct && hasAnyUserHook(elem, lctx)) return elem;
 	for (const child of t.typeChildren) {
 		const hit = hookedDistinctElement(child, lctx, seen);
 		if (hit != null) return hit;
@@ -2041,12 +2039,13 @@ function hookedDistinctElement(t: Type | null, lctx: LiftCtx, seen: HashSet<Type
 function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (lctx.jsBackend || lctx.checkerCtx == null) return;
 	const elem = hookedDistinctElement(t, lctx, new HashSet<Type>());
-	if (elem == null || nameSetContains(lctx.refusedArrayElems, elem.typeName)) return;
-	nameSetAdd(lctx.refusedArrayElems, elem.typeName);
+	if (elem == null || lctx.refusedArrayElems.has(elem)) return;
+	lctx.refusedArrayElems.add(elem);
 	addError(lctx.checkerCtx, "an array of the distinct type '" + elem.typeName + "' would never run its lifecycle hooks, because it is stored as an array of its base type: keep the values in a struct and make the array of those", loc.line, loc.column);
 }
 
 function liftTypeOps(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	refuseArrayOfHookedDistinct(t, lctx, loc);
 		// Skip match-type variant structs (typeName like "Alias.Key") — their
 		// hooks are emitted via the parent Union's `<Union>_v<N>` helper
 		// dispatch, not as standalone `<Alias.Key>Copy` (which would be an
@@ -2206,7 +2205,7 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		refCellTraces: [],
 		scannedTypes: new HashSet<Type>(),
 		arrayRootEpochs: new HashMap<Type, int32>(),
-		refusedArrayElems: createNameSet(),
+		refusedArrayElems: new HashSet<Type>(),
 		jsBackend: jsBackend,
 	};
 }

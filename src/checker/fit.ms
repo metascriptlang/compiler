@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, extDeclaresReceiver } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, primitiveMemberIndexInUnion, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult } from "./types";
+import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
@@ -1600,6 +1600,10 @@ function arrayDisplay(t: Type | null): string {
 // picks a temp's type from the STATIC type — so without this node it passes a
 // bare variant struct where the union is expected and clang only warns.
 // Reference: sigmatch.nim implicitConv(nkHiddenSubConv, ...).
+function unionSlotOf(formal: Type, exprType: Type): int32 {
+	const vi = variantIndexInUnion(formal, unwrapRef(exprType));
+	return vi >= 0 ? vi : structuralMemberIndex(formal, exprType);
+}
 function slotHoldsStructByValue(member: Type): boolean {
 	return inlineVariantStruct(member) != null;
 }

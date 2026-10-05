@@ -25,6 +25,7 @@ import { mangleModuleName, mangleProcName, mangleQualified, safeName } from "../
 import { aliveSetHasDecl, aliveSetHasModule, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
+import { getParserDefines, setParserDefines } from "../parser/context";
 import { computeAliveSet } from "../checker/reachability";
 import { inferRaises, resetRaises } from "../checker/raises";
 import { collectFreestandingAsync, collectWritableModuleBindings, freestandingAsyncLoc, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
@@ -3117,7 +3118,7 @@ resetLiftedOps();
 	const tD = performance.now();
 
 	// Emscripten: auto-enable Asyncify when DCE detects async code (promise module alive)
-	if (opts.targetOs == "emcc" && aliveSet.enabled) {
+	if (opts.targetOs == "emcc" && aliveSet.computed) {
 		let hasAsync = false;
 		for (const mp of aliveModules) {
 			if (mp.endsWith("promise/index.cms")) { hasAsync = true; }

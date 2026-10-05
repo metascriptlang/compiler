@@ -18,7 +18,7 @@ import { walkNode } from "../walker";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary, makeCall, makeIdent,
 	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
-	makeConditional, makeNull, makeHiddenStdConv, runtimeRef, generatedRef, overloadWinner,
+	makeConditional, makeNull, makeHiddenStdConv, runtimeRef, generatedRef,
 } from "../util";
 import { overloadWinner } from "../../checker/symbol";
 

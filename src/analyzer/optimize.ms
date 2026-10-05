@@ -16,7 +16,7 @@ import {
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
-import { makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym } from "../transform/util";
+import { makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym, makeHiddenAddr } from "../transform/util";
 import { testLoc, testFnRef } from "./inject";
 import { testVarSym, symListHas, symListAdd } from "./scope";
 
