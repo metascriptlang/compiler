@@ -237,7 +237,7 @@ function shiftAsBigInt(node: Node, leftT: Type): Node {
 		const unsignedView = asN(true, 64, d.left, loc);
 		const shifted = makeBinary(unsignedView, ">>", count, loc);
 		shifted.nodeType = createPrimitive(TypeKind.Uint64);
-		return asTyped(asN(false, 64, shifted, loc), TypeKind.Int64);
+		return shifted;
 	}
 	return node;
 }

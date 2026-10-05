@@ -153,7 +153,9 @@ function shiftAtLeftWidth(node: Node, d: BinaryExprData): Node {
 	if (d.operator == ">>") return makeBinary(d.left, unsigned ? ">>>" : ">>", count, loc);
 	if (unsigned) return makeBinary(d.left, ">>>", count, loc);
 	const asUnsigned = makeBinary(d.left, "&", makeNumber(bits == 8 ? 255 : 65535, loc), loc);
-	return wrapTo(makeBinary(asUnsigned, ">>>", count, loc), kind, loc);
+	const shifted = makeBinary(asUnsigned, ">>>", count, loc);
+	shifted.nodeType = node.nodeType;
+	return shifted;
 }
 
 function binaryAsUnsigned(node: Node): Node {
