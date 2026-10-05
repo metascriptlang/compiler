@@ -44,6 +44,12 @@ function checkHostBridgeCoverage(sym: Symbol, callee: Node): void {
 	}
 }
 
+function runtimeHostName(sym: Symbol): string {
+	if (sym.nativeName != "") return sym.nativeName;
+	if (sym.declNode != null || !sym.symFlags.has(SymbolFlag.ImportC)) return "";
+	return lookupHostFn(sym.name) != null ? sym.name : "";
+}
+
 // --- Operator → Opcode mapping ---
 
 function arithmeticOpcode(op: string): RaiserOpcode {
@@ -1391,11 +1397,12 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	// function") — catch it here, at the call site, with a span.
 	if (d.callee.kind == NodeKind.Identifier && d.callee.resolvedSym != null) {
 		const sym = d.callee.resolvedSym;
-		if (sym.nativeName != "") {
-			checkHostBridgeCoverage(sym, d.callee);
+		const hostName = runtimeHostName(sym);
+		if (hostName != "") {
+			if (sym.nativeName != "") checkHostBridgeCoverage(sym, d.callee);
 			const dest = allocReg(s);
 			emitCallArgs(s, dest, hostValues(d.arguments));
-			const nameIdx = addConst(s, raiserString(sym.nativeName));
+			const nameIdx = addConst(s, raiserString(hostName));
 			emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, d.arguments.length));
 			return dest;
 		}
