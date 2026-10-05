@@ -1951,7 +1951,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 		if (!isUnresolvedType(paramType) && paramType.kind != TypeKind.GenericParam
 			&& !isUnresolvedType(argTypes[pi]) && argTypes[pi].kind != TypeKind.Error
 			&& !(fnShaped && hasGenericParams(paramType))) {
-			argTypes[pi] = storedTypeOfNullRead(args[pi], argTypes[pi]);
+			argTypes[pi] = storedTypeOfNullRead(args[pi], argTypes[pi], paramType);
 			const constantArg = fitIntegerConstant(ctx, args[pi], argTypes[pi], paramType);
 			if (constantArg != null) {
 				args[pi] = constantArg;
