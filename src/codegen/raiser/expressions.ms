@@ -16,7 +16,7 @@ import { RaiserOpcode, RaiserConvClass, raiserABC, convOperand } from "../../rai
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
-import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type } from "../../checker/types";
+import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
@@ -110,7 +110,7 @@ function isLogicalOp(op: string): boolean {
 
 function isBitwiseOp(op: string): boolean {
 	return match (op) {
-		"&" | "|" | "^" | "<<" | ">>" => true,
+		"&" | "|" | "^" | "<<" | ">>" | ">>>" => true,
 		_ => false,
 	};
 }
@@ -231,6 +231,7 @@ function bitwiseOpcode(op: string): RaiserOpcode {
 		"^" => RaiserOpcode.BitXor,
 		"<<" => RaiserOpcode.ShiftLeft,
 		">>" => RaiserOpcode.ShiftRight,
+		">>>" => RaiserOpcode.ShiftRightU,
 		_ => RaiserOpcode.BitAnd,
 	};
 }
@@ -238,14 +239,14 @@ function bitwiseOpcode(op: string): RaiserOpcode {
 function isCompoundAssignOp(op: string): boolean {
 	return match (op) {
 		"+=" | "-=" | "*=" | "/=" | "%=" => true,
-		"&=" | "|=" | "^=" | "<<=" | ">>=" => true,
+		"&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
 		_ => false,
 	};
 }
 
 function emitBitwise(s: RaiserCompState, op: string, dest: int32, lReg: int32, rReg: int32, t: Type | null): void {
 	const opc = bitwiseOpcode(op);
-	if (opc != RaiserOpcode.ShiftLeft && opc != RaiserOpcode.ShiftRight) {
+	if (opc != RaiserOpcode.ShiftLeft && opc != RaiserOpcode.ShiftRight && opc != RaiserOpcode.ShiftRightU) {
 		emitInst(s, raiserABC(opc, dest, lReg, rReg));
 		return;
 	}
@@ -255,17 +256,14 @@ function emitBitwise(s: RaiserCompState, op: string, dest: int32, lReg: int32, r
 	emitInst(s, raiserABC(RaiserOpcode.Move, count, rReg, 0));
 	if (bits > 0) emitInst(s, raiserABC(RaiserOpcode.NarrowU, count, shiftCountBits(bits), 0));
 	let left = lReg;
-	let shift = opc;
-	if (opc == RaiserOpcode.ShiftRight && unsigned) {
-		shift = RaiserOpcode.ShiftRightU;
-		if (bits > 0) {
-			left = allocReg(s);
-			emitInst(s, raiserABC(RaiserOpcode.Move, left, lReg, 0));
-			emitInst(s, raiserABC(RaiserOpcode.NarrowU, left, bits, 0));
-		}
+	const shift = opc == RaiserOpcode.ShiftRight && unsigned ? RaiserOpcode.ShiftRightU : opc;
+	if (shift == RaiserOpcode.ShiftRightU && bits > 0) {
+		left = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.Move, left, lReg, 0));
+		emitInst(s, raiserABC(RaiserOpcode.NarrowU, left, bits, 0));
 	}
 	emitInst(s, raiserABC(shift, dest, left, count));
-	if (opc == RaiserOpcode.ShiftLeft && bits > 0) {
+	if (bits > 0 && (opc == RaiserOpcode.ShiftLeft || (opc == RaiserOpcode.ShiftRightU && !unsigned))) {
 		emitInst(s, raiserABC(unsigned ? RaiserOpcode.NarrowU : RaiserOpcode.SignExtend, dest, bits, 0));
 	}
 }
@@ -285,8 +283,9 @@ function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int
 	const base = op.slice(0, op.length - 1);
 	if (isBitwiseOp(base) && convClassOf(target.nodeType) == (RaiserConvClass.F64 as int32)) {
 		const asInt = emitConvTo(s, lhs, RaiserConvClass.I32 as int32, RaiserConvClass.F64 as int32);
-		emitBitwise(s, base, dest, asInt, rhs, int32Type());
-		emitInst(s, raiserABC(RaiserOpcode.Move, dest, emitConvTo(s, dest, RaiserConvClass.F64 as int32, RaiserConvClass.I32 as int32), 0));
+		const stored = base == ">>>" ? createPrimitive(TypeKind.Uint32) : int32Type();
+		emitBitwise(s, base, dest, asInt, rhs, stored);
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest, emitConvTo(s, dest, RaiserConvClass.F64 as int32, convClassOf(stored)), 0));
 		return;
 	}
 	if (isBitwiseOp(base)) {
