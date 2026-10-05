@@ -2318,7 +2318,7 @@ extern function ok<T>(val: T): Result<T, any>;
 | `@beforeReload` / `@afterReload` | module-level `(): void` function | Hot-reload lifecycle handler, run by `std/hcr` around a reload under `--hcr` ("Hot Code Reload" below) | DONE on Windows x64 and Linux x64 (`hcrEngine`, 2026-09-27) |
 | `@comptime` | block, function | Evaluate a block, or every call of the function, while compiling; see [docs/LANG-METAPROGRAMMING.md](LANG-METAPROGRAMMING.md) "`@comptime` functions" | Verified on C and JS (2026-10-03) |
 | `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
-| `@inline` | function | Hint to inline function body at call site | PLANNED |
+| `@inline` | module-level function, extension, operator | C gives every module that calls the routine its own `static inline` copy, so the C compiler can inline it without LTO; see [`@inline`](#inline) | Verified on C, JS and Raiser (2026-10-05) |
 
 ##### Which of the three a declaration wants
 
@@ -2346,6 +2346,22 @@ A `@compilerFunc` declaration lives in the prelude so every module a synthesized
 call lands in can reach it, and it needs no `export` — the table travels with the
 prelude scope, not through the export registry. The C name still comes from the
 `from "..."` clause, not from the mark.
+
+##### `@inline`
+
+The C backend defines an `@inline` routine as `static inline` in each module that calls it, from the
+body its own module checked and lowered; a call keeps call semantics (each argument evaluated once, a
+raise propagates). JS and the Raiser call it as before. Measured 2026-10-05 (`wt/solana-inline`):
+corpus `inlineAcrossModules` prints the same on C (DRC, ORC, `--danger`), JS, ESM and the Raiser and
+passes SAN; on SBF `--release` without LTO (platform-tools v1.57, LiteSVM), an int32 `a / 4` through
+`std/solana/arithmetic` costs 0.6 CU per operation instead of 25.6, and `a / b` 19.7 instead of 29.6.
+
+Refused at compile time: the mark on a method, a nested function or a non-function; an `extern`
+or body-less routine; an argument; `@exportName` or a reload handler next to it (there is no single
+C symbol); a `static` slot inside it; and the routine as a value, a callback included — call it from a
+lambda (`(n) => addOne(n)`). Under `--hcr`, a routine of a reloadable module is an ordinary routine,
+so a reload never leaves a stale copy behind (`hcrInlineFunctions`, macOS; not run on Linux or
+Windows).
 
 **Two known rough edges, so nobody copies them as patterns.** `@builtin` currently
 carries one declaration that is not an intrinsic at all (`nonisolated`, an actor
