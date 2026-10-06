@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, isGeneratorFlags, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion } from "./types";
+import { peelTransparentInstance, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
@@ -60,6 +60,7 @@ export function joinBranchTypes(types: Type[]): Type {
 		if (!dup) prepared.push(w);
 	}
 	if (prepared.length == 0) return inferredType();
+	dropSubclassMembers(prepared);
 	if (prepared.length == 1) return prepared[0];
 	const anonJoined = joinAnonLiteralStructs(prepared);
 	if (anonJoined != null) return anonJoined;
@@ -86,6 +87,28 @@ export function joinBranchTypes(types: Type[]): Type {
 		return acc;
 	}
 	return canonicalizeBranchJoin(unionOfTypes(prepared, null));
+}
+
+function dropSubclassMembers(members: Type[]): void {
+	let kept = 0;
+	for (let i = 0; i < members.length; i++) {
+		let absorbed = false;
+		for (let j = 0; j < members.length; j++) {
+			if (j != i && derivesFrom(members[i], members[j])) { absorbed = true; break; }
+		}
+		if (!absorbed) {
+			members[kept] = members[i];
+			kept += 1;
+		}
+	}
+	members.length = kept;
+}
+
+function derivesFrom(sub: Type, sup: Type): boolean {
+	const ancestor = classAncestorInstance(sub, sup);
+	if (ancestor == null) return false;
+	const supBody = sup.kind == TypeKind.Ref && sup.typeReturn != null ? sup.typeReturn : sup;
+	return ancestor.kind != TypeKind.GenericInstance || sameType(ancestor, supBody);
 }
 
 function anonLiteralStruct(t: Type | null): Type | null {
