@@ -6,7 +6,7 @@
 
 import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { genericParamsOf, enumStorageKind, isValueStorage, classParentOf, runtimeClassSym } from "../../checker/types";
+import { genericParamsOf, enumStorageKind, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
@@ -14,7 +14,7 @@ import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, CTypeInfoDemand, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet, addCGenError } from "./context";
 import { SymbolFlag, hasFlag, lookupSymbolReadonly, makeSymbol, setFlag } from "../../checker/symbol";
 import { mangle, mangledTypeName, mangledFunctionName, mangleQualified, mangleModuleName, mangleFieldName, safeName, resolveOverloadWinner, OverloadWinner } from "./names";
-import { cStringLiteral } from "./literals";
+import { cStringLiteral, escapeCString } from "./literals";
 import { getGlobalTypeOwner, getGlobalTypeOwnerByShape, CheckerContext, newSym } from "../../checker/context";
 
 // Struct C-name resolution: a sym-less named struct (macro-wire / mono
@@ -1086,6 +1086,8 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	// name) — the DRC ledger prints it and balance guards select rows by it.
 	const runtimeName = bareOrigin != "" ? mangle(bareOrigin) : className;
 	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.name = "${runtimeName}";`);
+	const shown = objType != null ? typeDisplayName(objType.kind == TypeKind.Ref && objType.typeReturn != null ? objType.typeReturn : objType) : "";
+	if (shown != "" && shown != runtimeName) addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.displayName = "${escapeCString(shown)}";`);
 	let destroyHook = "";
 	let destroySym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedDestructor) : null;
 	// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
