@@ -1,7 +1,5 @@
 // @exit: 1
 // @stdout: before 2
-// @xfail(js): the JS stop names the held Row by typeof as 'object', where C names it 'Row'; the stop itself matches C
-// @xfail(esm): same as js
 // @xfail(danger): --danger drops the tag test, so the read of the other member is undefined behaviour
 // @xfail(raiser): the Raiser VM does not test union conversions
 
