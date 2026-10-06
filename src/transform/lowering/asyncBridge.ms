@@ -71,7 +71,7 @@ function promiseTypeFor(inner: Type | null): Type {
 	return inner != null ? createPromise(inner) : createPromise(voidType());
 }
 
-import { isStructLikeType, inlineInFuture, boxedInFuture } from "../util";
+import { isStructLikeType, inlineInFuture, boxedInFuture, ownedInFuture } from "../util";
 
 // $retFut allocation: String needs the 16-byte inline slot; everything else uses
 // the 8-byte generic future (boxed types store a void*). nodeType carries
@@ -85,6 +85,57 @@ function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
 	const call = makeCall(runtimeRef("msFutureCreate", loc), [], loc);
 	call.nodeType = promiseTypeFor(innerType);
 	return call;
+}
+
+// The routine a future runs on its value when the future is destroyed: it takes
+// whatever the slot still holds into a local, and the local's scope exit runs the
+// value's own destructor. A reader that took the value left the slot empty.
+function makeValueDropFn(t: Type, ctx: TransformContext, loc: SourceLocation): Node {
+	const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
+	const futSym = mintSym(ctx, SymbolKind.Parameter, "fut", voidPtrType);
+	const stmts: Node[] = [];
+	if (boxedInFuture(t)) {
+		const rawSym = mintSym(ctx, SymbolKind.Variable, "$raw", voidPtrType);
+		const take = makeCall(runtimeRef("msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
+		take.nodeType = voidPtrType;
+		stmts.push(makeLocalDecl(rawSym, take, voidPtrType, loc));
+		const unbox = makeCall(runtimeRef("msUnboxStruct", loc), [makeTypedIdentResolved(rawSym, voidPtrType, loc)], loc);
+		unbox.nodeType = t;
+		const held = makeBinary(makeTypedIdentResolved(rawSym, voidPtrType, loc), "!=", makeNull(loc), loc);
+		held.nodeType = booleanType();
+		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
+		stmts.push(makeIf(held, makeBlock([makeLocalDecl(droppedSym, unbox, t, loc)], loc), null, loc));
+	} else {
+		const take = makeCall(runtimeRef(inlineInFuture(t) ? "msFutureTakeStringRaw" : "msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
+		take.nodeType = t;
+		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
+		stmts.push(makeLocalDecl(droppedSym, take, t, loc));
+	}
+	const fnExpr = createNode(NodeKind.FunctionExpr, {
+		funcExprParams: ["fut"],
+		funcExprParamTypes: ["Ptr<void>"],
+		funcExprBody: makeBlock(stmts, loc),
+		funcExprFlags: "",
+		funcExprReturnType: "void",
+	}, syntheticToken(loc));
+	fnExpr.nodeType = createClosureType([voidPtrType], ["fut"], voidType());
+	fnExpr.paramSyms = [futSym];
+	return fnExpr;
+}
+
+function makeLocalDecl(sym: Symbol, init: Node, t: Type, loc: SourceLocation): Node {
+	const decl = makeVarDecl(sym.name, init, DeclKind.Const, loc);
+	decl.nodeType = t;
+	decl.resolvedSym = sym;
+	return decl;
+}
+
+// msFutureSetValueDrop($retFut, drop): the async function's future owns its value.
+function makeOwnValueStmt(retFutSym: Symbol, retFutType: Type, fnReturnInner: Type | null, ctx: TransformContext, loc: SourceLocation): Node | null {
+	if (!ownedInFuture(fnReturnInner)) return null;
+	const call = makeCall(runtimeRef("msFutureSetValueDrop", loc),
+		[makeTypedIdentResolved(retFutSym, retFutType, loc), makeValueDropFn(fnReturnInner!, ctx, loc)], loc);
+	return makeExprStmt(call, loc);
 }
 
 // Zero value for a type — used as fallback in msFutureReadT(f, zeroval) when future failed
@@ -546,6 +597,8 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	retFutDecl.nodeType = retFutType;
 	retFutDecl.resolvedSym = retFutSym;
 	outerStmts.push(retFutDecl);
+	const ownValue = makeOwnValueStmt(retFutSym, retFutType, fnReturnInner, ctx, loc);
+	if (ownValue != null) outerStmts.push(ownValue);
 
 	// let $state = 0;
 	const stateDecl = makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc);
@@ -709,7 +762,8 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tra
 	const catchBody = makeBlock([failCall, makeReturn(makeTypedIdentResolved(retFutSym, retFutType, loc), loc)], loc);
 	const tryCatch = makeTryCatch(makeBlock(tryStmts, loc), excSym, catchBody, makeBlock([], loc), loc);
 
-	return makeBlock([retFutDecl, tryCatch], loc);
+	const ownValue = makeOwnValueStmt(retFutSym, retFutType, fnReturnInner, ctx, loc);
+	return makeBlock(ownValue != null ? [retFutDecl, ownValue, tryCatch] : [retFutDecl, tryCatch], loc);
 }
 
 // ===== Walk: Find was-async functions and rewrite =====
