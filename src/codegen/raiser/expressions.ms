@@ -19,7 +19,7 @@ import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserS
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
+import { typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
@@ -756,6 +756,12 @@ function classDisplayName(key: string): string {
 	return hash < 0 ? key : key.slice(colon + 1, hash);
 }
 
+function classTargetDisplay(t: Type | null, key: string): string {
+	let bare = t != null && t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
+	if (bare != null && bare.kind == TypeKind.Ref && bare.typeReturn != null) bare = bare.typeReturn;
+	return bare != null && bare.kind == TypeKind.GenericInstance ? typeDisplayName(bare) : classDisplayName(key);
+}
+
 function emitObjConv(s: RaiserCompState, node: Node, reg: int32): int32 {
 	const key = classTargetKey(node.nodeType);
 	if (key == "") {
@@ -763,7 +769,7 @@ function emitObjConv(s: RaiserCompState, node: Node, reg: int32): int32 {
 		queueRaiserCompileError(msg, node.location.line, node.location.column);
 		return emitTrapNil(s, msg);
 	}
-	emitInst(s, raiserABC(RaiserOpcode.ObjConv, reg, addConst(s, raiserString(key)), addConst(s, raiserString(classDisplayName(key)))));
+	emitInst(s, raiserABC(RaiserOpcode.ObjConv, reg, addConst(s, raiserString(key)), addConst(s, raiserString(classTargetDisplay(node.nodeType, key)))));
 	return reg;
 }
 
