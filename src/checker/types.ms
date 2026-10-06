@@ -4051,6 +4051,11 @@ function typeDisplayNameInner(t: Type | null): string {
 		const refElem = t.typeReturn.typeReturn;
 		if (refElem != null) return typeDisplayName(refElem) + "[]";
 	}
+	if (t.kind == TypeKind.Tuple && t.typeChildren.length > 0) {
+		const parts: string[] = [];
+		for (const c of t.typeChildren) parts.push(typeDisplayName(c));
+		return "[" + parts.join(", ") + "]";
+	}
 	if (name != "") return name;
 	if (t.kind == TypeKind.Ptr && t.typeReturn != null) return "Ptr<" + typeDisplayName(t.typeReturn) + ">";
 	return match (t.kind) {
