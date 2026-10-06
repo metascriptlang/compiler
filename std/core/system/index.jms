@@ -47,8 +47,20 @@ export extern function compilerFunc(): void;
 export extern function delegate(): void;
 
 @compilerFunc
+function msDefect(message: string): never {
+	@emit(`if (typeof process === "object" && process !== null && typeof process.exit === "function") {
+		process.stderr.write("Error: " + ${message} + "\\n");
+		process.exit(1);
+	}
+	const e = new Error(${message});
+	e.msDefect = true;
+	throw e;`);
+	unreachable;
+}
+
+@compilerFunc
 function msFieldError(head: string, actual: string): never {
-	@emit(`throw new Error(${head} + ${actual} + "'");`);
+	@emit(`${msDefect}(${head} + ${actual} + "'");`);
 	unreachable;
 }
 
@@ -110,21 +122,21 @@ export template `>=`<T>(a: T, b: T): boolean { return b <= a; }
 
 @compilerFunc
 function msCheckRangeI8(v: float64, lo: float64, hi: float64): float64 {
-	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) throw new Error("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
+	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) ${msDefect}("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
 	return ${v};`);
 	unreachable;
 }
 
 @compilerFunc
 function msCheckRangeI16(v: float64, lo: float64, hi: float64): float64 {
-	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) throw new Error("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
+	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) ${msDefect}("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
 	return ${v};`);
 	unreachable;
 }
 
 @compilerFunc
 function msCheckRangeI32(v: float64, lo: float64, hi: float64): float64 {
-	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) throw new Error("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
+	@emit(`if (!(${v} > ${lo} - 1 && ${v} < ${hi} + 1)) ${msDefect}("value " + ${v} + " not in range " + ${lo} + " .. " + ${hi});
 	return ${v};`);
 	unreachable;
 }
@@ -137,79 +149,79 @@ function msToInt32(v: float64): int32 {
 
 @compilerFunc
 function msCheckRangeI64(v: float64): float64 {
-	@emit(`if (!(${v} >= -9223372036854775808 && ${v} < 9223372036854775808)) throw new Error("value " + ${v} + " not in range -9223372036854775808 .. 9223372036854775807");
+	@emit(`if (!(${v} >= -9223372036854775808 && ${v} < 9223372036854775808)) ${msDefect}("value " + ${v} + " not in range -9223372036854775808 .. 9223372036854775807");
 	return ${v};`);
 	unreachable;
 }
 
 @compilerFunc
 function msDivI32(a: int32, b: int32): int32 {
-	@emit(`if (${b} === 0) throw new Error("division by zero");
-	if (${b} === -1 && ${a} === -2147483648) throw new Error("over- or underflow");
+	@emit(`if (${b} === 0) ${msDefect}("division by zero");
+	if (${b} === -1 && ${a} === -2147483648) ${msDefect}("over- or underflow");
 	return (${a} / ${b}) | 0;`);
 	unreachable;
 }
 
 @compilerFunc
 function msModI32(a: int32, b: int32): int32 {
-	@emit(`if (${b} === 0) throw new Error("division by zero");
+	@emit(`if (${b} === 0) ${msDefect}("division by zero");
 	return (${a} % ${b}) | 0;`);
 	unreachable;
 }
 
 @compilerFunc
 function msDivU32(a: uint32, b: uint32): uint32 {
-	@emit(`if (${b} === 0) throw new Error("division by zero");
+	@emit(`if (${b} === 0) ${msDefect}("division by zero");
 	return (${a} / ${b}) >>> 0;`);
 	unreachable;
 }
 
 @compilerFunc
 function msModU32(a: uint32, b: uint32): uint32 {
-	@emit(`if (${b} === 0) throw new Error("division by zero");
+	@emit(`if (${b} === 0) ${msDefect}("division by zero");
 	return ${a} % ${b};`);
 	unreachable;
 }
 
 @compilerFunc
 function msDivI64(a: int64, b: int64): int64 {
-	@emit(`if (${b} === 0n) throw new Error("division by zero");
-	if (${b} === -1n && ${a} === -9223372036854775808n) throw new Error("over- or underflow");
+	@emit(`if (${b} === 0n) ${msDefect}("division by zero");
+	if (${b} === -1n && ${a} === -9223372036854775808n) ${msDefect}("over- or underflow");
 	return ${a} / ${b};`);
 	unreachable;
 }
 
 @compilerFunc
 function msModI64(a: int64, b: int64): int64 {
-	@emit(`if (${b} === 0n) throw new Error("division by zero");
+	@emit(`if (${b} === 0n) ${msDefect}("division by zero");
 	return ${a} % ${b};`);
 	unreachable;
 }
 
 @compilerFunc
 function msDivU64(a: uint64, b: uint64): uint64 {
-	@emit(`if (${b} === 0n) throw new Error("division by zero");
+	@emit(`if (${b} === 0n) ${msDefect}("division by zero");
 	return ${a} / ${b};`);
 	unreachable;
 }
 
 @compilerFunc
 function msModU64(a: uint64, b: uint64): uint64 {
-	@emit(`if (${b} === 0n) throw new Error("division by zero");
+	@emit(`if (${b} === 0n) ${msDefect}("division by zero");
 	return ${a} % ${b};`);
 	unreachable;
 }
 
 @compilerFunc
 function msPowI32(a: int32, b: int32): int32 {
-	@emit(`if (${b} < 0) throw new Error("value " + ${b} + " not in range 0 .. 2147483647");
+	@emit(`if (${b} < 0) ${msDefect}("value " + ${b} + " not in range 0 .. 2147483647");
 	let r = 1, x = ${a}, y = ${b};
 	for (;;) {
-		if (y & 1) { r = r * x; if (r > 2147483647 || r < -2147483648) throw new Error("over- or underflow"); }
+		if (y & 1) { r = r * x; if (r > 2147483647 || r < -2147483648) ${msDefect}("over- or underflow"); }
 		y = y >>> 1;
 		if (y === 0) return r | 0;
 		x = x * x;
-		if (x > 2147483647 || x < -2147483648) throw new Error("over- or underflow");
+		if (x > 2147483647 || x < -2147483648) ${msDefect}("over- or underflow");
 	}`);
 	unreachable;
 }
@@ -218,11 +230,11 @@ function msPowI32(a: int32, b: int32): int32 {
 function msPowU32(a: uint32, b: uint32): uint32 {
 	@emit(`let r = 1, x = ${a}, y = ${b};
 	for (;;) {
-		if (y & 1) { r = r * x; if (r > 4294967295) throw new Error("over- or underflow"); }
+		if (y & 1) { r = r * x; if (r > 4294967295) ${msDefect}("over- or underflow"); }
 		y = y >>> 1;
 		if (y === 0) return r;
 		x = x * x;
-		if (x > 4294967295) throw new Error("over- or underflow");
+		if (x > 4294967295) ${msDefect}("over- or underflow");
 	}`);
 	unreachable;
 }
@@ -260,14 +272,14 @@ function msUint64ToFloat32(a: uint64): float32 {
 
 @compilerFunc
 function msPowI64(a: int64, b: int64): int64 {
-	@emit(`if (${b} < 0n) throw new Error("value " + ${b} + " not in range 0 .. 9223372036854775807");
+	@emit(`if (${b} < 0n) ${msDefect}("value " + ${b} + " not in range 0 .. 9223372036854775807");
 	let r = 1n, x = ${a}, y = ${b};
 	for (;;) {
-		if (y & 1n) { r = r * x; if (r > 9223372036854775807n || r < -9223372036854775808n) throw new Error("over- or underflow"); }
+		if (y & 1n) { r = r * x; if (r > 9223372036854775807n || r < -9223372036854775808n) ${msDefect}("over- or underflow"); }
 		y = y >> 1n;
 		if (y === 0n) return r;
 		x = x * x;
-		if (x > 9223372036854775807n || x < -9223372036854775808n) throw new Error("over- or underflow");
+		if (x > 9223372036854775807n || x < -9223372036854775808n) ${msDefect}("over- or underflow");
 	}`);
 	unreachable;
 }
@@ -276,11 +288,11 @@ function msPowI64(a: int64, b: int64): int64 {
 function msPowU64(a: uint64, b: uint64): uint64 {
 	@emit(`let r = 1n, x = ${a}, y = ${b};
 	for (;;) {
-		if (y & 1n) { r = r * x; if (r > 18446744073709551615n) throw new Error("over- or underflow"); }
+		if (y & 1n) { r = r * x; if (r > 18446744073709551615n) ${msDefect}("over- or underflow"); }
 		y = y >> 1n;
 		if (y === 0n) return r;
 		x = x * x;
-		if (x > 18446744073709551615n) throw new Error("over- or underflow");
+		if (x > 18446744073709551615n) ${msDefect}("over- or underflow");
 	}`);
 	unreachable;
 }
@@ -291,14 +303,14 @@ function msPowU64(a: uint64, b: uint64): uint64 {
 
 @compilerFunc
 function msChkIndex(i: int64, len: int64): int64 {
-	@emit(`if (!(${i} >= 0 && ${i} < ${len})) throw new Error("index " + ${i} + " out of bounds (length " + ${len} + ")");
+	@emit(`if (!(${i} >= 0 && ${i} < ${len})) ${msDefect}("index " + ${i} + " out of bounds (length " + ${len} + ")");
 	return Number(${i});`);
 	unreachable;
 }
 
 @compilerFunc
 function msSpanAt(v: unknown, i: int64): unknown {
-	@emit(`if (!(${i} >= 0 && ${i} < ${v}.len)) throw new Error("index " + ${i} + " out of bounds (length " + ${v}.len + ")");
+	@emit(`if (!(${i} >= 0 && ${i} < ${v}.len)) ${msDefect}("index " + ${i} + " out of bounds (length " + ${v}.len + ")");
 	return ${v}.base[${v}.off + Number(${i})];`);
 	unreachable;
 }
@@ -311,14 +323,14 @@ function msSpanValues(v: unknown): unknown {
 
 @compilerFunc
 function msSpanCell(v: unknown, i: int64): unknown {
-	@emit(`if (!(${i} >= 0 && ${i} < ${v}.len)) throw new Error("index " + ${i} + " out of bounds (length " + ${v}.len + ")");
+	@emit(`if (!(${i} >= 0 && ${i} < ${v}.len)) ${msDefect}("index " + ${i} + " out of bounds (length " + ${v}.len + ")");
 	return [${v}.base, ${v}.off + Number(${i})];`);
 	unreachable;
 }
 
 @compilerFunc
 function msArrayCell(a: unknown, i: int64): unknown {
-	@emit(`if (!(${i} >= 0 && ${i} < ${a}.length)) throw new Error("index " + ${i} + " out of bounds (length " + ${a}.length + ")");
+	@emit(`if (!(${i} >= 0 && ${i} < ${a}.length)) ${msDefect}("index " + ${i} + " out of bounds (length " + ${a}.length + ")");
 	return [${a}, Number(${i})];`);
 	unreachable;
 }
@@ -332,7 +344,7 @@ function msSpanOf(a: unknown): unknown {
 @compilerFunc
 function msSliceOf(a: unknown, start: number, end: number): unknown {
 	@emit(`const s = Number(${start}), e = Number(${end}), n = ${a}.length;
-	if (e !== s && (s < 0 || e < s || e > n)) throw new Error("slice " + s + ".." + e + " out of bounds (length " + n + ")");
+	if (e !== s && (s < 0 || e < s || e > n)) ${msDefect}("slice " + s + ".." + e + " out of bounds (length " + n + ")");
 	return { base: ${a}, off: s, len: e - s };`);
 	unreachable;
 }
@@ -340,7 +352,7 @@ function msSliceOf(a: unknown, start: number, end: number): unknown {
 @compilerFunc
 function msSliceSpan(v: unknown, start: number, end: number): unknown {
 	@emit(`const s = Number(${start}), e = Number(${end}), n = ${v}.len;
-	if (e !== s && (s < 0 || e < s || e > n)) throw new Error("slice " + s + ".." + e + " out of bounds (length " + n + ")");
+	if (e !== s && (s < 0 || e < s || e > n)) ${msDefect}("slice " + s + ".." + e + " out of bounds (length " + n + ")");
 	return { base: ${v}.base, off: ${v}.off + s, len: e - s };`);
 	unreachable;
 }
@@ -348,7 +360,7 @@ function msSliceSpan(v: unknown, start: number, end: number): unknown {
 @compilerFunc
 function msArrayAt(a: unknown, i: int64): unknown {
 	@emit(`const _a = ${a}, _i = ${i};
-	if (!(_i >= 0 && _i < _a.length)) throw new Error("index " + _i + " out of bounds (length " + _a.length + ")");
+	if (!(_i >= 0 && _i < _a.length)) ${msDefect}("index " + _i + " out of bounds (length " + _a.length + ")");
 	return _a[_i];`);
 	unreachable;
 }
@@ -356,7 +368,7 @@ function msArrayAt(a: unknown, i: int64): unknown {
 @compilerFunc
 function msChkArray(a: unknown, i: int64): unknown {
 	@emit(`const _a = ${a}, _i = ${i};
-	if (!(_i >= 0 && _i < _a.length)) throw new Error("index " + _i + " out of bounds (length " + _a.length + ")");
+	if (!(_i >= 0 && _i < _a.length)) ${msDefect}("index " + _i + " out of bounds (length " + _a.length + ")");
 	return _a;`);
 	unreachable;
 }
@@ -364,7 +376,7 @@ function msChkArray(a: unknown, i: int64): unknown {
 @compilerFunc
 function msChkStore(a: unknown, i: int64, v: unknown): unknown {
 	@emit(`const _a = ${a}, _i = ${i}, _v = ${v};
-	if (!(_i >= 0 && _i < _a.length)) throw new Error("index " + _i + " out of bounds (length " + _a.length + ")");
+	if (!(_i >= 0 && _i < _a.length)) ${msDefect}("index " + _i + " out of bounds (length " + _a.length + ")");
 	_a[_i] = _v;
 	return _v;`);
 	unreachable;
