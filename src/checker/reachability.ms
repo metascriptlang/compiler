@@ -24,11 +24,10 @@ import {
 } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName, refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey } from "../codegen/c/types";
-import { hasFlag, SymbolFlag } from "./symbol";
+import { hasFlag, SymbolFlag, lookupCtorDefaults } from "./symbol";
 import { classParentOf, hasGenericParams, isMaybeType, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
-import { lookupCtorDefaults } from "./instantiate";
 import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
 
 export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {

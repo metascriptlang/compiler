@@ -10,7 +10,7 @@ import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, classParentOf, runtimeClassSym, genericParamNamesOf } from "./types";
 import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
 import { splitTopLevel } from "../utils/string";
-import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
+import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind, registerCtorDefaults, resetCtorRegistry } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
@@ -92,79 +92,13 @@ export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext): Ch
 }
 
 // ===== Constructor Default Registry =====
-// Cross-module registry for constructor function types + defaults.
-// Each module has its own symbol table, so constructor symbols can't be shared
-// via scope. This registry is shared by every check of one build and provides the
-// concrete param types needed for default-fill in checkNewExpr.
-export interface CtorEntry {
-	className: string;
-	fnType: Type;
-	defaults: Node[];
-	initSym: Symbol | null;
-}
-
-export interface CtorRow {
-	classSym: Symbol;
-	entry: CtorEntry;
-}
-
-let _ctorRegistry: HashMap<Symbol, CtorEntry[]> = new HashMap<Symbol, CtorEntry[]>();
-let _ctorRows: CtorRow[] = [];
-
-export function registerCtorDefaults(classSym: Symbol, className: string, fnType: Type, defaults: Node[]): void {
-	if (lookupCtorDefaults(classSym, className) != null) return;
-	addCtorRow({ classSym, entry: { className, fnType, defaults, initSym: null } });
-}
-
-function addCtorRow(row: CtorRow): void {
-	let entries: CtorEntry[] = [];
-	const known = _ctorRegistry.get(row.classSym);
-	if (known != null) entries = known;
-	entries.push(row.entry);
-	_ctorRegistry.set(row.classSym, entries);
-	_ctorRows.push(row);
-}
-
-export function ctorDefaultsMark(): int32 {
-	return _ctorRows.length;
-}
-
-export function ctorDefaultsFrom(mark: int32): CtorRow[] {
-	const rows: CtorRow[] = [];
-	for (let i = mark; i < _ctorRows.length; i += 1) rows.push(_ctorRows[i]);
-	return rows;
-}
-
-export function replayCtorDefaults(rows: CtorRow[]): void {
-	for (const row of rows) {
-		if (lookupCtorDefaults(row.classSym, row.entry.className) == null) addCtorRow(row);
-	}
-}
-
 export function resetInstantiationState(): void {
 	_moduleCtxMap = new HashMap<string, CheckerContext>();
 	_moduleProgramMap = new HashMap<string, Node>();
-	_ctorRegistry = new HashMap<Symbol, CtorEntry[]>();
-	_ctorRows = [];
+	resetCtorRegistry();
 	_instanceHooks = new HashMap<string, InstanceHook>();
 	_hookScannedInstances = new HashMap<Symbol, HashSet<string>>();
 	resetUserHooks();
-}
-
-export function lookupCtorDefaults(classSym: Symbol | null, className: string): CtorEntry | null {
-	if (classSym == null) return null;
-	const entries = _ctorRegistry.get(classSym);
-	if (entries == null) return null;
-	for (const e of entries) {
-		if (e.className == className) return e;
-	}
-	return null;
-}
-
-export function registerCtorInit(classSym: Symbol, className: string, fnType: Type, initSym: Symbol): void {
-	registerCtorDefaults(classSym, className, fnType, []);
-	const entry = lookupCtorDefaults(classSym, className);
-	if (entry != null) entry.initSym = initSym;
 }
 
 interface InstanceHook {
