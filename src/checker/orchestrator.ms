@@ -2,12 +2,12 @@
 // Reference parallel implementation
 
 import { platform } from "std/process";
-import { Node, NodeKind, VariableDeclData, Symbol } from "../ast/node";
+import { Node, NodeKind, VariableDeclData, Symbol, SymbolKind } from "../ast/node";
 import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports, isStaticExtensionSym } from "./context";
 import { lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { threePassTimings, buildPreludeContext, preludeContextFor, createGraphPreludeContext, promoteModuleIntoPrelude, promoteStdModuleIntoPrelude, registerGraphPreludeFn, setSlowTrace } from "./checkPass";
-import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, hasExtraGlobalImports, setExtraGlobalImports } from "./prelude";
+import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, hasExtraGlobalImports, setExtraGlobalImports, modulePasses, setModulePassExempt, ModulePassState } from "./prelude";
 import { createModuleGraph } from "../module/graph";
 import { createFileSystemProvider, provideSource, loadModule, moduleIdentity, SourceProvider } from "../module/loader";
 import { backendOfExtension, createDefaultConfig, resolveImportWithConfig, ResolverConfig } from "../module/resolver";
@@ -86,7 +86,12 @@ function loadGlobalImportModule(graph: ModuleGraph, provider: SourceProvider, co
 		if (isExtra) {
 			const mod = findModule(graph, moduleIdentity(candidate, config, provider));
 			if (mod == null) graph.errors.push(`internal: globalImports entry '${entry}' loaded no module`);
-			else mod.extraPrelude = true;
+			else {
+				mod.extraPrelude = true;
+				for (const pass of modulePasses()) {
+					if (pass.entry == entry) pass.modulePath = mod.path;
+				}
+			}
 		}
 		return;
 	}
@@ -178,6 +183,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	const tBind = performance.now() - _tb0;
 
 	const _tc0 = performance.now();
+	if (modulePasses().length > 0) setModulePassExempt(globalImportClosure(graph), resolverConfig.stdPath);
 	const checked: { mod: Module, ctx: CheckerContext }[] = [];
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
@@ -210,6 +216,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		}
 		if (fresh && mod.stdPrelude) promoteStdModuleIntoPrelude(baseCtx, ctx, mod.preludeSpecifier, injectedIncludes, injectedFlags);
 		if (fresh && mod.extraPrelude) promoteModuleIntoPrelude(baseCtx, ctx);
+		if (mod.extraPrelude) bindModulePasses(mod, ctx);
 		checked.push({ mod, ctx });
 		for (const e of collectExports(ctx, path)) {
 			if (!isStaticExtensionSym(e.sym) && !hasExportName(mod, e.name)) mod.exportNames.push(e.name);
@@ -240,6 +247,43 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		console.log(`    getProperty: n=${gp[0]} t=${gp[1]}ms | findVariantByFieldName: n=${fvb[0]} t=${fvb[1]}ms | findAllExtByName: n=${fae[0]} t=${fae[1]}ms`);
 	}
 	return db.exportRegistry;
+}
+
+function globalImportClosure(graph: ModuleGraph): HashSet<string> {
+	const owned = new HashSet<string>();
+	const pending: string[] = [];
+	for (const mod of graph.modules) {
+		if (mod.extraPrelude || mod.stdPrelude) pending.push(mod.path);
+	}
+	while (pending.length > 0) {
+		const path = pending.pop()!;
+		if (owned.has(path)) continue;
+		owned.add(path);
+		const mod = findModule(graph, path);
+		if (mod == null) continue;
+		for (const ie of mod.imports) {
+			if (ie.sourcePath != "") pending.push(ie.sourcePath);
+		}
+	}
+	return owned;
+}
+
+function bindModulePasses(mod: Module, ctx: CheckerContext): void {
+	for (const pass of modulePasses()) {
+		if (pass.modulePath != mod.path) continue;
+		let found: Symbol | null = null;
+		for (const e of collectExports(ctx, mod.path)) {
+			if (e.name == pass.macro && e.sym.symbolKind == SymbolKind.Macro) found = e.sym;
+		}
+		if (found != null) {
+			pass.sym = found;
+			pass.state = ModulePassState.Bound;
+		} else {
+			pass.sym = null;
+			pass.state = ModulePassState.Broken;
+			mod.errors.push(createModuleError(`globalImports names modulePass '${pass.macro}', but this module exports no macro '${pass.macro}'`, 1, 1, ErrorSeverity.Error));
+		}
+	}
 }
 
 function mirrorModuleErrors(mod: Module, ctx: CheckerContext): void {

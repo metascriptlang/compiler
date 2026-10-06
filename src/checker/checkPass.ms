@@ -44,7 +44,7 @@ import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./tem
 import { fitNode, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerSelfReadType, registerLaterDeclarationNote } from "./checkerCallbacks";
+import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerSelfReadType, registerLaterDeclarationNote } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
@@ -3703,6 +3703,7 @@ function checkProgramCore(
 	cancelCtx: CancelCtx | null,
 	cancelVersion: int32,
 	adoptedDecls: HashMap<Node, Symbol> | null,
+	applyModulePasses: boolean = false,
 ): CheckerContext {
 	// Use shared IdentCache from prelude (one cache per compilation)
 	const sharedCache = preludeCtx.table.identCache;
@@ -3729,6 +3730,7 @@ function checkProgramCore(
 	openScope(ctx.table, ScopeKind.Module);
 	drainSeedSymbols(ctx);
 	const outerGensym = beginGensymUnit();
+	if (applyModulePasses) callApplyModulePasses(ctx, program);
 	runThreePasses(ctx, program);
 	rewindTemplateGensym(outerGensym);
 	collectDirectives(ctx, program);
@@ -3851,9 +3853,10 @@ export function checkProgramWithRegistryCancellable(
 	graph: ModuleGraph, mod: Module,
 	preludeCtx: CheckerContext,
 	cancelCtx: CancelCtx, cancelVersion: int32,
-	adoptedDecls: HashMap<Node, Symbol> | null = null
+	adoptedDecls: HashMap<Node, Symbol> | null = null,
+	applyModulePasses: boolean = false
 ): CheckerContext {
-	return checkProgramCore(program, preludeCtx, registry, graph, mod, cancelCtx, cancelVersion, adoptedDecls);
+	return checkProgramCore(program, preludeCtx, registry, graph, mod, cancelCtx, cancelVersion, adoptedDecls, applyModulePasses);
 }
 
 // Register callbacks at module load time

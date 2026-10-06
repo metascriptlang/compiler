@@ -12,6 +12,7 @@ type InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: T
 type EvalComptimeBlockFn = (node: Node, ctx: CheckerContext) => Node;
 type ExpandMacroInvocationFn = (node: Node, ctx: CheckerContext, depth: int32) => Node;
 type ApplyDecoratorsFn = (ctx: CheckerContext, program: Node) => void;
+type ApplyModulePassesFn = (ctx: CheckerContext, program: Node) => void;
 type DecoratorDefersFn = (ctx: CheckerContext, stmt: Node) => boolean;
 type ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Node, after: Node[]) => Node;
 type DemandReturnFn = (ctx: CheckerContext, sym: Symbol, read: Node) => void;
@@ -40,6 +41,8 @@ let expandMacroInvocationFn: ExpandMacroInvocationFn = (node: Node, ctx: Checker
 	return node;
 };
 let applyDecoratorsFn: ApplyDecoratorsFn = (ctx: CheckerContext, program: Node): void => {
+};
+let applyModulePassesFn: ApplyModulePassesFn = (ctx: CheckerContext, program: Node): void => {
 };
 let decoratorDefersFn: DecoratorDefersFn = (ctx: CheckerContext, stmt: Node): boolean => {
 	return false;
@@ -118,6 +121,14 @@ export function callApplyDecorators(ctx: CheckerContext, program: Node): void {
 
 export function registerApplyDecorators(fn: ApplyDecoratorsFn): void {
 	applyDecoratorsFn = fn;
+}
+
+export function callApplyModulePasses(ctx: CheckerContext, program: Node): void {
+	applyModulePassesFn(ctx, program);
+}
+
+export function registerApplyModulePasses(fn: ApplyModulePassesFn): void {
+	applyModulePassesFn = fn;
 }
 
 export function callDecoratorDefers(ctx: CheckerContext, stmt: Node): boolean {
