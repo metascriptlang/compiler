@@ -173,12 +173,20 @@ function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMet
 	return out;
 }
 
-function isVmPreludeModule(path: string): boolean {
-	if (_raiserPreludeBuilding || path == "") return false;
-	const outer = getComptimeOuterCtx();
-	if (outer == null || outer.graph == null) return false;
-	const mod = findModule(outer.graph, path);
-	return mod == null || mod.stdPrelude;
+let _vmPreludeSyms: HashSet<Symbol> | null = null;
+
+function isVmPreludeSym(sym: Symbol): boolean {
+	if (_raiserPreludeBuilding) return false;
+	if (_vmPreludeSyms == null) {
+		const own = new HashSet<Symbol>();
+		for (const s of raiserPreludeCtx().table.current.symbols.values()) {
+			own.add(s);
+			for (const o of s.overloads) own.add(o);
+		}
+		_vmPreludeSyms = own;
+	}
+	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
+	return _vmPreludeSyms!.has(origin);
 }
 
 function engineBodyCtx(definingModulePath: string): CheckerContext | null {
@@ -186,7 +194,7 @@ function engineBodyCtx(definingModulePath: string): CheckerContext | null {
 	const outer = getComptimeOuterCtx();
 	if (outer == null || outer.registry == null || outer.graph == null) return null;
 	const mod = findModule(outer.graph, definingModulePath);
-	if (mod == null || mod.stdPrelude) return raiserPreludeCtx();
+	if (mod == null || mod.stdPrelude) return null;
 	const declCtx = lookupModuleCtx(definingModulePath);
 	if (declCtx == null) return null;
 	const known = _engine.bodyCtxs.get(declCtx);
@@ -197,6 +205,15 @@ function engineBodyCtx(definingModulePath: string): CheckerContext | null {
 	clearSeedSymbols();
 	_engine.bodyCtxs.set(declCtx, bodyCtx);
 	return bodyCtx;
+}
+
+function vmStdSeeds(skipName: string): Symbol[] {
+	const prelude = raiserPreludeCtx();
+	const seeds: Symbol[] = [];
+	for (const s of prelude.table.current.symbols.values()) {
+		if (s.name != skipName && !isPreludeExport(prelude, s)) seeds.push(s);
+	}
+	return seeds;
 }
 
 registerEngineBodyCtxFn(engineBodyCtx);
@@ -305,11 +322,8 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const seedCtx = seedCtxForSym(sym);
 	const seeds: Symbol[] = instanceTypeParamSeeds(sym);
 	let exts: ExtensionMethod[] = [];
-	if (isVmPreludeModule(sym.modulePath)) {
-		const prelude = raiserPreludeCtx();
-		for (const s of prelude.table.current.symbols.values()) {
-			if (s.name != sym.name && !isPreludeExport(prelude, s)) seeds.push(s);
-		}
+	if (isVmPreludeSym(sym)) {
+		for (const s of vmStdSeeds(sym.name)) seeds.push(s);
 	} else if (seedCtx != null) {
 		for (const s of moduleScopeSymbols(seedCtx.table)) {
 			if (!isClass || s.name != sym.name) seeds.push(s);
