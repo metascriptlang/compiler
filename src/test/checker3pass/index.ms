@@ -32,6 +32,7 @@ import "./scenarios/returnBeforeBody";
 import "./scenarios/generatorYields";
 import "./scenarios/localForwardReferences";
 import "./scenarios/genericOperands";
+import "./scenarios/unionMemberOrder";
 import "./stress/deepNesting";
 import "./stress/manyParams";
 import "./stress/mixed";
