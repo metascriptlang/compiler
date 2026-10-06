@@ -674,6 +674,7 @@ typedef struct msFutureBase {
     bool crossThreadPublished;
     void* error;
     void (*valueDestructor)(void*);
+    void (*valueDrop)(void*);
     msFutureCb* callbacks;
     msFutureCb* cbTail;
     bool errorObserved;

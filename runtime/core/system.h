@@ -491,7 +491,14 @@ static inline msString msFutureReadString(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
 	assert(atomic_load_explicit(&f->finished, memory_order_acquire) && "Future not yet finished");
 	if (f->cancelled || f->failed) { msFutureRaiseFrom(f); return MS_EMPTY_STRING; }
-	return ((msFuture_msString*)fp)->value;
+	msString v = ((msFuture_msString*)fp)->value;
+	((msFuture_msString*)fp)->value = MS_EMPTY_STRING;
+	return v;
+}
+static inline msString msFutureTakeStringRaw(void* fp) {
+	msString v = ((msFuture_msString*)fp)->value;
+	((msFuture_msString*)fp)->value = MS_EMPTY_STRING;
+	return v;
 }
 
 /* Generic struct boxing for spawn — any value type via memcpy.
