@@ -27,6 +27,7 @@ import "./scenarios/overloadXGeneric";
 import "./scenarios/limitations";
 import "./scenarios/resultCarrierConversions";
 import "./scenarios/textConversions";
+import "./scenarios/literalTypeArgument";
 import "./scenarios/arcLiteralSafety";
 import "./scenarios/returnBeforeBody";
 import "./scenarios/generatorYields";
