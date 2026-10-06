@@ -1005,6 +1005,13 @@ export function isGeneratorFlags(flags: string): boolean {
 		findFlagSegment(flags, "async_generator") == "async_generator";
 }
 
+export function routineKindFlag(flags: string): string {
+	if (findFlagSegment(flags, "async_generator") == "async_generator") return "async_generator";
+	if (findFlagSegment(flags, "generator") == "generator") return "generator";
+	if (findFlagSegment(flags, "async") == "async") return "async";
+	return "";
+}
+
 // Cross-module generic monomorphization: a method must carry its body (declNode)
 // across module boundaries when its signature still mentions unresolved generic
 // params — its own <T> (static generic) OR the enclosing generic class seen through
@@ -1784,6 +1791,14 @@ test "stripGenFlag simple" { assert stripGenFlag("gen:T") == ""; }
 test "stripGenFlag with async" { assert stripGenFlag("async|gen:T") == "async"; }
 
 test "stripGenFlag no gen" { assert stripGenFlag("async") == "async"; }
+
+test "routineKindFlag reads the routine's kind beside other flag segments" {
+	assert routineKindFlag("generator|ext:b:Bag") == "generator";
+	assert routineKindFlag("async|ext:b:Bag") == "async";
+	assert routineKindFlag("async_generator|ext:b:Bag") == "async_generator";
+	assert routineKindFlag("ext:b:Bag") == "";
+	assert routineKindFlag("async_actor") == "";
+}
 
 test "isExtensionFlag prefix" {
 	assert isExtensionFlag("ext:s:string");

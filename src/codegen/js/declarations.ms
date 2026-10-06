@@ -8,7 +8,7 @@ import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JS
 import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { isGenericFn } from "../../checker/context";
+import { isGenericFn, routineKindFlag } from "../../checker/context";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // ===== Function Declaration =====
@@ -16,7 +16,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 	const d = node.data as FunctionDeclData;
 	const autoAsync = needsAutoAsync(d.fnFlags, d.fnBody);
-	match (d.fnFlags) {
+	match (routineKindFlag(d.fnFlags)) {
 		"async" => { emit(gen, "async function "); },
 		"generator" => { emit(gen, autoAsync ? "async function* " : "function* "); },
 		"async_generator" => { emit(gen, "async function* "); },
@@ -197,7 +197,7 @@ function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): 
 	if (d.methodFlags.indexOf("overload", 0) >= 0) return;
 	emitIndent(gen);
 	const autoAsync = needsAutoAsync(d.methodFlags, d.methodBody);
-	match (d.methodFlags) {
+	match (routineKindFlag(d.methodFlags)) {
 		"async" => { emit(gen, "async function "); },
 		"generator" => { emit(gen, autoAsync ? "async function* " : "function* "); },
 		"async_generator" => { emit(gen, "async function* "); },
@@ -274,7 +274,7 @@ export function emitMethodDecl(gen: JSGenerator, node: Node): void {
 	emitIndent(gen);
 	if (d.methodIsStatic) { emit(gen, "static "); }
 	const autoAsync = needsAutoAsync(d.methodFlags, d.methodBody);
-	match (d.methodFlags) {
+	match (routineKindFlag(d.methodFlags)) {
 		"async" => { emit(gen, "async "); },
 		"generator" => { emit(gen, autoAsync ? "async *" : "*"); },
 		"async_generator" => { emit(gen, "async *"); },
