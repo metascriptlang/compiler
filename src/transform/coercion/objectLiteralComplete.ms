@@ -26,7 +26,8 @@ function completeLiteral(node: Node): Node {
 	if (node.kind != NodeKind.ObjectLiteral) return node;
 	if (node.nodeType == null) return node;
 	const peeled = peelThrough(unwrapRef(node.nodeType), PEEL_ALL);
-	const t = peeled == null ? unwrapRef(node.nodeType) : peeled;
+	let t = peeled == null ? unwrapRef(node.nodeType) : peeled;
+	if (t.kind == TypeKind.GenericInstance && t.typeReturn != null) t = t.typeReturn;
 	if (t.kind != TypeKind.Struct) return node;
 	if (t.typeNames == null || t.typeChildren == null) return node;
 	if (t.sym != null && hasFlag(t.sym, SymbolFlag.ImportC)) return node;
