@@ -896,3 +896,20 @@ main();
 	const c = compileToCWithStd(src);
 	assert c.ok;
 }
+
+test "E2E: getImpl of the function whose body calls the macro is a checking-cycle error" {
+	const src = `
+import { Node, bindSym, getImpl } from "std/meta";
+
+macro selfImpl(x: Node): Node {
+	const impl = getImpl(bindSym("frag"));
+	return x;
+}
+
+function frag(v: float32): float32 { return selfImpl(v) * 2.0; }
+console.log(frag(1.0));
+`;
+	const c = compileToCWithStd(src);
+	assert !c.ok;
+	if (!c.ok) assert c.error.contains("'frag' is still being checked");
+}
