@@ -742,6 +742,21 @@ export function narrowsToMember(src: Type, target: Type): boolean {
 	return false;
 }
 
+function isTextlessScalar(t: Type): boolean {
+	const k = t.kind;
+	return isNumeric(t) || k == TypeKind.Boolean || k == TypeKind.BooleanLiteral || k == TypeKind.Char || k == TypeKind.BigInt;
+}
+
+export function textConversionRefusal(src: Type, target: Type): string {
+	const head = "cannot convert " + typeDisplayName(src) + " to " + typeDisplayName(target) + " — ";
+	if (isStringLike(src) && isTextlessScalar(target) && target.kind != TypeKind.BigInt) {
+		if (target.kind == TypeKind.Boolean || target.kind == TypeKind.BooleanLiteral) return head + "a string is not a boolean; compare it instead (s != \"\")";
+		return head + "a string is not a number; read a character code with s.charCodeAt(i), a byte with s.byteAt(i), or parse the text";
+	}
+	if (isTextlessScalar(src) && isStringLike(target)) return head + "format it with String(x) or x.toString()";
+	return "";
+}
+
 export function isScalarPrimitive(t: Type | null): boolean {
 	if (t == null) return false;
 	const k = t.kind;

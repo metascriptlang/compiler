@@ -34,7 +34,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare } from "./fit";
+import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, textConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -2231,6 +2231,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType)
 					+ " — a struct or union payload has no conversion to a primitive; read a field (e.g. .ok, .value) instead",
 					asLoc.line, asLoc.column);
+			}
+			if (node.kind == NodeKind.TypeAssertion && srcType != null && !viaConverter
+				&& !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
+				&& !reportedErrorSince(ctx, operandMark)) {
+				const refusal = textConversionRefusal(srcType, targetType);
+				if (refusal != "") addError(ctx, refusal, asLoc.line, asLoc.column);
 			}
 			if (srcType != null && isReadonlyView(srcType) && node.nodeType != null) node.nodeType = propagateReadonlyView(node.nodeType);
 			if (!reportedErrorSince(ctx, operandMark)) checkPointerAddress(ctx, node, d.asExpr, targetType);
