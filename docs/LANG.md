@@ -523,8 +523,8 @@ const greet = (name: string): void => { console.log("hi " + name); };
 // Async functions
 async function fetch(url: string): Promise<string> { ... }
 
-// Generator functions
-function* range(n: number): Generator<number> { ... }
+// Generator functions: the return type is Iterator<T> (Generator<T> does not resolve)
+function* range(n: number): Iterator<number> { ... }
 
 // Parameter destructuring — sugar for `const { label, count } = props;` at the top of
 // the body. The pattern needs a type: an annotation, or the slot's contextual type.
@@ -549,6 +549,46 @@ function fail(msg: string): never {
     if (msg == "") throw new Error("empty");
 }   // error: 'fail' returns 'never' but can reach the end of its body
 ```
+
+A function or method without a return annotation returns what its body returns, wherever it is
+called from: a call checked before the callee's body (a later function, a later method through
+`this` or a parameter, a module that imports this one back) checks that body first. A return type
+that would depend on itself through another unannotated routine is refused; a routine that only
+calls itself, or one whose call back is a statement that discards the result, still infers. Measured
+on C, JS and the Raiser (corpus `callBeforeTheCalleeBody`, `callBeforeTheCalleeBodyAcrossModules`):
+
+```typescript
+function a(n: number) { if (n > 0) return b(n - 1); return 3; }
+function b(n: number) { return a(n); }
+// error: cannot infer the return type of 'a': 'b' reads it while 'a' is still being checked (a -> b -> a); annotate the return type of 'a'
+```
+
+A generator without a return annotation is an `Iterator<T>` of what it yields, joined as returns
+are (`yield 1` and `yield 2.5` make `Iterator<float64>`); one with no `yield` of a value is refused,
+and so is a `return` with a value in it. Measured on C and JS (corpus `generatorInfersItsYieldType`);
+the Raiser does not run generators.
+
+Local function declarations that sit next to each other see each other, so they may call each
+other in any order; a local function is not visible before that run of declarations, and a `const`
+or `let` is not visible before its own declaration. A local function called before its declaration
+is checked needs its return type written. Measured on C, JS and the Raiser (corpus
+`localFunctionsCallEachOther`):
+
+```typescript
+function counter(): () => number {
+    let n = 0;
+    function a(): number { n += 1; return n < 3 ? b() : n; }
+    function b(): number { return a(); }
+    return a;          // counter()() is 3
+}
+const a = (): number => b();
+const b = (): number => 1;
+// error: Undefined variable 'b': 'b' is declared later in this block, and a const or let is not visible before its declaration; ...
+```
+
+A branch join of a class and its subclass is the class: `flag ? new B() : new A()` with
+`B extends A`, an `if`/`return` pair, an array literal and a `match` all give `A`, and the value
+keeps its run-time class. Measured on C, JS and the Raiser (corpus `joinOfAClassAndItsSubclass`).
 
 ### Extension Methods
 
