@@ -25,10 +25,11 @@ Compiles the post-Phase-3 AST into Raiser bytecode: `parse → check → transfo
 - **A pointer or `ref` to anything else is a location value** (`RegAddr`, `GlobalAddr`, `ElemAddr`, `FieldAddr`; the reference VM's `rkRegisterAddr` / `rkNodeAddr`, vm.nim:927-979): `HiddenAddr` takes it (`AddrReg` … `AddrField`), and `HiddenDeref`, `p[0]`, an assignment, `+=` and `++` go through it (`LoadDeref`, `StoreDeref`). `transformForRaiser` runs `insertVarParamDerefs` last, so a `ref`/`out` argument arrives as `HiddenAddr`; a host call still receives the value. A location keeps the array or object it points into alive under ORC (`heldHandle`).
 - **A spawned strand gets a graph copy of the parent's global slots** — globals are strand-local snapshots, not shared mutable state.
 - **Spread is lowered before bytecode generation** — each source is evaluated once; array insertion goes through the VM `push` builtin.
-- **Loops arrive lowered** — `for` and `for..of` go through the loop lowering C uses before lambda lifting, so a closure made in a loop body gets the env of its own iteration; a labelled `break` or `continue` jumps to the loop carrying the label. The native `for` / `for..of` compilation serves only the untransformed `rgen.ms` path.
+- **Loops and generators arrive lowered** — `for` and `for..of` go through the loop lowering C uses, and a `function*` through C's generator lowering, before lambda lifting, so ranging a `Map` or a `Set` runs their generators as state machines, and a closure made in a loop body gets the env of its own iteration; a labelled `break` or `continue` jumps to the loop carrying the label. The native `for` / `for..of` compilation serves only the untransformed `rgen.ms` path.
 - **Pending generic instances attach to their owning module before monomorphization, macro expansion and Raiser lowering** — on-demand compilation is scoped to the project image and restored afterwards.
 - **A function value is a closure pair `{ fn: funcIdx, env }`, `env = -1` when nothing is captured** — `compileClosureCall` branches on it at runtime and appends the env as the LAST argument, so it lands at `R[arity]`; a function identifier inside an expression stays a raw integer.
 - **Methods are top-level functions whose `this` is the closure env** — bound at `R[arity]`; `<Class>_new` creates the object, stores default properties and the method closures of its class chain, the most derived last (`{ fn, env: this }`, `env = -1` for a checked method that takes `this` as parameter 0), runs the constructor body and returns `this`; a method call is `LoadField` + `CallIndirect`.
+- **An object keeps the class it was made with** — `<Class>_new` makes it with an entry of its function's class-type table (class key and the keys of its bases, the per-function idiom of the copy plans); `instanceof` and a checked `as` test that entry, a strand copy and a value copy keep it, and a failed checked `as` is fatal as on C.
 - **`super(...)` calls the parent's `<Class>_init(this, args)`** — the parent's default properties and constructor body on the same object; a checked call to a method that has overrides loads the method from the receiver (NIM-REF CG-17), other method calls stay direct.
 - **Registers are a bump allocator** — `resetTemps` after each top-level statement keeps the locals and reclaims the temps.
 
@@ -36,9 +37,8 @@ Compiles the post-Phase-3 AST into Raiser bytecode: `parse → check → transfo
 
 Each probed on `msc run --target=raiser`:
 
-- `instanceof` — `cannot evaluate operator 'instanceof' at comptime`: an object carries no class.
 - `static` members — `cannot evaluate '<Class>' at comptime: symbol kind is Class`.
-- `for..of` over a string — `cannot evaluate 'msStringByteLength' at comptime: symbol kind is Function` (the VM has no string index either: `s[1]` stops with `expected an array, got value kind String`).
+- A string index — `s[1]` stops with `expected an array, got value kind String` (a `for..of` over a string runs: `abc`, measured 2026-10-06).
 
 ## Tests
 

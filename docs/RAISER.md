@@ -91,10 +91,13 @@ Measured 2026-09-19 with `msc` v0.2.55 (`~/.metascript/BUILD` `bce99dbf`), each 
 | `substring` | unbridged: warning, then `Unknown host function` | correct |
 | `sleepAsync` | correct: a timer queue parks the strand and wakes it in deadline order (measured 2026-10-04, `a b done 2`) | same |
 | `Promise.all` | unbridged: `msPromiseAll` (measured 2026-10-04) | correct |
-| `new Set<int32>()` then `add` | `attempt to access a nil address` in `Set_add__int32`, after `msMapFatal` unbridged warnings | correct |
+| `new Set<int32>()` then `add` | `true 1` (measured 2026-10-06, stage-2 build of `f0c36575a`) | same |
+| for-of over a `Map` (`[k, v]` and keys), a `Set`, a `HashMap`, a `HashSet` and a user `function*` (break, continue, finally, closure capture) | same output as C (measured 2026-10-06, `f0c36575a`): the generators run as the state machine C runs | correct |
+| `instanceof` over a subclass chain, a nullable, an `unknown`, a caught exception | same output as C (measured 2026-10-06, `f0c36575a`) | correct |
+| a checked `as` to a class the object is not | `raiser runtime error: invalid object conversion: DomNode is not NativeNode`, rc 1 (measured 2026-10-06, `f0c36575a`) | `Error: invalid object conversion: …`, rc 1 |
 | `msc run --target=raiser src/index.ms` (the whole compiler) | 16 type errors before codegen: `Undefined variable 'fetch'` ×14, `'Buffer'` ×1, `byteLength` arity ×1 | — |
 
-The three wrong results on strands and exceptions have compiler inbox cards dated 2026-09-19. Codegen-side gaps (`new Array<T>(n)`, `instanceof`, `static`) are listed in `src/codegen/raiser/CLAUDE.md`; `ref`/`out` locations are covered by the newer pointer probes above.
+The three wrong results on strands and exceptions have compiler inbox cards dated 2026-09-19. Codegen-side gaps (`static`, a string index) are listed in `src/codegen/raiser/CLAUDE.md`; `ref`/`out` locations are covered by the newer pointer probes above.
 
 Test lanes at the same commit: `msc test src/raiser/value.ms` 333/333, `src/raiser/vm.ms` 519/519, `src/codegen/raiser/eval.ms` 2449/2449 (each count includes the file's dependencies).
 
@@ -115,7 +118,7 @@ So Raiser suits small inputs. The per-slot boxed `RaiserValue` register file and
 
 `RaiserInstruction` is a record `{ op, a, b, c, cachedIdx, line }`, not a packed word. ABx and Ax are views over it: `Bx = b·256 + c`, `Ax` = signed 24 bits over `a`, `b`, `c`. `cachedIdx` is a per-instruction inline cache for `LoadField` / `StoreField`, which otherwise look fields up by name.
 
-74 opcodes, 74 dispatch arms:
+92 opcodes in `RaiserOpcode` (counted 2026-10-06); the table names the families, not every member:
 
 | Family | Opcodes |
 |---|---|
@@ -125,7 +128,7 @@ So Raiser suits small inputs. The per-slot boxed `RaiserValue` register file and
 | bitwise | BitAnd, BitOr, BitXor, BitNot, ShiftLeft, ShiftRight, ShiftRightU |
 | control | Jump, Call, CallIndirect, Ret, Halt, Print |
 | array | NewArray, LoadIndex, StoreIndex, ArrayLen, ArrayPush, ArraySetLen (truncate or nil-extend: the heap's only shrink) |
-| object | NewObject, LoadField, StoreField |
+| object | NewObject (with the class it is made with), LoadField, StoreField, InstanceOf, ObjConv (a failed checked conversion is fatal, as on C) |
 | string | ConcatStr, EqStr, NeStr, LtStr, LeStr, StrLen, StrByteLen, StrCharAt, StrSlice |
 | host, nil | CallHost, IsNil |
 | strands | Yield, Spawn, Await |
