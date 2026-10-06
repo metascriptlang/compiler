@@ -1,4 +1,4 @@
-import { compileToCWithStd, compileProjectToJSWithStd } from "../helpers";
+import { compileToCWithStd, compileProjectToJSWithStd, checkProjectDiagnostics, MapEntry } from "../helpers";
 
 const LIB = `@comptime function digitSum(text: string): uint64 {
 	let total: uint64 = 0;
@@ -136,4 +136,25 @@ const WEIGHT690: int32 = weight690(Kind690.Large, 3);
 test "comptimeCallFold: struct and enum arguments and results fold to the run-time values" {
 	assert KEY690.a == 7 && KEY690.b == 14;
 	assert WEIGHT690 == 30;
+}
+
+test "comptimeCallFold: a folded value a macro hands back keeps the call's type" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/lib.ms", entrySource: `import { Node } from "std/meta";
+export macro same(operand: Node): Node { return operand; }
+` },
+		{ entryPath: "src/main.ms", entrySource: `import { same } from "./lib";
+@comptime function big(): int64 { return 5; }
+@comptime function small(): float32 { return 1.5; }
+let wide = same(big());
+const narrow: int32 = wide;
+let f = same(small());
+const n: number = 0.1;
+f = n;
+console.log(narrow, f);
+` },
+	];
+	const text = checkProjectDiagnostics(entries, "src/main.ms").join("\n");
+	assert text.contains("implicit int64 → int32 conversion narrows"), "an int64 value stays int64 through the macro: " + text;
+	assert text.contains("implicit number → float32 conversion"), "a float32 value stays float32 through the macro: " + text;
 }
