@@ -165,6 +165,7 @@ function cloneStmt(node: Node): Node {
 		nodeType: node.nodeType,
 		flags: node.flags,
 		resolvedSym: node.resolvedSym,
+		comments: node.comments,
 	};
 }
 

@@ -2736,7 +2736,7 @@ function declareGeneric(ctx: CheckerContext, kind: NodeKind, name: string, param
 		}
 		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classExtends: "", classBody: body, nameLocation: zl }, zl);
 	} else {
-		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldDecorators: noFieldDecorators(fields.length) }, zl);
+		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length) }, zl);
 	}
 	decl.typeArg = params;
 	const sym = makeSymbol(name, kind == NodeKind.ClassDecl ? SymbolKind.Class : SymbolKind.Interface, createStruct(name, fields, [], true), false);
