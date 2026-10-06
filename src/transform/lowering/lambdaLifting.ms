@@ -1301,7 +1301,9 @@ function liftNonCapturing(body: Node, paramSyms: Symbol[], paramTypes: string[],
 	if (originalNodeType != null && originalNodeType.kind == TypeKind.Function) {
 		fnIdent.nodeType = originalNodeType;
 	}
-	return wrapFnAsClosure(fnIdent, loc);
+	const pair = wrapFnAsClosure(fnIdent, loc);
+	pair.nodeType = originalNodeType;
+	return pair;
 }
 
 function findCapturedIdent(sym: Symbol, capturedIdents: Node[]): Node {
