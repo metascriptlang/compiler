@@ -34,6 +34,8 @@ import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { insertVarParamDerefs } from "./native/varParamDeref";
 import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerAggregateEquality, lowerUserOperators } from "./lowering/operatorLower";
+import { projectTaggedMaybeReads } from "./coercion/maybeReadMaterialize";
+import { lowerUnionTags } from "./lowering/unionTagLower";
 import { liftDestructors } from "./lowering/destructorLifting";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
@@ -73,6 +75,8 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerBitSet(result, ctx);
 	result = lowerAggregateEquality(result, ctx);
 	result = lowerUserOperators(result, ctx);
+	result = projectTaggedMaybeReads(result);
+	result = lowerUnionTags(result, ctx);
 	result = unwrapMaybe(result, ctx);
 	result = liftDestructors(result, ctx, false);
 	result = insertVarParamDerefs(result, ctx);

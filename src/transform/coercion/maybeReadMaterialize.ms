@@ -24,7 +24,11 @@ import { makeMember } from "../util";
 
 export function materializeMaybeReads(program: Node, ctx: TransformContext): Node {
 	const project = !ctx.jsBackend;
-	return walkNode(program, (n: Node): Node => visitMaybeRead(n, project));
+	return walkNode(program, (n: Node): Node => visitMaybeRead(n, project, false));
+}
+
+export function projectTaggedMaybeReads(program: Node): Node {
+	return walkNode(program, (n: Node): Node => visitMaybeRead(n, false, true));
 }
 
 function carriesTaggedUnion(carrier: Type | null): boolean {
@@ -121,8 +125,9 @@ function qualifiesForTagged(node: Node): boolean {
 	return carriesTaggedUnion(declaredMaybeOf(node));
 }
 
-function visitMaybeRead(node: Node, projectAll: boolean): Node {
-	const project = projectAll || qualifiesForTagged(node);
+function visitMaybeRead(node: Node, projectAll: boolean, taggedOnly: boolean): Node {
+	if (taggedOnly && !qualifiesForTagged(node)) return node;
+	const project = projectAll || taggedOnly || qualifiesForTagged(node);
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		if (isAssignOp(d.operator)) d.left = unwrapIfMaterialized(d.left);
