@@ -897,12 +897,12 @@ main();
 	assert c.ok;
 }
 
-test "E2E: getImpl of the function whose body calls the macro is a checking-cycle error" {
+test "E2E: getImpl of the function whose body calls the macro reads its body in progress" {
 	const src = `
 import { Node, bindSym, getImpl } from "std/meta";
 
 macro selfImpl(x: Node): Node {
-	const impl = getImpl(bindSym("frag"));
+	if (getImpl(bindSym("frag")) == null) error("no body", x);
 	return x;
 }
 
@@ -910,6 +910,33 @@ function frag(v: float32): float32 { return selfImpl(v) * 2.0; }
 console.log(frag(1.0));
 `;
 	const c = compileToCWithStd(src);
+	assert c.ok, c.ok ? "" : c.error;
+}
+
+test "E2E: a macro that moves a local into another function is refused, not rebound by name" {
+	const src = `
+import { Node, NodeKind, bindSym, getImpl, childAt, childCount } from "std/meta";
+
+function returnedExpr(n: Node): Node | null {
+	if (n.kind == NodeKind.ReturnStmt) return childAt(n, 0);
+	for (let i = 0; i < childCount(n); i++) {
+		const r = returnedExpr(childAt(n, i));
+		if (r != null) return r;
+	}
+	return null;
+}
+
+macro steal(seed: Node): Node {
+	const impl = getImpl(bindSym("frag"));
+	const e = impl != null ? returnedExpr(impl) : null;
+	return e != null ? e : seed;
+}
+
+function frag(x: float32): float32 { return x * 2.0; }
+function g(x: float32): float32 { return steal(0.0); }
+console.log(String(g(10.0)));
+`;
+	const c = compileToCWithStd(src);
 	assert !c.ok;
-	if (!c.ok) assert c.error.contains("'frag' is still being checked");
+	if (!c.ok) assert c.error.contains("'x' is a local of another function");
 }
