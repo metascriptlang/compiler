@@ -29,6 +29,7 @@ import "./scenarios/resultCarrierConversions";
 import "./scenarios/textConversions";
 import "./scenarios/arcLiteralSafety";
 import "./scenarios/returnBeforeBody";
+import "./scenarios/generatorYields";
 import "./stress/deepNesting";
 import "./stress/manyParams";
 import "./stress/mixed";
