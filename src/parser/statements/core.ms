@@ -3,7 +3,8 @@
 
 import { TokenKind, Token } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, FunctionDeclData, BlockStmtData, BooleanLiteralData, ProgramData, createNode } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd, takePendingComments, isGenericCallAhead, captureGenericTypeArgs } from "../context";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd, takePendingComments, captureGenericTypeArgs } from "../context";
+import { isGenericCallAhead } from "../typeAnnotation";
 import { getParserDefines } from "../context";
 import { isDefined, definedValue } from "../../compiler/defines";
 import { parseIntStr } from "../../utils/string";

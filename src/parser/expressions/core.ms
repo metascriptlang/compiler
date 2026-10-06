@@ -3,8 +3,8 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, collectTokenText, stampEnd, takePendingComments } from "../context";
-import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
+import { ParserState, createState, current, advance, peek, isAtEnd, captureGenericTypeArgs, collectTokenText, stampEnd, takePendingComments } from "../context";
+import { skipTypeAnnotation, parseTypeExpr, isGenericCallAhead } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
@@ -804,3 +804,15 @@ test "lone operator" { assert !parseOk("+"); }
 
 test "empty string" { assert !parseOk(""); }
 
+test "comparisons around a parenthesized operand are not a generic call" {
+	assert exprOp("b < (x) && a > (y)") == "&&";
+	assert exprOp("b < x && a > (y)") == "&&";
+	assert exprOp("b < (0 as int32) || a > (5 as int32)") == "||";
+}
+
+test "explicit type arguments before a call stay a call" {
+	assert exprKind("id<int32>(x)") == NodeKind.CallExpr;
+	assert exprKind("id<Array<int32>>(x)") == NodeKind.CallExpr;
+	assert exprKind("id<Map<string, Array<int32>>>(x)") == NodeKind.CallExpr;
+	assert exprKind("id<int32 | string>(x)") == NodeKind.CallExpr;
+}

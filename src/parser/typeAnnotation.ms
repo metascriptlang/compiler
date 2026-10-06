@@ -10,7 +10,7 @@
 
 import { Token, TokenKind } from "../lexer/token";
 import { Node, NodeKind, createNode, createNodeAt, TypeAnnotationData, IdentifierData, TypeGenericData, TypeObjectData } from "../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, skipBalanced, skipGenericParams, splitAngleAssign, collectTokenText, addError } from "./context";
+import { ParserState, createState, current, advance, peek, isAtEnd, skipBalanced, skipGenericParams, splitAngleAssign, collectTokenText, addError, genericCallParenOffset } from "./context";
 import { lex } from "../lexer/lexer";
 
 
@@ -216,6 +216,36 @@ function applyArraySuffix(state: ParserState, result: Node): Node {
 		result = createNode(NodeKind.TypeArray, { typExprElement: result, typExprSize: size }, brackToken);
 	}
 	return result;
+}
+
+// `f<A, B>(…)` is a generic call only when the tokens between the angles parse
+// as types and end at the closing angle, as the reference's
+// parseTypeArgumentsInExpression decides; otherwise the parser rewinds and
+// `b < x && a > (y)` stays two comparisons.
+export function isGenericCallAhead(state: ParserState): boolean {
+	const parenAt = genericCallParenOffset(state);
+	if (parenAt < 0) return false;
+	const paren = peek(state, parenAt);
+	const saved = state.position;
+	const errorCount = state.errors.length;
+	const panic = state.panicMode;
+	const commentCount = state.pendingComments.length;
+	advance(state); // consume <
+	while (!isAtEnd(state)) {
+		const before = state.position;
+		parseTypeExpr(state);
+		if (state.position == before) break;
+		if (current(state).kind != TokenKind.Comma) break;
+		advance(state);
+	}
+	if (current(state).kind == TokenKind.Gt) advance(state);
+	const landed = current(state);
+	const ok = landed.line == paren.line && landed.column == paren.column;
+	state.position = saved;
+	while (state.errors.length > errorCount) state.errors.pop();
+	state.panicMode = panic;
+	while (state.pendingComments.length > commentCount) state.pendingComments.pop();
+	return ok;
 }
 
 function parseGenericTypeArgs(state: ParserState): Node[] {
