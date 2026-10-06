@@ -111,9 +111,10 @@ test "aggregate relation: scalar inference cannot widen writable array elements 
 		"function first<T>(xs: T[], value: T): T { xs.push(value); return xs[0]; } first(dogs, animal);",
 		"function keep<T>(value: T, xs: T[]): void { xs.push(value); } keep(animal, dogs);",
 		"class Box<T> { value: T; constructor(value: T) { this.value = value; } } function take(b: Box<int64>): string { return \"i\"; } function take(s: string): string { return s; } take(new Box<int32>(5));",
+		"function add(xs: Animal[]): void { xs.push(new Animal()); } add(dogs as Animal[]);",
 	];
 	for (const source of rejected) assert strictErrorCount(pre + source) > 0, source;
-	const source = pre + "function add(xs: Animal[]): void { xs.push(new Animal()); } function first<T>(xs: T[], value: T): T { xs.push(value); return xs[0]; } const pets: Animal[] = []; add(pets); add(dogs as Animal[]); const one: Animal = dogs[0]; const d = first(dogs, new Dog()); console.log(one.name.length + d.breed.length);";
+	const source = pre + "function add(xs: Animal[]): void { xs.push(new Animal()); } function first<T>(xs: T[], value: T): T { xs.push(value); return xs[0]; } const pets: Animal[] = []; add(pets); const one: Animal = dogs[0]; const d = first(dogs, new Dog()); console.log(one.name.length + d.breed.length);";
 	const c = compileToC(source);
 	assert c.ok, c.error;
 }
