@@ -1356,10 +1356,11 @@ before, JS passed the wrong member (`undefined` for the `P` field, `1` for the `
 members convert to the same output on C, JS, ESM and Raiser (corpus `649`, the `5/6/8 5/6 7/1.5`
 tokens: an injection by return, by literal and by `push`, an `as` and a field read after it).
 Not covered: the Raiser VM still passes the wrong member (`nil` for the `P` field, `1.5` for the
-`int32` read, measured with `msc run --target=raiser`). Giving the Raiser the wrapper changes a
-tagged union's value for the compile-time macros that exchange `NodeData` with the compiler:
-with it, corpus `506`, `509`, `510`, `513` and `252` failed to build on every lane, and without
-it they build. A union inside a struct field read through `.field`, a flow-narrowed member read
+`int32` read, measured with `msc run --target=raiser`). Giving the Raiser the wrapper
+and unwrapping `{ $tag, $v }` in the macro bridge's `valueToNode` made corpus `506`, `509`, `510`, `513`, `252`,
+`711` and `649` pass on every lane including Raiser, and `b3`/`c5` stop with the C message; but `704-macroExprHoist` and
+`762-bitSetMacro` then fail to build on every lane (`Macro 'memo' body: Type 'NodeFlag' is not assignable to type
+'BitSet<NodeFlag>'`), so the Raiser keeps raw values. A union inside a struct field read through `.field`, a flow-narrowed member read
 through a `Maybe` carrier and a tagged union passed as an `unknown` argument of a host function
 were probed only on the shapes above.
 
