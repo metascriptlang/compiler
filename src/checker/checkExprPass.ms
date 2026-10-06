@@ -1709,11 +1709,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						ki = ki + 1;
 					}
 				}
-				// Nim parity (semobjconstr.nim collectMissingFields): a missing field is
-				// default-initialized UNLESS its type requiresInit. A function field's zero
-				// is NULL, and calling NULL is a segfault, so it has no valid default —
-				// declare it `T | null` to opt out and handle the null.
-				if (objNames != null) {
+				if (objNames != null && !(isEngineCheckMode() && containerName == "Node")) {
 					let hasDynamicKey = false;
 					for (const k of d.keys) {
 						if (k == "..." || k == "__computed__") hasDynamicKey = true;
@@ -1722,12 +1718,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						let mi = 0;
 						while (mi < objNames.length) {
 							const wantT = mi < objChildren.length ? objChildren[mi] : null as unknown as Type;
-							if (wantT != null && wantT.kind == TypeKind.Function) {
+							if (wantT != null && requiresInit(wantT)) {
 								const want = objNames[mi];
 								let present = false;
 								for (const k of d.keys) { if (k == want) { present = true; break; } }
 								if (!present) {
-									addError(ctx, `field '${want}' must be initialized: type '${typeDisplayName(wantT)}' has no default value`, node.location.line, node.location.column);
+									addError(ctx, `field '${want}' must be initialized: type '${typeDisplayName(wantT)}' has no default value — give it in the literal (an object literal does not run the class's field initializers), or declare the field optional with '?'`, node.location.line, node.location.column);
 								}
 							}
 							mi = mi + 1;
