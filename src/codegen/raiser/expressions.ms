@@ -1481,7 +1481,8 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	// User function call: callee must be Identifier
 	if (d.callee.kind == NodeKind.Identifier) {
 		const calleeId = d.callee.data as IdentifierData;
-		if (calleeId.name == "super" && d.callee.resolvedSym != null && d.callee.resolvedSym.symbolKind == SymbolKind.Class) {
+		if (calleeId.name == "super" && d.callee.resolvedSym != null
+				&& (d.callee.resolvedSym.symbolKind == SymbolKind.Class || d.callee.resolvedSym.symbolKind == SymbolKind.Function)) {
 			return compileSuperCall(s, node, d.callee.resolvedSym);
 		}
 		if (resolveGlobal(s, d.callee.resolvedSym) >= 0 || resolveLocal(s, calleeId.name) >= 0) return compileClosureCall(s, node);
@@ -1509,11 +1510,17 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 
 function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int32 {
 	const d = node.data as CallExprData;
-	const body = superSym.symbolType != null ? unwrapRef(superSym.symbolType) : null;
-	const parent = body != null && body.sym != null ? body.sym : superSym;
-	const initName = parent.name + "_init";
-	let funcIdx = s.scopedFunctions && parent.modulePath != "" ? resolveFunc(s, parent.modulePath + ":" + initName) : -1;
-	if (funcIdx < 0) funcIdx = resolveFunc(s, initName);
+	let initName = superSym.name;
+	let funcIdx = -1;
+	if (superSym.symbolKind == SymbolKind.Function) {
+		funcIdx = resolveRoutine(s, superSym, superSym.name);
+	} else {
+		const body = superSym.symbolType != null ? unwrapRef(superSym.symbolType) : null;
+		const parent = body != null && body.sym != null ? body.sym : superSym;
+		initName = parent.name + "_init";
+		funcIdx = s.scopedFunctions && parent.modulePath != "" ? resolveFunc(s, parent.modulePath + ":" + initName) : -1;
+		if (funcIdx < 0) funcIdx = resolveFunc(s, initName);
+	}
 	const thisReg = resolveLocal(s, "this");
 	if (funcIdx < 0 || thisReg < 0) {
 		const msg = `cannot compile 'super(...)': no '${initName}' in the Raiser function table`;
