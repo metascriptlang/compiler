@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, unionOrderHint, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, isGeneratorFlags, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind } from "./types";
+import { peelTransparentInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
@@ -1456,7 +1456,7 @@ function structuralMemberIndex(formal: Type, exprType: Type): int32 {
 	return found;
 }
 
-function unionSlotOf(formal: Type, exprType: Type): int32 {
+export function unionSlotOf(formal: Type, exprType: Type): int32 {
 	const vi = variantIndexInUnion(formal, unwrapRef(exprType));
 	return vi >= 0 ? vi : structuralMemberIndex(formal, exprType);
 }
@@ -1563,8 +1563,12 @@ export function isSlotUnion(t: Type): boolean {
 	return !allStrLit;
 }
 
+function hasSharedDiscriminant(t: Type): boolean {
+	return findSharedStringDiscriminant(t) != "" || findSharedBooleanDiscriminant(t) != "" || findSharedEnumDiscriminant(t) != "";
+}
+
 export function storesUnionTag(t: Type): boolean {
-	if (!isSlotUnion(t) || isDiscriminatedUnion(t)) return false;
+	if (!isSlotUnion(t) || isDiscriminatedUnion(t) || hasSharedDiscriminant(t)) return false;
 	const seen: string[] = [];
 	for (const m of t.typeChildren) {
 		const kind = jsMemberKind(m);
@@ -2280,6 +2284,12 @@ test "a union of two structs stores its tag" {
 
 test "a union of two numbers stores its tag" {
 	assert storesUnionTag(createUnion([int32Type(), float64Type()]));
+}
+
+test "a union with a shared literal discriminant keeps no tag" {
+	const a = createStruct("A", ["kind"], [createStringLiteral("a")], false);
+	const b = createStruct("B", ["kind"], [createStringLiteral("b")], false);
+	assert !storesUnionTag(createUnion([a, b]));
 }
 
 test "a union whose members the value names keeps no tag" {
