@@ -1,7 +1,7 @@
 import { Node, NodeKind, NodeFlag, TypeKind, Type, HiddenStdConvData, MemberExprData, BinaryExprData, UnaryExprData, CallExprData, createNode } from "../../ast/node";
 import { storesUnionTag, unionSlotOf, narrowUnionToVariant, declaredTagUnionOf, objectHolderSlots } from "../../checker/fit";
 import { isMaybeType, unwrapRefNullUnion, typeDisplayName, createArray, int32Type, stringType, peelTransparentInstance, createUnion, jsMemberKind, isUnknownType, isArrayShaped, peelToStructOrUnion, unwrapRef } from "../../checker/types";
-import { TransformContext } from "../context";
+import { TransformContext, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
 import { callBuiltinKind, isRuntimeProcCall, makeCall, makeIntNumber, makeString, makeTypedObjectLiteral, runtimeRef, syntheticToken } from "../util";
 import { memberLabels, accessHead } from "../native/unionProjectLower";
@@ -30,7 +30,7 @@ function lowerNode(node: Node, field: string, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.ObjectLiteral && node.variantSlot > 0) return lowerLiteral(node);
 	if (node.kind == NodeKind.UnaryExpr) return unwrapTypeofOperand(node);
 	if (node.kind == NodeKind.BinaryExpr) return unwrapOperands(node);
-	if (node.kind == NodeKind.CallExpr) return unwrapCallArguments(node);
+	if (node.kind == NodeKind.CallExpr) return unwrapCallArguments(refuseHostUnion(node, ctx));
 	return node;
 }
 
@@ -81,6 +81,16 @@ function unwrapOperands(node: Node): Node {
 
 function isStringTyped(n: Node): boolean {
 	return n != null && n.nodeType != null && n.nodeType.kind == TypeKind.String;
+}
+
+function refuseHostUnion(node: Node, ctx: TransformContext): Node {
+	const sym = (node.data as CallExprData).callee.resolvedSym;
+	if (sym == null || sym.nativeName == "" || node.nodeType == null) return node;
+	const t = node.nodeType;
+	const ut = taggedUnion(isMaybeType(t) ? t.typeReturn : t);
+	if (ut == null) return node;
+	reportTransformError(ctx, `'${sym.name}' returns '${typeDisplayName(ut)}' from outside MetaScript, and a host value carries no tag naming its member; return one member type, or build the union in a MetaScript function`, node.location);
+	return node;
 }
 
 function unwrapCallArguments(node: Node): Node {
