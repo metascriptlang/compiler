@@ -629,7 +629,8 @@ Measured 2026-10-05 on C, `--target=js` and `--target=raiser` with corpus `inher
 `restParameterAcrossModules` for an imported class's constructor).
 Before, C and the Raiser filled the fields positionally and skipped the parent's body, and JS threw
 "Must call super constructor". A call through the parent runs the subclass's override on all three
-backends (corpus `overrideDispatchThroughBase`); `instanceof` does not run on the Raiser.
+backends (corpus `overrideDispatchThroughBase`); `instanceof` and a checked `as` answer the same on the
+Raiser since 2026-10-06 (corpus `classIdentityEveryLane`, `732-dynamicDispatch`).
 
 ### Interfaces
 
@@ -3334,8 +3335,8 @@ for (const name of ages) {
 ```
 
 An array pattern needs a tuple or an array element: over a `Set<int32>` or an `int32[]` it is the error "an array
-pattern needs each element to be a tuple or an array". Raiser does not run a Map's for-of yet (the iteration is a
-generator, and running one on the Raiser VM is a new mechanism; corpus `mapForOfEntries` is xfail there).
+pattern needs each element to be a tuple or an array". The Raiser runs these loops as C does since 2026-10-06: the
+iteration is a generator, lowered to the same state machine (corpus `mapForOfEntries`, `setAndHashForOf`).
 
 **Custom iterables**: define a `toItems` extension method on any type:
 
