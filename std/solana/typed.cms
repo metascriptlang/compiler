@@ -5,14 +5,6 @@ import { word } from "./discriminator";
 import { ProgramError } from "./error";
 import {
 	Account,
-	Delegated,
-	External,
-	ExternalMutable,
-	Mutable,
-	Owned,
-	Program,
-	Writable,
-	WritableSigner,
 	canonicalBump,
 	closedProgramAccount,
 	createdAccount,
@@ -20,54 +12,196 @@ import {
 	delegatedFailure,
 	exclusiveWritable,
 	givenBump,
+	keyIsZero,
 	mutableFailure,
 	ownedFailure,
 	programAccount,
 	resizedProgramAccount,
 	selectedInstruction,
+	transfer,
 } from "./core";
+import { Pubkey } from "./pubkey";
 import { SeedSlice, SignerSeeds } from "./seed";
+
+extern function msSolAccountAt(index: uint64): uint64;
+extern function msSolPointer(address: uint64): Ptr<void>;
+extern function msSolLoadU8(address: uint64): uint8;
+
+export struct Signer { private account: Account; }
+export struct WritableSigner { private account: Account; }
+export struct Writable { private account: Account; }
+export struct SystemAccount { private account: Account; }
+export struct Program<P> { private account: Account; }
+export struct Owned<T> { private account: Account; }
+export struct Mutable<T> { private account: Account; }
+export struct External<T> { private account: Account; }
+export struct ExternalMutable<T> { private account: Account; }
+export struct Delegated<T> { private account: Account; }
+
+export function key(this proof: Signer): Pubkey { return proof.account.key(); }
+export function key(this proof: WritableSigner): Pubkey { return proof.account.key(); }
+export function key(this proof: Writable): Pubkey { return proof.account.key(); }
+export function key(this proof: SystemAccount): Pubkey { return proof.account.key(); }
+export function key<P>(this proof: Program<P>): Pubkey { return proof.account.key(); }
+export function key<T>(this proof: Owned<T>): Pubkey { return proof.account.key(); }
+export function key<T>(this proof: Mutable<T>): Pubkey { return proof.account.key(); }
+export function key<T>(this proof: External<T>): Pubkey { return proof.account.key(); }
+export function key<T>(this proof: ExternalMutable<T>): Pubkey { return proof.account.key(); }
+export function key<T>(this proof: Delegated<T>): Pubkey { return proof.account.key(); }
+
+export function keyAddress(this proof: Signer): uint64 { return proof.account.keyAddress(); }
+export function keyAddress(this proof: WritableSigner): uint64 { return proof.account.keyAddress(); }
+export function keyAddress(this proof: Writable): uint64 { return proof.account.keyAddress(); }
+export function keyAddress(this proof: SystemAccount): uint64 { return proof.account.keyAddress(); }
+export function keyAddress<P>(this proof: Program<P>): uint64 { return proof.account.keyAddress(); }
+export function keyAddress<T>(this proof: Owned<T>): uint64 { return proof.account.keyAddress(); }
+export function keyAddress<T>(this proof: Mutable<T>): uint64 { return proof.account.keyAddress(); }
+export function keyAddress<T>(this proof: External<T>): uint64 { return proof.account.keyAddress(); }
+export function keyAddress<T>(this proof: ExternalMutable<T>): uint64 { return proof.account.keyAddress(); }
+export function keyAddress<T>(this proof: Delegated<T>): uint64 { return proof.account.keyAddress(); }
+
+export function lamports(this proof: Signer): uint64 { return proof.account.lamports(); }
+export function lamports(this proof: WritableSigner): uint64 { return proof.account.lamports(); }
+export function lamports(this proof: Writable): uint64 { return proof.account.lamports(); }
+export function lamports(this proof: SystemAccount): uint64 { return proof.account.lamports(); }
+export function lamports<T>(this proof: Owned<T>): uint64 { return proof.account.lamports(); }
+export function lamports<T>(this proof: Mutable<T>): uint64 { return proof.account.lamports(); }
+export function lamports<T>(this proof: External<T>): uint64 { return proof.account.lamports(); }
+export function lamports<T>(this proof: ExternalMutable<T>): uint64 { return proof.account.lamports(); }
+export function lamports<T>(this proof: Delegated<T>): uint64 { return proof.account.lamports(); }
+
+export function owner(this proof: Writable): Pubkey { return proof.account.owner(); }
+export function owner<T>(this proof: External<T>): Pubkey { return proof.account.owner(); }
+export function owner<T>(this proof: ExternalMutable<T>): Pubkey { return proof.account.owner(); }
+
+export function dataLength<T>(this proof: Owned<T>): uint64 { return proof.account.dataLength(); }
+export function dataLength<T>(this proof: Mutable<T>): uint64 { return proof.account.dataLength(); }
+export function dataLength<T>(this proof: Delegated<T>): uint64 { return proof.account.dataLength(); }
+
+export function asAccount(this proof: Signer): Account { return proof.account; }
+export function asAccount(this proof: WritableSigner): Account { return proof.account; }
+export function asAccount(this proof: Writable): Account { return proof.account; }
+export function asAccount(this proof: SystemAccount): Account { return proof.account; }
+export function asAccount<P>(this proof: Program<P>): Account { return proof.account; }
+export function asAccount<T>(this proof: Owned<T>): Account { return proof.account; }
+export function asAccount<T>(this proof: Mutable<T>): Account { return proof.account; }
+export function asAccount<T>(this proof: External<T>): Account { return proof.account; }
+export function asAccount<T>(this proof: ExternalMutable<T>): Account { return proof.account; }
+export function asAccount<T>(this proof: Delegated<T>): Account { return proof.account; }
+
+export function signer(index: int32): Result<Signer, ProgramError> {
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
+	if (msSolLoadU8(address + 1) == 0) { return Result.err(ProgramError.accountNotSigner()); }
+	const found: Account = { address: address };
+	return Result.ok({ account: found });
+}
+
+export function writableSigner(index: int32): Result<WritableSigner, ProgramError> {
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
+	if (msSolLoadU8(address + 1) == 0) { return Result.err(ProgramError.accountNotSigner()); }
+	if (msSolLoadU8(address + 2) == 0) { return Result.err(ProgramError.constraintMut()); }
+	const found: Account = { address: address };
+	return Result.ok({ account: found });
+}
+
+export function writable(index: int32): Result<Writable, ProgramError> {
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
+	if (msSolLoadU8(address + 2) == 0) { return Result.err(ProgramError.constraintMut()); }
+	const found: Account = { address: address };
+	return Result.ok({ account: found });
+}
+
+export function systemAccount(index: int32): Result<SystemAccount, ProgramError> {
+	const address = msSolAccountAt(index as uint64);
+	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
+	if (!keyIsZero(address + 40)) { return Result.err(ProgramError.accountNotSystemOwned()); }
+	const found: Account = { address: address };
+	return Result.ok({ account: found });
+}
+
+export function data<T>(this proof: Mutable<T>): Ptr<T> {
+	return msSolPointer(proof.account.address + 96) as Ptr<T>;
+}
+
+export function data<T>(this proof: Owned<T>): Readonly<Ptr<T>> {
+	return msSolPointer(proof.account.address + 96) as Ptr<T>;
+}
+
+export function data<T>(this proof: Delegated<T>): Readonly<Ptr<T>> {
+	return msSolPointer(proof.account.address + 96) as Ptr<T>;
+}
+
+export function read<T>(this proof: External<T>): Result<T, ProgramError> {
+	return T.decode(proof.account.data());
+}
+
+export function read<T>(this proof: ExternalMutable<T>): Result<T, ProgramError> {
+	return T.decode(proof.account.data());
+}
+
+export function transferLamports(
+	from: WritableSigner,
+	to: Writable,
+	lamports: uint64,
+): Result<uint64, ProgramError> {
+	return transfer(from.account, to.account, lamports);
+}
+
+export function asSigner(this proof: WritableSigner): Signer {
+	return { account: proof.account };
+}
+
+export function asWritable(this proof: WritableSigner): Writable {
+	return { account: proof.account };
+}
+
+export function asWritable<T>(this proof: Mutable<T>): Writable {
+	return { account: proof.account };
+}
 
 export struct Pda<T> {
 	account: Mutable<T>;
 	bump: uint8;
 }
 
-export function program<P>(index: int32): Result<Program<P>, ProgramError> {
+@inline export function program<P>(index: int32): Result<Program<P>, ProgramError> {
 	const found = try programAccount(index, P.id());
-	return Result.ok(found as Program<P>);
+	return Result.ok({ account: found });
 }
 
-export function owned<T>(index: int32): Result<Owned<T>, ProgramError> {
+@inline export function owned<T>(index: int32): Result<Owned<T>, ProgramError> {
 	let found: Account = { address: 0 };
 	const failure = ownedFailure(index, @comptime { return word(T.discriminator()); }, sizeof(T) as uint64, found);
 	if (failure != 0) { return Result.err({ code: failure }); }
-	return Result.ok(found as Owned<T>);
+	return Result.ok({ account: found });
 }
 
-export function mutable<T>(index: int32): Result<Mutable<T>, ProgramError> {
+@inline export function mutable<T>(index: int32): Result<Mutable<T>, ProgramError> {
 	let found: Account = { address: 0 };
 	const failure = mutableFailure(index, @comptime { return word(T.discriminator()); }, sizeof(T) as uint64, found);
 	if (failure != 0) { return Result.err({ code: failure }); }
-	return Result.ok(found as Mutable<T>);
+	return Result.ok({ account: found });
 }
 
-export function delegated<T>(index: int32): Result<Delegated<T>, ProgramError> {
+@inline export function delegated<T>(index: int32): Result<Delegated<T>, ProgramError> {
 	let found: Account = { address: 0 };
 	const failure = delegatedFailure(index, @comptime { return word(T.discriminator()); }, sizeof(T) as uint64, found);
 	if (failure != 0) { return Result.err({ code: failure }); }
-	return Result.ok(found as Delegated<T>);
+	return Result.ok({ account: found });
 }
 
 export function external<T>(index: int32): Result<External<T>, ProgramError> {
 	const found = try T.verify(index);
-	return Result.ok(found as External<T>);
+	return Result.ok({ account: found });
 }
 
 export function externalMutable<T>(index: int32): Result<ExternalMutable<T>, ProgramError> {
 	const found = try T.verify(index);
 	const claimed = try exclusiveWritable(found);
-	return Result.ok(claimed as ExternalMutable<T>);
+	return Result.ok({ account: claimed });
 }
 
 export function selectInstruction<E>(table: Readonly<Span<uint8>>): Result<E, ProgramError> {
@@ -86,8 +220,8 @@ export function create<T>(
 	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<Mutable<T>, ProgramError> {
 	const space = 8 + (sizeof(T) as uint64);
-	const created = try createdAccount(payer, target, space, @comptime { return word(T.discriminator()); }, signers);
-	return Result.ok(created as Mutable<T>);
+	const created = try createdAccount(payer.account, target.account, space, @comptime { return word(T.discriminator()); }, signers);
+	return Result.ok({ account: created });
 }
 
 export function createPdaOf<T>(
@@ -96,15 +230,15 @@ export function createPdaOf<T>(
 	seeds: Span<SeedSlice>,
 ): Result<Pda<T>, ProgramError> {
 	const space = 8 + (sizeof(T) as uint64);
-	const made = try createdPdaAccount(payer, target, seeds, space, @comptime { return word(T.discriminator()); });
-	return Result.ok({ account: made.account as Mutable<T>, bump: made.bump });
+	const made = try createdPdaAccount(payer.account, target.account, seeds, space, @comptime { return word(T.discriminator()); });
+	return Result.ok({ account: { account: made.account }, bump: made.bump });
 }
 
 export function verifiedPda<T>(
 	this account: Mutable<T>,
 	seeds: Span<SeedSlice>,
 ): Result<Pda<T>, ProgramError> {
-	const bump = try canonicalBump(account as Account, seeds);
+	const bump = try canonicalBump(account.account, seeds);
 	return Result.ok({ account: account, bump: bump });
 }
 
@@ -113,7 +247,7 @@ export function verifiedPdaWithBump<T>(
 	seeds: Span<SeedSlice>,
 	bump: uint8,
 ): Result<Pda<T>, ProgramError> {
-	const given = try givenBump(account as Account, seeds, bump);
+	const given = try givenBump(account.account, seeds, bump);
 	return Result.ok({ account: account, bump: given });
 }
 
@@ -121,7 +255,7 @@ export function verifiedPda<T>(
 	this account: Delegated<T>,
 	seeds: Span<SeedSlice>,
 ): Result<uint8, ProgramError> {
-	return canonicalBump(account as Account, seeds);
+	return canonicalBump(account.account, seeds);
 }
 
 export function verifiedPdaWithBump<T>(
@@ -129,11 +263,11 @@ export function verifiedPdaWithBump<T>(
 	seeds: Span<SeedSlice>,
 	bump: uint8,
 ): Result<uint8, ProgramError> {
-	return givenBump(account as Account, seeds, bump);
+	return givenBump(account.account, seeds, bump);
 }
 
 export function close<T>(account: Mutable<T>, refund: Writable): Result<uint64, ProgramError> {
-	return closedProgramAccount(account as Account, refund as Account);
+	return closedProgramAccount(account.account, refund.account);
 }
 
 export function realloc<T>(
@@ -141,5 +275,5 @@ export function realloc<T>(
 	space: uint64,
 	payer: WritableSigner,
 ): Result<uint64, ProgramError> {
-	return resizedProgramAccount(account as Account, space, payer as Account);
+	return resizedProgramAccount(account.account, space, payer.account);
 }

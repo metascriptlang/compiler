@@ -16,24 +16,29 @@ import {
 	argU64,
 	argU8,
 	argsFit,
-	delegatedAccount,
-	exclusiveWritable,
 	holds,
 	keysEqual,
 	keysMatch,
 	logEvent,
-	mutableAccount,
-	ownedAccount,
-	programAccount,
 	seedsCanonical,
 	seedsGiven,
+	unchecked,
+} from "./core";
+import {
+	createPdaOf,
+	delegated,
+	external,
+	externalMutable,
+	mutable,
+	owned,
+	program,
+	readArgs,
+	selectInstruction,
 	signer,
 	systemAccount,
-	unchecked,
 	writable,
 	writableSigner,
-} from "./core";
-import { createPdaOf, readArgs, selectInstruction } from "./typed";
+} from "./typed";
 import { delegateAt } from "./delegation";
 import {
 	associatedMatches,
@@ -445,94 +450,17 @@ export macro accounts(): Node {
 			isBitPattern: false,
 		};
 		let callee: Node | null = null;
-		let extra: Node[] = [];
 		if (base == "Signer") { callee = bindSym("signer"); }
 		if (base == "WritableSigner") { callee = bindSym("writableSigner"); }
 		if (base == "Writable") { callee = bindSym("writable"); }
 		if (base == "SystemAccount") { callee = bindSym("systemAccount"); }
 		if (base == "Account") { callee = bindSym("unchecked"); }
-		const typeName: Node = {
-			kind: NodeKind.Identifier,
-			line: line,
-			column: column,
-			name: inner,
-		};
-		if (base == "Program") {
-			callee = bindSym("programAccount");
-			extra = [{
-				kind: NodeKind.CallExpr,
-				line: line,
-				column: column,
-				callee: {
-					kind: NodeKind.MemberExpr,
-					line: line,
-					column: column,
-					object: typeName,
-					property: "id",
-					isOptional: false,
-				},
-				arguments: [],
-				isDirectCall: false,
-				resolvedOverloadIdx: -1,
-			}];
-		}
-		if (base == "Owned" || base == "Mutable" || base == "Delegated") {
-			callee = bindSym("ownedAccount");
-			if (base == "Mutable") { callee = bindSym("mutableAccount"); }
-			if (base == "Delegated") { callee = bindSym("delegatedAccount"); }
-			const discriminator: Node = {
-				kind: NodeKind.CallExpr,
-				line: line,
-				column: column,
-				callee: bindSym("word"),
-				arguments: [{
-					kind: NodeKind.CallExpr,
-					line: line,
-					column: column,
-					callee: {
-						kind: NodeKind.MemberExpr,
-						line: line,
-						column: column,
-						object: typeName,
-						property: "discriminator",
-						isOptional: false,
-					},
-					arguments: [],
-					isDirectCall: false,
-					resolvedOverloadIdx: -1,
-				}],
-				isDirectCall: false,
-				resolvedOverloadIdx: -1,
-			};
-			const size: Node = {
-				kind: NodeKind.TypeAssertion,
-				line: line,
-				column: column,
-				asExpr: {
-					kind: NodeKind.SizeofExpr,
-					line: line,
-					column: column,
-					sizeofType: inner,
-				},
-				asType: "uint64",
-			};
-			extra = [{
-				kind: NodeKind.ComptimeBlock,
-				line: line,
-				column: column,
-				comptimeBody: {
-					kind: NodeKind.BlockStmt,
-					line: line,
-					column: column,
-					statements: [{
-						kind: NodeKind.ReturnStmt,
-						line: line,
-						column: column,
-						argument: discriminator,
-					}],
-				},
-			}, size];
-		}
+		if (base == "Program") { callee = bindSym("program"); }
+		if (base == "Owned") { callee = bindSym("owned"); }
+		if (base == "Mutable") { callee = bindSym("mutable"); }
+		if (base == "Delegated") { callee = bindSym("delegated"); }
+		if (base == "External") { callee = bindSym("external"); }
+		if (base == "ExternalMutable") { callee = bindSym("externalMutable"); }
 		let check: Node | null = null;
 		if (callee != null) {
 			check = {
@@ -540,46 +468,11 @@ export macro accounts(): Node {
 				line: line,
 				column: column,
 				callee: callee!,
-				arguments: [index].concat(extra),
-				isDirectCall: false,
-				resolvedOverloadIdx: -1,
-			};
-		}
-		if (base == "External" || base == "ExternalMutable") {
-			check = {
-				kind: NodeKind.CallExpr,
-				line: line,
-				column: column,
-				callee: {
-					kind: NodeKind.MemberExpr,
-					line: line,
-					column: column,
-					object: typeName,
-					property: "verify",
-					isOptional: false,
-				},
 				arguments: [index],
 				isDirectCall: false,
 				resolvedOverloadIdx: -1,
 			};
-			if (base == "ExternalMutable") {
-				check = {
-					kind: NodeKind.CallExpr,
-					line: line,
-					column: column,
-					callee: bindSym("exclusiveWritable"),
-					arguments: [{
-						kind: NodeKind.TryExpr,
-						line: line,
-						column: column,
-						tryArg: check!,
-						hasCatch: false,
-						catchVal: check!,
-					}],
-					isDirectCall: false,
-					resolvedOverloadIdx: -1,
-				};
-			}
+			check!.typeArg = inner;
 		}
 		if (check == null) {
 			error("accounts<T>(): field '" + decl.interfaceFields[field] + "' has type '" +
@@ -588,18 +481,12 @@ export macro accounts(): Node {
 				"Owned<T>, Mutable<T>, Delegated<T>, External<T> or ExternalMutable<T>", shape);
 		}
 		values.push({
-			kind: NodeKind.TypeAssertion,
+			kind: NodeKind.TryExpr,
 			line: line,
 			column: column,
-			asExpr: {
-				kind: NodeKind.TryExpr,
-				line: line,
-				column: column,
-				tryArg: check!,
-				hasCatch: false,
-				catchVal: check!,
-			},
-			asType: written,
+			tryArg: check!,
+			hasCatch: false,
+			catchVal: check!,
 		});
 		field = field + 1;
 	}
@@ -991,6 +878,13 @@ const SEED_LIST_REQUIRED = "seeds must be written as a list at the call: [\"pet\
 
 const KEY_REQUIRED = "a key is an account or a Pubkey";
 
+function namesAnAccount(name: string, inner: string): boolean {
+	return name == "Account" || (name == "Distinct" && inner == "Account") ||
+		name == "Signer" || name == "WritableSigner" || name == "Writable" || name == "SystemAccount" ||
+		name == "Program" || name == "Owned" || name == "Mutable" ||
+		name == "External" || name == "ExternalMutable" || name == "Delegated";
+}
+
 macro keyAddressOf(operand: Node): Node {
 	const line = operand.line;
 	const column = operand.column;
@@ -1025,9 +919,7 @@ macro keyAddressOf(operand: Node): Node {
 			resolvedOverloadIdx: -1,
 		};
 	}
-	if (name == "Account" || (name == "Distinct" && inner == "Account") ||
-		name == "Program" || name == "Owned" || name == "Mutable" ||
-		name == "External" || name == "ExternalMutable" || name == "Delegated") {
+	if (namesAnAccount(name, inner)) {
 		return {
 			kind: NodeKind.CallExpr,
 			line: line,
@@ -1101,9 +993,7 @@ macro seedTable(list: Node): Node {
 					isOptional: false,
 				};
 			}
-			if (name == "Account" || (name == "Distinct" && inner == "Account") ||
-				name == "Program" || name == "Owned" || name == "Mutable" ||
-				name == "External" || name == "ExternalMutable" || name == "Delegated") {
+			if (namesAnAccount(name, inner)) {
 				builder = bindSym("seedKey");
 				argument = {
 					kind: NodeKind.CallExpr,

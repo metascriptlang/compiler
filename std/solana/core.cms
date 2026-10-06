@@ -560,57 +560,6 @@ export function id(this typeof Token): Pubkey { return TOKEN_PROGRAM_ID; }
 export function id(this typeof Token2022): Pubkey { return TOKEN_2022_PROGRAM_ID; }
 export function id(this typeof AssociatedToken): Pubkey { return ASSOCIATED_TOKEN_PROGRAM_ID; }
 
-export type Signer = distinct Account;
-export type WritableSigner = distinct Account;
-export type Writable = distinct Account;
-export type SystemAccount = distinct Account;
-export type Program<P> = distinct Account;
-export type Owned<T> = distinct Account;
-export type Mutable<T> = distinct Account;
-export type External<T> = distinct Account;
-export type ExternalMutable<T> = distinct Account;
-export type Delegated<T> = distinct Account;
-
-@delegate export function key(this proof: Signer): Pubkey;
-@delegate export function key(this proof: WritableSigner): Pubkey;
-@delegate export function key(this proof: Writable): Pubkey;
-@delegate export function key(this proof: SystemAccount): Pubkey;
-@delegate export function key<P>(this proof: Program<P>): Pubkey;
-@delegate export function key<T>(this proof: Owned<T>): Pubkey;
-@delegate export function key<T>(this proof: Mutable<T>): Pubkey;
-@delegate export function key<T>(this proof: External<T>): Pubkey;
-@delegate export function key<T>(this proof: ExternalMutable<T>): Pubkey;
-@delegate export function key<T>(this proof: Delegated<T>): Pubkey;
-
-@delegate export function keyAddress(this proof: Signer): uint64;
-@delegate export function keyAddress(this proof: WritableSigner): uint64;
-@delegate export function keyAddress(this proof: Writable): uint64;
-@delegate export function keyAddress(this proof: SystemAccount): uint64;
-@delegate export function keyAddress<P>(this proof: Program<P>): uint64;
-@delegate export function keyAddress<T>(this proof: Owned<T>): uint64;
-@delegate export function keyAddress<T>(this proof: Mutable<T>): uint64;
-@delegate export function keyAddress<T>(this proof: External<T>): uint64;
-@delegate export function keyAddress<T>(this proof: ExternalMutable<T>): uint64;
-@delegate export function keyAddress<T>(this proof: Delegated<T>): uint64;
-
-@delegate export function lamports(this proof: Signer): uint64;
-@delegate export function lamports(this proof: WritableSigner): uint64;
-@delegate export function lamports(this proof: Writable): uint64;
-@delegate export function lamports(this proof: SystemAccount): uint64;
-@delegate export function lamports<T>(this proof: Owned<T>): uint64;
-@delegate export function lamports<T>(this proof: Mutable<T>): uint64;
-@delegate export function lamports<T>(this proof: External<T>): uint64;
-@delegate export function lamports<T>(this proof: ExternalMutable<T>): uint64;
-@delegate export function lamports<T>(this proof: Delegated<T>): uint64;
-
-@delegate export function owner(this proof: Writable): Pubkey;
-@delegate export function owner<T>(this proof: External<T>): Pubkey;
-@delegate export function owner<T>(this proof: ExternalMutable<T>): Pubkey;
-
-@delegate export function dataLength<T>(this proof: Owned<T>): uint64;
-@delegate export function dataLength<T>(this proof: Mutable<T>): uint64;
-@delegate export function dataLength<T>(this proof: Delegated<T>): uint64;
-
 export function keysEqual(left: uint64, right: uint64): boolean {
 	return msSolLoadU64(left) == msSolLoadU64(right) &&
 		msSolLoadU64(left + 8) == msSolLoadU64(right + 8) &&
@@ -618,7 +567,7 @@ export function keysEqual(left: uint64, right: uint64): boolean {
 		msSolLoadU64(left + 24) == msSolLoadU64(right + 24);
 }
 
-function keyIsZero(address: uint64): boolean {
+export function keyIsZero(address: uint64): boolean {
 	return (msSolLoadU64(address) | msSolLoadU64(address + 8) | msSolLoadU64(address + 16) |
 		msSolLoadU64(address + 24)) == 0;
 }
@@ -651,39 +600,6 @@ function proofResult(address: uint64, failure: uint64): Result<Account, ProgramE
 	if (failure != 0) { return Result.err({ code: failure }); }
 	const found: Account = { address: address };
 	return Result.ok(found);
-}
-
-export function signer(index: int32): Result<Signer, ProgramError> {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
-	if (msSolLoadU8(address + 1) == 0) { return Result.err(ProgramError.accountNotSigner()); }
-	const found: Account = { address: address };
-	return Result.ok(found as Signer);
-}
-
-export function writableSigner(index: int32): Result<WritableSigner, ProgramError> {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
-	if (msSolLoadU8(address + 1) == 0) { return Result.err(ProgramError.accountNotSigner()); }
-	if (msSolLoadU8(address + 2) == 0) { return Result.err(ProgramError.constraintMut()); }
-	const found: Account = { address: address };
-	return Result.ok(found as WritableSigner);
-}
-
-export function writable(index: int32): Result<Writable, ProgramError> {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
-	if (msSolLoadU8(address + 2) == 0) { return Result.err(ProgramError.constraintMut()); }
-	const found: Account = { address: address };
-	return Result.ok(found as Writable);
-}
-
-export function systemAccount(index: int32): Result<SystemAccount, ProgramError> {
-	const address = msSolAccountAt(index as uint64);
-	if (address == 0) { return Result.err(ProgramError.accountNotEnoughKeys()); }
-	if (!keyIsZero(address + 40)) { return Result.err(ProgramError.accountNotSystemOwned()); }
-	const found: Account = { address: address };
-	return Result.ok(found as SystemAccount);
 }
 
 export function unchecked(index: int32): Result<Account, ProgramError> {
@@ -782,27 +698,6 @@ export function exclusiveWritable(found: Account): Result<Account, ProgramError>
 	return Result.ok(found);
 }
 
-export function data<T>(this proof: Mutable<T>): Ptr<T> {
-	return msSolPointer((proof as Account).address + 96) as Ptr<T>;
-}
-
-export function data<T>(this proof: Owned<T>): Readonly<Ptr<T>> {
-	return msSolPointer((proof as Account).address + 96) as Ptr<T>;
-}
-
-export function data<T>(this proof: Delegated<T>): Readonly<Ptr<T>> {
-	return msSolPointer((proof as Account).address + 96) as Ptr<T>;
-}
-
-export function read<T>(this proof: External<T>): Result<T, ProgramError> {
-	return T.decode((proof as Account).data());
-}
-
-export function read<T>(this proof: ExternalMutable<T>): Result<T, ProgramError> {
-	return T.decode((proof as Account).data());
-}
-
-
 export function selectedInstruction(table: Readonly<Span<uint8>>): Result<int32, ProgramError> {
 	if (msSolInstructionDataLength() < 8) { return Result.err(ProgramError.instructionMissing()); }
 	const word = msSolLoadU64(msSolInstructionData());
@@ -879,14 +774,12 @@ export function argBytes(offset: uint64): Bytes {
 }
 
 function initialized(
-	payer: WritableSigner,
-	target: Writable,
+	funding: Account,
+	created: Account,
 	space: uint64,
 	discriminator: uint64,
 	signers: Readonly<Span<SignerSeeds>>,
 ): Result<Account, ProgramError> {
-	const funding = payer as Account;
-	const created = target as Account;
 	if (funding.key() == created.key()) {
 		return Result.err(ProgramError.tryingToInitPayerAsProgramAccount());
 	}
@@ -897,8 +790,8 @@ function initialized(
 }
 
 export function createdAccount(
-	payer: WritableSigner,
-	target: Writable,
+	payer: Account,
+	target: Account,
 	space: uint64,
 	discriminator: uint64,
 	signers: Readonly<Span<SignerSeeds>> = [],
@@ -912,14 +805,14 @@ export struct DerivedAccount {
 }
 
 export function createdPdaAccount(
-	payer: WritableSigner,
-	target: Writable,
+	payer: Account,
+	target: Account,
 	seeds: Span<SeedSlice>,
 	space: uint64,
 	discriminator: uint64,
 ): Result<DerivedAccount, ProgramError> {
 	const found = try findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
-	if (found.key != (target as Account).key()) {
+	if (found.key != target.key()) {
 		return Result.err(ProgramError.constraintSeeds());
 	}
 	let signed: SeedTable = { slices: [], bump: [0], count: 0 };
@@ -1070,24 +963,4 @@ const MAX_EVENT_BYTES: uint64 = 1024;
 
 export function logData(bytes: Bytes): void {
 	msSolLogData(bytes.address, bytes.length);
-}
-
-export function transferLamports(
-	from: WritableSigner,
-	to: Writable,
-	lamports: uint64,
-): Result<uint64, ProgramError> {
-	return transfer(from as Account, to as Account, lamports);
-}
-
-export function asSigner(this proof: WritableSigner): Signer {
-	return (proof as Account) as Signer;
-}
-
-export function asWritable(this proof: WritableSigner): Writable {
-	return (proof as Account) as Writable;
-}
-
-export function asWritable<T>(this proof: Mutable<T>): Writable {
-	return (proof as Account) as Writable;
 }
