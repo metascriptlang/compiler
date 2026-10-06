@@ -26,6 +26,7 @@ import { aliveSetHasDecl, aliveSetHasModule, createAliveSet, AliveSet, CEmission
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { computeAliveSet } from "../checker/reachability";
+import { inferRaises, resetRaises } from "../checker/raises";
 import { collectFreestandingAsync, collectWritableModuleBindings, freestandingAsyncLoc, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { getSimpleTypeDesc, sealHookSyms, opCName } from "../codegen/c/types";
@@ -51,7 +52,7 @@ import { registrySrcPath, gitSrcPath } from "./package/cache";
 import { drainPendingInstances, distinctInstances, placeInstance } from "../checker/instantiate";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, collectTypeInstanceRows, moduleTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { hookSymMark, hookSymsFrom, replayHookSyms, opMark, opsFrom, replayOps } from "../codegen/c/types";
-import { GenericTypeInstRow, addGenericTypeInstRow } from "../parser/context";
+import { GenericTypeInstRow, addGenericTypeInstRow, getParserDefines, setParserDefines } from "../parser/context";
 import { dbLower } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig } from "./buildConfig";
@@ -60,8 +61,8 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot } from "./cc";
-import { defineIdentity } from "./defines";
+import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
+import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
 import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, writeCompileCache, computeFingerprint, publishFirstCompile, nativeDepFile, nativeDependenciesKnown, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
@@ -395,12 +396,10 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	// Split the "graph load+check" phase: this block is the LOADER half
 	// (parse of every module in the closure — prelude tree included), the
 	// orchestrator PROFILE line covers the check half. Build-perf §1.
-	// Backend ext feeds the prelude pack KEY, so it must be known before the
-	// prelude loads (A2 seeds the graph from a key-named deps file).
 	const backendExt = config.extensions.length > 0 ? config.extensions[0] : ".cms";
 	const _gl0 = performance.now();
 	if (config.stdPath != "") {
-		loadPreludeModules(graph, provider, config, backendExt);
+		loadPreludeModules(graph, provider, config);
 	}
 	const _pl0 = performance.now();
 	const _r = loadModule(graph, entryPath, provider, config, 1);
@@ -450,16 +449,20 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 // writer.
 let _preludeSeedHit: boolean = false;
 
-function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig, backendExt: string): void {
+function preludeSeedKey(config: ResolverConfig): string {
+	return preludePackKey(config.stdPath, config.extensions.join(","));
+}
+
+function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
 	_preludeSeedHit = false;
 	if (config.stdPath != "") {
-		const deps = tryLoadPreludeDeps(preludePackKey(config.stdPath, backendExt), preludePackStamp(config.stdPath));
+		const deps = tryLoadPreludeDeps(preludeSeedKey(config), preludePackStamp(config.stdPath));
 		if (deps != null && seedPreludeModules(graph, provider, deps)) _preludeSeedHit = true;
 	}
 	if (_preludeSeedHit) noteStdGlobalImportModules(graph, provider, config);
 	if (!_preludeSeedHit) {
 		loadStdGlobalImportModules(graph, provider, config);
-		if (config.stdPath != "") writeStdGraphDeps(graph, preludePackKey(config.stdPath, backendExt), preludePackStamp(config.stdPath));
+		if (config.stdPath != "") writeStdGraphDeps(graph, preludeSeedKey(config), preludePackStamp(config.stdPath));
 	}
 	loadExtraGlobalImportModules(graph, provider, config);
 }
@@ -1267,7 +1270,7 @@ function writeDepsFile(graph: ModuleGraph, entryPath: string, outDir: string): v
 	}
 	const depsPath = `${outDir}/${replaceExt(basename(entryPath), ".deps")}`;
 	writeOutput(depsPath, depsContent);
-	console.log(dim(`  wrote deps → ${depsPath}`));
+	printDiag(dim(`  wrote deps → ${depsPath}`));
 }
 
 // ===== Change Detection =====
@@ -1374,7 +1377,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		manifest = `${manifest}  ]\n}\n`;
 		writeOutput(`${splitRoot}/_manifest.json`, manifest);
 		if (opts.showTime) printTiming("emitted", t0);
-		console.log(success(`${tree.modulePaths.length} module(s) → ${bold(splitRoot)}`));
+		printDiag(success(`${tree.modulePaths.length} module(s) → ${bold(splitRoot)}`));
 		return;
 	}
 	entryPath = canonicalModulePath(entryPath);
@@ -1545,7 +1548,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		output = `${output}\n//# sourceMappingURL=${mapName}\n`;
 	}
 	writeOutput(outPath, output);
-	console.log(success(`${compiled} module(s) bundled → ${bold(outPath)}`));
+	printDiag(success(`${compiled} module(s) bundled → ${bold(outPath)}`));
 }
 
 // Platform-specific runtime compile — dispatch + selectors + pool + fs.
@@ -2095,7 +2098,7 @@ function publishHcrBuildAbi(state: HcrBuildAbi, changedPaths: string[]): void {
 		throw new Error(BUILD_STOPPED);
 	}
 	for (const decision of decisions) console.log(hcrReloadDiagnostic(decision));
-	console.log(`${green("  Wrote")} ${bold(state.bundlePath)}`);
+	printDiag(`${green("  Wrote")} ${bold(state.bundlePath)}`);
 }
 
 // ===== C Build =====
@@ -2454,6 +2457,11 @@ setGlobalHookOwners(sharedHookOwners);
 			console.log(`  Expected it in the same platform-tools ${bold("llvm/bin")} directory.`);
 			throw new Error(BUILD_STOPPED);
 		}
+		if (resolveSbfObjcopy() == "") {
+			printDiag(`${error("error")}: --os=solana requires ${bold("llvm-objcopy")} beside the SBF clang`);
+			console.log(`  Expected it in the same platform-tools ${bold("llvm/bin")} directory.`);
+			throw new Error(BUILD_STOPPED);
+		}
 	}
 
 	// WASM: force release mode, use zig cc with wasm32-wasi target
@@ -2526,7 +2534,7 @@ setGlobalHookOwners(sharedHookOwners);
 		|| (hcrBuildAbi.hadCurrent && hcrBundlesMatch(hcrBuildAbi.current, hcrBuildAbi.candidate));
 	const upToDate = session.keep ? lastBuilt && session.check.rechecked.size == 0 && hcrBundleCurrent : !projectChanged && hcrBundleCurrent;
 	if (upToDate) {
-		console.log(success("Up to date") + " " + bold(outBinary));
+		printDiag(success("Up to date") + " " + bold(outBinary));
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
 			ensureDir(depsDir);
@@ -2760,6 +2768,8 @@ setGlobalHookOwners(sharedHookOwners);
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
+	if (opts.isHcr) resetRaises();
+	else inferRaises(transformedPrograms);
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths, hcrRootFunctions(hcrModulePaths));
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
@@ -2949,7 +2959,7 @@ setGlobalHookOwners(sharedHookOwners);
 			ensureDir(emitDir);
 			const emitPath = `${emitDir}/${mangleModuleName(p.modPath)}.c`;
 			writeOutput(emitPath, cCode);
-			console.log(`${green("  Wrote")} ${bold(emitPath)}`);
+			printDiag(`${green("  Wrote")} ${bold(emitPath)}`);
 		} else {
 			let modFlags = appendFlag(sideFlags, quoteCcArg(`-iquote${dirname(p.modPath)}`));
 			modFlags = appendFlag(modFlags, quoteCcArg(`-iquote${cd}`));
@@ -3018,15 +3028,15 @@ setGlobalHookOwners(sharedHookOwners);
 			if (!hcrModulePaths.includes(mp)) coreModules.push(mp);
 		}
 		writeOutput(`${emitDir}/_hcrcore.c`, genHcrCoreDispatcher(coreModules, moduleOutputs));
-		console.log(`${green("  Wrote")} ${bold(`${emitDir}/_hcrcore.c`)}`);
+		printDiag(`${green("  Wrote")} ${bold(`${emitDir}/_hcrcore.c`)}`);
 		for (const mp of hcrModulePaths) {
 			const output = moduleOutputFor(moduleOutputs, mp);
 			if (output == null) continue;
 			const imagePath = `${emitDir}/_hcrimage_${mangleModuleName(mp)}.c`;
 			writeOutput(imagePath, genHcrImageDispatcher(output, mp == entryPath));
-			console.log(`${green("  Wrote")} ${bold(imagePath)}`);
+			printDiag(`${green("  Wrote")} ${bold(imagePath)}`);
 		}
-		console.log(success(`Emitted ${compiled + 1 + hcrModulePaths.length} C module(s)`));
+		printDiag(success(`Emitted ${compiled + 1 + hcrModulePaths.length} C module(s)`));
 		if (opts.showTime) printTiming("emitted", t0);
 		session.lastBuilt = true;
 		return BuildStatus.Built;
@@ -3043,8 +3053,8 @@ setGlobalHookOwners(sharedHookOwners);
 		const emitDir = emitDirOf(opts);
 		const dispPath = `${emitDir}/_dispatch.c`;
 		writeOutput(dispPath, dispatcher);
-		console.log(`${green("  Wrote")} ${bold(dispPath)}`);
-		console.log(success(`Emitted ${compiled + 1} C module(s)`));
+		printDiag(`${green("  Wrote")} ${bold(dispPath)}`);
+		printDiag(success(`Emitted ${compiled + 1} C module(s)`));
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
 			writeDepsFile(graph, entryPath, depsDir);
@@ -3127,7 +3137,7 @@ setGlobalHookOwners(sharedHookOwners);
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		if (session.keep && cJobs.length <= PLANNED_COMPILE_JOBS) ensurePchs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (opts.showTime) printTiming("phase D (link images)", tLink);
-		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(` (+${hcrModulePaths.length} HCR images)`));
+		printDiag(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(` (+${hcrModulePaths.length} HCR images)`));
 		session.lastBuilt = true;
 		return BuildStatus.Built;
 	}
@@ -3156,7 +3166,7 @@ setGlobalHookOwners(sharedHookOwners);
 		}
 		if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
-		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(" (link cached)"));
+		printDiag(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(" (link cached)"));
 		if (opts.showTime) printTiming("built", t0);
 		session.lastBuilt = true;
 		return BuildStatus.Built;
@@ -3169,7 +3179,7 @@ setGlobalHookOwners(sharedHookOwners);
 	const tD = performance.now();
 
 	// Emscripten: auto-enable Asyncify when DCE detects async code (promise module alive)
-	if (opts.targetOs == "emcc" && aliveSet.entries.length > 0) {
+	if (opts.targetOs == "emcc" && aliveSet.computed) {
 		let hasAsync = false;
 		for (const mp of aliveModules) {
 			if (mp.endsWith("promise/index.cms")) { hasAsync = true; }
@@ -3189,7 +3199,7 @@ setGlobalHookOwners(sharedHookOwners);
 			throw new Error(BUILD_STOPPED);
 		}
 	} else if (opts.targetOs == "solana") {
-		const linkRes = linkSolana(oFiles, outBinary);
+		const linkRes = linkSolana(oFiles, outBinary, opts.ccBinary, opts.lto, opts.mode, opts.strip);
 		if (!linkRes.ok) {
 			printDiag(`${error("error")}: SBF link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 			if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
@@ -3217,7 +3227,7 @@ setGlobalHookOwners(sharedHookOwners);
 	writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 
 	if (opts.showTime) printTiming("phase D (link)", tD);
-	console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`));
+	printDiag(success(`Built ${compiled} module(s) → ${bold(outBinary)}`));
 	if (opts.showTime) printTiming("total", t0);
 	session.lastBuilt = true;
 	return BuildStatus.Built;
@@ -3338,6 +3348,7 @@ setGlobalHookOwners(sharedHookOwners);
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
+	inferRaises(transformedPrograms);
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, filePath, true, graph);
 
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
@@ -3939,12 +3950,12 @@ test "a prelude load seeds the std graph from the deps file the previous load wr
 	env.set("HOME", "out/test/preludeDepsHome");
 	try {
 		const config = createDefaultConfig(Backend.C, join(resolveRuntimeDir(), "std"));
-		remove(`${packRoot()}/${preludePackKey(config.stdPath, ".cms")}.deps`);
+		remove(`${packRoot()}/${preludeSeedKey(config)}.deps`);
 		const fresh = createModuleGraph();
-		loadPreludeModules(fresh, createFileSystemProvider(), config, ".cms");
+		loadPreludeModules(fresh, createFileSystemProvider(), config);
 		assert !_preludeSeedHit;
 		const seeded = createModuleGraph();
-		loadPreludeModules(seeded, createFileSystemProvider(), config, ".cms");
+		loadPreludeModules(seeded, createFileSystemProvider(), config);
 		assert _preludeSeedHit;
 		assert seeded.loadOrder.join("\n") == fresh.loadOrder.join("\n");
 		for (const path of fresh.loadOrder) {
@@ -3956,6 +3967,82 @@ test "a prelude load seeds the std graph from the deps file the previous load wr
 			assert b.stdPrelude == a.stdPrelude;
 		}
 	} finally {
+		if (prevHome == "") env.delete("HOME");
+		else env.set("HOME", prevHome);
+	}
+}
+
+test "the prelude pack key names every define a std when-block can read" {
+	const prevDefines = getParserDefines();
+	try {
+		const onChain = createDefineTable();
+		initDefines(onChain, "c", "solana", "sbf", "manual", 0);
+		const onHost = createDefineTable();
+		initDefines(onHost, "c", "linux", "amd64", "drc", 0);
+		const onHostFlagged = createDefineTable();
+		initDefines(onHostFlagged, "c", "linux", "amd64", "drc", 0);
+		applyDefineSwitch(onHostFlagged, "-d:probeFlag");
+		const onBare = createDefineTable();
+		initDefines(onBare, "c", "bare", "amd64", "manual", 0);
+
+		setParserDefines(onChain);
+		const chainKey = preludePackKey("/key/std", ".rms");
+		setParserDefines(onHost);
+		const hostKey = preludePackKey("/key/std", ".rms");
+		setParserDefines(onHostFlagged);
+		const flaggedKey = preludePackKey("/key/std", ".rms");
+		setParserDefines(onBare);
+		const bareKey = preludePackKey("/key/std", ".rms");
+		setParserDefines(onChain);
+		assert preludePackKey("/key/std", ".rms") == chainKey;
+
+		assert chainKey != hostKey;
+		assert hostKey != flaggedKey;
+		assert bareKey != hostKey;
+		assert bareKey != chainKey;
+	} finally {
+		setParserDefines(prevDefines);
+	}
+}
+
+test "a prelude load never seeds the std graph from a deps file written for another target" {
+	const prevHome = env.get("HOME");
+	const prevDefines = getParserDefines();
+	env.set("HOME", "out/test/preludeDepsHome");
+	try {
+		const config = createDefaultConfig(Backend.C, join(resolveRuntimeDir(), "std"));
+		const onChain = createDefineTable();
+		initDefines(onChain, "c", "solana", "sbf", "manual", 0);
+		const onHost = createDefineTable();
+		initDefines(onHost, "c", "linux", "amd64", "drc", 0);
+
+		setParserDefines(onHost);
+		remove(`${packRoot()}/${preludeSeedKey(config)}.deps`);
+		setParserDefines(onChain);
+		remove(`${packRoot()}/${preludeSeedKey(config)}.deps`);
+		const chainFresh = createModuleGraph();
+		loadPreludeModules(chainFresh, createFileSystemProvider(), config);
+		assert !_preludeSeedHit;
+
+		setParserDefines(onHost);
+		const hostFresh = createModuleGraph();
+		loadPreludeModules(hostFresh, createFileSystemProvider(), config);
+		assert !_preludeSeedHit;
+		assert hostFresh.loadOrder.length > chainFresh.loadOrder.length;
+
+		setParserDefines(onChain);
+		const chainSeeded = createModuleGraph();
+		loadPreludeModules(chainSeeded, createFileSystemProvider(), config);
+		assert _preludeSeedHit;
+		assert chainSeeded.loadOrder.join("\n") == chainFresh.loadOrder.join("\n");
+
+		setParserDefines(onHost);
+		const hostSeeded = createModuleGraph();
+		loadPreludeModules(hostSeeded, createFileSystemProvider(), config);
+		assert _preludeSeedHit;
+		assert hostSeeded.loadOrder.join("\n") == hostFresh.loadOrder.join("\n");
+	} finally {
+		setParserDefines(prevDefines);
 		if (prevHome == "") env.delete("HOME");
 		else env.set("HOME", prevHome);
 	}

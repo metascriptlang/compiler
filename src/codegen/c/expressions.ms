@@ -8,7 +8,7 @@
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
-import { isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef } from "../../checker/types";
+import { isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, duVariantIndexOfType, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -655,6 +655,188 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 // Matches an `as` target type against a Union's typeChildren by comparing field names.
 // Returns the variant index (0-based), or -1 if no match.
 
+class ObjLitShape {
+	cType: string;
+	isClassObj: boolean;
+	unionWrapName: string;
+	unionWrapType: Type | null;
+	unionWrapIdx: number;
+	unionDiscKeyIdx: number;
+	isRefUnion: boolean;
+	discFieldInVariant: boolean;
+	fieldsType: Type | null;
+}
+
+function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShape {
+	const d = node.data as ObjectLiteralData;
+	let fieldsType: Type | null = node.nodeType;
+	let cType = "";
+	let isClassObj = false;
+	let unionWrapName = "";
+	let unionWrapType: Type | null = null;
+	let unionWrapIdx = -1;
+	let unionDiscKeyIdx = -1;
+	let isRefUnion = false;
+	// True when the resolved Union has a literal-disc field that lives in
+	// each variant struct (vs enum-disc match-type where the disc is the
+	// wrapper's `_tag`). Construction must write the disc field instead
+	// of skipping it.
+	let discFieldInVariant = false;
+	if (node.nodeType != null) {
+		// Unwrap Ref<Union> for discriminated union construction
+		let litType = node.nodeType;
+		// Union(Ref<T>, Null) — collapse to bare Ref<T> so the rest of the
+		// dispatch picks the Ref/heap-alloc path. The source-level union
+		// stays on node.nodeType for narrowing fidelity; we only override
+		// the local litType used for layout decisions here.
+		const refFromUnion = unwrapRefNullUnion(litType);
+		if (refFromUnion != null) {
+			litType = refFromUnion;
+		}
+		// Peel Ref/GenericInstance to reach the underlying Union body. Two
+		// shapes flow into the construction site:
+		//   - `R<T, E>` (GenericInstance over a Union body) — generic
+		//     match-type/TS-style DU; literal typed `{ok: true, ...}`.
+		//   - `Ref<R<T, E>>` (e.g. `type Result<T,E> = Ref<ResultData>`) —
+		//     heap-allocated wrapper; construction needs `msAlloc`.
+		//
+		// `namingType` keeps the form `getTypeDesc` should consult for
+		// the per-instance C name. The OUTER GenericInstance carries the
+		// monomorphized name (`R<int, string>` → `R__int_string`); the
+		// peeled inner Union body keeps the BASE name (`R`) and would
+		// otherwise emit a duplicate, base-named typedef that conflicts
+		// at the call site (`R*` vs `R__int_string*`). For `Ref<GI>` we
+		// strip the Ref but anchor naming on the GI; for bare `GI` the
+		// outer GI is already namingType.
+		let namingType = litType;
+		if (litType.kind == TypeKind.Ref || litType.kind == TypeKind.GenericInstance) {
+			const wasRef = litType.kind == TypeKind.Ref;
+			// Anchor naming: prefer the GI under any Ref wrapper so getTypeDesc
+			// flows through the mono-mangling path (codegen/c/types.ms:602-662).
+			let outerForName = litType;
+			if (wasRef && litType.typeReturn != null
+				&& litType.typeReturn.kind == TypeKind.GenericInstance) {
+				outerForName = litType.typeReturn;
+			}
+			const inner = peelToStructOrUnion(litType);
+			if (inner != null && inner.kind == TypeKind.Union) {
+				litType = inner;
+				if (wasRef) {
+					isRefUnion = true;
+					namingType = outerForName.kind == TypeKind.GenericInstance
+						? outerForName : inner;
+				}
+			}
+		}
+		if (litType.kind == TypeKind.Union && d.keys.length > 0) {
+			const unionName = getTypeDesc(g, namingType);
+			// Discriminated union: use discriminant key to find variant
+			const discName = isDiscriminatedUnion(litType) ? getDiscriminantName(litType) : "";
+			let discKeyIdx = -1;
+			if (discName != "") {
+				let ki = 0;
+				while (ki < d.keys.length) {
+					if (d.keys[ki] == discName) { discKeyIdx = ki; ki = d.keys.length; }
+					ki = ki + 1;
+				}
+			}
+			unionDiscKeyIdx = discKeyIdx;
+			const dt = litType.typeExtra;
+			discFieldInVariant = dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String);
+			if (discKeyIdx >= 0) {
+				// Discriminated: resolve variant from discriminant value
+				const discValNode = d.properties[discKeyIdx];
+				let varIdx = -1;
+				// Boolean-literal discriminant: `ok: true` / `ok: false`.
+				if (discValNode != null && discValNode.kind == NodeKind.BooleanLiteral) {
+					const bd = discValNode.data as BooleanLiteralData;
+					varIdx = findVariantByBooleanDiscriminant(litType, discName, bd.boolValue);
+				}
+				// String-literal discriminant: `kind: "circle"`.
+				if (varIdx < 0 && discValNode != null && discValNode.kind == NodeKind.StringLiteral) {
+					const sd = discValNode.data as StringLiteralData;
+					varIdx = findVariantByStringDiscriminant(litType, discName, sd.value);
+				}
+				if (varIdx < 0) {
+					let discValStr = "";
+					if (discValNode != null && discValNode.kind == NodeKind.MemberExpr) {
+						const md = discValNode.data as MemberExprData;
+						if (md.object != null && md.object.kind == NodeKind.Identifier) {
+							discValStr = (md.object.data as IdentifierData).name + "." + md.property;
+						}
+					} else if (discValNode != null && discValNode.kind == NodeKind.Identifier) {
+						// Checker rewrites Enum.Member → Enum_Member identifier
+						const idName = (discValNode.data as IdentifierData).name;
+						// Convert Enum_Member back to Enum.Member for variant lookup
+						const usIdx = idName.indexOf("_");
+						if (usIdx > 0) {
+							discValStr = idName.slice(0, usIdx) + "." + idName.slice(usIdx + 1, idName.length);
+						} else {
+							discValStr = idName;
+						}
+					}
+					varIdx = findVariantByDiscriminant(litType, discValStr);
+				}
+				if (varIdx >= 0) {
+					cType = variantStructCName(g, litType, varIdx, unionName);
+					unionWrapName = unionName;
+					unionWrapType = namingType;
+					unionWrapIdx = varIdx;
+				}
+			} else {
+				// Undiscriminated: use checker-stamped variant index.
+				// Reference parity: sem stamps resolved variant, codegen reads directly.
+				const stamped = node.variantSlot;
+				let varIdx = stamped > 0 ? stamped - 1 : -1;
+				// Fallback: re-match by field names + types (for nodes not checked, e.g. transforms)
+				if (varIdx < 0 && d.keys.length > 0) {
+					const keyArr: string[] = [];
+					const typeArr: Type[] = [];
+					for (let ki = 0; ki < d.keys.length; ki += 1) {
+						keyArr.push(d.keys[ki]);
+						if (ki < d.properties.length && d.properties[ki] != null && d.properties[ki].nodeType != null) {
+							typeArr.push(d.properties[ki].nodeType);
+						}
+					}
+					varIdx = findUnionVariant(node.nodeType, keyArr, typeArr);
+					// Last resort: name-only if type kinds mismatch (constant folding, etc.)
+					if (varIdx < 0 && typeArr.length > 0) {
+						varIdx = findUnionVariant(node.nodeType, keyArr, []);
+					}
+				}
+				if (varIdx >= 0) {
+					cType = variantStructCName(g, litType, varIdx, unionName);
+					unionWrapName = unionName;
+					unionWrapType = namingType;
+					unionWrapIdx = varIdx;
+				}
+			}
+			if (unionWrapIdx >= 0 && litType.kind == TypeKind.Union) {
+				const member = litType.typeChildren[unionWrapIdx];
+				if (member != null && member.kind == TypeKind.Ref && inlineVariantStruct(member) == null) {
+					if (report) addCGenError(g, "internal: object literal for reference member " + unionWrapIdx.toString() + " of " + unionWrapName + " reached codegen typed as the union in " + g.modulePath, node.location.line, node.location.column);
+				}
+			}
+		} else if (litType.kind == TypeKind.Ref && litType.typeReturn != null) {
+			// Class/interface type: ObjectLiteral constructs inner struct, heap-allocated.
+			// litType is the unwrapped form — bare Ref<T> here, even when node.nodeType
+			// is Union(Ref<T>, Null). Source-level union stays on node.nodeType.
+			cType = getTypeDesc(g, litType.typeReturn);
+			isClassObj = true;
+		} else {
+			const td = getTypeDesc(g, node.nodeType);
+			if (td != "void*" && td != "double" && td != "void") {
+				cType = td;
+			}
+		}
+	}
+	if (unionWrapIdx >= 0 && unionWrapType != null) {
+		const u = peelToStructOrUnion(unionWrapType);
+		fieldsType = u != null && u.typeChildren != null && unionWrapIdx < u.typeChildren.length ? u.typeChildren[unionWrapIdx] : null;
+	}
+	return { cType, isClassObj, unionWrapName, unionWrapType, unionWrapIdx, unionDiscKeyIdx, isRefUnion, discFieldInVariant, fieldsType };
+}
+
 // ===== Iterative genExpr infrastructure =====
 // Post-order stack traversal: Discover pushes children, Emit combines results.
 
@@ -670,6 +852,26 @@ interface ExprStackItem {
 class ExprEvalCtx {
 	workStack: ExprStackItem[];
 	results: string[];
+	destNodes: Readonly<Node>[];
+	destNames: string[];
+}
+
+function destOf(ctx: ExprEvalCtx, node: Readonly<Node>): string {
+	for (let i = 0; i < ctx.destNodes.length; i += 1) {
+		if (ctx.destNodes[i] == node) return ctx.destNames[i];
+	}
+	return "";
+}
+
+function objLitTarget(dest: string, shape: ObjLitShape): string {
+	return shape.unionWrapIdx >= 0 ? `${dest}.v${shape.unionWrapIdx}` : dest;
+}
+
+export function buildsInPlace(g: CGen, node: Readonly<Node>, destCType: string): boolean {
+	if (node == null || node.kind != NodeKind.ObjectLiteral || node.flags.has(NodeFlag.Closure)) return false;
+	const shape = objLitShape(g, node, false);
+	if (shape.cType == "" || shape.isClassObj || shape.isRefUnion) return false;
+	return (shape.unionWrapIdx >= 0 ? shape.unionWrapName : shape.cType) == destCType;
 }
 
 const TAG_DEFAULT = 0;
@@ -746,8 +948,20 @@ function joinArgs(g: CGen, p: CProc, args: Readonly<Node[]>): string {
 // ===== genExpr — iterative post-order stack traversal =====
 
 export function genExpr(g: CGen, p: CProc, node: Readonly<Node>): string {
+	return runExpr(g, p, node, "");
+}
+
+export function genExprInto(g: CGen, p: CProc, node: Readonly<Node>, dest: string): string {
+	return runExpr(g, p, node, dest);
+}
+
+function runExpr(g: CGen, p: CProc, node: Readonly<Node>, dest: string): string {
 	if (node == null) return "MS_NIL";
-	const ctx: ExprEvalCtx = { workStack: [], results: [] };
+	const ctx: ExprEvalCtx = { workStack: [], results: [], destNodes: [], destNames: [] };
+	if (dest != "") {
+		ctx.destNodes.push(node);
+		ctx.destNames.push(dest);
+	}
 	ctx.workStack.push({ node, phase: 0, childCount: 0, tag: 0 });
 	while (ctx.workStack.length > 0) {
 		const item = ctx.workStack[ctx.workStack.length - 1];
@@ -1102,6 +1316,21 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 	if (kind == NodeKind.ObjectLiteral) {
 		const d = node.data as ObjectLiteralData;
 		const n = d.properties.length;
+		const dest = destOf(ctx, node);
+		if (dest != "") {
+			const shape = objLitShape(g, node, false);
+			const target = objLitTarget(dest, shape);
+			if (shape.unionWrapIdx >= 0) emitStmtsLine(p, `${dest}._tag = ${shape.unionWrapIdx};`);
+			emitStmtsLine(p, `memset(&${target}, 0, sizeof(${shape.cType}));`);
+			for (let i = 0; i < n; i += 1) {
+				if (d.properties[i].kind != NodeKind.ObjectLiteral || shape.fieldsType == null) continue;
+				const ft = getProperty(shape.fieldsType, d.keys[i]);
+				if (!isUnresolvedType(ft) && buildsInPlace(g, d.properties[i], getTypeDesc(g, ft))) {
+					ctx.destNodes.push(d.properties[i]);
+					ctx.destNames.push(`${target}.${mangleFieldName(d.keys[i])}`);
+				}
+			}
+		}
 		ctx.workStack.push({ node, phase: 1, childCount: n, tag: TAG_DEFAULT });
 		// Push children in reverse order
 		let i = n - 1;
@@ -2110,170 +2339,20 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			// Reference-aligned: hoist struct literal to temp variable + field-by-field assignment.
 			// Reference implementation (object construction): generate temporary → assign fields → use temporary.
 			// Never emits inline compound literals — works with C89+ and avoids &({...}) issues.
-			let cType = "";
-			let isClassObj = false;
-			let unionWrapName = "";
-			let unionWrapType: Type | null = null;
-			let unionWrapIdx = -1;
-			let unionDiscKeyIdx = -1;
-			let isRefUnion = false;
-			// True when the resolved Union has a literal-disc field that lives in
-			// each variant struct (vs enum-disc match-type where the disc is the
-			// wrapper's `_tag`). Construction must write the disc field instead
-			// of skipping it.
-			let discFieldInVariant = false;
-			if (node.nodeType != null) {
-				// Unwrap Ref<Union> for discriminated union construction
-				let litType = node.nodeType;
-				// Union(Ref<T>, Null) — collapse to bare Ref<T> so the rest of the
-				// dispatch picks the Ref/heap-alloc path. The source-level union
-				// stays on node.nodeType for narrowing fidelity; we only override
-				// the local litType used for layout decisions here.
-				const refFromUnion = unwrapRefNullUnion(litType);
-				if (refFromUnion != null) {
-					litType = refFromUnion;
-				}
-				// Peel Ref/GenericInstance to reach the underlying Union body. Two
-				// shapes flow into the construction site:
-				//   - `R<T, E>` (GenericInstance over a Union body) — generic
-				//     match-type/TS-style DU; literal typed `{ok: true, ...}`.
-				//   - `Ref<R<T, E>>` (e.g. `type Result<T,E> = Ref<ResultData>`) —
-				//     heap-allocated wrapper; construction needs `msAlloc`.
-				//
-				// `namingType` keeps the form `getTypeDesc` should consult for
-				// the per-instance C name. The OUTER GenericInstance carries the
-				// monomorphized name (`R<int, string>` → `R__int_string`); the
-				// peeled inner Union body keeps the BASE name (`R`) and would
-				// otherwise emit a duplicate, base-named typedef that conflicts
-				// at the call site (`R*` vs `R__int_string*`). For `Ref<GI>` we
-				// strip the Ref but anchor naming on the GI; for bare `GI` the
-				// outer GI is already namingType.
-				let namingType = litType;
-				if (litType.kind == TypeKind.Ref || litType.kind == TypeKind.GenericInstance) {
-					const wasRef = litType.kind == TypeKind.Ref;
-					// Anchor naming: prefer the GI under any Ref wrapper so getTypeDesc
-					// flows through the mono-mangling path (codegen/c/types.ms:602-662).
-					let outerForName = litType;
-					if (wasRef && litType.typeReturn != null
-						&& litType.typeReturn.kind == TypeKind.GenericInstance) {
-						outerForName = litType.typeReturn;
-					}
-					const inner = peelToStructOrUnion(litType);
-					if (inner != null && inner.kind == TypeKind.Union) {
-						litType = inner;
-						if (wasRef) {
-							isRefUnion = true;
-							namingType = outerForName.kind == TypeKind.GenericInstance
-								? outerForName : inner;
-						}
-					}
-				}
-				if (litType.kind == TypeKind.Union && d.keys.length > 0) {
-					const unionName = getTypeDesc(g, namingType);
-					// Discriminated union: use discriminant key to find variant
-					const discName = isDiscriminatedUnion(litType) ? getDiscriminantName(litType) : "";
-					let discKeyIdx = -1;
-					if (discName != "") {
-						let ki = 0;
-						while (ki < d.keys.length) {
-							if (d.keys[ki] == discName) { discKeyIdx = ki; ki = d.keys.length; }
-							ki = ki + 1;
-						}
-					}
-					unionDiscKeyIdx = discKeyIdx;
-					const dt = litType.typeExtra;
-					discFieldInVariant = dt != null && (dt.kind == TypeKind.Boolean || dt.kind == TypeKind.String);
-					if (discKeyIdx >= 0) {
-						// Discriminated: resolve variant from discriminant value
-						const discValNode = d.properties[discKeyIdx];
-						let varIdx = -1;
-						// Boolean-literal discriminant: `ok: true` / `ok: false`.
-						if (discValNode != null && discValNode.kind == NodeKind.BooleanLiteral) {
-							const bd = discValNode.data as BooleanLiteralData;
-							varIdx = findVariantByBooleanDiscriminant(litType, discName, bd.boolValue);
-						}
-						// String-literal discriminant: `kind: "circle"`.
-						if (varIdx < 0 && discValNode != null && discValNode.kind == NodeKind.StringLiteral) {
-							const sd = discValNode.data as StringLiteralData;
-							varIdx = findVariantByStringDiscriminant(litType, discName, sd.value);
-						}
-						if (varIdx < 0) {
-							let discValStr = "";
-							if (discValNode != null && discValNode.kind == NodeKind.MemberExpr) {
-								const md = discValNode.data as MemberExprData;
-								if (md.object != null && md.object.kind == NodeKind.Identifier) {
-									discValStr = (md.object.data as IdentifierData).name + "." + md.property;
-								}
-							} else if (discValNode != null && discValNode.kind == NodeKind.Identifier) {
-								// Checker rewrites Enum.Member → Enum_Member identifier
-								const idName = (discValNode.data as IdentifierData).name;
-								// Convert Enum_Member back to Enum.Member for variant lookup
-								const usIdx = idName.indexOf("_");
-								if (usIdx > 0) {
-									discValStr = idName.slice(0, usIdx) + "." + idName.slice(usIdx + 1, idName.length);
-								} else {
-									discValStr = idName;
-								}
-							}
-							varIdx = findVariantByDiscriminant(litType, discValStr);
-						}
-						if (varIdx >= 0) {
-							cType = variantStructCName(g, litType, varIdx, unionName);
-							unionWrapName = unionName;
-							unionWrapType = namingType;
-							unionWrapIdx = varIdx;
-						}
-					} else {
-						// Undiscriminated: use checker-stamped variant index.
-						// Reference parity: sem stamps resolved variant, codegen reads directly.
-						const stamped = node.variantSlot;
-						let varIdx = stamped > 0 ? stamped - 1 : -1;
-						// Fallback: re-match by field names + types (for nodes not checked, e.g. transforms)
-						if (varIdx < 0 && d.keys.length > 0) {
-							const keyArr: string[] = [];
-							const typeArr: Type[] = [];
-							for (let ki = 0; ki < d.keys.length; ki += 1) {
-								keyArr.push(d.keys[ki]);
-								if (ki < d.properties.length && d.properties[ki] != null && d.properties[ki].nodeType != null) {
-									typeArr.push(d.properties[ki].nodeType);
-								}
-							}
-							varIdx = findUnionVariant(node.nodeType, keyArr, typeArr);
-							// Last resort: name-only if type kinds mismatch (constant folding, etc.)
-							if (varIdx < 0 && typeArr.length > 0) {
-								varIdx = findUnionVariant(node.nodeType, keyArr, []);
-							}
-						}
-						if (varIdx >= 0) {
-							cType = variantStructCName(g, litType, varIdx, unionName);
-							unionWrapName = unionName;
-							unionWrapType = namingType;
-							unionWrapIdx = varIdx;
-						}
-					}
-					if (unionWrapIdx >= 0 && litType.kind == TypeKind.Union) {
-						const member = litType.typeChildren[unionWrapIdx];
-						if (member != null && member.kind == TypeKind.Ref && inlineVariantStruct(member) == null) {
-							addCGenError(g, "internal: object literal for reference member " + unionWrapIdx.toString() + " of " + unionWrapName + " reached codegen typed as the union in " + g.modulePath, node.location.line, node.location.column);
-						}
-					}
-				} else if (litType.kind == TypeKind.Ref && litType.typeReturn != null) {
-					// Class/interface type: ObjectLiteral constructs inner struct, heap-allocated.
-					// litType is the unwrapped form — bare Ref<T> here, even when node.nodeType
-					// is Union(Ref<T>, Null). Source-level union stays on node.nodeType.
-					cType = getTypeDesc(g, litType.typeReturn);
-					isClassObj = true;
-				} else {
-					const td = getTypeDesc(g, node.nodeType);
-					if (td != "void*" && td != "double" && td != "void") {
-						cType = td;
-					}
-				}
-			}
+			const shape = objLitShape(g, node, true);
+			const cType = shape.cType;
+			const isClassObj = shape.isClassObj;
+			const unionWrapName = shape.unionWrapName;
+			const unionWrapType = shape.unionWrapType;
+			const unionWrapIdx = shape.unionWrapIdx;
+			const unionDiscKeyIdx = shape.unionDiscKeyIdx;
+			const isRefUnion = shape.isRefUnion;
+			const discFieldInVariant = shape.discFieldInVariant;
 			if (cType != "") {
 				// Reference pattern: allocate temp, zero-init, assign fields
-				p.labels += 1;
-				const tmpName = `_lit${p.labels}_`;
+				const dest = destOf(ctx, node);
+				if (dest == "") p.labels += 1;
+				const tmpName = dest != "" ? objLitTarget(dest, shape) : `_lit${p.labels}_`;
 				const access = isClassObj ? "->" : ".";
 				if (isClassObj) {
 					// Class: heap-allocate (Reference parity: managed object construction).
@@ -2294,7 +2373,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					}
 					const keysCover = fieldNames != null && d.keys.length == fieldNames.length && !hasNullProp;
 					emitStmtsLine(p, `${tmpName} = ${pickAllocExpr(g, cType, innerStruct, keysCover)};`);
-				} else {
+				} else if (dest == "") {
 					// Value type: stack-allocate (no slab zero available — memset explicitly)
 					emitProcLocalsLine(p, `${cType} ${tmpName};`);
 					emitStmtsLine(p, `memset(&${tmpName}, 0, sizeof(${cType}));`);
@@ -2313,19 +2392,22 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					// Skip NullLiteral fields — memset already zeroed them.
 					// This avoids void* → value-type errors for self-referential pointer fields
 					// where the C field is T* but the MS type is T (e.g. Type.typeReturn).
-					if (d.properties[i].kind != NodeKind.NullLiteral) {
+					const slot = `${tmpName}${access}${mangleFieldName(d.keys[i])}`;
+					if (d.properties[i].kind != NodeKind.NullLiteral && val != slot) {
 						let assignVal = val;
 						const fieldU = litFieldPrimitiveUnion(node, d.keys[i]);
 						if (fieldU != null) {
 							const mIdx = primitiveUnionMemberIdx(fieldU, d.properties[i].nodeType);
 							if (mIdx >= 0) assignVal = wrapPrimitiveUnion(g, fieldU, mIdx, val);
 						}
-						emitStmtsLine(p, `${tmpName}${access}${mangleFieldName(d.keys[i])} = ${assignVal};`);
+						emitStmtsLine(p, `${slot} = ${assignVal};`);
 					}
 					i += 1;
 				}
 				truncResults(ctx, cc);
-				if (unionWrapIdx >= 0 && isRefUnion) {
+				if (dest != "") {
+					ctx.results.push(dest);
+				} else if (unionWrapIdx >= 0 && isRefUnion) {
 					// Ref<Union>: heap-allocate union, assign variant
 					p.labels += 1;
 					const refTmp = `_ref${p.labels}_`;

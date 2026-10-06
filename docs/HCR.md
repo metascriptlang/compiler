@@ -27,25 +27,25 @@ backend and DRC/ORC runtime.
 | Capability | State |
 |---|---|
 | `--hcr` and module-global state lifting | Implemented |
-| Per-symbol state cells | Windows x64 and Linux x64: `hcrRegistryVariables` checks add/remove/reintroduce state, selective integer/string resets, initializer rollback/recovery and preserved values |
+| Per-symbol state cells | Windows x64, Linux x64 and macOS arm64: `hcrRegistryVariables` checks add/remove/reintroduce state, selective integer/string resets, initializer rollback/recovery and preserved values |
 | POSIX `dlopen` probe host | Native Linux `examples/hcrProbe/run.sh`: stable count storage, calls 10→40→30, added variable accepted, corrupt image rejected and current call returns 40 |
 | Windows `LoadLibrary` probe host | `hcrWindowsReload` now accepts an added variable while preserving count storage; corrupt images leave current callable |
 | Per-module native object cache | Implemented by generated-C fingerprints; `src/test/hcr/run.ms` proves a body-only edit recompiles only the changed module |
-| Per-module shared libraries | Windows x64 and Linux x64: a non-reloadable `<stem>.core.<ext>` (runtime, std, registry) plus one image per project module, guarded by `src/test/hcr/run.ms` (`hcrIndirect`): the unrebuilt app calls a reloaded `logic` image. macOS link flags exist and have never run |
-| Cross-module symbol cells | Windows x64 and Linux x64: `hcrIndirect`, `hcrSharedVariable` and `hcrRegistryGeneric` check unchanged callers, exported state/consts and private dependencies of concrete instances |
-| Transactional registry | Windows x64 and Linux x64: `hcrEngine` and `hcrRegistryVariables` check staging, publish, rollback and recovery. Existing shared-value mutations are not undone |
-| `@beforeReload` / `@afterReload` handlers | Windows x64 and Linux x64 checked by `hcrEngine`: old handlers quiesce, new handlers resume; a throw restores publication |
-| TypeInfo across reloads | Windows x64 and Linux x64 checked by `hcrEngine`: stable class identity/method dispatch, restored metadata after rollback; incompatible class layout still requires restart |
-| Watch build (`msc build --hcr --watch`) | Windows x64 (`ReadDirectoryChangesW`) and Linux x64 (inotify): rebuilds after each source save through a kept build session, guarded by `src/test/hcr/run.ms` (`hcrWatchWarm`: the C of a warm build equals a cold build's at every step of a replayed edit sequence, including constructor defaults, removed overrides and generic hook instances). macOS has no file-watch backend: `std/fs/watch` aborts with `file watching has no backend for this platform yet` |
-| Crash rollback (`step(body)`) | Windows x64 and Linux x64, `hcrStepCrash`: a fatal runtime error, a stack overflow, an access violation or segmentation fault and an uncaught exception inside `step` each revert the last accepted reload and the program keeps running on the previous generation; the crashed image is skipped until the next build. One level |
+| Per-module shared libraries | Windows x64, Linux x64 and macOS arm64: a non-reloadable `<stem>.core.<ext>` (runtime, std, registry) plus one image per project module, guarded by `src/test/hcr/run.ms` (`hcrIndirect`): the unrebuilt app calls a reloaded `logic` image |
+| Cross-module symbol cells | Windows x64, Linux x64 and macOS arm64: `hcrIndirect`, `hcrSharedVariable` and `hcrRegistryGeneric` check unchanged callers, exported state/consts and private dependencies of concrete instances |
+| Transactional registry | Windows x64, Linux x64 and macOS arm64: `hcrEngine` and `hcrRegistryVariables` check staging, publish, rollback and recovery. Existing shared-value mutations are not undone |
+| `@beforeReload` / `@afterReload` handlers | Windows x64, Linux x64 and macOS arm64 checked by `hcrEngine`: old handlers quiesce, new handlers resume; a throw restores publication |
+| TypeInfo across reloads | Windows x64, Linux x64 and macOS arm64 checked by `hcrEngine`: stable class identity/method dispatch, restored metadata after rollback; incompatible class layout still requires restart |
+| Watch build (`msc build --hcr --watch`) | Windows x64 (`ReadDirectoryChangesW`), Linux x64 (inotify) and macOS arm64 (FSEvents): rebuilds after each source save through a kept build session, guarded by `src/test/hcr/run.ms` (`hcrWatchWarm`: the C of a warm build equals a cold build's at every step of a replayed edit sequence, including constructor defaults, removed overrides and generic hook instances). |
+| Crash rollback (`step(body)`) | Windows x64, Linux x64 and macOS arm64, `hcrStepCrash`: a fatal runtime error, a stack overflow, an access violation or segmentation fault and an uncaught exception inside `step` each revert the last accepted reload and the program keeps running on the previous generation; the crashed image is skipped until the next build. One level |
 | Old-generation purge | Not built: no accepted image is unloaded (see "Accepted generations stay loaded") |
-| Function values across reloads | Windows x64 and Linux x64, `hcrFunctionValues`: a named function's value taken before a reload, a private one, one stored in a module-level object and code of the old generation all reach the newest generation; a closure keeps its own body; a held function writes the new cell after a type reset |
-| Construction across images | Windows x64 and Linux x64, `hcrCrossImageNew`: `new` of a class declared in another image, with and without a constructor, and `super(...)` into another image's class call the class's `_init` through the owner's table. The installed compiler (`4573591e`) fails the link with `Keeper…_init`, `Counter…_init` and `Base…_init` undefined |
+| Function values across reloads | Windows x64, Linux x64 and macOS arm64, `hcrFunctionValues`: a named function's value taken before a reload, a private one, one stored in a module-level object and code of the old generation all reach the newest generation; a closure keeps its own body; a held function writes the new cell after a type reset |
+| Construction across images | Windows x64, Linux x64 and macOS arm64, `hcrCrossImageNew`: `new` of a class declared in another image, with and without a constructor, and `super(...)` into another image's class call the class's `_init` through the owner's table. The installed compiler (`4573591e`) fails the link with `Keeper…_init`, `Counter…_init` and `Base…_init` undefined |
 | Generic construction across images | Windows x64 candidate `02d3615a`, `hcrGenericCtor`: two image users share `Box<int32>`, another uses `Box<string>`, and an implicit generic constructor runs its field initializer. Editing constructor/initializer bodies reloads from `41:1 42:1 kept:1 stamp=3` to `41:2 42:2 kept:2 stamp=4`. JavaScript plain control matches; generic `super` and POSIX were not checked in this extension |
 | Generic TypeInfo lifecycle bindings | Windows x64 candidate `02d3615a`, `hcrGenericOps`: captured getter/setter environments and a self-referential generic cell use foreign destroy/trace hooks. DRC and ORC produce `OPS 9 10 kept` and three `onDestroy` calls; the targeted environment/cell ledger rows balance. A real Neon signal/owner/effect consumer now builds and reloads; this is not a full Neon UI refresh proof |
-| Module globals at exit | Windows x64 and Linux x64, `hcrExitDestroy`: `msc run --hcr` destroys each module global once at exit, entry module first, and prints what `msc run` prints. The engine calls each current image's `Deinit000`, then the core's `msHcrCoreDeinit`; a retired cell (type reset) is never destroyed. The installed compiler printed no destroy line |
-| Dependency reload | Windows x64 and Linux x64, `hcrFileDependency`: an edit of a `file:` dependency reloads its module image in the running app; `hcrImageNameCollision`: two modules mapping to one image name stop the build |
-| `msc run --hcr app.ms` | Windows x64 and Linux x64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
+| Module globals at exit | Windows x64, Linux x64 and macOS arm64, `hcrExitDestroy`: `msc run --hcr` destroys each module global once at exit, entry module first, and prints what `msc run` prints. The engine calls each current image's `Deinit000`, then the core's `msHcrCoreDeinit`; a retired cell (type reset) is never destroyed. The installed compiler printed no destroy line |
+| Dependency reload | Windows x64, Linux x64 and macOS arm64, `hcrFileDependency`: an edit of a `file:` dependency reloads its module image in the running app; `hcrImageNameCollision`: two modules mapping to one image name stop the build |
+| `msc run --hcr app.ms` | Windows x64, Linux x64 and macOS arm64, guarded by `hcrRun`: builds the images, watches the sources and runs the program under the host from `std/hcr`; see "Running an app" |
 | iOS and automated deploy loops | Not implemented |
 | Neon Fast Refresh integration | Contract defined here; implementation belongs to the Neon repo |
 
@@ -70,6 +70,13 @@ emission incompatibilities and is not counted as a registry failure or a passing
 Native POSIX script uses gcc. The Windows-to-Linux script retains zig but was not rerun.
 The origin/main crash investigation, full gate, macOS, new Linux watch timing and call cost
 are not covered by these proofs.
+
+macOS arm64, 2026-10-05, macOS 26.6.2, tree `5700282b06cb`, a candidate built by
+`./msc build src/index.ms --gc=drc --danger --lto=off`: `MSC=./msc ./msc run --target=raiser
+src/test/hcr/run.ms` printed `ok` for all 31 cases with none skipped (`hcrWindowsReload` runs on
+Windows only), and each case printed `ok` alone under `HCR_ONLY=<case>`. On the installed
+compiler of main `719e18ad2` the same runner fails `hcrFsWatch` with `WATCH tree opened: false`.
+Not verified on macOS: `examples/hcrProbe/run.sh`, x86_64, reload latency and call cost.
 
 
 Implementation anchors: `src/transform/native/hcrLift.ms` `liftHcrState`,
@@ -460,8 +467,10 @@ extension` for both `aarch64-macos` and `x86_64-linux-gnu`; the same file named 
 links; `-l:core.hcr` panics (`TODO`) for macOS and is not found for Linux. A macOS host
 reported the failure as `FAIL hcrModuleObjectCache` under the default `zig cc`. The Windows
 lane pins the name (`hcrModuleObjectCache`) and the naming rule (`hcrCoreImagePath` test).
-Not verified: the macOS and Linux lane after the fix, including `hcrCoreLinkClang`, which is
-skipped on Windows because `--cc=clang` there targets msvc and rejects `-fPIC`.
+On macOS arm64 (2026-10-05, tree `5700282b06cb`) `hcrModuleObjectCache` (default compiler) and
+`hcrCoreLinkClang` (`--cc=clang`) print `ok`. Not verified: the Linux lane after
+the fix, including `hcrCoreLinkClang`, which is skipped on Windows because `--cc=clang` there
+targets msvc and rejects `-fPIC`.
 
 The layout follows the reference's split, where the registry and runtime are the only
 non-reloadable libraries, with one intentional divergence: the standard library lives in
@@ -660,6 +669,15 @@ contents from the new image's `DatInit000`: old objects then run the new methods
 destroy hook, exactly once. nimhcr does the same (`genTypeInfoAuxBase` registers the TypeInfo
 through `hcrRegisterGlobal`, which returns the existing global, and the type-init code
 overwrites it).
+
+The instance-display candidate was exercised on macOS ARM64 on 2026-10-03:
+two `--hcr` builds and the thin host produced `HCR-INST first 9` followed by
+`HCR-INST reloaded 10` (`src/test/hcr/fixtures/instanceof/`, `instanceofReload` in
+the runner). The display uses registry TypeInfo addresses, so replacing the module
+does not replace class identity. Accepted images remain loaded, keeping the static
+display arrays valid. Depth-40, cross-module and generic down-conversion probes also
+passed on DRC/ORC. This is not a revalidation of the other HCR status rows or a
+quiet-machine performance measurement.
 
 Two gaps were measured before the fix. The fixture had four generations of a `shapes` module,
 and a `Square` built in generation 1 was kept alive:
@@ -887,8 +905,22 @@ edits through `box.ms` (`boxHookBody` … `boxNoHook`, including a removed hook 
 row); on the compiler of `91dbf527` it fails at the first step that rebuilds from scratch
 (`logicMap.ms`), and with the `box` steps moved first, at `boxHookBody.ms`.
 
-Not verified: a live watch on macOS (no backend), a project with import cycles, and edits to
-`build.ms` during a watch (it is not re-read).
+The macOS watcher is FSEvents (`runtime/io/engineReadiness.c` `msFsWatchOpen`): one recursive
+stream per watched root with per-file events and 0.05 s latency, CoreServices opened with `dlopen`
+so no program links a framework. Its callback runs on a dispatch queue, appends to the watcher's
+batch under a lock and writes one byte to a pipe; the pipe is the `MS_IO_WATCH` request's
+descriptor in the engine's kqueue, the shape the Linux backend gives the inotify descriptor, so
+the future still completes on the loop thread. kqueue was rejected: an `EVFILT_VNODE` event names
+no entry (`struct kevent` has no path field), so a changed directory has to be re-listed, and an
+in-place write fires only on the written file's own descriptor, one descriptor per file. Zig's
+`std.Build.Watch` drops kqueue on macOS for that limit (`lib/std/Build/Watch/FsEvents.zig:1-4`);
+Dart's `dart:io` watcher (`runtime/bin/file_system_watcher_macos.cc`), Rust `notify` (default
+`macos_fsevent`) and Phoenix's `file_system` also use FSEvents. FSEvents reports no close: a
+renamed save is reported closed, an in-place rewrite is seen but not reported closed
+(`hcrFsWatch`); how long `waitForSourceChange` then waits on macOS was not measured.
+
+Not verified: a project with import cycles, and edits to `build.ms` during a watch (it is not
+re-read).
 
 ### JavaScript bundler transport (Vite)
 
@@ -1017,9 +1049,9 @@ These adapters implement one publication, compatibility and state-survival contr
 do not share a lowest-common-denominator linker strategy. A target is supported only when
 its native adapter proves that contract end to end.
 
-Windows x64 and Linux x64 run the whole loop: per-module images, vtable dispatch, the module
-registry, watch builds and `msc run --hcr` (see "Current status"). macOS has the loader code and
-no file-watch backend, and has never run; iOS deployment is a later slice.
+Windows x64, Linux x64 and macOS arm64 run the whole loop: per-module images, vtable dispatch,
+the module registry, watch builds and `msc run --hcr` (see "Current status"). iOS has no FSEvents
+and its deployment is a later slice.
 
 On 2026-09-22, Windows 11 x64 source tree
 `112b9d0a69e7a1058ba3931d15f69dec3e61a9a0` was built as a candidate compiler, then

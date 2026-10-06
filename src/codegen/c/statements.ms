@@ -6,17 +6,18 @@
 import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, NewExprData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isStructType, unwrapRefNullUnion, isUnresolvedType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { statementCanRaise } from "../../checker/raises";
 import {
 	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
 	readProcStmts, emitLineDir, getTemp, fillLocalName, lookupLocalSymName, setLocalSymName, pushBlock, popBlock,
 	CSection, addLine, sec, nameSetAdd, nameSetHas, addCGenError, addUnloweredError,
 } from "./context";
-import { genExpr, shimCallArg } from "./expressions";
+import { genExpr, genExprInto, buildsInPlace, shimCallArg } from "./expressions";
 import { formatCNumber, formatCNumberLit } from "./literals";
 import { ensureCrossModuleProto } from "./forward";
-import { safeName, mangledGlobalName, isModuleGlobalVar } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
+import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar } from "./names";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, callOverloadWinner, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
 
 // ===== blockLeaveActions — emit finally cleanup on break/continue/return =====
 // Reference parity: when control flow exits through
@@ -66,9 +67,12 @@ function isNumericCType(cType: string): boolean {
 
 function genNrvoCallExpr(g: CGen, p: CProc, callNode: Readonly<Node>, destVar: string): string {
 	const cd = callNode.data as CallExprData;
-	let callee = genExpr(g, p, cd.callee);
+	const winner = callOverloadWinner(callNode);
+	let callee = winner != null
+		? mangledFunctionName(winner.winnerSym, winner.winnerSym.name, winner.winnerIdx)
+		: genExpr(g, p, cd.callee);
 	// Resolve callee symbol + function type once (used for ABI shim + proto)
-	const nrvoSym = callNode.resolvedSym != null ? callNode.resolvedSym : (cd.callee.resolvedSym);
+	const nrvoSym = winner != null ? winner.winnerSym : (callNode.resolvedSym != null ? callNode.resolvedSym : cd.callee.resolvedSym);
 	const nrvoFnType = nrvoSym != null && nrvoSym.symbolType != null ? nrvoSym.symbolType : (cd.callee.nodeType != null ? cd.callee.nodeType : null as unknown as Type);
 	const hasParamTypes = nrvoFnType != null && nrvoFnType.kind == TypeKind.Function && nrvoFnType.typeChildren != null;
 	let argsStr = "";
@@ -201,25 +205,6 @@ export function resolveEmitArgs(g: CGen, mi: Readonly<MacroInvocationData>, p: C
 	return result;
 }
 
-// Reference fixupCall/raiseExit parity: after a call that can raise, transfer to
-// the nearest enclosing error target when the exception flag is set — so
-// statements after a raising call do not run on the raise path (double-exec).
-// Conservative canRaise (every call) is the reference's documented fallback.
-// Inside a try → nearest error target; no enclosing try → BeforeRet_ epilogue
-// (raiseExit L==0). DRC lifecycle hooks are no-raise ABI — never checked.
-// A statement's top-level value can raise when it is a bare call, or an
-// assignment whose right-hand side is a call (the DRC pass splits
-// `const x = f()` into a no-init decl + a separate `x = f()` assignment).
-function exprTopIsRaisingCall(exprNode: Readonly<Node>): boolean {
-	if (exprNode == null) return false;
-	if (exprNode.kind == NodeKind.CallExpr) return true;
-	if (exprNode.kind == NodeKind.BinaryExpr) {
-		const d = exprNode.data as BinaryExprData;
-		if (d.operator == "=" && d.right != null && d.right.kind == NodeKind.CallExpr) return true;
-	}
-	return false;
-}
-
 function raiseTarget(p: CProc): string {
 	if (p.nestedTryStmts.length == 0) {
 		p.beforeRetNeeded = true;
@@ -228,9 +213,14 @@ function raiseTarget(p: CProc): string {
 	return p.nestedTryStmts[p.nestedTryStmts.length - 1].label;
 }
 
+// Reference fixupCall/raiseExit parity: after a call that can raise, transfer to
+// the nearest enclosing error target when the exception flag is set — so
+// statements after a raising call do not run on the raise path (double-exec).
+// Inside a try → nearest error target; no enclosing try → BeforeRet_ epilogue
+// (raiseExit L==0). DRC lifecycle hooks are no-raise ABI — never checked.
 export function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
 	if (p.suppressRaiseCheck) return;
-	if (!exprTopIsRaisingCall(exprNode)) return;
+	if (!statementCanRaise(exprNode)) return;
 	emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
 }
 
@@ -425,6 +415,10 @@ function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 			emitStmtsLine(p, `${varName} = &(${initSnippet});`);
 			p.indirectLocals.push(d.declName);
 			if (node.resolvedSym != null) p.indirectSyms.push(node.resolvedSym);
+		} else if (hoistDecl && buildsInPlace(g, d.initializer, cType)) {
+			emitProcLocalsLine(p, `${cType} ${varName};`);
+			const built = genExprInto(g, p, d.initializer, varName);
+			if (built != varName) emitStmtsLine(p, `${varName} = ${built};`);
 		} else {
 			const initSnippet = genExpr(g, p, d.initializer);
 			let finalInit = initSnippet;
@@ -648,7 +642,10 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		emitStmtsLine(p, "return;");
 		return;
 	}
-	if (d.argument != null) {
+	if (d.argument != null && isNrvo && p.returnType != null && buildsInPlace(g, d.argument, getTypeDesc(g, p.returnType))) {
+		const built = genExprInto(g, p, d.argument, "(*__result)");
+		if (built != "(*__result)") emitStmtsLine(p, `*__result = ${built};`);
+	} else if (d.argument != null) {
 		const snippet = genExpr(g, p, d.argument);
 		if (isNrvo) {
 			// C99 compound literal: (Type){ .f = v } needs the (Type) prefix.

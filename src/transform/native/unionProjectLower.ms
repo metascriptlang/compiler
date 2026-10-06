@@ -113,40 +113,45 @@ function accessHead(field: string, projection: Node, ut: Type): string {
 	return `${what} is not accessible for type '${unionDisplay(ut)}' using '`;
 }
 
-export function checkVariantReads(program: Node, ctx: TransformContext): Node {
-	if (!ctx.rangeChecks) return program;
-	guardReads(program, ctx);
+export function checkVariantReads(program: Node, ctx: TransformContext, jsBackend: boolean): Node {
+	if (!jsBackend && !ctx.rangeChecks) return program;
+	guardVariantReads(program, ctx, jsBackend);
 	return program;
 }
 
-function guardReads(node: Node, ctx: TransformContext): void {
+function guardVariantReads(node: Node, ctx: TransformContext, jsBackend: boolean): void {
 	if (node == null) return;
-	if (node.kind == NodeKind.HiddenSubConv && node.flags.has(NodeFlag.ObjectSlot)) {
+	if (!jsBackend && node.kind == NodeKind.HiddenSubConv && node.flags.has(NodeFlag.ObjectSlot)) {
 		guardObjectSlot(node);
-		forEachChild(node, (c: Node): void => guardReads(c, ctx));
+		forEachChild(node, (c: Node): void => guardVariantReads(c, ctx, jsBackend));
 		return;
 	}
-	if (node.kind == NodeKind.TypeAssertion && !node.flags.has(NodeFlag.ConvCheck)) {
+	if (!jsBackend && node.kind == NodeKind.TypeAssertion && !node.flags.has(NodeFlag.ConvCheck)) {
 		const cast = (node.data as TypeAssertionData).asExpr;
 		if (cast != null && cast.kind == NodeKind.HiddenSubConv && !cast.flags.has(NodeFlag.ConvCheck)) {
-			forEachChild(cast, (c: Node): void => guardReads(c, ctx));
+			forEachChild(cast, (c: Node): void => guardVariantReads(c, ctx, jsBackend));
 			return;
 		}
 	}
 	if (node.kind == NodeKind.MemberExpr) {
 		const md = node.data as MemberExprData;
-		guardProjection(md.object, md.property, ctx, false);
+		if (jsBackend && md.object.kind == NodeKind.Identifier) md.object = projectIdentifier(md.object);
+		guardProjection(md.object, md.property, ctx, jsBackend, false);
 	}
-	guardProjection(node, "", ctx, node.flags.has(NodeFlag.ConvCheck));
-	forEachChild(node, (c: Node): void => guardReads(c, ctx));
+	if (!jsBackend) guardProjection(node, "", ctx, jsBackend, node.flags.has(NodeFlag.ConvCheck));
+	forEachChild(node, (c: Node): void => guardVariantReads(c, ctx, jsBackend));
 }
 
-function guardProjection(p: Node, field: string, ctx: TransformContext, anySource: boolean): void {
-	if (p != null && p.flags.has(NodeFlag.ObjectSlot)) return;
+function guardProjection(p: Node, field: string, ctx: TransformContext, jsBackend: boolean, anySource: boolean): void {
+	if (!jsBackend && p != null && p.flags.has(NodeFlag.ObjectSlot)) return;
 	const ut = checkedProjectionSource(p, anySource);
 	if (ut == null) return;
 	const d = p.data as HiddenStdConvData;
 	const loc = p.location;
+	if (jsBackend) {
+		guardProjectionJS(p, field, ctx, ut, d, loc);
+		return;
+	}
 	const u = d.convExpr;
 	const labels = memberLabels(ut).join("|");
 	const check = isLocation(u) ? "msVariantAccess" : "msVariantAccessVal";
@@ -180,21 +185,6 @@ function guardObjectSlot(p: Node): void {
 	if (carried) p.flags = p.flags.incl(NodeFlag.NoFieldCheck);
 }
 
-export function checkVariantReadsJS(program: Node, ctx: TransformContext): Node {
-	guardReadsJS(program, ctx);
-	return program;
-}
-
-function guardReadsJS(node: Node, ctx: TransformContext): void {
-	if (node == null) return;
-	if (node.kind == NodeKind.MemberExpr) {
-		const md = node.data as MemberExprData;
-		if (md.object.kind == NodeKind.Identifier) md.object = projectIdentifier(md.object);
-		guardProjectionJS(md.object, md.property, ctx);
-	}
-	forEachChild(node, (c: Node): void => guardReadsJS(c, ctx));
-}
-
 function discriminantValue(ut: Type, slot: int32, loc: SourceLocation): Node | null {
 	const en = ut.typeExtra;
 	if (en == null || en.kind != TypeKind.Enum || slot + 1 >= ut.typeNames.length) return null;
@@ -209,11 +199,8 @@ function discriminantValue(ut: Type, slot: int32, loc: SourceLocation): Node | n
 	return null;
 }
 
-function guardProjectionJS(p: Node, field: string, ctx: TransformContext): void {
-	const ut = checkedProjectionSource(p);
-	if (ut == null || !isDiscriminatedUnion(ut)) return;
-	const d = p.data as HiddenStdConvData;
-	const loc = p.location;
+function guardProjectionJS(p: Node, field: string, ctx: TransformContext, ut: Type, d: HiddenStdConvData, loc: SourceLocation): void {
+	if (!isDiscriminatedUnion(ut)) return;
 	const u = d.convExpr;
 	const want = discriminantValue(ut, p.variantSlot - 1, loc);
 	if (want == null) return;

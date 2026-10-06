@@ -19,6 +19,9 @@
 #endif
 #include "runtime/core/system.h"
 #include <stdint.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 /* ===== Operation Types ===== */
 
@@ -71,7 +74,7 @@ void* msIoSendString(msIoEngine* e, int fd, msString data);
 
 #define MS_FS_WATCH_UNSUPPORTED (-2)
 
-#if defined(_WIN32) || (defined(__linux__) && !defined(MS_USE_EPOLL))
+#if defined(_WIN32) || (defined(__linux__) && !defined(MS_USE_EPOLL)) || (defined(__APPLE__) && TARGET_OS_OSX)
 int32_t msFsWatchOpen(msIoEngine* e, msString path);
 int32_t msFsWatchLastError(void);
 void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive);

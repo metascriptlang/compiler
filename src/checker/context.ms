@@ -293,6 +293,22 @@ export function createExtMethod(methodName: string, receiverTypeName: string, so
 	};
 }
 
+let _userHooks: HashMap<string, Symbol> = new HashMap<string, Symbol>();
+
+export function resetUserHooks(): void {
+	_userHooks = new HashMap<string, Symbol>();
+}
+
+export function bindUserHook(typeName: string, hookName: string, sym: Symbol): void {
+	if (sym.modulePath == "") return;
+	_userHooks.set(sym.modulePath + "|" + typeName + "." + hookName, sym);
+}
+
+export function lookupUserHook(ownerModule: string, typeName: string, hookName: string): Symbol | null {
+	if (ownerModule == "") return null;
+	return _userHooks.get(ownerModule + "|" + typeName + "." + hookName);
+}
+
 export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
 	// Dedup by sym identity first (cheap fast-path).
 	if (method.sym != null) {
@@ -1004,13 +1020,35 @@ export function getExtReceiverName(flags: string): string {
 	return rest.slice(0, colonPos);
 }
 
-export function getExtReceiverType(flags: string): string {
+export const LIFECYCLE_HOOK_NAMES: string[] = ["onDestroy", "onCopy", "onMove", "onMoved", "onClone", "onTrace"];
+
+export function isLifecycleHookName(name: string): boolean {
+	return LIFECYCLE_HOOK_NAMES.includes(name);
+}
+
+export function declaresLifecycleHook(ctx: CheckerContext, typeName: string): boolean {
+	const registry = ctx.extensionRegistry;
+	if (registry == null) return false;
+	for (const hookName of LIFECYCLE_HOOK_NAMES) {
+		for (const m of findAllExtensionsByName(registry, hookName)) {
+			if (m.receiverTypeName == typeName && !m.isStatic && m.sym != null && m.sym.modulePath == ctx.modulePath) return true;
+		}
+	}
+	return false;
+}
+
+export function getExtReceiverText(flags: string): string {
 	const seg = findFlagSegment(flags, "ext:");
 	if (seg == "") return "";
 	const rest = seg.slice(4, seg.length);
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
-	return receiverBaseName(varPointeeText(rest.slice(colonPos + 1, rest.length)));
+	return rest.slice(colonPos + 1, rest.length).trim();
+}
+
+export function getExtReceiverType(flags: string): string {
+	const text = getExtReceiverText(flags);
+	return text == "" ? "" : receiverBaseName(varPointeeText(text));
 }
 
 function varPointeeText(typeText: string): string {
@@ -1253,6 +1291,7 @@ export class CheckerContext {
 	stmtPosExpr: Node;           // the expression that IS a statement: a macro there emits statements outright, so the expression-position rules (last element is the value, empty is an error) must not apply
 	typeExprSlot: Node;          // the operand being checked where a type name is accepted (a member's object, `new`'s callee, `instanceof`'s right side, a subscript's object); anywhere else a type name is not a value
 	calleeExpr: Node;            // the callee of the call being checked: a @comptime routine named there is folded, named anywhere else it is a run-time value
+	conversionOperand: Node;     // the operand of the numeric `as` being checked: a ternary or `??` there converts each arm the target does not take implicitly, as converting the joined value would
 	disambTable: HashMap<string, int32>; // (module, name) → how many routines of that name were already declared here; source of Symbol.disamb
 	itemModule: int32;           // index of the module this context checks; -1 for a context outside a module graph
 	nextItem: int32;
@@ -1341,6 +1380,7 @@ export function createContext(): CheckerContext {
 		stmtPosExpr: null as unknown as Node,
 		typeExprSlot: null as unknown as Node,
 		calleeExpr: null as unknown as Node,
+		conversionOperand: null as unknown as Node,
 		preludeCtx: null as unknown as CheckerContext,
 		instantiatingCtx: null as unknown as CheckerContext,
 		interf: [],
@@ -1755,6 +1795,13 @@ test "getExtReceiverType names a Var<T> receiver T, as `this ref x: T`" {
 	assert getExtReceiverType("ext:p:Var < uint8 >") == "uint8";
 	assert getExtReceiverType("ext:v:Variant<T>") == "Variant";
 	assert getExtReceiverType("ext:p:Ptr<Pet>") == "Ptr";
+}
+
+test "getExtReceiverText keeps the receiver as it was written" {
+	assert getExtReceiverText("ext:p:Ptr<Pet>") == "Ptr<Pet>";
+	assert getExtReceiverText("async|ext:self: Var<Pet> |gen:T") == "Var<Pet>";
+	assert getExtReceiverText("sext:Pet") == "";
+	assert getExtReceiverText("") == "";
 }
 
 test "isStaticExtensionFlag" {

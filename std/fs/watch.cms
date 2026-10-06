@@ -78,7 +78,8 @@ export async function nextChanges(w: FsWatch): Promise<FsChanges> {
 }
 
 // True when no writer can still hold the file: absent, or (Windows) openable while denying
-// writers. Linux cannot tell an open writer apart, so it answers false and reports closes in `closed`.
+// writers. Linux and macOS cannot tell an open writer apart, so they answer false; Linux reports
+// closes in `closed`, macOS only a renamed save.
 export function writeSettled(path: string): boolean {
 	return msFsWriteSettled_ms(path) == 1;
 }

@@ -17,6 +17,8 @@
 //                                        GUARD-OK printed + no ThreadSanitizer report (unscored without the toolchain)
 //   // GUARD-OS <os>                     one [<os>] lane instead: build --os=<os>; with GUARD-CHECK-FAIL the
 //                                        build must fail with every tag, else it must link (nothing is run)
+//   // GUARD-ASAN                        with GUARD-OS bare: also build --sanitize=address --cc=clang and run on the
+//                                        host; pass = exit 0 + GUARD-OK printed + no AddressSanitizer report
 // The double-destroy abort needs no directive — it is name-agnostic.
 //
 // Env: MSC=<path to msc> (default: ./msc, else installed msc)   GUARD_GC="drc orc" (default both)
@@ -70,6 +72,7 @@ const HAS_NODE = cmdExists("node");
 let fails = 0;
 let passes = 0;
 const unscoredOs: string[] = [];
+const unscoredSkips: string[] = [];
 const unscoredTsan: string[] = [];
 let tsanProbed = 0;
 
@@ -168,7 +171,9 @@ interface Probe {
 	checkfails: string[];
 	wantJs: boolean;
 	wantTsan: boolean;
+	wantAsan: boolean;
 	os: string;
+	osArgs: string[];
 }
 
 function firstWord(s: string): string {
@@ -200,7 +205,14 @@ function parseDirectives(probe: Probe, src: string): void {
 		if (line.startsWith(CHECK)) probe.checkfails.push(line.slice(CHECK.length, line.length));
 		if (line.startsWith("// GUARD-JS")) probe.wantJs = true;
 		if (line.startsWith("// GUARD-TSAN")) probe.wantTsan = true;
-		if (line.startsWith(OS)) probe.os = firstWord(line.slice(OS.length, line.length));
+		if (line.startsWith("// GUARD-ASAN")) probe.wantAsan = true;
+		if (line.startsWith(OS)) {
+			for (const word of line.slice(OS.length, line.length).trim().split(" ")) {
+				if (word == "") continue;
+				if (probe.os == "") probe.os = word;
+				else probe.osArgs.push(word);
+			}
+		}
 	}
 }
 
@@ -220,7 +232,7 @@ function discoverProbes(): Probe[] {
 	for (const name of names) {
 		const probe: Probe = {
 			name, path: `${GUARD_DIR}/${name}.ms`,
-			balance: [], balanceOrc: [], testBalance: [], checkfails: [], wantJs: false, wantTsan: false, os: "",
+			balance: [], balanceOrc: [], testBalance: [], checkfails: [], wantJs: false, wantTsan: false, wantAsan: false, os: "", osArgs: [],
 		};
 		parseDirectives(probe, readFileOr(probe.path, ""));
 		probes.push(probe);
@@ -297,6 +309,12 @@ function runGcLane(probe: Probe, gc: string): void {
 	const run = execFileResult(exe, []);
 	writeFile(`${LOG_DIR}/${probe.name}.${gc}.out`, run.output);
 	writeFile(`${LOG_DIR}/${probe.name}.${gc}.err`, run.errorOutput);
+	const skipped = firstLineContaining(run.output, "GUARD-SKIP");
+	if (succeeded(run) && skipped != "") {
+		unscoredSkips.push(tag);
+		console.log(`skip ${tag}: ${skipped.slice("GUARD-SKIP".length, skipped.length).trim()}`);
+		return;
+	}
 	const dd = firstLineContaining(run.errorOutput, "DOUBLE-DESTROY");
 	if (!succeeded(run) || dd != "") {
 		fail(tag, dd != "" ? dd : status(run));
@@ -321,7 +339,7 @@ function runGcLane(probe: Probe, gc: string): void {
 
 // The invariant lives in a freestanding build whose binary the host cannot run,
 // so the lane only builds: an errorcheck probe must fail with every tag, any
-// other probe must link.
+// other probe must link. A bare binary can run; GUARD-ASAN runs it.
 function runOsLane(probe: Probe): void {
 	const tag = `${probe.name} [${probe.os}]`;
 	const bin = `${BIN_DIR}/${probe.name}.${probe.os}`;
@@ -330,7 +348,14 @@ function runOsLane(probe: Probe): void {
 		fail(tag, "GUARD-OS builds a binary the host cannot run; drop GUARD-BALANCE/GUARD-TEST-BALANCE/GUARD-JS");
 		return;
 	}
-	const b = buildProbe(probe, probe.os, ["build", probe.path, `--os=${probe.os}`, `--output=${bin}`], buildLog);
+	if (probe.wantAsan && probe.os != "bare") {
+		fail(tag, "GUARD-ASAN runs the binary, and only an --os=bare build runs on the host");
+		return;
+	}
+	const args = ["build", probe.path, `--os=${probe.os}`];
+	for (const arg of probe.osArgs) args.push(arg);
+	args.push(`--output=${bin}`);
+	const b = buildProbe(probe, probe.os, args, buildLog);
 	if (!succeeded(b) && both(b).contains(`--os=${probe.os} requires `)) {
 		unscoredOs.push(tag);
 		console.log(`skip ${tag}: this host lacks the ${probe.os} toolchain (${buildLog})`);
@@ -347,6 +372,33 @@ function runOsLane(probe: Probe): void {
 	if (!succeeded(b)) {
 		const errs = firstErrorLines(both(b));
 		fail(tag, `build error${errs == "" ? "" : ": " + errs}`);
+		return;
+	}
+	ok(tag);
+	if (probe.wantAsan) runOsAsanLane(probe);
+}
+
+// A bare binary runs on the host, where ASan refuses the overlapping copy an SBF syscall refuses.
+function runOsAsanLane(probe: Probe): void {
+	const tag = `${probe.name} [${probe.os} asan]`;
+	const bin = `${BIN_DIR}/${probe.name}.${probe.os}.asan`;
+	const b = buildProbe(probe, `${probe.os} asan`, ["build", probe.path, `--os=${probe.os}`, "--sanitize=address", "--cc=clang", `--output=${bin}`], `${LOG_DIR}/${probe.name}.${probe.os}.asan.build`);
+	if (!succeeded(b)) {
+		const errs = firstErrorLines(both(b));
+		fail(tag, `build error${errs == "" ? "" : ": " + errs}`);
+		return;
+	}
+	const exe = binExecutable(bin);
+	if (exe == "") {
+		fail(tag, `build reported success but no binary at ${bin}`);
+		return;
+	}
+	const run = execFileResult(exe, []);
+	const merged = both(run);
+	writeFile(`${LOG_DIR}/${probe.name}.${probe.os}.asan.out`, merged);
+	const report = firstLineContaining(merged, "ERROR: AddressSanitizer");
+	if (report != "" || !succeeded(run) || !merged.contains("GUARD-OK")) {
+		fail(tag, report != "" ? report : status(run));
 		return;
 	}
 	ok(tag);
@@ -583,6 +635,9 @@ function main(): void {
 	}
 	if (unscoredOs.length > 0) {
 		console.log(`nim-guard: !! ${unscoredOs.length} GUARD-OS cell(s) unscored on this host (no toolchain): ${unscoredOs.join(", ")}`);
+	}
+	if (unscoredSkips.length > 0) {
+		console.log(`nim-guard: !! ${unscoredSkips.length} probe cell(s) printed GUARD-SKIP and are unscored on this host: ${unscoredSkips.join(", ")}`);
 	}
 	const verdict = fails == 0 ? `nim-guard: ALL GREEN (${passes} cells)` : `nim-guard: FAILURES ABOVE (${passes} ok, ${fails} red)`;
 	console.log(verdict);

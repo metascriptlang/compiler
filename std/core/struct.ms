@@ -360,6 +360,16 @@ export function* toItems<K, V>(this m: HashMap<K, V>): Iterator<K> {
 	}
 }
 
+export function* toPairs<K, V>(this m: HashMap<K, V>): Iterator<[K, V]> {
+	for (const entry of m.data) {
+		if (m.writing) { msMapFatal("concurrent map iteration and map write"); }
+		if (entry.hcode != 0) {
+			const pair: [K, V] = [entry.key, entry.value];
+			yield pair;
+		}
+	}
+}
+
 // Bulk-construction helper for HashMap (unordered counterpart of mapFromPairs).
 export function hashMapFromPairs<K, V>(keys: K[], values: V[]): HashMap<K, V> {
 	const m = new HashMap<K, V>();
@@ -721,6 +731,16 @@ export function* toItems<K, V>(this m: Map<K, V>): Iterator<K> {
 	}
 }
 
+export function* toPairs<K, V>(this m: Map<K, V>): Iterator<[K, V]> {
+	for (const entry of m.entries) {
+		if (m.writing) { msMapFatal("concurrent map iteration and map write"); }
+		if (entry.hcode != 0) {
+			const pair: [K, V] = [entry.key, entry.value];
+			yield pair;
+		}
+	}
+}
+
 // Used by the index-signature literal lowering — `{ "k": v, ... }` assigned
 // to a Map<K,V> target is rewritten to mapFromPairs([keys], [values]).
 // Returns the ordered Map so the lowering preserves the JS object literal's key order.
@@ -974,12 +994,10 @@ export extern function hash<E>(this self: BitSet<E>): int64;
 
 export function toItems<E>(this self: BitSet<E>): E[] {
 	const result: E[] = [];
-	const bits = sizeof(BitSet<E>) * 8;
-	let i = 0;
-	while (i < bits) {
+	const count = self.size();
+	for (let i = 0; result.length < count; i++) {
 		const m = i as E;
 		if (self.has(m)) { result.push(m); }
-		i = i + 1;
 	}
 	return result;
 }

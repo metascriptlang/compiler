@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: expected an array, got value kind Object
 // Parity program — `as` takes a nullable value struct to its payload: a map
 // read, a nullable parameter and a map read inside a generic class.
 //

@@ -451,13 +451,81 @@ Toolchain integration, entry points, freestanding headers, CLI automation.
 
 **What's blocking deploy:** The prelude pulls in 13 modules for a hello world. Dead modules (json, buffer, promise, struct) contain mutable globals (TypeInfo, init guards) and BPF-incompatible code (floats, aggregate returns). sbpf-linker rejects `.data` section relocations from these globals. Only 2 of 13 modules are actually needed.
 
+### Solana deploy artifact is stripped — measured 2026-10-03
+
+`msc build --os=solana` links to `<out>.debug` and writes `<out>` as `llvm-objcopy --strip-all` of it
+(`linkSolana`, `src/compiler/cc.ms`); `--strip` deletes the `.debug` copy and leaves `<out>` unchanged.
+The pin is `src/test/guard/solanaStripDeployArtifact.ms`.
+
+- **Reference.** `cargo-build-sbf 4.1.0` (platform-tools v1.54) ships its deploy artifact stripped. Its
+  source is not on this machine; the binary carries the strings `llvm-objcopy`, `--strip-all` and
+  `postprocessed`, and `--help` says `--debug` writes `target/deploy/debug/program.so.debug` with all
+  debug information while `program.so` is "a stripped version for execution in the VM". Three artifacts
+  it built here (`rust_counter.so`, `solana_vrf_program.so`, `hello_world.so`) list no `.symtab` or
+  `.strtab` under `llvm-readelf -S`; `hello_world.so` lists exactly `.rodata .text .shstrtab`, the table
+  an `msc` build now has. The unstripped copy exists in the reference only under `--debug`; here it is
+  always written unless `--strip`, because a build writes one file and nothing else keeps the names.
+- **Measured** on the base `4574b2a1c` plus this change, platform-tools v1.54, `--os=solana`:
+
+  | program | before | after | `.sections` before → after |
+  |---|---|---|---|
+  | `logU64(instructionData().length)` | 4,816 B | 1,888 B | `.rodata .text .symtab .strtab` → `.rodata .text` |
+  | `examples/escrow/program.ms` | 76,328 B | 58,352 B (−23.6%) | same |
+
+  `tools/solana/escrow.mjs` replays the escrow on LiteSVM against both files: 25 output lines, every
+  instruction and CU count identical. The `--strip` file is byte-identical to the default one (`cmp`).
+- **Not measured.** A deployment to a validator (only LiteSVM ran the stripped file); a Windows host;
+  whether `ld.lld --strip-all` alone gives the same bytes as the objcopy step. The 15% for Hibernal
+  (67,598 of 453,520 bytes) is the figure the reporting session measured, not re-run here.
+- **Cache.** The solana link flags carry `debug-copy=on|off`, so toggling `--strip` relinks. A `.debug`
+  deleted by hand is not restored by an unchanged rebuild: the link cache sees the program as current.
+
+### Solana entry holds the account table in its frame — measured 2026-10-04
+
+The emitted `entrypoint` (`genProjectDispatcher`, `src/codegen/c/index.ms`) declares
+`uint64_t accounts[MS_SOL_MAX_ACCOUNTS]` and hands it to `msSolParse` (`runtime/solana/solana.h`)
+before `MsMain()`. The accessors read the table through the context and parse nothing, so no
+instruction takes its account table from the 32 KiB heap. Pins:
+`src/test/guard/solanaEntryAccountTable.ms` (the emitted entry; a maximum the runtime cannot send
+fails the build) and `solanaEntryHostTable.ms` (the host simulator).
+
+- **Reference.** Pinocchio 0.9.3 `program_entrypoint!` declares `[MaybeUninit<AccountInfo>; $maximum]`
+  in the entry and calls `deserialize::<$maximum>` (`src/entrypoint/mod.rs:165-193`, `:304-433`); the
+  default maximum is `MAX_TX_ACCOUNTS`, `u8::MAX` = 255 (`src/lib.rs:253`), and accounts past a
+  smaller maximum are skipped, not an error (`mod.rs:76-80`, skip loop `:398-413`). The runtime sends
+  at most 255 accounts: a 256th is `MaxAccountsExceeded` before the program runs
+  (agave `program-runtime/src/serialization.rs:23,201-202`).
+- **Here.** `MS_SOL_MAX_ACCOUNTS` is 255 unless `--passC=-DMS_SOL_MAX_ACCOUNTS=n` says otherwise
+  (the reference's second macro argument); `0` and `256` and up are a build error. `msSolParse`
+  keeps the first `n` accounts and walks past the rest to the instruction data. The host simulator
+  parses the same way into a static table, so a `run` with 256 accounts sees 255 where the runtime
+  would refuse the instruction.
+- **Measured** on the base `4e78ec143` plus this change, platform-tools v1.57, LiteSVM 1.4.1,
+  `--os=solana`, the control built from the base tree at a path of the same length:
+  - Frame: the entry's table is `r10-4096` to `r10-2056`, 2,040 bytes of the 4,096; the parser is
+    out of line and touches no stack, and the entry calls the program's `Init000` (`MsMain` is
+    inlined into the entry), which has its own frame (`llvm-objdump` of the `.debug` copy).
+  - Heap position at the first user allocation, `msSolAlloc(0)` in a probe, for 1, 2, 8, 17, 64 and
+    255 accounts: base `0x300000048`, `…050`, `…080`, `…0c8`, `…240`, `…838` (64 + 8 per account);
+    now `0x300000040` for every count, and for 0 accounts.
+  - 12 instructions of 0 to 255 accounts (up to 30 distinct, the rest duplicates) read every
+    account's key, the instruction data and the program id correctly, and read nothing past the
+    count; 256 and 300 accounts are `MaxAccountsExceeded` on both builds. Built with
+    `MS_SOL_MAX_ACCOUNTS=8` and `=1`, instructions of 9, 17, 64 and 255 accounts see 8 and 1, with
+    the data and the program id right behind the skipped records.
+  - `examples/escrow/program.ms`: `.so` 52,592 → 49,056 B, `.text` 51,960 → 48,512 B; make 35,695 →
+    35,156 CU, take 32,647 → 32,139, refund 23,450 → 23,113, the refused make 611 → 552;
+    `tools/solana/escrow.mjs` passes. `heapExhausted.mjs` passes all 173 checks.
+- **Not measured.** `--passC=-flto`, which could inline the program's `Init000` into the entry and
+  add its frame to the table; a Windows host; a validator (LiteSVM only).
+
 ### Phase 3b: Module-Level DCE for Blockchain — TODO
 
 The compiler already computes a DCE alive set (Phase B in `cmdBuildC`). But it only marks dead *symbols* — all *modules* are still compiled. For blockchain, dead modules must be skipped entirely.
 
 **What needs to change:**
 
-1. **Skip dead modules in Phase C** — if no symbol from a module is in the alive set, don't compile it. This eliminates json, buffer, promise, struct for a hello world. Benefits all targets (faster builds).
+1. **Skip dead modules in Phase C** — if no symbol from a module is in the alive set, don't compile it. This eliminates json, buffer, promise, struct for a hello world. Benefits all targets (faster builds). **Done** for the modules a program does not reach; measured 2026-10-04 on tree `fa27682b2a79` (the candidate built from it against base `da84849e`, one fresh HOME each, platform-tools v1.57): `console.log(0)` with `--os=solana` built 9 modules (system, array, meta/node, json, promise, struct, math, object, the program) and now builds 1; `.text` 19,312 → 19,296 B and the unstripped link 23,112 → 22,112 B, so the saving is compile time and the symbol table, not code: `--gc-sections` already dropped the dead functions. `examples/escrow/program.ms` with the std/solana of that minute went 21 → 14 modules and 53,056 → 53,040 B of `.text`; `node tools/solana/escrow.mjs` passes on both. Two accidental roots had kept the modules alive (every exported class's `<Class>_init`, and the `nodeCache` init of `std/meta/node.ms`), and an alive set that had marked no name was read as "DCE off". Not measured: the other Phase 3b items, a host `--os=bare` build, a Windows host.
 
 2. **Skip TypeInfo for `--gc=manual`** — TypeInfo structs are mutable globals used only by DRC. In manual mode they're dead weight. Skipping them eliminates the main source of `.data` relocations.
 

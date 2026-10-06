@@ -50,8 +50,10 @@ Optional header directive:
 
 ```
 // GUARD-BALANCE <MangledType>   assert alloc==destroy for that type at exit
-// GUARD-OS <os>                 one [<os>] lane: build --os=<os>, never run; with
-//                               GUARD-CHECK-FAIL the build must fail with every tag
+// GUARD-OS <os> [<flag>…]       one [<os>] lane: build --os=<os> plus the flags, never
+//                               run; with GUARD-CHECK-FAIL the build must fail with every tag
+// GUARD-ASAN                    with GUARD-OS bare: also build under ASan and run on the
+//                               host; GUARD-OK printed and no AddressSanitizer report
 ```
 
 Note: mangled type names are compiler-internal and can shift under transform
@@ -90,6 +92,19 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   `@comptime` function, imported and in the entry, with a literal and a const-name argument, is
   evaluated while compiling and links (NIM-REF CT-32). Proven RED on `6162af93` (FREESTANDING E02
   at the module const).
+- **`solanaLtoLinks.ms`**, **`solanaLtoFrameOverflowFails.ms`** (`GUARD-OS solana --danger`) — a
+  `--danger` SBF build takes LTO (`docs/BUILD-PERF.md`, 2026-10-05): the merged bitcode is compiled
+  to one SBF object before ld.lld, and an overflowing frame in it still fails the build. Proven RED
+  with the merge step removed (`is incompatible with` the compiler_builtins objects) and with the
+  object compiled without the SBF error check (the overflow links).
 - **`solanaNumberArrayLiteral.ms`** (`GUARD-OS solana`) — a `number[]`/`float64[]` literal
   fills its elements one by one, as every other scalar literal does; SBF has no C varargs
   (NIM-REF TR-30). Proven RED on `36251885` (`undefined symbol: msNumberArrayFrom`).
+- **`solanaObjectLiteralFrame.ms`** (`GUARD-OS solana`) — an object literal that initializes a
+  local or is returned is built in that local or the caller's result slot, nested literals and
+  `Result.ok({...})` included (NIM-REF CG-46). Proven RED on `49046b457`: `settle` needs a 5,504-byte
+  SBF frame (limit 4,096); 2,624 on the fix.
+- **`bareArenaReallocCopy.ms`** (`GUARD-OS bare`, `GUARD-ASAN`) — a freestanding realloc copies
+  only the old block's bytes, so a growing array, Map, Set or string never copies out of the block
+  it lands in; on SBF that copy stops the program with "Overlapping copy" (NIM-REF RT-31). Proven
+  RED on `bead8cc6a` (ASan `memcpy-param-overlap` in the arena's realloc).

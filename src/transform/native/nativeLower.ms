@@ -43,7 +43,7 @@ export function lowerNativeAccess(program: Node, ctx: TransformContext): Node {
 	// Pre-pass: propagate SizedArray type from declarations/assignments to ArrayLiteral initializers.
 	// Without this, ArrayLiterals infer TypeKind.Array and get heap-allocated by rewriteArrayLiteral.
 	walkNode(program, propagateSizedArrayType);
-	checkVariantReads(program, ctx);
+	checkVariantReads(program, ctx, false);
 	walkNode(program, (n: Node): Node => { return rewriteAccess(n, ctx); });
 	return program;
 }
@@ -81,9 +81,19 @@ function rewriteAccess(node: Node, ctx: TransformContext): Node {
 	if (!ctx.rangeChecks && node.kind == NodeKind.HiddenSubConv && node.variantSlot > 0) node.flags = node.flags.incl(NodeFlag.NoFieldCheck);
 	if (node.kind == NodeKind.MemberExpr) return rewriteMemberExpr(node);
 	if (node.kind == NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
+	if (node.kind == NodeKind.ObjectLiteral) return rewriteAtomicLiteral(node);
 	if (node.kind == NodeKind.NewExpr) return rewriteNewExpr(node);
 	if (node.kind == NodeKind.CallExpr) return rewriteExternArrayReturn(rewriteArrayEvictCall(node));
 	return node;
+}
+
+function rewriteAtomicLiteral(node: Node): Node {
+	const refType = node.nodeType;
+	if (!isAtomicRef(refType) || isLockedRef(refType) || refType.typeReturn == null) return node;
+	node.nodeType = refType.typeReturn;
+	const box = makeCall(runtimeRef("msBoxArc", node.location), [node], node.location);
+	box.nodeType = refType;
+	return box;
 }
 
 // An extern (FFI) function whose return is typed Ref<Array> returns the array BY VALUE at

@@ -119,7 +119,7 @@ export function resolveTargetSizes(targetOs: string, cpuTarget: string): TargetI
 	return t;
 }
 
-function newCliOptions(): CliOptions {
+export function newCliOptions(): CliOptions {
 	return {
 		command: "",
 		inputFile: "",

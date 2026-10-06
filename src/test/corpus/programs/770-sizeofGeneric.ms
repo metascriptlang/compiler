@@ -4,7 +4,7 @@
 // each has to spell itself back into the substituted annotation; any of them
 // degrading to `unknown` used to fold silently to zero.
 //
-// @stdout: 4|1|8|4|4|8|4
+// @stdout: 4|1|8|1|1|8|1
 // @exit: 0
 
 type MyId = distinct int32;

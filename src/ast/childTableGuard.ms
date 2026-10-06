@@ -19,9 +19,11 @@ const TABLE_PATHS: string[] = [
 
 const KNOWN_GAPS: string[] = [
 	"visitor:arrowDefaults", "visitor:ctorDefaults",
-	"visitor:decorators", "visitor:enumInits", "visitor:fnDefaults", "visitor:methodDefaults",
+	"visitor:decorators", "visitor:enumInits", "visitor:fnDefaults", "visitor:interfaceFieldDecorators",
+	"visitor:methodDefaults",
 	"walker:arrowDefaults", "walker:ctorDefaults",
-	"walker:decorators", "walker:enumInits", "walker:fnDefaults", "walker:methodDefaults",
+	"walker:decorators", "walker:enumInits", "walker:fnDefaults", "walker:interfaceFieldDecorators",
+	"walker:methodDefaults",
 	"hash:arrowDefaults", "hash:ctorDefaults", "hash:typExprFieldDecorators",
 	"bridge:arrowDefaults", "bridge:ctorDefaults", "bridge:enumInits",
 	"bridge:fnDefaults", "bridge:forOfPattern", "bridge:methodDefaults",

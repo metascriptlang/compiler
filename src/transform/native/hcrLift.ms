@@ -1,7 +1,7 @@
 import {
 	Node, NodeKind, SourceLocation, createNode, DeclKind, SymbolKind, SymbolFlag,
 	ProgramData, VariableDeclData, ExportDeclData, DecoratedDeclData, ExprStmtData,
-	MacroInvocationData, Symbol, Type, TypeKind,
+	MacroInvocationData, Symbol, Type, TypeKind, noFieldDecorators,
 } from "../../ast/node";
 import { createPtr, createStruct, booleanType, isUnresolvedType } from "../../checker/types";
 import { makeSymbol, setFlag } from "../../checker/symbol";
@@ -182,7 +182,7 @@ function rewriteGlobalRefs(node: Node, globals: HashMap<Symbol, HcrGlobal>): Nod
 export function hcrStorageDecl(t: Type, loc: SourceLocation): Node {
 	const decl = createNode(NodeKind.StructDecl, {
 		interfaceName: t.typeName, interfaceFields: ["value"], interfaceFieldTypes: [],
-		interfaceExtends: [], nameLocation: loc,
+		interfaceExtends: [], nameLocation: loc, interfaceFieldDecorators: noFieldDecorators(1),
 	}, syntheticToken(loc));
 	decl.nodeType = t;
 	return decl;

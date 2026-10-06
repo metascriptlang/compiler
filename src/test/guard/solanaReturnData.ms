@@ -1,12 +1,13 @@
 // GUARD-OS solana
 import {
-	Instruction,
 	ProgramError,
 	account,
 	failWith,
 	instructionData,
+	invoke,
 	logU64,
 	programId,
+	putU8,
 	returnData,
 	setReturnData,
 } from "std/solana";
@@ -20,14 +21,13 @@ function answer(): Result<uint64, ProgramError> {
 function ask(): Result<uint64, ProgramError> {
 	if (returnData() !== null) { return Result.err(ProgramError.invalidAccountData()); }
 	const _self = try account(1);
-	const instruction = Instruction.forProgram(programId(), 0, 1);
-	instruction.appendU8(1);
-	const _invoked = try instruction.invoke();
+	let storage: uint8[1] = [];
+	const _invoked = try invoke(programId(), [], storage, putU8(storage, 0, 1));
 	const answered = returnData();
 	if (answered === null) { return Result.err(ProgramError.invalidAccountData()); }
 	if (!answered.program.equals(programId())) { return Result.err(ProgramError.incorrectProgramId()); }
-	logU64(answered.data.length);
-	logU64(try answered.data.readU8(2));
+	logU64(answered.length);
+	logU64(try answered.readU8(2));
 	return Result.ok(0);
 }
 

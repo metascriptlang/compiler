@@ -358,9 +358,19 @@ export function resolveRoutine(s: RaiserCompState, sym: Symbol | null, name: str
 			if (exact >= 0) return exact;
 			return resolveFunc(s, sym.modulePath + ":" + sym.name);
 		}
-		return resolveFunc(s, sym.name);
+		const exact = resolveFunc(s, routineKey(sym));
+		if (exact >= 0) return exact;
+		const byName = resolveFunc(s, sym.name);
+		return byName >= 0 && compiledForAnotherRoutine(s, byName) ? -1 : byName;
 	}
 	return resolveFunc(s, name);
+}
+
+function compiledForAnotherRoutine(s: RaiserCompState, index: int32): boolean {
+	for (const item of s.funcMap.items) {
+		if (item.index == index && item.name.indexOf("#") >= 0) return true;
+	}
+	return false;
 }
 
 // --- Enum helpers ---

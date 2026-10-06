@@ -10,7 +10,7 @@ import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { isLocation, writeRefusal, readonlyRootType, writableViewRefusal, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
 import { callCheckStmt, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
-import { isCompileTimeValue } from "./constFold";
+import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount } from "./context";
 import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter } from "./fit";
@@ -65,13 +65,15 @@ function peelToGenericInstance(t: Type | null): Type | null {
 //      Map/Set/Box patterns.
 function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Type, astTypeArg: string, expectedType: Type | null): { type: Type, instance: Symbol | null } {
 	const member = callee.kind == NodeKind.MemberExpr ? callee.data as MemberExprData : null;
-	const namespaceQualified = member != null && callee.resolvedSym != null
+	const bound = callee.resolvedSym != null && callee.resolvedSym.instantiatedFrom != null
+		? callee.resolvedSym.instantiatedFrom : callee.resolvedSym;
+	const namespaceQualified = member != null && bound != null
 		&& member.object.resolvedSym != null && member.object.resolvedSym.symbolKind == SymbolKind.Module;
 	if (callee.kind != NodeKind.Identifier && !namespaceQualified) return { type: calleeType, instance: null };
-	const calleeName = namespaceQualified ? callee.resolvedSym.name : (callee.data as IdentifierData).name;
+	const calleeName = namespaceQualified ? bound!.name : (callee.data as IdentifierData).name;
 	const writtenLength = namespaceQualified ? member!.object.resolvedSym.name.length + 1 + member!.property.length : calleeName.length;
 	const ltCol = callee.location.column + writtenLength;
-	const calleeSym = callee.resolvedSym != null ? callee.resolvedSym : lookupSymbol(ctx.table, calleeName);
+	const calleeSym = bound != null ? bound : lookupSymbol(ctx.table, calleeName);
 	const genericParams = calleeSym != null ? symGenericParams(calleeSym) : builtinGenericParams(calleeName);
 	if (genericParams == "") return { type: calleeType, instance: null };
 	// Try explicit type args first (sources 1 + 2 in priority comment above).
@@ -932,22 +934,33 @@ function evalCompileTimeCall(ctx: CheckerContext, node: Node, callType: Type): T
 		node.nodeType = errorType();
 		return node.nodeType;
 	}
+	if (!foldAtCompileTime(ctx, node, callType)) {
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
+	return node.nodeType!;
+}
+
+export function foldUserOperatorConstant(ctx: CheckerContext, expr: Node, expected: Type | null): void {
+	if (isEngineCheckMode() || ctx.compileTimeBodyDepth > 0 || !isUserOperatorConstant(expr, 0)) return;
+	const mark = ctx.errors.length;
+	if (!foldAtCompileTime(ctx, expr, expected)) ctx.errors = ctx.errors.slice(0, mark);
+}
+
+function foldAtCompileTime(ctx: CheckerContext, node: Node, expected: Type | null): boolean {
 	const loc = node.location;
 	const body = createNodeAt(NodeKind.BlockStmt, { statements: [createNodeAt(NodeKind.ReturnStmt, { argument: cloneNodeForCheck(node) }, loc)] }, loc);
 	const errorsBefore = errorCount(ctx);
 	const value = callEvalComptimeBlock(createNodeAt(NodeKind.ComptimeBlock, { comptimeBody: body }, loc), ctx);
-	if (errorCount(ctx) > errorsBefore) {
-		node.nodeType = errorType();
-		return node.nodeType;
-	}
+	if (errorCount(ctx) > errorsBefore) return false;
 	node.kind = value.kind;
 	node.data = value.data;
 	node.nodeType = null as unknown as Type;
 	node.resolvedSym = null;
 	node.flags = 0 as BitSet<NodeFlag>;
 	node.variantSlot = 0;
-	callCheckExpr(ctx, node, callType);
-	return node.nodeType;
+	callCheckExpr(ctx, node, expected);
+	return true;
 }
 function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
@@ -1074,6 +1087,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// Identity is preserved — the parent (e.g. VariableDecl) still references this node.
 			node.kind = expandedValue.kind;
 			node.data = expandedValue.data;
+			if (expandedValue.typeArg != "") node.typeArg = expandedValue.typeArg;
 			if (expandedValue.location != null) node.location = expandedValue.location;
 			node.nodeType = null as unknown as Type;
 			node.resolvedSym = null;

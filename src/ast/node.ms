@@ -3,3 +3,11 @@
 
 export * from "std/meta/node";
 export { SymbolFlag } from "std/meta/node";
+
+import { Node } from "std/meta/node";
+
+export function noFieldDecorators(fieldCount: int32): Node[][] {
+	const rows: Node[][] = [];
+	for (let i = 0; i < fieldCount; i += 1) rows.push([]);
+	return rows;
+}

@@ -157,6 +157,7 @@ function expandTemplateInner(ctx: CheckerContext, sym: Symbol, callNode: Node, c
 	// Mutate the call node in place (same pattern as macro eager expansion)
 	callNode.kind = expandedExpr.kind;
 	callNode.data = expandedExpr.data;
+	if (expandedExpr.typeArg != "") callNode.typeArg = expandedExpr.typeArg;
 	callNode.nodeType = expandedExpr.nodeType;
 	callNode.resolvedSym = expandedExpr.resolvedSym;
 

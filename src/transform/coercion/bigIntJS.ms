@@ -35,7 +35,8 @@ function is64Kind(kind: TypeKind): boolean {
 
 function reprKind(t: Type | null): TypeKind {
 	const r = peelToRepr(t);
-	return r == null ? TypeKind.Unknown : r.kind;
+	if (r == null) return TypeKind.Unknown;
+	return r.kind == TypeKind.Enum ? TypeKind.Int32 : r.kind;
 }
 
 function is64Type(t: Type | null): boolean {

@@ -8,7 +8,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
-import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
+import { isLifecycleHookName, getExtReceiverType, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -16,7 +16,7 @@ import { mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTop
 import { readFile } from "std/fs";
 import { env } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
-import { join, normalize } from "std/fs/path";
+import { join, normalize, isAbsolute } from "std/fs/path";
 import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
@@ -24,11 +24,11 @@ import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/me
 import { isAssignable, nonNullMemberOfNullable } from "./compat";
 import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType, findViewType, ownedAlternativeOf } from "./types";
 setConditionalAssignFn(isAssignable);
-import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseSuspendingViewParam, bodyMentionsName } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseSuspendingViewParam, bodyMentionsName } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, forgetInstances, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults } from "./instantiate";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
-import { declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance } from "./types";
+import { declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView } from "./types";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
@@ -38,9 +38,9 @@ import { writableViewRefusal } from "./assignable";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
-import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
+import { foldUserOperatorConstant, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
-import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase } from "./fit";
+import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
@@ -629,7 +629,8 @@ function checkStmtNode(ctx: CheckerContext, node: Node): void {
 		NodeKind.MatchStmt => checkMatchStmt(ctx, node),
 		NodeKind.DeferStmt => {
 			const d = node.data as DeferStmtData;
-			checkExpr(ctx, d.deferExpr, null);
+			if (d.deferExpr.kind == NodeKind.BlockStmt) checkBlock(ctx, d.deferExpr);
+			else checkExpr(ctx, d.deferExpr, null);
 		},
 		NodeKind.DecoratedDecl => checkDecoratedStmt(ctx, node),
 		NodeKind.DestructuringDecl => checkDestructuringDecl(ctx, node),
@@ -738,6 +739,10 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		}
 	}
 	checkExpr(ctx, d.initializer, declType);
+	if (ctx.targetOs == "solana" && d.declKind == DeclKind.Const && d.initializer != null
+			&& (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global)) {
+		foldUserOperatorConstant(ctx, d.initializer, declType);
+	}
 	const initType = d.initializer != null ? d.initializer.nodeType : null;
 	if (declType == null && initType != null && d.initializer != null
 			&& (d.initializer.kind == NodeKind.ArrayLiteral
@@ -967,6 +972,10 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 			sym.symbolType.typeReturn = voidType();
 			for (const t of ctx.inferredReturnTries) checkPropagatedErrorAgainst(ctx, t, voidType(), d.fnName);
 		}
+	}
+
+	if (d.fnReturnType == "" && isLifecycleHookName(d.fnName) && getExtReceiverType(d.fnFlags) != "") {
+		refuseHookInferredReturn(ctx, d.fnName, d.nameLocation, sym.symbolType);
 	}
 
 	// Async functions: ensure the effective return type is Promise<T>.
@@ -1451,8 +1460,10 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 			&& !isUnresolvedType(d.forOfIterable.nodeType)
 			&& d.forOfIterable.nodeType.kind != TypeKind.Error) {
 		const loc = d.forOfIterable.location;
+		const pairs = d.forOfPattern != null && d.forOfPattern.kind == NodeKind.ArrayPattern
+			&& offersProtocol(ctx, d.forOfIterable.nodeType, "toPairs");
 		const memberNode = createNodeAt(NodeKind.MemberExpr,
-			{ object: d.forOfIterable, property: "toItems", isOptional: false }, loc);
+			{ object: d.forOfIterable, property: pairs ? "toPairs" : "toItems", isOptional: false }, loc);
 		const toItemsCall = createNodeAt(NodeKind.CallExpr,
 			{ callee: memberNode, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
 		checkExpr(ctx, toItemsCall, null);
@@ -1474,6 +1485,10 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 		elemType = propagateReadonlyView(elemType);
 	}
 	if (d.forOfPattern != null) {
+		if (d.forOfPattern.kind == NodeKind.ArrayPattern && !destructuresByPosition(elemType)) {
+			addError(ctx, `an array pattern needs each element to be a tuple or an array, and this for-of yields '${typeDisplayName(elemType)}'`,
+				d.forOfPattern.location.line, d.forOfPattern.location.column);
+		}
 		// Destructured for-of: define symbols for each pattern element
 		defineForOfPatternBindings(ctx, d.forOfPattern, elemType, d.forOfIsConst, true);
 	} else {
@@ -1499,6 +1514,13 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forOfBody);
 	restoreConsumeState(ctx.affineTracker, affineSnap);
+}
+
+function destructuresByPosition(t: Type): boolean {
+	if (isUnresolvedType(t) || t.kind == TypeKind.Error) return true;
+	const held = peelTransparentInstance(withoutReadonlyView(t));
+	const base = held.kind == TypeKind.Ref && held.typeReturn != null ? held.typeReturn : held;
+	return base.kind == TypeKind.Tuple || base.kind == TypeKind.Array || base.kind == TypeKind.SizedArray || base.kind == TypeKind.Span;
 }
 
 function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean, forVar: boolean): void {
@@ -2417,6 +2439,7 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 		markExpansion(ctx, stmt, expansionOf(ctx, stmt, sym.modulePath));
 		call.kind = expanded.kind;
 		call.data = expanded.data;
+		if (expanded.typeArg != "") call.typeArg = expanded.typeArg;
 		if (expanded.location != null) call.location = expanded.location;
 		call.nodeType = null as unknown as Type;
 		call.resolvedSym = null;
@@ -2596,7 +2619,7 @@ export function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 		// Resolve @link paths relative to declaring module's directory (like @compile).
 		// Prepend to link list (reference-aligned: linked first, like addExternalFileToLink).
 		const modDir = getModuleDir(ctx.modulePath);
-		const resolved = modDir != "" ? modDir + "/" + arg0Str : arg0Str;
+		const resolved = isAbsolute(arg0Str) || modDir == "" ? normalize(arg0Str) : normalize(modDir + "/" + arg0Str);
 		linkObjects().add(resolved);
 	} else if (name == "passL") {
 		linkFlags().add(arg0Str);

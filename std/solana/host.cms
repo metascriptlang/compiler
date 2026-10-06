@@ -3,8 +3,8 @@
 import {
 	AccountMeta,
 	Clock,
-	Seeds,
 	account,
+	accountCount,
 	clock,
 	failWith,
 	instructionData,
@@ -31,6 +31,7 @@ extern function msSolHostSetClock(
 	leaderEpoch: uint64,
 	unixTime: uint64,
 ): void;
+extern function msSolPointer(address: uint64): Ptr<void>;
 extern function msSolLoadU8(address: uint64): uint8;
 extern function msSolLoadU64(address: uint64): uint64;
 extern function msSolStoreU8(address: uint64, value: uint8): void;
@@ -51,20 +52,25 @@ export struct HostRun {
 	fault: string;
 }
 
+export const REFUSED: uint64 = 0xffffffffffffffff;
+
+const MAX_INSTRUCTION_ACCOUNTS: int32 = 255;
+
 export struct HostInvocation {
 	program: Pubkey;
 	accounts: AccountMeta[];
 	data: uint8[];
 	signers: uint64;
+	signerSeeds: uint8[][][];
 }
 
 function storeKey(address: uint64, key: Pubkey): void {
-	const at = address as Ptr<Pubkey>;
+	const at = msSolPointer(address) as Ptr<Pubkey>;
 	at[] = key;
 }
 
 function loadKey(address: uint64): Pubkey {
-	const at = address as Ptr<Pubkey>;
+	const at = msSolPointer(address) as Ptr<Pubkey>;
 	return at[];
 }
 
@@ -168,6 +174,12 @@ export function run(
 	data: Span<uint8>,
 	entry: () => void,
 ): HostRun {
+	if (accounts.length > MAX_INSTRUCTION_ACCOUNTS) {
+		return {
+			result: REFUSED,
+			fault: `MaxAccountsExceeded: an instruction of ${accounts.length} accounts is refused, the runtime sends at most 255 (agave program-runtime/src/serialization.rs:23,201-202)`,
+		};
+	}
 	const lengths: uint64[] = [];
 	for (const holder of accounts) { lengths.push(holder.data.length as uint64); }
 	const input = serialized(program, accounts, data);
@@ -207,14 +219,55 @@ export function invocations(): HostInvocation[] {
 		for (let offset: uint64 = 0; offset < dataLength; offset++) {
 			bytes.push(msSolLoadU8(dataAddress + offset));
 		}
+		const signerCount = msSolLoadU64(record + 64);
+		let cursor = msSolLoadU64(record + 72);
+		const signerSeeds: uint8[][][] = [];
+		for (let signer: uint64 = 0; signer < signerCount; signer++) {
+			const seedCount = msSolLoadU64(cursor);
+			cursor = cursor + 8;
+			const seeds: uint8[][] = [];
+			for (let seed: uint64 = 0; seed < seedCount; seed++) {
+				const length = msSolLoadU64(cursor);
+				cursor = cursor + 8;
+				const seedBytes: uint8[] = [];
+				for (let offset: uint64 = 0; offset < length; offset++) {
+					seedBytes.push(msSolLoadU8(cursor + offset));
+				}
+				cursor = cursor + length;
+				seeds.push(seedBytes);
+			}
+			signerSeeds.push(seeds);
+		}
 		found.push({
 			program: loadKey(record),
 			accounts: metaList,
 			data: bytes,
-			signers: msSolLoadU64(record + 64),
+			signers: signerCount,
+			signerSeeds: signerSeeds,
 		});
 	}
 	return found;
+}
+
+export function textBytes(text: string): uint8[] {
+	const bytes: uint8[] = [];
+	for (let index = 0; index < text.length; index++) {
+		bytes.push(text.charCodeAt(index) as uint8);
+	}
+	return bytes;
+}
+
+export function signerIs(call: HostInvocation, signer: int32, expected: uint8[][]): boolean {
+	if (signer >= call.signerSeeds.length) { return false; }
+	const actual = call.signerSeeds[signer];
+	if (actual.length != expected.length) { return false; }
+	for (let seed = 0; seed < actual.length; seed++) {
+		if (actual[seed].length != expected[seed].length) { return false; }
+		for (let offset = 0; offset < actual[seed].length; offset++) {
+			if (actual[seed][offset] != expected[seed][offset]) { return false; }
+		}
+	}
+	return true;
 }
 
 export function setClock(clock: Clock): void {
@@ -281,7 +334,7 @@ function logSlot(): void {
 function payStep(): Result<uint64, ProgramError> {
 	const source = try account(0);
 	const destination = try account(1);
-	return transfer(source, destination, 10, Seeds.none());
+	return transfer(source, destination, 10);
 }
 
 function payTen(): void {
@@ -333,6 +386,34 @@ test "a CPI is recorded with its program, accounts and data" {
 	assert !calls[0].accounts[1].signer && calls[0].accounts[1].writable;
 	assert calls[0].data.length == 12;
 	assert calls[0].data[0] == 2 && calls[0].data[4] == 10;
+}
+
+let ranWith: int32 = -1;
+
+function noteAccounts(): void {
+	ranWith = accountCount();
+}
+
+function manyAccounts(count: int32): HostAccount[] {
+	const held: HostAccount[] = [];
+	for (let index = 0; index < count; index++) {
+		held.push(holderOf((index as uint64) + 1, [], false, false));
+	}
+	return held;
+}
+
+test "an instruction of 255 accounts runs and one of 256 is refused before the program runs, as the runtime refuses it" {
+	const empty: uint8[] = [];
+	ranWith = -1;
+	const allowed = run(keyOf(9), manyAccounts(255), empty, noteAccounts);
+	assert allowed.result == 0;
+	assert allowed.fault == "";
+	assert ranWith == 255;
+	ranWith = -1;
+	const refused = run(keyOf(9), manyAccounts(256), empty, noteAccounts);
+	assert refused.result == REFUSED;
+	assert refused.fault.indexOf("MaxAccountsExceeded") == 0;
+	assert ranWith == -1;
 }
 
 test "a program reads the clock the test sets" {

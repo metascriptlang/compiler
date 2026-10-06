@@ -1,0 +1,95 @@
+@include("runtime/solana/solana.h");
+@compile("runtime/solana/host.c");
+
+import { Pubkey } from "./pubkey";
+
+extern function msSolPointer(address: uint64): Ptr<void>;
+extern function msSolStoreU8(address: uint64, value: uint8): void;
+extern function msSolStoreU16(address: uint64, value: uint16): void;
+extern function msSolStoreU32(address: uint64, value: uint32): void;
+extern function msSolStoreU64(address: uint64, value: uint64): void;
+extern function msSolCopy(destination: uint64, source: uint64, length: uint64): void;
+extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
+
+export struct Bytes {
+	address: uint64;
+	length: uint64;
+}
+
+export function storePubkey(key: Pubkey, address: uint64): void {
+	const at = msSolPointer(address) as Ptr<Pubkey>;
+	at[] = key;
+}
+
+function fits(storage: Span<uint8>, at: uint64, width: uint64): boolean {
+	const capacity = storage.length as uint64;
+	return at <= capacity && width <= capacity - at;
+}
+
+function refused(storage: Span<uint8>): uint64 {
+	return (storage.length as uint64) + 1;
+}
+
+export function putU8(storage: Span<uint8>, at: uint64, value: uint8): uint64 {
+	if (!fits(storage, at, 1)) { return refused(storage); }
+	msSolStoreU8(msSolSpanAddress(storage) + at, value);
+	return at + 1;
+}
+
+export function putU16(storage: Span<uint8>, at: uint64, value: uint16): uint64 {
+	if (!fits(storage, at, 2)) { return refused(storage); }
+	msSolStoreU16(msSolSpanAddress(storage) + at, value);
+	return at + 2;
+}
+
+export function putU32(storage: Span<uint8>, at: uint64, value: uint32): uint64 {
+	if (!fits(storage, at, 4)) { return refused(storage); }
+	msSolStoreU32(msSolSpanAddress(storage) + at, value);
+	return at + 4;
+}
+
+export function putU64(storage: Span<uint8>, at: uint64, value: uint64): uint64 {
+	if (!fits(storage, at, 8)) { return refused(storage); }
+	msSolStoreU64(msSolSpanAddress(storage) + at, value);
+	return at + 8;
+}
+
+export function putI8(storage: Span<uint8>, at: uint64, value: int8): uint64 {
+	return putU8(storage, at, value as uint8);
+}
+
+export function putI16(storage: Span<uint8>, at: uint64, value: int16): uint64 {
+	return putU16(storage, at, value as uint16);
+}
+
+export function putI32(storage: Span<uint8>, at: uint64, value: int32): uint64 {
+	return putU32(storage, at, value as uint32);
+}
+
+export function putI64(storage: Span<uint8>, at: uint64, value: int64): uint64 {
+	return putU64(storage, at, value as uint64);
+}
+
+export function putBool(storage: Span<uint8>, at: uint64, value: boolean): uint64 {
+	return putU8(storage, at, value ? 1 : 0);
+}
+
+export function putPubkey(storage: Span<uint8>, at: uint64, value: Pubkey): uint64 {
+	if (!fits(storage, at, 32)) { return refused(storage); }
+	storePubkey(value, msSolSpanAddress(storage) + at);
+	return at + 32;
+}
+
+export function putAddress(storage: Span<uint8>, at: uint64, source: uint64, length: uint64): uint64 {
+	if (!fits(storage, at, length)) { return refused(storage); }
+	if (length > 0) { msSolCopy(msSolSpanAddress(storage) + at, source, length); }
+	return at + length;
+}
+
+export function putBytes(storage: Span<uint8>, at: uint64, value: Bytes): uint64 {
+	return putAddress(storage, at, value.address, value.length);
+}
+
+export function putSpan(storage: Span<uint8>, at: uint64, value: Readonly<Span<uint8>>): uint64 {
+	return putAddress(storage, at, msSolSpanAddress(value), value.length as uint64);
+}

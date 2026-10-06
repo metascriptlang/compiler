@@ -217,6 +217,7 @@ export enum SymbolFlag {
 	Borrow,
 	NeverRaises,
 	HcrCell, // pointer to a lifted module variable's registry storage; the analyzer destroys `(*ptr).value` at program end
+	ClassInit,
 }
 
 // ===== Symbol =====
@@ -284,6 +285,8 @@ export enum NodeFlag {
 	GlobalDestroys,
 	UserOp,        // checker: this operator calls a declared routine, not the built-in
 	ObjectSlot,    // checker: this union projection reads whichever slot holds an object, the conversion above it checks the class
+	CanRaise,      // raises inference: this statement's value holds a call that can raise
+	CannotRaise,   // raises inference: no call in this statement's value can raise
 }
 
 // ===== Node Kind Enum =====
@@ -450,8 +453,8 @@ export type NodeData =
 	| { exportedDecl: Node }                                       // ExportDecl
 	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation } // TypeAliasDecl
 	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] } // EnumDecl
-	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[] } // InterfaceDecl
-	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[] } // StructDecl
+	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] } // InterfaceDecl
+	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] } // StructDecl
 	| { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation } // ClassDecl
 	| { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }  // PropertyDecl
 	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // MethodDecl
@@ -676,8 +679,8 @@ export type ImportDeclData = { importNames: string[], importAliases: string[], i
 export type ExportDeclData = { exportedDecl: Node };
 export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation };
 export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] };
-export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[] };
-export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[] };
+export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] };
+export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] };
 export type ClassDeclData = { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation };
 export type ActorDeclData = { actorName: string, actorBody: Node[], nameLocation: SourceLocation };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }; // propVisibility: "" | "public" | "private" | "protected"
@@ -886,36 +889,6 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 	n.flowNode = null;
 	n.nodeTypeAst = null;
 	return n;
-}
-
-// ===== Node Cache (DRC-safe: Node in struct fields ONLY here) =====
-
-interface NodeCacheEntry {
-	key: number;
-	node: Node;
-}
-
-const nodeCache: NodeCacheEntry[] = [];
-
-export function nodeCacheGet(key: number): Node {
-	let i = 0;
-	while (i < nodeCache.length) {
-		if (nodeCache[i].key == key) return nodeCache[i].node;
-		i = i + 1;
-	}
-	return null as unknown as Node;
-}
-
-export function nodeCacheStore(key: number, node: Node): void {
-	let i = 0;
-	while (i < nodeCache.length) {
-		if (nodeCache[i].key == key) {
-			nodeCache[i].node = node;
-			return;
-		}
-		i = i + 1;
-	}
-	nodeCache.push({ key, node });
 }
 
 export function isEmptyBlock(node: Readonly<Node>): boolean {

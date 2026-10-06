@@ -354,11 +354,25 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 			}
 		}
 		const sep = i + 1 < fieldLocs.length && writtenCommaBetween(options.source, fieldLocs[i], fieldLocs[i + 1]) ? "," : ";";
+		const lead: Doc[] = [];
+		if (i < d.interfaceFieldDecorators.length) {
+			const decorators = d.interfaceFieldDecorators[i];
+			let ownLine = false;
+			for (const dec of decorators) {
+				if (dec.location.line != fieldLine) ownLine = true;
+			}
+			for (const dec of decorators) {
+				lead.push(callPrintNode(dec, options));
+				lead.push(ownLine ? docHardLine() : docText(" "));
+			}
+		}
 		if (attached != null) {
-			fields.push(docGroup([
-				docText(field + sep),
-				docLineSuffix([docText(" " + attached.value)]),
-			]));
+			lead.push(docText(field + sep));
+			lead.push(docLineSuffix([docText(" " + attached.value)]));
+			fields.push(docGroup(lead));
+		} else if (lead.length > 0) {
+			lead.push(docText(field + sep));
+			fields.push(docGroup(lead));
 		} else {
 			fields.push(docText(field + sep));
 		}

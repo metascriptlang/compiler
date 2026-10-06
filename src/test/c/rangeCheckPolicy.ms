@@ -8,6 +8,7 @@ function opaqueI64(x: int64): int64 { return x; }
 function opaqueU32(x: uint32): uint32 { return x; }
 function opaqueU8(x: uint8): uint8 { return x; }
 function opaqueGrade(g: Grade): Grade { return g; }
+function opaqueI32(x: int32): int32 { return x; }
 function opaqueMeters(m: Meters): Meters { return m; }
 `;
 
@@ -57,4 +58,23 @@ test "float64 to uint32 has no range check" {
 	const c = cFor("function f(): uint32 { return opaqueF64(3.9) as uint32; }");
 	assert c != "";
 	assert !c.contains("msCheckRangeU32");
+}
+
+test "int32 to an enum is checked against the enum's ordinals" {
+	const c = cFor("function f(): Grade { return opaqueI32(1) as Grade; }");
+	assert c != "";
+	assert c.contains("msCheckRangeI32");
+	assert c.contains(", 0, 2)");
+}
+
+test "float64 to an enum keeps a range check" {
+	const c = cFor("function f(): Grade { return opaqueF64(1.0) as Grade; }");
+	assert c != "";
+	assert c.contains("msCheckRangeI32");
+}
+
+test "an enum member to its own enum needs no range check" {
+	const c = cFor("function f(): Grade { return opaqueGrade(Grade.High) as Grade; }");
+	assert c != "";
+	assert !c.contains("msCheckRange");
 }

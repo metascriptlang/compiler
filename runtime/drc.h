@@ -53,15 +53,12 @@ static inline msRefHeader* msHeader(void* p) {
 	return (msRefHeader*)((char*)p - sizeof(msRefHeader));
 }
 
-/* Runtime subtype test: walks the msTypeInfo.base chain (Nim `of` analog). */
 static inline bool msIsInstance(void* p, const msTypeInfo* target) {
-	if (p == NULL) return false;
+	if (p == NULL || target == NULL) return false;
 	const msTypeInfo* t = msHeader(p)->type;
-	while (t != NULL) {
-		if (t == target) return true;
-		t = t->base;
-	}
-	return false;
+	if (t == target) return true;
+	return t != NULL && t->display != NULL && target->depth <= t->depth
+		&& t->display[target->depth] == target;
 }
 
 /* ===== DRC Ledger (test-only lifecycle guard) ===== */
@@ -190,6 +187,11 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 	h->allocSize = (uint32_t)total;
 	MS_LEDGER_ALLOC((void*)(h + 1), type);
 	return (void*)(h + 1);
+}
+
+static inline void* msRealloc(void* old, size_t oldSize, size_t newSize) {
+	(void)oldSize;
+	return realloc(old, newSize);
 }
 
 /* Arc<T> box: msAllocTyped, but starts at rc = MS_RC_INCREMENT (sole owner).

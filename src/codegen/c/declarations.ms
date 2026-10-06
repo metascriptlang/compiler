@@ -15,7 +15,7 @@ import {
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, hcrTypeInfoRef, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
+import { enumCTypeName, getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, hcrTypeInfoRef, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -250,7 +250,8 @@ function genEnumDecl(g: CGen, node: Readonly<Node>): void {
 
 	// Emit as typedef + #define constants (use explicit values if available)
 	const types = sec(g, CSection.Types);
-	addLine(types, "typedef int32_t " + name + ";");
+	const enumSym = declTypeSym(node);
+	addLine(types, `typedef ${enumCTypeName(enumSym != null ? enumSym.symbolType : node.nodeType)} ${name};`);
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
 		const val = (d.enumValues != null && i < d.enumValues.length) ? d.enumValues[i] : i;
 		addLine(types, `#define ${name}_${d.enumMembers[i]} (((${name})${val}))`);
@@ -561,7 +562,7 @@ function genTopLevelStmt(g: CGen, node: Readonly<Node>): void {
 	}
 	// Other statements go to ModuleInit — use shared initProc for consistent temp counter
 	const atExit = node.flags.has(NodeFlag.GlobalDestroys);
-	if (atExit && g.aliveSet.entries.length > 0 && !aliveSetHasModule(g.aliveSet, g.modulePath)) return;
+	if (atExit && !aliveSetHasModule(g.aliveSet, g.modulePath)) return;
 	const p = atExit ? g.deinitProc : g.initProc;
 	const target = atExit ? CSection.ModuleDeinit : CSection.ModuleInit;
 	genStmt(g, p, node);
@@ -613,7 +614,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	if (isTypeInfo) {
 		// TypeInfo is DRC metadata — skip under --gc=manual (write-only, never read)
 		if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
-		if (g.aliveSet.entries.length > 0 && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) {
+		if (g.aliveSet.computed && !aliveSetHas(g.aliveSet, g.modulePath, d.declName)) {
 			const skipBase = d.declName.slice(0, nameLen - 8);
 			if (g.preparingDeclarations) {
 				if (g.preparationFacts == null) return;
@@ -739,7 +740,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, staticPfx: string, cType: string): boolean {
 	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return false;
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.entries.length > 0 && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
+	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
 	const body = cType.slice(0, cType.length - 1);
 	if (isHcrImageModule(g, g.modulePath) && g.emissionFacts.hcrTypeInfoOwners.has(body)) return false;
 	const od = d.initializer.data as ObjectLiteralData;
@@ -776,7 +777,7 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	const arrT = t0.kind == TypeKind.Ref ? t0.typeReturn : t0;
 	if (arrT == null || arrT.kind != TypeKind.Array) return false;
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.entries.length > 0 && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
+	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, g.modulePath, d.declName, node.resolvedSym)) return true;
 	const arrCType = cType.slice(0, cType.length - 1);
 	const typeInfo = ensureRefArrayCellTypeInfo(g, arrT);
 	const viaRegistry = isHcrImageModule(g, g.modulePath);
@@ -898,6 +899,23 @@ function genTypeInfoVar(g: CGen, d: Readonly<VariableDeclData>, varName: string)
 					ensureTypeInfo(g, parentName);
 					addLine(datInit, `  ${infoName}.base = &${parentName}TypeInfo;`);
 				}
+			} else if (key == "display") {
+				const entries = (od.properties[i].data as ArrayLiteralData).elements;
+				const displayName = infoName + "Display";
+				addLine(sec(g, CSection.GlobalVars), `static const msTypeInfo* ${displayName}[${entries.length}];`);
+				for (let slot = 0; slot < entries.length; slot += 1) {
+					if (slot == entries.length - 1) {
+						addLine(datInit, `  ${displayName}[${slot}] = &${infoName};`);
+					} else {
+						const rawName = (entries[slot].data as StringLiteralData).value;
+						const cName = typeCacheGet(g.typeCache, "cname:" + rawName);
+						const entryName = cName != "" ? cName : rawName;
+						ensureTypeInfo(g, entryName);
+						addLine(datInit, `  ${displayName}[${slot}] = &${entryName}TypeInfo;`);
+					}
+				}
+				addLine(datInit, `  ${infoName}.depth = ${entries.length - 1};`);
+				addLine(datInit, `  ${infoName}.display = ${displayName};`);
 			} else {
 				// isCyclic: use genExpr directly
 				const val = genExpr(g, p, od.properties[i]);

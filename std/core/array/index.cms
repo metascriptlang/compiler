@@ -102,6 +102,9 @@ export extern function capacity(this arr: number[]): number from "&msNumberArray
 /** Removes deleteCount elements starting at index start. */
 export extern function splice(this arr: number[], start: number, deleteCount: number): void from "&msNumberArraySplice";
 
+/** Removes deleteCount elements at start, then inserts item at start. */
+export extern function splice(this arr: number[], start: number, deleteCount: number, item: number): void from "&msNumberArraySplice3";
+
 // ===== String Array =====
 
 /**
@@ -179,6 +182,17 @@ export extern function capacity(this arr: string[]): number from "&msStringArray
 
 /** Removes deleteCount elements starting at index start. */
 export extern function splice(this arr: string[], start: number, deleteCount: number): void from "&msStringArraySplice";
+
+/** Removes deleteCount elements at start, then inserts item at start. */
+export extern function splice(this arr: string[], start: number, deleteCount: number, item: string): void from "&msStringArraySplice3";
+
+// ===== Byte/Bool Array (boolean[] shares the msUint8Array representation) =====
+
+/** Removes deleteCount elements at start, then inserts item at start. */
+export extern function splice(this arr: uint8[], start: number, deleteCount: number, item: uint8): void from "&msUint8ArraySplice3";
+
+/** Removes deleteCount elements at start, then inserts item at start. */
+export extern function splice(this arr: boolean[], start: number, deleteCount: number, item: boolean): void from "&msUint8ArraySplice3";
 
 // ===== Generic Array (matches any T[] not covered by number[]/string[]) =====
 // Uses msGenericArray* macros which work with any MS_ARRAY(T) typedef.
@@ -264,6 +278,17 @@ export function map<T, U>(this arr: T[], fn: (x: T, i: number) => U): U[] {
 	let i = 0;
 	while (i < arr.length) {
 		out.push(fn(arr[i], i));
+		i = i + 1;
+	}
+	return out;
+}
+
+export function join<T>(this arr: T[], sep: string): string {
+	let out = "";
+	let i = 0;
+	while (i < arr.length) {
+		if (i > 0) out = out + sep;
+		out = out + `${arr[i]}`;
 		i = i + 1;
 	}
 	return out;

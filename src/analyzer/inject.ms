@@ -16,7 +16,7 @@ import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } f
 import { TransformContext, createTransformContext, freshTempSym, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
-	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef,
+	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved,
 } from "../transform/util";
 import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -192,7 +192,7 @@ function processHiddenWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node
 		if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && node.nodeType != null) {
 			const rcInfo = sinkClassify(node.nodeType, dctx);
 			if (rcInfo.needsCleanup) {
-				return passCopyToSink(node, dctx);
+				return passCopyToSink(node, dctx, mode == DrcMode.SinkArg);
 			}
 		}
 		return node;
@@ -208,7 +208,7 @@ function processAssertionWrapper(node: Node, dctx: DrcContext, mode: DrcMode): N
 	// between managed types forwards the mode to its operand like nkConv/nkObjUpConv.
 	if (mode == DrcMode.SinkArg && isReprCast(node, dctx)) {
 		ta.asExpr = processNode(ta.asExpr, dctx, DrcMode.Normal);
-		return passCopyToSink(node, dctx);
+		return passCopyToSink(node, dctx, true);
 	}
 	ta.asExpr = processNode(ta.asExpr, dctx, mode);
 	return node;
@@ -249,13 +249,13 @@ function processConvWrapper(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		cv.convExpr = processNode(cv.convExpr, dctx, DrcMode.Normal);
 		if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && node.nodeType != null
 				&& sinkClassify(node.nodeType, dctx).needsCleanup) {
-			return passCopyToSink(node, dctx);
+			return passCopyToSink(node, dctx, mode == DrcMode.SinkArg);
 		}
 		return node;
 	}
 	if (mode == DrcMode.SinkArg && node.kind == NodeKind.HiddenStdConv && isReprCast(node, dctx)) {
 		cv.convExpr = processNode(cv.convExpr, dctx, DrcMode.Normal);
-		return passCopyToSink(node, dctx);
+		return passCopyToSink(node, dctx, true);
 	}
 	cv.convExpr = processNode(cv.convExpr, dctx, mode);
 	return node;
@@ -599,7 +599,7 @@ function reportFailedMove(srcExpr: Node, dctx: DrcContext): void {
 	});
 }
 
-function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
+function passCopyToSink(srcExpr: Node, dctx: DrcContext, viaDup: boolean = false): Node {
 	const rcInfo = sinkClassify(srcExpr.nodeType, dctx);
 	if (!rcInfo.needsCleanup) return srcExpr;
 	reportFailedMove(srcExpr, dctx);
@@ -612,6 +612,15 @@ function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 	// leaks the temp's heap data (passCopyToSink intentionally skips scope cleanup).
 	setFlag(tmpSym, SymbolFlag.SinkTemp);
 	const tmpName = tmpSym.name;
+
+	if (viaDup && rcInfo.dupFn != null) {
+		const dup = makeCallResolved(makeIdentResolved(rcInfo.dupFn, loc), [srcExpr], rcInfo.dupFn, loc);
+		const dupDecl = makeVarDecl(tmpName, dup, DeclKind.Const, loc);
+		if (srcExpr.nodeType != null) dupDecl.nodeType = srcExpr.nodeType;
+		dupDecl.resolvedSym = tmpSym;
+		addPre(dctx, dupDecl);
+		return makeIdentResolved(tmpSym, loc);
+	}
 
 	if (isBinaryCopy(rcInfo)) {
 		// Named/String: null-init, then 2-arg copy from source.
@@ -710,7 +719,7 @@ function processMember(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		const rcInfo = sinkClassify(node.nodeType, dctx);
 		if (rcInfo.needsCleanup) {
 			// Always copy from MemberExpr: source field may belong to a shared object.
-			return passCopyToSink(node, dctx);
+			return passCopyToSink(node, dctx, true);
 		}
 	}
 	return node;
@@ -733,7 +742,7 @@ function processArrayAccess(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && node.nodeType != null) {
 		const rcInfo = sinkClassify(node.nodeType, dctx);
 		if (rcInfo.needsCleanup) {
-			return passCopyToSink(node, dctx);
+			return passCopyToSink(node, dctx, mode == DrcMode.SinkArg);
 		}
 	}
 	return node;
@@ -944,7 +953,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 			const sinkRc = sinkClassify(sym.symbolType, dctx);
 			if (sinkRc.needsCleanup) {
 				if (node.nodeType == null) node.nodeType = sym.symbolType;
-				return passCopyToSink(node, dctx);
+				return passCopyToSink(node, dctx, mode == DrcMode.SinkArg);
 			}
 		}
 		return node;
@@ -959,7 +968,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 			}
 			return node;
 		}
-		return passCopyToSink(node, dctx);
+		return passCopyToSink(node, dctx, true);
 	}
 
 	// Consumed mode: in-place move or copy (for call args, assignment RHS)

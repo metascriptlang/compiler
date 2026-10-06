@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv } from "./types";
+import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
@@ -448,12 +448,22 @@ export function checkBitwiseOperands(ctx: CheckerContext, op: string, leftType: 
 	}
 }
 
-function operandShape(t: Type): Type | null {
+function operandShape(t: Type | null): Type | null {
+	if (t == null) return null;
 	let s = skipModifier(t);
 	for (let depth = 0; depth < PEEL_MAX_DEPTH; depth += 1) {
 		const body = distinctBody(s);
-		if (body == null) return s;
-		s = skipModifier(body);
+		if (body != null) {
+			s = skipModifier(body);
+			continue;
+		}
+		if (s.kind == TypeKind.GenericInstance) {
+			const base = s.typeExtra != null ? s.typeExtra : s.typeReturn;
+			if (base == null) return s;
+			s = skipModifier(base);
+			continue;
+		}
+		return s;
 	}
 	return s;
 }
@@ -494,11 +504,21 @@ function binaryOperandSkip(t: Type): boolean {
 	const s = skipModifier(t);
 	if (hasGenericParams(s) || isUnknownType(s) || isUnresolvedType(s) || isMaybeType(s)) return true;
 	const k = s.kind;
-	return k == TypeKind.Error || k == TypeKind.Null || k == TypeKind.Union
+	return k == TypeKind.Error || k == TypeKind.Null
 		|| k == TypeKind.GenericParam || k == TypeKind.GenericInstance
 		|| k == TypeKind.TypeReference || k == TypeKind.Inferred || k == TypeKind.None
 		|| k == TypeKind.Varargs || k == TypeKind.Alias || k == TypeKind.Conditional
 		|| k == TypeKind.Result || k == TypeKind.BigInt;
+}
+
+function eqComparableOperand(orig: Type, shaped: Type): Type | null {
+	if (isMaybeType(orig) && orig.typeReturn != null) {
+		if (hasGenericParams(orig.typeReturn)) return null;
+		const payload = operandShape(orig.typeReturn);
+		return payload == null || binaryOperandSkip(payload) ? null : payload;
+	}
+	if (shaped.kind == TypeKind.Union && !hasGenericParams(orig)) return shaped;
+	return null;
 }
 
 function binaryPointerish(k: TypeKind): boolean {
@@ -523,6 +543,24 @@ function sameSetElement(a: Type, b: Type): boolean {
 }
 
 function equalityOperandsOk(a: Type, b: Type): boolean {
+	if (a.kind == TypeKind.Union && b.kind == TypeKind.Union) {
+		for (const ma of a.typeChildren) {
+			if (ma == null) continue;
+			for (const mb of b.typeChildren) {
+				if (mb != null && equalityOperandsOk(ma, mb)) return true;
+			}
+		}
+		return false;
+	}
+	if (a.kind == TypeKind.Union || b.kind == TypeKind.Union) {
+		const u = a.kind == TypeKind.Union ? a : b;
+		const other = a.kind == TypeKind.Union ? b : a;
+		if (u.typeChildren == null) return false;
+		for (const m of u.typeChildren) {
+			if (m != null && m.kind != TypeKind.Null && equalityOperandsOk(m, other)) return true;
+		}
+		return false;
+	}
 	if (a.kind == TypeKind.Set || b.kind == TypeKind.Set) return sameSetElement(a, b);
 	if (isNumeric(a) && isNumeric(b)) return true;
 	if (isStringLike(a) && isStringLike(b)) return true;
@@ -541,6 +579,43 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	return false;
 }
 
+export function isPayloadCarrier(t: Type | null): boolean {
+	if (t == null) return false;
+	if (isResult(t)) return true;
+	const s = operandShape(t);
+	if (s == null) return false;
+	if (isMaybeType(s)) return isPayloadCarrier(s.typeReturn);
+	if (s.kind == TypeKind.Struct) return true;
+	if (s.kind != TypeKind.Union || isStringLike(s) || s.typeChildren == null) return false;
+	let sawMember = false;
+	for (const m of s.typeChildren) {
+		if (m == null || m.kind == TypeKind.Null) continue;
+		sawMember = true;
+		if (!isPayloadCarrier(m)) return false;
+	}
+	return sawMember;
+}
+
+export function narrowsToMember(src: Type, target: Type): boolean {
+	if (src.kind != TypeKind.Union && !isMaybeType(src)) return false;
+	if (isMaybeType(src)) return src.typeReturn != null && isAssignable(src.typeReturn, target);
+	if (src.typeChildren == null) return false;
+	for (const m of src.typeChildren) {
+		if (m == null || m.kind == TypeKind.Null) continue;
+		if (isAssignable(m, target)) return true;
+	}
+	return false;
+}
+
+export function isScalarPrimitive(t: Type | null): boolean {
+	if (t == null) return false;
+	const k = t.kind;
+	return isNumeric(t) || k == TypeKind.Boolean || k == TypeKind.BooleanLiteral
+		|| k == TypeKind.Char || k == TypeKind.String || k == TypeKind.StringLiteral
+		|| k == TypeKind.Enum || k == TypeKind.EnumLiteral || k == TypeKind.BigInt
+		|| k == TypeKind.CString;
+}
+
 function compoundBase(op: string): string {
 	if (op.length < 2 || !op.endsWith("=") || op == "==" || op == "!=" || op == "<=" || op == ">="
 		|| op == "===" || op == "!==") return op;
@@ -554,7 +629,18 @@ export function binaryOperandsFail(ctx: CheckerContext, op: string, leftType: Ty
 	if (leftType == null || rightType == null) return false;
 	const a = operandShape(leftType);
 	const b = operandShape(rightType);
-	if (a == null || b == null || binaryOperandSkip(a) || binaryOperandSkip(b)) return false;
+	if (a == null || b == null) return false;
+	const sa = binaryOperandSkip(a);
+	const sb = binaryOperandSkip(b);
+	if (sa || sb) {
+		if (cls != "eq") return false;
+		const ea = sa ? eqComparableOperand(leftType, a) : a;
+		const eb = sb ? eqComparableOperand(rightType, b) : b;
+		if (ea == null || eb == null) return false;
+		if (equalityOperandsOk(ea, eb)) return false;
+		return ctx.extensionRegistry == null
+			|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) == null;
+	}
 	const ok = cls == "arith" ? arithOperandsOk(bop, a, b) : equalityOperandsOk(a, b);
 	if (ok) return false;
 	return ctx.extensionRegistry == null
@@ -886,11 +972,25 @@ export function tupleIndexType(ctx: CheckerContext, tupleType: Type, d: ArrayAcc
 }
 
 export function reportConstCast(ctx: CheckerContext, expr: Node, target: Type): void {
+	if (target.kind == TypeKind.Enum) {
+		reportConstEnumCast(ctx, expr, target);
+		return;
+	}
 	if (!isIntegerType(target) || isUnsignedIntegerType(target)) return;
 	const folded = constIntegerOf(expr);
 	if (folded == null) return;
 	const value = (folded.data as NumberLiteralData).intVal;
 	if (foldedIntFits(value, target)) return;
+	addError(ctx, "cannot convert " + int64ToDecimal(value) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);
+}
+
+function reportConstEnumCast(ctx: CheckerContext, expr: Node, target: Type): void {
+	if (target.typeNames.length == 0) return;
+	const folded = constIntegerOf(expr);
+	if (folded == null) return;
+	const value = (folded.data as NumberLiteralData).intVal;
+	const bounds = enumOrdinalBounds(target);
+	if (value >= (bounds[0] as int64) && value <= (bounds[1] as int64)) return;
 	addError(ctx, "cannot convert " + int64ToDecimal(value) + " to " + typeDisplayName(target), expr.location.line, expr.location.column);
 }
 
@@ -1074,10 +1174,20 @@ export function operandReadsValue(ctx: CheckerContext, op: string, leftType: Typ
 
 export enum ReadNeed { Value, Items, Text, Slot }
 
+function protocolReceiver(t: Type): Type {
+	const src = withoutReadonlyView(t);
+	return (src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr) && src.typeReturn != null ? src.typeReturn : src;
+}
+
+export function offersProtocol(ctx: CheckerContext, t: Type, name: string): boolean {
+	if (ctx.extensionRegistry == null) return false;
+	const exts = findAllExtensionsByName(ctx.extensionRegistry, name);
+	return findFirstMatchingExt(exts, withoutReadonlyView(t)) != null || findFirstMatchingExt(exts, protocolReceiver(t)) != null;
+}
+
 function declaresOwnProtocol(ctx: CheckerContext, t: Type, name: string): boolean {
 	if (ctx.extensionRegistry == null) return false;
-	let src = withoutReadonlyView(t);
-	if ((src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr) && src.typeReturn != null) src = src.typeReturn;
+	const src = protocolReceiver(t);
 	const ext = findFirstMatchingExt(findAllExtensionsByName(ctx.extensionRegistry, name), src);
 	return ext != null && ext.receiverTypeName != "" && ext.receiverTypeName == typeNameOf(src);
 }

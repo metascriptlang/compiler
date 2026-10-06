@@ -26,7 +26,7 @@ import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { genericTypeInstMark, takeGenericTypeInstsFrom } from "../../parser/context";
-import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
+import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, routineKey } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
@@ -273,10 +273,11 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const isClass = sym.symbolKind == SymbolKind.Class;
 	if (!isRoutineSym(sym) && !isClass) return -1;
 	const name = isClass ? sym.name + "_new" : sym.name;
-	const seenIdx = _engine.seen.get(name);
+	const key = isClass ? routineKey(sym) + "_new" : routineKey(sym);
+	const seenIdx = _engine.seen.get(key);
 	if (seenIdx != null) return seenIdx;
 	if (sym.declNode == null) return -1;
-	_engine.seen.set(name, _engine.image.functions.length);
+	_engine.seen.set(key, _engine.image.functions.length);
 	const seedCtx = seedCtxForSym(sym);
 	const seeds: Symbol[] = instanceTypeParamSeeds(sym);
 	let exts: ExtensionMethod[] = [];
@@ -291,6 +292,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const decls: Node[] = [clone];
 	const program = createNode(NodeKind.Program, { programStmts: decls }, synthToken(sym.declNode.location));
 	const idx = compileProgramIntoEngine(program, seeds, exts, name);
+	if (!isClass && idx >= 0) _engine.funcMap.items.push({ name: key, index: idx });
 	for (const e of _lastEngineCheckErrors) {
 		if (e.severity != Severity.Error) continue;
 		_pendingHelperErrors.push({

@@ -1,0 +1,152 @@
+@include("runtime/solana/solana.h");
+@compile("runtime/solana/host.c");
+
+import { Discriminator } from "./discriminator";
+import { ProgramError } from "./error";
+import {
+	Account,
+	Delegated,
+	External,
+	ExternalMutable,
+	Mutable,
+	Owned,
+	Program,
+	Writable,
+	WritableSigner,
+	canonicalBump,
+	closedProgramAccount,
+	createdAccount,
+	createdPdaAccount,
+	delegatedFailure,
+	exclusiveWritable,
+	givenBump,
+	mutableFailure,
+	ownedFailure,
+	programAccount,
+	resizedProgramAccount,
+	selectedInstruction,
+} from "./core";
+import { SeedSlice, SignerSeeds } from "./seed";
+
+extern function msSolLoadU64(address: uint64): uint64;
+extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
+
+export function wordOf(discriminator: Discriminator): uint64 {
+	return msSolLoadU64(msSolSpanAddress(discriminator.bytes));
+}
+
+export struct Pda<T> {
+	account: Mutable<T>;
+	bump: uint8;
+}
+
+export function program<P>(index: int32): Result<Program<P>, ProgramError> {
+	const found = try programAccount(index, P.id());
+	return Result.ok(found as Program<P>);
+}
+
+export function owned<T>(index: int32): Result<Owned<T>, ProgramError> {
+	let found: Account = { address: 0 };
+	const failure = ownedFailure(index, wordOf(T.discriminator()), sizeof(T) as uint64, found);
+	if (failure != 0) { return Result.err({ code: failure }); }
+	return Result.ok(found as Owned<T>);
+}
+
+export function mutable<T>(index: int32): Result<Mutable<T>, ProgramError> {
+	let found: Account = { address: 0 };
+	const failure = mutableFailure(index, wordOf(T.discriminator()), sizeof(T) as uint64, found);
+	if (failure != 0) { return Result.err({ code: failure }); }
+	return Result.ok(found as Mutable<T>);
+}
+
+export function delegated<T>(index: int32): Result<Delegated<T>, ProgramError> {
+	let found: Account = { address: 0 };
+	const failure = delegatedFailure(index, wordOf(T.discriminator()), sizeof(T) as uint64, found);
+	if (failure != 0) { return Result.err({ code: failure }); }
+	return Result.ok(found as Delegated<T>);
+}
+
+export function external<T>(index: int32): Result<External<T>, ProgramError> {
+	const found = try T.verify(index);
+	return Result.ok(found as External<T>);
+}
+
+export function externalMutable<T>(index: int32): Result<ExternalMutable<T>, ProgramError> {
+	const found = try T.verify(index);
+	const claimed = try exclusiveWritable(found);
+	return Result.ok(claimed as ExternalMutable<T>);
+}
+
+export function selectInstruction<E>(table: Readonly<Span<uint8>>): Result<E, ProgramError> {
+	const member = try selectedInstruction(table);
+	return Result.ok(member as E);
+}
+
+export function readArgs<T>(fits: boolean, value: T): Result<T, ProgramError> {
+	if (!fits) { return Result.err(ProgramError.instructionDidNotDeserialize()); }
+	return Result.ok(value);
+}
+
+export function create<T>(
+	payer: WritableSigner,
+	target: Writable,
+	signers: Span<SignerSeeds> = [],
+): Result<Mutable<T>, ProgramError> {
+	const space = 8 + (sizeof(T) as uint64);
+	const created = try createdAccount(payer, target, space, wordOf(T.discriminator()), signers);
+	return Result.ok(created as Mutable<T>);
+}
+
+export function createPdaOf<T>(
+	payer: WritableSigner,
+	target: Writable,
+	seeds: Span<SeedSlice>,
+): Result<Pda<T>, ProgramError> {
+	const space = 8 + (sizeof(T) as uint64);
+	const made = try createdPdaAccount(payer, target, seeds, space, wordOf(T.discriminator()));
+	return Result.ok({ account: made.account as Mutable<T>, bump: made.bump });
+}
+
+export function verifiedPda<T>(
+	this account: Mutable<T>,
+	seeds: Span<SeedSlice>,
+): Result<Pda<T>, ProgramError> {
+	const bump = try canonicalBump(account as Account, seeds);
+	return Result.ok({ account: account, bump: bump });
+}
+
+export function verifiedPdaWithBump<T>(
+	this account: Mutable<T>,
+	seeds: Span<SeedSlice>,
+	bump: uint8,
+): Result<Pda<T>, ProgramError> {
+	const given = try givenBump(account as Account, seeds, bump);
+	return Result.ok({ account: account, bump: given });
+}
+
+export function verifiedPda<T>(
+	this account: Delegated<T>,
+	seeds: Span<SeedSlice>,
+): Result<uint8, ProgramError> {
+	return canonicalBump(account as Account, seeds);
+}
+
+export function verifiedPdaWithBump<T>(
+	this account: Delegated<T>,
+	seeds: Span<SeedSlice>,
+	bump: uint8,
+): Result<uint8, ProgramError> {
+	return givenBump(account as Account, seeds, bump);
+}
+
+export function close<T>(account: Mutable<T>, refund: Writable): Result<uint64, ProgramError> {
+	return closedProgramAccount(account as Account, refund as Account);
+}
+
+export function realloc<T>(
+	account: Mutable<T>,
+	space: uint64,
+	payer: WritableSigner,
+): Result<uint64, ProgramError> {
+	return resizedProgramAccount(account as Account, space, payer as Account);
+}

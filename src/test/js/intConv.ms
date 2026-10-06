@@ -105,3 +105,28 @@ test "an unsigned or widening conversion stays unchecked on JS" {
 		assert !body.contains("msCheckRange"), body;
 	}
 }
+
+const ENUM_CONVERSIONS = `
+enum Kind { A, B, C }
+enum Port { Low = 256, High = 70000 }
+function toKind(v: int32): Kind { return v as Kind; }
+function toPort(v: int64): Port { return v as Port; }
+function same(k: Kind): Kind { return k as Kind; }
+console.log(toKind(1), toPort(256 as int64), same(Kind.A));
+`;
+
+test "an integer converted into an enum is checked against its lowest and highest member on JS" {
+	const result = compileToJS(ENUM_CONVERSIONS);
+	assert result.ok;
+	const emitted = result.value;
+	assert bodyOf(emitted, "toKind").contains("msCheckRangeI32"), bodyOf(emitted, "toKind");
+	assert bodyOf(emitted, "toKind").contains(", 0, 2)"), bodyOf(emitted, "toKind");
+	assert bodyOf(emitted, "toPort").contains(", 256, 70000)"), bodyOf(emitted, "toPort");
+	assert !bodyOf(emitted, "same").contains("msCheckRange"), bodyOf(emitted, "same");
+}
+
+test "an int64 converted into an enum leaves the BigInt on JS" {
+	const result = compileToJS(ENUM_CONVERSIONS);
+	assert result.ok;
+	assert bodyOf(result.value, "toPort").contains("BigInt.asIntN(32,"), bodyOf(result.value, "toPort");
+}

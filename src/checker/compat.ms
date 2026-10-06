@@ -830,6 +830,25 @@ function objectLayoutFits(source: Type, target: Type): boolean {
 	return true;
 }
 
+export function viewFieldNotHeld(source: Type, view: Type): string {
+	const sNames = source.typeNames;
+	const sChildren = source.typeChildren;
+	const vChildren = view.typeChildren;
+	let vi = 0;
+	for (const name of view.typeNames) {
+		let held = false;
+		for (let si = 0; si < sNames.length; si += 1) {
+			if (sNames[si] != name) continue;
+			held = si < sChildren.length && vi < vChildren.length
+				&& isAssignable(sChildren[si], vChildren[vi]) && !fieldReprMismatch(sChildren[si], vChildren[vi]);
+			break;
+		}
+		if (!held) return name;
+		vi += 1;
+	}
+	return "";
+}
+
 // A value of one object type reaching a slot of a DIFFERENT object type. This
 // is the only class the assignment positions gate on: they historically fit
 // their operand without consulting assignability at all, and widening them to

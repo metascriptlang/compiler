@@ -32,7 +32,7 @@ import { lookupCtorDefaults } from "./instantiate";
 import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
 
 export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {
-	if (aliveSet.entries.length == 0) return true;
+	if (!aliveSet.computed) return true;
 	const name = (node.data as FunctionDeclData).fnName;
 	const sym = node.resolvedSym;
 	// $-prefixed functions without a traced routine symbol ($Env_*Destroy etc. DRC hooks) are
@@ -656,6 +656,7 @@ export function computeAliveSet(
 		for (const overload of sym.overloads) rootFunctions.add(overload);
 	}
 	_aliveSet = createAliveSet();
+	_aliveSet.computed = true;
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
 	nameIndexBuild(programs, paths);
@@ -938,7 +939,7 @@ function exportsCSymbol(node: Node): boolean {
 	}
 	if (decl.kind != NodeKind.FunctionDecl) return false;
 	const sym = decl.resolvedSym;
-	return sym != null && sym.exportName != "";
+	return sym != null && sym.exportName != "" && !hasFlag(sym, SymbolFlag.ClassInit);
 }
 
 // getDeclName imported from collectPass (single canonical copy)
@@ -954,6 +955,25 @@ test "endsWith helper" {
 test "empty programs produce empty alive set" {
 	const aliveSet = computeAliveSet([], [], "/entry.ms", false, createModuleGraph());
 	assert aliveSet.entries.length == 0;
+}
+
+test "a computed alive set that marked no name still drops a module nothing reaches" {
+	const aliveSet = computeAliveSet([], [], "/entry.ms", false, createModuleGraph());
+	assert aliveSet.computed;
+	assert aliveSetHasModule(aliveSet, "/entry.ms");
+	assert !aliveSetHasModule(aliveSet, "/other.ms");
+}
+
+test "an alive set nobody computed keeps every module" {
+	assert aliveSetHasModule(createAliveSet(), "/other.ms");
+}
+
+test "a computed alive set keeps the side-effect imports of the entry and their chain" {
+	const graph = importGraph([["/entry.ms", "/direct.ms"], ["/entry.ms", "/chain.ms"], ["/chain.ms", "/chained.ms"]]);
+	const aliveSet = computeAliveSet([], [], "/entry.ms", false, graph);
+	assert aliveSetHasModule(aliveSet, "/direct.ms");
+	assert aliveSetHasModule(aliveSet, "/chained.ms");
+	assert !aliveSetHasModule(aliveSet, "/other.ms");
 }
 
 import { parseSource } from "../parser/statements/validation";
@@ -991,6 +1011,7 @@ function importGraph(edges: string[][]): ModuleGraph {
 
 function moduleAlive(graph: ModuleGraph, modulePath: string): boolean {
 	_aliveSet = createAliveSet();
+	_aliveSet.computed = true;
 	aliveSetAdd(_aliveSet, "/main.ms", "main");
 	aliveSetAdd(_aliveSet, "/impl.ms", "add");
 	markImportedModulesAlive(graph);

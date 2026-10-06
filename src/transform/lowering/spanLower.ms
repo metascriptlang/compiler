@@ -18,8 +18,9 @@ import { walkNode } from "../walker";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary, makeCall, makeIdent,
 	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
-	makeConditional, makeNull, makeHiddenStdConv, runtimeRef, overloadWinner,
+	makeConditional, makeNull, makeHiddenStdConv, runtimeRef,
 } from "../util";
+import { overloadWinner } from "../../checker/symbol";
 
 export function spanLower(program: Node, ctx: TransformContext): Node {
 	walkNode(program, wrapSpanCoercions);

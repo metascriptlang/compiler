@@ -1,4 +1,4 @@
-import { Node, NodeKind, TypeKind, getType, getTypeImpl, resolveType, sameType, typeKind } from "std/meta";
+import { Node, NodeKind, TypeKind, bindSym, getType, getTypeImpl, resolveType, sameType, typeKind } from "std/meta";
 
 struct QueryPoint { x: int32; label: string; }
 struct QueryPair<T> { value: T; label: string; }
@@ -97,4 +97,85 @@ test "Object.values uses concrete uniform generic fields" {
 	const uniform: QueryUniform<int32> = { first: 7, second: 9 };
 	const values = Object.values(uniform);
 	assert values[0] == 7 && values[1] == 9;
+}
+
+macro argumentKind(value: Node): Node {
+	if (getType(value) == null) error("the argument carries no type", value);
+	const kind = typeKind(value);
+	const name = kind == TypeKind.Int32 ? "int32" : kind == TypeKind.String ? "string" : "other";
+	return { kind: NodeKind.StringLiteral, line: value.line, column: value.column, value: name };
+}
+
+macro firstElementKind(list: Node): Node {
+	const element = list.elements[0];
+	if (getType(element) == null) error("the first element carries no type", element);
+	const name = typeKind(element) == TypeKind.Int32 ? "int32" : "other";
+	return { kind: NodeKind.StringLiteral, line: list.line, column: list.column, value: name };
+}
+
+macro forwardArgumentKind(value: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: value.line,
+		column: value.column,
+		callee: bindSym("argumentKind"),
+		arguments: [value],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+macro forwardAgain(value: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: value.line,
+		column: value.column,
+		callee: bindSym("forwardArgumentKind"),
+		arguments: [value],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+macro forwardFirstElementKind(list: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: list.line,
+		column: list.column,
+		callee: bindSym("firstElementKind"),
+		arguments: [list],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+test "a type query reads the argument of a macro written at the call" {
+	const integer: int32 = 3;
+	assert argumentKind(integer) == "int32";
+}
+
+test "a type query reads an argument that a macro passed to another macro" {
+	const integer: int32 = 3;
+	assert forwardArgumentKind(integer) == "int32";
+}
+
+test "a type query reads an expression that a macro passed to another macro" {
+	const integer: int32 = 3;
+	assert forwardArgumentKind(integer + 1) == "int32";
+}
+
+test "a type query reads a string that a macro passed to another macro" {
+	const text: string = "three";
+	assert forwardArgumentKind(text) == "string";
+}
+
+test "a type query reads an argument forwarded through two macros" {
+	const integer: int32 = 3;
+	assert forwardAgain(integer) == "int32";
+}
+
+test "a type query reads an element of a list that a macro passed to another macro" {
+	const first: int32 = 3;
+	const second: int32 = 4;
+	assert forwardFirstElementKind([first, second]) == "int32";
 }

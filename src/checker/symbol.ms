@@ -91,6 +91,10 @@ export function setFlag(sym: Symbol, flag: SymbolFlag): void {
 	sym.symFlags = sym.symFlags.incl(flag);
 }
 
+export function overloadWinner(set: Symbol, idx: number): Symbol {
+	return idx > 0 && idx - 1 < set.overloads.length ? set.overloads[idx - 1] : set;
+}
+
 export function isViewBinding(sym: Symbol | null): boolean {
 	if (sym == null) return false;
 	return sym.symbolKind == SymbolKind.Parameter || hasFlag(sym, SymbolFlag.ForVar);

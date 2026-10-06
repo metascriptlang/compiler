@@ -24,7 +24,9 @@ typedef struct msTypeInfo {
 	msTraceProc traceFn;     /* TypeName_trace function (NULL if acyclic) */
 	msDestroyProc destroyFn; /* TypeName_destroy function (NULL if no RC fields) */
 	uint8_t flags;           /* Amendment H: MS_TYPE_FLAG_FUTURE — defer decref to dispatcher */
-	const struct msTypeInfo* base; /* superclass chain for msIsInstance (NULL at root) */
+	const struct msTypeInfo* base;
+	uint32_t depth;
+	const struct msTypeInfo* const* display;
 } msTypeInfo;
 
 #define MS_ACYCLIC_FLAG false

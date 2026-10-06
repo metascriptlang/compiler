@@ -16,7 +16,7 @@
 //   reference comparisons  — template `>` = y < x           → derived from <
 //   reference comparisons  — template `>=` = y <= x         → derived from <=
 
-import { Node, NodeKind, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, BinaryExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
 import { hookPrototype, hookBaseCName } from "../../codegen/c/types";
 import { walkNode } from "../walker";
@@ -236,7 +236,7 @@ function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
 	if (t == null) return node;
 	if (isStringLike(t)) return node;
 	const typeName = typeNameOf(t);
-	if (typeName == "" || isBuiltinOperand(t)) return node;
+	if (typeName == "" || (isBuiltinOperand(t) && !node.flags.has(NodeFlag.UserOp))) return node;
 	const ext = resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, op, [t]);
 	if (ext == null) return node;
 	if (ext.sym == null) {
@@ -440,6 +440,12 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 export function lowerOperators(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, (node: Node): Node => {
 		return lowerOperatorNode(node, ctx);
+	});
+}
+
+export function lowerUserOperators(program: Node, ctx: TransformContext): Node {
+	return walkNode(program, (node: Node): Node => {
+		return node.flags.has(NodeFlag.UserOp) ? lowerOperatorNode(node, ctx) : node;
 	});
 }
 

@@ -8,12 +8,10 @@ import {
 } from "../../ast/node";
 import { markUsedIn, CheckerContext, Severity, addError, createContext, sgSortRecords } from "../../checker/context";
 import { lookupSymbol, makeSymbol, hasFlag, classDeclNodeOf, SymbolFlag, ScopeKind } from "../../checker/symbol";
-import { findExportedSymbol } from "../../checker/context";
-import { findChar } from "../../utils/string";
 import { collectOneDirective } from "../../checker/checkPass";
 import { registerApplyDecorators, registerDecoratorDefers, registerApplyDecoratedStmt } from "../../checker/checkerCallbacks";
 import { collectOneStatement, collectTopLevel, getDeclName } from "../../checker/collectPass";
-import { isBuiltinDirective, isIntrinsicDecorator, intrinsicOnly, recordFieldDecorators } from "../../checker/decoratorHelpers";
+import { isBuiltinDirective, isIntrinsicDecorator, intrinsicOnly, recordFieldDecorators, resolveDecoratorSymbol } from "../../checker/decoratorHelpers";
 import { ensureShaped, fillForwardSymbol } from "../../checker/resolvePass";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -614,19 +612,6 @@ function readNodes(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, v: Raise
 function adoptReplacement(old: Node, replacement: Node): void {
 	replacement.resolvedSym = old.resolvedSym;
 	if (old.resolvedSym != null && old.resolvedSym.declNode == old) old.resolvedSym.declNode = replacement;
-}
-
-function resolveDecoratorSymbol(ctx: CheckerContext, name: string): Symbol {
-	const dot = findChar(name, ".");
-	if (dot < 0) return lookupSymbol(ctx.table, name);
-	const head = name.slice(0, dot);
-	const rest = name.slice(dot + 1, name.length);
-	const ns = lookupSymbol(ctx.table, head);
-	if (ns == null || ns.symbolKind != SymbolKind.Module) return null as unknown as Symbol;
-	markUsedIn(ctx, ns);
-	const info = findExportedSymbol(ctx.exportRegistry, ns.modulePath, rest);
-	if (info == null) return null as unknown as Symbol;
-	return info.sym;
 }
 
 function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, target: Node, plan: ClassPlan): Node {

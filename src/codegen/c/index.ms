@@ -311,6 +311,7 @@ export function genProjectDispatcher(
 	addLine(b, "#include <stdint.h>");
 	addLine(b, "#include \"runtime/drc.h\"");
 	addLine(b, "#include \"runtime/core/system.h\"");
+	if (targetOs == "solana") addLine(b, "#include \"runtime/solana/solana.h\"");
 	addNewline(b);
 
 	// Forward declarations for all module init functions
@@ -392,7 +393,9 @@ export function genProjectDispatcher(
 		},
 		"solana" => {
 			addLine(b, "uint64_t entrypoint(const uint8_t* input) {");
+			addLine(b, "  uint64_t accounts[MS_SOL_MAX_ACCOUNTS];");
 			addLine(b, "  msSolanaEnter(input);");
+			addLine(b, "  msSolParse(accounts);");
 			addLine(b, "  MsMain();");
 			addLine(b, "  return msSolanaResult();");
 			addLine(b, "}");
@@ -721,6 +724,7 @@ test "TypeInfo facts use emission DCE predicates before any module emits" {
 	node.resolvedSym = makeSymbol("Hidden", SymbolKind.Class, null, false);
 	node.resolvedSym.modulePath = path;
 	const alive = createAliveSet();
+	alive.computed = true;
 	aliveSetAdd(alive, path, "AliveTypeInfo");
 	const facts = new CEmissionFacts();
 	prepareCModuleEmission(parsed.value, ctx, path, alive, facts);

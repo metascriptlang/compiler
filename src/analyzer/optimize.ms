@@ -12,11 +12,11 @@ import {
 	FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData,
 	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
 	ExportDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData,
-	ForOfStmtData, DoWhileStmtData,
+	ForOfStmtData, DoWhileStmtData, HiddenDerefData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
-import { makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym, runtimeRef } from "../transform/util";
+import { makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym, runtimeRef, makeHiddenAddr } from "../transform/util";
 import { testLoc, testFnRef } from "./inject";
 import { testVarSym, symListHas, symListAdd } from "./scope";
 
@@ -66,7 +66,13 @@ function opCallTarget(stmt: Node, op: SymbolFlag): Symbol | null {
 	if (cd.callee == null || cd.callee.resolvedSym == null || !hasFlag(cd.callee.resolvedSym, op)) return null;
 	if (cd.arguments.length != 1) return null;
 	// Access arguments[0] inline — avoid local Node variable (DRC use-after-free on return)
-	if (cd.arguments[0] == null || cd.arguments[0].kind != NodeKind.Identifier) return null;
+	if (cd.arguments[0] == null) return null;
+	if (cd.arguments[0].kind == NodeKind.HiddenAddr) {
+		const inner = (cd.arguments[0].data as HiddenDerefData).expr;
+		if (inner == null || inner.kind != NodeKind.Identifier) return null;
+		return inner.resolvedSym;
+	}
+	if (cd.arguments[0].kind != NodeKind.Identifier) return null;
 	return cd.arguments[0].resolvedSym;
 }
 
@@ -92,6 +98,7 @@ function invalidateMentioned(moved: Symbol[], stmt: Node): void {
 		else i += 1;
 	}
 }
+
 
 // ===== Block Optimization =====
 // Tracks wasMoved vars across the block (not just adjacent pairs).
@@ -283,6 +290,15 @@ test "preserves standalone destroy" {
 test "extracts var from wasMoved call" {
 	const v = testVarSym("myVar");
 	assert opCallTarget(makeWmCall(v), SymbolFlag.WasMovedOp) == v;
+}
+
+test "a wasMoved on the address of a variable pairs with a destroy on the same address" {
+	const loc = testLoc();
+	const x = testVarSym("x");
+	const wm = makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym("RWasMoved", AttachedOp.AttachedWasMoved), null, loc), [makeHiddenAddr(makeIdentResolved(x, loc), loc)], loc), loc);
+	const ds = makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym("RDestroy", AttachedOp.AttachedDestructor), null, loc), [makeHiddenAddr(makeIdentResolved(x, loc), loc)], loc), loc);
+	assert opCallTarget(wm, SymbolFlag.WasMovedOp) == x;
+	assert optimizeBlock([wm, ds]).length == 1;
 }
 
 test "returns null for non-wasMoved" {

@@ -16,10 +16,9 @@ import {
 	createNode,
 } from "../../ast/node";
 import { TransformContext } from "../context";
-import { overloadWinner } from "../util";
 import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
-import { lookupSymbol, getCtorParamTypes, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, getCtorParamTypes, hasFlag, overloadWinner, SymbolFlag } from "../../checker/symbol";
 
 // Holds the active ctx for the current walk. Closure over `ctx` would be
 // cleaner but walkNode's visitor signature is fixed to (node) => node.

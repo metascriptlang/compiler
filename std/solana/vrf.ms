@@ -1,17 +1,23 @@
 import {
 	Account,
 	AccountMeta,
-	Bytes,
-	Instruction,
-	Seeds,
+	InstructionAccount,
 	programId,
+	putBool,
+	putPubkey,
+	putSpan,
+	putU32,
+	putU64,
 } from "./core";
 import { ProgramError } from "./error";
+import { invokeSigned } from "./invoke";
+import { findProgramAddress, findProgramAddressOf, signed } from "./macro";
 import { Pubkey, pubkeyOf } from "./pubkey";
+import { SeedSlice, SignerSeeds, seedBytes, seedText, signerOf } from "./seed";
 
 when (testBuild) {
-	import { account, failWith, instructionData } from "./core";
-	import { HostAccount, invocations, run } from "./host";
+	import { account, failWith, instructionData, putBytes } from "./core";
+	import { HostAccount, invocations, run, signerIs, textBytes } from "./host";
 }
 
 export struct RandomnessRequest {
@@ -22,106 +28,89 @@ export struct RandomnessRequest {
 	slotHashes: Account;
 }
 
-export function vrfProgram(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz"); };
-}
+export const VRF_PROGRAM_ID: Pubkey = pubkeyOf("Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz");
 
-export function vrfEphemeralQueue(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc"); };
-}
+export const VRF_EPHEMERAL_QUEUE_ID: Pubkey = pubkeyOf("5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc");
 
-export function vrfBaseQueue(this typeof Pubkey): Pubkey {
-	return @comptime { return pubkeyOf("Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh"); };
-}
+export const VRF_BASE_QUEUE_ID: Pubkey = pubkeyOf("Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh");
 
 function requested(
-	accounts: RandomnessRequest,
+	storage: Span<uint8>,
 	callerSeed: Pubkey,
 	callbackDiscriminator: uint64,
 	callbackAccounts: Readonly<Span<AccountMeta>>,
-	callbackArguments: Bytes,
-	payerSigner: Seeds,
-): Result<uint64, ProgramError> {
-	const identity = try Seeds.empty(1).addText("identity").findProgramAddress(programId());
-	if (!identity.key.equals(accounts.programIdentity.key())) { return Result.err(ProgramError.invalidSeeds()); }
-	const metaCount = callbackAccounts.length as uint64;
-	const instruction = Instruction.forProgram(
-		Pubkey.vrfProgram(),
-		5,
-		92 + 34 * metaCount + callbackArguments.length,
-	);
-	instruction.addWritableSigner(accounts.payer);
-	instruction.addReadonlySigner(accounts.programIdentity);
-	instruction.addWritable(accounts.oracleQueue);
-	instruction.addReadonly(accounts.systemProgram);
-	instruction.addReadonly(accounts.slotHashes);
-	instruction.appendU64(10);
-	instruction.appendPubkey(callerSeed);
-	instruction.appendPubkey(programId());
-	instruction.appendU32(8);
-	instruction.appendU64(callbackDiscriminator);
-	instruction.appendU32(metaCount as uint32);
+	callbackArguments: Readonly<Span<uint8>>,
+): uint64 {
+	let length = putU64(storage, 0, 10);
+	length = putPubkey(storage, length, callerSeed);
+	length = putPubkey(storage, length, programId());
+	length = putU32(storage, length, 8);
+	length = putU64(storage, length, callbackDiscriminator);
+	length = putU32(storage, length, callbackAccounts.length as uint32);
 	for (const meta of callbackAccounts) {
-		instruction.appendAccountMeta(meta);
+		length = putPubkey(storage, length, meta.key);
+		length = putBool(storage, length, meta.signer);
+		length = putBool(storage, length, meta.writable);
 	}
-	instruction.appendU32(callbackArguments.length as uint32);
-	instruction.appendBytes(callbackArguments);
-	const identitySigner = Seeds.empty(2).addText("identity").addU8(identity.bump);
-	if (payerSigner.address == 0) { return instruction.invokeSigned(identitySigner); }
-	const signers: Seeds[2] = [identitySigner, payerSigner];
-	return instruction.invokeSigned(signers);
+	length = putU32(storage, length, callbackArguments.length as uint32);
+	return putSpan(storage, length, callbackArguments);
 }
 
-export function requestRandomness(accounts: RandomnessRequest, callerSeed: Pubkey, callbackDiscriminator: uint64, callbackAccount: Account, callbackArguments: Bytes): Result<uint64, ProgramError> {
+export function requestRandomness(
+	accounts: RandomnessRequest,
+	callerSeed: Pubkey,
+	callbackDiscriminator: uint64,
+	callbackAccounts: Span<AccountMeta>,
+	callbackArguments: Readonly<Span<uint8>>,
+	payerSigners: Span<SignerSeeds> = [],
+): Result<uint64, ProgramError> {
+	const identity = try findProgramAddress(["identity"]);
+	if (!identity.key.equals(accounts.programIdentity.key())) { return Result.err(ProgramError.invalidSeeds()); }
+	if (payerSigners.length > 1) { return Result.err(ProgramError.invalidArgument()); }
+	let storage: uint8[1024] = [];
+	const length = requested(storage, callerSeed, callbackDiscriminator, callbackAccounts, callbackArguments);
+	if (length > (storage.length as uint64)) { return Result.err(ProgramError.invalidInstructionData()); }
+	const bump: uint8[1] = [identity.bump];
+	const identitySeeds: SeedSlice[2] = [seedText("identity"), seedBytes(bump)];
+	let both: SignerSeeds[2] = [signerOf(identitySeeds), signerOf(identitySeeds)];
+	if (payerSigners.length == 1) { both[1] = payerSigners[0]; }
+	return invokeSigned(
+		VRF_PROGRAM_ID,
+		[
+			InstructionAccount.writableSigner(accounts.payer),
+			InstructionAccount.readonlySigner(accounts.programIdentity),
+			InstructionAccount.writable(accounts.oracleQueue),
+			InstructionAccount.readonly(accounts.systemProgram),
+			InstructionAccount.readonly(accounts.slotHashes),
+		],
+		storage,
+		length,
+		both[0..(1 + payerSigners.length)],
+	);
+}
+
+export function requestRandomness(
+	accounts: RandomnessRequest,
+	callerSeed: Pubkey,
+	callbackDiscriminator: uint64,
+	callbackAccount: Account,
+	callbackArguments: Readonly<Span<uint8>>,
+	payerSigners: Span<SignerSeeds> = [],
+): Result<uint64, ProgramError> {
 	const callbackAccounts: AccountMeta[1] = [AccountMeta.writable(callbackAccount.key())];
-	return requested(
+	return requestRandomness(
 		accounts,
 		callerSeed,
 		callbackDiscriminator,
 		callbackAccounts,
 		callbackArguments,
-		Seeds.none(),
-	);
-}
-
-export function requestRandomness(
-	accounts: RandomnessRequest,
-	callerSeed: Pubkey,
-	callbackDiscriminator: uint64,
-	callbackAccounts: Readonly<Span<AccountMeta>>,
-	callbackArguments: Bytes,
-): Result<uint64, ProgramError> {
-	return requested(
-		accounts,
-		callerSeed,
-		callbackDiscriminator,
-		callbackAccounts,
-		callbackArguments,
-		Seeds.none(),
-	);
-}
-
-export function requestRandomness(
-	accounts: RandomnessRequest,
-	callerSeed: Pubkey,
-	callbackDiscriminator: uint64,
-	callbackAccounts: Readonly<Span<AccountMeta>>,
-	callbackArguments: Bytes,
-	payerSigner: Seeds,
-): Result<uint64, ProgramError> {
-	return requested(
-		accounts,
-		callerSeed,
-		callbackDiscriminator,
-		callbackAccounts,
-		callbackArguments,
-		payerSigner,
+		payerSigners,
 	);
 }
 
 export function verifyVrfCallback(identity: Account): Result<uint64, ProgramError> {
 	if (!identity.isSigner()) { return Result.err(ProgramError.missingRequiredSignature()); }
-	const scoped = try Seeds.empty(2).addText("identity").addPubkey(programId()).findProgramAddress(Pubkey.vrfProgram());
+	const scoped = try findProgramAddressOf(VRF_PROGRAM_ID, ["identity", programId()]);
 	if (!scoped.key.equals(identity.key())) { return Result.err(ProgramError.incorrectAuthority()); }
 	return Result.ok(0);
 }
@@ -140,7 +129,7 @@ when (testBuild) {
 	function holder(key: Pubkey, signer: boolean, writable: boolean): HostAccount {
 		return {
 			key: key,
-			owner: Pubkey.systemProgram(),
+			owner: Pubkey.zero(),
 			lamports: 1000,
 			data: [],
 			signer: signer,
@@ -150,16 +139,13 @@ when (testBuild) {
 	}
 
 	function identityOf(program: Pubkey): Pubkey {
-		const found = Seeds.empty(1).addText("identity").findProgramAddress(program);
+		const found = findProgramAddressOf(program, ["identity"]);
 		if (found.ok) { return found.value.key; }
 		return Pubkey.zero();
 	}
 
 	function scopedIdentity(): Pubkey {
-		const found = Seeds.empty(2)
-			.addText("identity")
-			.addPubkey(programKey())
-			.findProgramAddress(Pubkey.vrfProgram());
+		const found = findProgramAddressOf(VRF_PROGRAM_ID, ["identity", programKey()]);
 		if (found.ok) { return found.value.key; }
 		return Pubkey.zero();
 	}
@@ -168,8 +154,8 @@ when (testBuild) {
 		return [
 			holder(keyOf(1), true, true),
 			holder(identity, false, false),
-			holder(Pubkey.vrfEphemeralQueue(), false, true),
-			holder(Pubkey.systemProgram(), false, false),
+			holder(VRF_EPHEMERAL_QUEUE_ID, false, true),
+			holder(Pubkey.zero(), false, false),
 			holder(keyOf(4), false, false),
 			holder(keyOf(5), false, true),
 		];
@@ -186,9 +172,31 @@ when (testBuild) {
 			slotHashes: try account(4),
 		};
 		const callback: uint64 = 0x0807060504030201;
-		const args = try data.range(1, 2);
+		const tail = try data.range(1, data.length - 1);
+		let relay: uint8[1024] = [];
+		const kept = putBytes(relay, 0, tail) as int32;
+		if (op == 5 || op == 6) {
+			const callbackAccount = try account(5);
+			const args5 = relay[0..2];
+			if (op == 5) {
+				const sent = try requestRandomness(request, keyOf(99), callback, callbackAccount, args5);
+				return Result.ok(sent);
+			}
+			const bump = try vrfPayerBump();
+			const paid = try signed(
+				requestRandomness(request, keyOf(99), callback, callbackAccount, args5),
+				["vrf-payer", [bump]],
+			);
+			return Result.ok(paid);
+		}
+		if (op >= 3) {
+			return requestRandomness(request, keyOf(99), callback, [], relay[0..kept]);
+		}
+		const args = relay[0..2];
 		if (op == 0) {
-			return requestRandomness(request, keyOf(99), callback, try account(5), args);
+			const callbackAccount = try account(5);
+			const one: AccountMeta[1] = [AccountMeta.writable(callbackAccount.key())];
+			return requestRandomness(request, keyOf(99), callback, one, args);
 		}
 		const metas: AccountMeta[3] = [
 			AccountMeta.writable(keyOf(11)),
@@ -196,23 +204,22 @@ when (testBuild) {
 			AccountMeta.writable(keyOf(13)),
 		];
 		if (op == 2) {
-			const signer = payerSeeds().withBump(try vrfPayerBump());
-			return requestRandomness(request, keyOf(99), callback, metas, args, signer);
+			const bump = try vrfPayerBump();
+			return signed(
+				requestRandomness(request, keyOf(99), callback, metas, args),
+				["vrf-payer", [bump]],
+			);
 		}
 		return requestRandomness(request, keyOf(99), callback, metas, args);
 	}
 
-	function payerSeeds(): Seeds {
-		return Seeds.empty(1).addText("vrf-payer");
-	}
-
 	function vrfPayerBump(): Result<uint8, ProgramError> {
-		const found = try payerSeeds().findProgramAddress(programId());
+		const found = try findProgramAddress(["vrf-payer"]);
 		return Result.ok(found.bump);
 	}
 
 	function vrfPayerKey(): Pubkey {
-		const found = payerSeeds().findProgramAddress(programKey());
+		const found = findProgramAddressOf(programKey(), ["vrf-payer"]);
 		if (found.ok) { return found.value.key; }
 		return Pubkey.zero();
 	}
@@ -242,16 +249,26 @@ when (testBuild) {
 		return value;
 	}
 
+	// ephemeral-vrf-sdk-0.4.1/src/consts.rs:4,7,10.
+	test "the VRF ids are the ones the SDK declares" {
+		assert VRF_PROGRAM_ID.toBase58() == "Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz";
+		assert VRF_BASE_QUEUE_ID.toBase58() == "Cuj97ggrhhidhbu39TijNVqE74xvKJ69gDervRUXAxGh";
+		assert VRF_EPHEMERAL_QUEUE_ID.toBase58() == "5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc";
+	}
+
 	test "requestRandomness sends the scoped request with the program identity signing" {
 		assert requestRun(requestAccounts(identityOf(programKey())), 0) == 0;
 		const sent = invocations()[0];
-		assert sent.program.equals(Pubkey.vrfProgram()) && sent.signers == 1;
+		assert sent.program.equals(VRF_PROGRAM_ID) && sent.signers == 1;
+		const identity = findProgramAddressOf(programKey(), ["identity"]);
+		assert identity.ok;
+		if (identity.ok) { assert signerIs(sent, 0, [textBytes("identity"), [identity.value.bump]]); }
 		assert sent.accounts.length == 5;
 		assert sent.accounts[0].key.equals(keyOf(1));
 		assert sent.accounts[0].signer && sent.accounts[0].writable;
 		assert sent.accounts[1].key.equals(identityOf(programKey()));
 		assert sent.accounts[1].signer && !sent.accounts[1].writable;
-		assert sent.accounts[2].key.equals(Pubkey.vrfEphemeralQueue()) && sent.accounts[2].writable;
+		assert sent.accounts[2].key.equals(VRF_EPHEMERAL_QUEUE_ID) && sent.accounts[2].writable;
 		assert !sent.accounts[3].writable && !sent.accounts[4].writable;
 		assert sent.data.length == 92 + 34 + 2;
 		assert sent.data[0] == 10 && sent.data[1] == 0 && sent.data[7] == 0;
@@ -286,10 +303,68 @@ when (testBuild) {
 		assert requestRun(accounts, 2) == 0;
 		const sent = invocations()[0];
 		assert sent.signers == 2;
+		const identity = findProgramAddressOf(programKey(), ["identity"]);
+		const payer = findProgramAddressOf(programKey(), ["vrf-payer"]);
+		assert identity.ok && payer.ok;
+		if (identity.ok && payer.ok) {
+			assert signerIs(sent, 0, [textBytes("identity"), [identity.value.bump]]);
+			assert signerIs(sent, 1, [textBytes("vrf-payer"), [payer.value.bump]]);
+		}
 		assert sent.accounts[0].key.equals(vrfPayerKey());
 		assert sent.accounts[0].signer && sent.accounts[0].writable;
 		assert sent.accounts[1].key.equals(identityOf(programKey())) && sent.accounts[1].signer;
 		assert u32At(sent.data, 84) == 3;
+	}
+
+	function sameInvocation(left: uint8[], right: uint8[]): boolean {
+		if (left.length != right.length) { return false; }
+		for (let index = 0; index < left.length; index++) {
+			if (left[index] != right[index]) { return false; }
+		}
+		return true;
+	}
+
+	test "the single callback account form sends the bytes of a one-account list, under try" {
+		assert requestRun(requestAccounts(identityOf(programKey())), 0) == 0;
+		const listed = invocations()[0];
+		assert requestRun(requestAccounts(identityOf(programKey())), 5) == 0;
+		const single = invocations()[0];
+		assert single.program.equals(listed.program) && single.signers == 1;
+		assert single.accounts.length == listed.accounts.length;
+		for (let index = 0; index < listed.accounts.length; index++) {
+			assert single.accounts[index].key.equals(listed.accounts[index].key);
+			assert single.accounts[index].signer == listed.accounts[index].signer;
+			assert single.accounts[index].writable == listed.accounts[index].writable;
+		}
+		assert sameInvocation(single.data, listed.data);
+		assert u32At(single.data, 84) == 1 && keyAt(single.data, 88).equals(keyOf(5));
+		assert single.data[120] == 0 && single.data[121] == 1;
+	}
+
+	test "the single callback account form signs next to a payer PDA, under signed and try" {
+		const accounts = requestAccounts(identityOf(programKey()));
+		accounts[0] = holder(vrfPayerKey(), false, true);
+		assert requestRun(accounts, 6) == 0;
+		const sent = invocations()[0];
+		assert sent.signers == 2;
+		const payer = findProgramAddressOf(programKey(), ["vrf-payer"]);
+		assert payer.ok;
+		if (payer.ok) { assert signerIs(sent, 1, [textBytes("vrf-payer"), [payer.value.bump]]); }
+		assert u32At(sent.data, 84) == 1 && keyAt(sent.data, 88).equals(keyOf(5));
+	}
+
+	function requestWith(length: int32): uint64 {
+		const input: uint8[] = [3];
+		for (let index = 0; index < length; index++) { input.push(0xcc); }
+		return run(programKey(), requestAccounts(identityOf(programKey())), input, requestEntry).result;
+	}
+
+	test "a request whose bytes do not fit the 1024-byte buffer is refused before it is sent" {
+		assert requestWith(1024 - 92) == 0;
+		const sent = invocations()[0];
+		assert sent.data.length == 1024;
+		assert requestWith(1024 - 92 + 1) == ProgramError.invalidInstructionData().code;
+		assert invocations().length == 0;
 	}
 
 	test "requestRandomness refuses an identity that is not the program's" {
@@ -315,7 +390,7 @@ when (testBuild) {
 		assert callbackRun(holder(scopedIdentity(), true, false)) == 0;
 		const unsigned = holder(scopedIdentity(), false, false);
 		assert callbackRun(unsigned) == ProgramError.missingRequiredSignature().code;
-		const global = holder(identityOf(Pubkey.vrfProgram()), true, false);
+		const global = holder(identityOf(VRF_PROGRAM_ID), true, false);
 		assert callbackRun(global) == ProgramError.incorrectAuthority().code;
 	}
 }

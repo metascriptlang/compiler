@@ -7,15 +7,17 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { firstPrivateField } from "./visibility";
-import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape, nestedViewType, ownedAlternativeOf, findViewType } from "./types";
+import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation } from "../ast/node";
+import { checkFieldDecoratorNames } from "./decoratorHelpers";
+import { peelToStructOrUnion, withoutReadonlyView, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, SymbolFlag } from "./symbol";
+import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
 import { forEachChild } from "../ast/visitor";
-import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls } from "./context";
+import { nestedViewType, ownedAlternativeOf, findViewType } from "./types";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
-import { isAssignable as isAssignableCheck, isValueStructDecl } from "./compat";
+import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
 import { buildTypeArgKeys, monoBaseName, monoInstanceNameOf, monoTypeKey } from "../monomorphize/registry";
 
 function anyHasGenericParams(types: Type[]): boolean {
@@ -1435,6 +1437,46 @@ function findPredicateInfix(text: string): int32 {
 	return (idxSp + 1) as int32;
 }
 
+
+function overloadDeclConflict(existing: Symbol, fnType: Type, d: FunctionDeclData): boolean {
+	const a = existing.symbolType;
+	if (a.typeChildren.length != fnType.typeChildren.length) return false;
+	for (let i = 0; i < a.typeChildren.length; i += 1) {
+		if (a.typeNames[i] != fnType.typeNames[i]) return false;
+		if (!sameType(a.typeChildren[i], fnType.typeChildren[i])) return false;
+	}
+	const ea = existing.declNode != null && existing.declNode.kind == NodeKind.FunctionDecl
+		? existing.declNode.data as FunctionDeclData : null;
+	if (ea == null || ea.fnReturnType == "" || d.fnReturnType == "") return false;
+	return !sameType(a.typeReturn, fnType.typeReturn);
+}
+
+function checkOverloadDeclAmbiguity(ctx: CheckerContext, node: Node, sym: Symbol, fnType: Type, d: FunctionDeclData): void {
+	const primary = lookupSymbol(ctx.table, d.fnName);
+	if (primary == null || primary.symbolKind != SymbolKind.Function) return;
+	let relevant = primary == sym;
+	if (!relevant) {
+		for (const ov of primary.overloads) {
+			if (ov == sym) {
+				relevant = true;
+				break;
+			}
+		}
+	}
+	if (!relevant) return;
+	const candidates: Symbol[] = [primary];
+	for (const ov of primary.overloads) candidates.push(ov);
+	for (const cand of candidates) {
+		if (cand == sym || cand.symbolKind != SymbolKind.Function) continue;
+		if (cand.modulePath != sym.modulePath) continue;
+		if (isUnresolvedType(cand.symbolType) || cand.symbolType.kind != TypeKind.Function) continue;
+		if (overloadDeclConflict(cand, fnType, d)) {
+			const prev = cand.declNode != null ? cand.declNode.location : node.location;
+			addError(ctx, `overloaded '${d.fnName}' leads to ambiguous calls — previous declaration at line ${prev.line}`, node.location.line, node.location.column);
+			return;
+		}
+	}
+}
 export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
 	// Use resolvedSym set by collectPass (preserves overloadIdx for overloaded functions).
@@ -1499,7 +1541,6 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 			}
 		}
 	}
-	refuseHookReceiverByValue(ctx, node, paramTypes);
 	for (let pi = 0; pi < paramTypes.length && pi < d.params.length; pi += 1) {
 		const pLoc = node.paramLocations != null && pi < node.paramLocations.length && node.paramLocations[pi] != null
 			? node.paramLocations[pi] : node.location;
@@ -1548,6 +1589,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 	// Record return type annotation positions for LSP
 	resolveTypeExpr(node.typeExpr, ctx);
+	refuseHookReceiver(ctx, node, paramTypes, d.fnReturnType != "" ? returnType : null);
 	const fnType = createFunction(paramTypes, d.params, returnType);
 	if (predicateSentinel != null) {
 		fnType.typeExtra = predicateSentinel;
@@ -1576,6 +1618,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 		closeScope(ctx.table);
 	}
 
+	checkOverloadDeclAmbiguity(ctx, node, sym, fnType, d);
 	// Overload handling: resolve in declaration order
 	if (sym.overloads.length > 0 && !isUnresolvedType(sym.symbolType)) {
 		// Primary already resolved — assign to first unresolved overload
@@ -1624,16 +1667,149 @@ function refuseUnknownAtCBoundary(ctx: CheckerContext, name: string, paramTypes:
 	addError(ctx, "extern '" + name + "' " + spot + ": unknown holds managed objects, a C function sees raw addresses — declare it Ptr<void>", node.location.line, node.location.column);
 }
 
-function refuseHookReceiverByValue(ctx: CheckerContext, node: Node, paramTypes: Type[]): void {
+function hookObjectName(t: Type): string {
+	const k = t.kind;
+	return k == TypeKind.Struct || k == TypeKind.GenericInstance || k == TypeKind.Distinct || k == TypeKind.Union ? t.typeName : "";
+}
+
+function hookReceiverShapes(hook: string): string {
+	const object = " (T a struct, a class or a generic instance of one)";
+	if (hook == "onDestroy") return "'this x: T', or for a struct also 'this ref x: T' and 'this x: Var<T>'" + object;
+	if (hook == "onClone") return "'this x: T'" + object;
+	return "'this ref x: T' or 'this x: Var<T>' for a struct, 'this x: T' for a class" + object;
+}
+
+function hookReceiverFault(hook: string, key: string, written: string, recv: Type): string {
+	let obj: Type = recv;
+	let byVar = false;
+	if (obj.kind == TypeKind.Var && obj.typeReturn != null) {
+		byVar = true;
+		obj = obj.typeReturn;
+	}
+	let byClass = false;
+	const readonlyView = isReadonlyView(obj);
+	if (obj.kind == TypeKind.Ref && obj.typeReturn != null && refWrapsNominal(obj)) {
+		byClass = true;
+		obj = obj.typeReturn;
+	}
+	if (obj.kind == TypeKind.Error) return "";
+	const display = byVar && !written.startsWith("Var") ? "ref " + written : written;
+	if (obj.kind == TypeKind.Ptr) return "'" + display + "' addresses the type, it is not the type the hook belongs to, so the hook would never run";
+	if (isMaybeType(obj) || unwrapRefNullUnion(obj) != null) return "'" + typeDisplayName(recv) + "' may be null, and a hook always receives the object itself";
+	const name = hookObjectName(obj);
+	if (name == "" && obj.kind != TypeKind.Alias) {
+		const shown = written == key ? typeDisplayName(recv) : display;
+		return "'" + shown + "' is not a type a hook can belong to, so the hook would never run";
+	}
+	if (name != key) return "'" + display + "' is not the type's own name, and a hook is found by the name its receiver is declared with, so the hook would never run";
+	if (byVar && byClass) return "'" + display + "' points at the class reference, and a class receiver already is the reference the hook writes through: take it as 'this x: " + name + "'";
+	if (hookWritesItsReceiver(hook)) {
+		if (readonlyView) return "'" + display + "' is a read-only view, and the hook has to write its receiver";
+		if (!byVar && !byClass) return "'" + display + "' is a value type, so 'this' would be a copy of the destination the hook has to write";
+	}
+	if (hook == "onClone" && byVar) return "'" + display + "' hands the hook the destination, and a clone is a new value made from a receiver taken by value";
+	return "";
+}
+
+function refuseHookReceiver(ctx: CheckerContext, node: Node, paramTypes: Type[], declaredReturn: Type | null): void {
 	const d = node.data as FunctionDeclData;
-	if (!hookWritesItsReceiver(d.fnName) || paramTypes.length == 0 || getExtReceiverType(d.fnFlags) == "") return;
+	if (!isLifecycleHookName(d.fnName) || paramTypes.length == 0) return;
+	const key = getExtReceiverType(d.fnFlags);
+	if (key == "") return;
 	const recv = paramTypes[0];
 	if (recv == null || isUnresolvedType(recv)) return;
-	const k = recv.kind;
-	if (k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Var || k == TypeKind.GenericParam) return;
-	const loc = node.paramLocations != null && node.paramLocations.length > 0 && node.paramLocations[0] != null ? node.paramLocations[0] : node.location;
-	addError(ctx, "signature for '" + d.fnName + "' must take its receiver by reference: '" + typeDisplayName(recv)
-		+ "' is a value type, so 'this' would be a copy of the destination the hook has to write", loc.line, loc.column);
+	const fault = hookReceiverFault(d.fnName, key, getExtReceiverText(d.fnFlags), recv);
+	if (fault != "") {
+		const loc = node.paramLocations != null && node.paramLocations.length > 0 && node.paramLocations[0] != null ? node.paramLocations[0] : node.location;
+		addError(ctx, "signature for '" + d.fnName + "' must take its receiver as " + hookReceiverShapes(d.fnName) + ": " + fault, loc.line, loc.column);
+		return;
+	}
+	refuseHookOutsideItsModule(ctx, node, key);
+	refuseHookSignature(ctx, d.fnName, d.nameLocation, paramTypes, declaredReturn);
+}
+
+function hookObjectOf(t: Type): Type {
+	let obj = t;
+	if (obj.kind == TypeKind.Var && obj.typeReturn != null) obj = obj.typeReturn;
+	if (obj.kind == TypeKind.Ref && obj.typeReturn != null && refWrapsNominal(obj)) obj = obj.typeReturn;
+	return withoutReadonlyView(obj);
+}
+
+function hookTakes(hook: string): string {
+	if (hook == "onCopy" || hook == "onMove") return "the receiver and the source value ('y: T')";
+	if (hook == "onTrace") return "the receiver and the tracer ('env: Ptr<void>')";
+	return "the receiver only";
+}
+
+function hookParamFault(hook: string, paramTypes: Type[]): string {
+	if (hook != "onDestroy" && hook != "onTrace" && paramTypes.length > 0) {
+		const recv = paramTypes[0];
+		if (recv.kind == TypeKind.Ref && recv.typeReturn != null && refWrapsNominal(recv)) {
+			return "'" + typeDisplayName(recv) + "' is a class, its values are shared by reference and never copied, moved or cloned by value, so the hook would never run";
+		}
+	}
+	const want = hook == "onCopy" || hook == "onMove" || hook == "onTrace" ? 2 : 1;
+	if (paramTypes.length != want) {
+		return "it takes " + hookTakes(hook) + ", " + paramTypes.length.toString() + " parameter" + (paramTypes.length == 1 ? "" : "s") + " declared";
+	}
+	if (hook == "onTrace") {
+		const env = paramTypes[1];
+		if (env.kind != TypeKind.Ptr || env.typeReturn == null || env.typeReturn.kind != TypeKind.Void) {
+			return "its second parameter is '" + typeDisplayName(env) + "', the tracer is 'env: Ptr<void>'";
+		}
+	}
+	if (hook == "onCopy" || hook == "onMove") {
+		const src = paramTypes[1];
+		if (!sameType(hookObjectOf(paramTypes[0]), hookObjectOf(src)) || src.kind == TypeKind.Var) {
+			return "its second parameter is '" + typeDisplayName(src) + "', the source value is the receiver's own type ('y: T')";
+		}
+	}
+	return "";
+}
+
+function hookReturnFault(hook: string, paramTypes: Type[], returnType: Type): string {
+	if (hook == "onClone") {
+		if (returnType.kind == TypeKind.Var || !sameType(hookObjectOf(paramTypes[0]), hookObjectOf(returnType))) {
+			return "it returns '" + typeDisplayName(returnType) + "', a clone is a new value of the receiver's own type";
+		}
+		return "";
+	}
+	if (returnType.kind != TypeKind.Void) return "it returns '" + typeDisplayName(returnType) + "', a hook returns nothing";
+	return "";
+}
+
+function hookTypesAreResolved(paramTypes: Type[], returnType: Type | null): boolean {
+	if (paramTypes.length == 0) return false;
+	for (const t of paramTypes) {
+		if (t == null || isUnresolvedType(t)) return false;
+	}
+	return returnType == null || !isUnresolvedType(returnType);
+}
+
+function refuseHookSignature(ctx: CheckerContext, hook: string, at: SourceLocation, paramTypes: Type[], returnType: Type | null): void {
+	if (!hookTypesAreResolved(paramTypes, returnType)) return;
+	let fault = hookParamFault(hook, paramTypes);
+	if (fault == "" && returnType != null) fault = hookReturnFault(hook, paramTypes, returnType);
+	if (fault == "") return;
+	addError(ctx, "signature for '" + hook + "' is wrong: " + fault, at.line, at.column);
+}
+
+export function refuseHookInferredReturn(ctx: CheckerContext, hook: string, at: SourceLocation, fnType: Type): void {
+	const returnType = fnType.typeReturn;
+	if (returnType == null || !hookTypesAreResolved(fnType.typeChildren, returnType)) return;
+	if (hookParamFault(hook, fnType.typeChildren) != "") return;
+	const fault = hookReturnFault(hook, fnType.typeChildren, returnType);
+	if (fault == "") return;
+	addError(ctx, "signature for '" + hook + "' is wrong: " + fault, at.line, at.column);
+}
+
+function refuseHookOutsideItsModule(ctx: CheckerContext, node: Node, typeName: string): void {
+	const d = node.data as FunctionDeclData;
+	const hookSym = node.resolvedSym;
+	const typeSym = lookupSymbol(ctx.table, typeName);
+	if (hookSym == null || typeSym == null || hookSym.modulePath == "" || typeSym.modulePath == "") return;
+	if (hookSym.modulePath == typeSym.modulePath) return;
+	addError(ctx, "type bound operation '" + d.fnName + "' can be defined only in the same module with its type (" + typeName + "): declare it in the module that declares '" + typeName + "'", d.nameLocation.line, d.nameLocation.column);
 }
 
 function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: string, line: int32, col: int32): void {
@@ -1677,6 +1853,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	// Set state to Shaped immediately to allow circular references in fields
 	sym.state = SymbolState.Shaped;
 	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.interfaceName.length, sym, sym.symbolType, sym.symbolKind, d.interfaceName, "", true);
+	checkFieldDecoratorNames(ctx, d.interfaceFieldDecorators);
 
 	// Check for generic params (e.g., interface Box<T> — parser stores in side-channel)
 	const genericStr = declGenericParams(node);
@@ -1809,6 +1986,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
 	if (sym.symbolType.kind == TypeKind.Struct && parentTypes.length == 1 && isValueStructDecl(parentTypes[0])) target.typeExtra = parentTypes[0];
 	for (const pt of mergedTypes) { propagateToOwner(target, pt); }
+	if (sym.symbolType.kind == TypeKind.Struct && declaresLifecycleHook(ctx, d.interfaceName)) target.typeFlags = target.typeFlags.incl(TypeFlag.HasAsgn);
 	node.nodeType = sym.symbolType;
 	// Record each OWN interface field DEF for symbol graph (inherited fields
 	// already recorded by parent's resolveInterface). Parser stores per-field
@@ -1933,6 +2111,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		distType.typeName = d.aliasName;
 		if (resolved.kind == TypeKind.Function) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BrandWiden);
 		if (hasFlag(sym, SymbolFlag.Borrow)) distType.typeFlags = distType.typeFlags.incl(TypeFlag.BorrowDot);
+		if (declaresLifecycleHook(ctx, d.aliasName)) distType.typeFlags = distType.typeFlags.incl(TypeFlag.HasAsgn);
 		assignType(sym.symbolType, distType);
 		node.nodeType = sym.symbolType;
 	} else if ((hasGenericAlias ? declaredByAnotherSymbol(resolved, sym) : resolved.sym != null)
@@ -2168,6 +2347,9 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
 				closeScope(ctx.table);
+			}
+			if (isLifecycleHookName(md.methodName) && !md.methodIsStatic) {
+				refuseHookSignature(ctx, md.methodName, md.nameLocation, paramTypes, md.methodReturnType != "" ? returnType : null);
 			}
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
 			stripRestParamPrefix(md.methodParams);
@@ -2476,7 +2658,7 @@ function declareGeneric(ctx: CheckerContext, kind: NodeKind, name: string, param
 		}
 		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classExtends: "", classBody: body, nameLocation: zl }, zl);
 	} else {
-		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl }, zl);
+		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldDecorators: noFieldDecorators(fields.length) }, zl);
 	}
 	decl.typeArg = params;
 	const sym = makeSymbol(name, kind == NodeKind.ClassDecl ? SymbolKind.Class : SymbolKind.Interface, createStruct(name, fields, [], true), false);

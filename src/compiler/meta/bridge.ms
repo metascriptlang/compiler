@@ -62,8 +62,8 @@ import {
 	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
-import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType } from "../../checker/types";
-import { hasFlag, isTypeSymbol, SymbolFlag } from "../../checker/symbol";
+import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase } from "../../checker/types";
+import { hasFlag, isTypeSymbol, SymbolFlag, overloadWinner } from "../../checker/symbol";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -162,6 +162,19 @@ function collectFieldDecorators(t: Type): Node[][] {
 	const out: Node[][] = [];
 	for (let i = 0; i < t.typeNames.length; i = i + 1) out.push([]);
 	if (t.sym == null) return out;
+	const decl = t.sym.declNode;
+	if (decl != null && (decl.kind == NodeKind.StructDecl || decl.kind == NodeKind.InterfaceDecl)) {
+		const d = decl.data as InterfaceDeclData;
+		for (let j = 0; j < t.typeNames.length; j = j + 1) {
+			for (let k = 0; k < d.interfaceFields.length; k = k + 1) {
+				if (d.interfaceFields[k] == t.typeNames[j]) {
+					out[j] = d.interfaceFieldDecorators[k];
+					break;
+				}
+			}
+		}
+		return out;
+	}
 	for (let j = 0; j < t.typeNames.length; j = j + 1) {
 		for (let k = 0; k < t.sym.fieldDecoratorNames.length; k = k + 1) {
 			if (t.sym.fieldDecoratorNames[k] == t.typeNames[j]) {
@@ -425,6 +438,99 @@ export function mapTypeToAst(t: Type | null, loc: SourceLocation, impl: boolean 
 	return mapTypeToAstWith(t, loc, [], impl);
 }
 
+function namedTypeNode(name: string, sym: Symbol | null, loc: SourceLocation): Node {
+	const n = atomicTypeNode(name, loc);
+	if (sym != null) {
+		n.resolvedSym = sym;
+		n.flags = n.flags.incl(NodeFlag.BoundSym);
+	}
+	return n;
+}
+
+function isClassLike(sym: Symbol | null): boolean {
+	return sym != null && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor);
+}
+
+function isImplicitRef(inner: Type): boolean {
+	if (inner.kind == TypeKind.Array || inner.kind == TypeKind.Span) return true;
+	if (inner.kind == TypeKind.GenericInstance) return inner.typeExtra != null && isClassLike(unwrapRefBase(inner.typeExtra).sym);
+	return isClassLike(inner.sym);
+}
+
+export function fieldTypeNode(t: Type | null, loc: SourceLocation): Node {
+	if (t == null) return atomicTypeNode("<null>", loc);
+	if (t.kind == TypeKind.Ref && t.typeReturn != null && isImplicitRef(t.typeReturn)) return fieldTypeNode(t.typeReturn, loc);
+	const atomicName = atomicTypeName(t);
+	let result: Node;
+	if (atomicName != "") {
+		result = atomicTypeNode(atomicName, loc);
+	} else if (t.kind == TypeKind.Struct && isMaybeType(t) && t.typeReturn != null) {
+		result = createNodeAt(NodeKind.TypeUnion, {
+			typExprMembers: [fieldTypeNode(t.typeReturn, loc), atomicTypeNode("null", loc)],
+			discFieldName: "",
+			variantKeys: [],
+			discKind: "",
+		}, loc);
+	} else if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span) {
+		result = createNodeAt(NodeKind.TypeArray, {
+			typExprElement: fieldTypeNode(t.typeReturn, loc),
+			typExprSize: t.kind == TypeKind.SizedArray ? t.typeValue as number : -1,
+		}, loc);
+	} else if (t.kind == TypeKind.GenericInstance) {
+		const base = t.typeExtra != null ? unwrapRefBase(t.typeExtra) : null;
+		const args: Node[] = [];
+		for (const a of t.typeChildren) args.push(fieldTypeNode(a, loc));
+		result = createNodeAt(NodeKind.TypeGeneric, {
+			typExprBase: namedTypeNode(t.typeName, base != null ? base.sym : null, loc),
+			typExprArgs: args,
+		}, loc);
+	} else if (t.sym != null && isTypeSymbol(t.sym)) {
+		result = namedTypeNode(t.typeName != "" ? t.typeName : t.sym.name, t.sym, loc);
+	} else if ((t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr || t.kind == TypeKind.Borrow || t.kind == TypeKind.Sink
+			|| t.kind == TypeKind.Lent || t.kind == TypeKind.Var || t.kind == TypeKind.Distinct) && t.typeReturn != null) {
+		result = createNodeAt(NodeKind.TypeGeneric, {
+			typExprBase: atomicTypeNode(modifierName(t.kind), loc),
+			typExprArgs: [fieldTypeNode(t.typeReturn, loc)],
+		}, loc);
+	} else if (t.kind == TypeKind.Union) {
+		const members: Node[] = [];
+		for (const m of t.typeChildren) members.push(fieldTypeNode(m, loc));
+		result = createNodeAt(NodeKind.TypeUnion, { typExprMembers: members, discFieldName: "", variantKeys: [], discKind: "" }, loc);
+	} else {
+		return mapTypeToAst(t, loc);
+	}
+	result.nodeType = t;
+	return result;
+}
+
+function fieldTypeIn(shape: Type, name: string): Type | null {
+	for (let i = 0; i < shape.typeNames.length && i < shape.typeChildren.length; i = i + 1) {
+		if (shape.typeNames[i] == name) return shape.typeChildren[i];
+	}
+	return null;
+}
+
+export function attachFieldTypeNodes(impl: RaiserValue, decl: Node, shape: Type, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap): void {
+	if (impl.kind != RaiserValueKind.Object) return;
+	if (decl.kind == NodeKind.StructDecl || decl.kind == NodeKind.InterfaceDecl) {
+		const nodes: Node[] = [];
+		for (const name of (decl.data as InterfaceDeclData).interfaceFields) nodes.push(fieldTypeNode(fieldTypeIn(shape, name), decl.location));
+		heapObjectSetField(objHeap, impl.intVal, "typeExprs", serializeNodes(nodes, objHeap, arrHeap, false));
+		return;
+	}
+	if (decl.kind != NodeKind.ClassDecl) return;
+	const body = heapObjectGetField(objHeap, impl.intVal, "classBody");
+	if (body.kind != RaiserValueKind.Array) return;
+	for (let i = 0; i < heapArrayLen(arrHeap, body.intVal); i = i + 1) {
+		const member = heapArrayGet(arrHeap, body.intVal, i);
+		if (member.kind != RaiserValueKind.Object) continue;
+		const kind = heapObjectGetField(objHeap, member.intVal, "kind");
+		if (kind.kind != RaiserValueKind.Int || kind.intVal != NodeKind.PropertyDecl as int64) continue;
+		const node = fieldTypeNode(fieldTypeIn(shape, readStr(objHeap, member.intVal, "propName")), decl.location);
+		heapObjectSetField(objHeap, member.intVal, "typeExpr", nodeToValue(node, objHeap, arrHeap, false));
+	}
+}
+
 // ===== Serialization helpers (write to RaiserValue) =====
 
 function serializeNodes(nodes: Node[], objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, includeTypeAst: boolean = true): RaiserValue {
@@ -533,6 +639,13 @@ export function boundTypeAt(index: int32): Type | null {
 	return _boundTypes[index];
 }
 
+export function boundTypeOfObject(objHeap: RaiserObjectHeap, handle: int64): Type | null {
+	const th = heapObjectGetField(objHeap, handle, "typeHandle");
+	if (th.kind == RaiserValueKind.Int) return boundTypeAt(th.intVal as int32);
+	if (th.kind == RaiserValueKind.Float) return boundTypeAt(th.floatVal as int32);
+	return null;
+}
+
 // `declNode` skipped to avoid Symbol↔Node cycle; reach it via getImpl.
 function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap): RaiserValue {
 	const handle = heapAllocObject(objHeap);
@@ -541,6 +654,13 @@ function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap): RaiserValue {
 	setStr(objHeap, handle, "modulePath", sym.modulePath);
 	setStr(objHeap, handle, "builtinKind", sym.builtinKind);
 	return raiserObject(handle);
+}
+
+function setTypeFields(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, handle: int64, t: Type, loc: SourceLocation, includeTypeAst: boolean): void {
+	heapObjectSetField(objHeap, handle, "typeHandle", raiserInt(registerBoundType(t) as int64));
+	if (includeTypeAst) {
+		setNode(objHeap, arrHeap, handle, "nodeType", mapTypeToAst(t, loc), false);
+	}
 }
 
 // ===== nodeToValue: AST Node → RaiserValue =====
@@ -647,7 +767,16 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
 			setNode(objHeap, arrHeap, handle, "callee", d.callee);
+			if (node.resolvedSym != null) {
+				const winner = overloadWinner(node.resolvedSym, d.resolvedOverloadIdx);
+				const calleeVal = heapObjectGetField(objHeap, handle, "callee");
+				if (winner != node.resolvedSym && winner.symbolType != null && calleeVal.kind == RaiserValueKind.Object) {
+					setTypeFields(objHeap, arrHeap, calleeVal.intVal, winner.symbolType, d.callee.location, includeTypeAst);
+					heapObjectSetField(objHeap, calleeVal.intVal, "resolvedSym", symbolToValue(winner, objHeap));
+				}
+			}
 			setNodes(objHeap, arrHeap, handle, "arguments", d.arguments);
+			setStr(objHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.MemberExpr => {
 			const d = node.data as MemberExprData;
@@ -713,6 +842,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as NewExprData;
 			setNode(objHeap, arrHeap, handle, "newCallee", d.newCallee);
 			setNodes(objHeap, arrHeap, handle, "newArguments", d.newArguments);
+			setStr(objHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.TryExpr => {
 			const d = node.data as TryExprData;
@@ -937,6 +1067,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStrs(objHeap, arrHeap, handle, "interfaceFieldTypes", d.interfaceFieldTypes);
 			setStrs(objHeap, arrHeap, handle, "interfaceExtends", d.interfaceExtends);
 			setStrs(objHeap, arrHeap, handle, "interfaceFieldVisibility", d.interfaceFieldVisibility != null ? d.interfaceFieldVisibility : []);
+			setNodeArrays(objHeap, arrHeap, handle, "interfaceFieldDecorators", d.interfaceFieldDecorators);
 			setStr(objHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.ClassDecl => {
@@ -1107,11 +1238,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 	};
 
 	if (node.nodeType != null) {
-		heapObjectSetField(objHeap, handle, "typeHandle", raiserInt(registerBoundType(node.nodeType) as int64));
-		if (includeTypeAst) {
-			const typeAst = mapTypeToAst(node.nodeType, node.location);
-			setNode(objHeap, arrHeap, handle, "nodeType", typeAst, false);
-		}
+		setTypeFields(objHeap, arrHeap, handle, node.nodeType, node.location, includeTypeAst);
 	} else if (includeTypeAst && node.nodeTypeAst != null) {
 		setNode(objHeap, arrHeap, handle, "nodeType", node.nodeTypeAst, false);
 	}
@@ -1272,6 +1399,12 @@ function readNodeArrays(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: 
 	return result;
 }
 
+function readFieldDecorators(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, fieldCount: int32, fallbackLoc: SourceLocation): Node[][] {
+	const rows = readNodeArrays(objHeap, arrHeap, h, "interfaceFieldDecorators", fallbackLoc);
+	while (rows.length < fieldCount) rows.push([]);
+	return rows;
+}
+
 export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
 	return match (val.kind) {
 		RaiserValueKind.Int => mkInt(val.intVal, fallbackLoc),
@@ -1297,15 +1430,15 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 			const kindField = heapObjectGetField(objHeap, handle, "kind");
 			if (kindField.kind == RaiserValueKind.Int) {
 				const out = readNodeFromObject(handle, kindField.intVal as NodeKind, objHeap, arrHeap, fallbackLoc);
-				// Preserve type-AST hint so subsequent macro expansions see the
-				// original arg's type info (Node.nodeType is a Type and can't
-				// be round-tripped; the type-AST Node form survives via
-				// nodeTypeAst). Fixes Bug 6 nested-macro re-expansion path.
+				// The argument's type survives the wire twice: the Type through its
+				// bound-type handle, the type-AST Node form in nodeTypeAst.
 				if (out != null) {
 					const ntField = heapObjectGetField(objHeap, handle, "nodeType");
 					if (ntField.kind == RaiserValueKind.Object) {
 						out.nodeTypeAst = valueToNode(ntField, objHeap, arrHeap, fallbackLoc);
 					}
+					const typed = boundTypeOfObject(objHeap, handle);
+					if (typed != null) out.nodeType = typed;
 					// One flag, by name, not the whole word: a macro that could set
 					// Sem/Transf/LL would forge pipeline state on a node the passes
 					// have never processed. Widen this list only per-flag.
@@ -1446,9 +1579,11 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.CallExpr => {
 			const callee = readNode(objHeap, arrHeap, h, "callee", loc);
 			const args = readNodes(objHeap, arrHeap, h, "arguments", loc);
-			return createNodeAt(NodeKind.CallExpr, {
+			const call = createNodeAt(NodeKind.CallExpr, {
 				callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: 0,
 			}, loc);
+			call.typeArg = readStr(objHeap, h, "typeArg");
+			return call;
 		},
 		NodeKind.MemberExpr => {
 			const object = readNode(objHeap, arrHeap, h, "object", loc);
@@ -1527,7 +1662,9 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.NewExpr => {
 			const newCallee = readNode(objHeap, arrHeap, h, "newCallee", loc);
 			const newArguments = readNodes(objHeap, arrHeap, h, "newArguments", loc);
-			return createNodeAt(NodeKind.NewExpr, { newCallee, newArguments }, loc);
+			const created = createNodeAt(NodeKind.NewExpr, { newCallee, newArguments }, loc);
+			created.typeArg = readStr(objHeap, h, "typeArg");
+			return created;
 		},
 		NodeKind.TryExpr => {
 			const tryArg = readNode(objHeap, arrHeap, h, "tryArg", loc);
@@ -1770,6 +1907,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 				interfaceExtends: readStrs(objHeap, arrHeap, h, "interfaceExtends"),
 				nameLocation: loc,
 				interfaceFieldVisibility: readStrs(objHeap, arrHeap, h, "interfaceFieldVisibility"),
+				interfaceFieldDecorators: readFieldDecorators(objHeap, arrHeap, h, interfaceFields.length, loc),
 			}, loc);
 			decl.typeArg = readStr(objHeap, h, "typeArg");
 			return decl;
@@ -1783,6 +1921,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 				interfaceExtends: readStrs(objHeap, arrHeap, h, "interfaceExtends"),
 				nameLocation: loc,
 				interfaceFieldVisibility: readStrs(objHeap, arrHeap, h, "interfaceFieldVisibility"),
+				interfaceFieldDecorators: readFieldDecorators(objHeap, arrHeap, h, interfaceFields.length, loc),
 			}, loc);
 			decl.typeArg = readStr(objHeap, h, "typeArg");
 			return decl;
@@ -2227,6 +2366,44 @@ test "round-trip CallExpr with arguments" {
 	assert d.arguments.length == 2;
 	assert d.arguments[0].kind == NodeKind.StringLiteral;
 	assert d.arguments[1].kind == NodeKind.NumberLiteral;
+}
+
+test "round-trip CallExpr keeps its explicit type arguments" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const callee = createNode(NodeKind.Identifier, { name: "make" }, synthToken(loc));
+	const orig = createNode(NodeKind.CallExpr, {
+		callee, arguments: [mkNumber(4, loc)], isDirectCall: true, resolvedOverloadIdx: 0,
+	}, synthToken(loc));
+	orig.typeArg = "int32,string";
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	assert back.kind == NodeKind.CallExpr;
+	assert back.typeArg == "int32,string";
+}
+
+test "round-trip CallExpr without explicit type arguments keeps none" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const callee = createNode(NodeKind.Identifier, { name: "make" }, synthToken(loc));
+	const orig = createNode(NodeKind.CallExpr, {
+		callee, arguments: [], isDirectCall: true, resolvedOverloadIdx: 0,
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	assert back.typeArg == "";
+}
+
+test "round-trip NewExpr keeps its explicit type arguments" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const callee = createNode(NodeKind.Identifier, { name: "Cell" }, synthToken(loc));
+	const orig = createNode(NodeKind.NewExpr, { newCallee: callee, newArguments: [] }, synthToken(loc));
+	orig.typeArg = "int32";
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	assert back.kind == NodeKind.NewExpr;
+	assert back.typeArg == "int32";
 }
 
 test "round-trip MemberExpr" {
@@ -3267,17 +3444,28 @@ test "nodeToValue — self-referential nodeType (Tree) terminates via cycle brea
 	assert kindVal.intVal == NodeKind.TypeObject as int64;
 }
 
-test "valueToNode — drops nodeType field (forward-only design)" {
+test "valueToNode — restores nodeType from its bound-type handle" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
 	const loc = makeLoc(1, 0);
 	const ident = createNodeAt(NodeKind.Identifier, { name: "x" }, loc);
-	ident.nodeType = makePrimType(TypeKind.Int32);
+	const written = makePrimType(TypeKind.Int32);
+	ident.nodeType = written;
 	const v = nodeToValue(ident, objH, arrH);
 	const back = valueToNode(v, objH, arrH, loc);
 	assert back.kind == NodeKind.Identifier;
 	assert (back.data as IdentifierData).name == "x";
-	assert back.nodeType == null;  // forward-only: reverse path leaves nodeType null
+	assert back.nodeType == written;
+}
+
+test "valueToNode — a node that never had a type comes back without one" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(1, 0);
+	const ident = createNodeAt(NodeKind.Identifier, { name: "x" }, loc);
+	const v = nodeToValue(ident, objH, arrH);
+	const back = valueToNode(v, objH, arrH, loc);
+	assert back.nodeType == null;
 }
 
 test "nodeToValue — child Nodes' nodeType cascades through dispatch" {
@@ -3382,6 +3570,50 @@ test "nodeToValue — different SymbolKinds preserved correctly" {
 	assert kindVal.intVal == SymbolKind.Function as int64;
 }
 
+function makeOverloadedCall(winnerIdx: number): Node[] {
+	const loc = makeLoc(1, 0);
+	const first = makeSymbol("f", SymbolKind.Function);
+	first.symbolType = makePrimType(TypeKind.Function);
+	first.symbolType.typeChildren = [makePrimType(TypeKind.Int32)];
+	const second = makeSymbol("f", SymbolKind.Function);
+	second.modulePath = "other";
+	second.symbolType = makePrimType(TypeKind.Function);
+	second.symbolType.typeChildren = [makePrimType(TypeKind.Int32), makePrimType(TypeKind.String)];
+	first.overloads = [second];
+	const callee = createNodeAt(NodeKind.Identifier, { name: "f" }, loc);
+	callee.resolvedSym = first;
+	callee.nodeType = first.symbolType;
+	const call = createNodeAt(NodeKind.CallExpr, {
+		callee, arguments: [], isDirectCall: true, resolvedOverloadIdx: winnerIdx,
+	}, loc);
+	call.resolvedSym = first;
+	return [call, callee];
+}
+
+test "nodeToValue — a call's callee shows the overload the call resolved to" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const parts = makeOverloadedCall(1);
+	const v = nodeToValue(parts[0], objH, arrH);
+	const calleeVal = heapObjectGetField(objH, v.intVal, "callee");
+	const params = heapObjectGetField(objH, heapObjectGetField(objH, calleeVal.intVal, "nodeType").intVal, "typExprParams");
+	assert heapArrayLen(arrH, params.intVal) == 2;
+	assert boundTypeOfObject(objH, calleeVal.intVal) == parts[0].resolvedSym.overloads[0].symbolType;
+	const symVal = heapObjectGetField(objH, calleeVal.intVal, "resolvedSym");
+	assert heapObjectGetField(objH, symVal.intVal, "modulePath").strVal == "other";
+}
+
+test "nodeToValue — a call that resolved to the first overload keeps its callee" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const parts = makeOverloadedCall(0);
+	const v = nodeToValue(parts[0], objH, arrH);
+	const calleeVal = heapObjectGetField(objH, v.intVal, "callee");
+	const params = heapObjectGetField(objH, heapObjectGetField(objH, calleeVal.intVal, "nodeType").intVal, "typExprParams");
+	assert heapArrayLen(arrH, params.intVal) == 1;
+	assert boundTypeOfObject(objH, calleeVal.intVal) == parts[1].nodeType;
+}
+
 test "valueToNode — drops resolvedSym field (forward-only design)" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
@@ -3456,7 +3688,7 @@ test "round-trip InterfaceDecl keeps interfaceExtends" {
 	const loc = makeLoc(3, 1);
 	const orig = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: "Child", interfaceFields: ["x"], interfaceFieldTypes: ["number"],
-		interfaceExtends: ["Base"], nameLocation: loc,
+		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
@@ -3470,11 +3702,43 @@ test "round-trip StructDecl keeps interfaceExtends" {
 	const loc = makeLoc(3, 1);
 	const orig = createNode(NodeKind.StructDecl, {
 		interfaceName: "S", interfaceFields: [], interfaceFieldTypes: [],
-		interfaceExtends: ["Base"], nameLocation: loc,
+		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldDecorators: [],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
 	assert d.interfaceExtends.length == 1;
+}
+
+test "round-trip StructDecl keeps each field's decorators with their arguments" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 1);
+	const arg = createNode(NodeKind.StringLiteral, { value: "config" }, synthToken(loc));
+	const dec = createNode(NodeKind.MacroInvocation, { macroName: "seeds", macroArgs: [arg], macroHasParens: true }, synthToken(loc));
+	const orig = createNode(NodeKind.StructDecl, {
+		interfaceName: "S", interfaceFields: ["a", "b"], interfaceFieldTypes: ["int32", "int32"],
+		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [[dec], []],
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as InterfaceDeclData;
+	assert d.interfaceFieldDecorators.length == 2;
+	assert d.interfaceFieldDecorators[0].length == 1 && d.interfaceFieldDecorators[1].length == 0;
+	const md = d.interfaceFieldDecorators[0][0].data as MacroInvocationData;
+	assert md.macroName == "seeds" && md.macroArgs.length == 1 && md.macroHasParens;
+	assert md.macroArgs[0].kind == NodeKind.StringLiteral;
+}
+
+test "round-trip pads a declaration built without decorators to one empty row per field" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 1);
+	const orig = createNode(NodeKind.InterfaceDecl, {
+		interfaceName: "I", interfaceFields: ["a", "b", "c"], interfaceFieldTypes: ["int32", "int32", "int32"],
+		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [],
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as InterfaceDeclData;
+	assert d.interfaceFieldDecorators.length == 3 && d.interfaceFieldDecorators[2].length == 0;
 }
 
 test "round-trip keeps the generic params of an interface, a struct, a class and an actor" {
@@ -3483,12 +3747,12 @@ test "round-trip keeps the generic params of an interface, a struct, a class and
 	const loc = makeLoc(3, 1);
 	const iface = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: "Box", interfaceFields: ["v"], interfaceFieldTypes: ["T"],
-		interfaceExtends: [] as string[], nameLocation: loc,
+		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	iface.typeArg = "T";
 	const strukt = createNode(NodeKind.StructDecl, {
 		interfaceName: "Cell", interfaceFields: ["v"], interfaceFieldTypes: ["T"],
-		interfaceExtends: [] as string[], nameLocation: loc,
+		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	strukt.typeArg = "T:number";
 	const cls = createNode(NodeKind.ClassDecl, { className: "Pair", classExtends: "", classBody: [] as Node[], nameLocation: loc }, synthToken(loc));
@@ -3548,7 +3812,7 @@ test "round-trip InterfaceDecl keeps interfaceExtends" {
 	const loc = makeLoc(3, 1);
 	const orig = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: "Child", interfaceFields: ["x"], interfaceFieldTypes: ["number"],
-		interfaceExtends: ["Base"], nameLocation: loc,
+		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
@@ -3562,7 +3826,7 @@ test "round-trip StructDecl keeps interfaceExtends" {
 	const loc = makeLoc(3, 1);
 	const orig = createNode(NodeKind.StructDecl, {
 		interfaceName: "S", interfaceFields: [], interfaceFieldTypes: [],
-		interfaceExtends: ["Base"], nameLocation: loc,
+		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldDecorators: [],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;

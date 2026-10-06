@@ -638,6 +638,26 @@ interface IUser { name: string; age: number; }
 struct SuperUser = IUser & { role: string; };
 ```
 
+#### Field Decorators
+
+A `struct` or `interface` field takes `@name` or `@name(args)` decorators before its name. A field decorator is metadata: it has no initializer contract and no run-time effect, and no code is emitted for it, so a decorated declaration has the same layout and the same emitted C and JS as the plain one.
+
+```typescript
+struct Accounts {
+    @signer @writable maker: Pubkey;
+    @seeds("config", mint) @bump(config.bump) config: Pubkey;
+    @address(SYSTEM_PROGRAM_ID) vault: Pubkey;
+}
+```
+
+- The name must resolve, in the scope of the declaration, to a function or a macro (`@ns.name` through a namespace import works). An unresolved name is the error `Cannot find name 'x'`, and a name that resolves to anything else is `'x' is not callable as a decorator`; the decorator is never called.
+- Arguments are kept as unevaluated syntax: `mint` and `config.bump` above need not name anything in scope.
+- A macro reads the decorators of field `i` through the declaration (`getImpl(bindSym(name))`, `interfaceFieldDecorators[i]`) or through the type view (`getTypeArg()` / `getTypeImpl`, `typExprFieldDecorators[i]`): a list of `MacroInvocation` nodes, each with `macroName` and `macroArgs`. The row exists for every field, empty when the field has none. See `docs/LANG-METAPROGRAMMING.md` "Reading types from a macro body".
+- Decorators on a class field keep the TC39 meaning (a function applied at compile time); only `struct` and `interface` fields are metadata.
+- An `extends` child lists only its own fields in `interfaceFields`, so a parent's decorators are on the parent's declaration; in the type view (`typExprFieldDecorators`) an inherited field's row is empty.
+
+Measured 2026-10-03 on a candidate built from tree `3c0765fc6b98bb83a2aedf4dae041b2e26252709`, shared machine: `msc run` of `src/test/corpus/programs/structFieldDecorators/main.ms` printed its `@stdout` line on C and with `--target=js`; a decorated and a plain `struct` or `interface` emit byte-identical C (`src/test/c/structFieldDecorators.ms`) and JS (`src/test/js/structFieldDecorators.ms`); the class decorator guards `src/test/guard/decorator*.ms` and `decorated*.ms` passed on C, except `decoratorReplace.ms`, which fails identically on the parent commit. Not measured: the type view of a generic struct instance (`getTypeArg()` cannot resolve `Pair<int32>` at the call site), LSP hover or go-to-definition on a decorator name, and the editor grammar.
+
 #### Struct Parameter Passing
 
 Struct params are **TS-compatible** — mutation propagates to the caller, just like TypeScript objects. The compiler auto-selects the optimal C ABI per parameter based on size and mutation analysis:
@@ -712,6 +732,25 @@ enum Status {
     Inactive = 0,
 }
 ```
+
+An enum is stored in the narrowest integer that holds its member values: `uint8` when every value
+is between 0 and 255, `uint16` up to 65535, `int32` when a value is negative or larger. The rule
+reads the smallest and the largest value, not the declaration order. An `extern enum` (declared
+`extern` or imported from a C header) keeps the C enum's type. Measured 2026-10-03 on C, JS and
+the Raiser with corpus `enumStorageWidth`: for `enum Kind { Empty, Pet }`,
+`enum Wide { Low = 0, High = 300 }`, `enum Signed { Below = -1, Zero = 0 }`,
+`enum Big { Small = 1, Large = 70000 }` and the structs `{ kind: Kind; version: uint8 }`,
+`{ a: uint8; w: Wide; b: uint8; k: Kind }` and `{ s: Signed; k: Kind; w: Wide; v: uint8 }`,
+`sizeof` prints `1 2 4 4 2 6 12`. A struct field keeps that width in the account bytes a Solana
+program reads (`Pet { species: Species; level: uint8; hearts: uint16 }` is 4 bytes).
+
+An integer converted into an enum with `as` must lie between the enum's smallest and largest member
+value; a value in a gap between members passes. A constant outside is a compile error
+(`300 as Kind` → `cannot convert 300 to Kind`); a run-time value outside stops the program
+(`value 300 not in range 0 .. 2`, exit 1). `--danger` drops the run-time check. Measured 2026-10-04
+on C and JS with corpus `enumConversionRangeCheck` (a three-member enum, a value in a gap) and
+`enumConversionRangeCheckWide` (an `int64` into a two-byte enum); the Raiser converts without the
+check and prints the value past the enum.
 
 ### BitSet&lt;E&gt;
 
@@ -1326,6 +1365,13 @@ Rules:
 - Each sig's param types must be assignable to the impl's corresponding params
 - Each sig's return type must be assignable to the impl's return type
 - At least one non-sig definition (the implementation) must exist
+- Same-name definitions with the same named parameter types cannot differ only
+  in their annotated return type. The second declaration is rejected even when
+  there is no call; the diagnostic names the function and previous declaration.
+
+Measured on C and JS, 2026-10-03: the conflicting `pick(int32)` definitions error
+at line 2; overloads distinguished by `int32` versus `string` still print `7 s`.
+Contract: `src/test/c/functions.ms`.
 
 **Known limitation — literal args**: Overload resolution currently scores each
 argument against each candidate's param type *without* per-candidate contextual
@@ -1490,6 +1536,26 @@ const data = expr as { value: number };   // Type narrowing (borrow, no copy)
 const len = (x as string).length;
 ```
 
+`as` does not extract a payload from a struct or a tagged union. For example,
+`Result<string, string> as int32` is a checker error; comparing that Result with
+`0` is also an error because the operands have no overlap. Narrow with `r.ok`
+and read the selected field instead.
+
+Measured on C and JS, 2026-10-03: the rejected cast names `Result<string, string>`
+and `int32`; the rejected comparison names the operator and both types. The valid
+`Result<int32, string>` branch prints `7` on both backends. Regression contract:
+`src/test/checker3pass/scenarios/resultCarrierConversions.ms`.
+
+An `as` from an object to an object type that is not a leading prefix of it reads the object's own
+fields: the cast takes the object's type, the way an `as` from a union takes the member's. So
+`(c as { label: string }).label` is `c.label`, a write through `const v = c as { label: string }`
+lands in `c`, and a field the view leaves out (`.r`) stays readable where TypeScript refuses it.
+A view field the object holds with another representation (`int32` against `number`) is an error at
+the cast. Rejected: keeping the view's type, because the view's own layout reads the wrong offset on
+C; a copy into the view, because it loses writes through the view. Decided by the person 2026-10-05.
+Measured on C (drc, orc) and JS, tree `d125e2de`, corpus `810-objectViewCast`:
+`iface=L write=M/M class=N alias=P pair=3M named=N`. Generic views were not probed.
+
 ## MetaScript-Specific Syntax
 
 ### Move Semantics
@@ -1516,6 +1582,12 @@ take(move arr[0]);               // ok when `take` has a plain parameter: nothin
 
 Measured on C (msc b899f456). The JS backend does not check moves yet. It accepts the refused lines
 above, keeps the element, and does not empty a moved field (`h.f` still holds its value).
+
+A struct `onDestroy` hook must tolerate a zeroed, moved-from value: a moved-from value is reset field by
+field (plain fields too) and its hook still runs on the zeros. The `wasMoved`/destroy pair is elided only inside
+one block; a scope whose calls can raise keeps its destroys in a `finally`, so the pair stays. Hooks run on C only.
+Measured on C drc and orc (tree 1df797bce2240b8279206627046b90b5e5099429): `const t = mk(9); const h = { r: t, tag: "t" }; console.log("end");`
+prints `end`, `destroy R 9`, `destroy R 0`; with `t` a literal and no call in the function it prints `destroy R 4` once.
 ```typescript
 // Execute at scope end (LIFO order)
 function process(): void {
@@ -2301,6 +2373,12 @@ declaration to jump to.
 | `@passC("flag");` | Raw C compiler flag | DONE |
 | `@passL("flag");` | Raw linker flag | DONE |
 
+Relative `@link` archive paths resolve from the declaring module; absolute paths
+remain absolute. Equivalent `@compile` paths and an imported header's companion
+source are compiled once. Measured 2026-10-03 with
+`src/test/nativeBuildBoundary.ms ... directive-paths`: the direct companion,
+subdirectory companion and absolute archive probes print `53`, `59` and `61`.
+
 #### 3-Tier Builtin System
 
 | Tier | Mapping | Output | Adding New Ones |
@@ -2673,6 +2751,105 @@ that parameter ("… its address is taken implicitly only for an extern C functi
 parameter 'ref x: S' or 'x: S'"), a struct of another type, and the initializer of a
 `Ptr<S> | null` variable ("… its address is never taken implicitly"). Measured 2026-09-25.
 
+#### Lifecycle hooks of a type
+
+A struct, a distinct type or a class takes over a lifecycle operation by declaring a hook, as a
+method of the class or as an extension function in the module that declares the type
+(`function onDestroy(this x: T)`). The six names are `onDestroy`, `onCopy`, `onMove`, `onMoved`,
+`onTrace` and `onClone`; user hooks run where the DRC runs, so on C and never on JS. A hook is
+bound to its type where it is declared (reference `bindHookToType`, semstmts 2182-2198) and an
+error at the declaration names the rule it breaks, so a hook the compiler accepts is a hook that
+runs. A declaration outside the module of its type is refused: `type bound operation 'onDestroy'
+can be defined only in the same module with its type (S)`.
+
+Every hook declares one of these parameter lists and returns nothing, except `onClone`. Measured
+2026-10-04 on tree `40b074a9ac6ea91aee90c93caa8a9411a72138f7`, C and JS, with `struct S`:
+
+| hook | parameters after the receiver | returns | runs when |
+|---|---|---|---|
+| `onDestroy`, `onMoved` | none | nothing | the value dies; the moved-from side of a move |
+| `onCopy`, `onMove` | `y: T`, the receiver's own type | nothing | a copy; a move into a destination |
+| `onTrace` | `env: Ptr<void>` | nothing | the cycle collector, `--gc=orc`, for a type that can form a cycle |
+| `onClone` | none | `T` | a copy into a sink position (below) |
+
+Anything else is `signature for 'onDestroy' is wrong: it takes the receiver only, 2 parameters
+declared`, `… its second parameter is 'int32', the source value is the receiver's own type`, `… it
+returns 'int32', a hook returns nothing` or `… a clone is a new value of the receiver's own type`
+(`bindTypeHook` semstmts 2219-2258, `bindDupHook` 2200-2217). A return type left to inference is
+checked after the body, and for a generic hook where it is instantiated. Before the check a
+second `onDestroy` parameter failed in the C compiler (`too few arguments to function call,
+expected 2, have 1`), a wrong `onCopy` source type failed there or compiled, and a value returned
+from `onDestroy` was accepted and ran (control `./msc`).
+
+The receiver names the type the hook belongs to, and the checker refuses a hook whose receiver
+cannot be that type, with an error that names the hook and the shapes it takes. A class or an
+interface is held by reference, so it is never copied, moved or cloned by value: `onCopy`,
+`onMove`, `onMoved` and `onClone` on one are refused (`'C' is a class, its values are shared by
+reference …`), and `onDestroy` and `onTrace` are the hooks it takes. A distinct type follows the
+struct column (`distinct int32` and `distinct string` with `onDestroy`; `onCopy`, `onMove` and
+`onMoved` through `this x: Var<Fd>`; `onClone` through `this x: Fd`).
+
+| receiver | on a struct or distinct type | on a class or interface |
+|---|---|---|
+| `this x: S` | `onDestroy`, `onClone` | `onDestroy`, `onTrace` |
+| `this ref x: S`, `this x: Var<S>` | every hook but `onClone` | refused |
+| `this x: Readonly<T>` | `onDestroy`, `onClone` | `onDestroy` |
+| `Ptr<T>`, `Ref<T>`, `Cursor<T>`, `Borrow<T>`, `T[]`, `T \| null`, a primitive, an enum, an alias of the type | refused | refused |
+
+A bare generic parameter is refused too. A hook that writes its receiver (`onCopy`, `onMove`,
+`onMoved`, `onTrace`) takes a struct by reference, because `this x: S` would be a copy of the
+destination; a class receiver already is the reference, so `this ref x: C` and `Var<C>` would point
+at that reference (`onDestroy` read its own parameter through a misaligned address and crashed at
+scope exit, measured before the check, `--gc=drc`).
+
+A type with a hook is a managed type even when it holds nothing managed (reference
+`normalizeTypeHook` marks `tfHasAsgn`, semstmts 2163-2180): its scope exit calls the hook for a
+struct with only `int32` fields, a generic instance of one and a `distinct int32`. Before, those
+declarations compiled and the hook never ran, and a struct or class holding a string lost its hook
+whenever a generic from another module (`Map<string, T>`) lifted the type first, because the
+per-module extension registry hides a hook from every module but the one that declares it. The
+hook is now found through the declaration of the type (`bindUserHook`, `checker/context.ms`).
+Corpus `userHookReachesEveryLift` prints the hooks that ran, `fd fdArray fdField handle mapClass
+mapShared mapStruct name slot` on C under `--gc=drc` and `--gc=orc`, and nothing on the control
+built from `99d28088c`. A hook on a distinct type replaces the base type's operation for that
+type, as the reference's `tyDistinct` arm does (liftdestructors 1193-1199).
+
+`onClone` is the reference's `=dup`: a copy into a sink position calls it instead of `onCopy`
+(injectdestructors `passCopyToSink` 479-520). Measured on both compilers with a struct of an
+`int32` and a string, the number of `onClone` calls per shape, the reference being Nim 2.2.2
+`--mm:orc`: `[a, a]` with `a` read afterwards 2 and 2, an object literal field 1 and 1,
+`xs.push(a)` 1 and 1 (`add`), `Map.set` 1 and 1 (`Table.[]=`), a tuple literal 1 and 1, `[a, a]`
+returned from a function 2 and 2, and none in `const b = a`, `b = a`, a call argument and returning
+a parameter. Corpus `userCloneHook` pins `[a, a]`, an object literal field, `const b = a`, `b = a` and returning a
+parameter; 300,000 rounds of the
+clone path hold RSS at 2 MB under both GC modes. A std generic that copies elements with `push` calls `onClone`
+once per element: `slice<T>` (`std/core/array`) does, where the reference's slice assigns and so calls
+`=copy` (the `clone.ms` card repro with `xs.slice(0)` printed `clone S` for each of two elements). A
+type without `onClone` still gets a generated `<T>Dup` that nothing calls (`emitDup`,
+`destructorLifting.ms`).
+
+On C, corpus `hookReceiverSpellings` counts `onCopy` once, `onMove` twice and `onMoved` three times
+for a struct, whether the receiver is `this ref x: S` or `Var<S>`.
+
+Limits, measured on the same tree:
+
+- An array of a distinct type that has a hook is refused on C (`an array of the distinct type 'Fd'
+  would never run its lifecycle hooks …`), because `Fd[]` is the `int32` array and its destroy
+  never reaches the elements; the reference's `seq[Fd]` destroys each one. Binding it needs an array
+  identity per distinct type, which the C backend does not have. A struct that holds the `Fd`
+  (`FdCell[]`), a `Map<string, Fd>` and a struct field of type `Fd` run the hook. JS accepts the array.
+- A value that was moved from keeps its plain fields, so a hook can see them. Control `./msc`:
+  `const h: Holder = { r: mk(8), tag: "t" }` with a struct `R` whose `onDestroy` prints `id` prints
+  `destroy R 8` twice; the reference (`=destroy` on a `Holder(r: mk(8))`) prints it once, and after
+  `var b = move a` its `a.id` is 0 while ours is untouched (inbox card
+  `2026-10-04-wasmoved-keeps-plain-fields-and-a-hook-runs-twice.md`).
+
+Not measured: `--hcr` and incremental builds with the new hook table; a hook of a std type restored
+from the prelude pack (the pack rebuilds the extension registry without the collect pass that binds
+hooks, so by reading it keeps the earlier registry lookup, which the std class hooks still go through
+with byte-identical C for `std/crypto`); a generic distinct type; an unannotated class method that
+returns a value (it stops in codegen with `unresolved type`, as any unannotated method return does).
+
 ### 6. Nullable Types and `Maybe<T>` (Deep Dive)
 
 MetaScript uses a unified `T | null` syntax for all nullable types. Under the hood, the compiler chooses the optimal representation based on the inner type — no user intervention needed.
@@ -2908,6 +3085,25 @@ The compiler rewrites `for (const x of set)` → `for (const x of set.toItems())
 
 **Built-in `toItems()`**: `Set<T>` returns `T[]`, `Map<K, V>` returns `K[]` (keys by default, use `.values()` for values).
 
+**Entries of a Map**: an array pattern takes the entries, `toPairs()` (`Map` and `HashMap` yield `[K, V]`); one name
+keeps the keys. Measured 2026-10-05, C and JS print the same:
+
+```ms
+const ages = new Map<string, int32>();
+ages.set("alice", 30);
+ages.set("bob", 27);
+for (const [name, age] of ages) {
+    console.log(`${name} ${age}`);   // alice 30 / bob 27
+}
+for (const name of ages) {
+    console.log(name);                // alice / bob
+}
+```
+
+An array pattern needs a tuple or an array element: over a `Set<int32>` or an `int32[]` it is the error "an array
+pattern needs each element to be a tuple or an array". Raiser does not run a Map's for-of yet (the iteration is a
+generator; corpus `mapForOfEntries` is xfail there).
+
 **Custom iterables**: define a `toItems` extension method on any type:
 
 ```ms
@@ -2926,6 +3122,7 @@ The `toItems` mechanism is one of a family of **convention-based dispatch protoc
 | Protocol | Synthesizes | Triggered when |
 |---|---|---|
 | `toItems(this T): U[]` | `for (x of obj)` → `for (x of obj.toItems())` | non-array obj in `for..of` |
+| `toPairs(this T): [K, V][]` | `for ([k, v] of obj)` → `for ([k, v] of obj.toPairs())` | non-array obj in `for..of` with an array pattern |
 | `toString(this T): string` | implicit string context | type concat with string |
 | `getDynamicField(this T, key: string): U` | `obj.foo` → `obj.getDynamicField("foo")` | `foo` not a real field of T |
 | `setDynamicField(this T, key: string, value: U): void` | `obj.foo = v` → `obj.setDynamicField("foo", v)` | `foo` not a real field of T, written |

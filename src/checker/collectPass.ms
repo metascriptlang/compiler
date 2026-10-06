@@ -4,7 +4,7 @@ import { inferredType, noneType, emptyType, createStruct, createEnum, createType
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, bindUserHook, isLifecycleHookName, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -459,6 +459,7 @@ export function collectFunction(ctx: CheckerContext, node: Node): void {
 	// Register extension (instance or static) with direct sym link
 	if (extTypeName != "" && ctx.extensionRegistry != null) {
 		registerExtension(ctx.extensionRegistry, createExtMethod(d.fnName, extTypeName, "", noneType(), isStaticExtensionFlag(d.fnFlags), sym, 1));
+		if (isLifecycleHookName(d.fnName) && !isStaticExtensionFlag(d.fnFlags) && !isGenericFn(d.fnFlags)) bindUserHook(extTypeName, d.fnName, sym);
 	}
 }
 
@@ -774,6 +775,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 		methodSym.defaultParams = md.methodDefaults;
 	}
 	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, className, "", fnType, md.methodIsStatic, methodSym, 1));
+	if (isLifecycleHookName(md.methodName) && !md.methodIsStatic && !isExternClass && !isGenericFn(md.methodFlags)) bindUserHook(className, md.methodName, methodSym);
 	if (!md.methodIsStatic && !isExternClass && builtinKind == "") {
 		dispatchRecordMethod(classSym, md.methodName, methodSym);
 	}

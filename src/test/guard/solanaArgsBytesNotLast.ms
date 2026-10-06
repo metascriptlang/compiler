@@ -1,6 +1,6 @@
 // GUARD-OS solana
 // GUARD-CHECK-FAIL must be the last field
-import { Bytes, ProgramError, args, failWith, readArgs } from "std/solana";
+import { Bytes, ProgramError, args, failWith } from "std/solana";
 
 struct UploadArgs {
 	chunk: Bytes;

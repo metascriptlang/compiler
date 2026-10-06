@@ -10,6 +10,7 @@
 #define MS_SOL_HOST_HEAP_SIZE (32 * 1024)
 #define MS_SOL_HOST_COMPUTE_BUDGET 200000ULL
 #define MS_SOL_MAX_SEEDS 16
+#define MS_SOL_MAX_SIGNERS 16
 #define MS_SOL_MAX_SEED_LEN 32
 #define MS_SOL_MAX_RETURN_DATA 1024
 
@@ -20,11 +21,13 @@ typedef struct {
     uint64_t dataLength;
     uint8_t* data;
     uint64_t signerCount;
+    uint8_t* signerSeeds;
 } msSolHostInvocation;
 
 static _Alignas(16) uint8_t msSolHostHeap[MS_SOL_HOST_HEAP_SIZE];
 static const uint64_t msSolHostEmptyInput[6];
 static msSolanaContext msSolHostState;
+static uint64_t msSolHostAccounts[MS_SOL_MAX_ACCOUNTS];
 static uint8_t* msSolHostInputBuffer;
 static uint64_t msSolHostFaultCode;
 static char msSolHostFaultText[160];
@@ -41,6 +44,7 @@ msSolanaContext* msSolHostContext(void) {
     if (msSolHostState.input == 0) {
         msSolHostState.input = (uint64_t)msSolHostEmptyInput;
         msSolHostState.arenaPosition = sizeof(msSolanaContext);
+        msSolParse(msSolHostAccounts);
     }
     return &msSolHostState;
 }
@@ -53,8 +57,8 @@ static void msSolHostFault(uint64_t code, const char* text) {
 
 uint64_t msSolHostAlloc(uint64_t size) {
     msSolanaContext* context = msSolHostContext();
-    size = (size + 7) & ~(uint64_t)7;
-    if (context->arenaPosition + size > MS_SOL_HOST_HEAP_SIZE) {
+    if (size <= UINT64_MAX - 7) size = (size + 7) & ~(uint64_t)7;
+    if (size > MS_SOL_HOST_HEAP_SIZE - context->arenaPosition) {
         fprintf(stderr, "std/solana host: the 32 KiB program heap is exhausted (asked %llu more bytes at %llu)\n",
             (unsigned long long)size, (unsigned long long)context->arenaPosition);
         abort();
@@ -72,6 +76,7 @@ static void msSolHostForget(void) {
     for (uint64_t index = 0; index < msSolHostInvocationCount; index++) {
         free(msSolHostInvocations[index].metas);
         free(msSolHostInvocations[index].data);
+        free(msSolHostInvocations[index].signerSeeds);
     }
     free(msSolHostInvocations);
     msSolHostInvocations = NULL;
@@ -84,6 +89,7 @@ void msSolHostEnter(uint64_t input) {
     memset(&msSolHostState, 0, sizeof(msSolHostState));
     msSolHostState.input = input == 0 ? (uint64_t)msSolHostEmptyInput : input;
     msSolHostState.arenaPosition = sizeof(msSolanaContext);
+    msSolParse(msSolHostAccounts);
     msSolHostFaultCode = 0;
     msSolHostFaultText[0] = 0;
     msSolHostReturnLength = 0;
@@ -641,11 +647,43 @@ static uint64_t msSolHostAssociated(const uint64_t* header) {
     return 0;
 }
 
+static uint64_t msSolHostSignerBytes(uint64_t signers, uint64_t signerCount) {
+    if (signerCount > MS_SOL_MAX_SIGNERS) return UINT64_MAX;
+    uint64_t total = 0;
+    for (uint64_t signer = 0; signer < signerCount; signer++) {
+        const uint64_t* entry = (const uint64_t*)(signers + signer * 16);
+        if (entry[1] > MS_SOL_MAX_SEEDS) return UINT64_MAX;
+        total += 8;
+        for (uint64_t seed = 0; seed < entry[1]; seed++) {
+            const uint64_t* slice = (const uint64_t*)(entry[0] + seed * 16);
+            if (slice[1] > MS_SOL_MAX_SEED_LEN) return UINT64_MAX;
+            total += 8 + slice[1];
+        }
+    }
+    return total;
+}
+
+static void msSolHostRecordSigners(uint8_t* out, uint64_t signers, uint64_t signerCount) {
+    for (uint64_t signer = 0; signer < signerCount; signer++) {
+        const uint64_t* entry = (const uint64_t*)(signers + signer * 16);
+        memcpy(out, &entry[1], 8);
+        out += 8;
+        for (uint64_t seed = 0; seed < entry[1]; seed++) {
+            const uint64_t* slice = (const uint64_t*)(entry[0] + seed * 16);
+            memcpy(out, &slice[1], 8);
+            out += 8;
+            if (slice[1] > 0) memcpy(out, (const void*)slice[0], (size_t)slice[1]);
+            out += slice[1];
+        }
+    }
+}
+
 uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint64_t accountInfoCount, uint64_t signers, uint64_t signerCount) {
     (void)accountInfos;
     (void)accountInfoCount;
-    (void)signers;
     const uint64_t* header = (const uint64_t*)instruction;
+    uint64_t signerBytes = msSolHostSignerBytes(signers, signerCount);
+    if (signerBytes == UINT64_MAX) return 13ULL << 32;
     msSolHostInvocation* grown = (msSolHostInvocation*)realloc(msSolHostInvocations,
         (size_t)(msSolHostInvocationCount + 1) * sizeof(msSolHostInvocation));
     if (grown == NULL) abort();
@@ -666,6 +704,9 @@ uint64_t msSolHostInvokeSigned(uint64_t instruction, uint64_t accountInfos, uint
     if (record->data == NULL) abort();
     if (header[4] > 0) memcpy(record->data, (const void*)header[3], (size_t)header[4]);
     record->signerCount = signerCount;
+    record->signerSeeds = (uint8_t*)malloc((size_t)signerBytes + 1);
+    if (record->signerSeeds == NULL) abort();
+    msSolHostRecordSigners(record->signerSeeds, signers, signerCount);
     msSolHostReturnLength = 0;
     uint64_t status = msSolHostSystem(header);
     if (status == 0) status = msSolHostToken(header);

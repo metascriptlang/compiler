@@ -63,15 +63,7 @@ function failWith(tag: string, why: string): void {
 	exit(1);
 }
 
-const WATCH_BACKEND = platform == "windows" || platform == "linux";
-const WATCH_CARD = "inbox card 2026-10-03-macos-fs-watch-backend.md";
-const WATCHING = ["hcrRun", "hcrSubdirModule", "hcrFileDependency", "hcrNewInstance", "hcrPrivateHelper", "hcrStepCrash", "hcrCrossImageNew", "hcrExitDestroy", "hcrRetainReport"];
-let CURRENT = "";
-
 function msc(dir: string, args: string[]): ExecFileResult {
-	if (!WATCH_BACKEND && args.length > 1 && args[0] == "run" && args.includes("--hcr")) {
-		failWith(CURRENT, `runs msc run --hcr, which needs a file-watch backend that ${platform} lacks; list it in WATCHING (${WATCH_CARD})`);
-	}
 	return execFileResult(MSC, args, dir);
 }
 
@@ -486,7 +478,7 @@ function indirect(): void {
 	const dir = freshDir(`${TMP}/indirect`);
 	for (const f of ["app.ms", "logic.ms", "shapes.ms", "host.ms", "hostCalls.h"]) copy(`${FIXTURES}/indirect/${f}`, `${dir}/${f}`);
 
-	if (platform != "windows" && platform != "linux") {
+	if (platform != "windows" && platform != "linux" && platform != "darwin") {
 		console.log(`skip ${tag}: no native fixture host adapter for ${platform}`);
 		return;
 	}
@@ -1196,6 +1188,17 @@ function fsWatch(): void {
 		"WATCH a closed file proves no writer: false",
 		"WATCH after close: ended true",
 		"WATCH closed while waiting: ended true",
+	] : platform == "darwin" ? [
+		"WATCH missing opened: false",
+		"WATCH write before the first wait: true",
+		"WATCH write in a subdirectory: true",
+		"WATCH an in-place rewrite is seen: true",
+		"WATCH a delete is seen: true",
+		"WATCH a renamed save is reported closed: true",
+		"WATCH a missing file has no writer: true",
+		"WATCH a closed file proves no writer: false",
+		"WATCH after close: ended true",
+		"WATCH closed while waiting: ended true",
 	] : [
 		"WATCH missing opened: false",
 		"WATCH tree opened: false",
@@ -1205,6 +1208,35 @@ function fsWatch(): void {
 		failWith(tag, "std/fs/watch did not report the expected changes");
 	}
 	console.log("ok   hcrFsWatch");
+}
+
+// ---- hcrInstanceofReload: the class display survives a module reload ----
+
+function instanceofReload(): void {
+	const tag = "hcrInstanceofReload";
+	const ext = sharedLibraryExt();
+	const exe = platform == "windows" ? "host.exe" : "host";
+	const dir = freshDir(`${TMP}/instanceof`);
+	for (const f of ["app.ms", "logic.ms", "logicEdit.ms"]) copy(`${FIXTURES}/instanceof/${f}`, `${dir}/${f}`);
+	copy(STD_HOST, `${dir}/host.cms`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g1/module${ext}`], "the first generation did not build");
+	copy(`${FIXTURES}/instanceof/logicEdit.ms`, `${dir}/logic.ms`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g2/module${ext}`], "the edited generation did not build");
+	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
+	ensureDir(`${dir}/run`);
+	for (const image of readDir(`${dir}/g1`)) {
+		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
+	}
+	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-INST ")) seen.push(line);
+	}
+	if (!succeeded(ran) || seen.join("\n") != ["HCR-INST first 9", "HCR-INST reloaded 10"].join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "reloading logic did not keep the class instance tests exact");
+	}
+	console.log(`ok   ${tag}`);
 }
 
 const CASES: { name: string, run: () => void }[] = [
@@ -1241,6 +1273,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrWatchLink", run: watchLink },
 	{ name: "hcrImageNameCollision", run: imageNameCollision },
 	{ name: "hcrArrayOwner", run: arrayOwner },
+	{ name: "hcrInstanceofReload", run: instanceofReload },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 
@@ -1258,11 +1291,6 @@ ensureDir(TMP);
 for (let i = 0; i < CASES.length; i++) {
 	if (i % SHARD_COUNT != SHARD_INDEX) continue;
 	if (ONLY.length > 0 && !ONLY.includes(CASES[i].name)) continue;
-	if (!WATCH_BACKEND && WATCHING.includes(CASES[i].name)) {
-		console.log(`skip ${CASES[i].name}: needs a file-watch backend, none on ${platform} (${WATCH_CARD})`);
-		continue;
-	}
-	CURRENT = CASES[i].name;
 	const t0 = performance.now();
 	CASES[i].run();
 	console.log(`time ${CASES[i].name} ${Math.round((performance.now() - t0) / 1000)}s`);

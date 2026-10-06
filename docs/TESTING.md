@@ -61,6 +61,39 @@ sits in `<module>Parked.ms` beside its module: no index imports it, the inbox
 card names it on its `Parked at:` line, and the fixing session moves it into
 the module and registers it.
 
+Ownership measurements from the 2026-10-03 root sweep:
+- `spliceSelfAliasing` keeps an inserted borrowed string/ref alive before deleting
+  its source slot. The pre-fix string probe aborts with ASan heap-use-after-free in
+  `msStringArraySplice3`; after retaining/copying before mutation, DRC and ORC
+  print `splice-self-alias all-ok`, with ledger `alloc=5 destroy=5`.
+- `arcContextualLiteral` exercises local and returned `Arc<T>` literals. Before
+  native boxing, both values print correctly but ledger `alloc=2 destroy=0`.
+  Routing through existing `msBoxArc` makes DRC/ORC ledger `2/2`; C and JS print
+  `arc-contextual 8 first 9 second`.
+- `checker3pass/scenarios/arcLiteralSafety` applies the constructor's existing
+  deep-immutable pointee gate to contextual literal creation. Before the gate,
+  an `Arc<SharedData>` containing a class reference checks clean; after it,
+  C and JS reject it naming `SharedData`. The primitive/string literal consumer
+  above remains accepted.
+
+The explicit `new Arc(...)` constructor was separately checked on C; this does
+not claim JS constructor support or coverage of every atomic-container operation.
+
+Generic distinct value-read recovery (2026-10-04), source tree
+`f34e8238f2e2952c4d9f54986cf0dd8caf083dce`: the old root-sweep candidate
+rejects `genericDistinctValueRead` on C and JS because integer arithmetic and unary
+reads reach fitting as `float64`/`number`. Preserving the substituted distinct body
+before inspecting a generic template restores the existing value-read protocol;
+the new C/ORC/JS consumer prints `generic-distinct-value 14 21 3 true 4`.
+`MSC=./msc-next MSCORPUS_ONLY=genericDistinctValueRead MSCORPUS_LANES=c,orc,js
+MSCORPUS_BUILD_JOBS=1 MSCORPUS_JOBS=1 ./msc-next run --target=raiser
+src/test/corpus/run.ms` reports `4 pass · 0 fail · 0 xfail · 0 xpass`.
+`msc-next test <file> --tests-in-dir` passes `lang/macroHiddenConversions` 9/9,
+`handoff/valueOfProtocol` 19/19 and `c/protocols` 31/31; the macro file also
+passes with `--target=js` (9 local tests, 70 including std dependencies).
+This covers integer/float bodies, operand order, single evaluation and protocol
+visibility/refusal; it does not establish a full integration gate.
+
 ### Pipeline tests (`c/*.ms`, `js/*.ms`)
 
 Test the FULL pipeline (parse → check → transform → analyze → codegen)

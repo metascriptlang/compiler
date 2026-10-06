@@ -25,6 +25,8 @@ import "./scenarios/nestedGeneric";
 import "./scenarios/recursive";
 import "./scenarios/overloadXGeneric";
 import "./scenarios/limitations";
+import "./scenarios/resultCarrierConversions";
+import "./scenarios/arcLiteralSafety";
 import "./stress/deepNesting";
 import "./stress/manyParams";
 import "./stress/mixed";

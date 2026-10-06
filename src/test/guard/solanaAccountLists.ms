@@ -1,14 +1,14 @@
 // GUARD-OS solana
 import {
 	AccountMeta,
-	Bytes,
-	Instruction,
+	InstructionAccount,
 	ProgramError,
 	Pubkey,
 	account,
 	failWith,
 	instructionData,
 	programId,
+	putBytes,
 	signerAccount,
 } from "std/solana";
 import { scheduleTask } from "std/solana/magicblock";
@@ -30,7 +30,7 @@ function request(): Result<RandomnessRequest, ProgramError> {
 	});
 }
 
-function vrfList(args: Bytes): Result<uint64, ProgramError> {
+function vrfList(args: Readonly<Span<uint8>>): Result<uint64, ProgramError> {
 	const metas: AccountMeta[3] = [
 		AccountMeta.writable(key(11)),
 		AccountMeta.readonly(key(12)),
@@ -39,21 +39,16 @@ function vrfList(args: Bytes): Result<uint64, ProgramError> {
 	return requestRandomness(try request(), key(99), 6, metas, args);
 }
 
-function vrfSingle(args: Bytes): Result<uint64, ProgramError> {
-	const callback = try account(6);
-	return requestRandomness(try request(), key(99), 6, callback, args);
-}
-
-function crankList(args: Bytes): Result<uint64, ProgramError> {
+function crankList(args: Readonly<Span<uint8>>): Result<uint64, ProgramError> {
 	const payer = try signerAccount(0);
-	const task = Instruction.forProgram(programId(), 2, args.length);
-	task.addWritable(try account(1));
-	task.addReadonly(try account(2));
-	task.appendBytes(args);
-	return scheduleTask(payer, 7, 400, 3, task);
+	const task: InstructionAccount[2] = [
+		InstructionAccount.writable(try account(1)),
+		InstructionAccount.readonly(try account(2)),
+	];
+	return scheduleTask(payer, 7, 400, 3, programId(), task, args);
 }
 
-function crankSingle(args: Bytes): Result<uint64, ProgramError> {
+function crankSingle(args: Readonly<Span<uint8>>): Result<uint64, ProgramError> {
 	const payer = try signerAccount(0);
 	return scheduleTask(payer, 7, 400, 3, try account(1), args, programId());
 }
@@ -61,11 +56,12 @@ function crankSingle(args: Bytes): Result<uint64, ProgramError> {
 function dispatch(): Result<uint64, ProgramError> {
 	const data = instructionData();
 	const op = try data.readU8(0);
-	const args = try data.range(1, data.length - 1);
-	if (op == 0) { return vrfList(args); }
-	if (op == 1) { return vrfSingle(args); }
-	if (op == 2) { return crankList(args); }
-	return crankSingle(args);
+	const tail = try data.range(1, data.length - 1);
+	let relay: uint8[64] = [];
+	const kept = putBytes(relay, 0, tail) as int32;
+	if (op == 0) { return vrfList(relay[0..kept]); }
+	if (op == 1) { return crankList(relay[0..kept]); }
+	return crankSingle(relay[0..kept]);
 }
 
 function main(): void {

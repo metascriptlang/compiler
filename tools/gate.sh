@@ -7,6 +7,7 @@ FLOOR_EXEMPT='^tools/'
 EMITS='^src/(analyzer|ast|binder|checker|codegen|diagnostics|lexer|module|monomorphize|parser|raiser|transform|utils)/|^src/compiler/(meta/|[^/]+\.ms$)|^src/index\.ms$|^(std|runtime|vendor)/'
 RULES=(
   'tools|^tools/'
+  'build|^tools/.*\.ms$'
   'hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^runtime/hcr|^examples/hcrProbe/'
   'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$'
   "tests,corpus|$EMITS"
@@ -66,7 +67,9 @@ refreshed" and changes neither verdict nor exit code. --tree-key <rev> prints
 the key for any rev, which tools/wt.sh land compares with msc.key.
 
 Every path that is not inert and not under tools/ gets build and suite; a rule
-only adds lanes to that floor. The tests lane compiles its tiers with the
+only adds lanes to that floor. The tools lane runs after the build lane and checks
+a changed tools/*.ms with the candidate, the compiler that will run it once this
+change lands, so a changed tools/*.ms also gets build. The tests lane compiles its tiers with the
 candidate, so a pin there tests the change rather than the previous compiler.
 It runs every tier when the compiler changed (a path under src/ outside
 src/test/, or one select cannot see), else only the tiers whose module graph
@@ -705,7 +708,7 @@ src/test/hcr/run.ms|build hcr suite
 src/test/native/programs/x.ms|build suite
 examples/hcrProbe/main.ms|build hcr suite
 tools/gate.sh|tools
-tools/syncLocalBinary.ms|tools
+tools/syncLocalBinary.ms|build tools
 docs/TESTING.md|
 src/test/known-red.json|
 CASES
@@ -1012,7 +1015,10 @@ run_tools_lane() {
         elif [ "$p" = tools/gate.sh ] && ! bash "$p" --self-test; then printf 'FAIL %s: self-test\n' "$p"; rc=1
         fi
         case "$p" in tools/wt.sh | tools/landQueue.sh | tools/landQueueTest.sh) queue=1 ;; esac ;;
-      *.ms) "$BUILDER" check "$p" || { printf 'FAIL %s: check\n' "$p"; rc=1; } ;;
+      *.ms)
+        if [ ! -x "$CAND" ]; then echo "tools: $p is checked by the candidate compiler; include the build lane"; printf 'FAIL %s: check\n' "$p"; rc=1
+        elif ! "$CAND" check "$p"; then printf 'FAIL %s: check\n' "$p"; rc=1
+        fi ;;
     esac
   done < <(awk -F'\t' '$1=="tools"' "$OUT/why")
   if [ "$queue" -eq 1 ] && ! bash tools/landQueueTest.sh; then printf 'FAIL %s: self-test\n' tools/landQueueTest.sh; rc=1; fi
@@ -1311,7 +1317,7 @@ lane_body() {
   printf '\nSECS=%d\nRC=%d\nEND\n' "$((SECONDS - t0))" "$rc" >>"$log"
 }
 
-PHASES=("tools build" "boundary suite hcr tests fmt" "corpus guard" "san")
+PHASES=("build" "tools boundary suite hcr tests fmt" "corpus guard" "san")
 
 start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0

@@ -12,7 +12,7 @@ import { attachedOpSym } from "../transform/util";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp } from "../ast/node";
 import { canFormAcycle } from "../transform/cycles";
 import { monoInstanceName } from "../monomorphize/registry";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, anonUnionCName, hashToBase36, typeKey, requireOpByKey, hookPrototype, setOpByKey, resetHookSyms } from "../codegen/c/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, anonUnionCName, hashToBase36, typeKey, requireOpByKey, getOpByKey, hookPrototype, setOpByKey, resetHookSyms } from "../codegen/c/types";
 
 // ===== RC Classification Kind =====
 
@@ -35,6 +35,7 @@ export interface RcInfo {
 	copyFn: Symbol | null;      // =copy op (null = none)
 	wasMovedFn: Symbol | null;  // =wasMoved op (null = none)
 	sinkFn: Symbol | null;      // =sink op (null = raw assign)
+	dupFn: Symbol | null;       // the type's own onClone (null = none: a copy into a sink is =copy)
 	seqLike: boolean;        // reference parity: sequence/string destroy by-value, copy src by-value
 }
 
@@ -49,6 +50,7 @@ export function noRcInfo(): RcInfo {
 		copyFn: null,
 		wasMovedFn: null,
 		sinkFn: null,
+		dupFn: null,
 		seqLike: false,
 	};
 }
@@ -62,6 +64,7 @@ function makeRcInfo(kind: RcKind, typeName: string, destroy: string, copy: strin
 		copyFn: copy != "" ? attachedOpSym(copy, AttachedOp.AttachedAsgn) : null,
 		wasMovedFn: wasMoved != "" ? attachedOpSym(wasMoved, AttachedOp.AttachedWasMoved) : null,
 		sinkFn: sink != "" ? attachedOpSym(sink, AttachedOp.AttachedSink) : null,
+		dupFn: null,
 	};
 }
 
@@ -72,7 +75,13 @@ function makeOpsInfo(kind: RcKind, typeName: string, t: Type, seqLike: boolean):
 		copyFn: requireOpByKey(t, AttachedOp.AttachedAsgn),
 		wasMovedFn: requireOpByKey(t, AttachedOp.AttachedWasMoved),
 		sinkFn: requireOpByKey(t, AttachedOp.AttachedSink),
+		dupFn: userDupOf(t),
 	};
+}
+
+function userDupOf(t: Type): Symbol | null {
+	const dup = getOpByKey(t, AttachedOp.AttachedDup);
+	return dup != null && !hasFlag(dup, SymbolFlag.GeneratedOp) ? dup : null;
 }
 
 // ===== Array Subclassification =====
@@ -296,7 +305,11 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", true),
 		TypeKind.Struct => classifyObject(t, ctx),
 		TypeKind.TypeReference => noRcInfo(),
-		TypeKind.Distinct | TypeKind.Sink => { if (t.typeReturn != null) { return classifyType(t.typeReturn, ctx); } else { return noRcInfo(); } },
+		TypeKind.Distinct => {
+			if (getOpByKey(t, AttachedOp.AttachedDestructor) != null) return makeOpsInfo(RcKind.Named, t.typeName, t, false);
+			return t.typeReturn != null ? classifyType(t.typeReturn, ctx) : noRcInfo();
+		},
+		TypeKind.Sink => { if (t.typeReturn != null) { return classifyType(t.typeReturn, ctx); } else { return noRcInfo(); } },
 		TypeKind.Union => {
 			// Anonymous nullable-Ref union (`Ref<T> | Null` / `Ptr<T> | Null`):
 			// codegen lowers this to a bare T* (see types.ms unwrapRefNullUnion +

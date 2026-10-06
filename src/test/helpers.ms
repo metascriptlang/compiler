@@ -10,6 +10,7 @@ import { resetBuildState } from "../compiler/buildSession";
 import { checkModuleGraph } from "../checker/orchestrator";
 import { TargetInfo, hostTargetInfo } from "../checker/types";
 import { computeAliveSet } from "../checker/reachability";
+import { inferRaises } from "../checker/raises";
 import { hasErrors, CheckerError, CheckerContext } from "../checker/context";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { expandMacros } from "../compiler/meta/expand";
@@ -130,6 +131,7 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	const preAnErrors = checkerCtx.errors.length;
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
 	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
+	inferRaises([analyzed]);
 	const aliveSet = createAliveSet();
 	const preCgErrors = checkerCtx.errors.length;
 	const cCode = generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false);
@@ -179,6 +181,7 @@ export function compileToCWithStd(source: string): CompileResult {
 	const preAnErrors = checkerCtx.errors.length;
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
 	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
+	inferRaises([analyzed]);
 	const aliveSet = createAliveSet();
 	const preCgErrors = checkerCtx.errors.length;
 	const cCode = generateCModule(analyzed, checkerCtx, modPath, aliveSet, false, false);
@@ -321,6 +324,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		emissionContexts.push(ctx);
 		emissionPaths.push(modPath);
 	}
+	inferRaises(emissionPrograms);
 	const aliveSet = computeAliveSet(emissionPrograms, emissionPaths, entryPath, false, graph);
 	const emissionFacts = new CEmissionFacts();
 	for (let i = 0; i < emissionPrograms.length; i += 1) {
@@ -468,6 +472,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		emissionContexts.push(ctx);
 		emissionPaths.push(modPath);
 	}
+	inferRaises(emissionPrograms);
 	const aliveSet = computeAliveSet(emissionPrograms, emissionPaths, entryPath, false, graph);
 	const emissionFacts = new CEmissionFacts();
 	for (let i = 0; i < emissionPrograms.length; i += 1) {

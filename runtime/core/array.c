@@ -73,7 +73,7 @@ void* msArrayPrepareAdd(int64_t len, void* p, int64_t addLen, int64_t elemSize) 
 
 	int64_t oldSize = headerSize + oldCap * elemSize;
 	int64_t newSize = headerSize + newCap * elemSize;
-	msArrayPayloadBase* q = (msArrayPayloadBase*)realloc(p, newSize);
+	msArrayPayloadBase* q = (msArrayPayloadBase*)msRealloc(p, oldSize, newSize);
 	if (q) {
 		if (newSize > oldSize) {
 			memset((char*)q + oldSize, 0, newSize - oldSize);
@@ -259,8 +259,9 @@ void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elem
 	int64_t newCap = msArrayResizeCap(oldCap);
 	if (newCap < needed) newCap = needed;
 
+	int64_t oldSize = headerSize + oldCap * elemSize;
 	int64_t newSize = headerSize + newCap * elemSize;
-	msArrayPayloadBase* q = (msArrayPayloadBase*)realloc(p, newSize);
+	msArrayPayloadBase* q = (msArrayPayloadBase*)msRealloc(p, oldSize, newSize);
 	if (q) q->cap = newCap;
 	return q;
 }
@@ -699,6 +700,76 @@ void msStringArraySplice(msStringArray* arr, int64_t start, int64_t deleteCount)
 	arr->len -= deleteCount;
 }
 
+/* splice3's item is a borrowed value (the caller keeps its own copy), so the
+ * string variant stores a copy — same convention as msStringArrayFill. */
+void msNumberArraySplice3(msNumberArray* arr, int64_t start, int64_t deleteCount, double item) {
+	if (start < 0) start = 0;
+	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
+		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
+		int64_t remaining = arr->len - start - deleteCount;
+		if (remaining > 0) {
+			memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(double));
+		}
+		arr->len -= deleteCount;
+	}
+	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+		arr->p = (msNumberPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(double));
+	}
+	if (start > arr->len) start = arr->len;
+	int64_t tail = arr->len - start;
+	if (tail > 0) {
+		memmove(arr->p->data + start + 1, arr->p->data + start, tail * sizeof(double));
+	}
+	arr->p->data[start] = item;
+	arr->len += 1;
+}
+
+void msStringArraySplice3(msStringArray* arr, int64_t start, int64_t deleteCount, msString item) {
+	if (item.p != NULL && !msIsLiteral(item)) item = msStringNew(item.p->data, item.len);
+	if (start < 0) start = 0;
+	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
+		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
+		for (int64_t i = start; i < start + deleteCount; i++) msStringDestroy(arr->p->data[i]);
+		int64_t remaining = arr->len - start - deleteCount;
+		if (remaining > 0) {
+			memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(msString));
+		}
+		arr->len -= deleteCount;
+	}
+	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+		arr->p = (msStringPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(msString));
+	}
+	if (start > arr->len) start = arr->len;
+	int64_t tail = arr->len - start;
+	if (tail > 0) {
+		memmove(arr->p->data + start + 1, arr->p->data + start, tail * sizeof(msString));
+	}
+	arr->p->data[start] = item;
+	arr->len += 1;
+}
+
+void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, uint8_t item) {
+	if (start < 0) start = 0;
+	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
+		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
+		int64_t remaining = arr->len - start - deleteCount;
+		if (remaining > 0) {
+			memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(uint8_t));
+		}
+		arr->len -= deleteCount;
+	}
+	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+		arr->p = (msUint8Payload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(uint8_t));
+	}
+	if (start > arr->len) start = arr->len;
+	int64_t tail = arr->len - start;
+	if (tail > 0) {
+		memmove(arr->p->data + start + 1, arr->p->data + start, tail * sizeof(uint8_t));
+	}
+	arr->p->data[start] = item;
+	arr->len += 1;
+}
+
 void msRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
 	if (arr->p == NULL || start < 0 || start >= arr->len) return;
 	if (deleteCount <= 0) return;
@@ -725,6 +796,7 @@ void msAtomicRefArrayDestroy(msRefArray* arr) {
 /* splice(start, deleteCount, item): delete deleteCount then insert item.
  * The array owns a ref to each element (delete decrefs), so insert increfs. */
 void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
+	if (item != NULL) msIncref(item);
 	if (start < 0) start = 0;
 	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
 		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
@@ -743,7 +815,6 @@ void msRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void
 	if (tail > 0) {
 		memmove(arr->p->data + start + 1, arr->p->data + start, tail * sizeof(void*));
 	}
-	if (item != NULL) msIncref(item);
 	arr->p->data[start] = item;
 	arr->len += 1;
 }
@@ -761,6 +832,7 @@ void msAtomicRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount)
 }
 
 void msAtomicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item) {
+	if (item != NULL) msAtomicIncref(item);
 	if (start < 0) start = 0;
 	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
 		if (start + deleteCount > arr->len) deleteCount = arr->len - start;
@@ -779,7 +851,6 @@ void msAtomicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount
 	if (tail > 0) {
 		memmove(arr->p->data + start + 1, arr->p->data + start, tail * sizeof(void*));
 	}
-	if (item != NULL) msAtomicIncref(item);
 	arr->p->data[start] = item;
 	arr->len += 1;
 }

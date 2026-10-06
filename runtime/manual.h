@@ -54,6 +54,11 @@ static inline msRefHeader* msHeader(void* p) {
     return (msRefHeader*)((char*)p - sizeof(msRefHeader));
 }
 
+typedef struct {
+    const char* message;
+    int code;
+} msException;
+
 /* ===== Allocation ===== */
 
 #ifdef MSOS_BARE
@@ -61,7 +66,7 @@ static inline msRefHeader* msHeader(void* p) {
 #if defined(MS_FREESTANDING_LIBC)
 
 void* msArenaAlloc(size_t size);
-void* msArenaRealloc(void* old, size_t old_size, size_t new_size);
+void* msRealloc(void* old, size_t old_size, size_t new_size);
 void msArenaReset(void);
 
 #elif defined(MSOS_SOLANA)
@@ -80,6 +85,8 @@ typedef struct {
     uint64_t instructionData;
     uint64_t instructionDataLength;
     uint64_t programId;
+    bool err;
+    msException* currException;
 } msSolanaContext;
 
 static inline msSolanaContext* msSolanaCurrentContext(void) {
@@ -90,6 +97,8 @@ static inline void msSolanaEnter(const uint8_t* input) {
     msSolanaContext* context = msSolanaCurrentContext();
     context->input = (uint64_t)input;
     context->arenaPosition = sizeof(msSolanaContext);
+    context->err = false;
+    context->currException = (msException*)0;
 }
 
 static inline uint64_t msSolanaResult(void) {
@@ -101,12 +110,49 @@ __attribute__((weak, noreturn)) void abort(void) {
     __builtin_unreachable();
 }
 
+#define MS_SOL_LOG_STATIC_SYSCALL_MURMUR3 0x207559bdULL
+
+static inline uint64_t msSolanaPutText(char* line, uint64_t at, const char* text) {
+    while (*text) line[at++] = *text++;
+    return at;
+}
+
+static inline uint64_t msSolanaPutDecimal(char* line, uint64_t at, uint64_t value) {
+    char digits[20];
+    uint64_t count = 0;
+    do {
+        digits[count++] = (char)('0' + value % 10);
+        value /= 10;
+    } while (value != 0);
+    while (count != 0) line[at++] = digits[--count];
+    return at;
+}
+
+__attribute__((weak, noinline, noreturn)) void msSolanaHeapExhausted(uint64_t asked) {
+    char line[160];
+    if (asked <= UINT64_MAX - 7) asked = (asked + 7) & ~(uint64_t)7;
+    uint64_t at = msSolanaPutText(line, 0, "std/solana: the ");
+    at = msSolanaPutDecimal(line, at, MS_SOLANA_HEAP_SIZE / 1024);
+    at = msSolanaPutText(line, at, " KiB program heap is exhausted (asked ");
+    at = msSolanaPutDecimal(line, at, asked);
+    at = msSolanaPutText(line, at, " more bytes at ");
+    at = msSolanaPutDecimal(line, at, msSolanaCurrentContext()->arenaPosition);
+    at = msSolanaPutText(line, at, ")");
+    ((uint64_t (*)(const char*, uint64_t))MS_SOL_LOG_STATIC_SYSCALL_MURMUR3)(line, at);
+    abort();
+}
+
+_Static_assert(MS_SOLANA_HEAP_SIZE % 8 == 0, "the bump pointer stays 8-aligned, so room is a multiple of 8");
+
 static inline void* msArenaAlloc(size_t size) {
-    size = (size + 7) & ~(size_t)7;
     msSolanaContext* context = msSolanaCurrentContext();
-    if (context->arenaPosition + size > MS_SOLANA_HEAP_SIZE) return (void*)0;
-    void* p = (void*)(MS_SOLANA_HEAP_START + context->arenaPosition);
-    context->arenaPosition += size;
+    uint64_t position = context->arenaPosition;
+    if (size > MS_SOLANA_HEAP_SIZE - position) msSolanaHeapExhausted(size);
+    void* p = (char*)MS_SOLANA_HEAP_START + position;
+    /* Keeps the heap base in one register: LLVM folds it into every field offset
+       as a 16-byte lddw otherwise (+1.8 KB on the escrow, measured 2026-10-03). */
+    __asm__("" : "+r"(p));
+    context->arenaPosition = position + ((size + 7) & ~(size_t)7);
     return p;
 }
 
@@ -133,7 +179,7 @@ static inline void* msArenaAlloc(size_t size) {
 #endif
 
 #ifndef MS_FREESTANDING_LIBC
-static inline void* msArenaRealloc(void* old, size_t old_size, size_t new_size) {
+static inline void* msRealloc(void* old, size_t old_size, size_t new_size) {
     void* p = msArenaAlloc(new_size);
     if (p && old && old_size > 0) {
         size_t copy_size = old_size < new_size ? old_size : new_size;
@@ -261,16 +307,14 @@ static inline void qsort(void* base, size_t count, size_t size, int (*cmp)(const
 }
 
 /* Redirect libc allocator to arena */
-static inline void* _ms_manual_realloc(void* old, size_t new_size) {
-    if (!old) return msArenaAlloc(new_size);
-    return msArenaRealloc(old, new_size, new_size);
-}
 static inline void* _ms_manual_calloc(size_t n, size_t size) {
     return msArenaAlloc(n * size);
 }
+void* msReallocNeedsOldSize(void* old, size_t size)
+    __attribute__((error("realloc has no old size in an arena build: call msRealloc(old, oldSize, newSize)")));
 #define malloc(s)     msArenaAlloc(s)
 #define calloc(n, s)  _ms_manual_calloc((n), (s))
-#define realloc(p, s) _ms_manual_realloc((p), (s))
+#define realloc(p, s) msReallocNeedsOldSize((p), (s))
 #define free(p)       ((void)(p))
 
 #elif defined(MS_FREESTANDING_LIBC)
@@ -293,16 +337,14 @@ static inline void* _ms_manual_calloc(size_t n, size_t size) {
 /* Redirect libc allocator to arena — only in freestanding mode.
    System headers already parsed above, so macros only affect
    function bodies in .h inlines and .c files compiled with -include. */
-static inline void* _ms_manual_realloc(void* old, size_t new_size) {
-    if (!old) return msArenaAlloc(new_size);
-    return msArenaRealloc(old, new_size, new_size);
-}
 static inline void* _ms_manual_calloc(size_t n, size_t size) {
     return msArenaAlloc(n * size);
 }
+void* msReallocNeedsOldSize(void* old, size_t size)
+    __attribute__((error("realloc has no old size in an arena build: call msRealloc(old, oldSize, newSize)")));
 #define malloc(s)     msArenaAlloc(s)
 #define calloc(n, s)  _ms_manual_calloc((n), (s))
-#define realloc(p, s) _ms_manual_realloc((p), (s))
+#define realloc(p, s) msReallocNeedsOldSize((p), (s))
 #define free(p)       ((void)(p))
 
 #else
@@ -350,13 +392,13 @@ typedef struct {
 #endif
 
 /* ===== Exception Handling (static, no TLS) ===== */
-typedef struct {
-    const char* message;
-    int code;
-} msException;
-
+#ifdef MSOS_SOLANA
+#define msErr (msSolanaCurrentContext()->err)
+#define msCurrException (msSolanaCurrentContext()->currException)
+#else
 static bool msErr = false;
 static msException* msCurrException = (msException*)0;
+#endif
 
 static inline void msClearException(void) {
     msErr = false;
@@ -385,7 +427,6 @@ static inline void msExit(int32_t code) {
 /* ===== I/O ===== */
 #ifdef MSOS_SOLANA
 /* Solana: log via sol_log_ syscall (provided by Solana runtime) */
-#define MS_SOL_LOG_STATIC_SYSCALL_MURMUR3 0x207559bdULL
 static inline void msPrintln(msString s) {
     if (s.p != (void*)0 && s.len > 0) {
         ((uint64_t (*)(const char*, uint64_t))MS_SOL_LOG_STATIC_SYSCALL_MURMUR3)(s.p->data, (uint64_t)s.len);

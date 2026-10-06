@@ -4,7 +4,7 @@ Compile-time code execution and AST manipulation. Macros are **normal MetaScript
 
 ## Core Principle: `Node` is Compile-Time Only
 
-`Node` (from `std/meta`) is a **compile-time-only type** — like standard reference AST node implementations. Values of type `Node` exist only during compilation and are erased before codegen. Any `Node` remaining in the AST at codegen is a compile error.
+`Node` (from `std/meta`) is the type a macro receives and returns, and a macro runs only while compiling: the expansion reaches codegen, the macro does not. The type is an ordinary class, not a compile-time-only one: a program that calls `createNodeAt(NodeKind.NumberLiteral, …, makeLoc(7, 9))` and prints `n.location.line` builds and prints `7` on C and on `--target=js` (measured 2026-10-04 on tree `fa27682b2a79`), and the compiler itself holds `Node` values at run time, so a leftover `Node` is not refused at codegen. What holds is the cost: a program that uses `std/meta` only inside macro bodies emits nothing from it on C, on the host and on `--os=solana`, while a program that calls a `std/meta` function at run time emits the module (guard `src/test/guard/metaModuleEmitsNothing.ms`). The JS bundle still carries `std/meta` (22,978 of 179,511 bytes of `console.log(0)`, measured 2026-10-04): the JS backend has no dead-module elimination (NIM-REF CG-15). The rest of this section still describes the intended model; only this paragraph was re-measured.
 
 Multiple sources produce `Node` values — all follow the same rules:
 
@@ -746,11 +746,15 @@ Three entry points, and picking the wrong one is the usual mistake:
 | a typed value or reflected field type | `getTypeImpl(value)` | the concrete implementation; Ref/Alias/generic wrappers are expanded at the query root, while nested generic field types retain their identity and can be queried separately |
 | a type the CALLER picked: `m<T>(...)` | `getTypeArg()` | the call site's `<T>`, resolved in the CALL SITE scope, Ref peeled |
 | a bound symbol (`bindSym`, either mode) | `getType(s)` / `getTypeImpl(s)` | syntax view / implementation view of its checked type; the implementation AST retains the original type identity; no type → compile error `node has no type`; a `null` node → `null` |
-| a bound symbol | `getImpl(s)` | a copy of its declaration (`ClassDecl`, `FunctionDecl`, …), `null` when the symbol has none; not a symbol → `node is not a symbol`; a `null` node → `null` |
+| a bound symbol | `getImpl(s)` | a copy of its declaration (`ClassDecl`, `FunctionDecl`, …), `null` when the symbol has none; not a symbol → `node is not a symbol`; a `null` node → `null`. A `StructDecl` / `InterfaceDecl` carries `interfaceFields`, `interfaceFieldTypes` and `interfaceFieldDecorators` — one list of `MacroInvocation` nodes (`macroName`, `macroArgs`) per field, empty for an undecorated field |
 | a type written as a string (`propType`, a param type) | `resolveType("A \| null")` | the type-AST the checker resolves for that annotation at the expansion site |
 | a type-AST from any query above | `typeKind(t)` | the original checked `TypeKind`, independent of the rendered AST shape; `getTypeImpl` can render a `TypeObject` while retaining a Ref or GenericInstance identity; no type handle → `node carries no type` |
 | two type-ASTs | `sameType(a, b)` | the checker's type identity (`resolveType("int32")` twice → true, against `"string"` → false); a non-type node → `sameType needs two type nodes` |
 | a bound symbol | `symKind(s)` | its `SymbolKind` (`Class`, `Enum`, `Function`, …); not a symbol → `node is not a symbol` |
+
+A node that a macro returns inside a call to another macro (`callee: bindSym("inner"), arguments: [value]`) arrives with its checker type, so the inner macro's `getType(value)`, `typeKind(value)` and `value.nodeType` answer as they do for an argument written at the call. Measured 2026-10-04 on tree `fa27682b2a79`, C and `--target=js`: one macro deep, two deep, an expression (`n + 1`), a string, and an element of a forwarded list (`src/test/lang/typeImplementationQuery.ms`, corpus `1091-macroForwardedArgumentKeepsItsType`); before, `getType` failed with `node has no type` while `nodeType` still answered. A call that a macro returns keeps its explicit type arguments — `make<int32>(4)`, `holder.build<int32>()`, either under `try`, and `new Cell<int32>()` — and the re-check binds `T` from them (`src/test/lang/macroSourceForms.ms`, corpus `1090-macroForwardsExplicitTypeArguments`); before, `cannot instantiate: 'T'`. Not measured: a macro that builds such a call itself by setting `typeArg` in its return literal.
+
+A call to an overloaded function arrives with its callee typed as the overload the call resolved to: `call.callee.nodeType` and `getType(call.callee)` describe that routine, wherever it was declared in the set, whether the set is local or imported, and whether it is generic (a generic winner shows its instance). Measured 2026-10-04 on tree `d8d99f4d79de`, C and `--target=js`: sets of two and three overloads declared shorter-first and longer-first, a generic overload declared before and after the concrete one, and a set imported from another module (`src/test/lang/macroOverloadWinner.ms`, corpus `1092-macroSeesTheOverloadWinner`); before, the callee showed the first routine declared. The callee a macro returns does not pin that overload: the re-check scores the call by name against its new arguments, so a macro that appends an argument reaches the sibling overload (`withFlag(pick(1))` calls `pick(a, b)`) and one that returns the call unchanged keeps its overload. Not covered, measured on the same tree: the callee of a method call or of an extension call whose name is overloaded still shows the first candidate (`k.m(1, "x")` over `m(a)` and `m(a, b)`, a static method, a `this`-receiver function), and `getImpl(call.callee)` answers `node is not a symbol` for every call, overloaded or not; the symbol the callee carries is `{ name, symbolKind, modulePath, builtinKind }`.
 
 ```ms
 export macro createStyles(sheet: Node): Node {
@@ -758,6 +762,8 @@ export macro createStyles(sheet: Node): Node {
     // st.typExprFieldNames / st.typExprFieldTypes / st.typExprFieldDecorators
 }
 ```
+
+`typExprFieldDecorators[i]` holds the decorators of field `i` as `MacroInvocation` nodes for a class, a struct and an interface alike; for a struct or interface it is the same list the declaration holds in `interfaceFieldDecorators[i]` (LANG.md "Field Decorators"). Their arguments are unevaluated syntax, so a macro that wants a string reads `stringValue(arg)` and an identifier's `name` after a `kind` check.
 
 Both hand back a **type-AST `Node`** (`TypeObject` / `TypeUnion` / `TypeArray` /
 `TypeGeneric` / `Identifier` / literal kinds — see `mapTypeToAst` in

@@ -1,4 +1,8 @@
+@include("runtime/solana/solana.h");
+
 import {
+	Account,
+	DELEGATION_PROGRAM_ID,
 	Discriminator,
 	ProgramError,
 	Pubkey,
@@ -11,32 +15,79 @@ import {
 	signer,
 	writable,
 	instructionDiscriminator,
-	readArgs,
-	selectInstruction,
-	Seeds,
+	account,
+	allocate,
+	assignTo,
+	createAccount,
+	createProgramAccount,
+	transfer,
 	close,
 	create,
 	createPda,
+	signed,
+	leBytes,
 	pda,
 	realloc,
 	writableSigner,
 	transferLamports,
 	Mutable,
+	Owned,
 	Program,
 	Signer,
 	Writable,
+	WritableSigner,
 	Delegated,
 	delegated,
 	pdaWithBump,
 	pubkeyOf,
 	instructionData,
+	logPubkey,
+	clock,
+	returnData,
+	setReturnData,
+	programId,
 	ProgramAddress,
 	Bytes,
-	borshBuffer,
+	InstructionAccount,
+	putBool,
+	putBytes,
+	putI16,
+	putI32,
+	putI64,
+	putI8,
+	putPubkey,
+	putSpan,
+	putU16,
+	putU32,
+	putU64,
+	putU8,
+	invoke,
+	invokeList,
+	invokeSigned,
 } from "./index";
-import { HostAccount, logs, run } from "./host";
-import { accounts, args, emitEvent, instruction } from "./macro";
+import { SignerSeeds } from "./seed";
+import { HostAccount, invocations, logs, run, setClock, signerIs, textBytes } from "./host";
+import {
+	accounts,
+	address,
+	args,
+	bump,
+	constraint,
+	emit,
+	findProgramAddress,
+	findProgramAddressOf,
+	hasOne,
+	instruction,
+	programAddress,
+	programAddressOf,
+	seeds,
+	signed,
+} from "./macro";
 import { anchorIdl } from "./idl";
+import { Node, NodeKind, bindSym } from "std/meta";
+
+extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
+extern function msSolProgramId(): uint64;
 
 
 export struct Counter {
@@ -111,6 +162,51 @@ function counterTag(): Discriminator {
 	return Counter.discriminator();
 }
 
+function patternedKey(): Pubkey {
+	let key = Pubkey.zero();
+	for (let i = 0; i < 32; i++) { key.bytes[i] = (i + 1) as uint8; }
+	return key;
+}
+
+function programIdEntry(): void {
+	if (!programId().equals(patternedKey())) { failWith(ProgramError.invalidArgument()); }
+}
+
+function accountKeyEntry(): void {
+	const found = writable(0);
+	if (!found.ok) {
+		failWith(found.error);
+		return;
+	}
+	if (!found.value.key().equals(patternedKey())) { failWith(ProgramError.invalidArgument()); }
+}
+
+function logKeyEntry(): void { logPubkey(patternedKey()); }
+
+test "a program id is read from the bytes the runtime put in the input buffer" {
+	const none: HostAccount[] = [];
+	assert run(patternedKey(), none, [], programIdEntry).result == 0;
+	assert run(keyOf(3), none, [], programIdEntry).result == ProgramError.invalidArgument().code;
+}
+
+test "an account key is read from its record in the input buffer" {
+	const matching = [holder(1, keyOf(9), [], true, true)];
+	matching[0].key = patternedKey();
+	assert run(programKey(), matching, [], accountKeyEntry).result == 0;
+	const other = [holder(1, keyOf(9), [], true, true)];
+	assert run(programKey(), other, [], accountKeyEntry).result == ProgramError.invalidArgument().code;
+}
+
+test "a Pubkey stored in program memory is logged from its own bytes" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], logKeyEntry).result == 0;
+	let found = false;
+	for (const line of logs()) {
+		if (line == "Program log: " + patternedKey().toBase58()) { found = true; }
+	}
+	assert found;
+}
+
 test "a signer verifier refuses an unsigned account with Anchor's AccountNotSigner" {
 	const unsigned = [holder(1, keyOf(9), [], false, true)];
 	assert run(programKey(), unsigned, [], signerEntry).result ==
@@ -136,7 +232,7 @@ test "a program verifier checks the key, then that it is executable" {
 	assert run(programKey(), [wrong], [], systemProgramEntry).result ==
 		ProgramError.invalidProgramId().code;
 	let system = holder(1, keyOf(9), [], false, false);
-	system.key = Pubkey.systemProgram();
+	system.key = Pubkey.zero();
 	assert run(programKey(), [system], [], systemProgramEntry).result ==
 		ProgramError.invalidProgramExecutable().code;
 	system.executable = true;
@@ -273,10 +369,6 @@ test "dispatch refuses short data, an unknown instruction and short or invalid a
 		ProgramError.instructionDidNotDeserialize().code;
 }
 
-function counterSeeds(): Seeds {
-	return Seeds.empty(1).addText("counter");
-}
-
 function createEntry(): void {
 	const result = createStep();
 	codeOf(result);
@@ -285,7 +377,7 @@ function createEntry(): void {
 function createStep(): Result<uint64, ProgramError> {
 	const payer = try writableSigner(0);
 	const target = try writable(1);
-	const counter = try create<Counter>(payer, target, Seeds.none());
+	const counter = try create<Counter>(payer, target);
 	const at = counter.data();
 	at.value = 5;
 	return Result.ok(0);
@@ -299,7 +391,7 @@ function createPdaEntry(): void {
 function createPdaStep(): Result<uint64, ProgramError> {
 	const payer = try writableSigner(0);
 	const target = try writable(1);
-	const made = try createPda<Counter>(payer, target, counterSeeds());
+	const made = try createPda<Counter>(payer, target, ["counter"]);
 	const at = made.account.data();
 	at.value = made.bump as uint64;
 	return Result.ok(0);
@@ -311,7 +403,8 @@ function verifyPdaEntry(): void {
 }
 
 function verifyPdaStep(): Result<uint64, ProgramError> {
-	const found = try pda(try mutable<Counter>(0), counterSeeds());
+	const counter = try mutable<Counter>(0);
+	const found = try pda(counter, ["counter"]);
 	return Result.ok(found.bump as uint64);
 }
 
@@ -334,7 +427,7 @@ function reallocStep(): Result<uint64, ProgramError> {
 }
 
 function wallet(seed: uint8, lamports: uint64): HostAccount {
-	let account = holder(seed, Pubkey.systemProgram(), [], true, true);
+	let account = holder(seed, Pubkey.zero(), [], true, true);
 	account.lamports = lamports;
 	return account;
 }
@@ -342,7 +435,7 @@ function wallet(seed: uint8, lamports: uint64): HostAccount {
 function blank(key: Pubkey): HostAccount {
 	return {
 		key: key,
-		owner: Pubkey.systemProgram(),
+		owner: Pubkey.zero(),
 		lamports: 0,
 		data: [],
 		signer: true,
@@ -366,7 +459,7 @@ test "create allocates through the System program and writes Anchor's discrimina
 }
 
 test "createPda accepts only the canonical address and records its bump" {
-	const derived = counterSeeds().findProgramAddress(programKey());
+	const derived = findProgramAddressOf(programKey(), ["counter"]);
 	assert derived.ok;
 	if (derived.ok) {
 		const accounts = [wallet(1, 10000000), blank(derived.value.key)];
@@ -387,7 +480,7 @@ test "close refunds every lamport, hands the account to the System program and e
 	const accounts = [counter, refund];
 	assert run(programKey(), accounts, [], closeEntry).result == 0;
 	assert accounts[0].lamports == 0 && accounts[1].lamports == 750;
-	assert accounts[0].owner == Pubkey.systemProgram() && accounts[0].data.length == 0;
+	assert accounts[0].owner == Pubkey.zero() && accounts[0].data.length == 0;
 	const self = [counter, counter];
 	assert run(programKey(), self, [], closeEntry).result == ProgramError.constraintClose().code;
 }
@@ -419,7 +512,7 @@ function bumpAccountsEntry(): void { codeOf(bumpAccountsStep()); }
 
 function systemProgramAccount(): HostAccount {
 	let account = holder(9, keyOf(0), [], false, false);
-	account.key = Pubkey.systemProgram();
+	account.key = Pubkey.zero();
 	account.executable = true;
 	return account;
 }
@@ -451,10 +544,10 @@ export struct Made {
 
 function emitEntry(): void {
 	const made: Made = { amount: 1234, maker: keyOf(7), done: true };
-	emitEvent<Made>(made);
+	emit<Made>(made);
 }
 
-test "emitEvent logs Anchor's event discriminator and the Borsh fields as Program data" {
+test "emit logs Anchor's event discriminator and the Borsh fields as Program data" {
 	const none: HostAccount[] = [];
 	assert run(programKey(), none, [], emitEntry).result == 0;
 	const expected = "Program data: " +
@@ -464,6 +557,236 @@ test "emitEvent logs Anchor's event discriminator and the Borsh fields as Progra
 		if (line == expected) { found = true; }
 	}
 	assert found;
+}
+
+export struct Wide {
+	small: uint8;
+	signedSmall: int8;
+	flag: boolean;
+	short: uint16;
+	signedShort: int16;
+	word: uint32;
+	signedWord: int32;
+	long: uint64;
+	signedLong: int64;
+	owner: Pubkey;
+}
+
+export struct Edge {
+	owner: Pubkey;
+	largest: uint64;
+	smallest: int64;
+	flag: boolean;
+	lowest: int8;
+	lowestShort: int16;
+	lowestWord: int32;
+}
+
+function wideEntry(): void {
+	const wide: Wide = {
+		small: 171,
+		signedSmall: -5,
+		flag: true,
+		short: 0x0102,
+		signedShort: -300,
+		word: 0x01020304,
+		signedWord: -70000,
+		long: 0x0102030405060708,
+		signedLong: -9000000000000,
+		owner: patternedKey(),
+	};
+	emit<Wide>(wide);
+	const edge: Edge = {
+		owner: patternedKey(),
+		largest: 0xffffffffffffffff,
+		smallest: -9223372036854775807 - 1,
+		flag: false,
+		lowest: -128,
+		lowestShort: -32768,
+		lowestWord: -2147483647 - 1,
+	};
+	emit<Edge>(edge);
+}
+
+test "emit writes every field width, signed or not, in declaration order" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], wideEntry).result == 0;
+	const wide = "Program data: G5rYD/n75SGr+wECAdT+BAMCAZDu/v8IBwYFBAMCAQBwMobQ9///" +
+		"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=";
+	const edge = "Program data: 196v8E6Mk6EBAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fIP//////////" +
+		"AAAAAAAAAIAAgACAAAAAgA==";
+	const lines = logs();
+	assert lines.length == 2;
+	assert lines[0] == wide && lines[1] == edge;
+}
+
+export struct Crowd {
+	key0: Pubkey;
+	key1: Pubkey;
+	key2: Pubkey;
+	key3: Pubkey;
+	key4: Pubkey;
+	key5: Pubkey;
+	key6: Pubkey;
+	key7: Pubkey;
+	key8: Pubkey;
+	key9: Pubkey;
+	key10: Pubkey;
+	key11: Pubkey;
+	key12: Pubkey;
+	key13: Pubkey;
+	key14: Pubkey;
+	key15: Pubkey;
+	key16: Pubkey;
+	key17: Pubkey;
+	key18: Pubkey;
+	key19: Pubkey;
+	key20: Pubkey;
+	key21: Pubkey;
+	key22: Pubkey;
+	key23: Pubkey;
+	key24: Pubkey;
+	key25: Pubkey;
+	key26: Pubkey;
+	key27: Pubkey;
+	key28: Pubkey;
+	key29: Pubkey;
+	key30: Pubkey;
+	first: uint64;
+	second: uint64;
+	third: uint64;
+}
+
+function crowdEntry(): void {
+	const crowd: Crowd = {
+		key0: patternedKey(),
+		key1: patternedKey(),
+		key2: patternedKey(),
+		key3: patternedKey(),
+		key4: patternedKey(),
+		key5: patternedKey(),
+		key6: patternedKey(),
+		key7: patternedKey(),
+		key8: patternedKey(),
+		key9: patternedKey(),
+		key10: patternedKey(),
+		key11: patternedKey(),
+		key12: patternedKey(),
+		key13: patternedKey(),
+		key14: patternedKey(),
+		key15: patternedKey(),
+		key16: patternedKey(),
+		key17: patternedKey(),
+		key18: patternedKey(),
+		key19: patternedKey(),
+		key20: patternedKey(),
+		key21: patternedKey(),
+		key22: patternedKey(),
+		key23: patternedKey(),
+		key24: patternedKey(),
+		key25: patternedKey(),
+		key26: patternedKey(),
+		key27: patternedKey(),
+		key28: patternedKey(),
+		key29: patternedKey(),
+		key30: patternedKey(),
+		first: 1,
+		second: 2,
+		third: 3,
+	};
+	emit<Crowd>(crowd);
+}
+
+test "emit holds an event of exactly the 1024 bytes its buffer has" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], crowdEntry).result == 0;
+	const lines = logs();
+	assert lines.length == 1;
+	const prefix = "Program data: ";
+	const line = lines[0];
+	assert line.length == prefix.length + 1368;
+	assert line.startsWith(prefix + "wsnqdi2Mq1oBAgMEBQYHCAkKCwwNDg8QERITFBUW");
+	assert line.endsWith("HR4fIAEAAAAAAAAAAgAAAAAAAAADAAAAAAAAAA==");
+}
+
+function inputBufferEntry(): void {
+	const first = account(0);
+	if (!first.ok) { failWith(ProgramError.custom(1)); return; }
+	const held = first.value;
+	if (held.data().address != held.address + 88) { failWith(ProgramError.custom(2)); return; }
+	const data = instructionData();
+	if (data.address + data.length != msSolProgramId()) { failWith(ProgramError.custom(3)); return; }
+	const inner = data.range(1, 2);
+	if (!inner.ok || inner.value.address != data.address + 1) { failWith(ProgramError.custom(4)); return; }
+	const meta = InstructionAccount.writable(held);
+	if (meta.key != held.address + 8) { failWith(ProgramError.custom(5)); }
+}
+
+test "every view and address a program can hold points into the input buffer the runtime built" {
+	const accounts = [holder(1, keyOf(9), [1, 2, 3], false, true)];
+	const input: uint8[] = [9, 1, 2, 3];
+	assert run(programKey(), accounts, input, inputBufferEntry).result == 0;
+	const empty: uint8[] = [0, 0, 0];
+	assert run(programKey(), accounts, empty, inputBufferEntry).result == 0;
+}
+
+function returnDataEntry(): void {
+	const payload: uint8[3] = [7, 8, 9];
+	setReturnData(payload);
+	const found = returnData();
+	if (found === null) { failWith(ProgramError.custom(1)); return; }
+	if (!found.program.equals(programId())) { failWith(ProgramError.custom(2)); return; }
+	if (found.length != 3) { failWith(ProgramError.custom(3)); return; }
+	const first = found.readU8(0);
+	const last = found.readU8(2);
+	if (!first.ok || first.value != 7 || !last.ok || last.value != 9) { failWith(ProgramError.custom(4)); }
+}
+
+function fullReturnDataEntry(): void {
+	let big: uint8[1024] = [];
+	for (let index = 0; index < 1024; index++) { big[index] = ((index * 7) & 0xff) as uint8; }
+	setReturnData(big);
+	const found = returnData();
+	if (found === null) { failWith(ProgramError.custom(1)); return; }
+	if (found.length != 1024) { failWith(ProgramError.custom(3)); return; }
+	for (let index = 0; index < 1024; index++) {
+		const byte = found.readU8(index as uint64);
+		if (!byte.ok || byte.value != ((index * 7) & 0xff)) { failWith(ProgramError.custom(5)); return; }
+	}
+	const word = found.readU64(8);
+	if (!word.ok || word.value != 0x69625b544d463f38) { failWith(ProgramError.custom(6)); }
+}
+
+function noReturnDataEntry(): void {
+	if (returnData() !== null) { failWith(ProgramError.custom(7)); }
+}
+
+test "returnData reads back the program, the length and every byte, up to the 1,024 the runtime holds" {
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], returnDataEntry).result == 0;
+	assert run(programKey(), none, [], fullReturnDataEntry).result == 0;
+	assert run(programKey(), none, [], noReturnDataEntry).result == 0;
+}
+
+test "clock reads every field the runtime wrote" {
+	setClock({
+		slot: 77,
+		epochStartTimestamp: -5,
+		epoch: 3,
+		leaderScheduleEpoch: 4,
+		unixTimestamp: 1700000000,
+	});
+	const none: HostAccount[] = [];
+	assert run(programKey(), none, [], clockEntry).result == 0;
+}
+
+function clockEntry(): void {
+	const now = clock();
+	if (now.slot != 77) { failWith(ProgramError.custom(1)); }
+	if (now.epochStartTimestamp != -5) { failWith(ProgramError.custom(2)); }
+	if (now.epoch != 3) { failWith(ProgramError.custom(3)); }
+	if (now.leaderScheduleEpoch != 4) { failWith(ProgramError.custom(4)); }
+	if (now.unixTimestamp != 1700000000) { failWith(ProgramError.custom(5)); }
 }
 
 function payEntry(): void {
@@ -483,12 +806,8 @@ test "transferLamports moves lamports through the System program" {
 	assert run(programKey(), poor, [], payEntry).result != 0;
 }
 
-function delegationProgramKey(): Pubkey {
-	return @comptime { return pubkeyOf("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh"); };
-}
-
 function counterAddress(): ProgramAddress {
-	const derived = counterSeeds().findProgramAddress(programKey());
+	const derived = findProgramAddressOf(programKey(), ["counter"]);
 	if (derived.ok) { return derived.value; }
 	return { key: Pubkey.zero(), bump: 0 };
 }
@@ -509,15 +828,15 @@ function delegatedEntry(): void {
 function delegatedPdaStep(): Result<uint8, ProgramError> {
 	const found = try delegated<Counter>(0);
 	const pinned = try instructionData().readU8(0);
-	if (pinned == 0) { return pda(found, counterSeeds()); }
-	return pdaWithBump(found, counterSeeds(), pinned);
+	if (pinned == 0) { return pda(found, ["counter"]); }
+	return pdaWithBump(found, ["counter"], pinned);
 }
 
 function delegatedPdaEntry(): void { codeOf(delegatedPdaStep()); }
 
 test "a delegated verifier checks the delegation program as owner, then discriminator and size" {
 	const tag = counterTag();
-	const dlp = delegationProgramKey();
+	const dlp = DELEGATION_PROGRAM_ID;
 	const undelegated = [holder(1, programKey(), counterBytes(tag, 41, 48), false, false)];
 	assert run(programKey(), undelegated, [], delegatedEntry).result ==
 		ProgramError.accountOwnedByWrongProgram().code;
@@ -537,7 +856,7 @@ test "a delegated verifier checks the delegation program as owner, then discrimi
 
 test "a delegated account must sit at the program's PDA, with the canonical or the given bump" {
 	const bytes = counterBytes(counterTag(), 41, 48);
-	const dlp = delegationProgramKey();
+	const dlp = DELEGATION_PROGRAM_ID;
 	const address = counterAddress();
 	const atPda = [delegatedCounter(address.key, dlp, bytes)];
 	const canonical: uint8[] = [0];
@@ -559,7 +878,7 @@ export struct ClaimAccounts {
 
 function claimStep(): Result<uint64, ProgramError> {
 	const x = try accounts<ClaimAccounts>();
-	const _bump = try pda(x.pet, counterSeeds());
+	const _bump = try pda(x.pet, ["counter"]);
 	return Result.ok(x.pet.data().value);
 }
 
@@ -571,31 +890,64 @@ function claimEntry(): void {
 test "accounts<T>() verifies a Delegated<T> field like delegated<T>()" {
 	const bytes = counterBytes(counterTag(), 41, 48);
 	const owner = holder(2, keyOf(9), [], true, false);
-	const pet = delegatedCounter(counterAddress().key, delegationProgramKey(), bytes);
+	const pet = delegatedCounter(counterAddress().key, DELEGATION_PROGRAM_ID, bytes);
 	assert run(programKey(), [owner, pet], [], claimEntry).result == 0;
 	const undelegated = delegatedCounter(counterAddress().key, programKey(), bytes);
 	assert run(programKey(), [owner, undelegated], [], claimEntry).result ==
 		ProgramError.accountOwnedByWrongProgram().code;
 }
 
-test "borshBuffer writes Borsh little-endian fields and refuses a write past its capacity" {
-	const written = borshBuffer(14).u64(0x0102030405060708).bool(true).i32(-2).u8(9).written();
-	assert written.ok;
-	if (written.ok) {
-		const view = written.value;
-		assert view.length == 14;
-		const expected: uint8[] = [8, 7, 6, 5, 4, 3, 2, 1, 1, 254, 255, 255, 255, 9];
-		for (let index = 0; index < 14; index++) {
-			const byte = view.readU8(index as uint64);
-			assert byte.ok && byte.value == expected[index];
-		}
-	}
-	const keyed = borshBuffer(32).pubkey(keyOf(7)).written();
-	assert keyed.ok && keyed.value.length == 32;
-	const over = borshBuffer(8).u64(1).u8(2).written();
-	assert !over.ok;
-	const after = borshBuffer(8).u64(1).u8(2).u8(3).written();
-	assert !after.ok;
+test "the put functions write Borsh little-endian fields and answer an offset past the storage for a write that does not fit" {
+	let fields: uint8[14] = [];
+	let at = putU64(fields, 0, 0x0102030405060708);
+	at = putBool(fields, at, true);
+	at = putI32(fields, at, -2);
+	at = putU8(fields, at, 9);
+	assert at == 14;
+	const expected: uint8[] = [8, 7, 6, 5, 4, 3, 2, 1, 1, 254, 255, 255, 255, 9];
+	for (let index = 0; index < 14; index++) { assert fields[index] == expected[index]; }
+	let key: uint8[32] = [];
+	assert putPubkey(key, 0, keyOf(7)) == 32 && key[0] == 7 && key[31] == 0;
+	let eight: uint8[8] = [];
+	const over = putU8(eight, putU64(eight, 0, 1), 2);
+	assert over == 9;
+	assert eight[0] == 1 && eight[1] == 0;
+	assert putU8(eight, over, 3) == 9;
+	assert putU64(eight, over, 3) == 9;
+	assert eight[0] == 1 && eight[7] == 0;
+}
+
+test "each width fits exactly the room it needs and is refused one byte short" {
+	let storage: uint8[8] = [];
+	assert putU8(storage, 7, 1) == 8 && putU8(storage, 8, 1) == 9;
+	assert putU16(storage, 6, 1) == 8 && putU16(storage, 7, 1) == 9;
+	assert putU32(storage, 4, 1) == 8 && putU32(storage, 5, 1) == 9;
+	assert putU64(storage, 0, 1) == 8 && putU64(storage, 1, 1) == 9;
+	assert putI8(storage, 7, -1) == 8 && putI16(storage, 6, -1) == 8;
+	assert putI32(storage, 4, -1) == 8 && putI64(storage, 0, -1) == 8;
+	assert storage[0] == 255 && storage[7] == 255;
+	let wide: uint8[32] = [];
+	assert putPubkey(wide, 0, keyOf(1)) == 32 && putPubkey(wide, 1, keyOf(1)) == 33;
+	assert putU8([], 0, 1) == 1;
+}
+
+test "putBytes and putSpan copy a view, keep the offset as the length and are refused one past the storage" {
+	let source: uint8[3] = [4, 5, 6];
+	const view: Bytes = { address: msSolSpanAddress(source), length: 3 };
+	let room: uint8[6] = [];
+	let at = putU8(room, 0, 1);
+	at = putBytes(room, at, view);
+	at = putU16(room, at, 0x0807);
+	assert at == 6;
+	const expected: uint8[] = [1, 4, 5, 6, 7, 8];
+	for (let index = 0; index < 6; index++) { assert room[index] == expected[index]; }
+	let tight: uint8[3] = [];
+	assert putBytes(tight, putU8(tight, 0, 1), view) == 4;
+	assert tight[1] == 0 && tight[2] == 0;
+	let spanned: uint8[6] = [];
+	assert putSpan(spanned, putU8(spanned, 0, 1), source) == 4;
+	assert spanned[1] == 4 && spanned[2] == 5 && spanned[3] == 6;
+	assert putSpan(tight, putU8(tight, 0, 1), source) == 4;
 }
 
 export enum GaugeOp {
@@ -644,5 +996,1051 @@ test "anchorIdl describes nested structs as defined types and fixed arrays as ar
 		assert types.at(1).name.asString() == "Gauge";
 		assert types.at(1).serialization.asString() == "bytemuck";
 		assert types.at(1).type.fields.at(1).type.asString() == "u16";
+	}
+}
+
+function hostProgram(): Pubkey {
+	return pubkeyOf("9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu");
+}
+
+function foundAt(found: Result<ProgramAddress, ProgramError>, key: Pubkey, bump: uint8): boolean {
+	return found.ok && found.value.bump == bump && found.value.key.equals(key);
+}
+
+test "a seed list derives the address the heap seeds derived, kind by kind" {
+	const program = hostProgram();
+	let five = Pubkey.zero();
+	five.bytes[0] = 5;
+	assert foundAt(
+		findProgramAddressOf(program, ["identity"]),
+		pubkeyOf("FLtPrptzq3LRxEv7uX39Hrfuw5mS9Uwc5yaMQdeThWeX"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["pet", [7]]),
+		pubkeyOf("93PwUMspkoH1MnRnJgVx8hcRkw1uXygXkK6LaovKJwE5"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["pk", five]),
+		pubkeyOf("65QKPW56NGMfywzKLBCHUcoXdHGiFG87TP7xLby1toZq"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["n", leBytes(0x0102030405060708 as uint64)]),
+		pubkeyOf("HZQsCyXSzhvuj7DCbx4exy39BBuLSEFnUMMUm2fAfqzF"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["all", [9], five, leBytes(258 as uint64)]),
+		pubkeyOf("AFwfQ1B22ZmWpoExE5vELZJFFWLMpLPoi5e8rngVFHgd"),
+		255,
+	);
+	assert foundAt(
+		findProgramAddressOf(program, ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]),
+		pubkeyOf("BTXAfu37pBqYg3YPwGthTeCscLRn3tWcsQB2Y4rof6EE"),
+		253,
+	);
+}
+
+test "a seed list takes a byte array, a span and a heap array like a byte literal" {
+	const program = hostProgram();
+	const fixed: uint8[1] = [7];
+	const span: Span<uint8> = fixed;
+	const heap: uint8[] = [7];
+	const literal = findProgramAddressOf(program, ["pet", [7]]);
+	assert literal.ok;
+	for (const found of [
+		findProgramAddressOf(program, ["pet", fixed]),
+		findProgramAddressOf(program, ["pet", span]),
+		findProgramAddressOf(program, ["pet", heap]),
+	]) {
+		assert found.ok;
+		if (found.ok && literal.ok) {
+			assert found.value.key.equals(literal.value.key);
+			assert found.value.bump == literal.value.bump;
+		}
+	}
+}
+
+test "programAddress rebuilds the address its bump was found for, and no other" {
+	const program = hostProgram();
+	const bump: uint8 = 255;
+	const identity = pubkeyOf("FLtPrptzq3LRxEv7uX39Hrfuw5mS9Uwc5yaMQdeThWeX");
+	const rebuilt = programAddressOf(program, ["identity", [bump]]);
+	assert rebuilt.ok;
+	if (rebuilt.ok) { assert rebuilt.value.equals(identity); }
+	const other: uint8 = 254;
+	const different = programAddressOf(program, ["identity", [other]]);
+	if (different.ok) { assert !different.value.equals(identity); }
+}
+
+test "findProgramAddress skips bumps whose address is on the curve" {
+	const found = findProgramAddressOf(hostProgram(), [
+		[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14],
+	]);
+	assert foundAt(
+		found,
+		pubkeyOf("6RWy3mtB7rxdHcS6tgrBqmtuUQ8tTjg5JHaK9g458kYj"),
+		249,
+	);
+}
+
+test "a list of sixteen seeds finds nothing and seventeen seeds create nothing" {
+	const program = hostProgram();
+	const sixteen = findProgramAddressOf(program, [
+		[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
+	]);
+	assert !sixteen.ok;
+	if (!sixteen.ok) { assert sixteen.error.code == ProgramError.maxSeedLengthExceeded().code; }
+	const seventeen = programAddressOf(program, [
+		[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16],
+	]);
+	assert !seventeen.ok;
+	if (!seventeen.ok) { assert seventeen.error.code == ProgramError.maxSeedLengthExceeded().code; }
+	const sixteenCreated = programAddressOf(program, [
+		[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
+	]);
+	if (!sixteenCreated.ok) {
+		assert sixteenCreated.error.code == ProgramError.invalidSeeds().code;
+	}
+}
+
+test "a seed of thirty-three bytes is refused by find and by create" {
+	const program = hostProgram();
+	const found = findProgramAddressOf(program, ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+	assert !found.ok;
+	if (!found.ok) { assert found.error.code == ProgramError.maxSeedLengthExceeded().code; }
+	const created = programAddressOf(program, ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+	assert !created.ok;
+	if (!created.ok) { assert created.error.code == ProgramError.maxSeedLengthExceeded().code; }
+	const wide: uint8[33] = [];
+	const bytes = programAddressOf(program, [wide]);
+	assert !bytes.ok;
+	if (!bytes.ok) { assert bytes.error.code == ProgramError.maxSeedLengthExceeded().code; }
+}
+
+export struct SeedAccounts {
+	owner: Signer;
+	vault: Writable;
+	pet: Mutable<Counter>;
+	plain: Account;
+}
+
+function accountSeedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<SeedAccounts>();
+	const byAccount = try findProgramAddress(["k", x.owner, x.vault, x.pet, x.plain]);
+	const byKey = try findProgramAddress([
+		"k",
+		x.owner.key(),
+		x.vault.key(),
+		x.pet.key(),
+		x.plain.key(),
+	]);
+	if (byAccount.key != byKey.key || byAccount.bump != byKey.bump) {
+		return Result.err(ProgramError.invalidSeeds());
+	}
+	const rebuilt = try programAddress(["k", x.owner, x.vault, x.pet, x.plain, [byAccount.bump]]);
+	if (rebuilt != byAccount.key) { return Result.err(ProgramError.constraintSeeds()); }
+	const reversed = try findProgramAddress(["k", x.plain, x.pet, x.vault, x.owner]);
+	if (reversed.key == byAccount.key) { return Result.err(ProgramError.constraintAddress()); }
+	return Result.ok(byAccount.bump as uint64);
+}
+
+function accountSeedEntry(): void { codeOf(accountSeedStep()); }
+
+test "an account is a seed through its key, whatever proof it carries" {
+	const accounts = [
+		holder(2, keyOf(9), [], true, false),
+		holder(3, Pubkey.zero(), [], false, true),
+		holder(1, programKey(), counterBytes(counterTag(), 41, 48), false, true),
+		holder(4, Pubkey.zero(), [], false, false),
+	];
+	assert run(programKey(), accounts, [], accountSeedEntry).result == 0;
+}
+
+function keyBytes(key: Pubkey): uint8[] {
+	const bytes: uint8[] = [];
+	for (let index = 0; index < 32; index++) { bytes.push(key.bytes[index]); }
+	return bytes;
+}
+
+function vaultSigner(): uint8[][] {
+	return [textBytes("vault"), keyBytes(keyOf(5)), [7]];
+}
+
+function counterSigner(): uint8[][] {
+	return [textBytes("counter"), [7]];
+}
+
+function ping(target: Account, signers: Span<SignerSeeds> = []): Result<uint64, ProgramError> {
+	let storage: uint8[1] = [];
+	const length = putU8(storage, 0, 3);
+	return invokeSigned(
+		keyOf(9),
+		[InstructionAccount.writable(target)],
+		storage,
+		length,
+		signers,
+	);
+}
+
+macro forwardSigned(call: Node, seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: call.line,
+		column: call.column,
+		callee: bindSym("signed"),
+		arguments: [call, seeds],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+macro forwardFind(program: Node, seeds: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: seeds.line,
+		column: seeds.column,
+		callee: bindSym("findProgramAddressOf"),
+		arguments: [program, seeds],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+function signingStep(): Result<uint64, ProgramError> {
+	const op = try instructionData().readU8(0);
+	const first = try account(0);
+	const second = try account(1);
+	if (op == 0) { return signed(transfer(first, second, 10), ["vault", keyOf(5), [7]]); }
+	if (op == 1) {
+		return signed(createAccount(first, second, 100, 8, keyOf(9)), ["vault", keyOf(5), [7]]);
+	}
+	if (op == 2) { return signed(assignTo(second, keyOf(9)), ["vault", keyOf(5), [7]]); }
+	if (op == 3) { return signed(allocate(second, 16), ["vault", keyOf(5), [7]]); }
+	if (op == 4) {
+		return signed(createProgramAccount(first, second, 16, keyOf(9)), ["vault", keyOf(5), [7]]);
+	}
+	if (op == 5) { return signed(ping(second), ["vault", keyOf(5), [7]]); }
+	if (op == 6) {
+		return signed(ping(second), [["vault", keyOf(5), [7]], ["counter", [7]]]);
+	}
+	if (op == 11) {
+		return signed(ping(second), [
+			[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16],
+		]);
+	}
+	if (op == 12) {
+		return signed(ping(second), ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+	}
+	if (op == 13) {
+		return signed(ping(second), [
+			[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15],
+		]);
+	}
+	if (op == 8) { return signed(ping(second), ["k", first, second, [7]]); }
+	if (op == 14) { return forwardSigned(ping(second), ["k", first, second, [7]]); }
+	if (op == 9) { return signed(ping(second), [[7]]); }
+	if (op == 10) {
+		const wide: uint64 = 258;
+		return signed(ping(second), [["a", leBytes(wide)], [[1], [2]], [first, "z"]]);
+	}
+	return ping(second);
+}
+
+function signingEntry(): void { codeOf(signingStep()); }
+
+function signingRun(op: uint8, target: HostAccount): HostAccount[] {
+	const accounts = [wallet(1, 10000000), target];
+	const input: uint8[] = [op];
+	run(programKey(), accounts, input, signingEntry);
+	return accounts;
+}
+
+test "a signed System call sends the seeds it was given, in order" {
+	for (const op of [0, 1, 2, 3]) {
+		signingRun(op as uint8, op == 1 ? blank(keyOf(2)) : wallet(2, 5000));
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, vaultSigner());
+	}
+	assert signingRun(0, wallet(2, 5000))[1].lamports == 5010;
+}
+
+test "a signer list takes a string, an account, a byte array, and a list of lists takes several signers" {
+	const accounts = [wallet(1, 10000), wallet(2, 5000)];
+	const input: uint8[] = [8];
+	run(programKey(), accounts, input, signingEntry);
+	let calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 1;
+	assert signerIs(calls[0], 0, [textBytes("k"), keyBytes(keyOf(1)), keyBytes(keyOf(2)), [7]]);
+	signingRun(9, wallet(2, 5000));
+	calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 1 && signerIs(calls[0], 0, [[7]]);
+	signingRun(10, wallet(2, 5000));
+	calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 3;
+	assert signerIs(calls[0], 0, [textBytes("a"), [2, 1, 0, 0, 0, 0, 0, 0]]);
+	assert signerIs(calls[0], 1, [[1], [2]]);
+	assert signerIs(calls[0], 2, [keyBytes(keyOf(1)), textBytes("z")]);
+}
+
+test "a signer list that a user macro forwards to signed reads its seed types" {
+	const accounts = [wallet(1, 10000), wallet(2, 5000)];
+	const input: uint8[] = [14];
+	run(programKey(), accounts, input, signingEntry);
+	const calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 1;
+	assert signerIs(calls[0], 0, [textBytes("k"), keyBytes(keyOf(1)), keyBytes(keyOf(2)), [7]]);
+}
+
+test "a seed list that a user macro forwards to the seed table reads its seed types" {
+	const program = hostProgram();
+	let five = Pubkey.zero();
+	five.bytes[0] = 5;
+	assert foundAt(
+		forwardFind(program, ["pk", five]),
+		pubkeyOf("65QKPW56NGMfywzKLBCHUcoXdHGiFG87TP7xLby1toZq"),
+		255,
+	);
+	assert foundAt(
+		forwardFind(program, ["pet", [7]]),
+		pubkeyOf("93PwUMspkoH1MnRnJgVx8hcRkw1uXygXkK6LaovKJwE5"),
+		255,
+	);
+}
+
+test "a signer of seventeen seeds or of a thirty-three byte seed is refused, sixteen seeds are sent" {
+	const accounts = [wallet(1, 10000), wallet(2, 5000)];
+	const refused: uint8[] = [11];
+	assert run(programKey(), accounts, refused, signingEntry).result ==
+		ProgramError.maxSeedLengthExceeded().code;
+	assert invocations().length == 0;
+	const wide: uint8[] = [12];
+	assert run(programKey(), accounts, wide, signingEntry).result ==
+		ProgramError.maxSeedLengthExceeded().code;
+	assert invocations().length == 0;
+	const sixteen: uint8[] = [13];
+	assert run(programKey(), accounts, sixteen, signingEntry).result == 0;
+	assert invocations().length == 1 && invocations()[0].signerSeeds[0].length == 16;
+}
+
+macro forwardCreated(call: Node): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		line: call.line,
+		column: call.column,
+		callee: bindSym("initializedCounter"),
+		arguments: [call],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+function initializedCounter(counter: Mutable<Counter>): Result<uint64, ProgramError> {
+	const at = counter.data();
+	at.value = 9;
+	return Result.ok(0);
+}
+
+function createSignedStep(): Result<uint64, ProgramError> {
+	const op = try instructionData().readU8(0);
+	const bump = try instructionData().readU8(1);
+	const payer = try writableSigner(0);
+	const target = try writable(1);
+	if (op == 0) {
+		const counter = try signed(create<Counter>(payer, target), ["counter", [bump]]);
+		counter.data().value = 5;
+		return Result.ok(0);
+	}
+	if (op == 1) {
+		const made = signed(create<Counter>(payer, target), ["counter", [bump]]);
+		const counter = try made;
+		counter.data().value = 6;
+		return Result.ok(0);
+	}
+	if (op == 2) { return forwardCreated(try create<Counter>(payer, target)); }
+	if (op == 3) {
+		const counter = try forwardSigned(create<Counter>(payer, target), ["counter", [bump]]);
+		counter.data().value = 8;
+		return Result.ok(0);
+	}
+	const counter = try create<Counter>(payer, target);
+	counter.data().value = 7;
+	return Result.ok(0);
+}
+
+function createSignedEntry(): void { codeOf(createSignedStep()); }
+
+test "create signs with the seeds of its target" {
+	const derived = findProgramAddressOf(programKey(), ["counter"]);
+	assert derived.ok;
+	if (derived.ok) {
+		const bump = derived.value.bump;
+		const signing: uint8[] = [0, bump];
+		let pdaTarget = blank(derived.value.key);
+		pdaTarget.signer = false;
+		const accounts = [wallet(1, 10000000), pdaTarget];
+		assert run(programKey(), accounts, signing, createSignedEntry).result == 0;
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].program.equals(systemKey()) && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, [textBytes("counter"), [bump]]);
+		assert accounts[1].data.length == 8 + (sizeof(Counter) as int32);
+		assert accounts[1].data[8] == 5;
+		const tag = accountDiscriminator("Counter");
+		for (let index = 0; index < 8; index++) {
+			assert accounts[1].data[index] == tag.bytes[index];
+		}
+	}
+}
+
+test "create without seeds records no signer, and an explicit type argument under try is a macro argument" {
+	const unsigned: uint8[] = [4, 0];
+	const accounts = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), accounts, unsigned, createSignedEntry).result == 0;
+	assert invocations().length == 1 && invocations()[0].signers == 0;
+	assert accounts[1].data[8] == 7;
+	const tried: uint8[] = [2, 0];
+	const second = [wallet(1, 10000000), blank(keyOf(3))];
+	assert run(programKey(), second, tried, createSignedEntry).result == 0;
+	assert second[1].data[8] == 9;
+}
+
+test "createProgramAccount signs the create, or the allocate and the assign of a prefunded account" {
+	signingRun(4, blank(keyOf(2)));
+	let calls = invocations();
+	assert calls.length == 1 && signerIs(calls[0], 0, vaultSigner());
+	signingRun(4, wallet(2, 1));
+	calls = invocations();
+	assert calls.length == 3;
+	assert calls[0].signers == 0 && calls[0].signerSeeds.length == 0;
+	assert calls[1].signers == 1 && signerIs(calls[1], 0, vaultSigner());
+	assert calls[2].signers == 1 && signerIs(calls[2], 0, vaultSigner());
+}
+
+test "an instruction is invoked with one signer, with two, or with none" {
+	signingRun(5, wallet(2, 5000));
+	let calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 1;
+	assert signerIs(calls[0], 0, vaultSigner());
+	signingRun(6, wallet(2, 5000));
+	calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 2;
+	assert signerIs(calls[0], 0, vaultSigner()) && signerIs(calls[0], 1, counterSigner());
+	signingRun(7, wallet(2, 5000));
+	calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 0 && calls[0].signerSeeds.length == 0;
+}
+
+test "createPda signs with its seeds and the found bump" {
+	const derived = findProgramAddressOf(programKey(), ["counter"]);
+	assert derived.ok;
+	if (derived.ok) {
+		const pdaAccounts = [wallet(1, 10000000), blank(derived.value.key)];
+		assert run(programKey(), pdaAccounts, [], createPdaEntry).result == 0;
+		const calls = invocations();
+		assert calls.length == 1 && calls[0].signers == 1;
+		assert signerIs(calls[0], 0, [textBytes("counter"), [derived.value.bump]]);
+	}
+}
+
+function sameBytes(left: uint8[], right: uint8[]): boolean {
+	if (left.length != right.length) { return false; }
+	for (let index = 0; index < left.length; index++) {
+		if (left[index] != right[index]) { return false; }
+	}
+	return true;
+}
+
+function systemKey(): Pubkey { return Pubkey.zero(); }
+
+function recordedStep(): Result<uint64, ProgramError> {
+	const op = try instructionData().readU8(0);
+	const first = try account(0);
+	const second = try account(1);
+	if (op == 0) { return createAccount(first, second, 100, 8, keyOf(9)); }
+	if (op == 1) { return assignTo(second, keyOf(9)); }
+	if (op == 2) { return transfer(first, second, 10); }
+	if (op == 3) { return allocate(second, 16); }
+	return createProgramAccount(first, second, 16, keyOf(9));
+}
+
+function recordedEntry(): void { codeOf(recordedStep()); }
+
+function recordedRun(op: uint8, target: HostAccount): uint64 {
+	const accounts = [wallet(1, 10000000), target];
+	const input: uint8[] = [op];
+	return run(programKey(), accounts, input, recordedEntry).result;
+}
+
+function owner9(): uint8[] {
+	const bytes: uint8[] = [9];
+	while (bytes.length < 32) { bytes.push(0); }
+	return bytes;
+}
+
+function joined(head: uint8[], tail: uint8[]): uint8[] {
+	const bytes: uint8[] = [];
+	for (const value of head) { bytes.push(value); }
+	for (const value of tail) { bytes.push(value); }
+	return bytes;
+}
+
+test "createAccount sends the System program two writable signers and 52 bytes" {
+	assert recordedRun(0, blank(keyOf(2))) == 0;
+	const calls = invocations();
+	assert calls.length == 1 && calls[0].signers == 0;
+	const sent = calls[0];
+	assert sent.program.equals(systemKey());
+	assert sent.accounts.length == 2;
+	assert sent.accounts[0].key.equals(keyOf(1)) && sent.accounts[0].writable && sent.accounts[0].signer;
+	assert sent.accounts[1].key.equals(keyOf(2)) && sent.accounts[1].writable && sent.accounts[1].signer;
+	const head: uint8[] = [0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(sent.data, joined(head, owner9()));
+}
+
+test "assign, transfer and allocate send the System program their accounts and data" {
+	assert recordedRun(1, wallet(2, 5000)) == 0;
+	let sent = invocations()[0];
+	assert sent.program.equals(systemKey()) && sent.accounts.length == 1;
+	assert sent.accounts[0].key.equals(keyOf(2)) && sent.accounts[0].writable && sent.accounts[0].signer;
+	const assignHead: uint8[] = [1, 0, 0, 0];
+	assert sameBytes(sent.data, joined(assignHead, owner9()));
+
+	assert recordedRun(2, wallet(2, 5000)) == 0;
+	sent = invocations()[0];
+	assert sent.program.equals(systemKey()) && sent.accounts.length == 2;
+	assert sent.accounts[0].key.equals(keyOf(1)) && sent.accounts[0].writable && sent.accounts[0].signer;
+	assert sent.accounts[1].key.equals(keyOf(2)) && sent.accounts[1].writable && !sent.accounts[1].signer;
+	const transferBytes: uint8[] = [2, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(sent.data, transferBytes);
+
+	assert recordedRun(3, wallet(2, 5000)) == 0;
+	sent = invocations()[0];
+	assert sent.program.equals(systemKey()) && sent.accounts.length == 1;
+	assert sent.accounts[0].key.equals(keyOf(2)) && sent.accounts[0].writable && sent.accounts[0].signer;
+	const allocateBytes: uint8[] = [8, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(sent.data, allocateBytes);
+}
+
+test "createProgramAccount creates a blank target in one call and tops up, allocates and assigns a funded one" {
+	assert recordedRun(4, blank(keyOf(2))) == 0;
+	let calls = invocations();
+	assert calls.length == 1;
+	const createHead: uint8[] = [0, 0, 0, 0, 0, 75, 15, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(calls[0].data, joined(createHead, owner9()));
+
+	assert recordedRun(4, wallet(2, 1)) == 0;
+	calls = invocations();
+	assert calls.length == 3;
+	const topUp: uint8[] = [2, 0, 0, 0, 255, 74, 15, 0, 0, 0, 0, 0];
+	assert sameBytes(calls[0].data, topUp);
+	assert calls[0].accounts.length == 2 && calls[0].accounts[0].key.equals(keyOf(1));
+	assert calls[0].accounts[1].key.equals(keyOf(2)) && calls[0].accounts[1].writable;
+	const allocateBytes: uint8[] = [8, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(calls[1].data, allocateBytes) && calls[1].accounts.length == 1;
+	const assignHead: uint8[] = [1, 0, 0, 0];
+	assert sameBytes(calls[2].data, joined(assignHead, owner9())) && calls[2].accounts.length == 1;
+	assert calls[2].accounts[0].key.equals(keyOf(2)) && calls[2].accounts[0].signer;
+}
+
+function forwarded(first: Account, signers: Span<SignerSeeds> = []): Result<uint64, ProgramError> {
+	let storage: uint8[4] = [];
+	const length = putU32(storage, 0, 5);
+	return invokeSigned(
+		keyOf(9),
+		[InstructionAccount.writable(first)],
+		storage,
+		length,
+		signers,
+	);
+}
+
+function listed(first: Account, count: uint64): Result<uint64, ProgramError> {
+	let metas: InstructionAccount[65];
+	for (let index = 0; index < 65; index++) {
+		metas[index] = InstructionAccount.flagged(first, index % 2 == 0, index % 3 == 0);
+	}
+	let storage: uint8[4] = [];
+	return invokeList(keyOf(9), metas[0..(count as int32)], storage, putU8(storage, 0, 1));
+}
+
+function invokeStep(): Result<uint64, ProgramError> {
+	const op = try instructionData().readU8(0);
+	const a = try account(0);
+	const b = try account(1);
+	const c = try account(2);
+	let storage: uint8[16] = [];
+	if (op == 0) { return invoke(keyOf(9), [], storage, putU8(storage, 0, 7)); }
+	if (op == 1) {
+		return invoke(
+			keyOf(9),
+			[InstructionAccount.writable(a)],
+			storage,
+			putU64(storage, putU32(storage, 0, 2), 10),
+		);
+	}
+	if (op == 2) {
+		return invoke(
+			keyOf(9),
+			[
+				InstructionAccount.writableSigner(a),
+				InstructionAccount.readonlySigner(b),
+				InstructionAccount.readonly(c),
+				InstructionAccount.flagged(a, true, false),
+				InstructionAccount.flagged(c, false, true),
+			],
+			storage,
+			putU8(storage, putU8(storage, 0, 1), 2),
+		);
+	}
+	if (op == 3) {
+		return signed(
+			invoke(keyOf(9), [InstructionAccount.writable(a)], storage, putU8(storage, 0, 3)),
+			["vault", [7]],
+		);
+	}
+	if (op == 4) { return signed(forwarded(a), [["a"], ["b", [1]]]); }
+	if (op == 5) { return forwarded(a); }
+	if (op == 6) {
+		return invoke(
+			keyOf(9),
+			[
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.writable(a), InstructionAccount.writable(b), InstructionAccount.writable(c),
+				InstructionAccount.readonlySigner(a),
+			],
+			storage,
+			putU8(storage, 0, 6),
+		);
+	}
+	if (op == 7) { return listed(a, 3); }
+	if (op == 8) { return listed(a, 65); }
+	if (op == 10) { return listed(a, 64); }
+	if (op == 9) {
+		return invoke(
+			keyOf(9),
+			[InstructionAccount.writable(a)],
+			storage,
+			putU8(storage, putU64(storage, putU64(storage, 0, 1), 2), 3),
+		);
+	}
+	return Result.err(ProgramError.invalidArgument());
+}
+
+function invokeEntry(): void { codeOf(invokeStep()); }
+
+function invokeRun(op: uint8): uint64 {
+	const accounts = [wallet(1, 100), holder(2, programKey(), [], false, true), holder(3, programKey(), [], false, false)];
+	const input: uint8[] = [op];
+	return run(programKey(), accounts, input, invokeEntry).result;
+}
+
+test "invoke lists no account, one account or several with their flags, and sends the bytes written" {
+	assert invokeRun(0) == 0;
+	let sent = invocations();
+	assert sent.length == 1 && sent[0].program.equals(keyOf(9));
+	assert sent[0].accounts.length == 0 && sent[0].signers == 0;
+	const one: uint8[] = [7];
+	assert sameBytes(sent[0].data, one);
+
+	assert invokeRun(1) == 0;
+	sent = invocations();
+	assert sent[0].accounts.length == 1 && sent[0].accounts[0].key.equals(keyOf(1));
+	assert sent[0].accounts[0].writable && !sent[0].accounts[0].signer;
+	const two: uint8[] = [2, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0];
+	assert sameBytes(sent[0].data, two);
+
+	assert invokeRun(2) == 0;
+	const flags = invocations()[0].accounts;
+	assert flags.length == 5;
+	assert flags[0].key.equals(keyOf(1)) && flags[0].writable && flags[0].signer;
+	assert flags[1].key.equals(keyOf(2)) && !flags[1].writable && flags[1].signer;
+	assert flags[2].key.equals(keyOf(3)) && !flags[2].writable && !flags[2].signer;
+	assert flags[3].key.equals(keyOf(1)) && flags[3].writable && !flags[3].signer;
+	assert flags[4].key.equals(keyOf(3)) && !flags[4].writable && flags[4].signer;
+	const pair: uint8[] = [1, 2];
+	assert sameBytes(invocations()[0].data, pair);
+}
+
+test "signed signs an invoke, and a function that forwards its signers signs the same way" {
+	assert invokeRun(3) == 0;
+	let sent = invocations();
+	assert sent.length == 1 && sent[0].signers == 1;
+	assert signerIs(sent[0], 0, [textBytes("vault"), [7]]);
+	assert invokeRun(4) == 0;
+	sent = invocations();
+	assert sent[0].signers == 2;
+	assert signerIs(sent[0], 0, [textBytes("a")]) && signerIs(sent[0], 1, [textBytes("b"), [1]]);
+	const five: uint8[] = [5, 0, 0, 0];
+	assert sameBytes(sent[0].data, five);
+	assert invokeRun(5) == 0;
+	assert invocations()[0].signers == 0;
+}
+
+test "sixteen accounts are sent, in order, and the sixteenth keeps its own flags" {
+	assert invokeRun(6) == 0;
+	const sent = invocations()[0];
+	assert sent.accounts.length == 16;
+	assert sent.accounts[0].key.equals(keyOf(1)) && sent.accounts[1].key.equals(keyOf(2));
+	assert sent.accounts[14].key.equals(keyOf(3)) && sent.accounts[14].writable;
+	assert sent.accounts[15].key.equals(keyOf(1));
+	assert !sent.accounts[15].writable && sent.accounts[15].signer;
+}
+
+test "a run-time list sends sixty-four accounts in order with their own flags" {
+	assert invokeRun(10) == 0;
+	const sent = invocations()[0];
+	assert sent.accounts.length == 64;
+	for (let index = 0; index < 64; index++) {
+		assert sent.accounts[index].key.equals(keyOf(1));
+		assert sent.accounts[index].writable == (index % 2 == 0);
+		assert sent.accounts[index].signer == (index % 3 == 0);
+	}
+}
+
+test "a run-time list sends its accounts, and one past sixty-four or data past its buffer is refused" {
+	assert invokeRun(7) == 0;
+	const sent = invocations()[0];
+	assert sent.accounts.length == 3;
+	assert sent.accounts[0].writable && sent.accounts[0].signer;
+	assert !sent.accounts[1].writable && !sent.accounts[1].signer;
+	assert sent.accounts[2].writable && !sent.accounts[2].signer;
+	assert invokeRun(8) == ProgramError.invalidArgument().code;
+	assert invocations().length == 0;
+	assert invokeRun(9) == ProgramError.invalidArgument().code;
+	assert invocations().length == 0;
+}
+
+export struct Safe {
+	owner: Pubkey;
+	limit: uint64;
+	bump: uint8;
+}
+
+export function discriminator(this typeof Safe): Discriminator {
+	return @comptime { return accountDiscriminator("Safe"); };
+}
+
+function safeBytes(owner: Pubkey, limit: uint8, bump: uint8): uint8[] {
+	const bytes: uint8[] = [];
+	const tag = Safe.discriminator();
+	for (let i = 0; i < 8; i++) { bytes.push(tag.bytes[i]); }
+	for (let i = 0; i < 32; i++) { bytes.push(owner.bytes[i]); }
+	bytes.push(limit);
+	for (let i = 0; i < 7; i++) { bytes.push(0); }
+	bytes.push(bump);
+	for (let i = 0; i < 7; i++) { bytes.push(0); }
+	return bytes;
+}
+
+function safeAddress(owner: Pubkey): ProgramAddress {
+	const derived = findProgramAddressOf(programKey(), ["safe", owner]);
+	if (derived.ok) { return derived.value; }
+	return { key: Pubkey.zero(), bump: 0 };
+}
+
+function atKey(account: HostAccount, key: Pubkey): HostAccount {
+	return { ...account, key: key };
+}
+
+function readOnly(account: HostAccount): HostAccount {
+	return { ...account, writable: false };
+}
+
+function safeAt(key: Pubkey, owner: Pubkey, limit: uint8, bump: uint8): HostAccount {
+	return atKey(holder(1, programKey(), safeBytes(owner, limit, bump), false, true), key);
+}
+
+function systemAccountKey(): HostAccount {
+	return atKey(holder(5, Pubkey.zero(), [], false, false), Pubkey.zero());
+}
+
+function ownerWallet(): HostAccount {
+	return holder(2, Pubkey.zero(), [], true, false);
+}
+
+function pinnedSafe(limit: uint8): HostAccount {
+	const found = safeAddress(keyOf(2));
+	return safeAt(found.key, keyOf(2), limit, found.bump);
+}
+
+export struct PinnedSafe {
+	owner: Signer;
+	@seeds("safe", owner) @bump(safe.bump) safe: Mutable<Safe>;
+}
+
+export struct CanonicalSafe {
+	owner: Signer;
+	@seeds("safe", owner) @bump safe: Mutable<Safe>;
+}
+
+function pinnedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<PinnedSafe>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function canonicalStep(): Result<uint64, ProgramError> {
+	const x = try accounts<CanonicalSafe>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function pinnedEntry(): void { codeOf(pinnedStep()); }
+function canonicalEntry(): void { codeOf(canonicalStep()); }
+
+test "@seeds with @bump(account.field) accepts the address the stored bump gives and nothing else" {
+	const found = safeAddress(keyOf(2));
+	assert run(programKey(), [ownerWallet(), pinnedSafe(9)], [], pinnedEntry).result == 0;
+	const wrongBump = [ownerWallet(), safeAt(found.key, keyOf(2), 9, found.bump - 1)];
+	assert run(programKey(), wrongBump, [], pinnedEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const elsewhere = [ownerWallet(), safeAt(keyOf(77), keyOf(2), 9, found.bump)];
+	assert run(programKey(), elsewhere, [], pinnedEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const otherSeed = [holder(3, Pubkey.zero(), [], true, false), pinnedSafe(9)];
+	assert run(programKey(), otherSeed, [], pinnedEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+test "a bare @bump accepts the canonical address only" {
+	assert run(programKey(), [ownerWallet(), pinnedSafe(9)], [], canonicalEntry).result == 0;
+	const found = safeAddress(keyOf(2));
+	const elsewhere = [ownerWallet(), safeAt(keyOf(77), keyOf(2), 9, found.bump)];
+	assert run(programKey(), elsewhere, [], canonicalEntry).result ==
+		ProgramError.constraintSeeds().code;
+}
+
+export struct OwnedSafe {
+	owner: Signer;
+	@hasOne(owner) safe: Mutable<Safe>;
+	@hasOne(owner, ProgramError.userError(3)) other: Owned<Safe>;
+}
+
+function ownedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<OwnedSafe>();
+	return Result.ok(x.safe.data().limit + x.other.data().limit);
+}
+
+function ownedSafeEntry(): void { codeOf(ownedStep()); }
+
+test "@hasOne compares the account's field of that name to the key of the sibling, with ConstraintHasOne or the error given" {
+	const mine = pinnedSafe(9);
+	const second = readOnly(safeAt(keyOf(8), keyOf(2), 4, 0));
+	assert run(programKey(), [ownerWallet(), mine, second], [], ownedSafeEntry).result == 0;
+	const stranger = safeAt(mine.key, keyOf(9), 9, 0);
+	assert run(programKey(), [ownerWallet(), stranger, second], [], ownedSafeEntry).result ==
+		ProgramError.constraintHasOne().code;
+	const strangers = readOnly(safeAt(keyOf(8), keyOf(9), 4, 0));
+	assert run(programKey(), [ownerWallet(), mine, strangers], [], ownedSafeEntry).result ==
+		ProgramError.userError(3).code;
+}
+
+export struct Addressed {
+	safe: Owned<Safe>;
+	@address(safe.owner) payer: Signer;
+	@address(Pubkey.zero(), ProgramError.userError(4)) system: Account;
+}
+
+function addressedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Addressed>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function addressedEntry(): void { codeOf(addressedStep()); }
+
+test "@address compares the field's key to a key, a field of another account's data or a call, with ConstraintAddress or the error given" {
+	const safe = readOnly(safeAt(keyOf(8), keyOf(2), 4, 0));
+	const system = holder(5, Pubkey.zero(), [], false, false);
+	const payer = ownerWallet();
+	const accounts = [safe, payer, systemAccountKey()];
+	assert run(programKey(), accounts, [], addressedEntry).result == 0;
+	const stranger = [safe, holder(3, Pubkey.zero(), [], true, false), accounts[2]];
+	assert run(programKey(), stranger, [], addressedEntry).result ==
+		ProgramError.constraintAddress().code;
+	const elsewhere = [safe, payer, system];
+	assert run(programKey(), elsewhere, [], addressedEntry).result ==
+		ProgramError.userError(4).code;
+}
+
+export struct Bounded {
+	@constraint(safe.limit > 5) @constraint(safe.limit < 100, ProgramError.userError(5))
+	safe: Owned<Safe>;
+}
+
+function boundedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Bounded>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function boundedEntry(): void { codeOf(boundedStep()); }
+
+test "@constraint holds a condition over the accounts and their data, with ConstraintRaw or the error given" {
+	const inside = [readOnly(safeAt(keyOf(8), keyOf(2), 50, 0))];
+	assert run(programKey(), inside, [], boundedEntry).result == 0;
+	const low = [readOnly(safeAt(keyOf(8), keyOf(2), 5, 0))];
+	assert run(programKey(), low, [], boundedEntry).result == ProgramError.constraintRaw().code;
+	const high = [readOnly(safeAt(keyOf(8), keyOf(2), 100, 0))];
+	assert run(programKey(), high, [], boundedEntry).result == ProgramError.userError(5).code;
+}
+
+let builtErrors: uint64 = 0;
+
+function counted(ordinal: uint32): ProgramError {
+	builtErrors = builtErrors + 1;
+	return ProgramError.userError(ordinal);
+}
+
+export struct Lazy {
+	owner: Signer;
+	@hasOne(owner, counted(3)) @constraint(safe.limit > 5, counted(5)) safe: Owned<Safe>;
+	@address(Pubkey.zero(), counted(4)) system: Account;
+}
+
+function lazyStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Lazy>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function lazyEntry(): void { codeOf(lazyStep()); }
+
+test "a custom error is built when its check fails and not before, as Anchor builds it in the failing branch" {
+	const system = systemAccountKey();
+	const stranger = holder(5, Pubkey.zero(), [], false, false);
+	const mine = readOnly(safeAt(keyOf(8), keyOf(2), 50, 0));
+	builtErrors = 0;
+	assert run(programKey(), [ownerWallet(), mine, system], [], lazyEntry).result == 0;
+	assert builtErrors == 0;
+	const strangers = readOnly(safeAt(keyOf(8), keyOf(9), 50, 0));
+	assert run(programKey(), [ownerWallet(), strangers, system], [], lazyEntry).result ==
+		ProgramError.userError(3).code;
+	assert builtErrors == 1;
+	const low = readOnly(safeAt(keyOf(8), keyOf(2), 1, 0));
+	assert run(programKey(), [ownerWallet(), low, system], [], lazyEntry).result ==
+		ProgramError.userError(5).code;
+	assert builtErrors == 2;
+	assert run(programKey(), [ownerWallet(), mine, stranger], [], lazyEntry).result ==
+		ProgramError.userError(4).code;
+	assert builtErrors == 3;
+}
+
+export struct Ordered {
+	owner: Signer;
+	@address(Pubkey.zero()) @constraint(safe.limit > 5) @hasOne(owner) @seeds("safe", owner) @bump(safe.bump)
+	safe: Mutable<Safe>;
+}
+
+function orderedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Ordered>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function orderedEntry(): void { codeOf(orderedStep()); }
+
+test "a field's constraints run seeds, has_one, constraint, address, whatever order they are written in" {
+	const found = safeAddress(keyOf(2));
+	const wrongAll = safeAt(safeAddress(keyOf(3)).key, keyOf(9), 1, found.bump);
+	assert run(programKey(), [ownerWallet(), wrongAll], [], orderedEntry).result ==
+		ProgramError.constraintSeeds().code;
+	const wrongRelation = safeAt(found.key, keyOf(9), 1, found.bump);
+	assert run(programKey(), [ownerWallet(), wrongRelation], [], orderedEntry).result ==
+		ProgramError.constraintHasOne().code;
+	const wrongLimit = safeAt(found.key, keyOf(2), 1, found.bump);
+	assert run(programKey(), [ownerWallet(), wrongLimit], [], orderedEntry).result ==
+		ProgramError.constraintRaw().code;
+	const mine = safeAt(found.key, keyOf(2), 50, found.bump);
+	assert run(programKey(), [ownerWallet(), mine], [], orderedEntry).result ==
+		ProgramError.constraintAddress().code;
+}
+
+export struct Chained {
+	@constraint(safe.limit > 5) safe: Owned<Safe>;
+	@address(Pubkey.zero()) @constraint(safe.limit > 100) second: Account;
+	last: Signer;
+}
+
+function chainedStep(): Result<uint64, ProgramError> {
+	const x = try accounts<Chained>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function chainedEntry(): void { codeOf(chainedStep()); }
+
+test "every field is verified by its type before any constraint runs, and a field's constraints precede the next field's" {
+	const system = systemAccountKey();
+	const stranger = holder(5, Pubkey.zero(), [], false, false);
+	const signedLast = holder(6, Pubkey.zero(), [], true, false);
+	const unsignedLast = holder(6, Pubkey.zero(), [], false, false);
+	const low = readOnly(safeAt(keyOf(8), keyOf(2), 1, 0));
+	const high = readOnly(safeAt(keyOf(8), keyOf(2), 120, 0));
+	assert run(programKey(), [low, stranger, unsignedLast], [], chainedEntry).result ==
+		ProgramError.accountNotSigner().code;
+	assert run(programKey(), [low, stranger, signedLast], [], chainedEntry).result ==
+		ProgramError.constraintRaw().code;
+	assert run(programKey(), [high, stranger, signedLast], [], chainedEntry).result ==
+		ProgramError.constraintAddress().code;
+	const middle = readOnly(safeAt(keyOf(8), keyOf(2), 50, 0));
+	assert run(programKey(), [middle, system, signedLast], [], chainedEntry).result ==
+		ProgramError.constraintRaw().code;
+	assert run(programKey(), [middle, stranger, signedLast], [], chainedEntry).result ==
+		ProgramError.constraintRaw().code;
+	assert run(programKey(), [high, system, signedLast], [], chainedEntry).result == 0;
+}
+
+export struct TwoTypes {
+	counter: Mutable<Counter>;
+	safe: Mutable<Safe>;
+}
+
+function twoTypesStep(): Result<uint64, ProgramError> {
+	const x = try accounts<TwoTypes>();
+	return Result.ok(x.counter.data().value + x.safe.data().limit);
+}
+
+function twoTypesEntry(): void { codeOf(twoTypesStep()); }
+
+test "accounts<T>() reads the discriminator of each account type, so an account of the other type is refused" {
+	const counter = holder(1, programKey(), counterBytes(counterTag(), 3, 48), false, true);
+	const safe = safeAt(keyOf(2), keyOf(9), 4, 0);
+	assert run(programKey(), [counter, safe], [], twoTypesEntry).result == 0;
+	assert run(programKey(), [safe, counter], [], twoTypesEntry).result ==
+		ProgramError.accountDiscriminatorMismatch().code;
+	const counters = [counter, holder(3, programKey(), counterBytes(counterTag(), 5, 48), false, true)];
+	assert run(programKey(), counters, [], twoTypesEntry).result ==
+		ProgramError.accountDiscriminatorMismatch().code;
+}
+
+export struct BySeed {
+	owner: Signer;
+	@seeds("safe", owner, leBytes(given.seed)) @bump(safe.bump) safe: Mutable<Safe>;
+}
+
+function bySeedStep(): Result<uint64, ProgramError> {
+	const given = try args<MakeArgs>();
+	const x = try accounts<BySeed>();
+	return Result.ok(x.safe.data().limit);
+}
+
+function bySeedEntry(): void { codeOf(bySeedStep()); }
+
+test "a seed names an instruction argument through the local that holds it where accounts<T>() is written" {
+	const seven: uint64 = 7;
+	const derived = findProgramAddressOf(programKey(), ["safe", keyOf(2), leBytes(seven)]);
+	assert derived.ok;
+	if (derived.ok) {
+		const found = derived.value;
+		const safe = safeAt(found.key, keyOf(2), 9, found.bump);
+		const bytes = makeTail(7, 0, 0, 41);
+		const data: uint8[] = [0, 0, 0, 0, 0, 0, 0, 0];
+		for (const byte of bytes) { data.push(byte); }
+		assert run(programKey(), [ownerWallet(), safe], data, bySeedEntry).result == 0;
+		const other = makeTail(8, 0, 0, 41);
+		const wrong: uint8[] = [0, 0, 0, 0, 0, 0, 0, 0];
+		for (const byte of other) { wrong.push(byte); }
+		assert run(programKey(), [ownerWallet(), safe], wrong, bySeedEntry).result ==
+			ProgramError.constraintSeeds().code;
 	}
 }

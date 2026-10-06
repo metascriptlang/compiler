@@ -210,6 +210,46 @@ GONE as of this measurement: main-tree `vendor/` is 51MB now (was 3.0GB);
 hello-world from a dev-tree binary runs 3.83s vs 1.06s warm from the
 installed one.
 
+## Measured 2026-10-05 — LTO on SBF (`--os=solana`)
+
+platform-tools v1.57 (clang and ld.lld 22.1.2), LiteSVM; stage-2 compiler of `wt/sbf-lto`
+against its base `09692dc8b`. CU counts are deterministic; build times were not measured
+(load 12–47 during the runs).
+
+`--danger` (or an explicit `--lto=`) compiles every module to bitcode, always full `-flto`;
+the link merges it with `ld.lld -r --plugin-opt=emit-llvm --lto-O<2|3>`, compiles the merged
+module with the SBF clang (its frame errors still fail the build), then links as before. A
+direct LTO link is refused: ld.lld gives bitcode the SBF machine (`0x107`) while clang's
+objects and platform-tools' `libcompiler_builtins` are `EM_BPF` ("is incompatible with").
+A thin `-r` merge writes only its last module, so SBF merges full whatever the strategy. A
+build without `--danger` is unchanged (escrow `.so` byte-identical to base).
+
+CU per operation through `std/solana/arithmetic` (100 iterations per shape, operands from an
+opaque instruction byte, (CU − loop baseline) / 100; every shape logs the same value):
+
+| shape | base `--danger` | LTO | shape | base `--danger` | LTO |
+|---|---|---|---|---|---|
+| i32 `a / b` | 26.7 | 18.7 | i64 `a / b` | 18.8 | 15.0 |
+| i32 `a % b` | 23.0 | 15.8 | i64 `a % b` | 18.0 | 12.1 |
+| i32 `a / 4` | 23.1 | 0.6 | i64 `a / 4` | 14.1 | 2.5 |
+| i32 `a / 100` | 23.1 | 2.1 | i64 `a / 100` | 14.1 | 0.6 |
+| i32 `a % 8` | 20.5 | 0 | i64 `a % 8` | 13.6 | 3.5 |
+| i32 `x /= b` | 33.0 | 20.7 | i64 `x /= b` | 23.6 | 15.0 |
+| i32 `x %= 3` | 26.6 | 11.1 | i64 `x %= 3` | 19.1 | 1.5 |
+
+Escrow (`examples/escrow`, `--danger`): `.so` 76,144 → 67,928 bytes; every LiteSVM scenario
+passes; make 31,025 → 28,590 CU, take 24,686 → 21,132, make (refund) 38,525 → 36,090,
+refund 18,787 → 16,590, refused 619 → 519.
+
+Hibernal's `settleAttack`, unsplit (probe copy of Hibernal `0c4ad93`): frame 5,696 bytes on
+base (over the 4,096 limit, the build fails) → 3,392 with LTO; with `wt/obj-constr-dest`'s
+object-literal destination also applied, 4,032 without LTO → 3,200 with it. The probe runs
+2,056 → 1,063 CU with the same logged value.
+
+A release build with `--lto=thin` merges the same way (i32 `a / 4` and i64 `a / 100` 0.6 CU each).
+Not verified: other platform-tools versions, Hibernal's full tree, std/solana's own deployed
+programs.
+
 ## Re-measured 2026-07-28 (supersedes the tables below)
 
 Apple Silicon 8-core, `msc build src/index.ms --gc=drc --danger --cc=clang`.
