@@ -10,7 +10,7 @@ import {
 	RaiserValue, RaiserValueKind,
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserString, raiserArray, raiserToString, copyValueInto,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
-	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField,
+	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
 	raiserFuture, raiserRegAddr, raiserGlobalAddr, raiserElemAddr, raiserFieldAddr, heapObjectSetField,
 	rcIncref, rcDecref, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap,
 } from "./value";
@@ -994,6 +994,18 @@ function runStrandSlice(vm: RaiserVM): void {
 			vmHandleLoadDeref(vm, inst);
 		} else if (op == RaiserOpcode.StoreDeref) {
 			vmHandleStoreDeref(vm, inst);
+		} else if (op == RaiserOpcode.InstanceOf) {
+			const held = getReg(vm, base + inst.b);
+			const key = getFuncConst(func, inst.c).strVal;
+			setReg(vm, base + inst.a, raiserBool(held.kind == RaiserValueKind.Object && raiserIsInstance(vm.objectHeap.objects[held.intVal].classType, key)));
+		} else if (op == RaiserOpcode.ObjConv) {
+			const held = getReg(vm, base + inst.a);
+			if (held.kind != RaiserValueKind.Nil) {
+				const classType = held.kind == RaiserValueKind.Object ? vm.objectHeap.objects[held.intVal].classType : RAISER_NO_CLASS;
+				if (!raiserIsInstance(classType, getFuncConst(func, inst.b).strVal)) {
+					vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : "<untyped>") + " is not " + getFuncConst(func, inst.c).strVal);
+				}
+			}
 		} else if (op == RaiserOpcode.SameLoc) {
 			const l = getReg(vm, base + inst.b);
 			const r = getReg(vm, base + inst.c);
@@ -1103,7 +1115,7 @@ function runStrandSlice(vm: RaiserVM): void {
 		} else if (op == RaiserOpcode.ArraySlice) {
 			vmHandleArraySlice(vm, inst);
 		} else if (op == RaiserOpcode.NewObject) {
-			vmHandleNewObject(vm, inst);
+			vmHandleNewObject(vm, inst, func);
 		} else if (op == RaiserOpcode.LoadField) {
 			vmHandleLoadField(vm, mod, inst);
 		} else if (op == RaiserOpcode.StoreField) {
@@ -1523,8 +1535,9 @@ function vmHandleArraySlice(vm: RaiserVM, inst: RaiserInstruction): void {
 
 // --- Object opcode handlers ---
 
-function vmHandleNewObject(vm: RaiserVM, inst: RaiserInstruction): void {
+function vmHandleNewObject(vm: RaiserVM, inst: RaiserInstruction, func: RaiserFunction): void {
 	const handle = heapAllocObject(vm.objectHeap);
+	if (inst.b > 0) vm.objectHeap.objects[handle].classType = func.classTypes[inst.b - 1];
 	const objVal = raiserObject(handle);
 	setReg(vm, vm.baseReg + inst.a, objVal);
 	vmMaybeCollect(vm);

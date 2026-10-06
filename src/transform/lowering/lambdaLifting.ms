@@ -42,7 +42,7 @@ import {
 import {
 	ScopeStack, createScopeStack, cloneScopeStack, pushFuncBoundary, popFuncBoundary,
 	pushLoopBoundary, popLoopBoundary,
-	defineVar, defineParams, isLocalVar, isOuterVar, isModuleLevelVar, isDirectParentVar,
+	defineVar, defineLocalRoutines, defineParams, isLocalVar, isOuterVar, isModuleLevelVar, isDirectParentVar,
 	isOuterFrameName,
 } from "./lambdaLiftingScope";
 
@@ -1627,6 +1627,7 @@ function drainPendingRewrites(state: LiftState, pendingBefore: number, result: N
 }
 
 function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean): Node[] {
+	if (!isTopLevel) defineLocalRoutines(state.ss, stmts);
 	const result: Node[] = [];
 	let si = 0;
 	while (si < stmts.length) {

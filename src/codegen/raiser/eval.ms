@@ -419,6 +419,27 @@ test "engine: a for-of over a string yields its bytes as chars" {
 	assert ctx.output == "6 795\na\nb\na|b|!\nx\n", ctx.output;
 }
 
+test "engine: a for-of over a generator runs it as a state machine" {
+	const ctx = evalOrcVM("class Bag { items: int32[] = []; }"
+		+ " function* toItems(this b: Bag): Iterator<int32> { for (const x of b.items) yield x; }"
+		+ " function* toPairs(this b: Bag): Iterator<[string, int32]> { for (const x of b.items) { const p: [string, int32] = ['k' + x.toString(), x]; yield p; } }"
+		+ " const b = new Bag(); b.items.push(4); b.items.push(5); b.items.push(6);"
+		+ " for (const x of b) { if (x == 6) break; console.log(x); } for (const [k, v] of b) { if (v == 5) continue; console.log(k); }"
+		+ " function* upTo(n: int32): Iterator<int32> { let i: int32 = 0; try { while (i < n) { yield i; i = i + 1; } } finally { console.log('done'); } }"
+		+ " let sum: int32 = 0; for (const i of upTo(4)) { if (i == 1) continue; sum = sum + i; } console.log(sum);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "4\n5\nk4\nk6\ndone\n5\n", ctx.output;
+}
+
+test "engine: an object keeps its class, which instanceof and a checked conversion test" {
+	const ctx = evalOrcVM("class A { a: int32 = 1; } class B extends A { b: int32 = 2; } class C extends B { } class D extends A { }"
+		+ " const x: A = new C(); const d: A = new D(); const n: A | null = null; const u: unknown = new B();"
+		+ " console.log(x instanceof B, x instanceof C, x instanceof D, d instanceof A, n instanceof A, u instanceof B, u instanceof C);"
+		+ " console.log((x as B).b, (n as B | null) == null); console.log((d as B).b);");
+	assert ctx.error == "invalid object conversion: D is not B", ctx.error;
+	assert ctx.output == "true true false true false true false\n2 true\n", ctx.output;
+}
+
 test "engine: a for-of raises when the string it iterates changes length" {
 	const ctx = evalOrcVM("let s = 'abc'; let seen = ''; try { for (const c of s) { seen = seen + c; s = s + 'd'; } } catch (e) { console.log('raised after ' + seen); }");
 	assert ctx.error == "", ctx.error;

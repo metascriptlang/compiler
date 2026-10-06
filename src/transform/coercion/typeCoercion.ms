@@ -26,7 +26,9 @@ function lowerCoercionNode(node: Node): Node {
 	const loc = node.location;
 	// String(x) → x.toString()
 	const toStringCallee = makeMember(d.arguments[0], "toString", loc);
-	return makeCall(toStringCallee, [], loc);
+	const call = makeCall(toStringCallee, [], loc);
+	call.nodeType = node.nodeType;
+	return call;
 }
 
 // ===== Tests =====

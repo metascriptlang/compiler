@@ -2,6 +2,7 @@
 // AST expression nodes → typed bytecode instructions.
 
 import { resolveOverloadWinner } from "../c/names";
+import { monoInstanceName } from "../../monomorphize/registry";
 import {
 	Node, NodeKind, NodeFlag, TypeKind, Type, SymbolKind, Symbol,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
@@ -18,7 +19,7 @@ import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserS
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
+import { unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
 import { SymbolFlag, isViewBinding } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
@@ -27,7 +28,7 @@ import {
 	resolveFunc, isLocalString, isEnumName, findEnumConstant,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine,
-	callRaiserStmtCompiler, emitTrapNil, resolveGlobal,
+	callRaiserStmtCompiler, emitTrapNil, resolveGlobal, raiserClassKey, classSymOfType,
 } from "./context";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros } from "./valueCopy";
 
@@ -512,6 +513,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			const refused = refuseByteView(s, node, d.asExpr.nodeType, node.nodeType);
 			if (refused >= 0) return refused;
 			const reg = compileExpr(s, d.asExpr);
+			if (node.flags.has(NodeFlag.ObjCheck)) return emitObjConv(s, node, reg);
 			return emitNumericConv(s, reg, d.asExpr.nodeType, node.nodeType);
 		},
 		NodeKind.UpdateExpr => { return compileUpdateExpr(s, node); },
@@ -740,11 +742,51 @@ function refusePointerOp(s: RaiserCompState, node: Node): int32 {
 	return emitTrapNil(s, msg);
 }
 
+function classTargetKey(t: Type | null): string {
+	let bare = t != null && t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
+	if (bare != null && bare.kind == TypeKind.Ref && bare.typeReturn != null) bare = bare.typeReturn;
+	if (bare != null && bare.kind == TypeKind.GenericInstance) return monoInstanceName(bare);
+	const sym = classSymOfType(bare);
+	return sym != null && sym.symbolKind == SymbolKind.Class ? raiserClassKey(sym) : "";
+}
+
+function classDisplayName(key: string): string {
+	const hash = key.lastIndexOf("#");
+	const colon = key.lastIndexOf(":", hash);
+	return hash < 0 ? key : key.slice(colon + 1, hash);
+}
+
+function emitObjConv(s: RaiserCompState, node: Node, reg: int32): int32 {
+	const key = classTargetKey(node.nodeType);
+	if (key == "") {
+		const msg = "internal: a checked object conversion has no class target";
+		queueRaiserCompileError(msg, node.location.line, node.location.column);
+		return emitTrapNil(s, msg);
+	}
+	emitInst(s, raiserABC(RaiserOpcode.ObjConv, reg, addConst(s, raiserString(key)), addConst(s, raiserString(classDisplayName(key)))));
+	return reg;
+}
+
+function compileInstanceOf(s: RaiserCompState, node: Node, d: BinaryExprData): int32 {
+	const named = d.right.resolvedSym;
+	const key = named != null && named.symbolKind == SymbolKind.Class ? raiserClassKey(named) : classTargetKey(d.right.nodeType);
+	if (key == "") {
+		const msg = "internal: the right side of instanceof did not resolve to a class";
+		queueRaiserCompileError(msg, node.location.line, node.location.column);
+		return emitTrapNil(s, msg);
+	}
+	const held = compileExpr(s, d.left);
+	const dest = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.InstanceOf, dest, held, addConst(s, raiserString(key))));
+	return dest;
+}
+
 function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	const refusedOp = refusePointerOp(s, node);
 	if (refusedOp >= 0) return refusedOp;
 	const d = node.data as BinaryExprData;
 	const op = d.operator;
+	if (op == "instanceof") return compileInstanceOf(s, node, d);
 
 	// Assignment: x = expr  or  arr[i] = expr
 	if (op == "=") {

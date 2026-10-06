@@ -44,7 +44,7 @@ export enum RaiserOpcode {
 	ArraySetLen,      // ABC: R[A].setLength(R[B]) — truncate or nil-extend
 
 	// Object operations (3)
-	NewObject,        // ABC: R[A] = new empty object
+	NewObject,        // ABC: R[A] = new empty object; B > 0 gives it class type B - 1 of the function
 	LoadField,        // ABC: R[A] = R[B].field(constants[C].strVal)
 	StoreField,       // ABC: R[A].field(constants[B].strVal) = R[C]
 
@@ -162,6 +162,8 @@ export enum RaiserOpcode {
 	LoadDeref,        // ABC: R[A] = R[B][] — an object or array pointer reads as itself
 	StoreDeref,       // ABC: R[A][] = R[C]
 	SameLoc,          // ABC: R[A] = R[B] and R[C] are the same address (kind, handle, index, field)
+	InstanceOf,       // ABC: R[A] = R[B] is an object whose class is K[C] or derives from it
+	ObjConv,          // ABC: fatal unless R[A] is nil or an instance of class K[B], named K[C]
 }
 
 export enum RaiserConvClass {

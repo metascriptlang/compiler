@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM cannot compile a yield expression ('cannot compile node kind YieldExpr')
 let trace: string = "";
 
 function* returns(n: int32): Iterator<int32> {

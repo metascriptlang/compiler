@@ -2,7 +2,7 @@
 // @stdout: before 7
 // @skip-js: node exits 1 with the same "invalid object conversion" line but wraps it in its own uncaught-error report, and parity compares merged stdout+stderr (sibling of 647)
 // @xfail(danger): --danger drops the forced conversion check, so the wrong downcast reads the other instance's memory instead of stopping
-// @xfail(raiser): the Raiser VM does not check object conversions
+// @xfail(raiser): the Raiser stops at the same conversion with exit 1, but its 'raiser runtime error: invalid object conversion: …' goes to stderr, which the raiser cell keeps apart from the compared output
 
 class Box<T> {
 	v: T;

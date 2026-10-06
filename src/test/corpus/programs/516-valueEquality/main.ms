@@ -1,10 +1,10 @@
 // @xfail(raiser): raiser runtime error: cannot compile node kind BigIntLiteral at comptime
 // Parity program — `==` on value types compares field by field on every backend: a struct, a
-// tuple, a struct nested in a struct, a generic struct instance, `!=`, and a struct declared
-// in another module. Field kinds: string, bigint, array (by reference), primitive union,
-// generic instance, tuple of struct.
+// tuple, a struct nested in a struct, a generic struct instance, `!=` on a struct and on a
+// generic instance, and a struct declared in another module. Field kinds: string, bigint,
+// array (by reference), primitive union, generic instance, tuple of struct.
 //
-// @stdout: struct=true,false tuple=true nested=true generic=true,false neq=true fields=true,false,false crossModule=true
+// @stdout: struct=true,false tuple=true nested=true generic=true,false neq=true,true,false fields=true,false,false crossModule=true
 // @exit: 0
 
 import { Pt, Wrap } from "./lib/shapes";
@@ -35,7 +35,7 @@ function main(): void {
 	const f4: F = { s: "a", n: 10n, xs: xs, u: "3", w: { inner: { x: 1, y: 9 }, tag: "t" }, tp: [{ x: 5, y: 6 }, "q"] };
 	const p1: Pt = { x: 1, y: 1 };
 	const p2: Pt = { x: 1, y: 1 };
-	console.log(`struct=${a == b},${a == c} tuple=${t1 == t2} nested=${q1 == q2} generic=${b1 == b2},${b1 == b3} neq=${a != c} fields=${f1 == f2},${f1 == f3},${f1 == f4} crossModule=${p1 == p2}`);
+	console.log(`struct=${a == b},${a == c} tuple=${t1 == t2} nested=${q1 == q2} generic=${b1 == b2},${b1 == b3} neq=${a != c},${b1 != b3},${b1 != b2} fields=${f1 == f2},${f1 == f3},${f1 == f4} crossModule=${p1 == p2}`);
 }
 
 main();

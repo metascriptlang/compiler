@@ -22,7 +22,7 @@ import { forEachChild } from "../../ast/visitor";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	ScopeStack, createScopeStack, cloneScopeStack, pushFuncBoundary,
-	popFuncBoundary, defineVar, defineParams, isLocalVar, isOuterVar, isModuleLevelVar,
+	popFuncBoundary, defineVar, defineLocalRoutines, defineParams, isLocalVar, isOuterVar, isModuleLevelVar,
 } from "./lambdaLiftingScope";
 
 // Result of capture detection over a single closure-bearing function body.
@@ -298,6 +298,7 @@ function detectAllWalk(node: Node | null): void {
 	// Generic: recurse children via explicit dispatch (avoid deep mapChildren stack)
 	if (node.kind == NodeKind.BlockStmt) {
 		const d = node.data as BlockStmtData;
+		defineLocalRoutines(_detectAllSS, d.statements);
 		for (const s of d.statements) detectAllWalk(s);
 		return;
 	}
@@ -473,6 +474,7 @@ function detectPassWalk(node: Node, state: DetectionState, ss: ScopeStack, enclo
 		if (!isSelfRefClosureInit) defineVar(ss, node.resolvedSym, d.declName);
 		return;
 	}
+	if (node.kind == NodeKind.BlockStmt) defineLocalRoutines(ss, (node.data as BlockStmtData).statements);
 	// Generic: recurse children, propagating enclosingFn.
 	mapChildren(node, (child: Node): Node => { detectPassWalk(child, state, ss, enclosingFn); return child; });
 }

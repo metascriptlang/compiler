@@ -2773,7 +2773,7 @@ setGlobalHookOwners(sharedHookOwners);
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
 	if (opts.isHcr) resetRaises();
 	else inferRaises(transformedPrograms);
-	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths, hcrRootFunctions(hcrModulePaths));
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths, hcrRootFunctions(hcrModulePaths), hcrModulePaths);
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
 	transformedPaths = [];

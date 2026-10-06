@@ -374,10 +374,25 @@ export interface RaiserObjectField {
 	value: RaiserValue;
 }
 
+export interface RaiserClassType {
+	name: string;
+	chain: string[];
+}
+
+export const RAISER_NO_CLASS: RaiserClassType = { name: "", chain: [] };
+
 export interface RaiserObjectData {
 	fields: RaiserObjectField[];
 	rc: int32;
 	color: int32;
+	classType: RaiserClassType;
+}
+
+export function raiserIsInstance(classType: RaiserClassType, key: string): boolean {
+	for (const k of classType.chain) {
+		if (k == key) return true;
+	}
+	return false;
 }
 
 export interface RaiserObjectHeap {
@@ -399,11 +414,12 @@ export function heapAllocObject(heap: RaiserObjectHeap): int64 {
 		data.fields.length = 0;
 		data.rc = 0;
 		data.color = 0;
+		data.classType = RAISER_NO_CLASS;
 		return reused;
 	}
 	const idx = heap.objects.length;
 	const fields: RaiserObjectField[] = [];
-	const data: RaiserObjectData = { fields, rc: 0, color: 0 };
+	const data: RaiserObjectData = { fields, rc: 0, color: 0, classType: RAISER_NO_CLASS };
 	heap.objects.push(data);
 	return idx;
 }
@@ -599,6 +615,7 @@ export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap,
 			return raiserNil();
 		}
 		const dstHandle = heapAllocObject(dstObj);
+		dstObj.objects[dstHandle].classType = srcObj.objects[val.intVal].classType;
 		map.objSrc.push(val.intVal);
 		map.objDst.push(dstHandle);
 		const fields = srcObj.objects[val.intVal].fields;

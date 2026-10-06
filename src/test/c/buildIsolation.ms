@@ -2,7 +2,7 @@ import { env } from "std/process";
 import { compileToC } from "../helpers";
 import { resetBuildState } from "../../compiler/buildSession";
 import { buildPreludeContext, preludeContextFor } from "../../checker/checkPass";
-import { ctorDefaultsMark } from "../../checker/instantiate";
+import { ctorDefaultsMark } from "../../checker/symbol";
 import { dispatchEntryCount } from "../../checker/context";
 import { duVariantRegistry, TargetInfo } from "../../checker/types";
 import { getGenericTypeInstCount } from "../../parser/context";

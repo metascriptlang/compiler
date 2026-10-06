@@ -151,6 +151,18 @@ class ConstructorInstancePair<K, V> {
 
 function constructorInstancePutPair(p: ConstructorInstancePair<int32, string>, k: int32, v: string): void { p.ks.push(k); p.vs.push(v); }
 
+struct InferredPoint { x: int32; y: int32; }
+
+class InferredReturns {
+	n: int32 = 4;
+	count() { return this.n; }
+	label() { return "n=" + this.n.toString(); }
+	point() { return { x: this.n, y: this.n * 2 } as InferredPoint; }
+	maybe(on: boolean) { if (on) return "on"; return null; }
+	bump() { this.n += 1; }
+	static zero() { return 0; }
+}
+
 test "classCalls: method defaults fill only the omitted trailing arguments after the receiver" {
 	const c = new DefaultCounter();
 	assert c.add() == 1;
@@ -288,4 +300,18 @@ test "classCalls: this in a two-parameter generic constructor is its instance" {
 	const p = new ConstructorInstancePair<int32, string>(7, "z");
 	assert p.ks.length == 2;
 	assert p.vs[1] == "z";
+}
+
+test "classCalls: a method without a return annotation returns what its body returns" {
+	const r = new InferredReturns();
+	const n: int32 = r.count();
+	assert n == 4;
+	assert r.label() == "n=4";
+	const p = r.point();
+	assert p.x == 4 && p.y == 8;
+	assert r.maybe(true) == "on";
+	assert r.maybe(false) == null;
+	r.bump();
+	assert r.count() == 5;
+	assert InferredReturns.zero() == 0;
 }

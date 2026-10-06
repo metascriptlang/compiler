@@ -5,7 +5,7 @@
 // Keeping these primitives in their own module avoids duplication and circular
 // imports.
 
-import { Symbol } from "../../ast/node";
+import { Node, NodeKind, Symbol, VariableDeclData } from "../../ast/node";
 
 // ===== Scope Stack =====
 // Tracks variable declarations with function boundary awareness.
@@ -38,6 +38,14 @@ export function popFuncBoundary(ss: ScopeStack): void {
 export function defineVar(ss: ScopeStack, sym: Symbol | null, name: string): void {
 	ss.syms.push(sym as Symbol);
 	ss.spellings.push(name);
+}
+
+export function defineLocalRoutines(ss: ScopeStack, stmts: Node[]): void {
+	for (const s of stmts) {
+		if (s.kind != NodeKind.VariableDecl) continue;
+		const d = s.data as VariableDeclData;
+		if (d.initializer != null && (d.initializer.kind == NodeKind.FunctionExpr || d.initializer.kind == NodeKind.ArrowFunction)) defineVar(ss, s.resolvedSym, d.declName);
+	}
 }
 
 export function defineParams(ss: ScopeStack, paramSyms: Symbol[] | null, params: string[]): void {

@@ -1,13 +1,13 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion } from "./visibility";
+import { refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion, methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
-import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
+import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, registerCtorDefaults, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults } from "./symbol";
 import { isLifecycleHookName, getExtReceiverType, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
@@ -26,7 +26,7 @@ import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, 
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseSuspendingViewParam, bodyMentionsName } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
-import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, forgetInstances, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults, instantiateParentClass } from "./instantiate";
+import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx } from "./instantiate";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
 import { declGenericParams, symGenericParams, classParentOf, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView } from "./types";
 import { splitTopLevel } from "../utils/string";
@@ -36,21 +36,21 @@ import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
+import { checkExpr, refuseFallingOffEnd, refuseGeneratorReturnValue } from "./checkExprPass";
 import { inlineDecorator } from "./decoratorHelpers";
 import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
-import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
+import { fitNode, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
+import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerLaterDeclarationNote } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
 import { reportConverterCycles } from "./converterCycle";
 import { parseSource } from "../parser/statements/validation";
-import { BreakState, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, varDecl } from "./initTracker";
+import { BreakState, InitTracker, createInitTracker, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, varDecl } from "./initTracker";
 
 // Extract directory from module path (e.g. "src/foo/bar.ms" → "src/foo")
 // Brief type description for error messages
@@ -197,7 +197,7 @@ function rewriteNestedFunctionDecl(ctx: CheckerContext, node: Node): void {
 	// Synthesize the fn-type annotation so checkVariableDecl's self-ref
 	// pre-registration fires (it requires a declared type) — recursion parity.
 	let fnAnnot = "";
-	let allTyped = true;
+	let allTyped = d.fnReturnType != "";
 	for (const pt of d.fnParamTypes) {
 		if (pt == "") { allTyped = false; break; }
 	}
@@ -209,7 +209,7 @@ function rewriteNestedFunctionDecl(ctx: CheckerContext, node: Node): void {
 			parts = parts + d.params[pi] + ": " + d.fnParamTypes[pi];
 			pi = pi + 1;
 		}
-		fnAnnot = "(" + parts + ") => " + (d.fnReturnType != "" ? d.fnReturnType : "void");
+		fnAnnot = "(" + parts + ") => " + d.fnReturnType;
 	}
 	node.kind = NodeKind.VariableDecl;
 	node.data = { declName: d.fnName, declType: fnAnnot, initializer: fnExpr, declKind: DeclKind.Const, nameLocation: d.nameLocation };
@@ -742,7 +742,14 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 			hoisted.symbolType = selfRefType;
 		}
 	}
+	const forward = lookupLocal(ctx.table, d.declName);
+	const forwardLocal = forward != null && forward.declNode == node && _forwardLocals.has(forward) ? forward : null;
+	if (forwardLocal != null) _routinesInFlight.push(forwardLocal);
 	checkExpr(ctx, d.initializer, declType);
+	if (forwardLocal != null) {
+		_routinesInFlight.pop();
+		_forwardLocals.delete(forwardLocal);
+	}
 	if (ctx.targetOs == "solana" && d.declKind == DeclKind.Const && d.initializer != null
 			&& (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global)) {
 		foldUserOperatorConstant(ctx, d.initializer, declType);
@@ -954,6 +961,11 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 
 	// Multi-pass parity: avoid re-checking body if already done
 	if (sym.state == SymbolState.Checked) return;
+	checkFunctionDeclBody(ctx, node, sym);
+}
+
+function checkFunctionDeclBody(ctx: CheckerContext, node: Node, sym: Symbol): void {
+	const d = node.data as FunctionDeclData;
 	sym.state = SymbolState.Checking;
 
 	const fnType = sym.symbolType;
@@ -1001,23 +1013,51 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 		return;
 	}
 
-	// Save/restore inferredReturn for nested functions
-	const savedReturn = ctx.inferredReturn;
-	ctx.inferredReturn = fnType.typeReturn != null ? fnType.typeReturn : inferredType();
-	const savedReturnStmts = ctx.inferredReturnStmts;
-	ctx.inferredReturnStmts = [];
-	const savedReturnTries = ctx.inferredReturnTries;
-	ctx.inferredReturnTries = [];
-
+	const outer = beginReturnInference(ctx, fnType);
+	_routinesInFlight.push(sym);
 	node.paramSyms = checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations!, d.fnDefaults);
+	_routinesInFlight.pop();
+	settleReturnInference(ctx, sym, d.fnName, d.fnFlags, d.nameLocation, outer);
+	settleDiscardedCalls(sym);
 
-	// If return type was unknown (no annotation), use inferred type
+	if (d.fnReturnType == "" && isLifecycleHookName(d.fnName) && getExtReceiverType(d.fnFlags) != "") {
+		refuseHookInferredReturn(ctx, d.fnName, d.nameLocation, sym.symbolType);
+	}
+	sym.state = SymbolState.Checked;
+}
+
+interface ReturnInference {
+	inferred: Type;
+	stmts: Node[];
+	tries: Node[];
+}
+
+function beginReturnInference(ctx: CheckerContext, fnType: Type): ReturnInference {
+	const outer: ReturnInference = {
+		inferred: ctx.inferredReturn,
+		stmts: ctx.inferredReturnStmts,
+		tries: ctx.inferredReturnTries,
+	};
+	ctx.inferredReturn = fnType.typeReturn != null ? fnType.typeReturn : inferredType();
+	ctx.inferredReturnStmts = [];
+	ctx.inferredReturnTries = [];
+	return outer;
+}
+
+function settleReturnInference(ctx: CheckerContext, sym: Symbol, name: string, flags: string, at: SourceLocation, outer: ReturnInference): void {
 	if (sym.symbolType.kind == TypeKind.Function
+		&& sym.symbolType.typeReturn != null
+		&& isUnresolvedType(sym.symbolType.typeReturn)
+		&& isSyncGeneratorFlags(flags)) {
+		const tries = ctx.inferredReturnTries;
+		sym.symbolType.typeReturn = settleYields(ctx, name, at);
+		for (const t of tries) checkPropagatedErrorAgainst(ctx, t, sym.symbolType.typeReturn, name);
+	} else if (sym.symbolType.kind == TypeKind.Function
 		&& sym.symbolType.typeReturn != null
 		&& isUnresolvedType(sym.symbolType.typeReturn)) {
 		if (ctx.inferredReturn.kind != TypeKind.Inferred) {
 			if (ctx.inferredReturn.kind == TypeKind.Span) {
-				addError(ctx, "function '" + d.fnName + "' cannot return " + formatTypeBrief(ctx.inferredReturn) + ": a Span borrows memory owned by its source; return the owning container instead", d.nameLocation.line, d.nameLocation.column);
+				addError(ctx, "function '" + name + "' cannot return " + formatTypeBrief(ctx.inferredReturn) + ": a Span borrows memory owned by its source; return the owning container instead", at.line, at.column);
 			}
 			const storedReturn = closureStorageType(ctx.inferredReturn);
 			sym.symbolType.typeReturn = storedReturn;
@@ -1025,15 +1065,11 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 				const rsd = rs.data as ReturnStmtData;
 				if (rsd.argument != null) rsd.argument = fitJoinedBranch(ctx, rsd.argument, storedReturn);
 			}
-			for (const t of ctx.inferredReturnTries) checkPropagatedErrorAgainst(ctx, t, storedReturn, d.fnName);
+			for (const t of ctx.inferredReturnTries) checkPropagatedErrorAgainst(ctx, t, storedReturn, name);
 		} else {
 			sym.symbolType.typeReturn = voidType();
-			for (const t of ctx.inferredReturnTries) checkPropagatedErrorAgainst(ctx, t, voidType(), d.fnName);
+			for (const t of ctx.inferredReturnTries) checkPropagatedErrorAgainst(ctx, t, voidType(), name);
 		}
-	}
-
-	if (d.fnReturnType == "" && isLifecycleHookName(d.fnName) && getExtReceiverType(d.fnFlags) != "") {
-		refuseHookInferredReturn(ctx, d.fnName, d.nameLocation, sym.symbolType);
 	}
 
 	// Async functions: ensure the effective return type is Promise<T>.
@@ -1043,7 +1079,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	//   - No annotation + empty body    → default to Promise<void>
 	// Excludes async_generator (returns AsyncIterator<T>).
 	if (hasFlag(sym, SymbolFlag.Async)
-		&& d.fnFlags != "async_generator"
+		&& flags != "async_generator"
 		&& sym.symbolType.kind == TypeKind.Function
 		&& sym.symbolType.typeReturn != null
 		&& !isAwaitable(sym.symbolType.typeReturn)) {
@@ -1052,10 +1088,238 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 		sym.symbolType.typeReturn = createPromise(inner);
 	}
 
-	ctx.inferredReturn = savedReturn;
-	ctx.inferredReturnStmts = savedReturnStmts;
-	ctx.inferredReturnTries = savedReturnTries;
-	sym.state = SymbolState.Checked;
+	ctx.inferredReturn = outer.inferred;
+	ctx.inferredReturnStmts = outer.stmts;
+	ctx.inferredReturnTries = outer.tries;
+}
+
+let _routinesInFlight: Symbol[] = [];
+let _methodsCheckedOnDemand: HashSet<Node> = new HashSet<Node>();
+let _discardedInFlightCalls: DiscardedCall[] = [];
+
+interface DiscardedCall {
+	call: Node;
+	sym: Symbol;
+}
+
+function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
+	const fnType = sym.symbolType;
+	if (fnType == null || fnType.kind != TypeKind.Function || !isUnresolvedType(fnType.typeReturn)) return;
+	const decl = sym.declNode;
+	if (decl == null || sym.overloads.length > 0) return;
+	const local = decl.kind == NodeKind.VariableDecl && _forwardLocals.has(sym);
+	if (!local && (decl.resolvedSym != sym || (decl.kind != NodeKind.FunctionDecl && decl.kind != NodeKind.MethodDecl))) return;
+	const at = _routinesInFlight.indexOf(sym);
+	if (at >= 0) {
+		const discarded = discardedCall(ctx, read);
+		if (discarded != null) _discardedInFlightCalls.push({ call: discarded, sym });
+		else if (at < _routinesInFlight.length - 1) refuseInferenceCycle(ctx, at, read);
+		return;
+	}
+	if (local) {
+		addError(ctx, `'${sym.name}' is used before its declaration is checked, so its return type cannot be inferred yet; annotate the return type of '${sym.name}'`, read.location.line, read.location.column);
+		return;
+	}
+	if (ctx.decoratorsPending) return;
+	const bodyCtx = pickBodyCtx(sym.modulePath, ctx);
+	if (sym.modulePath != "" && bodyCtx.modulePath != sym.modulePath) return;
+	if (decl.kind == NodeKind.FunctionDecl) demandFunctionBody(bodyCtx, decl, sym);
+	else demandMethodBody(bodyCtx, decl, sym);
+}
+
+function demandFunctionBody(ctx: CheckerContext, decl: Node, sym: Symbol): void {
+	const d = decl.data as FunctionDeclData;
+	if (sym.state == SymbolState.Checked || isGenericFn(d.fnFlags) || d.fnBody == null) return;
+	const top = moduleScopeOf(ctx);
+	if (top.symbols.get(sym.nameId) != sym) return;
+	const saved = enterDeclarationState(ctx, top);
+	const friends = expansionFriendsOf(ctx, decl);
+	const friendScope = befriend(ctx, friends);
+	checkFunctionDeclBody(ctx, decl, sym);
+	unfriend(friendScope, friends);
+	leaveDeclarationState(ctx, saved);
+}
+
+function demandMethodBody(ctx: CheckerContext, decl: Node, sym: Symbol): void {
+	const d = decl.data as MethodDeclData;
+	if (isGenericFn(d.methodFlags) || d.methodBody == null) return;
+	const owner = methodOwnerClass(ctx, sym);
+	if (owner == null) return;
+	const classDecl = classDeclNodeOf(owner);
+	if (classDecl == null || classDecl.kind != NodeKind.ClassDecl) return;
+	const top = moduleScopeOf(ctx);
+	if (top.symbols.get(owner.nameId) != owner) return;
+	const saved = enterDeclarationState(ctx, top);
+	ensureShaped(owner, ctx);
+	instantiateParentClass(classParentOf(owner.symbolType), ctx);
+	openScope(ctx.table, ScopeKind.Class);
+	ctx.table.current.privateAccess = owner;
+	const genericStr = declGenericParams(classDecl);
+	if (genericStr != "") {
+		ctx.inGenericContext = 1;
+		openScope(ctx.table, ScopeKind.Block);
+		for (const gp of splitTopLevel(genericStr, ",")) {
+			if (gp.trim() != "") defineGenericParam(ctx, gp.trim());
+		}
+	}
+	const friends = expansionFriendsOf(ctx, decl);
+	const friendScope = befriend(ctx, friends);
+	checkMethodBody(ctx, decl, sym, owner.symbolType);
+	unfriend(friendScope, friends);
+	if (genericStr != "") closeScope(ctx.table);
+	closeScope(ctx.table);
+	leaveDeclarationState(ctx, saved);
+	_methodsCheckedOnDemand.add(decl);
+}
+
+function discardedCall(ctx: CheckerContext, callee: Node): Node | null {
+	let stmt = ctx.stmtPosExpr;
+	if (stmt != null && stmt.kind == NodeKind.AwaitExpr) stmt = (stmt.data as AwaitExprData).awaitArg;
+	return stmt != null && stmt.kind == NodeKind.CallExpr && (stmt.data as CallExprData).callee == callee ? stmt : null;
+}
+
+function settleDiscardedCalls(sym: Symbol): void {
+	let kept = 0;
+	for (const pending of _discardedInFlightCalls) {
+		if (pending.sym == sym) pending.call.nodeType = sym.symbolType.typeReturn;
+		else {
+			_discardedInFlightCalls[kept] = pending;
+			kept += 1;
+		}
+	}
+	_discardedInFlightCalls.length = kept;
+}
+
+function refuseInferenceCycle(ctx: CheckerContext, at: number, read: Node): void {
+	const head = routineDisplayName(ctx, _routinesInFlight[at]);
+	const chain: string[] = [];
+	for (let i = at; i < _routinesInFlight.length; i += 1) chain.push(routineDisplayName(ctx, _routinesInFlight[i]));
+	chain.push(head);
+	const through = chain.slice(1, chain.length - 1).map((n: string): string => "'" + n + "'").join(", ");
+	addError(ctx, `cannot infer the return type of '${head}': ${through} ${chain.length > 3 ? "read" : "reads"} it while '${head}' is still being checked (${chain.join(" -> ")}); annotate the return type of '${head}'`,
+		read.location.line, read.location.column);
+}
+
+function routineDisplayName(ctx: CheckerContext, sym: Symbol): string {
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.MethodDecl) return sym.name;
+	const owner = methodOwnerClass(ctx, sym);
+	const name = (decl.data as MethodDeclData).methodName;
+	return owner != null ? owner.name + "." + name : name;
+}
+
+function moduleScopeOf(ctx: CheckerContext): Cursor<Scope> {
+	let top = ctx.table.current;
+	while (top.scopeKind != ScopeKind.Module && top.parent != null) top = top.parent;
+	return top;
+}
+
+interface DeclarationState {
+	scope: Cursor<Scope>;
+	currentFunction: Symbol | null;
+	currentActorName: string;
+	staticBlockClass: Symbol | null;
+	staticBlockPending: Node[];
+	readonlyBoundary: Cursor<Scope>;
+	staticInitBoundary: Cursor<Scope>;
+	pendingSpawnThunk: boolean;
+	inLoop: boolean;
+	inSwitch: boolean;
+	inTestBlock: boolean;
+	inTryExpr: boolean;
+	jsxMacroArgDepth: int32;
+	matchExprDepth: number;
+	matchArmExpected: Type | null;
+	initTracker: InitTracker;
+	condEvalDepth: int32;
+	inGenericContext: int32;
+	stmtPosExpr: Node;
+	typeExprSlot: Node;
+	calleeExpr: Node;
+	conversionOperand: Node;
+	pendingTrailing: Node[];
+	instantiatingCtx: CheckerContext;
+}
+
+function enterDeclarationState(ctx: CheckerContext, top: Cursor<Scope>): DeclarationState {
+	const saved: DeclarationState = {
+		scope: ctx.table.current,
+		currentFunction: ctx.currentFunction,
+		currentActorName: ctx.currentActorName,
+		staticBlockClass: ctx.staticBlockClass,
+		staticBlockPending: ctx.staticBlockPending,
+		readonlyBoundary: ctx.readonlyBoundary,
+		staticInitBoundary: ctx.staticInitBoundary,
+		pendingSpawnThunk: ctx.pendingSpawnThunk,
+		inLoop: ctx.inLoop,
+		inSwitch: ctx.inSwitch,
+		inTestBlock: ctx.inTestBlock,
+		inTryExpr: ctx.inTryExpr,
+		jsxMacroArgDepth: ctx.jsxMacroArgDepth,
+		matchExprDepth: ctx.matchExprDepth,
+		matchArmExpected: ctx.matchArmExpected,
+		initTracker: ctx.initTracker,
+		condEvalDepth: ctx.condEvalDepth,
+		inGenericContext: ctx.inGenericContext,
+		stmtPosExpr: ctx.stmtPosExpr,
+		typeExprSlot: ctx.typeExprSlot,
+		calleeExpr: ctx.calleeExpr,
+		conversionOperand: ctx.conversionOperand,
+		pendingTrailing: ctx.pendingTrailing,
+		instantiatingCtx: ctx.instantiatingCtx,
+	};
+	ctx.table.current = top;
+	ctx.currentFunction = null;
+	ctx.currentActorName = "";
+	ctx.staticBlockClass = null;
+	ctx.staticBlockPending = [];
+	ctx.readonlyBoundary = null as unknown as Cursor<Scope>;
+	ctx.staticInitBoundary = null as unknown as Cursor<Scope>;
+	ctx.pendingSpawnThunk = false;
+	ctx.inLoop = false;
+	ctx.inSwitch = false;
+	ctx.inTestBlock = false;
+	ctx.inTryExpr = false;
+	ctx.jsxMacroArgDepth = 0;
+	ctx.matchExprDepth = 0;
+	ctx.matchArmExpected = null;
+	ctx.initTracker = createInitTracker();
+	ctx.condEvalDepth = 0;
+	ctx.inGenericContext = 0;
+	ctx.stmtPosExpr = null as unknown as Node;
+	ctx.typeExprSlot = null as unknown as Node;
+	ctx.calleeExpr = null as unknown as Node;
+	ctx.conversionOperand = null as unknown as Node;
+	ctx.pendingTrailing = [];
+	ctx.instantiatingCtx = null as unknown as CheckerContext;
+	return saved;
+}
+
+function leaveDeclarationState(ctx: CheckerContext, saved: DeclarationState): void {
+	ctx.table.current = saved.scope;
+	ctx.currentFunction = saved.currentFunction;
+	ctx.currentActorName = saved.currentActorName;
+	ctx.staticBlockClass = saved.staticBlockClass;
+	ctx.staticBlockPending = saved.staticBlockPending;
+	ctx.readonlyBoundary = saved.readonlyBoundary;
+	ctx.staticInitBoundary = saved.staticInitBoundary;
+	ctx.pendingSpawnThunk = saved.pendingSpawnThunk;
+	ctx.inLoop = saved.inLoop;
+	ctx.inSwitch = saved.inSwitch;
+	ctx.inTestBlock = saved.inTestBlock;
+	ctx.inTryExpr = saved.inTryExpr;
+	ctx.jsxMacroArgDepth = saved.jsxMacroArgDepth;
+	ctx.matchExprDepth = saved.matchExprDepth;
+	ctx.matchArmExpected = saved.matchArmExpected;
+	ctx.initTracker = saved.initTracker;
+	ctx.condEvalDepth = saved.condEvalDepth;
+	ctx.inGenericContext = saved.inGenericContext;
+	ctx.stmtPosExpr = saved.stmtPosExpr;
+	ctx.typeExprSlot = saved.typeExprSlot;
+	ctx.calleeExpr = saved.calleeExpr;
+	ctx.conversionOperand = saved.conversionOperand;
+	ctx.pendingTrailing = saved.pendingTrailing;
+	ctx.instantiatingCtx = saved.instantiatingCtx;
 }
 
 function checkClassDecl(ctx: CheckerContext, node: Node): void {
@@ -1256,9 +1520,8 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			// Skip body check for generic methods (body re-checked per instantiation,
 			// like top-level generic fns at checkFunctionDecl:358).
 			if (!isGenericFn(d.methodFlags)) {
-				if (d.methodIsStatic) openStaticReceiverScope(ctx, classType.sym);
-				node.paramSyms = checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!, d.methodDefaults);
-				if (d.methodIsStatic) closeScope(ctx.table);
+				if (_methodsCheckedOnDemand.has(node)) _methodsCheckedOnDemand.delete(node);
+				else checkMethodBody(ctx, node, sym, classType);
 			} else if (isGenericFn(d.methodFlags)) {
 				markBodyIdentifiersUsed(ctx, d.methodBody);
 			}
@@ -1306,6 +1569,19 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 		NodeKind.BlockStmt => checkStaticBlockMember(ctx, node, classType.sym),
 		_ => {},
 	};
+}
+
+function checkMethodBody(ctx: CheckerContext, node: Node, sym: Symbol, classType: Type): void {
+	const d = node.data as MethodDeclData;
+	if (d.methodIsStatic) openStaticReceiverScope(ctx, classType.sym);
+	const outer = beginReturnInference(ctx, sym.symbolType);
+	_routinesInFlight.push(sym);
+	node.paramSyms = checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!, d.methodDefaults);
+	_routinesInFlight.pop();
+	settleReturnInference(ctx, sym, d.methodName, d.methodFlags, d.nameLocation, outer);
+	settleDiscardedCalls(sym);
+	if (node.nodeType != null && node.nodeType != sym.symbolType && node.nodeType.kind == TypeKind.Function) node.nodeType.typeReturn = sym.symbolType.typeReturn;
+	if (d.methodIsStatic) closeScope(ctx.table);
 }
 
 function openStaticReceiverScope(ctx: CheckerContext, owner: Symbol | null): void {
@@ -1830,6 +2106,60 @@ function spliceStatementsAt(stmts: Node[], at: int32, picked: Node[]): void {
 	for (const r of rebuilt) stmts.push(r);
 }
 
+interface BlockPosition {
+	stmts: Node[];
+	at: int32;
+}
+
+let _blocksInFlight: BlockPosition[] = [];
+let _forwardLocals: HashSet<Symbol> = new HashSet<Symbol>();
+
+function isLocalFunctionStmt(node: Node): boolean {
+	if (node.kind != NodeKind.FunctionDecl || node.flags.has(NodeFlag.Converter) || node.flags.has(NodeFlag.WhenDeferred)) return false;
+	return (node.data as FunctionDeclData).fnFlags.indexOf("extern", 0) < 0;
+}
+
+function forwardDeclareLocalRun(ctx: CheckerContext, stmts: Node[], from: int32): void {
+	let end = from;
+	while (end < stmts.length && isLocalFunctionStmt(stmts[end])) {
+		rewriteNestedFunctionDecl(ctx, stmts[end]);
+		end += 1;
+	}
+	for (let i = from; i < end; i += 1) forwardDeclareLocal(ctx, stmts[i]);
+}
+
+function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
+	const d = node.data as VariableDeclData;
+	if (d.initializer == null || d.initializer.kind != NodeKind.FunctionExpr || lookupLocal(ctx.table, d.declName) != null) return;
+	const fd = d.initializer.data as FunctionExprData;
+	const paramTypes: Type[] = [];
+	for (const pt of fd.funcExprParamTypes) {
+		if (pt == "") return;
+		paramTypes.push(resolveAnnotation(pt, ctx, d.nameLocation.line, d.nameLocation.column));
+	}
+	const declared = d.declType != "" ? resolveAnnotation(d.declType, ctx, d.nameLocation.line, d.nameLocation.column) : null;
+	const sym = makeSymbol(d.declName, SymbolKind.Variable, declared != null ? declared : createClosureType(paramTypes, fd.funcExprParams, inferredType()), false);
+	sym.declNode = node;
+	defineOrError(ctx, sym, node);
+	_forwardLocals.add(sym);
+}
+
+function laterDeclarationNote(name: string): string {
+	for (let b = _blocksInFlight.length - 1; b >= 0; b -= 1) {
+		const pos = _blocksInFlight[b];
+		for (let i = pos.at + 1; i < pos.stmts.length; i += 1) {
+			const s = pos.stmts[i];
+			if (s.kind == NodeKind.FunctionDecl && (s.data as FunctionDeclData).fnName == name) {
+				return ": '" + name + "' is declared later in this block, after a statement that runs first; a local function declaration is visible only from the run of function declarations it belongs to, so move '" + name + "' up next to them";
+			}
+			if (s.kind == NodeKind.VariableDecl && (s.data as VariableDeclData).declName == name) {
+				return ": '" + name + "' is declared later in this block, and a const or let is not visible before its declaration; declare it first, or write the functions as adjacent function declarations";
+			}
+		}
+	}
+	return "";
+}
+
 function checkBlock(ctx: CheckerContext, node: Node): void {
 	const d = node.data as BlockStmtData;
 	openScope(ctx.table, ScopeKind.Block);
@@ -1850,9 +2180,12 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 			}
 			continue;
 		}
+		if (ctx.currentFunction != null && isLocalFunctionStmt(d.statements[i])) forwardDeclareLocalRun(ctx, d.statements, i);
+		_blocksInFlight.push({ stmts: d.statements, at: i });
 		const _cs0 = performance.now();
 		checkStmt(ctx, d.statements[i]);
 		const _cs1 = performance.now();
+		_blocksInFlight.pop();
 		if (_slowTrace && _cs1 - _cs0 > 100) {
 			console.log(`        SLOWSTMT ${ctx.modulePath}:${d.statements[i].location.line} ${_cs1 - _cs0}ms kind=${d.statements[i].kind}`);
 		}
@@ -1868,6 +2201,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	if (ctx.currentFunction == null) {
 		addError(ctx, "return outside of function", node.location.line, node.location.column);
 	}
+	if (refuseGeneratorReturnValue(ctx, node)) return;
 	if (d.argument == null) {
 		// Bare `return;` is the user explicitly saying "void return". Inference
 		// (e.g. lambda body without an explicit return-type annotation) needs
@@ -3439,6 +3773,8 @@ export function checkProgramWithRegistryCancellable(
 // Register callbacks at module load time
 registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
 registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
+registerDemandReturn(demandReturnType);
+registerLaterDeclarationNote(laterDeclarationNote);
 
 // ===== Tests =====
 

@@ -11,8 +11,8 @@ export extern function `<`(this a: string, b: string): boolean from "msStringCom
 export extern function `<=`(this a: string, b: string): boolean from "msStringCompareLe";
 // Derived operators (!=, >, >=) come from the system templates.
 
-// Global conversion — bridge dispatches on the dynamic value kind.
-export extern function String<T>(val: T): string from "msStringFromValue";
+@builtin("ToString")
+export extern function String<T>(val: T): string;
 
 // ===== Comparison =====
 export function equals(this s: string, other: string): boolean { return s == other; }

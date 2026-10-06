@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no `instanceof` ('cannot evaluate operator 'instanceof' at comptime')
 // @stdout: instance-display deep-ok
 
 class C0 { value: int32 = 7; }

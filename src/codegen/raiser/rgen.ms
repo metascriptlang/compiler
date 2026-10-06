@@ -22,7 +22,7 @@ import {
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
 	RaiserFuncMap, RaiserFuncEntry, RaiserBuiltinMap, RaiserBuiltinEntry,
-	createCompState, emitInst, emitLoadConst, emitRet, allocReg,
+	createCompState, emitInst, emitLoadConst, emitRet, allocReg, raiserClassKey,
 	addConst, declareLocal, resetTemps, resolveFunc, emitClosurePair,
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
@@ -127,6 +127,7 @@ export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, 
 
 	const compiled = createRaiserFunction(fnName, s.code, s.constants, arity, 0, s.maxRegSeen);
 	compiled.copyPlans = s.copyPlans;
+	compiled.classTypes = s.classTypes;
 	return compiled;
 }
 
@@ -194,7 +195,20 @@ function compileClassInit(
 	emitRet(s, nilReg);
 	const compiled = createRaiserFunction(className + "_init", s.code, s.constants, ctorParams.length + 1, 0, s.maxRegSeen);
 	compiled.copyPlans = s.copyPlans;
+	compiled.classTypes = s.classTypes;
 	return compiled;
+}
+
+function classTypeOperand(s: RaiserCompState, className: string, classSym: Symbol | null): int32 {
+	if (classSym == null) return 0;
+	const chain: string[] = [];
+	let cur: Symbol | null = classSym;
+	while (cur != null && chain.length < 64) {
+		chain.push(raiserClassKey(cur));
+		cur = parentClassSymOf(cur);
+	}
+	s.classTypes.push({ name: className, chain });
+	return s.classTypes.length;
 }
 
 function compileClassConstructor(
@@ -218,7 +232,7 @@ function compileClassConstructor(
 
 	// Create this object
 	const thisReg = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.NewObject, thisReg, 0, 0));
+	emitInst(s, raiserABC(RaiserOpcode.NewObject, thisReg, classTypeOperand(s, className, classSym), 0));
 	declareLocal(s, "this", thisReg);
 
 	storeZeroFields(s, thisReg, classBody);
@@ -235,6 +249,7 @@ function compileClassConstructor(
 
 	const compiled = createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.maxRegSeen);
 	compiled.copyPlans = s.copyPlans;
+	compiled.classTypes = s.classTypes;
 	return compiled;
 }
 
@@ -536,6 +551,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 
 		const initFunc = createRaiserFunction("__init_" + mi, s.code, s.constants, 0, 0, s.maxRegSeen);
 		initFunc.copyPlans = s.copyPlans;
+		initFunc.classTypes = s.classTypes;
 		functions.push(initFunc);
 		initIndices.push(functions.length - 1);
 	}

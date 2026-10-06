@@ -1032,6 +1032,26 @@ function fileDependency(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function coreCell(): void {
+	const tag = "hcrCoreCell";
+	const dir = freshDir(`${TMP}/coreCell`);
+	for (const sub of ["app", "box"]) ensureDir(`${dir}/${sub}`);
+	for (const f of ["app/app.ms", "app/logic.ms", "box/box.ms", "logicEdit.ms"]) {
+		copy(`${FIXTURES}/coreCell/${f}`, `${dir}/${f}`);
+	}
+	const ran = msc(`${dir}/app`, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-CELL ")) seen.push(line);
+	}
+	const want = ["HCR-CELL start 1 0 0", "HCR-CELL reloaded logic 3"];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "array cells boxed by a project image first and by a core module later did not link and reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function watchWarmDependency(): void {
 	const tag = "hcrWatchWarmDependency";
 	const root = freshDir(`${TMP}/watchWarmDependency`);
@@ -1279,6 +1299,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFunctionValues", run: functionValues },
 	{ name: "hcrInlineFunctions", run: inlineFunctions },
 	{ name: "hcrFileDependency", run: fileDependency },
+	{ name: "hcrCoreCell", run: coreCell },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
 	{ name: "hcrTypeInfoLocality", run: typeInfoLocality },
 	{ name: "hcrWatchLink", run: watchLink },

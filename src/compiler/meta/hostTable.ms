@@ -46,7 +46,7 @@ import {
 	activeHostObjectHeap, activeHostArrayHeap, activeProgramArgv,
 } from "../../raiser/hostRegistry";
 import {
-	unboxString, unboxInt, unboxFloat, unboxBool,
+	unboxString, unboxInt, unboxFloat,
 	boxString, boxInt, boxFloat, boxBool,
 } from "../../raiser/marshal";
 import { isNodeWireMetaField } from "./wire";
@@ -671,19 +671,6 @@ function _bridgeMsStringSplit(args: RaiserValue[]): RaiserValue {
 	return raiserArray(h);
 }
 
-// Prelude globals. String<T> is the generic conversion on C/JS; here it
-// dispatches on the dynamic value kind. Int/Float go through the number
-// tier's toString — exact for integers up to 2^53 (JS parity), approximate
-// beyond, which no caller in the compiler's messages relies on.
-function _bridgeMsStringFromValue(args: RaiserValue[]): RaiserValue {
-	const v = args[0];
-	if (v.kind == RaiserValueKind.String) return v;
-	if (v.kind == RaiserValueKind.Int) return boxString(unboxInt(v).toString());
-	if (v.kind == RaiserValueKind.Float) return boxString(unboxFloat(v).toString());
-	if (v.kind == RaiserValueKind.Bool) return boxString(unboxBool(v) ? "true" : "false");
-	return boxString("");
-}
-
 function _bridgeMsPerformanceNow(args: RaiserValue[]): RaiserValue {
 	return boxFloat(performance.now());
 }
@@ -849,7 +836,6 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringParseInt",      _bridgeMsStringParseInt, HostCapability.Pure);
 	registerHostFn("msStringParseFloat",    _bridgeMsStringParseFloat, HostCapability.Pure);
 	registerHostFn("msStringFromCodePoint", _bridgeMsStringFromCodePoint, HostCapability.Pure);
-	registerHostFn("msStringFromValue",     _bridgeMsStringFromValue, HostCapability.Pure);
 	registerHostFn("msPerformanceNow",      _bridgeMsPerformanceNow);
 	registerHostFn("msProcessArgv",         _bridgeMsProcessArgv);
 	registerHostFn("msProcessSetEnv",       _bridgeMsProcessSetEnv);

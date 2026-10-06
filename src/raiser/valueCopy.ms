@@ -43,6 +43,7 @@ export function copyTypedValue(
 	}
 	if (plan.kind == RaiserCopyKind.Object && value.kind == RaiserValueKind.Object) {
 		const handle = heapAllocObject(objects);
+		objects.objects[handle].classType = objects.objects[value.intVal].classType;
 		const fields = objects.objects[value.intVal].fields;
 		for (const field of fields) {
 			let copied = raiserNil();

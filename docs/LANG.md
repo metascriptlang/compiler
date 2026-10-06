@@ -430,7 +430,7 @@ type yet and prints the built-in results.
 ```typescript
 "hello"         // Double-quoted string
 'world'         // Single-quoted string
-'a'             // char literal (length 1 single quotes)
+'a'             // a one-character string, as in TypeScript (not a char)
 "line\nnext"    // Escape sequences: \n \t \r \\ \" \'
 
 // Character code (compile-time fold, single-char literal only)
@@ -534,8 +534,8 @@ const greet = (name: string): void => { console.log("hi " + name); };
 // Async functions
 async function fetch(url: string): Promise<string> { ... }
 
-// Generator functions
-function* range(n: number): Generator<number> { ... }
+// Generator functions: the return type is Iterator<T> (Generator<T> does not resolve)
+function* range(n: number): Iterator<number> { ... }
 
 // Parameter destructuring — sugar for `const { label, count } = props;` at the top of
 // the body. The pattern needs a type: an annotation, or the slot's contextual type.
@@ -560,6 +560,46 @@ function fail(msg: string): never {
     if (msg == "") throw new Error("empty");
 }   // error: 'fail' returns 'never' but can reach the end of its body
 ```
+
+A function or method without a return annotation returns what its body returns, wherever it is
+called from: a call checked before the callee's body (a later function, a later method through
+`this` or a parameter, a module that imports this one back) checks that body first. A return type
+that would depend on itself through another unannotated routine is refused; a routine that only
+calls itself, or one whose call back is a statement that discards the result, still infers. Measured
+on C, JS and the Raiser (corpus `callBeforeTheCalleeBody`, `callBeforeTheCalleeBodyAcrossModules`):
+
+```typescript
+function a(n: number) { if (n > 0) return b(n - 1); return 3; }
+function b(n: number) { return a(n); }
+// error: cannot infer the return type of 'a': 'b' reads it while 'a' is still being checked (a -> b -> a); annotate the return type of 'a'
+```
+
+A generator without a return annotation is an `Iterator<T>` of what it yields, joined as returns
+are (`yield 1` and `yield 2.5` make `Iterator<float64>`); one with no `yield` of a value is refused,
+and so is a `return` with a value in it. Measured on C and JS (corpus `generatorInfersItsYieldType`);
+the Raiser does not run generators.
+
+Local function declarations that sit next to each other see each other, so they may call each
+other in any order; a local function is not visible before that run of declarations, and a `const`
+or `let` is not visible before its own declaration. A local function called before its declaration
+is checked needs its return type written. Measured on C, JS and the Raiser (corpus
+`localFunctionsCallEachOther`):
+
+```typescript
+function counter(): () => number {
+    let n = 0;
+    function a(): number { n += 1; return n < 3 ? b() : n; }
+    function b(): number { return a(); }
+    return a;          // counter()() is 3
+}
+const a = (): number => b();
+const b = (): number => 1;
+// error: Undefined variable 'b': 'b' is declared later in this block, and a const or let is not visible before its declaration; ...
+```
+
+A branch join of a class and its subclass is the class: `flag ? new B() : new A()` with
+`B extends A`, an `if`/`return` pair, an array literal and a `match` all give `A`, and the value
+keeps its run-time class. Measured on C, JS and the Raiser (corpus `joinOfAClassAndItsSubclass`).
 
 ### Extension Methods
 
@@ -636,10 +676,12 @@ const s = new Sub(7);                               // s.u == 14, s.n == 5
 
 Measured 2026-10-05 on C, `--target=js` and `--target=raiser` with corpus `inheritedConstructor`
 (two levels, a default read from another module, `extends Box<int32>`, a generic subclass) and
-`superForwardsRestParameter` (a rest parameter, C and JS; the Raiser has no rest parameters).
+`superForwardsRestParameter` (a rest parameter; on the Raiser since 2026-10-06, with corpus
+`restParameterAcrossModules` for an imported class's constructor).
 Before, C and the Raiser filled the fields positionally and skipped the parent's body, and JS threw
 "Must call super constructor". A call through the parent runs the subclass's override on all three
-backends (corpus `overrideDispatchThroughBase`); `instanceof` does not run on the Raiser.
+backends (corpus `overrideDispatchThroughBase`); `instanceof` and a checked `as` answer the same on the
+Raiser since 2026-10-06 (corpus `classIdentityEveryLane`, `732-dynamicDispatch`).
 
 ### Interfaces
 
@@ -2728,12 +2770,13 @@ Strings are **UTF-8 byte buffers on both backends** (C: `msString`; JS: byte arr
 MetaScript introduces `char` as a first-class primitive for **byte-tier** work: an unsigned 8-bit value (0–255).
 
 - **Access**: `byteAt(i)` reads raw bytes; `s[i]` is TS-tier and returns a `string` (see §0). A for-of over a string yields its UTF-8 bytes as `char`, so `for (const c of "héllo")` runs six times, on C, JS and Raiser (corpus `869-forOfStringBytes`, measured 2026-10-05).
-- **Literals**: Character literals use single quotes (e.g., `'a'`).
+- **Literals**: there is no char literal: `'A'` is a one-character `string`, as in TypeScript, and `const c: char = 'A'` is `Type 'string' is not assignable to type 'char'`. Write the code: `const c: char = "A".code` is 65 on C, JS and the Raiser (measured 2026-10-06).
 - **Numeric**: `char` is a numeric type and can participate in arithmetic or be cast to `number`.
+- **No `as` between text and numbers**: `s[i] as int32`, `s as char`, `s as boolean` and `n as string` are checker errors (`cannot convert string to int32 — …`) on C, JS and the Raiser, as in TypeScript and Nim; read `s.charCodeAt(i)` or `s.byteAt(i)`, or format with `String(n)`. `"0xff" as bigint` still parses. Measured 2026-10-06, pinned by `checker3pass/scenarios/textConversions.ms`.
 - **Codepoints use `int32`, not `char` or `uint32`**: `char` is 8-bit (only U+0000–U+00FF). A full Unicode codepoint is 21-bit, so hold it in `int32` — the type `.code`, `s.charCodeAt(i)`, and `fromCodePoint()` all speak, matching Go's `rune`. Prefer `int32` over `uint32` here: signed stays cast-free with those APIs and leaves `-1` free as an "invalid/absent" sentinel, whereas `uint32` buys only a compile-time non-negativity guarantee at the cost of an `as uint32` cast at every codepoint boundary.
 
 ```typescript
-const c: char = 'A';
+const c: char = "A".code;   // 65
 const s = "héllo";
 const first = s[0];        // "h" — string, TS semantics
 const b: int32 = s.byteAt(1); // 0xC3 — first byte of é, byte tier
@@ -3363,8 +3406,8 @@ for (const name of ages) {
 ```
 
 An array pattern needs a tuple or an array element: over a `Set<int32>` or an `int32[]` it is the error "an array
-pattern needs each element to be a tuple or an array". Raiser does not run a Map's for-of yet (the iteration is a
-generator, and running one on the Raiser VM is a new mechanism; corpus `mapForOfEntries` is xfail there).
+pattern needs each element to be a tuple or an array". The Raiser runs these loops as C does since 2026-10-06: the
+iteration is a generator, lowered to the same state machine (corpus `mapForOfEntries`, `setAndHashForOf`).
 
 **Custom iterables**: define a `toItems` extension method on any type:
 

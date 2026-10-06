@@ -3,12 +3,12 @@
 // through the checkerCallbacks door.
 
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
-import { ArrayAccessData, ArrayLiteralData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
+import { ArrayAccessData, YieldExprData, ArrayLiteralData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName } from "./compat";
-import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
+import { CheckerContext, Severity, ExtensionMethod, isGenericFn, isGeneratorFlags, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion } from "./types";
+import { peelTransparentInstance, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
@@ -60,6 +60,7 @@ export function joinBranchTypes(types: Type[]): Type {
 		if (!dup) prepared.push(w);
 	}
 	if (prepared.length == 0) return inferredType();
+	dropSubclassMembers(prepared);
 	if (prepared.length == 1) return prepared[0];
 	const anonJoined = joinAnonLiteralStructs(prepared);
 	if (anonJoined != null) return anonJoined;
@@ -86,6 +87,28 @@ export function joinBranchTypes(types: Type[]): Type {
 		return acc;
 	}
 	return canonicalizeBranchJoin(unionOfTypes(prepared, null));
+}
+
+function dropSubclassMembers(members: Type[]): void {
+	let kept = 0;
+	for (let i = 0; i < members.length; i++) {
+		let absorbed = false;
+		for (let j = 0; j < members.length; j++) {
+			if (j != i && derivesFrom(members[i], members[j])) { absorbed = true; break; }
+		}
+		if (!absorbed) {
+			members[kept] = members[i];
+			kept += 1;
+		}
+	}
+	members.length = kept;
+}
+
+function derivesFrom(sub: Type, sup: Type): boolean {
+	const ancestor = classAncestorInstance(sub, sup);
+	if (ancestor == null) return false;
+	const supBody = sup.kind == TypeKind.Ref && sup.typeReturn != null ? sup.typeReturn : sup;
+	return ancestor.kind != TypeKind.GenericInstance || sameType(ancestor, supBody);
 }
 
 function anonLiteralStruct(t: Type | null): Type | null {
@@ -584,7 +607,7 @@ function operandShape(t: Type | null): Type | null {
 			continue;
 		}
 		if (s.kind == TypeKind.GenericInstance) {
-			const base = s.typeExtra != null ? s.typeExtra : s.typeReturn;
+			const base = s.typeReturn != null ? s.typeReturn : s.typeExtra;
 			if (base == null) return s;
 			s = skipModifier(base);
 			continue;
@@ -650,9 +673,9 @@ function eqComparableOperand(orig: Type, shaped: Type): Type | null {
 	if (isMaybeType(orig) && orig.typeReturn != null) {
 		if (hasGenericParams(orig.typeReturn)) return null;
 		const payload = operandShape(orig.typeReturn);
-		return payload == null || binaryOperandSkip(payload) ? null : payload;
+		return payload == null || binaryOperandSkip(payload) ? null : orig.typeReturn;
 	}
-	if (shaped.kind == TypeKind.Union && !hasGenericParams(orig)) return shaped;
+	if (shaped.kind == TypeKind.Union && !hasGenericParams(orig)) return orig;
 	return null;
 }
 
@@ -677,7 +700,17 @@ function sameSetElement(a: Type, b: Type): boolean {
 	return ea != null && eb != null && ea.typeName == eb.typeName;
 }
 
-function equalityOperandsOk(a: Type, b: Type): boolean {
+function sameStructOperand(ao: Type, a: Type, bo: Type, b: Type): boolean {
+	const ia = skipModifier(ao);
+	const ib = skipModifier(bo);
+	if (ia.kind == TypeKind.GenericInstance && ib.kind == TypeKind.GenericInstance) return isAssignable(ia, ib) || isAssignable(ib, ia);
+	return isAssignable(a, b) || isAssignable(b, a);
+}
+
+function equalityOperandsOk(ao: Type, bo: Type): boolean {
+	const a = operandShape(ao);
+	const b = operandShape(bo);
+	if (a == null || b == null) return false;
 	if (a.kind == TypeKind.Union && b.kind == TypeKind.Union) {
 		for (const ma of a.typeChildren) {
 			if (ma == null) continue;
@@ -689,7 +722,7 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	}
 	if (a.kind == TypeKind.Union || b.kind == TypeKind.Union) {
 		const u = a.kind == TypeKind.Union ? a : b;
-		const other = a.kind == TypeKind.Union ? b : a;
+		const other = a.kind == TypeKind.Union ? bo : ao;
 		if (u.typeChildren == null) return false;
 		for (const m of u.typeChildren) {
 			if (m != null && m.kind != TypeKind.Null && equalityOperandsOk(m, other)) return true;
@@ -708,7 +741,7 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	if (aEnum || bEnum) return (aEnum ? b : a).kind == TypeKind.Void;
 	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
 	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
-	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return isAssignable(a, b) || isAssignable(b, a);
+	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return sameStructOperand(ao, a, bo, b);
 	if (a.kind == TypeKind.SizedArray || b.kind == TypeKind.SizedArray) return sameType(a, b);
 	if (binaryPointerish(a.kind) && binaryPointerish(b.kind)) return true;
 	return false;
@@ -742,6 +775,21 @@ export function narrowsToMember(src: Type, target: Type): boolean {
 	return false;
 }
 
+function isTextlessScalar(t: Type): boolean {
+	const k = t.kind;
+	return isNumeric(t) || k == TypeKind.Boolean || k == TypeKind.BooleanLiteral || k == TypeKind.Char || k == TypeKind.BigInt;
+}
+
+export function textConversionRefusal(src: Type, target: Type): string {
+	const head = "cannot convert " + typeDisplayName(src) + " to " + typeDisplayName(target) + " — ";
+	if (isStringLike(src) && isTextlessScalar(target) && target.kind != TypeKind.BigInt) {
+		if (target.kind == TypeKind.Boolean || target.kind == TypeKind.BooleanLiteral) return head + "a string is not a boolean; compare it instead (s != \"\")";
+		return head + "a string is not a number; read a character code with s.charCodeAt(i), a byte with s.byteAt(i), or parse the text";
+	}
+	if (isTextlessScalar(src) && isStringLike(target)) return head + "format it with String(x) or x.toString()";
+	return "";
+}
+
 export function isScalarPrimitive(t: Type | null): boolean {
 	if (t == null) return false;
 	const k = t.kind;
@@ -769,14 +817,14 @@ export function binaryOperandsFail(ctx: CheckerContext, op: string, leftType: Ty
 	const sb = binaryOperandSkip(b);
 	if (sa || sb) {
 		if (cls != "eq") return false;
-		const ea = sa ? eqComparableOperand(leftType, a) : a;
-		const eb = sb ? eqComparableOperand(rightType, b) : b;
+		const ea = sa ? eqComparableOperand(leftType, a) : leftType;
+		const eb = sb ? eqComparableOperand(rightType, b) : rightType;
 		if (ea == null || eb == null) return false;
 		if (equalityOperandsOk(ea, eb)) return false;
 		return ctx.extensionRegistry == null
 			|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) == null;
 	}
-	const ok = cls == "arith" ? arithOperandsOk(bop, a, b) : equalityOperandsOk(a, b);
+	const ok = cls == "arith" ? arithOperandsOk(bop, a, b) : equalityOperandsOk(leftType, rightType);
 	if (ok) return false;
 	return ctx.extensionRegistry == null
 		|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) == null;
@@ -2182,3 +2230,20 @@ function isNullAssertion(node: Node): boolean {
 	return false;
 }
 
+export function isSyncGeneratorFlags(flags: string): boolean {
+	return isGeneratorFlags(flags) && flags.indexOf("async") < 0;
+}
+
+export function settleYields(ctx: CheckerContext, name: string, at: SourceLocation): Type {
+	if (ctx.inferredReturn.kind == TypeKind.Inferred) {
+		addError(ctx, "cannot infer what generator '" + name + "' yields: it has no 'yield' with a value; annotate its return type as Iterator<T>", at.line, at.column);
+		return errorType();
+	}
+	const elem = closureStorageType(ctx.inferredReturn);
+	for (const y of ctx.inferredReturnStmts) {
+		const yd = y.data as YieldExprData;
+		yd.yieldArg = fitJoinedBranch(ctx, yd.yieldArg, elem);
+	}
+	ctx.inferredReturnStmts = [];
+	return createIterator(elem);
+}
