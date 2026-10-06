@@ -682,7 +682,7 @@ function setTypeFields(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, hand
 export function stripMacroArgWrappers(node: Node): Node {
 	let n = node;
 	while (n != null) {
-		if (n.kind == NodeKind.HiddenDeref || n.kind == NodeKind.HiddenAddr) {
+		if ((n.kind == NodeKind.HiddenDeref && !n.flags.has(NodeFlag.ExplicitDeref)) || n.kind == NodeKind.HiddenAddr) {
 			n = (n.data as HiddenDerefData).expr;
 		} else if (n.kind == NodeKind.HiddenStdConv || n.kind == NodeKind.HiddenSubConv) {
 			n = (n.data as HiddenStdConvData).convExpr;
@@ -707,6 +707,8 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		heapObjectSetField(objHeap, handle, "endLine", raiserInt(node.location.endLine));
 		heapObjectSetField(objHeap, handle, "endColumn", raiserInt(node.location.endColumn));
 	}
+	const syntaxFlags = node.flags.intersection(PARSER_NODE_FLAGS);
+	if (!syntaxFlags.isEmpty()) heapObjectSetField(objHeap, handle, "flags", raiserInt((syntaxFlags as uint32) as int64));
 
 	match (node.kind) {
 		// === Literals ===
@@ -1441,13 +1443,12 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 					}
 					const typed = boundTypeOfObject(objHeap, handle);
 					if (typed != null) out.nodeType = typed;
-					// One flag, by name, not the whole word: a macro that could set
-					// Sem/Transf/LL would forge pipeline state on a node the passes
-					// have never processed. Widen this list only per-flag.
 					const rawFlags = (readInt(objHeap, handle, "flags") as uint32) as BitSet<NodeFlag>;
-					if (rawFlags.has(NodeFlag.StaticStorage)) {
-						out.flags = out.flags.incl(NodeFlag.StaticStorage);
+					const pipeline = rawFlags.difference(PARSER_NODE_FLAGS);
+					if (!pipeline.isEmpty()) {
+						_wireRefusals.push({ message: `flags may hold only what the parser writes (${PARSER_NODE_FLAGS.toString()}), not ${pipeline.toString()}; build the set with (0 as BitSet<NodeFlag>).incl(NodeFlag.X)`, location: out.location });
 					}
+					out.flags = out.flags.union(rawFlags.intersection(PARSER_NODE_FLAGS));
 					if (typed != null && readBool(objHeap, handle, "folded")) out.flags = out.flags.incl(NodeFlag.Folded);
 				}
 				return out;
@@ -1469,6 +1470,8 @@ function deserializeObjectLiteral(handle: int64, objHeap: RaiserObjectHeap, arrH
 	}
 	return createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc);
 }
+
+const PARSER_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.Parenthesized | NodeFlag.WhenPicked | NodeFlag.ExplicitDeref | NodeFlag.CommaWritten;
 
 export interface WireRefusal {
 	message: string;
@@ -2484,6 +2487,82 @@ test "round-trip VariableDecl" {
 	assert d.declType == "number";
 	assert d.declKind == DeclKind.Const;
 	assert d.initializer.kind == NodeKind.NumberLiteral;
+}
+
+test "round-trip keeps every flag the parser writes" {
+	const loc = makeLoc(3, 0);
+	const syntax: NodeFlag[] = [NodeFlag.ExportDefault, NodeFlag.ExternC, NodeFlag.Converter, NodeFlag.StaticStorage, NodeFlag.Parenthesized, NodeFlag.WhenPicked, NodeFlag.ExplicitDeref, NodeFlag.CommaWritten];
+	for (const f of syntax) {
+		const objH = createStructHeap();
+		const arrH = createArrayHeap();
+		const orig = mkNumber(1, loc);
+		orig.flags = orig.flags.incl(f);
+		const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+		assert back.flags == orig.flags;
+	}
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const all = mkNumber(1, loc);
+	for (const f of syntax) all.flags = all.flags.incl(f);
+	assert valueToNode(nodeToValue(all, objH, arrH), objH, arrH, loc).flags == all.flags;
+}
+
+test "a written p[] crosses the wire as written; a checker-inserted deref is peeled" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const written = createNode(NodeKind.HiddenDeref, { expr: createNode(NodeKind.Identifier, { name: "p" }, synthToken(loc)) }, synthToken(loc));
+	written.flags = written.flags.incl(NodeFlag.ExplicitDeref);
+	const back = valueToNode(nodeToValue(written, objH, arrH), objH, arrH, loc);
+	assert back.kind == NodeKind.HiddenDeref;
+	assert back.flags.has(NodeFlag.ExplicitDeref);
+	const inserted = createNode(NodeKind.HiddenDeref, { expr: createNode(NodeKind.Identifier, { name: "p" }, synthToken(loc)) }, synthToken(loc));
+	assert valueToNode(nodeToValue(inserted, objH, arrH), objH, arrH, loc).kind == NodeKind.Identifier;
+}
+
+test "round-trip drops pipeline flags and keeps the syntax beside them" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const orig = mkNumber(1, loc);
+	orig.flags = orig.flags.incl(NodeFlag.Sem).incl(NodeFlag.Transf).incl(NodeFlag.LastRead).incl(NodeFlag.Parenthesized);
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	assert back.flags == (0 as BitSet<NodeFlag>).incl(NodeFlag.Parenthesized);
+}
+
+test "a pipeline flag forged by a macro is refused and does not reach the node" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const val = nodeToValue(mkNumber(1, loc), objH, arrH);
+	const forged = (0 as BitSet<NodeFlag>).incl(NodeFlag.Sem).incl(NodeFlag.LL).incl(NodeFlag.StaticStorage);
+	heapObjectSetField(objH, val.intVal, "flags", raiserInt((forged as uint32) as int64));
+	const back = valueToNode(val, objH, arrH, loc);
+	assert back.flags == (0 as BitSet<NodeFlag>).incl(NodeFlag.StaticStorage);
+	const refused = takeWireRefusals();
+	assert refused.length == 1;
+	assert refused[0].message.contains("Sem");
+}
+
+test "an enum ordinal written as flags is refused, not read as a set" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const val = nodeToValue(mkNumber(1, loc), objH, arrH);
+	heapObjectSetField(objH, val.intVal, "flags", raiserInt(NodeFlag.StaticStorage as int64));
+	const back = valueToNode(val, objH, arrH, loc);
+	assert !back.flags.has(NodeFlag.StaticStorage);
+	assert takeWireRefusals().length == 1;
+}
+
+test "a node that crossed the wire with only parser flags is not refused" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const orig = mkNumber(1, loc);
+	orig.flags = orig.flags.incl(NodeFlag.StaticStorage).incl(NodeFlag.Parenthesized);
+	valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	assert takeWireRefusals().length == 0;
 }
 
 test "round-trip FunctionDecl" {
