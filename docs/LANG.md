@@ -2941,8 +2941,7 @@ An empty pointer span stops at that conversion with `index 0 out of bounds
 the Raiser VM. Native `--danger` retains its deliberate unchecked-index mode.
 `pointerLocationTransfer` also matches on C/DRC, C/ORC, JS and the Raiser VM;
 see [Raiser's measured location matrix](RAISER.md#memory-model). Raw-pointer
-escape and invalidation by storage growth remain unchecked, not covered by
-that matrix.
+escape and invalidation by storage growth are checked separately (below).
 
 The suspension result above is not a general lifetime-safety claim. A nested
 `function` or `const` arrow inside an `async` function or a generator is rebuilt
@@ -2968,9 +2967,27 @@ too: the reference's JS backend has no pointer arithmetic, so it was a mechanism
 this arc). It silently turned std/solana's `load(123456)` from reading memory at `123456` into
 returning `123456`, so the integer keeps the reference's `cast` meaning.
 
-Not checked: a `Ptr<T>` outliving its target. Returning a local's address reads `0` on C and the
-old value on JS; a pointer into a `T[]` that grows crashes C and writes the old storage on JS.
-The reference checks an escaping address only for `var T` results, never `ptr T`.
+Checked since 2026-10-06, alike on C, JS and the Raiser VM (the checker refuses before any backend):
+
+- **A local's address stays in its frame.** The address of a local or value parameter (or of a
+  struct field or sized-array element inside one), and any local or struct value holding it, may not
+  reach a `return`, a module-level variable, a `ref`/`out` parameter, a field or element of heap
+  storage, or a `sink` argument such as `push`:
+  `'s' escapes its stack frame: the address taken at 2:57 reaches the return value, which outlives the call`.
+  Passing it to a call (`bump(s as Ptr<S>)`, an FFI `extern`) stays legal. The address of a `T[]`
+  element or of a `ref` parameter's location is not frame storage and may be returned.
+- **An address into array storage is refused while that storage can move.** A `Ptr<T>` local taken
+  with `xs[i] as Ptr<T>` or `view as Ptr<T>` follows the view rule of §Spans: a `push`, a reassignment
+  of `xs`, a `ref`/`move` hand-off or a call that receives `xs` while the pointer is still read is
+  refused (`pointer 'p' addresses storage of 'xs', which is potentially changed at 2:111 while 'p' is in
+  use`). Writes into the slot (`xs[0].n = 3`, `s = { … }`, `s.name = "c"`) and growth after the last
+  read stay legal. The arena pattern below is unaffected: an `interface` element converts to `Ptr<T>`
+  without `as`, points at the object rather than the slot, and survives growth (ASan clean).
+
+Before, on `b4c92597`: returning a local's address printed `q11 0 143` on C and `q11 5 143` on JS
+and the Raiser VM (ASan: stack-use-after-return); a pointer into a `T[]` that grew printed garbage
+on C and `9` on JS (ASan: heap-use-after-free). Still not checked: an address handed to a closure,
+or returned through a call (`identity(s as Ptr<S>)`).
 
 #### Linked structures: arena ownership + `Ptr<T>` links
 
@@ -3861,7 +3878,15 @@ const inc: Span<number> = items[1...3]; // [20, 30, 40] (length 3)
 2. **No Return**: A `Span<T>` cannot be returned from a function at all (checker-enforced since 2026-08-28: `cannot return Span<T>: a Span borrows memory owned by its source; return the owning container (Vec<T> or T[]) instead`) — regardless of where the Span was created.
 3. **Parameter Primary**: The primary use case for `Span<T>` is as a function parameter — structurally safe (the callee's frame always dies before the caller's owner), zero-copy from every source (`T[]`, `Vec<T>`, `T[N]`, literals, slices).
 
-Safety tier and intent: today `Span` sits exactly where Zig slices sit — safe as a parameter by construction, unchecked as storage. The planned upgrade is escape-analysis lite in the checker (view-style inference over a few countable escape shapes), NOT a borrow checker: no lifetime annotations will ever enter the syntax (TS surface).
+4. **A view local is refused while the storage it reads can move** (checker-enforced since 2026-10-06, alike on C, JS and the Raiser VM). A `Span<T>`, `Borrow<T>` or a struct holding one, bound in a function body, borrows the variable, field or element path it was taken from (`xs`, `bag.items`, `s.asBytes()`, `xs[1..3]`, a view of a view). Between its creation and its last read, these are refused: growing or shrinking the borrowed array (`push`, `pop`, `splice`, …), reassigning it or a path above it (`xs = …`, `rows[0] = …` under a view of `rows[0].items`), passing it to a `ref`/`out` parameter, a `T[]`/class parameter or `move`, and handing it whole to another binding (`const t = xs`):
+
+   ```
+   cannot borrow 'sp': what it borrows from ('xs') is potentially changed at 2:110 while 'sp' is in use; take the view after the change, or copy what it reads
+   ```
+
+   Legal, because the storage stays put: writes into elements or sibling fields (`xs[0].n = 5`, `xs[0] = { … }`, `bag.count = 3`, `rows[0].items.push(3)` under a view of `rows`), a call that takes the owner by value or `Readonly<…>` (`xs.indexOf(x)`, `world.kOf()`), growth after the last read, and a view re-taken each loop iteration before the growth. A view whose source lives in an inner block (`sp = inner` inside `{ }`) is refused with `which does not live long enough`. Measured on the 2026-10-06 candidate: before, `const sp = xs as Span<S>` followed by 1000 `push` printed `3` on C and `1` on JS (ASan: heap-use-after-free); reassigning `xs`, `const t = xs` in an inner block and reassigning a viewed string did the same. Not checked: a module-level view, a source changed through a closure or a value-struct parameter that reaches the array through a `T[]` field (`function f(w: World) { w.pets.push(…) }`), and views inside generic function bodies that the checker does not see as views.
+
+Safety tier and intent: `Span` is safe as a parameter by construction, checked as a local (rule 4), unchecked as storage. No lifetime annotations will ever enter the syntax (TS surface).
 
 #### Value Bindings Are Read-Only Views (Checker-Enforced)
 
