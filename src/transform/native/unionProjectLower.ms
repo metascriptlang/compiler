@@ -109,7 +109,9 @@ function unionDisplay(ut: Type): string {
 }
 
 export function accessHead(field: string, projection: Node, ut: Type): string {
-	const what = field != "" ? `field '${field}'` : `member '${unionMemberDisplay((projection.data as HiddenStdConvData).convType)}'`;
+	const target = (projection.data as HiddenStdConvData).convType;
+	const member = isMaybeType(target) && target.typeReturn != null ? target.typeReturn : target;
+	const what = field != "" ? `field '${field}'` : `member '${unionMemberDisplay(member)}'`;
 	return `${what} is not accessible for type '${unionDisplay(ut)}' using '`;
 }
 

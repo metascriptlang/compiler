@@ -809,7 +809,7 @@ function _unionRead(args: RaiserValue[], maybe: boolean): RaiserValue {
 	const tag = heapObjectGetField(objHeap, u.intVal, "$tag").intVal;
 	if (!_unionSlotAllowed(arrHeap, args[1], tag)) {
 		const label = heapArrayGet(arrHeap, args[3].intVal, tag);
-		raiseFromHost(unboxString(args[2]) + label.strVal + "'");
+		raiseFromHost(unboxString(args[2]) + label.strVal + "'", true);
 		return raiserNil();
 	}
 	return heapObjectGetField(objHeap, u.intVal, "$v");

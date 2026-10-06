@@ -21,7 +21,7 @@ import {
 import { orcCollectCycles } from "./orc";
 import { RaiserCopyKind, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
-import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise } from "./hostRegistry";
+import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, raiseFromHost } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink } from "./marshal";
 
 @include("runtime/promise/dispatch.h");
@@ -1940,8 +1940,13 @@ function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 	}
 	setActiveProgramArgv(prevArgv);
 
+	const fatal = hostRaiseIsFatal();
 	const raised = takeHostRaise();
 	if (raised != null) {
+		if (fatal) {
+			vmError(vm, raised);
+			return;
+		}
 		copyValueInto(vm.currentException, raiserString(raised));
 		vm.unwinding = true;
 		vm.savedIp = vm.ip - 1;
@@ -2790,6 +2795,50 @@ test "CallHost unknown name errors" {
 	const vm = execModule(makeTestModule(code, consts));
 	assert vm.error.length > 0;
 	assert vm.halted;
+}
+
+function execHostRaiseInCatch(fatal: boolean): RaiserVM {
+	registerHostFn("raise", (args: RaiserValue[]): RaiserValue => {
+		raiseFromHost("host failure", fatal);
+		return raiserNil();
+	});
+	return execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.Try, 0, 3),
+			raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
+			raiserAx(RaiserOpcode.Jump, 3),
+			raiserABx(RaiserOpcode.Catch, 1, 3),
+			raiserABC(RaiserOpcode.Print, 1, 0, 0),
+			raiserAx(RaiserOpcode.Jump, 1),
+			raiserABC(RaiserOpcode.Finally, 0, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),
+			raiserABC(RaiserOpcode.Print, 2, 0, 0),
+			raiserABC(RaiserOpcode.FinallyEnd, 0, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserString("raise"), raiserString("finally")]
+	));
+}
+
+test "a fatal host error bypasses the guest catch and finally" {
+	_resetHostRegistryForTests();
+	const vm = execHostRaiseInCatch(true);
+	assert vm.error == "host failure";
+	assert vm.output == "";
+	assert !vm.unwinding;
+	assert takeHostRaise() == null;
+	assert !hostRaiseIsFatal();
+}
+
+test "a recoverable host error reaches the guest catch after a fatal host error" {
+	_resetHostRegistryForTests();
+	const fatal = execHostRaiseInCatch(true);
+	assert fatal.error == "host failure";
+	const vm = execHostRaiseInCatch(false);
+	assert vm.error == "";
+	assert vm.output == "host failure\nfinally\n";
+	assert vm.exitValue.strVal == "host failure";
+	assert vm.safePoints.length == 0;
 }
 
 test "restricted CallHost rejects an unclassified host" {

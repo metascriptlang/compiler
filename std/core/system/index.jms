@@ -68,13 +68,13 @@ function msFieldError(head: string, actual: string): never {
 
 @compilerFunc
 function msUnionRead(u: unknown, slots: int32[], head: string, labels: string[]): unknown {
-	@emit(`if (${slots}.length !== 0 && !${slots}.includes(${u}.$tag)) throw new Error(${head} + ${labels}[${u}.$tag] + "'"); return ${u}.$v;`);
+	@emit(`if (${slots}.length !== 0 && !${slots}.includes(${u}.$tag)) ${msDefect}(${head} + ${labels}[${u}.$tag] + "'"); return ${u}.$v;`);
 	unreachable;
 }
 
 @compilerFunc
 function msUnionReadMaybe(u: unknown, slots: int32[], head: string, labels: string[]): unknown {
-	@emit(`if (${u} == null) return null; if (${slots}.length !== 0 && !${slots}.includes(${u}.$tag)) throw new Error(${head} + ${labels}[${u}.$tag] + "'"); return ${u}.$v;`);
+	@emit(`if (${u} == null) return null; if (${slots}.length !== 0 && !${slots}.includes(${u}.$tag)) ${msDefect}(${head} + ${labels}[${u}.$tag] + "'"); return ${u}.$v;`);
 	unreachable;
 }
 

@@ -106,14 +106,21 @@ export function activeHostArrayHeap(): RaiserArrayHeap | null {
 }
 
 let _hostRaise: string | null = null;
+let _hostRaiseFatal: boolean = false;
 
-export function raiseFromHost(message: string): void {
+export function raiseFromHost(message: string, fatal: boolean): void {
 	_hostRaise = message;
+	_hostRaiseFatal = fatal;
+}
+
+export function hostRaiseIsFatal(): boolean {
+	return _hostRaiseFatal;
 }
 
 export function takeHostRaise(): string | null {
 	const message = _hostRaise;
 	_hostRaise = null;
+	_hostRaiseFatal = false;
 	return message;
 }
 
@@ -132,6 +139,8 @@ export function _resetHostRegistryForTests(): void {
 	_activeObjectHeap = null;
 	_activeArrayHeap = null;
 	_activeProgramArgv = null;
+	_hostRaise = null;
+	_hostRaiseFatal = false;
 }
 
 // --- Tests ---
