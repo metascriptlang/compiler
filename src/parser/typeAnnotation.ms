@@ -142,7 +142,7 @@ function parseTypeAtom(state: ParserState): Node {
 
 	// Function type: (a: T, b: U) => R
 	if (token.kind == TokenKind.LParen) {
-		return parseTypeFunctionOrParen(state);
+		return applyArraySuffix(state, parseTypeFunctionOrParen(state));
 	}
 
 	// Object type: { x: T; y: U } — with array suffix: { ... }[]
@@ -156,7 +156,7 @@ function parseTypeAtom(state: ParserState): Node {
 	// (Positioned tuple AST as a dedicated NodeKind is a future enhancement.)
 	if (token.kind == TokenKind.LBracket) {
 		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
-		return createNode(NodeKind.Identifier, { name: "[tuple]" }, token);
+		return applyArraySuffix(state, createNode(NodeKind.Identifier, { name: "[tuple]" }, token));
 	}
 
 	// Named type: identifier (possibly with generics and array suffix)
@@ -199,8 +199,6 @@ function parseTypeAtom(state: ParserState): Node {
 	return result;
 }
 
-// Apply the array type suffix `[]` / `[N]` (repeatable) to a parsed type atom. Shared by the
-// named-type path and inline object types so `{ ... }[]` parses like `Name[]`.
 function applyArraySuffix(state: ParserState, result: Node): Node {
 	while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
 		const brackToken = current(state);
@@ -720,6 +718,21 @@ test "typeExpr generic" {
 
 test "typeExpr array" {
 	assert typeExprKind("number[]") == NodeKind.TypeArray;
+}
+
+test "typeExpr parenthesized atoms retain array suffixes" {
+	assert typeExprKind("(int32)[]") == NodeKind.TypeArray;
+	assert typeExprKind("(() => void)[]") == NodeKind.TypeArray;
+	assert typeExprKind("((() => int32)[])[]") == NodeKind.TypeArray;
+}
+
+test "generic call lookahead consumes tuple array type arguments" {
+	const lr = lex("<[int32, string][]>(values)");
+	assert lr.ok;
+	if (!lr.ok) return;
+	const state = createState(lr.value);
+	assert isGenericCallAhead(state);
+	assert state.position == 0;
 }
 
 test "typeExpr union" {
