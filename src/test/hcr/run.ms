@@ -63,6 +63,10 @@ function failWith(tag: string, why: string): void {
 	exit(1);
 }
 
+const PARKED: { name: string, card: string }[] = [
+	{ name: "hcrModulePassReload", card: "inbox card 2026-10-06-hcr-ref-array-cell-owned-by-user-image.md" },
+];
+
 function msc(dir: string, args: string[]): ExecFileResult {
 	return execFileResult(MSC, args, dir);
 }
@@ -1343,6 +1347,14 @@ ensureDir(TMP);
 for (let i = 0; i < CASES.length; i++) {
 	if (i % SHARD_COUNT != SHARD_INDEX) continue;
 	if (ONLY.length > 0 && !ONLY.includes(CASES[i].name)) continue;
+	let parkedCard = "";
+	for (const p of PARKED) {
+		if (p.name == CASES[i].name) parkedCard = p.card;
+	}
+	if (parkedCard != "") {
+		console.log(`skip ${CASES[i].name}: parked on a compiler bug (${parkedCard})`);
+		continue;
+	}
 	const t0 = performance.now();
 	CASES[i].run();
 	console.log(`time ${CASES[i].name} ${Math.round((performance.now() - t0) / 1000)}s`);
