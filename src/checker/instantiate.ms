@@ -21,7 +21,7 @@ import { mangleMonoName, monoInstanceName, monoInstanceNameOf } from "../monomor
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
 import { beginGensymUnit, rewindTemplateGensym } from "./template";
 import { getIdentId } from "./idents";
-import { fitJoinedBranch } from "./fit";
+import { fitJoinedBranch, settleYields, isSyncGeneratorFlags } from "./fit";
 import { bindFunctionFlow } from "../binder/index";
 
 // ===== Module-Path → CheckerContext Registry =====
@@ -809,6 +809,11 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		// Mirror the decl-side apply: an unresolved (un-annotated) return
 		// adopts the body's inferred return so the instance is fully typed.
 		if (instType.kind == TypeKind.Function
+				&& instType.typeReturn != null
+				&& isUnresolvedType(instType.typeReturn)
+				&& isSyncGeneratorFlags(cd.fnFlags)) {
+			instType.typeReturn = settleYields(bodyCtx, sym.name, cd.nameLocation);
+		} else if (instType.kind == TypeKind.Function
 				&& instType.typeReturn != null
 				&& isUnresolvedType(instType.typeReturn)) {
 			if (bodyCtx.inferredReturn.kind != TypeKind.Inferred) {

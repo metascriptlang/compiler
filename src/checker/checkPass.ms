@@ -35,12 +35,12 @@ import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
+import { checkExpr, refuseFallingOffEnd, refuseGeneratorReturnValue } from "./checkExprPass";
 import { inlineDecorator } from "./decoratorHelpers";
 import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
-import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
+import { fitNode, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn } from "./checkerCallbacks";
@@ -1023,6 +1023,13 @@ function beginReturnInference(ctx: CheckerContext, fnType: Type): ReturnInferenc
 
 function settleReturnInference(ctx: CheckerContext, sym: Symbol, name: string, flags: string, at: SourceLocation, outer: ReturnInference): void {
 	if (sym.symbolType.kind == TypeKind.Function
+		&& sym.symbolType.typeReturn != null
+		&& isUnresolvedType(sym.symbolType.typeReturn)
+		&& isSyncGeneratorFlags(flags)) {
+		const tries = ctx.inferredReturnTries;
+		sym.symbolType.typeReturn = settleYields(ctx, name, at);
+		for (const t of tries) checkPropagatedErrorAgainst(ctx, t, sym.symbolType.typeReturn, name);
+	} else if (sym.symbolType.kind == TypeKind.Function
 		&& sym.symbolType.typeReturn != null
 		&& isUnresolvedType(sym.symbolType.typeReturn)) {
 		if (ctx.inferredReturn.kind != TypeKind.Inferred) {
@@ -2109,6 +2116,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	if (ctx.currentFunction == null) {
 		addError(ctx, "return outside of function", node.location.line, node.location.column);
 	}
+	if (refuseGeneratorReturnValue(ctx, node)) return;
 	if (d.argument == null) {
 		// Bare `return;` is the user explicitly saying "void return". Inference
 		// (e.g. lambda body without an explicit return-type annotation) needs
