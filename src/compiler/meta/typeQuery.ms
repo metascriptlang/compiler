@@ -145,9 +145,7 @@ function hostGetImpl(args: RaiserValue[]): RaiserValue {
 	if (sym == null) return namesBuiltinType(ctx, args[0]) ? raiserNil() : queryError(ctx, "node is not a symbol");
 	if (hasFlag(sym, SymbolFlag.Forward)) return queryError(ctx, stillDecoratedMessage(sym.name));
 	if (sym.declNode == null) return raiserNil();
-	if (!checkFunctionOnDemand(ctx, sym)) {
-		return queryError(ctx, `'${sym.name}' is still being checked - getImpl cannot read its body from a macro called inside it`);
-	}
+	checkFunctionOnDemand(ctx, sym);
 	const impl = emitNode(sym.declNode);
 	const objHeap = activeHostObjectHeap();
 	const arrHeap = activeHostArrayHeap();
