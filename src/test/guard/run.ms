@@ -22,7 +22,7 @@
 // The double-destroy abort needs no directive — it is name-agnostic.
 //
 // Env: MSC=<path to msc> (default: ./msc, else installed msc)   GUARD_GC="drc orc" (default both)
-import { execFileResult, ExecFileResult, exit, env, cwd, cmdExists } from "std/process";
+import { execFileResult, ExecFileResult, exit, env, cwd, cmdExists, platform, arch } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, removeAll, symlink } from "std/fs";
 
 function slashes(p: string): string {
@@ -393,7 +393,29 @@ function runOsAsanLane(probe: Probe): void {
 		fail(tag, `build reported success but no binary at ${bin}`);
 		return;
 	}
+	let runtimeDir = "";
+	if (platform == "windows") {
+		const resource = execFileResult("clang", ["-print-resource-dir"]);
+		if (!succeeded(resource) || resource.output.trim() == "") {
+			fail(tag, `cannot locate clang ASan runtime: ${status(resource)}`);
+			return;
+		}
+		runtimeDir = `${slashes(resource.output.trim())}/lib/windows`;
+		const runtimeArch = match (arch) {
+			"amd64" => "x86_64",
+			"arm64" => "aarch64",
+			"i386" => "i386",
+			_ => "",
+		};
+		if (runtimeArch == "" || !exists(`${runtimeDir}/clang_rt.asan_dynamic-${runtimeArch}.dll`)) {
+			fail(tag, `missing clang ASan runtime for ${arch} in ${runtimeDir}`);
+			return;
+		}
+	}
+	const oldPath = env.get("PATH");
+	if (runtimeDir != "") env.set("PATH", `${runtimeDir};${oldPath}`);
 	const run = execFileResult(exe, []);
+	if (runtimeDir != "") env.set("PATH", oldPath);
 	const merged = both(run);
 	writeFile(`${LOG_DIR}/${probe.name}.${probe.os}.asan.out`, merged);
 	const report = firstLineContaining(merged, "ERROR: AddressSanitizer");
