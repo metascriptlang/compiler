@@ -1,6 +1,5 @@
 // @stdout: 4,5,|a,bc,|2.5,|10,20,|1,2,|p,q,|x
-// @xfail(raiser): the Raiser VM cannot compile a yield expression ('cannot compile node kind YieldExpr')
-// note: a generator without a return annotation yields what its `yield`s yield, joined as returns are: a function with an early bare `return`, strings, an int and a float joined to float64, a function expression, a class method, a generic class's method, and one read before its body is checked. Same output on C and JS.
+// note: a generator without a return annotation yields what its `yield`s yield, joined as returns are: a function with an early bare `return`, strings, an int and a float joined to float64, a function expression, a class method, a generic class's method, and one read before its body is checked. Same output on C, JS and the Raiser.
 function* early(n: int32) { if (n < 0) return; yield n; yield n + 1; }
 function* words() { yield "a"; yield "bc"; }
 function* mixed(flag: boolean) { if (flag) yield 1; else yield 2.5; }
