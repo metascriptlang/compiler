@@ -7,7 +7,7 @@ import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, literalBase, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, peelThrough, PEEL_ALL, isValuePointee, classParentOf } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf, lookupCtorDefaults, isVisibleSymbol } from "./symbol";
-import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, findExtension } from "./context";
+import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, findExtension, findAccessor } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -835,6 +835,17 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				addError(ctx,
 					"Type 'null' is not assignable to type '" + typeDisplayName(leftType) + "'",
 					d.right.location.line, d.right.location.column);
+			}
+			if (isAsgn && d.left.kind == NodeKind.MemberExpr && d.left.nodeType != null && isUnresolvedType(d.left.nodeType)) {
+				const md = d.left.data as MemberExprData;
+				const recvType = md.object.nodeType;
+				if (recvType != null && findAccessor(ctx, recvType, "set_" + md.property) != null) {
+					node.nodeType = callSetter(ctx, node, d, md); return;
+				}
+				if (recvType != null && findAccessor(ctx, recvType, "get_" + md.property) != null) {
+					addError(ctx, `Cannot assign to '${md.property}' because it is a read-only property: it has a getter and no setter`, d.left.location.line, d.left.location.column);
+					node.nodeType = errorType(); return;
+				}
 			}
 			// Convention-based dynamic field write protocol:
 			//   obj.foo = x  →  obj.setDynamicField("foo", x)
@@ -2578,6 +2589,23 @@ function declaresSubscript(ctx: CheckerContext, receiver: Type | null, op: strin
 	const t = subscriptOperandOf(receiver);
 	if (t == null || ctx.extensionRegistry == null) return false;
 	return findExtension(ctx.extensionRegistry, typeNameOf(t), op) != null;
+}
+
+function readsOnlyNames(n: Node): boolean {
+	if (n.kind == NodeKind.Identifier) return true;
+	if (n.kind == NodeKind.HiddenDeref) return readsOnlyNames((n.data as HiddenDerefData).expr);
+	return n.kind == NodeKind.MemberExpr && readsOnlyNames((n.data as MemberExprData).object);
+}
+
+function callSetter(ctx: CheckerContext, node: Node, d: BinaryExprData, md: MemberExprData): Type {
+	if (d.operator == "=") return rewriteAsMethodCall(ctx, node, md.object, "set_" + md.property, [d.right]);
+	if (!readsOnlyNames(md.object)) {
+		addError(ctx, `compound assignment '${d.operator}' to accessor '${md.property}' needs a receiver that is a name or a field path: store the receiver in a local first`, node.location.line, node.location.column);
+		return errorType();
+	}
+	const read = createNodeAt(NodeKind.MemberExpr, { object: cloneNodeForCheck(md.object), property: md.property, isOptional: false }, d.left.location);
+	const combined = createNodeAt(NodeKind.BinaryExpr, { operator: d.operator.slice(0, d.operator.length - 1), left: read, right: d.right }, node.location);
+	return rewriteAsMethodCall(ctx, node, md.object, "set_" + md.property, [combined]);
 }
 
 function rewriteAsMethodCall(ctx: CheckerContext, node: Node, receiver: Node, methodName: string, args: Node[]): Type {

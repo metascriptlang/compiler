@@ -12,7 +12,7 @@ import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, wri
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
-import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration } from "./context";
+import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
 import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
@@ -4483,6 +4483,13 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			return extFnT;
 		}
 	}
+	if (isUnresolvedType(propType) && !d.isOptional && !isUnresolvedType(resolvedObjType) && resolvedObjType.kind != TypeKind.Error) {
+		if (ctx.initTracker.leftPartOfAsgn > 0) {
+			if (findAccessor(ctx, objType, "set_" + d.property) != null || findAccessor(ctx, objType, "get_" + d.property) != null) return propType;
+		} else if (findAccessor(ctx, objType, "get_" + d.property) != null) {
+			return callGetter(ctx, node, d);
+		}
+	}
 	// Convention-based dynamic field access protocol:
 	//   obj.foo  →  obj.getDynamicField("foo")
 	// when:
@@ -4685,6 +4692,19 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		}
 	}
 	return propType;
+}
+
+function callGetter(ctx: CheckerContext, node: Node, d: MemberExprData): Type {
+	const getterMember = createNodeAt(NodeKind.MemberExpr, { object: d.object, property: "get_" + d.property, isOptional: false }, node.location);
+	const call = createNodeAt(NodeKind.CallExpr, { callee: getterMember, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, node.location);
+	callCheckExpr(ctx, call, null);
+	node.kind = NodeKind.CallExpr;
+	node.data = call.data;
+	node.nodeType = call.nodeType;
+	node.flags = call.flags;
+	node.variantSlot = call.variantSlot;
+	if (call.resolvedSym != null) node.resolvedSym = call.resolvedSym;
+	return call.nodeType!;
 }
 
 // The wire flattens SourceLocation onto the node, so these names carry no

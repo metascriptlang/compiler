@@ -431,7 +431,7 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 
 export function collectFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
-	if (d.params.length > 0 && d.params[0] == "this") {
+	if (d.params.length > 0 && d.params[0] == "this" && !node.flags.has(NodeFlag.Accessor)) {
 		addError(ctx, "a 'this' parameter is only valid as the receiver of a class method — an extension names its receiver: function " + d.fnName + "(this x: T)", node.location.line, node.location.column);
 	}
 	// 3-pass idempotency contract — Pass 1 (collect) parity with Pass 2/3.

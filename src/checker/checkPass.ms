@@ -22,7 +22,7 @@ import { inlineHeaderImports, createFileSystemProvider } from "../module/loader"
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType } from "./compat";
-import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType, findViewType, ownedAlternativeOf } from "./types";
+import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType, findViewType, ownedAlternativeOf, getProperty } from "./types";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseSuspendingViewParam, bodyMentionsName } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
@@ -970,6 +970,9 @@ function checkFunctionDeclBody(ctx: CheckerContext, node: Node, sym: Symbol): vo
 
 	const fnType = sym.symbolType;
 	node.nodeType = fnType;
+	if (fnType != null && fnType.kind == TypeKind.Function && fnType.typeChildren.length > 0) {
+		refuseAccessorOverField(ctx, node, fnType.typeChildren[0], d.fnName, d.nameLocation);
+	}
 	if (hasFlag(sym, SymbolFlag.Borrow)) {
 		resolveBorrow(ctx, sym, d.fnName, d.nameLocation);
 		sym.state = SymbolState.Checked;
@@ -1374,6 +1377,13 @@ function leaveDeclarationState(ctx: CheckerContext, saved: DeclarationState): vo
 	ctx.instantiatingCtx = saved.instantiatingCtx;
 }
 
+function refuseAccessorOverField(ctx: CheckerContext, node: Node, receiver: Type | null, routineName: string, at: SourceLocation): void {
+	if (!node.flags.has(NodeFlag.Accessor) || receiver == null) return;
+	const prop = routineName.slice(4, routineName.length);
+	if (isUnresolvedType(getProperty(receiver, prop))) return;
+	addError(ctx, `Duplicate identifier '${prop}': '${typeDisplayName(receiver)}' has a field and an accessor of that name`, at.line, at.column);
+}
+
 export function checkFunctionOnDemand(ctx: CheckerContext, sym: Symbol): void {
 	const decl = sym.declNode;
 	if (sym.symbolKind != SymbolKind.Function || decl == null || decl.kind != NodeKind.FunctionDecl) return;
@@ -1603,6 +1613,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 				}
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
 			if (!d.methodIsStatic) checkGenericOverride(ctx, d, className, classType);
+			refuseAccessorOverField(ctx, node, classType, d.methodName, d.nameLocation);
 			// Skip body check for generic methods (body re-checked per instantiation,
 			// like top-level generic fns at checkFunctionDecl:358).
 			if (!isGenericFn(d.methodFlags)) {

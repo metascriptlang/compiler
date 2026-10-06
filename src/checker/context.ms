@@ -4,7 +4,7 @@ import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cm
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { Node, NodeKind, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 import { AffineTracker, createAffineTracker } from "./spawnAffinity";
@@ -740,6 +740,16 @@ export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type 
 		depth += 1;
 	}
 	return results;
+}
+
+export function findAccessor(ctx: CheckerContext, objType: Type, routineName: string): ExtensionMethod | null {
+	if (ctx.extensionRegistry == null) return null;
+	const exts: ExtensionMethod[] = [];
+	for (const e of findAllExtensionsByName(ctx.extensionRegistry, routineName)) {
+		if (e.sym != null && e.sym.declNode != null && e.sym.declNode.flags.has(NodeFlag.Accessor)) exts.push(e);
+	}
+	if (exts.length == 0) return null;
+	return findFirstMatchingExt(exts, objType);
 }
 
 export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
