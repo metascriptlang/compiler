@@ -3162,15 +3162,39 @@ function structBehindConversion(t: Type | null): Type | null {
 		s = s.typeReturn;
 		depth += 1;
 	}
+	if (s != null && s.kind == TypeKind.GenericInstance && s.typeExtra != null && isValueStructDecl(unwrapRefBase(s.typeExtra))) return s;
 	return s != null && s.kind == TypeKind.Struct ? s : null;
+}
+
+function isStructInstance(t: Type): boolean {
+	return t.kind == TypeKind.GenericInstance;
+}
+
+function relatedStructInstances(source: Type, target: Type): boolean {
+	if (sameType(source, target)) return true;
+	if (isStructInstance(source) && isStructInstance(target)) {
+		return source.typeExtra != null && target.typeExtra != null
+			&& (hasGenericParams(source) || hasGenericParams(target))
+			&& sameNominal(unwrapRefBase(source.typeExtra), unwrapRefBase(target.typeExtra));
+	}
+	const sourceBody = isStructInstance(source) ? source.typeReturn : source;
+	const targetBody = isStructInstance(target) ? target.typeReturn : target;
+	if (sourceBody == null || targetBody == null) return false;
+	return (!isStructInstance(target) && valueStructBaseDepth(sourceBody, target) > 0)
+		|| (!isStructInstance(source) && valueStructBaseDepth(targetBody, source) > 0);
 }
 
 function refuseUnrelatedStructAs(ctx: CheckerContext, operand: Node, srcType: Type, targetType: Type, line: int32, column: int32): boolean {
 	if (operand.kind == NodeKind.ObjectLiteral) return false;
 	const target = structBehindConversion(targetType);
 	const source = structBehindConversion((srcType.kind == TypeKind.Ref || isMaybeType(srcType)) && srcType.typeReturn != null ? srcType.typeReturn : srcType);
-	if (target == null || source == null || !isValueStructDecl(target)) return false;
-	if (sameNominal(source, target) || valueStructBaseDepth(source, target) > 0 || valueStructBaseDepth(target, source) > 0) return false;
+	if (target == null || source == null) return false;
+	if (isStructInstance(source) || isStructInstance(target)) {
+		if (relatedStructInstances(source, target)) return false;
+	} else {
+		if (!isValueStructDecl(target)) return false;
+		if (sameNominal(source, target) || valueStructBaseDepth(source, target) > 0 || valueStructBaseDepth(target, source) > 0) return false;
+	}
 	addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + ": a struct converts only to itself, a distinct of it, or a struct it extends", line, column);
 	return true;
 }
