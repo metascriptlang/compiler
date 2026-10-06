@@ -1,4 +1,4 @@
-// @stdout: as-conv center center stretch,null center,null center center 4 auto s:auto,null n:4,null s:stretch center auto s:center,null s:auto stretch
+// @stdout: as-conv center center stretch,null center,null center center 4 auto s:auto,null n:4,null s:stretch center auto s:center,null s:auto stretch 5/6/8 5/6 7/1.5
 
 type Align = "auto" | "center" | "stretch";
 type Wire = number | string | null;
@@ -39,6 +39,24 @@ function unionToLitN(u: number | string): Align | null { return u as Align | nul
 function assignLitN(a: Align | null): Wire { const w: Wire = a; return w; }
 function assignLit(a: Align): number | string { const u: number | string = a; return u; }
 
+struct Left { a: int32 }
+struct Right { b: int32 }
+type Pair = Left | Right;
+type Amount = int32 | float64;
+
+function pairLeft(): Pair { const l: Left = { a: 5 }; return l; }
+function pairRight(): Pair { const r: Right = { b: 6 }; return r; }
+function pairLit(): Pair { const p: Pair = { b: 8 }; return p; }
+function pairLeftOf(p: Pair): int32 { const l = p as Left; return l.a; }
+function pairRightOf(p: Pair): int32 { const r = p as Right; return r.b; }
+function amountOf(whole: boolean): Amount { if (whole) return 7; return 1.5; }
+function pairAfter(): string {
+	const list: Pair[] = [];
+	list.push(pairLeft());
+	list.push(pairRight());
+	return `${pairLeftOf(list[0])}/${pairRightOf(list[1])}`;
+}
+
 function main(): void {
 	const w: Wire = "center";
 	const z: Wire = null;
@@ -63,6 +81,9 @@ function main(): void {
 		wshow(assignLitN("center")) + "," + wshow(assignLitN(null)),
 		wshow(assignLit("auto")),
 		show(unionToLitN("stretch")),
+		`${pairLeftOf(pairLeft())}/${pairRightOf(pairRight())}/${pairRightOf(pairLit())}`,
+		pairAfter(),
+		`${amountOf(true) as int32}/${amountOf(false) as float64}`,
 	].join(" "));
 }
 main();
