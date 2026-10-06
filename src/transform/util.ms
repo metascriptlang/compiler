@@ -1,9 +1,9 @@
 // Transform Utilities — node-building helpers for AST transforms
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, noFieldDecorators } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { createFunction, createClosureType, createStruct, createArray, createPtr, createVar, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, setRepr } from "../checker/types";
+import { isAffineAwaitable, createFunction, createClosureType, createStruct, createArray, createPtr, createVar, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, setRepr } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { lookupHookSym, requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
@@ -65,13 +65,20 @@ export function ownedInFuture(t: Type | null): boolean {
 	return inlineInFuture(t) || boxedInFuture(t) || refInFuture(t);
 }
 
-// The future an await reads was made by this very call to an async function, so
-// nothing else can name it: the await may take its value instead of copying.
-export function isFreshFutureCall(e: Node | null): boolean {
-	if (e == null || e.kind != NodeKind.CallExpr) return false;
+// This await is the only reader the future can have, so it may take the value
+// instead of copying it: the future was made by this very call (an async function,
+// an actor CALL's reply), or it is a spawn handle, which R2 lets be awaited once.
+export function isSoleFutureRead(e: Node | null): boolean {
+	if (e == null) return false;
+	if (isAffineAwaitable(e.nodeType)) return true;
+	if (e.kind != NodeKind.CallExpr) return false;
 	const callee = (e.data as CallExprData).callee;
 	const sym = e.resolvedSym != null ? e.resolvedSym : callee.resolvedSym;
-	return sym != null && sym.declNode != null && sym.declNode.flags.has(NodeFlag.WasAsync);
+	if (sym != null && sym.declNode != null && sym.declNode.flags.has(NodeFlag.WasAsync)) return true;
+	if (callee.kind != NodeKind.MemberExpr) return false;
+	let recv = (callee.data as MemberExprData).object.nodeType;
+	if (recv != null && recv.kind == TypeKind.Ref && recv.typeReturn != null) recv = recv.typeReturn;
+	return recv != null && recv.sym != null && recv.sym.symbolKind == SymbolKind.Actor;
 }
 
 // A read of an owning future that may not be its last: bind from the value's own

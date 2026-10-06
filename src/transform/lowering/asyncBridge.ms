@@ -28,7 +28,7 @@ import {
 	makeTypedIdentResolved, makeVarDecl, makeExprStmt, makeReturn,
 	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeWhile, makeBool, makeNumber, makeString,
 	makeAssign, makeBinary, makeTryCatch, makeCatchSym, makeContinue, syntheticToken, extractBodyStmts, runtimeRef,
-	isFreshFutureCall, makeFutureCopyRead, makeOwnsValueCheck,
+	isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck,
 } from "../util";
 import { createSymSet, symSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
@@ -324,11 +324,11 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 	// Default (terminal) state: return null (stepper done)
 	let current: Node = makeBlock([makeReturn(makeNull(loc), loc)], loc);
 
-	// Which yields await a future made by that very call (states are built last to
+	// Which yields are their future's only reader (states are built last to
 	// first, so a resume state is built before the yield it resumes from).
-	const freshYield: boolean[] = [];
+	const soleRead: boolean[] = [];
 	for (const item of sc.items) {
-		freshYield.push(item.isYield && isFreshFutureCall(locateYieldArg(item.stmts, false)));
+		soleRead.push(item.isYield && isSoleFutureRead(locateYieldArg(item.stmts, false)));
 	}
 
 	// Build if-else chain from last state to first
@@ -384,7 +384,7 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 				}
 			}
 			const takeStmt = makeExprStmt(makeAssign(makeTypedIdentResolved(varSym, varType, loc), readExpr, loc), loc);
-			if (freshYield[prevIdx] || !ownedInFuture(varType)) {
+			if (soleRead[prevIdx] || !ownedInFuture(varType)) {
 				stateStmts.push(takeStmt);
 			} else {
 				const copyRead = makeFutureCopyRead(makeTypedIdentResolved(prevYfSym, prevYfType, loc), varType!, loc);

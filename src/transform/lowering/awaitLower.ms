@@ -36,7 +36,7 @@ import {
 import { TransformContext, freshTempSym, freshOwnedSym, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { walkExpandBlocksHooked, containsExprKind, walkNode } from "../walker";
-import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym, ownedInFuture, isFreshFutureCall, makeFutureCopyRead, makeOwnsValueCheck } from "../util";
+import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck } from "../util";
 import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
 import { typedFutureReadFn } from "./promiseLower";
 import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
@@ -302,7 +302,7 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 	// a temp so it's only evaluated once. Without this, actor CALL futures get
 	// created twice — once for msWaitForReady and once for msFutureReadT — and
 	// the second future is never awaited, causing an assertion failure.
-	const fresh = isFreshFutureCall(handleExpr);
+	const soleRead = isSoleFutureRead(handleExpr);
 	let futIdent = handleExpr;
 	if (handleExpr.kind != NodeKind.Identifier) {
 		const tmp = makeTempDecl(ctx, "fut", handleExpr, handleExpr.nodeType, loc);
@@ -317,7 +317,7 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 		futIdent = tmp.ident;
 	}
 
-	if (!fresh && innerType != null && ownedInFuture(innerType)) {
+	if (!soleRead && innerType != null && ownedInFuture(innerType)) {
 		return expandSharedAwait(futIdent, stmts, loc, ctx, innerType);
 	}
 
