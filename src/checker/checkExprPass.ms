@@ -3300,6 +3300,7 @@ function refuseContainerReinterpret(ctx: CheckerContext, operand: Node, srcType:
 	const target = bareConversionType(targetType);
 	const family = containerFamily(source);
 	if (family == 0 || family == 3 || family != containerFamily(target)) return false;
+	if (family == 6 && (objectConversion(srcType, targetType) != ObjConv.None || objectConversion(targetType, srcType) != ObjConv.None)) return false;
 	const unequal = firstUnequalPart(source, target);
 	if (unequal.length == 0) return false;
 	const from = typeDisplayName(unequal[0]);
