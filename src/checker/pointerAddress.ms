@@ -128,7 +128,7 @@ function frameRoot(node: Node | null): Symbol | null {
 		match (n.kind) {
 			NodeKind.Identifier => {
 				const sym = n.resolvedSym;
-				if (sym == null || hasFlag(sym, SymbolFlag.Global)) return null;
+				if (sym == null || hasFlag(sym, SymbolFlag.Global) || throughHeap(sym.symbolType)) return null;
 				if (sym.symbolKind == SymbolKind.Parameter && sym.symbolType != null && sym.symbolType.kind == TypeKind.Var) return null;
 				if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter) return null;
 				return sym;
@@ -156,8 +156,24 @@ function isTainted(u: EscapeUnit, sym: Symbol | null): boolean {
 	return false;
 }
 
+function holdsPointer(t: Type | null, depth: int32 = 0): boolean {
+	if (t == null || depth > 8) return true;
+	return match (t.kind) {
+		TypeKind.Ptr | TypeKind.Unknown | TypeKind.GenericParam => true,
+		TypeKind.Struct | TypeKind.Tuple | TypeKind.Union | TypeKind.Result => {
+			for (const c of t.typeChildren) {
+				if (holdsPointer(c, depth + 1)) return true;
+			}
+			return false;
+		},
+		TypeKind.SizedArray | TypeKind.Array | TypeKind.Alias | TypeKind.Distinct => holdsPointer(t.typeReturn, depth + 1),
+		TypeKind.GenericInstance => t.typeReturn != null ? holdsPointer(t.typeReturn, depth + 1) : false,
+		_ => false,
+	};
+}
+
 function frameAddress(u: EscapeUnit, node: Node | null): Node | null {
-	if (node == null) return null;
+	if (node == null || !holdsPointer(node.nodeType)) return null;
 	return match (node.kind) {
 		NodeKind.Identifier => {
 			for (let i = 0; i < u.tainted.length; i += 1) {

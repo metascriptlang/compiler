@@ -11,6 +11,7 @@ import { isPrimitiveKind, isViewType, isReadonlyView } from "./types";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, addError } from "./context";
 import { isAddressTaking, checkPointerEscapesIn } from "./pointerAddress";
+import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 
 export const MAX_TIME: int32 = 999999;
 export const MIN_TIME: int32 = -1;
@@ -35,7 +36,7 @@ export interface VarEntry {
 	aliveEnd: int32;
 	borrowsFrom: int32[];
 	borrowPaths: string[];
-	borrowWhole: boolean[];
+	borrowHandles: string[];
 	scopePath: int32[];
 	external: boolean;
 }
@@ -48,6 +49,7 @@ export interface MutationInfo {
 	sites: Node[];
 	roots: Symbol[];
 	paths: string[];
+	keeps: int32[][];
 }
 
 export interface Partitions {
@@ -87,7 +89,7 @@ export function registerVariable(p: Partitions, sym: Symbol | null, isParam: boo
 		aliveEnd: isParam ? MAX_TIME : p.abstractTime,
 		borrowsFrom: [],
 		borrowPaths: [],
-		borrowWhole: [],
+		borrowHandles: [],
 		scopePath: [],
 		external: isParam,
 	});
@@ -128,6 +130,7 @@ export function ufConnect(p: Partitions, a: Symbol, b: Symbol): void {
 	let rbSites: Node[] = [];
 	let rbRoots: Symbol[] = [];
 	let rbPaths: string[] = [];
+	let rbKeeps: int32[][] = [];
 	if (p.vars[rb].con.kind == CK_ROOT_OF) {
 		const gb = p.graphs[p.vars[rb].con.target];
 		rbFlags = gb.flags;
@@ -137,6 +140,7 @@ export function ufConnect(p: Partitions, a: Symbol, b: Symbol): void {
 		rbSites = gb.sites;
 		rbRoots = gb.roots;
 		rbPaths = gb.paths;
+		rbKeeps = gb.keeps;
 	}
 
 	p.vars[rb].con = { kind: CK_DEPENDS_ON, target: ra };
@@ -151,9 +155,11 @@ export function ufConnect(p: Partitions, a: Symbol, b: Symbol): void {
 		for (const r of rbRoots) { roots.push(r); }
 		const paths: string[] = [];
 		for (const x of rbPaths) { paths.push(x); }
+		const keeps: int32[][] = [];
+		for (const k of rbKeeps) { keeps.push(k); }
 		p.graphs.push({
 			flags: rbFlags, maxMutation: rbMut,
-			minConnection: rbCon, mutations: muts, sites, roots, paths,
+			minConnection: rbCon, mutations: muts, sites, roots, paths, keeps,
 		});
 	} else if (p.vars[ra].con.kind == CK_ROOT_OF) {
 		const ga = p.graphs[p.vars[ra].con.target];
@@ -163,10 +169,13 @@ export function ufConnect(p: Partitions, a: Symbol, b: Symbol): void {
 		for (const s of rbSites) { ga.sites.push(s); }
 		for (const r of rbRoots) { ga.roots.push(r); }
 		for (const x of rbPaths) { ga.paths.push(x); }
+		for (const k of rbKeeps) { ga.keeps.push(k); }
 	}
 }
 
-export function potentialMutation(p: Partitions, sym: Symbol, site: Node | null = null, path: string = ""): void {
+export const NO_KEEP: int32[] = [-1];
+
+export function potentialMutation(p: Partitions, sym: Symbol, site: Node | null = null, path: string = "", keep: int32[] = NO_KEEP): void {
 	const id = variableId(p, sym);
 	if (id < 0) return;
 	if (p.abstractTime > p.vars[id].aliveEnd) p.vars[id].aliveEnd = p.abstractTime;
@@ -176,7 +185,7 @@ export function potentialMutation(p: Partitions, sym: Symbol, site: Node | null 
 		p.vars[r].con = { kind: CK_ROOT_OF, target: p.graphs.length };
 		p.graphs.push({
 			flags: SF_IS_MUTATED, maxMutation: p.abstractTime,
-			minConnection: MAX_TIME, mutations: [p.abstractTime], sites: [site as Node], roots: [sym], paths: [path],
+			minConnection: MAX_TIME, mutations: [p.abstractTime], sites: [site as Node], roots: [sym], paths: [path], keeps: [keep],
 		});
 	} else if (p.vars[r].con.kind == CK_ROOT_OF) {
 		const g = p.graphs[p.vars[r].con.target];
@@ -186,6 +195,7 @@ export function potentialMutation(p: Partitions, sym: Symbol, site: Node | null 
 		g.sites.push(site as Node);
 		g.roots.push(sym);
 		g.paths.push(path);
+		g.keeps.push(keep);
 	}
 }
 
@@ -197,19 +207,28 @@ export function dangerousMutation(g: MutationInfo, v: VarEntry): boolean {
 	return false;
 }
 
-function reaches(changed: string, borrowed: string, whole: boolean): boolean {
-	if (changed.length > borrowed.length || !borrowed.startsWith(changed)) return false;
-	if (changed.length == borrowed.length) return whole;
-	const next = borrowed.charAt(changed.length);
+function prefixOf(changed: string, location: string): boolean {
+	if (changed.length > location.length || !location.startsWith(changed)) return false;
+	if (changed.length == location.length) return true;
+	const next = location.charAt(changed.length);
 	return next == "." || next == "[";
 }
 
-function firstMutationIn(g: MutationInfo, v: VarEntry, source: Symbol, path: string, whole: boolean): int32 {
+function reaches(changed: string, handles: string): boolean {
+	for (const h of handles.split("|")) {
+		if (h != "" && prefixOf(changed, h == "@" ? "" : h)) return true;
+	}
+	return false;
+}
+
+function firstMutationIn(g: MutationInfo, v: VarEntry, source: Symbol, handles: string): int32 {
 	if ((g.flags & SF_IS_MUTATED) == 0) return -1;
 	for (let i = 0; i < g.mutations.length; i += 1) {
 		const m = g.mutations[i];
 		if (m < v.aliveStart || m > v.aliveEnd || g.roots[i] == v.sym) continue;
-		if (g.roots[i] != source || reaches(g.paths[i], path, whole)) return i;
+		const keep = g.keeps[i];
+		if (!(keep.length == 1 && keep[0] == -1) && encloses(keep, v.scopePath)) continue;
+		if (g.roots[i] != source || reaches(g.paths[i], handles)) return i;
 	}
 	return -1;
 }
@@ -234,10 +253,10 @@ interface BorrowUnit {
 	p: Partitions;
 	pass: int32;
 	scope: int32[];
-	nextScope: int32;
 	defers: Node[];
 	ctx: CheckerContext;
 	pointers: Symbol[];
+	blocks: Node[];
 }
 
 function isBorrower(u: BorrowUnit, sym: Symbol): boolean {
@@ -296,11 +315,21 @@ function anyChildCarries(t: Type, depth: int32): boolean {
 	return false;
 }
 
-function ownsStorage(t: Type | null): boolean {
-	if (t == null) return false;
-	if (t.kind == TypeKind.String || t.kind == TypeKind.Array) return true;
-	if (isViewType(t)) return false;
-	return carriesPointer(t);
+function ownsStorage(t: Type | null, depth: int32 = 0): boolean {
+	if (t == null || depth > 8) return false;
+	return match (t.kind) {
+		TypeKind.String | TypeKind.Array | TypeKind.Ref | TypeKind.BigInt => true,
+		TypeKind.Struct | TypeKind.Tuple | TypeKind.Union | TypeKind.Result => {
+			for (const c of t.typeChildren) {
+				if (ownsStorage(c, depth + 1)) return true;
+			}
+			return false;
+		},
+		TypeKind.SizedArray | TypeKind.Alias | TypeKind.Distinct | TypeKind.Sink => ownsStorage(t.typeReturn, depth + 1),
+		TypeKind.GenericInstance => t.typeReturn != null ? ownsStorage(t.typeReturn, depth + 1) : true,
+		TypeKind.GenericParam | TypeKind.Unknown => true,
+		_ => false,
+	};
 }
 
 function isAssignOp(op: string): boolean {
@@ -332,8 +361,10 @@ function rootsOf(node: Node | null, out: Symbol[]): void {
 			if (carriesPointer(node.nodeType)) {
 				const d = node.data as CallExprData;
 				const recv = receiverOf(node);
-				if (recv != null) rootsOf(recv, out);
-				for (const a of d.arguments) { rootsOf(a, out); }
+				if (recv != null && carriesPointer(recv.nodeType)) rootsOf(recv, out);
+				for (const a of d.arguments) {
+					if (carriesPointer(a.nodeType)) rootsOf(a, out);
+				}
 			}
 		},
 		_ => {},
@@ -361,29 +392,55 @@ function isSlice(n: Node): boolean {
 	return n.kind == NodeKind.ArrayAccess && isViewType(n.nodeType);
 }
 
-function pathSources(node: Node | null, out: Node[], paths: string[], wholes: boolean[], suffix: string = ""): boolean {
+const TEMP_PATH = "#";
+
+function isBufferHandle(t: Type | null): boolean {
+	if (t == null) return true;
+	return match (t.kind) {
+		TypeKind.String | TypeKind.Array | TypeKind.Ref | TypeKind.GenericParam | TypeKind.Unknown => true,
+		TypeKind.Alias | TypeKind.Distinct => isBufferHandle(t.typeReturn),
+		TypeKind.GenericInstance => t.typeReturn == null || isBufferHandle(t.typeReturn),
+		_ => false,
+	};
+}
+
+function relocate(handles: string, prefix: string): string {
+	let out = "";
+	for (const h of handles.split("|")) {
+		if (h == "") continue;
+		const at = h == "@" ? prefix : prefix + h;
+		out = out + "|" + (at == "" ? "@" : at);
+	}
+	return out;
+}
+
+function pathSources(node: Node | null, out: Node[], paths: string[], handles: string[], suffix: string = ""): void {
 	let n = node;
 	let path = suffix;
-	let terminal: Node | null = null;
+	const handleAt: int32[] = [];
 	while (n != null) {
+		if (n.kind != NodeKind.HiddenStdConv && n.kind != NodeKind.HiddenSubConv && n.kind != NodeKind.TypeAssertion
+			&& !isSlice(n) && isBufferHandle(n.nodeType) && n.kind != NodeKind.StringLiteral) {
+			handleAt.push(path.length as int32);
+		}
 		match (n.kind) {
-			NodeKind.Identifier | NodeKind.StringLiteral => {
-				const at: Node = terminal != null ? terminal : n;
+			NodeKind.Identifier => {
 				out.push(n);
 				paths.push(path);
-				wholes.push(ownsStorage(at.nodeType));
-				return true;
+				let found = "";
+				for (const cut of handleAt) {
+					const h = path.substring(0, path.length - cut);
+					found = found + "|" + (h == "" ? "@" : h);
+				}
+				handles.push(found);
+				return;
 			},
 			NodeKind.MemberExpr => {
-				if (terminal == null) terminal = n;
 				path = "." + (n.data as MemberExprData).property + path;
 				n = (n.data as MemberExprData).object;
 			},
 			NodeKind.ArrayAccess => {
-				if (!isSlice(n)) {
-					if (terminal == null) terminal = n;
-					path = "[]" + path;
-				}
+				if (!isSlice(n)) path = "[]" + path;
 				n = (n.data as ArrayAccessData).array;
 			},
 			NodeKind.HiddenDeref | NodeKind.HiddenAddr => { n = (n.data as { expr: Node }).expr; },
@@ -391,28 +448,45 @@ function pathSources(node: Node | null, out: Node[], paths: string[], wholes: bo
 			NodeKind.TypeAssertion => {
 				const inner = (n.data as TypeAssertionData).asExpr;
 				if (isAddressTaking(n) && inner != null && inner.nodeType != null && inner.nodeType.kind == TypeKind.Span) {
-					if (terminal == null) terminal = n;
 					path = "[]" + path;
 				}
 				n = inner;
 			},
 			NodeKind.ConditionalExpr => {
 				const d = n.data as ConditionalExprData;
-				return pathSources(d.ternaryConsequent, out, paths, wholes, path) && pathSources(d.ternaryAlternate, out, paths, wholes, path);
+				pathSources(d.ternaryConsequent, out, paths, handles, path);
+				pathSources(d.ternaryAlternate, out, paths, handles, path);
+				return;
 			},
 			NodeKind.CallExpr => {
-				if (!isViewType(n.nodeType)) return false;
 				const recv = receiverOf(n);
-				if (recv != null && supplies(recv.nodeType) && !pathSources(recv, out, paths, wholes, "")) return false;
+				if (recv != null && supplies(recv.nodeType)) pathSources(recv, out, paths, handles, "");
 				for (const a of (n.data as CallExprData).arguments) {
-					if (supplies(a.nodeType) && !pathSources(a, out, paths, wholes, "")) return false;
+					if (supplies(a.nodeType)) pathSources(a, out, paths, handles, "");
 				}
-				return true;
+				if (!isViewType(n.nodeType)) addTemp(n, out, paths, handles);
+				return;
 			},
-			_ => { return false; },
+			NodeKind.ObjectLiteral | NodeKind.ArrayLiteral => {
+				const members = n.kind == NodeKind.ObjectLiteral ? (n.data as ObjectLiteralData).properties : (n.data as ArrayLiteralData).elements;
+				for (const m of members) {
+					if (supplies(m.nodeType)) pathSources(m, out, paths, handles, "");
+				}
+				addTemp(n, out, paths, handles);
+				return;
+			},
+			_ => {
+				addTemp(n, out, paths, handles);
+				return;
+			},
 		};
 	}
-	return false;
+}
+
+function addTemp(n: Node, out: Node[], paths: string[], handles: string[]): void {
+	out.push(n);
+	paths.push(TEMP_PATH);
+	handles.push("");
 }
 
 function pathOf(node: Node | null): string {
@@ -444,17 +518,48 @@ function mutateRoots(u: BorrowUnit, node: Node | null, site: Node): void {
 	const roots: Symbol[] = [];
 	rootsOf(node, roots);
 	const path = roots.length == 1 ? pathOf(node) : "";
-	for (const r of roots) { potentialMutation(u.p, r, site, path); }
+	for (const r of roots) {
+		const id = variableId(u.p, r);
+		if (id >= 0 && !u.p.vars[id].external && isBorrower(u, r) && u.p.vars[id].borrowsFrom.length > 0) {
+			const v = u.p.vars[id];
+			for (let b = 0; b < v.borrowsFrom.length; b += 1) {
+				potentialMutation(u.p, u.p.vars[v.borrowsFrom[b]].sym, site, v.borrowPaths[b] + path);
+			}
+			continue;
+		}
+		potentialMutation(u.p, r, site, path);
+	}
 }
 
-function handOff(u: BorrowUnit, src: Node | null): void {
+function withoutHandle(handles: string, at: string): string {
+	const exact = at == "" ? "@" : at;
+	let out = "";
+	for (const h of handles.split("|")) {
+		if (h != "" && h != exact) out = out + "|" + h;
+	}
+	return out;
+}
+
+function handOff(u: BorrowUnit, src: Node | null, keep: int32[]): void {
 	let n = src;
 	while (n != null && (n.kind == NodeKind.HiddenStdConv || n.kind == NodeKind.HiddenSubConv)) {
 		n = (n.data as HiddenStdConvData).convExpr;
 	}
 	if (n == null || n.kind != NodeKind.Identifier || n.resolvedSym == null) return;
 	if (!ownsStorage(n.resolvedSym.symbolType)) return;
-	potentialMutation(u.p, n.resolvedSym, n);
+	potentialMutation(u.p, n.resolvedSym, n, "", keep);
+}
+
+function scopeOf(u: BorrowUnit, sym: Symbol | null): int32[] {
+	const id = variableId(u.p, sym);
+	if (id < 0 || u.p.vars[id].external) return [];
+	return u.p.vars[id].scopePath;
+}
+
+function currentScope(u: BorrowUnit): int32[] {
+	const out: int32[] = [];
+	for (const s of u.scope) { out.push(s); }
+	return out;
 }
 
 function borrowFrom(u: BorrowUnit, dest: Symbol, src: Node): void {
@@ -462,16 +567,21 @@ function borrowFrom(u: BorrowUnit, dest: Symbol, src: Node): void {
 	if (vid < 0) return;
 	const sources: Node[] = [];
 	const paths: string[] = [];
-	const wholes: boolean[] = [];
-	if (!pathSources(src, sources, paths, wholes)) {
-		addError(u.ctx, `cannot borrow '${dest.name}' from an expression that is not a variable, field or element path; bind the value to a local first`, src.location.line, src.location.column);
-		return;
-	}
+	const handles: string[] = [];
+	pathSources(src, sources, paths, handles);
 	const pointer = !isViewType(dest.symbolType);
 	for (let k = 0; k < sources.length; k += 1) {
 		const s = sources[k];
+		if (pointer) handles[k] = withoutHandle(handles[k], paths[k]);
+		if (paths[k] == TEMP_PATH) {
+			if (!encloses(u.scope, u.p.vars[vid].scopePath)) {
+				addError(u.ctx, `'${dest.name}' borrows from a temporary that ends with its block, which does not live long enough`, src.location.line, src.location.column);
+				return;
+			}
+			continue;
+		}
 		const sym = s.resolvedSym;
-		if (s.kind == NodeKind.StringLiteral || sym == null) continue;
+		if (sym == null) continue;
 		if (hasFlag(sym, SymbolFlag.Global)) {
 			addError(u.ctx, `cannot borrow '${dest.name}' from module-level '${sym.name}': a call can change it unseen; pass it as a parameter`, src.location.line, src.location.column);
 			return;
@@ -481,32 +591,32 @@ function borrowFrom(u: BorrowUnit, dest: Symbol, src: Node): void {
 		const from = u.p.vars[sid];
 		if (!from.external && from.sym != dest && isBorrower(u, from.sym)) {
 			for (let b = 0; b < from.borrowsFrom.length; b += 1) {
-				const deeper = paths[k] != "";
-				addBorrow(u.p.vars[vid], from.borrowsFrom[b], from.borrowPaths[b] + paths[k], !pointer && !deeper && from.borrowWhole[b]);
+				const base = from.borrowPaths[b];
+				addBorrow(u.p.vars[vid], from.borrowsFrom[b], base + paths[k], from.borrowHandles[b] + relocate(handles[k], base));
 			}
 			continue;
 		}
-		addBorrow(u.p.vars[vid], sid, paths[k], !pointer && wholes[k]);
+		addBorrow(u.p.vars[vid], sid, paths[k], handles[k]);
 	}
 }
 
-function addBorrow(v: VarEntry, sid: int32, path: string, whole: boolean): void {
+function addBorrow(v: VarEntry, sid: int32, path: string, handles: string): void {
 	for (let i = 0; i < v.borrowsFrom.length; i += 1) {
 		if (v.borrowsFrom[i] == sid && v.borrowPaths[i] == path) {
-			if (whole) v.borrowWhole[i] = true;
+			v.borrowHandles[i] = v.borrowHandles[i] + handles;
 			return;
 		}
 	}
 	v.borrowsFrom.push(sid);
 	v.borrowPaths.push(path);
-	v.borrowWhole.push(whole);
+	v.borrowHandles.push(handles);
 }
 
 function deps(u: BorrowUnit, dest: Symbol | null, src: Node | null): void {
 	if (dest == null || src == null) return;
 	const view = isBorrower(u, dest);
 	if (view) borrowFrom(u, dest, src);
-	else handOff(u, src);
+	else handOff(u, src, scopeOf(u, dest));
 	if (carriesPointer(dest.symbolType)) {
 		const sources: Symbol[] = [];
 		rootsOf(src, sources);
@@ -528,7 +638,9 @@ function assign(u: BorrowUnit, node: Node, d: BinaryExprData): void {
 	}
 	if (ownsStorage(left.nodeType)) mutateRoots(u, left, d.left);
 	if (d.operator != "=") return;
-	handOff(u, d.right);
+	const targets0: Symbol[] = [];
+	rootsOf(left, targets0);
+	handOff(u, d.right, targets0.length == 1 ? scopeOf(u, targets0[0]) : NO_KEEP);
 	if (carriesPointer(left.nodeType)) {
 		const targets: Symbol[] = [];
 		rootsOf(left, targets);
@@ -550,10 +662,10 @@ function formalAt(fnType: Type | null, i: int32): Type | null {
 	return i < n ? fnType.typeChildren[i] : null;
 }
 
-function argEffect(u: BorrowUnit, arg: Node, formal: Type | null, magic: boolean): void {
+function argEffect(u: BorrowUnit, arg: Node, formal: Type | null, resizes: boolean): void {
 	if (formal != null && formal.kind == TypeKind.Var) { mutateRoots(u, arg, arg); return; }
 	if (formal != null && formal.kind == TypeKind.Sink) {
-		handOff(u, arg);
+		handOff(u, arg, NO_KEEP);
 		if (carriesPointer(formal.typeReturn)) mutateRoots(u, arg, arg);
 		return;
 	}
@@ -561,51 +673,48 @@ function argEffect(u: BorrowUnit, arg: Node, formal: Type | null, magic: boolean
 		mutateRoots(u, arg, arg);
 		return;
 	}
-	if (magic) return;
-	if (!isHandle(formal != null ? formal : arg.nodeType)) return;
-	mutateRoots(u, arg, arg);
+	if (resizes) mutateRoots(u, arg, arg);
 }
 
-function isHandle(t: Type | null): boolean {
+function resizesReceiver(node: Node, recv: Node): boolean {
+	const callee = (node.data as CallExprData).callee;
+	if (callee == null || callee.kind != NodeKind.MemberExpr) return false;
+	if (!isMutatingArrayMethod((callee.data as MemberExprData).property)) return false;
+	const t = recv.nodeType;
 	if (t == null || isReadonlyView(t)) return false;
-	return match (t.kind) {
-		TypeKind.Ref => true,
-		TypeKind.Sink | TypeKind.Alias => isHandle(t.typeReturn),
-		TypeKind.Union => {
-			for (const c of t.typeChildren) {
-				if (isHandle(c)) return true;
-			}
-			return false;
-		},
-		_ => false,
-	};
+	const held = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	return held.kind == TypeKind.Array || held.kind == TypeKind.String;
 }
 
 function callEffects(u: BorrowUnit, node: Node): void {
 	const d = node.data as CallExprData;
 	const sym = node.resolvedSym;
-	const magic = sym != null && sym.builtinKind != "";
 	const fnType = sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function
 		? sym.symbolType
 		: (d.callee != null ? d.callee.nodeType : null);
 	const recv = receiverOf(node);
 	let offset: int32 = 0;
 	if (recv != null) {
+		const resizes = resizesReceiver(node, recv);
 		if (node.flags.has(NodeFlag.ExtCall)) {
-			argEffect(u, recv, formalAt(fnType, 0), magic);
+			argEffect(u, recv, formalAt(fnType, 0), resizes);
 			offset = 1;
 		} else {
-			argEffect(u, recv, null, magic);
+			argEffect(u, recv, null, resizes);
 		}
 	}
 	for (let i = 0; i < d.arguments.length; i += 1) {
-		argEffect(u, d.arguments[i], formalAt(fnType, i + offset), magic);
+		argEffect(u, d.arguments[i], formalAt(fnType, i + offset), false);
 	}
 }
 
-function openScope(u: BorrowUnit): void {
-	u.nextScope += 1;
-	u.scope.push(u.nextScope);
+function openScope(u: BorrowUnit, block: Node): void {
+	let id = u.blocks.indexOf(block);
+	if (id < 0) {
+		id = u.blocks.length;
+		u.blocks.push(block);
+	}
+	u.scope.push(id as int32);
 }
 
 function declare(u: BorrowUnit, sym: Symbol | null, redeclared: boolean): void {
@@ -688,18 +797,18 @@ function walk(u: BorrowUnit, node: Node | null): void {
 			const d = node.data as ArrayLiteralData;
 			for (const e of d.elements) { walk(u, e); }
 			if (u.pass == 2) {
-				for (const e of d.elements) { handOff(u, e); }
+				for (const e of d.elements) { handOff(u, e, currentScope(u)); }
 			}
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
 			for (const e of d.properties) { walk(u, e); }
 			if (u.pass == 2) {
-				for (const e of d.properties) { handOff(u, e); }
+				for (const e of d.properties) { handOff(u, e, currentScope(u)); }
 			}
 		},
 		NodeKind.BlockStmt => {
-			openScope(u);
+			openScope(u, node);
 			for (const s of (node.data as BlockStmtData).statements) { walk(u, s); }
 			u.scope.pop();
 		},
@@ -714,7 +823,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 		},
 		NodeKind.ForStmt => {
 			const d = node.data as ForStmtData;
-			openScope(u);
+			openScope(u, node);
 			walk(u, d.forInit);
 			walkLoop(u, [d.forCondition, d.forBody, d.forUpdate]);
 			u.scope.pop();
@@ -722,7 +831,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
 			walk(u, d.forOfIterable);
-			openScope(u);
+			openScope(u, node);
 			for (let round = 0; round < 2; round += 1) {
 				if (round == 1) u.p.inLoop += 1;
 				u.p.abstractTime += 1;
@@ -742,7 +851,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 		NodeKind.ForInStmt => {
 			const d = node.data as ForInStmtData;
 			walk(u, d.forInObject);
-			openScope(u);
+			openScope(u, node);
 			walkLoop(u, [d.forInBody]);
 			u.scope.pop();
 		},
@@ -781,7 +890,6 @@ function runPass(u: BorrowUnit, body: Node, pass: int32): void {
 	u.pass = pass;
 	u.p.abstractTime = 0;
 	u.scope = [];
-	u.nextScope = 0;
 	walk(u, body);
 	const defers: Node[] = [];
 	for (const d of u.defers) { defers.push(d); }
@@ -793,7 +901,7 @@ function checkUnit(ctx: CheckerContext, body: Node | null): void {
 	const pointers: Symbol[] = [];
 	collectPointers(body, pointers);
 	if (pointers.length == 0 && !declaresView(body)) return;
-	const u: BorrowUnit = { p: createPartitions(), pass: 1, scope: [], nextScope: 0, defers: [], ctx, pointers };
+	const u: BorrowUnit = { p: createPartitions(), pass: 1, scope: [], defers: [], ctx, pointers, blocks: [] };
 	runPass(u, body, 1);
 	runPass(u, body, 2);
 	for (const v of u.p.vars) {
@@ -804,7 +912,7 @@ function checkUnit(ctx: CheckerContext, body: Node | null): void {
 			const sid = ufRoot(u.p, b);
 			if (u.p.vars[sid].con.kind == CK_ROOT_OF) {
 				const g = u.p.graphs[u.p.vars[sid].con.target];
-				const at = firstMutationIn(g, v, src.sym, v.borrowPaths[bi], v.borrowWhole[bi]);
+				const at = firstMutationIn(g, v, src.sym, v.borrowHandles[bi]);
 				if (at >= 0) {
 					const site = g.sites[at];
 					const where = site != null ? ` at ${site.location.line}:${site.location.column}` : "";
