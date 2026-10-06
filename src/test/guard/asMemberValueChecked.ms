@@ -65,6 +65,21 @@ function asOtherOfPair(k: int32): Other { return pointOrOther(k) as Other; }
 function asIntOfNum(k: int32): int32 { return intOrFloat(k) as int32; }
 function asFloatOfNum(k: int32): float64 { return intOrFloat(k) as float64; }
 
+type RowOrLists = Row | int32[] | string[];
+
+function sameHeld(x: RowOrLists, y: RowOrLists): boolean {
+	let same = true;
+	when (js) {
+		same = x == y;
+	}
+	return same;
+}
+
+function sameHeldRow(): boolean {
+	const held = new Row(1);
+	return sameHeld(held, held);
+}
+
 function rejected(f: () => void): boolean {
 	try {
 		f();
@@ -76,7 +91,8 @@ function rejected(f: () => void): boolean {
 
 function validPaths(): boolean {
 	return asInt(0) + 1 == 42 && asList(0).length == 2 && asNamed(0).name == "n" && asPoint(0).x == 3
-		&& asPointOfPair(0).x == 3 && asOtherOfPair(1).y == 4 && asIntOfNum(0) == 7 && asFloatOfNum(1) == 1.5;
+		&& asPointOfPair(0).x == 3 && asOtherOfPair(1).y == 4 && asIntOfNum(0) == 7 && asFloatOfNum(1) == 1.5
+		&& sameHeldRow();
 }
 
 function wrongPathsRejected(): boolean {
