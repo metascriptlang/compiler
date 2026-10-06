@@ -192,7 +192,7 @@ env.delete("MSC_NO_GLOBAL_CACHE");
 
 removeAll(dir);
 ensureDir(dir);
-writeFile(`${dir}/host.ms`, "import { cwd } from \"std/process\";\nconsole.log(cwd());\n");
+writeFile(`${dir}/host.ms`, "import { cwd } from \"std/process\";\nimport { platform } from \"std/os\";\nconsole.log(cwd(), platform());\n");
 writeFile(`${dir}/chain.ms`, "import { logU64, instructionData } from \"std/solana\";\nfunction main(): void { logU64(instructionData().length as uint64); }\nmain();\n");
 writeFile(`${dir}/bare.ms`, "function answer(): int32 { return 42; }\nanswer();\n");
 
