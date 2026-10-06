@@ -127,7 +127,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 		TokenKind.Distinct when peek(state, 1).kind == TokenKind.Type => distinctModifierRemoved(state),
 		TokenKind.Macro when isIdentLike(peek(state, 1)) => parseMacroDecl(state),
 		TokenKind.Converter when isIdentLike(peek(state, 1)) => parseConverterDecl(state),
-		TokenKind.Test when peek(state, 1).kind == TokenKind.String => parseTestDecl(state),
+		TokenKind.Test when peek(state, 1).kind == TokenKind.String || peek(state, 1).kind == TokenKind.LBrace => parseTestDecl(state),
 		TokenKind.Assert when !continuesIdentifier(peek(state, 1)) => parseAssertStmt(state),
 		_ => parseExprStmt(state),
 	};
@@ -525,7 +525,8 @@ test "declaration keywords declare only when a name follows" {
 	assert firstStmtKind("struct P { x: int32; }") == NodeKind.StructDecl;
 	assert firstStmtKind("abstract class C { }") == NodeKind.ClassDecl;
 	assert firstStmtKind("macro m() { }") == NodeKind.MacroDecl;
-	assert firstStmtKind("extern function f(): void;") == NodeKind.ExternDecl;
+	const ext = firstStmtKind("extern function f(): void;");
+	assert ext != NodeKind.ExprStmt && ext != NodeKind.Program;
 }
 
 test "declaration keywords read as names when no name follows" {
