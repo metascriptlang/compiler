@@ -434,7 +434,7 @@ function buildSwitchDispatch(cases: Node[], matchSym: Symbol, discType: Type, lo
 
 function buildIfChain(cases: Node[], matchSym: Symbol, discType: Type, loc: SourceLocation, mode: string, assignSym: Symbol | null, ctx: TransformContext): Node {
 	// String hash dispatch for >8 string cases
-	if (isAllStringCases(cases)) {
+	if (!ctx.raiserBackend && isAllStringCases(cases)) {
 		return buildHashSwitch(cases, matchSym, discType, loc, mode, assignSym, ctx);
 	}
 
@@ -704,10 +704,6 @@ interface HashBucket {
 	arms: int32[];
 }
 
-// Build switch(djb2(disc)) { case HASH: if (eq1) { body } else if (eq2) { body } break; ... }
-// Collision-safe: patterns sharing a hash are chained in the same case arm.
-// Return mode: matched arms `return`, so default body placed unconditionally after switch.
-// Stmt/assign mode: matched arms don't exit, so $matched flag guards the default body.
 function buildHashSwitch(cases: Node[], matchSym: Symbol, discType: Type, loc: SourceLocation, mode: string, assignSym: Symbol | null, ctx: TransformContext): Node {
 	let defaultBody = makeBlock([], loc);
 	const armTests: Node[][] = [];
@@ -716,35 +712,22 @@ function buildHashSwitch(cases: Node[], matchSym: Symbol, discType: Type, loc: S
 
 	for (const c of cases) {
 		const caseData = c.data as MatchCaseData;
-		const body = wrapArmBody(caseData.caseBody, mode, varName, assignSym, loc, ctx);
+		const body = wrapArmBody(caseData.caseBody, mode, assignSym, loc, ctx);
 		if (isWildcard(caseData.casePatterns)) {
-			defaultBody = wrapArmBody(caseData.caseBody, mode, assignSym, loc, ctx);
+			defaultBody = body;
 			continue;
 		}
-
-		for (let j = 0; j < caseData.casePatterns.length; j += 1) {
-			const pat = caseData.casePatterns[j];
-			const strData = pat.data as StringLiteralData;
-			// js switches on the string itself (reference jsgen genCaseJS), so there
-			// is no hash to collide and every pattern gets its own case label.
-			const hash = ctx.jsBackend ? (0 as int32) : hashStringSigned(strData.value);
-
-			const body = wrapArmBody(caseData.caseBody, mode, assignSym, loc, ctx);
-			let guardedBlock = body;
-			if (needsFlag) {
-				const setMatched = makeExprStmt(makeAssign(makeIdentResolved(matchedSym, loc), makeBool(true, loc), loc), loc);
-				const guardedBodyStmts: Node[] = [];
-				guardedBodyStmts.push(setMatched);
-				guardedBodyStmts.push(body);
-				guardedBlock = makeBlock(guardedBodyStmts, loc);
-			}
-			const guard = makeBinary(makeTypedIdentResolved(matchSym, discType, loc), "===", pat, loc);
-			const guardedIf = ctx.jsBackend ? guardedBlock : makeIf(guard, guardedBlock, makeBlock([], loc), loc);
-
-			// Find existing bucket or create new one
-			let found = false;
-			let bi = 0;
-			while (!ctx.jsBackend && bi < buckets.length) {
+		const arm = armBodies.length;
+		armBodies.push(body);
+		if (ctx.jsBackend) {
+			armTests.push(caseData.casePatterns);
+			continue;
+		}
+		armTests.push([makeNumber(arm, loc)]);
+		for (const pat of caseData.casePatterns) {
+			const hash = hashStringSigned((pat.data as StringLiteralData).value);
+			let bucket = -1;
+			for (let bi = 0; bi < buckets.length; bi += 1) {
 				if (buckets[bi].hash == hash) {
 					bucket = bi;
 					break;

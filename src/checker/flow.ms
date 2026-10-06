@@ -99,13 +99,13 @@ function isDottedReference(node: Node | null): boolean {
 	return false;
 }
 
-// Check if any FlowLoopInfo in the stack matches this loopNode.
+// The FlowLoopInfo on the stack for this loopNode that already holds a type.
 // Used to detect re-entry during back-edge recursion.
-function findLoopInfo(stack: FlowLoopInfo[], loopNode: FlowNode): FlowLoopInfo {
+function findPopulatedLoopInfo(stack: FlowLoopInfo[], loopNode: FlowNode): FlowLoopInfo {
 	let i = 0;
 	while (i < stack.length) {
 		const info = stack[i];
-		if (info.loopNode == loopNode) return info;
+		if (info.loopNode == loopNode && info.types.length > 0) return info;
 		i = i + 1;
 	}
 	return null as unknown as FlowLoopInfo;
@@ -692,7 +692,7 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 	}
 	// Re-entry detection: if this loopNode is already on the
 	// stack, return the current accumulated union.
-	const existing = findLoopInfo(state.flowLoopStack, flow);
+	const existing = findPopulatedLoopInfo(state.flowLoopStack, flow);
 	if (existing != null) {
 		return flowType(unionOfTypes(existing.types, state.declaredType), true);
 	}

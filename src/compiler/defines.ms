@@ -20,7 +20,7 @@ export interface DefineTable {
 }
 
 export function createDefineTable(): DefineTable {
-	const t: DefineTable = { symbols: new HashMap<string, string>(), names: [] };
+	const t: DefineTable = { symbols: new HashMap<string, string>(), names: [], seeded: [] };
 	// std blocks the previous compiler cannot read sit under this symbol; the guards go one sync cycle after the compiler lands.
 	defineSymbol(t, "mscDeclaresRuntime", "true");
 	return t;

@@ -31,16 +31,18 @@
 // Runs AFTER optionalChain/nullishCoalesce (which produce ternaries) and
 // lowerOperators (so overloaded struct-returning operators are CallExprs here).
 
-import { Node, NodeKind, DeclKind, TypeKind, Symbol, FunctionDeclData, BlockStmtData, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, TypeKind, Symbol, FunctionDeclData, BlockStmtData, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData, NodeFlag, Type, ArrayLiteralData, ObjectLiteralData } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect } from "../walker";
-import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken } from "../util";
+import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked } from "../walker";
+import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 import { createTransformContextWithChecker } from "../context";
+import { peelTransparentInstance, PEEL_MAX_DEPTH } from "../../checker/types";
+import { readonlyDataConstBinding } from "../../checker/constFold";
 import { nodeHasPositionalNew } from "./newExprLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
 import { isLowerableSpreadLiteral, expandSpreadLiteral } from "../desugar/arraySpreadLower";

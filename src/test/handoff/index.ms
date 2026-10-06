@@ -145,3 +145,4 @@ import "./nominalIdentity";
 import "./enumConversionRange";
 import "./deferBlockCheck";
 import "./forOfPattern";
+import "./viewBorrows";

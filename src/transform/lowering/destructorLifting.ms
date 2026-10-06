@@ -24,12 +24,8 @@ import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext } from "../context";
 import { attachedOpSym, isRuntimeProcSym, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef } from "../util";
 import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, createUnion, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr } from "../../checker/types";
-import { hasTypeIdentity } from "../../checker/types";
-import { spelled } from "../../checker/types";
-import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily } from "../../codegen/c/types";
-import { liftedOp } from "../../codegen/c/types";
-import { opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
-import { genericParamsOf } from "../../checker/types";
+import { hasTypeIdentity, spelled, genericParamsOf, classParentOf } from "../../checker/types";
+import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook, pickBodyCtx } from "../../checker/instantiate";
 import { walkNode } from "../walker";
@@ -892,6 +888,11 @@ function classSymOf(t: Type | null): Symbol | null {
 	return t.sym;
 }
 
+function liftInstanceBaseOps(orig: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const base = classParentOf(orig);
+	if (base != null && unwrapRef(base).kind == TypeKind.GenericInstance) liftTypeOps(base, lctx, loc);
+}
+
 function baseClassOf(t: Type): Type | null {
 	if (classSymOf(t) == null || t.typeExtra == null) return null;
 	const base = unwrapRef(t.typeExtra);
@@ -1445,6 +1446,7 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	if (objType.kind != TypeKind.Struct && objType.kind != TypeKind.Union && !(objType.kind == TypeKind.Distinct && hasAnyUserHook(orig, lctx))) return;
 	if (nameSetContains(lctx.generating, typeId)) return;
 	nameSetAdd(lctx.generating, typeId);
+	liftInstanceBaseOps(orig, lctx, loc);
 
 	// ----- Resolve category via symbol lookup (matches old ensureTypeHooks) -----
 	let isClassOrInterface = refType != null;

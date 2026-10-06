@@ -21,7 +21,7 @@ import { mangleModuleName } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
 import { emitIncludeDirectives } from "./context";
-import { emitOwnedTypeInfos, refArrayCellName, arcCellName, promiseAllCellName, typeInfoCName } from "./types";
+import { emitOwnedTypeInfos, refArrayCellName, arcCellName, promiseAllCellName, typeInfoCName, defineDeferredElements } from "./types";
 import { collectModuleTypeInfoDemands } from "../../checker/reachability";
 
 // ===== generateCModule — one module's C code (no dispatcher) =====

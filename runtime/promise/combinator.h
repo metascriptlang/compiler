@@ -347,6 +347,8 @@ MS_DEFINE_FUTURE_FINALLY(msFutureFinally_ptr,    msFuture_ptr)
  *                  string elements:        MS_COPY_MOVE_STRING (system.h) move, zero slot
  *                  boxed struct elements:  MS_COPY_BOXED_MOVE  move bits out of the heap
  *                                          box, free the box, NULL the slot
+ *                  An owning input (valueDrop set) keeps its value: the share routine
+ *                  the caller passes, share(dstPtr, fut), copies it into the slot.
  *   arrTI        — pointer to the result array cell's TypeInfo (its destroyFn releases the
  *                  collected elements and frees the payload when the consumer's last ref
  *                  drops); generated instances take it from the demand emitter, the runtime

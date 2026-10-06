@@ -8,6 +8,7 @@ import {
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
+import { classDeclNodeOf, parentClassSymOf } from "../../checker/symbol";
 import { parseSource } from "../../parser/statements/validation";
 import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
 import {
@@ -22,11 +23,11 @@ import {
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
 	RaiserFuncMap, RaiserFuncEntry, RaiserGlobalMap, RaiserBuiltinMap, RaiserBuiltinEntry,
-	createCompState, emitInst, emitLoadConst, emitRet, allocReg,
+	createCompState, emitInst, emitLoadConst, emitRet, allocReg, raiserClassKey,
 	addConst, declareLocal, resetTemps, resolveFunc, emitClosurePair,
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
-	routineKey,
+	routineKey, resolveRoutine, RaiserCompState,
 } from "./context";
 import { compileStmt } from "./statements";
 import { compileExpr } from "./expressions";
@@ -213,7 +214,7 @@ function classTypeOperand(s: RaiserCompState, className: string, classSym: Symbo
 function compileClassConstructor(
 	funcMap: RaiserFuncMap, enumMap: RaiserFuncMap,
 	className: string, classBody: Node[],
-	ctorParams: string[], ctorBody: Node | null, globals: RaiserFuncMap | null = null,
+	ctorParams: string[], ctorBody: Node | null, globals: RaiserGlobalMap | null = null,
 	classSym: Symbol | null = null
 ): RaiserFunction {
 	const s = createCompState();

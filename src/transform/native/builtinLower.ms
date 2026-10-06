@@ -30,7 +30,7 @@ import { evictHelperName } from "./nativeLower";
 // ===== Main Entry Point =====
 
 export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
-	return walkNode(program, (node: Node): Node => {
+	const result = walkNode(program, (node: Node): Node => {
 		if (node.kind == NodeKind.CallExpr) {
 			return lowerCallExpr(node, ctx);
 		}
@@ -48,6 +48,12 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 		}
 		return node;
 	});
+	const shareFns = takeValueShareFns();
+	if (shareFns.length > 0 && result.kind == NodeKind.Program) {
+		const pd = result.data as ProgramData;
+		for (const decl of shareFns) { pd.programStmts.push(decl); }
+	}
+	return result;
 }
 
 // ===== Call Expression Lowering =====

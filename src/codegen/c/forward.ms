@@ -6,8 +6,9 @@
 
 import { Type, TypeKind, Symbol, Node, NodeKind, FunctionDeclData, CallingConvention } from "../../ast/node";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd } from "./context";
+import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, addCGenError } from "./context";
 import { ensureDrcProto, procHeader } from "./types";
+import { mangledFunctionName } from "./names";
 
 // ===== DRC forward prototypes =====
 

@@ -4,7 +4,7 @@
 // Each arg is coerced to string here. Primitives use direct calls; a value type or class
 // arrives already converted by the checker's std dump call.
 
-import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol } from "../../ast/node";
 import { getBuiltinKind, isNumeric, isWideInteger, stringType, booleanType, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase } from "../../checker/types";
 import { TransformContext } from "../context";
 import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, runtimeRef } from "../util";
@@ -106,6 +106,11 @@ function buildJsonValueDebug(arg: Node, loc: SourceLocation, ctx: TransformConte
 	return result;
 }
 
+function echoSym(node: Node): Symbol | null {
+	if (node.resolvedSym != null && node.resolvedSym.builtinKind == "Echo") return node.resolvedSym;
+	const callee = (node.data as CallExprData).callee;
+	return callee.resolvedSym != null && callee.resolvedSym.builtinKind == "Echo" ? callee.resolvedSym : null;
+}
 export function rewriteEcho(node: Node, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	const loc = node.location;

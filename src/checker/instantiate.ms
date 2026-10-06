@@ -7,15 +7,16 @@
 import { methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
+import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf } from "./types";
 import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf } from "./ctorRoutine";
+import { splitTopLevel } from "../utils/string";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, nominalTypeSym, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName } from "./context";
-import { createContext } from "./context";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, findAllExtensionsByName, hasExtensionByName, isEngineCheckMode, nominalTypeSym, declaresLifecycleHook, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName } from "./context";
+import { createContext, resetDefaultsCheckedAtDeclaration } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
@@ -117,6 +118,7 @@ export function resetInstantiationState(): void {
 	_moduleCtxMap = new HashMap<string, CheckerContext>();
 	_moduleProgramMap = new HashMap<string, Node>();
 	resetCtorRoutines();
+	resetDefaultsCheckedAtDeclaration();
 	_instanceHooks = new HashMap<Symbol, InstanceHook[]>();
 	_hookScannedInstances = new HashMap<Symbol, Type[][]>();
 	_checkedInstances = new HashMap<Symbol, CheckedInstantiation>();
@@ -182,19 +184,11 @@ export function lookupInstanceHook(type: Type, methodName: string): Symbol | nul
 }
 
 export function declaresUserHook(t: Type, ctx: CheckerContext): boolean {
-	const owner = t.sym;
-	const name = owner != null ? owner.name : t.typeName;
-	if (name == "") return false;
-	const registry = owner != null ? pickBodyCtx(owner.modulePath, ctx).extensionRegistry : ctx.extensionRegistry;
-	const instanceName = t.kind == TypeKind.GenericInstance ? monoInstanceName(t) : "";
 	for (const hookName of LIFECYCLE_HOOK_NAMES) {
-		if (instanceName != "" && lookupInstanceHook(instanceName, hookName) != null) return true;
-		if (registry == null || !hasExtensionByName(registry, hookName)) continue;
-		for (const m of findAllExtensionsByName(registry, hookName)) {
-			if (!m.isStatic && m.receiverTypeName == name) return true;
-		}
+		if (lookupInstanceHook(t, hookName) != null) return true;
 	}
-	return false;
+	const owner = nominalTypeSym(t);
+	return owner != null && declaresLifecycleHook(pickBodyCtx(owner.modulePath, ctx), owner);
 }
 
 function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, instanceName: string, names: string[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
@@ -1083,7 +1077,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	substStruct.sym = instSym;
 	cacheInstance(host.typeInstCache, classSym, instSym, dedup.types);
 	const classBody: Node[] = instanceFieldInits(classData, dedup.names, dedup.types, substStruct, classSym, ctx, loc);
-	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, instSym, dedup.names, dedup.types, mangledClass, createRef(canonicalInstance(structBase, concreteTypes, classSym)), ctx, loc));
+	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, instSym, dedup.names, dedup.types, mangledClass, createRef(canonical), ctx, loc));
 	// Set classNode.nodeType to the concrete (instantiated) class type so the
 	// methodToFunction transform can pull the right receiver type when lifting
 	// the ctor — without it, `this` falls back to `void*` in the generated

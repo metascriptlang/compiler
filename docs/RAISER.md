@@ -66,6 +66,9 @@ an object-dump fallback. On tree `0a2647053b60d7a5609baf31450c85c691d0d465`
 string for a struct/class; the corrected declaration printed `label:hot` and
 `name:node 7 true raw`. The existing `stdValueDump` consumer also matched C/ORC/JS
 for direct `String`, method and interpolation forms; engine tier: 315/315.
+Host errors distinguish recoverable exceptions from fatal runtime checks (`hostRegistry.ms` `raiseFromHost`, `vm.ms` `vmHandleCallHost`). A failed union-member check is fatal: guest `catch` and `finally` cannot resume execution after an invalid read. Recoverable host errors still unwind normally.
+
+Measured 2026-10-07 on `wt/danger-bound-checks`: `./msc.final run --target=<c|js|raiser> src/test/corpus/programs/asTaggedUnionInTryStops.ms` and `asTaggedMaybeInTryStops.ms` each exit 1 after `before 3` and `before 7`, respectively; neither prints `caught` or `after`. The old Raiser candidate printed both. Both member diagnostics now match across C/JS/Raiser. `./msc.fatal test src/raiser/vm.ms --tests-in-dir` passes 186 tests, including a fatal host error followed by a recoverable one that prints `host failure` and `finally`. This does not verify value-named union conversions such as `Point | string`.
 
 ## Execution budget
 
@@ -106,7 +109,7 @@ Measured 2026-09-19 with `msc` v0.2.55 (`~/.metascript/BUILD` `bce99dbf`), each 
 | a checked `as` to a class the object is not | `raiser runtime error: invalid object conversion: DomNode is not NativeNode`, rc 1 (measured 2026-10-06, `f0c36575a`) | `Error: invalid object conversion: …`, rc 1 |
 | `msc run --target=raiser src/index.ms` (the whole compiler) | 16 type errors before codegen: `Undefined variable 'fetch'` ×14, `'Buffer'` ×1, `byteLength` arity ×1 | — |
 
-The three wrong results on strands and exceptions have compiler inbox cards dated 2026-09-19. Codegen-side gaps (`new Array<T>(n)`, `extends`, class static fields, `out`) are listed in `src/codegen/raiser/CLAUDE.md`.
+The three wrong results on strands and exceptions have compiler inbox cards dated 2026-09-19. Codegen-side gaps (`static`, a string index) are listed in `src/codegen/raiser/CLAUDE.md`; `ref`/`out` locations are covered by the newer pointer probes above.
 
 Function-local `static const`/`static let` is a different storage class: on macOS at tree `5c819c80f0f50530aea42639fe142091a8ce0d10`, `./msc-n2s-rebase-hcr run --target=raiser src/test/corpus/programs/255-staticStorage.ms` printed `static-storage PASS` (one RC string initializer, repeated reads, same-spelled sites and per-call `let`). Class static fields and the other status rows were not re-run at that tree; corpus `949-staticIntLiteralExact.ms` retains its separate Raiser exclusion.
 

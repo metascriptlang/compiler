@@ -19,7 +19,7 @@ import {
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, jumpTarget, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
 	resolveBuiltin, registerFunc, resolveFunc, emitClosurePair,
-	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, isRoutineSym, resolveRoutine,
+	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, isRoutineSym, resolveRoutine, addConst,
 } from "./context";
 import { compileExpr, exprIsString } from "./expressions";
 import { emitValueCopy, emitZeroValue } from "./valueCopy";

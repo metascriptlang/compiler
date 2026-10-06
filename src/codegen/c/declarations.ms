@@ -3,7 +3,7 @@
 // Handles function, enum, interface (struct), class, export, and import declarations.
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
-import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ProgramData, PropertyDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, HiddenStdConvData, DeclKind, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ProgramData, PropertyDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, HiddenStdConvData, DeclKind, TypeKind, Type, Symbol, SymbolKind, MethodDeclData } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { hasGenericParams, isIntegerType, isNumeric, classParentOf } from "../../checker/types";
 import {
@@ -15,9 +15,10 @@ import {
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, typeInfoRef, ensureRefArrayCellTypeInfo, isHcrImageModule, isNilableValueType, procHeader, isTypeBoundOp, enumCTypeName } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, typeInfoRef, ensureRefArrayCellTypeInfo, isHcrImageModule, isNilableValueType, procHeader, isTypeBoundOp, enumCTypeName, hcrTypeInfoRef, zeroInit, defineDeferredElements } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
+import { copiesInline, inlineDeclOf } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isBakeableAggregateConst, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
@@ -712,8 +713,8 @@ function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Type | null): 
 	};
 }
 
-import { createCGen, assembleOutput } from "./context";
-import { CheckerContext, isGenericFn } from "../../checker/context";
+import { createCGen, assembleOutput, scopeMangledParam } from "./context";
+import { CheckerContext, GcMode, isGenericFn } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 

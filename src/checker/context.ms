@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { isNumeric, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView } from "./types";
+import { isNumeric, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -282,6 +282,20 @@ export function createExtMethod(methodName: string, sourcePath: string, fnType: 
 
 export function reexportExt(ext: ExtensionMethod, methodName: string, sourcePath: string, sym: Symbol, scopeDepth: number): ExtensionMethod {
 	return createExtMethod(methodName, sourcePath, ext.fnType, ext.isStatic, sym, scopeDepth);
+}
+
+let _defaultsCheckedAtDeclaration: HashSet<Node> = new HashSet<Node>();
+
+export function resetDefaultsCheckedAtDeclaration(): void {
+	_defaultsCheckedAtDeclaration = new HashSet<Node>();
+}
+
+export function noteDefaultCheckedAtDeclaration(def: Node): void {
+	_defaultsCheckedAtDeclaration.add(def);
+}
+
+export function defaultCheckedAtDeclaration(def: Node): boolean {
+	return _defaultsCheckedAtDeclaration.has(def);
 }
 
 export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
@@ -809,6 +823,12 @@ export function dispatchDeclaredEntry(classSym: Symbol, methodName: string): Dis
 		if (entry.methodName == methodName) return entry;
 	}
 	return null;
+}
+
+function classOwnSym(t: Type): Symbol | null {
+	let s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	if (s.kind == TypeKind.GenericInstance && s.typeExtra != null) s = s.typeExtra.kind == TypeKind.Ref && s.typeExtra.typeReturn != null ? s.typeExtra.typeReturn : s.typeExtra;
+	return s.sym;
 }
 
 function dispDepthBelow(classSym: Symbol, root: Symbol): int32 {

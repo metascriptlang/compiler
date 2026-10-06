@@ -4,18 +4,17 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet } from "./context";
-import { SymbolFlag, hasFlag, makeSymbol, setFlag } from "../../checker/symbol";
-import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, OverloadWinner } from "./names";
+import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly } from "../../checker/symbol";
+import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, OverloadWinner, mangleQualified, mangleModuleName } from "./names";
 import { CheckerContext, newSym } from "../../checker/context";
-import { cStringLiteral } from "./literals";
+import { cStringLiteral, escapeCString } from "./literals";
 
 export function resolvedTypeCName(t: Type, hasCheckerCtx: boolean): string {
 	if (t.sym != null) return mangledTypeName(t.sym, t.typeName);
@@ -1819,6 +1818,25 @@ export function getArrayContentType(arrTypeName: string): string {
 }
 
 // ===== Sized Array (Stack) =====
+
+export function zeroInit(t: Type | null): string {
+	return leadsWithEmptyAggregate(t, 0) ? "{}" : "{0}";
+}
+
+function leadsWithEmptyAggregate(t: Type | null, depth: int32): boolean {
+	if (t == null || depth > 16) return false;
+	if (t.kind == TypeKind.SizedArray) return t.typeValue == 0 || leadsWithEmptyAggregate(t.typeReturn, depth + 1);
+	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
+		for (const field of t.typeChildren) {
+			if (field != null && field.kind != TypeKind.Void) return leadsWithEmptyAggregate(field, depth + 1);
+		}
+		return false;
+	}
+	if (t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias || t.kind == TypeKind.GenericInstance) {
+		return leadsWithEmptyAggregate(t.typeReturn, depth + 1);
+	}
+	return false;
+}
 
 function sizedArrayCTypeName(t: Type): string {
 	const elemType = t.typeReturn != null ? elemArrayCName(t.typeReturn) : "void*";

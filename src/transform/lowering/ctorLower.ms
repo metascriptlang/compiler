@@ -16,9 +16,10 @@ import {
 } from "../../ast/node";
 import { TransformContext, newLoweredSym, mintingChecker } from "../context";
 import { makeAssign, makeMember, makeExprStmt, makeTypedIdent, makeTypedIdentResolved, makeBlock, makeCall, makeIdent } from "../util";
-import { createFunction, voidType } from "../../checker/types";
-import { parentClassSymOf } from "../../checker/symbol";
+import { createFunction, voidType, classParentOf } from "../../checker/types";
+import { parentClassSymOf, makeSymbol } from "../../checker/symbol";
 import { ctorRoutineFor, ctorFormalTypes } from "../../checker/ctorRoutine";
+import { instantiateParentClass } from "../../checker/instantiate";
 import { lowerMethodToFunction } from "./methodToFunction";
 import { parseInput, getStmts, checkedCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";

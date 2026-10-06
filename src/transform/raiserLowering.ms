@@ -34,11 +34,16 @@ import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { insertVarParamDerefs } from "./native/varParamDeref";
 import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerUserOperators } from "./lowering/operatorLower";
+import { projectTaggedMaybeReads } from "./coercion/maybeReadMaterialize";
+import { lowerUnionTags } from "./lowering/unionTagLower";
+import { liftDestructors } from "./lowering/destructorLifting";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
-	ctx.keepBuiltinMemberCalls = true;  // Native opcode calls retain their checked receiver.
-	let result = lowerBorrow(program, ctx);
+	ctx.raiserBackend = true;
+	ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
+	let result = lowerPointerAddresses(program, ctx, false);
+	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
@@ -69,7 +74,10 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerBitSet(result, ctx);
 	result = lowerUserOperators(result, ctx);
+	result = projectTaggedMaybeReads(result);
+	result = lowerUnionTags(result, ctx);
 	result = unwrapMaybe(result, ctx);
-
+	result = liftDestructors(result, ctx, false);
+	result = insertVarParamDerefs(result, ctx);
 	return result;
 }

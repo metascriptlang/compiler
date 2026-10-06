@@ -25,6 +25,7 @@ import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { lookupModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, routineKey } from "./context";
+import {  } from "../../parser/context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
@@ -245,11 +246,17 @@ function seedWireEnums(seeds: Symbol[]): void {
 }
 
 export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext): EngineMacroResult {
+	return compileIntoEngineSeeded(program, token, macroFnName, declCtx, []);
+}
+
+function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext, leadSeeds: Symbol[]): EngineMacroResult {
 	if (_engineToken != token) {
 		_engine = freshEngine();
 		_engineToken = token;
 	}
-	const seeds = moduleScopeSymbols(declCtx.table);
+	const seeds: Symbol[] = [];
+	for (const s of leadSeeds) seeds.push(s);
+	for (const s of moduleScopeSymbols(declCtx.table)) seeds.push(s);
 	const exts = seedExtensionsOf(declCtx, null);
 	seedWireEnums(seeds);
 	_pendingHelperErrors = [];
@@ -333,7 +340,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 }
 
 export function evalProgramViaEngine(program: Node, token: CheckerContext, fnName: string): RaiserContext {
-	const result = compileMacroIntoEngine(program, token, fnName, token);
+	const result = compileIntoEngineSeeded(program, token, fnName, token, enclosingTypeAliases(token.table));
 	if (result == null as unknown as EngineMacroResult) return createContext();
 	if (result.errors != null) {
 		for (const e of result.errors) {
@@ -1354,4 +1361,107 @@ test "engine: String uses a class's declared text conversion and preserves primi
 	const ctx = evalFull("class Name { text: string = 'node'; } function toString(this x: Name): string { return 'name:' + x.text; } console.log(String(new Name()), String(7), String(true), String('raw'));");
 	assert ctx.lastError == "";
 	assert ctx.lastOutput == "name:node 7 true raw\n";
+}
+
+test "engine: a byte view of a struct span traps instead of reading an element" {
+	const ctx = evalOrcVM("struct P { a: uint32; } const ps: P[] = [{ a: 258 }]; const v: Span<P> = ps;"
+		+ " const bytes = v as Ptr<void> as Ptr<uint8>; console.log(`${bytes[0]}`);");
+	assert ctx.error.includes("on the Raiser VM: no byte representation"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: a byte view through a typed pointer traps" {
+	const ctx = evalOrcVM("struct P { a: uint32; } let p: P = { a: 258 }; const typed = p as Ptr<P>;"
+		+ " const bytes = typed as Ptr<uint8>; console.log(`${bytes[0]}`);");
+	assert ctx.error.includes("cannot convert Ptr<P> to Ptr<uint8> on the Raiser VM"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: a same-element span pointer still reads its first element" {
+	const ctx = evalOrcVM("struct P { a: uint32; } const ps: P[] = [{ a: 258 }]; const v: Span<P> = ps;"
+		+ " const first = v as Ptr<P>; console.log(`${first[0].a}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "258\n";
+}
+
+test "engine: a span pointer reaches the struct element it addresses" {
+	const ctx = evalOrcVM("struct P { a: uint32; } let ps: P[] = [{ a: 1 }, { a: 2 }]; const v: Span<P> = ps;"
+		+ " const p = v as Ptr<P>; p.a = 9; console.log(`${ps[0].a} ${p[0].a} ${p[].a}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "9 9 9\n";
+}
+
+test "engine: an empty span has no element to point at" {
+	const ctx = evalOrcVM("struct P { a: uint32; } const none: P[] = []; const v: Span<P> = none; const p = v as Ptr<P>; console.log('reached');");
+	assert ctx.error.includes("out of bounds"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: an empty span of pointers has no slot to point at" {
+	const ctx = evalOrcVM("struct P { a: uint32; } const none: Ptr<P>[] = []; const v: Span<Ptr<P>> = none;"
+		+ " const p = v as Ptr<Ptr<P>>; console.log('reached');");
+	assert ctx.error.includes("out of bounds"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: element pointers compare by identity" {
+	const ctx = evalOrcVM("struct P { a: uint32; } let ps: P[] = [{ a: 1 }, { a: 2 }];"
+		+ " const p = ps[1] as Ptr<P>; const q = ps[1] as Ptr<P>; const r = ps[0] as Ptr<P>; console.log(`${p == q} ${p == r}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "true false\n";
+}
+
+test "engine: a ref scalar parameter writes the caller's variable" {
+	const ctx = evalOrcVM("function inc(ref n: int32): void { n = n + 1; n += 2; n++; } let k: int32 = 1; inc(k); console.log(`${k}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "5\n";
+}
+
+test "engine: an out parameter forwards to the caller's variable" {
+	const ctx = evalOrcVM("function setInt(out v: int32, n: int32): void { v = n; } function forward(out v: int32, n: int32): void { setInt(v, n); }"
+		+ " let a: int32 = 0; forward(a, 7); console.log(`${a}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "7\n";
+}
+
+test "engine: a ref string, element, field and class reference reach their storage" {
+	const ctx = evalOrcVM("class Box { v: int32 = 1; } struct H { n: int32; }"
+		+ " function shout(ref s: string): void { s += \"!\"; } function bump(ref v: int32): void { v++; }"
+		+ " function swap(ref b: Box): void { b = new Box(); b.v = 9; }"
+		+ " let t = \"hi\"; shout(t); let xs: int32[] = [1, 2]; bump(xs[1]); let h: H = { n: 4 }; bump(h.n);"
+		+ " let box = new Box(); swap(box); console.log(`${t} ${xs[1]} ${h.n} ${box.v}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "hi! 3 5 9\n";
+}
+
+test "engine: a span pointer to a scalar is written through" {
+	const ctx = evalOrcVM("let xs: int32[] = [1, 2]; const view: Span<int32> = xs; const p = view as Ptr<int32>; p[] = 5; p[0] += 2; console.log(`${xs[0]} ${p[]}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "7 7\n";
+}
+
+test "engine: an integer is not a typed pointer on the vm" {
+	const ctx = evalOrcVM("let k: int32 = 1; const p = k as Ptr<int32>; console.log(`${p[]}`);");
+	assert ctx.error.includes("cannot convert int32 to Ptr<int32> on the Raiser VM"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: scalar pointers compare by location" {
+	const ctx = evalOrcVM("let xs: int32[] = [1, 2, 3];"
+		+ " const a = xs[0..2] as Ptr<int32>; const b = xs[1..3] as Ptr<int32>; const c = xs[0..1] as Ptr<int32>; const d = xs[1..2] as Ptr<int32>;"
+		+ " console.log(`${a == b} ${a == c} ${b == d} ${a != b}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "false true true true\n";
+}
+
+test "engine: a write through a pointer past its element traps instead of writing element 0" {
+	const ctx = evalOrcVM("let bytes: uint8[] = [11, 22, 33]; const view: Span<uint8> = bytes; const p = view as Ptr<uint8>; p[1] = 66; console.log(`${bytes[0]} ${bytes[1]}`);");
+	assert ctx.error.includes("cannot index a pointer past the element it addresses on the Raiser VM"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: a struct pointer keeps its object through Ptr<void> on the vm" {
+	const ctx = evalOrcVM("struct S { n: int32; } let s: S = { n: 3 }; const raw = s as Ptr<void>; const p = raw as Ptr<S>; p[].n = 4; console.log(`${s.n}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "4\n";
 }

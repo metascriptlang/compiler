@@ -327,3 +327,17 @@ test "classCalls: a method with its own type parameter keeps the class's from th
 	assert b.applyBoth<string>((x: int32): string => `n${x * 2}`) == "n42";
 	assert new OwnParamBox<string>("ab").applyBoth((x: string): int32 => x.length as int32) == 2;
 }
+
+test "classCalls: a method without a return annotation returns what its body returns" {
+	const r = new InferredReturns();
+	const n: int32 = r.count();
+	assert n == 4;
+	assert r.label() == "n=4";
+	const p = r.point();
+	assert p.x == 4 && p.y == 8;
+	assert r.maybe(true) == "on";
+	assert r.maybe(false) == null;
+	r.bump();
+	assert r.count() == 5;
+	assert InferredReturns.zero() == 0;
+}

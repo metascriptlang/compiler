@@ -19,7 +19,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
 import { hasFlag, SymbolFlag, overloadWinner } from "../../checker/symbol";
-import { ctorFormalTypes } from "../../checker/ctorRoutine";
+import { ctorFormalTypes, ctorRoutineOf } from "../../checker/ctorRoutine";
 
 export function lowerRestParams(program: Node, _ctx: TransformContext): Node {
 	walkNode(program, lowerRest);
@@ -41,9 +41,12 @@ function makeArrayLit(elements: Node[], restType: Type, line: int32): Node {
 function lowerRestNew(node: Node): Node {
 	const d = node.data as NewExprData;
 	if (node.resolvedSym == null) return node;
+	d.newArguments = packCtorRest(d.newArguments, ctorFormalTypes(node.resolvedSym), node.location.line);
+	return node;
+}
 
-	const ctorTypes = ctorFormalTypes(node.resolvedSym);
-	if (ctorTypes == null || ctorTypes.length == 0) return node;
+function packCtorRest(args: Node[], ctorTypes: Type[] | null, line: int32): Node[] {
+	if (ctorTypes == null || ctorTypes.length == 0) return args;
 	const lastType = ctorTypes[ctorTypes.length - 1];
 	if (lastType == null || lastType.kind != TypeKind.Varargs) return args;
 
@@ -85,7 +88,7 @@ function lowerRest(node: Node): Node {
 	if (isConsoleLogCallee(callee)) return node;
 	if (callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "super"
 		&& callee.resolvedSym != null && callee.resolvedSym.symbolKind == SymbolKind.Class) {
-		d.arguments = packCtorRest(d.arguments, getCtorParamTypes(callee.resolvedSym), node.location.line);
+		d.arguments = packCtorRest(d.arguments, ctorFormalTypes(ctorRoutineOf(callee.resolvedSym)), node.location.line);
 		return node;
 	}
 	let sym = callee.resolvedSym;

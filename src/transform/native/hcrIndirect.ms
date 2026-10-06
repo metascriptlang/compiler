@@ -1,7 +1,7 @@
 import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, BlockStmtData, IdentifierData, MemberExprData, NewExprData, ObjectLiteralData, Symbol, createNode, SourceLocation, SymbolKind, Type, TypeKind } from "../../ast/node";
 import { exportedFunctionOf } from "../../checker/decoratorHelpers";
 import { hasGenericParams, createPtr, createStruct, voidType } from "../../checker/types";
-import { hasFlag, SymbolFlag, lookupCtorDefaults } from "../../checker/symbol";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isGenericFn } from "../../checker/context";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName } from "../../codegen/c/names";
 import { isNrvoReturnType, opCName } from "../../codegen/c/types";

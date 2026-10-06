@@ -7,9 +7,9 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { firstPrivateField } from "./visibility";
-import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation } from "../ast/node";
-import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType } from "./types";
-import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag } from "./symbol";
+import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention } from "../ast/node";
+import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType } from "./types";
+import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
@@ -17,7 +17,7 @@ import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeSt
 import { findCallTypeArg } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
-import { mintCtorRoutine } from "./ctorRoutine";
+import { mintCtorRoutine, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
 import { monoTypeKey } from "../monomorphize/registry";
 
 function anyHasGenericParams(types: Type[]): boolean {
@@ -700,7 +700,14 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			return createResult(resolveAnnotation(args[0], ctx, line, col), resolveAnnotation(args[1], ctx, line, col));
 		}
 		if (builtinHead == "Promise" && args.length == 1) {
-			return createPromise(resolveAnnotation(args[0], ctx, line, col));
+			const inner = resolveAnnotation(args[0], ctx, line, col);
+			if (isAwaitable(inner)) {
+				const value = awaitedType(inner);
+				const flat = value != null ? "Promise<" + typeDisplayName(value) + ">" : "Promise<T>";
+				addError(ctx, `'Promise<${typeDisplayName(inner)}>' is a promise of a promise, which is refused: write '${flat}' (an async function that returns a promise already gives '${flat}')`, line, col);
+				return value != null ? createPromise(value) : errorType();
+			}
+			return createPromise(inner);
 		}
 		if (builtinHead == "Iterator" && args.length == 1) {
 			return createIterator(resolveAnnotation(args[0], ctx, line, col));
@@ -2218,11 +2225,12 @@ function declaresConstructor(body: Node[]): boolean {
 	return false;
 }
 
-function inheritConstructor(node: Node, sym: Symbol, parentSym: Symbol, parentType: Type): void {
+function inheritConstructor(ctx: CheckerContext, node: Node, sym: Symbol, parentSym: Symbol, parentType: Type): void {
 	const d = node.data as ClassDeclData;
 	if (!hasFlag(parentSym, SymbolFlag.HasConstructor) || declaresConstructor(d.classBody)) return;
-	const parentCtor = ctorFnTypeOf(parentSym);
-	if (parentCtor == null) return;
+	const parentRoutine = ctorRoutineOf(parentSym);
+	if (parentRoutine == null || parentRoutine.symbolType == null) return;
+	const parentCtor = createFunction(ctorFormalTypes(parentRoutine)!, parentRoutine.symbolType.typeNames.slice(1), voidType());
 	const instance = unwrapRef(parentType);
 	const names = instance.kind == TypeKind.GenericInstance
 		? splitTopLevel(genericParamNamesOf(symGenericParams(parentSym)), ",").map((n: string): string => n.trim())
@@ -2251,6 +2259,7 @@ function inheritConstructor(node: Node, sym: Symbol, parentSym: Symbol, parentTy
 	d.classBody.push(ctorNode);
 	setFlag(sym, SymbolFlag.HasConstructor);
 	setFlag(sym, SymbolFlag.InheritsConstructor);
+	mintCtorRoutine(ctx, sym, sym.name, sym.symbolType, paramTypes, params, ctorNode, []);
 }
 
 export function resolveClass(ctx: CheckerContext, node: Node): void {
@@ -2469,7 +2478,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				mergedNames = newNames;
 				mergedTypes = newTypes;
 				didMergeParent = true;
-				if (parentSym != null) inheritConstructor(node, sym, parentSym, parentType);
+				if (parentSym != null) inheritConstructor(ctx, node, sym, parentSym, parentType);
 			}
 		}
 	}

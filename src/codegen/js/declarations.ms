@@ -6,8 +6,10 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
-import { hasGenericParams, declGenericParams } from "../../checker/types";
-import { isGenericFn } from "../../checker/context";
+import { hasGenericParams, declGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
+import { isGenericFn, routineKindFlag } from "../../checker/context";
+import { jsDefaultValue } from "./valueCopy";
+import { monoInstanceName } from "../../monomorphize/registry";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // ===== Function Declaration =====

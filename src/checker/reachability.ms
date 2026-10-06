@@ -9,22 +9,11 @@ import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDecl
 import { forEachChild } from "../ast/visitor";
 import { runtimeProcSym } from "../transform/util";
 import { getDeclName } from "./collectPass";
-import {
-	AliveSet,
-	CTypeInfoDemand,
-	TypeInfoKind,
-	createAliveSet,
-	aliveSetAddSym,
-	aliveSetHasSym,
-	aliveSetAddModule,
-	aliveSetHasDecl,
-	aliveSetHasModule,
-	aliveSetModuleCount,
-} from "../codegen/c/context";
+import { AliveSet, CTypeInfoDemand, TypeInfoKind, createAliveSet, aliveSetAddSym, aliveSetHasSym, aliveSetAddModule, aliveSetHasDecl, aliveSetHasModule, aliveSetModuleCount } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
-import { refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey, typeInfoSubject, objectTypeInfoKey, isPrivateTypeInfoSubject, arcCellKey, promiseAllShape, PromiseAllShape, promiseAllCellKey } from "../codegen/c/types";
+import { refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey, typeInfoSubject, objectTypeInfoKey, isPrivateTypeInfoSubject, arcCellKey, promiseAllShape, PromiseAllShape, promiseAllCellKey, hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
-import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance, unwrapRef } from "./types";
+import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { ctorRoutineOf } from "./ctorRoutine";
@@ -210,7 +199,7 @@ function moveCellOwnerIntoCore(key: string, demander: string): void {
 		if (!_imageModules.has(demand.owner)) return;
 		demand.owner = demander;
 		aliveSetAddModule(_aliveSet, demander);
-		markReferenced(demand.destroy, demander);
+		if (demand.destroy != null) markReferenced(demand.destroy, demander);
 		if (demand.trace != null) markReferenced(demand.trace, demander);
 		return;
 	}
@@ -348,8 +337,12 @@ function markObjectTypeInfo(type: Type | null, modulePath: string): void {
 }
 
 function classBaseOf(subject: Type): Type | null {
-	if (subject.kind != TypeKind.Struct || subject.typeExtra == null) return null;
-	const inner = subject.typeExtra.kind == TypeKind.Ref && subject.typeExtra.typeReturn != null ? subject.typeExtra.typeReturn : subject.typeExtra;
+	let parent: Type | null = null;
+	if (subject.kind == TypeKind.Struct) parent = subject.typeExtra;
+	else if (subject.kind == TypeKind.GenericInstance && runtimeClassSym(subject) != null) parent = classParentOf(subject);
+	if (parent == null) return null;
+	const inner = parent.kind == TypeKind.Ref && parent.typeReturn != null ? parent.typeReturn : parent;
+	if (inner.kind == TypeKind.GenericInstance) return inner;
 	if (inner.kind != TypeKind.Struct || inner.typeName == "") return null;
 	return inner;
 }
@@ -609,6 +602,8 @@ export function computeAliveSet(
 	}
 	_aliveSet = createAliveSet();
 	_aliveSet.computed = true;
+	_imageModules = new HashSet<string>();
+	for (const path of imageModules) _imageModules.add(path);
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
 	declIndexBuild(programs, paths);
@@ -892,6 +887,9 @@ import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
 import { spelled, createStruct, createRef, createUnion, nullType, stringType } from "./types";
 import { liftedOp, resetHookSyms, objectTypeInfoKey } from "../codegen/c/types";
+import {  } from "../codegen/c/context";
+import { makeSymbol, setFlag } from "./symbol";
+import { ExprStmtData } from "../ast/node";
 
 function allocationOf(source: string): Node {
 	const parsed = parseSource(source);
@@ -987,6 +985,34 @@ test "a function named main is alive only through a reference" {
 	const alive = computeAliveSet([parsed.value], ["entry.ms"], "entry.ms", false, createModuleGraph());
 	assert aliveSetHasSym(alive, used);
 	assert !aliveSetHasSym(alive, main);
+}
+
+function generatedHookProgram(source: string, hookName: string): Node | null {
+	const parsed = parseSource(source);
+	if (!parsed.ok) return null;
+	const hook = makeSymbol(hookName, SymbolKind.Function, null, false);
+	setFlag(hook, SymbolFlag.GeneratedOp);
+	for (const stmt of (parsed.value.data as ProgramData).programStmts) {
+		if (stmt.kind == NodeKind.FunctionDecl) stmt.resolvedSym = hook;
+		else ((stmt.data as ExprStmtData).expr.data as CallExprData).callee.resolvedSym = hook;
+	}
+	return parsed.value;
+}
+
+test "a frame hook nothing calls stays dead" {
+	const program = generatedHookProgram("function $Env_deadSharedDestroy(): void {}", "$Env_deadSharedDestroy");
+	assert program != null;
+	if (program == null) return;
+	const alive = computeAliveSet([program], ["owner.ms"], "owner.ms", false, createModuleGraph());
+	assert !functionDeclIsAlive(alive, "owner.ms", (program.data as ProgramData).programStmts[0]);
+}
+
+test "a frame hook a live statement calls stays alive" {
+	const program = generatedHookProgram("function $Env_liveSharedDestroy(): void {}\n$Env_liveSharedDestroy();", "$Env_liveSharedDestroy");
+	assert program != null;
+	if (program == null) return;
+	const alive = computeAliveSet([program], ["owner.ms"], "owner.ms", false, createModuleGraph());
+	assert functionDeclIsAlive(alive, "owner.ms", (program.data as ProgramData).programStmts[0]);
 }
 
 function importGraph(edges: string[][]): ModuleGraph {

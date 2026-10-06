@@ -1,6 +1,7 @@
 import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ActorDeclData, SymbolKind, Type } from "../../ast/node";
 import { TransformContext } from "../context";
-import { setFlag, SymbolFlag, initFnName } from "../../checker/symbol";
+import { setFlag, SymbolFlag, initFnName, makeSymbol } from "../../checker/symbol";
+import { newSym } from "../../checker/context";
 import { createFunction, voidType, noneType } from "../../checker/types";
 import { declGenericParams } from "../../checker/types";
 import { classInitCName, mangledTypeName } from "../../codegen/c/names";

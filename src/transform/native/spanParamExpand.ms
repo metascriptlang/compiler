@@ -23,8 +23,9 @@
 // V1 limitation: top-level FunctionDecl only. Span in closures/function-pointer types
 // emits a diagnostic.
 
-import { Node, NodeKind, FunctionDeclData, Symbol, CallExprData, ObjectLiteralData, ArrayLiteralData, Type, TypeKind } from "../../ast/node";
-import { createPtr, getSysType } from "../../checker/types";
+import { Node, NodeKind, FunctionDeclData, Symbol, CallExprData, ObjectLiteralData, ArrayLiteralData, Type, TypeKind, DeclKind, BlockStmtData } from "../../ast/node";
+import { createPtr, getSysType, createSpan, copyTypeShallow } from "../../checker/types";
+import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { TransformContext, reportTransformError } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeConditional, makeBinary, makeNumber, makeNull } from "../util";
@@ -35,11 +36,6 @@ interface ExpandedParam {
 	originalIndex: number;
 	paramName: string;
 	elemType: Type;
-}
-
-interface ExpandedFunc {
-	funcSym: Symbol;
-	params: ExpandedParam[];
 }
 
 // ===== Main Entry Point =====
@@ -164,24 +160,18 @@ function expandFunctionDecl(node: Node): void {
 	node.nodeType = flat;
 	if (node.resolvedSym != null && node.resolvedSym.symbolType == fnType) node.resolvedSym.symbolType = flat;
 
-	// Record this function as expanded
-	if (node.resolvedSym == null) throw new Error(`internal: extern '${d.fnName}' with a span parameter reached expansion without its symbol`);
-	expandedFuncs.push({ funcSym: node.resolvedSym, params: spanParams });
 }
 
 // ===== Pass 2: Call Site Expansion =====
 
 function expandCallSite(node: Node): void {
 	const d = node.data as CallExprData;
-
-	if (node.resolvedSym == null) return;
-	const target = overloadWinner(node.resolvedSym, d.resolvedOverloadIdx);
-	let funcInfo: ExpandedFunc = null as unknown as ExpandedFunc;
-	for (const ef of expandedFuncs) {
-		if (ef.funcSym == target) { funcInfo = ef; break; }
-	}
-
-	if (funcInfo == null) return;
+	const sym = node.resolvedSym != null ? node.resolvedSym : (d.callee != null ? d.callee.resolvedSym : null);
+	if (sym == null || !hasFlag(sym, SymbolFlag.ImportC)) return;
+	const declared = d.callee != null ? d.callee.nodeType : null;
+	if (declared == null || declared.kind != TypeKind.Function) return;
+	const spanParams = spanParamsOf(declared, []);
+	if (spanParams.length == 0) return;
 
 	// Build new argument list, expanding Span args into two
 	const newArgs: Node[] = [];
