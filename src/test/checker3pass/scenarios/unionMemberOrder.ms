@@ -33,11 +33,21 @@ function f(a: int32 | string): void {
 }
 `;
 
-test "a union written in another member order is refused, naming the order" {
+test "a union written in another member order is the same type" {
 	const errors = checkOnly(SRC_REORDERED).errors;
-	let named = 0;
-	for (const e of errors) if (e.contains(ORDER_HINT)) named += 1;
-	assert named == 4, "declaration, assignment, argument and nullable field must name the order: " + errors.join("\n");
+	assert errors.length == 0, "declaration, assignment, argument and nullable field take the other order: " + errors.join("\n");
+}
+
+test "a generic union settles into the same order once its parameter is known" {
+	const src = `
+function pick<T>(v: T | string): T | string { return v; }
+function show(v: string | int32): string { return typeof v == "string" ? v : "n"; }
+const p: string | int32 = pick<int32>(3);
+const q: (int32 | string)[] = [pick<int32>(4)];
+show(q[0]);
+`;
+	const errors = checkOnly(src).errors;
+	assert errors.length == 0, errors.join("\n");
 }
 
 test "a wider union refusal does not claim a reorder" {
