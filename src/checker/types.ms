@@ -2401,6 +2401,13 @@ export function typeofTagOf(t: Type | null): string {
 	return "object";
 }
 
+export function jsMemberKind(t: Type): string {
+	if (t.kind == TypeKind.Null) return "null";
+	if (t.kind == TypeKind.Ref && runtimeClassSym(t.typeReturn) != null) return "class";
+	if (isArrayShaped(t) || t.kind == TypeKind.Tuple) return "array";
+	return typeofTagOf(t);
+}
+
 export function unionHasMemberOfKind(t: Type | null, kind: TypeKind): boolean {
 	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null) return false;
 	for (const m of t.typeChildren) {

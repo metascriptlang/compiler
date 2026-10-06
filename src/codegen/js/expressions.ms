@@ -20,7 +20,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -820,13 +820,6 @@ function heldKindTest(kind: string): string {
 	if (kind == "array") return "Array.isArray(v)";
 	if (kind == "object") return "(v !== null && typeof v === \"object\" && !Array.isArray(v))";
 	return "typeof v === \"" + kind + "\"";
-}
-
-function jsMemberKind(t: Type): string {
-	if (t.kind == TypeKind.Null) return "null";
-	if (t.kind == TypeKind.Ref && runtimeClassSym(t.typeReturn) != null) return "class";
-	if (isArrayShaped(t) || t.kind == TypeKind.Tuple) return "array";
-	return typeofTagOf(t);
 }
 
 function soleMemberOfKind(union: Type, kind: string): boolean {
