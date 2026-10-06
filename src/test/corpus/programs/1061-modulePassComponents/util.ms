@@ -1,0 +1,3 @@
+export function double(x: int32): int32 {
+	return x * 2;
+}
