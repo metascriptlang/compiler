@@ -607,7 +607,7 @@ function operandShape(t: Type | null): Type | null {
 			continue;
 		}
 		if (s.kind == TypeKind.GenericInstance) {
-			const base = s.typeExtra != null ? s.typeExtra : s.typeReturn;
+			const base = s.typeReturn != null ? s.typeReturn : s.typeExtra;
 			if (base == null) return s;
 			s = skipModifier(base);
 			continue;
@@ -673,9 +673,9 @@ function eqComparableOperand(orig: Type, shaped: Type): Type | null {
 	if (isMaybeType(orig) && orig.typeReturn != null) {
 		if (hasGenericParams(orig.typeReturn)) return null;
 		const payload = operandShape(orig.typeReturn);
-		return payload == null || binaryOperandSkip(payload) ? null : payload;
+		return payload == null || binaryOperandSkip(payload) ? null : orig.typeReturn;
 	}
-	if (shaped.kind == TypeKind.Union && !hasGenericParams(orig)) return shaped;
+	if (shaped.kind == TypeKind.Union && !hasGenericParams(orig)) return orig;
 	return null;
 }
 
@@ -700,7 +700,17 @@ function sameSetElement(a: Type, b: Type): boolean {
 	return ea != null && eb != null && ea.typeName == eb.typeName;
 }
 
-function equalityOperandsOk(a: Type, b: Type): boolean {
+function sameStructOperand(ao: Type, a: Type, bo: Type, b: Type): boolean {
+	const ia = skipModifier(ao);
+	const ib = skipModifier(bo);
+	if (ia.kind == TypeKind.GenericInstance && ib.kind == TypeKind.GenericInstance) return isAssignable(ia, ib) || isAssignable(ib, ia);
+	return isAssignable(a, b) || isAssignable(b, a);
+}
+
+function equalityOperandsOk(ao: Type, bo: Type): boolean {
+	const a = operandShape(ao);
+	const b = operandShape(bo);
+	if (a == null || b == null) return false;
 	if (a.kind == TypeKind.Union && b.kind == TypeKind.Union) {
 		for (const ma of a.typeChildren) {
 			if (ma == null) continue;
@@ -712,7 +722,7 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	}
 	if (a.kind == TypeKind.Union || b.kind == TypeKind.Union) {
 		const u = a.kind == TypeKind.Union ? a : b;
-		const other = a.kind == TypeKind.Union ? b : a;
+		const other = a.kind == TypeKind.Union ? bo : ao;
 		if (u.typeChildren == null) return false;
 		for (const m of u.typeChildren) {
 			if (m != null && m.kind != TypeKind.Null && equalityOperandsOk(m, other)) return true;
@@ -731,7 +741,7 @@ function equalityOperandsOk(a: Type, b: Type): boolean {
 	if (aEnum || bEnum) return (aEnum ? b : a).kind == TypeKind.Void;
 	if (a.kind == TypeKind.Void || b.kind == TypeKind.Void) return true;
 	if (a.kind == TypeKind.Tuple && b.kind == TypeKind.Tuple) return true;
-	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return isAssignable(a, b) || isAssignable(b, a);
+	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) return sameStructOperand(ao, a, bo, b);
 	if (a.kind == TypeKind.SizedArray || b.kind == TypeKind.SizedArray) return sameType(a, b);
 	if (binaryPointerish(a.kind) && binaryPointerish(b.kind)) return true;
 	return false;
@@ -807,14 +817,14 @@ export function binaryOperandsFail(ctx: CheckerContext, op: string, leftType: Ty
 	const sb = binaryOperandSkip(b);
 	if (sa || sb) {
 		if (cls != "eq") return false;
-		const ea = sa ? eqComparableOperand(leftType, a) : a;
-		const eb = sb ? eqComparableOperand(rightType, b) : b;
+		const ea = sa ? eqComparableOperand(leftType, a) : leftType;
+		const eb = sb ? eqComparableOperand(rightType, b) : rightType;
 		if (ea == null || eb == null) return false;
 		if (equalityOperandsOk(ea, eb)) return false;
 		return ctx.extensionRegistry == null
 			|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) == null;
 	}
-	const ok = cls == "arith" ? arithOperandsOk(bop, a, b) : equalityOperandsOk(a, b);
+	const ok = cls == "arith" ? arithOperandsOk(bop, a, b) : equalityOperandsOk(leftType, rightType);
 	if (ok) return false;
 	return ctx.extensionRegistry == null
 		|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) == null;
