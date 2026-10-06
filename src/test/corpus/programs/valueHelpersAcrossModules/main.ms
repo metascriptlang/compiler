@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msHiXorLo
 // Parity program — two modules of one JS bundle that copy, assign and key the
 // same value types share the generated helpers instead of declaring each one
 // twice in the bundle's single scope: a struct, a struct holding structs, a
