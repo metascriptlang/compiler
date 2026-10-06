@@ -551,6 +551,12 @@ function fail(msg: string): never {
 }   // error: 'fail' returns 'never' but can reach the end of its body
 ```
 
+A call to a function or method declared `never` ends the flow as `throw` does, so a guard
+`if (!r.ok) { stop("no"); }` narrows the code after it, in a loop of any depth and in a macro body
+(`error(...)` returns `never`); verified 2026-10-06, corpus `neverCallEndsFlow` and
+`neverCallEndsFlowInMacro`, C and JS. Not verified: a `never` function reached through a function
+value whose type is only a union or a generic parameter.
+
 A function or method without a return annotation returns what its body returns, wherever it is
 called from: a call checked before the callee's body (a later function, a later method through
 `this` or a parameter, a module that imports this one back) checks that body first. A return type
