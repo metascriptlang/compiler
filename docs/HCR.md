@@ -505,7 +505,16 @@ Three edges that a single image resolved by the linker needed a mechanism across
   changes them is not measured. A reference array's cell TypeInfo is registered
   by its owner in the core registry, like a class's. Per-image copies were tried first; the
   C emitter keeps one definition per `__` name, so the consumer kept only a declaration and
-  failed the split link (`hcrArrayOwner`).
+  failed the split link (`hcrArrayOwner`). When a core module boxes the same cell, a core
+  module owns it as a plain global (`src/checker/reachability.ms` `moveCellOwnerIntoCore`):
+  core links before every image and outlives them, so it cannot declare what an image
+  defines, and an image reaches the core's TypeInfo like any core symbol. The first demander
+  in walk order used to own it, and a project module that boxed `number[]`, `string[]` or a
+  reference array before a module outside the project left the core link with an undefined
+  `…RefCellTypeInfo` (`hcrCoreCell`, red on `81adbb302`; Neon's `src/core/runtime.ms` hit it
+  through `createSignal`). Nim picks the owner by the type's module and lets the demander keep
+  the definition when that module is closed for codegen (`ccgtypes.nim` `genTypeInfoV2`,
+  `myModuleOpenForCodegen`); an image is closed to core in the same way.
 
 Methods of exported classes were missing from the S3a DCE roots although their table slots
 referenced them (`use of undeclared identifier 'Shape_area__…'`); every manifest function is
@@ -953,6 +962,15 @@ adds the import starts the host (`hcrHostMissesEngine`, measured on Windows 2026
 cannot drive a waiting `msc run`, so the inline test in `compile.ms` holds the check and `hcrRun`
 holds the path of the engine). Before, the host started and stopped at `HCR-HOST the core image
 does not export msHcrEngineStart`.
+
+The core image keeps only what the images of its build use, so the first edit that reaches a
+standard-library symbol nothing used before changes the core and answers `RestartRequired`; the
+old generation keeps running. On 2026-10-06, macOS arm64, tree `0b8cab6cfc5b`, a signal app on
+Neon's `src/core` (imported from outside the project, so in the core image) reloaded an edit of
+its `render` text in a 287 ms warm build with the counter kept. The next edit added
+`throw new Error(...)` to `render`, which made `Error`'s `_init` and TypeInfo alive in
+`std/core/system`, and answered `the core image changed`. `src/test/hcr/fixtures/step/app.ms`
+keeps `Error` alive through `mustNotThrow` for this reason.
 
 ## Neon Fast Refresh boundary
 
