@@ -12,7 +12,7 @@ import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
-import { callCheckStmt, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
+import { callCheckStmt, callDemandReturn, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
 import { checkArcPointeeSendable } from "./sendable";
 import { isLockedRef } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
@@ -651,6 +651,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
 			markUsedIn(ctx, sym);
+			if (sym.symbolKind == SymbolKind.Function) callDemandReturn(ctx, sym, node);
 			if (refusesTypeAsValue(ctx, node, sym, d.name)) { node.nodeType = errorType(); return; }
 			if (d.name == "this" && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor)) node.data = { name: sym.name };
 			if (sym.symbolKind == SymbolKind.Function && hasFlag(sym, SymbolFlag.CompileTime) && node != ctx.calleeExpr

@@ -9,7 +9,7 @@ import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
-import { callCheckStmt, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
+import { callCheckStmt, callDemandReturn, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration } from "./context";
@@ -4292,6 +4292,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		}
 		if (classMethSym != null && classMethSym.symbolKind == SymbolKind.Function) {
 			ensureShaped(classMethSym, ctx);
+			callDemandReturn(ctx, classMethSym, node);
 			node.resolvedSym = classMethSym;
 			sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, classMethSym, classMethSym.symbolType, SymbolKind.Method, d.property, resolvedObjType.typeName, false);
 			if (needsDeref) {
@@ -4390,6 +4391,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 			// Direct sym link — no name-based lookup needed
 			if (ext.sym != null) {
 				ensureShaped(ext.sym, ctx);
+				callDemandReturn(ctx, ext.sym, node);
 				node.resolvedSym = ext.sym;
 				markUsedIn(ctx, ext.sym);
 				// Also mark the imported symbol (may be a different object than ext.sym)

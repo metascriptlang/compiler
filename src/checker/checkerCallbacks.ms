@@ -14,6 +14,7 @@ type ExpandMacroInvocationFn = (node: Node, ctx: CheckerContext, depth: int32) =
 type ApplyDecoratorsFn = (ctx: CheckerContext, program: Node) => void;
 type DecoratorDefersFn = (ctx: CheckerContext, stmt: Node) => boolean;
 type ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Node, after: Node[]) => Node;
+type DemandReturnFn = (ctx: CheckerContext, sym: Symbol, read: Node) => void;
 
 let exprCheckerFn: ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null): void => {
 };
@@ -43,6 +44,8 @@ let decoratorDefersFn: DecoratorDefersFn = (ctx: CheckerContext, stmt: Node): bo
 };
 let applyDecoratedStmtFn: ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Node, after: Node[]): Node => {
 	return stmt;
+};
+let demandReturnFn: DemandReturnFn = (ctx: CheckerContext, sym: Symbol, read: Node): void => {
 };
 
 
@@ -125,3 +128,10 @@ export function registerApplyDecoratedStmt(fn: ApplyDecoratedStmtFn): void {
 	applyDecoratedStmtFn = fn;
 }
 
+export function callDemandReturn(ctx: CheckerContext, sym: Symbol, read: Node): void {
+	demandReturnFn(ctx, sym, read);
+}
+
+export function registerDemandReturn(fn: DemandReturnFn): void {
+	demandReturnFn = fn;
+}
