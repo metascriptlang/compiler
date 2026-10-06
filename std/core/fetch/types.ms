@@ -79,7 +79,7 @@ export interface RequestOptions {
 export interface FetchOptions {
 	method: string;
 	body: string;
-	headers: HttpHeaders;
+	headers?: HttpHeaders;
 	timeout: int32;
 	maxRedirects: int32;
 }
