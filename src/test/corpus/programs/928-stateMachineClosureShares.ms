@@ -11,7 +11,7 @@
 // @stdout: routine-text a ab abb
 // @stdout: same-state 1 42 42
 // @stdout: escaped 12 13 14
-// @xfail(raiser): the Raiser VM cannot evaluate std/core/struct.ms INITIAL_CAPACITY at comptime
+// @xfail(raiser): raiser runtime error: Unknown host function: msFutureThen
 // note: a closure made inside an async function or a generator shares the function's variables: writes through it are seen by the function and by later closures. Before the fix C gave every closure made in the state machine a private copy of what it captured, so `count` stayed 0 after an await, a `.then` callback's write was lost and a generator's `seen` never moved. A nested `function` or `const` arrow is never stored in the machine: every resume rebuilds it over the machine's variables, so it does not keep the machine alive whether it is made before a suspension, between two, inside a suspending loop, yielded out, or still in scope when the caller stops early. A closure held in a `let` is a value the machine stores and is not covered here.
 
 type Get = () => int32;
