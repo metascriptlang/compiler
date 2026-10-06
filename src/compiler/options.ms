@@ -3,7 +3,7 @@
 import { argv, exit, platform, arch } from "std/process";
 import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
-import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, formatDefines, defineSymbol } from "./defines";
+import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, defineSymbol } from "./defines";
 import { setDefaultLoopLimit } from "../raiser/vm";
 import { TargetInfo, hostTargetInfo, floatInt64Align } from "../checker/types";
 
@@ -204,10 +204,6 @@ export function parseArgs(): CliOptions {
 	// commands.nim:703).
 	const backendName = opts.target == Target.JS ? "js" : (opts.target == Target.Raiser ? "raiser" : "c");
 	initDefines(opts.defines, backendName, opts.targetOs, buildCpu(opts.targetOs, opts.cpuTarget), opts.gcMode, opts.mode);
-	if (opts.showDefines) {
-		console.log(formatDefines(opts.defines));
-		exit(0);
-	}
 
 	opts.targetInfo = resolveTargetSizes(opts.targetOs, opts.cpuTarget);
 
