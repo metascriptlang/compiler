@@ -2093,7 +2093,7 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 	const futName = "msFuture_" + mangle(innerDesc);
 	const arrName = arrayCTypeName(createArray(innerType));
 	const payloadName = getArrayContentType(arrName);
-	let destroyFn = "msNumberArrayDestroy";
+	let destroyFn = innerType.kind == TypeKind.Function ? "msClosureArrayDestroy" : "msNumberArrayDestroy";
 	if (innerType.kind == TypeKind.Struct && innerType.typeName != "" && hasAsgnFlag(innerType)) {
 		const walker = requireOpByKey(createArray(innerType), AttachedOp.AttachedDestructor);
 		destroyFn = opCName(walker);

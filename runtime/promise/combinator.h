@@ -182,7 +182,7 @@ static inline void name##_cb(void* raw) { \
     void* env = e->onFulfilled.env; \
     if (env) ((void(*)(arg_type, void*))fn)(val, env); \
     else ((void(*)(arg_type))fn)(val); \
-    drop(&((fut_type*)e->input)->value); \
+    if (e->input->base.valueDrop == NULL) drop(&((fut_type*)e->input)->value); \
     if (msErr) { \
         msFutureFail(e->output, (void*)msCurrException); \
         msErr = false; msCurrException = NULL; \
@@ -203,7 +203,8 @@ static inline void* name(void* input, msClosure onFulfilled) { \
  * completes the generic slot with a heap copy). Moves the bits out of the box, passes them
  * in the callback's own convention (by value, or by pointer when the callback takes the
  * struct indirectly), then runs `drop` on them: the callee borrows the parameter, so the
- * caller owns the value once the callback returns.
+ * caller owns the value once the callback returns. An owning future (valueDrop set)
+ * keeps its box: the callback borrows the bits in place and nothing is dropped.
  * Instantiated per T by codegen (ensureFutureThenBoxedInstance). */
 #define MS_PASS_VALUE(value) (value)
 #define MS_PASS_REF(value) (&(value))
@@ -216,9 +217,10 @@ static void name##_cb(void* raw) { \
         return; \
     } \
     void* box = e->input->value; \
-    e->input->value = NULL; \
+    bool owned = e->input->base.valueDrop != NULL; \
+    if (!owned) e->input->value = NULL; \
     T val; \
-    if (box != NULL) { memcpy(&val, box, sizeof(T)); free(box); } \
+    if (box != NULL) { memcpy(&val, box, sizeof(T)); if (!owned) free(box); } \
     else memset(&val, 0, sizeof(T)); \
     void* fn = (void*)e->onFulfilled.fn; \
     void* env = e->onFulfilled.env; \
@@ -227,7 +229,7 @@ static void name##_cb(void* raw) { \
     bool failed = msErr; \
     void* exception = (void*)msCurrException; \
     msErr = false; msCurrException = NULL; \
-    drop(&val); \
+    if (!owned) drop(&val); \
     if (failed) msFutureFail(e->output, exception); \
     else msFutureComplete(e->output, NULL); \
     msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); free(e); \
@@ -336,14 +338,17 @@ MS_DEFINE_FUTURE_FINALLY(msFutureFinally_ptr,    msFuture_ptr)
  *   arrType      — output array struct (msNumberArray / msStringArray / msRefArray)
  *   payloadType  — output array payload (msNumberPayload / msStringPayload / msRefPayload)
  *   copyStmt     — per-slot collect expression: copyStmt(dstPtr, srcPtr) where dstPtr
- *                  is DstT* and srcPtr is &f->value. Collecting CONSUMES the input
- *                  future's value (msFutureRead convention: move out + clear slot):
+ *                  is DstT* and srcPtr is &f->value, for an input whose future does
+ *                  not own its value (completed across threads): it has one reader,
+ *                  so collecting moves the value out and clears the slot:
  *                  same-type primitives:   MS_COPY_SAME        *(dst) = *(src)
  *                  widening primitives:    MS_COPY_TO_DOUBLE   *(dst) = (DstT)*(src)
  *                  ref elements:           MS_COPY_MOVE_PTR    move ptr, NULL the slot
  *                  string elements:        MS_COPY_MOVE_STRING (system.h) move, zero slot
  *                  boxed struct elements:  MS_COPY_BOXED_MOVE  move bits out of the heap
  *                                          box, free the box, NULL the slot
+ *                  An owning input (valueDrop set) keeps its value: the share routine
+ *                  the caller passes, share(dstPtr, fut), copies it into the slot.
  *   arrDestroyFn — destroy fn for the result array cell's TypeInfo (releases collected
  *                  elements and frees the payload when the consumer's last ref drops)
  *
@@ -351,9 +356,7 @@ MS_DEFINE_FUTURE_FINALLY(msFutureFinally_ptr,    msFuture_ptr)
  * as a refcounted heap CELL (msAllocTyped, lean Ref<Array> rep): msRefHeader + arrType.
  * The consumer reads it via msFutureRead + (arrType*)cast and owns the cell — its DRC
  * decref runs arrDestroyFn then frees the cell. An unread result is released by the
- * future's valueDestructor. A duplicated input future (Promise.all([p, p])) yields a
- * zero/NULL slot for the second entry — the msFutureRead second-read degradation,
- * never a double-free. */
+ * future's valueDestructor. */
 static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
 
 #define MS_PROMISE_ALL_FOR(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt, arrDestroyFn) \
@@ -371,6 +374,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
         int count; \
         _Atomic(int32_t) remaining;    /* decremented per completion; last decrementer runs cleanup */ \
         _Atomic(bool) failed;           /* first-failure wins; prevents double-fail */ \
+        msClosure share;                /* copies an owning input's value: share(dst, fut) */ \
     } elemFutType##_allState; \
     \
     typedef struct { \
@@ -392,6 +396,8 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
                 /* Exchange: only the first caller to see `failed == false` runs msFutureFail. */ \
                 bool prev = atomic_exchange_explicit(&s->failed, true, memory_order_acq_rel); \
                 if (!prev) msFutureFail(s->result, f->base.error); \
+            } else if (f->base.valueDrop != NULL && s->share.fn != NULL) { \
+                ((void (*)(void*, void*))s->share.fn)((void*)(&s->arr->p->data[idx]), (void*)f); \
             } else { \
                 copyStmt((&s->arr->p->data[idx]), (&f->value)); \
             } \
@@ -414,7 +420,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
         } \
     } \
     \
-    static inline void* msPromiseAllFor_##elemFutType(msRefArray* arr) { \
+    static inline void* msPromiseAllFor_##elemFutType(msRefArray* arr, msClosure share) { \
         int count = (arr != NULL) ? (int)arr->len : 0; \
         elemFutType** futures = (arr != NULL && arr->p != NULL) ? (elemFutType**)arr->p->data : NULL; \
         msFuture* result = (msFuture*)msFutureCreate(); \
@@ -438,6 +444,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
         state->result = result; \
         state->inputs = inputsCopy; \
         state->arr = resultArr; \
+        state->share = share; \
         state->count = count; \
         atomic_store_explicit(&state->remaining, count, memory_order_relaxed); \
         atomic_store_explicit(&state->failed, false, memory_order_relaxed); \
