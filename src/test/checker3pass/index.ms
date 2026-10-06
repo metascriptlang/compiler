@@ -26,6 +26,7 @@ import "./scenarios/recursive";
 import "./scenarios/overloadXGeneric";
 import "./scenarios/limitations";
 import "./scenarios/resultCarrierConversions";
+import "./scenarios/textConversions";
 import "./scenarios/arcLiteralSafety";
 import "./stress/deepNesting";
 import "./stress/manyParams";
