@@ -3,9 +3,9 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, captureGenericTypeArgs, collectTokenText, stampEnd, takePendingComments } from "../context";
+import { ParserState, createState, current, advance, peek, isAtEnd, captureGenericTypeArgs, collectTokenText, stampEnd, takePendingComments, parenGroupThen } from "../context";
 import { skipTypeAnnotation, parseTypeExpr, isGenericCallAhead } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifier } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
 import { isArrowFunction, parseArrowFunction, parseBareIdentArrow } from "./arrow";
@@ -367,9 +367,9 @@ function parsePrimary(state: ParserState): ExprResult {
 	}
 
 	// Match expression: match (expr) { pattern => body, ... }
-	// Only if followed by '(' — otherwise 'match' is used as identifier
+	// Only if '(' ... ')' is followed by '{' — otherwise 'match' is used as identifier
 	if (token.kind == TokenKind.Match) {
-		if (peek(state, 1).kind == TokenKind.LParen) {
+		if (parenGroupThen(state, 1, TokenKind.LBrace)) {
 			return parseMatchExpr(state, parseExprWithPrec, blockParser);
 		}
 		advance(state);
@@ -453,7 +453,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	}
 
 	// Move expression: move x, move x.field, move arr[i]
-	if (token.kind == TokenKind.Move) {
+	if (token.kind == TokenKind.Move && !continuesIdentifier(peek(state, 1))) {
 		advance(state);
 		const moveOperand = try parseExprWithPrec(state, 0);
 		return Result.ok(createNode(NodeKind.MoveExpr, { moveArg: moveOperand }, token));
@@ -514,11 +514,13 @@ function parsePrimary(state: ParserState): ExprResult {
 			advance(state); // consume 'async'
 			return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "async");
 		}
-		// async arrow: async () => ... or async (x) => ...
-		if (state.position + 1 < state.tokens.length &&
-			state.tokens[state.position + 1].kind == TokenKind.LParen) {
+		// async arrow: async () => ... or async (x) => ...; `async(x)` alone is a call
+		if (peek(state, 1).kind == TokenKind.LParen) {
 			advance(state); // consume 'async'
-			return parseArrowFunction(state, parseExprWithPrec, blockParser, "async");
+			if (isArrowFunction(state)) {
+				return parseArrowFunction(state, parseExprWithPrec, blockParser, "async");
+			}
+			return Result.ok(createNode(NodeKind.Identifier, { name: token.value }, token));
 		}
 		// Otherwise treat 'async' as identifier
 		advance(state);
@@ -803,6 +805,12 @@ test "void" { assert parseOk("void 0"); }
 test "lone operator" { assert !parseOk("+"); }
 
 test "empty string" { assert !parseOk(""); }
+
+test "match without a block after its parens is a call" { assert exprKind("match(1)") == NodeKind.CallExpr; }
+
+test "async without an arrow after its parens is a call" { assert exprKind("async(1)") == NodeKind.CallExpr; }
+
+test "move before a member access is a name" { assert exprKind("move.x") == NodeKind.MemberExpr; }
 
 test "comparisons around a parenthesized operand are not a generic call" {
 	assert exprOp("b < (x) && a > (y)") == "&&";

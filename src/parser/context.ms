@@ -351,6 +351,22 @@ function skipGenericParamRest(state: ParserState): void {
 	}
 }
 
+// Lookahead: the '(' at peek(offset) closes, and the token after its ')' is `follow`.
+export function parenGroupThen(state: ParserState, offset: int32, follow: TokenKind): boolean {
+	if (peek(state, offset).kind != TokenKind.LParen) return false;
+	let depth = 0;
+	for (let pos = offset; pos < state.tokens.length; pos += 1) {
+		const k = peek(state, pos).kind;
+		if (k == TokenKind.Eof) return false;
+		if (k == TokenKind.LParen) depth += 1;
+		if (k == TokenKind.RParen) {
+			depth -= 1;
+			if (depth == 0) return peek(state, pos + 1).kind == follow;
+		}
+	}
+	return false;
+}
+
 // Lookahead: the peek offset of the '(' right after the '>' that balances
 // this '<', or -1. Does NOT consume tokens — only peeks.
 export function genericCallParenOffset(state: ParserState): int32 {
