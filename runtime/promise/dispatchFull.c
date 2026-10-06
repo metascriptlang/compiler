@@ -1095,10 +1095,14 @@ void msAsyncCb(void* raw) {
 		? ((msFutureBase*(*)(void*))e->stepper.fn)(e->stepper.env)
 		: ((msFutureBase*(*)(void))e->stepper.fn)();
 
-	/* Eager resume: loop while yielded future is already resolved.
+	/* A thread with a callback queue (the owner thread) registers on a finished future
+	 * like on any other: its continuation runs at the next turn of the queue, behind the
+	 * code that follows the call (Amendment P). A pool worker has no queue and a
+	 * registered callback would run inline and recurse once per await, so it resumes in
+	 * a loop while the yielded future is already resolved.
 	 * Each stepper return brings a +1 ref; decref the previous yield
 	 * before overwriting `next` to avoid leaking one future per eager step. */
-	while (next != NULL && atomic_load_explicit(&next->finished, memory_order_acquire)) {
+	while (msCallSoonProc == NULL && next != NULL && atomic_load_explicit(&next->finished, memory_order_acquire)) {
 		msFutureDrcDestroy(next);
 		next = e->stepper.env != NULL
 			? ((msFutureBase*(*)(void*))e->stepper.fn)(e->stepper.env)

@@ -27,7 +27,7 @@ import { TransformContext, mintSym } from "../context";
 import {
 	makeTypedIdentResolved, makeVarDecl, makeExprStmt, makeReturn,
 	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeWhile, makeBool, makeNumber, makeString,
-	makeAssign, makeBinary, makeTryCatch, makeCatchSym, makeContinue, syntheticToken, extractBodyStmts, runtimeRef,
+	makeAssign, makeBinary, makeTryCatch, makeCatchSym, syntheticToken, extractBodyStmts, runtimeRef,
 	isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck,
 } from "../util";
 import { createSymSet, symSetAdd } from "../context";
@@ -398,7 +398,7 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 			// This state yields a future. The generator lower produces:
 			//   [...stmts, $state=next, return {value: yieldArg, done: false}]
 			// We replace with the stepper pattern:
-			//   [...stmts, $yf_N = yieldArg, $state=next, if(finished) continue, return $yf_N]
+			//   [...stmts, $yf_N = yieldArg, $state=next, return $yf_N]
 			//
 			// The yield return may be at the top level OR nested inside if/while blocks
 			// (from splitIf/splitWhile). We handle both cases.
@@ -439,14 +439,9 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 				// Set next state (reuse the state assign from splitStmts)
 				stateStmts.push(state.stmts[copyEnd - 2]); // $state = nextState
 
-				// Pre-resolved check: if (msFutureFinished($yf_N)) continue;
-				const finishedCheck = makeCall(runtimeRef("msFutureFinished", loc), [makeTypedIdentResolved(yfSym, yfType, loc)], loc);
-				finishedCheck.nodeType = booleanType();
-				const continueStmt = makeContinue(loc);
-				const preResolvedIf = makeIf(finishedCheck, makeBlock([continueStmt], loc), makeBlock([], loc), loc);
-				stateStmts.push(preResolvedIf);
-
-				// Not resolved: return the yielded future to msAsyncCb for registration
+				// Return the yielded future to msAsyncCb, finished or not: it registers a
+				// callback, and a finished future's callback runs at the next turn of the
+				// owner's callback queue (PARALOCK Amendment P).
 				stateStmts.push(makeReturn(makeTypedIdentResolved(yfSym, yfType, loc), loc));
 			} else {
 				// Nested yield: yield return is inside an if/while block (from splitIf/splitWhile).
@@ -461,9 +456,6 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 					const yfType = promiseTypeFor(state.yieldVarType);
 					stateStmts.push(makeExprStmt(makeAssign(makeTypedIdentResolved(yfSym, yfType, loc), yieldArg, loc), loc));
 					stateStmts.push(makeExprStmt(makeAssign(makeTypedIdentResolved(sc.stateSym, null, loc), makeNumber(state.nextState, loc), loc), loc));
-					const finishedCheck = makeCall(runtimeRef("msFutureFinished", loc), [makeTypedIdentResolved(yfSym, yfType, loc)], loc);
-					finishedCheck.nodeType = booleanType();
-					stateStmts.push(makeIf(finishedCheck, makeBlock([makeContinue(loc)], loc), makeBlock([], loc), loc));
 					stateStmts.push(makeReturn(makeTypedIdentResolved(yfSym, yfType, loc), loc));
 				} else {
 					// Truly unexpected — copy all stmts unchanged
