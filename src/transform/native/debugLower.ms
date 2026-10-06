@@ -5,7 +5,7 @@
 // json builders (jsonObject/jsonString/jsonNumber/jsonBool) + stringify from std/core/json.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol, createNode } from "../../ast/node";
-import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, int32Type } from "../../checker/types";
+import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, unwrapRefNullUnion, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, int32Type } from "../../checker/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension } from "../../checker/context";
@@ -263,8 +263,10 @@ function callDumpFn(dumpSym: Symbol, arg: Node, ctx: TransformContext, loc: Sour
 	return call;
 }
 
-function wrapFieldAsJson(fieldAccess: Node, ftype: Type, loc: SourceLocation, ctx: TransformContext): Node {
-	if (ftype == null) return makeCall(resolveDbgIdent("jsonNull", ctx, loc), [], loc);
+function wrapFieldAsJson(fieldAccess: Node, fieldType: Type, loc: SourceLocation, ctx: TransformContext): Node {
+	if (fieldType == null) return makeCall(resolveDbgIdent("jsonNull", ctx, loc), [], loc);
+	const pointer = unwrapRefNullUnion(fieldType);
+	const ftype = pointer != null ? pointer : fieldType;
 
 	// Primitives
 	const primWrapper = match (ftype.kind) {
