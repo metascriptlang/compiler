@@ -2610,8 +2610,10 @@ the Raiser. A trait `when` builds under `--os=solana` (linked, not run).
 | Build mode | `debug`, `release`, `danger`, plus `mode=release` |
 | Hot code reload | `hcr` under `--hcr` |
 | Command line | `-d:myFlag`, `-d:tier=3`, `--define:name=value` |
+| Project `build.ms` | `defines: { programId: "Fg6P…", tier: 2, fast: true }` |
+| Project directory (computed) | `projectDir`, the directory of the project's `build.ms` |
 
-A flag with no value is `"true"`. A name that is not defined is **false, never an
+A flag with no value is `"true"`. The `defines` of the `build.ms` the entry file sits under (the first one found walking up from it) go in before the source is parsed, and a `-d:` of the same name wins, as Nim reads its project config before the command line; a string, a number or a boolean is stored as its text, any other value is an error, and so is a name msc sets itself (`os`, `backend`, `solana`, `projectDir`, …). Measured 2026-10-06 on C, JS and the Raiser: corpus `buildDefines` reads a string, a number, `true` and `false` through `define()` and `when`, and `-d:tier=9` overrides the file's `tier: 2`. `build.ms` is read in the `const config = { … }; export default config;` form; `export default { … }` is not recognised. A name that is not defined is **false, never an
 error** — the namespace is open, so a typo cannot be distinguished from a flag the
 user has not set. `msc --help-defines` lists everything currently defined.
 

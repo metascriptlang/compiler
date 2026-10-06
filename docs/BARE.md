@@ -538,7 +538,7 @@ with the SBF clang at `-O2`, and links that object with `compiler_builtins` as b
   and the SBF clang's `-c` output are `EM_BPF`, flags `0x3` (`llvm-readelf -h`, platform-tools
   v1.57). clang picks the input language by extension, so the merged file is named `.bc`.
 - **Why `-O2`.** A prototype that took the level from the environment, `.so` bytes and CU on
-  LiteSVM: `examples/anchorBench/helloworld.ms` 8,280 B / 2,249 CU at `-O2`, 9,576 / 2,368 at
+  LiteSVM: `examples/anchorBench/helloworld/program.ms` 8,280 B / 2,249 CU at `-O2`, 9,576 / 2,368 at
   `-Os`, 12,936 / 3,032 at `-Oz`; `vault.ms` 6,120 / 1,943 + 601, 6,672 / 2,098 + 662, 9,512 /
   2,723 + 1,248; the escrow 31,592, 31,408 and 36,816 B (its CU at `-Os` and `-Oz` not measured).
   `-Os` saves the escrow 184 bytes and loses bytes and CU on both bench programs.
@@ -563,8 +563,8 @@ with the SBF clang at `-O2`, and links that object with `compiler_builtins` as b
   | program | `.so` bytes | compute units |
   |---|---|---|
   | `examples/escrow/program.ms` | 45,984 → 31,600 (`.text` 45,312 → 30,992) | make 22,614 → 20,771, take 11,532 → 8,739, refund 8,344 → 6,522, the refused make 402 → 250 |
-  | `examples/anchorBench/helloworld.ms` | 12,832 → 8,288 | init 2,655 → 2,250 |
-  | `examples/anchorBench/vault.ms` | 10,264 → 6,128 | deposit 2,309 → 1,945, withdraw 885 → 602 |
+  | `examples/anchorBench/helloworld/program.ms` | 12,832 → 8,288 | init 2,655 → 2,250 |
+  | `examples/anchorBench/vault/program.ms` | 10,264 → 6,128 | deposit 2,309 → 1,945, withdraw 885 → 602 |
 
   `node tools/solana/escrow.mjs` passes on both escrow builds. The same `anchorBench.mjs` run on
   Anchor v2's and Pinocchio's builds (`anchor-next` `ff0514b6`, `target/deploy`): helloworld v2

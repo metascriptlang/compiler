@@ -55,6 +55,27 @@ export function dispatch(): Result<uint64, ProgramError> {
 }
 ```
 
+### The program id
+
+A program declares its id in the `defines` of its project's `build.ms`, the place Anchor keeps it in `Anchor.toml` beside `declare_id!`; `examples/escrow/build.ms`:
+
+```ms
+const config = {
+	defines: { programId: "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS" },
+};
+export default config;
+```
+
+`-d:programId=<base58>` on the command line overrides it. Every module of the program reads the same id; nothing is imported. With an id declared:
+
+- `instruction<Op>()` first compares the runtime's program id with it and answers `DeclaredProgramIdMismatch` (4100) on another, before it reads the instruction, as Anchor's entry does (`anchor-syn-0.31.1/src/codegen/program/entry.rs:51-53`).
+- `createPda<T>` with seeds that are all strings or byte lists written in place derives the address and the bump at compile time and checks the target with one key compare instead of the run-time find (`examples/anchorBench/helloworld/program.ms`, `["counter"]`). Seeds that name an account or an argument are derived at run time.
+- `anchorIdl` writes the id as the IDL's `address`; a spec that names another address is a compile error.
+- `declaredProgramId()` is the id as a `Pubkey`, for the host-simulator tests (`run(declaredProgramId(), …)`); with no id declared it is a compile error that names both ways to declare one.
+- `programKeypair: "target/deploy/<name>-keypair.json"` (a path relative to `build.ms`, or absolute) names the deploy keypair; the build compares only its public half (bytes 32-63 of the `solana-keygen` JSON) and refuses an id that differs, naming the keypair's id, as `anchor keys sync` keeps them equal. Keep the keypair out of version control: name it with `-d:programKeypair=` on the deploy build, or in a `build.ms` that is not committed.
+
+A malformed id is a compile error at `instruction<Op>()` (`solanaProgramIdRefused.ms`), and so is a keypair of another id (`solanaDeployKeypairMismatch.ms`). Without a declared id, `instruction<Op>()` checks no id and every PDA is derived at run time. Measured with `msc build <program> --os=solana --danger`, LiteSVM 1.4.1 and `tools/solana/anchorBench.mjs`, the std before and after, each program at the id its bench deploys it to: helloworld 7,920 to 6,696 bytes and `init` 2,196 to 1,740 CU (the folded PDA, and the id check); vault, whose PDA names the user, 6,144 to 6,376 bytes, `deposit` 1,914 to 1,938 CU and `withdraw` 562 to 587 (the id check alone); helloworld deployed at another id answers 4100 in 120 CU. Not measured: a program whose literal-seed PDA is checked by `@seeds` rather than created by `createPda<T>` (those still derive at run time).
+
 ## 3. Accounts and proofs
 
 A verifier is the only way to get a proof, and a function that needs a property takes the proof. Each proof is a struct whose one field is a private `Account`, so only `typed.cms` builds one: outside it, `as` from an account, from another proof or from an array or a `Result` of either, and a struct literal, are compile errors (`src/test/guard/solanaProofForgeRefused.ms`). `key()`, `keyAddress()`, `lamports()` and the rest read that account, and `asAccount()` weakens any proof to the `Account` a CPI takes. `accounts<T>()` calls the verifiers of the table below, so its expansion in the program's module builds no proof itself. `accounts<T>()` verifies a struct of proofs field by field, in declaration order, which is also the order the client lists the accounts.
