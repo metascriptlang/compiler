@@ -8,15 +8,15 @@ function declaringSymbol(name: string, kind: NodeKind): Result<Symbol, string> {
 	const loc = makeLoc(0, 0);
 	const sym = makeSymbol(name, SymbolKind.TypeAlias, inferredType(), false);
 	if (kind == NodeKind.InterfaceDecl) {
-		sym.declNode = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: [], nameLocation: loc }, loc);
+		sym.declNode = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [], nameLocation: loc, interfaceFieldVisibility: [], interfaceFieldDecorators: [] }, loc);
 	} else if (kind == NodeKind.TypeAliasDecl) {
-		sym.declNode = createNodeAt(NodeKind.TypeAliasDecl, { aliasName: name, aliasType: "", aliasGenericParams: "", discriminantName: "", discriminantType: "", nameLocation: loc }, loc);
+		sym.declNode = createNodeAt(NodeKind.TypeAliasDecl, { aliasName: name, aliasType: "", aliasGenericParams: "", discriminantName: "", discriminantType: "", variantKeys: [], variantTypes: [], nameLocation: loc }, loc);
 	} else if (kind == NodeKind.ClassDecl) {
 		sym.declNode = createNodeAt(NodeKind.ClassDecl, { className: name, classBody: [], nameLocation: loc }, loc);
 	} else if (kind == NodeKind.ActorDecl) {
 		sym.declNode = createNodeAt(NodeKind.ActorDecl, { actorName: name, actorBody: [], nameLocation: loc }, loc);
 	} else if (kind == NodeKind.EnumDecl) {
-		sym.declNode = createNodeAt(NodeKind.EnumDecl, { enumName: name, memberLocations: [], nameLocation: loc }, loc);
+		sym.declNode = createNodeAt(NodeKind.EnumDecl, { enumName: name, enumMembers: [], enumValues: [], memberLocations: [], nameLocation: loc, enumInits: [] }, loc);
 	} else {
 		return Result.err("unsupported declaration kind in export identity matrix: " + kind.toString());
 	}
