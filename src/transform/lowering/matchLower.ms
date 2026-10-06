@@ -13,13 +13,15 @@
 // Or-patterns [p1, p2] → $m === p1 || $m === p2
 // Binding patterns (identifier) → const name = $m; prepended to body
 
-import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, BinaryExprData, ConditionalExprData, Type, Symbol, SymbolKind, isEmptyBlock } from "../../ast/node";
+import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, SwitchStmtData, AssertStmtData, IdentifierData, NumberLiteralData, StringLiteralData, BinaryExprData, ConditionalExprData, Type, Symbol, SymbolKind, isEmptyBlock } from "../../ast/node";
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { walkExpandBlocks, containsExprKind, mapExprChildren } from "../walker";
+import { lowerForStmt } from "./forLoopLower";
+import { moveDoWhileTestIntoBody } from "./jumpRetarget";
 import {
 	makeIdent, makeIdentResolved, makeTypedIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull,
 	makeReturn, makeIf, makeBinary, makeAssign, makeBool, makeUnary,
-	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType, runtimeRef,
+	makeCall, makeNumber, makeSwitch, makeSwitchCase, makeBreak, extractBodyStmts, isCSwitchableType, runtimeRef,
 } from "../util";
 import { booleanType, int32Type } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -175,6 +177,63 @@ function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
 				hoisted.push(stmt);
 				return hoisted;
 			}
+		},
+		NodeKind.IfStmt => {
+			const d = stmt.data as IfStmtData;
+			if (!containsExprKind(d.condition, NodeKind.MatchExpr)) return [stmt];
+			const pre: Node[] = [];
+			d.condition = hoistNestedMatch(d.condition, pre, ctx);
+			if (pre.length > 0) { pre.push(stmt); return pre; }
+		},
+		NodeKind.WhileStmt => {
+			const d = stmt.data as WhileStmtData;
+			if (!containsExprKind(d.whileCondition, NodeKind.MatchExpr)) return [stmt];
+			const pre: Node[] = [];
+			const cond = hoistNestedMatch(d.whileCondition, pre, ctx);
+			if (pre.length > 0) {
+				const loc = stmt.location;
+				pre.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null, loc));
+				for (const s of extractBodyStmts(d.whileBody)) { pre.push(s); }
+				d.whileCondition = makeBool(true, loc);
+				d.whileBody = makeBlock(pre, loc);
+			}
+		},
+		NodeKind.DoWhileStmt => {
+			const d = stmt.data as DoWhileStmtData;
+			if (!containsExprKind(d.doCondition, NodeKind.MatchExpr)) return [stmt];
+			const pre: Node[] = [];
+			const cond = hoistNestedMatch(d.doCondition, pre, ctx);
+			if (pre.length > 0) { moveDoWhileTestIntoBody(stmt, pre, cond, ctx); }
+		},
+		NodeKind.ForStmt => {
+			// Native for headers are already normalized; JS keeps them until a
+			// header needs statements. Reuse the same continue-safe loop tail.
+			const d = stmt.data as ForStmtData;
+			let init: Node | null = d.forInit;
+			if (init != null && init.kind == NodeKind.VariableDecl) {
+				init = (init.data as VariableDeclData).initializer;
+			} else if (init != null && init.kind == NodeKind.ExprStmt) {
+				init = (init.data as ExprStmtData).expr;
+			}
+			if (containsExprKind(init, NodeKind.MatchExpr)
+				|| containsExprKind(d.forCondition, NodeKind.MatchExpr)
+				|| containsExprKind(d.forUpdate, NodeKind.MatchExpr)) {
+				return [lowerForStmt(stmt, ctx)];
+			}
+		},
+		NodeKind.SwitchStmt => {
+			const d = stmt.data as SwitchStmtData;
+			if (!containsExprKind(d.switchDisc, NodeKind.MatchExpr)) return [stmt];
+			const pre: Node[] = [];
+			d.switchDisc = hoistNestedMatch(d.switchDisc, pre, ctx);
+			if (pre.length > 0) { pre.push(stmt); return pre; }
+		},
+		NodeKind.AssertStmt => {
+			const d = stmt.data as AssertStmtData;
+			if (!containsExprKind(d.assertExpr, NodeKind.MatchExpr)) return [stmt];
+			const pre: Node[] = [];
+			d.assertExpr = hoistNestedMatch(d.assertExpr, pre, ctx);
+			if (pre.length > 0) { pre.push(stmt); return pre; }
 		},
 		_ => {},
 	};

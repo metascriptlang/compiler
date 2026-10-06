@@ -25,6 +25,7 @@ import {
 	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData,
 } from "../ast/node";
 import { TransformContext } from "./context";
+import { makeBlock } from "./util";
 import { forEachChild } from "../ast/visitor";
 
 // Visitor function: takes a node, returns replacement (or same node if unchanged)
@@ -655,6 +656,20 @@ function walkFnBodyHooked(body: Node, expander: StmtExpander, ctx: TransformCont
 	expandTryDepth = outerTryDepth;
 }
 
+function expandStmtBodyHooked(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): Node {
+	if (node == null) return node;
+	if (node.kind == NodeKind.BlockStmt) {
+		walkExpandBlocksHooked(node, expander, ctx, onFnEntry, onFnExit);
+		return node;
+	}
+	const expanded = expander(node, ctx);
+	for (const stmt of expanded) {
+		walkExpandBlocksHooked(stmt, expander, ctx, onFnEntry, onFnExit);
+	}
+	if (expanded.length == 1) return expanded[0];
+	return makeBlock(expanded, node.location);
+}
+
 export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: TransformContext): void {
 	walkExpandBlocksHooked(node, expander, ctx, null as unknown as FnEntryHook, null as unknown as FnExitHook);
 }
@@ -707,20 +722,28 @@ export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: 
 		NodeKind.AssertStmt => {},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			walkExpandBlocksHooked(d.consequent, expander, ctx, onFnEntry, onFnExit);
-			walkExpandBlocksHooked(d.alternate, expander, ctx, onFnEntry, onFnExit);
+			d.consequent = expandStmtBodyHooked(d.consequent, expander, ctx, onFnEntry, onFnExit);
+			d.alternate = expandStmtBodyHooked(d.alternate, expander, ctx, onFnEntry, onFnExit);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			walkExpandBlocksHooked(d.whileBody, expander, ctx, onFnEntry, onFnExit);
+			d.whileBody = expandStmtBodyHooked(d.whileBody, expander, ctx, onFnEntry, onFnExit);
+		},
+		NodeKind.DoWhileStmt => {
+			const d = node.data as DoWhileStmtData;
+			d.doBody = expandStmtBodyHooked(d.doBody, expander, ctx, onFnEntry, onFnExit);
 		},
 		NodeKind.ForStmt => {
 			const d = node.data as ForStmtData;
-			walkExpandBlocksHooked(d.forBody, expander, ctx, onFnEntry, onFnExit);
+			d.forBody = expandStmtBodyHooked(d.forBody, expander, ctx, onFnEntry, onFnExit);
 		},
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
-			walkExpandBlocksHooked(d.forOfBody, expander, ctx, onFnEntry, onFnExit);
+			d.forOfBody = expandStmtBodyHooked(d.forOfBody, expander, ctx, onFnEntry, onFnExit);
+		},
+		NodeKind.ForInStmt => {
+			const d = node.data as ForInStmtData;
+			d.forInBody = expandStmtBodyHooked(d.forInBody, expander, ctx, onFnEntry, onFnExit);
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
