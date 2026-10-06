@@ -1,6 +1,9 @@
-import { DeclKind, Node, NodeKind, bindSym, getImpl, getType } from "std/meta";
+import { DeclKind, Node, NodeKind, bindSym, define, getImpl, getType, stringValue } from "std/meta";
 import { eventDiscriminator, instructionDiscriminator, word } from "./discriminator";
 import { ProgramError } from "./error";
+import { derivedAddressOf } from "./pda";
+import { Pubkey, pubkeyOf } from "./pubkey";
+import { readFile } from "std/fs";
 import {
 	argBool,
 	argBoolValid,
@@ -25,6 +28,7 @@ import {
 	unchecked,
 } from "./core";
 import {
+	createPdaAt,
 	createPdaOf,
 	delegated,
 	external,
@@ -33,6 +37,7 @@ import {
 	owned,
 	program,
 	readArgs,
+	selectDeclaredInstruction,
 	selectInstruction,
 	signer,
 	systemAccount,
@@ -58,27 +63,81 @@ import {
 } from "./seed";
 
 export macro instruction(): Node {
+	function byteLiteral(value: uint8, at: Node): Node {
+		return {
+			kind: NodeKind.NumberLiteral,
+			line: at.line,
+			column: at.column,
+			value: value as number,
+			isFloat: false,
+			intVal: value as int64,
+			outOfRangeText: "",
+			isBitPattern: false,
+		};
+	}
+
+	// The `programId` of the project's build.ms (`defines: { programId: "<base58>" }`), or no bytes.
+	function declaredProgramKey(at: Node): uint8[] {
+		const text = define("programId");
+		const bytes: uint8[] = [];
+		if (text == "") return bytes;
+		const parsed = Pubkey.parse(text);
+		if (!parsed.ok) {
+			error("the build declares programId '" + text + "' (build.ms `defines` or -d:programId), which is not a base58 public key", at);
+		}
+		for (const b of parsed.value.bytes) { bytes.push(b); }
+		return bytes;
+	}
+
 	const decl = getTypeArg();
 	if (decl.kind !== NodeKind.EnumDecl) {
 		error("instruction<Op>(): Op must be an enum of the program's instructions", decl);
 	}
+	// The deploy keypair (`programKeypair`, a solana-keygen JSON of 64 numbers; relative to the
+	// project's build.ms) must hold the declared id, as `anchor keys sync` keeps declare_id! equal to it.
+	function checkDeployKeypair(at: Node): void {
+		const named = define("programKeypair");
+		if (named == "") return;
+		const root = define("projectDir");
+		const path = named.startsWith("/") || root == "" ? named : root + "/" + named;
+		const text = try readFile(path) catch "";
+		if (text == "") { error("the build names programKeypair '" + path + "', which cannot be read", at); }
+		const numbers: uint8[] = [];
+		let value = -1;
+		for (const c of text.asBytes()) {
+			if (c >= 48 && c <= 57) {
+				value = (value < 0 ? 0 : value * 10) + (c - 48);
+				if (value > 255) { error("programKeypair '" + path + "' holds a number above 255", at); }
+			} else if (value >= 0) {
+				numbers.push(value as uint8);
+				value = -1;
+			}
+		}
+		if (value >= 0) { numbers.push(value as uint8); }
+		if (numbers.length != 64) { error("programKeypair '" + path + "' holds " + String(numbers.length) + " numbers; a solana-keygen keypair holds 64", at); }
+		let key = Pubkey.zero();
+		for (let i = 0; i < 32; i += 1) { key.bytes[i] = numbers[32 + i]; }
+		const held = key.toBase58();
+		const declaredText = define("programId");
+		if (declaredText == "") {
+			error("the deploy keypair '" + path + "' is program " + held + ", and the build declares no programId: add `programId: \"" + held + "\"` to the defines of build.ms", at);
+		}
+		if (declaredText != held) {
+			error("the build declares programId " + declaredText + ", but the deploy keypair '" + path + "' is program " + held
+				+ ": set programId to " + held + ", or deploy with the keypair of " + declaredText, at);
+		}
+	}
+
 	const bytes: Node[] = [];
+	checkDeployKeypair(decl);
+	const declared = declaredProgramKey(decl);
+	for (const b of declared) { bytes.push(byteLiteral(b, decl)); }
 	let member = 0;
 	while (member < decl.enumMembers.length) {
 		const discriminator = instructionDiscriminator(decl.enumMembers[member]);
 		let b = 0;
 		while (b < 8) {
-			const byte = discriminator.bytes[b];
-			bytes.push({
-				kind: NodeKind.NumberLiteral,
-				line: decl.line,
-				column: decl.column,
-				value: byte as number,
-				isFloat: false,
-				intVal: byte as int64,
-				outOfRangeText: "",
-				isBitPattern: false,
-			});
+			bytes.push(byteLiteral(discriminator.bytes[b], decl));
 			b = b + 1;
 		}
 		member = member + 1;
@@ -99,7 +158,7 @@ export macro instruction(): Node {
 		kind: NodeKind.CallExpr,
 		line: decl.line,
 		column: decl.column,
-		callee: bindSym("selectInstruction"),
+		callee: declared.length > 0 ? bindSym("selectDeclaredInstruction") : bindSym("selectInstruction"),
 		arguments: [table],
 		isDirectCall: false,
 		resolvedOverloadIdx: -1,
@@ -1214,6 +1273,89 @@ export macro pdaWithBump(account: Node, seeds: Node, bump: Node): Node {
 }
 
 export macro createPda(payer: Node, target: Node, seeds: Node): Node {
+	// The bytes of each seed when every one is a string or a byte list written in place, else none.
+	function literalSeeds(seeds: Node): uint8[][] {
+		const out: uint8[][] = [];
+		if (seeds.kind !== NodeKind.ArrayLiteral) return [];
+		for (const seed of seeds.elements) {
+			const bytes: uint8[] = [];
+			if (seed.kind === NodeKind.StringLiteral) {
+				for (const byte of stringValue(seed).asBytes()) { bytes.push(byte); }
+			} else if (seed.kind === NodeKind.ArrayLiteral) {
+				for (const element of seed.elements) {
+					if (element.kind !== NodeKind.NumberLiteral || element.intVal < 0 || element.intVal > 255) return [];
+					bytes.push(element.intVal as uint8);
+				}
+			} else {
+				return [];
+			}
+			out.push(bytes);
+		}
+		return out;
+	}
+
+		function byteLiteral(value: uint8, at: Node): Node {
+			return {
+				kind: NodeKind.NumberLiteral,
+				line: at.line,
+				column: at.column,
+				value: value as number,
+				isFloat: false,
+				intVal: value as int64,
+				outOfRangeText: "",
+				isBitPattern: false,
+			};
+		}
+
+		// The `programId` of the project's build.ms (`defines: { programId: "<base58>" }`), or no bytes.
+		function declaredProgramKey(at: Node): uint8[] {
+			const text = define("programId");
+			const bytes: uint8[] = [];
+			if (text == "") return bytes;
+			const parsed = Pubkey.parse(text);
+			if (!parsed.ok) {
+				error("the build declares programId '" + text + "' (build.ms `defines` or -d:programId), which is not a base58 public key", at);
+			}
+			for (const b of parsed.value.bytes) { bytes.push(b); }
+			return bytes;
+		}
+
+	const declared = declaredProgramKey(seeds);
+	const literal = declared.length > 0 ? literalSeeds(seeds) : [];
+	if (literal.length > 0) {
+		let program: Pubkey = { bytes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] };
+		for (let i = 0; i < 32; i += 1) { program.bytes[i] = declared[i]; }
+		const found = derivedAddressOf(literal, program);
+		if (!found.ok) { error("createPda: these seeds give no program address for the programId of build.ms", seeds); }
+		const address: Node[] = [];
+		for (const b of found.value.key.bytes) { address.push(byteLiteral(b, seeds)); }
+		const bumped: Node[] = [];
+		for (const seed of seeds.elements) { bumped.push(seed); }
+		bumped.push({ kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: [byteLiteral(found.value.bump, seeds)] });
+		return {
+			kind: NodeKind.CallExpr,
+			line: payer.line,
+			column: payer.column,
+			callee: bindSym("createPdaAt"),
+			arguments: [payer, target, {
+				kind: NodeKind.CallExpr,
+				line: seeds.line,
+				column: seeds.column,
+				callee: bindSym("seedTable"),
+				arguments: [{ kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: bumped }],
+				isDirectCall: false,
+				resolvedOverloadIdx: -1,
+			}, {
+				kind: NodeKind.TypeAssertion,
+				line: seeds.line,
+				column: seeds.column,
+				asExpr: { kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: address },
+				asType: "uint8[32]",
+			}, byteLiteral(found.value.bump, seeds)],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		};
+	}
 	return {
 		kind: NodeKind.CallExpr,
 		line: payer.line,
@@ -1228,6 +1370,25 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
 		}],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+// The program id the build declares (build.ms `defines: { programId }`, or -d:programId), as a
+// Pubkey folded at compile time; host tests run the program under it.
+export macro declaredProgramId(): Node {
+	const at: Node = { kind: NodeKind.Identifier, line: 0, column: 0, name: "declaredProgramId" };
+	const text = define("programId");
+	if (text == "") {
+		error("declaredProgramId(): the build declares no programId; add `defines: { programId: \"<base58>\" }` to build.ms, or pass -d:programId=<base58>", at);
+	}
+	return {
+		kind: NodeKind.CallExpr,
+		line: at.line,
+		column: at.column,
+		callee: bindSym("pubkeyOf"),
+		arguments: [{ kind: NodeKind.StringLiteral, line: at.line, column: at.column, value: text }],
 		isDirectCall: false,
 		resolvedOverloadIdx: -1,
 	};

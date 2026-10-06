@@ -9,6 +9,7 @@ import {
 	closedProgramAccount,
 	createdAccount,
 	createdPdaAccount,
+	createdPdaAccountAt,
 	delegatedFailure,
 	exclusiveWritable,
 	givenBump,
@@ -17,6 +18,7 @@ import {
 	ownedFailure,
 	programAccount,
 	resizedProgramAccount,
+	selectedDeclaredInstruction,
 	selectedInstruction,
 	transfer,
 } from "./core";
@@ -209,6 +211,11 @@ export function selectInstruction<E>(table: Readonly<Span<uint8>>): Result<E, Pr
 	return Result.ok(member as E);
 }
 
+export function selectDeclaredInstruction<E>(table: Readonly<Span<uint8>>): Result<E, ProgramError> {
+	const member = try selectedDeclaredInstruction(table);
+	return Result.ok(member as E);
+}
+
 export function readArgs<T>(fits: boolean, value: T): Result<T, ProgramError> {
 	if (!fits) { return Result.err(ProgramError.instructionDidNotDeserialize()); }
 	return Result.ok(value);
@@ -232,6 +239,18 @@ export function createPdaOf<T>(
 	const space = 8 + (sizeof(T) as uint64);
 	const made = try createdPdaAccount(payer.account, target.account, seeds, space, @comptime { return word(T.discriminator()); });
 	return Result.ok({ account: { account: made.account }, bump: made.bump });
+}
+
+export function createPdaAt<T>(
+	payer: WritableSigner,
+	target: Writable,
+	seeds: Span<SeedSlice>,
+	address: Readonly<Span<uint8>>,
+	bump: uint8,
+): Result<Pda<T>, ProgramError> {
+	const space = 8 + (sizeof(T) as uint64);
+	const made = try createdPdaAccountAt(payer.account, target.account, seeds, address, space, @comptime { return word(T.discriminator()); });
+	return Result.ok({ account: { account: made }, bump: bump });
 }
 
 export function verifiedPda<T>(

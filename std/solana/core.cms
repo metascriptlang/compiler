@@ -20,6 +20,7 @@ import {
 	fillWithBump,
 	findAt,
 	ownProgram,
+	signerOf,
 	signerOfBumped,
 	tableAddress,
 } from "./seed";
@@ -698,15 +699,25 @@ export function exclusiveWritable(found: Account): Result<Account, ProgramError>
 	return Result.ok(found);
 }
 
-export function selectedInstruction(table: Readonly<Span<uint8>>): Result<int32, ProgramError> {
+function selectedMember(base: uint64, count: int32): Result<int32, ProgramError> {
 	if (msSolInstructionDataLength() < 8) { return Result.err(ProgramError.instructionMissing()); }
 	const word = msSolLoadU64(msSolInstructionData());
-	const base = msSolSpanAddress(table);
-	const count = table.length >> 3;
 	for (let member = 0; member < count; member++) {
 		if (msSolLoadU64(base + (member as uint64) * 8) == word) { return Result.ok(member); }
 	}
 	return Result.err(ProgramError.instructionFallbackNotFound());
+}
+
+export function selectedInstruction(table: Readonly<Span<uint8>>): Result<int32, ProgramError> {
+	return selectedMember(msSolSpanAddress(table), table.length >> 3);
+}
+
+// The table opens with the program id build.ms declares; Anchor's entry refuses another id before
+// it reads the instruction (anchor-syn-0.31.1 codegen/program/entry.rs:51-53).
+export function selectedDeclaredInstruction(table: Readonly<Span<uint8>>): Result<int32, ProgramError> {
+	const base = msSolSpanAddress(table);
+	if (!keysEqual(msSolProgramId(), base)) { return Result.err(ProgramError.declaredProgramIdMismatch()); }
+	return selectedMember(base + 32, (table.length - 32) >> 3);
 }
 
 function argumentAddress(offset: uint64, width: uint64): uint64 {
@@ -823,6 +834,23 @@ export function createdPdaAccount(
 	signerOfBumped(signed, one);
 	const created = try initialized(payer, target, space, discriminator, one);
 	return Result.ok({ account: created, bump: found.bump });
+}
+
+// The address and bump of literal seeds, folded at compile time against the declared program id:
+// the run-time find is replaced by one key compare.
+export function createdPdaAccountAt(
+	payer: Account,
+	target: Account,
+	seeds: Readonly<Span<SeedSlice>>,
+	address: Readonly<Span<uint8>>,
+	space: uint64,
+	discriminator: uint64,
+): Result<Account, ProgramError> {
+	if (!keysEqual(target.keyAddress(), msSolSpanAddress(address))) {
+		return Result.err(ProgramError.constraintSeeds());
+	}
+	const one: SignerSeeds[1] = [signerOf(seeds)];
+	return initialized(payer, target, space, discriminator, one);
 }
 
 export function canonicalBump(

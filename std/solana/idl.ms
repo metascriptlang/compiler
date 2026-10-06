@@ -1,4 +1,4 @@
-import { Node, NodeKind, bindSym, getImpl, stringValue } from "std/meta";
+import { Node, NodeKind, bindSym, define, getImpl, stringValue } from "std/meta";
 import {
 	accountDiscriminator,
 	eventDiscriminator,
@@ -30,7 +30,8 @@ export macro anchorIdl(spec: Node): Node {
 		error("anchorIdl<Op>(spec): spec must be an object literal", spec);
 	}
 	let name = "program";
-	let programAddress = "";
+	const declared = define("programId");
+	let programAddress = declared;
 	let accountTypes: Node[] = [];
 	let eventTypes: Node[] = [];
 	let errorEnum = "";
@@ -41,7 +42,12 @@ export macro anchorIdl(spec: Node): Node {
 		const key = spec.keys[k];
 		const value = spec.properties[k];
 		if (key == "name") { name = stringValue(value); }
-		if (key == "address") { programAddress = stringValue(value); }
+		if (key == "address") {
+			programAddress = stringValue(value);
+			if (declared != "" && programAddress != declared) {
+				error("anchorIdl: address '" + programAddress + "' is not the programId '" + declared + "' the build declares", value);
+			}
+		}
 		if (key == "accounts") { accountTypes = value.elements; }
 		if (key == "events") { eventTypes = value.elements; }
 		if (key == "errors") { errorEnum = value.name; }
