@@ -953,6 +953,20 @@ export function seedsCanonical(key: uint64, seeds: Span<SeedSlice>): Result<void
 	return Result.ok(null);
 }
 
+export function seedsFolded(
+	key: uint64,
+	word0: uint64,
+	word1: uint64,
+	word2: uint64,
+	word3: uint64,
+): Result<void, ProgramError> {
+	if (msSolLoadU64(key) != word0 || msSolLoadU64(key + 8) != word1 ||
+		msSolLoadU64(key + 16) != word2 || msSolLoadU64(key + 24) != word3) {
+		return Result.err(ProgramError.constraintSeeds());
+	}
+	return Result.ok(null);
+}
+
 const MAX_EVENT_BYTES: uint64 = 1024;
 
 @noinline export function logEvent(

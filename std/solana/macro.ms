@@ -24,6 +24,7 @@ import {
 	keysMatch,
 	logEvent,
 	seedsCanonical,
+	seedsFolded,
 	seedsGiven,
 	unchecked,
 } from "./core";
@@ -467,6 +468,37 @@ export macro accounts(): Node {
 		return call(bindSym("keyAddressOf")!, [rewrite(n)], n);
 	}
 
+	function literalSeeds(seeds: Node[]): uint8[][] {
+		const out: uint8[][] = [];
+		for (const seed of seeds) {
+			const bytes: uint8[] = [];
+			if (seed.kind === NodeKind.StringLiteral) {
+				for (const byte of stringValue(seed).asBytes()) { bytes.push(byte); }
+			} else if (seed.kind === NodeKind.ArrayLiteral) {
+				for (const element of seed.elements) {
+					if (element.kind !== NodeKind.NumberLiteral || element.intVal < 0 || element.intVal > 255) return [];
+					bytes.push(element.intVal as uint8);
+				}
+			} else {
+				return [];
+			}
+			out.push(bytes);
+		}
+		return out;
+	}
+
+	function declaredProgramKey(at: Node): uint8[] {
+		const text = define("programId");
+		const bytes: uint8[] = [];
+		if (text == "") return bytes;
+		const parsed = Pubkey.parse(text);
+		if (!parsed.ok) {
+			error("the build declares programId '" + text + "' (build.ms `defines` or -d:programId), which is not a base58 public key", at);
+		}
+		for (const b of parsed.value.bytes) { bytes.push(b); }
+		return bytes;
+	}
+
 	// Anchor builds a custom error inside the failing branch (anchor-syn-0.31.1 constraints.rs:
 	// has_one 297-334, address 172-190, constraint 348-356); a success must not evaluate it.
 	function lazily(passed: Node, error: Node, at: Node): Node {
@@ -688,7 +720,36 @@ export macro accounts(): Node {
 					seeded,
 				), seeded));
 			} else {
-				checks.push(attempt(call(bindSym("seedsCanonical")!, [key, table], seeded), seeded));
+				const declared = declaredProgramKey(seeded);
+				const literal = declared.length > 0 ? literalSeeds(seeded.macroArgs) : [];
+				if (literal.length > 0) {
+					let program = Pubkey.zero();
+					for (let i = 0; i < 32; i += 1) { program.bytes[i] = declared[i]; }
+					const found = derivedAddressOf(literal, program);
+					if (!found.ok) {
+						error("accounts<" + decl.interfaceName + ">(): @seeds on field '" + self +
+							"' gives no program address for the programId of build.ms", seeded);
+					}
+					const address = found.value.key.bytes;
+					const words: Node[] = [key];
+					for (let w = 0; w < 4; w += 1) {
+						let word: uint64 = 0;
+						for (let b = 7; b >= 0; b -= 1) { word = (word << 8) | (address[w * 8 + b] as uint64); }
+						words.push({
+							kind: NodeKind.NumberLiteral,
+							line: seeded.line,
+							column: seeded.column,
+							value: word as number,
+							isFloat: false,
+							intVal: word as int64,
+							outOfRangeText: "",
+							isBitPattern: true,
+						});
+					}
+					checks.push(attempt(call(bindSym("seedsFolded")!, words, seeded), seeded));
+				} else {
+					checks.push(attempt(call(bindSym("seedsCanonical")!, [key, table], seeded), seeded));
+				}
 			}
 		}
 		const groups: Node[][] = [associated, related, required, addressed, authorized, minted];
