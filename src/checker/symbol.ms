@@ -136,6 +136,8 @@ export function ctorFnTypeOf(classSym: Symbol): Type | null {
 				}
 			}
 		}
+		const lifted = lookupCtorDefaults(sym, sym.name);
+		if (lifted != null && lifted.fnType != null && lifted.fnType.kind == TypeKind.Function) return lifted.fnType;
 		sym = parentClassSymOf(sym);
 		depth += 1;
 	}
