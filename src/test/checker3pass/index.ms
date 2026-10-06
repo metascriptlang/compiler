@@ -33,6 +33,7 @@ import "./scenarios/generatorYields";
 import "./scenarios/localForwardReferences";
 import "./scenarios/genericOperands";
 import "./scenarios/unionMemberOrder";
+import "./scenarios/selfRecursiveReturn";
 import "./stress/deepNesting";
 import "./stress/manyParams";
 import "./stress/mixed";
