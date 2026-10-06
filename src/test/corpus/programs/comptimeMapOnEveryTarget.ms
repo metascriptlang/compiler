@@ -1,6 +1,7 @@
 // @xfail(c): @comptime block: in instantiation of 'set<string, int32>': Ambiguous call to overloaded extension method 'push' (inbox 2026-10-06-comptime-map-fails-on-c-and-js-targets)
 // @xfail(orc): @comptime block: in instantiation of 'set<string, int32>': Ambiguous call to overloaded extension method 'push' (inbox 2026-10-06-comptime-map-fails-on-c-and-js-targets)
 // @xfail(danger): @comptime block: in instantiation of 'set<string, int32>': Ambiguous call to overloaded extension method 'push' (inbox 2026-10-06-comptime-map-fails-on-c-and-js-targets)
+// @xfail(san): @comptime block: in instantiation of 'set<string, int32>': Ambiguous call to overloaded extension method 'push' (inbox 2026-10-06-comptime-map-fails-on-c-and-js-targets)
 // @stdout: total=1 weighted=44 hashed=7 keys=a,bb
 // note: a `Map` or `HashMap` inside `@comptime` folds the same as on `--target=raiser`: an on-demand std helper the engine compiles from the Raiser's std is checked with that std's own private declarations (before, a JS build stopped at `Undefined variable 'msMapFatal'`). A C build still instantiates the Raiser's `Map.set` in the C build's `struct` module and stops at an ambiguous `push`.
 const total = @comptime {
