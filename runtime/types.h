@@ -27,6 +27,7 @@ typedef struct msTypeInfo {
 	const struct msTypeInfo* base;
 	uint32_t depth;
 	const struct msTypeInfo* const* display;
+	const char* displayName; /* Source spelling for diagnostics (NULL: same as name) */
 } msTypeInfo;
 
 #define MS_ACYCLIC_FLAG false

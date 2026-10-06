@@ -134,11 +134,15 @@ _Noreturn void msRaiseIndexError(int64_t idx, int64_t len) {
 	exit(1);
 }
 
+static const char* msTypeInfoShownName(const msTypeInfo* t) {
+	if (t == NULL) return "<untyped>";
+	if (t->displayName != NULL) return t->displayName;
+	return t->name != NULL ? t->name : "<untyped>";
+}
+
 _Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target) {
 	const msTypeInfo* t = msHeader(p)->type;
-	fprintf(stderr, "Error: invalid object conversion: %s is not %s\n",
-		(t != NULL && t->name != NULL) ? t->name : "<untyped>",
-		target->name != NULL ? target->name : "<untyped>");
+	fprintf(stderr, "Error: invalid object conversion: %s is not %s\n", msTypeInfoShownName(t), msTypeInfoShownName(target));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }

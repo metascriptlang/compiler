@@ -1,15 +1,14 @@
 import {
 	Account,
 	InstructionAccount,
-	ProgramAddress,
-	Writable,
-	WritableSigner,
 	createProgramAccountSeeded,
 	keysEqual,
 	putPubkey,
 	putU8,
 } from "./core";
+import { Writable, WritableSigner, asAccount } from "./typed";
 import { invoke } from "./invoke";
+import { ProgramAddress } from "./pda";
 import { ProgramError } from "./error";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, Pubkey, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./pubkey";
 import {
@@ -57,15 +56,15 @@ export function createMintPdaAt(
 	mintAuthority: Pubkey,
 	freezeAuthority: Pubkey | null,
 ): Result<uint8, ProgramError> {
-	const target = mint as Account;
-	if ((payer as Account).key() == target.key()) {
+	const target = mint.asAccount();
+	if (payer.asAccount().key() == target.key()) {
 		return Result.err(ProgramError.tryingToInitPayerAsProgramAccount());
 	}
 	const found = try findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
 	if (found.key != target.key()) { return Result.err(ProgramError.constraintSeeds()); }
 	if (!isTokenProgram(program)) { return Result.err(ProgramError.incorrectProgramId()); }
 	const _created = try createProgramAccountSeeded(
-		payer as Account,
+		payer.asAccount(),
 		target,
 		82,
 		program,

@@ -1445,7 +1445,7 @@ function atCallSite(): SourceLocation {
 // Safe to bake into the shared body: the compiled-macro cache is keyed by macro
 // name, and a named type does not vary per call site. Mutation is idempotent —
 // a second pass finds literals, not calls.
-function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string, typeArg: string): Node {
+function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string, typeArg: string, typeArgParams: string[] | null = null): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
@@ -1538,17 +1538,14 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 				addError(ctx, `Macro '${macroName}': getTypeArg() cannot resolve type '${typeArg}' at the call site`, node.location.line, node.location.column);
 				return node;
 			}
-			const at = peelToImpl(argType, ctx);
-			if (at == null) return node;
-			const implementation = mapTypeToAst(at, atCallSite(), true);
-			implementation.nodeType = argType;
-			return createNodeAt(NodeKind.TypeAssertion, {
-				asExpr: nodeToASTLiteral(implementation, node.location, false),
-				asType: "Node",
-			}, node.location);
+			if (typeArgParams != null) {
+				const params: string[] = typeArgParams;
+				if (!params.includes("$macro:typeArg")) params.push("$macro:typeArg");
+			}
+			return createNodeAt(NodeKind.Identifier, { name: "$macro:typeArg" }, node.location);
 		}
 	}
-	mapChildren(node, (child: Node): Node => bakeTypeIntrinsics(child, ctx, macroSym, macroName, typeArg));
+	mapChildren(node, (child: Node): Node => bakeTypeIntrinsics(child, ctx, macroSym, macroName, typeArg, typeArgParams));
 	return node;
 }
 
@@ -1559,6 +1556,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 interface CompiledMacro {
 	vm: RaiserVM;
 	funcIdx: number;
+	typeArgInput: boolean;
 }
 
 // A null `compiled` marks a macro whose body or helpers failed to check: it is
@@ -1593,14 +1591,18 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 		if (builds[bi].typeArg == typeArg) return builds[bi].compiled;
 	}
 	let body = decl.macroDeclBody;
-	const params = decl.macroDeclParams;
+	let params = decl.macroDeclParams;
+	if (typeArg != "") {
+		params = [];
+		for (const param of decl.macroDeclParams) params.push(param);
+	}
 
 	// Bake into a CLONE when the call site supplies a type argument: the declared
 	// body is shared by every call site, and getTypeArg() resolves per site.
 	let workBody = body;
 	if (typeArg != "") workBody = cloneNodeForCheck(body);
 	const bakeMark = ctx.errors.length;
-	bakeTypeIntrinsics(workBody, ctx, macroSym, macroName, typeArg);
+	bakeTypeIntrinsics(workBody, ctx, macroSym, macroName, typeArg, params);
 	if (errorsSince(ctx, bakeMark)) {
 		builds.push({ typeArg, compiled: null });
 		return null;
@@ -1627,10 +1629,11 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	const declParamTypes = decl.macroDeclParamTypes;
 	const paramTypes: string[] = [];
 	let pti = 0;
-	while (pti < params.length) {
+	while (pti < decl.macroDeclParams.length) {
 		paramTypes.push(pti < declParamTypes.length ? declParamTypes[pti] : "");
 		pti = pti + 1;
 	}
+	if (params.length > decl.macroDeclParams.length) paramTypes.push("Node");
 	const emptyDefaults: Node[] = [];
 	const nodeInScope = lookupSymbol(regCtx.table, "Node") != null;
 	const macroFn = createNode(NodeKind.FunctionDecl, {
@@ -1662,7 +1665,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 		return null;
 	}
 
-	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx };
+	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx, typeArgInput: params.length > decl.macroDeclParams.length };
 	builds.push({ typeArg, compiled: cm });
 	return cm;
 }
@@ -1728,6 +1731,15 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	for (const arg of d.macroArgs) {
 		const av = nodeToValue(stripMacroArgWrappers(arg), vm.objectHeap, vm.arrayHeap);
 		marshalArgs.push(av);
+	}
+	if (cm.typeArgInput) {
+		const argType = resolveAnnotation(node.typeArg, ctx, 0, 0);
+		if (argType == null || isUnresolvedType(argType)) return node;
+		const at = peelToImpl(argType, ctx);
+		if (at == null) return node;
+		const implementation = mapTypeToAst(at, node.location, true);
+		implementation.nodeType = argType;
+		marshalArgs.push(nodeToValue(implementation, vm.objectHeap, vm.arrayHeap));
 	}
 	const macroSourcePath = macroSym.modulePath != "" ? macroSym.modulePath : regCtx.modulePath;
 	pushActiveMetaCtx(ctx, node.location.line, node.location.column);

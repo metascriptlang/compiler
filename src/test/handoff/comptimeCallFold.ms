@@ -1,4 +1,4 @@
-import { compileToCWithStd, compileProjectToJSWithStd } from "../helpers";
+import { compileToCWithStd, compileProjectToJSWithStd, checkProjectDiagnostics, MapEntry } from "../helpers";
 
 const LIB = `@comptime function digitSum(text: string): uint64 {
 	let total: uint64 = 0;
@@ -65,11 +65,24 @@ test "comptimeCallFold: calls inside @comptime code are not checked as run-time 
 	assert c.includes("198536ULL") && c.includes("198535ULL"), c.slice(0, 300);
 }
 
-test "comptimeCallFold: an overloaded @comptime function is refused by name" {
-	assert cOf(`@comptime function pick(n: int32): int32 { return n; }
-		@comptime function pick(s: string): int32 { return s.length; }
-		const X: int32 = pick(9);
-		console.log(X);`).includes("'pick' is @comptime and overloaded");
+test "comptimeCallFold: an overloaded @comptime function folds the overload each call resolved to" {
+	const c = cOf(`@comptime function pick(n: uint64): uint64 { return n + 7000; }
+		@comptime function pick(s: string): uint64 { return (s.length as uint64) + 9000; }
+		const X: uint64 = pick(9);
+		const Y: uint64 = pick("abcd");
+		console.log(X, Y);`);
+	assert c.includes("7009ULL") && c.includes("9004ULL"), c.slice(0, 300);
+	assert callsLeft(c, "pick__") == 0, c.slice(0, 300);
+}
+
+test "comptimeCallFold: a @comptime block in a generic instance sees the type argument" {
+	const c = cOf(`struct P { x: int32; }
+		struct Q { y: int32; }
+		function code(this typeof P): uint64 { return 7101; }
+		function code(this typeof Q): uint64 { return 7202; }
+		function codeOf<T>(): uint64 { return @comptime { return T.code(); }; }
+		console.log(codeOf<P>(), codeOf<Q>());`);
+	assert c.includes("return 7101ULL;") && c.includes("return 7202ULL;"), c.slice(0, 300);
 }
 
 test "comptimeCallFold: the JS backend folds the same call" {
@@ -123,4 +136,25 @@ const WEIGHT690: int32 = weight690(Kind690.Large, 3);
 test "comptimeCallFold: struct and enum arguments and results fold to the run-time values" {
 	assert KEY690.a == 7 && KEY690.b == 14;
 	assert WEIGHT690 == 30;
+}
+
+test "comptimeCallFold: a folded value a macro hands back keeps the call's type" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/lib.ms", entrySource: `import { Node } from "std/meta";
+export macro same(operand: Node): Node { return operand; }
+` },
+		{ entryPath: "src/main.ms", entrySource: `import { same } from "./lib";
+@comptime function big(): int64 { return 5; }
+@comptime function small(): float32 { return 1.5; }
+let wide = same(big());
+const narrow: int32 = wide;
+let f = same(small());
+const n: number = 0.1;
+f = n;
+console.log(narrow, f);
+` },
+	];
+	const text = checkProjectDiagnostics(entries, "src/main.ms").join("\n");
+	assert text.contains("implicit int64 → int32 conversion narrows"), "an int64 value stays int64 through the macro: " + text;
+	assert text.contains("implicit number → float32 conversion"), "a float32 value stays float32 through the macro: " + text;
 }

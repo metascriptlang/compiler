@@ -714,6 +714,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			const d = node.data as NumberLiteralData;
 			const v = d.isFloat ? raiserFloat(d.value) : raiserInt(literalBits(d));
 			heapObjectSetField(objHeap, handle, "value", v);
+			if (!d.isFloat) heapObjectSetField(objHeap, handle, "intVal", v);
 			setBool(objHeap, handle, "isBitPattern", d.isBitPattern);
 			setStr(objHeap, handle, "outOfRangeText", d.outOfRangeText);
 		},
@@ -1239,6 +1240,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 
 	if (node.nodeType != null) {
 		setTypeFields(objHeap, arrHeap, handle, node.nodeType, node.location, includeTypeAst);
+		if (node.flags.has(NodeFlag.Folded)) setBool(objHeap, handle, "folded", true);
 	} else if (includeTypeAst && node.nodeTypeAst != null) {
 		setNode(objHeap, arrHeap, handle, "nodeType", node.nodeTypeAst, false);
 	}
@@ -1446,6 +1448,7 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 					if (rawFlags.has(NodeFlag.StaticStorage)) {
 						out.flags = out.flags.incl(NodeFlag.StaticStorage);
 					}
+					if (typed != null && readBool(objHeap, handle, "folded")) out.flags = out.flags.incl(NodeFlag.Folded);
 				}
 				return out;
 			}
@@ -2123,8 +2126,19 @@ test "NumberLiteral serialization" {
 	const numVal = heapObjectGetField(objHeap, val.intVal, "value");
 	assert numVal.kind == RaiserValueKind.Int;
 	assert numVal.intVal == 42;
+	const exact = heapObjectGetField(objHeap, val.intVal, "intVal");
+	assert exact.kind == RaiserValueKind.Int;
+	assert exact.intVal == 42;
 	const lineVal = heapObjectGetField(objHeap, val.intVal, "line");
 	assert lineVal.intVal == 5;
+}
+
+test "NumberLiteral serialization — a float literal carries no intVal" {
+	const objHeap = createStructHeap();
+	const arrHeap = createArrayHeap();
+	const node = createNode(NodeKind.NumberLiteral, { value: 3.5, isFloat: true, intVal: 0 as int64 }, synthToken(makeLoc(1, 0)));
+	const val = nodeToValue(node, objHeap, arrHeap);
+	assert heapObjectGetField(objHeap, val.intVal, "intVal").kind == RaiserValueKind.Nil;
 }
 
 test "NumberLiteral serialization — float stays float-boxed" {

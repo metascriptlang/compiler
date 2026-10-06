@@ -20,6 +20,14 @@ export interface BuildSection {
 	optimize: string;
 }
 
+// `defines: { name: value }` — the project's `-d:` switches, as Nim's project config files carry
+// `define:` (read before the command line, which overrides them).
+export interface DefinesSection {
+	keys: string[];
+	values: string[];
+	refused: string[];
+}
+
 export interface ResolveSection {
 	searchPaths: string[];
 	extensions: string[];
@@ -161,6 +169,7 @@ export interface BuildConfig {
 	deps: DepsSection;
 	devDeps: DepsSection;
 	globalImports: string[];
+	defines: DefinesSection;
 	valid: boolean;
 }
 
@@ -391,6 +400,38 @@ function extractGlobalImports(giNode: Node): string[] {
 	return result;
 }
 
+export function defaultDefinesSection(): DefinesSection {
+	return { keys: [], values: [], refused: [] };
+}
+
+function extractDefines(node: Node): DefinesSection {
+	const ds = defaultDefinesSection();
+	if (node == null || node.kind != NodeKind.ObjectLiteral) return ds;
+	const od = node.data as ObjectLiteralData;
+	for (let i = 0; i < od.keys.length && i < od.properties.length; i += 1) {
+		const value = od.properties[i];
+		let text = "";
+		let held = true;
+		if (value != null && value.kind == NodeKind.StringLiteral) {
+			text = nodeString(value);
+		} else if (value != null && value.kind == NodeKind.NumberLiteral) {
+			const n = value.data as NumberLiteralData;
+			text = n.isFloat ? String(n.value) : String(n.intVal);
+		} else if (nodeBool(value) >= 0) {
+			text = nodeBool(value) == 1 ? "true" : "false";
+		} else {
+			held = false;
+		}
+		if (held) {
+			ds.keys.push(od.keys[i]);
+			ds.values.push(text);
+		} else {
+			ds.refused.push(od.keys[i]);
+		}
+	}
+	return ds;
+}
+
 // Extract DepsSection from an ObjectLiteral node (the `deps: { ... }` or `devDeps: { ... }` block).
 // Each key/value pair is a package name → version string (registry or git source spec).
 function extractDeps(depsNode: Node): DepsSection {
@@ -422,7 +463,7 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const defDeps = defaultDepsSection();
 	const defDevDeps = defaultDepsSection();
 	const defGi: string[] = [];
-	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, lsp: defLsp, cc: defCc, package: defPkg, deps: defDeps, devDeps: defDevDeps, globalImports: defGi, valid: false };
+	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, lsp: defLsp, cc: defCc, package: defPkg, deps: defDeps, devDeps: defDevDeps, globalImports: defGi, defines: defaultDefinesSection(), valid: false };
 
 	if (!exists(filePath)) return defCfg;
 
@@ -450,8 +491,9 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const devDeps = extractDeps(findObjField(configObj, "devDeps"));
 
 	const globalImports = extractGlobalImports(findObjField(configObj, "globalImports"));
+	const defines = extractDefines(findObjField(configObj, "defines"));
 
-	return { entry, build: bs, resolve: rs, fmt, lsp, cc, package: pkg, deps, devDeps, globalImports, valid: true };
+	return { entry, build: bs, resolve: rs, fmt, lsp, cc, package: pkg, deps, devDeps, globalImports, defines, valid: true };
 }
 
 // Validate build.ms and return LSP-style warnings.
@@ -547,7 +589,8 @@ function testExtractFromSource(source: string): BuildConfig {
 		return {
 			entry: "", build: { target: "c", outDir: "out", outFile: "", optimize: "debug" },
 			resolve: defaultResolveSection(), fmt: defaultFmtSection(), cc: defaultCcSection(),
-			package: defaultPackageSection(), deps: defaultDepsSection(), devDeps: defaultDepsSection(), valid: false,
+			package: defaultPackageSection(), deps: defaultDepsSection(), devDeps: defaultDepsSection(),
+			globalImports: [], defines: defaultDefinesSection(), valid: false,
 		};
 	}
 	const entry = nodeString(findObjField(configObj, "entry"));
@@ -562,6 +605,7 @@ function testExtractFromSource(source: string): BuildConfig {
 		cc: extractCc(findObjField(configObj, "cc")),
 		package: pkg, deps, devDeps,
 		globalImports: extractGlobalImports(findObjField(configObj, "globalImports")),
+		defines: extractDefines(findObjField(configObj, "defines")),
 		valid: true,
 	};
 }

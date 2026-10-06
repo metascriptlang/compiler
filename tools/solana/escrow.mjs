@@ -79,14 +79,15 @@ const key = (value) => new web3.PublicKey(value);
 const hex = (bytes) => Buffer.from(bytes).toString("hex");
 
 let failures = 0;
-const programSigner = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(7));
 const idl = JSON.parse(readFileSync(idlPath, "utf8"));
-idl.address = programSigner.address;
+// The program runs at the id its build declares (the IDL's address); an IDL without one gets a fixed key.
+const programAddress = idl.address !== "" ? idl.address : (await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(7))).address;
+idl.address = programAddress;
 const client = new Program(idl, { connection: new web3.Connection("http://127.0.0.1:1") });
 
 async function scenario(label, body) {
 	const svm = new LiteSVM();
-	svm.addProgramFromFile(programSigner.address, programPath);
+	svm.addProgramFromFile(programAddress, programPath);
 	const maker = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(1));
 	const taker = await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(2));
 	const mintA = (await createKeyPairSignerFromPrivateKeyBytes(new Uint8Array(32).fill(3))).address;
@@ -135,7 +136,7 @@ async function scenario(label, body) {
 				: (meta.writable ? AccountRole.WRITABLE : AccountRole.READONLY),
 			...(meta.signer ? { signer: signers.get(meta.address) } : {}),
 		}));
-		const instruction = { programAddress: programSigner.address, accounts, data: new Uint8Array(built.data) };
+		const instruction = { programAddress: programAddress, accounts, data: new Uint8Array(built.data) };
 		const message = pipe(
 			createTransactionMessage({ version: 0 }),
 			(m) => setTransactionMessageFeePayerSigner(payer, m),
@@ -175,7 +176,7 @@ async function scenario(label, body) {
 
 	async function make(seed, deposit, receive, expected = null) {
 		const [escrow, bump] = await getProgramDerivedAddress({
-			programAddress: programSigner.address,
+			programAddress: programAddress,
 			seeds: ["escrow", encoder.encode(maker.address), u64(seed)],
 		});
 		const vault = await ata(escrow, mintA);

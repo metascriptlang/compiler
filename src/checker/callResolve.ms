@@ -9,7 +9,7 @@ import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
-import { callCheckStmt, callDemandReturn, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
+import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration } from "./context";
@@ -418,6 +418,16 @@ function deriveCallBindings(
 	}
 	mergeUnifyBindings(bindings, bindFromExpectedReturn(calleeType, expectedType));
 	return bindings;
+}
+
+// `Result.ok(v)` and `Result.err(e)` take T and E from the Result the context expects, as the
+// reference library's `ok`/`err` templates take them from `typeof(result)`, so a converter
+// reaches the value or the error before inference would bind it from the argument.
+function contextResultSlot(calleeSym: Symbol | null, formal: Type | null, context: UnifyBindings): Type | null {
+	if (calleeSym == null || formal == null || context.names.length == 0) return null;
+	if (calleeSym.builtinKind != "ResultOk" && calleeSym.builtinKind != "ResultErr") return null;
+	const slot = instantiateGeneric(formal, context.names, context.types);
+	return hasGenericParams(slot) ? null : slot;
 }
 
 function bindFromExpectedReturn(calleeType: Type, expectedType: Type | null): UnifyBindings {
@@ -1022,7 +1032,12 @@ export function checkCallExprProfile(): float64[] { return [_cceCount, _cceTime]
 export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	_cceCount = _cceCount + 1;
 	const _cc0 = performance.now();
-	const r = checkCallExprInner(ctx, node, expectedType);
+	let r = checkCallExprInner(ctx, node, expectedType);
+	const seen = node.kind == NodeKind.CallExpr && isUnresolvedType(r) ? callSelfReadType((node.data as CallExprData).callee) : null;
+	if (seen != null) {
+		node.nodeType = seen;
+		r = seen;
+	}
 	refuseHiddenMethodCall(ctx, node);
 	_cceTime = _cceTime + (performance.now() - _cc0);
 	return evalCompileTimeCall(ctx, node, foldTypeTrait(ctx, node, r));
@@ -1075,12 +1090,6 @@ function evalCompileTimeCall(ctx: CheckerContext, node: Node, callType: Type): T
 	const callee = compileTimeCallee(node);
 	if (callee == null) return callType;
 	const d = node.data as CallExprData;
-	const set = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
-	if (set.overloads.length > 0) {
-		addError(ctx, `'${callee.name}' is @comptime and overloaded; the compile-time evaluator keys routines by name and would run the wrong overload, so give each @comptime overload its own name`, node.location.line, node.location.column);
-		node.nodeType = errorType();
-		return node.nodeType;
-	}
 	for (let i = 0; i < d.arguments.length; i += 1) {
 		const arg = d.arguments[i];
 		if (isCompileTimeValue(arg, 0)) continue;
@@ -1114,7 +1123,14 @@ function foldAtCompileTime(ctx: CheckerContext, node: Node, expected: Type | nul
 	node.flags = 0 as BitSet<NodeFlag>;
 	node.variantSlot = 0;
 	callCheckExpr(ctx, node, expected);
+	node.flags = node.flags.incl(NodeFlag.Folded);
 	return true;
+}
+
+export function keepFoldedType(node: Node, expanded: Node): void {
+	if (!expanded.flags.has(NodeFlag.Folded) || expanded.nodeType == null) return;
+	node.flags = node.flags.incl(NodeFlag.Folded);
+	node.nodeType = expanded.nodeType;
 }
 function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
@@ -1267,6 +1283,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			node.resolvedSym = null;
 			node.flags = 0 as BitSet<NodeFlag>;
 			node.variantSlot = 0;
+			keepFoldedType(node, expandedValue);
 			// Re-check the mutated node so its nodeType is set. This drives correct
 			// type inference for the parent (e.g., the VariableDecl declaring `x`).
 			// If the expanded result is itself a macro call, this recurses through
@@ -1518,6 +1535,14 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				argType = argNode.resolvedSym.symbolType;
 			}
 		}
+		const resultSlot = contextResultSlot(calleeSym, _formal, _contextBindings);
+		if (resultSlot != null && argType != null && !hasGenericParams(argType) && !isAssignable(argType, resultSlot)) {
+			const converted = tryApplyConverter(ctx, d.arguments[ai], argType, resultSlot);
+			if (converted != null && converted.nodeType != null) {
+				d.arguments[ai] = converted;
+				argType = converted.nodeType;
+			}
+		}
 		argTypes[ai] = argType!;
 		// Source 3: forward inference. Single-walk — subsequent args see
 		// the updated bindings, prior args are never re-checked.
@@ -1654,6 +1679,16 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	if (node.resolvedSym != null && node.resolvedSym.builtinKind == "PromiseSpawn"
 		&& argTypes.length >= 1 && argTypes[0] != null && argTypes[0].kind == TypeKind.Function) {
 		const spawnInner = argTypes[0].typeReturn != null ? argTypes[0].typeReturn : voidType();
+		if (isAwaitable(spawnInner)) {
+			const named = d.arguments.length >= 1 && d.arguments[0].kind == NodeKind.Identifier;
+			const fn = named ? (d.arguments[0].data as IdentifierData).name : "";
+			const rewrite = named
+				? `write 'await ${fn}()', or 'await spawn(() => ${fn}Sync())' with a '${fn}Sync' that does not return a promise`
+				: "await the promise the function returns instead of spawning it, or spawn a function that does not return a promise";
+			addError(ctx, `spawn of a function that returns '${typeDisplayName(spawnInner)}' makes a promise of a promise, which is refused: ${rewrite}`, node.location.line, node.location.column);
+			node.nodeType = errorType();
+			return node.nodeType;
+		}
 		const spawnRet = createSpawnHandle(spawnInner);
 		node.nodeType = spawnRet;
 		// Spawn borrow checker: detect mutable variable captures
@@ -3483,7 +3518,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	}
 	// Fill default args for extension overloads
 	// defaultOffset: 0 for static (parser stripped receiver from fnDefaults), 1 for non-static
-	const winnerType = candidates[idx];
+	let winnerType = candidates[idx];
 	if (winnerType.kind == TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
 		const ovDefaultOffset = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
@@ -3498,10 +3533,13 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 			const instSym = callInstantiateGeneric(extWinnerSym, recvBindings.names, recvBindings.types, ctx, callNode.location);
 			if (instSym != null) {
 				callNode.resolvedSym = instSym;
-				(callNode.data as CallExprData).callee.resolvedSym = instSym;
+				winnerType = stripReceiverParam(instSym.symbolType);
 			}
 		}
 	}
+	const callee = (callNode.data as CallExprData).callee;
+	callee.resolvedSym = callNode.resolvedSym;
+	callee.nodeType = winnerType;
 	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
 }
 

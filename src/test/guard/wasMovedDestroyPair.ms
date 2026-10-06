@@ -1,4 +1,6 @@
 // optimizer.nim wasMovedDestroyPair: a pair inside one block is elided, a try-body wasMoved never pairs with a finally destroy; JS runs no struct hooks, so no GUARD-JS lane.
+// A call result written into a declared literal is consumed in place, with no temporary to destroy
+// (injectdestructors.nim `p`: nkObjConstr passes its fields as sinkArg, a call in sinkArg is consumed).
 
 struct R { id: int32; name: string; }
 struct Holder { r: R; tag: string; }
@@ -45,7 +47,7 @@ log.push("|");
 raisingBefore();
 
 const got = log.join(",");
-if (got == "4,|,4,0,|,end,9,0,|,8,0,|,mid,7,0") {
+if (got == "4,|,4,0,|,end,9,0,|,8,|,mid,7,0") {
 	console.log("GUARD-OK");
 } else {
 	console.log("GUARD-RED " + got);

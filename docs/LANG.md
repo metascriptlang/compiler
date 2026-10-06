@@ -150,6 +150,7 @@ const shifted = byte << 4;
 Constants follow Nim's literal rule, with one safety addition:
 
 - An untyped constant — a literal, or a `const` declared without a type — is a literal: it flows into any slot that holds its value exactly. An integer literal is `int32` when it fits and `int64` past that; an expression of untyped integer constants folds exactly in 64 bits, so `const x = 100000 * 100000` is the `int64` 10000000000.
+- A type parameter whose only evidence is an untyped integer literal takes the literal's type, as Nim's does, not TypeScript's `number`: with `function box<T>(v: T): T[]`, `box(0)` is `int32[]` and `box(3000000000)` `int64[]` on C, JS and the Raiser, and `const f: number[] = box(0)` is refused; `box<number>(0)` or `box(0.0)` gives `number[]`.
 - Object literals joined by an array literal, a conditional, a `match` or an inferred return are joined field by field, as two numbers join: `[{ low: 11 }, { low: 4294967295 }]` is `{ low: int64 }[]` and prints 4294967295 on every backend. A field constant the joined field cannot hold is refused (`[{ low: u }, { low: -1 }]` with `u: uint32`, as `[u, -1]` is), and so is an element that is not a literal and has another field width (`[a, { low: 4294967295 }]` with `const a = { low: 11 }`). A spread joins with its element type (`[...int64s, 1]` is `int64[]`); a spread whose elements the array cannot hold as they are is refused, and so is one whose elements would each be converted into a union element (`[...strings, 3]`, which TypeScript types `(string | number)[]`).
 - Array literals joined the same way widen their element type: `[[1, 2], [3, 4294967295]]` is `int64[][]` and prints 4294967295 on every backend, one level deeper too, `[[], [1, 2]]` is `int32[][]`, and `c ? [1] : [4294967295]` is `int64[]`; a constant the joined element cannot hold (`[[-1], [u]]` with `u: uint64`) and an element that is not a literal (`[a, [4294967295]]` with `a: int32[]`) are refused (corpus `nestedArrayLiteralWidths`).
 - A typed constant keeps its declared type: `const MAX: int64 = 100` narrows into `int32` only through `as`.
@@ -564,14 +565,28 @@ function fail(msg: string): never {
 A function or method without a return annotation returns what its body returns, wherever it is
 called from: a call checked before the callee's body (a later function, a later method through
 `this` or a parameter, a module that imports this one back) checks that body first. A return type
-that would depend on itself through another unannotated routine is refused; a routine that only
-calls itself, or one whose call back is a statement that discards the result, still infers. Measured
-on C, JS and the Raiser (corpus `callBeforeTheCalleeBody`, `callBeforeTheCalleeBodyAcrossModules`):
+that would depend on itself through another unannotated routine is refused; a call back that is a
+statement discarding the result still infers. Measured on C, JS and the Raiser (corpus
+`callBeforeTheCalleeBody`, `callBeforeTheCalleeBodyAcrossModules`):
 
 ```typescript
 function a(n: number) { if (n > 0) return b(n - 1); return 3; }
 function b(n: number) { return a(n); }
 // error: cannot infer the return type of 'a': 'b' reads it while 'a' is still being checked (a -> b -> a); annotate the return type of 'a'
+```
+
+A routine that calls itself reads the type its returns before the call have given; it infers when
+every later return keeps that type (`if (n < 2) return n; return fib(n - 1) + fib(n - 2);` is a
+`number`). A self call before any return, or one that read a type a later return widens, is refused,
+because the call would compute with the narrower type. Measured 2026-10-06 on C, JS and the Raiser
+(corpus `selfRecursionKeepsItsInferredReturn`); before, `if (n <= 0) return 0; return f(n - 1) + 0.5;`
+printed `0` on C and the Raiser and `1.5` on JS:
+
+```typescript
+function f(n: number) { return n <= 0 ? 0 : f(n - 1) + 1; }
+// error: cannot infer the return type of 'f': it calls itself before any return gives it a type; annotate the return type of 'f'
+function g(n: number) { if (n <= 0) return 0; return g(n - 1) + 0.5; }
+// error: cannot infer the return type of 'g': this call reads it as 'int32', but a later return makes it 'float64'; annotate the return type of 'g'
 ```
 
 A generator without a return annotation is an `Iterator<T>` of what it yields, joined as returns
@@ -667,6 +682,16 @@ TypeScript's implicit `constructor(...args) { super(...args); }`: the parent's b
 the subclass's field initializers. A missing argument takes the parent's default, evaluated in the
 parent's module, also in an explicit `super(...)`; a parent below a generic instance takes the
 instance's parameter types.
+
+In a class that declares a constructor, a field without an initializer whose type has no default
+value (an array, a class instance, a `Map`, a function) must be assigned on every path of the
+constructor body, as `tsc --strict` requires (TS2564). An assignment in only one branch, in a method
+the constructor calls, in a nested function, or after an early `return` does not count: `Field
+'items' has no initializer and is not assigned on every path of the constructor`, reported at the
+field (C, JS and Raiser alike). A path that throws needs nothing. Numbers, booleans, strings and
+structs keep their zero value on C and the Raiser; `items?: T[]` and `items: T[] | null` start
+null; `items!: T[]` is refused, since nothing would assign it. A class without a constructor is not
+checked yet (checker3pass `constructorFieldAssignment`).
 
 ```typescript
 class Base { u: int32; constructor(u: int32, w: string = "p") { this.u = u * 2; } }
@@ -1047,14 +1072,9 @@ points; three places are deliberately narrower here. It lets any module declare 
 starts compiling project-wide once `converter toBool(x: int): bool` is imported) — rule 2 closes that.
 It takes the first of two converters for one pair silently — rule 4 refuses. It applies converters
 inside overload scoring and to both operands (`j + j` gives `0`) — rule 5 applies them only where the
-target is already settled and to the operand whose other side is typed. It replaces the old
-`as<TargetType>` protocol, which found `asU` by the TARGET'S NAME, so any method called `asString`
-became an implicit conversion (`asString(this arr: uint8[])` in std made `const s: string = bytes`
-compile and run) — a converter is found by its pair of types, and naming a method `asInt32` now means
-nothing to the compiler (`const s: string = bytes` now reaches the `string`-slot gap of
-`~/metascript/.inbox/compiler/2026-09-19-union-into-string-slot-accepted.md`: the checker says nothing and
-clang rejects the C): `const n: int32 = w` with only `asInt32(this w: W)` declared is "Type 'W' is not
-assignable to type 'int32' — … (convert explicitly or declare a converter to 'int32')".
+target is already settled and to the operand whose other side is typed. A converter is found by its
+pair of types, never by a method's name: `const n: int32 = w` with only `asInt32(this w: W)` declared is
+"Type 'W' is not assignable to type 'int32' — … (convert explicitly or declare a converter to 'int32')".
 
 First user: JSX boundary lowering — see `docs/LANG-JSX.md` "Boundary Lowering via Converter".
 
@@ -1112,6 +1132,14 @@ A call that raises leaves the target of its assignment unchanged: after `x = mk(
 struct with a string field) and wherever it lives (a local, a field, an array element, a global set
 from a function the raise leaves). Measured 2026-10-05 on C (drc, orc, danger), `--target=js` and
 `--target=raiser` with corpus `raiseKeepsAssignedValue`; before, C stored the callee's zeroed result.
+
+A failed run-time check (an index out of bounds, a wrong class in `as`, an integer division by zero,
+a value outside an enum or integer range, a union member that is not the one held) is not an
+exception: it stops the program with `Error: <message>` on stderr and exit 1, inside a `try` too,
+and no `catch` sees it. On a JS host without `process.exit` the failure is an error that every
+emitted `catch` throws again (read from the emitted code, not run in a browser). Measured 2026-10-06 with C, `--target=js` and `--target=esm` (corpus
+`failedConversionInTryStops`, `failedIndexInTryStops`); before, JS caught both. The Raiser stops too
+but reports `raiser runtime error: …`, and does not yet check an enum range or a union member.
 
 ## Type System
 
@@ -1248,6 +1276,12 @@ type Extended = IUser & { role: string };
 // Struct intersection — compose value types from data-only interfaces
 struct SuperUser = IUser & { role: string; };
 ```
+
+A union value carries the position of the member it holds, so `int32 | string` and
+`string | int32` are different types: one is refused where the other is expected, with an error that
+says the members are the same in another order. A value narrowed to one member fits any union that
+holds that member, whatever the order. Measured 2026-10-06 on C, JS and the Raiser (corpus
+`narrowedUnionIntoAnotherOrder`); before, C read the narrowed value with the wrong member's layout.
 
 #### `as` between a union and its members
 
@@ -1876,6 +1910,12 @@ const user = await fetchUser(42);
 
 `async` functions return `Promise<T>`. The compiler desugars `await` into a state machine (stepper pattern) — each `await` splits the function body into states, with callbacks resuming execution when the awaited promise settles.
 
+A promise never holds a promise. `Promise<Promise<number>>` is refused where it is written (through
+an alias too), `spawn(work)` with `async function work()` is refused at the call with the rewrite
+`await work()` or `await spawn(() => workSync())`, and an async body whose return is itself a
+promise (`async function wrap() { return work(); }`) is refused with `return await ...`. TypeScript
+flattens these; refusing them keeps C, JS and the Raiser on one meaning (checker3pass `nestedPromise`).
+
 #### Promise Chaining (.then / .catch / .finally)
 
 ```typescript
@@ -2469,6 +2509,7 @@ extern function ok<T>(val: T): Result<T, any>;
 | `@comptime` | block, function | Evaluate a block, or every call of the function, while compiling; see [docs/LANG-METAPROGRAMMING.md](LANG-METAPROGRAMMING.md) "`@comptime` functions" | Verified on C and JS (2026-10-03) |
 | `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
 | `@inline` | module-level function, extension, operator | C gives every module that calls the routine its own `static inline` copy, so the C compiler can inline it without LTO; see [`@inline`](#inline) | Verified on C, JS and Raiser (2026-10-05) |
+| `@noinline` | function | Keep the function out of line on the C backend (`__attribute__((noinline))` on its prototype and definition); the JS backend emits it unchanged; anything but a function is an error ("@noinline applies to a function, not to 'x'"), and so is a function marked both `@inline` and `@noinline` | Verified on C and JS (2026-10-05) |
 
 ##### Which of the three a declaration wants
 
@@ -2636,8 +2677,10 @@ the Raiser. A trait `when` builds under `--os=solana` (linked, not run).
 | Build mode | `debug`, `release`, `danger`, plus `mode=release` |
 | Hot code reload | `hcr` under `--hcr` |
 | Command line | `-d:myFlag`, `-d:tier=3`, `--define:name=value` |
+| Project `build.ms` | `defines: { programId: "Fg6P…", tier: 2, fast: true }` |
+| Project directory (computed) | `projectDir`, the directory of the project's `build.ms` |
 
-A flag with no value is `"true"`. A name that is not defined is **false, never an
+A flag with no value is `"true"`. The `defines` of the `build.ms` the entry file sits under (the first one found walking up from it) go in before the source is parsed, and a `-d:` of the same name wins, as Nim reads its project config before the command line; a string, a number or a boolean is stored as its text, any other value is an error, and so is a name msc sets itself (`os`, `backend`, `solana`, `projectDir`, …). Measured 2026-10-06 on C, JS and the Raiser: corpus `buildDefines` reads a string, a number, `true` and `false` through `define()` and `when`, and `-d:tier=9` overrides the file's `tier: 2`. `build.ms` is read in the `const config = { … }; export default config;` form; `export default { … }` is not recognised. A name that is not defined is **false, never an
 error** — the namespace is open, so a typo cannot be distinguished from a flag the
 user has not set. `msc --help-defines` lists everything currently defined.
 
@@ -3420,6 +3463,10 @@ function toItems(this self: TokenStream): Token[] {
 for (const tok of stream) { ... }
 ```
 
+The extension may be a generator, `function* toItems(this b: Bag): Iterator<T>`, and a `toPairs` generator yielding
+`[K, V]` ranges with `[k, v]`; measured 2026-10-06 on C, JS and the Raiser (corpus `extensionGeneratorIterable`;
+before, JS emitted its `yield` inside a plain function).
+
 #### Convention-based dispatch protocols (overview)
 
 The `toItems` mechanism is one of a family of **convention-based dispatch protocols**: extension methods with reserved names that the compiler synthesizes calls to at well-defined syntax sites. Type opts in by declaring the extension; non-opt-in types remain strict.
@@ -3502,8 +3549,6 @@ Self-referential return enables infinite chaining. Non-opt-in types (e.g. `User`
 The implicit conversion of a value into another type at a slot, an argument, `as U` or an operand is a
 `converter`, declared beside the type — rules and measurements in
 [Converter Declarations](#converter-declarations).
-The old `as<TargetType>` protocol (a method named `as` + target name) is gone; such methods are ordinary
-methods now.
 
 A condition is not a converter site: corpus `785-runtimeConverterOperand` declares
 `converter boxToFlag(b: Box): boolean { return false; }` and `box ? "yes" : "no"` still prints `yes`.
@@ -3757,7 +3802,7 @@ The standard general-purpose array. It is a **reference type** — heap-allocate
   const alias = items;  // shares the same underlying array
   alias.push(5);        // items is now [1, 2, 3, 4, 5]
   ```
-- **Elements are invariant** (differs from TypeScript, which lets `Dog[]` stand in for `Animal[]`). An array is shared by pointer, so a view with a wider element type would let `push(new Animal())` land in a `Dog[]` and the next `dogs[i].breed` read past the object (measured as an ASan heap-buffer-overflow, 2026-09-10). Every route is closed: argument, `Span<T>`, `T[N]`, declaration, field, return, and a generic `T[]` whose `T` another argument would widen.
+- **Elements are invariant** (differs from TypeScript, which lets `Dog[]` stand in for `Animal[]`). An array is shared by pointer, so a view with a wider element type would let `push(new Animal())` land in a `Dog[]` and the next `dogs[i].breed` read past the object (measured as an ASan heap-buffer-overflow, 2026-09-10). Every route is closed: argument, `Span<T>`, `T[N]`, declaration, field, return, a generic `T[]` whose `T` another argument would widen, and `as`: `dogs as Animal[]` is "cannot convert Dog[] to Animal[]: it holds Dog where Animal[] holds Animal, …", and so is `int32[] as int64[]`, on C and JS (measured 2026-10-06). The same holds for `T[N]`, `Span<T>` (refused as "a view keeps its element type"), tuples, `Result` and `T | null`: their elements must be equal up to `distinct`, as the reference requires (`checkConvertible`). A nullable union narrowed or widened by member is not such a reinterpret: `x as string | null` from `number | string | null`, or `s as "a" | "b" | null` from `string | null`, tests membership and builds the carrier (`checker3pass/scenarios/resultCarrierConversions.ms`, `c/asCoercionNullable.ms`, `js/asConversion.ms`, `lang/nullableInstantiation.ms`, measured 2026-10-06), and a nullable class reference converts as the class does (`base as Derived | null` is the checked down-conversion, corpus `646-objDownConvChecked`, `655-checkedConversionToUnbuiltClass`), while `P | null as Q | null` of two structs and `int32 | null as uint8 | null` are refused.
   ```typescript
   class Animal { name = ""; }
   class Dog extends Animal { breed = ""; }

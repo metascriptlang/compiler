@@ -21,7 +21,7 @@ import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
-import { isAssignable, nonNullMemberOfNullable } from "./compat";
+import { isAssignable, nonNullMemberOfNullable, sameType } from "./compat";
 import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType, findViewType, ownedAlternativeOf } from "./types";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseSuspendingViewParam, bodyMentionsName } from "./resolvePass";
@@ -36,7 +36,7 @@ import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, refuseFallingOffEnd, refuseGeneratorReturnValue } from "./checkExprPass";
+import { checkExpr, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise } from "./checkExprPass";
 import { inlineDecorator } from "./decoratorHelpers";
 import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
@@ -44,13 +44,13 @@ import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./tem
 import { fitNode, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerLaterDeclarationNote } from "./checkerCallbacks";
+import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerSelfReadType, registerLaterDeclarationNote } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
 import { reportConverterCycles } from "./converterCycle";
 import { parseSource } from "../parser/statements/validation";
-import { BreakState, InitTracker, createInitTracker, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, varDecl } from "./initTracker";
+import { BreakState, InitTracker, createInitTracker, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, varDecl, requiresInit } from "./initTracker";
 
 // Extract directory from module path (e.g. "src/foo/bar.ms" → "src/foo")
 // Brief type description for error messages
@@ -1019,6 +1019,7 @@ function checkFunctionDeclBody(ctx: CheckerContext, node: Node, sym: Symbol): vo
 	_routinesInFlight.pop();
 	settleReturnInference(ctx, sym, d.fnName, d.fnFlags, d.nameLocation, outer);
 	settleDiscardedCalls(sym);
+	settleSelfReads(ctx, sym);
 
 	if (d.fnReturnType == "" && isLifecycleHookName(d.fnName) && getExtReceiverType(d.fnFlags) != "") {
 		refuseHookInferredReturn(ctx, d.fnName, d.nameLocation, sym.symbolType);
@@ -1045,6 +1046,7 @@ function beginReturnInference(ctx: CheckerContext, fnType: Type): ReturnInferenc
 }
 
 function settleReturnInference(ctx: CheckerContext, sym: Symbol, name: string, flags: string, at: SourceLocation, outer: ReturnInference): void {
+	const returnInferred = sym.symbolType.kind == TypeKind.Function && sym.symbolType.typeReturn != null && isUnresolvedType(sym.symbolType.typeReturn);
 	if (sym.symbolType.kind == TypeKind.Function
 		&& sym.symbolType.typeReturn != null
 		&& isUnresolvedType(sym.symbolType.typeReturn)
@@ -1078,6 +1080,10 @@ function settleReturnInference(ctx: CheckerContext, sym: Symbol, name: string, f
 	//   - No annotation + body returns T → wrap inferred T into Promise<T>
 	//   - No annotation + empty body    → default to Promise<void>
 	// Excludes async_generator (returns AsyncIterator<T>).
+	if (returnInferred && hasFlag(sym, SymbolFlag.Async) && flags != "async_generator"
+		&& sym.symbolType.typeReturn != null && isAwaitable(sym.symbolType.typeReturn)) {
+		refuseReturnedPromise(ctx, `async function '${name}'`, sym.symbolType.typeReturn, at);
+	}
 	if (hasFlag(sym, SymbolFlag.Async)
 		&& flags != "async_generator"
 		&& sym.symbolType.kind == TypeKind.Function
@@ -1102,6 +1108,51 @@ interface DiscardedCall {
 	sym: Symbol;
 }
 
+interface SelfRead {
+	read: Node;
+	sym: Symbol;
+	seen: Type;
+}
+
+let _selfReads: SelfRead[] = [];
+
+function readOwnReturn(ctx: CheckerContext, sym: Symbol, read: Node): void {
+	const name = routineDisplayName(ctx, sym);
+	if (ctx.inferredReturn == null || isUnresolvedType(ctx.inferredReturn)) {
+		addError(ctx, `cannot infer the return type of '${name}': it calls itself before any return gives it a type; annotate the return type of '${name}'`,
+			read.location.line, read.location.column);
+		return;
+	}
+	const joined = closureStorageType(ctx.inferredReturn);
+	const seen = hasFlag(sym, SymbolFlag.Async) && !isAwaitable(joined) ? createPromise(joined) : joined;
+	_selfReads.push({ read, sym, seen });
+}
+
+function selfReadType(callee: Node): Type | null {
+	for (let i = _selfReads.length - 1; i >= 0; i -= 1) {
+		if (_selfReads[i].read == callee) return _selfReads[i].seen;
+	}
+	return null;
+}
+
+function settleSelfReads(ctx: CheckerContext, sym: Symbol): void {
+	const final = sym.symbolType.typeReturn;
+	let kept = 0;
+	for (const r of _selfReads) {
+		if (r.sym != sym) {
+			_selfReads[kept] = r;
+			kept += 1;
+			continue;
+		}
+		if (final != null && !isUnresolvedType(final) && !sameType(r.seen, final)) {
+			const name = routineDisplayName(ctx, sym);
+			addError(ctx, `cannot infer the return type of '${name}': this call reads it as '${typeDisplayName(r.seen)}', but a later return makes it '${typeDisplayName(final)}'; annotate the return type of '${name}'`,
+				r.read.location.line, r.read.location.column);
+		}
+	}
+	_selfReads.length = kept;
+}
+
 function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
 	const fnType = sym.symbolType;
 	if (fnType == null || fnType.kind != TypeKind.Function || !isUnresolvedType(fnType.typeReturn)) return;
@@ -1114,6 +1165,7 @@ function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
 		const discarded = discardedCall(ctx, read);
 		if (discarded != null) _discardedInFlightCalls.push({ call: discarded, sym });
 		else if (at < _routinesInFlight.length - 1) refuseInferenceCycle(ctx, at, read);
+		else if (!local && ctx.currentFunction == sym) readOwnReturn(ctx, sym, read);
 		return;
 	}
 	if (local) {
@@ -1355,9 +1407,16 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 			if (trimGp != "") defineGenericParam(ctx, trimGp);
 		}
 	}
+	let ctorExits: string[][] | null = null;
 	for (const member of d.classBody) {
+		if (member.kind == NodeKind.ConstructorDecl) {
+			ctorExits = [];
+			ctx.ctorExitsNext = ctorExits;
+		}
 		checkClassMember(ctx, member, d.className, sym.symbolType);
+		ctx.ctorExitsNext = null;
 	}
+	refuseUnassignedFields(ctx, d.classBody, ctorExits);
 	if (hasGenerics) {
 		ctx.inGenericContext -= 1;
 		closeScope(ctx.table);
@@ -1365,6 +1424,26 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	closeScope(ctx.table);
 
 	sym.state = SymbolState.Checked;
+}
+
+function refuseUnassignedFields(ctx: CheckerContext, body: Node[], ctorExits: string[][] | null): void {
+	if (ctorExits == null) return;
+	for (const raw of body) {
+		let member = raw;
+		if (member.kind == NodeKind.DecoratedDecl) {
+			const dd = member.data as DecoratedDeclData;
+			if (dd.decoratedNode != null) member = dd.decoratedNode;
+		}
+		if (member.kind != NodeKind.PropertyDecl) continue;
+		const pd = member.data as PropertyDeclData;
+		if (pd.propIsStatic || pd.propInitializer != null || !requiresInit(member.nodeType)) continue;
+		let assigned = true;
+		for (const exit of ctorExits) {
+			if (!exit.includes("this." + pd.propName)) assigned = false;
+		}
+		if (assigned) continue;
+		addError(ctx, `Field '${pd.propName}' has no initializer and is not assigned on every path of the constructor: type '${typeDisplayName(member.nodeType)}' has no default value — initialize it ('${pd.propName}: ${pd.propType} = ...'), assign it in the constructor, or declare it optional with '?'`, member.location.line, member.location.column);
+	}
 }
 
 function checkActorDecl(ctx: CheckerContext, node: Node): void {
@@ -1580,6 +1659,7 @@ function checkMethodBody(ctx: CheckerContext, node: Node, sym: Symbol, classType
 	_routinesInFlight.pop();
 	settleReturnInference(ctx, sym, d.methodName, d.methodFlags, d.nameLocation, outer);
 	settleDiscardedCalls(sym);
+	settleSelfReads(ctx, sym);
 	if (node.nodeType != null && node.nodeType != sym.symbolType && node.nodeType.kind == TypeKind.Function) node.nodeType.typeReturn = sym.symbolType.typeReturn;
 	if (d.methodIsStatic) closeScope(ctx.table);
 }
@@ -2198,6 +2278,7 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 
 function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ReturnStmtData;
+	if (ctx.ctorExits != null) ctx.ctorExits.push(collectNewInits(ctx.initTracker, 0));
 	if (ctx.currentFunction == null) {
 		addError(ctx, "return outside of function", node.location.line, node.location.column);
 	}
@@ -2582,6 +2663,9 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	const _fb0 = performance.now();
 	const savedFunction = ctx.currentFunction;
 	const savedMatchDepth = ctx.matchExprDepth;
+	const savedCtorExits = ctx.ctorExits;
+	ctx.ctorExits = ctx.ctorExitsNext;
+	ctx.ctorExitsNext = null;
 	ctx.currentFunction = sym;
 	ctx.matchExprDepth = 0;
 	const compileTimeBody = sym != null && hasFlag(sym, SymbolFlag.CompileTime);
@@ -2641,6 +2725,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	if (body.kind == NodeKind.BlockStmt) {
 		checkStmt(ctx, body);
 		refuseFallOffEndOf(ctx, sym, body);
+		if (ctx.ctorExits != null && breaksBlock(body) == BreakState.BsNone) ctx.ctorExits.push(collectNewInits(ctx.initTracker, initSnap));
 	} else {
 		// Expression body (arrow functions) — infer return type
 		checkExpr(ctx, body, null);
@@ -2655,6 +2740,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	// PARALOCK Phase 1: restore affine tracker (erases this function's consumed set)
 	restoreConsumeState(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = savedBlock;
+	ctx.ctorExits = savedCtorExits;
 	ctx.currentFunction = savedFunction;
 	ctx.matchExprDepth = savedMatchDepth;
 	if (compileTimeBody) ctx.compileTimeBodyDepth = ctx.compileTimeBodyDepth - 1;
@@ -3774,6 +3860,7 @@ export function checkProgramWithRegistryCancellable(
 registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
 registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
 registerDemandReturn(demandReturnType);
+registerSelfReadType(selfReadType);
 registerLaterDeclarationNote(laterDeclarationNote);
 
 // ===== Tests =====

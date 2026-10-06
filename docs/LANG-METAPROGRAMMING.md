@@ -116,6 +116,12 @@ const TABLE = @comptime {
 
 Supports: number, string, boolean, null, array, object returns. Each maps to the corresponding literal AST node.
 
+The block runs on the Raiser with the Raiser's std whatever the build target. A `Map` or a `HashMap` built and ranged
+inside it folds on `--target=raiser` and on a JS build (measured 2026-10-06, corpus `comptimeMapOnEveryTarget`;
+before, a JS build stopped at `Undefined variable 'msMapFatal'`). Not yet: on a C build a comptime `Map.set` stops at
+`Ambiguous call to overloaded extension method 'push'` (a `HashMap` folds), and a class whose constructor calls an
+extension on `this`, `Set` among them, cannot be built at comptime on any target.
+
 A `@comptime` block also gets the checker context a macro body gets, so the typed queries of Tier 2 answer inside one (landed 2026-09-12). Measured 2026-09-13 against a class `Later` declared in the same module: `getTypeImpl(bindSym("Later"))` → `Struct` (the `Ref` is peeled), `getImpl(bindSym("Later"))` → its `ClassDecl`, `resolveType("Later | null")` → `TypeUnion`, and `typeKind(resolveType("int32"))` → `Int32`.
 
 ### `@comptime` functions
@@ -123,6 +129,8 @@ A `@comptime` block also gets the checker context a macro body gets, so the type
 A function marked `@comptime` runs only while compiling: each call is evaluated where it is written and replaced by its value, so `export const PROGRAM: uint64 = digitSum("2222");` is the constant `198535` in the emitted C and JS and builds under `--os=solana`. Every argument must be a compile-time value — a literal, a module-level `const` built from literals, or an expression of those; a parameter, a local or a module `let` is an error at the call. Calls inside other compile-time code (a `@comptime` function body, a `@comptime` block, a macro) run in the evaluator and are not checked this way. An overloaded `@comptime` function is refused, because the evaluator keys routines by name.
 
 Measured 2026-10-03 on `wt/comptime-calls`: corpus `1054-comptimeCallFolds` prints `program=198535 named=198535 joined=198535 key=7,14 weight=30 nested=20 chain=18 local=42` on the c, orc, danger, js, esm and raiser lanes, with no call left in the emitted C. Not done: a `@comptime` function that stays reachable (exported from the entry module, or used as a value) is still emitted as run-time code.
+
+A folded call passed to a macro keeps the call's type when the macro hands it back, as the same program without the macro does: with `macro same(x: Node): Node { return x; }`, `lengthOf(keyOf(1))` reads `keyOf`'s `Key.bytes` as `uint8[4]`, `let wide = same(big())` with `big(): int64` takes `5000000000`, and `same(small())` with `small(): float32` stays `float32` (`number` into it is refused). The value is re-checked against that type, so a macro may still edit it; an edited copy is checked as a new node. Measured 2026-10-06 on `wt/solana-checker-15`: corpus `foldedValueThroughMacro` prints `4 5000000000 0.75 6000000000 200` on C, JS and the Raiser.
 
 ### Planned enhancements
 

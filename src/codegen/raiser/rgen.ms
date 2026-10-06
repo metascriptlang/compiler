@@ -261,7 +261,7 @@ function compileClassConstructor(
 interface RaiserReservedSlot { idx: number; fnName: string; params: string[]; body: Node; arity: number; isMethod: boolean; }
 interface RaiserReservedCtor { idx: number; initIdx: number; className: string; classBody: Node[]; ctorParams: string[]; ctorBody: Node | null; classSym: Symbol | null; }
 
-export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, program: Node, wantFn: string): int32 {
+export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, program: Node, wantFn: string, wantSym: Symbol | null = null): int32 {
 	const pd = program.data as ProgramData;
 	let wantIdx = -1;
 
@@ -276,7 +276,13 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 			image.functions.push(raiserPlaceholderFunc());
 			const entry: RaiserFuncEntry = { name: fd.fnName, index: idx };
 			funcMap.items.push(entry);
-			if (fd.fnName == wantFn) wantIdx = idx;
+			if (funcMap.symbolIndices != null && fnNode.resolvedSym != null) {
+				funcMap.symbolIndices.set(fnNode.resolvedSym, idx);
+			}
+			if (fd.fnName == wantFn) {
+				wantIdx = idx;
+				if (funcMap.symbolIndices != null && wantSym != null) funcMap.symbolIndices.set(wantSym, idx);
+			}
 			reserved.push({ idx, fnName: fd.fnName, params: fd.params, body: fd.fnBody, arity: fd.params.length, isMethod: false });
 		}
 		const classNode = unwrapToClassDecl(pd.programStmts[i]);
@@ -286,7 +292,13 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 			const ctorIdx = image.functions.length;
 			image.functions.push(raiserPlaceholderFunc());
 			funcMap.items.push({ name: ctorKey, index: ctorIdx });
-			if (ctorKey == wantFn) wantIdx = ctorIdx;
+			if (funcMap.symbolIndices != null && classNode.resolvedSym != null) {
+				funcMap.symbolIndices.set(classNode.resolvedSym, ctorIdx);
+			}
+			if (ctorKey == wantFn) {
+				wantIdx = ctorIdx;
+				if (funcMap.symbolIndices != null && wantSym != null) funcMap.symbolIndices.set(wantSym, ctorIdx);
+			}
 			let ctorParams: string[] = [];
 			let ctorBody: Node | null = null;
 			for (const member of cd.classBody) {
@@ -296,6 +308,9 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 					const idx = image.functions.length;
 					image.functions.push(raiserPlaceholderFunc());
 					funcMap.items.push({ name: methodKey, index: idx });
+					if (funcMap.symbolIndices != null && member.resolvedSym != null) {
+						funcMap.symbolIndices.set(member.resolvedSym, idx);
+					}
 					reserved.push({ idx, fnName: methodKey, params: md.methodParams, body: md.methodBody, arity: md.methodParams.length, isMethod: true });
 				} else if (member.kind == NodeKind.ConstructorDecl) {
 					const ctd = member.data as ConstructorDeclData;
@@ -362,7 +377,7 @@ interface RaiserProjectDecl {
 
 export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModule {
 	const functions: RaiserFunction[] = [];
-	const globals: RaiserFuncMap = { items: [] };
+	const globals: RaiserFuncMap = { items: [], symbolIndices: null };
 	for (const moduleInput of modules) {
 		const program = moduleInput.program.data as ProgramData;
 		for (const statement of program.programStmts) {
@@ -376,9 +391,9 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 
 	// --- Pass 1: Global declaration collection ---
 	const globalFuncMapItems: RaiserFuncEntry[] = [];
-	const globalFuncMap: RaiserFuncMap = { items: globalFuncMapItems };
+	const globalFuncMap: RaiserFuncMap = { items: globalFuncMapItems, symbolIndices: null };
 	const globalEnumMapItems: RaiserFuncEntry[] = [];
-	const globalEnumMap: RaiserFuncMap = { items: globalEnumMapItems };
+	const globalEnumMap: RaiserFuncMap = { items: globalEnumMapItems, symbolIndices: null };
 	let funcIdx = 0;
 	const projectDecls: RaiserProjectDecl[] = [];
 	const noNodes: Node[] = [];

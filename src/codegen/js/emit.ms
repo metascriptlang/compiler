@@ -5,7 +5,7 @@
 
 import { Node, NodeKind, TypeKind, BlockStmtData } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
-import { JsImportEntry } from "../../checker/context";
+import { JsImportEntry, routineKindFlag } from "../../checker/context";
 import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, shiftLines } from "./sourcemap";
 import { mangleModuleName } from "../c/names";
 
@@ -334,7 +334,8 @@ export function emitBodyOrEmpty(gen: JSGenerator, body: Node): void {
 // that still contains an AwaitExpr must be emitted `async` — declared or not.
 // Pure syntax decision at emission; no semantic change on the C side.
 export function needsAutoAsync(flags: string, body: Node): boolean {
-	if (flags == "async" || flags == "async_generator") return false;
+	const kind = routineKindFlag(flags);
+	if (kind == "async" || kind == "async_generator") return false;
 	return body != null && bodyContainsAwait(body);
 }
 

@@ -201,7 +201,7 @@ function tableOf(shape, datas) {
 	for (const f of shape.fields) {
 		const encoded = fieldWords(f, datas);
 		fields.push(...encoded.words);
-		if (encoded.data) operands.push({ index: fields.length - encoded.words.length, expr: [`wordOf(${encoded.data}.discriminator())`, `sizeof(${encoded.data}) as uint64`] });
+		if (encoded.data) operands.push({ index: fields.length - encoded.words.length, expr: [`@comptime { return word(${encoded.data}.discriminator()); }`, `sizeof(${encoded.data}) as uint64`] });
 	}
 	const ext = [];
 	const prelude = [];
@@ -312,7 +312,7 @@ function tableOf(shape, datas) {
 	return { fields, constraints: stream, operands, ext, prelude, slots, fallbacks };
 }
 
-const sumOf = (shape, holder) => shape.fields.map((f) => `(${holder}.${f.name} as Account).address`).join(" + ");
+const sumOf = (shape, holder) => shape.fields.map((f) => f.type === "Account" ? `${holder}.${f.name}.address` : `${holder}.${f.name}.asAccount().address`).join(" + ");
 
 function handlerSource(shape, datas) {
 	if (form === "std") {
@@ -378,9 +378,9 @@ function chainBody(shape) {
 			case "SystemAccount": call = `systemCode(${i}, ${out})`; break;
 			case "Account": call = `anyCode(${i}, ${out})`; break;
 			case "Program": call = `programCode(${i}, ${PROGRAM_INDEX[t.inner]}, ${out})`; break;
-			case "Owned": call = `ownedCode(${i}, wordOf(${t.inner}.discriminator()), sizeof(${t.inner}) as uint64, ${out})`; break;
-			case "Mutable": call = `mutableCode(${i}, wordOf(${t.inner}.discriminator()), sizeof(${t.inner}) as uint64, ${out})`; break;
-			case "Delegated": call = `delegatedCode(${i}, wordOf(${t.inner}.discriminator()), sizeof(${t.inner}) as uint64, ${out})`; break;
+			case "Owned": call = `ownedCode(${i}, @comptime { return word(${t.inner}.discriminator()); }, sizeof(${t.inner}) as uint64, ${out})`; break;
+			case "Mutable": call = `mutableCode(${i}, @comptime { return word(${t.inner}.discriminator()); }, sizeof(${t.inner}) as uint64, ${out})`; break;
+			case "Delegated": call = `delegatedCode(${i}, @comptime { return word(${t.inner}.discriminator()); }, sizeof(${t.inner}) as uint64, ${out})`; break;
 			default: call = null;
 		}
 		if (call) {
@@ -492,6 +492,7 @@ function programSource(shapes, datas, extra = "") {
 	accounts,
 	address,
 	argU8,
+	asAccount,
 	associated,
 	bump,
 	constraint,
@@ -503,7 +504,7 @@ function programSource(shapes, datas, extra = "") {
 	seeds,
 	tokenAuthority,
 	tokenMint,
-	wordOf,
+	word,
 } from "std/solana";
 import { Mint, TokenAccount } from "std/solana/token";
 ${form === "chain" ? 'import { exclusiveWritable } from "std/solana";\nimport { bytesAddress, seedBytes, seedKey, seedText } from "std/solana/seed";\nimport { anyCode, associatedCode, delegatedCode, failed, keysCode, mutableCode, ownedCode, programCode, seedsCanonicalCode, seedsGivenCode, signerCode, systemCode, tokenAuthorityCode, tokenMintCode, writableCode, writableSignerCode } from "./accountTableProto";\n' : ""}${form === "table" ? 'import { bytesAddress } from "std/solana/seed";\nimport { failed, verifiedAccounts, verifiedConstraints } from "./accountTableProto";\n' : ""}`;
@@ -974,8 +975,8 @@ async function escrow() {
 			source = source.replace(original, `${parts.body}\tconst x = $accounts;\n`);
 		}
 		const imports = form === "table"
-			? 'import { bytesAddress } from "std/solana/seed";\nimport { failed, verifiedAccounts, verifiedConstraints } from "./accountTableProto";\nimport { wordOf } from "std/solana";\n'
-			: 'import { exclusiveWritable, wordOf } from "std/solana";\nimport { bytesAddress, seedBytes, seedKey, seedText } from "std/solana/seed";\nimport { anyCode, associatedCode, delegatedCode, failed, keysCode, mutableCode, ownedCode, programCode, seedsCanonicalCode, seedsGivenCode, signerCode, systemCode, tokenAuthorityCode, tokenMintCode, writableCode, writableSignerCode } from "./accountTableProto";\n';
+			? 'import { bytesAddress } from "std/solana/seed";\nimport { failed, verifiedAccounts, verifiedConstraints } from "./accountTableProto";\nimport { word } from "std/solana";\n'
+			: 'import { exclusiveWritable, word } from "std/solana";\nimport { bytesAddress, seedBytes, seedKey, seedText } from "std/solana/seed";\nimport { anyCode, associatedCode, delegatedCode, failed, keysCode, mutableCode, ownedCode, programCode, seedsCanonicalCode, seedsGivenCode, signerCode, systemCode, tokenAuthorityCode, tokenMintCode, writableCode, writableSignerCode } from "./accountTableProto";\n';
 		source = source.replace('import { Escrow, EscrowError', `${imports}function raise(error: ProgramError): Result<void, ProgramError> {\n\treturn Result.err(error);\n}\n\n${consts}import { Escrow, EscrowError`);
 		copyFileSync(join(HERE, "accountTableProto.cms"), join(dir, "accountTableProto.cms"));
 	}

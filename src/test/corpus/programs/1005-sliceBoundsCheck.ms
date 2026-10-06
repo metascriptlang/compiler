@@ -1,7 +1,5 @@
 // @exit: 1
 // @stdout: Error: slice 1..9 out of bounds (length 4)
-// @xfail(js): node reports the uncaught slice defect with its own trace on stderr, where C prints 'Error: slice ... out of bounds (length ...)'; C also makes the defect fatal where JS lets it be caught
-// @xfail(esm): node reports the uncaught slice defect with its own trace on stderr, where C prints 'Error: slice ... out of bounds (length ...)'; C also makes the defect fatal where JS lets it be caught
 // @xfail(raiser): the Raiser VM reports the uncaught slice defect as its own 'raiser runtime error: slice ...' on stderr, not C's 'Error: slice ... out of bounds (length ...)'
 // @xfail(danger): --danger drops bound checks, so the out-of-range slice is undefined behaviour there, not a slice error
 function sum(xs: Span<int32>): int32 {

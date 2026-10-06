@@ -12,6 +12,7 @@ import {
 	FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, AwaitExprData,
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
+import { isGenericFn, routineKindFlag } from "../../checker/context";
 import { TransformContext } from "../context";
 import { syntheticToken, makeReturn } from "../util";
 import { mapChildren, isFuncBoundary } from "../walker";
@@ -35,7 +36,9 @@ function rewriteAwaits(node: Node): Node {
 // ===== Main Walk =====
 
 function isAsyncFlags(flags: string): boolean {
-	return flags == "async" || flags == "async_generator";
+	if (isGenericFn(flags)) return false;
+	const kind = routineKindFlag(flags);
+	return kind == "async" || kind == "async_generator";
 }
 
 function desugarAsyncBody(fn: Node, body: Node): void {

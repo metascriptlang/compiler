@@ -3,7 +3,7 @@
 import { platform } from "std/process";
 import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
 import { setParserDefines } from "./parser/context";
-import { defineSymbol } from "./compiler/defines";
+import { applyConfigDefines, defineSymbol, formatDefines, seedProjectDir } from "./compiler/defines";
 import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdWatchC, cmdRunHcr, cmdRunJS, cmdRunRaiser, cmdTest, cmdTestJS } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
@@ -55,6 +55,25 @@ export function main(): int32 {
 	const projectRoot = findProjectRoot(opts.inputFile);
 	const buildMsPath = join(projectRoot, "build.ms");
 	opts.projectRoot = projectRoot;
+
+	// build.ms defines go in before any source is parsed, under the command line's -d: switches.
+	const projectConfig = projectRoot != "" ? loadBuildConfig(buildMsPath, false) : null;
+	if (projectConfig != null && projectConfig.valid) seedProjectDir(opts.defines, projectRoot);
+	if (projectConfig != null && projectConfig.valid) {
+		if (projectConfig.defines.refused.length > 0) {
+			console.log(`${error("error")}: ${buildMsPath}: define '${projectConfig.defines.refused[0]}' must be a string, a number or a boolean`);
+			process.exit(1);
+		}
+		const reserved = applyConfigDefines(opts.defines, projectConfig.defines.keys, projectConfig.defines.values);
+		if (reserved != "") {
+			console.log(`${error("error")}: ${buildMsPath}: define '${reserved}' is a name msc sets from its own options (backend, --os, --cpu, --gc, the build mode); give the project's define another name`);
+			process.exit(1);
+		}
+	}
+	if (opts.showDefines) {
+		console.log(formatDefines(opts.defines));
+		process.exit(0);
+	}
 
 	// build.ms globalImports — every command that checks code must see them,
 	// so this runs before dispatch, not inside run/build. Entries are

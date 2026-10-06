@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: attempt to access a nil address
+// @xfail(raiser): raiser runtime error: cannot evaluate 'msSetHashWord' at comptime: symbol kind is Function (the BitSet key hash lowers to a C runtime helper the Raiser has no body for)
 // @stdout: 2,first,second,true,false|65 1 23 true true false 2 true true false|100 1 23 true true false 2 true true false|composite 1 23 1 23
 // @exit: 0
 

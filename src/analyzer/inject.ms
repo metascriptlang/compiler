@@ -2028,31 +2028,42 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 	if (bd.left.kind == NodeKind.MemberExpr || bd.left.kind == NodeKind.ArrayAccess || bd.left.kind == NodeKind.HiddenDeref) {
 		bd.left = processNode(bd.left, dctx, DrcMode.Normal);
 	}
+	const fieldFlags = ((stmt.data as ExprStmtData).expr.flags.has(NodeFlag.FirstWrite))
+		? MOC_IS_FIELD | MOC_IS_DECL : MOC_IS_FIELD;
 
 	// Member assignment: obj.field = expr
 	if (bd.left.kind == NodeKind.MemberExpr) {
 		const rcInfo = classifyMemberFieldRc(bd.left, dctx);
-		if (!rcInfo.needsCleanup) return stmt;
+		if (!rcInfo.needsCleanup) {
+			bd.right = processNonRcRead(bd.right, dctx);
+			return stmt;
+		}
 		bd.left = stabilizeLocation(bd.left, dctx);
 		bd.right = processNode(bd.right, dctx, DrcMode.SinkArg);
-		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, MOC_IS_FIELD, idx, stmts, dctx, loc);
+		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, fieldFlags, idx, stmts, dctx, loc);
 	}
 
 	// Array index assignment: arr[i] = expr
 	if (bd.left.kind == NodeKind.ArrayAccess) {
 		const rcInfo = classifyArrayElementRc(bd.left, dctx);
-		if (!rcInfo.needsCleanup) return stmt;
+		if (!rcInfo.needsCleanup) {
+			bd.right = processNonRcRead(bd.right, dctx);
+			return stmt;
+		}
 		bd.left = stabilizeLocation(bd.left, dctx);
 		bd.right = processNode(bd.right, dctx, DrcMode.SinkArg);
-		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, MOC_IS_FIELD, idx, stmts, dctx, loc);
+		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, fieldFlags, idx, stmts, dctx, loc);
 	}
 
 	if (bd.left.kind == NodeKind.HiddenDeref) {
 		const rcInfo = bd.left.nodeType != null ? classifyRc(bd.left.nodeType, dctx) : noRcInfo();
-		if (!rcInfo.needsCleanup) return stmt;
+		if (!rcInfo.needsCleanup) {
+			bd.right = processNonRcRead(bd.right, dctx);
+			return stmt;
+		}
 		bd.left = stabilizeLocation(bd.left, dctx);
 		bd.right = processNode(bd.right, dctx, DrcMode.SinkArg);
-		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, MOC_IS_FIELD, idx, stmts, dctx, loc);
+		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, fieldFlags, idx, stmts, dctx, loc);
 	}
 
 	if (bd.left.kind != NodeKind.Identifier) return stmt;

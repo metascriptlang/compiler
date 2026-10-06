@@ -1,6 +1,9 @@
-import { DeclKind, Node, NodeKind, bindSym, getImpl, getType } from "std/meta";
-import { eventDiscriminator, instructionDiscriminator } from "./discriminator";
+import { DeclKind, Node, NodeKind, bindSym, define, getImpl, getType, stringValue } from "std/meta";
+import { eventDiscriminator, instructionDiscriminator, word } from "./discriminator";
 import { ProgramError } from "./error";
+import { derivedAddressOf } from "./pda";
+import { Pubkey, pubkeyOf } from "./pubkey";
+import { readFile } from "std/fs";
 import {
 	argBool,
 	argBoolValid,
@@ -16,24 +19,32 @@ import {
 	argU64,
 	argU8,
 	argsFit,
-	delegatedAccount,
-	exclusiveWritable,
 	holds,
 	keysEqual,
 	keysMatch,
 	logEvent,
-	mutableAccount,
-	ownedAccount,
-	programAccount,
 	seedsCanonical,
+	seedsFolded,
 	seedsGiven,
+	unchecked,
+} from "./core";
+import {
+	createPdaAt,
+	createPdaOf,
+	delegated,
+	external,
+	externalMutable,
+	mutable,
+	owned,
+	program,
+	readArgs,
+	selectDeclaredInstruction,
+	selectInstruction,
 	signer,
 	systemAccount,
-	unchecked,
 	writable,
 	writableSigner,
-} from "./core";
-import { createPdaOf, readArgs, selectInstruction, wordOf } from "./typed";
+} from "./typed";
 import { delegateAt } from "./delegation";
 import {
 	associatedMatches,
@@ -53,27 +64,81 @@ import {
 } from "./seed";
 
 export macro instruction(): Node {
+	function byteLiteral(value: uint8, at: Node): Node {
+		return {
+			kind: NodeKind.NumberLiteral,
+			line: at.line,
+			column: at.column,
+			value: value as number,
+			isFloat: false,
+			intVal: value as int64,
+			outOfRangeText: "",
+			isBitPattern: false,
+		};
+	}
+
+	// The `programId` of the project's build.ms (`defines: { programId: "<base58>" }`), or no bytes.
+	function declaredProgramKey(at: Node): uint8[] {
+		const text = define("programId");
+		const bytes: uint8[] = [];
+		if (text == "") return bytes;
+		const parsed = Pubkey.parse(text);
+		if (!parsed.ok) {
+			error("the build declares programId '" + text + "' (build.ms `defines` or -d:programId), which is not a base58 public key", at);
+		}
+		for (const b of parsed.value.bytes) { bytes.push(b); }
+		return bytes;
+	}
+
 	const decl = getTypeArg();
 	if (decl.kind !== NodeKind.EnumDecl) {
 		error("instruction<Op>(): Op must be an enum of the program's instructions", decl);
 	}
+	// The deploy keypair (`programKeypair`, a solana-keygen JSON of 64 numbers; relative to the
+	// project's build.ms) must hold the declared id, as `anchor keys sync` keeps declare_id! equal to it.
+	function checkDeployKeypair(at: Node): void {
+		const named = define("programKeypair");
+		if (named == "") return;
+		const root = define("projectDir");
+		const path = named.startsWith("/") || root == "" ? named : root + "/" + named;
+		const text = try readFile(path) catch "";
+		if (text == "") { error("the build names programKeypair '" + path + "', which cannot be read", at); }
+		const numbers: uint8[] = [];
+		let value = -1;
+		for (const c of text.asBytes()) {
+			if (c >= 48 && c <= 57) {
+				value = (value < 0 ? 0 : value * 10) + (c - 48);
+				if (value > 255) { error("programKeypair '" + path + "' holds a number above 255", at); }
+			} else if (value >= 0) {
+				numbers.push(value as uint8);
+				value = -1;
+			}
+		}
+		if (value >= 0) { numbers.push(value as uint8); }
+		if (numbers.length != 64) { error("programKeypair '" + path + "' holds " + String(numbers.length) + " numbers; a solana-keygen keypair holds 64", at); }
+		let key = Pubkey.zero();
+		for (let i = 0; i < 32; i += 1) { key.bytes[i] = numbers[32 + i]; }
+		const held = key.toBase58();
+		const declaredText = define("programId");
+		if (declaredText == "") {
+			error("the deploy keypair '" + path + "' is program " + held + ", and the build declares no programId: add `programId: \"" + held + "\"` to the defines of build.ms", at);
+		}
+		if (declaredText != held) {
+			error("the build declares programId " + declaredText + ", but the deploy keypair '" + path + "' is program " + held
+				+ ": set programId to " + held + ", or deploy with the keypair of " + declaredText, at);
+		}
+	}
+
 	const bytes: Node[] = [];
+	checkDeployKeypair(decl);
+	const declared = declaredProgramKey(decl);
+	for (const b of declared) { bytes.push(byteLiteral(b, decl)); }
 	let member = 0;
 	while (member < decl.enumMembers.length) {
 		const discriminator = instructionDiscriminator(decl.enumMembers[member]);
 		let b = 0;
 		while (b < 8) {
-			const byte = discriminator.bytes[b];
-			bytes.push({
-				kind: NodeKind.NumberLiteral,
-				line: decl.line,
-				column: decl.column,
-				value: byte as number,
-				isFloat: false,
-				intVal: byte as int64,
-				outOfRangeText: "",
-				isBitPattern: false,
-			});
+			bytes.push(byteLiteral(discriminator.bytes[b], decl));
 			b = b + 1;
 		}
 		member = member + 1;
@@ -94,7 +159,7 @@ export macro instruction(): Node {
 		kind: NodeKind.CallExpr,
 		line: decl.line,
 		column: decl.column,
-		callee: bindSym("selectInstruction"),
+		callee: declared.length > 0 ? bindSym("selectDeclaredInstruction") : bindSym("selectInstruction"),
 		arguments: [table],
 		isDirectCall: false,
 		resolvedOverloadIdx: -1,
@@ -403,6 +468,37 @@ export macro accounts(): Node {
 		return call(bindSym("keyAddressOf")!, [rewrite(n)], n);
 	}
 
+	function literalSeeds(seeds: Node[]): uint8[][] {
+		const out: uint8[][] = [];
+		for (const seed of seeds) {
+			const bytes: uint8[] = [];
+			if (seed.kind === NodeKind.StringLiteral) {
+				for (const byte of stringValue(seed).asBytes()) { bytes.push(byte); }
+			} else if (seed.kind === NodeKind.ArrayLiteral) {
+				for (const element of seed.elements) {
+					if (element.kind !== NodeKind.NumberLiteral || element.intVal < 0 || element.intVal > 255) return [];
+					bytes.push(element.intVal as uint8);
+				}
+			} else {
+				return [];
+			}
+			out.push(bytes);
+		}
+		return out;
+	}
+
+	function declaredProgramKey(at: Node): uint8[] {
+		const text = define("programId");
+		const bytes: uint8[] = [];
+		if (text == "") return bytes;
+		const parsed = Pubkey.parse(text);
+		if (!parsed.ok) {
+			error("the build declares programId '" + text + "' (build.ms `defines` or -d:programId), which is not a base58 public key", at);
+		}
+		for (const b of parsed.value.bytes) { bytes.push(b); }
+		return bytes;
+	}
+
 	// Anchor builds a custom error inside the failing branch (anchor-syn-0.31.1 constraints.rs:
 	// has_one 297-334, address 172-190, constraint 348-356); a success must not evaluate it.
 	function lazily(passed: Node, error: Node, at: Node): Node {
@@ -445,81 +541,17 @@ export macro accounts(): Node {
 			isBitPattern: false,
 		};
 		let callee: Node | null = null;
-		let extra: Node[] = [];
 		if (base == "Signer") { callee = bindSym("signer"); }
 		if (base == "WritableSigner") { callee = bindSym("writableSigner"); }
 		if (base == "Writable") { callee = bindSym("writable"); }
 		if (base == "SystemAccount") { callee = bindSym("systemAccount"); }
 		if (base == "Account") { callee = bindSym("unchecked"); }
-		const typeName: Node = {
-			kind: NodeKind.Identifier,
-			line: line,
-			column: column,
-			name: inner,
-		};
-		if (base == "Program") {
-			callee = bindSym("programAccount");
-			extra = [{
-				kind: NodeKind.CallExpr,
-				line: line,
-				column: column,
-				callee: {
-					kind: NodeKind.MemberExpr,
-					line: line,
-					column: column,
-					object: typeName,
-					property: "id",
-					isOptional: false,
-				},
-				arguments: [],
-				isDirectCall: false,
-				resolvedOverloadIdx: -1,
-			}];
-		}
-		if (base == "Owned" || base == "Mutable" || base == "Delegated") {
-			callee = bindSym("ownedAccount");
-			if (base == "Mutable") { callee = bindSym("mutableAccount"); }
-			if (base == "Delegated") { callee = bindSym("delegatedAccount"); }
-			// Read at run time: a @comptime block calls the first overload of `discriminator` for every
-			// account type (compiler card 2026-10-04-comptime-block-calls-the-first-overload-by-name).
-			const discriminator: Node = {
-				kind: NodeKind.CallExpr,
-				line: line,
-				column: column,
-				callee: bindSym("wordOf"),
-				arguments: [{
-					kind: NodeKind.CallExpr,
-					line: line,
-					column: column,
-					callee: {
-						kind: NodeKind.MemberExpr,
-						line: line,
-						column: column,
-						object: typeName,
-						property: "discriminator",
-						isOptional: false,
-					},
-					arguments: [],
-					isDirectCall: false,
-					resolvedOverloadIdx: -1,
-				}],
-				isDirectCall: false,
-				resolvedOverloadIdx: -1,
-			};
-			const size: Node = {
-				kind: NodeKind.TypeAssertion,
-				line: line,
-				column: column,
-				asExpr: {
-					kind: NodeKind.SizeofExpr,
-					line: line,
-					column: column,
-					sizeofType: inner,
-				},
-				asType: "uint64",
-			};
-			extra = [discriminator, size];
-		}
+		if (base == "Program") { callee = bindSym("program"); }
+		if (base == "Owned") { callee = bindSym("owned"); }
+		if (base == "Mutable") { callee = bindSym("mutable"); }
+		if (base == "Delegated") { callee = bindSym("delegated"); }
+		if (base == "External") { callee = bindSym("external"); }
+		if (base == "ExternalMutable") { callee = bindSym("externalMutable"); }
 		let check: Node | null = null;
 		if (callee != null) {
 			check = {
@@ -527,46 +559,11 @@ export macro accounts(): Node {
 				line: line,
 				column: column,
 				callee: callee!,
-				arguments: [index].concat(extra),
-				isDirectCall: false,
-				resolvedOverloadIdx: -1,
-			};
-		}
-		if (base == "External" || base == "ExternalMutable") {
-			check = {
-				kind: NodeKind.CallExpr,
-				line: line,
-				column: column,
-				callee: {
-					kind: NodeKind.MemberExpr,
-					line: line,
-					column: column,
-					object: typeName,
-					property: "verify",
-					isOptional: false,
-				},
 				arguments: [index],
 				isDirectCall: false,
 				resolvedOverloadIdx: -1,
 			};
-			if (base == "ExternalMutable") {
-				check = {
-					kind: NodeKind.CallExpr,
-					line: line,
-					column: column,
-					callee: bindSym("exclusiveWritable"),
-					arguments: [{
-						kind: NodeKind.TryExpr,
-						line: line,
-						column: column,
-						tryArg: check!,
-						hasCatch: false,
-						catchVal: check!,
-					}],
-					isDirectCall: false,
-					resolvedOverloadIdx: -1,
-				};
-			}
+			check!.typeArg = inner;
 		}
 		if (check == null) {
 			error("accounts<T>(): field '" + decl.interfaceFields[field] + "' has type '" +
@@ -575,18 +572,12 @@ export macro accounts(): Node {
 				"Owned<T>, Mutable<T>, Delegated<T>, External<T> or ExternalMutable<T>", shape);
 		}
 		values.push({
-			kind: NodeKind.TypeAssertion,
+			kind: NodeKind.TryExpr,
 			line: line,
 			column: column,
-			asExpr: {
-				kind: NodeKind.TryExpr,
-				line: line,
-				column: column,
-				tryArg: check!,
-				hasCatch: false,
-				catchVal: check!,
-			},
-			asType: written,
+			tryArg: check!,
+			hasCatch: false,
+			catchVal: check!,
 		});
 		field = field + 1;
 	}
@@ -729,7 +720,36 @@ export macro accounts(): Node {
 					seeded,
 				), seeded));
 			} else {
-				checks.push(attempt(call(bindSym("seedsCanonical")!, [key, table], seeded), seeded));
+				const declared = declaredProgramKey(seeded);
+				const literal = declared.length > 0 ? literalSeeds(seeded.macroArgs) : [];
+				if (literal.length > 0) {
+					let program = Pubkey.zero();
+					for (let i = 0; i < 32; i += 1) { program.bytes[i] = declared[i]; }
+					const found = derivedAddressOf(literal, program);
+					if (!found.ok) {
+						error("accounts<" + decl.interfaceName + ">(): @seeds on field '" + self +
+							"' gives no program address for the programId of build.ms", seeded);
+					}
+					const address = found.value.key.bytes;
+					const words: Node[] = [key];
+					for (let w = 0; w < 4; w += 1) {
+						let word: uint64 = 0;
+						for (let b = 7; b >= 0; b -= 1) { word = (word << 8) | (address[w * 8 + b] as uint64); }
+						words.push({
+							kind: NodeKind.NumberLiteral,
+							line: seeded.line,
+							column: seeded.column,
+							value: word as number,
+							isFloat: false,
+							intVal: word as int64,
+							outOfRangeText: "",
+							isBitPattern: true,
+						});
+					}
+					checks.push(attempt(call(bindSym("seedsFolded")!, words, seeded), seeded));
+				} else {
+					checks.push(attempt(call(bindSym("seedsCanonical")!, [key, table], seeded), seeded));
+				}
 			}
 		}
 		const groups: Node[][] = [associated, related, required, addressed, authorized, minted];
@@ -936,7 +956,7 @@ export macro emit(value: Node): Node {
 	}
 	if (total > 1024) {
 		error("emit<E>(value): the event is " + (total as int32) +
-			" bytes with its discriminator, over the 1024 the std buffers", value);
+			" bytes with its discriminator, over the 1024 the std buffers", shape);
 	}
 	const count = widths.length;
 	return {
@@ -978,6 +998,13 @@ const SEED_LIST_REQUIRED = "seeds must be written as a list at the call: [\"pet\
 
 const KEY_REQUIRED = "a key is an account or a Pubkey";
 
+function namesAnAccount(name: string, inner: string): boolean {
+	return name == "Account" || (name == "Distinct" && inner == "Account") ||
+		name == "Signer" || name == "WritableSigner" || name == "Writable" || name == "SystemAccount" ||
+		name == "Program" || name == "Owned" || name == "Mutable" ||
+		name == "External" || name == "ExternalMutable" || name == "Delegated";
+}
+
 macro keyAddressOf(operand: Node): Node {
 	const line = operand.line;
 	const column = operand.column;
@@ -1012,9 +1039,7 @@ macro keyAddressOf(operand: Node): Node {
 			resolvedOverloadIdx: -1,
 		};
 	}
-	if (name == "Account" || (name == "Distinct" && inner == "Account") ||
-		name == "Program" || name == "Owned" || name == "Mutable" ||
-		name == "External" || name == "ExternalMutable" || name == "Delegated") {
+	if (namesAnAccount(name, inner)) {
 		return {
 			kind: NodeKind.CallExpr,
 			line: line,
@@ -1088,9 +1113,7 @@ macro seedTable(list: Node): Node {
 					isOptional: false,
 				};
 			}
-			if (name == "Account" || (name == "Distinct" && inner == "Account") ||
-				name == "Program" || name == "Owned" || name == "Mutable" ||
-				name == "External" || name == "ExternalMutable" || name == "Delegated") {
+			if (namesAnAccount(name, inner)) {
 				builder = bindSym("seedKey");
 				argument = {
 					kind: NodeKind.CallExpr,
@@ -1311,6 +1334,89 @@ export macro pdaWithBump(account: Node, seeds: Node, bump: Node): Node {
 }
 
 export macro createPda(payer: Node, target: Node, seeds: Node): Node {
+	// The bytes of each seed when every one is a string or a byte list written in place, else none.
+	function literalSeeds(seeds: Node): uint8[][] {
+		const out: uint8[][] = [];
+		if (seeds.kind !== NodeKind.ArrayLiteral) return [];
+		for (const seed of seeds.elements) {
+			const bytes: uint8[] = [];
+			if (seed.kind === NodeKind.StringLiteral) {
+				for (const byte of stringValue(seed).asBytes()) { bytes.push(byte); }
+			} else if (seed.kind === NodeKind.ArrayLiteral) {
+				for (const element of seed.elements) {
+					if (element.kind !== NodeKind.NumberLiteral || element.intVal < 0 || element.intVal > 255) return [];
+					bytes.push(element.intVal as uint8);
+				}
+			} else {
+				return [];
+			}
+			out.push(bytes);
+		}
+		return out;
+	}
+
+		function byteLiteral(value: uint8, at: Node): Node {
+			return {
+				kind: NodeKind.NumberLiteral,
+				line: at.line,
+				column: at.column,
+				value: value as number,
+				isFloat: false,
+				intVal: value as int64,
+				outOfRangeText: "",
+				isBitPattern: false,
+			};
+		}
+
+		// The `programId` of the project's build.ms (`defines: { programId: "<base58>" }`), or no bytes.
+		function declaredProgramKey(at: Node): uint8[] {
+			const text = define("programId");
+			const bytes: uint8[] = [];
+			if (text == "") return bytes;
+			const parsed = Pubkey.parse(text);
+			if (!parsed.ok) {
+				error("the build declares programId '" + text + "' (build.ms `defines` or -d:programId), which is not a base58 public key", at);
+			}
+			for (const b of parsed.value.bytes) { bytes.push(b); }
+			return bytes;
+		}
+
+	const declared = declaredProgramKey(seeds);
+	const literal = declared.length > 0 ? literalSeeds(seeds) : [];
+	if (literal.length > 0) {
+		let program: Pubkey = { bytes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] };
+		for (let i = 0; i < 32; i += 1) { program.bytes[i] = declared[i]; }
+		const found = derivedAddressOf(literal, program);
+		if (!found.ok) { error("createPda: these seeds give no program address for the programId of build.ms", seeds); }
+		const address: Node[] = [];
+		for (const b of found.value.key.bytes) { address.push(byteLiteral(b, seeds)); }
+		const bumped: Node[] = [];
+		for (const seed of seeds.elements) { bumped.push(seed); }
+		bumped.push({ kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: [byteLiteral(found.value.bump, seeds)] });
+		return {
+			kind: NodeKind.CallExpr,
+			line: payer.line,
+			column: payer.column,
+			callee: bindSym("createPdaAt"),
+			arguments: [payer, target, {
+				kind: NodeKind.CallExpr,
+				line: seeds.line,
+				column: seeds.column,
+				callee: bindSym("seedTable"),
+				arguments: [{ kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: bumped }],
+				isDirectCall: false,
+				resolvedOverloadIdx: -1,
+			}, {
+				kind: NodeKind.TypeAssertion,
+				line: seeds.line,
+				column: seeds.column,
+				asExpr: { kind: NodeKind.ArrayLiteral, line: seeds.line, column: seeds.column, elements: address },
+				asType: "uint8[32]",
+			}, byteLiteral(found.value.bump, seeds)],
+			isDirectCall: false,
+			resolvedOverloadIdx: -1,
+		};
+	}
 	return {
 		kind: NodeKind.CallExpr,
 		line: payer.line,
@@ -1325,6 +1431,25 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 			isDirectCall: false,
 			resolvedOverloadIdx: -1,
 		}],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+
+// The program id the build declares (build.ms `defines: { programId }`, or -d:programId), as a
+// Pubkey folded at compile time; host tests run the program under it.
+export macro declaredProgramId(): Node {
+	const at: Node = { kind: NodeKind.Identifier, line: 0, column: 0, name: "declaredProgramId" };
+	const text = define("programId");
+	if (text == "") {
+		error("declaredProgramId(): the build declares no programId; add `defines: { programId: \"<base58>\" }` to build.ms, or pass -d:programId=<base58>", at);
+	}
+	return {
+		kind: NodeKind.CallExpr,
+		line: at.line,
+		column: at.column,
+		callee: bindSym("pubkeyOf"),
+		arguments: [{ kind: NodeKind.StringLiteral, line: at.line, column: at.column, value: text }],
 		isDirectCall: false,
 		resolvedOverloadIdx: -1,
 	};

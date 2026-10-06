@@ -1,4 +1,4 @@
-import { NodeKind, IdentifierData, createNodeAt, makeLoc, Node, childCount, SourceLocation, getType } from "std/meta";
+import { NodeKind, IdentifierData, createNodeAt, makeLoc, Node, bindSym, childCount, getImpl, SourceLocation, getType } from "std/meta";
 import { declareWireShape } from "./macroWireFixture";
 
 test "macro node variant fit: variant cast widens at a call argument" {
@@ -275,4 +275,41 @@ test "macro source forms: a call a macro returns without type arguments takes th
 
 test "macro source forms: a call a macro builds with its own typeArg binds T from it" {
 	assert resultCode(ownTypeArgument(3)) == 2;
+}
+
+macro intValSum(list: Node): Node {
+	let sum: int64 = 0;
+	for (const element of list.elements) { sum = sum + element.intVal; }
+	return { kind: NodeKind.NumberLiteral, line: list.line, column: list.column, value: sum as number, isFloat: false, intVal: sum, outOfRangeText: "", isBitPattern: false };
+}
+
+macro intValIsAllOnes(literal: Node): Node {
+	return { kind: NodeKind.BooleanLiteral, line: literal.line, column: literal.column, boolValue: literal.intVal == -1 };
+}
+
+macro readOnlyTag(use: Node): Node { error("@readOnlyTag is read by decoratorIntValSum<T>()", use); }
+
+struct IntTagged {
+	@readOnlyTag(7, [9, 11]) x: int32;
+}
+
+macro decoratorIntValSum(): Node {
+	const shape = getTypeArg();
+	const decl = getImpl(bindSym(shape.typExprTypeName))!;
+	const tag = decl.interfaceFieldDecorators[0][0];
+	let sum: int64 = tag.macroArgs[0].intVal;
+	for (const element of tag.macroArgs[1].elements) { sum = sum + element.intVal; }
+	return { kind: NodeKind.NumberLiteral, line: shape.line, column: shape.column, value: sum as number, isFloat: false, intVal: sum, outOfRangeText: "", isBitPattern: false };
+}
+
+test "macro source forms: an integer literal argument arrives with its intVal" {
+	assert intValSum([7, 9]) == 16;
+}
+
+test "macro source forms: a 64-bit pattern literal arrives with its exact intVal" {
+	assert intValIsAllOnes(0xFFFFFFFFFFFFFFFF);
+}
+
+test "macro source forms: an integer literal of a field decorator arrives with its intVal" {
+	assert decoratorIntValSum<IntTagged>() == 27;
 }

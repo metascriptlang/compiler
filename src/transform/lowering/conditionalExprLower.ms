@@ -31,13 +31,15 @@
 // Runs AFTER optionalChain/nullishCoalesce (which produce ternaries) and
 // lowerOperators (so overloaded struct-returning operators are CallExprs here).
 
-import { Node, NodeKind, DeclKind, TypeKind, Symbol, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, Type, TypeKind, Symbol, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect } from "../walker";
-import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken } from "../util";
+import { peelTransparentInstance, PEEL_MAX_DEPTH } from "../../checker/types";
+import { readonlyDataConstBinding } from "../../checker/constFold";
+import { walkExpandBlocksHooked, expandingInsideTry, mapExprChildren, mapChildren, hasEffect } from "../walker";
+import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdent, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, extractBodyStmts, syntheticToken } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter } from "../testUtil";
 import { nodeHasPositionalNew } from "./newExprLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
@@ -152,6 +154,65 @@ function hoistLiteral(lit: Node, hoisted: Node[], ctx: TransformContext): Node {
 		return lit;
 	}
 	return lit.kind == NodeKind.ObjectLiteral ? expandObjectSpread(lit) : lit;
+}
+
+function aggregateInitType(expr: Node): Type | null {
+	if (expr.nodeType == null) return null;
+	let t = peelTransparentInstance(expr.nodeType);
+	for (let i = 0; i < PEEL_MAX_DEPTH; i += 1) {
+		if ((t.kind != TypeKind.Alias && t.kind != TypeKind.GenericInstance) || t.typeReturn == null) break;
+		t = peelTransparentInstance(t.typeReturn);
+	}
+	if (expr.kind == NodeKind.ObjectLiteral && t.kind == TypeKind.Struct) {
+		const d = expr.data as ObjectLiteralData;
+		for (const key of d.keys) { if (key == "...") return null; }
+		return t;
+	}
+	if (expr.kind == NodeKind.ArrayLiteral && t.kind == TypeKind.SizedArray) return t;
+	return null;
+}
+
+function initializeAggregate(target: Node, literal: Node, initialized: Node[], ctx: TransformContext): void {
+	const t = aggregateInitType(literal);
+	const loc = literal.location;
+	if (t == null) {
+		const value = hoistTernaries(literal, initialized, ctx);
+		const assignment = makeAssign(target, value, loc);
+		assignment.flags = assignment.flags.incl(NodeFlag.FirstWrite);
+		initialized.push(makeExprStmt(assignment, loc));
+		return;
+	}
+	if (literal.kind == NodeKind.ObjectLiteral) {
+		const d = literal.data as ObjectLiteralData;
+		for (let i = 0; i < d.properties.length; i += 1) {
+			const field = makeMember(cloneNodeKeepSem(target), d.keys[i], loc);
+			const index = t.typeNames.indexOf(d.keys[i]);
+			field.nodeType = index >= 0 ? t.typeChildren[index] : d.properties[i].nodeType;
+			initializeAggregate(field, d.properties[i], initialized, ctx);
+		}
+	} else {
+		const d = literal.data as ArrayLiteralData;
+		for (let i = 0; i < d.elements.length; i += 1) {
+			const field = makeArrayAccess(cloneNodeKeepSem(target), makeNumber(i, loc), loc);
+			field.nodeType = t.typeReturn;
+			initializeAggregate(field, d.elements[i], initialized, ctx);
+		}
+	}
+}
+
+function expandAggregateDecl(stmt: Node, ctx: TransformContext): Node[] {
+	const d = stmt.data as VariableDeclData;
+	const initializer = d.initializer;
+	// The fields are written after the declaration, so the lowered binding is not read-only.
+	if (d.declKind == DeclKind.Const) d.declKind = DeclKind.Let;
+	d.initializer = initializer.kind == NodeKind.ObjectLiteral
+		? makeObjectLiteral([], [], stmt.location)
+		: createNode(NodeKind.ArrayLiteral, { elements: [] }, syntheticToken(stmt.location));
+	d.initializer.nodeType = initializer.nodeType;
+	const result: Node[] = [stmt];
+	const target = makeTypedIdentResolved(stmt.resolvedSym!, stmt.nodeType, stmt.location);
+	initializeAggregate(target, initializer, result, ctx);
+	return result;
 }
 
 function hoistSpreadOperand(spread: Node, hoisted: Node[], ctx: TransformContext): Node {
@@ -392,6 +453,11 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 			const d = stmt.data as VariableDeclData;
 			if (d.initializer != null && d.initializer.kind == NodeKind.ConditionalExpr) {
 				return lowerTernaryInVar(stmt, ctx);
+			}
+			if (functionDepth > 0 && d.initializer != null && stmt.resolvedSym != null
+				&& !stmt.flags.has(NodeFlag.StaticStorage) && aggregateInitType(d.initializer) != null
+				&& !(d.declKind == DeclKind.Const && readonlyDataConstBinding(stmt))) {
+				return expandAggregateDecl(stmt, ctx);
 			}
 		},
 		NodeKind.ReturnStmt => {
@@ -647,8 +713,17 @@ function bodyHasLoopContinue(node: Node): boolean {
 
 // ===== Entry Point =====
 
+let functionDepth = 0;
+
 export function lowerConditionalExpr(program: Node, ctx: TransformContext): Node {
-	walkExpandBlocks(program, expandConditionalStmt, ctx);
+	functionDepth = 0;
+	walkExpandBlocksHooked(
+		program,
+		expandConditionalStmt,
+		ctx,
+		(fn: Node): void => { functionDepth += 1; },
+		(fn: Node): void => { functionDepth -= 1; },
+	);
 	return program;
 }
 

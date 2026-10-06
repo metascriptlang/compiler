@@ -309,6 +309,7 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	vm.ip = 0;
 	vm.halted = false;
 	vm.error = "";
+	vm.exitValue = raiserNil();
 	vm.diagMessage = "";
 	vm.loopCount = 0;
 	vm.callStack.items.length = 0;
@@ -3077,6 +3078,24 @@ test "vmCallFunction: reusable VM, different args, no recompile" {
 	const argsB: RaiserValue[] = [y1, y2];
 	const rB = vmCallFunction(vm, 0, argsB);
 	assert rB.intVal == 3;
+}
+
+test "vmCallFunction: a failed invocation does not return the previous heap result" {
+	const successful: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.NewObject, 0, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const failed: RaiserInstruction[] = [raiserABx(RaiserOpcode.Trap, 0, 0)];
+	const empty: RaiserValue[] = [];
+	const first = createRaiserFunction("first", successful, empty, 0, 0, 2);
+	const second = createRaiserFunction("second", failed, [raiserString("failed invocation")], 0, 0, 2);
+	const vm = createVM(createRaiserModule("reuse", [first, second], 0), "arena");
+	const before = vmCallFunction(vm, 0, empty);
+	assert before.kind == RaiserValueKind.Object;
+	vm.objectHeap.objects.length = 0;
+	const after = vmCallFunction(vm, 1, empty);
+	assert vm.error == "failed invocation";
+	assert after.kind == RaiserValueKind.Nil;
 }
 
 test "vmCallFunction: nested Call/Ret through trampoline" {

@@ -12,7 +12,7 @@ import {
 import { putAddress } from "./buffer";
 import { invokeSigned } from "./invoke";
 import { ProgramError } from "./error";
-import { Pubkey, pubkeyOf } from "./pubkey";
+import { Pubkey } from "./pubkey";
 import {
 	SeedSlice,
 	SeedTable,

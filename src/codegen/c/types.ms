@@ -6,7 +6,7 @@
 
 import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { genericParamsOf, enumStorageKind, isValueStorage, classParentOf, runtimeClassSym } from "../../checker/types";
+import { genericParamsOf, enumStorageKind, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
@@ -14,7 +14,7 @@ import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, CTypeInfoDemand, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, NameSet, nameSetHas, nameSetAdd, createNameSet, addCGenError } from "./context";
 import { SymbolFlag, hasFlag, lookupSymbolReadonly, makeSymbol, setFlag } from "../../checker/symbol";
 import { mangle, mangledTypeName, mangledFunctionName, mangleQualified, mangleModuleName, mangleFieldName, safeName, resolveOverloadWinner, OverloadWinner } from "./names";
-import { cStringLiteral } from "./literals";
+import { cStringLiteral, escapeCString } from "./literals";
 import { getGlobalTypeOwner, getGlobalTypeOwnerByShape, CheckerContext, newSym } from "../../checker/context";
 
 // Struct C-name resolution: a sym-less named struct (macro-wire / mono
@@ -767,7 +767,14 @@ export function isPointerType(t: Type): boolean {
 // Reference parity: value types that can't be nil in C.
 // Used by codegen to emit {0} instead of MS_NIL, and memset instead of NULL assignment.
 export function isNilableValueType(t: Type): boolean {
-	return isValueStorage(t);
+	if (isValueStorage(t)) return true;
+	if (t == null) return false;
+	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return isNilableValueType(t.typeReturn);
+	if (t.kind == TypeKind.Set) {
+		const repr = setRepr(t);
+		return repr != null && isNilableValueType(repr);
+	}
+	return t.kind == TypeKind.SizedArray;
 }
 
 // ===== ccgIntroducedPtr (Reference: reference codegen utils parity) =====
@@ -1079,6 +1086,8 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 	// name) — the DRC ledger prints it and balance guards select rows by it.
 	const runtimeName = bareOrigin != "" ? mangle(bareOrigin) : className;
 	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.name = "${runtimeName}";`);
+	const shown = objType != null ? typeDisplayName(objType.kind == TypeKind.Ref && objType.typeReturn != null ? objType.typeReturn : objType) : "";
+	if (shown != "" && shown != runtimeName) addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.displayName = "${escapeCString(shown)}";`);
 	let destroyHook = "";
 	let destroySym = objType != null ? getAttachedOp(objType, AttachedOp.AttachedDestructor) : null;
 	// Monomorphized generic: AttachedDestructor was set on a throwaway type instance in
@@ -1910,7 +1919,7 @@ function genSizedArrayType(g: CGen, t: Type): string {
 	ensureForwardDecl(g, name);
 	const b = sec(g, CSection.Types);
 	addLine(b, `struct ${name} {`);
-	addLine(b, `    ${elemType} data[${size}];`);
+	addLine(b, `    ${elemType} data[${size == 0 ? 1 : size}];`);
 	addLine(b, "};");
 	addNewline(b);
 

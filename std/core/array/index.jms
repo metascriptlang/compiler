@@ -8,15 +8,14 @@ import { needsCopy } from "std/typetraits";
 
 export extern function push<T>(this arr: T[], sink value: T): void from "#.push(#)";
 export function pop<T>(this arr: T[]): T {
-	@emit(`if (${arr}.length === 0) throw new Error("index -1 out of bounds (length 0)");
-	return ${arr}.pop();`);
-	unreachable;
+	const last = arr[arr.length - 1];
+	@emit(`${arr}.pop();`);
+	return last;
 }
 export extern function shift<T>(this arr: T[]): T from "#.shift()";
 function checkedIndex<T>(this arr: Vec<T>, idx: number): int64 {
-	@emit(`var n = ${arr}.length, x = Math.trunc(${idx}), i = x < 0 ? n + x : x;
-	if (!(i >= 0 && i < n)) throw new Error("index " + x + " out of bounds (length " + n + ")");
-	return i;`);
+	@emit(`var n = ${arr}.length, x = Math.trunc(${idx});
+	return x < 0 && x >= -n ? n + x : x;`);
 	unreachable;
 }
 export function at<T>(this arr: Vec<T>, idx: number): T {

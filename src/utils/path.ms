@@ -5,13 +5,13 @@ import { exists, realpath } from "std/fs";
 import { dirname, join, isAbsolute, normalize } from "std/fs/path";
 
 // Find the project root by walking up looking for build.ms.
-// If entryFile is given (absolute path), walks up from its directory first.
+// If entryFile is given (a relative one against CWD), walks up from its directory first.
 // Falls back to walking up from CWD. Returns CWD if build.ms not found anywhere.
 // This is the Go/Rust convention: the manifest defines the project root.
 export function findProjectRoot(entryFile: string = ""): string {
 	// Strategy 1: walk up from entry file's directory
-	if (entryFile != "" && isAbsolute(entryFile)) {
-		let dir = dirname(entryFile);
+	if (entryFile != "") {
+		let dir = dirname(isAbsolute(entryFile) ? entryFile : normalize(join(cwd(), entryFile)));
 		let depth = 0;
 		while (depth < 20) {
 			if (exists(join(dir, "build.ms"))) return dir;

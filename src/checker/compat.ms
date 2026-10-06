@@ -239,6 +239,43 @@ function unionSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 	return false;
 }
 
+function unionTagSlotFits(a: Type | null, b: Type | null): boolean {
+	a = skipModifier(a);
+	b = skipModifier(b);
+	if (a == null || b == null) return false;
+	if (a.kind == TypeKind.GenericParam || b.kind == TypeKind.GenericParam) return true;
+	if (isStringRepr(a) && isStringRepr(b)) return true;
+	if (isNumeric(a) || isNumeric(b)) return isNumeric(a) && isNumeric(b) && sameType(a, b);
+	if (unionSlotReprMismatch(a, b)) return false;
+	return isAssignable(a, b) && !isReinterpretUnsafe(a, b);
+}
+
+function isTaggedUnion(t: Type): boolean {
+	return t.kind == TypeKind.Union && !isAllStringLiteralUnion(t) && unwrapRefNullUnion(t) == null;
+}
+
+export function unionOrderHint(source: Type | null, target: Type | null): string {
+	let s = skipModifier(source);
+	let t = skipModifier(target);
+	if (s != null && t != null && isMaybeType(s) && isMaybeType(t)) {
+		s = skipModifier(s.typeReturn);
+		t = skipModifier(t.typeReturn);
+	}
+	if (s == null || t == null || !isTaggedUnion(s) || !isTaggedUnion(t)) return "";
+	if (s.typeChildren.length != t.typeChildren.length) return "";
+	let reordered = false;
+	for (let i = 0; i < s.typeChildren.length; i += 1) {
+		let found = false;
+		for (const member of t.typeChildren) {
+			if (unionTagSlotFits(s.typeChildren[i], member)) { found = true; break; }
+		}
+		if (!found) return "";
+		if (!unionTagSlotFits(s.typeChildren[i], t.typeChildren[i])) reordered = true;
+	}
+	if (!reordered) return "";
+	return " — the same members in another order: a union value's tag is its member's position, so the value would be misread; write the union in one order (a shared type alias)";
+}
+
 // Field-level repr gate for structurally-compatible objects. Lenient outside the
 // union/numeric classes — everything else is either caught by the recursive
 // isReinterpretUnsafe walk or is an intentional divergence (Ref→Ptr cursor).
@@ -903,6 +940,8 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 		return " — a read-only view never converts back to the mutable type: declare the parameter "
 			+ typeDisplayName(createReadonlyView(target)) + ", or copy it with [...x]";
 	}
+	const order = unionOrderHint(source, target);
+	if (order != "") return order;
 	const shapeTarget = objectShapeTarget(source, target);
 	const s0 = skipModifier(source);
 	const t0 = skipModifier(shapeTarget);

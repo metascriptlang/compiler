@@ -2759,9 +2759,8 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		while (ai < cc) {
 			if (ai > 0) argsStr = argsStr + ", ";
 			let arg = ctx.results[ctx.results.length - cc + ai];
-			// & prefix on nativeName: wrap first arg with &(...)
 			if (ovNeedsAddr && ai == 0) {
-				arg = safeAddrOf(g, p, arg, cd.arguments[ai], null);
+				arg = nativeAddressReceiver(g, p, arg, cd.arguments[ai]);
 			} else if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length) {
 				const ovMutBits: int32 = emitSym != null ? emitSym.mutatedParams : sym.mutatedParams;
 				arg = shimCallArg(g, p, arg, ovType.typeChildren[ai], cd.arguments[ai], ovMutBits, ai);
@@ -3266,6 +3265,17 @@ function hasAddrPrefix(nativeName: string): boolean {
 	return nativeName.length > 0 && nativeName.charAt(0) == "&";
 }
 
+function nativeRefArrayReceiver(receiver: Readonly<Node>): Type | null {
+	let t = receiver.nodeType != null ? peelTransparentInstance(receiver.nodeType) : null;
+	if (t != null && t.kind == TypeKind.Union) t = unwrapRefNullUnion(t);
+	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null
+		&& t.typeReturn.kind == TypeKind.Array ? t : null;
+}
+
+function nativeAddressReceiver(g: CGen, p: CProc, snippet: string, receiver: Readonly<Node>): string {
+	return nativeRefArrayReceiver(receiver) != null ? snippet : safeAddrOf(g, p, snippet, receiver, null);
+}
+
 function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<Node[]>, sym: Symbol): string {
 	const needsAddr = hasAddrPrefix(nativeName);
 	let cName = stripAddrPrefix(nativeName);
@@ -3274,10 +3284,10 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 	// helper expects. The `&`-prefix convention takes the address of a value-array
 	// receiver to form that pointer; for a Ref the address-of and the implied deref
 	// cancel (the Ref IS the pointer), so pass the receiver through unchanged.
-	const recvT = args.length > 0 && args[0].nodeType != null ? peelTransparentInstance(args[0].nodeType) : null;
-	const recvIsRefArray = recvT != null
-		&& recvT.kind == TypeKind.Ref && recvT.typeReturn != null
-		&& recvT.typeReturn.kind == TypeKind.Array;
+	const refReceiver = args.length > 0 ? nativeRefArrayReceiver(args[0]) : null;
+	const recvT = refReceiver != null ? refReceiver
+		: args.length > 0 && args[0].nodeType != null ? peelTransparentInstance(args[0].nodeType) : null;
+	const recvIsRefArray = refReceiver != null;
 
 	// Array type suffix: ms_array_X → ms_array_X_number/_string/_ref
 	if (recvT != null) {
@@ -3301,7 +3311,7 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Readonly<No
 	// Build call with & on first arg if mutating
 	if (needsAddr && args.length > 0) {
 		const firstArg = genExpr(g, p, args[0]);
-		const recvSnippet = recvIsRefArray ? firstArg : safeAddrOf(g, p, firstArg, args[0], null);
+		const recvSnippet = nativeAddressReceiver(g, p, firstArg, args[0]);
 		let result = `${cName}(${recvSnippet}`;
 		let i = 1;
 		while (i < args.length) {

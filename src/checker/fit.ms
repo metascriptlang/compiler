@@ -5,10 +5,10 @@
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { ArrayAccessData, YieldExprData, ArrayLiteralData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, UnaryExprData, VariableDeclData, createNode, createNodeAt } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName } from "./compat";
+import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, unionOrderHint, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, isGeneratorFlags, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion } from "./types";
+import { peelTransparentInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
@@ -1221,7 +1221,8 @@ function converterReaches(produced: Type, target: Type): boolean {
 	return nonNull != null && sameConverterEnd(produced, nonNull);
 }
 
-function runtimeConverterFor(ctx: CheckerContext, srcType: Type, targetType: Type, site: Node | null): Symbol | null {
+function runtimeConverterFor(ctx: CheckerContext, valueType: Type, targetType: Type, site: Node | null): Symbol | null {
+	const srcType = literalBase(valueType);
 	const matches: Symbol[] = [];
 	for (const conv of ctx.runtimeConverters) {
 		ensureShaped(conv, ctx);
@@ -1468,15 +1469,21 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 	if (unwrapRefNullUnion(formal) != null) return null as unknown as Node;
 	// A flow-narrowed reference types as the variant, but its storage is the
 	// declared union struct — wrapping it would deref that struct as a variant
-	// pointer. The fit is an identity pass; stamping the position's type as
-	// the union keeps every downstream repr decision (address-of at the call,
-	// return/NRVO shape) identical to an un-narrowed reference.
-	if (declaredTagUnionOf(expr) != null) {
-		if (formal.kind == TypeKind.Union) {
+	// pointer. Into the declared union itself the fit is an identity pass;
+	// stamping the position's type as the union keeps every downstream repr
+	// decision (address-of at the call, return/NRVO shape) identical to an
+	// un-narrowed reference. Any other union numbers its members differently,
+	// so the member is projected out and tagged again.
+	const declared = declaredTagUnionOf(expr);
+	if (declared != null) {
+		if (formal.kind != TypeKind.Union) return null as unknown as Node;
+		if (sameType(declared, formal)) {
 			expr.nodeType = formal;
 			return expr;
 		}
-		return null as unknown as Node;
+		const projected = projectTagUnionMember(expr, declared, exprType);
+		if (projected == null as unknown as Node) return null as unknown as Node;
+		return widenVariantToUnion(projected, formal, exprType);
 	}
 	const valueType = unwrapRef(exprType);
 	const vi = unionSlotOf(formal, exprType);
@@ -1935,6 +1942,11 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 		return expr;
 	}
 	if (isReinterpretUnsafe(exprType, formal)) {
+		const order = unionOrderHint(exprType, formal);
+		if (order != "") {
+			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + order, expr.location.line, expr.location.column);
+			return expr;
+		}
 		addError(ctx, "Type '" + arrayDisplay(exprType) + "' is not assignable to type '" + arrayDisplay(formal) + "' — memory layout differs (pointer vs scalar, array element, shared field, or function signature repr); a raw cast would reinterpret, not convert (convert explicitly or declare a converter to '" + typeDisplayName(formal) + "')", expr.location.line, expr.location.column);
 		return expr;
 	}

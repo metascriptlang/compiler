@@ -16,10 +16,11 @@
 export interface DefineTable {
 	symbols: HashMap<string, string>;
 	names: string[];
+	seeded: string[];
 }
 
 export function createDefineTable(): DefineTable {
-	return { symbols: new HashMap<string, string>(), names: [] };
+	return { symbols: new HashMap<string, string>(), names: [], seeded: [] };
 }
 
 export function normalizeDefineName(name: string): string {
@@ -97,8 +98,37 @@ export function initDefines(t: DefineTable, backendName: string, targetOs: strin
 }
 
 function seed(t: DefineTable, name: string, value: string): void {
+	t.seeded.push(normalizeDefineName(name));
 	if (hasSymbol(t, name)) return;
 	defineSymbol(t, name, value);
+}
+
+// The directory of the project's build.ms, so compile-time code finds a project file from any working
+// directory (Nim macros.getProjectPath).
+export function seedProjectDir(t: DefineTable, dir: string): void {
+	seed(t, "projectDir", dir);
+}
+
+// A name msc answers from its own options, on this build or another: a project define of it would
+// turn `when solana` or `os == …` into a lie about the build.
+const OPTION_NAMES = ["msc", "backend", "os", "cpu", "gc", "mode", "hcr", "projectDir", "posix", "unix", "bsd",
+	"c", "js", "raiser", "debug", "release", "danger", "drc", "orc", "none", "manual",
+	"bare", "solana", "wasm", "emcc", "linux", "macos", "windows", "darwin", "freebsd", "ios", "android"];
+
+export function isOptionDefine(t: DefineTable, name: string): boolean {
+	const key = normalizeDefineName(name);
+	return t.seeded.includes(key) || OPTION_NAMES.includes(key);
+}
+
+// A project config's defines (build.ms `defines`) go in under the command line: a name `-d:` already
+// set keeps its command-line value (commands.nim processes the command line after the config files,
+// cmdlinehelper.nim:67-84). Returns the first name msc reserves, "" when every name went in.
+export function applyConfigDefines(t: DefineTable, keys: string[], values: string[]): string {
+	for (const k of keys) { if (isOptionDefine(t, k)) return k; }
+	for (let i = 0; i < keys.length && i < values.length; i += 1) {
+		if (!hasSymbol(t, keys[i])) defineSymbol(t, keys[i], values[i]);
+	}
+	return "";
 }
 
 // `-d:name` / `-d:name=value` / `--define:...` — commands.nim:703-711 splits on
@@ -220,4 +250,23 @@ test "formatDefines lists names with values" {
 	assert listing.contains("  c\n");
 	assert listing.contains("  backend=c\n");
 	assert listing.contains("  danger\n");
+}
+
+test "a project define goes in under the command line" {
+	const t = createDefineTable();
+	applyDefineSwitch(t, "-d:tier=3");
+	initDefines(t, "c", "solana", "sbf", "none", 2);
+	assert applyConfigDefines(t, ["programId", "tier", "fast"], ["Fg6P", "1", "true"]) == "";
+	assert definedValue(t, "programId") == "Fg6P";
+	assert definedValue(t, "tier") == "3";
+	assert isDefined(t, "fast");
+}
+
+test "a project define of a name msc answers is refused whole" {
+	const t = createDefineTable();
+	initDefines(t, "c", "macos", "arm64", "drc", 0);
+	assert applyConfigDefines(t, ["programId", "solana"], ["Fg6P", "true"]) == "solana";
+	assert !isDefined(t, "programId");
+	assert applyConfigDefines(t, ["arm64"], ["true"]) == "arm64";
+	assert applyConfigDefines(t, ["os"], ["linux"]) == "os";
 }

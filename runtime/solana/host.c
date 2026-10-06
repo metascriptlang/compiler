@@ -413,6 +413,15 @@ static int msSolHostIsOnCurve(const uint8_t point[32]) {
     return isZero || isOne;
 }
 
+uint64_t msSolHostCurveValidatePoint(uint64_t curve, uint64_t point, uint64_t result) {
+    (void)result;
+    if (curve != 0) {
+        msSolHostFault(2, "sol_curve_validate_point: only the edwards curve (0) is simulated");
+        return 1;
+    }
+    return msSolHostIsOnCurve((const uint8_t*)point) ? 0 : 1;
+}
+
 static int msSolHostSeedsFit(uint64_t seeds, uint64_t count) {
     if (count > MS_SOL_MAX_SEEDS) return 0;
     for (uint64_t index = 0; index < count; index++) {

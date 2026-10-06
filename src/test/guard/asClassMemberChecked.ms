@@ -10,6 +10,9 @@
 //   through a Base-typed value fails `as Child`, `as Base` fails on a held Child), or a nullable
 //   class target that skips the check so a number comes out of `as Row | null` as a Row.
 //
+//   A wrong member stops the program (NIM-REF RT-34), so the rejections are pinned in
+//   corpus/programs/657-*, 658-*, asClassFrom*Stops.ms, asNullableC*Stops.ms, asChildFrom*Stops.ms.
+//
 // RED MEANS: the object-slot projection (objectHolderSlots in fit.ms, guardObjectSlot in
 //   unionProjectLower.ms) or the JS class test stopped matching. Run /trace-nim on them.
 // GUARD-JS
@@ -75,15 +78,6 @@ function plainPlain(k: int32): Row { return plainOf(k) as Row; }
 function plainNullable(k: int32): Row | null { return plainOf(k) as Row | null; }
 function twoNullable(k: int32): Other | null { return twoOf(k) as Other | null; }
 
-function rejected(f: () => void): boolean {
-	try {
-		f();
-	} catch (e) {
-		return true;
-	}
-	return false;
-}
-
 function validPaths(): boolean {
 	const a = carriedNullable(0);
 	const b = carriedNullable(1);
@@ -101,21 +95,7 @@ function validPaths(): boolean {
 		&& narrowedChild(0) == 3 && narrowedChild(1) == -1;
 }
 
-function wrongPathsRejected(): boolean {
-	let ok = true;
-	when (js) {
-		ok = rejected((): void => { carriedNullable(2); })
-			&& rejected((): void => { carriedPlain(2); })
-			&& rejected((): void => { plainPlain(1); })
-			&& rejected((): void => { plainNullable(1); })
-			&& rejected((): void => { twoNullable(0); })
-			&& rejected((): void => { familyChild(3); })
-			&& rejected((): void => { bareChild(1); });
-	}
-	return ok;
-}
-
-if (validPaths() && wrongPathsRejected()) {
+if (validPaths()) {
 	console.log("GUARD-OK");
 } else {
 	process.exit(1);

@@ -4096,6 +4096,11 @@ function typeDisplayNameInner(t: Type | null): string {
 		const refElem = t.typeReturn.typeReturn;
 		if (refElem != null) return typeDisplayName(refElem) + "[]";
 	}
+	if (t.kind == TypeKind.Tuple && t.typeChildren.length > 0) {
+		const parts: string[] = [];
+		for (const c of t.typeChildren) parts.push(typeDisplayName(c));
+		return "[" + parts.join(", ") + "]";
+	}
 	if (name != "") return name;
 	if (t.kind == TypeKind.Ptr && t.typeReturn != null) return "Ptr<" + typeDisplayName(t.typeReturn) + ">";
 	return match (t.kind) {
@@ -4263,7 +4268,8 @@ function sizeOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 		if (sr != null) return sizeOfTypeAt(tg, sr, depth);
 	}
 	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) {
-		return sizeOfTypeAt(tg, t.typeReturn, depth) * t.typeValue;
+		const storageCount = t.typeValue == 0 ? 1 : t.typeValue;
+		return sizeOfTypeAt(tg, t.typeReturn, depth) * storageCount;
 	}
 	if (t.kind == TypeKind.GenericInstance) {
 		if (isAwaitable(t)) return ps;

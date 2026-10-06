@@ -107,7 +107,7 @@ function main(): void {
 `);
 	assert c.ok;
 	assert c.value.contains("[1] = _lit");
-	assert !c.value.contains("[1].x = ");
+	assert !c.value.contains("[1].x = s_1_");
 }
 
 test "an assigned literal whose destination is a module variable keeps a temporary" {

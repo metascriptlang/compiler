@@ -1,22 +1,25 @@
 import {
 	Account,
 	Bytes,
-	External,
-	ExternalMutable,
 	InstructionAccount,
-	Program,
 	System,
-	Writable,
-	WritableSigner,
 	putU64,
 	putU8,
 	unchecked,
 } from "./core";
+import {
+	External,
+	ExternalMutable,
+	Program,
+	Writable,
+	WritableSigner,
+	asAccount,
+} from "./typed";
 import { ProgramError } from "./error";
 import { invokeSigned } from "./invoke";
 import { associatedTokenAddress, isTokenProgram } from "./mint";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, Pubkey, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "./pubkey";
-import { SignerSeeds, bytesAddress, findAddress, seedBytes } from "./seed";
+import { SignerSeeds } from "./seed";
 
 export { associatedTokenAddress, initializeMint2 } from "./mint";
 export { createMintPda } from "./macro";
@@ -27,10 +30,13 @@ when (testBuild) {
 		failWith,
 		instructionData,
 		logU64,
+	} from "./core";
+	import {
+		external,
+		externalMutable,
 		writable,
 		writableSigner,
-	} from "./core";
-	import { external, externalMutable } from "./typed";
+	} from "./typed";
 	import { HostAccount, invocations, logs, run, signerIs, textBytes } from "./host";
 	import {
 		accounts,
@@ -492,11 +498,11 @@ export function verify(this typeof TokenAccount, index: int32): Result<Account, 
 }
 
 function tokenProgramOf(mint: External<Mint>): Pubkey {
-	return (mint as Account).owner();
+	return mint.asAccount().owner();
 }
 
 function mintDecimals(mint: External<Mint>): Result<uint8, ProgramError> {
-	const decoded = try (mint as Account).readMint();
+	const decoded = try mint.asAccount().readMint();
 	return Result.ok(decoded.decimals);
 }
 
@@ -511,9 +517,9 @@ export function transferTokens(
 	const decimals = try mintDecimals(mint);
 	return transferChecked(
 		tokenProgramOf(mint),
-		from as Account,
-		mint as Account,
-		to as Account,
+		from.asAccount(),
+		mint.asAccount(),
+		to.asAccount(),
 		authority,
 		amount,
 		decimals,
@@ -528,8 +534,8 @@ export function mintTokens(
 	amount: uint64,
 	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
-	const target = mint as Account;
-	return mintTo(target.owner(), target, to as Account, authority, amount, signers);
+	const target = mint.asAccount();
+	return mintTo(target.owner(), target, to.asAccount(), authority, amount, signers);
 }
 
 export function closeTokenAccount(
@@ -538,8 +544,8 @@ export function closeTokenAccount(
 	authority: Account,
 	signers: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
-	const closing = account as Account;
-	return closeAccount(closing.owner(), closing, destination as Account, authority, signers);
+	const closing = account.asAccount();
+	return closeAccount(closing.owner(), closing, destination.asAccount(), authority, signers);
 }
 
 export function createAssociatedFor(
@@ -554,11 +560,11 @@ export function createAssociatedFor(
 		return Result.err(ProgramError.constraintAssociatedTokenTokenProgram());
 	}
 	return createAssociatedToken(
-		payer as Account,
-		associated as Account,
+		payer.asAccount(),
+		associated.asAccount(),
 		wallet,
-		mint as Account,
-		systemProgram as Account,
+		mint.asAccount(),
+		systemProgram.asAccount(),
 		tokenProgram,
 	);
 }
@@ -568,7 +574,7 @@ export function expectAssociated(
 	wallet: Pubkey,
 	mint: External<Mint>,
 ): Result<void, ProgramError> {
-	const mintKey = (mint as Account).key();
+	const mintKey = mint.asAccount().key();
 	const derived = try associatedTokenAddress(wallet, mintKey, tokenProgramOf(mint));
 	if (derived.key != tokenAccount) {
 		return Result.err(ProgramError.accountNotAssociatedTokenAccount());
@@ -1109,7 +1115,7 @@ when (testBuild) {
 }
 
 when (testBuild) {
-	import { Signer } from "./core";
+	import { Signer } from "./typed";
 	export struct TransferAccounts {
 		owner: Signer;
 		from: ExternalMutable<TokenAccount>;
@@ -1123,7 +1129,7 @@ when (testBuild) {
 		if (op == 1) {
 			const _checked = try expectAssociated(x.from.key(), x.owner.key(), x.mint);
 		}
-		return transferTokens(x.from, x.to, x.mint, x.owner as Account, 250);
+		return transferTokens(x.from, x.to, x.mint, x.owner.asAccount(), 250);
 	}
 
 	function typedTransferEntry(): void {

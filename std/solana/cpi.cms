@@ -96,7 +96,7 @@ export function invokeCpi(
 	return Result.ok(status);
 }
 
-export function invokeList(
+@noinline export function invokeList(
 	program: Pubkey,
 	accounts: Readonly<Span<InstructionAccount>>,
 	data: Readonly<Span<uint8>>,

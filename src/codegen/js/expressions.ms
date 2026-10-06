@@ -19,8 +19,8 @@ import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
-import { isRuntimeProcSym } from "../../transform/util";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped } from "../../checker/types";
+import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -686,7 +686,7 @@ export function emitNewExpr(gen: JSGenerator, node: Node): void {
 		if (zero != "") {
 			emit(gen, "Array.from({ length: ");
 			emitNode(gen, d.newArguments[0]);
-			emit(gen, " }, () => " + zero + ")");
+			emit(gen, " }, () => (" + zero + "))");
 			return;
 		}
 	}
@@ -710,7 +710,9 @@ export function emitTypeAssertion(gen: JSGenerator, node: Node): void {
 	emit(gen, "((v) => (v == null || v instanceof ");
 	emitNode(gen, classReference(target, node.location));
 	const shown = target.instantiatedFrom != null ? namedTypeDisplay(checkedConversionBody(node)!) : target.name;
-	emit(gen, ") ? v : (() => { throw new Error(\"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + escapeJSString(shown) + "\"); })())(");
+	emit(gen, ") ? v : ");
+	emitDefectCall(gen, "\"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + escapeJSString(shown) + "\"", node.location);
+	emit(gen, ")(");
 	emitNode(gen, d.asExpr);
 	emit(gen, ")");
 }
@@ -743,7 +745,70 @@ function openMemberTest(gen: JSGenerator, member: Type, union: Type, check: stri
 		emitNode(gen, classReference(cls, location));
 		emit(gen, ")");
 	}
-	emit(gen, ") ? v : (() => { throw new Error(\"member '" + escapeJSString(unionMemberDisplay(member)) + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + typeof v + \"'\"); })())(");
+	emit(gen, ") ? v : ");
+	emitNode(gen, runtimeRef("msDefect", location));
+	emit(gen, "(\"member '" + escapeJSString(unionMemberDisplay(member)) + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + ");
+	emitHeldMember(gen, union, location);
+	emit(gen, " + \"'\"))(");
+}
+
+function classDepth(t: Type): int32 {
+	let depth = 0;
+	let parent = classParentOf(t);
+	while (parent != null) {
+		depth += 1;
+		parent = classParentOf(parent);
+	}
+	return depth;
+}
+
+function emitHeldMember(gen: JSGenerator, union: Type, location: SourceLocation): void {
+	const classes: Type[] = [];
+	let deepest = 0;
+	const kinds: string[] = [];
+	const names: string[] = [];
+	for (const m of union.typeChildren) {
+		if (m == null) continue;
+		const kind = heldKindOf(m);
+		if (kind == "class") {
+			classes.push(m);
+			if (classDepth(m) > deepest) deepest = classDepth(m);
+			continue;
+		}
+		const at = kinds.indexOf(kind);
+		if (at < 0) {
+			kinds.push(kind);
+			names.push(unionMemberDisplay(m));
+		} else {
+			names[at] = names[at] + " | " + unionMemberDisplay(m);
+		}
+	}
+	emit(gen, "(");
+	for (let depth = deepest; depth >= 0; depth -= 1) {
+		for (const m of classes) {
+			if (classDepth(m) != depth) continue;
+			emit(gen, "v instanceof ");
+			emitNode(gen, classReference(runtimeClassSym(m.typeReturn)!, location));
+			emit(gen, " ? \"" + escapeJSString(unionMemberDisplay(m)) + "\" : ");
+		}
+	}
+	for (let i = 0; i < kinds.length; i += 1) {
+		emit(gen, heldKindTest(kinds[i]) + " ? \"" + escapeJSString(names[i]) + "\" : ");
+	}
+	emit(gen, "typeof v)");
+}
+
+function heldKindOf(m: Type): string {
+	const repr = peelToRepr(m);
+	if (repr != null && (repr.kind == TypeKind.Int64 || repr.kind == TypeKind.Uint64)) return "bigint";
+	return jsMemberKind(m);
+}
+
+function heldKindTest(kind: string): string {
+	if (kind == "null") return "v == null";
+	if (kind == "array") return "Array.isArray(v)";
+	if (kind == "object") return "(v !== null && typeof v === \"object\" && !Array.isArray(v))";
+	return "typeof v === \"" + kind + "\"";
 }
 
 function jsMemberKind(t: Type): string {
@@ -772,6 +837,11 @@ function classMembers(union: Type): Symbol[] | null {
 	return classes;
 }
 
+function emitDefectCall(gen: JSGenerator, message: string, location: SourceLocation): void {
+	emitNode(gen, runtimeRef("msDefect", location));
+	emit(gen, "(" + message + ")");
+}
+
 function classReference(sym: Symbol, location: SourceLocation): Node {
 	const classRef = createNodeAt(NodeKind.Identifier, { name: sym.name } as IdentifierData, location);
 	classRef.resolvedSym = sym;
@@ -783,7 +853,11 @@ function openClassTest(gen: JSGenerator, cls: Symbol, member: Type, union: Type,
 	const shown = escapeJSString(typeDisplayName(member));
 	emit(gen, "((v) => (" + pass + "v instanceof ");
 	emitNode(gen, classReference(cls, location));
-	emit(gen, ") ? v : (() => { throw new Error(v !== null && typeof v === \"object\" && !Array.isArray(v) && v.constructor !== Object ? \"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + shown + "\" : \"member '" + shown + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + typeof v + \"'\"); })())(");
+	emit(gen, ") ? v : ");
+	emitNode(gen, runtimeRef("msDefect", location));
+	emit(gen, "(v !== null && typeof v === \"object\" && !Array.isArray(v) && v.constructor !== Object ? \"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + shown + "\" : \"member '" + shown + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + ");
+	emitHeldMember(gen, union, location);
+	emit(gen, " + \"'\"))(");
 }
 
 function classTarget(node: Node, payload: Type): Symbol | null {
@@ -807,7 +881,9 @@ function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData
 		const literals: Type[] = payload.kind == TypeKind.StringLiteral ? [payload] : payload.typeChildren;
 		const tests: string[] = [];
 		for (const lit of literals) tests.push("v === \"" + escapeJSString(lit.typeName) + "\"");
-		emit(gen, "((v) => (" + pass + tests.join(" || ") + ") ? v : (() => { throw new Error(\"invalid union conversion: \" + JSON.stringify(v) + \" is not " + escapeJSString(namedTypeDisplay(payload)) + "\"); })())(");
+		emit(gen, "((v) => (" + pass + tests.join(" || ") + ") ? v : ");
+		emitDefectCall(gen, "\"invalid union conversion: \" + JSON.stringify(v) + \" is not " + escapeJSString(namedTypeDisplay(payload)) + "\"", node.location);
+		emit(gen, ")(");
 		let stringSlot: Type | null = null;
 		if (union != null) {
 			for (const m of union.typeChildren) if (m.kind == TypeKind.String) stringSlot = m;
