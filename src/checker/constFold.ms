@@ -711,9 +711,10 @@ export function foldUnaryLiteral(op: string, operand: Node, node: Node): Node {
 				};
 				return makeTypedInteger(wrapToWidth(bits, node.nodeType), node.nodeType, loc);
 			}
+			const floating = od.isFloat || (node.nodeType != null && (isFloatType(node.nodeType) || node.nodeType.kind == TypeKind.Number));
 			const result = match (op) {
-				"-" => od.isFloat ? makeNumber(0 - nv, loc) : makeIntNumber((0 - (od.intVal as uint64)) as int64, loc),
-				"+" => od.isFloat ? makeNumber(nv, loc) : makeIntNumber(od.intVal, loc),
+				"-" => floating ? makeNumber(-nv, loc) : makeIntNumber((0 - (od.intVal as uint64)) as int64, loc),
+				"+" => floating ? makeNumber(nv, loc) : makeIntNumber(od.intVal, loc),
 				_ => node,
 			};
 			if (result != node && node.nodeType != null) {
