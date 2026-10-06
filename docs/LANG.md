@@ -2748,7 +2748,8 @@ To avoid heap allocations when parsing or processing strings, MetaScript allows 
 
 - **Zero-Copy Slicing**: Slicing a string with `..` (exclusive) or `...` (inclusive) performs pointer arithmetic instead of a heap copy; the slice is a `Readonly<Span<char>>`.
 - **Unified Params**: Functions taking `Readonly<Span<char>>` accept a `string`, a string slice and a `Span<char>` zero-copy.
-- **Read-only**: a string is immutable, so it never reaches a writable `Span<char>` — an argument, a local, a field, an assignment, a `this` receiver or a generic `Span<T>` refuses it (`cannot view 'lit' as a writable Span — a string is immutable; a view that only reads is Readonly<Span<T>>`), and a write through a string slice is E24.
+- **Read-only**: a string is immutable, so it never reaches a writable `Span<char>` — an argument, a local, an assignment, a `this` receiver or a generic `Span<T>` refuses it (`cannot view 'lit' as a writable Span — a string is immutable; a view that only reads is Readonly<Span<T>>`), and a write through a string slice is E24.
+- **Storage**: read-only does not make a borrowed view owning. Neither `Span<char>` nor `Readonly<Span<char>>` can be a field; use a parameter or a local whose source outlives the view. The storage-refusal cases live in `handoff/storageMutability.ms`.
 
 ```typescript
 function parseIdent(view: Readonly<Span<char>>): int32 {
@@ -2761,6 +2762,14 @@ parseIdent(source);        // 15
 ```
 
 Measured 2026-10-05 on C and JS (handoff `storageMutability` "a string reaches only a read-only Span, its slices too"). Before, a write through such a view hit the literal's read-only bytes (SIGBUS) or changed a built string on C only.
+
+Rechecked 2026-10-06 on Windows x64, compiler core `bca7f3e6`: the corrected
+`storageMutability` file passes 16/16, checking C and JS acceptance/refusal. A native
+and JavaScript caller reading a literal, a built string, slices, a local view, a generic
+reader and a read-only receiver prints `104 120 101 3 5 104 114 e` on both.
+The former accepted fixture declared a view field and was itself invalid; that case is
+now tested as a storage refusal, without weakening the compiler. Other backends were
+not rerun for this fixture correction.
 
 ### 4. Borrowed References (`Borrow<T>`)
 To achieve peak performance with large structs, MetaScript provides the `Borrow<T>` type (similar to the standard reference `lent T` pattern).
