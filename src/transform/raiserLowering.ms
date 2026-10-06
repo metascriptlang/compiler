@@ -3,6 +3,7 @@
 // Ordering matches the proven transformProgram pipeline (1000+ tests):
 //   lowerConstFold before lowerMatch (patterns resolved)
 
+import { bindCompilerFuncs } from "./util";
 import { Node } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker } from "./context";
@@ -39,6 +40,7 @@ import { lowerUnionTags } from "./lowering/unionTagLower";
 import { liftDestructors } from "./lowering/destructorLifting";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
+	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.raiserBackend = true;
 	ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.

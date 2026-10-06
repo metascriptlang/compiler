@@ -171,6 +171,17 @@ export function msCharToString(c: char): string {
 	return codePointString(b < 0x80 ? b as int64 : 0xFFFD);
 }
 
+when (raiser) {
+	@compilerFunc
+	extern function msUnionRead(u: Ptr<void>, slots: int32[], head: string, labels: string[]): Ptr<void>;
+
+	@compilerFunc
+	extern function msUnionReadMaybe(u: Ptr<void>, slots: int32[], head: string, labels: string[]): Ptr<void>;
+
+	@compilerFunc
+	extern function msUnionWrapMaybe(v: Ptr<void>, tag: int32): Ptr<void>;
+}
+
 export class AbortSignal {
 	aborted: boolean;
 	reason: string;
