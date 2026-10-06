@@ -199,7 +199,7 @@ test "converter: runtime converter skips a same-named type of another module" {
 	assert cCode.contains("Type 'Meters' is not assignable to type 'string'"), cCode;
 }
 
-test "converter: an extension named as<Target> is not an implicit conversion" {
+test "converter: an extension named after its target type is not an implicit conversion" {
 	const e = errorOf(`
 interface W { x: int32; }
 function asInt32(this w: W): int32 { return w.x; }
