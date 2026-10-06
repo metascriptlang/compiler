@@ -1749,10 +1749,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		}
 		const narrowUnary = subIntTypeDesc(g, node.nodeType);
 		if (narrowUnary != "" && (d.unaryOp == "-" || d.unaryOp == "~")) {
-			ctx.results.push(`((${narrowUnary})(${d.unaryOp}${operand}))`);
+			ctx.results.push(`((${narrowUnary})(${d.unaryOp}(${operand})))`);
 			return;
 		}
-		ctx.results.push(`(${d.unaryOp}${operand})`);
+		ctx.results.push(`(${d.unaryOp}(${operand}))`);
 		return;
 	}
 
