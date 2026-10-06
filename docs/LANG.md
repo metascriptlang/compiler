@@ -625,7 +625,8 @@ const s = new Sub(7);                               // s.u == 14, s.n == 5
 
 Measured 2026-10-05 on C, `--target=js` and `--target=raiser` with corpus `inheritedConstructor`
 (two levels, a default read from another module, `extends Box<int32>`, a generic subclass) and
-`superForwardsRestParameter` (a rest parameter, C and JS; the Raiser has no rest parameters).
+`superForwardsRestParameter` (a rest parameter; on the Raiser since 2026-10-06, with corpus
+`restParameterAcrossModules` for an imported class's constructor).
 Before, C and the Raiser filled the fields positionally and skipped the parent's body, and JS threw
 "Must call super constructor". A call through the parent runs the subclass's override on all three
 backends (corpus `overrideDispatchThroughBase`); `instanceof` does not run on the Raiser.

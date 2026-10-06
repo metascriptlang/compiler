@@ -94,7 +94,7 @@ Measured 2026-09-19 with `msc` v0.2.55 (`~/.metascript/BUILD` `bce99dbf`), each 
 | `new Set<int32>()` then `add` | `attempt to access a nil address` in `Set_add__int32`, after `msMapFatal` unbridged warnings | correct |
 | `msc run --target=raiser src/index.ms` (the whole compiler) | 16 type errors before codegen: `Undefined variable 'fetch'` ×14, `'Buffer'` ×1, `byteLength` arity ×1 | — |
 
-The three wrong results on strands and exceptions have compiler inbox cards dated 2026-09-19. Codegen-side gaps (`new Array<T>(n)`, `instanceof`, `static`, rest parameters) are listed in `src/codegen/raiser/CLAUDE.md`; `ref`/`out` locations are covered by the newer pointer probes above.
+The three wrong results on strands and exceptions have compiler inbox cards dated 2026-09-19. Codegen-side gaps (`new Array<T>(n)`, `instanceof`, `static`) are listed in `src/codegen/raiser/CLAUDE.md`; `ref`/`out` locations are covered by the newer pointer probes above.
 
 Test lanes at the same commit: `msc test src/raiser/value.ms` 333/333, `src/raiser/vm.ms` 519/519, `src/codegen/raiser/eval.ms` 2449/2449 (each count includes the file's dependencies).
 

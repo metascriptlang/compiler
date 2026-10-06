@@ -37,7 +37,6 @@ Compiles the post-Phase-3 AST into Raiser bytecode: `parse → check → transfo
 Each probed on `msc run --target=raiser`:
 
 - `instanceof` — `cannot evaluate operator 'instanceof' at comptime`: an object carries no class.
-- a rest parameter — `cannot compile node kind SpreadExpr at comptime`.
 - `static` members — `cannot evaluate '<Class>' at comptime: symbol kind is Class`.
 - `for..of` over a string — `cannot evaluate 'msStringByteLength' at comptime: symbol kind is Function` (the VM has no string index either: `s[1]` stops with `expected an array, got value kind String`).
 
