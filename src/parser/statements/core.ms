@@ -3,7 +3,7 @@
 
 import { TokenKind, Token } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, FunctionDeclData, BlockStmtData, BooleanLiteralData, ProgramData, createNode } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd, takePendingComments, isGenericCallAhead, captureGenericTypeArgs } from "../context";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd, takePendingComments, isGenericCallAhead, captureGenericTypeArgs, takeTrailingDecls } from "../context";
 import { getParserDefines } from "../context";
 import { isDefined, definedValue } from "../../compiler/defines";
 import { parseIntStr } from "../../utils/string";
@@ -383,8 +383,10 @@ export function parseBlockStmt(state: ParserState): NodeResult {
 			for (const w of picked) { stmts.push(w); }
 			continue;
 		}
+		const mark = state.trailingDecls.length;
 		const s = try parseStatement(state);
 		stmts.push(s);
+		for (const t of takeTrailingDecls(state, mark)) stmts.push(t);
 	}
 
 	const dangling = takePendingComments(state);
@@ -432,9 +434,12 @@ export function parseProgram(state: ParserState): NodeResult {
 			}
 			continue;
 		}
+		const mark = state.trailingDecls.length;
 		const result = parseStatement(state);
+		const trailing = takeTrailingDecls(state, mark);
 		if (result.ok) {
 			stmts.push(result.value);
+			for (const t of trailing) stmts.push(t);
 		} else {
 			addError(state, result.error);
 			synchronize(state);

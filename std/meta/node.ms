@@ -292,6 +292,7 @@ export enum NodeFlag {
 	CannotRaise,   // raises inference: no call in this statement's value can raise
 	WhenDeferred,  // parser: a `when` chain kept as nested IfStmt because a condition asks a type trait; the checker picks the branch per instance
 	Folded,        // checker: literal a @comptime call folded to; a macro that hands it back gets it re-checked as the call's type
+	Accessor,      // parser: this routine is a `get`/`set` accessor — `o.x` reads call it, `o.x = v` writes call it
 }
 
 // ===== Node Kind Enum =====

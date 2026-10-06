@@ -474,7 +474,11 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 	}
 
 	if (nextKind == TokenKind.Struct) {
+		const mark = state.trailingDecls.length;
 		const decl = try parseStructDecl(state);
+		for (let i = mark; i < state.trailingDecls.length; i += 1) {
+			state.trailingDecls[i] = createNode(NodeKind.ExportDecl, { exportedDecl: state.trailingDecls[i] }, exportToken);
+		}
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
@@ -850,6 +854,11 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	const fieldVisibility: string[] = [];
 	const fieldDecorators: Node[][] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
+		if (nodeKind == NodeKind.StructDecl && (current(state).kind == TokenKind.Get || current(state).kind == TokenKind.Set)
+				&& isIdentLike(peek(state, 1)) && peek(state, 2).kind == TokenKind.LParen) {
+			state.trailingDecls.push(try parseStructAccessor(state, name, genericNames));
+			continue;
+		}
 		const decorators: Node[] = [];
 		while (!isAtEnd(state) && current(state).kind == TokenKind.At) {
 			const dec = try parseMacroInvocation(state);
@@ -1299,6 +1308,11 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 	const accDefaults = getLastParsedDefaults();
 	const methodParams = extractParamNames(raw);
 	const methodParamTypes = extractParamTypes(raw);
+	const arityError = accessorArityError(accKind, accName, methodParams.length, accNameToken.line);
+	if (arityError != "") return Result.err(arityError);
+	if (isStatic || flags != "") {
+		return Result.err(`Accessor '${accKind} ${accName}' at line ${accNameToken.line} cannot be ${isStatic ? "static" : flags}: an accessor is a plain instance getter or setter`);
+	}
 	const methodReturnType = captureOptionalType(state);
 	const methodReturnTypeExpr = getLastTypeExpr();
 	const body = prependParamPatterns(try callBlockParser(state), accPatterns, accParamLocs);
@@ -1318,7 +1332,50 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 	accNode.typeExpr = methodReturnTypeExpr;
 	accNode.typeExprs = accParamTypeExprs;
 	accNode.paramLocations = accParamLocs;
+	accNode.flags = accNode.flags.incl(NodeFlag.Accessor);
 	return Result.ok(accNode);
+}
+
+function accessorArityError(accKind: string, accName: string, paramCount: int32, line: int32): string {
+	if (accKind == "get" && paramCount != 0) return `Getter '${accName}' at line ${line} cannot take parameters`;
+	if (accKind == "set" && paramCount != 1) return `Setter '${accName}' at line ${line} must take exactly one parameter`;
+	return "";
+}
+
+function parseStructAccessor(state: ParserState, structName: string, genericNames: string): NodeResult {
+	const accToken = current(state);
+	const accNameToken = peek(state, 1);
+	if (accToken.kind == TokenKind.Set) {
+		return Result.err(`Setter '${accNameToken.value}' in struct '${structName}' at line ${accToken.line}: a struct takes getters only — assign its fields`);
+	}
+	if (genericNames != "") {
+		return Result.err(`Getter '${accNameToken.value}' in generic struct '${structName}' at line ${accToken.line} is not supported`);
+	}
+	advance(state);
+	advance(state);
+	const raw = parseParamList(state, `get_${accNameToken.value}`);
+	const arityError = accessorArityError("get", accNameToken.value, extractParamNames(raw).length, accNameToken.line);
+	if (arityError != "") return Result.err(arityError);
+	const fnReturnType = captureOptionalType(state);
+	const fnReturnTypeExpr = getLastTypeExpr();
+	const fnBody = try callBlockParser(state);
+	const nameLoc = makeLocFromToken(accNameToken);
+	const fnNode = createNode(NodeKind.FunctionDecl, {
+		fnName: `get_${accNameToken.value}`,
+		params: ["this"],
+		fnParamTypes: [structName],
+		fnBody,
+		fnFlags: `ext:this:${structName}`,
+		fnReturnType,
+		fnDefaults: [null as unknown as Node],
+		nativeName: "",
+		nameLocation: nameLoc,
+	}, accToken);
+	fnNode.typeExpr = fnReturnTypeExpr;
+	fnNode.typeExprs = [null as unknown as Node];
+	fnNode.paramLocations = [nameLoc];
+	fnNode.flags = fnNode.flags.incl(NodeFlag.Accessor);
+	return Result.ok(fnNode);
 }
 
 function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: boolean, flags: string, visibility: string): NodeResult {
