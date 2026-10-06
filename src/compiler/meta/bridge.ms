@@ -63,7 +63,7 @@ import {
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase } from "../../checker/types";
-import { hasFlag, isFrameValue, isTypeSymbol, SymbolFlag, overloadWinner } from "../../checker/symbol";
+import { hasFlag, isTypeSymbol, SymbolFlag, overloadWinner } from "../../checker/symbol";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -646,8 +646,11 @@ export function boundTypeOfObject(objHeap: RaiserObjectHeap, handle: int64): Typ
 	return null;
 }
 
-function rebindsOnOutput(sym: Symbol): boolean {
-	return !isFrameValue(sym) && sym.overloadIdx == 0;
+function calleeSymOf(call: Node, d: CallExprData): Symbol | null {
+	if (call.resolvedSym == null) return null;
+	const winner = overloadWinner(call.resolvedSym, d.resolvedOverloadIdx);
+	if (stripMacroArgWrappers(d.callee).kind == NodeKind.MemberExpr) return winner.symbolKind == SymbolKind.Function ? winner : null;
+	return winner != call.resolvedSym ? winner : null;
 }
 
 // `declNode` skipped to avoid Symbol↔Node cycle; reach it via getImpl.
@@ -774,16 +777,14 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
 			setNode(objHeap, arrHeap, handle, "callee", d.callee);
-			if (node.resolvedSym != null) {
-				const winner = overloadWinner(node.resolvedSym, d.resolvedOverloadIdx);
-				const calleeVal = heapObjectGetField(objHeap, handle, "callee");
-				if (winner != node.resolvedSym && calleeVal.kind == RaiserValueKind.Object) {
-					if (winner.symbolType != null) {
-						setTypeFields(objHeap, arrHeap, calleeVal.intVal, winner.symbolType, d.callee.location, includeTypeAst);
-						heapObjectSetField(objHeap, calleeVal.intVal, "resolvedSym", symbolToValue(winner, objHeap));
-					}
-					heapObjectSetField(objHeap, calleeVal.intVal, "symHandle", raiserInt(registerBoundSym(winner) as int64));
+			const winner = calleeSymOf(node, d);
+			const calleeVal = heapObjectGetField(objHeap, handle, "callee");
+			if (winner != null && calleeVal.kind == RaiserValueKind.Object) {
+				if (winner != node.resolvedSym && winner.symbolType != null) {
+					setTypeFields(objHeap, arrHeap, calleeVal.intVal, winner.symbolType, d.callee.location, includeTypeAst);
+					heapObjectSetField(objHeap, calleeVal.intVal, "resolvedSym", symbolToValue(winner, objHeap));
 				}
+				heapObjectSetField(objHeap, calleeVal.intVal, "symHandle", raiserInt(registerBoundSym(winner) as int64));
 			}
 			setNodes(objHeap, arrHeap, handle, "arguments", d.arguments);
 			setStr(objHeap, handle, "typeArg", node.typeArg);
@@ -1562,7 +1563,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.Identifier => {
 			const n = createNodeAt(NodeKind.Identifier, { name: readStr(objHeap, h, "name") }, loc);
 			const hv = heapObjectGetField(objHeap, h, "symHandle");
-			if (hv.kind == RaiserValueKind.Int && hv.intVal >= 0 && hv.intVal < _boundSyms.length && rebindsOnOutput(_boundSyms[hv.intVal])) {
+			if (hv.kind == RaiserValueKind.Int && hv.intVal >= 0 && hv.intVal < _boundSyms.length) {
 				n.resolvedSym = _boundSyms[hv.intVal];
 				n.flags = n.flags.incl(NodeFlag.BoundSym);
 			}
@@ -3714,18 +3715,19 @@ test "nodeToValue — a call that resolved to the first overload keeps its calle
 	assert boundTypeOfObject(objH, calleeVal.intVal) == parts[1].nodeType;
 }
 
-test "valueToNode — drops resolvedSym field (forward-only design)" {
+test "valueToNode — a resolved identifier comes back bound to its symbol" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
 	const loc = makeLoc(1, 0);
 	const ident = createNodeAt(NodeKind.Identifier, { name: "x" }, loc);
-	ident.resolvedSym = makeSymbol("x", SymbolKind.Variable);
+	const sym = makeSymbol("x", SymbolKind.Variable);
+	ident.resolvedSym = sym;
 	const v = nodeToValue(ident, objH, arrH);
 	const back = valueToNode(v, objH, arrH, loc);
 	assert back.kind == NodeKind.Identifier;
 	assert (back.data as IdentifierData).name == "x";
-	// Forward-only: reverse path leaves resolvedSym as the null-cast sentinel.
-	assert back.resolvedSym == null;
+	assert back.resolvedSym == sym;
+	assert back.flags.has(NodeFlag.BoundSym);
 }
 
 test "nodeToValue — Symbol with empty name still emits object with empty string" {

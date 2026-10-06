@@ -332,6 +332,15 @@ export function lookupLocal(table: SymbolTable, name: string): Symbol {
 	return null as unknown as Symbol;
 }
 
+export function isVisibleSymbol(table: SymbolTable, sym: Symbol): boolean {
+	let scope = table.current;
+	while (scope != null) {
+		if (sym.nameId != 0 && scope.symbols.has(sym.nameId) && scope.symbols.get(sym.nameId) == sym) return true;
+		scope = scope.parent;
+	}
+	return false;
+}
+
 export function isFrameValue(sym: Symbol): boolean {
 	if (sym.symbolKind == SymbolKind.Parameter) return true;
 	return (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp) && !hasFlag(sym, SymbolFlag.Global);
