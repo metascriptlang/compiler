@@ -1,6 +1,5 @@
 // @exit: 1
 // @stdout: before row:7
-// @skip-js: node exits 1 with the same "member 'Row' is not accessible" line but wraps it in its own uncaught-error report, and parity compares merged stdout+stderr (sibling of 647)
 // @xfail(raiser): the Raiser VM does not test union conversions
 // @xfail(danger): --danger drops the tag test, so the read of the other member is undefined behaviour
 
