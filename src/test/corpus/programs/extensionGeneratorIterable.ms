@@ -4,10 +4,7 @@ class Bag { items: int32[] = [4, 5]; }
 function* toItems(this b: Bag): Iterator<int32> { for (const x of b.items) yield x; }
 class Shelf { names: string[] = ["a", "bb"]; }
 function* toPairs(this s: Shelf): Iterator<[string, int32]> {
-	for (const n of s.names) {
-		const p: [string, int32] = [n, n.length];
-		yield p;
-	}
+	for (const n of s.names) yield [n, n.length];
 }
 async function twice(this b: Bag): Promise<int32> { return b.items[0] * 2; }
 
