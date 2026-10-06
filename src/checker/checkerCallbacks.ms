@@ -15,6 +15,7 @@ type ApplyDecoratorsFn = (ctx: CheckerContext, program: Node) => void;
 type DecoratorDefersFn = (ctx: CheckerContext, stmt: Node) => boolean;
 type ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Node, after: Node[]) => Node;
 type DemandReturnFn = (ctx: CheckerContext, sym: Symbol, read: Node) => void;
+type LaterDeclarationNoteFn = (name: string) => string;
 
 let exprCheckerFn: ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null): void => {
 };
@@ -46,6 +47,9 @@ let applyDecoratedStmtFn: ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Nod
 	return stmt;
 };
 let demandReturnFn: DemandReturnFn = (ctx: CheckerContext, sym: Symbol, read: Node): void => {
+};
+let laterDeclarationNoteFn: LaterDeclarationNoteFn = (name: string): string => {
+	return "";
 };
 
 
@@ -134,4 +138,12 @@ export function callDemandReturn(ctx: CheckerContext, sym: Symbol, read: Node): 
 
 export function registerDemandReturn(fn: DemandReturnFn): void {
 	demandReturnFn = fn;
+}
+
+export function callLaterDeclarationNote(name: string): string {
+	return laterDeclarationNoteFn(name);
+}
+
+export function registerLaterDeclarationNote(fn: LaterDeclarationNoteFn): void {
+	laterDeclarationNoteFn = fn;
 }

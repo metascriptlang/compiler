@@ -12,7 +12,7 @@ import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
-import { callCheckStmt, callDemandReturn, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
+import { callCheckStmt, callDemandReturn, callLaterDeclarationNote, checkInTypeSlot, registerCheckExpr } from "./checkerCallbacks";
 import { checkArcPointeeSendable } from "./sendable";
 import { isLockedRef, isIterator, getIteratorYieldType } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
@@ -644,14 +644,15 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				if (builtin != null) { node.nodeType = builtin; return; }
 			}
 			if (sym == null) {
-					addError(ctx, `Undefined variable '${d.name}'`, node.location.line, node.location.column);
+					addError(ctx, `Undefined variable '${d.name}'` + callLaterDeclarationNote(d.name), node.location.line, node.location.column);
 				node.nodeType = errorType(); return;
 			}
 			// Demand-driven: ensure the symbol's signature is resolved before using its type
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
 			markUsedIn(ctx, sym);
-			if (sym.symbolKind == SymbolKind.Function) callDemandReturn(ctx, sym, node);
+			if (sym.symbolKind == SymbolKind.Function || (sym.symbolKind == SymbolKind.Variable && sym.symbolType != null
+					&& sym.symbolType.kind == TypeKind.Function && isUnresolvedType(sym.symbolType.typeReturn))) callDemandReturn(ctx, sym, node);
 			if (refusesTypeAsValue(ctx, node, sym, d.name)) { node.nodeType = errorType(); return; }
 			if (d.name == "this" && (sym.symbolKind == SymbolKind.Class || sym.symbolKind == SymbolKind.Actor)) node.data = { name: sym.name };
 			if (sym.symbolKind == SymbolKind.Function && hasFlag(sym, SymbolFlag.CompileTime) && node != ctx.calleeExpr

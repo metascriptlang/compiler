@@ -43,7 +43,7 @@ import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./tem
 import { fitNode, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn } from "./checkerCallbacks";
+import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerLaterDeclarationNote } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
@@ -196,7 +196,7 @@ function rewriteNestedFunctionDecl(ctx: CheckerContext, node: Node): void {
 	// Synthesize the fn-type annotation so checkVariableDecl's self-ref
 	// pre-registration fires (it requires a declared type) — recursion parity.
 	let fnAnnot = "";
-	let allTyped = true;
+	let allTyped = d.fnReturnType != "";
 	for (const pt of d.fnParamTypes) {
 		if (pt == "") { allTyped = false; break; }
 	}
@@ -208,7 +208,7 @@ function rewriteNestedFunctionDecl(ctx: CheckerContext, node: Node): void {
 			parts = parts + d.params[pi] + ": " + d.fnParamTypes[pi];
 			pi = pi + 1;
 		}
-		fnAnnot = "(" + parts + ") => " + (d.fnReturnType != "" ? d.fnReturnType : "void");
+		fnAnnot = "(" + parts + ") => " + d.fnReturnType;
 	}
 	node.kind = NodeKind.VariableDecl;
 	node.data = { declName: d.fnName, declType: fnAnnot, initializer: fnExpr, declKind: DeclKind.Const, nameLocation: d.nameLocation };
@@ -741,7 +741,14 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 			hoisted.symbolType = selfRefType;
 		}
 	}
+	const forward = lookupLocal(ctx.table, d.declName);
+	const forwardLocal = forward != null && forward.declNode == node && _forwardLocals.has(forward) ? forward : null;
+	if (forwardLocal != null) _routinesInFlight.push(forwardLocal);
 	checkExpr(ctx, d.initializer, declType);
+	if (forwardLocal != null) {
+		_routinesInFlight.pop();
+		_forwardLocals.delete(forwardLocal);
+	}
 	if (ctx.targetOs == "solana" && d.declKind == DeclKind.Const && d.initializer != null
 			&& (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global)) {
 		foldUserOperatorConstant(ctx, d.initializer, declType);
@@ -1083,13 +1090,18 @@ function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
 	const fnType = sym.symbolType;
 	if (fnType == null || fnType.kind != TypeKind.Function || !isUnresolvedType(fnType.typeReturn)) return;
 	const decl = sym.declNode;
-	if (decl == null || decl.resolvedSym != sym || sym.overloads.length > 0) return;
-	if (decl.kind != NodeKind.FunctionDecl && decl.kind != NodeKind.MethodDecl) return;
+	if (decl == null || sym.overloads.length > 0) return;
+	const local = decl.kind == NodeKind.VariableDecl && _forwardLocals.has(sym);
+	if (!local && (decl.resolvedSym != sym || (decl.kind != NodeKind.FunctionDecl && decl.kind != NodeKind.MethodDecl))) return;
 	const at = _routinesInFlight.indexOf(sym);
 	if (at >= 0) {
 		const discarded = discardedCall(ctx, read);
 		if (discarded != null) _discardedInFlightCalls.push({ call: discarded, sym });
 		else if (at < _routinesInFlight.length - 1) refuseInferenceCycle(ctx, at, read);
+		return;
+	}
+	if (local) {
+		addError(ctx, `'${sym.name}' is used before its declaration is checked, so its return type cannot be inferred yet; annotate the return type of '${sym.name}'`, read.location.line, read.location.column);
 		return;
 	}
 	if (ctx.decoratorsPending) return;
@@ -2078,6 +2090,60 @@ function spliceStatementsAt(stmts: Node[], at: int32, picked: Node[]): void {
 	for (const r of rebuilt) stmts.push(r);
 }
 
+interface BlockPosition {
+	stmts: Node[];
+	at: int32;
+}
+
+let _blocksInFlight: BlockPosition[] = [];
+let _forwardLocals: HashSet<Symbol> = new HashSet<Symbol>();
+
+function isLocalFunctionStmt(node: Node): boolean {
+	if (node.kind != NodeKind.FunctionDecl || node.flags.has(NodeFlag.Converter) || node.flags.has(NodeFlag.WhenDeferred)) return false;
+	return (node.data as FunctionDeclData).fnFlags.indexOf("extern", 0) < 0;
+}
+
+function forwardDeclareLocalRun(ctx: CheckerContext, stmts: Node[], from: int32): void {
+	let end = from;
+	while (end < stmts.length && isLocalFunctionStmt(stmts[end])) {
+		rewriteNestedFunctionDecl(ctx, stmts[end]);
+		end += 1;
+	}
+	for (let i = from; i < end; i += 1) forwardDeclareLocal(ctx, stmts[i]);
+}
+
+function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
+	const d = node.data as VariableDeclData;
+	if (d.initializer == null || d.initializer.kind != NodeKind.FunctionExpr || lookupLocal(ctx.table, d.declName) != null) return;
+	const fd = d.initializer.data as FunctionExprData;
+	const paramTypes: Type[] = [];
+	for (const pt of fd.funcExprParamTypes) {
+		if (pt == "") return;
+		paramTypes.push(resolveAnnotation(pt, ctx, d.nameLocation.line, d.nameLocation.column));
+	}
+	const declared = d.declType != "" ? resolveAnnotation(d.declType, ctx, d.nameLocation.line, d.nameLocation.column) : null;
+	const sym = makeSymbol(d.declName, SymbolKind.Variable, declared != null ? declared : createClosureType(paramTypes, fd.funcExprParams, inferredType()), false);
+	sym.declNode = node;
+	defineOrError(ctx, sym, node);
+	_forwardLocals.add(sym);
+}
+
+function laterDeclarationNote(name: string): string {
+	for (let b = _blocksInFlight.length - 1; b >= 0; b -= 1) {
+		const pos = _blocksInFlight[b];
+		for (let i = pos.at + 1; i < pos.stmts.length; i += 1) {
+			const s = pos.stmts[i];
+			if (s.kind == NodeKind.FunctionDecl && (s.data as FunctionDeclData).fnName == name) {
+				return ": '" + name + "' is declared later in this block, after a statement that runs first; a local function declaration is visible only from the run of function declarations it belongs to, so move '" + name + "' up next to them";
+			}
+			if (s.kind == NodeKind.VariableDecl && (s.data as VariableDeclData).declName == name) {
+				return ": '" + name + "' is declared later in this block, and a const or let is not visible before its declaration; declare it first, or write the functions as adjacent function declarations";
+			}
+		}
+	}
+	return "";
+}
+
 function checkBlock(ctx: CheckerContext, node: Node): void {
 	const d = node.data as BlockStmtData;
 	openScope(ctx.table, ScopeKind.Block);
@@ -2098,9 +2164,12 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 			}
 			continue;
 		}
+		if (ctx.currentFunction != null && isLocalFunctionStmt(d.statements[i])) forwardDeclareLocalRun(ctx, d.statements, i);
+		_blocksInFlight.push({ stmts: d.statements, at: i });
 		const _cs0 = performance.now();
 		checkStmt(ctx, d.statements[i]);
 		const _cs1 = performance.now();
+		_blocksInFlight.pop();
 		if (_slowTrace && _cs1 - _cs0 > 100) {
 			console.log(`        SLOWSTMT ${ctx.modulePath}:${d.statements[i].location.line} ${_cs1 - _cs0}ms kind=${d.statements[i].kind}`);
 		}
@@ -3678,6 +3747,7 @@ export function checkProgramWithRegistryCancellable(
 registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
 registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
 registerDemandReturn(demandReturnType);
+registerLaterDeclarationNote(laterDeclarationNote);
 
 // ===== Tests =====
 
