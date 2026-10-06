@@ -1112,7 +1112,8 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			}
 			const isArithmeticOp = d.operator == "+" || d.operator == "-" || d.operator == "*"
 				|| d.operator == "/" || d.operator == "%" || d.operator == "**";
-			if (isArithmeticOp || isComparisonOp(d.operator)) {
+			const isEqualityOp = d.operator == "==" || d.operator == "!=" || d.operator == "===" || d.operator == "!==";
+			if (isArithmeticOp || (isComparisonOp(d.operator) && !isEqualityOp)) {
 				const userResult = declaredOperatorResult(ctx, d.operator, effLeft, effRight);
 				if (userResult != null) {
 					node.flags = node.flags.incl(NodeFlag.UserOp);
