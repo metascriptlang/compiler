@@ -1129,6 +1129,10 @@ void msAsyncCb(void* raw) {
 	msFutureDrcDestroy(next);
 }
 
+void msEnsureOwnerDispatcher(void) {
+	if (!msIsPoolWorker) (void)msGetDispatcher();
+}
+
 void msAsyncStart(void* retFut, msClosure stepper) {
 	(void)retFut;
 	/* Main thread: ensure dispatcher exists (needs IOCP/pipe for cross-thread completion).

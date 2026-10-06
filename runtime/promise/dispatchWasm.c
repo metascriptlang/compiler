@@ -232,6 +232,10 @@ void msAsyncCb(void* raw) {
     msFutureAddCallback(next, (msClosure){ .fn = (msClosureFn)msAsyncCb, .env = raw });
 }
 
+void msEnsureOwnerDispatcher(void) {
+    (void)msGetDispatcher();
+}
+
 void msAsyncStart(void* retFut, msClosure stepper) {
     (void)retFut;
     msGetDispatcher();
