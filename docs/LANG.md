@@ -3720,7 +3720,7 @@ The standard general-purpose array. It is a **reference type** — heap-allocate
   const alias = items;  // shares the same underlying array
   alias.push(5);        // items is now [1, 2, 3, 4, 5]
   ```
-- **Elements are invariant** (differs from TypeScript, which lets `Dog[]` stand in for `Animal[]`). An array is shared by pointer, so a view with a wider element type would let `push(new Animal())` land in a `Dog[]` and the next `dogs[i].breed` read past the object (measured as an ASan heap-buffer-overflow, 2026-09-10). Every route is closed: argument, `Span<T>`, `T[N]`, declaration, field, return, and a generic `T[]` whose `T` another argument would widen.
+- **Elements are invariant** (differs from TypeScript, which lets `Dog[]` stand in for `Animal[]`). An array is shared by pointer, so a view with a wider element type would let `push(new Animal())` land in a `Dog[]` and the next `dogs[i].breed` read past the object (measured as an ASan heap-buffer-overflow, 2026-09-10). Every route is closed: argument, `Span<T>`, `T[N]`, declaration, field, return, a generic `T[]` whose `T` another argument would widen, and `as`: `dogs as Animal[]` is "cannot convert Dog[] to Animal[]: it holds Dog where Animal[] holds Animal, …", and so is `int32[] as int64[]`, on C and JS (measured 2026-10-06). The same holds for `T[N]`, `Span<T>`, tuples, `Result` and `T | null`: their elements must be equal up to `distinct`, as the reference requires (`checkConvertible`).
   ```typescript
   class Animal { name = ""; }
   class Dog extends Animal { breed = ""; }
