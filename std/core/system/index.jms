@@ -67,6 +67,24 @@ function msFieldError(head: string, actual: string): never {
 }
 
 @compilerFunc
+function msUnionRead(u: unknown, slots: int32[], head: string, labels: string[]): unknown {
+	@emit(`if (${slots}.length !== 0 && !${slots}.includes(${u}.$tag)) throw new Error(${head} + ${labels}[${u}.$tag] + "'"); return ${u}.$v;`);
+	unreachable;
+}
+
+@compilerFunc
+function msUnionReadMaybe(u: unknown, slots: int32[], head: string, labels: string[]): unknown {
+	@emit(`if (${u} == null) return null; if (${slots}.length !== 0 && !${slots}.includes(${u}.$tag)) throw new Error(${head} + ${labels}[${u}.$tag] + "'"); return ${u}.$v;`);
+	unreachable;
+}
+
+@compilerFunc
+function msUnionWrapMaybe(v: unknown, tag: int32): unknown {
+	@emit(`return ${v} == null ? null : { $tag: ${tag}, $v: ${v} };`);
+	unreachable;
+}
+
+@compilerFunc
 function msCharToString(c: char): string {
 	@emit(`return ${c} < 128 ? String.fromCharCode(${c}) : "\\uFFFD";`);
 	unreachable;
