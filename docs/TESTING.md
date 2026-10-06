@@ -447,14 +447,21 @@ Traps, all paid for on 2026-09-05:
   unchanged; each Span is now last-read before its owner's assignment, instead of
   carrying a borrowed view across a source write. The danger driver fell back to
   the auto-detected compiler without LTO, so whole-program DCE is not proved.
-- On that Windows host, the bare ASan build now links, but its default launch exits
-  53 with no output. Its PE imports `clang_rt.asan_dynamic-x86_64.dll`, present under
-  LLVM 23's `lib/windows` rather than the default process search path. A child with
-  that directory prepended to one canonical `Path` entry prints `GUARD-OK`, exit 0,
-  no ASan report. The corpus SAN runner already arranges this runtime path; the
-  guard runner still needs equivalent runtime discovery. An environment block
-  containing both `Path` and `PATH` failed to resolve it. This is a focused loader
-  measurement, not a full current integration guard/SAN GREEN.
+- Windows guard loader followup, 2026-10-06: the previous default bare-ASan launch
+  exited 53 because LLVM's `lib/windows` was outside the DLL search path.
+  `src/test/guard/run.ms` now discovers that directory from clang and temporarily
+  extends the native process PATH around the synchronous child launch.
+  Runner blob `b237e3b4a2b0`, based on tree `2ce918893f31`, was exercised with
+  `MSC=$PWD/out/recovery/msc.exe GUARD_SHARD=25/285 out/recovery/msc.exe run --target=raiser src/test/guard/run.ms`:
+  `bareArenaReallocCopy [bare]` and `[bare asan]` both pass, `ALL GREEN (2 cells)`.
+  A throwaway overlapping-memcpy binary built with `clang -fsanitize=address -O0`
+  and launched through the same runner launch block reports
+  `ERROR: AddressSanitizer: memcpy-param-overlap`; the launcher checks failure and
+  PATH restoration, printing `ASAN-FAULT-DETECTED PATH-RESTORED`.
+  An environment block containing both `Path` and `PATH` previously failed to
+  resolve the DLL; no machine PATH change or DLL copy is needed.
+  This proves the x64 Windows loader and sanitizer sensitivity, not the full
+  integration guard/SAN lane or the arm64/i386 runtime filenames.
 - Heap corruption inside the compiler itself: build it under ASan with the
   DRC slab off, `msc build src/index.ms --gc=drc --sanitize=address
   --passC=-DMS_SLAB_MAX=0 --passL=-fsanitize=address --cc=clang
