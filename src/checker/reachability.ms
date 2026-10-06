@@ -133,6 +133,7 @@ function visitedAdd(key: string): void {
 
 let _aliveSet: AliveSet = createAliveSet();
 let _singleModule = "";
+let _imageModules = new HashSet<string>();
 
 // ===== Core Walker =====
 
@@ -237,9 +238,25 @@ function walkBody(node: Node, modulePath: string): void {
 	walkChildrenGeneric(node, modulePath);
 }
 
+function moveCellOwnerIntoCore(key: string, demander: string): void {
+	if (_imageModules.size == 0 || _imageModules.has(demander)) return;
+	for (const demand of _aliveSet.typeInfos) {
+		if (demand.key != key) continue;
+		if (!_imageModules.has(demand.owner)) return;
+		demand.owner = demander;
+		aliveSetAddModule(_aliveSet, demander);
+		markReferenced(demand.destroy, demander);
+		if (demand.trace != null) markReferenced(demand.trace, demander);
+		return;
+	}
+}
+
 function markRefArrayCell(arrT: Type, modulePath: string): void {
 	const key = refArrayCellKey(arrT);
-	if (_aliveSet.typeInfoKeys.has(key)) return;
+	if (_aliveSet.typeInfoKeys.has(key)) {
+		moveCellOwnerIntoCore(key, modulePath);
+		return;
+	}
 	const destroy = refArrayCellOp(arrT, AttachedOp.AttachedDestructor);
 	if (destroy == null) throw new Error(`internal: ref-array cell ${key} is boxed in ${modulePath} before its destroy op was lifted`);
 	const trace = refArrayCellOp(arrT, AttachedOp.AttachedTrace);
@@ -647,6 +664,7 @@ export function computeAliveSet(
 	graph: ModuleGraph,
 	exportRootModules: string[] = [],
 	exportRootFunctions: Symbol[] = [],
+	imageModules: string[] = [],
 ): AliveSet {
 	const rootFunctions = new HashSet<Symbol>();
 	for (const sym of exportRootFunctions) {
@@ -655,6 +673,8 @@ export function computeAliveSet(
 	}
 	_aliveSet = createAliveSet();
 	_aliveSet.computed = true;
+	_imageModules = new HashSet<string>();
+	for (const path of imageModules) _imageModules.add(path);
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
 	nameIndexBuild(programs, paths);
@@ -777,6 +797,7 @@ function takeReachability(): AliveSet {
 	const result = _aliveSet;
 	_aliveSet = createAliveSet();
 	_singleModule = "";
+	_imageModules = new HashSet<string>();
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
 	_nameIndex = new HashMap<string, string>();
