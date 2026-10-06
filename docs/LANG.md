@@ -430,7 +430,7 @@ type yet and prints the built-in results.
 ```typescript
 "hello"         // Double-quoted string
 'world'         // Single-quoted string
-'a'             // char literal (length 1 single quotes)
+'a'             // a one-character string, as in TypeScript (not a char)
 "line\nnext"    // Escape sequences: \n \t \r \\ \" \'
 
 // Character code (compile-time fold, single-char literal only)
@@ -2707,13 +2707,13 @@ Strings are **UTF-8 byte buffers on both backends** (C: `msString`; JS: byte arr
 MetaScript introduces `char` as a first-class primitive for **byte-tier** work: an unsigned 8-bit value (0–255).
 
 - **Access**: `byteAt(i)` reads raw bytes; `s[i]` is TS-tier and returns a `string` (see §0). A for-of over a string yields its UTF-8 bytes as `char`, so `for (const c of "héllo")` runs six times, on C, JS and Raiser (corpus `869-forOfStringBytes`, measured 2026-10-05).
-- **Literals**: Character literals use single quotes (e.g., `'a'`).
+- **Literals**: there is no char literal: `'A'` is a one-character `string`, as in TypeScript, and `const c: char = 'A'` is `Type 'string' is not assignable to type 'char'`. Write the code: `const c: char = "A".code` is 65 on C, JS and the Raiser (measured 2026-10-06).
 - **Numeric**: `char` is a numeric type and can participate in arithmetic or be cast to `number`.
 - **No `as` between text and numbers**: `s[i] as int32`, `s as char`, `s as boolean` and `n as string` are checker errors (`cannot convert string to int32 — …`) on C, JS and the Raiser, as in TypeScript and Nim; read `s.charCodeAt(i)` or `s.byteAt(i)`, or format with `String(n)`. `"0xff" as bigint` still parses. Measured 2026-10-06, pinned by `checker3pass/scenarios/textConversions.ms`.
 - **Codepoints use `int32`, not `char` or `uint32`**: `char` is 8-bit (only U+0000–U+00FF). A full Unicode codepoint is 21-bit, so hold it in `int32` — the type `.code`, `s.charCodeAt(i)`, and `fromCodePoint()` all speak, matching Go's `rune`. Prefer `int32` over `uint32` here: signed stays cast-free with those APIs and leaves `-1` free as an "invalid/absent" sentinel, whereas `uint32` buys only a compile-time non-negativity guarantee at the cost of an `as uint32` cast at every codepoint boundary.
 
 ```typescript
-const c: char = 'A';
+const c: char = "A".code;   // 65
 const s = "héllo";
 const first = s[0];        // "h" — string, TS semantics
 const b: int32 = s.byteAt(1); // 0xC3 — first byte of é, byte tier
