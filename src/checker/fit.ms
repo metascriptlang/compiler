@@ -1469,15 +1469,21 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 	if (unwrapRefNullUnion(formal) != null) return null as unknown as Node;
 	// A flow-narrowed reference types as the variant, but its storage is the
 	// declared union struct — wrapping it would deref that struct as a variant
-	// pointer. The fit is an identity pass; stamping the position's type as
-	// the union keeps every downstream repr decision (address-of at the call,
-	// return/NRVO shape) identical to an un-narrowed reference.
-	if (declaredTagUnionOf(expr) != null) {
-		if (formal.kind == TypeKind.Union) {
+	// pointer. Into the declared union itself the fit is an identity pass;
+	// stamping the position's type as the union keeps every downstream repr
+	// decision (address-of at the call, return/NRVO shape) identical to an
+	// un-narrowed reference. Any other union numbers its members differently,
+	// so the member is projected out and tagged again.
+	const declared = declaredTagUnionOf(expr);
+	if (declared != null) {
+		if (formal.kind != TypeKind.Union) return null as unknown as Node;
+		if (sameType(declared, formal)) {
 			expr.nodeType = formal;
 			return expr;
 		}
-		return null as unknown as Node;
+		const projected = projectTagUnionMember(expr, declared, exprType);
+		if (projected == null as unknown as Node) return null as unknown as Node;
+		return widenVariantToUnion(projected, formal, exprType);
 	}
 	const valueType = unwrapRef(exprType);
 	const vi = unionSlotOf(formal, exprType);
