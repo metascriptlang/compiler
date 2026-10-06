@@ -1169,6 +1169,14 @@ function walkGenerators(node: Node, ctx: TransformContext): void {
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
 			walkGenerators(d.methodBody, ctx);
+			const fnType = node.resolvedSym != null ? node.resolvedSym.symbolType : null;
+			if (d.methodBody != null && isGeneratorFlag(d.methodFlags) && (fnType == null || !hasGenericParams(fnType))) {
+				d.methodBody = transformGeneratorFn(
+					d.methodParams, d.methodParamTypes, d.methodBody,
+					d.methodFlags, d.methodReturnType, fnType != null ? fnType.typeReturn : null, ctx, node.location,
+				);
+				d.methodFlags = "";
+			}
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;
