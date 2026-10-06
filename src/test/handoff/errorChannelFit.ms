@@ -28,6 +28,25 @@ test "propagation requires one unambiguous conversion into the enclosing error c
 	}
 }
 
+test "Result.err and Result.ok convert into the channel the context settles, through exactly one converter" {
+	const scopes: ConversionScope[] = [
+		{ declarations: "", accepted: false },
+		{ declarations: "converter convert(e: SourceError): TargetError { return TargetError.Account; }", accepted: true },
+		{ declarations: "converter first(e: SourceError): TargetError { return TargetError.Account; } converter second(e: SourceError): TargetError { return TargetError.Dead; }", accepted: false },
+	];
+	for (const scope of scopes) {
+		for (const body of ["return Result.err(SourceError.Missing);", "const e: SourceError = SourceError.Missing; return Result.err(e);"]) {
+			for (const asyncPrefix of ["", "async "]) {
+				const returnType = asyncPrefix == "" ? "Result<uint64, TargetError>" : "Promise<Result<uint64, TargetError>>";
+				const result = compileToCWithStd(errors + scope.declarations + `${asyncPrefix}function feed(): ${returnType} { ${body} } feed();`);
+				assert result.ok == scope.accepted, asyncPrefix + body + scope.declarations;
+			}
+		}
+		const valued = compileToCWithStd(errors + scope.declarations + "function feed(): Result<TargetError, string> { return Result.ok(SourceError.Missing); } feed();");
+		assert valued.ok == scope.accepted, "ok " + scope.declarations;
+	}
+}
+
 test "inferred and instantiated returns enforce their own settled error channel" {
 	for (const target of ["SourceError", "TargetError"]) {
 		const inferred = compileToCWithStd(errors + `function feed(fail: boolean) { if (fail) return Result.err(${target}.` + (target == "SourceError" ? "Missing" : "Dead") + `) as Result<uint64, ${target}>; const v = try load(); return Result.ok(v) as Result<uint64, ${target}>; } feed(false);`);
