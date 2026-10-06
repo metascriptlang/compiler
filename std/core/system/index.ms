@@ -170,6 +170,38 @@ export function msCharToString(c: char): string {
 	return codePointString(b < 0x80 ? b as int64 : 0xFFFD);
 }
 
+interface MsTagged {
+	$tag: int32;
+	$v: unknown;
+}
+
+function holdsTag(slots: int32[], tag: int32): boolean {
+	if (slots.length == 0) return true;
+	for (const slot of slots) {
+		if (slot == tag) return true;
+	}
+	return false;
+}
+
+@compilerFunc
+function msUnionRead(u: MsTagged, slots: int32[], head: string, labels: string[]): unknown {
+	if (!holdsTag(slots, u.$tag)) throw new Error(head + labels[u.$tag] + "'");
+	return u.$v;
+}
+
+@compilerFunc
+function msUnionReadMaybe(u: MsTagged | null, slots: int32[], head: string, labels: string[]): unknown {
+	if (u == null) return null;
+	if (!holdsTag(slots, u.$tag)) throw new Error(head + labels[u.$tag] + "'");
+	return u.$v;
+}
+
+@compilerFunc
+function msUnionWrapMaybe(v: unknown, tag: int32): MsTagged | null {
+	if (v == null) return null;
+	return { $tag: tag, $v: v };
+}
+
 export class AbortSignal {
 	aborted: boolean;
 	reason: string;
