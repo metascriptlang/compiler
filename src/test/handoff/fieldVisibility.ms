@@ -127,6 +127,26 @@ test "fieldVisibility: as converts a generic struct instance only to itself, a d
 	assert reports(lib, pre + "function forge<T>(raw: P): Box<T> { return raw as Box<T>; }\nconsole.log(forge<A>(p).x);\n", "cannot convert P to Box<A>");
 }
 
+test "fieldVisibility: a refused struct conversion says who builds a struct with private fields" {
+	const lib = "export struct Account { address: uint64; }\nexport struct Signer { private account: Account; }\nexport struct P { x: int32; }\nexport struct Q { x: int32; }\n";
+	const pre = "import { Account, Signer, P, Q } from \"./lib\";\nconst raw: Account = { address: 1 };\nconst p: P = { x: 3 };\n";
+	assert reports(lib, pre + "const s = raw as Signer;\n", "Signer has private fields, so only the module that declares it builds one");
+	assert reports(lib, pre + "const q = p as Q;\n", "build a Q from its fields, or declare a converter from P to Q");
+}
+
+test "fieldVisibility: as converts a container only to one whose elements are equal up to distinct" {
+	const lib = "export struct P { x: int32; }\nexport struct Q { y: string; }\nexport type D = distinct P;\n";
+	const pre = "import { P, Q, D } from \"./lib\";\nconst ps: P[] = [{ x: 7 }];\nconst sized: P[2] = [{ x: 1 }, { x: 2 }];\nconst np: P | null = ps[0];\nconst tup: [P, int32] = [{ x: 1 }, 2];\nfunction made(): Result<P, string> { return Result.ok({ x: 3 }); }\nconst r = made();\n";
+	assert errorsOf(lib, pre + "const same = ps as P[];\nconst ds = ps as D[];\nconst lit = [{ x: 4 }] as P[];\nconst got = np as P;\nconsole.log(same.length, ds.length, lit.length, got.x, sized.length, tup[1], r.ok);\n").length == 0;
+	assert reports(lib, pre + "const q = ps as Q[];\n", "cannot convert P[] to Q[]: it holds P where Q[] holds Q");
+	assert reports(lib, pre + "const q = ps as Q[];\n", "convert each element instead: `.map((e) => e as Q)`");
+	assert reports(lib, pre + "const q = sized as Q[2];\n", "cannot convert P[2] to Q[2]");
+	assert reports(lib, pre + "const q = r as Result<Q, string>;\n", "cannot convert Result<P, string> to Result<Q, string>");
+	assert reports(lib, pre + "const q = tup as [Q, int32];\n", "cannot convert [P, int32] to [Q, int32]");
+	assert reports(lib, pre + "const q = np as (Q | null);\n", "cannot convert P | null to Q | null");
+	assert reports(lib, pre + "const ints: int32[] = [1];\nconst q = ints as string[];\n", "cannot convert int32[] to string[]");
+}
+
 function reports(library: string, main: string, needle: string): boolean {
 	for (const m of diagnostics(library, main)) {
 		if (m.indexOf(needle) >= 0) return true;
