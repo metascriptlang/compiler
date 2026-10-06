@@ -39,6 +39,8 @@ typedef bool MS_BOOL;
 /* ===== I/O ===== */
 
 void msPrintln(msString s);
+void msEprintln(msString s);
+void msWarnln(msString s);
 
 /* ===== DRC Lifecycle Stubs ===== */
 

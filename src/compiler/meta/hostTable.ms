@@ -373,6 +373,11 @@ function _bridgeMsWriteStderr(args: RaiserValue[]): RaiserValue {
 	return raiserNil();
 }
 
+function _bridgeMsEprintln(args: RaiserValue[]): RaiserValue {
+	writeStderr(unboxString(args[0]) + "\n");
+	return raiserNil();
+}
+
 function _bridgeMsStdinDisableBuffering(args: RaiserValue[]): RaiserValue {
 	stdinDisableBuffering();
 	return raiserNil();
@@ -847,6 +852,8 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStdinHasData",        _bridgeMsStdinHasData);
 	registerHostFn("msWriteStdout",        _bridgeMsWriteStdout);
 	registerHostFn("msWriteStderr",        _bridgeMsWriteStderr);
+	registerHostFn("msEprintln",           _bridgeMsEprintln);
+	registerHostFn("msWarnln",             _bridgeMsEprintln);
 	when (!testBuild) {
 		registerHostFn("msZipReaderOpen",       _bridgeMsZipReaderOpen);
 		registerHostFn("msZipReaderCount",      _bridgeMsZipReaderCount);

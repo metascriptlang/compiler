@@ -10,6 +10,12 @@ export class console {
 	 */
 	@builtin("Echo")
 	static extern log(...values: unknown[]): void from "msPrintln";
+
+	@builtin("Echo")
+	static extern warn(...values: unknown[]): void from "msWarnln";
+
+	@builtin("Echo")
+	static extern error(...values: unknown[]): void from "msEprintln";
 }
 
 export class process {

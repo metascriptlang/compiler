@@ -481,9 +481,20 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 
 	// console.log (Echo builtin) and its lowered msPrintln → console.log (strings are native)
 	const isMsPrintln = isRuntimeProcSym(sym, "msPrintln");
-	if (isMsPrintln || (sym != null && sym.builtinKind == "Echo")) {
-		markNamed(gen, calleeOriginNode(d.callee), isMsPrintln ? "msPrintln" : "console.log");
-		emit(gen, "console.log(");
+	const isMsWarnln = isRuntimeProcSym(sym, "msWarnln");
+	const isMsEprintln = isRuntimeProcSym(sym, "msEprintln");
+	if (isMsPrintln || isMsWarnln || isMsEprintln) {
+		const method = isMsWarnln ? "warn" : isMsEprintln ? "error" : "log";
+		markNamed(gen, calleeOriginNode(d.callee), isMsWarnln ? "msWarnln" : isMsEprintln ? "msEprintln" : "msPrintln");
+		emit(gen, `console.${method}(`);
+		emitJoinedNodes(gen, d.arguments, ", ");
+		emit(gen, ")");
+		return;
+	}
+	if (sym != null && sym.builtinKind == "Echo") {
+		const method = sym.name;
+		markNamed(gen, calleeOriginNode(d.callee), `console.${method}`);
+		emit(gen, `console.${method}(`);
 		emitJoinedNodes(gen, d.arguments, ", ");
 		emit(gen, ")");
 		return;

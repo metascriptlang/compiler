@@ -53,6 +53,19 @@ void msPrintln(msString s) {
 	fflush(stdout);
 }
 
+void msEprintln(msString s) {
+	fflush(stdout);
+	if (s.p != NULL && s.len > 0) {
+		fwrite(s.p->data, 1, s.len, stderr);
+	}
+	fputc('\n', stderr);
+	fflush(stderr);
+}
+
+void msWarnln(msString s) {
+	msEprintln(s);
+}
+
 void msClearException(void) {
 	msErr = false;
 	msCurrException = NULL;
