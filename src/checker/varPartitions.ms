@@ -10,7 +10,7 @@ import { forEachChild } from "../ast/visitor";
 import { isPrimitiveKind, isViewType, isReadonlyView } from "./types";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, addError } from "./context";
-import { isAddressTaking } from "./pointerAddress";
+import { isAddressTaking, checkPointerEscapesIn } from "./pointerAddress";
 
 export const MAX_TIME: int32 = 999999;
 export const MIN_TIME: int32 = -1;
@@ -835,6 +835,11 @@ function scanUnits(ctx: CheckerContext, node: Node | null): void {
 		_ => {},
 	};
 	forEachChild(node, (child: Node): void => { scanUnits(ctx, child); });
+}
+
+export function checkRoutineBorrows(ctx: CheckerContext, routine: Node): void {
+	scanUnits(ctx, routine);
+	checkPointerEscapesIn(ctx, routine);
 }
 
 export function checkViewBorrows(ctx: CheckerContext, program: Node): void {

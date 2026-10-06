@@ -103,7 +103,6 @@ export function checkPointerAddress(ctx: CheckerContext, node: Node, expr: Node,
 
 interface EscapeUnit {
 	ctx: CheckerContext;
-	unitName: string;
 	tainted: Symbol[];
 	origin: Node[];
 	changed: boolean;
@@ -214,7 +213,7 @@ function escapeError(u: EscapeUnit, origin: Node, into: string, at: Node): void 
 	const expr = (origin.data as TypeAssertionData).asExpr;
 	const root = frameRoot(expr);
 	const name = root != null ? root.name : "a local";
-	addError(u.ctx, `'${name}' escapes its stack frame: the address taken at ${origin.location.line}:${origin.location.column} reaches ${into} that outlives '${u.unitName}'`, at.location.line, at.location.column);
+	addError(u.ctx, `'${name}' escapes its stack frame: the address taken at ${origin.location.line}:${origin.location.column} reaches ${into}, which outlives the call`, at.location.line, at.location.column);
 }
 
 function storeTarget(u: EscapeUnit, target: Node, origin: Node, at: Node): void {
@@ -231,7 +230,7 @@ function storeTarget(u: EscapeUnit, target: Node, origin: Node, at: Node): void 
 	}
 	const root = frameRoot(target);
 	if (root != null) { taint(u, root, origin); return; }
-	escapeError(u, origin, "storage", at);
+	escapeError(u, origin, "heap storage", at);
 }
 
 function sinkFormal(t: Type | null): boolean {
@@ -248,7 +247,7 @@ function escapeCall(u: EscapeUnit, node: Node): void {
 		const fi = i + offset;
 		if (fi >= fnType.typeChildren.length || !sinkFormal(fnType.typeChildren[fi])) continue;
 		const origin = frameAddress(u, d.arguments[i]);
-		if (origin != null) escapeError(u, origin, "storage", d.arguments[i]);
+		if (origin != null) escapeError(u, origin, "a sink argument", d.arguments[i]);
 	}
 }
 
@@ -284,9 +283,9 @@ function escapeWalk(u: EscapeUnit, node: Node | null): void {
 	forEachChild(node, (child: Node): void => { escapeWalk(u, child); });
 }
 
-function escapeUnit(ctx: CheckerContext, name: string, body: Node | null): void {
+function escapeUnit(ctx: CheckerContext, body: Node | null): void {
 	if (body == null) return;
-	const u: EscapeUnit = { ctx, unitName: name, tainted: [], origin: [], changed: true, report: false };
+	const u: EscapeUnit = { ctx, tainted: [], origin: [], changed: true, report: false };
 	let rounds = 0;
 	while (u.changed && rounds < 8) {
 		u.changed = false;
@@ -300,20 +299,18 @@ function escapeUnit(ctx: CheckerContext, name: string, body: Node | null): void 
 function escapeScan(ctx: CheckerContext, node: Node | null): void {
 	if (node == null) return;
 	match (node.kind) {
-		NodeKind.FunctionDecl => {
-			const d = node.data as FunctionDeclData;
-			escapeUnit(ctx, d.fnName, d.fnBody);
-		},
-		NodeKind.MethodDecl => {
-			const d = node.data as MethodDeclData;
-			escapeUnit(ctx, d.methodName, d.methodBody);
-		},
-		NodeKind.ConstructorDecl => escapeUnit(ctx, "constructor", (node.data as ConstructorDeclData).ctorBody),
-		NodeKind.ArrowFunction => escapeUnit(ctx, "the arrow function", (node.data as ArrowFunctionData).arrowBody),
-		NodeKind.FunctionExpr => escapeUnit(ctx, "the function expression", (node.data as FunctionExprData).funcExprBody),
+		NodeKind.FunctionDecl => escapeUnit(ctx, (node.data as FunctionDeclData).fnBody),
+		NodeKind.MethodDecl => escapeUnit(ctx, (node.data as MethodDeclData).methodBody),
+		NodeKind.ConstructorDecl => escapeUnit(ctx, (node.data as ConstructorDeclData).ctorBody),
+		NodeKind.ArrowFunction => escapeUnit(ctx, (node.data as ArrowFunctionData).arrowBody),
+		NodeKind.FunctionExpr => escapeUnit(ctx, (node.data as FunctionExprData).funcExprBody),
 		_ => {},
 	};
 	forEachChild(node, (child: Node): void => { escapeScan(ctx, child); });
+}
+
+export function checkPointerEscapesIn(ctx: CheckerContext, routine: Node): void {
+	escapeScan(ctx, routine);
 }
 
 export function checkPointerEscapes(ctx: CheckerContext, program: Node): void {

@@ -19,6 +19,7 @@ import { createContext } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceName, monoInstanceNameOf } from "../monomorphize/registry";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
+import { checkRoutineBorrows } from "./varPartitions";
 import { beginGensymUnit, rewindTemplateGensym } from "./template";
 import { getIdentId } from "./idents";
 import { fitJoinedBranch, settleYields, isSyncGeneratorFlags } from "./fit";
@@ -805,6 +806,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		const outerGensym = beginGensymUnit();
 		cloned.paramSyms = callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
 		rewindTemplateGensym(outerGensym);
+		checkRoutineBorrows(bodyCtx, cloned);
 		_igfBodyTime = _igfBodyTime + (performance.now() - _igb0);
 		// Mirror the decl-side apply: an unresolved (un-annotated) return
 		// adopts the body's inferred return so the instance is fully typed.
@@ -1096,6 +1098,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], typ
 		const outerGensym = beginGensymUnit();
 		ctorDeclNode.paramSyms = callCheckFunctionBody(bodyCtx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
 		rewindTemplateGensym(outerGensym);
+		checkRoutineBorrows(bodyCtx, ctorDeclNode);
 		bodyCtx.modulePath = savedModulePath;
 		bodyCtx.instantiatingCtx = savedHost;
 		removeInjectedSyms(bodyCtx, injectedSyms);
