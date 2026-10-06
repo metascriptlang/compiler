@@ -64,6 +64,19 @@ test "a view stays legal when nothing can move the storage it reads" {
 	}
 }
 
+test "a generic routine is checked in each instance" {
+	const view = "function firstAfter<T>(xs: T[], x: T): T { const sp: Span<T> = xs; xs.push(x); return sp[0]; }\nfirstAfter([1, 2], 3);";
+	const frame = "function leakOf<T>(x: T): Ptr<T> { let s: T = x; return s as Ptr<T>; }\nstruct G { n: int32; }\nleakOf<G>({ n: 1 });";
+	const legal = "function firstThen<T>(xs: T[], x: T): T { const sp: Span<T> = xs; const f = sp[0]; xs.push(x); return f; }\nfirstThen([1, 2], 3);";
+	for (const source of [view, frame]) {
+		const c = compileToCWithStd(source);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/generic.ms", entrySource: source }], "test/generic.ms");
+		assert !c.ok && (c.error.includes("is potentially changed at") || c.error.includes("escapes its stack frame")), source;
+		assert js.startsWith("ERROR:"), source;
+	}
+	assert compileToCWithStd(legal).ok;
+}
+
 test "a view borrows only from a path that outlives it" {
 	const body = "const outer: S[] = []; let sp: Span<S> = outer; { const inner: S[] = [{ n: 1, name: \"a\" }]; sp = inner; } return sp.length as int32;";
 	assert refusedWith(body, "which does not live long enough"), body;
