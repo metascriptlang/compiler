@@ -73,9 +73,9 @@ function unwrapOperands(node: Node): Node {
 	if (!concat && !compare) return node;
 	const left = holdsTaggedUnion(d.left);
 	const right = holdsTaggedUnion(d.right);
-	if (left == right) return node;
+	if (!left && !right) return node;
 	if (left) d.left = unionValue(d.left);
-	else d.right = unionValue(d.right);
+	if (right) d.right = unionValue(d.right);
 	return node;
 }
 
