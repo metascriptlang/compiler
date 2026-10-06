@@ -7,3 +7,4 @@ export * from "./core";
 export * from "./typed";
 export * from "./macro";
 export * from "./invoke";
+export * from "./accountCodec";

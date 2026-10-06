@@ -1,0 +1,15 @@
+@include("runtime/solana/accountCodec.h");
+
+extern function msSolAccountFloat32FromBits(bits: uint32): float32;
+extern function msSolAccountFloat64FromBits(bits: uint64): float64;
+extern function msSolAccountFloat32Bits(value: float32): uint32;
+extern function msSolAccountFloat64Bits(value: float64): uint64;
+
+export function accountFloat32FromBits(bits: uint32): float32 { return msSolAccountFloat32FromBits(bits); }
+export function accountFloat64FromBits(bits: uint64): float64 { return msSolAccountFloat64FromBits(bits); }
+export function accountFloat32Bits(value: float32): uint32 { return msSolAccountFloat32Bits(value); }
+export function accountFloat64Bits(value: float64): uint64 { return msSolAccountFloat64Bits(value); }
+
+export function accountByteArray(size: int32): uint8[] {
+	return new Array(size);
+}

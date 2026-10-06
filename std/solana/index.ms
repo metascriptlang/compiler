@@ -4,3 +4,4 @@ export * from "./discriminator";
 export * from "./pda";
 export * from "./littleEndian";
 export * from "./borsh";
+export * from "./accountCodec";

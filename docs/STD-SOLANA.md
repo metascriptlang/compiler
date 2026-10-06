@@ -141,6 +141,38 @@ An account type is a fixed-size value struct declared in a module shared by the 
 - `create<T>` and `createPda<T>` follow Anchor's `init` (`anchor-syn-0.31.1/src/codegen/accounts/constraints.rs` `generate_create_account`): a target with no lamports is created with `create_account`; a prefunded one is topped up to rent exemption, allocated and assigned. Paying with the account being created is 4101. The discriminator is written after the account exists; `createPda` takes the canonical bump, signs with the seeds and that bump, and refuses another address (2006).
 - `close` is Anchor's (`anchor-lang-0.31.1/src/common.rs` `close`): every lamport to the destination, assigned to the System program, data resized to zero. Closing onto itself is 2011; a destination that would overflow is `ArithmeticOverflow` where Anchor's `unwrap` panics.
 - `realloc` grows or shrinks the data, tops rent up from the payer through the System program or returns the excess lamports to the payer, and refuses growth past 10,240 bytes in one instruction (3016).
+
+### Portable account bytes
+
+The program and host share the layout declarations; the host does not maintain a
+field-offset decoder or load an IDL at runtime. `accountCodec.ms` owns the public
+`decode` / `encode` surface and `accountLayout.ms` obtains offsets, sizes and
+alignment from the compiler rather than reproducing an ABI in the library.
+
+Use the owner-checking `decode` overload for an RPC account envelope. The byte-only
+overload deliberately makes no ownership claim, matching a client account coder
+that receives only bytes. Both require the discriminator and complete fixed-size
+payload before constructing the value. A boolean byte other than 0/1 or a value
+outside the enum's exact member set is 3003, including nested structs and fixed
+arrays; sparse enum holes are not accepted. Encoding uses the same offsets and
+zeroes padding, so uninitialized host struct padding is never exported.
+
+This retains `alive: boolean` and `kind: Species`, unlike rejecting those fields
+under an unchecked zero-copy contract. The boolean rule follows the checked
+serialization rule, not a non-zero-is-true Pod boolean; the layout remains repr(C),
+not packed Borsh.
+
+Measured on the `wt/std-solana` candidate, 2026-10-07: native
+`msc-ready test std/solana/accountCodecTest.ms` passed **27 files / 395 tests**,
+including golden padding bytes, all integer widths, exact enum membership, floats,
+imported hidden types and BitSet storage. A real `msc-stable run` / `--target=js`
+host consumer of nested `Pet` bytes printed
+`valid 18446744073709551615 2 badBool 3003` and `badEnum 3003` on both backends.
+The full transitive JS test run is not green: it aborts with the previously carded
+sized-local array symptom before reaching the codec tests. No Android device or
+Android32 runtime was exercised; incompatible native 64-bit alignment is refused
+instead of silently using another wire layout.
+
 ### PDA seeds
 
 A seed list is written where it is used: `findProgramAddress(["pet", mint, [bump]])`. Anchor builds its seeds at the constraint, on the stack, from the account fields and `to_le_bytes()` (`anchor-syn-0.31.1/src/codegen/accounts/constraints.rs` `generate_constraint_seeds`, lines 1133-1180: `find_program_address(&[…], &program)` without a bump, `create_program_address(&[…, &[b][..]], &program)` with one, a failure of the latter mapped to `ConstraintSeeds`). Pinocchio hands the syscall a `Seed { ptr, len }` table borrowed from the caller (`pinocchio-0.9.3/src/instruction.rs` lines 190-270). MetaScript has no lifetimes and refuses a view as a struct field or array element (`paper/NIM-REF.md` CK-139), so the list is a macro argument: each call expands its list into a table of `SeedSlice`s on the caller's stack and passes it as a `Span<SeedSlice>` to a core in `seed.cms`. There is no `Seeds` value to build, keep, or return from a helper, and nothing touches the heap.
