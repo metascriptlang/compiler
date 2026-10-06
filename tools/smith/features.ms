@@ -1,3 +1,5 @@
+import { Rng, seeded } from "./rng";
+
 export enum Ty {
 	Int8,
 	Int16,
@@ -10,6 +12,12 @@ export enum Ty {
 	Float64,
 }
 
+export enum Fam {
+	Closure,
+	Union,
+	Generic,
+}
+
 export enum Plant {
 	None,
 	Backend,
@@ -18,6 +26,7 @@ export enum Plant {
 
 export struct Features {
 	types: BitSet<Ty>;
+	fams: BitSet<Fam>;
 	funcs: int32;
 	globals: int32;
 	stmts: int32;
@@ -39,6 +48,23 @@ export const ALL_TYS: Ty[] = [
 	Ty.Uint64,
 	Ty.Float64,
 ];
+
+export const ALL_FAMS: Fam[] = [Fam.Closure, Fam.Union, Fam.Generic];
+
+export function famName(f: Fam): string {
+	return match (f) {
+		Fam.Closure => "closure",
+		Fam.Union => "union",
+		Fam.Generic => "generic",
+	};
+}
+
+function famFromName(name: string): Result<Fam, string> {
+	for (const f of ALL_FAMS) {
+		if (famName(f) == name) { return Result.ok(f); }
+	}
+	return Result.err("unknown family '" + name + "' (closure, union, generic, none)");
+}
 
 export function tyName(t: Ty): string {
 	return match (t) {
@@ -81,8 +107,11 @@ function plantFromName(name: string): Result<Plant, string> {
 export function defaults(this typeof Features): Features {
 	let types = 0 as BitSet<Ty>;
 	for (const t of ALL_TYS) { types = types.incl(t); }
+	let fams = 0 as BitSet<Fam>;
+	for (const f of ALL_FAMS) { fams = fams.incl(f); }
 	return {
 		types: types,
+		fams: fams,
 		funcs: 5,
 		globals: 6,
 		stmts: 4,
@@ -99,7 +128,12 @@ export function format(this f: Features): string {
 	for (const t of ALL_TYS) {
 		if (f.types.has(t)) { types = types == "" ? tyName(t) : types + "," + tyName(t); }
 	}
+	let fams = "";
+	for (const m of ALL_FAMS) {
+		if (f.fams.has(m)) { fams = fams == "" ? famName(m) : fams + "," + famName(m); }
+	}
 	return "types=" + types +
+		" fams=" + (fams == "" ? "none" : fams) +
 		" funcs=" + String(f.funcs) +
 		" globals=" + String(f.globals) +
 		" stmts=" + String(f.stmts) +
@@ -133,6 +167,34 @@ function parseTypes(text: string): Result<BitSet<Ty>, string> {
 	return Result.ok(types);
 }
 
+function parseFams(text: string): Result<BitSet<Fam>, string> {
+	let fams = 0 as BitSet<Fam>;
+	if (text == "none") { return Result.ok(fams); }
+	for (const name of text.split(",")) {
+		const f = try famFromName(name);
+		fams = fams.incl(f);
+	}
+	return Result.ok(fams);
+}
+
+export function swarm(this base: Features, seed: uint64): Features {
+	const r = Rng.seeded(seed ^ (0x5357524D53574152 as uint64));
+	let types = 0 as BitSet<Ty>;
+	for (const t of ALL_TYS) {
+		if (base.types.has(t) && r.chance(50)) { types = types.incl(t); }
+	}
+	if (types.isEmpty()) {
+		const kept: Ty[] = [];
+		for (const t of ALL_TYS) { if (base.types.has(t)) { kept.push(t); } }
+		types = types.incl(kept[r.below(kept.length)]);
+	}
+	let fams = 0 as BitSet<Fam>;
+	for (const f of ALL_FAMS) {
+		if (base.fams.has(f) && r.chance(50)) { fams = fams.incl(f); }
+	}
+	return { ...base, types: types, fams: fams };
+}
+
 export function overlay(this base: Features, text: string): Result<Features, string> {
 	let f: Features = { ...base };
 	for (const item of text.split(" ")) {
@@ -143,6 +205,8 @@ export function overlay(this base: Features, text: string): Result<Features, str
 		const value = item.slice(eq + 1, item.length);
 		if (key == "types") {
 			f = { ...f, types: try parseTypes(value) };
+		} else if (key == "fams") {
+			f = { ...f, fams: try parseFams(value) };
 		} else if (key == "plant") {
 			f = { ...f, plant: try plantFromName(value) };
 		} else if (key == "funcs") {
@@ -174,11 +238,15 @@ test "the formatted vector parses back to itself" {
 }
 
 test "an overlay changes only the keys it names" {
-	const r = Features.defaults().overlay("types=int32,float64 plant=backend");
+	const base = Features.defaults();
+	const r = base.overlay("types=int32,float64 plant=backend");
 	assert r.ok;
 	if (r.ok) {
-		assert r.value.format() ==
-			"types=int32,float64 funcs=5 globals=6 stmts=4 depth=3 expr=3 trips=4 entries=4 plant=backend";
+		assert r.value.types.has(Ty.Int32) && r.value.types.has(Ty.Float64);
+		assert !r.value.types.has(Ty.Int64);
+		assert r.value.plant == Plant.Backend;
+		assert r.value.fams == base.fams;
+		assert r.value.funcs == base.funcs && r.value.depth == base.depth;
 	}
 }
 
@@ -193,4 +261,31 @@ test "an unknown type is refused" {
 test "a value outside its range is refused" {
 	assert !Features.defaults().overlay("depth=0").ok;
 	assert !Features.defaults().overlay("trips=x").ok;
+}
+
+test "fams=none formats and parses back" {
+	const r = Features.defaults().overlay("fams=none");
+	assert r.ok;
+	if (r.ok) {
+		assert r.value.fams.isEmpty();
+		assert r.value.format().contains(" fams=none ");
+	}
+}
+
+test "an unknown family is refused" {
+	assert !Features.defaults().overlay("fams=closure,coroutine").ok;
+}
+
+test "swarm is a function of seed and base, keeps a type, and stays inside the base" {
+	const base = Features.defaults().overlay("types=int8,uint64 fams=union");
+	assert base.ok;
+	if (base.ok) {
+		for (let s = 0; s < 64; s++) {
+			const a = base.value.swarm(s as uint64);
+			assert a.format() == base.value.swarm(s as uint64).format();
+			assert !a.types.isEmpty();
+			assert !a.types.has(Ty.Int32);
+			assert !a.fams.has(Fam.Closure);
+		}
+	}
 }
