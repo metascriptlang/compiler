@@ -686,7 +686,7 @@ export function emitNewExpr(gen: JSGenerator, node: Node): void {
 		if (zero != "") {
 			emit(gen, "Array.from({ length: ");
 			emitNode(gen, d.newArguments[0]);
-			emit(gen, " }, () => " + zero + ")");
+			emit(gen, " }, () => (" + zero + "))");
 			return;
 		}
 	}

@@ -11,20 +11,37 @@ import {
 	ArrayAccessData, BinaryExprData, ConditionalExprData, HiddenDerefData, MemberExprData, SpreadExprData, TypeAssertionData,
 } from "../../ast/node";
 import { isViewBinding } from "../../checker/symbol";
-import { isStructType, needsValueCopy, setRepr, valueCopyRepr } from "../../checker/types";
+import { isNullableShape, isStructType, needsValueCopy, setRepr, valueCopyRepr } from "../../checker/types";
 import { emit, emitNode, JSGenerator, jsTypedArrayName } from "./emit";
 
 export function jsDefaultValue(t: Type | null): string {
-	t = valueCopyRepr(t);
+	return defaultValueOf(t, []);
+}
+
+function defaultValueOf(declared: Type | null, open: Type[]): string {
+	if (declared != null && isNullableShape([declared])) return "null";
+	const t = valueCopyRepr(declared);
 	if (t == null) return "";
+	if (t.kind == TypeKind.Struct && !t.typeFlags.has(TypeFlag.IsMaybe)) {
+		if (!isStructType(t)) return "null";
+		if (open.includes(t)) return "";
+		open.push(t);
+		const fields: string[] = [];
+		for (let i = 0; i < t.typeNames.length; i += 1) {
+			const v = defaultValueOf(i < t.typeChildren.length ? t.typeChildren[i] : null, open);
+			if (v != "") fields.push(`${t.typeNames[i]}: ${v}`);
+		}
+		open.pop();
+		return fields.length == 0 ? "{}" : `{ ${fields.join(", ")} }`;
+	}
 	if (t.kind == TypeKind.SizedArray) {
 		const size = t.typeValue;
 		const elemType = t.typeReturn;
 		if (elemType != null) {
 			const typedName = jsTypedArrayName(elemType.kind);
 			if (typedName != "") return `new ${typedName}(${size})`;
-			const elemInit = jsDefaultValue(elemType);
-			if (elemInit != "") return `Array.from({ length: ${size} }, () => ${elemInit})`;
+			const elemInit = defaultValueOf(elemType, open);
+			if (elemInit != "") return `Array.from({ length: ${size} }, () => (${elemInit}))`;
 		}
 		return `new Array(${size}).fill(null)`;
 	}

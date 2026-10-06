@@ -6,6 +6,7 @@ import {
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
+import { jsDefaultValue } from "./valueCopy";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { isGenericFn, routineKindFlag } from "../../checker/context";
@@ -171,6 +172,12 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 						emit(gen, `${safeJsName(pd.propName)} = `);
 						emitNode(gen, pd.propInitializer);
 						emit(gen, ";\n");
+					}
+				} else {
+					const zero = jsDefaultValue(member.nodeType);
+					if (zero != "") {
+						emitIndent(gen);
+						emit(gen, `${pd.propName} = ${zero};\n`);
 					}
 				}
 			},
