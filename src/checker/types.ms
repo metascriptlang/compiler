@@ -676,7 +676,7 @@ function unionMemberKey(t: Type): string {
 		depth += 1;
 	}
 	const ownerPath = owner != null && owner.sym != null ? owner.sym.modulePath : "";
-	return typeKey(t) + "@" + ownerPath;
+	return typeKey(t) + "\u0001" + ownerPath;
 }
 
 // DU-variant identity (Nim attachedOps-by-ItemId analog for structural types):
