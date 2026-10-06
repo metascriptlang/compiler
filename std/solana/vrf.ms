@@ -60,9 +60,9 @@ export function requestRandomness(
 	accounts: RandomnessRequest,
 	callerSeed: Pubkey,
 	callbackDiscriminator: uint64,
-	callbackAccounts: Span<AccountMeta>,
+	callbackAccounts: Readonly<Span<AccountMeta>>,
 	callbackArguments: Readonly<Span<uint8>>,
-	payerSigners: Span<SignerSeeds> = [],
+	payerSigners: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	const identity = try findProgramAddress(["identity"]);
 	if (!identity.key.equals(accounts.programIdentity.key())) { return Result.err(ProgramError.invalidSeeds()); }
@@ -95,7 +95,7 @@ export function requestRandomness(
 	callbackDiscriminator: uint64,
 	callbackAccount: Account,
 	callbackArguments: Readonly<Span<uint8>>,
-	payerSigners: Span<SignerSeeds> = [],
+	payerSigners: Readonly<Span<SignerSeeds>> = [],
 ): Result<uint64, ProgramError> {
 	const callbackAccounts: AccountMeta[1] = [AccountMeta.writable(callbackAccount.key())];
 	return requestRandomness(

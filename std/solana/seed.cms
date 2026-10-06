@@ -10,8 +10,8 @@ extern function msSolCopy(destination: uint64, source: uint64, length: uint64): 
 extern function msSolStringAddress(text: string): uint64;
 extern function msSolStringLength(text: string): uint64;
 extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
-extern function msSolTableAddress(table: Span<SeedSlice>): uint64 from "msSolSpanAddress";
-extern function msSolSignersAddress(table: Span<SignerSeeds>): uint64 from "msSolSpanAddress";
+extern function msSolTableAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
+extern function msSolSignersAddress(table: Readonly<Span<SignerSeeds>>): uint64 from "msSolSpanAddress";
 extern function msSolCreateProgramAddress(
 	seeds: uint64,
 	seedCount: uint64,
@@ -68,7 +68,7 @@ export function seedKey(address: uint64): SeedSlice {
 	return { address: address, length: 32 };
 }
 
-export function signerOf(seeds: Span<SeedSlice>): SignerSeeds {
+export function signerOf(seeds: Readonly<Span<SeedSlice>>): SignerSeeds {
 	return { address: msSolTableAddress(seeds), length: seeds.length as uint64 };
 }
 
@@ -76,7 +76,7 @@ function unsigned(): Signing {
 	return { table: 0, count: 0 };
 }
 
-export function tableAddress(table: Span<SeedSlice>): uint64 {
+export function tableAddress(table: Readonly<Span<SeedSlice>>): uint64 {
 	return msSolTableAddress(table);
 }
 
@@ -96,7 +96,7 @@ function fits(table: uint64, count: uint64, limit: uint64): boolean {
 	return true;
 }
 
-export function signingOf(signers: Span<SignerSeeds>): Signing {
+export function signingOf(signers: Readonly<Span<SignerSeeds>>): Signing {
 	if (signers.length == 0) { return unsigned(); }
 	return { table: msSolSignersAddress(signers), count: signers.length as uint64 };
 }
@@ -144,14 +144,14 @@ export function findAt(
 }
 
 export function createAddress(
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 	program: uint64,
 ): Result<Pubkey, ProgramError> {
 	return createAt(tableAddress(seeds), seeds.length as uint64, program);
 }
 
 export function findAddress(
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 	program: uint64,
 ): Result<ProgramAddress, ProgramError> {
 	return findAt(tableAddress(seeds), seeds.length as uint64, program);
@@ -173,7 +173,7 @@ export function fillWithBump(
 }
 
 export function createAddressWithBump(
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 	bump: uint8,
 	program: uint64,
 ): Result<Pubkey, ProgramError> {
