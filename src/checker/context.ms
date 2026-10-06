@@ -1301,6 +1301,8 @@ export class CheckerContext {
 	compileTimeBodyDepth: number;
 	matchArmExpected: Type | null;
 	initTracker: InitTracker;    // ref parity: TEffects.init — definite assignment tracking
+	ctorExits: string[][] | null; // the `this.<field>` names assigned on each exit of the constructor body being checked
+	ctorExitsNext: string[][] | null;
 	affineTracker: AffineTracker; // PARALOCK Phase 1 — affine-Promise consumption tracking
 	strictDefs: boolean;         // ref parity: strictDefs — warn on all uninit var use
 	strictNullChecks: boolean;   // ref parity: strictNotNil — warn on unguarded class deref
@@ -1384,6 +1386,8 @@ export function createContext(): CheckerContext {
 		compileTimeBodyDepth: 0,
 		matchArmExpected: null,
 		initTracker: createInitTracker(),
+		ctorExits: null,
+		ctorExitsNext: null,
 		affineTracker: createAffineTracker(),
 		strictDefs: false,
 		strictNullChecks: false,

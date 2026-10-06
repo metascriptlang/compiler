@@ -49,7 +49,7 @@ import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
 import { reportConverterCycles } from "./converterCycle";
 import { parseSource } from "../parser/statements/validation";
-import { BreakState, InitTracker, createInitTracker, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, varDecl } from "./initTracker";
+import { BreakState, InitTracker, createInitTracker, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, varDecl, requiresInit } from "./initTracker";
 
 // Extract directory from module path (e.g. "src/foo/bar.ms" → "src/foo")
 // Brief type description for error messages
@@ -1386,9 +1386,16 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 			if (trimGp != "") defineGenericParam(ctx, trimGp);
 		}
 	}
+	let ctorExits: string[][] | null = null;
 	for (const member of d.classBody) {
+		if (member.kind == NodeKind.ConstructorDecl) {
+			ctorExits = [];
+			ctx.ctorExitsNext = ctorExits;
+		}
 		checkClassMember(ctx, member, d.className, sym.symbolType);
+		ctx.ctorExitsNext = null;
 	}
+	refuseUnassignedFields(ctx, d.classBody, ctorExits);
 	if (hasGenerics) {
 		ctx.inGenericContext -= 1;
 		closeScope(ctx.table);
@@ -1396,6 +1403,26 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	closeScope(ctx.table);
 
 	sym.state = SymbolState.Checked;
+}
+
+function refuseUnassignedFields(ctx: CheckerContext, body: Node[], ctorExits: string[][] | null): void {
+	if (ctorExits == null) return;
+	for (const raw of body) {
+		let member = raw;
+		if (member.kind == NodeKind.DecoratedDecl) {
+			const dd = member.data as DecoratedDeclData;
+			if (dd.decoratedNode != null) member = dd.decoratedNode;
+		}
+		if (member.kind != NodeKind.PropertyDecl) continue;
+		const pd = member.data as PropertyDeclData;
+		if (pd.propIsStatic || pd.propInitializer != null || !requiresInit(member.nodeType)) continue;
+		let assigned = true;
+		for (const exit of ctorExits) {
+			if (!exit.includes("this." + pd.propName)) assigned = false;
+		}
+		if (assigned) continue;
+		addError(ctx, `Field '${pd.propName}' has no initializer and is not assigned on every path of the constructor: type '${typeDisplayName(member.nodeType)}' has no default value — initialize it ('${pd.propName}: ${pd.propType} = ...'), assign it in the constructor, or declare it optional with '?'`, member.location.line, member.location.column);
+	}
 }
 
 function checkActorDecl(ctx: CheckerContext, node: Node): void {
@@ -2230,6 +2257,7 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 
 function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ReturnStmtData;
+	if (ctx.ctorExits != null) ctx.ctorExits.push(collectNewInits(ctx.initTracker, 0));
 	if (ctx.currentFunction == null) {
 		addError(ctx, "return outside of function", node.location.line, node.location.column);
 	}
@@ -2614,6 +2642,9 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	const _fb0 = performance.now();
 	const savedFunction = ctx.currentFunction;
 	const savedMatchDepth = ctx.matchExprDepth;
+	const savedCtorExits = ctx.ctorExits;
+	ctx.ctorExits = ctx.ctorExitsNext;
+	ctx.ctorExitsNext = null;
 	ctx.currentFunction = sym;
 	ctx.matchExprDepth = 0;
 	const compileTimeBody = sym != null && hasFlag(sym, SymbolFlag.CompileTime);
@@ -2663,6 +2694,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	if (body.kind == NodeKind.BlockStmt) {
 		checkStmt(ctx, body);
 		refuseFallOffEndOf(ctx, sym, body);
+		if (ctx.ctorExits != null && breaksBlock(body) == BreakState.BsNone) ctx.ctorExits.push(collectNewInits(ctx.initTracker, initSnap));
 	} else {
 		// Expression body (arrow functions) — infer return type
 		checkExpr(ctx, body, null);
@@ -2677,6 +2709,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	// PARALOCK Phase 1: restore affine tracker (erases this function's consumed set)
 	restoreConsumeState(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = savedBlock;
+	ctx.ctorExits = savedCtorExits;
 	ctx.currentFunction = savedFunction;
 	ctx.matchExprDepth = savedMatchDepth;
 	if (compileTimeBody) ctx.compileTimeBodyDepth = ctx.compileTimeBodyDepth - 1;

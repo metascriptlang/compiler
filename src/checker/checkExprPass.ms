@@ -1008,6 +1008,14 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				// Phase 4: reassignment invalidation now flows through the
 				// binder's FlowAssignment node — no fact stack to purge.
 			}
+			if (isAsgn && ctx.ctorExits != null && d.left.kind == NodeKind.MemberExpr) {
+				const lhsMember = d.left.data as MemberExprData;
+				let lhsObject = lhsMember.object;
+				if (lhsObject.kind == NodeKind.HiddenDeref) lhsObject = (lhsObject.data as HiddenDerefData).expr;
+				if (lhsObject.kind == NodeKind.Identifier && (lhsObject.data as IdentifierData).name == "this") {
+					markInitialized(ctx.initTracker, "this." + lhsMember.property);
+				}
+			}
 			// Post-hoc literal coercion: if one side is typed integer and other is integer literal that fits, coerce.
 			// Example: `h: int64; h * 33` — coerces literal 33 (default int32) to int64.
 			let effLeft = leftType != null ? peelTransparentInstance(leftType) : null;
@@ -2800,6 +2808,8 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	sym.declNode = fnNode;
 	if (isAsync) setFlag(sym, SymbolFlag.Async);
 	ctx.currentFunction = sym;
+	const savedCtorExits = ctx.ctorExits;
+	ctx.ctorExits = null;
 	openScope(ctx.table, ScopeKind.Function);
 	const savedBoundary = ctx.readonlyBoundary;
 	if (ctx.pendingSpawnThunk) {
@@ -2852,6 +2862,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	}
 	closeScope(ctx.table);
 	ctx.readonlyBoundary = savedBoundary;
+	ctx.ctorExits = savedCtorExits;
 	ctx.currentFunction = savedFunction;
 	ctx.matchExprDepth = savedMatchDepth;
 
