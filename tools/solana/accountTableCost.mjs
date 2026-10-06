@@ -312,7 +312,7 @@ function tableOf(shape, datas) {
 	return { fields, constraints: stream, operands, ext, prelude, slots, fallbacks };
 }
 
-const sumOf = (shape, holder) => shape.fields.map((f) => `(${holder}.${f.name} as Account).address`).join(" + ");
+const sumOf = (shape, holder) => shape.fields.map((f) => f.type === "Account" ? `${holder}.${f.name}.address` : `${holder}.${f.name}.asAccount().address`).join(" + ");
 
 function handlerSource(shape, datas) {
 	if (form === "std") {
@@ -492,6 +492,7 @@ function programSource(shapes, datas, extra = "") {
 	accounts,
 	address,
 	argU8,
+	asAccount,
 	associated,
 	bump,
 	constraint,
