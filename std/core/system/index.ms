@@ -556,6 +556,27 @@ when (mscDeclaresRuntime) {
 	extern function msModAssignU64(lv: Ptr<void>, b: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msModAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msAndAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msOrAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msXorAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msShlAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msShrAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msShrUAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msBoxDouble(v: float64): Ptr<void>;
 
 	@compilerFunc
@@ -593,6 +614,27 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msFutureDrcDestroy(f: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msFutureValueAt(fp: Ptr<void>): Ptr<void>;
+
+	@compilerFunc
+	extern function msFutureBoxAt(fp: Ptr<void>): Ptr<void>;
+
+	@compilerFunc
+	extern function msFutureOwnsValue(fp: Ptr<void>): boolean;
+
+	@compilerFunc
+	extern function msFutureSetValueDrop(fp: Ptr<void>, drop: () => void): void;
+
+	@compilerFunc
+	extern function msFutureTakeRaw(fp: Ptr<void>): Ptr<void>;
+
+	@compilerFunc
+	extern function msFutureTakeStringRaw(fp: Ptr<void>): string;
+
+	@compilerFunc
+	extern function msHcrVariableStorage(cell: Ptr<void>): Ptr<void>;
 
 	@compilerFunc
 	extern function msFutureChain(src: Ptr<void>, dst: Ptr<void>): void;
