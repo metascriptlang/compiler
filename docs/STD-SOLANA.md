@@ -57,7 +57,7 @@ export function dispatch(): Result<uint64, ProgramError> {
 
 ## 3. Accounts and proofs
 
-A verifier is the only way to get a proof, and a function that needs a property takes the proof. Each proof is a struct whose one field is a private `Account`, so only `typed.cms` builds one: outside it, `as` from an account or from another proof and a struct literal are compile errors (`src/test/guard/solanaProofForgeRefused.ms`). `key()`, `keyAddress()`, `lamports()` and the rest read that account, and `asAccount()` weakens any proof to the `Account` a CPI takes. `accounts<T>()` calls the verifiers of the table below, so its expansion in the program's module builds no proof itself. `accounts<T>()` verifies a struct of proofs field by field, in declaration order, which is also the order the client lists the accounts.
+A verifier is the only way to get a proof, and a function that needs a property takes the proof. Each proof is a struct whose one field is a private `Account`, so only `typed.cms` builds one: outside it, `as` from an account, from another proof or from an array or a `Result` of either, and a struct literal, are compile errors (`src/test/guard/solanaProofForgeRefused.ms`). `key()`, `keyAddress()`, `lamports()` and the rest read that account, and `asAccount()` weakens any proof to the `Account` a CPI takes. `accounts<T>()` calls the verifiers of the table below, so its expansion in the program's module builds no proof itself. `accounts<T>()` verifies a struct of proofs field by field, in declaration order, which is also the order the client lists the accounts.
 
 | Proof | Verifier | Anchor | Checks, in order, and the code a failure returns |
 |---|---|---|---|
@@ -209,7 +209,7 @@ const sent = invoke(
 
 - **Instruction.** 8 bytes of `sha256("global:" + snake_case(name))[0..8]`, then the arguments in Borsh. `instruction<Op>()` computes every member's discriminator at compile time; short data is `InstructionMissing` (100), no match `InstructionFallbackNotFound` (101).
 - **Arguments.** `args<T>()` reads `T`'s fields at their Borsh offsets (sized integers, `boolean`, `Pubkey`); short data or a `bool` byte other than 0 and 1 is `InstructionDidNotDeserialize` (102), as Borsh refuses it.
-- **Errors.** `ProgramError` carries the runtime's builtin errors (`n << 32`) and Anchor's codes with Anchor's numbers (`anchor-lang-0.31.1/src/error.rs`). A program's own errors are an enum; its `converter` to `ProgramError` returns `ProgramError.userError(ordinal)`, Anchor's `6000 + n`, and `try` converts through it. `Result.err(member)` in a handler that returns `ProgramError` does not convert (a converter does not apply to an open generic): call the converter by name, as `examples/escrow/program.ms` does.
+- **Errors.** `ProgramError` carries the runtime's builtin errors (`n << 32`) and Anchor's codes with Anchor's numbers (`anchor-lang-0.31.1/src/error.rs`). A program's own errors are an enum; its `converter` to `ProgramError` returns `ProgramError.userError(ordinal)`, Anchor's `6000 + n`, and `try` converts through it. `Result.err(EscrowError.ZeroAmount)` in a handler that returns `Result<T, ProgramError>` converts through the same converter, which must be imported where the handler is (`examples/escrow/program.ms`); `Result.ok` and `Result.err` take T and E from the Result the context expects (corpus `converterIntoResultSlot`).
 - **Events.** `emit<E>(local)` logs `sha256("event:" + Name)[0..8]` and the Borsh fields through `sol_log_data`, which a validator prints as `Program data: <base64>`, Anchor's `emit!`. Anchor builds the bytes in a `Vec::with_capacity(256)` that grows (`anchor-attribute-event-0.31.1/src/lib.rs:47-56,100-110`); here the macro hands `logEvent` the discriminator, the width of each field and its value (the address of a `Pubkey` field), and the core writes them into a 1,024-byte stack buffer. The size is known where the event is written, so an event over 1,024 bytes is a compile error that names its size (`solanaEventTooLarge.ms`), and one of exactly 1,024 builds (`solanaEventAtLimit.ms`). Writing the event struct's own bytes was rejected: C pads a field after a smaller one, Borsh does not.
 
 ## 6. Signed division
@@ -268,8 +268,6 @@ Each figure is per field, from a program that lists 1 and 8 fields of the kind; 
 
 ## 9. Compiler debt
 
-Each row is a workaround the toolkit carries until the compiler card under `~/metascript/.inbox/compiler/` closes. Paying it back means removing the workaround named here.
+A workaround the toolkit carries for a compiler gap is a row here, with its card under `~/metascript/.inbox/compiler/`; paying it back removes the workaround.
 
-| Gap | Workaround in std/solana | Card |
-|---|---|---|
-| `as` converts a container to one of an unrelated element type (`Account[] as Signer[]`, `Result<Account, E> as Result<Signer, E>`; on C `P[] as Q[]` reads one struct's bytes as another's), so a proof can still be forged through an array or a `Result` | none: a proof comes only from its verifier except through such a cast | `2026-10-06-as-between-containers-of-unrelated-elements` |
+None is open.
