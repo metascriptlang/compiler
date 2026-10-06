@@ -105,6 +105,18 @@ export function activeHostArrayHeap(): RaiserArrayHeap | null {
 	return _activeArrayHeap;
 }
 
+let _hostRaise: string | null = null;
+
+export function raiseFromHost(message: string): void {
+	_hostRaise = message;
+}
+
+export function takeHostRaise(): string | null {
+	const message = _hostRaise;
+	_hostRaise = null;
+	return message;
+}
+
 export function setActiveProgramArgv(programArgv: string[] | null): void {
 	_activeProgramArgv = programArgv;
 }

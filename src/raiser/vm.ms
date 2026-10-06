@@ -21,7 +21,7 @@ import {
 import { orcCollectCycles } from "./orc";
 import { RaiserCopyKind, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
-import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv } from "./hostRegistry";
+import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink } from "./marshal";
 
 @include("runtime/promise/dispatch.h");
@@ -1939,6 +1939,15 @@ function vmHandleCallHost(vm: RaiserVM, inst: RaiserInstruction): void {
 		setActiveHostHeaps(prevObjHeap, prevArrHeap);
 	}
 	setActiveProgramArgv(prevArgv);
+
+	const raised = takeHostRaise();
+	if (raised != null) {
+		copyValueInto(vm.currentException, raiserString(raised));
+		vm.unwinding = true;
+		vm.savedIp = vm.ip - 1;
+		unwindStep(vm);
+		return;
+	}
 
 	const dst = getReg(vm, base + inst.a);
 	vmIncref(vm, result);
