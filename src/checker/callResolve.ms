@@ -24,7 +24,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, moduleScopeNamed, ctorFnTypeOf, getCtorParamTypes, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, parentClassSymOf, lookupCtorDefaults } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { isOutParam, unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createStringLiteral, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, functionSlotOf } from "./types";
+import { isOutParam, unionHasMemberOfKind, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createClosureType, createGenericInstance, createLocked, createPrimitive, createPromise, createStringLiteral, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, duVariantIndexOfType, errorType, findFieldInVariant, findVariantByDiscriminant, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, functionSlotOf } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 
@@ -762,6 +762,19 @@ function checkNewArgs(ctx: CheckerContext, args: Node[]): void {
 	for (const arg of args) { callCheckExpr(ctx, arg, null); }
 }
 
+function promiseExecutorType(ctx: CheckerContext, node: Node, held: Type | null): Type | null {
+	if (held == null || isUnresolvedType(held) || hasGenericParams(held)) return null;
+	if (isAwaitable(held)) {
+		addError(ctx, "'new Promise<" + typeDisplayName(held) + ">' is refused: its resolve would receive a promise, and a synchronous executor cannot await it; resolve the value itself", node.location.line, node.location.column);
+		return null;
+	}
+	const resolveParams = held.kind == TypeKind.Void ? [] as Type[] : [held];
+	const resolveNames = held.kind == TypeKind.Void ? [] as string[] : ["value"];
+	const resolveFn = createClosureType(resolveParams, resolveNames, voidType());
+	const rejectFn = createClosureType([stringType()], ["error"], voidType());
+	return createClosureType([resolveFn, rejectFn], ["resolve", "reject"], voidType());
+}
+
 export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): Type {
 	const d = node.data as NewExprData;
 	// new BuiltinType<...>() — construct value types (Map, Set) and Promise
@@ -951,6 +964,9 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		} else if (!hasCtor && innerType != null && innerType.typeChildren != null && ai < innerType.typeChildren.length) {
 			argExpected = innerType.typeChildren[ai];
 		}
+		if (ai == 0 && d.newArguments.length == 1 && innerType != null && isAwaitable(innerType)) {
+			argExpected = promiseExecutorType(ctx, node, awaitedType(innerType));
+		}
 		callCheckExpr(ctx, d.newArguments[ai], argExpected);
 		const argType = d.newArguments[ai].nodeType;
 		if (hasCtor && argExpected != null && argType != null) {
@@ -999,6 +1015,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		}
 	}
 	if (generic.instance != null) d.newCallee.resolvedSym = generic.instance;
+	if (innerType != null && isAwaitable(innerType)) return innerType;
 	if (resolvedType != null && (resolvedType.kind == TypeKind.Struct || resolvedType.kind == TypeKind.Ref || resolvedType.kind == TypeKind.GenericInstance)) {
 		return resolvedType;
 	}
