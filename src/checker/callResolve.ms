@@ -420,6 +420,16 @@ function deriveCallBindings(
 	return bindings;
 }
 
+// `Result.ok(v)` and `Result.err(e)` take T and E from the Result the context expects, as the
+// reference library's `ok`/`err` templates take them from `typeof(result)`, so a converter
+// reaches the value or the error before inference would bind it from the argument.
+function contextResultSlot(calleeSym: Symbol | null, formal: Type | null, context: UnifyBindings): Type | null {
+	if (calleeSym == null || formal == null || context.names.length == 0) return null;
+	if (calleeSym.builtinKind != "ResultOk" && calleeSym.builtinKind != "ResultErr") return null;
+	const slot = instantiateGeneric(formal, context.names, context.types);
+	return hasGenericParams(slot) ? null : slot;
+}
+
 function bindFromExpectedReturn(calleeType: Type, expectedType: Type | null): UnifyBindings {
 	const bindings = createUnifyBindings();
 	if (expectedType != null && calleeType != null && calleeType.typeReturn != null) {
@@ -1510,6 +1520,14 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 					&& argNode.resolvedSym.symbolType != null
 					&& argNode.resolvedSym.symbolType.kind == TypeKind.EnumLiteral) {
 				argType = argNode.resolvedSym.symbolType;
+			}
+		}
+		const resultSlot = contextResultSlot(calleeSym, _formal, _contextBindings);
+		if (resultSlot != null && argType != null && !hasGenericParams(argType) && !isAssignable(argType, resultSlot)) {
+			const converted = tryApplyConverter(ctx, d.arguments[ai], argType, resultSlot);
+			if (converted != null && converted.nodeType != null) {
+				d.arguments[ai] = converted;
+				argType = converted.nodeType;
 			}
 		}
 		argTypes[ai] = argType!;
