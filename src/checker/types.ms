@@ -496,6 +496,10 @@ export function awaitedType(t: Type | null): Type | null {
 	return p.typeReturn;
 }
 
+export function asyncBodyType(declared: Type): Type {
+	return awaitedType(declared) ?? declared;
+}
+
 // isAffineAwaitable — an awaitable carrying affine consumption semantics
 // (spawn-origin Promises, @affineAwaitable types). Reads the flag bit set by T2.
 // Used by PARALOCK R1-R6 affine checker rules.
