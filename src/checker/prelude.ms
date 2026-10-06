@@ -6,6 +6,7 @@
 // checkProgram() reads globalImports from disk, parses + checks in Global scope.
 // Later: concat with globalImports from build.ms (user-configurable).
 
+import { Symbol } from "../ast/node";
 
 
 // Default global imports. Returns array (module-level const string[] hits DRC bug).
@@ -27,6 +28,49 @@ export function extraGlobalImports(): string[] {
 
 export function extraGlobalImportsBuildFile(): string {
 	return _extraGlobalImportsBuildFile;
+}
+
+export enum ModulePassState { Unbound, Bound, Broken }
+
+export interface ModulePass {
+	entry: string;
+	macro: string;
+	modulePath: string;
+	state: ModulePassState;
+	sym: Symbol | null;
+}
+
+let _modulePasses: ModulePass[] = [];
+let _modulePassExempt: HashSet<string> = new HashSet<string>();
+let _modulePassStdPath: string = "";
+
+export function setModulePasses(entries: string[], macros: string[]): void {
+	_modulePasses = [];
+	for (let i = 0; i < entries.length; i += 1) {
+		_modulePasses.push({ entry: entries[i], macro: macros[i], modulePath: "", state: ModulePassState.Unbound, sym: null });
+	}
+	_modulePassExempt = new HashSet<string>();
+	_modulePassStdPath = "";
+}
+
+export function modulePasses(): ModulePass[] {
+	return _modulePasses;
+}
+
+export function modulePassIdentity(): string {
+	let out = "";
+	for (const pass of _modulePasses) out = out + ` modulePass=${pass.entry}#${pass.macro}`;
+	return out;
+}
+
+export function setModulePassExempt(paths: HashSet<string>, stdPath: string): void {
+	_modulePassExempt = paths;
+	_modulePassStdPath = stdPath;
+}
+
+export function modulePassExempt(path: string): boolean {
+	if (_modulePassExempt.has(path)) return true;
+	return _modulePassStdPath != "" && path.startsWith(_modulePassStdPath);
 }
 
 export function isGlobalImport(path: string): boolean {
@@ -85,6 +129,29 @@ test "globalImports has system, string, array, bigint, json, buffer, promise, st
 	assert imports[13] == "std/core/number";
 	assert imports[14] == "std/core/boolean";
 	assert imports[15] == "std/core/object";
+}
+
+test "module passes enter the build identity, and none leave it empty" {
+	setModulePasses([], []);
+	assert modulePassIdentity() == "";
+	setModulePasses(["/p/src/refresh"], ["refreshModule"]);
+	assert modulePassIdentity() == " modulePass=/p/src/refresh#refreshModule";
+	setModulePasses(["/p/src/refresh"], ["other"]);
+	assert modulePassIdentity() != " modulePass=/p/src/refresh#refreshModule";
+	setModulePasses([], []);
+}
+
+test "a module pass skips std and the globalImports closure, and nothing else" {
+	setModulePasses(["/p/src/refresh"], ["refreshModule"]);
+	const closure = new HashSet<string>();
+	closure.add("/p/src/refresh.ms");
+	closure.add("/p/src/render.ms");
+	setModulePassExempt(closure, "/std/");
+	assert modulePassExempt("/p/src/render.ms");
+	assert modulePassExempt("/std/core/array.ms");
+	assert !modulePassExempt("/p/src/app.ms");
+	setModulePasses([], []);
+	assert !modulePassExempt("/p/src/render.ms");
 }
 
 test "isGlobalImport matches" {
