@@ -1123,7 +1123,14 @@ function foldAtCompileTime(ctx: CheckerContext, node: Node, expected: Type | nul
 	node.flags = 0 as BitSet<NodeFlag>;
 	node.variantSlot = 0;
 	callCheckExpr(ctx, node, expected);
+	node.flags = node.flags.incl(NodeFlag.Folded);
 	return true;
+}
+
+export function keepFoldedType(node: Node, expanded: Node): void {
+	if (!expanded.flags.has(NodeFlag.Folded) || expanded.nodeType == null) return;
+	node.flags = node.flags.incl(NodeFlag.Folded);
+	node.nodeType = expanded.nodeType;
 }
 function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as CallExprData;
@@ -1276,6 +1283,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			node.resolvedSym = null;
 			node.flags = 0 as BitSet<NodeFlag>;
 			node.variantSlot = 0;
+			keepFoldedType(node, expandedValue);
 			// Re-check the mutated node so its nodeType is set. This drives correct
 			// type inference for the parent (e.g., the VariableDecl declaring `x`).
 			// If the expanded result is itself a macro call, this recurses through

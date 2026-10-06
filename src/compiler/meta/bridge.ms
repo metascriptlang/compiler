@@ -1240,6 +1240,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 
 	if (node.nodeType != null) {
 		setTypeFields(objHeap, arrHeap, handle, node.nodeType, node.location, includeTypeAst);
+		if (node.flags.has(NodeFlag.Folded)) setBool(objHeap, handle, "folded", true);
 	} else if (includeTypeAst && node.nodeTypeAst != null) {
 		setNode(objHeap, arrHeap, handle, "nodeType", node.nodeTypeAst, false);
 	}
@@ -1447,6 +1448,7 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 					if (rawFlags == NodeFlag.StaticStorage as int32) {
 						out.flags = out.flags.incl(NodeFlag.StaticStorage);
 					}
+					if (typed != null && readBool(objHeap, handle, "folded")) out.flags = out.flags.incl(NodeFlag.Folded);
 				}
 				return out;
 			}
