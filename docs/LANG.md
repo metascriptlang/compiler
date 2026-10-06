@@ -445,6 +445,17 @@ type yet and prints the built-in results.
 `${a} + ${b} = ${a + b}`    // Multiple substitutions
 ```
 
+Physical LF, CRLF and CR line endings have the same LF value inside a template;
+an escaped carriage return still has its escape value. The same rule applies to
+interpolation heads, middles and tails, while source positions count CRLF once.
+
+Measured 2026-10-06 on Windows x64, source tree `2220eaeb47c5`: lexer tests
+376/376, including newline/escape/location variants. The unchanged
+`headerImportSpelledInAString` oracle prints `34 32 32 kept` on C/ORC/danger/JS/ESM/Raiser;
+before, CRLF made it print `35 32 32 kept` on all six. Tagged-template/raw APIs
+were not added or revalidated.
+
+
 ### Backtick-Escaped Identifiers
 ```typescript
 `if`            // Use reserved word as identifier

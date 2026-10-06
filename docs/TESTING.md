@@ -432,6 +432,29 @@ Traps, all paid for on 2026-09-05:
   of fault detection and must not satisfy the capability check.
   Other toolchain versions/architectures and a full current integration SAN
   run were not verified by this measurement.
+- Windows integration followup, 2026-10-06, source tree `2220eaeb47c5`, one recovery
+  build and serial focused runs after a machine restart: compiler source check 373
+  modules clean; lexer 376/376; CC 741/741 with the gate's `NO_COLOR`/`FORCE_COLOR`
+  clearing (`tools/gate.sh` `test_one`). Direct CC testing under `NO_COLOR` made
+  eleven unchanged color-length assertions fail; that was not an observed linker
+  regression. Absolute-link and compile-time metadata guards print `GUARD-OK` on
+  DRC/ORC with balanced ledgers. SBF entry emission assertions execute before the
+  existing missing-SDK `GUARD-SKIP`; the real SBF link/account-limit matrix remains
+  unverified on this host.
+- The same followup's exact corpus subset (`MSCORPUS_ONLY=headerImportSpelledInAString,objectLiteralAssignedInPlace`,
+  `MSCORPUS_RAISER=1`, build slots 1) prints `14 pass · 0 fail · 0 xfail · 0 xpass`:
+  twelve cells plus two parity comparisons. The in-place assignment oracle is
+  unchanged; each Span is now last-read before its owner's assignment, instead of
+  carrying a borrowed view across a source write. The danger driver fell back to
+  the auto-detected compiler without LTO, so whole-program DCE is not proved.
+- On that Windows host, the bare ASan build now links, but its default launch exits
+  53 with no output. Its PE imports `clang_rt.asan_dynamic-x86_64.dll`, present under
+  LLVM 23's `lib/windows` rather than the default process search path. A child with
+  that directory prepended to one canonical `Path` entry prints `GUARD-OK`, exit 0,
+  no ASan report. The corpus SAN runner already arranges this runtime path; the
+  guard runner still needs equivalent runtime discovery. An environment block
+  containing both `Path` and `PATH` failed to resolve it. This is a focused loader
+  measurement, not a full current integration guard/SAN GREEN.
 - Heap corruption inside the compiler itself: build it under ASan with the
   DRC slab off, `msc build src/index.ms --gc=drc --sanitize=address
   --passC=-DMS_SLAB_MAX=0 --passL=-fsanitize=address --cc=clang
