@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind, createNod
 import { CheckerContext, addError } from "../../checker/context";
 import { lookupSymbol, hasFlag, isTypeSymbol, SymbolFlag } from "../../checker/symbol";
 import { builtinTypeNamed, ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
-import { instantiateGenericBody, genericParamsOf, unwrapRefBase } from "../../checker/types";
+import { instantiateGenericBody, genericParamsOf, unwrapRefBase, sizeOfType, alignOfType, offsetOfField, structLayoutType, SIZE_NOT_COMPUTABLE } from "../../checker/types";
 import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField } from "../../raiser/value";
 import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHeap } from "../../raiser/hostRegistry";
 import { mapTypeToAst, nodeToValue, boundSymAt, boundTypeOfObject, attachFieldTypeNodes } from "./bridge";
@@ -176,6 +176,56 @@ function hostTypeKind(args: RaiserValue[]): RaiserValue {
 	return raiserInt(peelAlias(t).kind as int64);
 }
 
+function layoutTypeArg(args: RaiserValue[], name: string, ctx: CheckerContext): Type | null {
+	if (args.length < 1 || args[0].kind != RaiserValueKind.Object) {
+		queryError(ctx, `${name}: expected a typed node`);
+		return null;
+	}
+	const sym = boundSymOf(args[0]);
+	if (sym != null && hasFlag(sym, SymbolFlag.Forward)) {
+		queryError(ctx, `${name}: ${stillDecoratedMessage(sym.name)}`);
+		return null;
+	}
+	const t = typeArgOf(args[0]);
+	if (t == null) queryError(ctx, `${name}: node has no type`);
+	return t;
+}
+
+function hostGetSize(args: RaiserValue[]): RaiserValue {
+	const ctx = activeMetaCtx();
+	if (ctx == null) return raiserNil();
+	const t = layoutTypeArg(args, "getSize", ctx);
+	return t == null ? raiserNil() : raiserInt(sizeOfType(ctx.targetInfo, t) as int64);
+}
+
+function hostGetAlign(args: RaiserValue[]): RaiserValue {
+	const ctx = activeMetaCtx();
+	if (ctx == null) return raiserNil();
+	const t = layoutTypeArg(args, "getAlign", ctx);
+	if (t == null) return raiserNil();
+	if (sizeOfType(ctx.targetInfo, t) < 0) return raiserInt(SIZE_NOT_COMPUTABLE as int64);
+	const alignment = alignOfType(ctx.targetInfo, t);
+	return raiserInt((alignment > 0 ? alignment : SIZE_NOT_COMPUTABLE) as int64);
+}
+
+function hostGetOffset(args: RaiserValue[]): RaiserValue {
+	const ctx = activeMetaCtx();
+	if (ctx == null) return raiserNil();
+	const t = layoutTypeArg(args, "getOffset", ctx);
+	if (t == null) return raiserNil();
+	if (args.length != 2 || args[1].kind != RaiserValueKind.String) return queryError(ctx, "getOffset: expected a field name string");
+	const body = structLayoutType(t);
+	if (body == null) {
+		if (sizeOfType(ctx.targetInfo, t) < 0) return raiserInt(SIZE_NOT_COMPUTABLE as int64);
+		return queryError(ctx, "getOffset: node type is not a struct");
+	}
+	const field = args[1].strVal;
+	for (const name of body.typeNames) {
+		if (name == field) return raiserInt(offsetOfField(ctx.targetInfo, t, field) as int64);
+	}
+	return queryError(ctx, `getOffset: struct '${body.typeName}' has no field '${field}'`);
+}
+
 function hostSameType(args: RaiserValue[]): RaiserValue {
 	const ctx = activeMetaCtx();
 	if (ctx == null || args.length < 2) return raiserBool(false);
@@ -212,6 +262,9 @@ export function registerTypeQueryHostFns(): void {
 	registerHostFn("msMetaGetImpl", hostGetImpl, HostCapability.Pure);
 	registerHostFn("msMetaResolveType", hostResolveType, HostCapability.Pure);
 	registerHostFn("msMetaTypeKind", hostTypeKind, HostCapability.Pure);
+	registerHostFn("msMetaGetSize", hostGetSize, HostCapability.Pure);
+	registerHostFn("msMetaGetAlign", hostGetAlign, HostCapability.Pure);
+	registerHostFn("msMetaGetOffset", hostGetOffset, HostCapability.Pure);
 	registerHostFn("msMetaSameType", hostSameType, HostCapability.Pure);
 	registerHostFn("msMetaSymKind", hostSymKind, HostCapability.Pure);
 }

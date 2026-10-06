@@ -4475,6 +4475,11 @@ function sizeOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 }
 
 function sizeOfStruct(tg: TargetInfo, t: Type, depth: int32): int32 {
+	return structLayoutAt(tg, t, depth, -1);
+}
+
+// Size and field offsets share one traversal, including padding and erased fields.
+function structLayoutAt(tg: TargetInfo, t: Type, depth: int32, fieldIndex: int32): int32 {
 	let offset = 0;
 	let maxAlign = 1;
 	if (t.typeChildren != null) {
@@ -4487,13 +4492,42 @@ function sizeOfStruct(tg: TargetInfo, t: Type, depth: int32): int32 {
 				const fieldAlign = alignOfTypeAt(tg, field, depth);
 				if (fieldAlign > maxAlign) maxAlign = fieldAlign;
 				offset = alignTo(offset, fieldAlign);
+				if (i == fieldIndex) return offset;
 				offset = offset + fieldSize;
 			}
+			if (i == fieldIndex) return offset;
 			i = i + 1;
 		}
 	}
 	if (offset == 0) return 0;
 	return alignTo(offset, maxAlign);
+}
+
+export function structLayoutType(t: Type): Type | null {
+	let cur = t;
+	for (let depth = 0; depth <= 16; depth += 1) {
+		if (cur.kind == TypeKind.Struct) return cur;
+		if (cur.kind == TypeKind.GenericInstance) {
+			const body = instanceLayoutBody(cur);
+			if (body == null || body == cur) return null;
+			cur = body;
+		} else if ((cur.kind == TypeKind.Alias || cur.kind == TypeKind.Distinct || cur.kind == TypeKind.Sink || cur.kind == TypeKind.Lent) && cur.typeReturn != null) {
+			cur = cur.typeReturn;
+		} else {
+			return null;
+		}
+	}
+	return null;
+}
+
+export function offsetOfField(tg: TargetInfo, t: Type, field: string): int32 {
+	if (tg.ptrSize < 4) return SIZE_NOT_COMPUTABLE;
+	const body = structLayoutType(t);
+	if (body == null) return SIZE_NOT_COMPUTABLE;
+	for (let i = 0; i < body.typeNames.length; i += 1) {
+		if (body.typeNames[i] == field && i < body.typeChildren.length) return structLayoutAt(tg, body, 1, i);
+	}
+	return SIZE_NOT_COMPUTABLE;
 }
 
 function instanceLayoutBody(t: Type): Type | null {
@@ -5043,6 +5077,25 @@ test "sizeOfType char before int64 follows the target alignment rule" {
 	const obj = createStruct("Head", ["c", "x"], [createPrimitive(TypeKind.Char), createPrimitive(TypeKind.Int64)], true);
 	assert sizeOfType(wasm, obj) == 16;
 	assert sizeOfType(i386, obj) == 12;
+}
+
+test "field offsets share target padding with struct size" {
+	const i386: TargetInfo = { ptrSize: 4, floatSize: 8, cpu: "i386", os: "linux" };
+	const sbf: TargetInfo = { ptrSize: 8, floatSize: 8, cpu: "sbf", os: "solana" };
+	const nested = createStruct("Nested", ["c", "wide"], [createPrimitive(TypeKind.Uint8), createPrimitive(TypeKind.Uint64)], false);
+	const outer = createStruct("Outer", ["lead", "items", "tail"], [createPrimitive(TypeKind.Uint8), createSizedArray(nested, 2), createPrimitive(TypeKind.Uint8)], false);
+	assert offsetOfField(i386, nested, "wide") == 4;
+	assert offsetOfField(sbf, nested, "wide") == 8;
+	assert offsetOfField(i386, outer, "items") == 4;
+	assert offsetOfField(i386, outer, "tail") == 28;
+	assert sizeOfType(i386, outer) == 32;
+	assert offsetOfField(sbf, outer, "items") == 8;
+	assert offsetOfField(sbf, outer, "tail") == 40;
+	assert sizeOfType(sbf, outer) == 48;
+	assert offsetOfField(sbf, outer, "missing") < 0;
+	assert offsetOfField(sbf, numberType(), "missing") < 0;
+	const unavailable = createStruct("Unavailable", ["unknown", "tail"], [unknownType(), int32Type()], false);
+	assert offsetOfField(sbf, unavailable, "tail") < 0;
 }
 
 // ===== Maybe<T> + Nullable Pointer Tests =====
