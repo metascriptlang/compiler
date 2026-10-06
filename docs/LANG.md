@@ -1274,11 +1274,14 @@ type Extended = IUser & { role: string };
 struct SuperUser = IUser & { role: string; };
 ```
 
-A union value carries the position of the member it holds, so `int32 | string` and
-`string | int32` are different types: one is refused where the other is expected, with an error that
-says the members are the same in another order. A value narrowed to one member fits any union that
-holds that member, whatever the order. Measured 2026-10-06 on C, JS and the Raiser (corpus
-`narrowedUnionIntoAnotherOrder`); before, C read the narrowed value with the wrong member's layout.
+A union is one type whatever order its members are written in, as in TypeScript: `int32 | string`
+and `string | int32` are the same type in every module, nullable, inside an array and through a generic
+parameter once it is known, and a value moves between them with no conversion. The members are kept in
+one canonical order where the union is built; error messages show that order, `null` last
+(`int32 | string | null`). A declared discriminated union keeps its declared variant order. A value
+narrowed to one member fits any union that holds that member. Measured 2026-10-06 on C, JS and the
+Raiser (corpus `unionMemberOrderIdentity`, `narrowedUnionIntoAnotherOrder`); before, the other order
+was refused.
 
 #### `as` between a union and its members
 
