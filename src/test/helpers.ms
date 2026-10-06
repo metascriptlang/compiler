@@ -7,11 +7,11 @@
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
 import { resetBuildState } from "../compiler/buildSession";
-import { checkModuleGraph } from "../checker/orchestrator";
+import { checkModuleGraph, loadStdGlobalImportModules } from "../checker/orchestrator";
 import { TargetInfo, hostTargetInfo } from "../checker/types";
 import { computeAliveSet } from "../checker/reachability";
 import { inferRaises } from "../checker/raises";
-import { hasErrors, CheckerError, CheckerContext } from "../checker/context";
+import { hasErrors, CheckerError, CheckerContext, GcMode } from "../checker/context";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { expandMacros } from "../compiler/meta/expand";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
@@ -24,7 +24,8 @@ import { analyzeProgram } from "../analyzer/index";
 import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { AliveSet, createAliveSet, CEmissionFacts } from "../codegen/c/context";
 import { generateJS, generateJSModule } from "../codegen/js/jsgen";
-import { MapEntry, createMapProvider, loadModuleGraph, loadModuleGraphWithConfig, canonicalModulePath } from "../module/loader";
+import { createModuleGraph } from "../module/graph";
+import { MapEntry, createMapProvider, loadModuleGraph, loadModuleGraphWithConfig, canonicalModulePath, loadModule } from "../module/loader";
 import { createDefaultConfig, Backend } from "../module/resolver";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
@@ -154,14 +155,16 @@ export function compileToCWithStd(source: string): CompileResult {
 	const root = resolveRuntimeDir();
 	const stdPath = root != "" ? join(root, "std") : "std";
 	const config = createDefaultConfig(Backend.C, stdPath);
-	const graph = loadModuleGraphWithConfig(modPath, provider, config);
+	const graph = createModuleGraph();
+	loadStdGlobalImportModules(graph, provider, config);
+	loadModule(graph, modPath, provider, config, 1);
 
 	const mod = findModule(graph, modPath);
 	if (mod == null) return Result.err("module not found");
 	const loadErr = loadFailure(mod);
 	if (loadErr != "") return Result.err(loadErr);
 
-	checkModuleGraph(graph, stdPath);
+	checkModuleGraph(graph, stdPath, ".cms", platform, hostTargetInfo(), GcMode.Orc, config);
 
 	const unit = checkedUnit(modPath);
 	if (unit == null) return Result.err(uncheckedError(mod));
