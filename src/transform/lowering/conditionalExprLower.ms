@@ -47,6 +47,7 @@ import { isLowerableSpreadLiteral, expandSpreadLiteral } from "../desugar/arrayS
 import { spreadStructOf, expandObjectSpread } from "../desugar/objectSpreadLower";
 import { needsIntegerCompoundRewrite } from "../coercion/intArithJS";
 import { isImpureArrayOp } from "./bitSetLower";
+import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
 
 // ===== Hoist (top-down) =====
 
@@ -435,7 +436,7 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 			const expr = (stmt.data as ExprStmtData).expr;
 			if (expr.kind == NodeKind.BinaryExpr) {
 				const d = expr.data as BinaryExprData;
-				if (needsIntegerCompoundRewrite(d)) {
+				if (needsIntegerCompoundRewrite(d) || needsUint64CompoundWrap(d)) {
 					const pre: Node[] = [];
 					d.left = hoistAssignTargetEffects(d.left, pre, ctx, []);
 					if (pre.length > 0) {

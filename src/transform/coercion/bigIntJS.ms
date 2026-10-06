@@ -15,7 +15,7 @@
 // `Math`, `BigInt`, `Number` receivers stay symbol-less on purpose: binding
 // them would reach prelude classes and mangle. Runs after resolveRuntimeIdents.
 
-import { Node, NodeKind, NumberLiteralData, BigIntLiteralData, TypeAssertionData, HiddenStdConvData, BinaryExprData, UnaryExprData, SourceLocation, TypeKind, Type, createNode, NodeData } from "../../ast/node";
+import { Node, NodeKind, NumberLiteralData, BigIntLiteralData, TypeAssertionData, HiddenStdConvData, BinaryExprData, UnaryExprData, UpdateExprData, SourceLocation, TypeKind, Type, createNode, NodeData } from "../../ast/node";
 import { TokenKind, createToken } from "../../lexer/token";
 import { TransformContext } from "../context";
 import { addError } from "../../checker/context";
@@ -81,6 +81,7 @@ function materializeBigInt(node: Node, ctx: TransformContext): Node {
 	}
 	if (node.kind == NodeKind.BinaryExpr) return binaryAsBigInt(node, ctx);
 	if (node.kind == NodeKind.UnaryExpr) return unaryAsBigInt(node);
+	if (node.kind == NodeKind.UpdateExpr) return updateAsBigInt(node, ctx);
 	return node;
 }
 
@@ -267,7 +268,49 @@ function assignAsBigInt(node: Node, ctx: TransformContext): Node {
 		return makeBinary(d.left, "=", shifted, node.location);
 	}
 	if (isNarrowIntType(rightT)) d.right = bigIntOf(d.right, node.location);
+	if (needsUint64CompoundWrap(d)) return compoundAtUint64(node, d, ctx);
 	return node;
+}
+
+// `x op= y` stores what `x = x op y` stores (NIM-REF CK-152). The reference
+// wraps mInc/mDec on uint64 in place and lowers `*=` to the wrapped `*`.
+export function needsUint64CompoundWrap(d: BinaryExprData): boolean {
+	if (d.left == null || reprKind(d.left.nodeType) != TypeKind.Uint64) return false;
+	return d.operator == "+=" || d.operator == "-=" || d.operator == "*=";
+}
+
+function compoundAtUint64(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
+	const readBack = cloneIfPure(d.left);
+	if (readBack == null) {
+		if (ctx.checkerCtx != null) {
+			addError(ctx.checkerCtx, "integer '" + d.operator + "' needs a left side that can be read twice; hoist the receiver or index into a local first", node.location.line, node.location.column);
+		}
+		return node;
+	}
+	const loc = node.location;
+	const widened = makeBinary(readBack, d.operator.slice(0, 1), d.right, loc);
+	return makeBinary(d.left, "=", asTyped(asN(true, 64, widened, loc), TypeKind.Uint64), loc);
+}
+
+// A postfix step reads back the value before the step: the wrapped new value
+// stepped back and wrapped again, as updateAtWidth does for the narrow widths.
+function updateAsBigInt(node: Node, ctx: TransformContext): Node {
+	const d = node.data as UpdateExprData;
+	if (reprKind(d.updateArg.nodeType) != TypeKind.Uint64) return node;
+	const readBack = cloneIfPure(d.updateArg);
+	if (readBack == null) {
+		if (ctx.checkerCtx != null) {
+			addError(ctx.checkerCtx, "integer '" + d.updateOp + "' needs an operand that can be read twice; hoist the receiver or index into a local first", node.location.line, node.location.column);
+		}
+		return node;
+	}
+	const loc = node.location;
+	const step = d.updateOp == "++" ? "+" : "-";
+	const next = makeBinary(readBack, step, bigLit("1n", TypeKind.Uint64, loc), loc);
+	const stored = makeBinary(d.updateArg, "=", asTyped(asN(true, 64, next, loc), TypeKind.Uint64), loc);
+	if (d.isPrefix) return stored;
+	const back = makeBinary(stored, d.updateOp == "++" ? "-" : "+", bigLit("1n", TypeKind.Uint64, loc), loc);
+	return asTyped(asN(true, 64, back, loc), TypeKind.Uint64);
 }
 
 function unaryAsBigInt(node: Node): Node {
