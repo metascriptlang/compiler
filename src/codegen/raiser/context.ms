@@ -5,8 +5,8 @@ import {
 	RaiserOpcode, RaiserInstruction,
 	raiserABC, raiserABx, raiserAx
 } from "../../raiser/bytecode";
-import { RaiserValue, raiserInt, raiserString, raiserNil } from "../../raiser/value";
-import { Node, Symbol, SymbolKind, SymbolFlag, Type } from "../../ast/node";
+import { RaiserValue, RaiserClassType, raiserInt, raiserString, raiserNil } from "../../raiser/value";
+import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
 
@@ -126,6 +126,7 @@ export interface RaiserCompState {
 	builtins: RaiserBuiltinMap;
 	copyTypes: Type[];
 	copyPlans: RaiserCopyPlan[];
+	classTypes: RaiserClassType[];
 	globals: RaiserFuncMap;
 	scopedFunctions: boolean;
 }
@@ -144,7 +145,7 @@ export function createCompState(): RaiserCompState {
 	const builtinItems: RaiserBuiltinEntry[] = [];
 	const builtins: RaiserBuiltinMap = { items: builtinItems };
 	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack,
-		funcMap, enumMap, builtins, copyTypes: [], copyPlans: [], globals: { items: [] }, scopedFunctions: false };
+		funcMap, enumMap, builtins, copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, scopedFunctions: false };
 }
 
 // Overloads share module and name and differ by the declaration-time disamb,
@@ -152,6 +153,20 @@ export function createCompState(): RaiserCompState {
 export function routineKey(sym: Symbol): string {
 	const name = sym.name;
 	return sym.modulePath + ":" + name + "#" + sym.disamb;
+}
+
+export function classSymOfType(t: Type | null): Symbol | null {
+	let cur = t;
+	if (cur != null && cur.kind == TypeKind.Ref && cur.typeReturn != null) cur = cur.typeReturn;
+	if (cur == null || cur.sym == null) return null;
+	return cur.sym;
+}
+
+export function raiserClassKey(classSym: Symbol): string {
+	const own = classSymOfType(classSym.symbolType);
+	const sym = own != null ? own : classSym;
+	if (sym.instantiatedFrom != null) return sym.name;
+	return sym.modulePath + ":" + sym.name + "#" + sym.disamb;
 }
 
 export function globalSymbolKey(sym: Symbol): string {

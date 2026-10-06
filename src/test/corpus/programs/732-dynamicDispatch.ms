@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM has no `instanceof` ('cannot evaluate operator 'instanceof' at comptime')
 // @stdout: 42 3 gau 1 true true false ok
 // The C backend used to bind method calls to the receiver's STATIC type:
 // `const b: Base = new Derived(); b.step(3)` ran Base.step (printed 0) while

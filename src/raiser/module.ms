@@ -1,7 +1,7 @@
 // Raiser VM — Module and Function structures
 
 import { RaiserInstruction, RaiserOpcode, raiserABC, raiserABx } from "./bytecode";
-import { RaiserValue, raiserInt } from "./value";
+import { RaiserValue, RaiserClassType, raiserInt } from "./value";
 import { RaiserCopyPlan } from "./valueCopy";
 
 // --- Function ---
@@ -14,6 +14,7 @@ export interface RaiserFunction {
 	localsCount: number;
 	maxRegs: number;
 	copyPlans: RaiserCopyPlan[];
+	classTypes: RaiserClassType[];
 }
 
 // --- Module ---
@@ -28,7 +29,7 @@ export interface RaiserModule {
 // --- Constructors ---
 
 export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, maxRegs: number): RaiserFunction {
-	return { name, code, constants, arity, localsCount, maxRegs, copyPlans: [] };
+	return { name, code, constants, arity, localsCount, maxRegs, copyPlans: [], classTypes: [] };
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {

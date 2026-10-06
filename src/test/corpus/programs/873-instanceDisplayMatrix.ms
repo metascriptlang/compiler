@@ -1,5 +1,4 @@
 // @stdout: total=4 a6 false
-// @xfail(raiser): the Raiser VM has no `instanceof` ('cannot evaluate operator 'instanceof' at comptime')
 // note: msIsInstance is a display check (arc-style): depth + ancestors' msTypeInfo addresses,
 // filled where .base is assigned. This pin covers the matrix at depth 0 and depth ≥ 5 —
 // exact hit, ancestor hit, miss, null — plus an overridden method dispatched over the deep

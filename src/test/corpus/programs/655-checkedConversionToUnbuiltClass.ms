@@ -1,5 +1,4 @@
 // @stdout: unbuilt iof-unknown=false iof-base=false as-unknown=ok as-base=ok
-// @xfail(raiser): the Raiser VM has no `instanceof` ('cannot evaluate operator 'instanceof' at comptime')
 
 class A { a: int32 = 1; }
 class B { b: string = "b"; }
