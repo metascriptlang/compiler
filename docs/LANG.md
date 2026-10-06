@@ -1523,6 +1523,17 @@ Pick<T, K>           // Subset of properties (planned)
 Omit<T, K>           // Exclude properties (planned)
 ```
 
+`Readonly<T>` can widen into a union through a compatible read-only member. A mutable
+member, or an unrelated read-only member beside a mutable one, does not allow the view
+to be dropped. This does not relax the storage restrictions on borrowed views.
+
+Checked 2026-10-06 on Windows x64, source tree `11fdb5911671`: the compatibility guard
+passes 542/542 native tests, including Span and reference variants and the refused mutable
+branches. A typed macro receiving `["pet", view]` with `view: Readonly<Span<uint8>>`
+prints `7` on C and JavaScript; the old compiler refuses both with PARALOCK E24.
+The complete compatibility module's JavaScript tests were not run: its unchanged
+`checker/types.ms` dependency fails at `(t as unknown).hash()`.
+
 ### Mapped Types
 ```ms
 // Planned — not yet implemented
