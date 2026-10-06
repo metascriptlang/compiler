@@ -985,23 +985,41 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 		return;
 	}
 
-	// Save/restore inferredReturn for nested functions
-	const savedReturn = ctx.inferredReturn;
-	ctx.inferredReturn = fnType.typeReturn != null ? fnType.typeReturn : inferredType();
-	const savedReturnStmts = ctx.inferredReturnStmts;
-	ctx.inferredReturnStmts = [];
-	const savedReturnTries = ctx.inferredReturnTries;
-	ctx.inferredReturnTries = [];
-
+	const outer = beginReturnInference(ctx, fnType);
 	node.paramSyms = checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations!, d.fnDefaults);
+	settleReturnInference(ctx, sym, d.fnName, d.fnFlags, d.nameLocation, outer);
 
-	// If return type was unknown (no annotation), use inferred type
+	if (d.fnReturnType == "" && isLifecycleHookName(d.fnName) && getExtReceiverType(d.fnFlags) != "") {
+		refuseHookInferredReturn(ctx, d.fnName, d.nameLocation, sym.symbolType);
+	}
+	sym.state = SymbolState.Checked;
+}
+
+interface ReturnInference {
+	inferred: Type;
+	stmts: Node[];
+	tries: Node[];
+}
+
+function beginReturnInference(ctx: CheckerContext, fnType: Type): ReturnInference {
+	const outer: ReturnInference = {
+		inferred: ctx.inferredReturn,
+		stmts: ctx.inferredReturnStmts,
+		tries: ctx.inferredReturnTries,
+	};
+	ctx.inferredReturn = fnType.typeReturn != null ? fnType.typeReturn : inferredType();
+	ctx.inferredReturnStmts = [];
+	ctx.inferredReturnTries = [];
+	return outer;
+}
+
+function settleReturnInference(ctx: CheckerContext, sym: Symbol, name: string, flags: string, at: SourceLocation, outer: ReturnInference): void {
 	if (sym.symbolType.kind == TypeKind.Function
 		&& sym.symbolType.typeReturn != null
 		&& isUnresolvedType(sym.symbolType.typeReturn)) {
 		if (ctx.inferredReturn.kind != TypeKind.Inferred) {
 			if (ctx.inferredReturn.kind == TypeKind.Span) {
-				addError(ctx, "function '" + d.fnName + "' cannot return " + formatTypeBrief(ctx.inferredReturn) + ": a Span borrows memory owned by its source; return the owning container instead", d.nameLocation.line, d.nameLocation.column);
+				addError(ctx, "function '" + name + "' cannot return " + formatTypeBrief(ctx.inferredReturn) + ": a Span borrows memory owned by its source; return the owning container instead", at.line, at.column);
 			}
 			const storedReturn = closureStorageType(ctx.inferredReturn);
 			sym.symbolType.typeReturn = storedReturn;
@@ -1009,15 +1027,11 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 				const rsd = rs.data as ReturnStmtData;
 				if (rsd.argument != null) rsd.argument = fitJoinedBranch(ctx, rsd.argument, storedReturn);
 			}
-			for (const t of ctx.inferredReturnTries) checkPropagatedErrorAgainst(ctx, t, storedReturn, d.fnName);
+			for (const t of ctx.inferredReturnTries) checkPropagatedErrorAgainst(ctx, t, storedReturn, name);
 		} else {
 			sym.symbolType.typeReturn = voidType();
-			for (const t of ctx.inferredReturnTries) checkPropagatedErrorAgainst(ctx, t, voidType(), d.fnName);
+			for (const t of ctx.inferredReturnTries) checkPropagatedErrorAgainst(ctx, t, voidType(), name);
 		}
-	}
-
-	if (d.fnReturnType == "" && isLifecycleHookName(d.fnName) && getExtReceiverType(d.fnFlags) != "") {
-		refuseHookInferredReturn(ctx, d.fnName, d.nameLocation, sym.symbolType);
 	}
 
 	// Async functions: ensure the effective return type is Promise<T>.
@@ -1027,7 +1041,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	//   - No annotation + empty body    → default to Promise<void>
 	// Excludes async_generator (returns AsyncIterator<T>).
 	if (hasFlag(sym, SymbolFlag.Async)
-		&& d.fnFlags != "async_generator"
+		&& flags != "async_generator"
 		&& sym.symbolType.kind == TypeKind.Function
 		&& sym.symbolType.typeReturn != null
 		&& !isAwaitable(sym.symbolType.typeReturn)) {
@@ -1036,10 +1050,9 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 		sym.symbolType.typeReturn = createPromise(inner);
 	}
 
-	ctx.inferredReturn = savedReturn;
-	ctx.inferredReturnStmts = savedReturnStmts;
-	ctx.inferredReturnTries = savedReturnTries;
-	sym.state = SymbolState.Checked;
+	ctx.inferredReturn = outer.inferred;
+	ctx.inferredReturnStmts = outer.stmts;
+	ctx.inferredReturnTries = outer.tries;
 }
 
 function checkClassDecl(ctx: CheckerContext, node: Node): void {
@@ -1241,7 +1254,10 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			// like top-level generic fns at checkFunctionDecl:358).
 			if (!isGenericFn(d.methodFlags)) {
 				if (d.methodIsStatic) openStaticReceiverScope(ctx, classType.sym);
+				const outer = beginReturnInference(ctx, sym.symbolType);
 				node.paramSyms = checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!, d.methodDefaults);
+				settleReturnInference(ctx, sym, d.methodName, d.methodFlags, d.nameLocation, outer);
+				if (node.nodeType != null && node.nodeType != sym.symbolType && node.nodeType.kind == TypeKind.Function) node.nodeType.typeReturn = sym.symbolType.typeReturn;
 				if (d.methodIsStatic) closeScope(ctx.table);
 			} else if (isGenericFn(d.methodFlags)) {
 				markBodyIdentifiersUsed(ctx, d.methodBody);
