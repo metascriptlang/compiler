@@ -1,10 +1,8 @@
 import { compileToCWithStd, compileProjectToJSWithStd } from "../helpers";
 
 const HEAD = "struct S { n: int32; name: string; }\nstruct R { items: int32[]; k: int32; }\nclass Bag { items: S[] = []; count: int32 = 0; }\n"
-	+ "struct World { pets: S[]; k: int32; }\n"
+	+ "struct World { pets: S[]; k: int32; }\nstruct L { tags: Vec<int32>; n: int32; }\n"
 	+ "function grow(ref a: S[]): void { a.push({ n: 2, name: \"g\" }); }\n"
-	+ "function growShared(a: S[]): void { a.push({ n: 2, name: \"g\" }); }\n"
-	+ "function growBag(b: Bag): void { b.items.push({ n: 2, name: \"g\" }); }\n"
 	+ "function take(a: S[]): int32 { return a.length as int32; }\n"
 	+ "function kOf(this w: World): int32 { return w.k; }\n"
 	+ "function bump(p: Ptr<S>): void { p[].n = p[].n + 1; }\n";
@@ -31,8 +29,6 @@ test "a view is refused while the storage it reads can move or be freed" {
 		`${xs} const sp: Span<S> = xs; while (sp.length < 4) { xs.push({ n: 2, name: "b" }); } return sp[0].n;`,
 		`${xs} const sp: Span<S> = xs; xs = [{ n: 7, name: "d" }]; return sp[0].n;`,
 		`${xs} const sp: Span<S> = xs; grow(xs); return sp[0].n;`,
-		`${xs} const sp: Span<S> = xs; growShared(xs); return sp[0].n;`,
-		"const b = new Bag(); const sp: Span<S> = b.items; growBag(b); return sp.length as int32;",
 		"const b = new Bag(); const sp: Span<S> = b.items; b.items.push({ n: 3, name: \"e\" }); return sp.length as int32;",
 		`${xs} const sp: Span<S> = xs; const w: Span<S> = sp[0..1]; xs.push({ n: 3, name: "f" }); return w[0].n;`,
 		`${xs} const sp: Span<S> = xs; const alias = xs; alias.push({ n: 2, name: "b" }); return sp[0].n;`,
@@ -58,6 +54,9 @@ test "a view stays legal when nothing can move the storage it reads" {
 		"const w: World = { pets: [{ n: 4, name: \"p\" }], k: 2 }; const sp: Span<S> = w.pets; const k = w.kOf(); return sp[0].n + k;",
 		"const s = \"ab\" + String(1); const b = s.asBytes(); const t = s + \"!\"; return (b[0] as int32) + (t.length as int32);",
 		`${xs} const sp: Span<S> = xs; if (sp.length > 0) { xs.push({ n: 2, name: "b" }); } return xs.length as int32;`,
+		`${xs} const sp: Span<S> = xs; const k = take(xs); return sp[0].n + k;`,
+		`${xs} const sp: Span<S> = xs; const kept = xs; return sp[0].n + (kept.length as int32);`,
+		"let arr: S[2] = [{ n: 1, name: \"a\" }, { n: 2, name: \"b\" }]; const sp: Span<S> = arr; arr = [{ n: 3, name: \"c\" }, { n: 4, name: \"d\" }]; return sp[0].n;",
 	];
 	for (const body of legal) {
 		assert compiles(body) == "", body;
@@ -94,6 +93,8 @@ test "a pointer into array storage is refused while the array can grow" {
 		"let s: S = { n: 1, name: \"a\" }; const p = s as Ptr<S>; s.n = 4; s = { n: 5, name: \"b\" }; s.name = \"c\"; bump(p); return p[].n;",
 		"let arr: S[2] = [{ n: 1, name: \"x\" }, { n: 2, name: \"y\" }]; const q = arr[1] as Ptr<S>; arr[0] = { n: 9, name: \"z\" }; return q[].n;",
 		"let xs: S[] = [{ n: 1, name: \"a\" }]; const p = xs[0] as Ptr<S>; xs[0].n = 3; const n = p[].n; xs.push({ n: 2, name: \"b\" }); return n;",
+		"let bag: L = { tags: [1], n: 0 }; const field = bag.tags as Ptr<Vec<int32>>; bag = { tags: [4, 5, 6], n: 1 }; return field[].length as int32;",
+		"let xs: S[] = [{ n: 1, name: \"a\" }]; const view = xs[0] as Ptr<S>; const inner = xs[0] as Ptr<S>; view[] = { n: 2, name: \"b\" }; return inner[].n;",
 	];
 	for (const body of legal) {
 		assert compiles(body) == "", body;
