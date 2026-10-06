@@ -553,14 +553,28 @@ function fail(msg: string): never {
 A function or method without a return annotation returns what its body returns, wherever it is
 called from: a call checked before the callee's body (a later function, a later method through
 `this` or a parameter, a module that imports this one back) checks that body first. A return type
-that would depend on itself through another unannotated routine is refused; a routine that only
-calls itself, or one whose call back is a statement that discards the result, still infers. Measured
-on C, JS and the Raiser (corpus `callBeforeTheCalleeBody`, `callBeforeTheCalleeBodyAcrossModules`):
+that would depend on itself through another unannotated routine is refused; a call back that is a
+statement discarding the result still infers. Measured on C, JS and the Raiser (corpus
+`callBeforeTheCalleeBody`, `callBeforeTheCalleeBodyAcrossModules`):
 
 ```typescript
 function a(n: number) { if (n > 0) return b(n - 1); return 3; }
 function b(n: number) { return a(n); }
 // error: cannot infer the return type of 'a': 'b' reads it while 'a' is still being checked (a -> b -> a); annotate the return type of 'a'
+```
+
+A routine that calls itself reads the type its returns before the call have given; it infers when
+every later return keeps that type (`if (n < 2) return n; return fib(n - 1) + fib(n - 2);` is a
+`number`). A self call before any return, or one that read a type a later return widens, is refused,
+because the call would compute with the narrower type. Measured 2026-10-06 on C, JS and the Raiser
+(corpus `selfRecursionKeepsItsInferredReturn`); before, `if (n <= 0) return 0; return f(n - 1) + 0.5;`
+printed `0` on C and the Raiser and `1.5` on JS:
+
+```typescript
+function f(n: number) { return n <= 0 ? 0 : f(n - 1) + 1; }
+// error: cannot infer the return type of 'f': it calls itself before any return gives it a type; annotate the return type of 'f'
+function g(n: number) { if (n <= 0) return 0; return g(n - 1) + 0.5; }
+// error: cannot infer the return type of 'g': this call reads it as 'int32', but a later return makes it 'float64'; annotate the return type of 'g'
 ```
 
 A generator without a return annotation is an `Iterator<T>` of what it yields, joined as returns
@@ -1097,6 +1111,14 @@ struct with a string field) and wherever it lives (a local, a field, an array el
 from a function the raise leaves). Measured 2026-10-05 on C (drc, orc, danger), `--target=js` and
 `--target=raiser` with corpus `raiseKeepsAssignedValue`; before, C stored the callee's zeroed result.
 
+A failed run-time check (an index out of bounds, a wrong class in `as`, an integer division by zero,
+a value outside an enum or integer range, a union member that is not the one held) is not an
+exception: it stops the program with `Error: <message>` on stderr and exit 1, inside a `try` too,
+and no `catch` sees it. On a JS host without `process.exit` the failure is an error that every
+emitted `catch` throws again (read from the emitted code, not run in a browser). Measured 2026-10-06 with C, `--target=js` and `--target=esm` (corpus
+`failedConversionInTryStops`, `failedIndexInTryStops`); before, JS caught both. The Raiser stops too
+but reports `raiser runtime error: …`, and does not yet check an enum range or a union member.
+
 ## Type System
 
 ### Type Annotations
@@ -1232,6 +1254,12 @@ type Extended = IUser & { role: string };
 // Struct intersection — compose value types from data-only interfaces
 struct SuperUser = IUser & { role: string; };
 ```
+
+A union value carries the position of the member it holds, so `int32 | string` and
+`string | int32` are different types: one is refused where the other is expected, with an error that
+says the members are the same in another order. A value narrowed to one member fits any union that
+holds that member, whatever the order. Measured 2026-10-06 on C, JS and the Raiser (corpus
+`narrowedUnionIntoAnotherOrder`); before, C read the narrowed value with the wrong member's layout.
 
 #### `as` between a union and its members
 
