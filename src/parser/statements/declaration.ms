@@ -1224,6 +1224,9 @@ function parseClassMember(state: ParserState): NodeResult {
 		memberIsOptional = true;
 		advance(state);
 	}
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Bang && peek(state, 1).kind == TokenKind.Colon) {
+		return Result.err(`Field '${nameToken.value}!' at line ${nameToken.line}: a definite-assignment '!' is refused, because a field nothing assigns has no value to read — initialize it, assign it on every path of the constructor, or declare it optional with '?'`);
+	}
 
 	// Method — early return (LParen for regular, Lt for generic like parse<T>(...))
 	if (!isAtEnd(state) && (current(state).kind == TokenKind.LParen || current(state).kind == TokenKind.Lt)) {
