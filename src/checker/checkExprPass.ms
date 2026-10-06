@@ -2923,10 +2923,15 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		return createClosureType(types, params, isAsync ? createPromise(voidType()) : voidType());
 	}
 	if (!isUnresolvedType(inferredRet)) {
+		if (isAsync && fnFlags.indexOf("generator") < 0 && isAwaitable(inferredRet)) refuseReturnedPromise(ctx, name == "<arrow>" ? "an async arrow function" : "an async function expression", inferredRet, body.location);
 		const retT = isAsync && !isAwaitable(inferredRet) ? createPromise(inferredRet) : inferredRet;
 		return createClosureType(types, params, retT);
 	}
 	return createClosureType(types, params, isAsync ? createPromise(voidType()) : voidType());
+}
+
+export function refuseReturnedPromise(ctx: CheckerContext, what: string, returned: Type, at: SourceLocation): void {
+	addError(ctx, `${what} returns '${typeDisplayName(returned)}' from its body, which makes a promise of a promise and is refused: write 'return await ...' so it returns the value`, at.line, at.column);
 }
 
 // TS-parity arity subsumption for LITERAL lambdas: a written arrow may declare

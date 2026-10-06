@@ -1679,6 +1679,16 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	if (node.resolvedSym != null && node.resolvedSym.builtinKind == "PromiseSpawn"
 		&& argTypes.length >= 1 && argTypes[0] != null && argTypes[0].kind == TypeKind.Function) {
 		const spawnInner = argTypes[0].typeReturn != null ? argTypes[0].typeReturn : voidType();
+		if (isAwaitable(spawnInner)) {
+			const named = d.arguments.length >= 1 && d.arguments[0].kind == NodeKind.Identifier;
+			const fn = named ? (d.arguments[0].data as IdentifierData).name : "";
+			const rewrite = named
+				? `write 'await ${fn}()', or 'await spawn(() => ${fn}Sync())' with a '${fn}Sync' that does not return a promise`
+				: "await the promise the function returns instead of spawning it, or spawn a function that does not return a promise";
+			addError(ctx, `spawn of a function that returns '${typeDisplayName(spawnInner)}' makes a promise of a promise, which is refused: ${rewrite}`, node.location.line, node.location.column);
+			node.nodeType = errorType();
+			return node.nodeType;
+		}
 		const spawnRet = createSpawnHandle(spawnInner);
 		node.nodeType = spawnRet;
 		// Spawn borrow checker: detect mutable variable captures

@@ -35,7 +35,7 @@ import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, refuseFallingOffEnd, refuseGeneratorReturnValue } from "./checkExprPass";
+import { checkExpr, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise } from "./checkExprPass";
 import { inlineDecorator } from "./decoratorHelpers";
 import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
@@ -1030,6 +1030,7 @@ function beginReturnInference(ctx: CheckerContext, fnType: Type): ReturnInferenc
 }
 
 function settleReturnInference(ctx: CheckerContext, sym: Symbol, name: string, flags: string, at: SourceLocation, outer: ReturnInference): void {
+	const returnInferred = sym.symbolType.kind == TypeKind.Function && sym.symbolType.typeReturn != null && isUnresolvedType(sym.symbolType.typeReturn);
 	if (sym.symbolType.kind == TypeKind.Function
 		&& sym.symbolType.typeReturn != null
 		&& isUnresolvedType(sym.symbolType.typeReturn)
@@ -1063,6 +1064,10 @@ function settleReturnInference(ctx: CheckerContext, sym: Symbol, name: string, f
 	//   - No annotation + body returns T → wrap inferred T into Promise<T>
 	//   - No annotation + empty body    → default to Promise<void>
 	// Excludes async_generator (returns AsyncIterator<T>).
+	if (returnInferred && hasFlag(sym, SymbolFlag.Async) && flags != "async_generator"
+		&& sym.symbolType.typeReturn != null && isAwaitable(sym.symbolType.typeReturn)) {
+		refuseReturnedPromise(ctx, `async function '${name}'`, sym.symbolType.typeReturn, at);
+	}
 	if (hasFlag(sym, SymbolFlag.Async)
 		&& flags != "async_generator"
 		&& sym.symbolType.kind == TypeKind.Function
