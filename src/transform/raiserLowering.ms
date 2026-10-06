@@ -25,6 +25,7 @@ import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
 import { lowerLambda } from "./lowering/lambdaLifting";
+import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerCtorInit } from "./lowering/ctorLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
@@ -64,6 +65,7 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = retargetJumps(result, ctx);
+	result = lowerGenerator(result, ctx);
 	result = lowerCtorInit(result, ctx);
 	result = lowerNewExpr(result, ctx);
 	result = lowerLambda(result, ctx);

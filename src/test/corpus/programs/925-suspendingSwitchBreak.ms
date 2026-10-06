@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM cannot compile a yield expression ('cannot compile node kind YieldExpr')
 function* gen(): Iterator<int32> {
 	let i: int32 = 0;
 	while (i < 4) {
