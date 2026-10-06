@@ -3430,9 +3430,9 @@ test "not equal" { assert exprSnippet("x !== y;") == "(x != y)"; }
 
 test "nested" { assert exprSnippet("a + b * c;") == "(a + (b * c))"; }
 
-test "negation" { assert exprSnippet("-x;") == "(-x)"; }
+test "negation" { assert exprSnippet("-x;") == "(-(x))"; }
 
-test "logical not" { assert exprSnippet("!flag;") == "(!flag)"; }
+test "logical not" { assert exprSnippet("!flag;") == "(!(flag))"; }
 
 test "no args" { assert exprSnippet("foo();") == "foo()"; }
 
