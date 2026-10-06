@@ -55,3 +55,30 @@ test "JS: an as to an int32 member tests the member before truncating" {
 	assert js.ok;
 	assert js.value.contains("typeof v === \"number\"");
 }
+
+test "JS: an as out of two same-kind struct members reads the member through its stored tag" {
+	const js = compileToJS("struct P { a: int32 }\nstruct Q { b: int32 }\nfunction mk(): P | Q { const q: Q = { b: 2 }; return q; }\nfunction f(): int32 { const p = mk() as P; return p.a; }");
+	assert js.ok;
+	assert js.value.contains("$tag: 1");
+	assert js.value.contains("msUnionRead");
+	assert js.value.contains("member 'P' is not accessible for type 'P | Q' using '");
+}
+
+test "JS: an as out of int32 | float64 reads the member through its stored tag" {
+	const js = compileToJS("function mk(): int32 | float64 { return 1.5; }\nfunction f(): int32 { return mk() as int32; }");
+	assert js.ok;
+	assert js.value.contains("$tag: 1");
+	assert js.value.contains("member 'int32' is not accessible for type 'int32 | float64' using '");
+}
+
+test "JS: a union whose members the value names keeps the raw value" {
+	const js = compileToJS("function mk(): number | string { return 1; }\nfunction f(): number { return mk() as number; }");
+	assert js.ok;
+	assert !js.value.contains("$tag");
+}
+
+test "JS: a union value returned by a host function is refused" {
+	const js = compileToJS("extern function pick(k: int32): int32 | float64 from \"(#)\";\nconst v = pick(2);");
+	assert !js.ok;
+	assert js.error.contains("carries no tag naming its member");
+}
