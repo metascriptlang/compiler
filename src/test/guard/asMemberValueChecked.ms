@@ -6,11 +6,11 @@
 //   `Array.isArray` for an array, a non-array object of no member class for a struct or an
 //   interface. A wrong member is rejected; the held member converts.
 //
-// WHAT IT CATCHES: a JS conversion emitted without a test, so the wrong member reads undefined
-//   fields or a string arrives as an int32 (`| 0` of a string).
+// WHAT IT CATCHES: a JS test that rejects the held member. A wrong member stops the program
+//   (NIM-REF RT-34), so the rejections are pinned in corpus/programs/asUnion*Stops.ms.
 //
 // RED MEANS: emitCheckedNarrowing (codegen/js/expressions.ms) or materializeIntConv
-//   (transform/coercion/intConvJS.ms) stopped testing. Run /trace-nim on them.
+//   (transform/coercion/intConvJS.ms) tests the wrong member. Run /trace-nim on them.
 // GUARD-JS
 
 class Row {
@@ -47,31 +47,11 @@ function asList(k: int32): int32[] { return rowOrList(k) as int32[]; }
 function asNamed(k: int32): Named { return rowOrNamed(k) as Named; }
 function asPoint(k: int32): Point { return pointOrText(k) as Point; }
 
-function rejected(f: () => void): boolean {
-	try {
-		f();
-	} catch (e) {
-		return true;
-	}
-	return false;
-}
-
 function validPaths(): boolean {
 	return asInt(0) + 1 == 42 && asList(0).length == 2 && asNamed(0).name == "n" && asPoint(0).x == 3;
 }
 
-function wrongPathsRejected(): boolean {
-	let ok = true;
-	when (js) {
-		ok = rejected((): void => { asInt(1); })
-			&& rejected((): void => { asList(1); })
-			&& rejected((): void => { asNamed(1); })
-			&& rejected((): void => { asPoint(1); });
-	}
-	return ok;
-}
-
-if (validPaths() && wrongPathsRejected()) {
+if (validPaths()) {
 	console.log("GUARD-OK");
 } else {
 	process.exit(1);
