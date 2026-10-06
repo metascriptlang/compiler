@@ -1428,6 +1428,8 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 		},
 		RaiserValueKind.Object => {
 			const handle = val.intVal;
+			const unionTag = heapObjectGetField(objHeap, handle, "$tag");
+			if (unionTag.kind == RaiserValueKind.Int) return valueToNode(heapObjectGetField(objHeap, handle, "$v"), objHeap, arrHeap, fallbackLoc);
 			// Check for "kind" field — if present, this is a serialized Node
 			const kindField = heapObjectGetField(objHeap, handle, "kind");
 			if (kindField.kind == RaiserValueKind.Int) {
