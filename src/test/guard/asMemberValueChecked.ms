@@ -69,7 +69,7 @@ type RowOrLists = Row | int32[] | string[];
 
 function sameHeld(x: RowOrLists, y: RowOrLists): boolean {
 	let same = true;
-	when (js) {
+	when (js || raiser) {
 		same = x == y;
 	}
 	return same;
@@ -98,6 +98,12 @@ function validPaths(): boolean {
 function wrongPathsRejected(): boolean {
 	let ok = true;
 	when (js) {
+		ok = rejected((): void => { asPointOfPair(1); })
+			&& rejected((): void => { asOtherOfPair(0); })
+			&& rejected((): void => { asIntOfNum(1); })
+			&& rejected((): void => { asFloatOfNum(0); });
+	}
+	when (raiser) {
 		ok = rejected((): void => { asPointOfPair(1); })
 			&& rejected((): void => { asOtherOfPair(0); })
 			&& rejected((): void => { asIntOfNum(1); })
