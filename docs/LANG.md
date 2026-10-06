@@ -2709,6 +2709,7 @@ MetaScript introduces `char` as a first-class primitive for **byte-tier** work: 
 - **Access**: `byteAt(i)` reads raw bytes; `s[i]` is TS-tier and returns a `string` (see §0). A for-of over a string yields its UTF-8 bytes as `char`, so `for (const c of "héllo")` runs six times, on C, JS and Raiser (corpus `869-forOfStringBytes`, measured 2026-10-05).
 - **Literals**: Character literals use single quotes (e.g., `'a'`).
 - **Numeric**: `char` is a numeric type and can participate in arithmetic or be cast to `number`.
+- **No `as` between text and numbers**: `s[i] as int32`, `s as char`, `s as boolean` and `n as string` are checker errors (`cannot convert string to int32 — …`) on C, JS and the Raiser, as in TypeScript and Nim; read `s.charCodeAt(i)` or `s.byteAt(i)`, or format with `String(n)`. `"0xff" as bigint` still parses. Measured 2026-10-06, pinned by `checker3pass/scenarios/textConversions.ms`.
 - **Codepoints use `int32`, not `char` or `uint32`**: `char` is 8-bit (only U+0000–U+00FF). A full Unicode codepoint is 21-bit, so hold it in `int32` — the type `.code`, `s.charCodeAt(i)`, and `fromCodePoint()` all speak, matching Go's `rune`. Prefer `int32` over `uint32` here: signed stays cast-free with those APIs and leaves `-1` free as an "invalid/absent" sentinel, whereas `uint32` buys only a compile-time non-negativity guarantee at the cost of an `as uint32` cast at every codepoint boundary.
 
 ```typescript
