@@ -117,6 +117,16 @@ test "fieldVisibility: as takes a nullable struct to its payload and still refus
 	assert refused;
 }
 
+test "fieldVisibility: as converts a generic struct instance only to itself, a distinct of it or a struct it extends" {
+	const lib = "export struct P { x: int32; }\nexport struct Box<T> { x: int32; }\nexport struct Kept<T> extends P { item: T; }\nexport struct A { a: int32; }\nexport struct B { b: int32; }\nexport type D = distinct Box<A>;\n";
+	const pre = "import { P, Box, Kept, A, B, D } from \"./lib\";\nconst p: P = { x: 3 };\nconst ba: Box<A> = { x: 1 };\nconst k: Kept<A> = { x: 2, item: { a: 4 } };\nfunction same<T>(b: Box<T>): Box<T> { return b as Box<T>; }\n";
+	assert errorsOf(lib, pre + "const d = ba as D;\nconst back = d as Box<A>;\nconst up = k as P;\nconsole.log(same<A>(ba).x, back.x, up.x);\n").length == 0;
+	assert reports(lib, pre + "const q = ba as Box<B>;\n", "cannot convert Box<A> to Box<B>");
+	assert reports(lib, pre + "const q = p as Box<A>;\n", "cannot convert P to Box<A>");
+	assert reports(lib, pre + "const q = ba as P;\n", "cannot convert Box<A> to P");
+	assert reports(lib, pre + "function forge<T>(raw: P): Box<T> { return raw as Box<T>; }\nconsole.log(forge<A>(p).x);\n", "cannot convert P to Box<A>");
+}
+
 function reports(library: string, main: string, needle: string): boolean {
 	for (const m of diagnostics(library, main)) {
 		if (m.indexOf(needle) >= 0) return true;
