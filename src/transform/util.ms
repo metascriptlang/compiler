@@ -1,9 +1,9 @@
 // Transform Utilities — node-building helpers for AST transforms
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
-import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, noFieldDecorators } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, noFieldDecorators } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, setRepr } from "../checker/types";
+import { createFunction, createClosureType, createStruct, createArray, createPtr, createVar, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, setRepr } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { lookupHookSym, requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
@@ -63,6 +63,69 @@ export function refInFuture(t: Type | null): boolean {
 // value's owner and every reader that may not be the last one copies it out.
 export function ownedInFuture(t: Type | null): boolean {
 	return inlineInFuture(t) || boxedInFuture(t) || refInFuture(t);
+}
+
+// The future an await reads was made by this very call to an async function, so
+// nothing else can name it: the await may take its value instead of copying.
+export function isFreshFutureCall(e: Node | null): boolean {
+	if (e == null || e.kind != NodeKind.CallExpr) return false;
+	const callee = (e.data as CallExprData).callee;
+	const sym = e.resolvedSym != null ? e.resolvedSym : callee.resolvedSym;
+	return sym != null && sym.declNode != null && sym.declNode.flags.has(NodeFlag.WasAsync);
+}
+
+// A read of an owning future that may not be its last: bind from the value's own
+// location (the slot, or the box it points at), so the binding copies through the
+// type's hook and the future keeps its value for the next reader.
+export function makeFutureCopyRead(fut: Node, t: Type, loc: SourceLocation): Node {
+	const at = makeCall(runtimeRef(boxedInFuture(t) ? "msFutureBoxAt" : "msFutureValueAt", loc), [fut], loc);
+	at.nodeType = createPtr(voidType());
+	// Var<T> is T's address in C for every T, a handle's slot included.
+	const slot = makeHiddenDeref(makeHiddenStdConv(at, createVar(t), loc), loc);
+	slot.nodeType = t;
+	return slot;
+}
+
+// share(dst, fut): copies an owning future's value into the slot at `dst`, for a
+// runtime combinator that collects values out of futures other code may also read.
+// The builtin pass runs after lambda lifting, so the routine is a generated
+// top-level function (collected here, appended by lowerBuiltins) passed as a
+// closure without an environment.
+let _shareFnDecls: Node[] = [];
+
+export function takeValueShareFns(): Node[] {
+	const out = _shareFnDecls;
+	_shareFnDecls = [];
+	return out;
+}
+
+export function makeValueShareFn(t: Type, ctx: TransformContext, loc: SourceLocation): Node {
+	const voidPtrType = createPtr(voidType());
+	const sym = mintSym(ctx, SymbolKind.Function, "$share" + _shareFnDecls.length.toString(), null);
+	const dstSym = mintSym(ctx, SymbolKind.Parameter, "dst", voidPtrType);
+	const futSym = mintSym(ctx, SymbolKind.Parameter, "fut", voidPtrType);
+	const stmts: Node[] = [];
+	if (ownedInFuture(t)) {
+		const slot = makeHiddenDeref(makeHiddenStdConv(makeTypedIdentResolved(dstSym, voidPtrType, loc), createVar(t), loc), loc);
+		slot.nodeType = t;
+		const copy = makeFutureCopyRead(makeTypedIdentResolved(futSym, voidPtrType, loc), t, loc);
+		stmts.push(makeExprStmt(makeAssign(slot, copy, loc), loc));
+	}
+	const fnNode = makeFnDecl(sym.name, [dstSym, futSym], ["Ptr<void>", "Ptr<void>"], makeBlock(stmts, loc), "", "void", loc);
+	fnNode.nodeType = createFunction([voidPtrType, voidPtrType], ["dst", "fut"], voidType());
+	sym.symbolType = fnNode.nodeType;
+	fnNode.resolvedSym = sym;
+	_shareFnDecls.push(fnNode);
+	const pair = makeObjectLiteral(["fn", "env"], [makeTypedIdentResolved(sym, fnNode.nodeType, loc), makeNull(loc)], loc);
+	pair.flags = pair.flags.incl(NodeFlag.Closure);
+	pair.nodeType = createClosureType([voidPtrType, voidPtrType], ["dst", "fut"], voidType());
+	return pair;
+}
+
+export function makeOwnsValueCheck(fut: Node, loc: SourceLocation): Node {
+	const call = makeCall(runtimeRef("msFutureOwnsValue", loc), [fut], loc);
+	call.nodeType = booleanType();
+	return call;
 }
 
 // Value-layout types — passed by-value or via NRVO out-param, NOT as void*.

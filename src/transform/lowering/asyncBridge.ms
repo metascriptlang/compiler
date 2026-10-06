@@ -28,6 +28,7 @@ import {
 	makeTypedIdentResolved, makeVarDecl, makeExprStmt, makeReturn,
 	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeWhile, makeBool, makeNumber, makeString,
 	makeAssign, makeBinary, makeTryCatch, makeCatchSym, makeContinue, syntheticToken, extractBodyStmts, runtimeRef,
+	isFreshFutureCall, makeFutureCopyRead, makeOwnsValueCheck,
 } from "../util";
 import { createSymSet, symSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
@@ -253,6 +254,12 @@ function rewriteAsyncReturn(node: Node, promiseType: Type, fnReturnInner: Type |
 // This walks recursively to find and extract it, returning the yield arg (future node).
 // Also replaces the found return+stateAssign with empty stmts to prevent duplicate emission.
 function extractYieldArgDeep(stmts: Node[]): Node {
+	return locateYieldArg(stmts, true);
+}
+
+// The yield argument a state hands to the dispatcher; `remove` also deletes its
+// return and the state assign before it.
+function locateYieldArg(stmts: Node[], remove: boolean): Node {
 	for (let i = stmts.length - 1; i >= 0; i -= 1) {
 		const s = stmts[i];
 		if (s.kind == NodeKind.ReturnStmt) {
@@ -262,8 +269,8 @@ function extractYieldArgDeep(stmts: Node[]): Node {
 				if (od.properties.length > 0) {
 					const yieldArg = od.properties[0];
 					// Remove return + preceding state assign
-					if (i > 0) { stmts.splice(i - 1, 2); }
-					else { stmts.splice(i, 1); }
+					if (remove && i > 0) { stmts.splice(i - 1, 2); }
+					else if (remove) { stmts.splice(i, 1); }
 					return yieldArg;
 				}
 			}
@@ -271,17 +278,17 @@ function extractYieldArgDeep(stmts: Node[]): Node {
 		// Recurse into blocks
 		if (s.kind == NodeKind.BlockStmt) {
 			const bd = s.data as BlockStmtData;
-			const found = extractYieldArgDeep(bd.statements);
+			const found = locateYieldArg(bd.statements, remove);
 			if (found != null) return found;
 		}
 		if (s.kind == NodeKind.IfStmt) {
 			const id = s.data as IfStmtData;
 			if (id.consequent != null && id.consequent.kind == NodeKind.BlockStmt) {
-				const found = extractYieldArgDeep((id.consequent.data as BlockStmtData).statements);
+				const found = locateYieldArg((id.consequent.data as BlockStmtData).statements, remove);
 				if (found != null) return found;
 			}
 			if (id.alternate != null && id.alternate.kind == NodeKind.BlockStmt) {
-				const found = extractYieldArgDeep((id.alternate.data as BlockStmtData).statements);
+				const found = locateYieldArg((id.alternate.data as BlockStmtData).statements, remove);
 				if (found != null) return found;
 			}
 		}
@@ -316,6 +323,13 @@ function yieldFutureSym(yfs: YieldFuture[], state: number): Symbol {
 function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promiseType: Type, closureType: Type, loc: SourceLocation): Node {
 	// Default (terminal) state: return null (stepper done)
 	let current: Node = makeBlock([makeReturn(makeNull(loc), loc)], loc);
+
+	// Which yields await a future made by that very call (states are built last to
+	// first, so a resume state is built before the yield it resumes from).
+	const freshYield: boolean[] = [];
+	for (const item of sc.items) {
+		freshYield.push(item.isYield && isFreshFutureCall(locateYieldArg(item.stmts, false)));
+	}
 
 	// Build if-else chain from last state to first
 	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
@@ -369,10 +383,15 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 					readExpr = rawRead;
 				}
 			}
-			stateStmts.push(makeExprStmt(
-				makeAssign(makeTypedIdentResolved(varSym, varType, loc), readExpr, loc),
-				loc,
-			));
+			const takeStmt = makeExprStmt(makeAssign(makeTypedIdentResolved(varSym, varType, loc), readExpr, loc), loc);
+			if (freshYield[prevIdx] || !ownedInFuture(varType)) {
+				stateStmts.push(takeStmt);
+			} else {
+				const copyRead = makeFutureCopyRead(makeTypedIdentResolved(prevYfSym, prevYfType, loc), varType!, loc);
+				const copyStmt = makeExprStmt(makeAssign(makeTypedIdentResolved(varSym, varType, loc), copyRead, loc), loc);
+				const owns = makeOwnsValueCheck(makeTypedIdentResolved(prevYfSym, prevYfType, loc), loc);
+				stateStmts.push(makeIf(owns, makeBlock([copyStmt], loc), makeBlock([takeStmt], loc), loc));
+			}
 		}
 
 		if (state.isYield) {
