@@ -1,16 +1,18 @@
 // GUARD-OS solana
-// GUARD-CHECK-FAIL solanaProofForgeRefused.ms:33:
-// GUARD-CHECK-FAIL solanaProofForgeRefused.ms:34:
 // GUARD-CHECK-FAIL solanaProofForgeRefused.ms:35:
 // GUARD-CHECK-FAIL solanaProofForgeRefused.ms:36:
 // GUARD-CHECK-FAIL solanaProofForgeRefused.ms:37:
 // GUARD-CHECK-FAIL solanaProofForgeRefused.ms:38:
 // GUARD-CHECK-FAIL solanaProofForgeRefused.ms:39:
+// GUARD-CHECK-FAIL solanaProofForgeRefused.ms:40:
+// GUARD-CHECK-FAIL solanaProofForgeRefused.ms:41:
+// GUARD-CHECK-FAIL solanaProofForgeRefused.ms:43:
+// GUARD-CHECK-FAIL solanaProofForgeRefused.ms:44:
 // GUARD-CHECK-FAIL 'account' is a private field of 'WritableSigner'
 // GUARD-CHECK-FAIL cannot convert Owned<Pet> to Mutable<Pet>
 // A proof comes only from its verifier: outside std/solana an account, a weaker proof or another
 // proof's type converts to no proof, by `as` or by a literal, and the weakening calls and the
-// readers still compile.
+// readers still compile; neither does an array or a Result of accounts convert to one of proofs.
 // RED MEANS: a program builds a Signer, a WritableSigner or a Mutable<T> its accounts never proved,
 // so an unsigned or foreign account passes as signed or owned.
 import { Account, Discriminator, Mutable, Owned, ProgramError, Signer, WritableSigner, accountDiscriminator, asAccount, failWith, owned, unchecked, writableSigner } from "std/solana";
@@ -37,6 +39,9 @@ function forged(raw: Account, signed: Signer, pet: Owned<Pet>): void {
 	const e: Mutable<Pet> = { account: raw };
 	const f = pet as Mutable<Pet>;
 	const g = pet.asAccount() as Mutable<Pet>;
+	const accounts: Account[] = [raw];
+	const h = accounts as Signer[];
+	const i = unchecked(0) as Result<Signer, ProgramError>;
 }
 
 function main(): void {
