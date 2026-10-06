@@ -63,7 +63,7 @@ import {
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase } from "../../checker/types";
-import { hasFlag, isTypeSymbol, SymbolFlag, overloadWinner } from "../../checker/symbol";
+import { hasFlag, isFrameValue, isTypeSymbol, SymbolFlag, overloadWinner } from "../../checker/symbol";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -646,6 +646,10 @@ export function boundTypeOfObject(objHeap: RaiserObjectHeap, handle: int64): Typ
 	return null;
 }
 
+function rebindsOnOutput(sym: Symbol): boolean {
+	return !isFrameValue(sym) && sym.overloadIdx == 0;
+}
+
 // `declNode` skipped to avoid Symbol↔Node cycle; reach it via getImpl.
 function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap): RaiserValue {
 	const handle = heapAllocObject(objHeap);
@@ -742,7 +746,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
 			setStr(objHeap, handle, "name", d.name);
-			if (node.resolvedSym != null && (node.flags.has(NodeFlag.BoundSym) || isTypeSymbol(node.resolvedSym))) {
+			if (node.resolvedSym != null) {
 				heapObjectSetField(objHeap, handle, "symHandle", raiserInt(registerBoundSym(node.resolvedSym) as int64));
 			}
 		},
@@ -773,9 +777,12 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			if (node.resolvedSym != null) {
 				const winner = overloadWinner(node.resolvedSym, d.resolvedOverloadIdx);
 				const calleeVal = heapObjectGetField(objHeap, handle, "callee");
-				if (winner != node.resolvedSym && winner.symbolType != null && calleeVal.kind == RaiserValueKind.Object) {
-					setTypeFields(objHeap, arrHeap, calleeVal.intVal, winner.symbolType, d.callee.location, includeTypeAst);
-					heapObjectSetField(objHeap, calleeVal.intVal, "resolvedSym", symbolToValue(winner, objHeap));
+				if (winner != node.resolvedSym && calleeVal.kind == RaiserValueKind.Object) {
+					if (winner.symbolType != null) {
+						setTypeFields(objHeap, arrHeap, calleeVal.intVal, winner.symbolType, d.callee.location, includeTypeAst);
+						heapObjectSetField(objHeap, calleeVal.intVal, "resolvedSym", symbolToValue(winner, objHeap));
+					}
+					heapObjectSetField(objHeap, calleeVal.intVal, "symHandle", raiserInt(registerBoundSym(winner) as int64));
 				}
 			}
 			setNodes(objHeap, arrHeap, handle, "arguments", d.arguments);
@@ -1555,7 +1562,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.Identifier => {
 			const n = createNodeAt(NodeKind.Identifier, { name: readStr(objHeap, h, "name") }, loc);
 			const hv = heapObjectGetField(objHeap, h, "symHandle");
-			if (hv.kind == RaiserValueKind.Int && hv.intVal >= 0 && hv.intVal < _boundSyms.length) {
+			if (hv.kind == RaiserValueKind.Int && hv.intVal >= 0 && hv.intVal < _boundSyms.length && rebindsOnOutput(_boundSyms[hv.intVal])) {
 				n.resolvedSym = _boundSyms[hv.intVal];
 				n.flags = n.flags.incl(NodeFlag.BoundSym);
 			}
