@@ -208,7 +208,7 @@ test "uint8 shift masks its count to the byte width" {
 }
 
 test "int8 unsigned shift reads the byte unsigned" {
-	const result = compileToJS("function f(a: int8, n: int8): int8 { return a >>> n; }");
+	const result = compileToJS("function f(a: int8, n: int8): uint8 { return a >>> n; }");
 	assert result.ok;
 	assert result.value.contains("& 255");
 }
