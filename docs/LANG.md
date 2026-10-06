@@ -1307,12 +1307,14 @@ const r = slot as Row | null;   // slot: number | Row | null — a Row converts,
   converts out of `Base | Child` to `Child`, and a held `Child` converts to `Base`. A member that
   holds no object stops with `Error: member 'Row' is not accessible for type 'number | Row' using
   'number'`, an object of another class with `Error: invalid object conversion: Base is not Child`.
-- JS holds no tag; it tests what the value itself names: `instanceof` the class for a class
-  target, `typeof` for a primitive member, `Array.isArray` for the only array member, and a
-  non-array object of none of the union's classes for the only struct or interface member, with
-  the C message. A member that shares its runtime kind with another (`P | Q`, `int32 | float64`,
-  two array members) converts on JS without a test (a number member keeps the `typeof` test),
-  while C tests the stored tag.
+- JS tests what the value itself names: `instanceof` the class for a class target, `typeof` for
+  a primitive member, `Array.isArray` for the only array member, and a non-array object of none
+  of the union's classes for the only struct or interface member, with the C message. A union
+  with two members of one runtime kind (`P | Q`, `int32 | float64`, two array members) cannot be
+  told apart by its value, so JS stores `{ $tag, $v }` for it, as C stores `_tag` and the
+  variant, and every checked read tests the tag with the same message. `number | string`,
+  `Row | null`, `Base | Child` and the discriminated unions stay raw values. A function declared
+  with `extern` that returns such a union is an error on JS, because the host value has no tag.
 - `--danger` drops the membership test and the tag test, of a bare and of a nullable union
   (`Wire as Align | null`, `number | Row | null as Row | null`) alike, as it drops bound checks.
 
@@ -1347,8 +1349,19 @@ Members the JS value names, measured on the same tree: `int32 | string` as `int3
 as `int32[]`, `Row | Named` as `Named` and `Point | string` as `Point` convert the held member and
 stop on the other with `member … is not accessible` on C and JS (guard `asMemberValueChecked`);
 before, JS let the wrong member through (`undefined` fields, a string truncated to `0` as an int32).
-Not covered: `P | Q` as `P` and `int32 | float64` as `int32` still test the tag on C and pass the
-wrong member on JS (`2` for a held `1.5` plus one).
+`P | Q` as `P` holding a `Q`, and `int32 | float64` as `int32` holding `1.5`, stop on C and JS with
+`member 'P' is not accessible for type 'P | Q' using 'Q'` and `member 'int32' is not accessible for
+type 'int32 | float64' using 'float64'` (guard `asMemberValueChecked` on C and JS, tree `2e22d0152`);
+before, JS passed the wrong member (`undefined` for the `P` field, `1` for the `1.5`). The held
+members convert to the same output on C, JS, ESM and Raiser (corpus `649`, the `5/6/8 5/6 7/1.5`
+tokens: an injection by return, by literal and by `push`, an `as` and a field read after it).
+Not covered: the Raiser VM still passes the wrong member (`nil` for the `P` field, `1.5` for the
+`int32` read, measured with `msc run --target=raiser`). Giving the Raiser the wrapper changes a
+tagged union's value for the compile-time macros that exchange `NodeData` with the compiler:
+with it, corpus `506`, `509`, `510`, `513` and `252` failed to build on every lane, and without
+it they build. A union inside a struct field read through `.field`, a flow-narrowed member read
+through a `Maybe` carrier and a tagged union passed as an `unknown` argument of a host function
+were probed only on the shapes above.
 
 ### Discriminated Union Types
 
