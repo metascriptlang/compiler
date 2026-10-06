@@ -7,6 +7,7 @@ import {
 	WritableSigner,
 	accounts,
 	args,
+	asAccount,
 	bump,
 	failWith,
 	instruction,
@@ -37,14 +38,14 @@ export struct WithdrawAccounts {
 function deposit(): Result<uint64, ProgramError> {
 	const given = try args<AmountArgs>();
 	const x = try accounts<DepositAccounts>();
-	return transfer(x.user as Account, x.vault as Account, given.amount);
+	return transfer(x.user.asAccount(), x.vault.asAccount(), given.amount);
 }
 
 function withdraw(): Result<uint64, ProgramError> {
 	const given = try args<AmountArgs>();
 	const x = try accounts<WithdrawAccounts>();
-	const vault = x.vault as Account;
-	const user = x.user as Account;
+	const vault = x.vault.asAccount();
+	const user = x.user.asAccount();
 	vault.setLamports(vault.lamports() - given.amount);
 	user.setLamports(user.lamports() + given.amount);
 	return Result.ok(given.amount);

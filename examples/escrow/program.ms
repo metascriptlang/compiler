@@ -11,6 +11,7 @@ import {
 	WritableSigner,
 	accounts,
 	args,
+	asAccount,
 	associated,
 	bump,
 	close,
@@ -86,7 +87,7 @@ function make(): Result<uint64, ProgramError> {
 	escrow.mintB = x.mintB.key();
 	escrow.receive = a.receive;
 	escrow.bump = made.bump;
-	const escrowAccount = made.account as Account;
+	const escrowAccount = made.account.asAccount();
 	const _vaultMade = try createAssociatedFor(
 		x.maker,
 		x.vault,
@@ -96,7 +97,7 @@ function make(): Result<uint64, ProgramError> {
 		x.tokenProgram,
 	);
 	const _vaultKey = try expectAssociated(
-		(x.vault as Account).key(),
+		x.vault.key(),
 		escrowAccount.key(),
 		x.mintA,
 	);
@@ -105,7 +106,7 @@ function make(): Result<uint64, ProgramError> {
 		x.makerAtaA,
 		vault,
 		x.mintA,
-		x.maker as Account,
+		x.maker.asAccount(),
 		a.deposit,
 	);
 	return Result.ok(a.deposit);
@@ -114,13 +115,13 @@ function make(): Result<uint64, ProgramError> {
 function take(): Result<uint64, ProgramError> {
 	const x = try accounts<TakeAccounts>();
 	const escrow = x.escrow.data();
-	const escrowAccount = x.escrow as Account;
+	const escrowAccount = x.escrow.asAccount();
 	const receive = escrow.receive;
 	const _paid = try transferTokens(
 		x.takerAtaB,
 		x.makerAtaB,
 		x.mintB,
-		x.taker as Account,
+		x.taker.asAccount(),
 		receive,
 	);
 	const held = (try x.vault.read()).amount;
@@ -139,7 +140,7 @@ function take(): Result<uint64, ProgramError> {
 function refund(): Result<uint64, ProgramError> {
 	const x = try accounts<RefundAccounts>();
 	const escrow = x.escrow.data();
-	const escrowAccount = x.escrow as Account;
+	const escrowAccount = x.escrow.asAccount();
 	const held = (try x.vault.read()).amount;
 	const _returned = try signed(
 		transferTokens(x.vault, x.makerAtaA, x.mintA, escrowAccount, held),
