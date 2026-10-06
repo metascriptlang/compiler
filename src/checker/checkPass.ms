@@ -1374,6 +1374,15 @@ function leaveDeclarationState(ctx: CheckerContext, saved: DeclarationState): vo
 	ctx.instantiatingCtx = saved.instantiatingCtx;
 }
 
+export function checkFunctionOnDemand(ctx: CheckerContext, sym: Symbol): boolean {
+	const decl = sym.declNode;
+	if (sym.symbolKind != SymbolKind.Function || decl == null || decl.kind != NodeKind.FunctionDecl) return true;
+	if (sym.modulePath != ctx.modulePath || ctx.decoratorsPending) return true;
+	if (sym.state == SymbolState.Checking) return false;
+	demandFunctionBody(ctx, decl, sym);
+	return true;
+}
+
 function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	const sym = lookupSymbol(ctx.table, d.className);
