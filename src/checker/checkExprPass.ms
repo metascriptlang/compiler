@@ -65,6 +65,10 @@ function isComparisonOp(op: string): boolean {
 	return op == "<" || op == "<=" || op == ">" || op == ">=" || op == "==" || op == "!=" || op == "===" || op == "!==";
 }
 
+function isStructOperand(t: Type): boolean {
+	return isStructType(t) || (t.kind == TypeKind.GenericInstance && isStructType(t.typeReturn));
+}
+
 function declaredOperatorResult(ctx: CheckerContext, op: string, left: Type | null, right: Type | null): Type | null {
 	if (left == null || right == null || isStringLike(left) || isStringLike(right) || ctx.extensionRegistry == null) return null;
 	const ext = resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [left, right]);
@@ -1152,7 +1156,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				&& effLeft.kind != TypeKind.Null && effRight.kind != TypeKind.Null
 				&& !hasGenericParams(effLeft) && !hasGenericParams(effRight)
 				&& ((isStringLike(effLeft) && isStringLike(effRight))
-					|| (isStructType(effLeft) && isStructType(effRight) && typeNameOf(effLeft) == typeNameOf(effRight))
+					|| (isStructOperand(effLeft) && isStructOperand(effRight) && typeNameOf(effLeft) == typeNameOf(effRight))
 					|| (effLeft.kind == TypeKind.Tuple && effRight.kind == TypeKind.Tuple)
 					|| (tplOpName == "!=" && effLeft.kind == TypeKind.SizedArray
 						&& effRight.kind == TypeKind.SizedArray)
