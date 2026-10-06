@@ -175,6 +175,7 @@ when (testBuild) {
 	import {
 		ASSOCIATED_TOKEN_PROGRAM_ID,
 		Discriminator,
+		declaredProgramId,
 		Pubkey,
 		SYSTEM_PROGRAM_ID,
 		TOKEN_PROGRAM_ID,
@@ -191,7 +192,7 @@ when (testBuild) {
 		return key;
 	}
 
-	function programKey(): Pubkey { return keyOf(200); }
+	function programKey(): Pubkey { return declaredProgramId(); }
 
 	function pushU64(bytes: uint8[], value: uint64): void {
 		for (let shift: uint64 = 0; shift < 64; shift += 8) {

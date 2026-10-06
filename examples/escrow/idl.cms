@@ -5,7 +5,6 @@ import { MakeAccounts, RefundAccounts, TakeAccounts } from "./program";
 export function escrowIdl(): string {
 	return anchorIdl<EscrowOp>({
 		name: "escrow",
-		address: "",
 		Make: [MakeAccounts, MakeArgs],
 		Take: [TakeAccounts],
 		Refund: [RefundAccounts],
