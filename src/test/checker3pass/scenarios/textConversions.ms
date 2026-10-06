@@ -57,3 +57,22 @@ test "character codes, bytes, bigint parsing and union members still convert" {
 	const result = checkOnly(SRC_VALID);
 	assert result.errors.length == 0, "valid conversions must check: " + result.errors.join("\n");
 }
+
+const SRC_QUOTED_CHAR = `
+const c: char = 'A';
+`;
+
+const SRC_CODE_CHAR = `
+const c: char = "A".code;
+const d: char = 'A'.code;
+`;
+
+test "a single-quoted letter is a string, so it does not fit a char slot" {
+	const text = checkOnly(SRC_QUOTED_CHAR).errors.join("\n");
+	assert text.contains("'string' is not assignable to type 'char'"), "'A' into char must fail the checker: " + text;
+}
+
+test "a letter's code fits a char slot from either quote" {
+	const result = checkOnly(SRC_CODE_CHAR);
+	assert result.errors.length == 0, "\"A\".code into char must check: " + result.errors.join("\n");
+}
