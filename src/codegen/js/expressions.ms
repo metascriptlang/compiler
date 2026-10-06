@@ -19,7 +19,7 @@ import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
-import { compilerFuncSym, isRuntimeProcSym } from "../../transform/util";
+import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
 import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped } from "../../checker/types";
 
 // ===== Literal Emitters =====
@@ -777,9 +777,7 @@ function classMembers(union: Type): Symbol[] | null {
 }
 
 function emitDefectCall(gen: JSGenerator, message: string, location: SourceLocation): void {
-	const defect = compilerFuncSym("msDefect");
-	if (defect == null) throw new Error("internal: the JS prelude declares no msDefect");
-	emitNode(gen, classReference(defect, location));
+	emitNode(gen, runtimeRef("msDefect", location));
 	emit(gen, "(" + message + ")");
 }
 
