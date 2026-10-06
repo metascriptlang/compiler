@@ -3387,6 +3387,10 @@ function toItems(this self: TokenStream): Token[] {
 for (const tok of stream) { ... }
 ```
 
+The extension may be a generator, `function* toItems(this b: Bag): Iterator<T>`, and a `toPairs` generator yielding
+`[K, V]` ranges with `[k, v]`; measured 2026-10-06 on C, JS and the Raiser (corpus `extensionGeneratorIterable`;
+before, JS emitted its `yield` inside a plain function).
+
 #### Convention-based dispatch protocols (overview)
 
 The `toItems` mechanism is one of a family of **convention-based dispatch protocols**: extension methods with reserved names that the compiler synthesizes calls to at well-defined syntax sites. Type opts in by declaring the extension; non-opt-in types remain strict.

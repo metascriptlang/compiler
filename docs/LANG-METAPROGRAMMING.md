@@ -116,6 +116,13 @@ const TABLE = @comptime {
 
 Supports: number, string, boolean, null, array, object returns. Each maps to the corresponding literal AST node.
 
+The block runs on the Raiser with the Raiser's std whatever the build target, so a `Map` or a `HashMap` built and
+ranged inside it folds the same on C, JS and `--target=raiser` (measured 2026-10-06, corpus
+`comptimeMapOnEveryTarget`; before, a C build stopped at `Ambiguous call to overloaded extension method 'push'` and a
+JS build at `Undefined variable 'msMapFatal'`). Not yet: a class whose constructor calls an extension on `this`,
+`Set` among them, stops on every target with `internal: extension call '.add' reached lowering without its resolved
+symbol`.
+
 A `@comptime` block also gets the checker context a macro body gets, so the typed queries of Tier 2 answer inside one (landed 2026-09-12). Measured 2026-09-13 against a class `Later` declared in the same module: `getTypeImpl(bindSym("Later"))` → `Struct` (the `Ref` is peeled), `getImpl(bindSym("Later"))` → its `ClassDecl`, `resolveType("Later | null")` → `TypeUnion`, and `typeKind(resolveType("int32"))` → `Int32`.
 
 ### `@comptime` functions
