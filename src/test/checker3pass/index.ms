@@ -30,6 +30,7 @@ import "./scenarios/textConversions";
 import "./scenarios/literalTypeArgument";
 import "./scenarios/constructorFieldAssignment";
 import "./scenarios/nestedPromise";
+import "./scenarios/constructionFieldInit";
 import "./scenarios/arcLiteralSafety";
 import "./scenarios/returnBeforeBody";
 import "./scenarios/generatorYields";
