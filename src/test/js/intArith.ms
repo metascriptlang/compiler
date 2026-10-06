@@ -281,6 +281,12 @@ test "int64 compound add is left alone" {
 	assert result.value.contains("+=");
 }
 
+test "uint8 step on a call-indexed element hoists the index and wraps" {
+	const result = compileToJS("let n: int32 = 0; function at(): int32 { n += 1; return 0; } function f(a: uint8[]): void { a[at()]++; }");
+	assert result.ok;
+	assert result.value.contains("& 255");
+}
+
 test "int32 increment is left alone" {
 	const result = compileToJS("function f(a: int32): int32 { let x = a; x++; return x; }");
 	assert result.ok;
