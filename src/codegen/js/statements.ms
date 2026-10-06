@@ -6,7 +6,7 @@ import {
 	ExprStmtData, ReturnStmtData, BreakStmtData, ContinueStmtData,
 	SwitchStmtData, SwitchCaseData, ThrowStmtData, TryCatchStmtData,
 	ForStmtData, ForOfStmtData, MacroInvocationData, StringLiteralData,
-	AssertStmtData, isEmptyBlock, Type,
+	AssertStmtData, BlockStmtData, isEmptyBlock, Type,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt, escapeJSString } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
@@ -299,14 +299,19 @@ export function emitTryCatchStmt(gen: JSGenerator, node: Node): void {
 	emit(gen, "try ");
 	emitBlockOrStmt(gen, d.tryBody);
 	if (d.hasCatchClause) {
-		if (d.catchName != "") {
-			emit(gen, " catch (");
-			emit(gen, safeJsName(d.catchName));
-			emit(gen, ") ");
+		const caught = d.catchName != "" ? safeJsName(d.catchName) : "msCaught";
+		emit(gen, " catch (" + caught + ") {\n");
+		gen.indentLevel = gen.indentLevel + 1;
+		emitIndent(gen);
+		emit(gen, "if (" + caught + " && " + caught + ".msDefect) throw " + caught + ";\n");
+		if (d.catchBody.kind == NodeKind.BlockStmt) {
+			for (const stmt of (d.catchBody.data as BlockStmtData).statements) emitNode(gen, stmt);
 		} else {
-			emit(gen, " catch ");
+			emitNode(gen, d.catchBody);
 		}
-		emitBlockOrStmt(gen, d.catchBody);
+		gen.indentLevel = gen.indentLevel - 1;
+		emitIndent(gen);
+		emit(gen, "}");
 	}
 	if (d.finallyBody != null) {
 		emit(gen, " finally ");

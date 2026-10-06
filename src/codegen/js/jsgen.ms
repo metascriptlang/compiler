@@ -419,7 +419,7 @@ test "do-while" {
 test "try-catch" {
 	// Transform adds finally {} block
 	const js = genFromSource("try { 1; } catch (e) { 2; }");
-	assert js == "try {\n  1;\n} catch (e) {\n  2;\n} finally {\n}\n";
+	assert js == "try {\n  1;\n} catch (e) {\n  if (e && e.msDefect) throw e;\n  2;\n} finally {\n}\n";
 }
 
 test "throw" {
