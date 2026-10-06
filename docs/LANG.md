@@ -672,6 +672,16 @@ the subclass's field initializers. A missing argument takes the parent's default
 parent's module, also in an explicit `super(...)`; a parent below a generic instance takes the
 instance's parameter types.
 
+In a class that declares a constructor, a field without an initializer whose type has no default
+value (an array, a class instance, a `Map`, a function) must be assigned on every path of the
+constructor body, as `tsc --strict` requires (TS2564). An assignment in only one branch, in a method
+the constructor calls, in a nested function, or after an early `return` does not count: `Field
+'items' has no initializer and is not assigned on every path of the constructor`, reported at the
+field (C, JS and Raiser alike). A path that throws needs nothing. Numbers, booleans, strings and
+structs keep their zero value on C and the Raiser; `items?: T[]` and `items: T[] | null` start
+null; `items!: T[]` is refused, since nothing would assign it. A class without a constructor is not
+checked yet (checker3pass `constructorFieldAssignment`).
+
 ```typescript
 class Base { u: int32; constructor(u: int32, w: string = "p") { this.u = u * 2; } }
 class Sub extends Base { n: int32 = 5; }
@@ -1877,6 +1887,12 @@ const user = await fetchUser(42);
 ```
 
 `async` functions return `Promise<T>`. The compiler desugars `await` into a state machine (stepper pattern) — each `await` splits the function body into states, with callbacks resuming execution when the awaited promise settles.
+
+A promise never holds a promise. `Promise<Promise<number>>` is refused where it is written (through
+an alias too), `spawn(work)` with `async function work()` is refused at the call with the rewrite
+`await work()` or `await spawn(() => workSync())`, and an async body whose return is itself a
+promise (`async function wrap() { return work(); }`) is refused with `return await ...`. TypeScript
+flattens these; refusing them keeps C, JS and the Raiser on one meaning (checker3pass `nestedPromise`).
 
 #### Promise Chaining (.then / .catch / .finally)
 

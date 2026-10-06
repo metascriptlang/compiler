@@ -130,6 +130,8 @@ A function marked `@comptime` runs only while compiling: each call is evaluated 
 
 Measured 2026-10-03 on `wt/comptime-calls`: corpus `1054-comptimeCallFolds` prints `program=198535 named=198535 joined=198535 key=7,14 weight=30 nested=20 chain=18 local=42` on the c, orc, danger, js, esm and raiser lanes, with no call left in the emitted C. Not done: a `@comptime` function that stays reachable (exported from the entry module, or used as a value) is still emitted as run-time code.
 
+A folded call passed to a macro keeps the call's type when the macro hands it back, as the same program without the macro does: with `macro same(x: Node): Node { return x; }`, `lengthOf(keyOf(1))` reads `keyOf`'s `Key.bytes` as `uint8[4]`, `let wide = same(big())` with `big(): int64` takes `5000000000`, and `same(small())` with `small(): float32` stays `float32` (`number` into it is refused). The value is re-checked against that type, so a macro may still edit it; an edited copy is checked as a new node. Measured 2026-10-06 on `wt/solana-checker-15`: corpus `foldedValueThroughMacro` prints `4 5000000000 0.75 6000000000 200` on C, JS and the Raiser.
+
 ### Planned enhancements
 
 1. **Scope capture** — read surrounding `const` declarations (immutable values only)
