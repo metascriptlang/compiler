@@ -76,7 +76,7 @@ export struct RefundAccounts {
 function make(): Result<uint64, ProgramError> {
 	const a = try args<MakeArgs>();
 	if (a.deposit == 0 || a.receive == 0) {
-		return Result.err(escrowError(EscrowError.ZeroAmount));
+		return Result.err(EscrowError.ZeroAmount);
 	}
 	const x = try accounts<MakeAccounts>();
 	const made = try createPda<Escrow>(x.maker, x.escrow, ["escrow", x.maker, leBytes(a.seed)]);
