@@ -523,12 +523,24 @@ fails the build) and `solanaEntryHostTable.ms` (the host simulator).
 - **Not measured.** A Windows host; a validator (LiteSVM only). LTO, which could have inlined the
   program's `Init000` into the entry, is measured in the next section.
 
-### Solana programs link as one LTO module — measured 2026-10-05
+### Solana LTO follows the optimization flags — measured 2026-10-07
 
-`--os=solana` takes `--lto=full` unless the build says `--lto=off` (`resolveLto`,
-`src/compiler/cc.ms`); `--lto=thin` is refused. Every module compiles to bitcode with `-flto`;
-`linkSolana` merges the bitcode with `ld.lld -r --lto-emit-llvm`, compiles the merged module once
-with the SBF clang at `-O2`, and links that object with `compiler_builtins` as before.
+`--os=solana` alone does not enable LTO. `--danger` selects it unless an explicit
+`--lto=off` disables it; `--lto=full` and `--lto=thin` also select the whole-module
+SBF merge. The decision lives in `resolveLto`, and the two-step merge in
+`linkSolana` / `mergeSbfBitcode` (`src/compiler/cc.ms`).
+
+On tree `2afa173472c6e47a6cf4b62f011e5364eed4d116`, installed compiler and support
+`369dbc18a`, platform-tools v1.57: a copy of
+`examples/anchorBench/helloworld/program.ms` built from `/tmp/borsh` with
+`msc build hello.ms --os=solana --output=hello-synced-default.so` was **12,768 B**;
+adding `--danger` was **7,920 B**. Only the latter produced the merge's
+`.lto.bc` / `.lto.o` intermediates. This comparison changes both optimization
+level and LTO; it does not isolate LTO's size gain or measure compute units.
+The measurements below retain their original tree and then-default flags.
+Explicit flag neighbours on the same source and installation: `--danger --lto=off`
+produced **11,768 B**, while `--lto=thin` and `--lto=full` without `--danger`
+both produced **7,928 B** and completed the merge. Their compute units were not measured.
 
 - **Reference.** Anchor v2 benches its programs with `lto = "fat"` and `opt-level = 3`
   (`anchor-next` `ff0514b6` `bench/Cargo.toml:48-52`).
