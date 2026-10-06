@@ -42,16 +42,27 @@ export function isCSwitchableType(t: Type | null): boolean {
 // reader (awaitLower). Exactly one of these holds per type:
 //   inlineInFuture → 16-byte typed slot (msFutureCreateInline / msSpawnInto)
 //   boxedInFuture  → heap box in the void* slot (msSinkBoxStruct / msUnboxStruct)
+//   refInFuture    → a counted reference in the void* slot
 //   neither        → primitive bits in the void* slot
 // A writer/reader pair disagreeing on this = silent garbage or UAF; do not
-// branch on layout anywhere else.
+// branch on layout anywhere else. A closure is a two-word value, so it is boxed.
 export function inlineInFuture(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.String;
 }
 
 export function boxedInFuture(t: Type | null): boolean {
 	if (t == null) return false;
-	return t.kind == TypeKind.Array || (isStructLikeType(t) && t.kind != TypeKind.String);
+	return t.kind == TypeKind.Array || t.kind == TypeKind.Function || (isStructLikeType(t) && t.kind != TypeKind.String);
+}
+
+export function refInFuture(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Ref;
+}
+
+// The future holds a value that has a destructor: the async writer makes it the
+// value's owner and every reader that may not be the last one copies it out.
+export function ownedInFuture(t: Type | null): boolean {
+	return inlineInFuture(t) || boxedInFuture(t) || refInFuture(t);
 }
 
 // Value-layout types — passed by-value or via NRVO out-param, NOT as void*.
@@ -96,7 +107,7 @@ export function unboxFnNameForType(t: Type | null): string {
 // Tiers (matches spawnLower.boxForType / actor dispatch):
 //   primitive       → msUnbox<T>(voidPtr)        (bits stored in void* slot)
 //   struct-like     → msUnboxStruct(voidPtr)     (cast+deref+free — heap-boxed)
-//   pointer-shape   → voidPtr unchanged           (Ref/Ptr/Function — already void*)
+//   pointer-shape   → voidPtr unchanged           (Ref/Ptr — already void*)
 //   void            → voidPtr unchanged           (no value to extract)
 export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, loc: SourceLocation): Node {
 	if (innerType == null || innerType.kind == TypeKind.Void) return voidPtrExpr;
@@ -107,12 +118,12 @@ export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, l
 		return c;
 	}
 	// Heap-boxed via msSinkBoxStruct → cast+deref+free shell.
-	if (isStructLikeType(innerType) || innerType.kind == TypeKind.Array) {
+	if (boxedInFuture(innerType) || innerType.kind == TypeKind.String) {
 		const call = makeCall(runtimeRef("msUnboxStruct", loc), [voidPtrExpr], loc);
 		call.nodeType = innerType;
 		return call;
 	}
-	// Pointer-shape (Ref/Ptr/Function): spawnLower returns these unboxed —
+	// Pointer-shape (Ref/Ptr): spawnLower returns these unboxed —
 	// the void* IS the pointer. C handles implicit conversion at assignment.
 	return voidPtrExpr;
 }

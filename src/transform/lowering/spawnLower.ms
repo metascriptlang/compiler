@@ -45,7 +45,7 @@ export function boxForType(retVal: Node, retType: Type, loc: SourceLocation): No
 			call.nodeType = retType;
 			return call;
 		},
-		TypeKind.Struct | TypeKind.GenericInstance | TypeKind.Tuple | TypeKind.Array => {
+		TypeKind.Struct | TypeKind.GenericInstance | TypeKind.Tuple | TypeKind.Array | TypeKind.Function => {
 			// msSinkBoxStruct: codegen expands to malloc+memcpy+wasMoved (DRC-aware)
 			const call = makeCall(runtimeRef("msSinkBoxStruct", loc), [retVal], loc);
 			call.nodeType = retType;

@@ -58,7 +58,7 @@ function futureTypedSuffix(t: Type | null): string {
 		TypeKind.Int64 | TypeKind.Uint64 => "int64",
 		TypeKind.Boolean => "bool",
 		TypeKind.String => "msString",
-		TypeKind.Ref | TypeKind.Ptr | TypeKind.Function => "ptr",
+		TypeKind.Ref | TypeKind.Ptr => "ptr",
 		_ => "",  // struct, array, void, unknown → fall through to boxed path
 	};
 }
