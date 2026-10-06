@@ -582,11 +582,11 @@ const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticS
 
 function isCheckerWrapper(node: Node): boolean {
 	if (node.kind == NodeKind.HiddenDeref) return !node.flags.has(NodeFlag.ExplicitDeref);
-	return node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.HiddenStdConv;
+	return node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv;
 }
 
 // ===== clearCheckerState =====
-// Collapse HiddenDeref/HiddenAddr/HiddenStdConv wrappers and clear resolvedSym/flags on a
+// Collapse checker-inserted wrappers and clear resolvedSym/flags on a
 // cloned AST so the re-check regenerates them against concrete types. forEachChild drives
 // the recursion so EVERY NodeKind is covered — a manual match silently missed ForStmt/Switch/
 // Match etc., stacking a second deref on loop/array accesses in instantiated method bodies.
@@ -610,7 +610,7 @@ function bindsInto(node: Node, redeclared: Symbol[]): boolean {
 function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void {
 	if (node == null) return;
 	while (isCheckerWrapper(node)) {
-		const inner = node.kind == NodeKind.HiddenStdConv
+		const inner = node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv
 			? (node.data as HiddenStdConvData).convExpr
 			: (node.data as HiddenDerefData).expr;
 		if (inner == null) break;
