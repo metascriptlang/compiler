@@ -28,6 +28,7 @@ import "./scenarios/limitations";
 import "./scenarios/resultCarrierConversions";
 import "./scenarios/textConversions";
 import "./scenarios/arcLiteralSafety";
+import "./scenarios/returnBeforeBody";
 import "./stress/deepNesting";
 import "./stress/manyParams";
 import "./stress/mixed";
