@@ -21,6 +21,7 @@ import {
 } from "./graph";
 import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig, Backend } from "./resolver";
 import { lex } from "../lexer/lexer";
+import { TokenKind } from "../lexer/token";
 import { createState, getParserDefines, setParserDefines } from "../parser/context";
 import { definedValue, createDefineTable, initDefines } from "../compiler/defines";
 import { callStateProgramParser } from "../parser/statements/callbacks";
@@ -239,37 +240,22 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 
 function inlineHeaderImportsInner(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean, outErrors: ModuleError[], cparseReads: string[]): string {
 	let result = source;
-	let searchPos = 0;
 	let insertedLines = 0;
 	const emittedHeaderDecls = new HashSet<string>();
-	while (searchPos < result.length) {
-		// Find next import or re-export statement referencing a .h file
-		let importIdx = result.indexOf("import ", searchPos);
-		let exportIdx = result.indexOf("export {", searchPos);
-		let isReexport = false;
-
-		// Pick whichever comes first
-		if (importIdx < 0 && exportIdx < 0) break;
-		if (importIdx < 0) { importIdx = exportIdx; isReexport = true; }
-		else if (exportIdx >= 0 && exportIdx < importIdx) { importIdx = exportIdx; isReexport = true; }
-
-		// Skip matches inside // comments — find start of line, check for //
-		let lineStart = result.lastIndexOf("\n", importIdx);
-		if (lineStart < 0) lineStart = 0;
-		const linePrefix = result.slice(lineStart, importIdx);
-		if (linePrefix.indexOf("//") >= 0) {
-			searchPos = importIdx + 7;
-			continue;
-		}
+	const starts = importStatementStarts(source);
+	let shift = 0;
+	for (const start of starts) {
+		const importIdx = start + shift;
+		const isReexport = result.charCodeAt(importIdx) == "e".code;
 
 		// Find the full statement — terminated by ;
 		const stmtEnd = result.indexOf(";", importIdx);
-		if (stmtEnd < 0) { searchPos = importIdx + 7; continue; }
+		if (stmtEnd < 0) continue;
 		const stmt = result.slice(importIdx, stmtEnd + 1);
 
 		// Must have "from" clause with a .h specifier
 		const fromIdx = stmt.indexOf(" from ");
-		if (fromIdx < 0) { searchPos = importIdx + 7; continue; }
+		if (fromIdx < 0) continue;
 
 		// Extract specifier (between quotes after "from")
 		const afterFrom = stmt.slice(fromIdx + 6, stmt.length).trim();
@@ -280,14 +266,14 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 			if (endQuote > 0) specifier = afterFrom.slice(1, endQuote);
 		}
 
-		if (!specifier.endsWith(".h")) { searchPos = importIdx + 7; continue; }
+		if (!specifier.endsWith(".h")) continue;
 
 		// Extract brace positions (shared by guard check and name extraction)
 		const braceOpen = stmt.indexOf("{");
 		const braceClose = stmt.indexOf("}");
 
 		// For re-exports, must have { ... } braces (export { X as Y } from "*.h")
-		if (isReexport && braceOpen < 0) { searchPos = importIdx + 7; continue; }
+		if (isReexport && braceOpen < 0) continue;
 
 		// Resolve the .h file path relative to the consuming module
 		let headerPath = specifier;
@@ -318,7 +304,6 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 				const missLine = countLinesBefore(result, importIdx) - insertedLines;
 				outErrors.push(createModuleError(`cannot read C header '${specifier}' (resolved '${headerPath}')`, missLine, 1, ErrorSeverity.Error));
 			}
-			searchPos = importIdx + 7;
 			continue;
 		}
 
@@ -345,7 +330,6 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 				const noTargetLine = countLinesBefore(result, importIdx) - insertedLines;
 				outErrors.push(createModuleError(`C header '${specifier}': no C target model for --os=${definedValue(getParserDefines(), "os")} --cpu=${definedValue(getParserDefines(), "cpu")}`, noTargetLine, 1, ErrorSeverity.Error));
 			}
-			searchPos = importIdx + 7;
 			continue;
 		}
 		const headerDiags: Diagnostic[] = [];
@@ -400,12 +384,34 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 		const insertPos = stmtEnd + 1;  // just past the ';' of the import
 		const sep = compactReplacement ? " " : "\n";
 		result = result.slice(0, insertPos) + sep + replacement + result.slice(insertPos, result.length);
-		searchPos = insertPos + sep.length + replacement.length;
+		shift = shift + sep.length + replacement.length;
 		if (!compactReplacement) {
 			insertedLines = insertedLines + countLinesBefore(replacement, replacement.length);
 		}
 	}
 	return result;
+}
+
+function importStatementStarts(source: string): int32[] {
+	const starts: int32[] = [];
+	if (source.indexOf(".h\"", 0) < 0 && source.indexOf(".h'", 0) < 0) return starts;
+	const lexed = lex(source);
+	if (!lexed.ok) return starts;
+	const lineStarts: int32[] = [0];
+	let nl = source.indexOf("\n", 0);
+	while (nl >= 0) {
+		lineStarts.push(nl + 1);
+		nl = source.indexOf("\n", nl + 1);
+	}
+	const toks = lexed.value;
+	for (let i = 0; i < toks.length; i += 1) {
+		const t = toks[i];
+		const reexport = t.kind == TokenKind.Export && i + 1 < toks.length && toks[i + 1].kind == TokenKind.LBrace;
+		if ((t.kind == TokenKind.Import || reexport) && t.line >= 1 && t.line <= lineStarts.length) {
+			starts.push(lineStarts[t.line - 1] + t.column - 1);
+		}
+	}
+	return starts;
 }
 
 // Line number (1-based) of the character at endPos, counting inserted text —
@@ -922,6 +928,19 @@ test "re-export from .h with prefix-colliding names does not double-export" {
 	assert inlined.indexOf("export extern function fooBar(") >= 0;
 	assert inlined.indexOf("export extern function fooBarBaz(") >= 0;
 	assert inlined.indexOf("export export") < 0;
+}
+
+test "inlineHeaderImports reads import statements, never a string or a comment that spells one" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/tmp/msspelled/lp.h", "int linkProbe(int x);\nint otherProbe(int x);\n"));
+	const provider = createMapProvider(entries);
+	const spelled = "import { otherProbe } fr" + "om \"./lp.h\";";
+	const src = "const t = `" + spelled + "`;\nconst q = '" + spelled + "';\n/* " + spelled + " */\nimport { linkProbe } fr" + "om \"./lp.h\";\n";
+	const inlined = inlineHeaderImports(src, "/tmp/msspelled/main.ms", provider);
+	assert inlined.indexOf("extern function linkProbe(") >= 0;
+	assert inlined.indexOf("extern function otherProbe(") < 0;
+	assert inlined.indexOf("`" + spelled + "`") >= 0;
+	assert inlined.indexOf("'" + spelled + "'") >= 0;
 }
 
 test "A imports B chain" {

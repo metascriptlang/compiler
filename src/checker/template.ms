@@ -18,7 +18,7 @@ import {
 	FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, VariableDeclData,
 	ForOfStmtData, ForInStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData,
 	MatchCaseData, SpliceManyData,
-	Type, TypeKind, Symbol,
+	Type, TypeKind, Symbol, createNodeAt,
 } from "../ast/node";
 import { CheckerContext, addError, extractGenericNames } from "./context";
 import { inferredType, errorType, voidType, typeDisplayName, hasGenericParams, isUnknownType, isUnresolvedType } from "./types";
@@ -368,6 +368,27 @@ function extendMask(masked: string[], names: string[], st: SubstState): string[]
 		ext.push(nm);
 	}
 	return ext;
+}
+
+function paramSubstState(paramNames: string[], args: Node[]): SubstState {
+	const used: boolean[] = [];
+	for (const p of paramNames) used.push(false);
+	return {
+		ctx: null as unknown as CheckerContext, symName: "", paramNames, args, used,
+		gsuffix: "", localNames: [], rejectDestructuring: false,
+	};
+}
+
+export function referencedParams(node: Node, paramNames: string[]): boolean[] {
+	const args: Node[] = [];
+	for (const p of paramNames) args.push(createNodeAt(NodeKind.Identifier, { name: p }, node.location));
+	const st = paramSubstState(paramNames, args);
+	substituteInto(cloneNodeForCheck(node), st, []);
+	return st.used;
+}
+
+export function substituteParams(node: Node, paramNames: string[], args: Node[]): Node {
+	return substituteInto(node, paramSubstState(paramNames, args), []);
 }
 
 function nameIndex(list: string[], name: string): int32 {

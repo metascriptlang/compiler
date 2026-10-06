@@ -1002,6 +1002,16 @@ function functionValues(): void {
 	]);
 }
 
+function inlineFunctions(): void {
+	const tag = "hcrInlineFunctions";
+	const dir = buildLogicGenerations(tag, "inlineFunctions", ["logic.ms", "logicEdit.ms"]);
+	runPrebuilt(tag, dir, ["logic", "support"], "HCR-INLINE", [
+		"HCR-INLINE g1: step 7 quotient -3",
+		"HCR-INLINE g2: reloaded logic",
+		"HCR-INLINE after g2: step 302 quotient -4",
+	]);
+}
+
 function fileDependency(): void {
 	const tag = "hcrFileDependency";
 	const dir = freshDir(`${TMP}/fileDependency`);
@@ -1267,6 +1277,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrRegistryVariables", run: registryVariables },
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
 	{ name: "hcrFunctionValues", run: functionValues },
+	{ name: "hcrInlineFunctions", run: inlineFunctions },
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
 	{ name: "hcrTypeInfoLocality", run: typeInfoLocality },

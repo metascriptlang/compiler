@@ -1,4 +1,3 @@
-// @xfail(raiser): struct == compares by reference on raiser (card 2026-09-29-raiser-struct-equality-by-reference)
 // @stdout: some=true,false none=true,false,false neq=false,true payload=true,false,false call=true,2 int=true,true
 // note: `==` between two `S | null` values, or an `S | null` and an `S`, compares the payloads field by field when both are present and is true when both are absent; a call operand runs once; a nullable primitive compares by value. Same output on every backend.
 

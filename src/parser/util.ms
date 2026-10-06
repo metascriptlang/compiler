@@ -210,6 +210,19 @@ export function prependParamPatterns(body: Node, patterns: Node[], locs: SourceL
 	return createNodeAt(NodeKind.BlockStmt, { statements: decls }, body.location);
 }
 
+function parseDefaultValue(state: ParserState): Result<Node, string> {
+	const defaults = _lastDefaults;
+	const typeExprs = _lastParamTypeExprs;
+	const locations = _lastParamLocations;
+	const patterns = _lastParamPatterns;
+	const value = callExprParser(state);
+	_lastDefaults = defaults;
+	_lastParamTypeExprs = typeExprs;
+	_lastParamLocations = locations;
+	_lastParamPatterns = patterns;
+	return value;
+}
+
 export function parseParamList(state: ParserState, fnName: string): string[] {
 	const params: string[] = [];
 	_lastDefaults = [];
@@ -308,7 +321,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 				advance(state);
 				const dIdx = (params.length - 2) / 2;
 				while (_lastDefaults.length < dIdx) { _lastDefaults.push(null as unknown as Node); }
-				const dResult = callExprParser(state);
+				const dResult = parseDefaultValue(state);
 				_lastDefaults.push(dResult.ok ? dResult.value : null as unknown as Node);
 			}
 			if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
@@ -326,7 +339,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			advance(state);
 			const paramIdx = (params.length - 2) / 2;
 			while (_lastDefaults.length < paramIdx) { _lastDefaults.push(null as unknown as Node); }
-			const defResult = callExprParser(state);
+			const defResult = parseDefaultValue(state);
 			_lastDefaults.push(defResult.ok ? defResult.value : null as unknown as Node);
 		}
 		if (current(state).kind == TokenKind.Comma) { advance(state); } else { break; }
@@ -382,6 +395,18 @@ test "multiple defaults via getLastParsedDefaults" {
 	assert (defs[1].data as NumberLiteralData).value == 1;
 	assert defs[2] != null;
 	assert (defs[2].data as NumberLiteralData).value == 2;
+}
+
+test "a default that parses its own parameter list keeps the outer list" {
+	const raw = parseParams("(a: int32, cb: (x: int32) => int32 = (x: int32): int32 => x + a, n: int32 = 2)", "testFn4");
+	assert raw.length == 6;
+	const defs = getLastParsedDefaults();
+	assert defs.length == 3;
+	assert defs[0] == null;
+	assert defs[1] != null && defs[1].kind == NodeKind.ArrowFunction;
+	assert defs[2] != null && defs[2].kind == NodeKind.NumberLiteral;
+	assert getLastParamLocations().length == 3;
+	assert getLastParamTypeExprs().length == 3;
 }
 
 test "no default returns empty array" {

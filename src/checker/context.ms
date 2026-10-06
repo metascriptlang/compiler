@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { isNumeric, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity } from "./types";
+import { isNumeric, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, classParentOf } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -297,6 +297,17 @@ let _userHooks: HashMap<string, Symbol> = new HashMap<string, Symbol>();
 
 export function resetUserHooks(): void {
 	_userHooks = new HashMap<string, Symbol>();
+	_defaultsCheckedAtDeclaration = new HashSet<Node>();
+}
+
+let _defaultsCheckedAtDeclaration: HashSet<Node> = new HashSet<Node>();
+
+export function noteDefaultCheckedAtDeclaration(def: Node): void {
+	_defaultsCheckedAtDeclaration.add(def);
+}
+
+export function defaultCheckedAtDeclaration(def: Node): boolean {
+	return _defaultsCheckedAtDeclaration.has(def);
 }
 
 export function bindUserHook(typeName: string, hookName: string, sym: Symbol): void {
@@ -624,6 +635,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 		// Unification failed (e.g., Array<T> class vs uint8[] array — different type kinds).
 		// Fall through to name-based matching below.
 	}
+	if (recvT.kind == TypeKind.Span) return isAssignable(objType, recvT);
 	// Concrete array extensions: element type compatibility is authoritative.
 	// Don't fall through to name-based matching (which matches all "Array" extensions
 	// regardless of element type — e.g., pop(number[]) would incorrectly match Bar[]).
@@ -746,12 +758,12 @@ export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): Ex
 }
 
 function classBaseStruct(t: Type): Type | null {
-	let s = t;
-	if (s.kind == TypeKind.Ref && s.typeReturn != null) s = s.typeReturn;
-	if (s.kind != TypeKind.Struct || s.typeExtra == null) return null;
-	let inner = s.typeExtra;
+	const parent = classParentOf(t);
+	if (parent == null) return null;
+	let inner = parent;
 	if (inner.kind == TypeKind.Ref && inner.typeReturn != null) inner = inner.typeReturn;
 	if (inner.kind == TypeKind.Struct) return inner;
+	if (inner.kind == TypeKind.GenericInstance) return parent;
 	if (inner.sym != null && inner.sym.symbolType != null) {
 		let bs = inner.sym.symbolType;
 		if (bs.kind == TypeKind.Ref && bs.typeReturn != null) bs = bs.typeReturn;
@@ -843,12 +855,17 @@ export function dispatchEntryFor(sym: Symbol): DispMethodEntry | null {
 	return _dispBySym.get(sym) ?? null;
 }
 
+function classOwnSym(t: Type): Symbol | null {
+	let s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	if (s.kind == TypeKind.GenericInstance && s.typeExtra != null) s = s.typeExtra.kind == TypeKind.Ref && s.typeExtra.typeReturn != null ? s.typeExtra.typeReturn : s.typeExtra;
+	return s.sym;
+}
+
 function dispDepthBelow(classSym: Symbol, root: Symbol): int32 {
 	let cur: Type | null = classSym.symbolType;
 	let d = 0;
 	while (cur != null && d < 64) {
-		const own = cur.kind == TypeKind.Ref && cur.typeReturn != null ? cur.typeReturn.sym : cur.sym;
-		if (own == root) return d;
+		if (classOwnSym(cur) == root) return d;
 		cur = classBaseStruct(cur);
 		d += 1;
 	}
@@ -859,7 +876,8 @@ export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): D
 	let cur = classSym.symbolType != null ? classBaseStruct(classSym.symbolType) : null;
 	let d = 0;
 	while (cur != null && d < 64) {
-		const ofBase = cur.sym != null ? _dispByClass.get(cur.sym) : null;
+		const baseSym = classOwnSym(cur);
+		const ofBase = baseSym != null ? _dispByClass.get(baseSym) : null;
 		if (ofBase != null) {
 			for (const e of ofBase) {
 				if (e.methodName == methodName) return e;

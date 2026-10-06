@@ -18,7 +18,7 @@ function temporaryStringJoined(): string {
 	return a + b;
 }
 
-function stringSpanCount(s: Span<char>): int32 {
+function stringSpanCount(s: Readonly<Span<char>>): int32 {
 	let n: int32 = 0;
 	let i: int32 = 0;
 	while (i < (s.length as int32)) {
@@ -195,7 +195,7 @@ test "stringRepresentation: astral character indexing and slicing retain individ
 
 test "stringRepresentation: string coerces to Span<char> and reads its bytes" {
 	const txt = "hello";
-	const chars: Span<char> = txt;
+	const chars: Readonly<Span<char>> = txt;
 	assert (chars.length as int32) == 5;
 	assert (chars[0] as int32) == 104;
 	assert (chars[4] as int32) == 111;
@@ -207,7 +207,7 @@ test "stringRepresentation: string literal meets a Span<char> parameter" {
 
 test "stringRepresentation: empty string yields an empty span, not a crash" {
 	const empty = "";
-	const none: Span<char> = empty;
+	const none: Readonly<Span<char>> = empty;
 	assert (none.length as int32) == 0;
 }
 
@@ -222,7 +222,7 @@ test "stringRepresentation: slicing a string yields a span over its bytes" {
 test "stringRepresentation: span over a heap-built string, and a slice of that span" {
 	let built = "ab";
 	built = built + "cdc";
-	const s: Span<char> = built;
+	const s: Readonly<Span<char>> = built;
 	assert (s.length as int32) == 5;
 	const inner = s[1..3];
 	assert (inner.length as int32) == 2;
@@ -232,7 +232,7 @@ test "stringRepresentation: span over a heap-built string, and a slice of that s
 
 test "stringRepresentation: Span<char> over a string walks with for..of" {
 	const txt = "abc";
-	const s: Span<char> = txt;
+	const s: Readonly<Span<char>> = txt;
 	let total: int32 = 0;
 	for (const c of s) { total = total + (c as int32); }
 	assert total == 294;

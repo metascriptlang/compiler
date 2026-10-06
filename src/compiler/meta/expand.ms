@@ -1430,6 +1430,10 @@ function rewriteCallExprToMacroInvocation(node: Node, ctx: CheckerContext): Node
 	return node;
 }
 
+function atCallSite(): SourceLocation {
+	return makeLoc(0, 0);
+}
+
 // ===== getTypeImpl(TypeName): bake a named type's type-AST into the body =====
 //
 // Macro bodies can read the type of a VALUE they receive (`arg.nodeType`), but a
@@ -1471,8 +1475,8 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			const bkeys: string[] = ["kind", "line", "column", "name", "symHandle"];
 			const bvalues: Node[] = [
 				enumOrdinalAs("NodeKind", NodeKind.Identifier as number, bloc),
-				mkNumber(bloc.line, bloc),
-				mkNumber(bloc.column, bloc),
+				mkNumber(atCallSite().line, bloc),
+				mkNumber(atCallSite().column, bloc),
 				mkString(symName, bloc),
 				mkNumber(registerBoundSym(boundSym), bloc),
 			];
@@ -1504,7 +1508,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 				}
 				const t = peelToImpl(sym.symbolType, declCtx);
 				if (t == null) return node;
-				const implementation = mapTypeToAst(t, node.location, true);
+				const implementation = mapTypeToAst(t, atCallSite(), true);
 				implementation.nodeType = sym.symbolType;
 				// Assert to Node so flat reads on the spliced literal resolve through the
 				// NodeData unique-field-name rule; a bare literal would type as its own
@@ -1536,7 +1540,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			}
 			const at = peelToImpl(argType, ctx);
 			if (at == null) return node;
-			const implementation = mapTypeToAst(at, node.location, true);
+			const implementation = mapTypeToAst(at, atCallSite(), true);
 			implementation.nodeType = argType;
 			return createNodeAt(NodeKind.TypeAssertion, {
 				asExpr: nodeToASTLiteral(implementation, node.location, false),

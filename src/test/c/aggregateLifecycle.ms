@@ -15,7 +15,7 @@ test "array fields are cycle edges only when their element graph reaches the own
 	for (const c of cases) {
 		const result = compileToC(c.declarations);
 		assert result.ok, result.ok ? "" : result.error;
-		assert result.value.contains(`msOrcTraceRef(&((*self).${c.field}), callback);`) == c.cyclic, c.field + " trace";
+		assert result.value.contains(`msOrcTraceRef((&((*self).${c.field})), callback);`) == c.cyclic, c.field + " trace";
 		assert result.value.contains(`msDecrefCyclic((*self).${c.field});`) == c.cyclic, c.field + " release";
 	}
 }

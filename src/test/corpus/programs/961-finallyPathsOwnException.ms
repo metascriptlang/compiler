@@ -1,4 +1,4 @@
-// @xfail(raiser): Raiser cannot run `super(m)` in a constructor of a class extending Error (Tagged_new: "cannot evaluate 'super' at comptime"), also on the baseline
+// @xfail(raiser): the Raiser VM loses finally blocks that run while an exception is in flight (prints neither f4, f5 nor f6, and 'o:displaced' for 'o:winner')
 // @stdout: t|f|o:through|caught|f2|bare|f3|f4|o:re|f5|o:fromcatch orig|o:fin only|o:winner|c|f6|1|inner|after inner|o:outer flight
 // note: every path through a finally keeps one owner for the exception in flight (the SAN ledger balances Error and Tagged): no raise, a raise that passes through, caught by a named or bare catch, rethrown, replaced from the catch, raised in the finally with none in flight, displaced by a raise in the finally, a return from the catch, and a raise caught inside the finally (the baseline panicked on a null Error).
 

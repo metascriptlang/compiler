@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: attempt to access a nil address
 // Parity program — Map keyed by an enum or a value struct hashes the key by value: an enum by
 // its ordinal, a struct or tuple by folding each part's hash. A class key keeps its identity. Rides on
 // two checker rules: an enum value takes extension methods, and among tied generic extensions

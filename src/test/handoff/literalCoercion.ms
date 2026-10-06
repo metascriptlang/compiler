@@ -331,3 +331,55 @@ test "an integer literal picks a float overload that holds it, an integer one fi
 	const f = "function f(x: int64): boolean { return true; }\nfunction f(x: float64): string { return \"f64\"; }\n";
 	assert errorCount(f + "const picked: boolean = f(5);\n") == 0;
 }
+
+test "two object literals whose fields differ in width are two types" {
+	assert hasError("const a = { low: 11 };\nlet b = { low: 4294967295 };\nb = a;\n", "is not assignable to type '{ low: int64; }'");
+	assert hasError("const a = { v: [1, 2] };\nlet b = { v: [1.5] };\nb = a;\n", "is not assignable");
+	assert errorCount("const a = { low: 11 };\nlet b = { low: 12 };\nb = a;\n") == 0;
+}
+
+test "an array, conditional or return of object literals widens each field to hold every constant" {
+	const wide = ["const xs = [{ low: 11 }, { low: 4294967295 }];\nconst n: int32 = xs[0].low;\n",
+		"const xs = [{ p: { low: 11 } }, { p: { low: 4294967295 } }];\nconst n: int32 = xs[0].p.low;\n",
+		"function f(c: boolean) { return c ? { low: 11 } : { low: 4294967295 }; }\nconst n: int32 = f(true).low;\n",
+		"function f(c: boolean) { if (c) return { low: 11 }; return { low: 4294967295 }; }\nconst n: int32 = f(true).low;\n"];
+	for (const src of wide) assert hasError(src, "int64 → int32");
+	assert errorCount("const xs = [{ low: 11 }, { low: 4294967295 }];\nconst n: int64 = xs[0].low;\n") == 0;
+	assert errorCount("const u: uint64 = 18446744073709551615;\nconst xs = [{ v: 11 }, { v: u }];\nconst n: uint64 = xs[0].v;\n") == 0;
+}
+
+test "a field constant the joined field cannot hold is refused naming the value" {
+	assert hasError("const u: uint32 = 5;\nconst xs = [{ low: u }, { low: -1 }];\n", "-1 is outside [0, 4294967295]");
+	assert hasError("const u: uint64 = 5;\nconst xs = [{ low: -1 }, { low: u }];\n", "-1 is outside [0, 18446744073709551615]");
+	assert hasError("const a = { low: 11 };\nconst xs = [a, { low: 4294967295 }];\n", "is not assignable to type '{ low: int64; }'");
+}
+
+test "a spread's elements join the array's element type and are judged by it" {
+	assert hasError("const h: int64[] = [4294967295];\nconst xs = [...h, 1];\nconst n: int32 = xs[1];\n", "int64 → int32");
+	assert hasError("const head = [{ low: 11 }];\nconst xs = [...head, { low: 4294967295 }];\n", "a spread copies its elements");
+	assert hasError("const head: string[] = [\"x\"];\nconst xs: int32[] = [...head, 3];\n", "a spread copies its elements");
+	assert errorCount("const head: int32[] = [1];\nconst xs = [...head, 4294967295];\n") == 0;
+	assert errorCount("class A { n: int32 = 1; }\nclass D extends A { m: int32 = 2; }\nconst ds: D[] = [new D()];\nconst all: A[] = [...ds, new A()];\n") == 0;
+}
+
+test "an array of array literals widens the element type to hold every constant" {
+	const wide = ["const xs = [[1, 2], [3, 4294967295]];\nconst n: int32 = xs[0][0];\n",
+		"const xs = [[[1]], [[4294967295]]];\nconst n: int32 = xs[0][0][0];\n",
+		"function f(c: boolean) { return c ? [1] : [4294967295]; }\nconst n: int32 = f(true)[0];\n",
+		"const xs = [{ v: [1] }, { v: [4294967295] }];\nconst n: int32 = xs[0].v[0];\n"];
+	for (const src of wide) assert hasError(src, "int64 → int32");
+	assert errorCount("const xs = [[1, 2], [3, 4294967295]];\nconst n: int64 = xs[0][1];\n") == 0;
+	assert errorCount("const u: uint64 = 18446744073709551615;\nconst xs = [[1], [u]];\nconst n: uint64 = xs[0][0];\n") == 0;
+	assert errorCount("const xs = [[], [1, 2]];\nconst n: int32 = xs[0].length + xs[1][0];\n") == 0;
+}
+
+test "an array element the joined element type cannot hold is refused" {
+	assert hasError("const u: uint64 = 5;\nconst xs = [[-1], [u]];\n", "-1 is outside [0, 18446744073709551615]");
+	assert hasError("const a: int32[] = [1];\nconst xs = [a, [4294967295]];\n", "is not assignable to type 'int64[]'");
+}
+
+test "a spread whose elements would each need a conversion to the array's union element is refused" {
+	assert hasError("const s: string[] = [\"a\"];\nconst t = [...s, 3];\n", "a spread copies its elements into the array as they are: each 'string' would have to be converted");
+	assert hasError("const s: string[] = [\"a\"];\nconst t: (string | int32)[] = [...s, 3];\n", "a spread copies its elements");
+	assert errorCount("const s: string[] = [\"a\"];\nconst t = [...s, \"b\"];\n") == 0;
+}

@@ -24,6 +24,8 @@
 #include <string.h>
 #include <spawn.h>
 #include <poll.h>
+#include <fcntl.h>
+#include <pthread.h>
 #if defined(__APPLE__)
 #include <crt_externs.h>
 #define MS_SPAWN_ENVIRON (*_NSGetEnviron())
@@ -362,6 +364,22 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 	return (double)exitCode;
 }
 #else
+/* posix_spawn hands the child every descriptor without FD_CLOEXEC, and macOS has no
+ * pipe2: a spawn that lands between pipe() and the FD_CLOEXEC below leaks the pipe
+ * the way the Windows _msSpawnCreateLock describes, so creation and spawn share it. */
+static pthread_mutex_t _msSpawnCreateLock = PTHREAD_MUTEX_INITIALIZER;
+
+static inline int _msSpawnPipe(int fds[2]) {
+	pthread_mutex_lock(&_msSpawnCreateLock);
+	int made = pipe(fds);
+	if (made == 0) {
+		fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+		fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+	}
+	pthread_mutex_unlock(&_msSpawnCreateLock);
+	return made;
+}
+
 static inline double msProcessExecFile(msString path, msStringArray* args) {
 	const char* pathStr = msStringToCString(path);
 	int64_t argc = (args != NULL) ? args->len : 0;
@@ -387,7 +405,9 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 	 * (sys-time heavy) and concurrent forks serialize on the parent's vm map
 	 * lock, capping the parallel compile pool near 2 effective cores. */
 	pid_t pid = 0;
+	pthread_mutex_lock(&_msSpawnCreateLock);
 	int spawnErr = posix_spawnp(&pid, pathStr, NULL, NULL, argv, MS_SPAWN_ENVIRON);
+	pthread_mutex_unlock(&_msSpawnCreateLock);
 	for (int64_t j = 1; j <= argc; j++) free(argv[j]);
 	free(argv);
 	if (spawnErr != 0) return -1.0;
@@ -723,8 +743,8 @@ static inline msString msProcessSpawnSync(msString command) {
 
 #else  /* POSIX */
 	int outPipe[2], errPipe[2];
-	if (pipe(outPipe) < 0) return MS_EMPTY_STRING;
-	if (pipe(errPipe) < 0) {
+	if (_msSpawnPipe(outPipe) < 0) return MS_EMPTY_STRING;
+	if (_msSpawnPipe(errPipe) < 0) {
 		close(outPipe[0]); close(outPipe[1]);
 		return MS_EMPTY_STRING;
 	}
@@ -749,7 +769,9 @@ static inline msString msProcessSpawnSync(msString command) {
 	shArgv[2] = (char*)cmd;
 	shArgv[3] = NULL;
 	pid_t pid = 0;
+	pthread_mutex_lock(&_msSpawnCreateLock);
 	int spawnErr = posix_spawn(&pid, "/bin/sh", &fa, NULL, shArgv, MS_SPAWN_ENVIRON);
+	pthread_mutex_unlock(&_msSpawnCreateLock);
 	posix_spawn_file_actions_destroy(&fa);
 	if (spawnErr != 0) {
 		close(outPipe[0]); close(outPipe[1]);
@@ -905,8 +927,8 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 
 #else  /* POSIX */
 	int outPipe[2], errPipe[2];
-	if (pipe(outPipe) < 0) return MS_EMPTY_STRING;
-	if (pipe(errPipe) < 0) {
+	if (_msSpawnPipe(outPipe) < 0) return MS_EMPTY_STRING;
+	if (_msSpawnPipe(errPipe) < 0) {
 		close(outPipe[0]); close(outPipe[1]);
 		return MS_EMPTY_STRING;
 	}
@@ -953,7 +975,9 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	posix_spawn_file_actions_addclose(&fa, errPipe[1]);
 	if (cwd.len > 0) posix_spawn_file_actions_addchdir_np(&fa, msStringToCString(cwd));
 	pid_t pid = 0;
+	pthread_mutex_lock(&_msSpawnCreateLock);
 	int spawnErr = posix_spawnp(&pid, exeStr, &fa, NULL, argv, MS_SPAWN_ENVIRON);
+	pthread_mutex_unlock(&_msSpawnCreateLock);
 	posix_spawn_file_actions_destroy(&fa);
 	for (int64_t j = 1; j <= argc; j++) free(argv[j]);
 	free(argv);

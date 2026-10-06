@@ -70,9 +70,12 @@ function isNeverCall(node: Node, ctx: TransformContext): boolean {
 // Standard reference equivalent: mark-sweep worklist
 // Reference equivalent: transform/dce.zig (computeAliveSymsMultiModule)
 
-// Every symbol a subtree references. An enum member use references its enum.
-function collectRefs(node: Node, refs: HashSet<Symbol>): void {
+// Every symbol a subtree references. An enum member use references its enum,
+// and so does a type that names it: a generic instance bound to the enum
+// may call its toString from another module.
+function collectRefs(node: Node, refs: HashSet<Symbol>, seen: HashSet<Type>): void {
 	if (node == null) return;
+	collectEnumsOfType(node.nodeType, refs, seen);
 	const sym = node.resolvedSym;
 	if (sym != null) {
 		refs.add(sym);
@@ -81,8 +84,22 @@ function collectRefs(node: Node, refs: HashSet<Symbol>): void {
 	}
 	if (node.kind == NodeKind.Identifier) return;
 	forEachChild(node, (child: Node): void => {
-		collectRefs(child, refs);
+		collectRefs(child, refs, seen);
 	});
+}
+
+function collectEnumsOfType(t: Type | null, refs: HashSet<Symbol>, seen: HashSet<Type>): void {
+	if (t == null || seen.has(t)) return;
+	seen.add(t);
+	if (t.kind == TypeKind.Enum) {
+		if (t.sym != null) refs.add(t.sym);
+		return;
+	}
+	collectEnumsOfType(t.typeReturn, refs, seen);
+	collectEnumsOfType(t.typeExtra, refs, seen);
+	if (t.typeChildren != null) {
+		for (const c of t.typeChildren) collectEnumsOfType(c, refs, seen);
+	}
 }
 
 function enumOwnerOf(sym: Symbol): Symbol | null {
@@ -161,8 +178,9 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 	if (!anyEliminable) return;
 
 	const refs = new HashSet<Symbol>();
+	const seen = new HashSet<Type>();
 	for (let si = 0; si < stmts.length; si += 1) {
-		if (declSyms[si] == null) collectRefs(stmts[si], refs);
+		if (declSyms[si] == null) collectRefs(stmts[si], refs, seen);
 	}
 
 	const alive = new HashSet<Symbol>();
@@ -173,7 +191,7 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 			const sym = declSyms[di];
 			if (sym != null && refs.has(sym) && !alive.has(sym)) {
 				alive.add(sym);
-				collectRefs(stmts[di], refs);
+				collectRefs(stmts[di], refs, seen);
 				changed = true;
 			}
 		}
@@ -602,6 +620,12 @@ test "an enum reached only through its toString op stays" {
 	assert pr.ok;
 	const ctx = createTransformContextWithChecker(checkProgram(pr.value));
 	assert getStmts(lowerDCE(lowerBuiltins(pr.value, ctx), ctx)).length == 3;
+}
+
+test "an enum named only by a type stays" {
+	assert sweptStmtCount("enum Shade { Lo, Hi } const n: int32 = 1; const s = n as Shade;") == 3;
+	assert sweptStmtCount("enum Shade { Lo, Hi } struct Lamp { shade: BitSet<Shade>; } const n: int32 = 1;") == 3;
+	assert sweptStmtCount("enum Shade { Lo, Hi } function lit(s: Shade): int32 { return s as int32; } const n: int32 = 1;") == 3;
 }
 
 test "a local that shares an enum's name does not keep the enum" {

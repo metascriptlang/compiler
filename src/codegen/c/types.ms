@@ -4,9 +4,9 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, peelToRepr, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct } from "../../checker/types";
 import { AttachedOp } from "../../ast/node";
-import { genericParamsOf, enumStorageKind } from "../../checker/types";
+import { genericParamsOf, enumStorageKind, isValueStorage, classParentOf, runtimeClassSym } from "../../checker/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, Symbol } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
@@ -767,12 +767,7 @@ export function isPointerType(t: Type): boolean {
 // Reference parity: value types that can't be nil in C.
 // Used by codegen to emit {0} instead of MS_NIL, and memset instead of NULL assignment.
 export function isNilableValueType(t: Type): boolean {
-	if (t == null) return false;
-	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return isNilableValueType(t.typeReturn);
-	const k = t.kind;
-	return k == TypeKind.Struct || k == TypeKind.Array || k == TypeKind.GenericInstance
-		|| k == TypeKind.Tuple || k == TypeKind.String || k == TypeKind.Function
-		|| k == TypeKind.Union;
+	return isValueStorage(t);
 }
 
 // ===== ccgIntroducedPtr (Reference: reference codegen utils parity) =====
@@ -869,7 +864,13 @@ export function isNrvoReturnType(retType: Type | null, funcType: Type | null): b
 	if (retType.kind == TypeKind.Span) return true;
 	if (isResult(retType)) return true;
 	if (retType.kind == TypeKind.Tuple) return true;
-	return false;
+	return hasArrayRepr(retType);
+}
+
+function hasArrayRepr(t: Type | null): boolean {
+	if (t != null && t.kind == TypeKind.Alias) return hasArrayRepr(t.typeReturn);
+	const repr = peelToRepr(t);
+	return repr != null && repr.kind == TypeKind.SizedArray;
 }
 
 // ===== NRVO Call-Site Detection (Standard reference pattern) =====
@@ -1099,6 +1100,14 @@ export function ensureTypeInfoDef(g: CGen, className: string, objType: Type | nu
 		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.isCyclic = MS_TRUE;`);
 		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.traceFn = (msTraceProc)${traceHook};`);
 	}
+	const parent = objType != null && objType.kind == TypeKind.GenericInstance && runtimeClassSym(objType) != null ? classParentOf(objType) : null;
+	const parentBody = parent != null && parent.kind == TypeKind.Ref ? parent.typeReturn : parent;
+	if (parentBody != null && (parentBody.kind == TypeKind.GenericInstance || parentBody.kind == TypeKind.Struct)) {
+		const baseName = getTypeDesc(g, parentBody);
+		if (parentBody.kind == TypeKind.GenericInstance) ensureTypeInfoDef(g, baseName, parentBody);
+		else ensureTypeInfo(g, baseName);
+		addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.base = &${baseName}TypeInfo;`);
+	}
 }
 
 // TypeInfo for an Arc<T> heap cell; destroyFn runs the pointee's destructor on the
@@ -1299,7 +1308,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 		},
 		TypeKind.Ptr => {
 			const innerType = t.typeReturn;
-			if (innerType != null && (innerType.kind == TypeKind.Ref || innerType.kind == TypeKind.Ptr)) {
+			if (innerType != null && innerType.kind == TypeKind.Ref) {
 				const ptrType = getTypeDesc(g, innerType);
 				typeCacheSet(g.typeCache, key, ptrType);
 				return ptrType;
@@ -1733,8 +1742,7 @@ function genArrayType(g: CGen, t: Type): string {
 	const elemKey = (resolvedElem != null) ? typeKey(resolvedElem) : "";
 	const selfRef = elemKey != "" && isBeingDefined(g, elemKey);
 
-	// getTypeDesc(elem) kept for its emission side-effect (element typedef) + the data[] type.
-	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : getTypeDesc(g, t.typeReturn);
+	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : elementTypeDesc(g, t.typeReturn);
 
 	const arrTypeName = arrayCTypeName(t);
 	typeCacheSet(g.typeCache, key, arrTypeName);
@@ -1758,6 +1766,31 @@ function genArrayType(g: CGen, t: Type): string {
 	}
 
 	return arrTypeName;
+}
+
+function elementTypeDesc(g: CGen, elem: Type | null): string {
+	if (elem == null || !holdsStructByValue(elem)) return getTypeDesc(g, elem);
+	const name = elemArrayCName(elem);
+	ensureForwardDecl(g, name);
+	g.deferredElements.push(elem);
+	return name;
+}
+
+function holdsStructByValue(t: Type): boolean {
+	if (isImportedType(t)) return false;
+	const peeled = peelTransparentInstance(t);
+	if (peeled != t) return holdsStructByValue(peeled);
+	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return holdsStructByValue(t.typeReturn);
+	if (t.kind == TypeKind.GenericInstance) return distinctInstanceRepr(t) == null && isStructType(peelToStructOrUnion(t.typeExtra));
+	return isStructType(t) || t.kind == TypeKind.Tuple;
+}
+
+export function defineDeferredElements(g: CGen): void {
+	while (g.deferredElements.length > 0) {
+		const pending = g.deferredElements;
+		g.deferredElements = [];
+		for (const t of pending) getTypeDesc(g, t);
+	}
 }
 
 // Returns the array type name for a given element type string (for use in expressions/statements).
@@ -1841,6 +1874,25 @@ export function getArrayContentType(arrTypeName: string): string {
 }
 
 // ===== Sized Array (Stack) =====
+
+export function zeroInit(t: Type | null): string {
+	return leadsWithEmptyAggregate(t, 0) ? "{}" : "{0}";
+}
+
+function leadsWithEmptyAggregate(t: Type | null, depth: int32): boolean {
+	if (t == null || depth > 16) return false;
+	if (t.kind == TypeKind.SizedArray) return t.typeValue == 0 || leadsWithEmptyAggregate(t.typeReturn, depth + 1);
+	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
+		for (const field of t.typeChildren) {
+			if (field != null && field.kind != TypeKind.Void) return leadsWithEmptyAggregate(field, depth + 1);
+		}
+		return false;
+	}
+	if (t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias || t.kind == TypeKind.GenericInstance) {
+		return leadsWithEmptyAggregate(t.typeReturn, depth + 1);
+	}
+	return false;
+}
 
 function sizedArrayCName(t: Type, elemType: string): string {
 	return `msSizedArray_${mangle(elemType)}_${t.typeValue}`;

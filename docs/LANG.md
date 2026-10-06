@@ -53,8 +53,10 @@ checker rejects it and names the alternative.
   (corpus `687`, `688`). An interface has no run-time identity to test, so `u as I` is
   refused: make `I` a class, or keep the values in a discriminated union. `u instanceof Box`
   without type arguments is refused for the same reason: no instance is built from the
-  generic itself. Not measured: a generic class with an `extends` clause, which does not
-  compile yet (`'super' requires the enclosing class to have an 'extends' clause`).
+  generic itself. An instance carries its parent: with `class Pair<U> extends Base<U>` and
+  `class Sub extends Base<int32>`, `u as Base<int32>` passes for a `Pair<int32>` and a `Sub`,
+  and `u as Base<string>` on a `Sub` stops with `invalid object conversion`, exit 1, on C and
+  JS (measured 2026-10-05).
 - `x as unknown as T` is two conversions, up then a tested down, never a reinterpret:
   `i as unknown as K` for an `int32` is refused — write `i as K`. `null as unknown as T`
   still works, because a `null` literal takes any type.
@@ -143,17 +145,19 @@ const masked = flags & 0x00FF00FF;
 const shifted = byte << 4;
 ```
 
-**Type Promotion Rules**: A numeric conversion is implicit only when no value of the source can lose information. Sized integers widen into any integer type whose range contains them (`uint8` → `int16`/`int32`/`int64`, `uint16` → `int32`/`int64`, `uint32` → `int64`, and every same-signedness widening), `int8`..`uint16` widen into `float32`, `int8`..`uint32` into `float64`/`number`, `float32` into `float64`/`number`, and `number` ↔ `float64` alias. Every other numeric conversion — narrowing, a sign change that can alter a value, a wider integer into a float, `float64`/`number` → `float32`, and any float → integer at run time — is the programmer's word: `as`. The rule holds at every slot: declarations, assignments, returns, arguments (functions, methods, extensions, generic methods such as `Map.set`), union members, `sink` parameters, and the operands of arithmetic, comparison and compound-assignment operators. Into a union, a number goes into the member that holds it best, ranked as an overload is (`int16` into `int32 | string`, `int32` into `number | string`; `int32` into `int64 | number` takes `int64`, an integer widening over an integer → float conversion); when two members rank the same (`int16` into `float32 | number`) the conversion is refused and `as` names the member.
+**Type Promotion Rules**: A numeric conversion is implicit only when no value of the source can lose information. Sized integers widen into any integer type whose range contains them (`uint8` → `int16`/`int32`/`int64`, `uint16` → `int32`/`int64`, `uint32` → `int64`, and every same-signedness widening), `int8`..`uint16` widen into `float32`, `int8`..`uint32` into `float64`/`number`, `float32` into `float64`/`number`, and `number` ↔ `float64` alias. Every other numeric conversion — narrowing, a sign change that can alter a value, a wider integer into a float, `float64`/`number` → `float32`, and any float → integer at run time — is the programmer's word: `as`. The rule holds at every slot: declarations, assignments, returns, arguments (functions, methods, extensions, generic methods such as `Map.set`), union members, `sink` parameters, and the operands of arithmetic, comparison and compound-assignment operators. A comparison between a signed and an unsigned integer compiles only when one of the two types holds every value of the other (`uint8` with `int32`, `uint32` with `int64`) and then compares the values on every backend; `int32` with `uint32`, `int8` with `uint8` and any signed type with `uint64` need `as` on one side (corpus `mixedSignednessComparison`, handoff `relationalCheck`). Into a union, a number goes into the member that holds it best, ranked as an overload is (`int16` into `int32 | string`, `int32` into `number | string`; `int32` into `int64 | number` takes `int64`, an integer widening over an integer → float conversion); when two members rank the same (`int16` into `float32 | number`) the conversion is refused and `as` names the member.
 
 Constants follow Nim's literal rule, with one safety addition:
 
 - An untyped constant — a literal, or a `const` declared without a type — is a literal: it flows into any slot that holds its value exactly. An integer literal is `int32` when it fits and `int64` past that; an expression of untyped integer constants folds exactly in 64 bits, so `const x = 100000 * 100000` is the `int64` 10000000000.
+- Object literals joined by an array literal, a conditional, a `match` or an inferred return are joined field by field, as two numbers join: `[{ low: 11 }, { low: 4294967295 }]` is `{ low: int64 }[]` and prints 4294967295 on every backend. A field constant the joined field cannot hold is refused (`[{ low: u }, { low: -1 }]` with `u: uint32`, as `[u, -1]` is), and so is an element that is not a literal and has another field width (`[a, { low: 4294967295 }]` with `const a = { low: 11 }`). A spread joins with its element type (`[...int64s, 1]` is `int64[]`); a spread whose elements the array cannot hold as they are is refused, and so is one whose elements would each be converted into a union element (`[...strings, 3]`, which TypeScript types `(string | number)[]`).
+- Array literals joined the same way widen their element type: `[[1, 2], [3, 4294967295]]` is `int64[][]` and prints 4294967295 on every backend, one level deeper too, `[[], [1, 2]]` is `int32[][]`, and `c ? [1] : [4294967295]` is `int64[]`; a constant the joined element cannot hold (`[[-1], [u]]` with `u: uint64`) and an element that is not a literal (`[a, [4294967295]]` with `a: int32[]`) are refused (corpus `nestedArrayLiteralWidths`).
 - A typed constant keeps its declared type: `const MAX: int64 = 100` narrows into `int32` only through `as`.
 - A float — literal or constant — never becomes an integer implicitly: `const i: int32 = 3.0` is refused; write `3`.
 - An integer a float cannot hold exactly is refused even as a literal (`const f: float32 = 16777217`), and so is a `uint64`/`int64` past what the slot holds. `16777217 as float32` rounds on the programmer's word.
 - A float literal or an untyped float constant goes into a `float32` slot rounded once, as Nim does: `const K = 0.1; const f: float32 = K` and `step(1.0 / 60.0)` with a `float32` parameter compile, and every backend holds the same `0.10000000149011612`. A float that would round to infinity is refused, literal or constant (`const f: float32 = 1e39`); Nim yields `inf`.
 - A literal or an untyped constant beside a `float32` operand is `float32`, so `x / 1000.0`, `x * 2` and `x * K` with `const K = 0.1` stay `float32`. Nim keeps such an expression `float64` and narrows it at the slot, which the rule above refuses; the literal is rounded instead, once, where the source shows it.
-- A compound assignment `x op= y` converts `y` to the type of `x` as an assignment would (Nim's `+=`(x: var T, y: T)): `int32 += int64` and `float32 *= number` need `as`, `uint8 -= 1` and `number += int32` do not.
+- A compound assignment `x op= y` converts `y` to the type of `x` as an assignment would (Nim's `+=`(x: var T, y: T)): `int32 += int64` and `float32 *= number` need `as`, `uint8 -= 1` and `number += int32` do not. The bitwise forms (`&=` `|=` `^=` `<<=` `>>=` `>>>=`) keep their binary operator's rule instead: both operands of one integer type, so `int64 |= int32` and `uint64 <<= int32` need `as` while `uint8 |= 0x80` does not. A `number` target takes what the binary takes (`n |= 2` on 5 stores 7), and `int32 >>>= k` is refused because `>>>` gives a `uint32` the target cannot hold.
 
 An `out` argument is written in place, so its variable must have exactly the parameter's type. Measured refusals name the rule, the value when it is a constant, and the fix:
 
@@ -171,7 +175,7 @@ error: implicit int16 conversion into 'float32 | number' fits both float32 and n
 error: implicit int64 → int32 conversion in '+=' narrows — write an explicit 'as int32'
 ```
 
-Pins: `src/test/handoff/numericLattice.ms`, `numericConstants.ms`, `literalCoercion.ms`, `src/test/js/float32.ms`; corpus `1022`, `1031`, `1032`, `1034`.
+Pins: `src/test/handoff/numericLattice.ms`, `numericConstants.ms`, `literalCoercion.ms`, `src/test/js/float32.ms`; corpus `1022`, `1031`, `1032`, `1034`, `anonymousLiteralFieldWidths`.
 
 ### Float Types
 
@@ -261,6 +265,15 @@ int       float     double                       (reserved, not yet usable as ty
 | `*=` | STAR_EQUALS | Mul-assign |
 | `/=` | SLASH_EQUALS | Div-assign |
 | `%=` | PERCENT_EQUALS | Mod-assign |
+| `&=` | AMP_EQUALS | Bitwise-AND-assign |
+| `\|=` | PIPE_EQUALS | Bitwise-OR-assign |
+| `^=` | CARET_EQUALS | Bitwise-XOR-assign |
+| `<<=` | LT_LT_EQUALS | Left-shift-assign |
+| `>>=` | GT_GT_EQUALS | Right-shift-assign |
+| `>>>=` | GT_GT_GT_EQUALS | Unsigned-right-shift-assign |
+
+`x op= y` stores `x op y` into `x` and evaluates `x` once: `a[next()] |= 1` calls `next()` once
+(corpus `bitwiseCompoundAssignment` and, for `>>>=`, `940-unsignedShift`, on C, JS and Raiser).
 
 ### Comparison
 | Operator | Token | Description |
@@ -291,6 +304,17 @@ int       float     double                       (reserved, not yet usable as ty
 | `<<` | LT_LT | Left shift |
 | `>>` | GT_GT | Right shift |
 | `>>>` | GT_GT_GT | Unsigned right shift |
+
+A `number` operand of a bitwise operator converts by ECMAScript ToInt32: `3000000000.7 | 0` is
+`-1294967296` and `~2147483648` is `2147483647`, with a warning (corpus `958-numberBitwiseToInt32`,
+`numberBitwiseOutsideInt32`). `>>>` on an `int32` or a `number` is the `uint32` TypeScript computes:
+`-1 >>> 0` is `4294967295`, the count is masked to 31 so `>>> 32` shifts by 0, and
+`const x: int32 = i >>> 1` needs `as int32` (corpus `unsignedShiftToUint32`). The same rule holds at
+every width: `>>>` reads a signed operand's bits as the unsigned type of its own width, masks the count to
+that width and has that type, so an `int8` -1 `>>> 0` is the `uint8` 255, an `int16` -1 `>>> 1` the
+`uint16` 32767 and an `int64` -1 `>>> 0` the `uint64` 18446744073709551615; a signed target of `>>>=` is
+refused, and an unsigned operand keeps its type (corpus `unsignedShiftOfEveryWidth`, `940-unsignedShift`,
+`954-intArithWidths`). Each holds on C, JS and Raiser, measured 2026-10-05.
 
 ### Update
 | Operator | Token | Description |
@@ -326,7 +350,9 @@ On a built-in type a compound assignment is its own operator: `c /= b` calls a d
 `/=`, and declaring `%` alone leaves `n %= v` on the built-in `%`. With the declarations
 above and `a = 10`, `b = 3` (`int32`), `w = 10`, `v = 3` (`int64`), `a / b`, `c /= b`,
 `w % v` and `n %= v` print `div=1003 divAssign=-13 modOnly=77 modAssign=1` on C and JS
-(corpus `compoundOperatorOverload`). Raiser does not apply a user overload on a built-in
+(corpus `compoundOperatorOverload`). The bitwise forms follow the same rule: a declared
+`|=` on `int32` runs for `o |= b` (`orAssign=1003`), and a declared `^` on `uint32` alone
+leaves `y ^= one` built-in (`xorOnly=7 xorAssign=13`). Raiser does not apply a user overload on a built-in
 type yet and prints the built-in results.
 
 ### Punctuation
@@ -542,6 +568,14 @@ Math.floor(3.7);  // → floor(3.7), receiver not passed
 
 Instance: receiver prepended as first arg at call site. Static: receiver stripped, just a namespaced call.
 
+An array receiver says whether the method writes. `this arr: T[]` may write the array (`push`,
+`arr[i] = …`), so a value `Vec<T>` reaches it only from a writable place: a `const`, a value parameter
+or a `for..of` binding is refused (`cannot mutate 'v' with 'zero' — 'v' is const (use 'let')`), and a
+`Readonly<T[]>` is refused as a read-only view (PARALOCK E24). `this arr: Vec<T>` only reads and takes
+a `T[]`, a `Vec<T>` and a `Readonly<T[]>` alike; the std array readers (`indexOf`, `includes`, `join`,
+`slice`, `at`, `concat`, `map`, …) are declared that way. Measured 2026-10-05 on C, JS and Raiser
+(corpus `arrayReaderReceivers`, handoff `storageMutability`).
+
 ### Classes
 ```typescript
 class Point {
@@ -576,6 +610,25 @@ class Service {
     static count: number;
 }
 ```
+
+A subclass that declares no constructor runs its parent's with the arguments of its `new`, as
+TypeScript's implicit `constructor(...args) { super(...args); }`: the parent's body runs first, then
+the subclass's field initializers. A missing argument takes the parent's default, evaluated in the
+parent's module, also in an explicit `super(...)`; a parent below a generic instance takes the
+instance's parameter types.
+
+```typescript
+class Base { u: int32; constructor(u: int32, w: string = "p") { this.u = u * 2; } }
+class Sub extends Base { n: int32 = 5; }
+const s = new Sub(7);                               // s.u == 14, s.n == 5
+```
+
+Measured 2026-10-05 on C, `--target=js` and `--target=raiser` with corpus `inheritedConstructor`
+(two levels, a default read from another module, `extends Box<int32>`, a generic subclass) and
+`superForwardsRestParameter` (a rest parameter, C and JS; the Raiser has no rest parameters).
+Before, C and the Raiser filled the fields positionally and skipped the parent's body, and JS threw
+"Must call super constructor". A call through the parent runs the subclass's override on all three
+backends (corpus `overrideDispatchThroughBase`); `instanceof` does not run on the Raiser.
 
 ### Interfaces
 
@@ -704,6 +757,11 @@ Developer writes normal code — the compiler picks the fastest path automatical
 | `ref` | `f(ref v: Struct)` | In-out — the callee reads and writes the caller's value |
 | `out` | `f(out v: Struct)` | Output parameter — callee fills the value |
 
+A closure cannot capture a `ref` or `out` parameter (`'n' is a ref/out parameter and cannot be
+captured by a closure`), as the reference refuses capturing a `var` parameter (lambdalifting.nim:208
+`illegalCapture`): the closure could outlive the caller's variable. Before 2026-10-03 the capture
+compiled on JS and failed in clang on C; copy the value into a local, or pass it as an argument.
+
 `move` is not a parameter modifier: it is written at the call site, `f(move v)` (see Move
 Semantics). A `sink` parameter is only for an `extern` declaration; on a MetaScript function it is
 refused (`'sink' parameter on 'f': only an extern declaration can take ownership of an argument`).
@@ -779,7 +837,7 @@ flags & TypeFlag.HasAsgn        // now a type error when `flags` is BitSet<NodeF
 ```
 
 `BitSet<E>` is a value type, so it has **no mutating methods**: every operation returns a new set,
-and adding in place is `s = s | Flag.Used` (`|=` does not lex, KNOWN-ISSUES L24). Only enums with
+and adding in place is `s |= Flag.Used`, the same as `s = s | Flag.Used`. Only enums with
 ordinal values participate — an enum with hand-assigned values (`A = 1, B = 2`) is already a flag
 encoding and keeps its numeric meaning.
 
@@ -996,6 +1054,12 @@ try {
 }
 ```
 
+A call that raises leaves the target of its assignment unchanged: after `x = mk(-1)` raises inside a
+`try`, the handler and the code after it see the old `x`, whatever `x` holds (a number, a struct, a
+struct with a string field) and wherever it lives (a local, a field, an array element, a global set
+from a function the raise leaves). Measured 2026-10-05 on C (drc, orc, danger), `--target=js` and
+`--target=raiser` with corpus `raiseKeepsAssignedValue`; before, C stored the callee's zeroed result.
+
 ## Type System
 
 ### Type Annotations
@@ -1032,6 +1096,28 @@ Measured 2026-09-30 with the identity-fix candidate: `msc-idfix run smoke.ms` on
 inserting one item and reading its map size. Pins `bug163`, `bug565`, `bug580` and `bug572`
 cover the nullable-set variant, same-name module boundaries and invariant type arguments.
 Full corpus and downstream deployment were not revalidated by this measurement.
+
+**A class extending a generic class instance.** `class Sub extends Base<int32>` and
+`class Pair<U> extends Base<U>` inherit the instance: a `Sub` passes where a `Base<int32>` is
+expected, reaches `get()` and `u` with `U = int32`, and `super(u)` runs `Base<int32>`'s
+constructor, one or two levels down. A generic class may extend a plain one the same way.
+
+```typescript
+class Base<U> { u: U; constructor(u: U) { this.u = u; } get(): U { return this.u; } }
+class Sub extends Base<int32> { constructor(u: int32) { super(u + 1); } }
+function read(b: Base<int32>): int32 { return b.get(); }
+read(new Sub(2));                                   // 3
+
+class Bad extends Base<int32> { get(): int32 { return 2; } }
+// error: Method 'Bad.get' overrides 'Base.get'; a method of a generic class cannot override or be overridden
+```
+
+An override pair where either class is generic is refused at the declaration: a call through a
+`Base<int32>` would need a dispatcher for each instance of `get`, which neither backend builds.
+A plain override among the non-generic classes below the instance dispatches as usual. Measured
+2026-10-05 on C and `--target=js` with corpus `classExtendsGenericInstance` (same output on
+both, and with `Base` imported from another module); the Raiser runs it too since the same day.
+Not measured: JS multi-file output, where each module is its own file.
 
 
 A generic parameter is always a type. A value parameter (a "const generic") is refused by the parser:
@@ -1862,7 +1948,7 @@ spawn(() => { c.n = 1; return c.n; }, { move: [c] });    // MOVE:   c is the thu
 spawn(() => lockedUpdate(gate, (v: int32): int32 => v + 1)); // SHARE:  writes go through a Locked<T> critical section
 ```
 
-- A captured binding is a **read-only view** inside the thunk: assignment, `++`, `out` arguments, `move`, the mutating array builtins (`push`, `splice`, …) and an `as` cast back to the mutable type are compile errors (`cannot write through Readonly<Counter> — … (PARALOCK E24)`). The view is deep and follows the value through aliases, `for..of`, destructuring, and struct copies that carry a ref; a POD struct copy is a plain value again.
+- A captured binding is a **read-only view** inside the thunk: assignment, `++`, `out` arguments, `move`, an array method whose receiver is `T[]` or `Span<T>` (`push`, `splice`, … or a user extension) and an `as` cast back to the mutable type are compile errors (`cannot write through Readonly<Counter> — … (PARALOCK E24)`). The view is deep and follows the value through aliases, `for..of`, destructuring, and struct copies that carry a ref; a POD struct copy is a plain value again.
 - A callee that only reads says so in its signature: `function readOnly(c: Readonly<Counter>)`. A class method says it with a TypeScript `this` parameter — `peek(this: Readonly<Counter>): int32 { return this.n; }` — and only such methods are callable through a view (`v.bump()` on a view: `a method callable through the view declares its receiver … (PARALOCK E24)`); inside, `this` is the view, so a write is E24. An extension spells the same receiver `function peek(this c: Readonly<Counter>): int32`. The `this` parameter must come first, name the enclosing class (`C` or `Readonly<C>`), and is refused on static methods, constructors, free functions and lambdas.
 - `{ move: [x, y] }` hands the listed bindings to the thunk on the parent thread at the spawn site. Inside the thunk they are owned and writable; a later use in the parent is an error (`'c' was moved into a spawn thunk and cannot be used afterwards`), rebinding a `let` revives it. Entries must be plain local names. `{ timeout: ms }` is the other option; any other key is an error.
 - `move x` *inside* the thunk is refused (`cannot move out of Readonly<…>`): it would reset the parent's slot from the child thread.
@@ -2329,7 +2415,7 @@ extern function ok<T>(val: T): Result<T, any>;
 | `@beforeReload` / `@afterReload` | module-level `(): void` function | Hot-reload lifecycle handler, run by `std/hcr` around a reload under `--hcr` ("Hot Code Reload" below) | DONE on Windows x64 and Linux x64 (`hcrEngine`, 2026-09-27) |
 | `@comptime` | block, function | Evaluate a block, or every call of the function, while compiling; see [docs/LANG-METAPROGRAMMING.md](LANG-METAPROGRAMMING.md) "`@comptime` functions" | Verified on C and JS (2026-10-03) |
 | `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
-| `@inline` | function | Hint to inline function body at call site | PLANNED |
+| `@inline` | module-level function, extension, operator | C gives every module that calls the routine its own `static inline` copy, so the C compiler can inline it without LTO; see [`@inline`](#inline) | Verified on C, JS and Raiser (2026-10-05) |
 
 ##### Which of the three a declaration wants
 
@@ -2357,6 +2443,22 @@ A `@compilerFunc` declaration lives in the prelude so every module a synthesized
 call lands in can reach it, and it needs no `export` — the table travels with the
 prelude scope, not through the export registry. The C name still comes from the
 `from "..."` clause, not from the mark.
+
+##### `@inline`
+
+The C backend defines an `@inline` routine as `static inline` in each module that calls it, from the
+body its own module checked and lowered; a call keeps call semantics (each argument evaluated once, a
+raise propagates). JS and the Raiser call it as before. Measured 2026-10-05 (`wt/solana-inline`):
+corpus `inlineAcrossModules` prints the same on C (DRC, ORC, `--danger`), JS, ESM and the Raiser and
+passes SAN; on SBF `--release` without LTO (platform-tools v1.57, LiteSVM), an int32 `a / 4` through
+`std/solana/arithmetic` costs 0.6 CU per operation instead of 25.6, and `a / b` 19.7 instead of 29.6.
+
+Refused at compile time: the mark on a method, a nested function or a non-function; an `extern`
+or body-less routine; an argument; `@exportName` or a reload handler next to it (there is no single
+C symbol); a `static` slot inside it; and the routine as a value, a callback included — call it from a
+lambda (`(n) => addOne(n)`). Under `--hcr`, a routine of a reloadable module is an ordinary routine,
+so a reload never leaves a stale copy behind (`hcrInlineFunctions`, macOS; not run on Linux or
+Windows).
 
 **Two known rough edges, so nobody copies them as patterns.** `@builtin` currently
 carries one declaration that is not an intrinsic at all (`nonisolated`, an actor
@@ -2430,10 +2532,45 @@ when (macos) {
 ### Condition grammar
 
 A closed grammar — flag names, literals, `!`, `&&`, `||`, comparisons
-(`==` `===` `!=` `!==` `<` `<=` `>` `>=`) and parentheses. Function calls and
-arbitrary expressions are rejected: conditions are resolved before any symbol
-table exists, so an identifier there is always a flag name, never a variable.
-Comparison is numeric when both sides are numeric, string otherwise.
+(`==` `===` `!=` `!==` `<` `<=` `>` `>=`), parentheses, and a type trait called
+with its type argument (`isPlainData<T>()`, below). Other calls and arbitrary
+expressions are rejected: flags are resolved before any symbol table exists, so an
+identifier there is always a flag name, never a variable. Comparison is numeric when
+both sides are numeric, string otherwise.
+
+### Type traits
+
+`std/typetraits` answers questions about a type while compiling. Each is a call with
+one type argument and no value: it folds to `true` or `false`, so it can stand in
+any expression, and in a `when` it picks a branch.
+
+| Trait | `true` for |
+|---|---|
+| `isPlainData<T>()` | a `T` that owns no managed memory (string, array, `Vec`, class, interface, closure) and declares no lifecycle hook, so its bytes can be copied or mapped as they are: numbers, booleans, enums, `Ptr<T>`, and structs, tuples and fixed arrays of those |
+| `needsCopy<T>()` | a `T` that every slot must hold its own copy of, because it can change in place: a value struct, tuple, `Vec` or fixed array; `false` for numbers, booleans, enums, strings and references (`T[]`, class, interface) |
+
+Inside a generic function a `when` that asks a trait is decided for each instance,
+with that instance's types; only the picked branch is type-checked and emitted for it.
+Flags in the same chain still decide at parse. A trait `when` belongs in a function
+body: at module level, where `when` selects declarations, it is an error.
+
+```typescript
+import { isPlainData } from "std/typetraits";
+
+function byteSize<T>(x: T): int32 {
+    when (isPlainData<T>()) {
+        return sizeof(T);       // int32 instance: 4
+    } else {
+        return x.length;        // string instance: never checked for int32
+    }
+}
+```
+
+Measured 2026-10-05 (`wt/solana-type-traits`, stage-2 candidate): corpus
+`typeTraitsPerInstance` (one generic instantiated with `int32`, a struct, a struct
+with a string, a `Vec`, a class and a string; a generic class method; a closure
+inside a generic) prints the same line on C (DRC, ORC, `--danger`), JS, ESM and
+the Raiser. A trait `when` builds under `--os=solana` (linked, not run).
 
 ### Flags
 
@@ -2579,7 +2716,7 @@ Strings are **UTF-8 byte buffers on both backends** (C: `msString`; JS: byte arr
 ### 1. The `char` Primitive
 MetaScript introduces `char` as a first-class primitive for **byte-tier** work: an unsigned 8-bit value (0–255).
 
-- **Access**: `byteAt(i)` reads raw bytes; `s[i]` is TS-tier and returns a `string` (see §0).
+- **Access**: `byteAt(i)` reads raw bytes; `s[i]` is TS-tier and returns a `string` (see §0). A for-of over a string yields its UTF-8 bytes as `char`, so `for (const c of "héllo")` runs six times, on C, JS and Raiser (corpus `869-forOfStringBytes`, measured 2026-10-05).
 - **Literals**: Character literals use single quotes (e.g., `'a'`).
 - **Numeric**: `char` is a numeric type and can participate in arithmetic or be cast to `number`.
 - **Codepoints use `int32`, not `char` or `uint32`**: `char` is 8-bit (only U+0000–U+00FF). A full Unicode codepoint is 21-bit, so hold it in `int32` — the type `.code`, `s.charCodeAt(i)`, and `fromCodePoint()` all speak, matching Go's `rune`. Prefer `int32` over `uint32` here: signed stays cast-free with those APIs and leaves `-1` free as an "invalid/absent" sentinel, whereas `uint32` buys only a compile-time non-negativity guarantee at the cost of an `as uint32` cast at every codepoint boundary.
@@ -2606,20 +2743,24 @@ console.log(buf.length);        // 2 (TS compatibility)
 console.log(buf.byteLength);    // 4 (UTF-8 bytes)
 ```
 
-### 3. Zero-Copy String Views (`Span<char>`)
-To avoid heap allocations when parsing or processing strings, MetaScript allows viewing a `string` as a `Span<char>`.
+### 3. Zero-Copy String Views (`Readonly<Span<char>>`)
+To avoid heap allocations when parsing or processing strings, MetaScript allows viewing a `string` as a read-only `Span<char>`.
 
-- **Zero-Copy Slicing**: Slicing a string with `..` (exclusive) or `...` (inclusive) into a `Span` context performs pointer arithmetic instead of a heap copy.
-- **Unified Params**: Functions taking `Span<char>` can accept both `string` and `Span<char>` arguments zero-copy.
+- **Zero-Copy Slicing**: Slicing a string with `..` (exclusive) or `...` (inclusive) performs pointer arithmetic instead of a heap copy; the slice is a `Readonly<Span<char>>`.
+- **Unified Params**: Functions taking `Readonly<Span<char>>` accept a `string`, a string slice and a `Span<char>` zero-copy.
+- **Read-only**: a string is immutable, so it never reaches a writable `Span<char>` — an argument, a local, a field, an assignment, a `this` receiver or a generic `Span<T>` refuses it (`cannot view 'lit' as a writable Span — a string is immutable; a view that only reads is Readonly<Span<T>>`), and a write through a string slice is E24.
 
 ```typescript
-function parseIdent(view: Span<char>): void {
-    // Process characters without allocating tiny strings
+function parseIdent(view: Readonly<Span<char>>): int32 {
+    return view.length as int32;   // process characters without allocating tiny strings
 }
 
 const source = "function main()";
-parseIdent(source[0...7]); // Zero-copy view of "function"
+parseIdent(source[0...7]); // Zero-copy view of "function": 8
+parseIdent(source);        // 15
 ```
+
+Measured 2026-10-05 on C and JS (handoff `storageMutability` "a string reaches only a read-only Span, its slices too"). Before, a write through such a view hit the literal's read-only bytes (SIGBUS) or changed a built string on C only.
 
 ### 4. Borrowed References (`Borrow<T>`)
 To achieve peak performance with large structs, MetaScript provides the `Borrow<T>` type (similar to the standard reference `lent T` pattern).
@@ -2655,10 +2796,100 @@ const node: Ref<ASTNode> = { kind: "binary", left: a, right: b };
 // Explicit Ptr — heap-allocated, no RC (manual lifetime)
 const buf: Ptr<Buffer> = arenaAlloc(arena, sizeof Buffer);
 
-// Ptr for C interop
-extern function malloc(size: number): Ptr<void> from "ms_malloc";
+// Ptr for C interop — the @include'd header declares the C symbols
+@include("stdlib.h")
+extern function malloc(size: uint64): Ptr<void>;
 extern function free(p: Ptr<void>): void;
 ```
+
+Without the `@include`, a call to either extern fails the C compile with
+`call to undeclared function` — an extern binds a C symbol, it does not
+declare one. Match the parameter type to the header too: `size: uint64`
+(`size_t`), not `number` (a `double` the C prototype rejects). Verified
+2026-09-30 with `msc run` on exactly this shape (malloc, two byte writes
+through `buf as Ptr<uint8>`, free): prints `42|7`. C backend only — extern
+C functions have no JS linkage.
+
+#### Taking an address: `x as Ptr<T>`
+
+`x as Ptr<T>` keeps the two meanings the reference spells `addr x` and `cast[ptr T](x)`: a value stored
+inline (a struct, a sized array, a tuple) or a Span element is addressed; an integer is the address it
+holds, read as before (`address as Ptr<Pubkey>`, `(address + 96) as Ptr<T>` in std/solana). The rules
+live in `checkPointerAddress` (`src/checker/pointerAddress.ms`); the JS and Raiser VM refusals in
+`byteViewRefusal` / `pointerOpRefusal` (`src/checker/byteViews.ms`).
+
+| Written | Native (C) | JS | Raiser VM |
+|---|---|---|---|
+| `s as Ptr<S>`, `xs[i] as Ptr<S>`, `s.f as Ptr<F>` for a struct, sized array or tuple | address of the location | `[base, index]` location | the object |
+| `view as Ptr<T>` (`Span<T>`) | `&view[0]`; an empty span raises the bound error | same, raises the same | a VM location of element 0; raises the same |
+| `view as Ptr<void>` | the data pointer, `null` for an empty array | refused | refused |
+| `s as Ptr<U>`, `U` not the type of `s` | `cast[ptr U](addr s)`: a struct `{ a: 258 }` reads `2 1` | refused at compile time | refused, traps |
+| `n as Ptr<T>` for an integer | the address `n` holds (`cast[ptr T](n)`), unchanged | refused at compile time | refused, traps |
+| `p as Ptr<U>` for a pointer `p` | a pointer cast; `Ptr<Ptr<T>>` is `T**` | same pointee only | same pointee only |
+| a `const` binding or value-type parameter of a struct | `Readonly<Ptr<S>>`: reads compile, a write is refused | same | same |
+| a call or a literal of a struct (`mk() as Ptr<S>`) | refused: no address | refused | refused |
+| `xs as Ptr<U>` for `T[]` / `string`, `U` not the handle type and not `void` | refused, as the reference refuses casting a `seq` (`isCastable`); write `xs as Span<T> as Ptr<…>` | refused | refused |
+| `view as Span<U>`, `U ≠ T` | refused, as the reference refuses `cast[openArray[U]]` | refused | refused |
+| `p + n`, `q - p`, `p < q`, `p[i]` with `i ≠ 0`, `p += n` | pointer arithmetic | refused: no address arithmetic | refused, traps |
+| `p == q`, `p[]`, `p[0]`, `p.f` | as C | location identity and access | location identity and access |
+
+A `ref` / `out` argument of any type reaches the caller's location on the Raiser VM too (`RegAddr`,
+`ElemAddr`, `FieldAddr`, `GlobalAddr`; `src/codegen/raiser/CLAUDE.md`).
+
+The plain-struct pointer arrays exercised here hold uncounted addresses: before,
+`const slots: Ptr<Pet>[] = [a as Ptr<Pet>]` aborted at scope exit by decrementing
+a stack address. This is not a blanket rule for every `Ptr<T>`; counted-pointee
+handling remains `isUncountedPtrElement` (`src/checker/types.ms`), unchanged here.
+
+Measured 2026-10-03 on tree `ee6fccbb` with `msc run` (C, `--gc=orc`, `--target=js`,
+`--target=raiser`): corpus `679-typedPointerLocations` (every lane) and
+`691-nativePointerAddresses` (native lanes) print their oracles; `src/test/c/pointerAddress.ms`,
+`src/test/js/byteViews.ms` and the raiser engine tests in `src/codegen/raiser/eval.ms` hold the
+refusals. Before, on installed `e5e932d0`: `uint8[] as Ptr<uint8>` read the array header
+(`2 0`), and on JS a byte view printed `[object Object]` and `p + 1` gave `NaN`. The integer forms
+of std/solana and Hibernal (`address as Ptr<Pubkey>`, `records[seat] as Ptr<PetAccount>`,
+`(address + 24) as Ptr<uint64>`) print the same as installed `e5e932d0` (`i1 9 6 8 7 6`).
+
+Checked again on 2026-10-04, source tree
+`de24e7b64206d38fb57f76d36cf1a3c3086b3b9a`: a same-element
+`Span<Ptr<T>> as Ptr<Ptr<T>>` addresses the pointer slot, not its pointee.
+Corpus `679-typedPointerLocations` prints its `slots 5 66` oracle on C, JS and
+the Raiser VM after replacing a slot and writing through the selected pointer.
+An empty pointer span stops at that conversion with `index 0 out of bounds
+(length 0)` on checked C and JS, and the corresponding array-bound error on
+the Raiser VM. Native `--danger` retains its deliberate unchecked-index mode.
+`pointerLocationTransfer` also matches on C/DRC, C/ORC, JS and the Raiser VM;
+see [Raiser's measured location matrix](RAISER.md#memory-model). Raw-pointer
+escape and invalidation by storage growth remain unchecked, not covered by
+that matrix.
+
+The suspension result above is not a general lifetime-safety claim. A nested
+`function` or `const` arrow inside an `async` function or a generator is rebuilt
+at each resume and never stored in the frame (NIM-REF TR-35). Measured
+2026-10-05 with `--gc=drc`, ASan and `-DMS_DRC_LEDGER`, generator and `async`
+alike: a routine made before a suspension, between two, still in scope when the
+caller stops early, inside a suspending loop, called by a sibling routine,
+capturing a string, capturing a local of its own state, or yielded out balances
+its frame and closure environment; before, each left the frame and one
+environment undestroyed, on `0f1ecc06` as well. Corpus
+`928-stateMachineClosureShares` pins these under SAN.
+
+Not covered, still leaking under `--gc=drc` (collected under `--gc=orc`): a
+closure held in a `let` that is alive at a suspension, and a routine that
+captures a per-iteration binding of a suspending loop. Both are values the frame
+stores; the standard reference leaks the `let` case under ARC as well.
+
+Rejected: a refusal of only the direct `Span<T> as Ptr<U>` cast on JS — an intermediate typed
+pointer (`span as Ptr<T> as Ptr<void> as Ptr<uint8>`) bypassed it, and the Raiser VM (including
+`@comptime`) read the element object as the byte (`r1 [object]`, a comptime fold of `258`'s first
+byte to `1`). A runtime pointer offset on JS (throw when the storage is not an array) was dropped
+too: the reference's JS backend has no pointer arithmetic, so it was a mechanism of our own. Rejected too: reading an integer variable's own address for `n as Ptr<T>` (a draft of
+this arc). It silently turned std/solana's `load(123456)` from reading memory at `123456` into
+returning `123456`, so the integer keeps the reference's `cast` meaning.
+
+Not checked: a `Ptr<T>` outliving its target. Returning a local's address reads `0` on C and the
+old value on JS; a pointer into a `T[]` that grows crashes C and writes the old storage on JS.
+The reference checks an escaping address only for `var T` results, never `ptr T`.
 
 #### Linked structures: arena ownership + `Ptr<T>` links
 
@@ -3113,7 +3344,7 @@ for (const name of ages) {
 
 An array pattern needs a tuple or an array element: over a `Set<int32>` or an `int32[]` it is the error "an array
 pattern needs each element to be a tuple or an array". Raiser does not run a Map's for-of yet (the iteration is a
-generator; corpus `mapForOfEntries` is xfail there).
+generator, and running one on the Raiser VM is a new mechanism; corpus `mapForOfEntries` is xfail there).
 
 **Custom iterables**: define a `toItems` extension method on any type:
 
@@ -3382,7 +3613,7 @@ If you receive bytes from an untrusted source, the parser itself will reject inv
 | :--- | :--- | :--- | :--- |
 | **Ownership** | Owned (Heap/RC) | Borrowed (View) | Owned (Heap/RC) |
 | **Slicing** | Returns new `string` (Copy) | Returns `Span<char>` (Zero-copy) | Returns new `uint8[]` (Copy) |
-| **Mutation** | Allowed (COW-protected) | Allowed (on source buffer) | Allowed (direct) |
+| **Mutation** | Allowed (COW-protected) | Allowed on a `char` buffer; a string's view is `Readonly<Span<char>>` | Allowed (direct) |
 | **Bridge** | `.asBytes()` → `uint8[]` | N/A | `.asString()` → `string` |
 | **Use Case** | Text processing, standard TS | Parsing, high-perf views | Binary I/O, protocols, hashing |
 
@@ -3606,11 +3837,12 @@ macro deriveEq(target) {
 
 ### Extern Declarations (FFI)
 ```typescript
-// Standard FFI (names match)
+// Standard FFI (names match) — a header you @include declares the symbol
+@include("stdlib.h")
 extern function free(p: Ptr<void>): void;
 
-// Aliased FFI (names differ)
-extern function malloc(size: number): Ptr<void> from "ms_malloc";
+// Aliased FFI (names differ) — `from` binds the C name
+extern function myAbs(n: int32): int32 from "abs";
 
 // cstring is used for zero-copy C interop. 
 // Standard 'string' implicitly coerces to 'cstring'.

@@ -2,13 +2,13 @@
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
 import { refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion } from "./visibility";
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { errorType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion } from "./types";
+import { errorType, booleanType, inferredType, noneType, isUnresolvedType,charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag } from "./symbol";
-import { isLifecycleHookName, getExtReceiverType, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry } from "./context";
+import { isLifecycleHookName, getExtReceiverType, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -26,25 +26,27 @@ import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, 
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseSuspendingViewParam, bodyMentionsName } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
-import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, forgetInstances, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults } from "./instantiate";
+import { lookupModuleCtx, registerModuleCtx, registerCtorDefaults, forgetInstances, CtorRow, ctorDefaultsMark, ctorDefaultsFrom, replayCtorDefaults, instantiateParentClass } from "./instantiate";
 import { GenericTypeInstRow, genericTypeInstMark, takeGenericTypeInstsFrom, addGenericTypeInstRow } from "../parser/context";
-import { declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView } from "./types";
+import { declGenericParams, symGenericParams, classParentOf, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView } from "./types";
 import { splitTopLevel } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
-import { analyzeParamMutations, isValueAggregateParam, scanForMutation, findMutationLocation } from "./paramMutationAnalysis";
+import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
-import { writableViewRefusal } from "./assignable";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd } from "./checkExprPass";
-import { foldUserOperatorConstant, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
+import { inlineDecorator } from "./decoratorHelpers";
+import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
+import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
 import { fitNode, joinBranchTypes, fitJoinedBranch, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
+import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
 import { reportConverterCycles } from "./converterCycle";
 import { parseSource } from "../parser/statements/validation";
@@ -411,6 +413,8 @@ function checkDecoratedStmt(ctx: CheckerContext, node: Node): void {
 	const k = ctx.table.current.scopeKind;
 	const local = k != ScopeKind.Module && k != ScopeKind.Global;
 	let after: Node[] = [];
+	const inlineDec = local && node.kind == NodeKind.DecoratedDecl ? inlineDecorator((node.data as DecoratedDeclData).decorators) : null;
+	if (inlineDec != null) addError(ctx, "@inline applies to a module-level function", inlineDec.location.line, inlineDec.location.column);
 	if (local && callDecoratorDefers(ctx, node)) {
 		if (!mintDecoratedLocalType(ctx, node)) return;
 		after = applyNestedDecorators(ctx, node);
@@ -812,10 +816,6 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 
 function refuseStoredView(ctx: CheckerContext, node: Node, d: VariableDeclData, varType: Type | null): void {
 	if (node.resolvedSym == null || varType == null) return;
-	if (varType.kind == TypeKind.Span && !isReadonlyView(varType) && d.initializer != null) {
-		const viewRefusal = writableViewRefusal(d.initializer);
-		if (viewRefusal != "") addError(ctx, viewRefusal, d.initializer.location.line, d.initializer.location.column);
-	}
 	if (!hasFlag(node.resolvedSym, SymbolFlag.Global)) {
 		refuseNestedView(ctx, "'" + d.declName + "'", varType, d.nameLocation.line, d.nameLocation.column);
 		return;
@@ -831,6 +831,10 @@ function refuseStoredView(ctx: CheckerContext, node: Node, d: VariableDeclData, 
 function checkStaticStorageDecl(ctx: CheckerContext, node: Node, d: VariableDeclData): void {
 	if (d.declKind == DeclKind.Var) {
 		addError(ctx, "'static var' is not supported — use 'static let'; hoisting rebuilds a var declaration without its symbol, so the slot would be emitted as an untyped frame local while every read resolved to module scope", d.nameLocation.line, d.nameLocation.column);
+		return;
+	}
+	if (ctx.currentFunction != null && hasFlag(ctx.currentFunction, SymbolFlag.Inline)) {
+		addError(ctx, "an @inline function is copied into every module that calls it, so it cannot own a 'static' slot; declare it at module scope", d.nameLocation.line, d.nameLocation.column);
 		return;
 	}
 	if (node.resolvedSym != null) {
@@ -876,7 +880,61 @@ function markBodyIdentifiersUsed(ctx: CheckerContext, body: Node): void {
 		const sym = lookupSymbol(ctx.table, d.name);
 		if (sym != null) markUsedIn(ctx, sym);
 	}
+	for (const text of writtenTypes(body)) markTypeNamesUsed(ctx, text);
 	forEachChild(body, (child: Node): void => { markBodyIdentifiersUsed(ctx, child); });
+}
+
+function writtenTypes(node: Node): string[] {
+	const texts: string[] = node.typeArg != "" ? [node.typeArg] : [];
+	match (node.kind) {
+		NodeKind.VariableDecl => { texts.push((node.data as VariableDeclData).declType); },
+		NodeKind.TypeAssertion => { texts.push((node.data as TypeAssertionData).asType); },
+		NodeKind.SizeofExpr => { texts.push((node.data as SizeofExprData).sizeofType); },
+		NodeKind.TypeAnnotation => { texts.push((node.data as TypeAnnotationData).annotationType); },
+		NodeKind.ArrowFunction => {
+			const d = node.data as ArrowFunctionData;
+			for (const t of d.arrowParamTypes) texts.push(t);
+			texts.push(d.arrowReturnType);
+		},
+		NodeKind.FunctionExpr => {
+			const d = node.data as FunctionExprData;
+			for (const t of d.funcExprParamTypes) texts.push(t);
+			texts.push(d.funcExprReturnType);
+		},
+		NodeKind.FunctionDecl => {
+			const d = node.data as FunctionDeclData;
+			for (const t of d.fnParamTypes) texts.push(t);
+			texts.push(d.fnReturnType);
+		},
+		_ => {},
+	};
+	return texts;
+}
+
+function markTypeNamesUsed(ctx: CheckerContext, text: string): void {
+	let i = 0;
+	while (i < text.length) {
+		const ch = text.charCodeAt(i);
+		if (ch == "\"".code || ch == "'".code) {
+			const close = text.indexOf(text.charAt(i), i + 1);
+			i = close < 0 ? text.length : close + 1;
+			continue;
+		}
+		if (!isLetter(ch)) { i += 1; continue; }
+		const start = i;
+		while (i < text.length && isAlphanumeric(text.charCodeAt(i))) i += 1;
+		if (start > 0 && text.charAt(start - 1) == ".") continue;
+		if (namesAMember(text, i)) continue;
+		const sym = lookupSymbol(ctx.table, text.slice(start, i));
+		if (sym != null) markUsedIn(ctx, sym);
+	}
+}
+
+function namesAMember(text: string, end: int32): boolean {
+	let j = end;
+	while (j < text.length && text.charAt(j) == " ") j += 1;
+	if (j < text.length && text.charAt(j) == "?") j += 1;
+	return j < text.length && text.charAt(j) == ":";
 }
 
 function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
@@ -951,7 +1009,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	const savedReturnTries = ctx.inferredReturnTries;
 	ctx.inferredReturnTries = [];
 
-	node.paramSyms = checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations!);
+	node.paramSyms = checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations!, d.fnDefaults);
 
 	// If return type was unknown (no annotation), use inferred type
 	if (sym.symbolType.kind == TypeKind.Function
@@ -1012,6 +1070,7 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 
 	if (sym.state == SymbolState.Checked) return;
 	sym.state = SymbolState.Checking;
+	instantiateParentClass(classParentOf(sym.symbolType), ctx);
 
 	openScope(ctx.table, ScopeKind.Class);
 	ctx.table.current.privateAccess = sym;
@@ -1134,8 +1193,13 @@ function checkGenericOverride(ctx: CheckerContext, d: MethodDeclData, className:
 	let baseDecl = base.sym.declNode;
 	if (baseDecl != null && baseDecl.kind == NodeKind.DecoratedDecl) baseDecl = (baseDecl.data as DecoratedDeclData).decoratedNode;
 	const baseGeneric = baseDecl != null && baseDecl.kind == NodeKind.MethodDecl && isGenericFn((baseDecl.data as MethodDeclData).methodFlags);
-	if (!baseGeneric && !isGenericFn(d.methodFlags)) return;
-	addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.classSym.name}.${d.methodName}'; a method with its own type parameters cannot override or be overridden`,
+	if (baseGeneric || isGenericFn(d.methodFlags)) {
+		addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.classSym.name}.${d.methodName}'; a method with its own type parameters cannot override or be overridden`,
+			d.nameLocation.line, d.nameLocation.column);
+		return;
+	}
+	if (symGenericParams(base.classSym) == "" && symGenericParams(classType.sym) == "") return;
+	addError(ctx, `Method '${className}.${d.methodName}' overrides '${base.classSym.name}.${d.methodName}'; a method of a generic class cannot override or be overridden`,
 		d.nameLocation.line, d.nameLocation.column);
 }
 
@@ -1167,7 +1231,12 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 					ctx.staticInitBoundary = ctx.table.current;
 					openStaticReceiverScope(ctx, classType.sym);
 				}
+				const hoistMark = ctx.pendingHoisted.length;
 				checkExpr(ctx, pd.propInitializer, node.nodeType);
+				if (!pd.propIsStatic && takeDefaultArgTemps(ctx, hoistMark).length > 0) {
+					addError(ctx, "the initializer of field '" + pd.propName + "' passes an argument that a default value reads, and a field initializer has no statement to bind it in — pass a variable, or assign the field in the constructor",
+						pd.propInitializer.location.line, pd.propInitializer.location.column);
+				}
 				if (node.nodeType != null && pd.propInitializer.nodeType != null) {
 					pd.propInitializer = fitNode(ctx, pd.propInitializer, node.nodeType, pd.propInitializer.nodeType);
 				}
@@ -1188,7 +1257,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			// like top-level generic fns at checkFunctionDecl:358).
 			if (!isGenericFn(d.methodFlags)) {
 				if (d.methodIsStatic) openStaticReceiverScope(ctx, classType.sym);
-				node.paramSyms = checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!);
+				node.paramSyms = checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations!, d.methodDefaults);
 				if (d.methodIsStatic) closeScope(ctx.table);
 			} else if (isGenericFn(d.methodFlags)) {
 				markBodyIdentifiersUsed(ctx, d.methodBody);
@@ -1228,7 +1297,11 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			if (node.paramLocations != null) {
 				for (const loc of node.paramLocations) { ctorLocs.push(loc); }
 			}
-			node.paramSyms = checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, ctorFnType, false), ctorParams, d.ctorBody, ctorLocs);
+			const ctorDefaults: Node[] = [null as unknown as Node];
+			if (d.ctorDefaults != null) {
+				for (const def of d.ctorDefaults) ctorDefaults.push(def);
+			}
+			node.paramSyms = checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, ctorFnType, false), ctorParams, d.ctorBody, ctorLocs, ctorDefaults);
 		},
 		NodeKind.BlockStmt => checkStaticBlockMember(ctx, node, classType.sym),
 		_ => {},
@@ -1501,14 +1574,6 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 		sgRecordSym(ctx, d.bindingLocation.line, d.bindingLocation.column, d.bindingLocation.column + d.forOfBinding.length, forSym, elemType, SymbolKind.Variable, d.forOfBinding, "", true);
 	}
 	checkStmt(ctx, d.forOfBody);
-	// Nim parity: skForVar is arAddressableConst (parampatterns.isAssignable) —
-	// same bucket as value params, so the same interior-write ban applies.
-	if (d.forOfPattern == null && isValueAggregateParam(elemType)
-		&& scanForMutation(d.forOfBody, d.forOfBinding, true)) {
-		let mloc = findMutationLocation(d.forOfBody, d.forOfBinding, true);
-		if (mloc.line <= 0) mloc = node.location;
-		addError(ctx, `cannot mutate value-type loop variable '${d.forOfBinding}': for-of binds a per-iteration copy; iterate by index to mutate the collection`, mloc.line, mloc.column);
-	}
 	exitLoopScope(ctx, saved);
 	restoreInitState(ctx.initTracker, oldInitState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
@@ -1521,6 +1586,17 @@ function destructuresByPosition(t: Type): boolean {
 	const held = peelTransparentInstance(withoutReadonlyView(t));
 	const base = held.kind == TypeKind.Ref && held.typeReturn != null ? held.typeReturn : held;
 	return base.kind == TypeKind.Tuple || base.kind == TypeKind.Array || base.kind == TypeKind.SizedArray || base.kind == TypeKind.Span;
+}
+
+function definePatternBinding(ctx: CheckerContext, sym: Symbol, forVar: boolean): void {
+	if (forVar) {
+		setFlag(sym, SymbolFlag.ForVar);
+	} else if (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global) {
+		setFlag(sym, SymbolFlag.Global);
+		stampOwner(ctx, sym);
+		sym.disamb = nextDisamb(ctx, ctx.modulePath, sym.name);
+	}
+	defineSymbol(ctx.table, sym);
 }
 
 function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean, forVar: boolean): void {
@@ -1538,8 +1614,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 					if (hasDefault) checkExpr(ctx, apd.patternDefaults[i], bound);
 					if (bound != null) elem.nodeType = bound;
 					const elemSym = makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
-					if (forVar) setFlag(elemSym, SymbolFlag.ForVar);
-					defineSymbol(ctx.table, elemSym);
+					definePatternBinding(ctx, elemSym, forVar);
 					elem.resolvedSym = elemSym;
 					markInitialized(ctx.initTracker, id.name);
 				}
@@ -1554,8 +1629,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 							addError(ctx, `rest element '${id.name}' requires an array source`, elem.location.line, elem.location.column);
 						}
 						const restSym = makeSymbol(id.name, SymbolKind.Variable, derived != null ? derived : inferredType(), !isConst);
-						if (forVar) setFlag(restSym, SymbolFlag.ForVar);
-						defineSymbol(ctx.table, restSym);
+						definePatternBinding(ctx, restSym, forVar);
 						inner.resolvedSym = restSym;
 						markInitialized(ctx.initTracker, id.name);
 					}
@@ -1594,8 +1668,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 							addError(ctx, `object rest '${restId.name}' requires a source with remaining named fields`, prop.location.line, prop.location.column);
 						}
 						const objRestSym = makeSymbol(restId.name, SymbolKind.Variable, restType != null ? restType : inferredType(), !isConst);
-						if (forVar) setFlag(objRestSym, SymbolFlag.ForVar);
-						defineSymbol(ctx.table, objRestSym);
+						definePatternBinding(ctx, objRestSym, forVar);
 						inner.resolvedSym = objRestSym;
 						markInitialized(ctx.initTracker, restId.name);
 					}
@@ -1612,8 +1685,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 				if (p.propDefault != null) checkExpr(ctx, p.propDefault, bound);
 				if (bound != null) p.propAlias.nodeType = bound;
 				const aliasSym = makeSymbol(id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
-				if (forVar) setFlag(aliasSym, SymbolFlag.ForVar);
-				defineSymbol(ctx.table, aliasSym);
+				definePatternBinding(ctx, aliasSym, forVar);
 				p.propAlias.resolvedSym = aliasSym;
 				markInitialized(ctx.initTracker, id.name);
 			}
@@ -1706,6 +1778,58 @@ function drainHoisted(ctx: CheckerContext, stmts: Node[], at: int32, from: int32
 	return n + trailing;
 }
 
+function pickDeferredWhen(ctx: CheckerContext, node: Node): Node[] | null {
+	let at: Node | null = node;
+	while (at != null && at.kind == NodeKind.IfStmt && at.flags.has(NodeFlag.WhenDeferred)) {
+		const d = at.data as IfStmtData;
+		checkExpr(ctx, d.condition, booleanType());
+		const value = whenConditionValue(ctx, d.condition);
+		if (value < 0) return null;
+		if (value == 1) return (d.consequent.data as BlockStmtData).statements;
+		at = d.alternate;
+	}
+	if (at == null) return [];
+	return (at.data as BlockStmtData).statements;
+}
+
+function whenConditionValue(ctx: CheckerContext, cond: Node): int32 {
+	return match (cond.kind) {
+		NodeKind.BooleanLiteral => (cond.data as BooleanLiteralData).boolValue ? 1 : 0,
+		NodeKind.UnaryExpr => {
+			const v = whenConditionValue(ctx, (cond.data as UnaryExprData).operand);
+			return v < 0 ? v : 1 - v;
+		},
+		NodeKind.BinaryExpr => {
+			const b = cond.data as BinaryExprData;
+			const l = whenConditionValue(ctx, b.left);
+			const r = whenConditionValue(ctx, b.right);
+			if (l < 0 || r < 0) return -1;
+			return b.operator == "&&" ? l * r : (l + r > 0 ? 1 : 0);
+		},
+		NodeKind.CallExpr when (typeTraitOf(cond) != null) => -1,
+		_ => refuseWhenCondition(ctx, cond),
+	};
+}
+
+function refuseWhenCondition(ctx: CheckerContext, cond: Node): int32 {
+	if (cond.nodeType != null && cond.nodeType.kind == TypeKind.Error) return 0;
+	addError(ctx, "a 'when' condition is decided while compiling: it reads build flags and type traits such as isPlainData<T>(), not other calls", cond.location.line, cond.location.column);
+	return 0;
+}
+
+function spliceStatementsAt(stmts: Node[], at: int32, picked: Node[]): void {
+	const rebuilt: Node[] = [];
+	for (let k = 0; k < stmts.length; k += 1) {
+		if (k != at) {
+			rebuilt.push(stmts[k]);
+			continue;
+		}
+		for (const p of picked) rebuilt.push(p);
+	}
+	stmts.length = 0;
+	for (const r of rebuilt) stmts.push(r);
+}
+
 function checkBlock(ctx: CheckerContext, node: Node): void {
 	const d = node.data as BlockStmtData;
 	openScope(ctx.table, ScopeKind.Block);
@@ -1717,6 +1841,15 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 	let i = 0;
 	while (i < d.statements.length) {
 		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { break; }
+		if (d.statements[i].flags.has(NodeFlag.WhenDeferred)) {
+			const picked = pickDeferredWhen(ctx, d.statements[i]);
+			if (picked == null) {
+				i = i + 1;
+			} else {
+				spliceStatementsAt(d.statements, i, picked);
+			}
+			continue;
+		}
 		const _cs0 = performance.now();
 		checkStmt(ctx, d.statements[i]);
 		const _cs1 = performance.now();
@@ -2100,7 +2233,17 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 let _slowTrace: boolean = false;
 export function setSlowTrace(on: boolean): void { _slowTrace = on; }
 
-export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] {
+function checkDefaultInParamScope(ctx: CheckerContext, def: Node, paramType: Type): void {
+	if (paramType == null || hasGenericParams(paramType) || ctx.inGenericContext > 0) return;
+	const hoistMark = ctx.pendingHoisted.length;
+	const probe = cloneNodeForCheck(def);
+	checkExpr(ctx, probe, paramType);
+	if (probe.nodeType != null) fitNode(ctx, probe, paramType, probe.nodeType);
+	ctx.pendingHoisted.length = hoistMark;
+	noteDefaultCheckedAtDeclaration(def);
+}
+
+export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[], defaults: Node[] | null = null): Symbol[] {
 	const paramSyms: Symbol[] = [];
 	const _fb0 = performance.now();
 	const savedFunction = ctx.currentFunction;
@@ -2143,6 +2286,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 			const at = (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) ? paramLocs[i] : body.location;
 			refuseSuspendingViewParam(ctx, param, paramType, at.line, at.column);
 		}
+		if (defaults != null && i < defaults.length && defaults[i] != null) checkDefaultInParamScope(ctx, defaults[i], paramType);
 		const paramSym = makeSymbol(param, SymbolKind.Parameter, paramType, false);
 		// Set declaration location for go-to-definition
 		if (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) {
@@ -2616,7 +2760,7 @@ export function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 	} else if (name == "passC") {
 		ctx.compilerFlags = appendFlag(ctx.compilerFlags, resolveModuleRelativeIncludes(arg0Str, getModuleDir(ctx.modulePath)));
 	} else if (name == "link") {
-		// Resolve @link paths relative to declaring module's directory (like @compile).
+		// Resolve a relative @link path from the declaring module's directory (like @compile).
 		// Prepend to link list (reference-aligned: linked first, like addExternalFileToLink).
 		const modDir = getModuleDir(ctx.modulePath);
 		const resolved = isAbsolute(arg0Str) || modDir == "" ? normalize(arg0Str) : normalize(modDir + "/" + arg0Str);

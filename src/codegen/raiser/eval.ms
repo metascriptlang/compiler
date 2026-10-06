@@ -393,11 +393,36 @@ test "engine: explicit exit coerces its number and aborts module initialization"
 	assert ctx.exitValue.intVal == 7;
 }
 
+test "engine: exit inside a spawned strand ends the program with its code" {
+	const ctx = evalOrcVM("function quit(): int32 { exit(3); return 0; }"
+		+ " console.log('armed'); const f = spawn(() => quit());"
+		+ " let n: int32 = 0; while (n < 1000) { n += 1; }"
+		+ " console.log(`after ${await f}`);");
+	assert ctx.error == "";
+	assert ctx.output == "armed\n";
+	assert ctx.exitValue.kind == RaiserValueKind.Int;
+	assert ctx.exitValue.intVal == 3;
+}
+
 test "engine: for-of raises when its body changes the array length" {
 	const ctx = evalOrcVM("function run(mode: int32): string { const arr: int32[] = [1, 2, 3]; let seen = ''; try { for (const x of arr) { seen = seen + String(x) + ','; if (seen.length > 20) break; if (mode == 0) arr.push(x); if (mode == 1 && x == 1) { arr.push(9); continue; } if (mode == 2) { arr.push(9); break; } } } catch (e) { return 'raised after ' + seen; } return 'finished ' + seen; }"
 		+ " console.log(run(0)); console.log(run(1)); console.log(run(2)); console.log(run(3));");
 	assert ctx.error == "";
 	assert ctx.output == "raised after 1,\nraised after 1,\nfinished 1,\nfinished 1,2,3,\n";
+}
+
+test "engine: a for-of over a string yields its bytes as chars" {
+	const ctx = evalOrcVM("let n = 0; let sum = 0; for (const c of 'h\u00e9llo') { n += 1; sum += c as int32; } console.log(n, sum);"
+		+ " let s = 'ab'; let seen = ''; for (const c of s) { seen = seen + c + '|'; console.log(c); if (c as int32 == 97) continue; seen = seen + '!'; }"
+		+ " console.log(seen); for (const c of 'xyz') { if (c as int32 == 121) break; console.log(`${c}`); }");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "6 795\na\nb\na|b|!\nx\n", ctx.output;
+}
+
+test "engine: a for-of raises when the string it iterates changes length" {
+	const ctx = evalOrcVM("let s = 'abc'; let seen = ''; try { for (const c of s) { seen = seen + c; s = s + 'd'; } } catch (e) { console.log('raised after ' + seen); }");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "raised after a\n", ctx.output;
 }
 
 test "engine: struct assignment preserves the source value" {
@@ -499,6 +524,19 @@ test "engine: a method called inside a function binds its receiver as this" {
 		+ " console.log(`${t.echo(\"t\")} ${viaLocal()} ${viaParam(new Reg())} ${viaClosure()}`);");
 	assert vm.error == "";
 	assert vm.output == "reg:t reg:x reg reg:y 4 5\n";
+}
+
+test "engine: super runs the parent constructor and a call through the base runs the override" {
+	const vm = evalOrcVM("class A { name: string; constructor(name: string) { this.name = name; }"
+		+ " speak(n: int32): string { return this.name + \".\" + n.toString(); }"
+		+ " intro(): string { return \"I \" + this.speak(1); } }"
+		+ " class B extends A { speak(n: int32): string { return this.name + \"!\" + n.toString(); } }"
+		+ " class C extends B { k: int32 = 4; constructor(name: string) { super(name + \"c\"); this.k = 5; } }"
+		+ " function talk(a: A): string { return a.speak(2); }"
+		+ " const all: A[] = [new A(\"a\"), new B(\"b\"), new C(\"x\")];"
+		+ " for (const a of all) { console.log(`${talk(a)} ${a.intro()}`); }");
+	assert vm.error == "";
+	assert vm.output == "a.2 I a.1\nb!2 I b!1\nxc!2 I xc!1\n";
 }
 
 test "engine: new Array(n) holds n distinct zero elements" {
@@ -679,6 +717,18 @@ test "engine: a uint64 past int64 compares, divides and prints unsigned" {
 	assert ctx.output == "true true false true 9223372036854775807 5 18446744073709551615 18446744073709551615 18446744073709552000 18446744073709552000 u=18446744073709551615 6148914691236517205 1\n18446744073709551615\n";
 }
 
+test "engine: unsigned sums and products past 64 bits wrap as on C" {
+	const ctx = evalOrcVM("function mul(a: uint64, b: uint64): uint64 { return a * b; }"
+		+ " function add(a: uint64, b: uint64): uint64 { return a + b; }"
+		+ " function sub(a: uint64, b: uint64): uint64 { return a - b; }"
+		+ " function mul32(a: uint32, b: uint32): uint32 { return a * b; }"
+		+ " const u = 0xFFFFFFFFFFFFFFFF as uint64; let k = u; k *= 5 as uint64;"
+		+ " console.log(`${mul(u, 3 as uint64)} ${add(u, 2 as uint64)} ${sub(1 as uint64, 2 as uint64)}`"
+		+ " + ` ${mul32(4000000000 as uint32, 4000000000 as uint32)} ${k}`);");
+	assert ctx.error == "";
+	assert ctx.output == "18446744073709551613 1 18446744073709551615 1983905792 18446744073709551611\n";
+}
+
 test "engine: increment and decrement on a float step by one" {
 	const ctx = evalOrcVM("struct P { x: number; }"
 		+ " function run(): void { let p: P = { x: 1.75 }; const xs: number[] = [1.5]; let k: number = 0.5;"
@@ -757,6 +807,18 @@ test "engine: nested structs and tuples compare by value" {
 		+ " console.log(`${o1 == o2} ${o1 == o3} ${l == r} ${l == x}`);");
 	assert ctx.error == "";
 	assert ctx.output == "true false true false\n";
+}
+
+test "engine: the hash builtins give the bits of the native 128-bit mix and float layout" {
+	const ctx = evalOrcVM("@builtin(\"HiXorLo\") extern function hiXorLo(a: uint64, b: uint64): uint64;"
+		+ " @builtin(\"Float64Bits\") extern function float64Bits(d: number): uint64;"
+		+ " console.log(`${hiXorLo(0x123456789abcdef0 as uint64, 0xfedcba9876543210 as uint64)}`"
+		+ " + ` ${hiXorLo(0xa0761d6478bd642f as uint64, 0xe7037ed1a0b428db as uint64)}`"
+		+ " + ` ${hiXorLo(0xFFFFFFFFFFFFFFFF as uint64, 0xFFFFFFFFFFFFFFFF as uint64)}`"
+		+ " + ` ${float64Bits(1.5)} ${float64Bits(-1.0)}`);");
+	assert ctx.error == "";
+	assert ctx.output == "3562955285811542818 2302960717771869484 18446744073709551615"
+		+ " 4609434218613702656 13830554455654793216\n";
 }
 
 test "orc: correct result + no error on object program" {
@@ -977,25 +1039,46 @@ function evalRaiserDirect(code: string): RaiserContext {
 	return ctx;
 }
 
-// --- Closure capture tests --- (commented out: lambda-lifted closures return 0 via Raiser VM)
-// Hand-written closure pairs work; lambda-lifting + full transform pipeline does not.
-// Root cause: post-lambda-lifting transforms (likely destructorLifting or DRC interaction)
-// corrupt the AST for the Raiser codegen path. Needs further investigation.
-//
-// testGroup("Raiser Phase 3: closures", () => {
-// 	test("capture local variable", () => {
-// 		const ctx = evalFull("function make(): number { const x = 42; const f = (): number => x; return f(); } return make();");
-// 		check(ctx.lastResult.intVal === 42);
-// 	});
-// 	test("capture in top-level scope", () => {
-// 		const ctx = evalFull("const x = 99; const f = (): number => x; return f();");
-// 		check(ctx.lastResult.intVal === 99);
-// 	});
-// 	test("capture block body top-level", () => {
-// 		const ctx = evalFull("const x = 77; const f = (): number => { return x; }; return f();");
-// 		check(ctx.lastResult.intVal === 77);
-// 	});
-// });
+test "a lambda-lifted closure reads a local it captured" {
+	const ctx = evalFull("function make(): number { const x = 42; const f = (): number => x; return f(); } return make();");
+	assert unboxFloat(ctx.lastResult) == 42;
+}
+
+test "a top-level closure reads a module binding" {
+	const ctx = evalFull("const x = 99; const f = (): number => { return x; }; return f();");
+	assert unboxFloat(ctx.lastResult) == 99;
+}
+
+test "a call through a local closure calls the closure, not a routine of the same name" {
+	const ctx = evalFull("function add(a: number, b: number): number { return a - b; } function make(k: number): number { const add = (x: number): number => x + k; return add(1); } return make(10);");
+	assert ctx.lastError == "", ctx.lastError;
+	assert unboxFloat(ctx.lastResult) == 11;
+}
+
+test "a call through a closure parameter calls the closure, not a routine of the same name" {
+	const ctx = evalFull("function add(a: number, b: number): number { return a - b; } function apply(add: (x: number) => number): number { return add(1); } return apply((x: number): number => x + 40);");
+	assert ctx.lastError == "", ctx.lastError;
+	assert unboxFloat(ctx.lastResult) == 41;
+}
+
+test "a closure made in a for-of reads the binding of its own iteration" {
+	const ctx = evalFull("function make(): string { const fs: (() => string)[] = []; for (const j of ['a', 'b']) { fs.push((): string => j); } let out = ''; for (const f of fs) { out = out + f(); } return out; } return make();");
+	assert ctx.lastError == "", ctx.lastError;
+	assert ctx.lastResult.strVal == "ab";
+}
+
+test "a closure made in a for loop that continues reads the counter of its own iteration" {
+	const ctx = evalFull("function make(): number { const fs: (() => number)[] = []; for (let i = 0; i < 6; i++) { if (i % 2 == 0) continue; fs.push((): number => i); } let acc = 0; for (const f of fs) { acc = acc * 10 + f(); } return acc; } return make();");
+	assert ctx.lastError == "", ctx.lastError;
+	assert unboxFloat(ctx.lastResult) == 135;
+}
+
+test "a function reads the global a module-level destructuring declares" {
+	const ctx = evalFull("function pair(): number[] { return [3, 4]; } let [p, q] = pair(); const f = (): number => q; function sum(): number { return p * 10 + q; } q = 5; return sum() * 10 + f();");
+	assert ctx.lastError == "", ctx.lastError;
+	assert unboxFloat(ctx.lastResult) == 355;
+}
+
 test "hand-written closure pair (no transforms)" {
 	const ctx = evalRaiserDirect("function lifted(_envP: unknown): number { return _envP.x; } const x = 99; const f = { fn: lifted, env: { x: x } }; return f();");
 	assert ctx.lastResult.intVal == 99;
@@ -1220,8 +1303,111 @@ test "engine: an empty slice passes at any start" {
 }
 
 test "engine: a string span views its bytes" {
-	const ctx = evalOrcVM("function n(v: Span<char>): int32 { let t = 0; for (let i = 0; i < v.length; i++) t += v[i] as int32; return t; }"
+	const ctx = evalOrcVM("function n(v: Readonly<Span<char>>): int32 { let t = 0; for (let i = 0; i < v.length; i++) t += v[i] as int32; return t; }"
 		+ " const s = 'hello'; console.log(`${n(s)} ${n(s[1..4])}`);");
 	assert ctx.error == "";
 	assert ctx.output == "532 317\n";
+}
+
+test "engine: a byte view of a struct span traps instead of reading an element" {
+	const ctx = evalOrcVM("struct P { a: uint32; } const ps: P[] = [{ a: 258 }]; const v: Span<P> = ps;"
+		+ " const bytes = v as Ptr<void> as Ptr<uint8>; console.log(`${bytes[0]}`);");
+	assert ctx.error.includes("on the Raiser VM: no byte representation"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: a byte view through a typed pointer traps" {
+	const ctx = evalOrcVM("struct P { a: uint32; } let p: P = { a: 258 }; const typed = p as Ptr<P>;"
+		+ " const bytes = typed as Ptr<uint8>; console.log(`${bytes[0]}`);");
+	assert ctx.error.includes("cannot convert Ptr<P> to Ptr<uint8> on the Raiser VM"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: a same-element span pointer still reads its first element" {
+	const ctx = evalOrcVM("struct P { a: uint32; } const ps: P[] = [{ a: 258 }]; const v: Span<P> = ps;"
+		+ " const first = v as Ptr<P>; console.log(`${first[0].a}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "258\n";
+}
+
+test "engine: a span pointer reaches the struct element it addresses" {
+	const ctx = evalOrcVM("struct P { a: uint32; } let ps: P[] = [{ a: 1 }, { a: 2 }]; const v: Span<P> = ps;"
+		+ " const p = v as Ptr<P>; p.a = 9; console.log(`${ps[0].a} ${p[0].a} ${p[].a}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "9 9 9\n";
+}
+
+test "engine: an empty span has no element to point at" {
+	const ctx = evalOrcVM("struct P { a: uint32; } const none: P[] = []; const v: Span<P> = none; const p = v as Ptr<P>; console.log('reached');");
+	assert ctx.error.includes("out of bounds"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: an empty span of pointers has no slot to point at" {
+	const ctx = evalOrcVM("struct P { a: uint32; } const none: Ptr<P>[] = []; const v: Span<Ptr<P>> = none;"
+		+ " const p = v as Ptr<Ptr<P>>; console.log('reached');");
+	assert ctx.error.includes("out of bounds"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: element pointers compare by identity" {
+	const ctx = evalOrcVM("struct P { a: uint32; } let ps: P[] = [{ a: 1 }, { a: 2 }];"
+		+ " const p = ps[1] as Ptr<P>; const q = ps[1] as Ptr<P>; const r = ps[0] as Ptr<P>; console.log(`${p == q} ${p == r}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "true false\n";
+}
+
+test "engine: a ref scalar parameter writes the caller's variable" {
+	const ctx = evalOrcVM("function inc(ref n: int32): void { n = n + 1; n += 2; n++; } let k: int32 = 1; inc(k); console.log(`${k}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "5\n";
+}
+
+test "engine: an out parameter forwards to the caller's variable" {
+	const ctx = evalOrcVM("function setInt(out v: int32, n: int32): void { v = n; } function forward(out v: int32, n: int32): void { setInt(v, n); }"
+		+ " let a: int32 = 0; forward(a, 7); console.log(`${a}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "7\n";
+}
+
+test "engine: a ref string, element, field and class reference reach their storage" {
+	const ctx = evalOrcVM("class Box { v: int32 = 1; } struct H { n: int32; }"
+		+ " function shout(ref s: string): void { s += \"!\"; } function bump(ref v: int32): void { v++; }"
+		+ " function swap(ref b: Box): void { b = new Box(); b.v = 9; }"
+		+ " let t = \"hi\"; shout(t); let xs: int32[] = [1, 2]; bump(xs[1]); let h: H = { n: 4 }; bump(h.n);"
+		+ " let box = new Box(); swap(box); console.log(`${t} ${xs[1]} ${h.n} ${box.v}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "hi! 3 5 9\n";
+}
+
+test "engine: a span pointer to a scalar is written through" {
+	const ctx = evalOrcVM("let xs: int32[] = [1, 2]; const view: Span<int32> = xs; const p = view as Ptr<int32>; p[] = 5; p[0] += 2; console.log(`${xs[0]} ${p[]}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "7 7\n";
+}
+
+test "engine: an integer is not a typed pointer on the vm" {
+	const ctx = evalOrcVM("let k: int32 = 1; const p = k as Ptr<int32>; console.log(`${p[]}`);");
+	assert ctx.error.includes("cannot convert int32 to Ptr<int32> on the Raiser VM"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: scalar pointers compare by location" {
+	const ctx = evalOrcVM("let xs: int32[] = [1, 2, 3];"
+		+ " const a = xs[0..2] as Ptr<int32>; const b = xs[1..3] as Ptr<int32>; const c = xs[0..1] as Ptr<int32>; const d = xs[1..2] as Ptr<int32>;"
+		+ " console.log(`${a == b} ${a == c} ${b == d} ${a != b}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "false true true true\n";
+}
+
+test "engine: a write through a pointer past its element traps instead of writing element 0" {
+	const ctx = evalOrcVM("let bytes: uint8[] = [11, 22, 33]; const view: Span<uint8> = bytes; const p = view as Ptr<uint8>; p[1] = 66; console.log(`${bytes[0]} ${bytes[1]}`);");
+	assert ctx.error.includes("cannot index a pointer past the element it addresses on the Raiser VM"), ctx.error;
+	assert ctx.output == "";
+}
+
+test "engine: a struct pointer keeps its object through Ptr<void> on the vm" {
+	const ctx = evalOrcVM("struct S { n: int32; } let s: S = { n: 3 }; const raw = s as Ptr<void>; const p = raw as Ptr<S>; p[].n = 4; console.log(`${s.n}`);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "4\n";
 }

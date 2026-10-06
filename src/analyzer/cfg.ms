@@ -257,7 +257,8 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 			// Check for assignment: x = expr (def on LHS, use on RHS)
 			if (d.expr != null && d.expr.kind == NodeKind.BinaryExpr) {
 				const bd = d.expr.data as BinaryExprData;
-				if (bd.operator == "=" || bd.operator == "+=" || bd.operator == "-=" || bd.operator == "*=" || bd.operator == "/=") {
+				if (bd.operator == "=" || bd.operator == "+=" || bd.operator == "-=" || bd.operator == "*=" || bd.operator == "/="
+					|| bd.operator == "&=" || bd.operator == "|=" || bd.operator == "^=" || bd.operator == "<<=" || bd.operator == ">>=" || bd.operator == ">>>=") {
 					// RHS first (uses before def)
 					walkExpr(bd.right, ctx);
 					// LHS: check if it's a direct identifier or field path to our var

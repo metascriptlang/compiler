@@ -1,4 +1,4 @@
-// @xfail(raiser): the Raiser VM cannot run a subclass constructor or instanceof ('cannot evaluate 'super' at comptime: symbol kind is Class', 'cannot evaluate operator 'instanceof' at comptime')
+// @xfail(raiser): the Raiser VM has no `instanceof` ('cannot evaluate operator 'instanceof' at comptime')
 // @stdout: instance-display deep-ok
 
 class C0 { value: int32 = 7; }

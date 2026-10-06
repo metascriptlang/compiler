@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: attempt to access a nil address
 // Parity program — Map keyed by a scalar other than int32/number/string finds
 // what it stores: 64-bit keys differing only above bit 31, floats and booleans,
 // read from a local, through a key parameter and through an interface field.

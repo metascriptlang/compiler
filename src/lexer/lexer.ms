@@ -364,6 +364,24 @@ test "operator disambiguation (greedy)" {
 	assert lexKindAt("a&&b", 1) == TokenKind.AmpAmp;
 }
 
+test "bitwise compound assignments are one token each" {
+	assert lexKindAt("a&=b", 1) == TokenKind.AmpEq;
+	assert lexKindAt("a|=b", 1) == TokenKind.PipeEq;
+	assert lexKindAt("a^=b", 1) == TokenKind.CaretEq;
+	assert lexKindAt("a<<=b", 1) == TokenKind.LtLtEq;
+	assert lexKindAt("a>>=b", 1) == TokenKind.GtGtEq;
+	assert lexKindAt("a>>>=b", 1) == TokenKind.GtGtGtEq;
+	assert lexKindAt("a>>>=b", 2) == TokenKind.Ident;
+	assert lexKindAt("a&&=b", 1) == TokenKind.AmpAmp;
+	assert lexKindAt("a||b", 1) == TokenKind.PipePipe;
+	assert lexKindAt("a|>b", 1) == TokenKind.PipeGt;
+}
+
+test "a regex may follow a bitwise compound assignment" {
+	assert lexKindAt("x |= /a/", 2) == TokenKind.Regex;
+	assert lexKindAt("x >>>= /a/", 2) == TokenKind.Regex;
+}
+
 test "operators jammed without spaces" {
 	assert lexCount("a+b") == 3;
 	assert lexCount("a-b") == 3;

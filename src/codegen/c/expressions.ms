@@ -17,11 +17,11 @@ import {
 	isIndirectRef,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
+import { getTypeDesc, zeroInit, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral } from "../../utils/string";
 import { findChar } from "../../utils/string";
-import { ensureCrossModuleProto } from "./forward";
+import { ensureCrossModuleProto, copiesInline } from "./forward";
 import { useHeader } from "./context";
 import { GcMode, dispatchOverridesFor, dispatchEntryFor } from "../../checker/context";
 import { lookupCtorDefaults, CtorEntry } from "../../checker/instantiate";
@@ -423,7 +423,8 @@ function isArrayAccessCall(node: Readonly<Node>): boolean {
 		|| isRuntimeProcSym(sym, "msNumberArrayAccess") || isRuntimeProcSym(sym, "msRefArrayAccess")
 		|| isRuntimeProcSym(sym, "msUint8ArrayAccess") || isRuntimeProcSym(sym, "msSizedArrayAccess")
 		|| isRuntimeProcSym(sym, "msArrayAccessUnchecked") || isRuntimeProcSym(sym, "msRefArrayAccessUnchecked")
-		|| isRuntimeProcSym(sym, "msSizedArrayAccessUnchecked");
+		|| isRuntimeProcSym(sym, "msSizedArrayAccessUnchecked") || isRuntimeProcSym(sym, "msSpanAccess")
+		|| isRuntimeProcSym(sym, "msSpanAccessUnchecked");
 }
 
 // Check if an AST node produces a C lvalue (can have & applied directly).
@@ -440,6 +441,22 @@ function isLvalueNode(node: Readonly<Node>): boolean {
 		|| isArrayAccessCall(node);
 }
 
+function isResultSlot(g: CGen, snippet: string, exprNode: Readonly<Node>): boolean {
+	if (exprNode.kind != NodeKind.CallExpr || exprNode.nodeType == null || !isCIdentifier(snippet)) return false;
+	const ret = getCalleeReturnType(exprNode);
+	return ret != null && isNrvoReturnType(ret, getCalleeFuncType(exprNode)) && getTypeDesc(g, ret) == getTypeDesc(g, exprNode.nodeType);
+}
+
+function isCIdentifier(s: string): boolean {
+	if (s.byteLength == 0) return false;
+	for (let i = 0; i < s.byteLength; i += 1) {
+		const c = s.byteAt(i);
+		const letter = (c >= "a".code && c <= "z".code) || (c >= "A".code && c <= "Z".code) || c == "_".code;
+		if (!letter && !(i > 0 && c >= "0".code && c <= "9".code)) return false;
+	}
+	return true;
+}
+
 // Emit `_clit<N>` tagged-union wrapper temp and return its address.
 // Layout: { unionT tmp; tmp._tag = varIdx; tmp.v<idx> = (cast?)snippet; }
 // `withCast` is true when the source value type differs from the variant
@@ -453,7 +470,7 @@ function emitTaggedUnionWrapAddr(p: CProc, unionName: string, varIdx: number, va
 	emitStmtsLine(p, `${tmpName}._tag = ${varIdx};`);
 	const valueRhs = withCast ? `(${varTypeCName})${snippet}` : snippet;
 	emitStmtsLine(p, `${tmpName}.v${varIdx} = ${valueRhs};`);
-	return "&" + tmpName;
+	return "(&" + tmpName + ")";
 }
 
 // Reference parity: standard address generation always operates on a named variable,
@@ -546,7 +563,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 			const tmpName = `_clit${p.labels}_`;
 			emitProcLocalsLine(p, `${cType} ${tmpName};`);
 			emitStmtsLine(p, `${tmpName} = (${cType})${snippet};`);
-			return "&" + tmpName;
+			return "(&" + tmpName + ")";
 		}
 	}
 	// Union variant wrapping: when passing a variant-typed temp where a union* is expected,
@@ -555,7 +572,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 	if (paramType != null && paramType.kind == TypeKind.Union && exprNode != null && exprNode.kind == NodeKind.ObjectLiteral) {
 		// Union-typed literal ⇒ ObjectLiteral emission already wrapped the snippet into the full union
 		if (exprNode.nodeType != null && exprNode.nodeType.kind == TypeKind.Union) {
-			return "&" + snippet;
+			return "(&" + snippet + ")";
 		}
 		const od = exprNode.data as ObjectLiteralData;
 		if (od.keys != null && od.keys.length > 0) {
@@ -600,6 +617,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 	// Fallback: non-lvalue expressions (calls, constructors) cannot have & applied directly.
 	// Hoist to a temp local so we can take its address.
 	if (p != null && exprNode != null && !isLvalueNode(exprNode)) {
+		if (isResultSlot(g, snippet, exprNode)) return `&${snippet}`;
 		// When paramType (from implementation) resolves to a Union but exprNode.nodeType
 		// is a Struct variant (from overload), wrap in the full tagged union.
 		const resolvedParam = resolveSinkLent(paramType);
@@ -631,7 +649,7 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 			const tmpName = `_clit${p.labels}_`;
 			emitProcLocalsLine(p, `${cType} ${tmpName};`);
 			emitStmtsLine(p, `${tmpName} = ${snippet};`);
-			return "&" + tmpName;
+			return "(&" + tmpName + ")";
 		}
 	}
 	// Union variant lvalue: when &local is taken and the local's type is a variant struct
@@ -645,10 +663,10 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 		const exprNT = exprNode.nodeType;
 		if (innerParam != null && innerParam.kind == TypeKind.Union && exprNT.kind == TypeKind.Struct) {
 			const unionCType = getTypeDesc(g, innerParam);
-			return `(${unionCType}*)&(${snippet})`;
+			return `((${unionCType}*)&(${snippet}))`;
 		}
 	}
-	return `&(${snippet})`;
+	return `(&(${snippet}))`;
 }
 
 // ===== Union Variant Index Matching =====
@@ -868,6 +886,10 @@ function objLitTarget(dest: string, shape: ObjLitShape): string {
 }
 
 export function buildsInPlace(g: CGen, node: Readonly<Node>, destCType: string): boolean {
+	if (node != null && node.kind == NodeKind.CallExpr) {
+		const ret = getCalleeReturnType(node);
+		return ret != null && isNrvoReturnType(ret, getCalleeFuncType(node)) && getTypeDesc(g, ret) == destCType;
+	}
 	if (node == null || node.kind != NodeKind.ObjectLiteral || node.flags.has(NodeFlag.Closure)) return false;
 	const shape = objLitShape(g, node, false);
 	if (shape.cType == "" || shape.isClassObj || shape.isRefUnion) return false;
@@ -1043,7 +1065,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			}
 			if (nk == TypeKind.Set) {
 				const cType = getTypeDesc(g, node.nodeType);
-				ctx.results.push(`(${cType}){0}`);
+				ctx.results.push(`(${cType})${zeroInit(node.nodeType)}`);
 				return;
 			}
 			// Union(Ref<T>, Null) / Union(Ptr<T>, Null) is a pointer at C level — emit NULL,
@@ -1054,7 +1076,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			}
 			if (isNilableValueType(node.nodeType)) {
 				const cType = getTypeDesc(g, node.nodeType);
-				ctx.results.push(`(${cType}){0}`);
+				ctx.results.push(`(${cType})${zeroInit(node.nodeType)}`);
 				return;
 			}
 		}
@@ -1101,7 +1123,8 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// Ensure cross-module function has a forward declaration (needed for function
 			// pointers in closure literals — direct calls go through ensureCrossModuleProto)
 			const calleeName = mangledFunctionName(idSym, referenceName(idSym, d.name), idSym.overloadIdx);
-			if (idSym.symbolType != null && idSym.modulePath != null && idSym.modulePath != "" && idSym.modulePath != g.modulePath) {
+			if (idSym.symbolType != null && idSym.modulePath != null && idSym.modulePath != ""
+					&& (idSym.modulePath != g.modulePath || copiesInline(g, idSym))) {
 				ensureCrossModuleProto(g, calleeName, idSym.symbolType, idSym);
 			}
 			let emitted = calleeName;
@@ -1405,7 +1428,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		// Value-type new: struct/GenericInstance types → zero-initialized struct
 		if (node.nodeType != null && (node.nodeType.kind == TypeKind.Struct || node.nodeType.kind == TypeKind.GenericInstance) && d.newArguments.length == 0) {
 			const cType = getTypeDesc(g, node.nodeType);
-			ctx.results.push(`(${cType}){0}`);
+			ctx.results.push(`(${cType})${zeroInit(node.nodeType)}`);
 			return;
 		}
 		// Ref-type new: Ref<GenericInstance> → heap-allocate with monomorphized name
@@ -1665,6 +1688,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		}
 		if ((d.operator == "<<" || d.operator == ">>") && isShiftOperand(d.left.nodeType)) {
 			ctx.results.push(genShift(g, node, d.operator, d.left.nodeType, left, finalRight));
+			return;
+		}
+		if ((d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>=") && integerTypeOf(d.left.nodeType) != null) {
+			ctx.results.push(genShiftAssign(d.operator, d.left.nodeType, left, finalRight));
 			return;
 		}
 		if (d.operator == "**") {
@@ -2151,6 +2178,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`((${targetType})&(${expr}))`);
 			return;
 		}
+		if (node.nodeType != null && isPointerType(node.nodeType)
+			&& srcType != null && srcType.kind == TypeKind.Span) {
+			ctx.results.push(`((${targetType})(${expr}).data)`);
+			return;
+		}
 		ctx.results.push(`((${targetType})${expr})`);
 		return;
 	}
@@ -2592,11 +2624,10 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 	const nrvoType = (nrvoRet != null && isNrvoReturnType(nrvoRet, nrvoFuncType)) ? nrvoRet : null;
 
 	if (nrvoType != null) {
-		// NRVO: allocate temp, pass &tmp as first arg, read tmp after call
+		// NRVO: pass the result slot as first arg, read it after call
 		const cType = getTypeDesc(g, nrvoType);
-		const tmp = getTemp(p, cType);
-		if (nrvoTempNeedsZero(cType)) emitStmtsLine(p, `(${tmp.snippet}) = (${cType}){0};`);
-		const nrvoArg = "&" + tmp.snippet;
+		const slot = nrvoSlot(p, ctx, node, nrvoType, cType);
+		const nrvoArg = "&" + slot;
 		let fullArgs = "";
 		if (argsStr != "") {
 			fullArgs = `${nrvoArg}, ${argsStr}`;
@@ -2609,7 +2640,7 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 		const callWithEnv = `((${clFull})${fnExpr})(${fullArgs}, ${envExpr})`;
 		const callNoEnv = `((${clHalf})${fnExpr})(${fullArgs})`;
 		emitStmtsLine(p, `(${envExpr} ? ${callWithEnv} : ${callNoEnv});`);
-		ctx.results.push(tmp.snippet);
+		ctx.results.push(slot);
 		return;
 	}
 
@@ -2638,15 +2669,21 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 	ctx.results.push(`(${envExpr} ? ${callWithEnv} : ${callNoEnv})`);
 }
 
-function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, calleeName: string, argsStr: string, retType: Type | null, funcType: Type | null): void {
+function nrvoSlot(p: CProc, ctx: ExprEvalCtx, node: Readonly<Node>, t: Type, cType: string): string {
+	const dest = destOf(ctx, node);
+	if (dest != "") return dest;
+	const tmp = getTemp(p, cType);
+	if (nrvoTempNeedsZero(cType)) emitStmtsLine(p, `(${tmp.snippet}) = (${cType})${zeroInit(t)};`);
+	return tmp.snippet;
+}
+
+function emitNrvoOrValueCall(g: CGen, p: CProc, ctx: ExprEvalCtx, node: Readonly<Node>, calleeName: string, argsStr: string, retType: Type | null, funcType: Type | null): void {
 	if (retType != null && isNrvoReturnType(retType, funcType)) {
-		const cType = getTypeDesc(g, retType);
-		const tmp = getTemp(p, cType);
-		if (nrvoTempNeedsZero(cType)) emitStmtsLine(p, `(${tmp.snippet}) = (${cType}){0};`);
-		let nrvoArgs = "&" + tmp.snippet;
+		const slot = nrvoSlot(p, ctx, node, retType, getTypeDesc(g, retType));
+		let nrvoArgs = "&" + slot;
 		if (argsStr != "") nrvoArgs = `${nrvoArgs}, ${argsStr}`;
 		emitStmtsLine(p, `${calleeName}(${nrvoArgs});`);
-		ctx.results.push(tmp.snippet);
+		ctx.results.push(slot);
 		return;
 	}
 	ctx.results.push(`${calleeName}(${argsStr})`);
@@ -2743,7 +2780,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		// On-demand cross-module prototype (reference parity: genProcPrototype)
 		ensureCrossModuleProto(g, ovCalleeName, ovType, emitSym != null ? emitSym : sym);
 		const ovRet = (ovType != null && ovType.kind == TypeKind.Function) ? ovType.typeReturn : null;
-		emitNrvoOrValueCall(g, p, ctx, ovCalleeName, argsStr, ovRet, ovType);
+		emitNrvoOrValueCall(g, p, ctx, node, ovCalleeName, argsStr, ovRet, ovType);
 		return;
 	}
 
@@ -3040,7 +3077,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		}
 	}
 
-	emitNrvoOrValueCall(g, p, ctx, finalCallee, argsStr, getCalleeReturnType(node), getCalleeFuncType(node));
+	emitNrvoOrValueCall(g, p, ctx, node, finalCallee, argsStr, getCalleeReturnType(node), getCalleeFuncType(node));
 }
 // ===== genExprAssign — evaluate expression and assign to dest =====
 // For statement-level: `dest = expr;`
@@ -3189,6 +3226,15 @@ function genShift(g: CGen, node: Readonly<Node>, op: string, leftType: Type | nu
 	return `((${resultType})${atLeftWidth(g, leftType, bits, resultType)}((${operandType})(${left}) ${op} ((${countType})(${right}) & ${bits - 1})))`;
 }
 
+function genShiftAssign(op: string, leftType: Type | null, left: string, right: string): string {
+	const bits = shiftOperandBits(leftType);
+	const unsignedType = `uint${bits}_t`;
+	const count = `((${unsignedType})(${right}) & ${bits - 1})`;
+	const lt = integerTypeOf(leftType);
+	if (op == ">>=" || (lt != null && isUnsignedInteger(lt))) return `(${left} ${op == "<<=" ? "<<=" : ">>="} ${count})`;
+	return `(*(${unsignedType}*)&(${left}) ${op == "<<=" ? "<<=" : ">>="} ${count})`;
+}
+
 // The operands go unsigned so C's promotion to int cannot overflow (uint16 *
 // uint16), and the result wraps at its own width.
 function subIntTypeDesc(g: CGen, t: Type | null): string {
@@ -3304,7 +3350,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 
 	// Empty array: C99 compound literal zero-init
 	if (d.elements.length == 0) {
-		return `(${arrayTypeName}){0}`;
+		return `(${arrayTypeName})${zeroInit(node.nodeType)}`;
 	}
 
 	// A sequence allocates its payload once, then assigns each element in place
@@ -3312,7 +3358,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Readonly<Node>): string {
 	const isSizedArray = node.nodeType != null && node.nodeType.kind == TypeKind.SizedArray;
 	const tmp = getTemp(p, arrayTypeName);
 	const tmpName = tmp.snippet;
-	emitStmtsLine(p, `${tmpName} = (${arrayTypeName}){0};`);
+	emitStmtsLine(p, `${tmpName} = (${arrayTypeName})${zeroInit(node.nodeType)};`);
 	if (!isSizedArray) {
 		emitStmtsLine(p, `${tmpName}.p = (__typeof__(${tmpName}.p))msArrayPayloadNew(${d.elements.length}, sizeof(${tmpName}.p->data[0]));`);
 		emitStmtsLine(p, `${tmpName}.len = ${d.elements.length};`);

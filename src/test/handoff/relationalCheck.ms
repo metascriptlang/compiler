@@ -151,3 +151,17 @@ test "enum arithmetic is unaffected" {
 test "null comparison is unaffected" {
 	assert strictErrorCount("interface R { m: int32; }\nconst a: R | null = null;\nconst c = a == null;") == 0;
 }
+
+test "comparing a signed and an unsigned integer neither of which holds the other is rejected" {
+	const pre = "function count(): uint64 { return 3 as uint64; }\nconst li: int32 = -1;\nconst i32v: int32 = -5;\nconst u32: uint32 = 3000000000 as uint32;\nconst i8: int8 = -1;\nconst u8: uint8 = 200;\n";
+	for (const cmp of ["count() < li", "count() > li", "count() === li", "li != count()", "i32v < u32", "u32 >= i32v", "i8 == u8"]) {
+		assert hasError(pre + "const c = " + cmp + ";", "neither type holds every value of the other"), cmp;
+	}
+}
+
+test "comparing a signed and an unsigned integer one of which holds the other is valid" {
+	const pre = "function count(): uint64 { return 3 as uint64; }\nconst li: int32 = -1;\nconst wide: int64 = -1;\nconst u32: uint32 = 3000000000 as uint32;\nconst u8: uint8 = 200;\n";
+	for (const cmp of ["u8 > li", "wide < u32", "u32 === wide", "count() > 0", "count() == (li as uint64)", "(count() as int32) < li"]) {
+		assert strictErrorCount(pre + "const c = " + cmp + ";") == 0, cmp;
+	}
+}

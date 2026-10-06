@@ -13,12 +13,26 @@ function readHunger(this pet: LocatedPet): int32 { return pet.hunger; }
 function locatedPet(value: int32): LocatedPet {
 	return { hunger: value, name: "a", inner: { v: 1, tags: [2] }, tags: [1, 2] };
 }
+function putThroughRef(ref value: uint8): void { value = 99; }
+function forwardRef(ref value: uint8): void { putThroughRef(value); }
+function writeSecond(view: Span<uint8>): void { forwardRef(view[1]); }
+function replaceThroughRef(ref value: StoredValue): void { value = { n: 77 }; }
+function replaceSecond(view: Span<StoredValue>): void { replaceThroughRef(view[1]); }
+struct ByteLaid { a: uint32; b: uint8; }
+function firstByteOf(view: Span<ByteLaid>): uint8 { return (view as Ptr<void> as Ptr<uint8>)[0]; }
+function firstByteOfSized(values: ByteLaid[2]): uint8 { return ((values as Span<ByteLaid>) as Ptr<void> as Ptr<uint8>)[0]; }
+function writeThroughSpanPointer(view: Span<ByteLaid>): void { const pointer = view as Ptr<ByteLaid>; pointer[].a = 9; pointer[1].b = 7; }
+struct WideValue { a: int64; b: int64; c: int64; d: int64; e: int64; }
+function peekThroughAddress(value: WideValue): int64 { const view = value as Ptr<WideValue>; return view[].a; }
+function appendThroughRef(ref text: string): void { text = text + "!"; text += "?"; text += "ab"; }
+extern function msPtrBits(p: Ptr<void>): uint64;
+function pointerBits(p: Ptr<void>): uint64 { return msPtrBits(p); }
 let locationReads: int32 = 0;
 function selectedIndex(): int32 { locationReads++; return 1; }
 
 test "valueLocations: native stores copy value elements rather than sharing their source" {
 	let value: StoredValue = { n: 1 };
-	const owned: Vec<StoredValue> = [];
+	let owned: Vec<StoredValue> = [];
 	const shared: StoredValue[] = [];
 	const throughCall: StoredValue[] = [];
 	owned.push(value);
@@ -80,7 +94,7 @@ test "valueLocations: in-place aggregate assignment preserves nested locations w
 	let elements: StoredOuter[1] = [{ a: 1, inner: { v: 2, tags: [1] } }];
 	const view = elements[0] as Ptr<StoredOuter>;
 	const nested = elements[0].inner as Ptr<StoredInner>;
-	const source: StoredOuter = { a: 3, inner: { v: 4, tags: [9, 9] } };
+	let source: StoredOuter = { a: 3, inner: { v: 4, tags: [9, 9] } };
 	elements[0] = source;
 	assert view.a == 3 && nested.v == 4;
 	assert view.inner.tags.length == 2 && view.inner.tags[1] == 9;
@@ -390,4 +404,73 @@ test "valueLocations: a throw before an explicit move never evaluates the moved 
 	try { explicitAfterThrow(true); } catch (e) { caught = true; }
 	assert caught && movedIndexReads == 0;
 	assert explicitAfterThrow(false) == 2 && movedIndexReads == 1;
+}
+
+test "valueLocations: a span element forwarded through ref parameters writes the original array" {
+	let values: uint8[] = [11, 22, 33, 44];
+	writeSecond(values);
+	assert values[0] == 11 && values[1] == 99 && values[2] == 33 && values[3] == 44;
+}
+
+test "valueLocations: a ref to a slice element keeps the slice offset into its sized array" {
+	let values: uint8[4] = [11, 22, 33, 44];
+	writeSecond(values[1..3]);
+	assert values[0] == 11 && values[1] == 22 && values[2] == 99 && values[3] == 44;
+}
+
+test "valueLocations: replacing a struct span element through ref reaches its storage" {
+	let values: StoredValue[] = [{ n: 1 }, { n: 2 }, { n: 3 }];
+	replaceSecond(values);
+	assert values[0].n == 1 && values[1].n == 77 && values[2].n == 3;
+}
+
+test "valueLocations: a span pointer dereferences and indexes the original elements" {
+	let values: ByteLaid[] = [{ a: 1, b: 2 }, { a: 3, b: 4 }];
+	writeThroughSpanPointer(values);
+	assert values[0].a == 9 && values[0].b == 2 && values[1].a == 3 && values[1].b == 7;
+	assert (values as Span<ByteLaid> as Ptr<ByteLaid>)[1].a == 3;
+}
+
+test "valueLocations: a native byte view of a span reads its first element's bytes" {
+	const values: ByteLaid[] = [{ a: 258, b: 9 }, { a: 3, b: 4 }];
+	assert firstByteOf(values) == 2;
+	const sized: ByteLaid[2] = [{ a: 515, b: 9 }, { a: 3, b: 4 }];
+	assert firstByteOfSized(sized) == 3;
+}
+
+test "valueLocations: a const or value-parameter address reads the value" {
+	const fixed: StoredValue = { n: 4 };
+	const view = fixed as Ptr<StoredValue>;
+	assert view[].n == 4;
+	assert peekThroughAddress({ a: 1, b: 2, c: 3, d: 4, e: 5 }) == 1;
+}
+
+test "valueLocations: a sized array's address is its first element" {
+	let values: uint8[2] = [7, 8];
+	const first = values as Ptr<uint8>;
+	assert first[0] == 7 && first[1] == 8;
+}
+
+test "valueLocations: a span of pointers yields a pointer to its first slot" {
+	let a: StoredValue = { n: 1 };
+	let b: StoredValue = { n: 2 };
+	const slots: Ptr<StoredValue>[] = [a as Ptr<StoredValue>, b as Ptr<StoredValue>];
+	const view: Span<Ptr<StoredValue>> = slots;
+	const firstSlot = view as Ptr<Ptr<StoredValue>>;
+	assert firstSlot[][].n == 1;
+}
+
+test "valueLocations: an integer holding an address reads the memory there" {
+	let stored: StoredValue = { n: 41 };
+	const bits = pointerBits(stored as Ptr<void>);
+	const at = bits as Ptr<StoredValue>;
+	at[].n = at[].n + 1;
+	assert stored.n == 42;
+	assert ((bits + 0) as Ptr<StoredValue>)[].n == 42;
+}
+
+test "valueLocations: a ref string parameter appends to the caller's string" {
+	let text = "hi";
+	appendThroughRef(text);
+	assert text == "hi!?ab";
 }

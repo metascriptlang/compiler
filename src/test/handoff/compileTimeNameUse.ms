@@ -54,3 +54,35 @@ console.log(doubled + n);
 	assert occurrences(messages, "'Op' is imported but never used") == 0, messages.join("\n");
 	assert occurrences(messages, "'other' is imported but never used") == 1, messages.join("\n");
 }
+
+test "compileTimeNameUse: a type named only inside a generic body counts as a use; a dead import still warns" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/lib.ms", entrySource: `export struct Record { address: uint64; }
+export type Proof<T> = distinct Record;
+export interface Host { tag: string; }
+export struct Slot { n: int32; }
+export struct Spare { n: int32; }
+` },
+		{ entryPath: "src/gen.ms", entrySource: `import { Proof, Record, Host, Slot, Spare } from "./lib";
+export function addressOf<T>(proof: Proof<T>): uint64 {
+	return (proof as Record).address;
+}
+export function visit<T>(value: T): int32 {
+	const measure = (host: Host): int32 => host.tag.length;
+	return 0;
+}
+export class Keeper<T> {
+	held: int32 = 0;
+	keep<U>(value: U): int32 {
+		const slot: Slot = { n: 2 };
+		return slot.n;
+	}
+}
+` },
+	];
+	const messages = checkProjectDiagnostics(entries, "src/gen.ms");
+	assert occurrences(messages, "'Record' is imported but never used") == 0, messages.join("\n");
+	assert occurrences(messages, "'Host' is imported but never used") == 0, messages.join("\n");
+	assert occurrences(messages, "'Slot' is imported but never used") == 0, messages.join("\n");
+	assert occurrences(messages, "'Spare' is imported but never used") == 1, messages.join("\n");
+}

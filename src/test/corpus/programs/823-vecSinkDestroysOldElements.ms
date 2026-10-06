@@ -4,7 +4,7 @@ class Item {
 }
 
 function mkVec(n: int32): Vec<Item> {
-	const v: Vec<Item> = [];
+	let v: Vec<Item> = [];
 	for (let i: int32 = 0; i < n; i++) { v.push(new Item("i" + i.toString())); }
 	return v;
 }
@@ -29,7 +29,7 @@ function sinkInLoop(): void {
 }
 
 function mkNullable(n: int32): Vec<Item | null> {
-	const v: Vec<Item | null> = [null];
+	let v: Vec<Item | null> = [null];
 	for (let i: int32 = 0; i < n; i++) { v.push(new Item("n" + i.toString())); }
 	return v;
 }

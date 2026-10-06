@@ -10,7 +10,8 @@ extern function msSolCopy(destination: uint64, source: uint64, length: uint64): 
 extern function msSolStringAddress(text: string): uint64;
 extern function msSolStringLength(text: string): uint64;
 extern function msSolSpanAddress(data: Readonly<Span<uint8>>): uint64;
-extern function msSolTableAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
+extern function msSolTableAddress(table: Span<SeedSlice>): uint64 from "msSolSpanAddress";
+extern function msSolSeedsAddress(table: Readonly<Span<SeedSlice>>): uint64 from "msSolSpanAddress";
 extern function msSolSignersAddress(table: Readonly<Span<SignerSeeds>>): uint64 from "msSolSpanAddress";
 extern function msSolCreateProgramAddress(
 	seeds: uint64,
@@ -69,7 +70,7 @@ export function seedKey(address: uint64): SeedSlice {
 }
 
 export function signerOf(seeds: Readonly<Span<SeedSlice>>): SignerSeeds {
-	return { address: msSolTableAddress(seeds), length: seeds.length as uint64 };
+	return { address: msSolSeedsAddress(seeds), length: seeds.length as uint64 };
 }
 
 function unsigned(): Signing {
@@ -77,7 +78,7 @@ function unsigned(): Signing {
 }
 
 export function tableAddress(table: Readonly<Span<SeedSlice>>): uint64 {
-	return msSolTableAddress(table);
+	return msSolSeedsAddress(table);
 }
 
 export function bytesAddress(bytes: Readonly<Span<uint8>>): uint64 {

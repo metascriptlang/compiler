@@ -1,8 +1,8 @@
 // Type Compatibility - table-driven assignability checking
 
-import { Type, TypeKind, SymbolKind } from "../ast/node";
+import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName } from "./types";
+import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, maybePayloadWidenSlot, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -161,6 +161,22 @@ export function isStructIntoPtr(source: Type | null, target: Type | null): boole
 	let t = skipModifier(target);
 	if (t != null && t.kind == TypeKind.Union) t = nonNullMemberOfNullable(t);
 	return s != null && t != null && s.kind == TypeKind.Struct && t.kind == TypeKind.Ptr;
+}
+
+export function isRefIntoValue(source: Type | null, target: Type | null): boolean {
+	const s = skipModifier(source);
+	let t = skipModifier(target);
+	if (t != null && t.kind == TypeKind.Union) t = nonNullMemberOfNullable(t);
+	return s != null && t != null && s.kind == TypeKind.Ref && !isAtomicRef(s) && s.typeReturn != null
+		&& isValuePointee(s.typeReturn) && t.kind != TypeKind.Ref && t.kind != TypeKind.Ptr;
+}
+
+export function isStructIntoRef(source: Type | null, target: Type | null): boolean {
+	const s = skipModifier(source);
+	let t = skipModifier(target);
+	if (t != null && t.kind == TypeKind.Union) t = nonNullMemberOfNullable(t);
+	return s != null && t != null && s.kind == TypeKind.Struct && t.kind == TypeKind.Ref
+		&& !isAtomicRef(t) && t.typeReturn != null && isValuePointee(t.typeReturn);
 }
 
 function isPointerShapedRepr(t: Type | null): boolean {
@@ -377,7 +393,10 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			TypeKind.Distinct => source.typeName == target.typeName,
 			TypeKind.EnumLiteral => sameEnumMember(source, target),
 			TypeKind.GenericInstance => {
-				if (!sameGenericBase(source, target)) return differentGenericsFit(source, target);
+				if (!sameGenericBase(source, target)) {
+					const ancestor = classAncestorInstance(source, target);
+					return ancestor != null ? isAssignable(ancestor, target) : differentGenericsFit(source, target);
+				}
 				const limit = source.typeChildren.length < target.typeChildren.length ? source.typeChildren.length : target.typeChildren.length;
 				const invariant = isNominalType(source);
 				for (let gi = 0; gi < limit; gi += 1) {
@@ -389,6 +408,12 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			TypeKind.Tuple => isTupleAssignable(source, target),
 			_ => true,
 		};
+	}
+
+	if ((target.kind == TypeKind.GenericInstance && source.kind == TypeKind.Struct)
+			|| (target.kind == TypeKind.Struct && source.kind == TypeKind.GenericInstance)) {
+		const ancestor = classAncestorInstance(source, target);
+		if (ancestor != null) return isAssignable(ancestor, target);
 	}
 
 	// Generic-alias instance carries its resolved body in typeReturn
@@ -502,11 +527,10 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 			return isAssignable(source.typeReturn, target.typeReturn);
 		}
 	}
-	// Ref<T> → T auto-deref: self-referential fields are promoted to Ref<T>,
-	// but passing them to functions expecting T should work transparently.
 	// Arc<T> does NOT auto-unwrap — sharing the pointee unguarded defeats the atomic rc.
 	if (source.kind == TypeKind.Ref && !isAtomicRef(source) && source.typeReturn != null) {
 		if (source.typeReturn.kind == TypeKind.Array && target.kind == TypeKind.Array) return false;
+		if (isValuePointee(source.typeReturn)) return false;
 		return isAssignable(source.typeReturn, target);
 	}
 
@@ -630,7 +654,7 @@ export function needsStdConv(source: Type, target: Type): boolean {
 	}
 	// Array/SizedArray/String to Span coercion requires struct initializer
 	if (target.kind == TypeKind.Span) {
-		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray) return true;
+		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray) return sameElement(source.typeReturn, target.typeReturn);
 		if ((source.kind == TypeKind.String || source.kind == TypeKind.StringLiteral) && target.typeReturn != null && target.typeReturn.kind == TypeKind.Char) return true;
 	}
 	// String/StringLiteral → CString requires msStringToCString extraction
@@ -734,9 +758,14 @@ function fnSlotReprMismatch(a: Type | null, b: Type | null): boolean {
 	return isReinterpretUnsafe(a, b);
 }
 
+function leavesInlineConv(source: Type, target: Type): boolean {
+	return source.callConv == CallingConvention.CcInline && target.callConv != CallingConvention.CcInline;
+}
+
 // Function assignability: contravariant params, covariant return
 function isFunctionAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
+	if (leavesInlineConv(source, target)) return false;
 	if (source.typeChildren.length != target.typeChildren.length) return false;
 	// Check params (contravariant: target params assignable to source params)
 	let i = 0;
@@ -763,7 +792,7 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 }
 
 // A literal bound without an annotation freezes as `__anonN__...` (anonStructName).
-function isAnonLiteralName(name: string): boolean {
+export function isAnonLiteralName(name: string): boolean {
 	return name.length > 6 && name.slice(0, 6) == "__anon";
 }
 
@@ -1175,8 +1204,9 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			TypeKind.Function => {
 				// Nim procTypeRel (sigmatch.nim:789): arity, then every param, then
 				// the return type, combined with minRel — the weakest component wins.
-				// callConv is deliberately not folded in (NIM-REF CK-52: MS has one
-				// closure repr, so it carries no discriminating information).
+				// callConv is folded in only for the inline convention (NIM-REF CK-52:
+				// MS has one closure repr, so the others carry no discriminating information).
+				if (leavesInlineConv(actual, formal)) return TypeRelation.None;
 				if (formal.typeChildren.length != actual.typeChildren.length) return TypeRelation.None;
 				let worst = TypeRelation.Exact;
 				for (let pi = 0; pi < formal.typeChildren.length; pi += 1) {
@@ -1223,7 +1253,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			&& actual.typeReturn.kind == TypeKind.Array ? actual.typeReturn : actual;
 		if (seq.kind == TypeKind.Array || seq.kind == TypeKind.SizedArray) {
 			const elemRel = typeRelation(formal.typeReturn, seq.typeReturn);
-			if (elemRel != TypeRelation.None) return TypeRelation.Subtype;
+			if (elemRel >= TypeRelation.Generic) return TypeRelation.Subtype;
 		}
 	}
 	// Error type = suppress cascading

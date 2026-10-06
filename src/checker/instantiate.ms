@@ -7,8 +7,9 @@
 import { methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams } from "./types";
+import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, classParentOf, runtimeClassSym, genericParamNamesOf } from "./types";
 import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
+import { splitTopLevel } from "../utils/string";
 import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
@@ -177,6 +178,22 @@ let _hookScannedInstances: HashMap<Symbol, HashSet<string>> = new HashMap<Symbol
 export function lookupInstanceHook(instanceName: string, methodName: string): Symbol | null {
 	const hook = _instanceHooks.get(instanceName + "." + methodName);
 	return hook != null ? hook.sym : null;
+}
+
+export function declaresUserHook(t: Type, ctx: CheckerContext): boolean {
+	const owner = t.sym;
+	const name = owner != null ? owner.name : t.typeName;
+	if (name == "") return false;
+	const registry = owner != null ? pickBodyCtx(owner.modulePath, ctx).extensionRegistry : ctx.extensionRegistry;
+	const instanceName = t.kind == TypeKind.GenericInstance ? monoInstanceName(t) : "";
+	for (const hookName of LIFECYCLE_HOOK_NAMES) {
+		if (instanceName != "" && lookupInstanceHook(instanceName, hookName) != null) return true;
+		if (registry == null || !hasExtensionByName(registry, hookName)) continue;
+		for (const m of findAllExtensionsByName(registry, hookName)) {
+			if (!m.isStatic && m.receiverTypeName == name) return true;
+		}
+	}
+	return false;
 }
 
 function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, instanceName: string, names: string[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
@@ -626,7 +643,12 @@ function substituteTypeStrings(strs: string[], names: string[], types: Type[]): 
 	}
 }
 
-const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter;
+const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticStorage | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.WhenDeferred | NodeFlag.ExplicitDeref;
+
+function isCheckerWrapper(node: Node): boolean {
+	if (node.kind == NodeKind.HiddenDeref) return !node.flags.has(NodeFlag.ExplicitDeref);
+	return node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.HiddenStdConv;
+}
 
 // ===== clearCheckerState =====
 // Collapse HiddenDeref/HiddenAddr/HiddenStdConv wrappers and clear resolvedSym/flags on a
@@ -652,7 +674,7 @@ function bindsInto(node: Node, redeclared: Symbol[]): boolean {
 
 function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void {
 	if (node == null) return;
-	while (node.kind == NodeKind.HiddenDeref || node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.HiddenStdConv) {
+	while (isCheckerWrapper(node)) {
 		const inner = node.kind == NodeKind.HiddenStdConv
 			? (node.data as HiddenStdConvData).convExpr
 			: (node.data as HiddenDerefData).expr;
@@ -660,6 +682,7 @@ function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void 
 		node.kind = inner.kind;
 		node.data = inner.data;
 		node.nodeType = inner.nodeType;
+		if (inner.flags.has(NodeFlag.ExplicitDeref)) node.flags = node.flags.incl(NodeFlag.ExplicitDeref);
 	}
 	// Enum member access is a mangled Identifier ("E_M") whose name is never bound
 	// in scope — resolvedSym is its ONLY resolution path (checkExprPass honors it,
@@ -995,7 +1018,10 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	}
 	const loc = ctorNode != null && ctorNode.location != null ? ctorNode.location : (classDeclNode.location != null ? classDeclNode.location : makeLoc(0, 0));
 	const structBase = unwrapClassStruct(classSym);
+	const canonical = canonicalInstance(structBase, concreteTypes, classSym);
+	const parent = classParentOf(canonical);
 	const substStruct = instanceStruct(structBase, mangledClass, dedup.names, dedup.types);
+	substStruct.typeExtra = parent;
 	const concreteClassType = createRef(substStruct);
 	const instSym = makeSymbol(mangledClass, SymbolKind.Class, concreteClassType, false);
 	instSym.state = SymbolState.Shaped;
@@ -1007,23 +1033,33 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	instances.push(instSym);
 	host.typeInstCache.set(classSym, instances);
 	const classBody: Node[] = instanceFieldInits(classData, dedup.names, dedup.types, substStruct, classSym, ctx, loc);
-	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, dedup.names, dedup.types, mangledClass, createRef(canonicalInstance(structBase, concreteTypes, classSym)), ctx, loc));
+	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, dedup.names, dedup.types, mangledClass, createRef(canonical), ctx, loc));
 	// Set classNode.nodeType to the concrete (instantiated) class type so the
 	// methodToFunction transform can pull the right receiver type when lifting
 	// the ctor — without it, `this` falls back to `void*` in the generated
 	// `<MangledClass>_init` signature and `(*this).field` accesses fail to type
 	// check at the C level.
-	const classNodeData: NodeData = { className: mangledClass, classExtends: "", classBody, nameLocation: loc };
+	const classNodeData: NodeData = { className: mangledClass, classExtends: parent != null ? typeDisplayName(parent) : "", classBody, nameLocation: loc };
 	const classNode = createNodeAt(NodeKind.ClassDecl, classNodeData, loc);
 	classNode.nodeType = concreteClassType;
 	classNode.resolvedSym = instSym;
 	instSym.declNode = classNode;
 	addPendingInstance(host, classNode);
+	instantiateParentClass(parent, ctx);
 	instantiateInstanceHooks(structBase.sym != null ? structBase.sym : classSym, classData, mangledClass, dedup.names, dedup.types, ctx, loc);
 	const instType = createGenericInstance(structBase, dedup.types);
 	instType.typeName = classSym.name;
 	instantiateHooksInType(instType, ctx, loc, 0);
 	return instSym;
+}
+
+export function instantiateParentClass(parent: Type | null, ctx: CheckerContext): Symbol | null {
+	const body = parent != null && parent.kind == TypeKind.Ref ? parent.typeReturn : parent;
+	if (body == null || body.kind != TypeKind.GenericInstance || hasGenericParams(body)) return null;
+	const cls = runtimeClassSym(body);
+	if (cls == null) return null;
+	const names = splitTopLevel(genericParamNamesOf(symGenericParams(cls)), ",").map((n: string): string => n.trim());
+	return instantiateClassConstructor(cls, names, body.typeChildren, ctx);
 }
 
 function unwrapClassStruct(classSym: Symbol): Type {

@@ -6,6 +6,7 @@
 // Float/string/boolean types are rejected at the checker phase.
 
 import { TypeKind } from "../../ast/node";
+import { typeDisplayName } from "../../checker/types";
 import { checkSource, errorCount, strictErrorCount, warningCount, hasError, hasWarning } from "./helpers";
 import { lookupSymbol } from "../../checker/symbol";
 import { Severity } from "../../checker/context";
@@ -188,4 +189,67 @@ test "~int32 result is int32" {
 	const sym = lookupSymbol(ctx.table, "b");
 	assert sym != null;
 	assert sym.symbolType.kind == TypeKind.Int32;
+}
+
+// ===== Compound bitwise assignment: the binary operator, stored into the target =====
+
+test "every bitwise compound assignment is valid on a sized integer" {
+	assert strictErrorCount("let a: uint8 = 1;\na |= 0x80;\na &= 0x0F;\na ^= 1;\na <<= 1;\na >>= 1;\na >>>= 1;") == 0;
+	assert strictErrorCount("let b: int64 = 1;\nconst k: int64 = 3;\nb <<= k;\nb >>= k;\nb |= k;") == 0;
+}
+
+test "a BitSet takes |= &= ^= with a member or a set" {
+	assert strictErrorCount("enum F { A, B }\nlet s = (0 as BitSet<F>).incl(F.A);\ns |= F.B;\ns &= F.A | F.B;\ns ^= F.A;") == 0;
+}
+
+test "a bitwise compound assignment keeps the binary same-size rule" {
+	assert hasError("let a: int32 = 1;\nconst w: int64 = 2;\na |= w;", "bitwise operator '|=' requires same integer size");
+	assert hasError("let u: uint64 = 1;\nconst c: int32 = 3;\nu <<= c;", "bitwise operator '<<=' requires same integer size");
+}
+
+test "a bitwise compound assignment takes the targets its binary operator takes" {
+	assert strictErrorCount("let n: number = 5;\nn |= 1;\nn &= 3;\nn ^= 1;\nn <<= 2;\nn >>= 1;\nn >>>= 1;") == 0;
+	assert hasWarning("let n: number = 5;\nn |= 1;", "bitwise operator '|=' on 'number' implicitly casts to int32");
+	assert hasError("let f: float64 = 5;\nf <<= 1;", "bitwise operator '<<=' requires integer type, got 'float64'");
+}
+
+test "a bitwise compound assignment stores only what the target holds" {
+	assert hasError("enum E { A, B }\nlet e: E = E.A;\ne |= E.B;", "'|=' cannot store the 'BitSet<E>' result of '|' in 'E'");
+	assert hasError("let j: int32 = -1;\nj >>>= 1;", "'>>>=' cannot store the 'uint32' result of '>>>' in 'int32'");
+	assert hasError("let j: int8 = -1;\nj >>>= 1;", "'>>>=' cannot store the 'uint8' result of '>>>' in 'int8'");
+	assert hasError("let j: int64 = -1;\nj >>>= 1;", "'>>>=' cannot store the 'uint64' result of '>>>' in 'int64'");
+}
+
+test "an unsigned right shift of a signed integer is the unsigned type of its width" {
+	const cases = [["let i: int8 = -1;\nconst r = i >>> 0;", "uint8"], ["let i: int16 = -1;\nconst r = i >>> 1;", "uint16"],
+		["let i: int64 = -1;\nconst r = i >>> 0;", "uint64"], ["let i: uint8 = 255;\nconst r = i >>> 1;", "uint8"]];
+	for (const c of cases) {
+		const ctx = checkSource(c[0]);
+		assert ctx != null, c[0];
+		assert typeDisplayName(lookupSymbol(ctx.table, "r").symbolType) == c[1], c[0];
+	}
+	assert hasError("let i: int8 = -1;\nconst x: int8 = i >>> 1;", "implicit uint8 → int8 conversion may exceed the target's maximum");
+}
+
+test "an unsigned right shift of an int32 or a number is uint32" {
+	for (const src of ["let i: int32 = -1;\nconst r = i >>> 1;", "let n: number = -1;\nconst r = n >>> 1;", "const r = -1 >>> 0;"]) {
+		const ctx = checkSource(src);
+		assert ctx != null, src;
+		assert lookupSymbol(ctx.table, "r").symbolType.kind == TypeKind.Uint32, src;
+	}
+	assert strictErrorCount("let i: int32 = -1;\nconst u: uint32 = i >>> 0;") == 0;
+	assert hasError("let i: int32 = -1;\nconst x: int32 = i >>> 1;", "implicit uint32 → int32 conversion may exceed the target's maximum");
+}
+
+test "a bitwise compound assignment is a statement" {
+	assert hasError("let a: int32 = 1;\nconst b = (a |= 2);", "assignment is a statement");
+}
+
+test "a bitwise compound assignment refuses what the binary operator refuses on bigint" {
+	assert hasError("let g: bigint = 5n;\ng >>>= 1n;", "operator '>>>=' is not allowed on bigint — use '>>='");
+	assert hasError("let g: bigint = 5n;\ng |= 1;", "cannot mix bigint and 'int32' in '|='");
+}
+
+test "a bitwise compound assignment is a mutation of a readonly parameter" {
+	assert hasError("function h(readonly x: uint8[]): void { x[0] |= 2; }", "cannot mutate readonly parameter 'x'");
 }

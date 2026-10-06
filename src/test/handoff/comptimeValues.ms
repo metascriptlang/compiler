@@ -52,6 +52,10 @@ test "comptime values: integer representation" {
 		{ name: "float to int truncates toward zero r", source: "const f: float64 = 7.9; return f as int32;", low: 7, high: 7 },
 		{ name: "float to int truncates toward zero n", source: "const f: float64 = -7.9; return f as int32;", low: -7, high: -7 },
 		{ name: "unsigned narrowing wraps r", source: "const i: int32 = 300; return i as uint8;", low: 44, high: 44 },
+		{ name: "an unsigned right shift masks its count to 31 r", source: "const a: int32 = -8; const k: int32 = 33; return a >>> k;", low: 2147483644, high: 2147483644 },
+		{ name: "a number bitwise operand past int32 wraps by ToInt32 r", source: "const n: number = 3000000000.7; return n | 0;", low: -1294967296, high: -1294967296 },
+		{ name: "a number bitwise operand at 2^31 wraps by ToInt32 r", source: "const n: number = 2147483648; return ~n;", low: 2147483647, high: 2147483647 },
+		{ name: "a number compound operand past int32 wraps by ToInt32 r", source: "let k: int32 = 0; const n: number = -2147483649.5; k |= n; return k;", low: 2147483647, high: 2147483647 },
 	];
 	for (const item of cases) {
 		const result = evalSourceFull(item.source);
@@ -97,9 +101,19 @@ test "comptime values: floating representation" {
 	}
 }
 
+test "comptime values: an unsigned right shift of an int32 or a number is uint32" {
+	const wide: int64 = 4294967295;
+	for (const source of ["const a: int32 = -1; return a >>> 0;", "const a: int32 = -1; const k: int32 = 32; return a >>> k;", "let n: number = -1; n >>>= 0; return n as int64;"]) {
+		const result = evalSourceFull(source);
+		assert result.lastError == "", source + ": " + result.lastError;
+		assert result.lastResult.kind == RaiserValueKind.Int, source;
+		assert result.lastResult.intVal == wide, source;
+	}
+}
+
 test "comptime values: unsupported evaluation" {
 	const cases = [
-		{ name: "an operator the engine cannot evaluate is a compile error, not a silent 0 r", source: "const a: int32 = -8; return a >>> 1;", low: 0, high: 0 },
+		{ name: "an operator the engine cannot evaluate is a compile error, not a silent 0 r", source: "const o = { x: 1 }; return \"x\" in o;", low: 0, high: 0 },
 	];
 	for (const item of cases) {
 		const result = evalSourceFull(item.source);
@@ -108,7 +122,7 @@ test "comptime values: unsupported evaluation" {
 }
 
 test "comptime values: an operator the engine cannot evaluate is reported by name" {
-	const result = evalSourceFull("const a: int32 = -8; return a >>> 1;");
-	const expected = "cannot evaluate operator '>>>' at comptime";
+	const result = evalSourceFull("const o = { x: 1 }; return \"x\" in o;");
+	const expected = "cannot evaluate operator 'in' at comptime";
 	assert result.lastError.contains(expected), result.lastError;
 }

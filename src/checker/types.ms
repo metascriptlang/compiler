@@ -137,32 +137,13 @@ export function anonStructName(fieldNames: string[], fieldTypes: Type[]): string
 	let i = 0;
 	while (i < fieldNames.length) {
 		const ft = i < fieldTypes.length ? fieldTypes[i] : null;
-		let suffix = "x";
-		if (ft != null) {
-			suffix = match (ft.kind) {
-				TypeKind.Number | TypeKind.Float64 => "n",
-				TypeKind.Float32 => "f",
-				TypeKind.String => "s",
-				TypeKind.Boolean => "b",
-				TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => "i",
-				TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "u",
-				TypeKind.Array => {
-					// Distinguish array element types to avoid struct name collision
-					// (e.g., string[] field vs unknown[] field producing the same anon struct name)
-					if (ft.typeReturn != null) {
-						return match (ft.typeReturn.kind) {
-							TypeKind.String => "As",
-							TypeKind.Number | TypeKind.Float64 => "An",
-							TypeKind.Boolean => "Ab",
-							_ => "x",
-						};
-					} else {
-						return "x";
-					}
-				},
-				_ => "x",
-			};
-		}
+		const suffix = ft == null ? "x" : match (ft.kind) {
+			TypeKind.Number | TypeKind.Float64 => "n",
+			TypeKind.Float32 => "f",
+			TypeKind.String => "s",
+			TypeKind.Boolean => "b",
+			_ => "x" + _stdHashToBase36(typeKey(ft)),
+		};
 		name = name + "__" + fieldNames[i] + suffix;
 		i = i + 1;
 	}
@@ -1532,6 +1513,15 @@ export function isAtomicRef(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Ref && t.typeFlags.has(TypeFlag.IsAtomic);
 }
 
+export function isValuePointee(pointee: Type): boolean {
+	if (pointee.kind == TypeKind.Void) return false;
+	if (pointee.kind == TypeKind.Struct || pointee.kind == TypeKind.GenericInstance) {
+		const decl = pointee.kind == TypeKind.GenericInstance && pointee.typeExtra != null ? pointee.typeExtra : pointee;
+		return decl.sym != null && decl.sym.symbolKind == SymbolKind.Struct;
+	}
+	return pointee.kind != TypeKind.Array && pointee.kind != TypeKind.Function;
+}
+
 // Locked<T> (PARALOCK I22) — the one sanctioned shared-mutable cell. ONE
 // allocation: atomic-rc header + inline ticket lock + typed payload, so the
 // handle IS an atomic Ref and every mechanism Arc already drives (atomic
@@ -1571,7 +1561,7 @@ export function isReadonlyView(t: Type | null): boolean {
 	return t.typeFlags.has(TypeFlag.IsReadonly);
 }
 
-function copyTypeShallow(t: Type): Type {
+export function copyTypeShallow(t: Type): Type {
 	const c = emptyType();
 	c.kind = t.kind;
 	c.typeName = t.typeName;
@@ -2527,6 +2517,70 @@ export function hasDestructor(t: Type | null): boolean {
 	return getAttachedOp(t, AttachedOp.AttachedDestructor) != null;
 }
 
+// Maybe<T> is judged by its payload: the JS backend erases the C `{ value, present }`
+// carrier to a native `T | null`, so a copy made for the carrier would deep-copy a
+// plain nullable string (corpus 015 "p1=[object Object]").
+export function valueCopyRepr(t: Type | null): Type | null {
+	const base = distinctBody(t);
+	if (base != null) return valueCopyRepr(base);
+	if (t != null && t.kind == TypeKind.Struct && t.typeFlags.has(TypeFlag.IsMaybe)) {
+		return valueCopyRepr(t.typeReturn);
+	}
+	if (t != null && t.kind == TypeKind.Set) {
+		const repr = setRepr(t);
+		if (repr != null) return repr;
+	}
+	if (t != null && t.kind == TypeKind.GenericInstance && isStructType(t.typeReturn)) return t.typeReturn;
+	return t;
+}
+
+export function needsValueCopy(t: Type | null): boolean {
+	t = valueCopyRepr(t);
+	if (t == null) return false;
+	if (t.kind == TypeKind.Struct) return t.typeFlags.has(TypeFlag.IsStruct);
+	if (t.kind == TypeKind.Tuple) return true;
+	if (t.kind == TypeKind.Array) return true;
+	if (t.kind == TypeKind.SizedArray) return true;
+	return false;
+}
+
+const PLAIN_DATA_MAX_DEPTH = 64;
+
+export function isPlainDataType(t: Type | null, declaresHook: (owner: Type) => boolean): boolean {
+	return plainDataAt(t, declaresHook, 0);
+}
+
+function plainDataAt(t: Type | null, declaresHook: (owner: Type) => boolean, depth: int32): boolean {
+	if (t == null) return true;
+	if (depth > PLAIN_DATA_MAX_DEPTH || isAwaitable(t)) return false;
+	const base = distinctBody(t);
+	if (base != null) return plainDataAt(base, declaresHook, depth + 1);
+	const peeled = peelTransparentInstance(t);
+	if (peeled != t) return plainDataAt(peeled, declaresHook, depth + 1);
+	if (hasAsgnFlag(t)) return false;
+	if (isPrimitiveKind(t.kind)) return true;
+	return match (t.kind) {
+		TypeKind.Char | TypeKind.BooleanLiteral | TypeKind.EnumLiteral | TypeKind.CString
+			| TypeKind.Ptr | TypeKind.Borrow | TypeKind.Span | TypeKind.Set => true,
+		TypeKind.Distinct | TypeKind.Alias | TypeKind.Sink | TypeKind.SizedArray => plainDataAt(t.typeReturn, declaresHook, depth + 1),
+		TypeKind.Tuple => plainDataAll(t.typeChildren, declaresHook, depth),
+		TypeKind.Struct when (isMaybeType(t)) => plainDataAt(t.typeReturn, declaresHook, depth + 1),
+		TypeKind.Struct when (isStructType(t)) => !declaresHook(t) && plainDataAll(t.typeChildren, declaresHook, depth),
+		TypeKind.Union => !unionHasMemberOfKind(t, TypeKind.StringLiteral) && !declaresHook(t)
+			&& plainDataAll(t.typeChildren, declaresHook, depth),
+		TypeKind.GenericInstance => t.typeReturn != null && !hasAsgnFlag(t.typeReturn) && !declaresHook(t)
+			&& plainDataAt(t.typeReturn, declaresHook, depth + 1),
+		_ => false,
+	};
+}
+
+function plainDataAll(ts: Type[], declaresHook: (owner: Type) => boolean, depth: int32): boolean {
+	for (const c of ts) {
+		if (!plainDataAt(c, declaresHook, depth + 1)) return false;
+	}
+	return true;
+}
+
 // ===== Tuple Type Name (reference parity: deterministic name for structural types) =====
 // DJB2 hash of type structure → "msTuple_HASH". Same algorithm as C codegen
 // (types.ms:genTupleType) so generated comparison functions match struct names.
@@ -2764,6 +2818,38 @@ function genericInstanceClass(gi: Type): Type | null {
 	return base != null && base.kind == TypeKind.Ref ? base.typeReturn : base;
 }
 
+export function classParentOf(t: Type | null): Type | null {
+	if (t == null) return null;
+	const s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	if (s.kind == TypeKind.GenericInstance) {
+		const cls = genericInstanceClass(s);
+		if (cls == null || cls.kind != TypeKind.Struct || cls.typeExtra == null) return null;
+		const names = splitTopLevel(genericParamsOf(s), ",");
+		if (names.length == 0 || names.length > s.typeChildren.length) return cls.typeExtra;
+		const args: Type[] = [];
+		for (let i = 0; i < names.length; i += 1) {
+			names[i] = names[i].trim();
+			args.push(s.typeChildren[i]);
+		}
+		return substituteAllParams(cls.typeExtra, names, args);
+	}
+	return s.kind == TypeKind.Struct ? s.typeExtra : null;
+}
+
+export function classAncestorInstance(t: Type | null, target: Type): Type | null {
+	const tgt = target.kind == TypeKind.Ref && target.typeReturn != null ? target.typeReturn : target;
+	const tgtClass = tgt.kind == TypeKind.GenericInstance ? genericInstanceClass(tgt) : tgt;
+	if (tgtClass == null || tgtClass.kind != TypeKind.Struct || tgtClass.sym == null || tgtClass.sym.symbolKind != SymbolKind.Class) return null;
+	let cur = classParentOf(t);
+	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		const body = cur.kind == TypeKind.Ref && cur.typeReturn != null ? cur.typeReturn : cur;
+		const cls = body.kind == TypeKind.GenericInstance ? genericInstanceClass(body) : body;
+		if (cls != null && cls.sym == tgtClass.sym && (body.kind == TypeKind.GenericInstance) == (tgt.kind == TypeKind.GenericInstance)) return body;
+		cur = classParentOf(body);
+	}
+	return null;
+}
+
 function isClassOrSubclass(sub: Type, sup: Type): boolean {
 	const supBody = sup.typeReturn;
 	const supSym = runtimeClassSym(supBody);
@@ -2982,6 +3068,29 @@ function holdsView(t: Type | null, seen: TypeVisitSet): boolean {
 function anyChildHoldsView(t: Type, seen: TypeVisitSet): boolean {
 	for (const child of t.typeChildren) {
 		if (holdsView(child, seen)) return true;
+	}
+	return false;
+}
+
+export function mayHoldAddress(t: Type | null): boolean {
+	return holdsAddress(t, new TypeVisitSet());
+}
+
+function holdsAddress(t: Type | null, seen: TypeVisitSet): boolean {
+	if (t == null || !typeVisitAdd(seen, t)) return false;
+	return match (t.kind) {
+		TypeKind.Var | TypeKind.Span | TypeKind.Borrow | TypeKind.Ptr | TypeKind.Lent => true,
+		TypeKind.Sink | TypeKind.Alias | TypeKind.Cursor | TypeKind.Distinct => holdsAddress(t.typeReturn, seen),
+		TypeKind.Array | TypeKind.SizedArray | TypeKind.Ref => holdsAddress(t.typeReturn, seen),
+		TypeKind.GenericInstance => holdsAddress(t.typeExtra, seen),
+		TypeKind.Struct | TypeKind.Tuple | TypeKind.Union => anyChildHoldsAddress(t, seen),
+		_ => false,
+	};
+}
+
+function anyChildHoldsAddress(t: Type, seen: TypeVisitSet): boolean {
+	for (const child of t.typeChildren) {
+		if (holdsAddress(child, seen)) return true;
 	}
 	return false;
 }
@@ -3410,7 +3519,11 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		// Affine and plain Promises share typeName "Promise" — their distinction
 		// is in flag bits, not in the name. Simple equality covers both.
 		const namesMatch = formal.typeName == concrete.typeName;
-		if (!namesMatch) return;
+		if (!namesMatch) {
+			const ancestor = classAncestorInstance(concrete, formal);
+			if (ancestor != null) unifyType(formal, ancestor, bindings);
+			return;
+		}
 		const limit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
 		for (let gi = 0; gi < limit; gi += 1) {
 			unifyType(formal.typeChildren[gi], concrete.typeChildren[gi], bindings);
@@ -3419,6 +3532,11 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	}
 	// GenericInstance vs Struct (either direction) — try base type matching
 	if (formal.kind == TypeKind.GenericInstance && concrete.kind == TypeKind.Struct) {
+		const ancestor = classAncestorInstance(concrete, formal);
+		if (ancestor != null) {
+			unifyType(formal, ancestor, bindings);
+			return;
+		}
 		if (formal.typeExtra != null) {
 			unifyType(formal.typeExtra, concrete, bindings);
 		}
@@ -3537,6 +3655,15 @@ function genericScan(t: Type | null, active: TypeVisitSet): boolean {
 }
 
 // ===== Type Query Helpers =====
+
+export function isValueStorage(t: Type | null): boolean {
+	if (t == null) return false;
+	if ((t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) && t.typeReturn != null) return isValueStorage(t.typeReturn);
+	const k = t.kind;
+	return k == TypeKind.Struct || k == TypeKind.Array || k == TypeKind.GenericInstance
+		|| k == TypeKind.Tuple || k == TypeKind.String || k == TypeKind.Function
+		|| k == TypeKind.Union;
+}
 
 export function isNumeric(t: Type | null): boolean {
 	if (t == null) return false;
@@ -3914,6 +4041,7 @@ export function typeDisplayName(t: Type | null): string {
 }
 function typeDisplayNameInner(t: Type | null): string {
 	if (t == null) return "<null>";
+	if (t.kind == TypeKind.Function && t.callConv == CallingConvention.CcInline) return "@inline function";
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
 		return "..." + typeDisplayName(t.typeChildren[0]);
 	}
@@ -3924,6 +4052,9 @@ function typeDisplayNameInner(t: Type | null): string {
 	// A generic instance erases to its base name, so two different
 	// instantiations render identically ("expected X, got X"). Spell the type
 	// arguments the user wrote.
+	if (t.kind == TypeKind.Ref && !isAtomicRef(t) && t.typeReturn != null && isValuePointee(t.typeReturn)) {
+		return "Ref<" + typeDisplayName(t.typeReturn) + ">";
+	}
 	if (t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.GenericInstance) {
 		return typeDisplayName(t.typeReturn);
 	}
@@ -3938,6 +4069,8 @@ function typeDisplayNameInner(t: Type | null): string {
 	if (t.kind == TypeKind.Set) return "BitSet<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Borrow && t.typeReturn != null) return "Borrow<" + typeDisplayName(t.typeReturn) + ">";
 	if (t.kind == TypeKind.Span && t.typeReturn != null) return "Span<" + typeDisplayName(t.typeReturn) + ">";
+	if (t.kind == TypeKind.Array && t.typeReturn != null) return "Vec<" + typeDisplayName(t.typeReturn) + ">";
+	if (t.kind == TypeKind.SizedArray && t.typeReturn != null) return typeDisplayName(t.typeReturn) + "[" + String(t.typeValue) + "]";
 	if (t.kind == TypeKind.Var && t.typeReturn != null) return "out " + typeDisplayName(t.typeReturn);
 	if (isMaybeType(t) && t.typeReturn != null) return typeDisplayName(t.typeReturn) + " | null";
 	const shape = namelessObjectShape(t);

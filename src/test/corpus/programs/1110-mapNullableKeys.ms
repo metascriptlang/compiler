@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msHiXorLo
 // Parity program — a nullable key (`T | null`) keeps null apart from every value of T, the zero
 // value included: on C the key hashes like an Option, folding the payload and its presence.
 //

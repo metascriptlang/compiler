@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM shares one binding across sibling closures (prints '10,15,10,15,' where C prints '0,5,10,15,')
 type StrThunk = () => string;
 type IntThunk = () => int32;
 

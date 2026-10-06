@@ -533,6 +533,45 @@ function helloEmitClean(): void {
 	ok(tag);
 }
 
+function deadFrameEmitsNoHooks(): void {
+	const tag = "deadFrameEmitsNoHooks";
+	const dir = freshDir("deadframe");
+	writeFile(`${dir}/lib.ms`, "export function used(): int32 { return 1; }\n"
+		+ "export function deadClosure(label: string): () => string { let s = label; return (): string => { s = s + \"+\"; return s; }; }\n"
+		+ "export async function deadAsync(label: string): Promise<string> { const s = label + \"!\"; await Promise.resolve(0); return s; }\n"
+		+ "export function* deadGen(label: string): Iterator<string> { const s = label + \"?\"; yield s; yield s; }\n"
+		+ "export function liveClosure(label: string): () => string { let s = label; return (): string => { s = s + \"+\"; return s; }; }\n");
+	writeFile(`${dir}/main.ms`, "import { used, liveClosure } from \"./lib\";\nconst f = liveClosure(\"a\");\nconsole.log(`${used()} ${f()} ${f()}`);\n");
+	const b = execFileResult(MSC, ["build", "main.ms", "--gc=drc", "--emit=c"], dir);
+	writeFile(`${LOG_DIR}/${tag}.log`, both(b));
+	if (!succeeded(b)) {
+		fail(tag, "emit error");
+		return;
+	}
+	let liveHooks = false;
+	for (const f of readDir(`${dir}/out/debug`)) {
+		if (!f.endsWith(".c")) continue;
+		const text = try readFile(`${dir}/out/debug/${f}`) catch "";
+		for (const owner of ["deadClosure", "deadAsync", "deadGen"]) {
+			if (text.contains(`dollarEnv_${owner}_sharedDestroy_(`)) {
+				fail(tag, `${f} emits the frame hooks of ${owner}, which nothing calls`);
+				return;
+			}
+		}
+		if (text.contains("dollarEnv_liveClosure_sharedDestroy_(")) liveHooks = true;
+	}
+	if (!liveHooks) {
+		fail(tag, "the frame hooks of liveClosure, which main calls, are missing");
+		return;
+	}
+	const r = execFileResult(MSC, ["run", "--gc=drc", "main.ms"], dir);
+	if (!succeeded(r) || !r.output.contains("1 a+ a++")) {
+		fail(tag, `liveClosure printed '${r.output.trim()}', expected '1 a+ a++'`);
+		return;
+	}
+	ok(tag);
+}
+
 // Nim follows only symbols into code generation: a field is never a routine,
 // so a destroy hook reading `label` must not keep another module's `label()`.
 function fieldNameKeepsNoRoutine(): void {
@@ -619,6 +658,7 @@ function main(): void {
 	}
 
 	helloEmitClean();
+	deadFrameEmitsNoHooks();
 	fieldNameKeepsNoRoutine();
 	preludeGate("preludeUserModule", "gi", `${GUARD_DIR}/fixtures/preludeUserModule`, "neonGuardPreludeProbe",
 		"globalImports symbol never reached the entry module", "", "");

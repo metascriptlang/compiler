@@ -35,16 +35,23 @@ export function parentClassSymOf(classSym: Symbol): Symbol {
 	if (t == null || t.typeExtra == null) return null as unknown as Symbol;
 	let p = t.typeExtra;
 	if (p.kind == TypeKind.Ref && p.typeReturn != null) p = p.typeReturn;
+	if (p.kind == TypeKind.GenericInstance && p.typeExtra != null) p = p.typeExtra;
+	if (p.kind == TypeKind.Ref && p.typeReturn != null) p = p.typeReturn;
 	if (p.sym == null) return null as unknown as Symbol;
 	return p.sym;
 }
 
 export function getCtorParamTypes(classSym: Symbol): Type[] {
+	const fnType = ctorFnTypeOf(classSym);
+	return fnType != null ? fnType.typeChildren : null as unknown as Type[];
+}
+
+export function ctorFnTypeOf(classSym: Symbol): Type | null {
 	let sym = classSym;
 	let depth = 0;
 	while (sym != null && depth < 64) {
 		const decl = classDeclNodeOf(sym);
-		if (decl == null) return null as unknown as Type[];
+		if (decl == null) return null;
 		let body: Node[] = null as unknown as Node[];
 		if (decl.kind == NodeKind.ClassDecl) {
 			body = (decl.data as ClassDeclData).classBody;
@@ -55,14 +62,14 @@ export function getCtorParamTypes(classSym: Symbol): Type[] {
 			for (const member of body) {
 				if (member.kind == NodeKind.ConstructorDecl && member.nodeType != null
 						&& member.nodeType.kind == TypeKind.Function) {
-					return member.nodeType.typeChildren;
+					return member.nodeType;
 				}
 			}
 		}
 		sym = parentClassSymOf(sym);
 		depth += 1;
 	}
-	return null as unknown as Type[];
+	return null;
 }
 
 

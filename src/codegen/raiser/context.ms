@@ -69,6 +69,7 @@ export interface RaiserBreakPatches {
 
 export interface RaiserLoopInfo {
 	startIp: int32;
+	label: string;
 	breakPatches: RaiserBreakPatches;
 	// Each loop kind patches these to its own "re-enter" point: for-of/for-stmt
 	// to the update step (NOT loop start — else continue skips the update and
@@ -297,9 +298,10 @@ export function patchAbxTo(s: RaiserCompState, idx: int32, op: RaiserOpcode, a: 
 
 // --- Loop helpers ---
 
-export function pushLoop(s: RaiserCompState, startIp: int32): void {
+export function pushLoop(s: RaiserCompState, startIp: int32, label: string): void {
 	const info: RaiserLoopInfo = {
 		startIp,
+		label,
 		breakPatches: { items: [] },
 		continuePatches: { items: [] },
 	};
@@ -318,8 +320,12 @@ export function currentLoop(s: RaiserCompState): RaiserLoopInfo {
 	return s.loopStack.items[len - 1];
 }
 
-export function hasLoop(s: RaiserCompState): boolean {
-	return s.loopStack.items.length > 0;
+export function jumpTarget(s: RaiserCompState, label: string): RaiserLoopInfo | null {
+	for (let i = s.loopStack.items.length - 1; i >= 0; i = i - 1) {
+		const loop = s.loopStack.items[i];
+		if (label == "" || loop.label == label) return loop;
+	}
+	return null;
 }
 
 // --- Function map helpers ---

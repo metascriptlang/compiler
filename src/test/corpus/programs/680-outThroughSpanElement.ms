@@ -1,9 +1,4 @@
 // @stdout: 1 42 3 7 5 9 | 3 | 10 11
-// @xfail(c): C loses an out write through a span element; native Span/ref location is span-cast-void's bug653/corpus 678
-// @xfail(orc): C loses an out write through a span element; native Span/ref location is span-cast-void's bug653/corpus 678
-// @xfail(danger): C loses an out write through a span element; native Span/ref location is span-cast-void's bug653/corpus 678
-// @xfail(san): C loses an out write through a span element; native Span/ref location is span-cast-void's bug653/corpus 678
-// @xfail(raiser): the Raiser VM refuses an out write into a scalar ("writes in place only into a struct or an array")
 function setInt(out v: int32, n: int32): void {
 	v = n;
 }

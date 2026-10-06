@@ -91,11 +91,11 @@ function arithFn(op: string): string {
 		"/" | "/=" => "msBigIntDiv",
 		"%" | "%=" => "msBigIntMod",
 		"**" => "msBigIntPow",
-		"&" => "msBigIntAnd",
-		"|" => "msBigIntOr",
-		"^" => "msBigIntXor",
-		"<<" => "msBigIntShl",
-		">>" => "msBigIntShr",
+		"&" | "&=" => "msBigIntAnd",
+		"|" | "|=" => "msBigIntOr",
+		"^" | "^=" => "msBigIntXor",
+		"<<" | "<<=" => "msBigIntShl",
+		">>" | ">>=" => "msBigIntShr",
 		_ => "",
 	};
 }

@@ -1,6 +1,6 @@
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
-import { distinctBody } from "../../checker/types";
+import { distinctBody, isStructType } from "../../checker/types";
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserString, raiserFloat, raiserBool, raiserNil } from "../../raiser/value";
 import { peelToRepr, unwrapRef } from "../../checker/types";
@@ -10,6 +10,9 @@ function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
 	const base = distinctBody(valueType);
 	if (base != null) return copyPlan(s, base);
 	if (valueType != null && valueType.kind == TypeKind.Alias) {
+		return copyPlan(s, valueType.typeReturn);
+	}
+	if (valueType != null && valueType.kind == TypeKind.GenericInstance && isStructType(valueType.typeReturn)) {
 		return copyPlan(s, valueType.typeReturn);
 	}
 	if (valueType == null) return -1;
@@ -53,6 +56,7 @@ export function needsValueAssign(s: RaiserCompState, valueType: Type | null): bo
 function valueShape(t: Type | null): Type | null {
 	if (t != null && (t.kind == TypeKind.Alias || t.kind == TypeKind.Distinct)) return valueShape(t.typeReturn);
 	if (t != null && t.kind == TypeKind.Struct && t.typeFlags.has(TypeFlag.IsMaybe)) return valueShape(t.typeReturn);
+	if (t != null && t.kind == TypeKind.GenericInstance && isStructType(t.typeReturn)) return valueShape(t.typeReturn);
 	return t;
 }
 

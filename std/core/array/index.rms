@@ -15,7 +15,7 @@ export extern function push<T>(this arr: T[], sink value: T): void from "&msGene
 export extern function setLength<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
 
 // Negative index support (C kernel contract): -1 reads the last element.
-export function at<T>(this arr: T[], idx: number): T {
+export function at<T>(this arr: Vec<T>, idx: number): T {
 	let i = idx;
 	if (i < 0) i = i + arr.length;
 	return arr[i];
@@ -30,7 +30,7 @@ export function pop<T>(this arr: T[]): T {
 
 // The VM heap exposes no allocation size; the live length is the only
 // meaningful capacity at comptime.
-export function capacity<T>(this arr: T[]): number {
+export function capacity<T>(this arr: Vec<T>): number {
 	return arr.length;
 }
 
@@ -88,7 +88,7 @@ export function sort(this arr: string[]): void {
 	arr.sortBy((a: string, b: string): number => a < b ? -1 : (a > b ? 1 : 0));
 }
 
-export function join(this arr: string[], sep: string): string {
+export function join(this arr: Vec<string>, sep: string): string {
 	let out = "";
 	for (let i = 0; i < arr.length; i = i + 1) {
 		if (i > 0) out = out + sep;
@@ -97,7 +97,7 @@ export function join(this arr: string[], sep: string): string {
 	return out;
 }
 
-export function join<T>(this arr: T[], sep: string): string {
+export function join<T>(this arr: Vec<T>, sep: string): string {
 	let out = "";
 	for (let i = 0; i < arr.length; i = i + 1) {
 		if (i > 0) out = out + sep;
@@ -112,7 +112,7 @@ export function join<T>(this arr: T[], sep: string): string {
  * Calls a function on every element in order and returns the results as a new array.
  * @param fn Mapper receiving the element and its index.
  */
-export function map<T, U>(this arr: T[], fn: (x: T, i: number) => U): U[] {
+export function map<T, U>(this arr: Vec<T>, fn: (x: T, i: number) => U): U[] {
 	const out: U[] = [];
 	let i = 0;
 	while (i < arr.length) {
@@ -122,7 +122,7 @@ export function map<T, U>(this arr: T[], fn: (x: T, i: number) => U): U[] {
 	return out;
 }
 
-export function slice<T>(this arr: T[], start: number, end: number = 9007199254740991): T[] {
+export function slice<T>(this arr: Vec<T>, start: number, end: number = 9007199254740991): T[] {
 	const n = arr.length;
 	let lo = start < 0 ? n + start : start;
 	let hi = end < 0 ? n + end : end;
@@ -152,7 +152,7 @@ export function slice(this view: Readonly<Span<uint8>>, start: number, end: numb
 	return out;
 }
 
-export function concat<T>(this arr: T[], other: T[]): T[] {
+export function concat<T>(this arr: Vec<T>, other: T[]): T[] {
 	const out: T[] = [];
 	let i = 0;
 	while (i < arr.length) {
@@ -167,7 +167,7 @@ export function concat<T>(this arr: T[], other: T[]): T[] {
 	return out;
 }
 
-export function indexOf<T>(this arr: T[], value: T): number {
+export function indexOf<T>(this arr: Vec<T>, value: T): number {
 	const n = arr.length;
 	let i = 0;
 	while (i < n) {
@@ -177,7 +177,7 @@ export function indexOf<T>(this arr: T[], value: T): number {
 	return -1;
 }
 
-export function includes<T>(this arr: T[], value: T): boolean {
+export function includes<T>(this arr: Vec<T>, value: T): boolean {
 	const n = arr.length;
 	let i = 0;
 	while (i < n) {
@@ -201,7 +201,7 @@ export function includes(this view: Readonly<Span<uint8>>, value: uint8): boolea
 	return view.indexOf(value) >= 0;
 }
 
-export function count<T>(this arr: T[], value: T): number {
+export function count<T>(this arr: Vec<T>, value: T): number {
 	const n = arr.length;
 	let c = 0;
 	let i = 0;

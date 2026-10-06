@@ -410,15 +410,31 @@ Source commit `0ac0b83c`, tree `68fc5b80b2cb47e89b9d866feff3493c16ec45a0`.
 This is candidate proof, not the full BitSet matrix, normal gate, installed compiler or
 downstream Scene lifecycle proof.
 
-## L24. Compound bitwise assignment `|=` / `&=` / `^=` / `<<=` does not lex (LIVE, measured 2026-09-13)
+## ~~L24. Compound bitwise assignment `|=` / `&=` / `^=` / `<<=` does not lex~~ (FIXED, measured 2026-10-05)
+
+`&=`, `|=`, `^=`, `<<=`, `>>=` and `>>>=` store the binary `x op y` into `x` and read `x` once.
+Measured on a stage-2 build of `wt/solana-bit-assign` (base `b6b86a10f`, which still prints the
+old `Parse: Unexpected token: =`):
 
 ```
 let x: int32 = 3;
-x |= 4;  x &= 1;  x ^= 1;  x <<= 1;     error: Parse: Unexpected token: = at line 2   (each, both backends)
-x += 1;                                 4
+x |= 4;  x &= 5;  x ^= 1;  x <<= 2;  x >>= 1;       8 on C, JS and Raiser
+x >>>= 1;                                           refused since 2026-10-05: `>>>` gives a uint32
+let y: int32 = 10;  y -= 4;                         6
 ```
 
-`>>=` and `-=` not measured. No token for the bitwise forms in `src/lexer/token.ms`.
+Corpus `bitwiseCompoundAssignment` gives the binary form's values on C, JS and Raiser for int32,
+uint32, int64, uint64, uint8, int8, int16 and uint16, calls `next()` once in `a[next()] |= v`,
+and covers a `BitSet<E>` over 4 and over 70 members. The operands follow the binary operator:
+`int32 |= int64` and `uint64 <<= int32` are refused as `|` and `<<` are (`src/test/handoff/bitwiseCheck.ms`).
+A `number` target takes what the binary takes and stores its result, with the same warning:
+`n |= 2` on 5 gives 7 (stage-2 build of `wt/solana-holes-6`, corpus `numberCompoundAssignment` on C,
+JS and Raiser; the base `450d986d2` refused `n |= 1`). Since `wt/solana-holes-7` (2026-10-05) `>>>`
+on an int32 or a `number` is uint32, so `n >>>= 0` on -1 stores 4294967295 as TypeScript does and an
+int32 target of `>>>=` is refused; the Raiser evaluates `>>>` and `>>>=`, and a `number` outside int32
+(3000000000.7) wraps by ToInt32 there as on C and JS (corpus `940-unsignedShift`,
+`unsignedShiftToUint32`, `numberBitwiseOutsideInt32` on every lane; before, the Raiser stopped with
+`value 3000000000.7 not in range`).
 
 ## L25. ~~`HashMap` is not defined on the JS backend~~ RETRACTED 2026-09-13 — it was the `msc run --target=js` path
 
@@ -977,7 +993,9 @@ variants`, 3 explicit type arguments, 2 `JSON_parse` instantiations on a discrim
 A single file still runs on its own with `msc test <file>`. Run that way, `msc test src/test/c/protocols.ms` is red on two tests the gate has never seen: `E2E C: JsonValue dynamic write via setDynamicField` (`protocols.ms:480`) and `E2E C: JsonValue dynamic access via protocol after migration` (`protocols.ms:499`), both failing `assert c.ok` (3119 passed, 2 failed across 146 files, installed `v0.2.55`). Not measured: which of these are stale
 test code and which are checker regressions.
 
-## L49. A type used only in an arrow's parameter annotation inside a generic body is reported unused (LIVE, measured 2026-09-19)
+## L49. A type used only in an arrow's parameter annotation inside a generic body is reported unused (RESOLVED 2026-10-05)
+
+**Status: RESOLVED — fixed 2026-10-05** (`b365e5bdf`): a generic body is not checked until an instance asks for it, so its uses are marked at the declaration, and that walk now reads the type names written in the body (annotations, `as`, `sizeof`, arrow and nested function signatures, explicit type arguments), not only identifiers. Measured on a stage-2 build of the fix, the three-module repro below: `'Host'` and `'HostNode'` no longer warn (base `0a5569a08` warns both); an unused import still warns. Pin: handoff `compileTimeNameUse` (`as`, a local annotation, an arrow parameter, a generic method). Not re-measured: Neon's own build, the LSP.
 
 ```ms
 // hostTypes.ms

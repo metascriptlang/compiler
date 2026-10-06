@@ -36,7 +36,7 @@ import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } fro
 import { checkProgram } from "../../checker/checkPass";
 import {
 	DetectionState, createDetectionState, detectPass,
-	detectionGetCaptures, detectionGetCapturedIdents, routineBindingSym,
+	detectionGetCaptures, detectionGetCapturedIdents, routineBindingSym, routineSyms, refsAnySym, symIn,
 	isOnceLoop, iterationBodyOf, collectIterationDecls,
 } from "./lambdaLiftingDetect";
 import {
@@ -992,66 +992,8 @@ function ownEnvDecl(selfEnvSym: Symbol, envParamSym: Symbol, envName: string, en
 	return decl;
 }
 
-function isFrameNode(n: Node): boolean {
-	return isFuncBoundary(n) || n.kind == NodeKind.MethodDecl || n.kind == NodeKind.ConstructorDecl || n.kind == NodeKind.TestDecl;
-}
-
-function refsAnySym(n: Node | null, syms: Symbol[]): boolean {
-	if (n == null || syms.length == 0) return false;
-	if (n.kind == NodeKind.Identifier) {
-		for (const s of syms) {
-			if (n.resolvedSym == s) return true;
-		}
-		return false;
-	}
-	let found = false;
-	forEachChild(n, (c: Node): void => {
-		if (!found && refsAnySym(c, syms)) found = true;
-	});
-	return found;
-}
-
-function symIn(syms: Symbol[], sym: Symbol): boolean {
-	for (const s of syms) {
-		if (s == sym) return true;
-	}
-	return false;
-}
-
-function collectRoutineCandidates(n: Node | null, depth: number, state: LiftState, out: Symbol[]): void {
-	if (n == null) return;
-	if (depth > 0 && n.kind == NodeKind.VariableDecl) {
-		const sym = routineBindingSym(n);
-		if (sym != null && !refsAnySym((n.data as VariableDeclData).initializer, state.splitLoopLocals)) out.push(sym);
-	}
-	const inner = isFrameNode(n) ? depth + 1 : depth;
-	forEachChild(n, (c: Node): void => { collectRoutineCandidates(c, inner, state, out); });
-}
-
-function collectForwardRefs(n: Node | null, candidates: SymSet, declared: Symbol[], forward: Symbol[]): void {
-	if (n == null) return;
-	if (n.kind == NodeKind.Identifier) {
-		const sym = n.resolvedSym;
-		if (sym != null && symSetContains(candidates, sym) && !symIn(declared, sym) && !symIn(forward, sym)) forward.push(sym);
-		return;
-	}
-	if (n.kind == NodeKind.VariableDecl && symSetContains(candidates, n.resolvedSym)) {
-		declared.push(n.resolvedSym!);
-	}
-	forEachChild(n, (c: Node): void => { collectForwardRefs(c, candidates, declared, forward); });
-}
-
 function collectRoutines(program: Node, state: LiftState): void {
-	const candidates: Symbol[] = [];
-	collectRoutineCandidates(program, 0, state, candidates);
-	if (candidates.length == 0) return;
-	const candidateSet = createSymSet();
-	for (const s of candidates) symSetAdd(candidateSet, s);
-	const forward: Symbol[] = [];
-	collectForwardRefs(program, candidateSet, [], forward);
-	for (const s of candidates) {
-		if (!symIn(forward, s)) symSetAdd(state.routines, s);
-	}
+	state.routines = routineSyms(program, 0, state.splitLoopLocals);
 }
 
 function isRoutineSym(state: LiftState, sym: Symbol | null): boolean {

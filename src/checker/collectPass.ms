@@ -1,5 +1,5 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp } from "../ast/node";
-import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator } from "./decoratorHelpers";
+import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
 import { inferredType, noneType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, int32Type, getSysType, stringType } from "./types";
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
@@ -261,6 +261,28 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	if (info.compilerFunc) registerCompilerFunc(ctx, sym);
 	if (info.borrow) markBorrow(ctx, dd, sym);
 	if (info.compileTime && sym.symbolKind == SymbolKind.Function) setFlag(sym, SymbolFlag.CompileTime);
+	if (acceptsInline(ctx, dd)) setFlag(sym, SymbolFlag.Inline);
+}
+
+function acceptsInline(ctx: CheckerContext, dd: DecoratedDeclData): boolean {
+	const dec = inlineDecorator(dd.decorators);
+	if (dec == null) return false;
+	const problem = inlineMisuse(dec.data as MacroInvocationData, dd);
+	if (problem == "") return true;
+	addError(ctx, problem, dec.location.line, dec.location.column);
+	return false;
+}
+
+function inlineMisuse(md: MacroInvocationData, dd: DecoratedDeclData): string {
+	if (md.macroArgs.length > 0) return "@inline takes no arguments";
+	const fn = exportedFunctionOf(dd.decoratedNode);
+	if (fn == null) return "@inline applies to a module-level function";
+	const fd = fn.data as FunctionDeclData;
+	if (fd.fnFlags.indexOf("extern", 0) >= 0 || fd.fnBody == null) return "@inline needs a function with a body";
+	if (exportNameDecorator(dd.decorators) != null || reloadHandlerDecorator(dd.decorators) != null) {
+		return "@inline puts a copy in every module that calls it, so it has no single C symbol to export";
+	}
+	return "";
 }
 
 function declaredSymbolOf(decorated: Node, named: Symbol): Symbol {
@@ -680,6 +702,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 			const info = extractDecoratorInfo(member);
 			builtinKind = info.builtinKind;
 			reportExportNameMisuse(ctx, dd);
+			acceptsInline(ctx, dd);
 		}
 	}
 	if (methodNode == null) return;

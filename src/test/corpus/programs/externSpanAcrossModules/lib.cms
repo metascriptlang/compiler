@@ -1,0 +1,4 @@
+@include("./ffi.h");
+
+export extern function sumOf(xs: Readonly<Span<int64>>): int64 from "corpusSpanSum";
+export extern function fillFrom(xs: Span<int64>, v: int64): void from "corpusSpanFill";

@@ -50,7 +50,7 @@ export function toItems<T>(this iter: Iterator<T>): T[] {
 // Arrays normally hit the fast path in iterableElemType and never need this.
 // Exists as fallback: if the fast path fails, the checker's synthetic toItems() call resolves.
 // Uses while (not for-of) to avoid circular dependency.
-export function* toItems<T>(this arr: T[]): Iterator<T> {
+export function* toItems<T>(this arr: Vec<T>): Iterator<T> {
 	let i = 0;
 	while (i < arr.length) {
 		yield arr[i];
@@ -79,6 +79,7 @@ export function hashString(s: string): int64 {
 // hashWangYi1 — hiXorLo is the full
 // 128-bit product of two uint64, high half XOR low half (msHiXorLo in
 // runtime/core/system.h). Every key type reaches this one mixing site.
+@builtin("HiXorLo")
 extern function msHiXorLo(a: uint64, b: uint64): uint64;
 
 // 0 marks an empty Map/Set slot, so a key that mixes to 0 takes the sentinel.
@@ -91,7 +92,9 @@ export function hashWangYi1(x: uint64): int64 {
 	return h;
 }
 
+@builtin("PtrBits")
 extern function msPtrBits(p: Ptr<void>): uint64;
+@builtin("Float64Bits")
 extern function msFloat64Bits(d: number): uint64;
 
 export function hashNumber(n: number): int64 { return hashWangYi1(msFloat64Bits(n + 0.0)); }
@@ -591,7 +594,7 @@ function orderedMapEnlarge<K, V>(m: Map<K, V>): void {
 
 function orderedMapCompact<K, V>(m: Map<K, V>): void {
 	const oldEntries = m.entries;
-	const newEntries: Vec<OrderedMapEntry<K, V>> = [];
+	let newEntries: Vec<OrderedMapEntry<K, V>> = [];
 	let i: int32 = 0;
 	while (i < oldEntries.length) {
 		if (oldEntries[i].hcode != 0) {
@@ -835,7 +838,7 @@ function orderedSetEnlarge<T>(s: Set<T>): void {
 
 function orderedSetCompact<T>(s: Set<T>): void {
 	const oldEntries = s.entries;
-	const newEntries: Vec<OrderedSetEntry<T>> = [];
+	let newEntries: Vec<OrderedSetEntry<T>> = [];
 	let i: int32 = 0;
 	while (i < oldEntries.length) {
 		if (oldEntries[i].hcode != 0) {

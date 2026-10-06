@@ -31,7 +31,8 @@ import {
 } from "../util";
 import { createSymSet, symSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
-import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
+import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, localsOutlivingSuspension, hoistStateRoutines, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield } from "./generatorLower";
+import { routineSyms } from "./lambdaLiftingDetect";
 import { stmtCountAfter } from "../testUtil";
 
 // ===== Variable Type Collection =====
@@ -438,6 +439,8 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	// 2. Collect the locals for hoisting
 	const locals = createSymSet();
 	collectStateLocals(body, ctx, locals);
+	const lifetimeLifted = localsOutlivingSuspension(body, locals, ctx);
+	const routines = routineSyms(body, 1, []);
 
 	const stateSym = mintSym(ctx, SymbolKind.Variable, "$state", numberType());
 	setFlag(stateSym, SymbolFlag.Mutable);
@@ -474,7 +477,10 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	}
 
 	// 6. Convert the declarations of the locals that outlive a state to assignments
-	const lifted = localsSpanningStates(sc, locals);
+	const spanning = localsSpanningStates(sc, locals);
+	for (const sym of lifetimeLifted.items) symSetAdd(spanning, sym);
+	const hoisted: Node[] = [];
+	const lifted = hoistStateRoutines(routines, sc, locals, spanning, hoisted);
 	// Also add yielded-future locals ($yf0, $yf1, ...) to the hoisted set
 	// with typed future types (Promise<T> from the yield variable type)
 	const yfs: YieldFuture[] = [];
@@ -503,7 +509,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 
 	// 7. Wrap in while(true) + try/catch
 	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
-	const tryBody = makeBlock([loop], loc);
+	const tryBody = makeBlock([...hoisted, loop], loc);
 	const excSym = makeCatchSym(ctx, "$e");
 	const failCall = makeExprStmt(
 		makeCall(

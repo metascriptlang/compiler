@@ -18,6 +18,7 @@ export class TransformContext {
 	fnDeclNames: string[];  // collected function declaration names (for closureCallMarker)
 	checkerCtx: CheckerContext;  // type info from Phase 2 (null in test mode)
 	jsBackend: boolean;
+	raiserBackend: boolean;
 	preserveModuleConstants: boolean;
 	rangeChecks: boolean;
 	boundChecks: boolean;
@@ -39,7 +40,7 @@ export interface EnumToStringCopy {
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, preserveModuleConstants: false, rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingValueEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [] };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, preserveModuleConstants: false, rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingValueEqs: [], pendingCarrierEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [] };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {

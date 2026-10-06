@@ -1,5 +1,4 @@
 // @stdout: env copy 9 40 3 | loop 4 5 | rebound 2 4 1 1 caller 2 | nested 7 | churn 32
-// @xfail(raiser): raiser runtime error: expected an object, got value kind Int
 
 class Box {
 	n: int32;

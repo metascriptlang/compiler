@@ -10,7 +10,7 @@
 
 import { Token, TokenKind } from "../lexer/token";
 import { Node, NodeKind, createNode, createNodeAt, TypeAnnotationData, IdentifierData, TypeGenericData, TypeObjectData } from "../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, skipBalanced, skipGenericParams, collectTokenText, addError } from "./context";
+import { ParserState, createState, current, advance, isAtEnd, skipBalanced, skipGenericParams, splitAngleAssign, collectTokenText, addError } from "./context";
 import { lex } from "../lexer/lexer";
 
 
@@ -232,6 +232,7 @@ function parseGenericTypeArgs(state: ParserState): Node[] {
 			continue;
 		}
 		// Closing >
+		if (!isAtEnd(state)) splitAngleAssign(state);
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Gt) {
 			depth -= 1;
 			advance(state);
@@ -564,6 +565,12 @@ test "nested generics" { assert skipsType("Result<Array<number>, string>"); }
 test "nested generics no space" { assert skipsType("Result<Array<number>>"); }
 
 test "triple nested generics" { assert skipsType("HashMap<string, Result<Array<number>>>"); }
+
+test "a closer joined to = leaves the =" {
+	assert skipsTo("Array<number>= x", TokenKind.Assign);
+	assert skipsTo("Result<Array<number>>= x", TokenKind.Assign);
+	assert skipsTo("A<B<Array<number>>>= x", TokenKind.Assign);
+}
 
 test "array in generic arg" { assert skipsType("Result<Node[], string>"); }
 

@@ -15,7 +15,7 @@
 //     - Inject shadowing local: const name = { data: name_data, len: name_len }
 //     - Body stays untouched — references name as a Span struct via the local
 //
-//   Pass 2 (Call Sites): For each CallExpr targeting an expanded function:
+//   Pass 2 (Call Sites): For each call of an extern whose declared type has Span<T> params, in any module:
 //     - If arg is ObjectLiteral (from spanLower): extract data/len fields into two args
 //     - If arg is Span-typed expr: expand to (arg.data, arg.len)
 //
@@ -26,7 +26,8 @@
 // emits a diagnostic.
 
 import { Node, NodeKind, DeclKind, FunctionDeclData, CallExprData, ObjectLiteralData, ArrayLiteralData, BlockStmtData, Type, TypeKind } from "../../ast/node";
-import { createPtr, createSpan, getSysType } from "../../checker/types";
+import { createPtr, createSpan, getSysType, copyTypeShallow } from "../../checker/types";
+import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { TransformContext, reportTransformError } from "../context";
 import { walkNode } from "../walker";
 import {
@@ -41,21 +42,13 @@ interface ExpandedParam {
 	elemType: Type;
 }
 
-interface ExpandedFunc {
-	funcName: string;
-	params: ExpandedParam[];
-}
-
 // ===== Main Entry Point =====
 
 export function spanParamExpand(program: Node, ctx: TransformContext): Node {
-	// Collect expanded function info during Pass 1
-	const expandedFuncs: ExpandedFunc[] = [];
-
 	// Pass 1: Rewrite FunctionDecl signatures
 	walkNode(program, (node: Node): Node => {
 		if (node.kind == NodeKind.FunctionDecl) {
-			expandFunctionDecl(node, expandedFuncs, ctx);
+			expandFunctionDecl(node);
 		}
 		// Diagnostic for Span params in closures
 		if (node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr) {
@@ -65,21 +58,40 @@ export function spanParamExpand(program: Node, ctx: TransformContext): Node {
 	});
 
 	// Pass 2: Rewrite call sites for expanded functions
-	if (expandedFuncs.length > 0) {
-		walkNode(program, (node: Node): Node => {
-			if (node.kind == NodeKind.CallExpr) {
-				expandCallSite(node, expandedFuncs);
-			}
-			return node;
-		});
-	}
+	walkNode(program, (node: Node): Node => {
+		if (node.kind == NodeKind.CallExpr) {
+			expandCallSite(node);
+		}
+		return node;
+	});
 
 	return program;
 }
 
 // ===== Pass 1: Declaration Expansion =====
 
-function expandFunctionDecl(node: Node, expandedFuncs: ExpandedFunc[], ctx: TransformContext): void {
+function spanParamsOf(fnType: Type, names: string[]): ExpandedParam[] {
+	const spanParams: ExpandedParam[] = [];
+	let i = 0;
+	while (i < fnType.typeChildren.length) {
+		let pType = fnType.typeChildren[i];
+		// Unwrap Var/out modifier — reference parity: var openArray → openArray
+		if (pType != null && (pType.kind == TypeKind.Var || pType.kind == TypeKind.Sink || pType.kind == TypeKind.Lent) && pType.typeReturn != null) {
+			pType = pType.typeReturn;
+		}
+		if (pType != null && pType.kind == TypeKind.Span && pType.typeReturn != null) {
+			spanParams.push({
+				originalIndex: i,
+				paramName: i < names.length ? names[i] : "",
+				elemType: pType.typeReturn,
+			});
+		}
+		i = i + 1;
+	}
+	return spanParams;
+}
+
+function expandFunctionDecl(node: Node): void {
 	const d = node.data as FunctionDeclData;
 	if (d.fnFlags.indexOf("extern", 0) < 0) return;
 	const fnType = node.nodeType;
@@ -87,28 +99,9 @@ function expandFunctionDecl(node: Node, expandedFuncs: ExpandedFunc[], ctx: Tran
 	if (fnType.kind != TypeKind.Function) return;
 	if (d.params.length == 0) return;
 
-	// Find Span params
-	const spanParams: ExpandedParam[] = [];
-	let i = 0;
-	while (i < d.params.length) {
-		if (i < fnType.typeChildren.length) {
-			let pType = fnType.typeChildren[i];
-			// Unwrap Var/out modifier — reference parity: var openArray → openArray
-			if (pType != null && (pType.kind == TypeKind.Var || pType.kind == TypeKind.Sink || pType.kind == TypeKind.Lent) && pType.typeReturn != null) {
-				pType = pType.typeReturn;
-			}
-			if (pType != null && pType.kind == TypeKind.Span && pType.typeReturn != null) {
-				spanParams.push({
-					originalIndex: i,
-					paramName: d.params[i],
-					elemType: pType.typeReturn,
-				});
-			}
-		}
-		i = i + 1;
-	}
-
+	const spanParams = spanParamsOf(fnType, d.params);
 	if (spanParams.length == 0) return;
+	let i = 0;
 
 	// Build new param lists and type children
 	const newParams: string[] = [];
@@ -166,7 +159,10 @@ function expandFunctionDecl(node: Node, expandedFuncs: ExpandedFunc[], ctx: Tran
 	// Update params and type
 	d.params = newParams;
 	d.fnParamTypes = newParamTypes;
-	fnType.typeChildren = newTypeChildren;
+	const flat = copyTypeShallow(fnType);
+	flat.typeChildren = newTypeChildren;
+	node.nodeType = flat;
+	if (node.resolvedSym != null && node.resolvedSym.symbolType == fnType) node.resolvedSym.symbolType = flat;
 
 	// Inject shadowing locals at top of body
 	if (d.fnBody != null && d.fnBody.kind == NodeKind.BlockStmt) {
@@ -200,49 +196,18 @@ function expandFunctionDecl(node: Node, expandedFuncs: ExpandedFunc[], ctx: Tran
 		}
 	}
 
-	// Record this function as expanded
-	expandedFuncs.push({ funcName: d.fnName, params: spanParams });
 }
 
 // ===== Pass 2: Call Site Expansion =====
 
-function expandCallSite(node: Node, expandedFuncs: ExpandedFunc[]): void {
+function expandCallSite(node: Node): void {
 	const d = node.data as CallExprData;
-
-	// Find the expanded function info via resolvedSym or callee name
-	let funcInfo: ExpandedFunc = null as unknown as ExpandedFunc;
-
-	// Try resolvedSym first (most reliable)
-	if (node.resolvedSym != null && node.resolvedSym.symbolType != null) {
-		const symType = node.resolvedSym.symbolType;
-		if (symType.kind == TypeKind.Function) {
-			// Check if any param is Span — if the function was expanded, its params
-			// are no longer Span, so we match by function name
-			let fi = 0;
-			while (fi < expandedFuncs.length) {
-				if (expandedFuncs[fi].funcName == node.resolvedSym.name) {
-					funcInfo = expandedFuncs[fi];
-					fi = expandedFuncs.length; // break
-				}
-				fi = fi + 1;
-			}
-		}
-	}
-
-	// Fallback: check callee identifier name
-	if (funcInfo == null && d.callee != null && d.callee.kind == NodeKind.Identifier) {
-		const calleeName = (d.callee.data as { name: string }).name;
-		let fi = 0;
-		while (fi < expandedFuncs.length) {
-			if (expandedFuncs[fi].funcName == calleeName) {
-				funcInfo = expandedFuncs[fi];
-				fi = expandedFuncs.length; // break
-			}
-			fi = fi + 1;
-		}
-	}
-
-	if (funcInfo == null) return;
+	const sym = node.resolvedSym != null ? node.resolvedSym : (d.callee != null ? d.callee.resolvedSym : null);
+	if (sym == null || !hasFlag(sym, SymbolFlag.ImportC)) return;
+	const declared = d.callee != null ? d.callee.nodeType : null;
+	if (declared == null || declared.kind != TypeKind.Function) return;
+	const spanParams = spanParamsOf(declared, []);
+	if (spanParams.length == 0) return;
 
 	// Build new argument list, expanding Span args into two
 	const newArgs: Node[] = [];
@@ -255,11 +220,11 @@ function expandCallSite(node: Node, expandedFuncs: ExpandedFunc[]): void {
 		let isExpandedPos = false;
 		let ep: ExpandedParam = null as unknown as ExpandedParam;
 		let epi = 0;
-		while (epi < funcInfo.params.length) {
-			if (funcInfo.params[epi].originalIndex == ai) {
+		while (epi < spanParams.length) {
+			if (spanParams[epi].originalIndex == ai) {
 				isExpandedPos = true;
-				ep = funcInfo.params[epi];
-				epi = funcInfo.params.length; // break
+				ep = spanParams[epi];
+				epi = spanParams.length; // break
 			}
 			epi = epi + 1;
 		}

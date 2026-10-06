@@ -449,18 +449,23 @@ export function lowerUserOperators(program: Node, ctx: TransformContext): Node {
 	});
 }
 
+function comparesByValue(ctx: TransformContext, operand: Node): boolean {
+	const resolved = resolveType(ctx, operand);
+	const peeled = resolved != null ? peelThrough(resolved, PEEL_ALIAS) : null;
+	if (peeled == null) return false;
+	let t = peelTransparentInstance(peeled);
+	if (isMaybeType(t)) t = peelTransparentInstance(unwrapMaybeType(t));
+	return hasValueEq(t) || t.kind == TypeKind.Tuple;
+}
+
 export function lowerAggregateEquality(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, (node: Node): Node => {
 		if (node.kind != NodeKind.BinaryExpr || ctx.checkerCtx == null) return node;
 		const d = node.data as BinaryExprData;
-		if (d.operator != "==" && d.operator != "===") return node;
-		const resolved = resolveType(ctx, d.left);
-		const peeled = resolved != null ? peelThrough(resolved, PEEL_ALIAS) : null;
-		if (peeled == null) return node;
-		const leftType = peelTransparentInstance(peeled);
-		if (!isValueObject(leftType) && leftType.kind != TypeKind.Tuple) return node;
-		const lowered = resolveOpCall(ctx, typeNameOf(leftType), "==", leftType, d.left, d.right, node.location);
-		return lowered != null ? lowered : node;
+		const op = d.operator;
+		if (op != "==" && op != "===" && op != "!=" && op != "!==") return node;
+		if (!comparesByValue(ctx, d.left) && !comparesByValue(ctx, d.right)) return node;
+		return lowerOperatorNode(node, ctx);
 	});
 }
 

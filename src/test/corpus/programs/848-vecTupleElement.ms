@@ -13,7 +13,7 @@ struct Holder {
 }
 
 function mk(n: int32): Vec<[Tok, int32]> {
-	const out: Vec<[Tok, int32]> = [];
+	let out: Vec<[Tok, int32]> = [];
 	for (let i: int32 = 0; i < n; i += 1) out.push([new Tok("r" + i.toString()), i]);
 	return out;
 }
@@ -25,11 +25,11 @@ function round(k: int32): string {
 	let h: Holder = { rows: [], k: k };
 	h.rows.push([new Tok("h" + k.toString()), 7 as int32]);
 	h.rows = [[new Tok("i" + k.toString()), 8 as int32], [new Tok("j" + k.toString()), 9 as int32]];
-	const named: Vec<[string, int32]> = [];
+	let named: Vec<[string, int32]> = [];
 	named.push(["s" + k.toString(), k]);
-	const pod: Vec<[int32, int32]> = [];
+	let pod: Vec<[int32, int32]> = [];
 	pod.push([k, k + 1]);
-	const nest: Vec<[Vec<Row>, string]> = [];
+	let nest: Vec<[Vec<Row>, string]> = [];
 	nest.push([h.rows, "n" + k.toString()]);
 	return xs.length.toString() + " " + ys[2][0].s + " " + h.rows[1][0].s + " " + named[0][0] + " " + pod[0][1].toString() + " " + nest[0][0][0][0].s + nest[0][1];
 }

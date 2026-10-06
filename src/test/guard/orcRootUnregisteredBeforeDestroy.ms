@@ -39,7 +39,7 @@ function heldByArray(): void {
 }
 
 function heldByVec(): void {
-	const holder: Vec<Node> = [];
+	let holder: Vec<Node> = [];
 	const x = new Node();
 	holder.push(x);
 	x.child = mkPair();

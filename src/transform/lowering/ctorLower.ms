@@ -16,7 +16,8 @@ import {
 } from "../../ast/node";
 import { TransformContext, createTransformContext } from "../context";
 import { makeAssign, makeMember, makeExprStmt, makeTypedIdent, makeTypedIdentResolved, makeBlock, makeCall, makeIdent } from "../util";
-import { createFunction, voidType } from "../../checker/types";
+import { createFunction, voidType, classParentOf } from "../../checker/types";
+import { instantiateParentClass } from "../../checker/instantiate";
 import { getCtorParamTypes, parentClassSymOf, makeSymbol } from "../../checker/symbol";
 import { lowerMethodToFunction } from "./methodToFunction";
 import { parseInput, getStmts } from "../testUtil";
@@ -91,10 +92,11 @@ function lowerCtorBody(classNode: Node, cd: ClassDeclData, ctorNode: Node): void
 // takes no arguments — there is nothing to forward otherwise. A `super`
 // identifier with no resolvedSym is worse than none: both backends fall through
 // to their generic call path and emit a call to an undefined symbol.
-function implicitSuperStmt(classNode: Node, cd: ClassDeclData): Node {
+function implicitSuperStmt(classNode: Node, cd: ClassDeclData, ctx: TransformContext): Node {
 	if (cd.classExtends == "") return null as unknown as Node;
 	if (classNode.resolvedSym == null) return null as unknown as Node;
-	const parentSym = parentClassSymOf(classNode.resolvedSym);
+	const instance = ctx != null && ctx.checkerCtx != null ? instantiateParentClass(classParentOf(classNode.resolvedSym.symbolType), ctx.checkerCtx) : null;
+	const parentSym = instance != null ? instance : parentClassSymOf(classNode.resolvedSym);
 	if (parentSym == null) return null as unknown as Node;
 	const parentParams = getCtorParamTypes(parentSym);
 	if (parentParams != null && parentParams.length > 0) return null as unknown as Node;
@@ -106,11 +108,11 @@ function implicitSuperStmt(classNode: Node, cd: ClassDeclData): Node {
 	return makeExprStmt(call, loc);
 }
 
-function synthesizeCtor(classNode: Node, cd: ClassDeclData): void {
+function synthesizeCtor(classNode: Node, cd: ClassDeclData, ctx: TransformContext): void {
 	const loc = classNode.location;
 	const stmts: Node[] = [];
 	const thisSym = makeSymbol("this", SymbolKind.Parameter, classNode.nodeType, false);
-	const superStmt = implicitSuperStmt(classNode, cd);
+	const superStmt = implicitSuperStmt(classNode, cd, ctx);
 	if (superStmt != null) stmts.push(superStmt);
 	for (const s of fieldInitStatements(classNode, cd, thisSym)) { stmts.push(s); }
 	const ctorNode = createNodeAt(NodeKind.ConstructorDecl, {
@@ -126,19 +128,19 @@ function synthesizeCtor(classNode: Node, cd: ClassDeclData): void {
 	cd.classBody.push(ctorNode);
 }
 
-function ensureImplicitSuper(classNode: Node, cd: ClassDeclData, ctorNode: Node): void {
+function ensureImplicitSuper(classNode: Node, cd: ClassDeclData, ctorNode: Node, ctx: TransformContext): void {
 	const ctorData = ctorNode.data as ConstructorDeclData;
 	if (ctorData.ctorBody == null || ctorData.ctorBody.kind != NodeKind.BlockStmt) return;
 	const body = ctorData.ctorBody.data as BlockStmtData;
 	if (body.statements.length > 0 && isSuperCallStmt(body.statements[0])) return;
-	const superStmt = implicitSuperStmt(classNode, cd);
+	const superStmt = implicitSuperStmt(classNode, cd, ctx);
 	if (superStmt == null) return;
 	const merged: Node[] = [superStmt];
 	for (const s of body.statements) { merged.push(s); }
 	body.statements = merged;
 }
 
-function lowerClassNode(classNode: Node): void {
+function lowerClassNode(classNode: Node, ctx: TransformContext): void {
 	const cd = classNode.data as ClassDeclData;
 	let ctorNode: Node | null = null;
 	for (const member of cd.classBody) {
@@ -152,10 +154,10 @@ function lowerClassNode(classNode: Node): void {
 		}
 	}
 	if (ctorNode == null) {
-		synthesizeCtor(classNode, cd);
+		synthesizeCtor(classNode, cd, ctx);
 		return;
 	}
-	ensureImplicitSuper(classNode, cd, ctorNode);
+	ensureImplicitSuper(classNode, cd, ctorNode, ctx);
 	lowerCtorBody(classNode, cd, ctorNode);
 }
 
@@ -175,7 +177,7 @@ export function lowerCtorInit(program: Node, ctx: TransformContext): Node {
 			if (target.resolvedSym != null && target.resolvedSym.symbolKind == SymbolKind.Function) {
 				continue;
 			}
-			lowerClassNode(target);
+			lowerClassNode(target, ctx);
 		}
 	}
 	return program;

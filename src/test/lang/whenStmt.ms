@@ -9,12 +9,12 @@
 // Flags come from the define table (src/compiler/defines.ms, a port of Nim's
 // condsyms.nim); the parser reads it through a side channel.
 
-import { compileToC } from "../helpers";
+import { compileToC, compileToCWithStd } from "../helpers";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { setParserDefines, resetParserDefines } from "../../parser/context";
 import { DefineTable, createDefineTable, defineSymbol, applyDefineSwitch } from "../../compiler/defines";
-import { Node, NodeKind, ProgramData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, BlockStmtData, IfStmtData } from "../../ast/node";
 
 function withFlags(pairs: string[]): DefineTable {
 	const t = createDefineTable();
@@ -130,6 +130,72 @@ function main(): void { console.log("ok"); }
 `);
 	resetParserDefines();
 	assert !r.ok;
+}
+
+function bodyOf(fn: Node): Node[] {
+	return ((fn.data as FunctionDeclData).fnBody.data as BlockStmtData).statements;
+}
+
+test "when: a type-trait condition keeps the chain for the checker" {
+	const stmts = topLevel("function g<T>(): number { when (isPlainData<T>()) { return 1; } else { return 2; } }", ["c"]);
+	assert stmts.length == 1;
+	const body = bodyOf(stmts[0]);
+	assert body.length == 1;
+	assert body[0].kind == NodeKind.IfStmt && body[0].flags.has(NodeFlag.WhenDeferred);
+	assert (body[0].data as IfStmtData).condition.kind == NodeKind.CallExpr;
+}
+
+test "when: flags ahead of a type trait still decide at parse" {
+	const src = "function g<T>(): number { when (c) { return 1; } else when (isPlainData<T>()) { return 2; } return 3; }";
+	const takenTop = topLevel(src, ["c"]);
+	assert takenTop.length == 1;
+	const taken = bodyOf(takenTop[0]);
+	assert taken.length == 2 && taken[0].kind == NodeKind.ReturnStmt;
+	const deferredTop = topLevel(src, ["js"]);
+	assert deferredTop.length == 1;
+	const deferred = bodyOf(deferredTop[0]);
+	assert deferred.length == 2 && deferred[0].flags.has(NodeFlag.WhenDeferred);
+}
+
+test "when: a type-trait condition at module level is refused" {
+	const r = parseSource("when (isPlainData<int32>()) { const a = 1; }");
+	assert !r.ok;
+	if (!r.ok) { assert r.error.contains("function body"); }
+}
+
+test "when: a type-trait branch is picked per instance and the other is never checked" {
+	const r = compileToCWithStd(`
+import { isPlainData } from "std/typetraits";
+function onlyPlain<T>(x: T): int32 {
+	when (isPlainData<T>()) { return sizeof(T); } else { return x.length; }
+}
+function main(): void { console.log(onlyPlain(1 as int32) + onlyPlain("abc")); }
+`);
+	assert r.ok;
+}
+
+test "when: the picked type-trait branch IS checked for its instance" {
+	const r = compileToCWithStd(`
+import { isPlainData } from "std/typetraits";
+function f<T>(x: T): int32 {
+	when (isPlainData<T>()) { return x.nope; } else { return 0; }
+}
+function main(): void { console.log(f<string>("a") + f<int32>(1)); }
+`);
+	assert !r.ok;
+	if (!r.ok) { assert r.error.contains("nope"); }
+}
+
+test "when: a call that is not a type trait is refused in a condition" {
+	const r = compileToCWithStd(`
+function yes<T>(): boolean { return true; }
+function f<T>(): int32 {
+	when (yes<T>()) { return 1; } else { return 2; }
+}
+function main(): void { console.log(f<int32>()); }
+`);
+	assert !r.ok;
+	if (!r.ok) { assert r.error.contains("type traits"); }
 }
 
 // `@target` / `@platform` are retired in favour of `when`. They must DIAGNOSE, not

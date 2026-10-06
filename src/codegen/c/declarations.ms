@@ -3,9 +3,9 @@
 // Handles function, enum, interface (struct), class, export, and import declarations.
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
-import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, HiddenStdConvData, DeclKind, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, DeclKind, TypeKind, Type, Symbol, SymbolKind } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
-import { hasGenericParams, isIntegerType, isNumeric } from "../../checker/types";
+import { hasGenericParams, isIntegerType, isNumeric, classParentOf } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
@@ -13,12 +13,12 @@ import {
 	setLocalSymName, factClaimGeneric, factSkipTypeInfo,
 } from "./context";
 import { genExpr } from "./expressions";
-import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, resolveEmitArgs } from "./statements";
+import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
-import { enumCTypeName, getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, hcrTypeInfoRef, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp } from "./types";
+import { enumCTypeName, getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfo, ensureTypeInfoDef, ensureRefArrayCellTypeInfo, isHcrImageModule, hcrTypeInfoRef, isCompilerGenCName, isNilableValueType, procHeader, isTypeBoundOp, zeroInit, defineDeferredElements } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
-import { isDrcLifecycleName } from "./forward";
+import { isDrcLifecycleName, copiesInline, inlineDeclOf } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isBakeableAggregateConst, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
@@ -84,9 +84,10 @@ function genExternDecl(g: CGen, node: Readonly<Node>): void {
 
 // ===== Function Declaration =====
 
-function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void {
+function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlineCopy: boolean = false): void {
 	const d = node.data as FunctionDeclData;
 	const sym = node.resolvedSym;
+	if (!inlineCopy && !g.preparingDeclarations && sym != null && copiesInline(g, sym)) return;
 
 	// Tier 1: body-less overload signature — typecheck-only, skip codegen emission entirely.
 	// The implementation (same name, no 'overload' flag) emits the actual C function.
@@ -132,7 +133,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 
 	const instanceAlreadyEmitted = isGenericInstance && (g.emittedInstances.has(name)
 		|| (g.emissionFacts.genericOwners.has(name) && g.emissionFacts.genericOwners.readonlyGet(name) != g.modulePath));
-	if (isGenericInstance && !instanceAlreadyEmitted) g.emittedInstances.add(name);
+	if (isGenericInstance && !instanceAlreadyEmitted && !inlineCopy) g.emittedInstances.add(name);
 
 	// main() is never static — called from dispatcher
 	// Lifted functions (sym === null) are always static
@@ -144,7 +145,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	const isTypeBound = sym != null && isTypeBoundOp(sym);
 	const isPublicLinkage = isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance || isTypeBound || hcrCoreCallable;
 	const linkage = isPublicLinkage ? "" : (sym != null ? "MS_LIB_PRIVATE " : "static ");
-	const prefix = exportPrefix + linkage;
+	const prefix = inlineCopy ? "static inline " : exportPrefix + linkage;
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
 	const actualRetType = nrvo ? "void" : cRetType;
@@ -155,7 +156,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 	const hasNativeName = (sym != null && sym.nativeName != "") || (d.nativeName != null && d.nativeName != "");
 	if (isExternFn && hasNativeName) return;
 
-	if (!alreadyDeclared) {
+	if (!alreadyDeclared && !inlineCopy) {
 		addLine(sec(g, CSection.ProcHeaders), proto + ";");
 	}
 
@@ -164,7 +165,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 
 	// Emit function body to Procs
 	// Skip body for duplicate generic instances — forward decl already emitted above.
-	if (instanceAlreadyEmitted) return;
+	if (instanceAlreadyEmitted && !inlineCopy) return;
 	if (d.fnBody != null) {
 		const p = createProc(name, fnType.typeReturn);
 		p.suppressRaiseCheck = isDrcHookFn || (sym != null && hasFlag(sym, SymbolFlag.NeverRaises));
@@ -190,10 +191,17 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean): void
 		// Reference parity (BeforeRet_): emit default return after DRC cleanup labels
 		// to satisfy C compiler's control flow analysis for non-void functions.
 		if (!nrvo && actualRetType != "void") {
-			addLine(procs, `  return (${actualRetType}){0};`);
+			addLine(procs, `  return (${actualRetType})${zeroInit(fnType.typeReturn)};`);
 		}
 		addLine(procs, "}");
 		addNewline(procs);
+	}
+}
+
+export function emitInlineCopies(g: CGen): void {
+	for (let i = 0; i < g.inlineCopies.length; i += 1) {
+		const decl = inlineDeclOf(g.inlineCopies[i]);
+		if (decl != null) genFunctionDecl(g, decl, false, true);
 	}
 }
 
@@ -344,6 +352,9 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	// to avoid re-emitting the forward decl / struct body.
 	nameSetAdd(g.declaredThings, name);
 	genStaticFieldGlobals(g, d, node.resolvedSym);
+	const parent = node.nodeType != null ? classParentOf(node.nodeType) : null;
+	const parentInstance = parent != null && parent.kind == TypeKind.Ref ? parent.typeReturn : parent;
+	if (parentInstance != null && parentInstance.kind == TypeKind.GenericInstance) ensureTypeInfoDef(g, getTypeDesc(g, parentInstance), parentInstance);
 
 	// Emit struct type definition (skip if already declared by genObjectType for generic instances)
 	if (!typeAlreadyDeclared) {
@@ -674,7 +685,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 		if (g.checkerCtx != null && g.checkerCtx.targetOs == "solana"
 				&& d.declKind == DeclKind.Const
 				&& readonlyDataConstBinding(node)) {
-			const braced = readonlyDataBracedInit(g, init, node.nodeType);
+			const braced = readonlyDataBracedInit(init, node.nodeType);
 			if (braced != "") {
 				addLine(sec(g, CSection.GlobalVars), `const ${cType} ${varName} = ${braced};`);
 				nameSetAdd(g.declaredGlobals, varName);
@@ -705,7 +716,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 			&& d.initializer.kind == NodeKind.NullLiteral
 			&& node.nodeType != null
 			&& isNilableValueType(node.nodeType)) {
-		addLine(sec(g, CSection.ModuleInit), `  ${varName} = (${cType}){0};`);
+		addLine(sec(g, CSection.ModuleInit), `  ${varName} = (${cType})${zeroInit(node.nodeType)};`);
 		return;
 	}
 	if (d.initializer != null
@@ -786,46 +797,6 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
 	nameSetAdd(g.declaredGlobals, varName);
 	return true;
-}
-
-function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Type | null): string {
-	match (init.kind) {
-		NodeKind.NumberLiteral => {
-			return formatCNumberLit(init.data as NumberLiteralData, init.nodeType);
-		},
-		NodeKind.BooleanLiteral => {
-			return cBoolLiteral((init.data as BooleanLiteralData).boolValue);
-		},
-		NodeKind.HiddenStdConv => {
-			return readonlyDataBracedInit(g, (init.data as HiddenStdConvData).convExpr, t);
-		},
-		NodeKind.ArrayLiteral => {
-			// A sized array's C type is a struct with one `data[N]` member, so
-			// the element list needs the extra struct-level brace at every depth.
-			const ad = init.data as ArrayLiteralData;
-			const elemT = t != null && t.kind == TypeKind.SizedArray ? t.typeReturn : null;
-			let parts = "";
-			for (const e of ad.elements) {
-				const part = readonlyDataBracedInit(g, e, elemT);
-				if (part == "") return "";
-				parts = parts.length == 0 ? part : parts + ", " + part;
-			}
-			const arrayBraced = `{ ${parts} }`;
-			return t != null && t.kind == TypeKind.SizedArray ? `{ ${arrayBraced} }` : arrayBraced;
-		},
-		NodeKind.ObjectLiteral => {
-			const od = init.data as ObjectLiteralData;
-			let parts = "";
-			for (let i = 0; i < od.properties.length; i += 1) {
-				const part = readonlyDataBracedInit(g, od.properties[i], null);
-				if (part == "") return "";
-				const kv = `.${mangleFieldName(od.keys[i])} = ${part}`;
-				parts = parts.length == 0 ? kv : parts + ", " + kv;
-			}
-			return `{ ${parts} }`;
-		},
-		_ => { return ""; },
-	};
 }
 
 // ===== TypeInfo Variable (from destructorLifting) =====
@@ -943,6 +914,7 @@ function declOutput(input: string): string {
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		genDecl(g, pd.programStmts[i], false);
 	}
+	defineDeferredElements(g);
 	return assembleOutput(g);
 }
 

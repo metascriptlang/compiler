@@ -16,12 +16,12 @@ import {
 	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline, assembleOutput, extract, nameSetAdd, undefPlatformMacros,
 	replayFactWrites,
 } from "./context";
-import { genDecl, registerDeclCName } from "./declarations";
+import { genDecl, registerDeclCName, emitInlineCopies } from "./declarations";
 import { mangleModuleName } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
 import { emitIncludeDirectives } from "./context";
-import { emitOwnedTypeInfos, refArrayCellName } from "./types";
+import { defineDeferredElements, emitOwnedTypeInfos, refArrayCellName } from "./types";
 import { collectModuleTypeInfoDemands } from "../../checker/reachability";
 
 // ===== generateCModule — one module's C code (no dispatcher) =====
@@ -185,6 +185,7 @@ export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Read
 			genDecl(g, stmt, false);
 		}
 	}
+	emitInlineCopies(g);
 	emitOwnedTypeInfos(g);
 
 	// Emit test table (test builds only — after all TestDecl nodes processed)
@@ -197,6 +198,7 @@ export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Read
 
 
 
+	defineDeferredElements(g);
 	emitStringPoolDecls(g.stringPool, sec(g, CSection.StringPool));
 	undefPlatformMacros(g);
 

@@ -74,12 +74,12 @@ function isIdentChar(c: string): boolean {
 
 function destroyCallsOf(code: string, typeName: string): int32 {
 	let n: int32 = 0;
-	let at = code.indexOf("Destroy(&");
+	let at = code.indexOf("Destroy((&");
 	while (at >= 0) {
 		let from = at;
 		while (from > 0 && isIdentChar(code.charAt(from - 1))) from -= 1;
 		if (code.slice(from, at).startsWith(typeName)) n += 1;
-		at = code.indexOf("Destroy(&", at + 9);
+		at = code.indexOf("Destroy((&", at + 10);
 	}
 	return n;
 }

@@ -1,6 +1,4 @@
 // Raiser-specific lowering subset — only semantic transforms, no C-backend transforms.
-// Skips lambdaLifting, destructorLifting, DCE, generators, string ops, etc.
-// The Raiser VM handles ForStmt/ForOfStmt, closures, ternary, update natively.
 //
 // Ordering matches the proven transformProgram pipeline (1000+ tests):
 //   lowerConstFold before lowerMatch (patterns resolved)
@@ -17,6 +15,9 @@ import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
 import { lowerTypeCoercion } from "./coercion/typeCoercion";
 import { lowerDestructuring } from "./desugar/destructuringLower";
 import { lowerSpread } from "./desugar/spreadExpand";
+import { lowerForLoop } from "./lowering/forLoopLower";
+import { lowerForOf } from "./lowering/forOfLower";
+import { retargetJumps } from "./lowering/jumpRetarget";
 import { lowerObjectSpreadEager } from "./desugar/objectSpreadLower";
 import { lowerArraySpreadEager } from "./desugar/arraySpreadLower";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
@@ -27,14 +28,18 @@ import { lowerCtorInit } from "./lowering/ctorLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerBorrow } from "./lowering/borrowLower";
+import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
+import { insertVarParamDerefs } from "./native/varParamDeref";
 import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerAggregateEquality, lowerUserOperators } from "./lowering/operatorLower";
 import { liftDestructors } from "./lowering/destructorLifting";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
+	ctx.raiserBackend = true;
 	ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
-	let result = lowerBorrow(program, ctx);
+	let result = lowerPointerAddresses(program, ctx, false);
+	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
@@ -45,6 +50,8 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerTypeCoercion(result, ctx);
 	result = lowerDestructuring(result, ctx);
 	result = lowerSpread(result, ctx);
+	result = lowerForLoop(result, ctx);
+	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);
 	// Result.ok/err are `static extern` (no body, no nativeName) — Raiser
 	// cannot dispatch via either funcMap or CallHost. Desugar to ObjectLiteral
@@ -54,6 +61,7 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerResultConstructors(result);
 	result = lowerSwitch(result, ctx);
 	result = lowerMatch(result, ctx);
+	result = retargetJumps(result, ctx);
 	result = lowerCtorInit(result, ctx);
 	result = lowerNewExpr(result, ctx);
 	result = lowerLambda(result, ctx);
@@ -63,5 +71,6 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerUserOperators(result, ctx);
 	result = unwrapMaybe(result, ctx);
 	result = liftDestructors(result, ctx, false);
+	result = insertVarParamDerefs(result, ctx);
 	return result;
 }

@@ -11,6 +11,7 @@ export enum TokenKind {
 	// Operators
 	Plus, Minus, Star, Slash, Percent, StarStar,
 	Assign, PlusEq, MinusEq, StarEq, SlashEq, PercentEq,
+	AmpEq, PipeEq, CaretEq, LtLtEq, GtGtEq, GtGtGtEq,
 	EqEq, EqEqEq, BangEq, BangEqEq,
 	Lt, LtEq, Gt, GtEq,
 	AmpAmp, PipePipe, Bang,

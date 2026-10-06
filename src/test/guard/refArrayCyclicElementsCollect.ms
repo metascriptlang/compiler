@@ -43,7 +43,7 @@ function spliceInsert(): int32 {
 function vecDestroy(): int32 {
 	let total: int32 = 0;
 	for (let i: int32 = 0; i < 300; i++) {
-		const v: Vec<Node> = [];
+		let v: Vec<Node> = [];
 		v.push(make(i));
 		total = total + v[0].id;
 	}

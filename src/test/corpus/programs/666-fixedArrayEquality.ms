@@ -1,4 +1,3 @@
-// @xfail(raiser): struct == compares by reference on raiser (card 2026-09-29-raiser-struct-equality-by-reference)
 // @stdout: top=true,false,false,true str=true,false field=true,false nested=true,false generic=true,false
 // note: `==` and `!=` on two fixed arrays `T[N]` compare them element by element: bytes, strings, structs holding a fixed array, a fixed-array field of a struct and of a generic struct instance. Same output on every backend.
 

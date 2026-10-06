@@ -36,22 +36,22 @@ function churn(): void {
 	const cols: Vec<Color>[] = [];
 	const pairs: Vec<[string, string]>[] = [];
 	for (let n = 0; n < 10; n = n + 1) {
-		const si: Vec<string> = [];
+		let si: Vec<string> = [];
 		si.push(bigStr("s"));
 		si.push(bigStr("t"));
 		strs.push(si);
-		const ni: Vec<number> = [];
+		let ni: Vec<number> = [];
 		ni.push(n);
 		ni.push(n + 1);
 		nums.push(ni);
-		const ci: Vec<Cell> = [];
+		let ci: Vec<Cell> = [];
 		ci.push(makeCell("c"));
 		cells.push(ci);
-		const ei: Vec<Color> = [];
+		let ei: Vec<Color> = [];
 		ei.push(Color.Red);
 		ei.push(Color.Blue);
 		cols.push(ei);
-		const pi: Vec<[string, string]> = [];
+		let pi: Vec<[string, string]> = [];
 		pi.push(makePair("p"));
 		pairs.push(pi);
 	}

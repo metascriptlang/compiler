@@ -75,8 +75,8 @@ defer → … → forLoopLower → forOfLower → matchLower → tailCall → pa
 generatorLower → spawn/await/actor lowering → varHoist → lambdaLifting → **callHoist** →
 builtinLower → operator/string/subscript lowering → conditionalExprLower → updateExpr →
 restParam → … . Order is a contract: e.g. `for`→`while` before `for-of`; `match`→`if`
-before generators; `generatorLower` runs after `lambdaLifting` (intentional reversal — see
-CONTRIBUTING.md). C-backend-only sub-pipeline runs after: closureCallMarker, pointerParam,
+before generators; `generatorLower` runs before `lambdaLifting` (intentional reversal — see
+CONTRIBUTING.md; a nested routine is rebuilt at each resume rather than stored in the frame, NIM-REF TR-35). C-backend-only sub-pipeline runs after: closureCallMarker, pointerParam,
 rangeCheckInject, optionalCoercion.
 
 ### What Phase 4 (Analyzer) requires Phase 3 to have done

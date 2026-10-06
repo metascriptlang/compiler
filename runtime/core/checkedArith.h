@@ -1,5 +1,6 @@
 /*
- * Checked integer division, modulo and power, and ToInt32. The includer declares
+ * Checked integer division, modulo and power, ToInt32, and the compound assignments
+ * C has no operator for on a float target. The includer declares
  * msRaiseDivByZero, msRaiseOverflow and msRaiseRangeError first
  * (runtime/core/system.h, runtime/manual.h).
  */
@@ -140,5 +141,20 @@ static inline int32_t msToInt32(double x) {
 	if (m < 0) m += 4294967296.0;
 	return (int32_t)(uint32_t)m;
 }
+
+static inline int32_t msNumberAnd(double a, int32_t b) { return msToInt32(a) & b; }
+static inline int32_t msNumberOr(double a, int32_t b) { return msToInt32(a) | b; }
+static inline int32_t msNumberXor(double a, int32_t b) { return msToInt32(a) ^ b; }
+static inline int32_t msNumberShl(double a, int32_t b) { return (int32_t)((uint32_t)msToInt32(a) << ((uint32_t)b & 31)); }
+static inline int32_t msNumberShr(double a, int32_t b) { return msToInt32(a) >> ((uint32_t)b & 31); }
+static inline uint32_t msNumberShrU(double a, int32_t b) { return (uint32_t)msToInt32(a) >> ((uint32_t)b & 31); }
+
+#define msModAssignF64(lv, b) msDivAssign_(lv, b, fmod)
+#define msAndAssignF64(lv, b) msDivAssign_(lv, b, msNumberAnd)
+#define msOrAssignF64(lv, b) msDivAssign_(lv, b, msNumberOr)
+#define msXorAssignF64(lv, b) msDivAssign_(lv, b, msNumberXor)
+#define msShlAssignF64(lv, b) msDivAssign_(lv, b, msNumberShl)
+#define msShrAssignF64(lv, b) msDivAssign_(lv, b, msNumberShr)
+#define msShrUAssignF64(lv, b) msDivAssign_(lv, b, msNumberShrU)
 
 #endif /* MS_CHECKED_ARITH_H */

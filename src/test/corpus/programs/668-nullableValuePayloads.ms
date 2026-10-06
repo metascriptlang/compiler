@@ -1,4 +1,3 @@
-// @xfail(raiser): != null yields 1 (NIM-REF CT-25, wt/nim-raiser 2adb86ea, not landed); struct == compares by reference on raiser (card 2026-09-29-raiser-struct-equality-by-reference)
 // @stdout: arr=true,true,1,true,false,true,true box=true,true,4,true,false,true,true tup=true,true,a,true,false,true,true vec=true,true,1,7 field=true,false,true,late,true toplevel=false,true,true,false,true,true,false,true,true,true,true
 // note: `T | null` whose payload is a fixed array, a tuple, a generic struct instance or a `Vec<T>` holds either a value or null: declared with a value or null, assigned null or a value, read after a null check, compared with `==` (payload by value, null only equals null), passed as an argument and returned; the same payloads as nullable struct fields. Same output on every backend.
 

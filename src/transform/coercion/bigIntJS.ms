@@ -23,6 +23,7 @@ import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeMember, makeNumber, runtimeRef } from "../util";
 import { createPrimitive, isIntegerType, peelToRepr } from "../../checker/types";
 import { int64ToDecimal, uint64ToDecimal } from "../../utils/string";
+import { cloneIfPure } from "./intArithJS";
 
 export function lowerBigIntJS(program: Node, ctx: TransformContext): Node {
 	walkNode(program, (node: Node): Node => materializeBigInt(node, ctx));
@@ -236,7 +237,7 @@ function shiftAsBigInt(node: Node, leftT: Type): Node {
 		const unsignedView = asN(true, 64, d.left, loc);
 		const shifted = makeBinary(unsignedView, ">>", count, loc);
 		shifted.nodeType = createPrimitive(TypeKind.Uint64);
-		return asTyped(asN(false, 64, shifted, loc), TypeKind.Int64);
+		return shifted;
 	}
 	return node;
 }
@@ -253,11 +254,17 @@ function assignAsBigInt(node: Node, ctx: TransformContext): Node {
 	const leftT = d.left != null ? d.left.nodeType : null;
 	const rightT = d.right != null ? d.right.nodeType : null;
 	if (!is64Type(leftT)) return node;
-	if (d.operator == "<<=" || d.operator == ">>=") {
-		if (ctx.checkerCtx != null) {
-			addError(ctx.checkerCtx, "compound shift on int64/uint64 is not supported on the js target; write `a = a " + d.operator.slice(0, d.operator.length - 1) + " b` instead", node.location.line, node.location.column);
+	if (d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>=") {
+		const base = d.operator.slice(0, d.operator.length - 1);
+		const readBack = cloneIfPure(d.left);
+		if (readBack == null) {
+			if (ctx.checkerCtx != null) {
+				addError(ctx.checkerCtx, "integer '" + d.operator + "' needs a left side that can be read twice; hoist the receiver or index into a local first", node.location.line, node.location.column);
+			}
+			return node;
 		}
-		return node;
+		const shifted = shiftAsBigInt(makeBinary(readBack, base, d.right, node.location), peelToRepr(leftT)!);
+		return makeBinary(d.left, "=", shifted, node.location);
 	}
 	if (isNarrowIntType(rightT)) d.right = bigIntOf(d.right, node.location);
 	return node;
@@ -328,7 +335,7 @@ function narrowBits(kind: TypeKind): int32 {
 function isAssignOp(op: string): boolean {
 	return match (op) {
 		"=" | "+=" | "-=" | "*=" | "/=" | "%=" => true,
-		"<<=" | ">>=" | "&=" | "|=" | "^=" => true,
+		"<<=" | ">>=" | ">>>=" | "&=" | "|=" | "^=" => true,
 		_ => false,
 	};
 }

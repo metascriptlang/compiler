@@ -724,7 +724,7 @@ export function foldUnaryLiteral(op: string, operand: Node, node: Node): Node {
 
 const READONLY_DATA_DEPTH_LIMIT: int32 = 32;
 
-// A module-level `const` of sized-array or struct type whose leaves are all
+// A `const` of sized-array or struct type whose leaves are all
 // scalar literals is read-only data: nothing can write it (a `const` binding is
 // deep — element and field writes are checker errors), so the SBF link may keep
 // it in .rodata instead of writable static storage.

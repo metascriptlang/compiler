@@ -3,10 +3,11 @@
 
 
 import {
-	Node, NodeKind, ProgramData, FunctionDeclData, SymbolFlag,
+	Node, NodeKind, ProgramData, FunctionDeclData, SymbolFlag, Symbol,
 	ExportDeclData, DecoratedDeclData, EnumDeclData,
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
+import { classDeclNodeOf, parentClassSymOf } from "../../checker/symbol";
 import { parseSource } from "../../parser/statements/validation";
 import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
 import {
@@ -26,7 +27,7 @@ import {
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
 	globalSymbolKey,
-	routineKey,
+	routineKey, resolveRoutine, RaiserCompState,
 } from "./context";
 import { compileStmt } from "./statements";
 import { compileExpr } from "./expressions";
@@ -133,10 +134,74 @@ export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, 
 // Creates ClassName_new(params...): allocates object, sets property defaults,
 // stores method closures, executes ctor body, returns this.
 
-function compileClassConstructor(
+function storeMethodClosures(s: RaiserCompState, thisReg: int32, className: string, classBody: Node[]): void {
+	for (const member of classBody) {
+		if (member.kind != NodeKind.MethodDecl) continue;
+		const md = member.data as MethodDeclData;
+		const methodKey = `${className}_${md.methodName}`;
+		const viaSym = member.resolvedSym != null ? resolveRoutine(s, member.resolvedSym, methodKey) : -1;
+		const methodIdx = viaSym >= 0 ? viaSym : resolveFunc(s, methodKey);
+		if (methodIdx < 0) continue;
+		const receiverIsParam = md.methodParams.length > 0 && md.methodParams[0] == "this";
+		const closureReg = emitClosurePair(s, methodIdx, receiverIsParam ? -1 : thisReg);
+		const methodNameIdx = addConst(s, raiserString(md.methodName));
+		emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, methodNameIdx, closureReg));
+	}
+}
+
+function storeInheritedClosures(s: RaiserCompState, thisReg: int32, classSym: Symbol | null, depth: int32): void {
+	const parent = classSym != null && depth < 64 ? parentClassSymOf(classSym) : null;
+	if (parent == null) return;
+	storeInheritedClosures(s, thisReg, parent, depth + 1);
+	const decl = classDeclNodeOf(parent);
+	if (decl == null || decl.kind != NodeKind.ClassDecl) return;
+	const pd = decl.data as ClassDeclData;
+	storeMethodClosures(s, thisReg, pd.className, pd.classBody);
+}
+
+function storeZeroFields(s: RaiserCompState, thisReg: int32, classBody: Node[]): void {
+	for (let ci = 0; ci < classBody.length; ci += 1) {
+		if (classBody[ci].kind == NodeKind.PropertyDecl) {
+			const pd = classBody[ci].data as PropertyDeclData;
+			const fieldReg = pd.propIsStatic ? emitZeroValue(s, null) : emitZeroValue(s, classBody[ci].nodeType);
+			const nameIdx = addConst(s, raiserString(pd.propName));
+			emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, nameIdx, fieldReg));
+		}
+	}
+}
+
+function compileClassInit(
 	funcMap: RaiserFuncMap, enumMap: RaiserFuncMap,
 	className: string, classBody: Node[],
 	ctorParams: string[], ctorBody: Node | null, globals: RaiserFuncMap | null = null
+): RaiserFunction {
+	const s = createCompState();
+	s.funcMap = funcMap;
+	s.enumMap = enumMap;
+	if (globals != null) s.globals = globals;
+	s.scopedFunctions = globals != null;
+	const thisReg = allocReg(s);
+	declareLocal(s, "this", thisReg);
+	for (let i = 0; i < ctorParams.length; i += 1) {
+		declareLocal(s, ctorParams[i], allocReg(s));
+	}
+	storeZeroFields(s, thisReg, classBody);
+	if (ctorBody != null) {
+		compileStmt(s, ctorBody);
+	}
+	const nilReg = allocReg(s);
+	emitLoadConst(s, nilReg, raiserNil());
+	emitRet(s, nilReg);
+	const compiled = createRaiserFunction(className + "_init", s.code, s.constants, ctorParams.length + 1, 0, s.maxRegSeen);
+	compiled.copyPlans = s.copyPlans;
+	return compiled;
+}
+
+function compileClassConstructor(
+	funcMap: RaiserFuncMap, enumMap: RaiserFuncMap,
+	className: string, classBody: Node[],
+	ctorParams: string[], ctorBody: Node | null, globals: RaiserFuncMap | null = null,
+	classSym: Symbol | null = null
 ): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
@@ -156,28 +221,9 @@ function compileClassConstructor(
 	emitInst(s, raiserABC(RaiserOpcode.NewObject, thisReg, 0, 0));
 	declareLocal(s, "this", thisReg);
 
-	for (let ci = 0; ci < classBody.length; ci += 1) {
-		if (classBody[ci].kind == NodeKind.PropertyDecl) {
-			const pd = classBody[ci].data as PropertyDeclData;
-			const fieldReg = pd.propIsStatic ? emitZeroValue(s, null) : emitZeroValue(s, classBody[ci].nodeType);
-			const nameIdx = addConst(s, raiserString(pd.propName));
-			emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, nameIdx, fieldReg));
-		}
-	}
-
-	// Store method closures: { fn: funcIdx, env: this }
-	for (let ci = 0; ci < classBody.length; ci += 1) {
-		if (classBody[ci].kind == NodeKind.MethodDecl) {
-			const md = classBody[ci].data as MethodDeclData;
-			const methodKey = `${className}_${md.methodName}`;
-			const methodIdx = resolveFunc(s, methodKey);
-			if (methodIdx >= 0) {
-				const closureReg = emitClosurePair(s, methodIdx, thisReg);
-				const methodNameIdx = addConst(s, raiserString(md.methodName));
-				emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, methodNameIdx, closureReg));
-			}
-		}
-	}
+	storeZeroFields(s, thisReg, classBody);
+	storeInheritedClosures(s, thisReg, classSym, 0);
+	storeMethodClosures(s, thisReg, className, classBody);
 
 	// Execute constructor body
 	if (ctorBody != null) {
@@ -198,7 +244,7 @@ function compileClassConstructor(
 // image-wide with no relocation. Enums fold into the shared enumMap. Returns the
 // absolute index assigned to `wantFn` (-1 if not present).
 interface RaiserReservedSlot { idx: number; fnName: string; params: string[]; body: Node; arity: number; isMethod: boolean; }
-interface RaiserReservedCtor { idx: number; className: string; classBody: Node[]; ctorParams: string[]; ctorBody: Node | null; }
+interface RaiserReservedCtor { idx: number; initIdx: number; className: string; classBody: Node[]; ctorParams: string[]; ctorBody: Node | null; classSym: Symbol | null; }
 
 export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, program: Node, wantFn: string): int32 {
 	const pd = program.data as ProgramData;
@@ -242,7 +288,10 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 					ctorBody = ctd.ctorBody;
 				}
 			}
-			ctors.push({ idx: ctorIdx, className: cd.className, classBody: cd.classBody, ctorParams, ctorBody });
+			const initIdx = image.functions.length;
+			image.functions.push(raiserPlaceholderFunc());
+			funcMap.items.push({ name: cd.className + "_init", index: initIdx });
+			ctors.push({ idx: ctorIdx, initIdx, className: cd.className, classBody: cd.classBody, ctorParams, ctorBody, classSym: classNode.resolvedSym });
 		}
 		const enumNode = unwrapToEnumDecl(pd.programStmts[i]);
 		if (enumNode != null) {
@@ -261,7 +310,8 @@ export function appendProgramToImage(image: RaiserModule, funcMap: RaiserFuncMap
 		image.functions[r.idx] = func;
 	}
 	for (const c of ctors) {
-		image.functions[c.idx] = compileClassConstructor(funcMap, enumMap, c.className, c.classBody, c.ctorParams, c.ctorBody);
+		image.functions[c.idx] = compileClassConstructor(funcMap, enumMap, c.className, c.classBody, c.ctorParams, c.ctorBody, null, c.classSym);
+		image.functions[c.initIdx] = compileClassInit(funcMap, enumMap, c.className, c.classBody, c.ctorParams, c.ctorBody);
 	}
 	return wantIdx;
 }
@@ -283,6 +333,8 @@ export interface RaiserModuleInput {
 interface RaiserProjectDecl {
 	modulePath: string;
 	isCtor: boolean;
+	isInit: boolean;
+	classSym: Symbol | null;
 	isMethod: boolean;
 	fnName: string;
 	params: string[];
@@ -332,7 +384,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 					globalFuncMap.items.push({ name: fnNode.resolvedSym.modulePath + ":" + fnNode.resolvedSym.name, index: funcIdx });
 					globalFuncMap.items.push({ name: routineKey(fnNode.resolvedSym), index: funcIdx });
 				}
-				projectDecls.push({ modulePath: modules[mi].modulePath, isCtor: false, isMethod: false, fnName: fd.fnName, params: fd.params, body: fd.fnBody, className: "", classBody: noNodes, ctorParams: noStrs, ctorBody: nullNode });
+				projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, isMethod: false, fnName: fd.fnName, params: fd.params, body: fd.fnBody, className: "", classBody: noNodes, ctorParams: noStrs, ctorBody: nullNode });
 				funcIdx += 1;
 			}
 			const enumNode = unwrapToEnumDecl(pd.programStmts[i]);
@@ -363,7 +415,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 						const mEntry: RaiserFuncEntry = { name: methodKey, index: funcIdx };
 						globalFuncMap.items.push(mEntry);
 						globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + methodKey, index: funcIdx });
-						projectDecls.push({ modulePath: modules[mi].modulePath, isCtor: false, isMethod: true, fnName: methodKey, params: md.methodParams, body: md.methodBody, className: "", classBody: noNodes, ctorParams: noStrs, ctorBody: nullNode });
+						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: null, isCtor: false, isMethod: true, fnName: methodKey, params: md.methodParams, body: md.methodBody, className: "", classBody: noNodes, ctorParams: noStrs, ctorBody: nullNode });
 						funcIdx += 1;
 					}
 				}
@@ -376,7 +428,11 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 						globalFuncMap.items.push(cEntry);
 						globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + ctorKey, index: funcIdx });
 						const ctd = cd.classBody[ci].data as ConstructorDeclData;
-						projectDecls.push({ modulePath: modules[mi].modulePath, isCtor: true, isMethod: false, fnName: ctorKey, params: noStrs, body: nullNode, className: cd.className, classBody: cd.classBody, ctorParams: ctd.ctorParams, ctorBody: ctd.ctorBody });
+						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: classNode.resolvedSym, isCtor: true, isMethod: false, fnName: ctorKey, params: noStrs, body: nullNode, className: cd.className, classBody: cd.classBody, ctorParams: ctd.ctorParams, ctorBody: ctd.ctorBody });
+						funcIdx += 1;
+						globalFuncMap.items.push({ name: cd.className + "_init", index: funcIdx });
+						globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + cd.className + "_init", index: funcIdx });
+						projectDecls.push({ modulePath: modules[mi].modulePath, isInit: true, classSym: classNode.resolvedSym, isCtor: false, isMethod: false, fnName: cd.className + "_init", params: noStrs, body: nullNode, className: cd.className, classBody: cd.classBody, ctorParams: ctd.ctorParams, ctorBody: ctd.ctorBody });
 						funcIdx += 1;
 					}
 				}
@@ -385,7 +441,11 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 					const cEntry: RaiserFuncEntry = { name: ctorKey, index: funcIdx };
 					globalFuncMap.items.push(cEntry);
 					globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + ctorKey, index: funcIdx });
-					projectDecls.push({ modulePath: modules[mi].modulePath, isCtor: true, isMethod: false, fnName: ctorKey, params: noStrs, body: nullNode, className: cd.className, classBody: cd.classBody, ctorParams: noStrs, ctorBody: nullNode });
+					projectDecls.push({ modulePath: modules[mi].modulePath, isInit: false, classSym: classNode.resolvedSym, isCtor: true, isMethod: false, fnName: ctorKey, params: noStrs, body: nullNode, className: cd.className, classBody: cd.classBody, ctorParams: noStrs, ctorBody: nullNode });
+					funcIdx += 1;
+					globalFuncMap.items.push({ name: cd.className + "_init", index: funcIdx });
+					globalFuncMap.items.push({ name: modules[mi].modulePath + ":" + cd.className + "_init", index: funcIdx });
+					projectDecls.push({ modulePath: modules[mi].modulePath, isInit: true, classSym: classNode.resolvedSym, isCtor: false, isMethod: false, fnName: cd.className + "_init", params: noStrs, body: nullNode, className: cd.className, classBody: cd.classBody, ctorParams: noStrs, ctorBody: nullNode });
 					funcIdx += 1;
 				}
 			}
@@ -421,8 +481,10 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 		const dcl = projectDecls[idx];
 		const prevModule = getRaiserModulePath();
 		setRaiserModulePath(dcl.modulePath);
-		if (dcl.isCtor) {
-			functions[idx] = compileClassConstructor(globalFuncMap, globalEnumMap, dcl.className, dcl.classBody, dcl.ctorParams, dcl.ctorBody, globals);
+		if (dcl.isInit) {
+			functions[idx] = compileClassInit(globalFuncMap, globalEnumMap, dcl.className, dcl.classBody, dcl.ctorParams, dcl.ctorBody, globals);
+		} else if (dcl.isCtor) {
+			functions[idx] = compileClassConstructor(globalFuncMap, globalEnumMap, dcl.className, dcl.classBody, dcl.ctorParams, dcl.ctorBody, globals, dcl.classSym);
 		} else {
 			functions[idx] = compileFuncBody(globalFuncMap, globalEnumMap, dcl.fnName, dcl.params, dcl.body, dcl.params.length, dcl.isMethod, globals);
 		}
@@ -1027,6 +1089,31 @@ test "/=" {
 test "%=" {
 	const ctx = evalRaiser("let x = 17; x %= 5; return x;");
 	assert ctx.lastResult.intVal == 2;
+}
+
+test "|=" {
+	const ctx = evalRaiser("let x = 12; x |= 3; return x;");
+	assert ctx.lastResult.intVal == 15;
+}
+
+test "&=" {
+	const ctx = evalRaiser("let x = 12; x &= 6; return x;");
+	assert ctx.lastResult.intVal == 4;
+}
+
+test "^=" {
+	const ctx = evalRaiser("let x = 12; x ^= 6; return x;");
+	assert ctx.lastResult.intVal == 10;
+}
+
+test "<<=" {
+	const ctx = evalRaiser("let x = 3; x <<= 4; return x;");
+	assert ctx.lastResult.intVal == 48;
+}
+
+test ">>=" {
+	const ctx = evalRaiser("let x = 48; x >>= 4; return x;");
+	assert ctx.lastResult.intVal == 3;
 }
 
 test "+= in loop" {

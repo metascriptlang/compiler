@@ -816,7 +816,7 @@ function bindBinaryExpr(state: BinderState, node: Node): void {
 	if (d.operator == "=" || d.operator == "+=" || d.operator == "-="
 		|| d.operator == "*=" || d.operator == "/=" || d.operator == "%="
 		|| d.operator == "**=" || d.operator == "&=" || d.operator == "|="
-		|| d.operator == "^=" || d.operator == "<<=" || d.operator == ">>="
+		|| d.operator == "^=" || d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>="
 		|| d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") {
 		if (d.left != null) bindExpression(state, d.left);
 		if (d.right != null) bindExpression(state, d.right);

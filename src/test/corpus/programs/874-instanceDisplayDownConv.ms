@@ -1,5 +1,4 @@
 // @stdout: deep=7 box=41 mid=1
-// @xfail(raiser): the Raiser VM cannot evaluate class inheritance (super) or instanceof at comptime
 // note: checked `as` out of `unknown` rides msObjDownConv → msIsInstance, now the display
 // check; includes a generic class instance (one msTypeInfo per instantiation). Sibling of
 // 646/647/873; the fatal direction is 875.

@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, UnaryExprData, TypeAssertionData, NumberLiteralData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, ArrowFunctionData, Type, TypeKind, SourceLocation, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, UnaryExprData, TypeAssertionData, NumberLiteralData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, ArrowFunctionData, ArrayAccessData, MemberExprData, HiddenDerefData, Type, TypeKind, SourceLocation, createNodeAt } from "../../ast/node";
 import { bitSetElemType, setRepr, booleanType, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { TransformContext, freshTempSym } from "../context";
@@ -49,6 +49,10 @@ function setOpName(sym: Node): string {
 
 function isSetBinaryOp(op: string): boolean {
 	return op == "|" || op == "&" || op == "^";
+}
+
+function isSetCompoundOp(op: string): boolean {
+	return op == "|=" || op == "&=" || op == "^=";
 }
 
 // ===== word class (uint32 / uint64) =====
@@ -326,8 +330,26 @@ function lowerCall(node: Node, ctx: TransformContext): Node {
 	return lowerWordCall(node, name, recv, repr);
 }
 
-function lowerBinary(node: Node): Node {
+function lowerCompound(node: Node, ctx: TransformContext): Node {
 	const d = node.data as BinaryExprData;
+	const repr = setRepr(d.left.nodeType);
+	if (repr == null) return node;
+	if (repr.kind != TypeKind.SizedArray) {
+		if (isEnumOperand(d.right)) d.right = shiftMember(d.right, repr);
+		return node;
+	}
+	const readBack = cloneIfPure(d.left);
+	if (readBack == null) {
+		addError(ctx.checkerCtx, "'" + d.operator + "' on a BitSet over 64 members needs a left side that can be read twice; hoist the receiver or index into a local first", node.location.line, node.location.column);
+		return node;
+	}
+	const op = d.operator.slice(0, d.operator.length - 1);
+	return makeBinary(d.left, "=", lowerArrayBinary(typedBinary(readBack, op, d.right, d.left.nodeType, node.location), repr), node.location);
+}
+
+function lowerBinary(node: Node, ctx: TransformContext): Node {
+	const d = node.data as BinaryExprData;
+	if (isSetCompoundOp(d.operator) && isSetOperand(d.left)) return lowerCompound(node, ctx);
 	if (isSetBinaryOp(d.operator)) {
 		if (bitSetElemType(node.nodeType) == null) return node;
 		const repr = setRepr(node.nodeType);
@@ -345,7 +367,7 @@ function lowerBinary(node: Node): Node {
 
 function lowerNode(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.CallExpr) return lowerCall(node, ctx);
-	if (node.kind == NodeKind.BinaryExpr) return lowerBinary(node);
+	if (node.kind == NodeKind.BinaryExpr) return lowerBinary(node, ctx);
 	if (node.kind == NodeKind.TypeAssertion) {
 		const repr = arrayRepr(node.nodeType);
 		if (repr != null) return lowerArrayZero(node, repr);
@@ -363,6 +385,7 @@ function isArrayOp(node: Node): boolean {
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		if (isSetBinaryOp(d.operator)) return arrayRepr(node.nodeType) != null;
+		if (isSetCompoundOp(d.operator)) return arrayRepr(d.left.nodeType) != null;
 		if (d.operator == "==" || d.operator == "!=") return arrayRepr(d.left.nodeType) != null;
 	}
 	return false;
@@ -391,9 +414,30 @@ function hoistArrayOperands(expr: Node, pre: Node[], ctx: TransformContext): Nod
 		return expr;
 	}
 	const d = expr.data as BinaryExprData;
-	d.left = hoistOperand(d.left, pre, ctx);
+	d.left = isSetCompoundOp(d.operator) ? hoistTargetEffects(d.left, pre, ctx) : hoistOperand(d.left, pre, ctx);
 	d.right = hoistOperand(d.right, pre, ctx);
 	return expr;
+}
+
+function hoistTargetEffects(target: Node, pre: Node[], ctx: TransformContext): Node {
+	if (target.kind == NodeKind.ArrayAccess) {
+		const d = target.data as ArrayAccessData;
+		d.array = hoistTargetEffects(d.array, pre, ctx);
+		d.index = hoistOperand(d.index, pre, ctx);
+		return target;
+	}
+	if (target.kind == NodeKind.MemberExpr) {
+		const d = target.data as MemberExprData;
+		d.object = hoistTargetEffects(d.object, pre, ctx);
+		return target;
+	}
+	if (target.kind == NodeKind.HiddenDeref || target.kind == NodeKind.HiddenAddr) {
+		const d = target.data as HiddenDerefData;
+		d.expr = hoistTargetEffects(d.expr, pre, ctx);
+		return target;
+	}
+	if (target.kind == NodeKind.CallExpr || target.kind == NodeKind.NewExpr) return hoistOperand(target, pre, ctx);
+	return target;
 }
 
 export function isImpureArrayOp(node: Node): boolean {

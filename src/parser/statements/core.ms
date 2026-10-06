@@ -2,8 +2,8 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseStatement()
 
 import { TokenKind, Token } from "../../lexer/token";
-import { Node, NodeKind, NodeFlag, FunctionDeclData, BlockStmtData, ProgramData, createNode } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd, takePendingComments } from "../context";
+import { Node, NodeKind, NodeFlag, FunctionDeclData, BlockStmtData, BooleanLiteralData, ProgramData, createNode } from "../../ast/node";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd, takePendingComments, isGenericCallAhead, captureGenericTypeArgs } from "../context";
 import { getParserDefines } from "../context";
 import { isDefined, definedValue } from "../../compiler/defines";
 import { parseIntStr } from "../../utils/string";
@@ -141,8 +141,8 @@ function parseStatementCore(state: ParserState): NodeResult {
 // `when (flag) { … } else when (…) { … } else { … }`.
 //
 // Nim's semWhen (semexprs.nim:2705-2712) takes the first true branch and returns
-// immediately, so the other branches are never semantically checked. MetaScript
-// resolves the chain HERE, at parse, because collectTopLevel runs before any check
+// immediately, so the other branches are never semantically checked. Flag
+// conditions resolve HERE, at parse, because collectTopLevel runs before any check
 // and would otherwise register declarations belonging to a dead branch — Haxe cuts
 // at the same place ("discarded while parsing … not type-checked").
 //
@@ -195,10 +195,35 @@ function isCmpOp(k: TokenKind): boolean {
 		|| k == TokenKind.Gt || k == TokenKind.GtEq;
 }
 
-// The condition grammar is CLOSED — flag names, literals, !, &&, ||, comparisons and
-// parentheses, nothing else. Both references restrict it the same way; an open
-// expression grammar would need a symbol table that does not exist at parse time.
-function parseWhenPrimary(state: ParserState): Result<boolean, string> {
+// The condition grammar is CLOSED — flag names, literals, !, &&, ||, comparisons,
+// parentheses and a type trait `name<T>()`. Flags resolve here, with no symbol table;
+// a trait needs the instance's types, so it stays an expression for the checker.
+function whenFlag(value: boolean, at: Token): Node {
+	return createNode(NodeKind.BooleanLiteral, { boolValue: value }, at);
+}
+
+function isWhenFlag(n: Node): boolean {
+	return n.kind == NodeKind.BooleanLiteral;
+}
+
+function whenFlagValue(n: Node): boolean {
+	return (n.data as BooleanLiteralData).boolValue;
+}
+
+function parseWhenTrait(state: ParserState, nameTok: Token): NodeResult {
+	const typeArg = captureGenericTypeArgs(state);
+	advance(state);
+	if (current(state).kind != TokenKind.RParen) {
+		return Result.err(`A type trait in a 'when' condition takes only its type argument: write '${nameTok.value}<${typeArg}>()' at line ${current(state).line}`);
+	}
+	advance(state);
+	const callee = createNode(NodeKind.Identifier, { name: nameTok.value }, nameTok);
+	const call = createNode(NodeKind.CallExpr, { callee, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, nameTok);
+	call.typeArg = typeArg;
+	return Result.ok(call);
+}
+
+function parseWhenPrimary(state: ParserState): NodeResult {
 	const tok = current(state);
 	if (tok.kind == TokenKind.LParen) {
 		advance(state);
@@ -212,11 +237,13 @@ function parseWhenPrimary(state: ParserState): Result<boolean, string> {
 	if (tok.kind == TokenKind.Bang) {
 		advance(state);
 		const v = try parseWhenPrimary(state);
-		return Result.ok(!v);
+		if (isWhenFlag(v)) return Result.ok(whenFlag(!whenFlagValue(v), tok));
+		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: "!", operand: v }, tok));
 	}
 	if (tok.kind == TokenKind.Ident) {
 		const name = tok.value;
 		advance(state);
+		if (isGenericCallAhead(state)) return parseWhenTrait(state, tok);
 		if (isCmpOp(current(state).kind)) {
 			const op = current(state).kind;
 			advance(state);
@@ -225,34 +252,45 @@ function parseWhenPrimary(state: ParserState): Result<boolean, string> {
 				return Result.err(`Expected a literal after the comparison in 'when' condition at line ${rhsTok.line}`);
 			}
 			advance(state);
-			return Result.ok(applyCmp(definedValue(getParserDefines(), name), rhsTok.value, op));
+			return Result.ok(whenFlag(applyCmp(definedValue(getParserDefines(), name), rhsTok.value, op), tok));
 		}
-		return Result.ok(isDefined(getParserDefines(), name));
+		return Result.ok(whenFlag(isDefined(getParserDefines(), name), tok));
 	}
-	return Result.err(`Unsupported expression in 'when' condition at line ${tok.line} — only flag names, literals, !, &&, || and comparisons are allowed`);
+	return Result.err(`Unsupported expression in 'when' condition at line ${tok.line} — only flag names, literals, !, &&, ||, comparisons and type traits (name<T>()) are allowed`);
 }
 
-function parseWhenAnd(state: ParserState): Result<boolean, string> {
+function whenJoin(left: Node, right: Node, op: string, at: Token): Node {
+	if (isWhenFlag(left) && isWhenFlag(right)) {
+		const a = whenFlagValue(left);
+		const b = whenFlagValue(right);
+		return whenFlag(op == "&&" ? a && b : a || b, at);
+	}
+	return createNode(NodeKind.BinaryExpr, { operator: op, left, right }, at);
+}
+
+function parseWhenAnd(state: ParserState): NodeResult {
 	let left = try parseWhenPrimary(state);
 	while (current(state).kind == TokenKind.AmpAmp) {
+		const op = current(state);
 		advance(state);
 		const right = try parseWhenPrimary(state);
-		left = left && right;
+		left = whenJoin(left, right, "&&", op);
 	}
 	return Result.ok(left);
 }
 
-function parseWhenOr(state: ParserState): Result<boolean, string> {
+function parseWhenOr(state: ParserState): NodeResult {
 	let left = try parseWhenAnd(state);
 	while (current(state).kind == TokenKind.PipePipe) {
+		const op = current(state);
 		advance(state);
 		const right = try parseWhenAnd(state);
-		left = left || right;
+		left = whenJoin(left, right, "||", op);
 	}
 	return Result.ok(left);
 }
 
-function parseWhenHead(state: ParserState): Result<boolean, string> {
+function parseWhenHead(state: ParserState): NodeResult {
 	if (current(state).kind != TokenKind.LParen) {
 		return Result.err(`Expected '(' after 'when' at line ${current(state).line}`);
 	}
@@ -270,6 +308,28 @@ function blockStatements(node: Node): Node[] {
 	return (node.data as BlockStmtData).statements;
 }
 
+function deferWhen(conds: Node[], blocks: Node[], elseBlock: Node | null, from: int32, at: Token): Node {
+	let alternate: Node | null = elseBlock;
+	for (let i = conds.length - 1; i >= from; i -= 1) {
+		if (isWhenFlag(conds[i])) {
+			if (whenFlagValue(conds[i])) alternate = blocks[i];
+			continue;
+		}
+		const node = createNode(NodeKind.IfStmt, { condition: conds[i], consequent: blocks[i], alternate: alternate as unknown as Node }, at);
+		node.flags = node.flags.incl(NodeFlag.WhenDeferred);
+		alternate = node;
+	}
+	return alternate as Node;
+}
+
+function pickWhenBranch(conds: Node[], blocks: Node[], elseBlock: Node | null, at: Token): Node[] {
+	for (let i = 0; i < conds.length; i += 1) {
+		if (!isWhenFlag(conds[i])) return [deferWhen(conds, blocks, elseBlock, i, at)];
+		if (whenFlagValue(conds[i])) return blockStatements(blocks[i]);
+	}
+	return elseBlock != null ? blockStatements(elseBlock) : [];
+}
+
 // Every branch is PARSED (a dead branch must still be syntactically valid — Haxe says
 // the same) but only the first true one is selected; later conditions are parsed for
 // their tokens and not consulted, mirroring semWhen's early return.
@@ -277,25 +337,22 @@ export function parseWhenChain(state: ParserState): NodesResult {
 	const before = takePendingComments(state);
 	const whenToken = current(state);
 	advance(state); // consume 'when'
-	const firstCond = try parseWhenHead(state);
-	const firstBlock = try parseBlockStmt(state);
-	let chosen: Node[] = [];
-	let picked = firstCond;
-	if (firstCond) { chosen = blockStatements(firstBlock); }
+	const conds: Node[] = [try parseWhenHead(state)];
+	const blocks: Node[] = [try parseBlockStmt(state)];
+	let elseBlock: Node | null = null;
 
 	while (current(state).kind == TokenKind.Else) {
 		advance(state);
 		if (current(state).kind == TokenKind.When) {
 			advance(state);
-			const cond = try parseWhenHead(state);
-			const blk = try parseBlockStmt(state);
-			if (!picked && cond) { chosen = blockStatements(blk); picked = true; }
+			conds.push(try parseWhenHead(state));
+			blocks.push(try parseBlockStmt(state));
 		} else {
-			const blk = try parseBlockStmt(state);
-			if (!picked) { chosen = blockStatements(blk); picked = true; }
+			elseBlock = try parseBlockStmt(state);
 			break;
 		}
 	}
+	const chosen = pickWhenBranch(conds, blocks, elseBlock, whenToken);
 	const endToken = state.tokens[state.position - 1];
 	const endLine = endToken.line as int32;
 	const endColumn = (endToken.column + 1) as int32;
@@ -362,7 +419,13 @@ export function parseProgram(state: ParserState): NodeResult {
 		if (current(state).kind == TokenKind.When) {
 			const chain = parseWhenChain(state);
 			if (chain.ok) {
-				for (const w of chain.value) { stmts.push(w); }
+				for (const w of chain.value) {
+					if (w.flags.has(NodeFlag.WhenDeferred)) {
+						addError(state, `A 'when' that asks a type trait is decided per generic instance and belongs in a function body (line ${w.location.line}); at module level 'when' selects on build flags only`);
+						continue;
+					}
+					stmts.push(w);
+				}
 			} else {
 				addError(state, chain.error);
 				synchronize(state);

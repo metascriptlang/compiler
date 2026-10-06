@@ -226,12 +226,31 @@ export function skipGenericParams(state: ParserState): void {
 	advance(state);
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
+		splitAngleAssign(state);
 		if (current(state).kind == TokenKind.Lt) { depth += 1; }
 		if (current(state).kind == TokenKind.Gt) { depth -= 1; }
 		if (current(state).kind == TokenKind.GtGt) { depth -= 2; }
 		if (current(state).kind == TokenKind.GtGtGt) { depth -= 3; }
 		advance(state);
 	}
+}
+
+export function splitAngleAssign(state: ParserState): void {
+	let pos = state.position;
+	while (pos < state.tokens.length && state.tokens[pos].kind == TokenKind.Comment) pos += 1;
+	if (pos >= state.tokens.length) return;
+	const tok = state.tokens[pos];
+	const closer = match (tok.kind) {
+		TokenKind.GtEq => TokenKind.Gt,
+		TokenKind.GtGtEq => TokenKind.GtGt,
+		TokenKind.GtGtGtEq => TokenKind.GtGtGt,
+		_ => TokenKind.Eof,
+	};
+	if (closer == TokenKind.Eof) return;
+	const width = tok.value.byteLength - 1;
+	state.tokens[pos] = { kind: closer, value: ">".repeat(width), line: tok.line, column: tok.column, rawValue: "" };
+	const assign: Token = { kind: TokenKind.Assign, value: "=", line: tok.line, column: tok.column + width, rawValue: "" };
+	state.tokens.splice(pos + 1, 0, assign);
 }
 
 

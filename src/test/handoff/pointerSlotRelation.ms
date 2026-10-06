@@ -1,4 +1,4 @@
-import { strictErrorCount } from "./helpers";
+import { strictErrorCount, hasError } from "./helpers";
 import { compileToC, compileToCWithStd } from "../helpers";
 
 test "pointerSlotRelation: cursor nullability does not make ordinary references nullable" {
@@ -85,9 +85,9 @@ test "pointer slot relation: forwarding a reference preserves one address layer"
 	const source = "extern function writeTyped(p: Ptr<int32> | null): int32; extern function writeOpaque(p: Ptr<void> | null): int32; extern function readBorrow(p: Borrow<int32>): int32; function forward(ref n: int32): int32 { writeTyped(n); writeOpaque(n); return readBorrow(n); }";
 	const c = compileToCWithStd(source);
 	assert c.ok, c.error;
-	assert c.value.contains("writeTyped(&((*n)))");
-	assert c.value.contains("writeOpaque(&((*n)))");
-	assert c.value.contains("readBorrow(&((*n)))");
+	assert c.value.contains("writeTyped((&((*n))))");
+	assert c.value.contains("writeOpaque((&((*n))))");
+	assert c.value.contains("readBorrow((&((*n))))");
 }
 
 test "pointer slot relation: reference cursors retain reference reads without scalar reinterpretation" {
@@ -199,4 +199,30 @@ test "pointerSlotRelation: a method call on a Ptr<T> or Var<T> receiver lowers a
 		assert !methodForm.startsWith("error:"), item.name + ": " + methodForm;
 		assert methodForm == receiverProgram(item.declarations, item.freeCall), item.name;
 	}
+}
+
+test "pointerSlotRelation: a struct value into a Ref slot is refused and the refusal names the Ref" {
+	const pre = "struct P { n: int32; s: string; }\nfunction mk(): P { return { n: 1, s: \"x\" }; }\nfunction one(): int32 { return 1; }\nfunction show(r: Ref<P>): int32 { return r.n; }\nstruct H { r: Ref<P>; }\n";
+	const refused = "Type 'P' is not assignable to type 'Ref<P>' — a struct value is never copied into a new Ref implicitly";
+	assert hasError(pre + "const r: Ref<P> = mk();", refused);
+	assert hasError(pre + "const h: H = { r: mk() };", refused);
+	assert hasError(pre + "const n = show(mk());", "got P, expected Ref<P>");
+	assert hasError(pre + "const c: Ref<int32> = one();", "type 'Ref<int32>'");
+	assert strictErrorCount(pre + "const r: Ref<P> = { ...mk() };\nconst h: H = { r: { n: 2, s: \"y\" } };") == 0;
+}
+
+test "pointerSlotRelation: a class or interface value keeps its plain name in a refusal" {
+	assert hasError("class A { n: int32 = 1; }\nclass B { s: string = \"\"; }\nconst b: B = new A();", "Type 'A' is not assignable to type 'B'");
+	assert hasError("interface I { n: int32; }\ninterface J { s: string; }\nconst i: I = { n: 1 };\nconst j: J = i;", "Type 'I' is not assignable to type 'J'");
+}
+
+test "pointerSlotRelation: a Ref of a value is never dereferenced implicitly; x[] reads it" {
+	const pre = "struct S { n: int32; }\nstruct Pair<T> { a: T; b: T; }\nfunction get2(x: S): int32 { return x.n; }\nfunction get(this x: S): int32 { return x.n; }\nfunction firstOf<T>(p: Pair<T>): T { return p.a; }\nconst v: Ref<S> = { n: 10 };\nconst pair: Ref<Pair<int32>> = { a: 1, b: 2 };\n";
+	const hint = "a Ref is never dereferenced implicitly: write 'v[]'";
+	assert hasError(pre + "const n = get2(v);", "got Ref<S>, expected S — " + hint);
+	assert hasError(pre + "const w: S = v;", "Type 'Ref<S>' is not assignable to type 'S' — " + hint);
+	assert hasError(pre + "const n = v.get();", "receiver: got Ref<S>, expected S — " + hint);
+	assert hasError(pre + "const one = firstOf(pair);", "write 'pair[]'");
+	assert hasError("struct P { a: int32; }\nstruct D extends P { b: int32; }\nfunction readP(p: P): int32 { return p.a; }\nconst r: Ref<D> = { a: 1, b: 2 };\nconst n = readP(r);", "got Ref<D>, expected P — a Ref is never dereferenced implicitly: write 'r[]'");
+	assert strictErrorCount(pre + "const n = get2(v[]) + v[].get() + firstOf(pair[]);\nconst w: S = v[];") == 0;
 }

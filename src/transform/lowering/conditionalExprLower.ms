@@ -89,6 +89,7 @@ function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Nod
 		return makeIdentResolved(t, loc);
 	}
 	if (expr.kind == NodeKind.UpdateExpr) return hoistUpdate(expr, hoisted, ctx);
+	if (argDepth > 0 && expr.kind == NodeKind.BinaryExpr && (expr.data as BinaryExprData).operator == "=") return hoistArgAssign(expr, hoisted, ctx);
 	if (!ctx.jsBackend) {
 		if (expr.kind == NodeKind.ArrayLiteral || expr.kind == NodeKind.ObjectLiteral) return hoistLiteral(expr, hoisted, ctx);
 		if (expr.kind == NodeKind.SpreadExpr) return hoistSpreadOperand(expr, hoisted, ctx);
@@ -162,6 +163,17 @@ function hoistSpreadOperand(spread: Node, hoisted: Node[], ctx: TransformContext
 	return spread;
 }
 
+let argDepth = 0;
+
+// C leaves the order of call arguments unspecified: an argument that writes runs as
+// its own statement, in argument order.
+function hoistArgAssign(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
+	const bd = expr.data as BinaryExprData;
+	bd.right = hoistTernaries(bd.right, hoisted, ctx);
+	hoisted.push(makeExprStmt(expr, expr.location));
+	return cloneNodeKeepSem(bd.left);
+}
+
 function hoistUpdate(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	const ud = expr.data as UpdateExprData;
 	const loc = expr.location;
@@ -187,12 +199,15 @@ function hoistUpdate(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 function hoistChildrenInOrder(expr: Node, hoisted: Node[], ctx: TransformContext): void {
 	const kids: Node[] = [];
 	const ends: int32[] = [];
+	const call = expr.kind == NodeKind.CallExpr || expr.kind == NodeKind.NewExpr;
+	if (call) argDepth += 1;
 	mapExprChildren(expr, (child: Node): Node => {
 		const lowered = hoistTernaries(child, hoisted, ctx);
 		kids.push(lowered);
 		ends.push(hoisted.length);
 		return lowered;
 	});
+	if (call) argDepth -= 1;
 	let i = kids.length - 2;
 	while (i >= 0) {
 		if (ends[i] < hoisted.length && kids[i] != null) {
@@ -496,7 +511,11 @@ function expandWhileCond(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 function isAssignOperator(op: string): boolean {
-	return op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=";
+	return match (op) {
+		"=" | "+=" | "-=" | "*=" | "/=" | "%=" => true,
+		"&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
+		_ => false,
+	};
 }
 
 // Assignment statement: TS evaluates the target reference BEFORE the RHS.

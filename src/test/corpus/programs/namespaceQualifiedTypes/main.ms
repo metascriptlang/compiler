@@ -1,5 +1,4 @@
 // @stdout: struct=3 class=5 generic=7 shared=9 local=40 enum=true
-// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table (a namespace-qualified `new`, as 807-namespaceImportClass)
 // note: a type reached through a namespace import resolves through the module's exports: a struct parameter, a class annotation and `new`, a generic instance that is the same type the module's own functions take, an enum, and beside a local type of the same name.
 import * as t from "./lib/types";
 struct V { a: int32; b: int32; c: int32; }

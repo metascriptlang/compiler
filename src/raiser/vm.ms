@@ -11,7 +11,7 @@ import {
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserString, raiserArray, raiserToString, copyValueInto,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField,
-	raiserFuture,
+	raiserFuture, raiserRegAddr, raiserGlobalAddr, raiserElemAddr, raiserFieldAddr, heapObjectSetField,
 	rcIncref, rcDecref, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap,
 } from "./value";
 import {
@@ -27,6 +27,8 @@ import { RaiserHostFn, RaiserPrintSink } from "./marshal";
 @include("runtime/promise/dispatch.h");
 extern function msMonoTimeMs(): int64;
 extern function msSleepMs(ms: int32): void;
+extern function msFloat64Bits(d: float64): uint64;
+extern function msToInt32(d: float64): int32;
 
 // --- VM State ---
 
@@ -363,7 +365,7 @@ function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue): void {
 	f.finished = true;
 	// Completion runs on the producing strand, whose heap dies with it — the
 	// value graph moves into storage the future owns.
-	const owned = copyGraph(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, value);
+	const owned = copyGraphWith(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, value, strandCopyMap(vm));
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 	copyValueInto(f.value, owned);
 	for (const w of f.waiters) {
@@ -673,6 +675,13 @@ function finishProgram(vm: RaiserVM, value: RaiserValue, abrupt: boolean): void 
 	vm.halted = true;
 }
 
+function strandCopyMap(vm: RaiserVM): RaiserCopyMap {
+	const map = createCopyMap();
+	map.sourceRegs = vm.regs.slots;
+	map.sourceGlobals = vm.globals;
+	return map;
+}
+
 function copyStrandGlobals(
 	vm: RaiserVM,
 	arrays: RaiserArrayHeap,
@@ -680,6 +689,7 @@ function copyStrandGlobals(
 	map: RaiserCopyMap,
 ): RaiserValue[] {
 	const globals: RaiserValue[] = [];
+	map.destGlobals = globals;
 	for (const value of vm.globals) {
 		const copied = copyGraphWith(vm.arrayHeap, vm.objectHeap, arrays, objects, value, map);
 		if (vm.gcMode == "orc") rcIncref(arrays, objects, copied);
@@ -707,7 +717,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	const sp: number[] = [];
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
-	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, createCopyMap());
+	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, strandCopyMap(vm));
 	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil(), unwinding: false, savedIp: -1 };
 	vm.sched.strands.items.push(s);
 	return id;
@@ -735,7 +745,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const envField = heapObjectGetField(vm.objectHeap, closure.intVal, "env");
-	const copyMap = createCopyMap();
+	const copyMap = strandCopyMap(vm);
 	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, copyMap);
 	if (envField.kind == RaiserValueKind.Object) {
 		// C hands the thunk a borrow of the parent's captures and the analyzer
@@ -809,9 +819,9 @@ export function execLoop(vm: RaiserVM): void {
 	execStrandLoop(vm);
 	// The host reads its result off the mirror once this returns (context.ms,
 	// expand.ms, the rgen tests), so whichever strand ran last, the mirror
-	// leaves pointing at the main strand's heap. exitValue needs no copy: both
-	// finishProgram call sites are guarded by strandFinish returning false,
-	// which is exactly the main strand.
+	// leaves pointing at the main strand's heap. exitValue needs no copy: a
+	// finishProgram call either comes from the main strand or is an abrupt Halt,
+	// whose operand is an integer exit code.
 	if (vm.sched.strands.items.length > 0) {
 		const main = vm.sched.strands.items[0];
 		vm.arrayHeap = main.arrayHeap;
@@ -898,7 +908,7 @@ function runStrandSlice(vm: RaiserVM): void {
 			setReg(vm, base + inst.a, raiserNil());
 		} else if (op == RaiserOpcode.Halt) {
 			const haltVal = getReg(vm, base + inst.a);
-			if (strandFinish(vm, haltVal)) {
+			if (inst.b != 1 && strandFinish(vm, haltVal)) {
 				vm.yielded = true;
 			} else {
 				finishProgram(vm, haltVal, inst.b == 1);
@@ -959,6 +969,35 @@ function runStrandSlice(vm: RaiserVM): void {
 			} else {
 				setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) % (rhs.intVal as uint64)) as int64));
 			}
+		} else if (op == RaiserOpcode.AddU64) {
+			const lhs = getReg(vm, base + inst.b);
+			const rhs = getReg(vm, base + inst.c);
+			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) + (rhs.intVal as uint64)) as int64));
+		} else if (op == RaiserOpcode.SubU64) {
+			const lhs = getReg(vm, base + inst.b);
+			const rhs = getReg(vm, base + inst.c);
+			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) - (rhs.intVal as uint64)) as int64));
+		} else if (op == RaiserOpcode.MulU64) {
+			const lhs = getReg(vm, base + inst.b);
+			const rhs = getReg(vm, base + inst.c);
+			setReg(vm, base + inst.a, raiserInt(((lhs.intVal as uint64) * (rhs.intVal as uint64)) as int64));
+		} else if (op == RaiserOpcode.AddrReg) {
+			setReg(vm, base + inst.a, raiserRegAddr((base + inst.b) as int64));
+		} else if (op == RaiserOpcode.AddrGlobal) {
+			setReg(vm, base + inst.a, raiserGlobalAddr((inst.b * 256 + inst.c) as int64));
+		} else if (op == RaiserOpcode.AddrIndex) {
+			vmHandleAddrIndex(vm, inst);
+		} else if (op == RaiserOpcode.AddrField) {
+			const handle = vmHeapOperand(vm, getReg(vm, base + inst.b), RaiserValueKind.Object, "an object");
+			if (!vm.halted) setReg(vm, base + inst.a, raiserFieldAddr(handle, getFuncConst(getModuleFunc(mod, vm.funcIdx), inst.c).strVal));
+		} else if (op == RaiserOpcode.LoadDeref) {
+			vmHandleLoadDeref(vm, inst);
+		} else if (op == RaiserOpcode.StoreDeref) {
+			vmHandleStoreDeref(vm, inst);
+		} else if (op == RaiserOpcode.SameLoc) {
+			const l = getReg(vm, base + inst.b);
+			const r = getReg(vm, base + inst.c);
+			setReg(vm, base + inst.a, raiserBool(l.kind == r.kind && l.intVal == r.intVal && l.floatVal == r.floatVal && l.strVal == r.strVal));
 		} else if (op == RaiserOpcode.NegI64) {
 			const val = getReg(vm, base + inst.b);
 			setReg(vm, base + inst.a, raiserInt(-val.intVal));
@@ -1302,6 +1341,76 @@ function vmHeapOperand(vm: RaiserVM, v: RaiserValue, kind: RaiserValueKind, expe
 	return -1;
 }
 
+function vmElemIndex(vm: RaiserVM, handle: int64, idx: int64): boolean {
+	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
+		vmError(vm, `array handle out of bounds: ${handle}`); return false;
+	}
+	const arrLen = heapArrayLen(vm.arrayHeap, handle);
+	if (idx < 0 || idx >= arrLen) {
+		vmError(vm, `array index out of bounds: ${idx} (length ${arrLen})`); return false;
+	}
+	return true;
+}
+
+function vmHandleAddrIndex(vm: RaiserVM, inst: RaiserInstruction): void {
+	const handle = vmHeapOperand(vm, getReg(vm, vm.baseReg + inst.b), RaiserValueKind.Array, "an array");
+	if (vm.halted) return;
+	const idx = getReg(vm, vm.baseReg + inst.c).intVal;
+	if (!vmElemIndex(vm, handle, idx)) return;
+	const data = vm.arrayHeap.arrays[handle];
+	if (data.viewOff >= 0) {
+		setReg(vm, vm.baseReg + inst.a, raiserElemAddr(data.items[0].intVal, data.viewOff + idx));
+		return;
+	}
+	setReg(vm, vm.baseReg + inst.a, raiserElemAddr(handle, idx));
+}
+
+function vmHandleLoadDeref(vm: RaiserVM, inst: RaiserInstruction): void {
+	const ptr = getReg(vm, vm.baseReg + inst.b);
+	let held = ptr;
+	if (ptr.kind == RaiserValueKind.RegAddr) {
+		held = getReg(vm, ptr.intVal as number);
+	} else if (ptr.kind == RaiserValueKind.GlobalAddr) {
+		held = vm.globals[ptr.intVal];
+	} else if (ptr.kind == RaiserValueKind.ElemAddr) {
+		if (!vmElemIndex(vm, ptr.intVal, ptr.floatVal as int64)) return;
+		held = heapArrayGet(vm.arrayHeap, ptr.intVal, ptr.floatVal as int64);
+	} else if (ptr.kind == RaiserValueKind.FieldAddr) {
+		held = heapObjectGetField(vm.objectHeap, ptr.intVal, ptr.strVal);
+	} else if (ptr.kind == RaiserValueKind.Nil) {
+		vmError(vm, "attempt to read through a nil pointer"); return;
+	}
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	vmIncref(vm, held);
+	vmDecref(vm, dst);
+	copyValueInto(dst, held);
+}
+
+function vmHandleStoreDeref(vm: RaiserVM, inst: RaiserInstruction): void {
+	const ptr = getReg(vm, vm.baseReg + inst.a);
+	const val = getReg(vm, vm.baseReg + inst.c);
+	if (ptr.kind == RaiserValueKind.RegAddr || ptr.kind == RaiserValueKind.GlobalAddr) {
+		const dst = ptr.kind == RaiserValueKind.RegAddr ? getReg(vm, ptr.intVal as number) : vm.globals[ptr.intVal];
+		vmIncref(vm, val);
+		vmDecref(vm, dst);
+		copyValueInto(dst, val);
+	} else if (ptr.kind == RaiserValueKind.ElemAddr) {
+		const idx = ptr.floatVal as int64;
+		if (!vmElemIndex(vm, ptr.intVal, idx)) return;
+		vmIncref(vm, val);
+		vmDecref(vm, heapArrayGet(vm.arrayHeap, ptr.intVal, idx));
+		heapArraySet(vm.arrayHeap, ptr.intVal, idx, val);
+	} else if (ptr.kind == RaiserValueKind.FieldAddr) {
+		vmIncref(vm, val);
+		vmDecref(vm, heapObjectGetField(vm.objectHeap, ptr.intVal, ptr.strVal));
+		heapObjectSetField(vm.objectHeap, ptr.intVal, ptr.strVal, val);
+	} else if (ptr.kind == RaiserValueKind.Nil) {
+		vmError(vm, "attempt to write through a nil pointer");
+	} else {
+		vmError(vm, `cannot write through a value of kind ${ptr.kind}: it is not a location`);
+	}
+}
+
 function vmHandleLoadIndex(vm: RaiserVM, inst: RaiserInstruction): void {
 	const arrVal = getReg(vm, vm.baseReg + inst.b);
 	const idxVal = getReg(vm, vm.baseReg + inst.c);
@@ -1628,8 +1737,30 @@ function vmHandleConv(vm: RaiserVM, inst: RaiserInstruction): void {
 	const src = getReg(vm, vm.baseReg + inst.b);
 	const cls = convTarget(inst.c);
 	const fromUnsigned = convSource(inst.c) == (RaiserConvClass.U64 as int32);
+	if (cls == RaiserConvClass.F64Bits) {
+		setReg(vm, vm.baseReg + inst.a, raiserInt(msFloat64Bits(asNum(src)) as int64));
+		return;
+	}
+	if (cls == RaiserConvClass.I32Wrap) {
+		setReg(vm, vm.baseReg + inst.a, raiserInt(msToInt32(asNum(src)) as int64));
+		return;
+	}
+	if (cls == RaiserConvClass.HandleBits) {
+		if (src.kind == RaiserValueKind.Nil) {
+			setReg(vm, vm.baseReg + inst.a, raiserInt(0));
+		} else if (src.kind == RaiserValueKind.Object || src.kind == RaiserValueKind.Array) {
+			setReg(vm, vm.baseReg + inst.a, raiserInt(src.intVal));
+		} else {
+			vmError(vm, `no identity bits for a value of kind ${src.kind}`);
+		}
+		return;
+	}
 	if (cls == RaiserConvClass.F64 || cls == RaiserConvClass.F32) {
 		setReg(vm, vm.baseReg + inst.a, raiserFloat(convToFloat(src, fromUnsigned, cls == RaiserConvClass.F32)));
+		return;
+	}
+	if (cls == RaiserConvClass.Str && convSource(inst.c) == (RaiserConvClass.Char as int32)) {
+		setReg(vm, vm.baseReg + inst.a, raiserString(fromCodePoint(src.intVal >= 0 && src.intVal < 0x80 ? src.intVal as int32 : 0xFFFD)));
 		return;
 	}
 	if (cls == RaiserConvClass.Str) {
@@ -1886,6 +2017,28 @@ test "a float converted to a signed integer out of its range stops, as on C" {
 	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.I32).error.indexOf("not in range") >= 0;
 }
 
+test "a float wrapped to int32 takes the bitwise operand conversion of C and JS" {
+	assert execConv(raiserFloat(3000000000.7), RaiserConvClass.I32Wrap).exitValue.intVal == -1294967296;
+	assert execConv(raiserFloat(2147483648.0), RaiserConvClass.I32Wrap).exitValue.intVal == -2147483648;
+	assert execConv(raiserFloat(-2147483649.0), RaiserConvClass.I32Wrap).exitValue.intVal == 2147483647;
+	assert execConv(raiserFloat(-0.5), RaiserConvClass.I32Wrap).exitValue.intVal == 0;
+	assert execConv(raiserFloat(1e20), RaiserConvClass.I32Wrap).exitValue.intVal == 1661992960;
+	assert execConv(raiserFloat(0.0 / 0.0), RaiserConvClass.I32Wrap).exitValue.intVal == 0;
+	assert execConv(raiserInt(4294967297), RaiserConvClass.I32Wrap).exitValue.intVal == 1;
+}
+
+test "a float converted to its bits keeps the IEEE pattern" {
+	assert execConv(raiserFloat(1.5), RaiserConvClass.F64Bits).exitValue.intVal == 4609434218613702656;
+	assert execConv(raiserFloat(-1.0), RaiserConvClass.F64Bits).exitValue.intVal == -4616189618054758400;
+}
+
+test "a reference converted to its identity bits is its handle, and nil is zero" {
+	assert execConv(raiserObject(7), RaiserConvClass.HandleBits).exitValue.intVal == 7;
+	assert execConv(raiserArray(3), RaiserConvClass.HandleBits).exitValue.intVal == 3;
+	assert execConv(raiserNil(), RaiserConvClass.HandleBits).exitValue.intVal == 0;
+	assert execConv(raiserString("k"), RaiserConvClass.HandleBits).error.startsWith("no identity bits");
+}
+
 test "a float in a signed integer's range converts by truncation" {
 	assert execConv(raiserFloat(127.9), RaiserConvClass.I8).exitValue.intVal == 127;
 	assert execConv(raiserFloat(-9.5), RaiserConvClass.I64).exitValue.intVal == -9;
@@ -1896,6 +2049,13 @@ test "add: 10 + 20 = 30" { assert execBinOp(RaiserOpcode.AddI64, 10, 20).exitVal
 test "sub: 100 - 42 = 58" { assert execBinOp(RaiserOpcode.SubI64, 100, 42).exitValue.intVal == 58; }
 
 test "mul: 6 * 7 = 42" { assert execBinOp(RaiserOpcode.MulI64, 6, 7).exitValue.intVal == 42; }
+
+test "unsigned add, sub and mul wrap past 64 bits" {
+	assert execBinOp(RaiserOpcode.MulU64, 4611686018427387904, 4).exitValue.intVal == 0;
+	assert execBinOp(RaiserOpcode.MulU64, -1, 3).exitValue.intVal == -3;
+	assert execBinOp(RaiserOpcode.AddU64, 4611686018427387904, 4611686018427387904).exitValue.intVal == -9223372036854775807 - 1;
+	assert execBinOp(RaiserOpcode.SubU64, 0, 1).exitValue.intVal == -1;
+}
 
 test "div: 84 / 2 = 42" { assert execBinOp(RaiserOpcode.DivI64, 84, 2).exitValue.intVal == 42; }
 
@@ -2500,7 +2660,7 @@ test "forward jumps are free; only back-edges consume the budget" {
 }
 
 test "every opcode reaches a branch of the dispatch" {
-	for (let i: int32 = 0; i <= (RaiserOpcode.ModU64 as int32); i += 1) {
+	for (let i: int32 = 0; i <= (RaiserOpcode.MulU64 as int32); i += 1) {
 		// a constant, a global and a copy plan give CallHost, LoadGlobal, StoreGlobal and CopyValue an operand to read
 		const mod = makeTestModule([raiserABC(i as RaiserOpcode, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [raiserString("missingFn")]);
 		mod.globalCount = 1;

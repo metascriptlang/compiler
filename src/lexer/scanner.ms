@@ -454,13 +454,16 @@ export function scanOperator(s: LexerState): boolean {
 		},
 		"<".code => {
 			if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.LtEq, "<=", startLine, startCol); }
+			else if (next == "<".code && peekAt(s, 2) == "=".code) { skip(s, 3); addToken(s, TokenKind.LtLtEq, "<<=", startLine, startCol); }
 			else if (next == "<".code) { skip(s, 2); addToken(s, TokenKind.LtLt, "<<", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Lt, "<", startLine, startCol); }
 			return true;
 		},
 		">".code => {
 			if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.GtEq, ">=", startLine, startCol); }
+			else if (next == ">".code && peekAt(s, 2) == ">".code && peekAt(s, 3) == "=".code) { skip(s, 4); addToken(s, TokenKind.GtGtGtEq, ">>>=", startLine, startCol); }
 			else if (next == ">".code && peekAt(s, 2) == ">".code) { skip(s, 3); addToken(s, TokenKind.GtGtGt, ">>>", startLine, startCol); }
+			else if (next == ">".code && peekAt(s, 2) == "=".code) { skip(s, 3); addToken(s, TokenKind.GtGtEq, ">>=", startLine, startCol); }
 			else if (next == ">".code) { skip(s, 2); addToken(s, TokenKind.GtGt, ">>", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Gt, ">", startLine, startCol); }
 			return true;
@@ -490,12 +493,14 @@ export function scanOperator(s: LexerState): boolean {
 		},
 		"&".code => {
 			if (next == "&".code) { skip(s, 2); addToken(s, TokenKind.AmpAmp, "&&", startLine, startCol); }
+			else if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.AmpEq, "&=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Amp, "&", startLine, startCol); }
 			return true;
 		},
 		"|".code => {
 			if (next == "|".code) { skip(s, 2); addToken(s, TokenKind.PipePipe, "||", startLine, startCol); }
 			else if (next == ">".code) { skip(s, 2); addToken(s, TokenKind.PipeGt, "|>", startLine, startCol); }
+			else if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.PipeEq, "|=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Pipe, "|", startLine, startCol); }
 			return true;
 		},
@@ -536,7 +541,11 @@ export function scanPunctuation(s: LexerState): boolean {
 		",".code => { advanceChar(s); addToken(s, TokenKind.Comma, ",", startLine, startCol); return true; },
 		"@".code => { advanceChar(s); addToken(s, TokenKind.At, "@", startLine, startCol); return true; },
 		"~".code => { advanceChar(s); addToken(s, TokenKind.Tilde, "~", startLine, startCol); return true; },
-		"^".code => { advanceChar(s); addToken(s, TokenKind.Caret, "^", startLine, startCol); return true; },
+		"^".code => {
+			if (peekAt(s, 1) == "=".code) { skip(s, 2); addToken(s, TokenKind.CaretEq, "^=", startLine, startCol); }
+			else { advanceChar(s); addToken(s, TokenKind.Caret, "^", startLine, startCol); }
+			return true;
+		},
 		_ => false,
 	};
 }
