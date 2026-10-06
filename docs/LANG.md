@@ -1036,14 +1036,9 @@ points; three places are deliberately narrower here. It lets any module declare 
 starts compiling project-wide once `converter toBool(x: int): bool` is imported) — rule 2 closes that.
 It takes the first of two converters for one pair silently — rule 4 refuses. It applies converters
 inside overload scoring and to both operands (`j + j` gives `0`) — rule 5 applies them only where the
-target is already settled and to the operand whose other side is typed. It replaces the old
-`as<TargetType>` protocol, which found `asU` by the TARGET'S NAME, so any method called `asString`
-became an implicit conversion (`asString(this arr: uint8[])` in std made `const s: string = bytes`
-compile and run) — a converter is found by its pair of types, and naming a method `asInt32` now means
-nothing to the compiler (`const s: string = bytes` now reaches the `string`-slot gap of
-`~/metascript/.inbox/compiler/2026-09-19-union-into-string-slot-accepted.md`: the checker says nothing and
-clang rejects the C): `const n: int32 = w` with only `asInt32(this w: W)` declared is "Type 'W' is not
-assignable to type 'int32' — … (convert explicitly or declare a converter to 'int32')".
+target is already settled and to the operand whose other side is typed. A converter is found by its
+pair of types, never by a method's name: `const n: int32 = w` with only `asInt32(this w: W)` declared is
+"Type 'W' is not assignable to type 'int32' — … (convert explicitly or declare a converter to 'int32')".
 
 First user: JSX boundary lowering — see `docs/LANG-JSX.md` "Boundary Lowering via Converter".
 
@@ -3471,8 +3466,6 @@ Self-referential return enables infinite chaining. Non-opt-in types (e.g. `User`
 The implicit conversion of a value into another type at a slot, an argument, `as U` or an operand is a
 `converter`, declared beside the type — rules and measurements in
 [Converter Declarations](#converter-declarations).
-The old `as<TargetType>` protocol (a method named `as` + target name) is gone; such methods are ordinary
-methods now.
 
 A condition is not a converter site: corpus `785-runtimeConverterOperand` declares
 `converter boxToFlag(b: Box): boolean { return false; }` and `box ? "yes" : "no"` still prints `yes`.
