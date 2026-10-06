@@ -40,10 +40,11 @@ import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap, raiserNil,
 	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
 	heapArrayLen, heapArrayGet, heapAllocArray, heapArrayPush, raiserArray,
+	heapAllocObject, heapObjectSetField, raiserObject, raiserInt,
 } from "../../raiser/value";
 import {
 	HostCapability, registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized,
-	activeHostObjectHeap, activeHostArrayHeap, activeProgramArgv,
+	activeHostObjectHeap, activeHostArrayHeap, activeProgramArgv, raiseFromHost,
 } from "../../raiser/hostRegistry";
 import {
 	unboxString, unboxInt, unboxFloat,
@@ -790,8 +791,53 @@ export function _resetBridgeStateForTests(): void {
 	_spawnPipeOk = 1;
 }
 
+function _unionSlotAllowed(arrHeap: RaiserArrayHeap, slots: RaiserValue, tag: int64): boolean {
+	const n = heapArrayLen(arrHeap, slots.intVal);
+	if (n == 0) return true;
+	for (let i = 0; i < n; i = i + 1) {
+		if (heapArrayGet(arrHeap, slots.intVal, i).intVal == tag) return true;
+	}
+	return false;
+}
+
+function _unionRead(args: RaiserValue[], maybe: boolean): RaiserValue {
+	const objHeap = activeHostObjectHeap();
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap == null || arrHeap == null) return raiserNil();
+	const u = args[0];
+	if (maybe && u.kind == RaiserValueKind.Nil) return raiserNil();
+	const tag = heapObjectGetField(objHeap, u.intVal, "$tag").intVal;
+	if (!_unionSlotAllowed(arrHeap, args[1], tag)) {
+		const label = heapArrayGet(arrHeap, args[3].intVal, tag);
+		raiseFromHost(unboxString(args[2]) + label.strVal + "'");
+		return raiserNil();
+	}
+	return heapObjectGetField(objHeap, u.intVal, "$v");
+}
+
+function _bridgeMsUnionRead(args: RaiserValue[]): RaiserValue {
+	return _unionRead(args, false);
+}
+
+function _bridgeMsUnionReadMaybe(args: RaiserValue[]): RaiserValue {
+	return _unionRead(args, true);
+}
+
+function _bridgeMsUnionWrapMaybe(args: RaiserValue[]): RaiserValue {
+	const objHeap = activeHostObjectHeap();
+	if (objHeap == null || args[0].kind == RaiserValueKind.Nil) return raiserNil();
+	const handle = heapAllocObject(objHeap);
+	heapObjectSetField(objHeap, handle, "$tag", args[1]);
+	heapObjectSetField(objHeap, handle, "$v", args[0]);
+	return raiserObject(handle);
+}
+
 export function ensureHostTableLoaded(): void {
 	if (isHostRegistryInitialized()) return;
+
+	registerHostFn("msUnionRead", _bridgeMsUnionRead, HostCapability.Pure);
+	registerHostFn("msUnionReadMaybe", _bridgeMsUnionReadMaybe, HostCapability.Pure);
+	registerHostFn("msUnionWrapMaybe", _bridgeMsUnionWrapMaybe, HostCapability.Pure);
 
 	// fs predicates
 	registerHostFn("msFsExists",         _bridgeMsFsExists, HostCapability.FileRead);
