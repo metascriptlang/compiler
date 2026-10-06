@@ -6,7 +6,7 @@ import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramDat
 import { createUnifyBindings, unifyType } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
-import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode } from "../../checker/context";
+import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport } from "../../checker/context";
 import { findModule } from "../../module/graph";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
@@ -173,12 +173,20 @@ function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMet
 	return out;
 }
 
+function isVmPreludeModule(path: string): boolean {
+	if (_raiserPreludeBuilding || path == "") return false;
+	const outer = getComptimeOuterCtx();
+	if (outer == null || outer.graph == null) return false;
+	const mod = findModule(outer.graph, path);
+	return mod == null || mod.stdPrelude;
+}
+
 function engineBodyCtx(definingModulePath: string): CheckerContext | null {
 	if (_engine == null || _raiserPreludeBuilding) return null;
 	const outer = getComptimeOuterCtx();
 	if (outer == null || outer.registry == null || outer.graph == null) return null;
 	const mod = findModule(outer.graph, definingModulePath);
-	if (mod == null || mod.stdPrelude) return null;
+	if (mod == null || mod.stdPrelude) return raiserPreludeCtx();
 	const declCtx = lookupModuleCtx(definingModulePath);
 	if (declCtx == null) return null;
 	const known = _engine.bodyCtxs.get(declCtx);
@@ -297,7 +305,12 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const seedCtx = seedCtxForSym(sym);
 	const seeds: Symbol[] = instanceTypeParamSeeds(sym);
 	let exts: ExtensionMethod[] = [];
-	if (seedCtx != null) {
+	if (isVmPreludeModule(sym.modulePath)) {
+		const prelude = raiserPreludeCtx();
+		for (const s of prelude.table.current.symbols.values()) {
+			if (s.name != sym.name && !isPreludeExport(prelude, s)) seeds.push(s);
+		}
+	} else if (seedCtx != null) {
 		for (const s of moduleScopeSymbols(seedCtx.table)) {
 			if (!isClass || s.name != sym.name) seeds.push(s);
 		}
