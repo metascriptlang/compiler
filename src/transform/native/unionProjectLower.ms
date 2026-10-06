@@ -86,7 +86,7 @@ function checkedProjectionSource(n: Node, anySource: boolean = false): Type | nu
 	return ut;
 }
 
-function memberLabels(ut: Type): string[] {
+export function memberLabels(ut: Type): string[] {
 	const labels: string[] = [];
 	const du = isDiscriminatedUnion(ut);
 	for (let vi = 0; vi < ut.typeChildren.length; vi += 1) {
@@ -108,7 +108,7 @@ function unionDisplay(ut: Type): string {
 	return names.join(" | ");
 }
 
-function accessHead(field: string, projection: Node, ut: Type): string {
+export function accessHead(field: string, projection: Node, ut: Type): string {
 	const what = field != "" ? `field '${field}'` : `member '${unionMemberDisplay((projection.data as HiddenStdConvData).convType)}'`;
 	return `${what} is not accessible for type '${unionDisplay(ut)}' using '`;
 }
