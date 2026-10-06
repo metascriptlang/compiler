@@ -21,7 +21,7 @@ import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
-import { isAssignable, nonNullMemberOfNullable } from "./compat";
+import { isAssignable, nonNullMemberOfNullable, sameType } from "./compat";
 import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType } from "./types";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
@@ -43,7 +43,7 @@ import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./tem
 import { fitNode, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerLaterDeclarationNote } from "./checkerCallbacks";
+import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerSelfReadType, registerLaterDeclarationNote } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
@@ -1003,6 +1003,7 @@ function checkFunctionDeclBody(ctx: CheckerContext, node: Node, sym: Symbol): vo
 	_routinesInFlight.pop();
 	settleReturnInference(ctx, sym, d.fnName, d.fnFlags, d.nameLocation, outer);
 	settleDiscardedCalls(sym);
+	settleSelfReads(ctx, sym);
 
 	if (d.fnReturnType == "" && isLifecycleHookName(d.fnName) && getExtReceiverType(d.fnFlags) != "") {
 		refuseHookInferredReturn(ctx, d.fnName, d.nameLocation, sym.symbolType);
@@ -1086,6 +1087,51 @@ interface DiscardedCall {
 	sym: Symbol;
 }
 
+interface SelfRead {
+	read: Node;
+	sym: Symbol;
+	seen: Type;
+}
+
+let _selfReads: SelfRead[] = [];
+
+function readOwnReturn(ctx: CheckerContext, sym: Symbol, read: Node): void {
+	const name = routineDisplayName(ctx, sym);
+	if (ctx.inferredReturn == null || isUnresolvedType(ctx.inferredReturn)) {
+		addError(ctx, `cannot infer the return type of '${name}': it calls itself before any return gives it a type; annotate the return type of '${name}'`,
+			read.location.line, read.location.column);
+		return;
+	}
+	const joined = closureStorageType(ctx.inferredReturn);
+	const seen = hasFlag(sym, SymbolFlag.Async) && !isAwaitable(joined) ? createPromise(joined) : joined;
+	_selfReads.push({ read, sym, seen });
+}
+
+function selfReadType(callee: Node): Type | null {
+	for (let i = _selfReads.length - 1; i >= 0; i -= 1) {
+		if (_selfReads[i].read == callee) return _selfReads[i].seen;
+	}
+	return null;
+}
+
+function settleSelfReads(ctx: CheckerContext, sym: Symbol): void {
+	const final = sym.symbolType.typeReturn;
+	let kept = 0;
+	for (const r of _selfReads) {
+		if (r.sym != sym) {
+			_selfReads[kept] = r;
+			kept += 1;
+			continue;
+		}
+		if (final != null && !isUnresolvedType(final) && !sameType(r.seen, final)) {
+			const name = routineDisplayName(ctx, sym);
+			addError(ctx, `cannot infer the return type of '${name}': this call reads it as '${typeDisplayName(r.seen)}', but a later return makes it '${typeDisplayName(final)}'; annotate the return type of '${name}'`,
+				r.read.location.line, r.read.location.column);
+		}
+	}
+	_selfReads.length = kept;
+}
+
 function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
 	const fnType = sym.symbolType;
 	if (fnType == null || fnType.kind != TypeKind.Function || !isUnresolvedType(fnType.typeReturn)) return;
@@ -1098,6 +1144,7 @@ function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
 		const discarded = discardedCall(ctx, read);
 		if (discarded != null) _discardedInFlightCalls.push({ call: discarded, sym });
 		else if (at < _routinesInFlight.length - 1) refuseInferenceCycle(ctx, at, read);
+		else if (!local && ctx.currentFunction == sym) readOwnReturn(ctx, sym, read);
 		return;
 	}
 	if (local) {
@@ -1564,6 +1611,7 @@ function checkMethodBody(ctx: CheckerContext, node: Node, sym: Symbol, classType
 	_routinesInFlight.pop();
 	settleReturnInference(ctx, sym, d.methodName, d.methodFlags, d.nameLocation, outer);
 	settleDiscardedCalls(sym);
+	settleSelfReads(ctx, sym);
 	if (node.nodeType != null && node.nodeType != sym.symbolType && node.nodeType.kind == TypeKind.Function) node.nodeType.typeReturn = sym.symbolType.typeReturn;
 	if (d.methodIsStatic) closeScope(ctx.table);
 }
@@ -3747,6 +3795,7 @@ export function checkProgramWithRegistryCancellable(
 registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
 registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
 registerDemandReturn(demandReturnType);
+registerSelfReadType(selfReadType);
 registerLaterDeclarationNote(laterDeclarationNote);
 
 // ===== Tests =====

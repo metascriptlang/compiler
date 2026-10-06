@@ -15,6 +15,7 @@ type ApplyDecoratorsFn = (ctx: CheckerContext, program: Node) => void;
 type DecoratorDefersFn = (ctx: CheckerContext, stmt: Node) => boolean;
 type ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Node, after: Node[]) => Node;
 type DemandReturnFn = (ctx: CheckerContext, sym: Symbol, read: Node) => void;
+type SelfReadTypeFn = (callee: Node) => Type | null;
 type LaterDeclarationNoteFn = (name: string) => string;
 
 let exprCheckerFn: ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null): void => {
@@ -47,6 +48,9 @@ let applyDecoratedStmtFn: ApplyDecoratedStmtFn = (ctx: CheckerContext, stmt: Nod
 	return stmt;
 };
 let demandReturnFn: DemandReturnFn = (ctx: CheckerContext, sym: Symbol, read: Node): void => {
+};
+let selfReadTypeFn: SelfReadTypeFn = (callee: Node): Type | null => {
+	return null;
 };
 let laterDeclarationNoteFn: LaterDeclarationNoteFn = (name: string): string => {
 	return "";
@@ -138,6 +142,14 @@ export function callDemandReturn(ctx: CheckerContext, sym: Symbol, read: Node): 
 
 export function registerDemandReturn(fn: DemandReturnFn): void {
 	demandReturnFn = fn;
+}
+
+export function callSelfReadType(callee: Node): Type | null {
+	return selfReadTypeFn(callee);
+}
+
+export function registerSelfReadType(fn: SelfReadTypeFn): void {
+	selfReadTypeFn = fn;
 }
 
 export function callLaterDeclarationNote(name: string): string {
