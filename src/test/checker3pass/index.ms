@@ -30,6 +30,7 @@ import "./scenarios/textConversions";
 import "./scenarios/arcLiteralSafety";
 import "./scenarios/returnBeforeBody";
 import "./scenarios/generatorYields";
+import "./scenarios/localForwardReferences";
 import "./stress/deepNesting";
 import "./stress/manyParams";
 import "./stress/mixed";
