@@ -1,8 +1,10 @@
 # Smith coverage — audit and proposed expansion
 
-Status: **proposal awaiting approval**, 2026-10-07. The confirmed goal extends
-DESIGN's four slices to the whole language surface, in separate domains. Compiler
-findings are evidence to retain and park, not compiler work in this goal.
+Status: **matrix and four tooling mechanisms approved**, 2026-10-07, by user
+resume after the explicit proposal. Implementation is in progress, not complete.
+The confirmed goal extends DESIGN's four slices to the whole language surface,
+in separate domains. Compiler findings are evidence to retain and park, not
+compiler work in this goal.
 
 This is not a claim that all these constructs work on the current compiler, nor
 that Smith covers them. `source-present` means the generator path was read;
@@ -89,14 +91,14 @@ reducer was run by this probe. A shared heavy gate was active, so the 100-seed
 lane campaign was not started beside it. Earlier slice-2 parity/rerun evidence
 remains in DESIGN §Slice 2 — measured.
 
-## Coverage/domain matrix to approve
+## Approved coverage/domain matrix
 
 `P` = existing corpus parity, with exact deterministic stdout and selected lanes.
 `S` = existing corpus SAN/DRC ledger. `I` = generated invariant checked before a
 stable canonical summary, plus a separately generated sequential/reference
 result where applicable. `D` = a pinned compile diagnostic, not lane agreement.
 `T` = target/reload execution through an existing consumer, not compile success.
-P/S are already approved. I/D/T extensions below need approval; no new runner is
+P/S and the I/D/T tooling extensions below are approved; no new runner is
 assumed. Each row must later link runnable variants and its verified/blocked
 state. A single syntax hit does not verify a row.
 
@@ -137,9 +139,10 @@ Reserved/internal/legacy syntax still gets a positive or negative boundary probe
 not silently dropped from the inventory. Erlang is postponed by the repo; it is
 an explicit target decision to record, not an invented working backend.
 
-## Gaps to close before claiming solid
+## Audit gaps before hardening
 
-Source-review findings, not yet mutation-tested runtime defects:
+Snapshot at the audit source tree above, not current implementation status.
+The measured hardening below supersedes some of these source-review findings:
 
 - `features.ms` `swarm` uses a fixed 50% per type/family rather than R3's random
   per-configuration density. Recommend the reference density model; record the
@@ -161,7 +164,57 @@ Source-review findings, not yet mutation-tested runtime defects:
 - No reducer or graduation command exists yet. The current pins demonstrate real
   compiler discoveries, not automated reduction; keep that distinction.
 
-## Proposed order and NEW MECHANISM decisions
+## Core hardening — measured
+
+2026-10-07, macOS arm64 on the shared machine with a foreign gate active.
+Final source tree `a038fee4504bca2eea314dad30db645efb21cbc7`; subject compiler
+SHA-256 remains the one recorded above. No compiler/runtime/std was changed.
+
+| check | result |
+|---|---|
+| Density guards, fixed-coin source, C / JS | Both tests red on each backend; a shared density makes them green. |
+| `msc test tools/smith/gen.ms` / `msc test tools/smith/gen.ms --target=js` on final source | **322/322 C**, **85/85 JS**, 0 red. |
+| Four restored generator guards, independently mutated header / plant / disabled-family / enabled-family behavior, C and JS | **8/8 controls red**, each on exactly its intended guard. |
+| 20,000 seeds (0..19999), default three-family swarm, C == JS | All families **4959**, none **5019** (reference model probabilities 1/4 each). |
+| Same seeds, `types=uint64 fams=closure,union`, C == JS | Both families **6684** (reference model probability 1/3). |
+| Before node fuel, seed 1, `fams=none funcs=1 globals=1 stmts=32 depth=4 expr=1 trips=64 entries=1` | **3,612,592 bytes**, 0.578 s; source-size guard red on C and JS. |
+| Weighted block-exhaustion and per-loop call-overhead guards on old accounting, C and JS | Both red on each backend; final accounting makes them green. |
+| Max legal numeric knobs, six seeds × three family vectors (below), final generator | **18/18 generated**, max **64,448 bytes**, max **0.509 s**; timing is not an idle-machine performance claim. |
+| Seed 1 of each extreme vector, `./msc check <generated.ms>` | **3/3 clean**. |
+| Same seed, compiled C/JS consumers, `fams=none` and `fams=closure` | **4/4 run exit 0**, exact stdout equality for both pairs. |
+| Same seed, all-family consumer | JS build/run exit 0; C build exceeded **30 s**. Not a compiler finding until a longer deadline and isolation resolve it. |
+
+The extreme sweep uses seeds **1,2,3,7,21,24**, each of `fams=none`, `closure`,
+and `closure,union,generic`, with `funcs=64 globals=64 stmts=32 depth=8 expr=8
+trips=64 entries=64`. Final CLI regeneration was byte-identical to all three
+measured consumer inputs; the last source edit only changed an equivalent block
+loop spelling and strengthened an inline scope assertion.
+
+Reproduction commands: `msc build tools/smith/main.ms
+--output=out/smith/core/cli-final`, then `gen <seed> --features="<vector above>"`.
+Build consumers with `./msc build <file> --target=c|js --output=<artifact>` and
+execute the C artifact / `node <artifact.js>`, keeping stdout separate from build
+logs. Density probe: call `Features.defaults().swarm(seed)` for 0..19999, count
+full/empty family masks; repeat with the restricted vector above.
+Raw matrices/logs/controls are under `out/smith/core/`, not committed.
+
+Mechanism pointers: `features.ms` `swarm` follows R3 using a uniform uint64
+threshold, rather than a fixed coin. `gen.ms` `Gen.nodesLeft`, `Gen.reserve`,
+`Gen.block`, `Gen.statement`, `Gen.call` and `Gen.convert` bound source creation,
+weighted numeric blocks/loops/calls and selection retries using the existing
+budget model. No compiler pass or runtime protocol was added.
+
+**Still open:** scalar expression/helper costs, callback/closure invocation
+weights (including repeated generic callbacks), safe budget composition through
+capture graphs, and observation coverage. Source fuel and these small consumer
+probes do NOT prove a whole-program execution bound or full family coverage.
+The mixed-family C build needs a longer isolated deadline after the heavy gate;
+it must not be called a bug or silently omitted. The 100-seed execution campaign,
+closure-only campaign, driver controls, SAN and reducer remain unrun/unimplemented
+at this checkpoint. Old bundles keep their source/identity; they are not rewritten
+for the changed generator.
+
+## Approved order and NEW MECHANISM decisions
 
 1. Harden the existing core, then SAN and reducer, before expanding families.
    Restore WIP checks, match R3, verify budget/scope contracts and evidence paths.
@@ -173,7 +226,8 @@ Source-review findings, not yet mutation-tested runtime defects:
    environment is reported separately from a compiler blocker. A missing oracle
    is a design question, not permission to mark a family parked and finish.
 
-**NEW MECHANISM — tooling only, approval required before writing:**
+**NEW MECHANISM — tooling only, approved scope; separate missing consumer
+adapters still require a concrete proposal before writing:**
 
 - **Project/evidence manifests:** extend single-file generation/bundles to module
   trees, native fixtures and exact dependency/support/lane configuration identity.

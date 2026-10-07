@@ -5,7 +5,9 @@ Status: direction approved (2026-10-03..05, in conversation); slice 1 proven
 This file owns the agreed four-slice shape, the constraints that forced it and
 the measurements behind the generator's surface. Csmith-derived evidence lives
 in `CSMITH-STUDY.md`. The broader full-language goal confirmed 2026-10-07 is
-audited in `coveragePlan.md`; its domain/oracle expansion still awaits approval.
+audited in `coveragePlan.md`; its domain/oracle matrix and four tooling mechanisms
+were approved by user resume. That file also holds the measured core hardening
+and its still-open bounds; approval is not implementation or coverage evidence.
 Compiler findings are now retained and parked, not fixed within this goal.
 
 ## Goal
