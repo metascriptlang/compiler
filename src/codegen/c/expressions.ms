@@ -1656,7 +1656,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// Null assignment to value type: x = MS_NIL → zero-init.
 		// Structs/arrays: memset(&x, 0, sizeof(Type)).
 		// Numerics: x = 0 (MS_NIL is void*, incompatible with int/float in C).
-		if (d.operator == "=" && (finalRight == "MS_NIL" || finalRight == "NULL" || finalRight == "((void*)0)")) {
+		let rightValue: Readonly<Node> = d.right;
+		while (rightValue.kind == NodeKind.HiddenStdConv || rightValue.kind == NodeKind.HiddenSubConv || rightValue.kind == NodeKind.TypeAssertion) {
+			rightValue = rightValue.kind == NodeKind.TypeAssertion ? (rightValue.data as TypeAssertionData).asExpr : (rightValue.data as HiddenStdConvData).convExpr;
+		}
+		if (d.operator == "=" && (finalRight == "MS_NIL" || finalRight == "NULL" || finalRight == "((void*)0)" || rightValue.kind == NodeKind.NullLiteral)) {
 			const lt = d.left.nodeType;
 			if (lt != null && isNilableValueType(lt)) {
 				const cType = getTypeDesc(g, lt);
