@@ -573,6 +573,7 @@ _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi);
 _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi);
 _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected);
 _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag);
+_Noreturn void msRaiseUnreachable(const char* text);
 _Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target);
 _Noreturn void msRaiseStrLitError(msString s, msString target);
 msString msStrLitConv(msString s, msString members, msString target);

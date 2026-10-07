@@ -535,6 +535,11 @@ _Noreturn static inline void msRaiseSliceError(int64_t start, int64_t end, int64
     __builtin_trap();
 }
 
+_Noreturn static inline void msRaiseUnreachable(const char* text) {
+    (void)text;
+    __builtin_trap();
+}
+
 _Noreturn static inline void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
     (void)val; (void)lo; (void)hi;
     __builtin_trap();

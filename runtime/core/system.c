@@ -228,6 +228,12 @@ msString msStrLitConv(msString s, msString members, msString target) {
 	msRaiseStrLitError(s, target);
 }
 
+_Noreturn void msRaiseUnreachable(const char* text) {
+	fprintf(stderr, "Error: %s\n", text);
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
 _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag) {
 	const char* text = labels.p != NULL ? labels.p->data : "";
 	int64_t start = 0;
