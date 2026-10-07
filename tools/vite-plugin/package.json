@@ -10,6 +10,9 @@
   "files": [
     "index.js"
   ],
+  "dependencies": {
+    "magic-string": "^0.30.17"
+  },
   "peerDependencies": {
     "vite": ">=5"
   }

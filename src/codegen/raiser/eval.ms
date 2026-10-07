@@ -28,7 +28,7 @@ import { synthToken } from "../../compiler/meta/bridge";
 import { genericTypeInstMark, takeGenericTypeInstsFrom } from "../../parser/context";
 import { registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors } from "./context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput, appendProgramToImage } from "./rgen";
-import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, getMacroDeclModulePath, callComptimeHelperPreparer } from "../../compiler/meta/callbacks";
+import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
 import { callWithComptimeHostPolicy } from "../../compiler/meta/hostPolicy";
@@ -189,12 +189,13 @@ function isVmPreludeSym(sym: Symbol): boolean {
 	return _vmPreludeSyms!.has(origin);
 }
 
-function engineBodyCtx(definingModulePath: string): CheckerContext | null {
+function engineBodyCtx(definingModulePath: string, owner: Symbol | null): CheckerContext | null {
 	if (_engine == null || _raiserPreludeBuilding) return null;
 	const outer = getComptimeOuterCtx();
 	if (outer == null || outer.registry == null || outer.graph == null) return null;
 	const mod = findModule(outer.graph, definingModulePath);
-	if (mod == null || mod.stdPrelude) return null;
+	if (mod == null) return null;
+	if (mod.stdPrelude) return owner != null && isVmPreludeSym(owner) ? raiserPreludeCtx() : null;
 	const declCtx = lookupModuleCtx(definingModulePath);
 	if (declCtx == null) return null;
 	const known = _engine.bodyCtxs.get(declCtx);
@@ -249,27 +250,19 @@ function seedWireEnums(seeds: Symbol[]): void {
 	}
 }
 
-export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string): EngineMacroResult {
-	return compileIntoEngineSeeded(program, token, macroFnName, []);
+export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string, declaringCtx: CheckerContext): EngineMacroResult {
+	return compileIntoEngineSeeded(program, token, macroFnName, declaringCtx, []);
 }
 
-function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, leadSeeds: Symbol[]): EngineMacroResult {
+function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, declaringCtx: CheckerContext, leadSeeds: Symbol[]): EngineMacroResult {
 	if (_engineToken != token) {
 		_engine = freshEngine();
 		_engineToken = token;
 	}
 	const seeds: Symbol[] = [];
 	for (const s of leadSeeds) seeds.push(s);
-	for (const s of moduleScopeSymbols(token.table)) seeds.push(s);
-	const exts = seedExtensionsOf(token, null);
-	const declPath = getMacroDeclModulePath();
-	if (declPath != "") {
-		const declCtx = lookupModuleCtx(declPath);
-		if (declCtx != null) {
-			for (const s of moduleScopeSymbols(declCtx.table)) seeds.push(s);
-			for (const e of seedExtensionsOf(declCtx, null)) exts.push(e);
-		}
-	}
+	for (const s of moduleScopeSymbols(declaringCtx.table)) seeds.push(s);
+	const exts = seedExtensionsOf(declaringCtx, null);
 	seedWireEnums(seeds);
 	_pendingHelperErrors = [];
 	takeRaiserCompileErrors(); // reset: stale entries from an earlier compile must not leak in
@@ -352,7 +345,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 }
 
 export function evalProgramViaEngine(program: Node, token: CheckerContext, fnName: string): RaiserContext {
-	const result = compileIntoEngineSeeded(program, token, fnName, enclosingTypeAliases(token.table));
+	const result = compileIntoEngineSeeded(program, token, fnName, token, enclosingTypeAliases(token.table));
 	if (result == null as unknown as EngineMacroResult) return createContext();
 	if (result.errors != null) {
 		for (const e of result.errors) {
@@ -1335,7 +1328,7 @@ function __macroBody(t: string): number {
 }
 `);
 	assert wrapperPr.ok;
-	const r = compileMacroIntoEngine(wrapperPr.value, outerCtx, "__macroBody");
+	const r = compileMacroIntoEngine(wrapperPr.value, outerCtx, "__macroBody", outerCtx);
 	let found = false;
 	for (const e of r.errors) {
 		if (e.message.indexOf("noSuchMemberAnywhere", 0) >= 0) found = true;

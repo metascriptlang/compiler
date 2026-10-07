@@ -57,6 +57,19 @@ checker rejects it and names the alternative.
   `class Sub extends Base<int32>`, `u as Base<int32>` passes for a `Pair<int32>` and a `Sub`,
   and `u as Base<string>` on a `Sub` stops with `invalid object conversion`, exit 1, on C and
   JS (measured 2026-10-05).
+- Conversion diagnostics name the source class, not its generated module-qualified
+  identifier. The spelling includes generic arguments (`Box<int32>`) and preserves
+  underscores in author names (`Source__MMarker`). A user-defined static `name`
+  remains the user's value; it does not rename the type in an error.
+  Measured on Windows x64, tree `490fa7bd9fc6`, with the native corpus harness over
+  seven programs: `35 pass · 0 fail · 14 xfail · 0 xpass`; all C/ORC/JS/ESM
+  diagnostic outputs are byte-identical. The xfails are the existing unchecked
+  `danger` policy and measured Raiser static-member/static-init/stderr-capture
+  limits, not waived C/JS failures. A separate unused-type-parameter probe
+  reports `Phantom<string> is not Target` on C and JS.
+  This measurement does not cover foreign JS constructors or an isolated
+  performance run. Regression consumers: `classConversionDiagnosticNames`,
+  `genericConversionDiagnosticNames`, `classConversionInStaticInitializationStops`.
 - `x as unknown as T` is two conversions, up then a tested down, never a reinterpret:
   `i as unknown as K` for an `int32` is refused — write `i as K`. `null as unknown as T`
   still works, because a `null` literal takes any type.
@@ -445,6 +458,17 @@ type yet and prints the built-in results.
 `hello ${name}`              // With expression substitution
 `${a} + ${b} = ${a + b}`    // Multiple substitutions
 ```
+
+Physical LF, CRLF and CR line endings have the same LF value inside a template;
+an escaped carriage return still has its escape value. The same rule applies to
+interpolation heads, middles and tails, while source positions count CRLF once.
+
+Measured 2026-10-06 on Windows x64, source tree `2220eaeb47c5`: lexer tests
+376/376, including newline/escape/location variants. The unchanged
+`headerImportSpelledInAString` oracle prints `34 32 32 kept` on C/ORC/danger/JS/ESM/Raiser;
+before, CRLF made it print `35 32 32 kept` on all six. Tagged-template/raw APIs
+were not added or revalidated.
+
 
 ### Backtick-Escaped Identifiers
 ```typescript
@@ -1704,6 +1728,17 @@ Pick<T, K>           // Subset of properties (planned)
 Omit<T, K>           // Exclude properties (planned)
 ```
 
+`Readonly<T>` can widen into a union through a compatible read-only member. A mutable
+member, or an unrelated read-only member beside a mutable one, does not allow the view
+to be dropped. This does not relax the storage restrictions on borrowed views.
+
+Checked 2026-10-06 on Windows x64, source tree `11fdb5911671`: the compatibility guard
+passes 542/542 native tests, including Span and reference variants and the refused mutable
+branches. A typed macro receiving `["pet", view]` with `view: Readonly<Span<uint8>>`
+prints `7` on C and JavaScript; the old compiler refuses both with PARALOCK E24.
+The complete compatibility module's JavaScript tests were not run: its unchanged
+`checker/types.ms` dependency fails at `(t as unknown).hash()`.
+
 ### Mapped Types
 ```ms
 // Planned — not yet implemented
@@ -2842,7 +2877,8 @@ To avoid heap allocations when parsing or processing strings, MetaScript allows 
 
 - **Zero-Copy Slicing**: Slicing a string with `..` (exclusive) or `...` (inclusive) performs pointer arithmetic instead of a heap copy; the slice is a `Readonly<Span<char>>`.
 - **Unified Params**: Functions taking `Readonly<Span<char>>` accept a `string`, a string slice and a `Span<char>` zero-copy.
-- **Read-only**: a string is immutable, so it never reaches a writable `Span<char>` — an argument, a local, a field, an assignment, a `this` receiver or a generic `Span<T>` refuses it (`cannot view 'lit' as a writable Span — a string is immutable; a view that only reads is Readonly<Span<T>>`), and a write through a string slice is E24.
+- **Read-only**: a string is immutable, so it never reaches a writable `Span<char>` — an argument, a local, an assignment, a `this` receiver or a generic `Span<T>` refuses it (`cannot view 'lit' as a writable Span — a string is immutable; a view that only reads is Readonly<Span<T>>`), and a write through a string slice is E24.
+- **Storage**: read-only does not make a borrowed view owning. Neither `Span<char>` nor `Readonly<Span<char>>` can be a field; use a parameter or a local whose source outlives the view. The storage-refusal cases live in `handoff/storageMutability.ms`.
 
 ```typescript
 function parseIdent(view: Readonly<Span<char>>): int32 {
@@ -2855,6 +2891,14 @@ parseIdent(source);        // 15
 ```
 
 Measured 2026-10-05 on C and JS (handoff `storageMutability` "a string reaches only a read-only Span, its slices too"). Before, a write through such a view hit the literal's read-only bytes (SIGBUS) or changed a built string on C only.
+
+Rechecked 2026-10-06 on Windows x64, compiler core `bca7f3e6`: the corrected
+`storageMutability` file passes 16/16, checking C and JS acceptance/refusal. A native
+and JavaScript caller reading a literal, a built string, slices, a local view, a generic
+reader and a read-only receiver prints `104 120 101 3 5 104 114 e` on both.
+The former accepted fixture declared a view field and was itself invalid; that case is
+now tested as a storage refusal, without weakening the compiler. Other backends were
+not rerun for this fixture correction.
 
 ### 4. Borrowed References (`Borrow<T>`)
 To achieve peak performance with large structs, MetaScript provides the `Borrow<T>` type (similar to the standard reference `lent T` pattern).

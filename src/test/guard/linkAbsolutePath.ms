@@ -11,7 +11,7 @@
 import { execFileResult, cwd, exit, env, cmdExists } from "std/process";
 import { writeFile, ensureDir, removeAll } from "std/fs";
 
-const root = cwd();
+const root = cwd().replaceAll("\\", "/");
 const mscEnv = env.get("MSC");
 const msc = mscEnv != "" ? mscEnv : `${root}/msc`;
 const dir = `${root}/out/guardLinkAbsolutePath`;

@@ -232,19 +232,58 @@ function homeDir(): string {
 	return home.replaceAll("\\", "/");
 }
 
+function windowsDriverQuoter(): string {
+	return `
+static char* quoteArgument(const char* arg) {
+  int special = arg[0] == 0;
+  for (const char* s = arg; *s; s++) {
+    if (*s == ' ' || *s == '\\t' || *s == '"') special = 1;
+  }
+  if (!special) return (char*)arg;
+  char* buffer = (char*)malloc(strlen(arg) * 2 + 3);
+  if (!buffer) abort();
+  char* out = buffer;
+  *out++ = '"';
+  for (const char* s = arg; *s; s++) {
+    if (*s == '\\\\') {
+      int count = 0;
+      while (*s == '\\\\') { count++; s++; }
+      if (*s == 0) {
+        for (int i = 0; i < count * 2; i++) *out++ = '\\\\';
+        break;
+      }
+      if (*s == '"') {
+        for (int i = 0; i < count * 2 + 1; i++) *out++ = '\\\\';
+      } else {
+        for (int i = 0; i < count; i++) *out++ = '\\\\';
+      }
+      *out++ = *s;
+    } else {
+      if (*s == '"') *out++ = '\\\\';
+      *out++ = *s;
+    }
+  }
+  *out++ = '"';
+  *out = 0;
+  return buffer;
+}
+`;
+}
+
 function writeWrapper(dir: string, toolValue: int32): string {
 	if (windows) {
 		const wrapper = `${dir}/cc-wrapper.exe`;
 		const source = `${dir}/cc-wrapper.c`;
 		const zig = `${homeDir()}/.metascript/zig/zig.exe`;
 		put(source,
-			"#include <process.h>\n#include <stdlib.h>\n"
+			"#include <process.h>\n#include <stdlib.h>\n#include <string.h>\n"
+			+ windowsDriverQuoter()
 			+ "int main(int argc, char **argv) {\n"
 			+ "  char **args = malloc(sizeof(char *) * (argc + 3));\n"
-			+ `  args[0] = "${zig}";\n`
+			+ `  args[0] = quoteArgument("${zig}");\n`
 			+ "  args[1] = \"cc\";\n"
 			+ `  args[2] = "-DTOOL_VALUE=${toolValue}";\n`
-			+ "  for (int i = 1; i < argc; i++) args[i + 2] = argv[i];\n"
+			+ "  for (int i = 1; i < argc; i++) args[i + 2] = quoteArgument(argv[i]);\n"
 			+ "  args[argc + 2] = NULL;\n"
 			+ `  return (int)_spawnv(_P_WAIT, "${zig}", (const char * const *)args);\n`
 			+ "}\n");
@@ -264,6 +303,7 @@ function projectDriver(dir: string): string {
 		const zig = `${homeDir()}/.metascript/zig/zig.exe`;
 		put(source,
 			"#include <process.h>\n#include <stdlib.h>\n#include <string.h>\n"
+			+ windowsDriverQuoter()
 			+ "int main(int argc, char **argv) {\n"
 			+ "  if (getenv(\"MSC_BOUNDARY_REJECT_DISPATCH\")) {\n"
 			+ "    int compile = 0;\n"
@@ -271,9 +311,9 @@ function projectDriver(dir: string): string {
 			+ "    if (compile) for (int i = 1; i < argc; i++) if (strstr(argv[i], \"_dispatch.\")) return 98;\n"
 			+ "  }\n"
 			+ "  char **args = malloc(sizeof(char *) * (argc + 2));\n"
-			+ `  args[0] = "${zig}";\n`
+			+ `  args[0] = quoteArgument("${zig}");\n`
 			+ "  args[1] = \"cc\";\n"
-			+ "  for (int i = 1; i < argc; i++) args[i + 1] = argv[i];\n"
+			+ "  for (int i = 1; i < argc; i++) args[i + 1] = quoteArgument(argv[i]);\n"
 			+ "  args[argc + 1] = NULL;\n"
 			+ `  return (int)_spawnv(_P_WAIT, "${zig}", (const char * const *)args);\n`
 			+ "}\n");

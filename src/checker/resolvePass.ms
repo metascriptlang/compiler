@@ -12,6 +12,8 @@ import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { peelToStructOrUnion, withoutReadonlyView, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, isAwaitable, awaitedType, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag, ctorFnTypeOf } from "./symbol";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
+import { forEachChild } from "../ast/visitor";
+import { nestedViewType, ownedAlternativeOf, findViewType } from "./types";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
@@ -286,8 +288,32 @@ export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line:
 	if (t.kind == TypeKind.Span) {
 		const elem = t.typeReturn != null ? typeDisplayName(t.typeReturn) : "T";
 		addError(ctx, "cannot return Span<" + elem + ">: a Span borrows memory owned by its source; return the owning container (Vec<" + elem + "> or " + elem + "[]) instead", line, col);
+	} else {
+		refuseNestedView(ctx, "a return value", t, line, col);
 	}
 	return t;
+}
+
+export function refuseNestedView(ctx: CheckerContext, what: string, t: Type | null, line: int32, col: int32): void {
+	const view = nestedViewType(t);
+	if (view == null) return;
+	addError(ctx, what + " of type " + typeDisplayName(t!) + " cannot hold " + typeDisplayName(view)
+		+ " inside it: a view borrows memory its source can free while the container still holds it — use " + ownedAlternativeOf(view), line, col);
+}
+export function refuseSuspendingViewParam(ctx: CheckerContext, name: string, t: Type | null, line: int32, col: int32): void {
+	const view = findViewType(t);
+	if (view == null) return;
+	const what = view.kind == TypeKind.Var ? "a ref/out parameter" : "a " + typeDisplayName(view) + " view";
+	addError(ctx, "parameter '" + name + "' of an async or generator function cannot be " + what
+		+ ": its parameters are captured into the frame the function suspends in, and the memory they point at can change or die across an await or yield — take the view again after each await, or pass a copy with [...x]", line, col);
+}
+
+export function bodyMentionsName(body: Node | null, name: string): boolean {
+	if (body == null) return false;
+	if (body.kind == NodeKind.Identifier && (body.data as IdentifierData).name == name) return true;
+	let hit = false;
+	forEachChild(body, (c: Node): void => { if (!hit && bodyMentionsName(c, name)) hit = true; });
+	return hit;
 }
 
 export function bindFromExplicitTypeArgs(node: Node, paramNames: string[], ctx: CheckerContext): UnifyBindings {
@@ -1558,6 +1584,11 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 			}
 		}
 	}
+	for (let pi = 0; pi < paramTypes.length && pi < d.params.length; pi += 1) {
+		const pLoc = node.paramLocations != null && pi < node.paramLocations.length && node.paramLocations[pi] != null
+			? node.paramLocations[pi] : node.location;
+		refuseNestedView(ctx, "parameter '" + d.params[pi] + "'", paramTypes[pi], pLoc.line, pLoc.column);
+	}
 
 	const retLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
 	// Type predicate detection: fnReturnType is `"<paramName> is <typeText>"`
@@ -1829,6 +1860,13 @@ function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: str
 	addWarning(ctx, "owning self-referential field '" + fieldName + "' in '" + typeName + "': destroy recurses per node — a long chain overflows the stack; for non-owning links use Cursor<" + typeName + "> with an arena/array owner", line, col);
 }
 
+function refuseViewField(ctx: CheckerContext, fieldName: string, typeName: string, fieldType: Type | null, line: int32, col: int32): void {
+	const view = findViewType(fieldType);
+	if (view == null) return;
+	addError(ctx, "field '" + fieldName + "' of '" + typeName + "' cannot hold " + typeDisplayName(view)
+		+ ": a view borrows memory its source can free while the field still holds it — store " + ownedAlternativeOf(view), line, col);
+}
+
 function interfaceCycleChain(ctx: CheckerContext, currentName: string, targetName: string, visited: string[]): string {
 	for (const v of visited) {
 		if (v == currentName) return "";
@@ -1968,16 +2006,17 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	for (let wi = 0; wi < d.interfaceFields.length; wi += 1) {
 		if (wi >= fieldTypes.length) break;
 		const wft = fieldTypes[wi];
+		let wLine = node.location.line;
+		let wCol = node.location.column;
+		if (node.paramLocations != null && wi < node.paramLocations.length) {
+			wLine = node.paramLocations[wi].line;
+			wCol = node.paramLocations[wi].column;
+		}
 		if (wft != null && wft.kind == TypeKind.Ref && wft.typeReturn != null
 			&& wft.typeReturn.typeName == d.interfaceName) {
-			let wLine = node.location.line;
-			let wCol = node.location.column;
-			if (node.paramLocations != null && wi < node.paramLocations.length) {
-				wLine = node.paramLocations[wi].line;
-				wCol = node.paramLocations[wi].column;
-			}
 			warnOwningSelfRef(ctx, d.interfaceFields[wi], d.interfaceName, wLine, wCol);
 		}
+		refuseViewField(ctx, d.interfaceFields[wi], d.interfaceName, wft, wLine, wCol);
 	}
 
 	// Update sym type in-place — avoid temporary Type that shares typeChildren
@@ -2375,6 +2414,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	const sym = lookupSymbol(ctx.table, d.className);
 	if (sym == null) return;
 	node.resolvedSym = sym;
+	if (sym.instantiatedFrom == null) d.classDisplayName = d.className;
 
 	// Set state to Shaped immediately to allow circular references in methods/properties
 	sym.state = SymbolState.Shaped;
@@ -2454,6 +2494,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				if (pd.propType != "") {
 					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
+					refuseViewField(ctx, pd.propName, d.className, staticType, member.location.line, member.location.column);
 				}
 				member.nodeType = staticType;
 				// Find matching staticFields entry and set its type
@@ -2475,6 +2516,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 						&& propType.typeReturn.typeName == d.className) {
 						warnOwningSelfRef(ctx, pd.propName, d.className, member.location.line, member.location.column);
 					}
+					refuseViewField(ctx, pd.propName, d.className, propType, member.location.line, member.location.column);
 				} else {
 					memberTypes.push(inferredType());
 				}
@@ -2667,6 +2709,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 				if (pd.propType != "") {
 					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
+					refuseViewField(ctx, pd.propName, d.actorName, staticType, member.location.line, member.location.column);
 				}
 				member.nodeType = staticType;
 				for (const sf of sym.staticFields) {
@@ -2683,6 +2726,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 				resolveTypeExpr(member.typeExpr, ctx);
 				member.nodeType = propType;
 				memberTypes.push(propType);
+				refuseViewField(ctx, pd.propName, d.actorName, propType, member.location.line, member.location.column);
 			} else {
 				memberTypes.push(inferredType());
 			}
@@ -2734,7 +2778,7 @@ function declareGeneric(ctx: CheckerContext, kind: NodeKind, name: string, param
 		for (let i = 0; i < fields.length; i += 1) {
 			body.push(createNodeAt(NodeKind.PropertyDecl, { propName: fields[i], propType: types[i], propIsStatic: false, propIsReadonly: false, propVisibility: "", propInitializer: null as unknown as Node }, zl));
 		}
-		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classExtends: "", classBody: body, nameLocation: zl }, zl);
+		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classDisplayName: name, classExtends: "", classBody: body, nameLocation: zl }, zl);
 	} else {
 		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldDecorators: noFieldDecorators(fields.length) }, zl);
 	}

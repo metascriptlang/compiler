@@ -129,3 +129,18 @@ function main(): void { console.log(f().toString()); }
 	for (const source of refused) assert !compileToCWithStd(source).ok, source;
 	assert compileToCWithStd("function f(): int32 { static const n = 3; return n; }").ok;
 }
+
+test "macro output cannot forge processing flags to suppress generated-expression checking" {
+	const refused = compileToCWithStd(`
+import { Node, NodeKind, NodeFlag } from "std/meta";
+macro invalid(): Node {
+	return {
+		kind: NodeKind.Identifier, line: 0, column: 0,
+		flags: (0 as BitSet<NodeFlag>).incl(NodeFlag.Sem).incl(NodeFlag.Transf).incl(NodeFlag.LL),
+		name: "notDeclaredByTheCaller",
+	};
+}
+console.log(invalid());
+`);
+	assert !refused.ok;
+}

@@ -116,11 +116,19 @@ const TABLE = @comptime {
 
 Supports: number, string, boolean, null, array, object returns. Each maps to the corresponding literal AST node.
 
-The block runs on the Raiser with the Raiser's std whatever the build target. A `Map` or a `HashMap` built and ranged
-inside it folds on `--target=raiser` and on a JS build (measured 2026-10-06, corpus `comptimeMapOnEveryTarget`;
-before, a JS build stopped at `Undefined variable 'msMapFatal'`). Not yet: on a C build a comptime `Map.set` stops at
-`Ambiguous call to overloaded extension method 'push'` (a `HashMap` folds), and a class whose constructor calls an
-extension on `this`, `Set` among them, cannot be built at comptime on any target.
+The block runs on the Raiser with the Raiser's std whatever the build target. A `Map` or `HashMap`
+built and ranged inside it folds on C/ORC/danger/JS/ESM/Raiser. Measured on Windows x64,
+source tree `100fe9f96348`: `comptimeMapOnEveryTarget` prints
+`total=1 weighted=44 hashed=7 keys=a,bb` on all six lanes; its SAN cell exits 0 without
+an ASan/ledger report. Together with generic type-parameter and imported-helper scope
+variants, the focused matrix is `21 pass · 0 fail · 0 xfail · 0 xpass`.
+The prior C `Map.set` failure (`Ambiguous call to overloaded extension method 'push'`)
+came from instantiating a VM std helper in the target backend's module context.
+The existing engine body-context callback now selects the VM's own prelude for std
+modules; user-module defining contexts are unchanged.
+A separate native `Set<int32>([3, 3, 4])` comptime probe still stops during lowering at
+`extension call '.add' reached lowering without its resolved symbol`; Set constructors
+and other `this`-extension constructors were not verified on the other backends here.
 
 A `@comptime` block also gets the checker context a macro body gets, so the typed queries of Tier 2 answer inside one (landed 2026-09-12). Measured 2026-09-13 against a class `Later` declared in the same module: `getTypeImpl(bindSym("Later"))` → `Struct` (the `Ref` is peeled), `getImpl(bindSym("Later"))` → its `ClassDecl`, `resolveType("Later | null")` → `TypeUnion`, and `typeKind(resolveType("int32"))` → `Int32`.
 
@@ -144,6 +152,50 @@ A folded call passed to a macro keeps the call's type when the macro hands it ba
 **Status: DONE** — parsing + eager expansion in `checkCallExpr`, cross-module macros, `quote`/splice, and JSX consumption all landed. JSX macros are verified end-to-end to native (`jsxMacroNative.ms` / `jsxDomNative.ms`, `std/meta/jsxDom.ms`); macro bodies navigate JSX array fields (`for..of`, indexing, `.length`).
 
 Macros receive `Node` values (AST), walk them node-by-node, analyze/reclassify/restructure, and return transformed AST. The compiler's own typed `Node` is the macro's input and output. `node.nodeType` gives type info after phase 2. Exception: a bare module-level statement that calls a macro imported from an already-checked module expands while declarations are collected, so the declarations it emits are visible everywhere in the module; its arguments arrive untyped (no `nodeType`, no `resolvedSym`). Read types there through `getTypeImpl`, `getType` or `bindSym`, and literal values through `intValue` / `floatValue` / `stringValue`.
+
+### Macro body scope
+
+An imported macro's type annotations use its declaring module's checked scope.
+A caller's `import { Node as DomNode }` does not replace the macro's `std/meta.Node`,
+whether the imported class is ordinary or `extern`. Explicit expansion-site queries
+remain distinct; see [binding symbols](#binding-symbols-from-a-macro-body-bindsym).
+
+Measured 2026-10-05 with the candidate for `365a9bbb`: corpus
+[`1028`](../src/test/corpus/programs/1028-macroBySymbolAcrossModules/main.ms)
+prints `1 2 2 2 1 2 7` on C and JS, covering both aliases, a typed macro local,
+bare statement/expression/generic calls, and the caller's own runtime class value.
+The previous compiler rejects the same program with five macro-body type errors.
+Existing private/generic bound-symbol, export-star and nested-decorator consumers
+also pass C/JS; the nested decorator's dynamic caller query still prints `scoped=4`.
+Not measured here: packed/standalone prelude scope, ESM, ORC, SAN or a full language suite.
+
+Integration check, 2026-10-05 on compiler `3fab156a`: macro-body checking rejects
+an unguarded computed binding used as a non-null callee, and a raw integer used
+for an enum-valued declaration field. These are invalid producer inputs, not
+loss of the declaring module's private-field access. The API contracts remain
+in `std/meta/index.ms` and `std/meta/node.ms`; do not bypass their nullable or
+enum types to make an expansion test pass.
+
+With the producer inputs corrected, the same compiler runs a declaration splice
+at module scope and inside a function on C and JS (`4`, then `7`); a guarded
+caller-visible computed binding prints `8` on both, while the absent binding
+reports the macro's single explicit error. Handoff `bindSymGeneric` is 3/3 and
+`fieldVisibility` 13/13, including the ordinary-caller private-access refusals.
+This focused check is not a fresh full-suite or SAN verdict.
+
+The flag wire is a set, not an enum ordinal. `valueToNode` in
+`src/compiler/meta/bridge.ms` preserves the allowed `StaticStorage` member of
+`Node.flags`; it does not copy processing flags from macro output. Reading the
+old ordinal protocol dropped a typed static flag, so the generated initializer
+ran once per call rather than once per site.
+
+Measured 2026-10-05 with the corrected decoder: corpus 704/705/706 prints each
+unchanged PASS oracle on C DRC, C ORC and JS; private-field corpus prints its
+unchanged oracle on those three cells and Raiser. The macro boundary handoff is
+5/5, including refusal of generated expressions carrying forged processing
+flags. Raiser still fails the existing static-hoist oracles (704 builds=5,
+705 builds=17, 706 builds=9); those existing xfails were not removed. Full SAN
+and the integration gate are separate checks.
 
 ### The Core Concept: AST In -> Manipulate -> AST Out
 

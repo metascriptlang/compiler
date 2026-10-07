@@ -1219,7 +1219,7 @@ let _hcrWarmLinks: HcrWarmLink[] = [];
 function warmHcrSession(opts: Readonly<CliOptions>): void {
 	for (const j of _hcrWarmJobs) compilePlanFor(j.cFile, j.depFile != "", j.flags, opts.mode, opts.ccCompiler, opts.ccBinary);
 	ensurePchs(_hcrWarmJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
-	for (const link of _hcrWarmLinks) warmLinkPlan(link.image, link.flags, opts.ccCompiler, opts.ccBinary);
+	for (const link of _hcrWarmLinks) warmLinkPlan(link.image, link.flags, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 	_hcrWarmJobs = [];
 	_hcrWarmLinks = [];
 }
@@ -1816,7 +1816,7 @@ function linkHcrImage(objects: string[], externalInputs: string[], image: string
 		_hcrWarmLinks.push({ image, flags });
 		return;
 	}
-	const linked = linkObjects(objects, image, flags, opts.mode, opts.ccCompiler, opts.ccBinary);
+	const linked = linkObjects(objects, image, flags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 	if (!linked.ok) {
 		console.log(`${error("error")}: link failed for HCR image ${image} ${dim(`(exit ${linked.error.exitCode})`)}`);
 		if (linked.error.errorOutput != "") console.log(linked.error.errorOutput);
@@ -2442,8 +2442,8 @@ setGlobalHookOwners(sharedHookOwners);
 	// in resolveTargetGcMode (it has to happen before the check pass).
 	// Both halves come from Anza's platform-tools bundle - a stock LLVM will not
 	// do, so the diagnostic points at the bundle rather than at a package manager.
-	if (opts.targetOs == "solana") {
-		if (opts.mode == 0) opts.mode = 1;
+	if (opts.targetOs == "solana" && opts.mode == 0) opts.mode = 1;
+	if (opts.targetOs == "solana" && !opts.emitC) {
 		if (opts.ccBinary == "") {
 			const sbfClang = resolveBpfClang();
 			if (sbfClang == "") {
@@ -3209,7 +3209,7 @@ setGlobalHookOwners(sharedHookOwners);
 			throw new Error(BUILD_STOPPED);
 		}
 	} else {
-		const linkRes = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
+		const linkRes = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 		if (!linkRes.ok) {
 			printDiag(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 			if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
@@ -3492,7 +3492,7 @@ setGlobalHookOwners(sharedHookOwners);
 	let testLink = cliLinkFlags(allFlags, opts, true);
 	for (const obj of globalLinkObjects()) oFiles.push(obj);
 	for (const flag of globalLinkFlags()) { testLink = appendFlag(testLink, flag); }
-	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary);
+	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 	if (!linkRes.ok) {
 		printDiag(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 		if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);

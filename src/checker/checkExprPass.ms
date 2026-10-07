@@ -16,7 +16,7 @@ import { callCheckStmt, callDemandReturn, callLaterDeclarationNote, checkInTypeS
 import { checkArcPointeeSendable } from "./sendable";
 import { isLockedRef, isIterator, getIteratorYieldType } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
-import { builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
+import { builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation, refuseSuspendingViewParam, bodyMentionsName } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, monoConcreteTypeName } from "../monomorphize/clone";
 import { callExpandMacroInvocation, callEvalComptimeBlock } from "./checkerCallbacks";
@@ -2816,6 +2816,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		ctx.pendingSpawnThunk = false;
 		ctx.readonlyBoundary = ctx.table.current;
 	}
+	const suspends = isAsync || fnFlags.indexOf("generator") >= 0;
 	const paramSyms: Symbol[] = [];
 	let pi = 0;
 	for (const p of params) {
@@ -2825,6 +2826,10 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		} else if (ctxParamTypes != null && pi < ctxParamTypes.length && ctxParamTypes[pi] != null) {
 			// Contextual fallback: untyped param inherits expected param type
 			pType = ctxParamTypes[pi];
+		}
+		if (suspends && bodyMentionsName(body, p)) {
+			const at = paramLocs != null && pi < paramLocs.length && paramLocs[pi] != null ? paramLocs[pi] : fnNode.location;
+			refuseSuspendingViewParam(ctx, p, pType, at.line, at.column);
 		}
 		const paramSym = makeSymbol(p, SymbolKind.Parameter, pType, false);
 		if (paramLocs != null && pi < paramLocs.length && paramLocs[pi] != null) {

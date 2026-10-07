@@ -460,7 +460,7 @@ export type NodeData =
 	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] } // EnumDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] } // InterfaceDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] } // StructDecl
-	| { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation } // ClassDecl
+	| { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation } // ClassDecl
 	| { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }  // PropertyDecl
 	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // MethodDecl
 	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[] } // ConstructorDecl
@@ -686,7 +686,7 @@ export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsD
 export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] };
 export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] };
 export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][] };
-export type ClassDeclData = { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation };
+export type ClassDeclData = { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation };
 export type ActorDeclData = { actorName: string, actorBody: Node[], nameLocation: SourceLocation };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }; // propVisibility: "" | "public" | "private" | "protected"
 export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation };

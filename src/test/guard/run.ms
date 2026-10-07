@@ -22,8 +22,8 @@
 // The double-destroy abort needs no directive — it is name-agnostic.
 //
 // Env: MSC=<path to msc> (default: ./msc, else installed msc)   GUARD_GC="drc orc" (default both)
-import { execFileResult, ExecFileResult, exit, env, cwd, cmdExists } from "std/process";
-import { readFile, writeFile, readDir, exists, ensureDir, removeAll, symlink } from "std/fs";
+import { execFileResult, ExecFileResult, exit, env, cwd, cmdExists, platform, arch } from "std/process";
+import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, symlink } from "std/fs";
 
 function slashes(p: string): string {
 	return p.replaceAll("\\", "/");
@@ -62,6 +62,12 @@ const SHARD = envOr("GUARD_SHARD", "0/1").split("/");
 const SHARD_INDEX = SHARD[0].parseInt() as int32;
 const SHARD_COUNT = SHARD.length == 2 ? SHARD[1].parseInt() as int32 : 0;
 const WORK = SHARD_COUNT > 1 ? `${OUT}/work${SHARD_INDEX}` : `${OUT}/work`;
+const CLAIMS = envOr("GUARD_CLAIMS", "");
+
+function claimProbe(probe: Probe, i: int32): boolean {
+	if (CLAIMS == "") return i % SHARD_COUNT == SHARD_INDEX;
+	return remove(`${CLAIMS}/${probe.name}`).ok;
+}
 const BIN_DIR = `${OUT}/bin`;
 const LOG_DIR = `${OUT}/logs`;
 
@@ -393,7 +399,29 @@ function runOsAsanLane(probe: Probe): void {
 		fail(tag, `build reported success but no binary at ${bin}`);
 		return;
 	}
+	let runtimeDir = "";
+	if (platform == "windows") {
+		const resource = execFileResult("clang", ["-print-resource-dir"]);
+		if (!succeeded(resource) || resource.output.trim() == "") {
+			fail(tag, `cannot locate clang ASan runtime: ${status(resource)}`);
+			return;
+		}
+		runtimeDir = `${slashes(resource.output.trim())}/lib/windows`;
+		const runtimeArch = match (arch) {
+			"amd64" => "x86_64",
+			"arm64" => "aarch64",
+			"i386" => "i386",
+			_ => "",
+		};
+		if (runtimeArch == "" || !exists(`${runtimeDir}/clang_rt.asan_dynamic-${runtimeArch}.dll`)) {
+			fail(tag, `missing clang ASan runtime for ${arch} in ${runtimeDir}`);
+			return;
+		}
+	}
+	const oldPath = env.get("PATH");
+	if (runtimeDir != "") env.set("PATH", `${runtimeDir};${oldPath}`);
 	const run = execFileResult(exe, []);
+	if (runtimeDir != "") env.set("PATH", oldPath);
 	const merged = both(run);
 	writeFile(`${LOG_DIR}/${probe.name}.${probe.os}.asan.out`, merged);
 	const report = firstLineContaining(merged, "ERROR: AddressSanitizer");
@@ -640,16 +668,17 @@ function main(): void {
 
 	const probes = discoverProbes();
 	for (let i = 0; i < probes.length; i++) {
-		if (i % SHARD_COUNT != SHARD_INDEX) continue;
 		const probe = probes[i];
+		if (!claimProbe(probe, i)) continue;
 		if (probe.os != "") {
 			runOsLane(probe);
-			continue;
+		} else {
+			for (const gc of modes) runGcLane(probe, gc);
+			if (probe.wantJs) runJsLane(probe);
+			if (probe.wantTsan) runTsanLane(probe);
+			if (probe.testBalance.length > 0) runTestLane(probe);
 		}
-		for (const gc of modes) runGcLane(probe, gc);
-		if (probe.wantJs) runJsLane(probe);
-		if (probe.wantTsan) runTsanLane(probe);
-		if (probe.testBalance.length > 0) runTestLane(probe);
+		if (CLAIMS != "") writeFile(`${CLAIMS}/done/${probe.name}`, "");
 	}
 	if (SHARD_INDEX > 0) {
 		console.log(fails == 0 ? `nim-guard: ALL GREEN (${passes} cells)` : `nim-guard: FAILURES ABOVE (${passes} ok, ${fails} red)`);

@@ -4,7 +4,7 @@ import {
 	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, ActorDeclData, createNodeAt, SymbolKind,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString } from "./emit";
 import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
 import { jsDefaultValue } from "./valueCopy";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
@@ -136,6 +136,9 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	}
 	emit(gen, " {\n");
 	gen.indentLevel = gen.indentLevel + 1;
+	if (d.classDisplayName == "") throw new Error(`internal: class '${d.className}' has no source display name`);
+	emitIndent(gen);
+	emit(gen, `static [globalThis.Symbol.for("metascript.typeDisplayName")] = "${escapeJSString(d.classDisplayName)}";\n`);
 	const staticMethods: Node[] = [];
 	for (const member of d.classBody) {
 		match (member.kind) {
@@ -251,6 +254,7 @@ export function emitActorDecl(gen: JSGenerator, node: Node): void {
 	for (const m of d.actorBody) body.push(m);
 	const cls = createNodeAt(NodeKind.ClassDecl, {
 		className: d.actorName,
+		classDisplayName: d.actorName,
 		classExtends: "",
 		classBody: body,
 		nameLocation: d.nameLocation,

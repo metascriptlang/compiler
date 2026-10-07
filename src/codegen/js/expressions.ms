@@ -744,7 +744,7 @@ export function emitTypeAssertion(gen: JSGenerator, node: Node): void {
 	emitNode(gen, classReference(target, node.location));
 	const shown = target.instantiatedFrom != null ? namedTypeDisplay(checkedConversionBody(node)!) : target.name;
 	emit(gen, ") ? v : ");
-	emitDefectCall(gen, "\"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + escapeJSString(shown) + "\"", node.location);
+	emitDefectCall(gen, "\"invalid object conversion: \" + " + classDisplayName(gen) + " + \" is not " + escapeJSString(shown) + "\"", node.location);
 	emit(gen, ")(");
 	emitNode(gen, d.asExpr);
 	emit(gen, ")");
@@ -868,6 +868,14 @@ function emitDefectCall(gen: JSGenerator, message: string, location: SourceLocat
 	emit(gen, "(" + message + ")");
 }
 
+function classDisplayName(gen: JSGenerator): string {
+	if (!gen.helpers.classNameRuntime) {
+		gen.helpers.classNameRuntime = true;
+		gen.staticSlots.push("function msClassDisplayName(v) { const c = v.constructor; const k = globalThis.Symbol.for(\"metascript.typeDisplayName\"); return globalThis.Object.prototype.hasOwnProperty.call(c, k) ? c[k] : c.name; }\n");
+	}
+	return "msClassDisplayName(v)";
+}
+
 function classReference(sym: Symbol, location: SourceLocation): Node {
 	const classRef = createNodeAt(NodeKind.Identifier, { name: sym.name } as IdentifierData, location);
 	classRef.resolvedSym = sym;
@@ -881,7 +889,7 @@ function openClassTest(gen: JSGenerator, cls: Symbol, member: Type, union: Type,
 	emitNode(gen, classReference(cls, location));
 	emit(gen, ") ? v : ");
 	emitNode(gen, runtimeRef("msDefect", location));
-	emit(gen, "(v !== null && typeof v === \"object\" && !Array.isArray(v) && v.constructor !== Object ? \"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + shown + "\" : \"member '" + shown + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + ");
+	emit(gen, "(v !== null && typeof v === \"object\" && !Array.isArray(v) && v.constructor !== Object ? \"invalid object conversion: \" + " + classDisplayName(gen) + " + \" is not " + shown + "\" : \"member '" + shown + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + ");
 	emitHeldMember(gen, union, location);
 	emit(gen, " + \"'\"))(");
 }

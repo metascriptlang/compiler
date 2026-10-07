@@ -1446,8 +1446,8 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 					// One flag, by name, not the whole word: a macro that could set
 					// Sem/Transf/LL would forge pipeline state on a node the passes
 					// have never processed. Widen this list only per-flag.
-					const rawFlags = readInt(objHeap, handle, "flags") as int32;
-					if (rawFlags == NodeFlag.StaticStorage as int32) {
+					const rawFlags = (readInt(objHeap, handle, "flags") as uint32) as BitSet<NodeFlag>;
+					if (rawFlags.has(NodeFlag.StaticStorage)) {
 						out.flags = out.flags.incl(NodeFlag.StaticStorage);
 					}
 					if (typed != null && readBool(objHeap, handle, "folded")) out.flags = out.flags.incl(NodeFlag.Folded);
@@ -3771,7 +3771,7 @@ test "round-trip keeps the generic params of an interface, a struct, a class and
 		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	strukt.typeArg = "T:number";
-	const cls = createNode(NodeKind.ClassDecl, { className: "Pair", classExtends: "", classBody: [] as Node[], nameLocation: loc }, synthToken(loc));
+	const cls = createNode(NodeKind.ClassDecl, { className: "Pair", classDisplayName: "Pair", classExtends: "", classBody: [] as Node[], nameLocation: loc }, synthToken(loc));
 	cls.typeArg = "A,B:number";
 	const act = createNode(NodeKind.ActorDecl, { actorName: "Worker", actorBody: [] as Node[], nameLocation: loc }, synthToken(loc));
 	act.typeArg = "M";

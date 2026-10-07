@@ -273,7 +273,7 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 				hasInterpolation = true;
 				break;
 			}
-			if (tc == "\n".code) { hasNewline = true; break; }
+			if (tc == "\n".code || tc == "\r".code) { hasNewline = true; break; }
 			tempPos = tempPos + 1;
 		}
 		if (!hasInterpolation && !hasNewline && tempPos < s.source.byteLength) {
@@ -311,6 +311,12 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 		if (ch == "\\".code) {
 			if (runStart < s.pos) val += s.source.byteSlice(runStart, s.pos);
 			val += scanEscape(s);
+			runStart = s.pos;
+		} else if (ch == "\r".code) {
+			if (runStart < s.pos) val += s.source.byteSlice(runStart, s.pos);
+			val += "\n";
+			advanceChar(s);
+			if (peek(s) == "\n".code) advanceChar(s);
 			runStart = s.pos;
 		} else {
 			advanceChar(s);

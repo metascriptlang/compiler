@@ -234,7 +234,7 @@ export function create<T>(
 export function createPdaOf<T>(
 	payer: WritableSigner,
 	target: Writable,
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 ): Result<Pda<T>, ProgramError> {
 	const space = 8 + (sizeof(T) as uint64);
 	const made = try createdPdaAccount(payer.account, target.account, seeds, space, @comptime { return word(T.discriminator()); });
@@ -255,7 +255,7 @@ export function createPdaAt<T>(
 
 export function verifiedPda<T>(
 	this account: Mutable<T>,
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 ): Result<Pda<T>, ProgramError> {
 	const bump = try canonicalBump(account.account, seeds);
 	return Result.ok({ account: account, bump: bump });
@@ -263,7 +263,7 @@ export function verifiedPda<T>(
 
 export function verifiedPdaWithBump<T>(
 	this account: Mutable<T>,
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 	bump: uint8,
 ): Result<Pda<T>, ProgramError> {
 	const given = try givenBump(account.account, seeds, bump);
@@ -272,14 +272,14 @@ export function verifiedPdaWithBump<T>(
 
 export function verifiedPda<T>(
 	this account: Delegated<T>,
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 ): Result<uint8, ProgramError> {
 	return canonicalBump(account.account, seeds);
 }
 
 export function verifiedPdaWithBump<T>(
 	this account: Delegated<T>,
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 	bump: uint8,
 ): Result<uint8, ProgramError> {
 	return givenBump(account.account, seeds, bump);

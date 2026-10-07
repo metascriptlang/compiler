@@ -452,7 +452,7 @@ export function createProgramAccountSeeded(
 	target: Account,
 	space: uint64,
 	newOwner: Pubkey,
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 	bump: uint8,
 ): Result<uint64, ProgramError> {
 	let signed: SeedTable = { slices: [], bump: [0], count: 0 };
@@ -818,7 +818,7 @@ export struct DerivedAccount {
 export function createdPdaAccount(
 	payer: Account,
 	target: Account,
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 	space: uint64,
 	discriminator: uint64,
 ): Result<DerivedAccount, ProgramError> {
@@ -855,7 +855,7 @@ export function createdPdaAccountAt(
 
 export function canonicalBump(
 	account: Account,
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 ): Result<uint8, ProgramError> {
 	const found = try findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
 	if (found.key != account.key()) { return Result.err(ProgramError.constraintSeeds()); }
@@ -864,7 +864,7 @@ export function canonicalBump(
 
 export function givenBump(
 	account: Account,
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 	bump: uint8,
 ): Result<uint8, ProgramError> {
 	const derived = createAddressWithBump(seeds, bump, ownProgram());
@@ -935,7 +935,7 @@ export function holds(condition: boolean, failure: uint64): Result<void, Program
 
 export function seedsGiven(
 	key: uint64,
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 	bump: uint8,
 ): Result<void, ProgramError> {
 	const derived = createAddressWithBump(seeds, bump, ownProgram());
@@ -945,7 +945,7 @@ export function seedsGiven(
 	return Result.ok(null);
 }
 
-export function seedsCanonical(key: uint64, seeds: Span<SeedSlice>): Result<void, ProgramError> {
+export function seedsCanonical(key: uint64, seeds: Readonly<Span<SeedSlice>>): Result<void, ProgramError> {
 	const found = try findAt(tableAddress(seeds), seeds.length as uint64, ownProgram());
 	if (!keysEqual(msSolSpanAddress(found.key.bytes), key)) {
 		return Result.err(ProgramError.constraintSeeds());

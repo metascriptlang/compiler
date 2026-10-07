@@ -12,7 +12,7 @@ function declaringSymbol(name: string, kind: NodeKind): Result<Symbol, string> {
 	} else if (kind == NodeKind.TypeAliasDecl) {
 		sym.declNode = createNodeAt(NodeKind.TypeAliasDecl, { aliasName: name, aliasType: "", aliasGenericParams: "", discriminantName: "", discriminantType: "", nameLocation: loc }, loc);
 	} else if (kind == NodeKind.ClassDecl) {
-		sym.declNode = createNodeAt(NodeKind.ClassDecl, { className: name, classBody: [], nameLocation: loc }, loc);
+		sym.declNode = createNodeAt(NodeKind.ClassDecl, { className: name, classDisplayName: name, classBody: [], nameLocation: loc }, loc);
 	} else if (kind == NodeKind.ActorDecl) {
 		sym.declNode = createNodeAt(NodeKind.ActorDecl, { actorName: name, actorBody: [], nameLocation: loc }, loc);
 	} else if (kind == NodeKind.EnumDecl) {

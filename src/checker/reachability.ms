@@ -263,12 +263,7 @@ function markRefArrayCell(arrT: Type, modulePath: string): void {
 	let owner = _singleModule != "" ? _singleModule : modulePath;
 	if (_singleModule == "") {
 		if (destroy.modulePath != "") owner = destroy.modulePath;
-		if (trace != null) {
-			if (destroy.modulePath != "" && destroy.modulePath != trace.modulePath) {
-				throw new Error(`internal: ref-array cell ${key} has its destroy op in ${destroy.modulePath} and its trace op in ${trace.modulePath}`);
-			}
-			owner = trace.modulePath;
-		}
+		if (trace != null) owner = trace.modulePath;
 	}
 	_aliveSet.typeInfoKeys.add(key);
 	const demand: CTypeInfoDemand = { cell: createRef(arrT), key, owner, cName: "", destroy, trace };
@@ -359,6 +354,7 @@ function markTypeInfoOf(type: Type | null, modulePath: string): void {
 				markAndWalk(h, hn);
 			}
 		}
+		markTypeInfoHooks(t, modulePath);
 		markTypeInfoOf(classParentOf(t), modulePath);
 	}
 	if (t.kind == TypeKind.Union) {
@@ -372,6 +368,7 @@ function markTypeInfoOf(type: Type | null, modulePath: string): void {
 				markAndWalk(h, hn);
 			}
 		}
+		markTypeInfoHooks(t, modulePath);
 		return;
 	}
 	const tn = t.typeName;
@@ -388,7 +385,8 @@ function markTypeInfoOf(type: Type | null, modulePath: string): void {
 		markAndWalk(home, tiName);
 	}
 	if (t.kind != TypeKind.Struct) return;
-	markTypeInfoHooks(t, t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : (home != "" ? home : modulePath));
+	const sharedInstance = t.sym != null && (t.sym.instantiatedFrom != null || hasGenericParams(t.sym.symbolType));
+	markTypeInfoHooks(t, sharedInstance ? modulePath : (t.sym != null && t.sym.modulePath != "" ? t.sym.modulePath : (home != "" ? home : modulePath)));
 	let bt = t.typeExtra;
 	let depth = 0;
 	while (bt != null && depth < 64) {

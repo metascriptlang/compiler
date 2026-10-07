@@ -432,6 +432,36 @@ Traps, all paid for on 2026-09-05:
   of fault detection and must not satisfy the capability check.
   Other toolchain versions/architectures and a full current integration SAN
   run were not verified by this measurement.
+- Windows integration followup, 2026-10-06, source tree `2220eaeb47c5`, one recovery
+  build and serial focused runs after a machine restart: compiler source check 373
+  modules clean; lexer 376/376; CC 741/741 with the gate's `NO_COLOR`/`FORCE_COLOR`
+  clearing (`tools/gate.sh` `test_one`). Direct CC testing under `NO_COLOR` made
+  eleven unchanged color-length assertions fail; that was not an observed linker
+  regression. Absolute-link and compile-time metadata guards print `GUARD-OK` on
+  DRC/ORC with balanced ledgers. SBF entry emission assertions execute before the
+  existing missing-SDK `GUARD-SKIP`; the real SBF link/account-limit matrix remains
+  unverified on this host.
+- The same followup's exact corpus subset (`MSCORPUS_ONLY=headerImportSpelledInAString,objectLiteralAssignedInPlace`,
+  `MSCORPUS_RAISER=1`, build slots 1) prints `14 pass · 0 fail · 0 xfail · 0 xpass`:
+  twelve cells plus two parity comparisons. The in-place assignment oracle is
+  unchanged; each Span is now last-read before its owner's assignment, instead of
+  carrying a borrowed view across a source write. The danger driver fell back to
+  the auto-detected compiler without LTO, so whole-program DCE is not proved.
+- Windows guard loader followup, 2026-10-06: the previous default bare-ASan launch
+  exited 53 because LLVM's `lib/windows` was outside the DLL search path.
+  `src/test/guard/run.ms` now discovers that directory from clang and temporarily
+  extends the native process PATH around the synchronous child launch.
+  Runner blob `b237e3b4a2b0`, based on tree `2ce918893f31`, was exercised with
+  `MSC=$PWD/out/recovery/msc.exe GUARD_SHARD=25/285 out/recovery/msc.exe run --target=raiser src/test/guard/run.ms`:
+  `bareArenaReallocCopy [bare]` and `[bare asan]` both pass, `ALL GREEN (2 cells)`.
+  A throwaway overlapping-memcpy binary built with `clang -fsanitize=address -O0`
+  and launched through the same runner launch block reports
+  `ERROR: AddressSanitizer: memcpy-param-overlap`; the launcher checks failure and
+  PATH restoration, printing `ASAN-FAULT-DETECTED PATH-RESTORED`.
+  An environment block containing both `Path` and `PATH` previously failed to
+  resolve the DLL; no machine PATH change or DLL copy is needed.
+  This proves the x64 Windows loader and sanitizer sensitivity, not the full
+  integration guard/SAN lane or the arm64/i386 runtime filenames.
 - Heap corruption inside the compiler itself: build it under ASan with the
   DRC slab off, `msc build src/index.ms --gc=drc --sanitize=address
   --passC=-DMS_SLAB_MAX=0 --passL=-fsanitize=address --cc=clang

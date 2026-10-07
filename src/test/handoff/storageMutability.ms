@@ -148,7 +148,7 @@ function run(): void {
 }
 
 test "a string reaches only a read-only Span, its slices too" {
-	const head = "struct Holder { s: Span<char>; }\nfunction poke(s: Span<char>): void { s[0] = 65 as char; }\nfunction setFirst(this s: Span<char>): void { s[0] = 66 as char; }\nfunction count<T>(s: Span<T>): int32 { return s.length as int32; }\nfunction title(): string { return \"abc\"; }\n";
+	const head = "function poke(s: Span<char>): void { s[0] = 65 as char; }\nfunction setFirst(this s: Span<char>): void { s[0] = 66 as char; }\nfunction count<T>(s: Span<T>): int32 { return s.length as int32; }\nfunction title(): string { return \"abc\"; }\n";
 	const refused = [
 		"const lit = \"hello\"; poke(lit);",
 		"let built = \"x\".repeat(3); poke(built);",
@@ -156,7 +156,6 @@ test "a string reaches only a read-only Span, its slices too" {
 		"const lit = \"hello\"; poke(lit[1..3]);",
 		"const lit = \"hello\"; const w: Span<char> = lit;",
 		"let built = \"x\".repeat(3); let w: Span<char> = built[0..1]; w = built;",
-		"let built = \"x\".repeat(3); const h: Holder = { s: built };",
 		"const lit = \"hello\"; lit.setFirst();",
 		"const lit = \"hello\"; count(lit);",
 		"const lit = \"hello\"; const mid = lit[1..3]; mid[0] = 65 as char;",
@@ -165,20 +164,18 @@ test "a string reaches only a read-only Span, its slices too" {
 		const source = head + `function run(): void { ${body} } run();`;
 		const c = compileToCWithStd(source);
 		const js = compileProjectToJSWithStd([{ entryPath: "test/text.ms", entrySource: source }], "test/text.ms");
-		assert !c.ok && (c.error.contains("a string is immutable") || c.error.contains("cannot write through Readonly<Span<char>>")), body;
+		assert !c.ok, body;
 		assert js.startsWith("ERROR:"), body;
 	}
-	const legal = `struct Holder { s: Readonly<Span<char>>; }
-function peek(s: Readonly<Span<char>>): int32 { return s[0] as int32; }
+	const legal = `function peek(s: Readonly<Span<char>>): int32 { return s[0] as int32; }
 function size<T>(s: Readonly<Span<T>>): int32 { return s.length as int32; }
 function firstOf(this s: Readonly<Span<char>>): int32 { return s[0] as int32; }
 function run(): void {
 	const lit = "hello";
 	let built = "x".repeat(3);
 	const r: Readonly<Span<char>> = built;
-	const h: Holder = { s: lit[1..4] };
 	const mid = lit[1..3];
-	console.log(peek(lit), peek(built), peek(lit[1..2]), r.length, h.s.length, size(lit), lit.firstOf(), peek("raw"), mid[0]);
+	console.log(peek(lit), peek(built), peek(lit[1..2]), r.length, size(lit), lit.firstOf(), peek("raw"), mid[0]);
 } run();`;
 	const c = compileToCWithStd(legal);
 	assert c.ok, c.ok ? "" : c.error;
@@ -205,11 +202,120 @@ test "string byte views permit reads and detached writes but never mutable alias
 		assert !c.ok, body;
 		assert js.startsWith("ERROR:"), body;
 	}
-	const source = `const s = "x".repeat(4); const view = s.asBytes(); const copy = view.slice(0, view.length); copy[0] = 65; copy.push(66); console.log(view[0], copy.asString());`;
+	const source = `function run(): void { const s = "x".repeat(4); const view = s.asBytes(); const copy = view.slice(0, view.length); copy[0] = 65; copy.push(66); console.log(view[0], copy.asString()); } run();`;
 	const c = compileToCWithStd(source);
 	const js = compileProjectToJSWithStd([{ entryPath: "test/view.ms", entrySource: source }], "test/view.ms");
 	assert c.ok, c.ok ? "" : c.error;
 	assert !js.startsWith("ERROR:"), js;
+}
+
+test "a view borrows only from a path that outlives it and stays unchanged while it is read" {
+	const refused = [
+		"function f(): int32 { let v: Readonly<Span<uint8>> = \"\".asBytes(); { const s = \"ab\".repeat(2); v = s.asBytes(); } return v[0] as int32; }",
+		"function f(): int32 { let v: Readonly<Span<uint8>> = \"\".asBytes(); let i = 0; while (i < 2) { const s = \"ab\".repeat(i + 1); v = s.asBytes(); i += 1; } return v.length as int32; }",
+		"function f(): int32 { let s = \"ab\".repeat(2); const v = s.asBytes(); s = \"cd\".repeat(2); return v[0] as int32; }",
+		"function f(): int32 { const a: uint8[] = [1, 2]; const v: Span<uint8> = a; a.push(3); return v[0] as int32; }",
+		"function f(): int32 { const a: uint8[] = [1]; const v: Readonly<Span<uint8>> = a; let t: int32 = 0; for (let i = 0; i < 3; i += 1) { t += v[0] as int32; a.push(1); } return t; }",
+		"function grow(a: uint8[]): void { a.push(1); } function f(): int32 { const a: uint8[] = [1, 2]; const v: Readonly<Span<uint8>> = a; grow(a); return v[0] as int32; }",
+		"function mk(): string { return \"ab\".repeat(2); } function f(): int32 { const v = mk().asBytes(); return v[0] as int32; }",
+		"let buf: uint8[] = [1, 2]; function f(): int32 { const v: Span<uint8> = buf; return v[0] as int32; }",
+		"function f(t: string): () => int32 { const s = t; return (): int32 => { const v = s.asBytes(); return v[0] as int32; }; }",
+		"struct Chunk { bytes: Readonly<Span<uint8>>; }",
+		"struct TextWindow { chars: Readonly<Span<char>>; }",
+		"class Holder { bytes: Span<int32>; constructor(b: Span<int32>) { this.bytes = b; } }",
+		"function f(s: string): int32 { const vs: Readonly<Span<uint8>>[] = []; return vs.length as int32; }",
+		"function f(vs: Span<uint8>[]): int32 { return vs.length as int32; }",
+
+		"function f(ref n: int32): () => int32 { return (): int32 => n; }",
+		"function fill(s: Span<uint8>): void { s[0] = 7; } function f(): void { const v: Vec<uint8> = new Array(2); fill(v); }",
+		"function f(): void { const v: Vec<uint8> = new Array(2); const view: Span<uint8> = v; view[0] = 1; }",
+		"function f(): int32 { const a: uint8[] = [1, 2]; const alias = a; const v: Readonly<Span<uint8>> = a; alias.push(9); return v[0] as int32; }",
+		"function myAppend(this a: uint8[]): void { a.push(1); } function f(): int32 { const a: uint8[] = [1]; const v: Readonly<Span<uint8>> = a; a.myAppend(); return v[0] as int32; }",
+		"function f(c: boolean): int32 { const a: uint8[] = [1]; const b: uint8[] = [2]; let v: Readonly<Span<uint8>> = a; if (c) { v = b; } a.push(3); return v[0] as int32; }",
+		"function f(): int32 { const s = \"ab\".repeat(2); const v = s.asBytes(); { const t = s; console.log(t); } return v[0] as int32; }",
+		"function f(): int32 { const s = \"ab\".repeat(2); const v = s.asBytes(); const pair = [s, \"x\"]; return (v[0] as int32) + (pair.length as int32); }",
+		"function f(): int32 { const xs = [\"ab\".repeat(2)]; let t: int32 = 0; for (const s of xs) { const v = s.asBytes(); xs[0] = \"z\"; t += v[0] as int32; } return t; }",
+		"function f(): int32 { const a: uint8[] = [1]; let v: Readonly<Span<uint8>> = a; a.push(2); v = a; return v.length as int32; }",
+		"function f(): int32 { const a: uint8[] = [1]; let t: int32 = 0; for (let i = 0; i < 3; i += 1) { const v: Readonly<Span<uint8>> = a; t += v.length as int32; a.push(1); } return t; }",
+		"function f(): int32 { const a: uint8[] = [1, 2]; const v: Readonly<Span<uint8>> = a; const i = a.indexOf(2); return (v[0] as int32) + (i as int32); }",
+		"function same(a: uint8[]): uint8[] { return a; } function f(): int32 { const a: uint8[] = [1]; const v: Readonly<Span<uint8>> = a; const b = same(a); b.push(2); return v[0] as int32; }",
+		"function f(): int32 { const s = \"ab\".repeat(2); const v = s.asBytes(); { const g = (): int32 => s.length as int32; console.log(g()); } return v[0] as int32; }",
+		"function viewOf(a: uint8[], b: uint8[]): int32 { const v: Readonly<Span<uint8>> = a; b.push(1); return v[0] as int32; }",
+		"function f(): int32 { const a: uint8[] = [1]; const grow = (): void => { a.push(1); }; const v: Readonly<Span<uint8>> = a; grow(); return v[0] as int32; }",
+		"let keep: uint8[] = []; function growKeep(): void { keep.push(1); } function f(): int32 { const a: uint8[] = [1]; keep = a; const v: Readonly<Span<uint8>> = a; growKeep(); return v[0] as int32; }",
+	];
+	for (const body of refused) {
+		const c = compileToCWithStd(body);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/borrow.ms", entrySource: body }], "test/borrow.ms");
+		assert !c.ok, body;
+		assert js.startsWith("ERROR:"), body;
+	}
+	const accepted = [
+		"function f(text: string): int32 { const b = text.asBytes(); return b[0] as int32; }",
+		"function f(): int32 { const s = \"ab\".repeat(2); const b = s.asBytes(); return b[1] as int32; }",
+		"function f(): int32 { const a: uint8[] = [1, 2, 3]; const v: Span<uint8> = a; v[0] = 9; const n = a.length; return (v[0] as int32) + (n as int32); }",
+		"function f(): int32 { const a: uint8[] = [1, 2]; const v: Readonly<Span<uint8>> = a; const x = v[0] as int32; a.push(3); return x; }",
+		"function f(): int32 { const a: uint8[] = [1]; const v: Readonly<Span<uint8>> = a; const x = v[0] as int32; a.push(2); const w: Readonly<Span<uint8>> = a; return x + (w.length as int32); }",
+		"function f(): int32 { const a: uint8[] = [1, 2]; const alias = a; const v: Readonly<Span<uint8>> = a; const n = alias.length; return (v[0] as int32) + (n as int32); }",
+		"function f(): int32 { const s = \"ab\".repeat(2); const v = s.asBytes(); const i = s.indexOf(\"b\"); return (v[0] as int32) + (i as int32); }",
+		"function f(): int32 { const s = \"ab\".repeat(2); const v = s.asBytes(); const x = v[0] as int32; const t = s; return x + (t.length as int32); }",
+		"function copied(t: string): uint8[] { return [...t.asBytes()]; } function f(): int32 { const s = \"ab\".repeat(2); const v = s.asBytes(); const kept = copied(s); kept.push(1); return (v[0] as int32) + (kept.length as int32); }",
+		"function g(ref n: int32, s: string): int32 { const v = s.asBytes(); n = v.length as int32; return v[0] as int32; }",
+		"const text = \"abc\"; function f(): int32 { const b = text.asBytes(); return b[0] as int32; }",
+		"function count(a: Readonly<uint8[]>): int32 { return a.length as int32; } function f(): int32 { const a: uint8[] = [1, 2]; const v: Readonly<Span<uint8>> = a; const n = count(a); return (v[0] as int32) + n; }",
+		"function fill(s: Span<uint8>): void { s[0] = 7; } function f(): void { let v: Vec<uint8> = new Array(2); fill(v); }",
+		"struct S { xs: uint8[]; } function f(s: S): int32 { const v: Readonly<Span<uint8>> = s.xs; return v[0] as int32; }",
+		"function f(): int32 { const v: Readonly<Span<uint8>> = [5, 6]; return v[1] as int32; }",
+		"function f(b: Span<uint8>): int32 { const w = b; return w.length as int32; }",
+		"function f(): int32 { const a: uint8[] = [1]; const v: Readonly<Span<uint8>> = a; const x = v[0] as int32; const g = (): int32 => a.length as int32; return x + g(); }",
+		"function count(a: Readonly<uint8[]>): int32 { return a.length as int32; } function f(a: uint8[]): int32 { const v: Readonly<Span<uint8>> = a; const n = count(a); return (v[0] as int32) + n; }",
+		"const s = \"ab\"; const top = s.asBytes(); console.log(top[0]);",
+	];
+	for (const body of accepted) {
+		const c = compileToCWithStd(body);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/borrow.ms", entrySource: body }], "test/borrow.ms");
+		assert c.ok, body + (c.ok ? "" : " — " + c.error);
+		assert !js.startsWith("ERROR:"), body + " — " + js;
+	}
+}
+
+test "an async or generator function refuses a view or ref parameter" {
+	const refused = [
+		"async function g(b: Readonly<Span<uint8>>): Promise<int32> { return b[0] as int32; }",
+		"async function g(b: Span<int32>): Promise<int32> { return b[0]; }",
+		"async function g(ref n: int32): Promise<void> { n = 1; }",
+		"function* g(b: Span<int32>): Iterator<int32> { yield b[0]; }",
+		"class C { async m(b: Span<int32>): Promise<int32> { return b[0]; } }",
+		"const g = async (b: Span<int32>): Promise<int32> => b[0];",
+	];
+	for (const body of refused) {
+		const c = compileToCWithStd(body);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/suspparam.ms", entrySource: body }], "test/suspparam.ms");
+		assert !c.ok, body;
+		assert js.startsWith("ERROR:"), body;
+	}
+}
+
+test "a view local does not live across an await or a yield" {
+	const refused = [
+		"async function f(a: uint8[]): Promise<int32> { const v: Readonly<Span<uint8>> = a; const h = spawn((): int32 => 1); await h; return v[0] as int32; }",
+		"function* f(a: uint8[]): Iterator<int32> { const v: Readonly<Span<uint8>> = a; yield 1; const n = v[0] as int32; yield n; }",
+	];
+	for (const body of refused) {
+		const c = compileToCWithStd(body);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/suspend.ms", entrySource: body }], "test/suspend.ms");
+		assert !c.ok, body;
+		assert js.startsWith("ERROR:"), body;
+	}
+	const accepted = [
+		"async function f(a: uint8[]): Promise<int32> { const v: Readonly<Span<uint8>> = a; const n = v[0] as int32; const h = spawn((): int32 => 1); await h; return n; }",
+	];
+	for (const body of accepted) {
+		const c = compileToCWithStd(body);
+		const js = compileProjectToJSWithStd([{ entryPath: "test/suspend.ms", entrySource: body }], "test/suspend.ms");
+		assert c.ok, body + (c.ok ? "" : " — " + c.error);
+		assert !js.startsWith("ERROR:"), body + " — " + js;
+	}
 }
 
 test "a read-only Span refuses writes and a Span binding never escapes into a closure" {

@@ -52,7 +52,10 @@ function hashFile(path: string): string {
 	const prefix = `${stamp}|`;
 	if (known != null && known.startsWith(prefix)) return known.substring(prefix.length, known.length);
 	const hash = hashFileContent(path);
-	if (settled(path)) _hashByStamp.set(path, `${prefix}${hash}`);
+	if (settled(path)) {
+		_hashByStamp.set(path, `${prefix}${hash}`);
+		_hashMemoWrites += 1;
+	}
 	return hash;
 }
 
@@ -98,21 +101,70 @@ function collectFilesSorted(dir: string, prefix: string, outPaths: string[]): vo
 // Content-hash every file under one support tree into the stamp accumulator.
 // Keys are prefixed with the tree name so runtime/x.h and vendor/x.h can never
 // collide. A missing tree contributes nothing.
-function stampTreeInto(acc: string, dir: string, prefix: string): string {
-	if (!exists(dir)) return acc;
+function collectTreeFiles(dir: string, prefix: string, paths: string[], names: string[]): void {
+	if (!exists(dir)) return;
 	const files: string[] = [];
 	collectFilesSorted(dir, "", files);
 	for (const f of files) {
-		acc = `${acc}\n${prefix}${f}:${hashFile(join(dir, f))}`;
+		paths.push(join(dir, f));
+		names.push(`${prefix}${f}`);
 	}
-	return acc;
+}
+
+const HASH_MEMO_MAGIC = "MSHM1";
+let _hashMemoWrites = 0;
+
+function hashMemoPath(subject: string, kind: string): string {
+	const root = globalCacheRoot();
+	if (root == "") return "";
+	return `${root}/stamps/${hashContent(subject)}.${kind}`;
+}
+
+function readSealed(path: string): string[] {
+	if (path == "" || !exists(path)) return [];
+	const lines = (try readFile(path) catch "").split("\n");
+	if (lines.length < 2 || lines[0] != HASH_MEMO_MAGIC) return [];
+	const body = lines.slice(1, lines.length - 1);
+	if (lines[lines.length - 1] != hashContent(body.join("\n"))) return [];
+	return body;
+}
+
+function writeSealed(path: string, body: string[]): void {
+	if (path == "") return;
+	ensureDir(dirname(path));
+	const text = body.join("\n");
+	atomicWriteFile(path, `${HASH_MEMO_MAGIC}\n${text}\n${hashContent(text)}`);
+}
+
+function loadHashMemo(path: string): void {
+	for (const line of readSealed(path)) {
+		const tab = line.indexOf("\t");
+		if (tab <= 0) continue;
+		const file = line.substring(0, tab);
+		if (_hashByStamp.get(file) == null) _hashByStamp.set(file, line.substring(tab + 1, line.length));
+	}
+}
+
+function saveHashMemo(path: string, files: string[]): void {
+	const body: string[] = [];
+	for (const file of files) {
+		const known = _hashByStamp.get(file);
+		if (known != null) body.push(`${file}\t${known}`);
+	}
+	writeSealed(path, body);
 }
 
 // Memoized; initCache computes it once on the main thread so parallel compile
 // workers only ever read the settled value.
 export function toolchainStamp(): string {
 	if (_toolchainStamp != "") return _toolchainStamp;
-	_toolchainStamp = hashContent(`${hashFile(resolveArgv0(argv[0]))}\n${objectStamp()}`);
+	const exe = resolveArgv0(argv[0]);
+	const memo = hashMemoPath(exe, "exe");
+	loadHashMemo(memo);
+	const writes = _hashMemoWrites;
+	const exeHash = hashFile(exe);
+	if (_hashMemoWrites != writes) saveHashMemo(memo, [exe]);
+	_toolchainStamp = hashContent(`${exeHash}\n${objectStamp()}`);
 	return _toolchainStamp;
 }
 
@@ -122,12 +174,38 @@ export function objectStamp(): string {
 }
 
 export function supportTreesStamp(root: string): string {
-	let acc = "";
-	if (root != "") {
-		acc = stampTreeInto(acc, join(root, "runtime"), "runtime/");
-		acc = stampTreeInto(acc, join(root, "vendor"), "vendor/");
+	if (root == "") return hashContent("");
+	const paths: string[] = [];
+	const names: string[] = [];
+	collectTreeFiles(join(root, "runtime"), "runtime/", paths, names);
+	collectTreeFiles(join(root, "vendor"), "vendor/", paths, names);
+	const stamps: string[] = [];
+	const listed: string[] = [];
+	let stamped = true;
+	for (let i: int32 = 0; i < paths.length; i += 1) {
+		const stamp = changeStamp(paths[i]);
+		if (stamp == "") stamped = false;
+		stamps.push(stamp);
+		listed.push(`${names[i]}\t${stamp}`);
 	}
-	return hashContent(acc);
+	const listing = hashContent(listed.join("\n"));
+	const sumPath = hashMemoPath(root, "sum");
+	const sum = readSealed(sumPath);
+	if (stamped && sum.length == 2 && sum[0] == listing) return sum[1];
+	const memo = hashMemoPath(root, "files");
+	loadHashMemo(memo);
+	const writes = _hashMemoWrites;
+	const parts: string[] = [""];
+	let remembered = stamped;
+	for (let i: int32 = 0; i < paths.length; i += 1) {
+		parts.push(`${names[i]}:${hashFile(paths[i])}`);
+		const known = _hashByStamp.get(paths[i]);
+		if (known == null || !known.startsWith(`${stamps[i]}|`)) remembered = false;
+	}
+	const stamp = hashContent(parts.join("\n"));
+	if (_hashMemoWrites != writes) saveHashMemo(memo, paths);
+	if (remembered) writeSealed(sumPath, [listing, stamp]);
+	return stamp;
 }
 
 // ===== Cache State =====
@@ -884,7 +962,25 @@ const PRE_OUTHASH = "outputHash:";
 
 function outputIdentity(path: string): string {
 	const stamp = changeStamp(path);
-	return stamp != "" ? `stamp:${stamp}` : hashFile(path);
+	if (stamp != "" && settled(path)) return `settled:${stamp}`;
+	return `content:${hashFileContent(path)}`;
+}
+
+function outputMatches(stored: string, path: string): boolean {
+	if (stored.startsWith("settled:")) return stored == `settled:${changeStamp(path)}`;
+	return stored.startsWith("content:") && stored == `content:${hashFileContent(path)}`;
+}
+
+function settleOutputLine(cacheFile: string, lines: string[], stored: string, path: string): void {
+	if (stored.startsWith("settled:")) return;
+	const settledIdentity = outputIdentity(path);
+	if (!settledIdentity.startsWith("settled:")) return;
+	const out: string[] = [];
+	for (const line of lines) {
+		if (line == "") continue;
+		out.push(line.startsWith(PRE_OUTHASH) ? `${PRE_OUTHASH}${settledIdentity}` : line);
+	}
+	atomicWriteFile(cacheFile, `${out.join("\n")}\n`);
 }
 const PRE_DEP = "dep:";
 const PRE_CWD = "cwd:";
@@ -981,7 +1077,7 @@ export function projectCacheChanged(
 	if (storedCmd != currentCmd) return true;
 	if (storedCwd != cwd()) return true;
 	if (storedInputs != inputs) return true;
-	if (storedOutputHash != outputIdentity(outputFile)) return true;
+	if (!outputMatches(storedOutputHash, outputFile)) return true;
 
 	if (storedDeps.length < depPaths.length) return true;
 	let di = 0;
@@ -1327,8 +1423,8 @@ export function isLinkCached(oFiles: string[], externalInputs: string[], linkFla
 	if (storedCmd != linkFlags) return false;
 	if (storedOFiles != objectListKey(oFiles)) return false;
 	if (storedInputs != externalInputKey(externalInputs)) return false;
-	const currentOutputHash = outputIdentity(outputFile);
-	if (storedOutputHash != currentOutputHash) return false;
+	if (!outputMatches(storedOutputHash, outputFile)) return false;
+	settleOutputLine(cFile, lines, storedOutputHash, outputFile);
 	return true;
 }
 
@@ -1564,6 +1660,40 @@ test "a link output rewritten to the same size at once is not taken as cached" {
 	remove(linkCacheFile(output));
 }
 
+test "a link output recorded inside the settle window is identified by its content" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const output = `${base}/msc-link-racy-${performance.now()}.bin`;
+	writeFile(output, "first");
+	assert outputIdentity(output).startsWith("content:");
+	for (let i: int32 = 0; i < 50; i += 1) {
+		writeFile(output, "first");
+		writeLinkCache([], [], "-flags", output, output);
+		writeFile(output, "other");
+		assert !isLinkCached([], [], "-flags", output, output);
+	}
+	remove(output);
+	remove(linkCacheFile(output));
+}
+
+test "a settled link output is trusted by its stamp and its record is upgraded once settled" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const output = `${base}/msc-link-settled-${performance.now()}.bin`;
+	writeFile(output, "first");
+	writeLinkCache([], [], "-flags", output, output);
+	const contentRecord = try readFile(linkCacheFile(output)) catch "";
+	assert contentRecord.includes(`${PRE_OUTHASH}content:`);
+	const until = performance.now() + (SETTLED_SECONDS + 1) * 1000;
+	while (performance.now() < until) {}
+	assert isLinkCached([], [], "-flags", output, output);
+	const settledRecord = try readFile(linkCacheFile(output)) catch "";
+	assert settledRecord.includes(`${PRE_OUTHASH}settled:`);
+	assert isLinkCached([], [], "-flags", output, output);
+	writeFile(output, "other");
+	assert !isLinkCached([], [], "-flags", output, output);
+	remove(output);
+	remove(linkCacheFile(output));
+}
+
 test "a runtime or vendor file edit moves the support-tree stamp" {
 	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
 	const root = `${base}/msc-support-stamp-${performance.now()}`;
@@ -1579,6 +1709,84 @@ test "a runtime or vendor file edit moves the support-tree stamp" {
 	writeFile(`${root}/runtime/core.h`, "#define A 2\n");
 	assert supportTreesStamp(root) != vendorEdit;
 	removeAll(root);
+}
+
+let _settledTreesBase = "";
+
+function settledSupportTree(tag: string): string {
+	if (_settledTreesBase == "") {
+		const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+		_settledTreesBase = `${base}/msc-support-memo-${performance.now()}`;
+		for (const t of ["edit", "seal", "add"]) {
+			ensureDir(`${_settledTreesBase}/${t}/runtime`);
+			ensureDir(`${_settledTreesBase}/${t}/vendor/lib`);
+			writeFile(`${_settledTreesBase}/${t}/runtime/core.h`, "#define A 1\n");
+			writeFile(`${_settledTreesBase}/${t}/vendor/lib/x.h`, "#define B 1\n");
+		}
+		const until = performance.now() + (SETTLED_SECONDS + 1) * 1000;
+		while (performance.now() < until) {}
+	}
+	return `${_settledTreesBase}/${tag}`;
+}
+
+function freshProcessStamp(root: string): string {
+	_hashByStamp.clear();
+	return supportTreesStamp(root);
+}
+
+function forgetSupportMemo(root: string): void {
+	remove(hashMemoPath(root, "sum"));
+	remove(hashMemoPath(root, "files"));
+	removeAll(root);
+}
+
+function uncachedStamp(root: string): string {
+	_hashByStamp.clear();
+	const saved = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	const stamp = supportTreesStamp(root);
+	env.set("MSC_NO_GLOBAL_CACHE", saved);
+	return stamp;
+}
+
+test "a support-tree stamp is served from disk to the next process and moves on a same-size edit" {
+	if (globalCacheRoot() == "") return;
+	const root = settledSupportTree("edit");
+	const first = freshProcessStamp(root);
+	assert readSealed(hashMemoPath(root, "sum")).length == 2;
+	assert readSealed(hashMemoPath(root, "files")).length == 2;
+	assert first == uncachedStamp(root);
+	assert freshProcessStamp(root) == first;
+	writeFile(`${root}/vendor/lib/x.h`, "#define B 2\n");
+	const edited = freshProcessStamp(root);
+	assert edited != first;
+	assert edited == uncachedStamp(root);
+	forgetSupportMemo(root);
+}
+
+test "a support-tree memo whose seal does not match its body is ignored" {
+	if (globalCacheRoot() == "") return;
+	const root = settledSupportTree("seal");
+	const first = freshProcessStamp(root);
+	const sum = readSealed(hashMemoPath(root, "sum"));
+	writeFile(hashMemoPath(root, "sum"), `${HASH_MEMO_MAGIC}\n${sum[0]}\nforged-stamp\n${hashContent(`${sum[0]}\n${sum[1]}`)}`);
+	const files = readSealed(hashMemoPath(root, "files"));
+	const forged: string[] = [];
+	for (const line of files) forged.push(`${line.substring(0, line.lastIndexOf("|") + 1)}forged`);
+	writeFile(hashMemoPath(root, "files"), `${HASH_MEMO_MAGIC}\n${forged.join("\n")}\nnot-the-seal`);
+	assert freshProcessStamp(root) == first;
+	forgetSupportMemo(root);
+}
+
+test "a file added to a support tree moves the stamp served from disk" {
+	if (globalCacheRoot() == "") return;
+	const root = settledSupportTree("add");
+	const first = freshProcessStamp(root);
+	writeFile(`${root}/vendor/lib/y.h`, "#define C 1\n");
+	const added = freshProcessStamp(root);
+	assert added != first;
+	assert added == uncachedStamp(root);
+	forgetSupportMemo(root);
 }
 
 test "bug6: writeCompileFingerprint after writeCSource produces a cache hit" {

@@ -50,7 +50,7 @@ export function initializeMint2(
 export function createMintPdaAt(
 	payer: WritableSigner,
 	mint: Writable,
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 	program: Pubkey,
 	decimals: uint8,
 	mintAuthority: Pubkey,

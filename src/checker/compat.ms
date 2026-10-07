@@ -1042,6 +1042,11 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 	if (dstInner != null) dst = dstInner;
 	if (!isReadonlyView(src) || isReadonlyView(dst)) return false;
 	if (src.kind == TypeKind.Union && dst.kind != TypeKind.Union) return false;
+	if (src.kind != TypeKind.Union && dst.kind == TypeKind.Union) {
+		for (const member of dst.typeChildren) {
+			if (isAssignable(src, member)) return false;
+		}
+	}
 	return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Array || dst.kind == TypeKind.Span
 		|| dst.kind == TypeKind.Ptr || dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union
 		|| dst.kind == TypeKind.Unknown;
@@ -2193,6 +2198,25 @@ test "a view assigned into a nullable of itself keeps the view" {
 	assert !dropsReadonlyView(nullableView, nullableView);
 	assert dropsReadonlyView(view, nullableLeaf);
 	assert dropsReadonlyView(nullableView, leaf);
+}
+
+test "a read-only view reaches a union only through a matching read-only member" {
+	const writable = createSpan(createPrimitive(TypeKind.Uint8));
+	const view = createReadonlyView(writable);
+	const allowed = createUnion([stringType(), view]);
+	assert isAssignable(view, allowed);
+	assert !dropsReadonlyView(view, allowed);
+	const mutable = createUnion([stringType(), writable]);
+	assert !isAssignable(view, mutable);
+	assert dropsReadonlyView(view, mutable);
+	const unrelated = createReadonlyView(createSpan(stringType()));
+	const wrongBranch = createUnion([unrelated, writable]);
+	assert !isAssignable(view, wrongBranch);
+	assert dropsReadonlyView(view, wrongBranch);
+	const leaf = createRef(createStruct("UnionLeaf", ["v"], [numberType()], false));
+	const leafView = createReadonlyView(leaf);
+	assert isAssignable(leafView, createUnion([leafView, stringType()]));
+	assert !isAssignable(leafView, createUnion([leaf, stringType()]));
 }
 
 

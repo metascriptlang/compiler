@@ -60,7 +60,7 @@ import { isUnresolvedType } from "../../checker/types";
 import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
-import { callMacroEngineCompiler, EngineMacroResult, setMacroDeclModulePath, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
+import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
 import "./decorators";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -1650,8 +1650,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 
 	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(loc));
 
-	setMacroDeclModulePath(macroSym.modulePath);
-	const result = callMacroEngineCompiler(program, ctx, "__macroBody");
+	const result = callMacroEngineCompiler(program, ctx, "__macroBody", regCtx);
 	if (result == null as unknown as EngineMacroResult || result.funcIdx < 0) return null;
 	let broken = false;
 	if (result.errors != null && result.errors.length > 0) {
@@ -1685,12 +1684,14 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		}
 		return node;
 	}
-	// Bound macro (bindSym): the caller never imported it, so the body is built
-	// against the DECLARING module's scope.
 	let regCtx = ctx;
-	if (node.flags.has(NodeFlag.BoundSym) && macroSym.modulePath != "") {
+	if (macroSym.modulePath != "" && macroSym.modulePath != ctx.modulePath) {
 		const bmc = lookupModuleCtx(macroSym.modulePath);
-		if (bmc != null) regCtx = bmc;
+		if (bmc == null) {
+			addError(ctx, `macro '${d.macroName}' has no checked declaring scope '${macroSym.modulePath}'`, node.location.line, node.location.column);
+			return node;
+		}
+		regCtx = bmc;
 	}
 	const body = decl.macroDeclBody;
 	const params = decl.macroDeclParams;
@@ -2426,7 +2427,7 @@ test "hasUserMacroInvocation detects macro in ClassDecl body" {
 		methodDefaults: [], nativeName: "", nameLocation: loc,
 	}, synthToken(loc));
 	const cls = createNode(NodeKind.ClassDecl, {
-		className: "C", classExtends: "", classBody: [method], nameLocation: loc,
+		className: "C", classDisplayName: "C", classExtends: "", classBody: [method], nameLocation: loc,
 	}, synthToken(loc));
 	assert hasUserMacroInvocation(cls, ctx);
 }

@@ -223,3 +223,4 @@ export function writeRefusal(target: Node, site: WriteSite, method: string = "")
 	};
 	return site == WriteSite.View ? refusal + "; a view that only reads is Readonly<Span<T>>" : refusal;
 }
+
