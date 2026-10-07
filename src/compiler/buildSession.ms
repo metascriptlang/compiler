@@ -6,6 +6,7 @@ import { GenericTypeInstRow, takeGenericTypeInstsFrom, resetAllSideChannels } fr
 import { pendingInstanceKeyOf, resetInstantiationState } from "../checker/instantiate";
 import { resetDispatchRegistry } from "../checker/context";
 import { resetRaises } from "../checker/raises";
+import { resetResizeSummaries } from "../checker/varPartitions";
 import { resetDuVariantRegistry } from "../checker/types";
 import { resetDuHashes } from "../analyzer/classify";
 import { resetLinkState } from "../utils/linkState";
@@ -100,6 +101,7 @@ export function resetBuildState(): void {
 	resetInstantiationState();
 	resetDispatchRegistry();
 	resetRaises();
+	resetResizeSummaries();
 	resetDuVariantRegistry();
 	resetDuHashes();
 	resetLinkState();
