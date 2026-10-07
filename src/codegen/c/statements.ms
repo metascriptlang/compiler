@@ -443,7 +443,7 @@ function genStaticStorageVar(g: CGen, p: CProc, node: Readonly<Node>, d: Readonl
 	}
 	if (cType == "") cType = "double";
 	if (cType == "void") cType = "void*";
-	addLine(sec(g, CSection.GlobalVars), `static ${cType} ${slot};`);
+	if (!nameSetHas(g.declaredGlobals, slot)) addLine(sec(g, CSection.GlobalVars), `static ${cType} ${slot};`);
 	nameSetAdd(g.declaredGlobals, slot);
 	if (d.initializer == null) return;
 	if (d.declKind != DeclKind.Const) {

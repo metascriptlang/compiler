@@ -1129,6 +1129,10 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				// enum members (they are SymbolKind.EnumMember, not Variable), so we
 				// don't need a nodeType-based guard here.
 				cName = mangledGlobalName(idSym, referenceName(idSym, d.name));
+				if (idSym != null && hasFlag(idSym, SymbolFlag.StaticLocal) && node.nodeType != null && !nameSetHas(g.declaredGlobals, cName)) {
+					addLine(sec(g, CSection.GlobalVars), `static ${getTypeDesc(g, node.nodeType)} ${cName};`);
+					nameSetAdd(g.declaredGlobals, cName);
+				}
 			} else {
 				const mapped = lookupLocalName(p, safe);
 				cName = mapped != "" ? mapped : safe;
