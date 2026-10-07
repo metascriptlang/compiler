@@ -4,7 +4,7 @@ import { peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberK
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeBlock, makeCall, makeExprStmt, makeFnDecl, makeIf, makeIdentResolved, makeIntNumber, makeMember, makeReturn, makeString, makeTypedIdentResolved, makeTypedObjectLiteral, makeUnary, runtimeRef, syntheticToken, makeBool, makeNull } from "../util";
+import { makeBinary, makeBlock, makeCall, makeExprStmt, makeFnDecl, makeIf, makeIdentResolved, makeIntNumber, makeMember, makeReturn, makeString, makeTypedIdentResolved, makeTypedObjectLiteral, makeUnary, runtimeRef, syntheticToken, makeBool, makeNull, makeHiddenSubConv } from "../util";
 import { createNode } from "../../ast/node";
 import { memberLabels } from "../native/unionProjectLower";
 
@@ -143,7 +143,7 @@ function conversionArms(source: Type, target: Type, valueSym: Symbol, ctx: Trans
 		const vi = order[k];
 		const member = source.typeChildren[vi];
 		const arm = slots[vi] >= 0
-			? makeReturn(slotConv(slotConv(read(valueSym, source, loc), member, vi), target, slots[vi]), loc)
+			? makeReturn(slotConv(heldAs(slotConv(read(valueSym, source, loc), member, vi), target.typeChildren[slots[vi]], loc), target, slots[vi]), loc)
 			: memberMissing(source, target, vi, ctx, loc);
 		if (k == order.length - 1) {
 			stmts.push(arm);
@@ -152,6 +152,13 @@ function conversionArms(source: Type, target: Type, valueSym: Symbol, ctx: Trans
 		}
 	}
 	return stmts;
+}
+
+function heldAs(held: Node, slot: Type, loc: SourceLocation): Node {
+	if (held.nodeType == null || held.nodeType == slot || held.nodeType.kind != TypeKind.Ref || slot.kind != TypeKind.Ref) return held;
+	const upcast = makeHiddenSubConv(held, slot, loc);
+	upcast.nodeType = slot;
+	return upcast;
 }
 
 function testsByTag(source: Type, ctx: TransformContext): boolean {

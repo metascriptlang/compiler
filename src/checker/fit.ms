@@ -1573,6 +1573,10 @@ function unionMembers(t: Type): Type[] {
 	return t.kind == TypeKind.Union && t.typeChildren != null ? t.typeChildren : [t];
 }
 
+function isClassRef(t: Type): boolean {
+	return t.kind == TypeKind.Ref && runtimeClassSym(t.typeReturn) != null;
+}
+
 function exactMemberSlot(target: Type, member: Type): int32 {
 	let found: int32 = -1;
 	let widened: int32 = -1;
@@ -1582,7 +1586,8 @@ function exactMemberSlot(target: Type, member: Type): int32 {
 		if (sameType(child, member)) {
 			if (found >= 0) return -1;
 			found = ti;
-		} else if (member.kind == TypeKind.StringLiteral && child.kind == TypeKind.String) {
+		} else if ((member.kind == TypeKind.StringLiteral && child.kind == TypeKind.String)
+			|| (isClassRef(member) && isClassRef(child) && derivesFrom(member, child))) {
 			widened = widened == -1 ? ti : -2;
 		}
 	}
@@ -1619,8 +1624,7 @@ export function nullableUnionPayloads(source: Type | null, target: Type | null):
 export function convertsUnionImplicitly(source: Type | null, target: Type | null): boolean {
 	const payloads = nullableUnionPayloads(source, target);
 	if (payloads != null) return unionConversionRefusal(payloads[0], payloads[1], true) == "";
-	if (!convertsBetweenUnions(source, target)) return false;
-	return (slotRefuses(source!, target!) || isReinterpretUnsafe(source!, target!)) && unionConversionRefusal(source!, target!, true) == "";
+	return convertsBetweenUnions(source, target) && unionConversionRefusal(source!, target!, true) == "";
 }
 
 export function fitUnionIntoUnion(expr: Node, exprType: Type, formal: Type): Node | null {
