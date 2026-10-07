@@ -628,12 +628,8 @@ export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 		needComma = true;
 	}
 	if (sized) {
-		let fill = "0";
-		if (typedName == "") {
-			const elemDefault = jsDefaultValue(t.typeReturn);
-			if (elemDefault != "") fill = elemDefault;
-			else fill = "null";
-		}
+		const elemDefault = jsDefaultValue(t.typeReturn);
+		const fill = elemDefault != "" ? elemDefault : (typedName != "" ? "0" : "null");
 		let extra = (t.typeValue as int32) - d.elements.length;
 		while (extra > 0) {
 			if (needComma) emit(gen, ", ");
