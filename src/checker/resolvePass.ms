@@ -2378,6 +2378,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	const sym = lookupSymbol(ctx.table, d.className);
 	if (sym == null) return;
 	node.resolvedSym = sym;
+	if (sym.instantiatedFrom == null) d.classDisplayName = d.className;
 
 	// Set state to Shaped immediately to allow circular references in methods/properties
 	sym.state = SymbolState.Shaped;
@@ -2741,7 +2742,7 @@ function declareGeneric(ctx: CheckerContext, kind: NodeKind, name: string, param
 		for (let i = 0; i < fields.length; i += 1) {
 			body.push(createNodeAt(NodeKind.PropertyDecl, { propName: fields[i], propType: types[i], propIsStatic: false, propIsReadonly: false, propVisibility: "", propInitializer: null as unknown as Node }, zl));
 		}
-		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classExtends: "", classBody: body, nameLocation: zl }, zl);
+		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classDisplayName: name, classExtends: "", classBody: body, nameLocation: zl }, zl);
 	} else {
 		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldDecorators: noFieldDecorators(fields.length) }, zl);
 	}

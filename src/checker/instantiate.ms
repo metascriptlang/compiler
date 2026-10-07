@@ -978,7 +978,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	// the ctor — without it, `this` falls back to `void*` in the generated
 	// `<MangledClass>_init` signature and `(*this).field` accesses fail to type
 	// check at the C level.
-	const classNodeData: NodeData = { className: mangledClass, classExtends: parent != null ? typeDisplayName(parent) : "", classBody, nameLocation: loc };
+	const classNodeData: NodeData = { className: mangledClass, classDisplayName: typeDisplayName(canonical), classExtends: parent != null ? typeDisplayName(parent) : "", classBody, nameLocation: loc };
 	const classNode = createNodeAt(NodeKind.ClassDecl, classNodeData, loc);
 	classNode.nodeType = concreteClassType;
 	classNode.resolvedSym = instSym;

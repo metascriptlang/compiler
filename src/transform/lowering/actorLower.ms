@@ -457,6 +457,7 @@ function emitActorStruct(node: Node, d: ActorDeclData, ctx: TransformContext, lo
 	}
 	const classNode = createNode(NodeKind.ClassDecl, {
 		className: d.actorName,
+		classDisplayName: d.actorName,
 		classExtends: "",
 		classBody: structMembers,
 		nameLocation: d.nameLocation,

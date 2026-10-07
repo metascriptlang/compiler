@@ -1064,6 +1064,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 
 	const classNode = createNode(NodeKind.ClassDecl, {
 		className: nameToken.value,
+		classDisplayName: nameToken.value,
 		classExtends: extendsName,
 		classBody: members,
 		nameLocation: makeLocFromToken(nameToken),
@@ -1756,6 +1757,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 			if (!isAtEnd(state) && current(state).kind == TokenKind.RBrace) advance(state);
 			const classNode = createNode(NodeKind.ClassDecl, {
 				className: nameToken.value,
+				classDisplayName: nameToken.value,
 				classExtends: extendsName,
 				classBody: members,
 				nameLocation: makeLocFromToken(nameToken),

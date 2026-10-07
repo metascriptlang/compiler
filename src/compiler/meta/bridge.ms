@@ -3769,7 +3769,7 @@ test "round-trip keeps the generic params of an interface, a struct, a class and
 		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	strukt.typeArg = "T:number";
-	const cls = createNode(NodeKind.ClassDecl, { className: "Pair", classExtends: "", classBody: [] as Node[], nameLocation: loc }, synthToken(loc));
+	const cls = createNode(NodeKind.ClassDecl, { className: "Pair", classDisplayName: "Pair", classExtends: "", classBody: [] as Node[], nameLocation: loc }, synthToken(loc));
 	cls.typeArg = "A,B:number";
 	const act = createNode(NodeKind.ActorDecl, { actorName: "Worker", actorBody: [] as Node[], nameLocation: loc }, synthToken(loc));
 	act.typeArg = "M";
