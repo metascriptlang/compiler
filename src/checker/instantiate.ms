@@ -5,7 +5,7 @@
 // the specialized version. No separate monomorphize pass needed.
 
 import { methodOwnerClass } from "./visibility";
-import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, classParentOf, runtimeClassSym, genericParamNamesOf } from "./types";
 import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
@@ -917,6 +917,88 @@ function canonicalInstance(base: Type, typeArgs: Type[], classSym: Symbol): Type
 	const inst = createGenericInstance(base, typeArgs);
 	instantiateGenericBody(inst, symGenericParams(classSym));
 	return inst;
+}
+
+// ===== Field initializers of an object literal =====
+// An object literal of a class type takes the initializer of every field it omits, the way
+// `new C()` runs it: a fresh copy re-checked in the class's module, at the field's type.
+
+function classDeclOf(classSym: Symbol, ctx: CheckerContext): Node | null {
+	let decl: Node | null = classSym.declNode;
+	if (decl == null || decl.kind != NodeKind.ClassDecl) {
+		const declSym = lookupSymbol(pickBodyCtx(classSym.modulePath, ctx).table, classSym.name);
+		decl = declSym != null ? declSym.declNode : null;
+	}
+	return decl != null && decl.kind == NodeKind.ClassDecl ? decl : null;
+}
+
+function ownField(decl: Node, fieldName: string): PropertyDeclData | null {
+	for (const raw of (decl.data as ClassDeclData).classBody) {
+		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
+		if (member == null || member.kind != NodeKind.PropertyDecl) continue;
+		const pd = member.data as PropertyDeclData;
+		if (!pd.propIsStatic && pd.propName == fieldName) return pd;
+	}
+	return null;
+}
+
+function readsThis(node: Node): boolean {
+	if (node == null) return false;
+	if (node.kind == NodeKind.Identifier && (node.data as IdentifierData).name == "this") return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => { if (!found && readsThis(child)) found = true; });
+	return found;
+}
+
+export function literalFieldInitializer(ctx: CheckerContext, classType: Type | null, fieldName: string, fieldType: Type, loc: SourceLocation): Node | null {
+	let cur = classType;
+	for (let depth = 0; cur != null && depth < 16; depth += 1) {
+		const body = cur.kind == TypeKind.Ref && cur.typeReturn != null ? cur.typeReturn : cur;
+		const classSym = runtimeClassSym(body);
+		if (classSym == null) return null;
+		const decl = classDeclOf(classSym, ctx);
+		if (decl == null) return null;
+		const pd = ownField(decl, fieldName);
+		if (pd != null) {
+			if (pd.propInitializer == null) return null;
+			if (readsThis(pd.propInitializer)) {
+				addError(ctx, `field '${fieldName}' of '${classSym.name}' has an initializer that reads 'this', which an object literal cannot run — give '${fieldName}' a value in the literal`, loc.line, loc.column);
+				return null;
+			}
+			const names = body.kind == TypeKind.GenericInstance ? splitTopLevel(genericParamNamesOf(symGenericParams(classSym)), ",").map((n: string): string => n.trim()) : [];
+			const types = body.kind == TypeKind.GenericInstance ? body.typeChildren : [];
+			return checkFieldInitializerCopy(ctx, pd.propInitializer, fieldName, fieldType, classSym, names, types, loc);
+		}
+		cur = classParentOf(body);
+	}
+	return null;
+}
+
+function checkFieldInitializerCopy(ctx: CheckerContext, init: Node, fieldName: string, fieldType: Type, classSym: Symbol, names: string[], types: Type[], loc: SourceLocation): Node {
+	let copy = monoCloneNode(init);
+	clearCheckerState(copy);
+	if (names.length > 0) replaceTypeVars(copy, names, types);
+	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
+	const savedModulePath = bodyCtx.modulePath;
+	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
+	const callerScope = openInstanceScope(bodyCtx, names, types);
+	bodyCtx.table.current.privateAccess = classSym;
+	const injectedSyms: Symbol[] = [];
+	for (const ct of types) injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
+	const extPreCount = injectCallerExtensions(bodyCtx, ctx);
+	const errBefore = bodyCtx.errors.length;
+	callCheckExpr(bodyCtx, copy, fieldType);
+	if (copy.nodeType != null) copy = fitNode(bodyCtx, copy, fieldType, copy.nodeType);
+	if (bodyCtx.errors.length > errBefore) {
+		const first = bodyCtx.errors[errBefore].message;
+		bodyCtx.errors.length = errBefore;
+		addError(ctx, `the initializer of field '${fieldName}' of '${classSym.name}', run for this literal: ${first}`, loc.line, loc.column);
+	}
+	bodyCtx.modulePath = savedModulePath;
+	removeInjectedSyms(bodyCtx, injectedSyms);
+	bodyCtx.table.current = callerScope;
+	truncateCallerExtensions(bodyCtx, extPreCount);
+	return copy;
 }
 
 // ===== On-Demand Constructor Instantiation =====
