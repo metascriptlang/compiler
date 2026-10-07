@@ -25,6 +25,20 @@ export function injectRangeChecks(program: Node, ctx: TransformContext): Node {
 	return program;
 }
 
+export function injectEnumRangeChecks(program: Node, ctx: TransformContext): Node {
+	walkNode(program, (n: Node): Node => {
+		if (n.kind == NodeKind.TypeAssertion) {
+			const d = n.data as TypeAssertionData;
+			if (n.nodeType != null && n.nodeType.kind == TypeKind.Enum && d.asExpr != null) d.asExpr = checkedEnumSource(ctx, d.asExpr, n.nodeType);
+		} else if (n.kind == NodeKind.HiddenStdConv) {
+			const d = n.data as HiddenStdConvData;
+			if (d.convType != null && d.convType.kind == TypeKind.Enum && d.convExpr != null) d.convExpr = checkedEnumSource(ctx, d.convExpr, d.convType);
+		}
+		return n;
+	});
+	return program;
+}
+
 // Parity: standard reference's conversion transformation — convert HiddenStdConv with narrowing integer to range check.
 // Standard reference checks if destination range covers source range to skip redundant checks.
 // We use getRangeCheckForTypeKind which returns "" for non-narrowing types.
