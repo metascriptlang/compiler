@@ -65,15 +65,29 @@ function hasLine(errors: string[], part: string, tail: string): boolean {
 
 test "an object literal that omits a field whose type has no default value is refused" {
 	const errors = checkOnly(SRC_LITERAL_REFUSED).errors;
-	for (const name of ["items", "r", "m", "f", "h", "init", "points", "xs"]) {
+	for (const name of ["items", "r", "m", "f", "h", "points", "xs"]) {
 		assert hasLine(errors, `field '${name}'`, LITERAL), `'${name}' must be refused: ` + errors.join("\n");
 	}
 	assert !hasLine(errors, "field 'n'", LITERAL), errors.join("\n");
+	assert !hasLine(errors, "field 'init'", LITERAL), "the literal takes the initializer of 'init': " + errors.join("\n");
 }
 
 test "value, optional and nullable fields may be omitted from an object literal" {
 	const errors = checkOnly(SRC_LITERAL_ACCEPTED).errors;
 	assert errors.length == 0, errors.join("\n");
+}
+
+test "an object literal cannot run an initializer that reads this" {
+	const src = `
+class T { a: int32 = 1; b: int32 = this.a + 1; }
+const t: T = { a: 5 };
+const u: T = { a: 5, b: 2 };
+`;
+	const errors = checkOnly(src).errors;
+	assert hasLine(errors, "field 'b' of 'T' has an initializer that reads 'this'", "give 'b' a value in the literal"), errors.join("\n");
+	let refusals = 0;
+	for (const e of errors) if (e.contains("reads 'this'")) refusals += 1;
+	assert refusals == 1, errors.join("\n");
 }
 
 test "new of a class without a constructor is refused when a field has no default value and no initializer" {

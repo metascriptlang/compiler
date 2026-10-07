@@ -2,7 +2,7 @@
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
 import { refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
+import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, literalBase, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, peelThrough, PEEL_ALL, isValuePointee, classParentOf } from "./types";
@@ -1585,6 +1585,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			// GenericInstance (e.g., MyResult<T, E> = Ref<MyData<T, E>> where MyData
 			// is itself generic) by recursing through GI/Ref wrappers.
 			const literalOwnerSym = declaringSymOf(objExpected);
+			const literalClassType = objExpected;
 			objExpected = peelToStructOrUnion(objExpected);
 			// A generic-containing expected type (un-instantiated formal like
 			// `{ v: T }` at a call site whose T is still unbound) must NOT be
@@ -1726,6 +1727,16 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					for (const k of d.keys) {
 						if (k == "..." || k == "__computed__") hasDynamicKey = true;
 					}
+					if (!hasDynamicKey && d.keys.length == d.properties.length) {
+						for (let oi = 0; oi < objNames.length && oi < objChildren.length; oi += 1) {
+							if (objNames[oi].startsWith("__") || d.keys.includes(objNames[oi])) continue;
+							const init = literalFieldInitializer(ctx, literalClassType, objNames[oi], objChildren[oi], node.location);
+							if (init == null) continue;
+							d.keys.push(objNames[oi]);
+							d.properties.push(init);
+							if (d.keyLocations != null) d.keyLocations.push(makeLoc(0, 0));
+						}
+					}
 					if (!hasDynamicKey) {
 						let mi = 0;
 						while (mi < objNames.length) {
@@ -1735,7 +1746,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 								let present = false;
 								for (const k of d.keys) { if (k == want) { present = true; break; } }
 								if (!present) {
-									addError(ctx, `field '${want}' must be initialized: type '${typeDisplayName(wantT)}' has no default value — give it in the literal (an object literal does not run the class's field initializers), or declare the field optional with '?'`, node.location.line, node.location.column);
+									addError(ctx, `field '${want}' must be initialized: type '${typeDisplayName(wantT)}' has no default value — give it in the literal or an initializer in the class, or declare the field optional with '?'`, node.location.line, node.location.column);
 								}
 							}
 							mi = mi + 1;
@@ -3149,7 +3160,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
-import { instantiateClassConstructor, pickBodyCtx } from "./instantiate";
+import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer } from "./instantiate";
 import { anyArgIsParametric, keepFoldedType, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, takeDefaultArgTemps } from "./callResolve";
 
 function bodyIntoBlock(body: Node, temps: Node[]): void {
