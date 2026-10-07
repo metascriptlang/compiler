@@ -468,7 +468,15 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			} else if (expectedType != null && expectedType.kind == TypeKind.Union) {
 				// Mirror the StringLiteral/BooleanLiteral arms below: a numeric
 				// member of the expected union types the literal, so `width: 400.0`
-				// fits `float32 | string | null` (first numeric member wins).
+				// fits `float32 | string | null`. An integer literal takes an
+				// integer member before a float one, whatever the member order.
+				if (isNodeIntLit(node)) {
+					for (const child of expectedType.typeChildren) {
+						if (child != null && isIntegerType(child) && literalFitsInType(node, child, false)) {
+							node.nodeType = child; return;
+						}
+					}
+				}
 				for (const child of expectedType.typeChildren) {
 					if (child == null) continue;
 					if (isIntegerType(child) && literalFitsInType(node, child, false)) {
