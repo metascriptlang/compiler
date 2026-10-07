@@ -1,11 +1,11 @@
 import { argv } from "std/process";
-import { Features, defaults, overlay } from "./features";
+import { Features, defaults, overlay, swarm } from "./features";
 import { generate } from "./gen";
 import { rerunBundle, runSeeds } from "./drive";
 
 function usage(): int32 {
-	console.log("usage: msc run tools/smith/main.ms gen <seed> [--features=\"key=value ...\"] [--plant=none|backend|opt]");
-	console.log("       msc run tools/smith/main.ms run <firstSeed> <count> [--features=...] [--plant=...]");
+	console.log("usage: msc run tools/smith/main.ms gen <seed> [--features=\"key=value ...\"] [--plant=none|backend|opt] [--swarm]");
+	console.log("       msc run tools/smith/main.ms run <firstSeed> <count> [--features=...] [--plant=...] [--swarm]");
 	console.log("       msc run tools/smith/main.ms rerun <bundleDir>");
 	return 2;
 }
@@ -31,12 +31,15 @@ function seedOf(text: string): Result<uint64, string> {
 function main(): int32 {
 	const positional: string[] = [];
 	let overlayText = "";
+	let swarmed = false;
 	for (let i = 1; i < argv.length; i++) {
 		const a = argv[i];
 		if (a.startsWith("--features=")) {
 			overlayText += " " + a.slice("--features=".length, a.length);
 		} else if (a.startsWith("--plant=")) {
 			overlayText += " plant=" + a.slice("--plant=".length, a.length);
+		} else if (a == "--swarm") {
+			swarmed = true;
 		} else if (a.startsWith("--")) {
 			console.log("smith: unknown flag " + a);
 			return usage();
@@ -56,7 +59,7 @@ function main(): int32 {
 			console.log("smith: " + seed.error);
 			return 2;
 		}
-		console.log(generate(seed.value, f));
+		console.log(generate(seed.value, swarmed ? f.swarm(seed.value) : f));
 		return 0;
 	}
 	if (positional.length == 3 && positional[0] == "run") {
@@ -70,11 +73,11 @@ function main(): int32 {
 			console.log("smith: count must be at least 1");
 			return 2;
 		}
-		return runSeeds(first.value, n.value, f);
+		return runSeeds(first.value, n.value, f, swarmed);
 	}
 	if (positional.length == 2 && positional[0] == "rerun") {
-		if (overlayText != "") {
-			console.log("smith: rerun takes its features from the bundle; drop --features/--plant");
+		if (overlayText != "" || swarmed) {
+			console.log("smith: rerun takes its features from the bundle; drop --features/--plant/--swarm");
 			return 2;
 		}
 		return rerunBundle(positional[1]);
