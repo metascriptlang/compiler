@@ -807,7 +807,7 @@ reusable_programs() (
   {
     find "$dir" -type f -print0 | LC_ALL=C sort -z | xargs -0 -r bash -c 'hash_files "$@"' _ \
       | awk '{ p = $2; sub(/^\*/, "", p); print "key\t" $1 "@" p "\t" p }'
-    grep -rEo "[\"'\`]\.{1,2}/(\.\./)*" "$dir" | awk '{ print "ref\t\t" $0 }'
+    { grep -rEo "[\"'\`]\.{1,2}/(\.\./)*" "$dir" || [ $? -eq 1 ]; } | awk '{ print "ref\t\t" $0 }'
   } | program_keys
 )
 
@@ -1035,6 +1035,11 @@ program_key_self_test() (
   printf 'export const v = 1;\n' >"$d/src/test/corpus/programs/dir/helper.ms"
   printf 'import { v } from "./helper";\n' >"$d/src/test/corpus/programs/dir/main.ms"
   printf "import { v } from '../plain';\n" >"$d/src/test/corpus/programs/escape/main.ms"
+  mkdir -p "$d/flat/src/test/corpus/programs"
+  printf 'console.log(1);\n' >"$d/flat/src/test/corpus/programs/only.ms"
+  got=$(CTL_WORK="$d/flat"; reusable_programs) || { printf 'FAIL program keys: programs without relative imports failed the scan\n'; bad=1; }
+  [ "${got%% *}" = only ] || { printf 'FAIL program keys: a lone program without relative imports was not reusable\n'; bad=1; }
+  rm -rf "$d/flat"
   got=$(reusable_programs | sort)
   printf '%s\n' "$got" | grep -q '^plain ' && printf '%s\n' "$got" | grep -q '^dir ' \
     || { printf 'FAIL program keys: a self-contained program was not reusable\n'; bad=1; }
