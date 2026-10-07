@@ -19,6 +19,7 @@ export enum WriteVerdict {
 	ConstInterior,
 	ValueParamInterior,
 	ForVarInterior,
+	BorrowView,
 }
 
 export enum WriteSite {
@@ -98,6 +99,7 @@ export function checkWrite(target: Node, site: WriteSite): WriteCheck {
 	const sym = cur.resolvedSym;
 	if (sym == null || reachesThroughReference(sym)) return { verdict: WriteVerdict.Writable, root: sym };
 	const viewInterior = interior || (asRefArg && isValueAggregateParam(target.nodeType));
+	if (sym.symbolType != null && sym.symbolType.kind == TypeKind.Borrow) return { verdict: WriteVerdict.BorrowView, root: sym };
 	if (hasFlag(sym, SymbolFlag.ForVar)) return { verdict: viewInterior ? WriteVerdict.ForVarInterior : WriteVerdict.Writable, root: sym };
 	if (sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable)) {
 		if (!interior) return { verdict: WriteVerdict.ConstRebind, root: sym };
@@ -213,12 +215,13 @@ export function writeRefusal(target: Node, site: WriteSite, method: string = "")
 		WriteSite.RefArg => `pass '${text}' to a 'ref' parameter`,
 		WriteSite.Receiver => `mutate '${text}' with '${method}'`,
 		WriteSite.View => `view '${text}' as a writable Span`,
-		WriteSite.Assign => w.verdict == WriteVerdict.ConstRebind ? `assign to '${name}'` : `write '${text}'`,
+		WriteSite.Assign => w.verdict == WriteVerdict.ConstRebind || target.kind == NodeKind.Identifier ? `assign to '${name}'` : `write '${text}'`,
 	};
 	const refusal = match (w.verdict) {
 		WriteVerdict.ConstRebind | WriteVerdict.ConstInterior => `cannot ${what} — '${name}' is const (use 'let')`,
 		WriteVerdict.ValueParamInterior => `cannot mutate value-type parameter '${name}': value parameters are read-only views; copy it locally first`,
 		WriteVerdict.ForVarInterior => `cannot mutate value-type loop variable '${name}': for-of binds a per-iteration copy; iterate by index to mutate the collection`,
+		WriteVerdict.BorrowView => `cannot ${what} — '${name}' is a read-only Borrow<T> view; change what it was taken from, copy what it reads into a 'let', or declare a new Borrow<T> for another source`,
 		WriteVerdict.Writable => "",
 	};
 	return site == WriteSite.View ? refusal + "; a view that only reads is Readonly<Span<T>>" : refusal;

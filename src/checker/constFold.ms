@@ -142,7 +142,8 @@ export function isCompileTimeValue(expr: Node, depth: int32): boolean {
 			&& isCompileTimeValue((expr.data as ConditionalExprData).ternaryConsequent, depth)
 			&& isCompileTimeValue((expr.data as ConditionalExprData).ternaryAlternate, depth),
 		NodeKind.TypeAssertion => isCompileTimeValue((expr.data as TypeAssertionData).asExpr, depth),
-		NodeKind.HiddenStdConv => isCompileTimeValue((expr.data as HiddenStdConvData).convExpr, depth),
+		NodeKind.HiddenStdConv => (expr.data as HiddenStdConvData).convType.kind != TypeKind.Borrow
+			&& isCompileTimeValue((expr.data as HiddenStdConvData).convExpr, depth),
 		NodeKind.HiddenSubConv => isCompileTimeValue((expr.data as HiddenStdConvData).convExpr, depth),
 		NodeKind.HiddenDeref => isCompileTimeValue((expr.data as HiddenDerefData).expr, depth),
 		_ => false,

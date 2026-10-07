@@ -727,7 +727,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const boundary = ctx.readonlyBoundary;
 			const capturedView = boundary != null && isCapturableValue(sym) && isCapturedAcross(ctx.table, d.name, sym, boundary);
 			let readType = sym.symbolType;
-			if (readType != null && readType.kind == TypeKind.Var && readType.typeReturn != null) {
+			if (readType != null && (readType.kind == TypeKind.Var || readType.kind == TypeKind.Borrow) && readType.typeReturn != null) {
 				readType = readType.typeReturn;
 			}
 			if (ctx.initTracker.leftPartOfAsgn > 0) {

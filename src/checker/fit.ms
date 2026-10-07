@@ -1799,6 +1799,31 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	return wrapInConv(expr, formal);
 }
 
+function isPathRootedInVariable(node: Node): boolean {
+	let n = node;
+	while (n.kind != NodeKind.Identifier) {
+		if (n.kind == NodeKind.MemberExpr) n = (n.data as MemberExprData).object;
+		else if (n.kind == NodeKind.ArrayAccess) n = (n.data as ArrayAccessData).array;
+		else if (n.kind == NodeKind.HiddenDeref) n = (n.data as { expr: Node }).expr;
+		else return false;
+	}
+	return n.resolvedSym != null;
+}
+
+// A Borrow<T> local holds the address of its initializer, so the initializer must be a
+// variable, or a field or element reached from one.
+export function fitViewLocal(ctx: CheckerContext, init: Node, declType: Type): Node {
+	const view = peelTransparentInstance(declType);
+	if (view.kind != TypeKind.Borrow || init.nodeType == null || init.nodeType.kind == TypeKind.Error) return init;
+	if (!isPathRootedInVariable(init)) {
+		addError(ctx, "cannot borrow from this expression: a " + typeDisplayName(declType)
+			+ " local holds the address of a variable, or of a field or element reached from one; bind the value to a local first",
+			init.location.line, init.location.column);
+		return init;
+	}
+	return wrapInConv(init, declType);
+}
+
 export function convertIntoUnknown(expr: Node, exprType: Type | null, formal: Type): Node {
 	const slot = skipModifier(formal) ?? formal;
 	const slotHeld = slot.kind == TypeKind.Union ? unwrapRefNullUnion(slot) : slot;
