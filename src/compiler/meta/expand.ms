@@ -1670,7 +1670,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	return cm;
 }
 
-export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: int32): Node {
+export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 	const d = node.data as MacroInvocationData;
 
 	if (isDirectiveInvocation(node)) return node;
@@ -1814,7 +1814,7 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	}
 
 	// Deserialize result
-	let result = valueToNode(vmCtx.lastResult, vmCtx.objectHeap, vmCtx.arrayHeap, node.location);
+	const result = valueToNode(vmCtx.lastResult, vmCtx.objectHeap, vmCtx.arrayHeap, node.location);
 	for (const refusal of takeWireRefusals()) {
 		const at = refusal.location.line > 0 ? refusal.location : node.location;
 		addError(ctx, `Macro '${d.macroName}': ${refusal.message}`, at.line, at.column);
@@ -1824,6 +1824,12 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	clearObjectHeap(vmCtx.objectHeap);
 	clearArrayHeap(vmCtx.arrayHeap);
 	vmCtx = null;
+	return result;
+}
+
+export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: int32): Node {
+	let result = invokeMacro(node, ctx);
+	if (result == node) return node;
 
 	// Deserialized result has fresh CallExpr nodes for any nested
 	// macro references — the checker's CallExpr→MacroInvocation rewrite at

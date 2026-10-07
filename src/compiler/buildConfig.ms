@@ -170,6 +170,8 @@ export interface BuildConfig {
 	devDeps: DepsSection;
 	globalImports: string[];
 	defines: DefinesSection;
+	modulePassFrom: string[];
+	modulePassMacro: string[];
 	valid: boolean;
 }
 
@@ -432,6 +434,19 @@ function extractDefines(node: Node): DefinesSection {
 	return ds;
 }
 
+function extractModulePasses(giNode: Node, from: string[], macros: string[]): void {
+	if (giNode == null || giNode.kind != NodeKind.ArrayLiteral) return;
+	for (const elem of (giNode.data as ArrayLiteralData).elements) {
+		if (elem == null || elem.kind != NodeKind.ObjectLiteral) continue;
+		const macro = nodeString(findObjField(elem, "modulePass"));
+		const src = nodeString(findObjField(elem, "from"));
+		if (macro.length > 0 && src.length > 0) {
+			from.push(src);
+			macros.push(macro);
+		}
+	}
+}
+
 // Extract DepsSection from an ObjectLiteral node (the `deps: { ... }` or `devDeps: { ... }` block).
 // Each key/value pair is a package name → version string (registry or git source spec).
 function extractDeps(depsNode: Node): DepsSection {
@@ -463,7 +478,7 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const defDeps = defaultDepsSection();
 	const defDevDeps = defaultDepsSection();
 	const defGi: string[] = [];
-	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, lsp: defLsp, cc: defCc, package: defPkg, deps: defDeps, devDeps: defDevDeps, globalImports: defGi, defines: defaultDefinesSection(), valid: false };
+	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, lsp: defLsp, cc: defCc, package: defPkg, deps: defDeps, devDeps: defDevDeps, globalImports: defGi, defines: defaultDefinesSection(), modulePassFrom: [], modulePassMacro: [], valid: false };
 
 	if (!exists(filePath)) return defCfg;
 
@@ -490,10 +505,14 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const deps = extractDeps(findObjField(configObj, "deps"));
 	const devDeps = extractDeps(findObjField(configObj, "devDeps"));
 
-	const globalImports = extractGlobalImports(findObjField(configObj, "globalImports"));
+	const giNode = findObjField(configObj, "globalImports");
+	const globalImports = extractGlobalImports(giNode);
 	const defines = extractDefines(findObjField(configObj, "defines"));
+	const modulePassFrom: string[] = [];
+	const modulePassMacro: string[] = [];
+	extractModulePasses(giNode, modulePassFrom, modulePassMacro);
 
-	return { entry, build: bs, resolve: rs, fmt, lsp, cc, package: pkg, deps, devDeps, globalImports, defines, valid: true };
+	return { entry, build: bs, resolve: rs, fmt, lsp, cc, package: pkg, deps, devDeps, globalImports, defines, modulePassFrom, modulePassMacro, valid: true };
 }
 
 // Validate build.ms and return LSP-style warnings.
@@ -597,6 +616,9 @@ function testExtractFromSource(source: string): BuildConfig {
 	const pkg = extractPackage(findObjField(configObj, "package"));
 	const deps = extractDeps(findObjField(configObj, "deps"));
 	const devDeps = extractDeps(findObjField(configObj, "devDeps"));
+	const passFrom: string[] = [];
+	const passMacro: string[] = [];
+	extractModulePasses(findObjField(configObj, "globalImports"), passFrom, passMacro);
 	return {
 		entry, build: extractBuild(findObjField(configObj, "build")),
 		resolve: extractResolve(findObjField(configObj, "resolve")),
@@ -606,6 +628,7 @@ function testExtractFromSource(source: string): BuildConfig {
 		package: pkg, deps, devDeps,
 		globalImports: extractGlobalImports(findObjField(configObj, "globalImports")),
 		defines: extractDefines(findObjField(configObj, "defines")),
+		modulePassFrom: passFrom, modulePassMacro: passMacro,
 		valid: true,
 	};
 }
@@ -653,6 +676,21 @@ test "extractGlobalImports reads flat string array" {
 	const cfg = testExtractFromSource("const config = { globalImports: [\"./src/converters\"] }; export default config;");
 	assert cfg.globalImports.length == 1;
 	assert cfg.globalImports[0] == "./src/converters";
+}
+
+test "a globalImports entry naming a modulePass is both a global import and a pass" {
+	const cfg = testExtractFromSource("const config = { globalImports: [\"./a\", { from: \"./src/refresh\", modulePass: \"refreshModule\" }, { from: \"./b\" }] }; export default config;");
+	assert cfg.globalImports.length == 3;
+	assert cfg.globalImports[1] == "./src/refresh";
+	assert cfg.modulePassFrom.length == 1;
+	assert cfg.modulePassFrom[0] == "./src/refresh";
+	assert cfg.modulePassMacro[0] == "refreshModule";
+}
+
+test "a build without modulePass entries has no passes" {
+	const cfg = testExtractFromSource("const config = { globalImports: [{ from: \"./src/converters\" }] }; export default config;");
+	assert cfg.modulePassFrom.length == 0;
+	assert cfg.modulePassMacro.length == 0;
 }
 
 test "extractGlobalImports reads from-object entries" {

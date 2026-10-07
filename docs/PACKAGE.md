@@ -73,8 +73,42 @@ Module paths whose exports land in scope of every source file, injected before c
 (`src/index.ms`). `std/`-prefixed specifiers pass through; absolute paths are normalized; anything
 else is joined to the project root. Entries are extension-less. Precedence: a local declaration
 wins over an explicit import, an explicit import wins over the injection. The object-entry forms
-(`{ from, names }`, …) are accepted but only `from` is read — an entry always injects the module's
-full export surface.
+(`{ from, names }`, …) are accepted but only `from` and `modulePass` are read — an entry always
+injects the module's full export surface.
+
+#### `modulePass` — a build-wide module transform
+
+`globalImports: [{ from: "./refresh", modulePass: "refreshModule" }]` names a macro exported by that
+module. Before declarations are collected, every module outside std and outside the globalImports
+closure is handed to it as a `Program`, and its return value replaces the module. A result that is
+not a `Program`, or that changes the module's imports, is an error naming the pass. Contract pins:
+`src/test/c/modulePassDiagnostics.ms`, `src/test/c/modulePassEmit.ms`, corpus
+`1061-modulePassComponents`, `1062-modulePassKeepsModules`.
+
+Turning it off for a release: keep one `config`, and let the pass switch itself off with `when`
+inside its body. The macro body sees the build's defines. Measured 2026-10-06 on a dev build of
+`wt/module-pass`, using a copy of 1062 whose `keepModule` returned a NumberLiteral under
+`when (refresh)`: with `-d:refresh`, the pass is refused by name; without it, the oracle line prints.
+`--hcr` defines `hcr` the same way (`src/compiler/options.ms`), but `when (hcr)` was not run.
+
+```ts
+export macro refreshModule(mod: Node): Node {
+	when (hcr) { /* rewrite */ }
+	return mod;
+}
+```
+
+A pass that returns its module unchanged emits the same bytes as the same `globalImports` without
+the pass. Measured on that build: 1062 gave identical C (16 modules via `--emit=c`) and identical JS
+(one 190 KB bundle). The rule is pinned by `src/test/c/modulePassEmit.ms`; the pin goes red when
+node flags stop crossing the macro wire. Writing `config` twice inside `when (…) { const config = … }
+else { … }` also works (measured the same day), but its two copies drift.
+
+Not covered: the language server does not load `build.ms` `globalImports` at all, so an editor
+shows neither the injected names nor what the pass emits (card
+`~/metascript/.inbox/compiler/2026-10-06-lsp-ignores-build-global-imports.md`). Under `--hcr`, a
+globalImports module that keeps a module-level `string[]` fails to link, with or without a pass
+(card `2026-10-06-hcr-ref-array-cell-owned-by-user-image.md`).
 
 ### `lsp` — editor-only target
 

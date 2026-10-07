@@ -19,6 +19,8 @@ import "./protocols";
 import "./typeIntrospection";
 import "./multidecl";
 import "./importedStmtMacroDiagnostics";
+import "./modulePassDiagnostics";
+import "./modulePassEmit";
 import "./macroSandbox";
 import "./toycodec";
 import "./structuralPrefix";

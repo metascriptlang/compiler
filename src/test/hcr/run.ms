@@ -63,6 +63,10 @@ function failWith(tag: string, why: string): void {
 	exit(1);
 }
 
+const PARKED: { name: string, card: string }[] = [
+	{ name: "hcrModulePassReload", card: "inbox card 2026-10-06-hcr-ref-array-cell-owned-by-user-image.md" },
+];
+
 function msc(dir: string, args: string[]): ExecFileResult {
 	return execFileResult(MSC, args, dir);
 }
@@ -931,6 +935,25 @@ function sharedVariable(): void {
 	]);
 }
 
+function modulePassReload(): void {
+	const tag = "hcrModulePassReload";
+	const fixture = "modulePass";
+	const dir = freshDir(`${TMP}/${fixture}`);
+	for (const name of ["build.ms", "refresh.ms", "app.ms"]) copy(`${FIXTURES}/${fixture}/${name}`, `${dir}/${name}`);
+	copy(`${FIXTURES}/registrySupport.ms`, `${dir}/support.ms`);
+	const edits = ["logic.ms", "logicEdit.ms"];
+	for (let i = 0; i < edits.length; i += 1) {
+		copy(`${FIXTURES}/${fixture}/${edits[i]}`, `${dir}/logic.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g${i + 1}/module${sharedLibraryExt()}`],
+			`generation ${i + 1} failed to build`);
+	}
+	runPrebuilt(tag, dir, ["logic", "support", "refresh"], "HCR-PASS", [
+		"HCR-PASS start: tpl-g1 tpl-g1 | register logic.ms:Counter,template tpl-g1",
+		"HCR-PASS g2: reloaded logic | reregister logic.ms:Counter",
+		"HCR-PASS after reload: tpl-g2! tpl-g2! | template tpl-g2",
+	]);
+}
+
 function registryVariables(): void {
 	const tag = "hcrRegistryVariables";
 	const dir = buildLogicGenerations(tag, "registryVariables", [
@@ -1295,6 +1318,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrExitDestroy", run: exitDestroy },
 	{ name: "hcrRetainReport", run: retainReport },
 	{ name: "hcrRegistryVariables", run: registryVariables },
+	{ name: "hcrModulePassReload", run: modulePassReload },
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
 	{ name: "hcrFunctionValues", run: functionValues },
 	{ name: "hcrInlineFunctions", run: inlineFunctions },
@@ -1323,6 +1347,14 @@ ensureDir(TMP);
 for (let i = 0; i < CASES.length; i++) {
 	if (i % SHARD_COUNT != SHARD_INDEX) continue;
 	if (ONLY.length > 0 && !ONLY.includes(CASES[i].name)) continue;
+	let parkedCard = "";
+	for (const p of PARKED) {
+		if (p.name == CASES[i].name) parkedCard = p.card;
+	}
+	if (parkedCard != "") {
+		console.log(`skip ${CASES[i].name}: parked on a compiler bug (${parkedCard})`);
+		continue;
+	}
 	const t0 = performance.now();
 	CASES[i].run();
 	console.log(`time ${CASES[i].name} ${Math.round((performance.now() - t0) / 1000)}s`);

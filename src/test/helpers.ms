@@ -7,7 +7,8 @@
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
 import { resetBuildState } from "../compiler/buildSession";
-import { checkModuleGraph } from "../checker/orchestrator";
+import { checkModuleGraph, loadStdGlobalImportModules, loadExtraGlobalImportModules } from "../checker/orchestrator";
+import { hasExtraGlobalImports } from "../checker/prelude";
 import { TargetInfo, hostTargetInfo } from "../checker/types";
 import { computeAliveSet } from "../checker/reachability";
 import { inferRaises } from "../checker/raises";
@@ -24,11 +25,11 @@ import { analyzeProgram } from "../analyzer/index";
 import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { AliveSet, createAliveSet, CEmissionFacts } from "../codegen/c/context";
 import { generateJS, generateJSModule } from "../codegen/js/jsgen";
-import { MapEntry, createMapProvider, loadModuleGraph, loadModuleGraphWithConfig, canonicalModulePath } from "../module/loader";
-import { createDefaultConfig, Backend } from "../module/resolver";
+import { MapEntry, SourceProvider, createMapProvider, loadModule, loadModuleGraph, loadModuleGraphWithConfig, canonicalModulePath } from "../module/loader";
+import { createDefaultConfig, Backend, ResolverConfig } from "../module/resolver";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
-import { ErrorSeverity, Module, ModuleGraph, findModule } from "../module/graph";
+import { ErrorSeverity, Module, ModuleGraph, createModuleGraph, findModule } from "../module/graph";
 import { Node, ProgramData } from "../ast/node";
 import { drainPendingInstances, lookupModuleCtx, lookupModuleProgram, placeInstance } from "../checker/instantiate";
 import { platform } from "std/process";
@@ -254,6 +255,15 @@ export function compileTestBuildToJS(source: string): CompileResult {
 
 // ===== Project compilation (multiple source files with imports) =====
 
+function loadProjectGraph(entryPath: string, provider: SourceProvider, config: ResolverConfig): ModuleGraph {
+	if (!hasExtraGlobalImports()) return loadModuleGraphWithConfig(entryPath, provider, config);
+	const graph = createModuleGraph();
+	loadStdGlobalImportModules(graph, provider, config);
+	loadExtraGlobalImportModules(graph, provider, config);
+	const _loaded = loadModule(graph, entryPath, provider, config, 1);
+	return graph;
+}
+
 // Compile project to C — same pipeline as compile.ms:
 // checkModuleGraph (2-phase) → per-module transform → computeAliveSet (post-transform DCE) → codegen
 export function compileProjectToC(entries: MapEntry[], entryPath: string): string {
@@ -418,7 +428,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 	const root = resolveRuntimeDir();
 	const stdPath = root != "" ? join(root, "std") : "std";
 	const config = createDefaultConfig(Backend.C, stdPath);
-	const graph = loadModuleGraphWithConfig(entryPath, provider, config);
+	const graph = loadProjectGraph(entryPath, provider, config);
 	if (graph.errors.length > 0) {
 		let msg = "ERROR: graph:";
 		for (const e of graph.errors) {
@@ -622,7 +632,7 @@ export function compileProjectToJSWithStd(entries: MapEntry[], entryPath: string
 	const root = resolveRuntimeDir();
 	const stdPath = root != "" ? join(root, "std") : "std";
 	const config = createDefaultConfig(Backend.JS, stdPath);
-	const graph = loadModuleGraphWithConfig(entryPath, provider, config);
+	const graph = loadProjectGraph(entryPath, provider, config);
 	if (graph.errors.length > 0) {
 		let msg = "ERROR: graph:";
 		for (const e of graph.errors) {

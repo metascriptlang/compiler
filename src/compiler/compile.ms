@@ -47,6 +47,7 @@ import { setGlobalHookOwners, hookOwnerMark, hookOwnersFrom, replayHookOwners, t
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, tryLoadPreludeDeps, writePreludeDeps, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
+import { modulePassIdentity } from "../checker/prelude";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
@@ -2501,7 +2502,7 @@ setGlobalHookOwners(sharedHookOwners);
 	// Project-level cache: skip entire pipeline if nothing changed.
 	// Reference-aligned: changeDetectedViaJsonBuildInstructions — early return before codegen.
 	const allFlags0 = cliCompileFlags(opts);
-	const buildIdentityFlags = cliLinkFlags(allFlags0, opts) + defineIdentity(opts.defines);
+	const buildIdentityFlags = cliLinkFlags(allFlags0, opts) + defineIdentity(opts.defines) + modulePassIdentity();
 	const projectDeps: string[] = [];
 	for (const path of graph.loadOrder) projectDeps.push(path);
 	for (const path of globalLinkObjects()) projectDeps.push(path);
