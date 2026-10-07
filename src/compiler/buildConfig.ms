@@ -609,7 +609,7 @@ function testExtractFromSource(source: string): BuildConfig {
 			entry: "", build: { target: "c", outDir: "out", outFile: "", optimize: "debug" },
 			resolve: defaultResolveSection(), fmt: defaultFmtSection(), lsp: defaultLspSection(), cc: defaultCcSection(),
 			package: defaultPackageSection(), deps: defaultDepsSection(), devDeps: defaultDepsSection(),
-			globalImports: [], defines: defaultDefinesSection(), valid: false,
+			globalImports: [], defines: defaultDefinesSection(), modulePassFrom: [], modulePassMacro: [], valid: false,
 		};
 	}
 	const entry = nodeString(findObjField(configObj, "entry"));
