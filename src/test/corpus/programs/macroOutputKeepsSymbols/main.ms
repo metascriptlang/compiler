@@ -1,4 +1,4 @@
-// @stdout: 3 9\n11 4
+// @stdout: 3 9|11 4
 // @exit: 0
 // note: a node a macro hands back keeps the symbols the checker bound, as the reference keeps a typed node's symbols: a call keeps its winning overload, primary or not, and a parameter keeps the parameter it named, even where the expansion site declares another binding of the same name. These used to be resolved again by name where the macro put them.
 
@@ -19,5 +19,7 @@ function shadowed(x: int32): int32 {
 
 function plain(x: int32): int32 { return same(x) * 2; }
 
-console.log(String(same(pick(2.0))), String(same(pick(2))));
-console.log(String(shadowed(10)), String(plain(2)));
+const out: string[] = [];
+out.push([String(same(pick(2.0))), String(same(pick(2)))].join(" "));
+out.push([String(shadowed(10)), String(plain(2))].join(" "));
+console.log(out.join("|"));

@@ -1,4 +1,4 @@
-// @stdout: f32 f32 f32\nf32 f32 f32\nf32 f32 f32\n8
+// @stdout: f32 f32 f32|f32 f32 f32|f32 f32 f32|8
 // @exit: 0
 // note: `getImpl` hands a macro the checked body of a function declared further down the module, wherever the macro is called: at module level, inside a function and inside a nested function, and through a callee that is itself declared later. The body used to arrive unchecked before its declaration, so `getType` of its expressions stopped the build with "node has no type".
 
@@ -16,7 +16,9 @@ function outer(): string {
 function frag(x: float32): float32 { return later(x) + x; }
 function later(x: float32): float32 { return x * 2.0 + 1.0; }
 
-console.log(atModule);
-console.log(insideFunction());
-console.log(outer());
-console.log(String(frag(2.666) as int32));
+const out: string[] = [];
+out.push(atModule);
+out.push(insideFunction());
+out.push(outer());
+out.push(String(frag(2.666) as int32));
+console.log(out.join("|"));
