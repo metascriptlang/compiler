@@ -43,38 +43,40 @@ function viewOfView(): int32 {
 	return again;
 }
 
+const out: string[] = [];
 const xs = [1, 2, 3];
 const card: Borrow<int32[]> = xs;
-console.log(`card=${card.length}/${card[1]}`);
+out.push(`card=${card.length}/${card[1]}`);
 
 const n: int32 = 7;
 const bn: Borrow<int32> = n;
-console.log(`scalar=${bn + 1}/${bn == 7}/${bn}`);
+out.push(`scalar=${bn + 1}/${bn == 7}/${bn}`);
 
 const s = "hello";
 const bs: Borrow<string> = s;
-console.log(`text=${bs.length}/${bs + "!"}/${bs == "hello"}`);
+out.push(`text=${bs.length}/${bs + "!"}/${bs == "hello"}`);
 
 const bigs: Big[] = [{ a: 1, b: 2, c: 3, d: 4, e: 5 }, { a: 6, b: 7, c: 8, d: 9, e: 10 }];
 const be: Borrow<Big> = bigs[1];
-console.log(`struct=${be.a}/${be.e}`);
+out.push(`struct=${be.a}/${be.e}`);
 
 const counter = new Counter();
 const bc: Borrow<Counter> = counter;
-console.log(`class=${bc.v}`);
+out.push(`class=${bc.v}`);
 
 const bag: Bag = { items: [4, 5], big: { a: 11, b: 12, c: 0, d: 0, e: 0 } };
 const bf: Borrow<int32[]> = bag.items;
 const bg: Borrow<Big> = bag.big;
-console.log(`field=${bf[1]}/${bg.b}`);
+out.push(`field=${bf[1]}/${bg.b}`);
 
 const element: Borrow<int32> = xs[2];
-console.log(`element=${element}`);
-console.log(`param=${fromParams(xs, bigs[1])}`);
-console.log(`generic=${viaGeneric<int32>(4)}/${viaGeneric<string>("x")}`);
+out.push(`element=${element}`);
+out.push(`param=${fromParams(xs, bigs[1])}`);
+out.push(`generic=${viaGeneric<int32>(4)}/${viaGeneric<string>("x")}`);
 
 const copy = be;
-console.log(`copy=${copy.b}`);
-console.log(`alias=${seenThroughAliases()}`);
-console.log(`temp=${readA(make())}/${readN(seven())}/${readN(3)}`);
-console.log(`nested=${viewOfView()}`);
+out.push(`copy=${copy.b}`);
+out.push(`alias=${seenThroughAliases()}`);
+out.push(`temp=${readA(make())}/${readN(seven())}/${readN(3)}`);
+out.push(`nested=${viewOfView()}`);
+console.log(out.join(" "));
