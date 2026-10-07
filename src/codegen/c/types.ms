@@ -774,7 +774,7 @@ export function isNilableValueType(t: Type): boolean {
 		const repr = setRepr(t);
 		return repr != null && isNilableValueType(repr);
 	}
-	return t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span;
+	return t.kind == TypeKind.SizedArray;
 }
 
 // ===== ccgIntroducedPtr (Reference: reference codegen utils parity) =====

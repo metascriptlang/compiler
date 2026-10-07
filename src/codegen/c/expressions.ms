@@ -1658,7 +1658,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// Numerics: x = 0 (MS_NIL is void*, incompatible with int/float in C).
 		if (d.operator == "=" && (finalRight == "MS_NIL" || finalRight == "NULL" || finalRight == "((void*)0)")) {
 			const lt = d.left.nodeType;
-			if (lt != null && isNilableValueType(lt)) {
+			if (lt != null && (isNilableValueType(lt) || lt.kind == TypeKind.Span)) {
 				const cType = getTypeDesc(g, lt);
 				ctx.results.push(`memset(&(${left}), 0, sizeof(${cType}))`);
 				return;
