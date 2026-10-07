@@ -786,9 +786,15 @@ trim_controls() {
   return 0
 }
 
+emit_width() {
+  local share=2
+  [ "$(find "${SLOTS_DIR:-/nonexistent}" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" -gt 1 ] || share=1
+  cap_jobs "$(share_of_cores "$share")" "${GATE_PAR:-}"
+}
+
 emit_side() {
   local jobs scrub
-  jobs=$(cap_jobs "$(share_of_cores 2)" "${GATE_PAR:-}") || return $?
+  jobs=$(emit_width) || return $?
   mkdir -p "$2"
   mapfile -t scrub < <(compgen -e | grep '^MSC' | sed 's/^/--unset=/')
   awk '{ print NR, $0 }' | bounded env -u FORCE_COLOR "${scrub[@]}" GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$1"
@@ -820,7 +826,7 @@ keep_emits() {
 
 adopt_candidate() {
   local key dir tmp
-  [ -n "$cand_key" ] && [ -x "$CAND" ] && [ "$(cat "$CAND.key" 2>/dev/null)" = "$cand_key" ] || return 0
+  cand_proven || return 0
   key=$(control_key HEAD) || return 1
   dir=$(control_dir "$key")
   if ! control_ready "$dir" "$key"; then
@@ -833,15 +839,29 @@ adopt_candidate() {
   touch "$dir"
 }
 
-emit_control() {
-  local dir="$2/emit"
+emit_cached() {
+  local dir="$2/emit" side=$3
   mkdir -p "$dir" || return 1
-  reusable_programs >"$EMIT/ctl.keys"
-  control_todo "$dir" "$EMIT/ctl.keys" <"$EMIT/programs" >"$EMIT/ctl.todo"
-  control_rows "$dir" "$EMIT/ctl.keys" cached <"$EMIT/programs" >"$EMIT/ctl.cached"
-  emit_side "$1" "$CTL_WORK/e/ctrl" <"$EMIT/ctl.todo" | sort >"$EMIT/ctl.fresh" || return 1
-  keep_emits "$dir" "$EMIT/ctl.fresh" || return 1
-  sort "$EMIT/ctl.cached" "$EMIT/ctl.fresh" >"$EMIT/ctl.sig"
+  [ -s "$EMIT/ctl.keys" ] || reusable_programs >"$EMIT/ctl.keys" || return 1
+  control_todo "$dir" "$EMIT/ctl.keys" <"$EMIT/programs" >"$EMIT/$side.todo"
+  control_rows "$dir" "$EMIT/ctl.keys" cached <"$EMIT/programs" >"$EMIT/$side.cached"
+  emit_side "$1" "$CTL_WORK/e/$side" <"$EMIT/$side.todo" | sort >"$EMIT/$side.fresh" || return 1
+  keep_emits "$dir" "$EMIT/$side.fresh" || return 1
+  sort "$EMIT/$side.cached" "$EMIT/$side.fresh" >"$EMIT/$side.sig"
+}
+
+cand_proven() {
+  [ -n "$cand_key" ] && [ -x "$CAND" ] && [ "$(cat "$CAND.key" 2>/dev/null)" = "$cand_key" ] \
+    && [ -z "$(git status --porcelain -- src std)" ] && [ "$(tree_key HEAD)" = "$cand_key" ]
+}
+
+emit_candidate() {
+  local key dir
+  if cand_proven && key=$(control_key HEAD) && dir=$(control_dir "$key") && control_ready "$dir" "$key"; then
+    emit_cached "$1" "$dir" cand
+  else
+    emit_side "$1" "$CTL_WORK/e/cand" <"$EMIT/programs" | sort >"$EMIT/cand.sig"
+  fi
 }
 
 shared_cache_self_test() (
@@ -1057,6 +1077,50 @@ emit_env_self_test() (
   return $bad
 )
 
+emit_width_self_test() (
+  local d bad=0 SLOTS_DIR GATES_DIR GATE_PAR="" full half
+  d=$(mktemp -d) || return 1
+  SLOTS_DIR="$d/slots" GATES_DIR="$d/gates"
+  mkdir -p "$SLOTS_DIR/0" "$GATES_DIR"
+  full=$(emit_width)
+  mkdir "$SLOTS_DIR/1"
+  half=$(emit_width)
+  [ "$full" -eq "$(cores)" ] || { printf 'FAIL emit width: a selector alone got %s of %s cores\n' "$full" "$(cores)"; bad=1; }
+  [ "$(cores)" -lt 2 ] || [ "$half" -lt "$full" ] || { printf 'FAIL emit width: a selector beside another lane kept %s cores\n' "$half"; bad=1; }
+  GATE_PAR=2; [ "$(emit_width)" -le 2 ] || { printf 'FAIL emit width: GATE_PAR did not cap the selector\n'; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
+cand_reuse_self_test() (
+  local d bad=0 CTL_CACHE CTL_WORK EMIT CAND cand_key CONTROL_SUPPORT=support EXE_SUFFIX="" key dir g="git -c user.name=t -c user.email=t@t"
+  d=$(mktemp -d) || return 1
+  CTL_CACHE="$d/cache" CTL_WORK="$d/work" EMIT="$d/emit" CAND="$d/repo/cand"
+  mkdir -p "$d/repo/src" "$d/repo/std/core/system" "$d/repo/runtime" "$d/repo/vendor" "$CTL_WORK/src/test/corpus/programs" "$EMIT" "$CTL_CACHE/entries"
+  printf 'x\n' >"$d/repo/src/a.ms"; printf 'x\n' >"$d/repo/std/core/system/index.ms"
+  printf 'console.log(1);\n' >"$CTL_WORK/src/test/corpus/programs/p.ms"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$CAND"; chmod +x "$CAND"
+  cd "$d/repo" && printf 'cand\n' >.gitignore && git init -q && $g add . && $g commit -qm base || { cd /; rm -rf "$d"; return 1; }
+  cand_key=$(tree_key HEAD); printf '%s\n' "$cand_key" >"$CAND.key"
+  key=$(control_key HEAD) dir=$(control_dir "$key")
+  mkdir -p "$d/pub/std/core/system"; cp "$CAND" "$(control_binary "$d/pub")"; printf 'x\n' >"$d/pub/std/core/system/index.ms"
+  publish_control "$d/pub" "$dir" "$key" || { printf 'FAIL cand reuse: fixture publication failed\n'; bad=1; }
+  printf 'p %s/src/test/corpus/programs/p.ms\n' "$CTL_WORK" >"$EMIT/programs"
+  reusable_programs >"$EMIT/ctl.keys"
+  printf 'p\tc-cached\tj-cached\t0\t1\n' >"$EMIT/row"
+  keep_emits "$dir/emit" "$EMIT/row" || bad=1
+  emit_candidate "$CAND" >/dev/null 2>&1
+  [ "$(cut -f2 "$EMIT/cand.sig")" = c-cached ] || { printf 'FAIL cand reuse: a proven candidate did not reuse its tree'"'"'s emits\n'; bad=1; }
+  printf 'y\n' >src/a.ms
+  emit_candidate "$CAND" >/dev/null 2>&1
+  [ "$(cut -f2 "$EMIT/cand.sig")" != c-cached ] || { printf 'FAIL cand reuse: a candidate with uncommitted source reused cached emits\n'; bad=1; }
+  git checkout -q -- src/a.ms; printf 'other\n' >"$CAND.key"
+  emit_candidate "$CAND" >/dev/null 2>&1
+  [ "$(cut -f2 "$EMIT/cand.sig")" != c-cached ] || { printf 'FAIL cand reuse: a candidate built from another tree reused cached emits\n'; bad=1; }
+  cd / && rm -rf "$d"
+  return $bad
+)
+
 control_boot_self_test() (
   local d tmp bad=0 BUILDER CC_FLAG="" OUT CTL_CACHE CTL_WORK EXE_SUFFIX="" CONTROL_SUPPORT=support key
   d=$(mktemp -d) || return 1
@@ -1183,7 +1247,7 @@ CASES
     | cat - <(printf 'ref\t\tsrc/test/corpus/programs/%s\n' '630-escapes.ms:"../../../' '802-nested/app/direct.ms:"../' '802-nested/main.ms:"./' '803-up/main.ms:"../') \
       <(printf 'dirty\t\tsrc/test/corpus/programs/%s\n' 804-dirty/main.ms 900-new/main.ms) \
     | program_keys | sort | paste -sd'|' -)
-  want="100-file o1|200-dir o2|802-nested o4"
+  want="100-file o1;|200-dir o2;|802-nested o4;"
   [ "$got" = "$want" ] || { printf 'FAIL control reuse: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   got=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     same c1 j1 0 9 c1 j1 0 9  changed c1 j1 0 9 c2 j1 0 9  bothfail c1 j1 1 9 c1 j1 1 9  candfail c1 j1 0 9 c1 j1 1 9 \
@@ -1287,6 +1351,8 @@ CASES
   publish_self_test || bad=1
   emit_env_self_test || bad=1
   control_boot_self_test || bad=1
+  emit_width_self_test || bad=1
+  cand_reuse_self_test || bad=1
   stable_emit_self_test || bad=1
   queue_self_test || bad=1
   adopt_self_test || bad=1
@@ -1556,9 +1622,8 @@ select_programs() {
   rm -rf "$EMIT"
   mkdir -p "$EMIT"
   stable_programs >"$EMIT/programs"
-  emit_control "$ctl" "$ctl_dir" || { select_whole "control emit or cache publication failed"; return; }
-  emit_side "$cand" "$CTL_WORK/e/cand" <"$EMIT/programs" | sort >"$EMIT/cand.sig" \
-    || { select_whole "candidate emit failed"; return; }
+  emit_cached "$ctl" "$ctl_dir" ctl || { select_whole "control emit or cache publication failed"; return; }
+  emit_candidate "$cand" || { select_whole "candidate emit failed"; return; }
   adopt_candidate || { select_whole "candidate cache publication failed"; return; }
   trim_controls "$key" "$(control_key HEAD)"
   n_all=$(grep -c . "$EMIT/programs")
