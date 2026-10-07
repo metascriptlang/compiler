@@ -1,7 +1,7 @@
 // Shared path resolution utilities for the MetaScript compiler.
 
 import { argv, cwd, env, platform } from "std/process";
-import { exists, realpath } from "std/fs";
+import { exists, realpath, ensureDir, writeFile, removeAll } from "std/fs";
 import { dirname, join, isAbsolute, normalize } from "std/fs/path";
 
 // Find the project root by walking up looking for build.ms.
@@ -125,6 +125,18 @@ test "canonicalRootDir — the two spellings of one root agree" {
 test "canonicalRootDir — a symlinked spelling resolves to the physical root" {
 	if (platform == "darwin") assert canonicalRootDir("/tmp") == "/private/tmp";
 	assert canonicalRootDir(".") == cwd();
+}
+
+test "findProjectRoot walks up from a relative entry's own directory" {
+	const app = join(cwd(), "out/findRootProbe/app");
+	removeAll(join(cwd(), "out/findRootProbe"));
+	ensureDir(join(app, "src"));
+	writeFile(join(app, "build.ms"), "export default {};\n");
+	const direct = findProjectRoot("out/findRootProbe/app/main.ms").replaceAll("\\", "/");
+	const nested = findProjectRoot("out/findRootProbe/app/src/main.ms").replaceAll("\\", "/");
+	removeAll(join(cwd(), "out/findRootProbe"));
+	assert direct.endsWith("out/findRootProbe/app");
+	assert nested == direct;
 }
 
 test "canonicalRootDir — an already-clean root is unchanged" {
