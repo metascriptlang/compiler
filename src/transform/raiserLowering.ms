@@ -5,7 +5,7 @@
 
 import { Node } from "../ast/node";
 import { CheckerContext } from "../checker/context";
-import { createTransformContextWithChecker } from "./context";
+import { createTransformContextWithChecker, TransformContext } from "./context";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerImplicitConv } from "./coercion/implicitConvLower";
@@ -38,11 +38,21 @@ import { projectTaggedMaybeReads } from "./coercion/maybeReadMaterialize";
 import { lowerUnionTags } from "./lowering/unionTagLower";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
+import { enterCompilerFuncs, leaveCompilerFuncs } from "./util";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.raiserBackend = true;
 	ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
+	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
+	try {
+		return lowerForRaiser(program, ctx);
+	} finally {
+		leaveCompilerFuncs(outer);
+	}
+}
+
+function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	let result = lowerPointerAddresses(program, ctx, false);
 	result = lowerBorrow(result, ctx);
 	result = lowerImplicitConv(result, ctx);
@@ -83,4 +93,34 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = liftDestructors(result, ctx, false);
 	result = insertVarParamDerefs(result, ctx);
 	return result;
+}
+
+// ===== Tests =====
+
+import { parseInput } from "./testUtil";
+import { checkProgram } from "../checker/checkPass";
+import { walkNode } from "./walker";
+import { NodeKind, Symbol, SymbolKind } from "../ast/node";
+import { makeSymbol } from "../checker/symbol";
+import { compilerFuncSym } from "./util";
+
+test "the raiser lowering names runtime procs from its own std, not from the last backend transformed" {
+	const parsed = parseInput("enum Color { Red, Green, Blue }\nfunction raw(): int32 { return 9; }\nconst c = raw() as Color;");
+	assert parsed.ok;
+	const checkerCtx = checkProgram(parsed.value);
+	const foreign = new HashMap<string, Symbol>();
+	const jsHelper = makeSymbol("msCheckRangeI32", SymbolKind.Function, null, false);
+	foreign.set("msCheckRangeI32", jsHelper);
+	const saved = enterCompilerFuncs(foreign, checkerCtx.table.identCache);
+	const lowered = transformForRaiser(parsed.value, checkerCtx);
+	const restored = compilerFuncSym("msCheckRangeI32");
+	leaveCompilerFuncs(saved);
+	let check: Symbol | null = null;
+	walkNode(lowered, (n: Node): Node => {
+		if (n.kind == NodeKind.CallExpr && n.resolvedSym != null && n.resolvedSym.name == "msCheckRangeI32") check = n.resolvedSym;
+		return n;
+	});
+	assert check != null;
+	assert check != jsHelper;
+	assert restored == jsHelper;
 }

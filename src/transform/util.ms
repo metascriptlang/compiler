@@ -315,6 +315,20 @@ export function runtimeProcSym(procName: string): Symbol {
 	return sym;
 }
 
+export type CompilerFuncScope = { funcs: HashMap<string, Symbol>, syms: HashMap<string, Symbol>, cache: IdentCache | null };
+
+export function enterCompilerFuncs(declared: HashMap<string, Symbol>, identCache: IdentCache): CompilerFuncScope {
+	const saved: CompilerFuncScope = { funcs: _compilerFuncs, syms: _runtimeSyms, cache: _runtimeIdentCache };
+	bindCompilerFuncs(declared, identCache);
+	return saved;
+}
+
+export function leaveCompilerFuncs(saved: CompilerFuncScope): void {
+	_compilerFuncs = saved.funcs;
+	_runtimeSyms = saved.syms;
+	_runtimeIdentCache = saved.cache;
+}
+
 export function compilerFuncSym(procName: string): Symbol | null {
 	return _compilerFuncs.get(procName);
 }
