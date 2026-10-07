@@ -179,9 +179,10 @@ function parseFams(text: string): Result<BitSet<Fam>, string> {
 
 export function swarm(this base: Features, seed: uint64): Features {
 	const r = Rng.seeded(seed ^ (0x5357524D53574152 as uint64));
+	const density = r.next();
 	let types = 0 as BitSet<Ty>;
 	for (const t of ALL_TYS) {
-		if (base.types.has(t) && r.chance(50)) { types = types.incl(t); }
+		if (base.types.has(t) && r.next() < density) { types = types.incl(t); }
 	}
 	if (types.isEmpty()) {
 		const kept: Ty[] = [];
@@ -190,7 +191,7 @@ export function swarm(this base: Features, seed: uint64): Features {
 	}
 	let fams = 0 as BitSet<Fam>;
 	for (const f of ALL_FAMS) {
-		if (base.fams.has(f) && r.chance(50)) { fams = fams.incl(f); }
+		if (base.fams.has(f) && r.next() < density) { fams = fams.incl(f); }
 	}
 	return { ...base, types: types, fams: fams };
 }
@@ -274,6 +275,34 @@ test "fams=none formats and parses back" {
 
 test "an unknown family is refused" {
 	assert !Features.defaults().overlay("fams=closure,coroutine").ok;
+}
+
+test "swarm samples one density per vector, not a fixed coin per feature" {
+	const base = Features.defaults();
+	let all = 0;
+	let none = 0;
+	for (let seed = 0; seed < 4096; seed++) {
+		const f = base.swarm(seed as uint64);
+		if (f.fams == base.fams) { all++; }
+		if (f.fams.isEmpty()) { none++; }
+	}
+	assert all > 819 && all < 1229;
+	assert none > 819 && none < 1229;
+}
+
+test "swarm density also correlates a restricted two-family vector" {
+	const parsed = Features.defaults().overlay("types=uint64 fams=closure,union");
+	assert parsed.ok;
+	if (parsed.ok) {
+		let both = 0;
+		for (let seed = 0; seed < 4096; seed++) {
+			const f = parsed.value.swarm(seed as uint64);
+			assert f.types == parsed.value.types;
+			assert !f.fams.has(Fam.Generic);
+			if (f.fams == parsed.value.fams) { both++; }
+		}
+		assert both > 1228 && both < 1502;
+	}
 }
 
 test "swarm is a function of seed and base, keeps a type, and stays inside the base" {
