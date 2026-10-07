@@ -10,7 +10,7 @@
 //   5. Value wrapping (assign): x = tok → x = { value: tok, present: true }
 
 import { Node, NodeKind, NodeFlag, SourceLocation, MemberExprData, TypeAssertionData, VariableDeclData, BinaryExprData, Type, TypeKind } from "../../ast/node";
-import { isStructType, isMaybeType, isTagCarriedUnion, getProperty, unionMemberDisplay, isUnknownType } from "../../checker/types";
+import { isStructType, isMaybeType, isTagCarriedUnion, getProperty, unionMemberDisplay, isUnknownType, peelTransparentInstance, unionHasMemberOfKind } from "../../checker/types";
 import { isLocation } from "../../checker/assignable";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -81,6 +81,12 @@ function maybeSlotType(n: Node): Type | null {
 
 // ===== Main Entry Point =====
 
+export function unwrapRefusesNull(target: Type): boolean {
+	const t = peelTransparentInstance(target);
+	if (isUnknownType(t) || isMaybeType(t) || t.kind == TypeKind.Null) return false;
+	return !unionHasMemberOfKind(t, TypeKind.Null);
+}
+
 export function nullAccessHead(carrier: Type): string {
 	const payload = carrier.typeReturn != null ? unionMemberDisplay(carrier.typeReturn) : "?";
 	return `member '${payload}' is not accessible for type '${payload} | null' using '`;
@@ -129,7 +135,7 @@ function lowerNullableNode(node: Node): Node {
 			&& isMaybeType(d.asExpr.nodeType)
 			&& node.nodeType != null && !isMaybeType(node.nodeType)) {
 			const member = makeMember(d.asExpr, "value", loc);
-			if (!isUnknownType(node.nodeType)) member.flags = member.flags.incl(NodeFlag.ConvCheck);
+			if (unwrapRefusesNull(node.nodeType)) member.flags = member.flags.incl(NodeFlag.ConvCheck);
 			if (node.flags.has(NodeFlag.ConvCheck)) {
 				member.nodeType = d.asExpr.nodeType.typeReturn;
 				d.asExpr = member;
