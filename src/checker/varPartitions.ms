@@ -12,6 +12,7 @@ import { hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { isAddressTaking, checkPointerEscapesIn } from "./pointerAddress";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
+import { sameUpToDistinct } from "./checkExprPass";
 
 export const MAX_TIME: int32 = 999999;
 export const MIN_TIME: int32 = -1;
@@ -254,9 +255,15 @@ export function containsPointer(t: Type | null, depth: int32): boolean {
 	};
 }
 
+interface HandleKey {
+	any: boolean;
+	text: boolean;
+	elem: Type | null;
+}
+
 interface ResizeSummary {
 	unknown: boolean;
-	keys: string[];
+	keys: HandleKey[];
 }
 
 let resizeDone = new HashMap<Symbol, ResizeSummary>();
@@ -279,39 +286,58 @@ function anyResize(): ResizeSummary {
 	return { unknown: true, keys: [] };
 }
 
-function addKey(out: string[], k: string): void {
-	if (!out.includes(k)) out.push(k);
+function anyKey(): HandleKey {
+	return { any: true, text: false, elem: null };
 }
 
-function keyMatches(a: string, b: string): boolean {
-	return a == "*" || b == "*" || a == b;
+function textKey(): HandleKey {
+	return { any: false, text: true, elem: null };
 }
 
-function matchesAnyKey(k: string, keys: string[]): boolean {
+function arrayKey(elem: Type | null): HandleKey {
+	if (elem == null || elem.kind == TypeKind.GenericParam || elem.kind == TypeKind.Unknown) return anyKey();
+	return { any: false, text: false, elem };
+}
+
+function keyMatches(a: HandleKey, b: HandleKey): boolean {
+	if (a.any || b.any) return true;
+	if (a.text || b.text) return a.text == b.text;
+	return sameUpToDistinct(a.elem!, b.elem!);
+}
+
+function matchesAnyKey(k: HandleKey, keys: HandleKey[]): boolean {
 	for (const x of keys) {
 		if (keyMatches(k, x)) return true;
 	}
 	return false;
 }
 
-function arrayKey(elem: Type | null): string {
-	if (elem == null || elem.kind == TypeKind.GenericParam || elem.kind == TypeKind.Unknown) return "*";
-	return "array:" + typeDisplayName(elem);
+function addKey(out: HandleKey[], k: HandleKey): void {
+	for (const x of out) {
+		if (x.any == k.any && x.text == k.text && (x.elem == k.elem || (x.elem != null && k.elem != null && sameUpToDistinct(x.elem, k.elem)))) return;
+	}
+	out.push(k);
 }
 
-function sharedKeys(t: Type | null, viaRef: boolean, depth: int32, out: string[]): void {
+function keysMeet(a: HandleKey[], b: HandleKey[]): boolean {
+	for (const k of a) {
+		if (matchesAnyKey(k, b)) return true;
+	}
+	return false;
+}
+
+function sharedKeys(t: Type | null, viaRef: boolean, depth: int32, out: HandleKey[]): void {
 	if (t == null || depth > 6) {
-		addKey(out, "*");
+		addKey(out, anyKey());
 		return;
 	}
 	match (t.kind) {
-		TypeKind.Ref => sharedKeys(t.typeReturn, true, depth + 1, out),
-		TypeKind.Var => sharedKeys(t.typeReturn, true, depth + 1, out),
+		TypeKind.Ref | TypeKind.Var => sharedKeys(t.typeReturn, true, depth + 1, out),
 		TypeKind.Array => {
 			if (viaRef) addKey(out, arrayKey(t.typeReturn));
 			sharedKeys(t.typeReturn, viaRef, depth + 1, out);
 		},
-		TypeKind.String => { if (viaRef) addKey(out, "string"); },
+		TypeKind.String => { if (viaRef) addKey(out, textKey()); },
 		TypeKind.Struct | TypeKind.Tuple | TypeKind.Union | TypeKind.Result => {
 			for (const c of t.typeChildren) { sharedKeys(c, viaRef, depth + 1, out); }
 		},
@@ -323,71 +349,66 @@ function sharedKeys(t: Type | null, viaRef: boolean, depth: int32, out: string[]
 			}
 		},
 		TypeKind.SizedArray | TypeKind.Alias | TypeKind.Distinct | TypeKind.Sink | TypeKind.Lent => sharedKeys(t.typeReturn, viaRef, depth + 1, out),
-		TypeKind.GenericParam | TypeKind.Unknown | TypeKind.TypeReference | TypeKind.Pending => addKey(out, "*"),
+		TypeKind.GenericParam | TypeKind.Unknown | TypeKind.TypeReference | TypeKind.Pending => addKey(out, anyKey()),
 		_ => {},
 	};
 }
 
-function keysOf(t: Type | null, viaRef: boolean): string[] {
-	const out: string[] = [];
+function keysOf(t: Type | null, viaRef: boolean): HandleKey[] {
+	const out: HandleKey[] = [];
 	sharedKeys(t, viaRef, 0, out);
 	return out;
 }
 
-function handlePaths(t: Type | null, keys: string[], viaRef: boolean, depth: int32, prefix: string, out: string[]): void {
+function handlePaths(t: Type | null, keys: HandleKey[], viaRef: boolean, depth: int32, prefix: string, out: string[]): void {
 	if (t == null || depth > 6) {
-		addKey(out, prefix);
+		if (!out.includes(prefix)) out.push(prefix);
 		return;
 	}
+	const whole = (inner: string[]): void => {
+		if (inner.length > 0 && !out.includes(prefix)) out.push(prefix);
+	};
 	match (t.kind) {
 		TypeKind.Ref | TypeKind.Var => handlePaths(t.typeReturn, keys, true, depth + 1, prefix, out),
 		TypeKind.Array => {
-			if (viaRef && matchesAnyKey(arrayKey(t.typeReturn), keys)) addKey(out, prefix);
+			if (viaRef && matchesAnyKey(arrayKey(t.typeReturn), keys) && !out.includes(prefix)) out.push(prefix);
 			handlePaths(t.typeReturn, keys, viaRef, depth + 1, prefix + "[]", out);
 		},
-		TypeKind.String => { if (viaRef && matchesAnyKey("string", keys)) addKey(out, prefix); },
+		TypeKind.String => { if (viaRef && matchesAnyKey(textKey(), keys) && !out.includes(prefix)) out.push(prefix); },
 		TypeKind.Struct => {
 			for (let i = 0; i < t.typeChildren.length; i += 1) {
 				const name = i < t.typeNames.length ? t.typeNames[i] : "";
-				if (name == "") {
+				if (name != "") {
+					handlePaths(t.typeChildren[i], keys, viaRef, depth + 1, prefix + "." + name, out);
+				} else {
 					const inner: string[] = [];
 					handlePaths(t.typeChildren[i], keys, viaRef, depth + 1, prefix, inner);
-					if (inner.length > 0) addKey(out, prefix);
-				} else {
-					handlePaths(t.typeChildren[i], keys, viaRef, depth + 1, prefix + "." + name, out);
+					whole(inner);
 				}
 			}
 		},
-		TypeKind.Tuple | TypeKind.SizedArray => {
-			if (t.kind == TypeKind.SizedArray) {
-				handlePaths(t.typeReturn, keys, viaRef, depth + 1, prefix + "[]", out);
-			} else {
-				for (const c of t.typeChildren) { handlePaths(c, keys, viaRef, depth + 1, prefix + "[]", out); }
-			}
+		TypeKind.SizedArray => handlePaths(t.typeReturn, keys, viaRef, depth + 1, prefix + "[]", out),
+		TypeKind.Tuple => {
+			for (const c of t.typeChildren) { handlePaths(c, keys, viaRef, depth + 1, prefix + "[]", out); }
 		},
-		TypeKind.Union | TypeKind.Result => {
+		TypeKind.Union | TypeKind.Result | TypeKind.GenericInstance => {
 			const inner: string[] = [];
-			for (const c of t.typeChildren) { handlePaths(c, keys, viaRef, depth + 1, prefix, inner); }
-			if (inner.length > 0) addKey(out, prefix);
-		},
-		TypeKind.GenericInstance => {
-			if (t.typeChildren.length == 0 && t.typeReturn != null) {
-				handlePaths(t.typeReturn, keys, viaRef, depth + 1, prefix, out);
+			if (t.kind == TypeKind.GenericInstance && t.typeChildren.length == 0 && t.typeReturn != null) {
+				handlePaths(t.typeReturn, keys, viaRef, depth + 1, prefix, inner);
 			} else {
-				const inner: string[] = [];
 				for (const c of t.typeChildren) { handlePaths(c, keys, viaRef, depth + 1, prefix, inner); }
-				if (inner.length > 0) addKey(out, prefix);
 			}
+			whole(inner);
 		},
 		TypeKind.Alias | TypeKind.Distinct | TypeKind.Sink | TypeKind.Lent => handlePaths(t.typeReturn, keys, viaRef, depth + 1, prefix, out),
-		TypeKind.GenericParam | TypeKind.Unknown | TypeKind.TypeReference | TypeKind.Pending => { if (keys.length > 0) addKey(out, prefix); },
+		TypeKind.GenericParam | TypeKind.Unknown | TypeKind.TypeReference | TypeKind.Pending => { if (keys.length > 0 && !out.includes(prefix)) out.push(prefix); },
 		_ => {},
 	};
 }
 
-function effectKeys(available: string[], s: ResizeSummary): string[] {
+function effectKeys(available: HandleKey[], s: ResizeSummary): HandleKey[] {
 	if (s.unknown) return available;
-	const out: string[] = [];
+	const out: HandleKey[] = [];
 	for (const k of available) {
 		if (matchesAnyKey(k, s.keys)) addKey(out, k);
 	}
@@ -412,13 +433,18 @@ function isDispatched(sym: Symbol): boolean {
 	return !entry.overloaded && dispatchOverridesFor(entry.classSym, entry.methodName).length > 0;
 }
 
+function reachesNonText(t: Type | null): boolean {
+	for (const k of keysOf(t, false)) {
+		if (!k.text) return true;
+	}
+	return false;
+}
+
 function externSummary(sym: Symbol): ResizeSummary {
 	const t = sym.symbolType;
 	if (t == null || t.kind != TypeKind.Function) return anyResize();
 	for (const formal of t.typeChildren) {
-		for (const k of keysOf(formal, false)) {
-			if (k != "string") return anyResize();
-		}
+		if (reachesNonText(formal)) return anyResize();
 	}
 	return noResize();
 }
@@ -453,11 +479,17 @@ function newSummary(node: Node): ResizeSummary {
 		return s;
 	}
 	for (const a of (node.data as NewExprData).newArguments) {
-		for (const k of keysOf(a.nodeType, false)) {
-			if (k != "string") return anyResize();
-		}
+		if (reachesNonText(a.nodeType)) return anyResize();
 	}
 	return noResize();
+}
+
+function joinSummary(s: ResizeSummary, c: ResizeSummary): void {
+	if (c.unknown) {
+		s.unknown = true;
+		return;
+	}
+	for (const k of c.keys) { addKey(s.keys, k); }
 }
 
 function scanResizes(node: Node | null, s: ResizeSummary): void {
@@ -468,24 +500,12 @@ function scanResizes(node: Node | null, s: ResizeSummary): void {
 			if (recv != null && resizesReceiver(node, recv)) {
 				const t = recv.nodeType;
 				const held = t != null && t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
-				addKey(s.keys, held != null && held.kind == TypeKind.Array ? arrayKey(held.typeReturn) : "string");
+				addKey(s.keys, held != null && held.kind == TypeKind.Array ? arrayKey(held.typeReturn) : textKey());
 			} else {
-				const c = calleeSummary(node);
-				if (c.unknown) {
-					s.unknown = true;
-					return;
-				}
-				for (const k of c.keys) { addKey(s.keys, k); }
+				joinSummary(s, calleeSummary(node));
 			}
 		},
-		NodeKind.NewExpr => {
-			const c = newSummary(node);
-			if (c.unknown) {
-				s.unknown = true;
-				return;
-			}
-			for (const k of c.keys) { addKey(s.keys, k); }
-		},
+		NodeKind.NewExpr => joinSummary(s, newSummary(node)),
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
 			if (isAssignOp(d.operator)) replacedKeys(d.left, s);
@@ -508,7 +528,7 @@ function replacedKeys(target: Node | null, s: ResizeSummary): void {
 function sameSummary(a: ResizeSummary, b: ResizeSummary): boolean {
 	if (a.unknown != b.unknown || a.keys.length != b.keys.length) return false;
 	for (const k of a.keys) {
-		if (!b.keys.includes(k)) return false;
+		if (!matchesAnyKey(k, b.keys)) return false;
 	}
 	return true;
 }
@@ -553,12 +573,6 @@ function summaryOf(sym: Symbol): ResizeSummary {
 	return resizeDone.get(sym)!;
 }
 
-interface ClosureEffect {
-	node: Node;
-	captured: Symbol[];
-	summary: ResizeSummary;
-}
-
 interface BorrowUnit {
 	p: Partitions;
 	pass: int32;
@@ -567,7 +581,8 @@ interface BorrowUnit {
 	ctx: CheckerContext;
 	pointers: Symbol[];
 	blocks: Node[];
-	closures: ClosureEffect[];
+	captured: Symbol[];
+	routines: Node[];
 	suspends: int32[];
 	suspendSites: Node[];
 	escaped: Symbol[];
@@ -998,23 +1013,27 @@ function reachableByCalls(u: BorrowUnit, root: Symbol, path: string): boolean {
 	return path != "" && crossesRef(root.symbolType, path);
 }
 
+function escapeSym(u: BorrowUnit, sym: Symbol, captured: boolean): void {
+	const list = captured ? u.captured : u.escaped;
+	if (variableId(u.p, sym) >= 0 && keysOf(sym.symbolType, captured).length > 0 && !list.includes(sym)) list.push(sym);
+}
+
 function escape(u: BorrowUnit, src: Node | null): void {
 	const sources: Symbol[] = [];
 	rootsOf(src, sources);
-	for (const s of sources) {
-		if (variableId(u.p, s) >= 0 && keysOf(s.symbolType, false).length > 0 && !u.escaped.includes(s)) u.escaped.push(s);
-	}
+	for (const s of sources) { escapeSym(u, s, false); }
 }
 
-function holdsKeys(t: Type | null): string[] {
-	if (t == null) return ["*"];
-	const inner = t.kind == TypeKind.Ref || t.kind == TypeKind.Var ? t.typeReturn : t;
-	if (inner == null) return ["*"];
-	const out: string[] = [];
+function holdsKeys(t: Type | null): HandleKey[] {
+	if (t == null) return [anyKey()];
+	const viaRef = t.kind == TypeKind.Ref || t.kind == TypeKind.Var;
+	const inner = viaRef ? t.typeReturn : t;
+	if (inner == null) return [anyKey()];
+	const out: HandleKey[] = [];
 	if (inner.kind == TypeKind.Array || inner.kind == TypeKind.SizedArray) {
 		sharedKeys(inner.typeReturn, true, 1, out);
 	} else if (inner.kind == TypeKind.Struct || inner.kind == TypeKind.Tuple) {
-		for (const c of inner.typeChildren) { sharedKeys(c, t.kind == TypeKind.Ref || t.kind == TypeKind.Var, 1, out); }
+		for (const c of inner.typeChildren) { sharedKeys(c, viaRef, 1, out); }
 	} else {
 		sharedKeys(inner, true, 1, out);
 	}
@@ -1027,13 +1046,7 @@ function storedIntoOther(u: BorrowUnit, args: Node[], summary: ResizeSummary): v
 		const own = keysOf(args[i].nodeType, false);
 		if (own.length == 0) continue;
 		for (let j = 0; j < args.length; j += 1) {
-			if (j == i) continue;
-			const room = holdsKeys(args[j].nodeType);
-			let fits = false;
-			for (const k of own) {
-				if (matchesAnyKey(k, room)) fits = true;
-			}
-			if (fits) {
+			if (j != i && keysMeet(own, holdsKeys(args[j].nodeType))) {
 				escape(u, args[i]);
 				break;
 			}
@@ -1041,14 +1054,19 @@ function storedIntoOther(u: BorrowUnit, args: Node[], summary: ResizeSummary): v
 	}
 }
 
-function changeEscaped(u: BorrowUnit, site: Node, summary: ResizeSummary): void {
-	for (const sym of u.escaped) {
-		const keys = effectKeys(keysOf(sym.symbolType, false), summary);
-		if (keys.length == 0) continue;
-		const paths: string[] = [];
-		handlePaths(sym.symbolType, keys, false, 0, "", paths);
-		for (const p of paths) { potentialMutation(u.p, sym, site, p); }
-	}
+function changeSym(u: BorrowUnit, sym: Symbol, viaRef: boolean, summary: ResizeSummary, site: Node): void {
+	if (isBorrower(u, sym)) return;
+	const keys = effectKeys(keysOf(sym.symbolType, viaRef), summary);
+	if (keys.length == 0) return;
+	const paths: string[] = [];
+	handlePaths(sym.symbolType, keys, viaRef, 0, "", paths);
+	for (const p of paths) { potentialMutation(u.p, sym, site, p); }
+}
+
+function changeEscaped(u: BorrowUnit, site: Node, summary: ResizeSummary, runsClosures: boolean): void {
+	for (const sym of u.escaped) { changeSym(u, sym, false, summary, site); }
+	if (!runsClosures) return;
+	for (const sym of u.captured) { changeSym(u, sym, true, summary, site); }
 }
 
 function formalAt(fnType: Type | null, i: int32): Type | null {
@@ -1061,7 +1079,7 @@ function formalAt(fnType: Type | null, i: int32): Type | null {
 	return i < n ? fnType.typeChildren[i] : null;
 }
 
-function reachesBorrowed(u: BorrowUnit, v: VarEntry, keys: string[]): boolean {
+function reachesBorrowed(u: BorrowUnit, v: VarEntry, keys: HandleKey[]): boolean {
 	for (let b = 0; b < v.borrowsFrom.length; b += 1) {
 		if (keysMeet(borrowedKeys(u.p.vars[v.borrowsFrom[b]].sym, v.borrowHandles[b]), keys)) return true;
 	}
@@ -1091,11 +1109,7 @@ function changeReachable(u: BorrowUnit, arg: Node, t: Type | null, viaRef: boole
 
 function argEffect(u: BorrowUnit, arg: Node, formal: Type | null, resizes: boolean, summary: ResizeSummary): void {
 	if (formal != null && formal.kind == TypeKind.Var) {
-		if (summary.unknown) {
-			mutateRoots(u, arg, arg);
-		} else {
-			changeReachable(u, arg, formal.typeReturn, true, summary);
-		}
+		mutateRoots(u, arg, arg);
 		return;
 	}
 	if (formal != null && formal.kind == TypeKind.Sink) {
@@ -1143,17 +1157,17 @@ function callEffects(u: BorrowUnit, node: Node): void {
 		}
 	}
 	let passesRoutine = false;
+	const all: Node[] = [];
+	if (recv != null) all.push(recv);
 	for (let i = 0; i < d.arguments.length; i += 1) {
 		const a = d.arguments[i];
 		argEffect(u, a, formalAt(fnType, i + offset), false, summary);
 		if (a.nodeType != null && a.nodeType.kind == TypeKind.Function) passesRoutine = true;
+		all.push(a);
 	}
-	runClosures(u, node, summary.unknown || passesRoutine);
-	const all: Node[] = [];
-	if (recv != null) all.push(recv);
-	for (const a of d.arguments) { all.push(a); }
 	storedIntoOther(u, all, summary);
-	changeEscaped(u, node, summary);
+	const local = sym != null && sym.declNode != null && u.routines.includes(sym.declNode);
+	changeEscaped(u, node, passesRoutine ? anyResize() : summary, summary.unknown || passesRoutine || local);
 }
 
 function capturedBy(u: BorrowUnit, node: Node | null, out: Symbol[]): void {
@@ -1176,9 +1190,8 @@ function capturedWrites(u: BorrowUnit, node: Node | null, s: ResizeSummary): voi
 }
 
 function recordClosure(u: BorrowUnit, node: Node): void {
-	for (const c of u.closures) {
-		if (c.node == node) return;
-	}
+	if (u.routines.includes(node)) return;
+	u.routines.push(node);
 	const body = routineBody(node);
 	const s = noResize();
 	scanResizes(body, s);
@@ -1186,124 +1199,89 @@ function recordClosure(u: BorrowUnit, node: Node): void {
 	if (!s.unknown && s.keys.length == 0) return;
 	const captured: Symbol[] = [];
 	capturedBy(u, body, captured);
-	if (captured.length > 0) u.closures.push({ node, captured, summary: s });
+	for (const sym of captured) { escapeSym(u, sym, true); }
 }
 
-function runClosure(u: BorrowUnit, c: ClosureEffect, site: Node): void {
-	for (const sym of c.captured) {
-		if (isBorrower(u, sym)) continue;
-		const keys = effectKeys(keysOf(sym.symbolType, true), c.summary);
-		if (keys.length == 0) continue;
-		const paths: string[] = [];
-		handlePaths(sym.symbolType, keys, true, 0, "", paths);
-		for (const p of paths) { potentialMutation(u.p, sym, site, p); }
-	}
+interface PathEnd {
+	t: Type | null;
+	crossed: boolean;
 }
 
-function runClosures(u: BorrowUnit, call: Node, any: boolean): void {
-	const target = call.resolvedSym != null ? call.resolvedSym.declNode : null;
-	for (const c of u.closures) {
-		if (any || c.node == target) runClosure(u, c, call);
-	}
-}
-
-function crossesRef(t0: Type | null, path: string): boolean {
+function followPath(t0: Type | null, path: string): PathEnd {
 	let t = t0;
 	let rest = path;
-	while (true) {
-		if (t == null) return true;
+	let crossed = false;
+	while (t != null) {
 		match (t.kind) {
-			TypeKind.Ref | TypeKind.Var | TypeKind.Span | TypeKind.Borrow | TypeKind.GenericParam | TypeKind.Unknown
-				| TypeKind.TypeReference | TypeKind.Pending => { return true; },
+			TypeKind.GenericParam | TypeKind.Unknown | TypeKind.TypeReference | TypeKind.Pending => { return { t, crossed: true }; },
+			TypeKind.Ref | TypeKind.Var => {
+				crossed = true;
+				if (rest == "") return { t, crossed };
+				t = t.typeReturn;
+				continue;
+			},
 			TypeKind.Alias | TypeKind.Distinct | TypeKind.Sink | TypeKind.Lent => {
+				if (rest == "") return { t, crossed };
 				t = t.typeReturn;
 				continue;
 			},
 			TypeKind.GenericInstance => {
-				if (t.typeReturn == null) return true;
+				if (t.typeReturn == null) return { t, crossed: true };
+				if (rest == "") return { t, crossed };
 				t = t.typeReturn;
 				continue;
 			},
+			TypeKind.Span | TypeKind.Borrow => { crossed = true; },
 			_ => {},
 		};
-		if (rest == "") return false;
+		if (rest == "") return { t, crossed };
 		if (rest.startsWith("[]")) {
 			rest = rest.slice(2, rest.length);
-			if (t.kind != TypeKind.Array && t.kind != TypeKind.SizedArray) return true;
-			t = t.typeReturn;
+			const indexable = t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span;
+			t = indexable ? t.typeReturn : null;
 			continue;
 		}
-		if (!rest.startsWith(".") || t.kind != TypeKind.Struct) return true;
-		let end = 1;
-		while (end < rest.length && rest.charAt(end) != "." && rest.charAt(end) != "[") end += 1;
-		const name = rest.slice(1, end);
-		rest = rest.slice(end, rest.length);
-		const at = t.typeNames.indexOf(name);
-		if (at < 0 || at >= t.typeChildren.length) return true;
-		t = t.typeChildren[at];
-	}
-}
-
-function typeAtPath(t0: Type | null, path: string): Type | null {
-	let t = t0;
-	let rest = path;
-	while (t != null) {
-		if (t.kind == TypeKind.Ref || t.kind == TypeKind.Var || t.kind == TypeKind.Alias || t.kind == TypeKind.Distinct
-			|| t.kind == TypeKind.Sink || t.kind == TypeKind.Lent || (t.kind == TypeKind.GenericInstance && t.typeReturn != null)) {
-			if (rest == "") return t;
-			t = t.typeReturn;
-			continue;
-		}
-		if (rest == "") return t;
-		if (rest.startsWith("[]")) {
-			rest = rest.slice(2, rest.length);
-			t = t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray ? t.typeReturn : null;
-			continue;
-		}
-		if (!rest.startsWith(".") || t.kind != TypeKind.Struct) return null;
+		if (!rest.startsWith(".") || t.kind != TypeKind.Struct) return { t: null, crossed: true };
 		let end = 1;
 		while (end < rest.length && rest.charAt(end) != "." && rest.charAt(end) != "[") end += 1;
 		const at = t.typeNames.indexOf(rest.slice(1, end));
 		rest = rest.slice(end, rest.length);
 		t = at >= 0 && at < t.typeChildren.length ? t.typeChildren[at] : null;
 	}
-	return null;
+	return { t: null, crossed: true };
 }
 
-function keysAtPath(sym: Symbol, path: string): string[] {
-	const t = typeAtPath(sym.symbolType, path);
-	return t == null ? ["*"] : keysOf(t, true);
+function crossesRef(t: Type | null, path: string): boolean {
+	return followPath(t, path).crossed;
 }
 
-function ownKeys(t0: Type | null): string[] {
+function keysAtPath(sym: Symbol, path: string): HandleKey[] {
+	const end = followPath(sym.symbolType, path).t;
+	return end == null ? [anyKey()] : keysOf(end, true);
+}
+
+function ownKeys(t0: Type | null): HandleKey[] {
 	let t = t0;
 	while (t != null && (t.kind == TypeKind.Ref || t.kind == TypeKind.Var || t.kind == TypeKind.Alias || t.kind == TypeKind.Distinct
 		|| t.kind == TypeKind.Sink || t.kind == TypeKind.Lent)) t = t.typeReturn;
-	if (t == null) return ["*"];
+	if (t == null) return [anyKey()];
 	return match (t.kind) {
 		TypeKind.Array | TypeKind.Span | TypeKind.Borrow => [arrayKey(t.typeReturn)],
-		TypeKind.String => ["string"],
+		TypeKind.String => [textKey()],
 		_ => keysOf(t, true),
 	};
 }
 
-function borrowedKeys(sym: Symbol, handles: string): string[] {
-	const out: string[] = [];
-	let any = false;
+function borrowedKeys(sym: Symbol, handles: string): HandleKey[] {
+	const out: HandleKey[] = [];
+	let named = false;
 	for (const h of handles.split("|")) {
 		if (h == "") continue;
-		any = true;
-		for (const k of ownKeys(typeAtPath(sym.symbolType, h == "@" ? "" : h))) { addKey(out, k); }
+		named = true;
+		for (const k of ownKeys(followPath(sym.symbolType, h == "@" ? "" : h).t)) { addKey(out, k); }
 	}
-	if (!any) out.push("*");
+	if (!named) out.push(anyKey());
 	return out;
-}
-
-function keysMeet(a: string[], b: string[]): boolean {
-	for (const k of a) {
-		if (matchesAnyKey(k, b)) return true;
-	}
-	return false;
 }
 
 function inExternalGroup(u: BorrowUnit, id: int32): boolean {
@@ -1323,6 +1301,7 @@ function aliasedChange(u: BorrowUnit, v: VarEntry, src: VarEntry, handles: strin
 	}
 	if (!shared) return [];
 	const borrowed = borrowedKeys(src.sym, handles);
+	const srcRoot = ufRoot(u.p, variableId(u.p, src.sym));
 	for (let gi = 0; gi < u.p.graphs.length; gi += 1) {
 		const g = u.p.graphs[gi];
 		for (let i = 0; i < g.mutations.length; i += 1) {
@@ -1331,20 +1310,15 @@ function aliasedChange(u: BorrowUnit, v: VarEntry, src: VarEntry, handles: strin
 			const r = g.roots[i];
 			if (r == src.sym || r == v.sym) continue;
 			const rid = variableId(u.p, r);
-			if (rid < 0 || ufRoot(u.p, rid) == ufRoot(u.p, variableId(u.p, src.sym)) || !inExternalGroup(u, rid)) continue;
-			for (const k of keysAtPath(r, g.paths[i])) {
-				if (matchesAnyKey(k, borrowed)) return [gi, i];
-			}
+			if (rid < 0 || ufRoot(u.p, rid) == srcRoot || !inExternalGroup(u, rid)) continue;
+			if (keysMeet(keysAtPath(r, g.paths[i]), borrowed)) return [gi, i];
 		}
 	}
 	return [];
 }
 
 function sharedSource(u: BorrowUnit, src: VarEntry, handles: string): boolean {
-	if (hasFlag(src.sym, SymbolFlag.Global)) return true;
-	for (const c of u.closures) {
-		if (c.captured.includes(src.sym)) return true;
-	}
+	if (hasFlag(src.sym, SymbolFlag.Global) || u.escaped.includes(src.sym) || u.captured.includes(src.sym)) return true;
 	for (const h of handles.split("|")) {
 		if (h != "" && crossesRef(src.sym.symbolType, h == "@" ? "" : h)) return true;
 	}
@@ -1555,7 +1529,7 @@ function checkUnit(ctx: CheckerContext, body: Node | null): void {
 	const pointers: Symbol[] = [];
 	collectPointers(body, pointers);
 	if (pointers.length == 0 && !declaresView(body)) return;
-	const u: BorrowUnit = { p: createPartitions(), pass: 1, scope: [], defers: [], ctx, pointers, blocks: [], closures: [], suspends: [], suspendSites: [], escaped: [] };
+	const u: BorrowUnit = { p: createPartitions(), pass: 1, scope: [], defers: [], ctx, pointers, blocks: [], captured: [], routines: [], suspends: [], suspendSites: [], escaped: [] };
 	runPass(u, body, 1);
 	runPass(u, body, 2);
 	for (const v of u.p.vars) {

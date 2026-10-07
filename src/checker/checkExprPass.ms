@@ -3272,6 +3272,10 @@ function containerParts(t: Type): Type[] {
 	return t.typeReturn != null ? [t.typeReturn] : [];
 }
 
+export function sameUpToDistinct(a: Type, b: Type): boolean {
+	return firstUnequalPart(a, b).length == 0;
+}
+
 function firstUnequalPart(source: Type, target: Type): Type[] {
 	const a = bareConversionType(source);
 	const b = bareConversionType(target);
