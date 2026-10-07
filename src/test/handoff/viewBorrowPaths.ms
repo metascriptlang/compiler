@@ -49,6 +49,12 @@ test "rule 1: a Vec local viewed and then passed to a ref parameter is refused" 
 	assert why == "", why;
 }
 
+test "rule 1: a ref argument counts as a change even when the callee never resizes, as the reference's var rule" {
+	const decls = "function writeDay(ref w: World2, day: int32): void { w.day = day; }\n";
+	const why = refusal(program(decls, "let w: World2 = { pets: [11], day: 0 }; const v: Span<int32> = w.pets; writeDay(w, 8); return v[0];"), BORROW);
+	assert why == "", why;
+}
+
 test "rule 1: a Vec local viewed and then moved is refused" {
 	const decls = "function eat(a: Vec<int32>): int32 { return a.length as int32; }\n";
 	const why = refusal(program(decls, `${VEC} const v: Span<int32> = xs; const k = eat(move xs); return v[0] + k;`), BORROW);
