@@ -89,6 +89,13 @@ test "E2E C: an accessor named like a field is a duplicate identifier" {
 	assert accessorError("struct V2 { x: float32; get x(): float32 { return 1.0; } }\nconst v: V2 = { x: 1.0 };").contains("Duplicate identifier 'x'");
 }
 
+test "E2E C: a decorated accessor is refused, not dropped" {
+	const deco = "import { Node, ClassMethodDecoratorContext } from \"std/meta\";\nmacro logged(value: Node, context: ClassMethodDecoratorContext): Node { return value; }\n";
+	assert accessorError(deco + "class C { @logged get n(): int32 { return 1; } }\nconsole.log(new C().n);").contains("decorator 'logged' cannot apply to accessor 'get n'");
+	assert accessorError(deco + "class C { private _n: int32 = 0; get n(): int32 { return this._n; } @logged set n(v: int32) { this._n = v; } }").contains("cannot apply to accessor 'set n'");
+	assert accessorError(deco + "struct V2 { x: float32; @logged get sum(): float32 { return this.x; } }").contains("Decorated getter 'sum' at line 3 is not supported");
+}
+
 test "E2E C: a compound assignment to an accessor through a call receiver is refused" {
 	assert accessorError("class C { get n(): int32 { return 1; } set n(v: int32) {} }\nfunction make(): C { return new C(); }\nmake().n += 1;").contains("needs a receiver that is a name or a field path");
 }
