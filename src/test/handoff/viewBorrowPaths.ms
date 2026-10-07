@@ -186,6 +186,22 @@ test "rule 2: a method called on a struct that holds the views leaves them legal
 	assert errors == "", errors;
 }
 
+test "rule 2: a view struct that also carries arrays of another type stays legal when a callee grows those" {
+	const decls = "struct Config { log: int32[]; }\n"
+		+ "struct Seen { pets: Span<S>; config: Config; }\n"
+		+ "function note(s: Seen): void { s.config.log.push(1); }\n";
+	const errors = errorsOf(program(decls, "const world: World = { pets: [{ n: 4, name: \"p\" }], k: 2 }; const config: Config = { log: [] }; const seen: Seen = { pets: world.pets, config: config }; note(seen); return seen.pets[0].n;"));
+	assert errors == "", errors;
+}
+
+test "rule 2: a view struct that also carries the viewed array is refused when a callee grows it" {
+	const decls = "struct Owner { pets: S[]; }\n"
+		+ "struct Seen { pets: Span<S>; owner: Owner; }\n"
+		+ "function grow3(s: Seen): void { s.owner.pets.push({ n: 2, name: \"g\" }); }\n";
+	const why = refusal(program(decls, "const owner: Owner = { pets: [{ n: 4, name: \"p\" }] }; const seen: Seen = { pets: owner.pets, owner: owner }; grow3(seen); return seen.pets[0].n;"), BORROW);
+	assert why == "", why;
+}
+
 test "rule 2: a slot write into the T[] leaves the view legal" {
 	const errors = errorsOf(program("", `${ARR} const sp: Span<S> = xs; xs[0] = { n: 9, name: "z" }; return sp[0].n;`));
 	assert errors == "", errors;
