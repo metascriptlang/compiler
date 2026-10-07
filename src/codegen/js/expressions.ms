@@ -20,7 +20,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -764,7 +764,7 @@ function assertedUnion(d: TypeAssertionData): Type | null {
 }
 
 function openTagTest(gen: JSGenerator, member: Type, union: Type, pass: string, location: SourceLocation): void {
-	openMemberTest(gen, member, union, pass + "typeof v === \"" + typeofTagOf(member) + "\"", [], location);
+	openMemberTest(gen, member, union, pass + "typeof v === \"" + heldKindOf(member) + "\"", [], location);
 }
 
 function openMemberTest(gen: JSGenerator, member: Type, union: Type, check: string, excluded: Symbol[], location: SourceLocation): void {
