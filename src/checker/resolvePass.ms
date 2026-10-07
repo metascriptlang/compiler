@@ -2016,7 +2016,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 			&& wft.typeReturn.typeName == d.interfaceName) {
 			warnOwningSelfRef(ctx, d.interfaceFields[wi], d.interfaceName, wLine, wCol);
 		}
-		refuseViewField(ctx, d.interfaceFields[wi], d.interfaceName, wft, wLine, wCol);
+		if (node.kind != NodeKind.StructDecl) refuseViewField(ctx, d.interfaceFields[wi], d.interfaceName, wft, wLine, wCol);
 	}
 
 	// Update sym type in-place — avoid temporary Type that shares typeChildren
