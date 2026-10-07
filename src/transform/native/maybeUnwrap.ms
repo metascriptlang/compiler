@@ -20,11 +20,12 @@
 // The absent case (null-typed-as-Maybe) already lowers to native `null` via JS
 // codegen's emitNullLiteral, so construction needs no rewrite — only the reads above.
 
-import { Node, NodeKind, MemberExprData, ObjectLiteralData } from "../../ast/node";
-import { isMaybeType, peelTransparentInstance } from "../../checker/types";
+import { Node, NodeKind, MemberExprData, ObjectLiteralData, TypeAssertionData } from "../../ast/node";
+import { isMaybeType, peelTransparentInstance, isUnknownType } from "../../checker/types";
+import { nullAccessHead } from "./nullableLower";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeNull } from "../util";
+import { makeBinary, makeNull, makeCall, makeString, runtimeRef } from "../util";
 
 export function unwrapMaybe(program: Node, ctx: TransformContext): Node {
 	walkNode(program, unwrapMaybeNode);
@@ -40,6 +41,17 @@ function unwrapMaybeNode(node: Node): Node {
 		const d = node.data as ObjectLiteralData;
 		if (d.keys.length == 2 && d.keys[0] == "value" && d.keys[1] == "present") {
 			return d.properties[0];
+		}
+	}
+
+	if (node.kind == NodeKind.TypeAssertion && node.nodeType != null && !isMaybeType(peelTransparentInstance(node.nodeType)) && !isUnknownType(node.nodeType)) {
+		const d = node.data as TypeAssertionData;
+		const carrier = d.asExpr != null && d.asExpr.nodeType != null ? peelTransparentInstance(d.asExpr.nodeType) : null;
+		if (carrier != null && isMaybeType(carrier)) {
+			const call = makeCall(runtimeRef("msMaybeGet", loc), [d.asExpr, makeString(nullAccessHead(carrier), loc), makeString("null", loc)], loc);
+			call.nodeType = carrier.typeReturn;
+			d.asExpr = call;
+			return node;
 		}
 	}
 

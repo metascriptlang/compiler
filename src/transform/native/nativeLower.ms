@@ -20,6 +20,7 @@ import { TransformContext, createTransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef, makeTypedIdent, makeArrayAccess, makeHiddenSubConv, isRuntimeProcCall } from "../util";
 import { checkVariantReads } from "./unionProjectLower";
+import { checkMaybeReads } from "./nullableLower";
 
 // reference array: a Ref<Array> receiver reaching access/length lowering (e.g. a node
 // synthesized by forOfLower after the checker already ran) is a msXxxArray* pointer, but
@@ -44,6 +45,7 @@ export function lowerNativeAccess(program: Node, ctx: TransformContext): Node {
 	// Without this, ArrayLiterals infer TypeKind.Array and get heap-allocated by rewriteArrayLiteral.
 	walkNode(program, propagateSizedArrayType);
 	checkVariantReads(program, ctx, false);
+	checkMaybeReads(program);
 	walkNode(program, (n: Node): Node => { return rewriteAccess(n, ctx); });
 	return program;
 }

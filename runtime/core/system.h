@@ -597,6 +597,18 @@ static inline void msFfiRelease(void* p) { msDecrefCyclic(p); }
 	__vv; \
 })
 
+#define msMaybeAccess(m, head, labels) (*({ \
+	__typeof__(m)* __pm = &(m); \
+	if (!__pm->present) msRaiseFieldError((head), (labels), 0); \
+	__pm; \
+}))
+
+#define msMaybeAccessVal(m, head, labels) ({ \
+	__typeof__(m) __mv = (m); \
+	if (!__mv.present) msRaiseFieldError((head), (labels), 0); \
+	__mv; \
+})
+
 #define msVariantHolds(mask, tag) ((((uint64_t)(mask)) >> (uint64_t)(tag)) & 1u)
 
 #define msVariantObject(u, mask, head, labels) (*({ \

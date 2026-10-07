@@ -823,6 +823,11 @@ function _bridgeMsUnionReadMaybe(args: RaiserValue[]): RaiserValue {
 	return _unionRead(args, true);
 }
 
+function _bridgeMsMaybeGet(args: RaiserValue[]): RaiserValue {
+	if (args[0].kind == RaiserValueKind.Nil) raiseFromHost(unboxString(args[1]) + unboxString(args[2]) + "'", true);
+	return args[0];
+}
+
 function _bridgeMsUnionWrapMaybe(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
 	if (objHeap == null || args[0].kind == RaiserValueKind.Nil) return raiserNil();
@@ -838,6 +843,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msUnionRead", _bridgeMsUnionRead, HostCapability.Pure);
 	registerHostFn("msUnionReadMaybe", _bridgeMsUnionReadMaybe, HostCapability.Pure);
 	registerHostFn("msUnionWrapMaybe", _bridgeMsUnionWrapMaybe, HostCapability.Pure);
+	registerHostFn("msMaybeGet", _bridgeMsMaybeGet, HostCapability.Pure);
 
 	// fs predicates
 	registerHostFn("msFsExists",         _bridgeMsFsExists, HostCapability.FileRead);

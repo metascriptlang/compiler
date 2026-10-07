@@ -592,6 +592,18 @@ static inline int64_t msSliceLen(int64_t start, int64_t end, int64_t len) {
     __vv; \
 })
 
+#define msMaybeAccess(m, head, labels) (*({ \
+    __typeof__(m)* __pm = &(m); \
+    if (!__pm->present) __builtin_trap(); \
+    __pm; \
+}))
+
+#define msMaybeAccessVal(m, head, labels) ({ \
+    __typeof__(m) __mv = (m); \
+    if (!__mv.present) __builtin_trap(); \
+    __mv; \
+})
+
 /* ===== Range-Checked Integer Casts ===== */
 static inline int8_t   msCheckRangeI8(double v, int64_t lo, int64_t hi)  { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (int8_t)v; }
 static inline uint8_t  msCheckRangeU8(double v, int64_t lo, int64_t hi)  { if(!(v>(double)lo-1.0&&v<(double)hi+1.0)) msRaiseRangeErrorF(v,lo,hi); return (uint8_t)v; }
