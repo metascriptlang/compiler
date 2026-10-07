@@ -79,13 +79,6 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 			}
 
 			if (ctx.jsBackend) return node;
-			// Borrow promotion: HiddenStdConv(expr, Borrow<T>) → HiddenAddr(expr) (takes &expr in C)
-			if (targetType.kind == TypeKind.Borrow) {
-				const loc = node.location;
-				const addr = makeHiddenAddr(d.convExpr, loc);
-				addr.nodeType = targetType;
-				return addr;
-			}
 			if (takesAddressAtCArg(d.convExpr.nodeType, targetType)) {
 				const addr = makeHiddenAddr(d.convExpr, node.location);
 				addr.nodeType = nonNullMemberOfNullable(targetType);
