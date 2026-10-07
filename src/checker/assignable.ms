@@ -6,7 +6,7 @@
 // Otherwise the root decides: a `const` owns its value to the last field,
 // and a value parameter or a for-of binding is a read-only view of the
 // caller's storage. Rebinding a parameter (CK-18) or a loop binding (CK-30)
-// stays legal.
+// stays legal. A Borrow<T> root refuses every write, through a reference too.
 
 import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, BinaryExprData, HiddenDerefData, OutExprData, TypeAssertionData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
@@ -77,7 +77,21 @@ function isValueContainer(t: Type | null): boolean {
 	return t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray);
 }
 
+function borrowRoot(target: Node): Symbol | null {
+	let cur: Node = target;
+	while (cur.kind != NodeKind.Identifier) {
+		if (cur.kind == NodeKind.MemberExpr) cur = (cur.data as MemberExprData).object;
+		else if (cur.kind == NodeKind.ArrayAccess) cur = (cur.data as ArrayAccessData).array;
+		else if (cur.kind == NodeKind.HiddenDeref) cur = (cur.data as HiddenDerefData).expr;
+		else return null;
+	}
+	const sym = cur.resolvedSym;
+	return sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Borrow ? sym : null;
+}
+
 export function checkWrite(target: Node, site: WriteSite): WriteCheck {
+	const borrowed = borrowRoot(target);
+	if (borrowed != null) return { verdict: WriteVerdict.BorrowView, root: borrowed };
 	const asRefArg = site == WriteSite.RefArg;
 	let cur: Node = target;
 	let interior = false;
@@ -99,7 +113,6 @@ export function checkWrite(target: Node, site: WriteSite): WriteCheck {
 	const sym = cur.resolvedSym;
 	if (sym == null || reachesThroughReference(sym)) return { verdict: WriteVerdict.Writable, root: sym };
 	const viewInterior = interior || (asRefArg && isValueAggregateParam(target.nodeType));
-	if (sym.symbolType != null && sym.symbolType.kind == TypeKind.Borrow) return { verdict: WriteVerdict.BorrowView, root: sym };
 	if (hasFlag(sym, SymbolFlag.ForVar)) return { verdict: viewInterior ? WriteVerdict.ForVarInterior : WriteVerdict.Writable, root: sym };
 	if (sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable)) {
 		if (!interior) return { verdict: WriteVerdict.ConstRebind, root: sym };
@@ -194,6 +207,7 @@ export function lvalueText(node: Node): string {
 		return lvalueText(d.object) + "." + d.property;
 	}
 	if (node.kind == NodeKind.ArrayAccess) return lvalueText((node.data as ArrayAccessData).array) + "[…]";
+	if (node.kind == NodeKind.HiddenDeref) return lvalueText((node.data as HiddenDerefData).expr);
 	return "…";
 }
 
@@ -221,7 +235,7 @@ export function writeRefusal(target: Node, site: WriteSite, method: string = "")
 		WriteVerdict.ConstRebind | WriteVerdict.ConstInterior => `cannot ${what} — '${name}' is const (use 'let')`,
 		WriteVerdict.ValueParamInterior => `cannot mutate value-type parameter '${name}': value parameters are read-only views; copy it locally first`,
 		WriteVerdict.ForVarInterior => `cannot mutate value-type loop variable '${name}': for-of binds a per-iteration copy; iterate by index to mutate the collection`,
-		WriteVerdict.BorrowView => `cannot ${what} — '${name}' is a read-only Borrow<T> view; change what it was taken from, copy what it reads into a 'let', or declare a new Borrow<T> for another source`,
+		WriteVerdict.BorrowView => `cannot ${what} — '${name}' is a read-only Borrow<T> view; to write, change what it was taken from or take a 'ref' parameter instead`,
 		WriteVerdict.Writable => "",
 	};
 	return site == WriteSite.View ? refusal + "; a view that only reads is Readonly<Span<T>>" : refusal;

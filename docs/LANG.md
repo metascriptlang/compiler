@@ -2912,7 +2912,7 @@ To achieve peak performance with large structs, MetaScript provides the `Borrow<
 
 - **Purpose**: Avoid memory copies when accessing large objects or array elements.
 - **Behavior**: A `Borrow<T>` local or parameter holds the address of a variable, field or element; every read goes through it, so `b.field`, `b[i]`, `b.length`, `b + 1`, `b == x` and `${b}` read the place as it is now. Copying it out (`const c = b`) copies the `T`.
-- **Safety**: read-only (`b.x = …` and `b = …` are refused; a write that reaches through a reference, such as `b[0] = 5` on a `Borrow<int32[]>`, writes the shared array). The initializer must be a variable, field or element: a call result or literal is refused. While the local is in use, a change of its place (`n = 2`, `n++`, `s.x = 5`, `xs[0] = 7`, a `ref` argument) or of the storage it lies in (`xs.push`, rule 4 of Span below) is refused; capturing it in a closure is refused.
+- **Safety**: read-only: `b = …`, `b.x = …`, `b[0] = 5` (also on a `Borrow<int32[]>` or a class), `b.push(…)` and passing `b[0]` to a `ref` parameter are refused; write through the source or a `ref` parameter. The initializer must be a variable, field or element: a call result or literal is refused. While the local is in use, a change of its place (`n = 2`, `n++`, `s.x = 5`, `xs[0] = 7`, a `ref` argument) or of the storage it lies in (`xs.push`, rule 4 of Span below) is refused; capturing it in a closure is refused.
 
 ```typescript
 struct LargeData { a: int32; /* many fields */ }

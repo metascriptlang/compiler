@@ -159,6 +159,13 @@ test "a Borrow<T> local is a read-only view of a place" {
 	const writes = [
 		"let s: S = { n: 1, name: \"a\" }; const b: Borrow<S> = s; b.n = 2; return s.n;",
 		"let s: S = { n: 1, name: \"a\" }; let b: Borrow<S> = s; const t: S = { n: 2, name: \"b\" }; b = t; return b.n;",
+		"const xs: int32[] = [1, 2]; const b: Borrow<int32[]> = xs; b[0] = 5; return xs[0];",
+		"const xs: int32[] = [1, 2]; const b: Borrow<int32[]> = xs; b[0] += 5; return xs[0];",
+		"const xs: int32[] = [1, 2]; const b: Borrow<int32[]> = xs; b.push(3); return xs[0];",
+		"const bag = new Bag(); const b: Borrow<Bag> = bag; b.count = 2; return bag.count;",
+		"const bag = new Bag(); const b: Borrow<Bag> = bag; b.items.push({ n: 1, name: \"a\" }); return bag.count;",
+		"let xs: S[] = [{ n: 1, name: \"a\" }]; const b: Borrow<S[]> = xs; grow(b); return xs[0].n;",
+		"const xs: int32[] = [1, 2]; const b: Borrow<int32[]> = xs; const sp: Span<int32> = b; return sp[0];",
 	];
 	for (const body of writes) {
 		assert refusedWith(body, "is a read-only Borrow<T> view"), body;
@@ -166,5 +173,5 @@ test "a Borrow<T> local is a read-only view of a place" {
 	assert refusedWith("const b: Borrow<S> = { n: 1, name: \"a\" }; return b.n;", "cannot borrow from this expression"), "literal";
 	assert refusedWith("const b: Borrow<int32> = take([]); return b;", "cannot borrow from this expression"), "call result";
 	assert refusedWith("const xs: int32[] = [1]; const b: Borrow<int32[]> = xs; const f = (): int32 => b.length as int32; return f();", "cannot be captured"), "closure";
-	assert compiles("const xs: int32[] = [1, 2]; const b: Borrow<int32[]> = xs; b[0] = 5; return xs[0];") == "", "an element write reaches through the array reference";
+	assert compiles("const xs: int32[] = [1, 2]; const b: Borrow<int32[]> = xs; const r: Readonly<Span<int32>> = b; return r[0] + b[1];") == "", "a read-only view of the borrowed array";
 }
