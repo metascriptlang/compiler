@@ -2911,16 +2911,18 @@ not rerun for this fixture correction.
 To achieve peak performance with large structs, MetaScript provides the `Borrow<T>` type (similar to the standard reference `lent T` pattern).
 
 - **Purpose**: Avoid memory copies when accessing large objects or array elements.
-- **Behavior**: Passes a pointer instead of copying the struct value.
-- **Safety**: Managed by the analyzer to ensure the borrow does not outlive the owner.
+- **Behavior**: A `Borrow<T>` local or parameter holds the address of a variable, field or element; every read goes through it, so `b.field`, `b[i]`, `b.length`, `b + 1`, `b == x` and `${b}` read the place as it is now. Copying it out (`const c = b`) copies the `T`.
+- **Safety**: read-only (`b.x = …` and `b = …` are refused; a write that reaches through a reference, such as `b[0] = 5` on a `Borrow<int32[]>`, writes the shared array). The initializer must be a variable, field or element: a call result or literal is refused. While the local is in use, a change of its place (`n = 2`, `n++`, `s.x = 5`, `xs[0] = 7`, a `ref` argument) or of the storage it lies in (`xs.push`, rule 4 of Span below) is refused; capturing it in a closure is refused.
 
 ```typescript
-interface LargeData { /* many fields */ }
+struct LargeData { a: int32; /* many fields */ }
 const data: LargeData[] = [...];
 
-// No copy: 'item' is a pointer to the element in the array
+// No copy: 'item' is the address of the element
 const item: Borrow<LargeData> = data[0];
 ```
+
+Measured 2026-10-08, C, JS and the Raiser alike: corpus `borrowLocalReadsThroughAddress` prints `card=3/2 scalar=8/true/7 text=5/hello!/true struct=6/10 class=5 field=5/12 element=3 param=16 generic=4/x copy=7 alias=9/7 temp=5/8/4 nested=2` on each, covering scalar, string, struct, array and class `T`, local, field, element and parameter sources, a generic instance, a change through an alias or a callee (`alias=9/7`) and a temporary argument to a `Borrow<T>` parameter.
 
 ### 5. Reference Types (`Ref<T>` and `Ptr<T>`)
 
