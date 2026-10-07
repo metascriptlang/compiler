@@ -1173,7 +1173,7 @@ function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
 		return;
 	}
 	if (ctx.decoratorsPending) return;
-	const bodyCtx = pickBodyCtx(sym.modulePath, ctx);
+	const bodyCtx = pickBodyCtx(sym.modulePath, ctx, sym);
 	if (sym.modulePath != "" && bodyCtx.modulePath != sym.modulePath) return;
 	if (decl.kind == NodeKind.FunctionDecl) demandFunctionBody(bodyCtx, decl, sym);
 	else demandMethodBody(bodyCtx, decl, sym);

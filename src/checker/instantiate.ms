@@ -73,16 +73,16 @@ export function lookupModuleProgram(modulePath: string): Node | null {
 //   4. Caller's ctx — last resort when all lookups miss.
 // Reference parity: Nim's `graph.ifaces[module]` via the `symMap` for generic
 // instantiation body re-check.
-let _engineBodyCtxFn: (definingModulePath: string) => CheckerContext | null = (definingModulePath: string): CheckerContext | null => null;
+let _engineBodyCtxFn: (definingModulePath: string, owner: Symbol | null) => CheckerContext | null = (definingModulePath: string, owner: Symbol | null): CheckerContext | null => null;
 
-export function registerEngineBodyCtxFn(fn: (definingModulePath: string) => CheckerContext | null): void {
+export function registerEngineBodyCtxFn(fn: (definingModulePath: string, owner: Symbol | null) => CheckerContext | null): void {
 	_engineBodyCtxFn = fn;
 }
 
-export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext): CheckerContext {
+export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, owner: Symbol | null = null): CheckerContext {
 	if (definingModulePath == "" || definingModulePath == ctx.modulePath) return ctx;
 	if (isEngineCheckMode()) {
-		const engineCtx = _engineBodyCtxFn(definingModulePath);
+		const engineCtx = _engineBodyCtxFn(definingModulePath, owner);
 		if (engineCtx != null) return engineCtx;
 	}
 	const defining = lookupModuleCtx(definingModulePath);
@@ -118,7 +118,7 @@ export function declaresUserHook(t: Type, ctx: CheckerContext): boolean {
 	const owner = t.sym;
 	const name = owner != null ? owner.name : t.typeName;
 	if (name == "") return false;
-	const registry = owner != null ? pickBodyCtx(owner.modulePath, ctx).extensionRegistry : ctx.extensionRegistry;
+	const registry = owner != null ? pickBodyCtx(owner.modulePath, ctx, owner).extensionRegistry : ctx.extensionRegistry;
 	const instanceName = t.kind == TypeKind.GenericInstance ? monoInstanceName(t) : "";
 	for (const hookName of LIFECYCLE_HOOK_NAMES) {
 		if (instanceName != "" && lookupInstanceHook(instanceName, hookName) != null) return true;
@@ -148,7 +148,7 @@ function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, insta
 }
 
 function instantiateExtensionHooks(genericSym: Symbol, instanceName: string, instType: Type, ctx: CheckerContext, loc: SourceLocation): boolean {
-	const registry = pickBodyCtx(genericSym.modulePath, ctx).extensionRegistry;
+	const registry = pickBodyCtx(genericSym.modulePath, ctx, genericSym).extensionRegistry;
 	if (registry == null) return true;
 	let settled = true;
 	for (const hookName of LIFECYCLE_HOOK_NAMES) {
@@ -716,7 +716,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	const mangledName = mangleMonoName(monoRoutineBaseName(mangleBase, sym.modulePath, sym.disamb), dedup.types) + readonlyViewSuffix(dedup.types);
 
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
-	const bodyCtx = pickBodyCtx(sym.modulePath, ctx);
+	const bodyCtx = pickBodyCtx(sym.modulePath, ctx, sym);
 	const existing = cachedInstance(host, sym, mangledName);
 	if (existing != null) {
 		ctx.genericInstDepth = ctx.genericInstDepth - 1;
@@ -881,7 +881,7 @@ function instanceFieldInits(classData: ClassDeclData, names: string[], types: Ty
 		if (pd.propInitializer != null) initialized += 1;
 	}
 	if (initialized == 0) return fields;
-	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
+	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 	const callerScope = openInstanceScope(bodyCtx, names, types);
@@ -930,7 +930,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	const dedup = deduplicateBindings(paramNames, concreteTypes);
 	const mangledClass = monoInstanceNameOf(classSym.name, classSym.modulePath, dedup.types);
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
-	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
+	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
 	let instances: Symbol[] = [];
 	const known = host.typeInstCache.get(classSym);
 	if (known != null) instances = known;
@@ -945,7 +945,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	// registry this function already uses to re-check the constructor body below.
 	let classDeclNode: Node | null = classSym.declNode;
 	if (classDeclNode == null || classDeclNode.kind != NodeKind.ClassDecl) {
-		const declCtx = pickBodyCtx(classSym.modulePath, ctx);
+		const declCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
 		const declSym = lookupSymbol(declCtx.table, classSym.name);
 		classDeclNode = declSym != null ? declSym.declNode : null;
 	}
@@ -1069,7 +1069,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, names: string[], typ
 	// `graph.ifaces[module]` lookup. Inject concrete type symbols so user types in type
 	// args (e.g. Item in `new HashSet<Item>(...)`) are visible during resolveAnnotation.
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
-	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
+	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
 	if (clonedBody != null) {
 		const savedHost = bodyCtx.instantiatingCtx;
 		bodyCtx.instantiatingCtx = host;
