@@ -60,3 +60,10 @@ test "a narrowed union reference fits a union in another order" {
 	const result = checkOnly(SRC_NARROWED);
 	assert result.errors.length == 0, "a narrowed member converts into any union holding it: " + result.errors.join("\n");
 }
+
+test "a generic alias over a primitive leaves the order of unions holding it" {
+	const overString = checkOnly("type Label<T> = string;\nfunction f(a: number | string): void { const x: boolean = a; }\n").errors.join("\n");
+	assert overString.contains("'number | string'"), "string keeps its place after a generic alias names it: " + overString;
+	const overNumber = checkOnly("type Count<T> = number;\nfunction f(b: boolean | number): void { const y: string = b; }\n").errors.join("\n");
+	assert overNumber.contains("'boolean | number'"), "number keeps its place after a generic alias names it: " + overNumber;
+}
