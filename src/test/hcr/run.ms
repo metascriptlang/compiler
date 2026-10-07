@@ -731,6 +731,7 @@ function runCommand(): void {
 			env.set("MSC_NO_GLOBAL_CACHE", globalCache);
 			failWith(tag, `msc run --hcr${via ? " (logic imported through via.ms)" : ""} did not rebuild the edited module alone into the running app`);
 		}
+		need(tag, !both(ran).contains("still open for writing"), "an in-place save waited out the writer limit");
 		need(tag, !exists(ended), "the image copies of an ended run survived the next start");
 		need(tag, exists(`${alive}/keep.txt`), "the start removed the copies of a live process");
 		need(tag, exists(`${foreign}/keep.txt`), "the start removed a directory that is not a run");
@@ -1162,6 +1163,7 @@ function fsWatch(): void {
 		"WATCH a renamed save is reported closed: true",
 		"WATCH a missing file has no writer: true",
 		"WATCH a closed file proves no writer: true",
+		"WATCH a writer close is observable: true",
 		"WATCH after close: ended true",
 		"WATCH closed while waiting: ended true",
 	] : platform == "linux" ? [
@@ -1172,6 +1174,7 @@ function fsWatch(): void {
 		"WATCH a closed write is reported closed: true",
 		"WATCH a missing file has no writer: true",
 		"WATCH a closed file proves no writer: false",
+		"WATCH a writer close is observable: true",
 		"WATCH after close: ended true",
 		"WATCH closed while waiting: ended true",
 	] : platform == "darwin" ? [
@@ -1183,6 +1186,7 @@ function fsWatch(): void {
 		"WATCH a renamed save is reported closed: true",
 		"WATCH a missing file has no writer: true",
 		"WATCH a closed file proves no writer: false",
+		"WATCH a writer close is observable: false",
 		"WATCH after close: ended true",
 		"WATCH closed while waiting: ended true",
 	] : [
