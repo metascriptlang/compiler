@@ -208,6 +208,14 @@ test "rule 2: a view struct that also carries the viewed array is refused when a
 	assert why == "", why;
 }
 
+test "rule 2: an array stored into another argument escapes, and a later call that grows it there is refused" {
+	const decls = "class Registry { items: int32[][] = []; }\n"
+		+ "function register(r: Registry, a: int32[]): void { r.items.push(a); }\n"
+		+ "function growFirst(r: Registry): void { r.items[0].push(1); }\n";
+	const why = refusal(program(decls, "const r = new Registry(); const a: int32[] = [11, 22]; register(r, a); const v: Span<int32> = a; growFirst(r); return v[0];"), BORROW);
+	assert why == "", why;
+}
+
 test "rule 2: a slot write into the T[] leaves the view legal" {
 	const errors = errorsOf(program("", `${ARR} const sp: Span<S> = xs; xs[0] = { n: 9, name: "z" }; return sp[0].n;`));
 	assert errors == "", errors;
