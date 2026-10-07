@@ -223,12 +223,17 @@ function reaches(changed: string, handles: string): boolean {
 
 function firstMutationIn(g: MutationInfo, v: VarEntry, source: Symbol, handles: string): int32 {
 	if ((g.flags & SF_IS_MUTATED) == 0) return -1;
+	const borrowed = borrowedKeys(source, handles);
 	for (let i = 0; i < g.mutations.length; i += 1) {
 		const m = g.mutations[i];
 		if (m < v.aliveStart || m > v.aliveEnd || g.roots[i] == v.sym) continue;
 		const keep = g.keeps[i];
 		if (!(keep.length == 1 && keep[0] == -1) && encloses(keep, v.scopePath)) continue;
-		if (g.roots[i] != source || reaches(g.paths[i], handles)) return i;
+		if (g.roots[i] != source) {
+			if (keysMeet(keysAtPath(g.roots[i], g.paths[i]), borrowed)) return i;
+			continue;
+		}
+		if (reaches(g.paths[i], handles)) return i;
 	}
 	return -1;
 }
@@ -311,7 +316,7 @@ function sharedKeys(t: Type | null, viaRef: boolean, depth: int32, out: string[]
 			for (const c of t.typeChildren) { sharedKeys(c, viaRef, depth + 1, out); }
 		},
 		TypeKind.GenericInstance => {
-			if (t.typeReturn != null) {
+			if (t.typeChildren.length == 0 && t.typeReturn != null) {
 				sharedKeys(t.typeReturn, viaRef, depth + 1, out);
 			} else {
 				for (const c of t.typeChildren) { sharedKeys(c, viaRef, depth + 1, out); }
@@ -366,7 +371,7 @@ function handlePaths(t: Type | null, keys: string[], viaRef: boolean, depth: int
 			if (inner.length > 0) addKey(out, prefix);
 		},
 		TypeKind.GenericInstance => {
-			if (t.typeReturn != null) {
+			if (t.typeChildren.length == 0 && t.typeReturn != null) {
 				handlePaths(t.typeReturn, keys, viaRef, depth + 1, prefix, out);
 			} else {
 				const inner: string[] = [];
@@ -785,8 +790,11 @@ function pathSources(node: Node | null, out: Node[], paths: string[], handles: s
 			},
 			NodeKind.ObjectLiteral | NodeKind.ArrayLiteral => {
 				const members = n.kind == NodeKind.ObjectLiteral ? (n.data as ObjectLiteralData).properties : (n.data as ArrayLiteralData).elements;
-				for (const m of members) {
-					if (supplies(m.nodeType)) pathSources(m, out, paths, handles, "");
+				for (let mi = 0; mi < members.length; mi += 1) {
+					const m = members[mi];
+					const field = n.kind == NodeKind.ObjectLiteral ? literalFieldType(n, mi) : null;
+					const known = field != null && field.kind != TypeKind.GenericParam && field.kind != TypeKind.Unknown;
+					if (known ? isViewType(field) : supplies(m.nodeType)) pathSources(m, out, paths, handles, "");
 				}
 				addTemp(n, out, paths, handles);
 				return;
@@ -797,6 +805,16 @@ function pathSources(node: Node | null, out: Node[], paths: string[], handles: s
 			},
 		};
 	}
+}
+
+function literalFieldType(lit: Node, index: int32): Type | null {
+	let t = lit.nodeType;
+	while (t != null && (t.kind == TypeKind.Alias || t.kind == TypeKind.Distinct || (t.kind == TypeKind.GenericInstance && t.typeReturn != null))) t = t.typeReturn;
+	if (t == null || t.kind != TypeKind.Struct) return null;
+	const d = lit.data as ObjectLiteralData;
+	if (index >= d.keys.length) return null;
+	const at = t.typeNames.indexOf(d.keys[index]);
+	return at >= 0 && at < t.typeChildren.length ? t.typeChildren[at] : null;
 }
 
 function addTemp(n: Node, out: Node[], paths: string[], handles: string[]): void {
@@ -1043,9 +1061,29 @@ function formalAt(fnType: Type | null, i: int32): Type | null {
 	return i < n ? fnType.typeChildren[i] : null;
 }
 
+function reachesBorrowed(u: BorrowUnit, v: VarEntry, keys: string[]): boolean {
+	for (let b = 0; b < v.borrowsFrom.length; b += 1) {
+		if (keysMeet(borrowedKeys(u.p.vars[v.borrowsFrom[b]].sym, v.borrowHandles[b]), keys)) return true;
+	}
+	return false;
+}
+
 function changeReachable(u: BorrowUnit, arg: Node, t: Type | null, viaRef: boolean, summary: ResizeSummary): void {
 	const keys = effectKeys(keysOf(t, viaRef), summary);
 	if (keys.length == 0) return;
+	const roots: Symbol[] = [];
+	rootsOf(arg, roots);
+	if (roots.length == 1) {
+		const id = variableId(u.p, roots[0]);
+		if (id >= 0 && !u.p.vars[id].external && isBorrower(u, roots[0]) && u.p.vars[id].borrowsFrom.length > 0) {
+			const v = u.p.vars[id];
+			if (!reachesBorrowed(u, v, keys)) return;
+			for (let b = 0; b < v.borrowsFrom.length; b += 1) {
+				potentialMutation(u.p, u.p.vars[v.borrowsFrom[b]].sym, arg, v.borrowPaths[b]);
+			}
+			return;
+		}
+	}
 	const paths: string[] = [];
 	handlePaths(t, keys, viaRef, 0, "", paths);
 	for (const p of paths) { mutateRoots(u, arg, arg, p); }
@@ -1175,7 +1213,8 @@ function crossesRef(t0: Type | null, path: string): boolean {
 	while (true) {
 		if (t == null) return true;
 		match (t.kind) {
-			TypeKind.Ref | TypeKind.Var | TypeKind.GenericParam | TypeKind.Unknown | TypeKind.TypeReference | TypeKind.Pending => { return true; },
+			TypeKind.Ref | TypeKind.Var | TypeKind.Span | TypeKind.Borrow | TypeKind.GenericParam | TypeKind.Unknown
+				| TypeKind.TypeReference | TypeKind.Pending => { return true; },
 			TypeKind.Alias | TypeKind.Distinct | TypeKind.Sink | TypeKind.Lent => {
 				t = t.typeReturn;
 				continue;
@@ -1236,6 +1275,37 @@ function keysAtPath(sym: Symbol, path: string): string[] {
 	return t == null ? ["*"] : keysOf(t, true);
 }
 
+function ownKeys(t0: Type | null): string[] {
+	let t = t0;
+	while (t != null && (t.kind == TypeKind.Ref || t.kind == TypeKind.Var || t.kind == TypeKind.Alias || t.kind == TypeKind.Distinct
+		|| t.kind == TypeKind.Sink || t.kind == TypeKind.Lent)) t = t.typeReturn;
+	if (t == null) return ["*"];
+	return match (t.kind) {
+		TypeKind.Array | TypeKind.Span | TypeKind.Borrow => [arrayKey(t.typeReturn)],
+		TypeKind.String => ["string"],
+		_ => keysOf(t, true),
+	};
+}
+
+function borrowedKeys(sym: Symbol, handles: string): string[] {
+	const out: string[] = [];
+	let any = false;
+	for (const h of handles.split("|")) {
+		if (h == "") continue;
+		any = true;
+		for (const k of ownKeys(typeAtPath(sym.symbolType, h == "@" ? "" : h))) { addKey(out, k); }
+	}
+	if (!any) out.push("*");
+	return out;
+}
+
+function keysMeet(a: string[], b: string[]): boolean {
+	for (const k of a) {
+		if (matchesAnyKey(k, b)) return true;
+	}
+	return false;
+}
+
 function inExternalGroup(u: BorrowUnit, id: int32): boolean {
 	if (u.p.vars[id].external) return true;
 	const root = ufRoot(u.p, id);
@@ -1247,12 +1317,12 @@ function inExternalGroup(u: BorrowUnit, id: int32): boolean {
 
 function aliasedChange(u: BorrowUnit, v: VarEntry, src: VarEntry, handles: string): int32[] {
 	if (!src.external) return [];
-	const borrowed: string[] = [];
+	let shared = false;
 	for (const h of handles.split("|")) {
-		if (h == "" || !crossesRef(src.sym.symbolType, h == "@" ? "" : h)) continue;
-		for (const k of keysAtPath(src.sym, h == "@" ? "" : h)) { addKey(borrowed, k); }
+		if (h != "" && crossesRef(src.sym.symbolType, h == "@" ? "" : h)) shared = true;
 	}
-	if (borrowed.length == 0) return [];
+	if (!shared) return [];
+	const borrowed = borrowedKeys(src.sym, handles);
 	for (let gi = 0; gi < u.p.graphs.length; gi += 1) {
 		const g = u.p.graphs[gi];
 		for (let i = 0; i < g.mutations.length; i += 1) {
