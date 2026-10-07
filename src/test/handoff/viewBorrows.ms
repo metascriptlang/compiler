@@ -128,3 +128,43 @@ test "a local's address never outlives its frame" {
 	const kept = HEAD + "function first(xs: S[]): Ptr<S> { return xs[0] as Ptr<S>; }\nfunction firstOf(ref s: S): Ptr<S> { return s as Ptr<S>; }\n";
 	assert compileToCWithStd(kept).ok;
 }
+
+test "a Borrow<T> local is refused while its place is changed in place" {
+	const refused = [
+		"let n: int32 = 1; const b: Borrow<int32> = n; n = 2; return b;",
+		"let n: int32 = 1; const b: Borrow<int32> = n; n++; return b;",
+		"let n: int32 = 1; const b: Borrow<int32> = n; n += 3; return b;",
+		"let s: S = { n: 1, name: \"a\" }; const b: Borrow<int32> = s.n; s.n = 5; return b;",
+		"let s: S = { n: 1, name: \"a\" }; const b: Borrow<int32> = s.n; s = { n: 8, name: \"b\" }; return b;",
+		"const xs: int32[] = [1, 2]; const b: Borrow<int32> = xs[0]; xs[0] = 7; return b;",
+		"const xs: S[] = [{ n: 1, name: \"a\" }]; const b: Borrow<S> = xs[0]; xs[0] = { n: 9, name: \"z\" }; return b.n;",
+		"const xs: int32[] = [1, 2]; const b: Borrow<int32[]> = xs; xs.push(3); return b.length as int32;",
+		"const xs: int32[] = [1, 2]; const sp: Span<int32> = xs; const b: Borrow<int32> = xs[0]; sp[0] = 4; return b;",
+	];
+	for (const body of refused) {
+		assert refusedWith(body, "is potentially changed at"), body;
+	}
+	const legal = [
+		"let s: S = { n: 1, name: \"a\" }; const b: Borrow<int32> = s.n; s.name = \"q\"; const e: Borrow<S> = s; return b + e.n;",
+		"let n: int32 = 1; const b: Borrow<int32> = n; const k = b; n = 2; return k + n;",
+		"const xs: int32[] = [1, 2]; const sp: Span<int32> = xs; xs[0] = 7; return sp[0];",
+		"let s: S = { n: 1, name: \"a\" }; const e: Borrow<S> = s; s.n = 4; return e.n;",
+	];
+	for (const body of legal) {
+		assert compiles(body) == "", body;
+	}
+}
+
+test "a Borrow<T> local is a read-only view of a place" {
+	const writes = [
+		"let s: S = { n: 1, name: \"a\" }; const b: Borrow<S> = s; b.n = 2; return s.n;",
+		"let s: S = { n: 1, name: \"a\" }; let b: Borrow<S> = s; const t: S = { n: 2, name: \"b\" }; b = t; return b.n;",
+	];
+	for (const body of writes) {
+		assert refusedWith(body, "is a read-only Borrow<T> view"), body;
+	}
+	assert refusedWith("const b: Borrow<S> = { n: 1, name: \"a\" }; return b.n;", "cannot borrow from this expression"), "literal";
+	assert refusedWith("const b: Borrow<int32> = take([]); return b;", "cannot borrow from this expression"), "call result";
+	assert refusedWith("const xs: int32[] = [1]; const b: Borrow<int32[]> = xs; const f = (): int32 => b.length as int32; return f();", "cannot be captured"), "closure";
+	assert compiles("const xs: int32[] = [1, 2]; const b: Borrow<int32[]> = xs; b[0] = 5; return xs[0];") == "", "an element write reaches through the array reference";
+}
