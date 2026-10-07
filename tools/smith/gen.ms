@@ -3,6 +3,7 @@ import { ALL_TYS, ALL_FAMS, Fam, Features, Plant, Ty, tyName, format } from "./f
 
 const FN_COST_CAP: int64 = 20000 as int64;
 const TOP_COST_CAP: int64 = 200000 as int64;
+const GEN_NODE_CAP: int32 = 4096;
 
 enum Shape {
 	Literal,
@@ -163,10 +164,18 @@ class Gen {
 	ents: Ent[] = [];
 	entCount: int32 = 0;
 	makerCount: int32 = 0;
+	nodesLeft: int32 = GEN_NODE_CAP;
 
 	pickTy(): Ty { return this.tys[this.rng.below(this.tys.length)]; }
 
 	pickOp(ops: string[]): string { return ops[this.rng.below(ops.length)]; }
+
+	reserve(work: int64): boolean {
+		const remaining = this.costCap - this.cost;
+		if (remaining < 0 || work > remaining / this.mult) { return false; }
+		this.cost = this.cost + this.mult * work;
+		return true;
+	}
 
 	intTys(): Ty[] {
 		const out: Ty[] = [];
@@ -330,8 +339,9 @@ class Gen {
 
 	convert(t: Ty, depth: int32): string {
 		if (this.tys.length < 2) { return this.binary(t, depth); }
-		let from = this.pickTy();
-		while (from == t) { from = this.pickTy(); }
+		const alternatives: Ty[] = [];
+		for (const from of this.tys) { if (from != t) { alternatives.push(from); } }
+		const from = alternatives[this.rng.below(alternatives.length)];
 		const a = this.expr(from, depth + 1);
 		const checkedAtCompileTime = this.shape != Shape.Other;
 		if (checkedAtCompileTime && isSigned(from) && !isSigned(t) && !isFloat(t)) { return this.wrapHelper(from, t) + "(" + a + ")"; }
@@ -340,6 +350,11 @@ class Gen {
 	}
 
 	cond(depth: int32): string {
+		if (this.nodesLeft == 0) {
+			const t = this.pickTy();
+			return "(" + this.leaf(t) + " == " + this.leaf(t) + ")";
+		}
+		this.nodesLeft--;
 		if (depth >= this.exprMax || this.rng.chance(60)) {
 			const t = this.pickTy();
 			const a = this.expr(t, depth + 1);
@@ -358,9 +373,7 @@ class Gen {
 		for (const f of this.fns) { if (f.ret == t) { candidates.push(f); } }
 		if (candidates.length == 0) { return ""; }
 		const f = candidates[this.rng.below(candidates.length)];
-		const added = this.mult * f.cost + (1 as int64);
-		if (this.cost + added > this.costCap) { return ""; }
-		this.cost = this.cost + added;
+		if (!this.reserve(f.cost + (1 as int64))) { return ""; }
 		let args = "";
 		for (const p of f.params) {
 			const a = this.expr(p, depth + 1);
@@ -370,6 +383,8 @@ class Gen {
 	}
 
 	expr(t: Ty, depth: int32): string {
+		if (this.nodesLeft == 0) { return this.leaf(t); }
+		this.nodesLeft--;
 		if (depth >= this.exprMax) { return this.leaf(t); }
 		if (this.fams.length > 0 && this.rng.chance(20)) {
 			const fam = this.famExpr(t, depth);
@@ -694,7 +709,8 @@ class Gen {
 	}
 
 	statement(depth: int32, indent: string, inLoop: boolean, ret: Ty, inFn: boolean): string {
-		this.cost = this.cost + this.mult;
+		this.nodesLeft--;
+		if (!this.reserve(1 as int64)) { return ""; }
 		if (this.fams.length > 0 && this.rng.chance(20)) {
 			const fam = this.famStatement(indent);
 			if (fam != "") { return fam; }
@@ -728,10 +744,13 @@ class Gen {
 			if (this.rng.chance(50)) { text += " else {\n" + this.block(depth + 1, indent + "\t", inLoop, ret, inFn) + indent + "}"; }
 			return text + "\n";
 		}
-		if (k < 82 && nested) {
+		const available = (this.costCap - this.cost) / this.mult;
+		const maxTrips = Math.min(this.tripMax, (available / (3 as int64)) as int32);
+		if (k < 82 && nested && maxTrips > 0) {
 			const name = "i" + String(this.loopCount);
 			this.loopCount = this.loopCount + 1;
-			const trips = this.rng.between(1, this.tripMax);
+			const trips = this.rng.between(1, maxTrips);
+			if (!this.reserve((2 * trips) as int64)) { return ""; }
 			const savedMult = this.mult;
 			this.mult = this.mult * (trips as int64);
 			this.scope.push({ name: name, ty: Ty.Int32, writable: false });
@@ -761,7 +780,10 @@ class Gen {
 		const savedEnts = this.ents.length;
 		const n = this.rng.between(1, this.stmtMax);
 		let out = "";
-		for (let i = 0; i < n; i++) { out += this.statement(depth, indent, inLoop, ret, inFn); }
+		for (let i = 0; i < n; i++) {
+			if (this.nodesLeft == 0 || this.cost + this.mult > this.costCap) { break; }
+			out += this.statement(depth, indent, inLoop, ret, inFn);
+		}
 		while (this.scope.length > saved) { this.scope.pop(); }
 		while (this.ents.length > savedEnts) { this.ents.pop(); }
 		return out;
@@ -866,6 +888,74 @@ test "the same seed and features give the same program" {
 test "different seeds give different programs" {
 	const f = Features.defaults();
 	assert generate(11 as uint64, f) != generate(12 as uint64, f);
+}
+
+test "numeric loop and routine weights stay capped and restore their scope" {
+	for (let seed = 1; seed < 13; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int8, Ty.Int64, Ty.Float64];
+		g.stmtMax = 32;
+		g.depthMax = 8;
+		g.exprMax = 8;
+		g.tripMax = 64;
+		g.fn(0);
+		assert g.cost <= FN_COST_CAP;
+		assert g.fns[0].cost <= FN_COST_CAP;
+		assert g.mult == (1 as int64);
+		assert g.scope.length == g.fns[0].params.length;
+		assert g.ents.length == 0;
+	}
+}
+
+test "a call is refused before its weighted product could overflow" {
+	const g = new Gen();
+	g.rng = Rng.seeded(1 as uint64);
+	g.mult = FN_COST_CAP;
+	g.costCap = FN_COST_CAP;
+	g.fns = [{
+		name: "huge",
+		ret: Ty.Int8,
+		params: [],
+		cost: 9223372036854775806 as int64,
+	}];
+	assert g.call(Ty.Int8, 0) == "";
+	assert g.cost == (0 as int64);
+}
+
+test "call overhead is charged for every loop iteration" {
+	const g = new Gen();
+	g.rng = Rng.seeded(1 as uint64);
+	g.mult = 64 as int64;
+	g.costCap = 63 as int64;
+	g.fns = [{ name: "tiny", ret: Ty.Int8, params: [], cost: 0 as int64 }];
+	assert g.call(Ty.Int8, 0) == "";
+	assert g.cost == (0 as int64);
+}
+
+test "an exhausted weighted budget emits no block and preserves scope" {
+	for (const t of [Ty.Int8, Ty.Float64]) {
+		const g = new Gen();
+		g.rng = Rng.seeded(1 as uint64);
+		g.tys = [t];
+		g.costCap = FN_COST_CAP;
+		g.cost = FN_COST_CAP - (1 as int64);
+		g.mult = 64 as int64;
+		const text = g.block(0, "", false, t, true);
+		assert text == "";
+		assert g.cost == FN_COST_CAP - (1 as int64);
+		assert g.scope.length == 0 && g.ents.length == 0;
+	}
+}
+
+test "a legal deep vector cannot explode generated source" {
+	const parsed = Features.defaults().overlay(
+		"fams=none funcs=1 globals=1 stmts=32 depth=4 expr=1 trips=64 entries=1",
+	);
+	assert parsed.ok;
+	if (parsed.ok) {
+		assert generate(1 as uint64, parsed.value).byteLength < 1048576;
+	}
 }
 
 test "the program head names its seed and full feature vector" {
