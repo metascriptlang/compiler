@@ -1479,7 +1479,7 @@ function valueOfProtocolOf(ctx: CheckerContext, t: Type | null): ExtensionMethod
 	const none = null as unknown as ExtensionMethod;
 	if (t == null || ctx.extensionRegistry == null) return none;
 	let src = withoutReadonlyView(t);
-	if (isUnresolvedType(src) || src.kind == TypeKind.Error || isUnknownType(src)) return none;
+	if (isUnresolvedType(src) || src.kind == TypeKind.Error || isUnknownType(src) || isMaybeType(src)) return none;
 	if ((src.kind == TypeKind.Ref || src.kind == TypeKind.Ptr) && src.typeReturn != null) src = src.typeReturn;
 	if (src.kind != TypeKind.Distinct && src.kind != TypeKind.GenericInstance && src.kind != TypeKind.Struct) return none;
 	const exts = findAllExtensionsByName(ctx.extensionRegistry, "valueOf");
