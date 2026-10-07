@@ -1726,6 +1726,13 @@ function buildHcrCandidateAbi(
 	const candidate: HcrModuleAbi[] = [];
 	const modulePaths: string[] = [];
 	const imageOwners = new HashMap<string, string>();
+	const globalImportIds: string[] = [];
+	for (const modPath of graph.loadOrder) {
+		const mod = findModule(graph, modPath);
+		if (mod == null || !mod.extraPrelude) continue;
+		const moduleId = hcrModuleId(modPath, root, stdPath, deps);
+		if (moduleId != "") globalImportIds.push(moduleId);
+	}
 	for (const modPath of graph.loadOrder) {
 		const moduleId = hcrModuleId(modPath, root, stdPath, deps);
 		if (moduleId == "") continue;
@@ -1742,6 +1749,9 @@ function buildHcrCandidateAbi(
 			const dependencyId = hcrModuleId(imported.sourcePath, root, stdPath, deps);
 			if (dependencyId == "") continue;
 			dependencies.push(dependencyId);
+		}
+		for (const globalId of globalImportIds) {
+			if (globalId != moduleId && !dependencies.includes(globalId)) dependencies.push(globalId);
 		}
 		const exports = hcrModuleExports(moduleId, modPath);
 		if (!exports.ok) return Result.err(exports.error);
