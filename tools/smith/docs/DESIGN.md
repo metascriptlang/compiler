@@ -2,9 +2,11 @@
 
 Status: direction approved (2026-10-03..05, in conversation); slice 1 proven
 2026-10-05 and slice 2 integrated/probed 2026-10-07 (§Slice 2 — measured).
-This file owns the agreed shape, the constraints that forced it and the
-measurements behind the generator's surface. Csmith-derived evidence lives
-in `CSMITH-STUDY.md`.
+This file owns the agreed four-slice shape, the constraints that forced it and
+the measurements behind the generator's surface. Csmith-derived evidence lives
+in `CSMITH-STUDY.md`. The broader full-language goal confirmed 2026-10-07 is
+audited in `coveragePlan.md`; its domain/oracle expansion still awaits approval.
+Compiler findings are now retained and parked, not fixed within this goal.
 
 ## Goal
 
