@@ -29,7 +29,7 @@ export interface ExportedSymInfo {
 	extIsStatic: boolean;
 	overloadExtReceiverTypes: string[];
 	overloadExtIsStatic: boolean[];
-	converterTargetType: Type; // resolved converter target (null when unresolved / not a converter)
+	converterTargetType: Type | null;
 }
 
 export interface ModuleExports {

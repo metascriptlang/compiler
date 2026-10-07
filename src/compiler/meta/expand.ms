@@ -1772,6 +1772,7 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 		objectHeap: vm.objectHeap,
 		lastError: vm.error,
 		gcMode: vm.gcMode,
+		orphanFailures: [],
 	};
 
 	// Check for VM-level errors (instruction budget, division by zero, etc.)
@@ -2444,7 +2445,7 @@ test "hasUserMacroInvocation detects macro in DecoratedDecl decorators" {
 	defineTestMacro(ctx, "myDeco", loc);
 	const inv = createNode(NodeKind.MacroInvocation, { macroName: "myDeco", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const inner = createNode(NodeKind.InterfaceDecl, {
-		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [],
+		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [],
 	}, synthToken(loc));
 	const dec = createNode(NodeKind.DecoratedDecl, {
 		decorators: [inv], decoratedNode: inner,

@@ -1,7 +1,7 @@
 import { cwd, env, execFileResult, findOnPath, platform } from "std/process";
 import { copyFile, ensureDir, exists, readFile, realpath, removeAll, writeFile } from "std/fs";
 import { djb2, fingerprint, hashToHex } from "std/hash";
-import { Features, defaults, format, overlay } from "./features";
+import { Features, defaults, format, overlay, swarm } from "./features";
 import { generate } from "./gen";
 
 const GENERATOR_SOURCES: string[] = ["rng.ms", "features.ms", "gen.ms"];
@@ -273,7 +273,7 @@ function writeBundle(p: Paths, name: string, program: string, meta: string, v: V
 
 function isFinding(kind: string): boolean { return kind != "clean"; }
 
-export function runSeeds(first: uint64, count: int32, f: Features): int32 {
+export function runSeeds(first: uint64, count: int32, base: Features, swarmed: boolean): int32 {
 	const p = paths();
 	if (!exists(p.root + "/src/test/corpus/run.ms")) { return fail("run from the repo root: no src/test/corpus/run.ms under " + p.root); }
 	const msc = subjectMsc(p.root);
@@ -282,15 +282,18 @@ export function runSeeds(first: uint64, count: int32, f: Features): int32 {
 	prepareSandbox(p);
 	const names: string[] = [];
 	const programs: string[] = [];
+	const vectors: Features[] = [];
 	for (let i = 0; i < count; i++) {
 		const seed = first + (i as uint64);
+		const f = swarmed ? base.swarm(seed) : base;
+		vectors.push(f);
 		const name = programName(seed, f);
 		const program = generate(seed, f);
 		writeFile(p.programs + "/" + name + ".ms", program);
 		names.push(name);
 		programs.push(program);
 	}
-	console.log("smith run — seeds " + String(first) + ".." + String(first + ((count - 1) as uint64)) + ", " + f.format());
+	console.log("smith run — seeds " + String(first) + ".." + String(first + ((count - 1) as uint64)) + ", " + (swarmed ? "swarm over " : "") + base.format());
 	console.log("  msc " + id.msc + " (" + id.mscVersion + ", " + id.mscHash + "; " + id.support + ")");
 	console.log("  generator " + id.generator);
 	const log = runCorpus(p, msc);
@@ -306,7 +309,7 @@ export function runSeeds(first: uint64, count: int32, f: Features): int32 {
 			clean++;
 			continue;
 		}
-		const dir = writeBundle(p, names[i], programs[i], metaText(seed, f, id, v), v);
+		const dir = writeBundle(p, names[i], programs[i], metaText(seed, vectors[i], id, v), v);
 		if (v.kind == "timeout" || v.kind == "unjudged") { notBugs++; } else { findings++; }
 		console.log("  " + names[i] + " " + v.kind + (v.split == "" ? "" : " [" + v.split + "]") + " → " + dir);
 	}

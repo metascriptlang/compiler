@@ -292,7 +292,7 @@ export function createResult(okType: Type, errType: Type): Type {
 	falseVariant.kind = TypeKind.Struct;
 	falseVariant.typeNames = ["ok", "error"];
 	falseVariant.typeChildren = [createBooleanLiteral(false), eParam];
-	const base = createUnion([trueVariant, falseVariant]);
+	const base = createUnionInOrder([trueVariant, falseVariant]);
 	base.typeName = "Result";
 	base.typeExtra = booleanType();
 	base.typeNames = ["ok", "true", "false"];
@@ -551,6 +551,14 @@ function hasNullMember(t: Type): boolean {
 }
 
 export function createUnion(types: Type[]): Type {
+	return buildUnion(types, true);
+}
+
+export function createUnionInOrder(types: Type[]): Type {
+	return buildUnion(types, false);
+}
+
+function buildUnion(types: Type[], canonical: boolean): Type {
 	// Flatten nested unions — `Union(Null, Union(A, B))` becomes `Union(Null, A, B)`.
 	// Without flattening, downstream shape checks miss the canonical form and
 	// codegen falls back to a literal tagged union.
@@ -586,6 +594,7 @@ export function createUnion(types: Type[]): Type {
 		}
 		if (!dup) seen.push(k);
 	}
+	if (canonical && !extendsDeclaredSum(types)) sortUnionMembers(seen);
 	const t = emptyType();
 	t.kind = TypeKind.Union;
 	t.typeChildren = seen;
@@ -632,6 +641,42 @@ export function createUnion(types: Type[]): Type {
 		}
 	}
 	return t;
+}
+
+function extendsDeclaredSum(types: Type[]): boolean {
+	for (const ut of types) {
+		if (ut != null && ut.kind == TypeKind.Union && ut.typeNames != null && ut.typeNames.length >= 2) return true;
+	}
+	return false;
+}
+
+export function sortUnionMembers(members: Type[]): void {
+	const keys: string[] = [];
+	for (const m of members) keys.push(unionMemberKey(m));
+	for (let i = 1; i < members.length; i += 1) {
+		const m = members[i];
+		const k = keys[i];
+		let j = i - 1;
+		while (j >= 0 && keys[j] > k) {
+			members[j + 1] = members[j];
+			keys[j + 1] = keys[j];
+			j -= 1;
+		}
+		members[j + 1] = m;
+		keys[j + 1] = k;
+	}
+}
+
+function unionMemberKey(t: Type): string {
+	if (t.kind == TypeKind.Null) return "~null";
+	let owner: Type | null = t;
+	let depth = 0;
+	while (owner != null && owner.sym == null && owner.typeReturn != null && depth < PEEL_MAX_DEPTH) {
+		owner = owner.typeReturn;
+		depth += 1;
+	}
+	const ownerPath = owner != null && owner.sym != null ? owner.sym.modulePath : "";
+	return typeKey(t) + "\u0001" + ownerPath;
 }
 
 // DU-variant identity (Nim attachedOps-by-ItemId analog for structural types):
@@ -2139,6 +2184,11 @@ export function getSysType(kind: TypeKind): Type {
 	return createPrimitive(kind);
 }
 
+export function isSysType(t: Type): boolean {
+	const idx = t.kind as number;
+	return idx >= 0 && idx < _sysTypes.length && _sysTypes[idx] == t;
+}
+
 // ===== Well-Known Type Accessors =====
 // Thin wrappers over getSysType for backward compatibility + readability.
 
@@ -3264,6 +3314,7 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 			TypeKind.Union | TypeKind.Tuple => {
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlace(copy, paramName, concrete, active);
+				if (t.kind == TypeKind.Union && copy.typeName == "" && (copy.typeNames == null || copy.typeNames.length == 0)) sortUnionMembers(copy.typeChildren);
 				if (t.kind == TypeKind.Union && isNullableShape(copy.typeChildren) && !hasGenericParams(copy)) {
 					return nullableUnionOf(copy.typeChildren);
 				}
@@ -3352,6 +3403,7 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 			TypeKind.Union | TypeKind.Tuple => {
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(copy, names, concretes, active);
+				if (t.kind == TypeKind.Union && copy.typeName == "" && (copy.typeNames == null || copy.typeNames.length == 0)) sortUnionMembers(copy.typeChildren);
 				if (t.kind == TypeKind.Union && isNullableShape(copy.typeChildren) && !hasGenericParams(copy)) {
 					return nullableUnionOf(copy.typeChildren);
 				}

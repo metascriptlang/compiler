@@ -18,7 +18,7 @@ import {
 	ArrayLiteralData, ObjectLiteralData, SpreadExprData, SymbolFlag,
 } from "../ast/node";
 import {
-	createUnion, inferredType, nullType, neverType,
+	createUnion, createUnionInOrder, inferredType, nullType, neverType,
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance,
@@ -1652,7 +1652,7 @@ export function narrowTypeByDiscriminantProperty(
 // disc field, so a bare createUnion residual would reject `n.kind` — and a
 // single-variant residual must stay a 1-child union for the same reason.
 function unionPreservingDiscriminant(parent: Type, remaining: Type[]): Type {
-	const u = createUnion(remaining);
+	const u = createUnionInOrder(remaining);
 	if (u.kind != TypeKind.Union) return u;
 	if (parent.typeExtra == null || parent.typeNames == null
 		|| parent.typeNames.length == 0 || parent.typeChildren == null) return u;

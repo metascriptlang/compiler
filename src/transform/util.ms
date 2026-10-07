@@ -620,7 +620,7 @@ export function makeInterfaceDeclFromTypes(name: string, fields: string[], field
 		interfaceName: name, interfaceFields: fields, interfaceFieldTypes: fieldTypes,
 		interfaceExtends: [] as string[],
 		nameLocation: loc,
-		interfaceFieldDecorators: noFieldDecorators(fields.length),
+		interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length),
 	}, syntheticToken(loc));
 	n.nodeType = createStruct(name, fields, resolvedTypes, true);
 	return n;

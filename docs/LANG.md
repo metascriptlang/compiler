@@ -768,7 +768,9 @@ const h: Handler = { tag: 1 };            // cb omitted → null
 if (h.cb !== null) { h.cb(7); }           // narrow, then call
 ```
 
-A **bare** function-typed field (no `?`, no `| null`) must be initialized — a NULL function pointer has no safe default, so the checker rejects omission; `?` is the opt-out. `?` is a parse error on `struct` fields (a value type would silently become a union — write the union explicitly) and on class methods (declare a function-typed property instead). `?` applies to interface fields, class properties, and anonymous object types alike.
+**Fields without a default value** (measured 2026-10-06 on C, JS and the Raiser; checker3pass `constructionFieldInit`, corpus `constructionGivesEveryField`, `classFieldZeroValue`): a field whose type has no default — an array, a class instance, a `Map`, a function, or a struct holding one — must be given wherever the object is built. An object literal that omits one is an error (`field 'items' must be initialized: type 'int32[]' has no default value`), even when the class declares an initializer for it: an object literal does not run field initializers (`k: int32 = 5` reads `0` from `{ n: 1 }`). `new C()` of a class without a constructor is an error when such a field, its own or a parent's, has no initializer (`'new Rec()' leaves 'items' without a value`). Value fields (numbers, `boolean`, `string`, a struct of those) keep their zero value; `?` and `| null` opt out, and a nullable function defaults to `null`. Before this rule the omitted field read as nil: `b.items.length` crashed on C, JS and the Raiser. `tsc` refuses every omitted non-optional property (TS2739/TS2741), value fields included; MS keeps the zero value for those. A class field without initializer, a struct-valued one included, reads its zero value after `new` on JS as on C (it read `undefined` before).
+
+`?` is a parse error on `struct` fields (a value type would silently become a union — write the union explicitly) and on class methods (declare a function-typed property instead). `?` applies to interface fields, class properties, and anonymous object types alike.
 
 **C backend**: Interfaces emit as C structs, passed by pointer (`T*`), heap-allocated with DRC refcounting.
 
@@ -1296,11 +1298,14 @@ type Extended = IUser & { role: string };
 struct SuperUser = IUser & { role: string; };
 ```
 
-A union value carries the position of the member it holds, so `int32 | string` and
-`string | int32` are different types: one is refused where the other is expected, with an error that
-says the members are the same in another order. A value narrowed to one member fits any union that
-holds that member, whatever the order. Measured 2026-10-06 on C, JS and the Raiser (corpus
-`narrowedUnionIntoAnotherOrder`); before, C read the narrowed value with the wrong member's layout.
+A union is one type whatever order its members are written in, as in TypeScript: `int32 | string`
+and `string | int32` are the same type in every module, nullable, inside an array and through a generic
+parameter once it is known, and a value moves between them with no conversion. The members are kept in
+one canonical order where the union is built; error messages show that order, `null` last
+(`int32 | string | null`). A declared discriminated union keeps its declared variant order. A value
+narrowed to one member fits any union that holds that member. Measured 2026-10-06 on C, JS and the
+Raiser (corpus `unionMemberOrderIdentity`, `narrowedUnionIntoAnotherOrder`); before, the other order
+was refused.
 
 #### `as` between a union and its members
 

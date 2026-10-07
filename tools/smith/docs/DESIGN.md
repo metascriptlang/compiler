@@ -1,9 +1,14 @@
 # Smith — design
 
-Status: direction approved (2026-10-03..05, in conversation); slice 1 built
-and proven 2026-10-05 (§Slice 1 — measured). This file owns the agreed shape,
-the constraints that forced it and the measurements behind the generator's
-surface. Evidence for the Csmith-derived claims lives in `CSMITH-STUDY.md`.
+Status: direction approved (2026-10-03..05, in conversation); slice 1 proven
+2026-10-05 and slice 2 integrated/probed 2026-10-07 (§Slice 2 — measured).
+This file owns the agreed four-slice shape, the constraints that forced it and
+the measurements behind the generator's surface. Csmith-derived evidence lives
+in `CSMITH-STUDY.md`. The broader full-language goal confirmed 2026-10-07 is
+audited in `coveragePlan.md`; its domain/oracle matrix and four tooling mechanisms
+were approved by user resume. That file also holds the measured core hardening
+and its still-open bounds; approval is not implementation or coverage evidence.
+Compiler findings are now retained and parked, not fixed within this goal.
 
 ## Goal
 
@@ -106,11 +111,12 @@ may be emitted raw was measured one case per program, built
 Not measured: the Raiser and SAN lanes, `--release`, Windows, Linux/gcc,
 `float32`, `int64` → `float64` rounding at the 2^53 edge.
 
-Spelling traps the generator encodes: `-128 as int8` is `-(128 as int8)` and
-fails to compile, so negative literals are written `((-128) as int8)`;
-`b < (X) && a > (Y)` parses as a generic call `b<…>(…)` (TypeScript reads two
-comparisons), so the safe-math helpers parenthesize every comparison. Both are
-queued on the arc card.
+The initial measurements found spelling traps: `-128 as int8` binds as
+`-(128 as int8)`, so the generator writes negative literals as
+`((-128) as int8)`. Regression pins `1110-uint64CompoundAssignWraps`,
+`1111-negateNegativeLiteral` and `1113-comparisonPairIsNotGenericCall`
+hold the compiler fixes found by slice 1; `1113` also covers parenthesized
+callback-array type arguments found by the land formatter lane.
 
 ### The loop, proven
 
@@ -142,6 +148,32 @@ MIN), a clang error (seed 21).
   read `js vs danger` on one run). The bundle records a canonical split instead:
   lanes grouped by identical output (wrong-code) or by pass/fail (crash), in
   `LANE_ORDER`.
+
+## Slice 2 — measured
+
+Code: `features.ms` `Fam` / `swarm`; `gen.ms` `Gen` family methods;
+`drive.ms` `runSeeds`; `main.ms` accepts `--swarm` for `gen` and `run`.
+The per-seed vector, not the base vector, is the bundle's reproduction input.
+
+Measured 2026-10-07 on macOS arm64, base tree
+`639c4eb55166f23c31a4a75e4707859a48065868` with uncommitted slice 2 sources
+(generator hash `9e18949_f562f177:39015`); subject `./msc` v0.3.2,
+hash `dd5a2867_65a6d9a5:21583040`, support commit `a23bbae0a`:
+
+| command / check | result |
+|---|---|
+| `./msc test tools/smith/gen.ms` | 311/311 tests, 17 files |
+| CLI `run 1 3`, default full families | 3 clean, 0 finding, 0 timeout/unjudged; c/orc/danger/js/esm |
+| CLI `run 101 2 --swarm --plant=backend` | 2 planted wrong-code bundles, canonical split `c orc danger \| js esm` |
+| `rerun` of both planted bundles | 2/2 REPRODUCED; byte-identical program and every lane output |
+| slice 1 CLI vs slice 2 `gen <seed> --features=fams=none`, seeds 1,2,3,7,21,24 | byte-identical after removing only ` fams=none` from the new header |
+
+The planted seed 101 drew `fams=closure`; seed 102 drew `fams=union,generic`.
+Old slice 1 bundles keep their evidence but become VOID under the new generator
+identity/header; they are not migrated or deleted.
+Not yet measured here: the 100-seed swarm campaign, closure-only campaign, SAN,
+Raiser, Windows or Linux. The matrix above does not claim yield or exhaustive
+family coverage.
 
 ## Open questions (design-level, decide before the slice that needs them)
 

@@ -17,8 +17,9 @@
 // std/promise are only observable through one of those three, so widening
 // the surface would only duplicate diagnostics.
 
-import { Node, NodeKind, SourceLocation, Symbol, DeclKind, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, VariableDeclData, ExportDeclData, DecoratedDeclData, ProgramData, createNodeAt, makeLoc } from "../ast/node";
+import { Node, NodeKind, SourceLocation, Symbol, SymbolKind, DeclKind, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, VariableDeclData, ExportDeclData, DecoratedDeclData, ProgramData, createNodeAt, makeLoc } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { makeSymbol } from "./symbol";
 import { readonlyDataConstBinding } from "./constFold";
 
 // Single wording shared by both consumers — only the severity differs.
@@ -216,8 +217,7 @@ function fsVariable(name: string, kind: DeclKind, initializer: Node): Node {
 		declKind: kind,
 		nameLocation: fsLoc(),
 	}, fsLoc());
-	const sym = new Symbol();
-	sym.name = name;
+	const sym = makeSymbol(name, SymbolKind.Variable, null, false);
 	sym.modulePath = "test.ms";
 	node.resolvedSym = sym;
 	return node;

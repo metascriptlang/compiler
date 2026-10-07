@@ -426,7 +426,7 @@ export type NodeData =
 	| { yieldArg: Node, isDelegate: boolean }                      // YieldExpr
 	| { moveArg: Node }                                            // MoveExpr
 	| { outArg: Node }                                             // OutExpr
-	| { sizeofType: string, sizeofResolved: Type }                 // SizeofExpr
+	| { sizeofType: string, sizeofResolved: Type | null }                 // SizeofExpr
 	| { convExpr: Node, convType: Type }                           // HiddenStdConv, HiddenSubConv
 	| { expr: Node }                                               // HiddenDeref, HiddenAddr
 	| { annotationType: string }                                   // TypeAnnotation
@@ -650,7 +650,7 @@ export type AwaitExprData = { awaitArg: Node };
 export type YieldExprData = { yieldArg: Node, isDelegate: boolean };
 export type MoveExprData = { moveArg: Node };
 export type OutExprData = { outArg: Node };
-export type SizeofExprData = { sizeofType: string, sizeofResolved: Type };
+export type SizeofExprData = { sizeofType: string, sizeofResolved: Type | null };
 export type HiddenStdConvData = { convExpr: Node, convType: Type };
 export type TypeAnnotationData = { annotationType: string };
 
@@ -739,23 +739,23 @@ export type JSXSpreadAttributeData = { jsxSpreadArg: Node };
 // ===== Constructors =====
 
 export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
-	const n = new Node();
-	n.kind = kind;
-	n.data = data;
-	n.location = makeLoc(token.line, token.column);
-	n.nodeType = null;
-	n.resolvedSym = null;
-	n.flags = 0 as BitSet<NodeFlag>;
-	n.variantSlot = 0;
-	n.comments = [];
-	n.typeExpr = null;
-	n.typeExprs = null;
-	n.paramLocations = null;
-	n.paramSyms = null;
-	n.typeArg = "";
-	n.flowNode = null;
-	n.nodeTypeAst = null;
-	return n;
+	return {
+		kind,
+		location: makeLoc(token.line, token.column),
+		data,
+		nodeType: null,
+		resolvedSym: null,
+		flags: 0 as BitSet<NodeFlag>,
+		variantSlot: 0,
+		comments: [],
+		typeExpr: null,
+		typeExprs: null,
+		paramLocations: null,
+		paramSyms: null,
+		typeArg: "",
+		flowNode: null,
+		nodeTypeAst: null,
+	};
 }
 
 // createNodeAt — overloaded constructor for AST nodes. Per-kind signatures
@@ -877,23 +877,23 @@ export function createNodeAt(kind: NodeKind.JSXSpreadAttribute, data: JSXSpreadA
 // overload resolution. It also serves as the fallback for callers that pass a
 // runtime (non-literal) NodeKind or a NodeData value that isn't known to narrow.
 export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation): Node {
-	const n = new Node();
-	n.kind = kind;
-	n.data = data;
-	n.location = loc;
-	n.nodeType = null;
-	n.resolvedSym = null;
-	n.flags = 0 as BitSet<NodeFlag>;
-	n.variantSlot = 0;
-	n.comments = [];
-	n.typeExpr = null;
-	n.typeExprs = null;
-	n.paramLocations = null;
-	n.paramSyms = null;
-	n.typeArg = "";
-	n.flowNode = null;
-	n.nodeTypeAst = null;
-	return n;
+	return {
+		kind,
+		location: loc,
+		data,
+		nodeType: null,
+		resolvedSym: null,
+		flags: 0 as BitSet<NodeFlag>,
+		variantSlot: 0,
+		comments: [],
+		typeExpr: null,
+		typeExprs: null,
+		paramLocations: null,
+		paramSyms: null,
+		typeArg: "",
+		flowNode: null,
+		nodeTypeAst: null,
+	};
 }
 
 export function isEmptyBlock(node: Readonly<Node>): boolean {

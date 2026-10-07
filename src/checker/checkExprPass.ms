@@ -34,7 +34,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, textConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare } from "./fit";
+import { declaredTagUnionOf, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, textConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -468,7 +468,15 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			} else if (expectedType != null && expectedType.kind == TypeKind.Union) {
 				// Mirror the StringLiteral/BooleanLiteral arms below: a numeric
 				// member of the expected union types the literal, so `width: 400.0`
-				// fits `float32 | string | null` (first numeric member wins).
+				// fits `float32 | string | null`. An integer literal takes an
+				// integer member before a float one, whatever the member order.
+				if (isNodeIntLit(node)) {
+					for (const child of expectedType.typeChildren) {
+						if (child != null && isIntegerType(child) && literalFitsInType(node, child, false)) {
+							node.nodeType = child; return;
+						}
+					}
+				}
 				for (const child of expectedType.typeChildren) {
 					if (child == null) continue;
 					if (isIntegerType(child) && literalFitsInType(node, child, false)) {
@@ -1285,6 +1293,10 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					}
 				}
 			}
+			if (d.unaryOp == "typeof" && operandType != null && operandType.kind == TypeKind.Union) {
+				const stored = declaredTagUnionOf(d.operand);
+				if (stored != null && stored != operandType) d.operand.nodeType = stored;
+			}
 			node.nodeType = inferUnaryOp(d.unaryOp, operandType!); return;
 		},
 		NodeKind.UpdateExpr => {
@@ -1709,11 +1721,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						ki = ki + 1;
 					}
 				}
-				// Nim parity (semobjconstr.nim collectMissingFields): a missing field is
-				// default-initialized UNLESS its type requiresInit. A function field's zero
-				// is NULL, and calling NULL is a segfault, so it has no valid default —
-				// declare it `T | null` to opt out and handle the null.
-				if (objNames != null) {
+				if (objNames != null && !(isEngineCheckMode() && containerName == "Node")) {
 					let hasDynamicKey = false;
 					for (const k of d.keys) {
 						if (k == "..." || k == "__computed__") hasDynamicKey = true;
@@ -1722,12 +1730,12 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 						let mi = 0;
 						while (mi < objNames.length) {
 							const wantT = mi < objChildren.length ? objChildren[mi] : null as unknown as Type;
-							if (wantT != null && wantT.kind == TypeKind.Function) {
+							if (wantT != null && requiresInit(wantT)) {
 								const want = objNames[mi];
 								let present = false;
 								for (const k of d.keys) { if (k == want) { present = true; break; } }
 								if (!present) {
-									addError(ctx, `field '${want}' must be initialized: type '${typeDisplayName(wantT)}' has no default value`, node.location.line, node.location.column);
+									addError(ctx, `field '${want}' must be initialized: type '${typeDisplayName(wantT)}' has no default value — give it in the literal (an object literal does not run the class's field initializers), or declare the field optional with '?'`, node.location.line, node.location.column);
 								}
 							}
 							mi = mi + 1;
