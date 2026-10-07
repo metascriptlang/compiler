@@ -2139,6 +2139,11 @@ export function getSysType(kind: TypeKind): Type {
 	return createPrimitive(kind);
 }
 
+export function isSysType(t: Type): boolean {
+	const idx = t.kind as number;
+	return idx >= 0 && idx < _sysTypes.length && _sysTypes[idx] == t;
+}
+
 // ===== Well-Known Type Accessors =====
 // Thin wrappers over getSysType for backward compatibility + readability.
 
