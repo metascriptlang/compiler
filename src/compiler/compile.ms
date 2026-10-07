@@ -2198,7 +2198,7 @@ function writesSettled(pending: PendingWrites): boolean {
 }
 
 const RESCAN_SETTLE_MS = 60;
-const WRITES_QUIET_MS = 50;
+const WRITES_QUIET_MS = 20;
 const WRITER_WAIT_LIMIT_MS = 500;
 
 function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
