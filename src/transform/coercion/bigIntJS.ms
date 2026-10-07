@@ -108,8 +108,6 @@ function bigLit(text: string, kind: TypeKind, loc: SourceLocation): Node {
 
 // ===== Conversions (genConv rows, exact-C narrow variant) =====
 
-// `u as int64` out of `int64 | string`: the held member already has the target's
-// representation, and the node carries the member test codegen emits.
 export function readsUnionMember(d: TypeAssertionData): boolean {
 	if (d.asExpr == null) return false;
 	if (d.asExpr.kind == NodeKind.HiddenSubConv) return true;
