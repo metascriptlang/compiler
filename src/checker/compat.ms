@@ -1154,6 +1154,7 @@ function sameNameList(a: string[], b: string[]): boolean {
 }
 
 function sameStructType(a: Type, b: Type): boolean {
+	if (isMaybeType(a) && isMaybeType(b)) return sameType(a.typeReturn, b.typeReturn);
 	if (a.typeName != "" || b.typeName != "") return sameNominal(a, b);
 	if (a.typeFlags != b.typeFlags) return false;
 	if (!sameNameList(a.typeNames, b.typeNames)) return false;
