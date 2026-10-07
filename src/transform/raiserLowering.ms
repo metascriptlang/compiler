@@ -36,6 +36,7 @@ import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerAggregateEquality, lowerUserOperators } from "./lowering/operatorLower";
 import { projectTaggedMaybeReads } from "./coercion/maybeReadMaterialize";
 import { lowerUnionTags } from "./lowering/unionTagLower";
+import { lowerUnionConversions } from "./lowering/unionConvLower";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { enterCompilerFuncs, leaveCompilerFuncs } from "./util";
@@ -88,6 +89,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = lowerUserOperators(result, ctx);
 	result = injectEnumRangeChecks(result, ctx);
 	result = projectTaggedMaybeReads(result);
+	result = lowerUnionConversions(result, ctx);
 	result = lowerUnionTags(result, ctx);
 	result = unwrapMaybe(result, ctx);
 	result = liftDestructors(result, ctx, false);

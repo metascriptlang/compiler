@@ -1563,6 +1563,97 @@ export function isSlotUnion(t: Type): boolean {
 	return !allStrLit;
 }
 
+export function convertsBetweenUnions(source: Type | null, target: Type | null): boolean {
+	if (source == null || target == null || source.kind != TypeKind.Union || target.kind != TypeKind.Union) return false;
+	if (hasGenericParams(source) || hasGenericParams(target)) return false;
+	return isSlotUnion(source) && isSlotUnion(target) && !sameType(source, target);
+}
+
+function unionMembers(t: Type): Type[] {
+	return t.kind == TypeKind.Union && t.typeChildren != null ? t.typeChildren : [t];
+}
+
+function exactMemberSlot(target: Type, member: Type): int32 {
+	let found: int32 = -1;
+	let widened: int32 = -1;
+	const members = unionMembers(target);
+	for (let ti: int32 = 0; ti < members.length; ti += 1) {
+		const child = members[ti];
+		if (sameType(child, member)) {
+			if (found >= 0) return -1;
+			found = ti;
+		} else if (member.kind == TypeKind.StringLiteral && child.kind == TypeKind.String) {
+			widened = widened == -1 ? ti : -2;
+		}
+	}
+	return found >= 0 ? found : widened >= 0 ? widened : -1;
+}
+
+export function unionMemberSlots(source: Type, target: Type): int32[] {
+	const slots: int32[] = [];
+	for (const member of source.typeChildren) slots.push(exactMemberSlot(target, member));
+	return slots;
+}
+
+export function unionConversionRefusal(source: Type, target: Type, implicit: boolean): string {
+	const slots = unionMemberSlots(source, target);
+	let held = 0;
+	for (let i = 0; i < slots.length; i += 1) {
+		if (slots[i] >= 0) { held += 1; continue; }
+		const member = source.typeChildren[i];
+		for (const t of unionMembers(target)) {
+			if (isAssignable(member, t)) return `'${typeDisplayName(member)}' converts to '${typeDisplayName(t)}', not as a member of the same type; convert it on its own before the union`;
+		}
+		if (implicit) return `'${typeDisplayName(member)}' is not a member of '${typeDisplayName(target)}'`;
+	}
+	return held == 0 ? `no member of '${typeDisplayName(source)}' is a member of '${typeDisplayName(target)}'` : "";
+}
+
+export function nullableUnionPayloads(source: Type | null, target: Type | null): Type[] | null {
+	if (!isMaybeType(source) || !isMaybeType(target)) return null;
+	const from = source!.typeReturn;
+	const to = target!.typeReturn;
+	return convertsBetweenUnions(from, to) ? [from!, to!] : null;
+}
+
+export function convertsUnionImplicitly(source: Type | null, target: Type | null): boolean {
+	const payloads = nullableUnionPayloads(source, target);
+	if (payloads != null) return unionConversionRefusal(payloads[0], payloads[1], true) == "";
+	if (!convertsBetweenUnions(source, target)) return false;
+	return (slotRefuses(source!, target!) || isReinterpretUnsafe(source!, target!)) && unionConversionRefusal(source!, target!, true) == "";
+}
+
+export function fitUnionIntoUnion(expr: Node, exprType: Type, formal: Type): Node | null {
+	const storedRead = convertStoredUnionRead(expr, exprType, formal);
+	if (storedRead != null) return storedRead;
+	if (convertsUnionImplicitly(exprType, formal)) return convertUnionToUnion(expr, exprType, formal);
+	if (!isMaybeType(formal) || formal.typeReturn == null || exprType.kind != TypeKind.Union) return null;
+	const payload = formal.typeReturn;
+	const converted = convertStoredUnionRead(expr, exprType, payload) ?? (convertsUnionImplicitly(exprType, payload) ? convertUnionToUnion(expr, exprType, payload) : null);
+	return converted != null ? synthMaybeWrap(converted, formal, payload) : null;
+}
+
+export function convertStoredUnionRead(expr: Node, exprType: Type, formal: Type): Node | null {
+	if (exprType.kind != TypeKind.Union || !isSlotUnion(exprType)) return null;
+	const declared = declaredTagUnionOf(expr);
+	if (declared == null || sameType(declared, exprType) || !convertsBetweenUnions(declared, formal)) return null;
+	if (!sameType(exprType, formal) && unionConversionRefusal(exprType, formal, true) != "") return null;
+	return convertUnionToUnion(expr, exprType, formal);
+}
+
+export function convertUnionToUnion(expr: Node, source: Type, target: Type): Node {
+	const declared = declaredTagUnionOf(expr);
+	if (declared != null && sameType(declared, target)) {
+		expr.nodeType = target;
+		return expr;
+	}
+	if (declared != null) expr.nodeType = declared;
+	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: expr, convType: target }, createToken(TokenKind.Ident, "", expr.location.line));
+	convNode.nodeType = target;
+	convNode.flags = convNode.flags.incl(NodeFlag.Sem);
+	return convNode;
+}
+
 function hasSharedDiscriminant(t: Type): boolean {
 	return findSharedStringDiscriminant(t) != "" || findSharedBooleanDiscriminant(t) != "" || findSharedEnumDiscriminant(t) != "";
 }
@@ -1901,6 +1992,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	// them. Skip when expr is already Maybe-typed (passthrough like
 	// `return otherMaybeFn()`).
 	if (isMaybeType(formal) && formal.typeReturn != null && !isMaybeType(exprType)) {
+		const unionFit = fitUnionIntoUnion(expr, exprType, formal);
+		if (unionFit != null) return unionFit;
 		if (isNominalMismatch(exprType, formal)) {
 			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal.typeReturn) + " | null'", expr.location.line, expr.location.column);
 			return expr;
@@ -1934,6 +2027,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 		const projected = narrowUnionToVariant(expr, exprType);
 		if (projected != null as unknown as Node) return projected;
 	}
+	const unionFit = fitUnionIntoUnion(expr, exprType, formal);
+	if (unionFit != null) return unionFit;
 	if (isNominalMismatch(exprType, formal)) {
 		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'", expr.location.line, expr.location.column);
 		return expr;

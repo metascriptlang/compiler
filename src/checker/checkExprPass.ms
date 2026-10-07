@@ -34,7 +34,7 @@ import { callInstantiateGeneric } from "./checkerCallbacks";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { declaredTagUnionOf, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, textConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare } from "./fit";
+import { declaredTagUnionOf, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, isStrLitSet, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, isSyncGeneratorFlags, settleYields, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, objectPathHolders, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, isPayloadCarrier, isScalarPrimitive, textConversionRefusal, narrowsToMember, isFittingNumericConstant, isBitwiseCompoundOp, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -2154,6 +2154,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 				stampCheckedInstance(ctx, node, targetType);
 				return;
 			}
+			if (srcType != null && !reportedErrorSince(ctx, operandMark) && convertAsBetweenUnions(ctx, node, srcType, targetType, asLoc)) return;
 			if (srcType != null && !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
 				&& !hasGenericParams(srcType) && !hasGenericParams(targetType) && !reportedErrorSince(ctx, operandMark)) {
 				const carried = assertIntoNullable(d.asExpr, srcType, targetType);
@@ -3436,4 +3437,42 @@ function insideGenericTemplate(ctx: CheckerContext): boolean {
 	const current = ctx.currentFunction;
 	if (current == null || current.instantiatedFrom != null) return false;
 	return hasGenericParams(current.symbolType) || isGenericFn(routineFlags(current.declNode));
+}
+
+// Kept out of checkExprInner: every local of that routine is paid by each nested expression's frame.
+function convertAsBetweenUnions(ctx: CheckerContext, node: Node, srcType: Type, targetType: Type, asLoc: SourceLocation): boolean {
+	const d = node.data as TypeAssertionData;
+	const nullableTarget = isSlotUnion(srcType) && isMaybeType(targetType) && targetType.typeReturn != null ? targetType.typeReturn : null;
+	let refusalSource: Type = srcType;
+	let refusalTarget: Type = targetType;
+	let converted: Node | null = null;
+	if (nullableTarget != null && (convertsBetweenUnions(srcType, nullableTarget) || unionConversionRefusal(srcType, nullableTarget, false) != "")) {
+		refusalTarget = nullableTarget;
+		if (unionConversionRefusal(srcType, nullableTarget, false) == "") converted = synthMaybeWrap(convertUnionToUnion(d.asExpr, srcType, nullableTarget), targetType, nullableTarget);
+	} else {
+		const storedRead = convertStoredUnionRead(d.asExpr, srcType, targetType);
+		const payloads = nullableUnionPayloads(srcType, targetType);
+		if (storedRead != null) {
+			converted = storedRead;
+		} else if (payloads != null) {
+			refusalSource = payloads[0];
+			refusalTarget = payloads[1];
+			if (unionConversionRefusal(payloads[0], payloads[1], false) == "") converted = convertUnionToUnion(d.asExpr, srcType, targetType);
+		} else if (convertsBetweenUnions(srcType, targetType)) {
+			if (unionConversionRefusal(srcType, targetType, false) == "") converted = convertUnionToUnion(d.asExpr, srcType, targetType);
+		} else {
+			return false;
+		}
+	}
+	if (converted == null) {
+		addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + " — " + unionConversionRefusal(refusalSource, refusalTarget, false), asLoc.line, asLoc.column);
+	} else if (converted.kind == NodeKind.HiddenSubConv) {
+		node.kind = NodeKind.HiddenSubConv;
+		node.data = converted.data;
+		node.flags = node.flags.incl(NodeFlag.Sem);
+	} else {
+		node.data = { asExpr: converted, asType: d.asType };
+	}
+	node.nodeType = targetType;
+	return true;
 }
