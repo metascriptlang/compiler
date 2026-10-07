@@ -176,6 +176,10 @@ export function ufConnect(p: Partitions, a: Symbol, b: Symbol): void {
 
 export const NO_KEEP: int32[] = [-1];
 
+// A write that changes a value in place without moving storage. Only a Borrow<T>
+// local, which reads its source through an address, borrows such a place.
+const VALUE_WRITE = "=";
+
 export function potentialMutation(p: Partitions, sym: Symbol, site: Node | null = null, path: string = "", keep: int32[] = NO_KEEP): void {
 	const id = variableId(p, sym);
 	if (id < 0) return;
@@ -231,6 +235,7 @@ function firstMutationIn(g: MutationInfo, v: VarEntry, source: Symbol, handles: 
 		const keep = g.keeps[i];
 		if (!(keep.length == 1 && keep[0] == -1) && encloses(keep, v.scopePath)) continue;
 		if (g.roots[i] != source) {
+			if (g.paths[i].startsWith(VALUE_WRITE)) continue;
 			if (keysMeet(keysAtPath(g.roots[i], g.paths[i]), borrowed)) return i;
 			continue;
 		}
@@ -863,16 +868,16 @@ function pathOf(node: Node | null): string {
 	return "";
 }
 
-function mutateRoots(u: BorrowUnit, node: Node | null, site: Node, suffix: string = ""): void {
+function mutateRoots(u: BorrowUnit, node: Node | null, site: Node, suffix: string = "", mark: string = ""): void {
 	const roots: Symbol[] = [];
 	rootsOf(node, roots);
-	const path = roots.length == 1 ? pathOf(node) + suffix : "";
+	const path = mark + (roots.length == 1 ? pathOf(node) + suffix : "");
 	for (const r of roots) {
 		const id = variableId(u.p, r);
 		if (id >= 0 && !u.p.vars[id].external && isBorrower(u, r) && u.p.vars[id].borrowsFrom.length > 0) {
 			const v = u.p.vars[id];
 			for (let b = 0; b < v.borrowsFrom.length; b += 1) {
-				potentialMutation(u.p, u.p.vars[v.borrowsFrom[b]].sym, site, v.borrowPaths[b] + path);
+				potentialMutation(u.p, u.p.vars[v.borrowsFrom[b]].sym, site, mark + v.borrowPaths[b] + path.substring(mark.length, path.length));
 			}
 			continue;
 		}
@@ -919,6 +924,7 @@ function borrowFrom(u: BorrowUnit, dest: Symbol, src: Node): void {
 	const handles: string[] = [];
 	pathSources(src, sources, paths, handles);
 	const pointer = !isViewType(dest.symbolType);
+	const byAddress = dest.symbolType != null && dest.symbolType.kind == TypeKind.Borrow;
 	for (let k = 0; k < sources.length; k += 1) {
 		const s = sources[k];
 		if (pointer) handles[k] = withoutHandle(handles[k], paths[k]);
@@ -942,12 +948,17 @@ function borrowFrom(u: BorrowUnit, dest: Symbol, src: Node): void {
 		if (!from.external && from.sym != dest && isBorrower(u, from.sym)) {
 			for (let b = 0; b < from.borrowsFrom.length; b += 1) {
 				const base = from.borrowPaths[b];
-				addBorrow(u.p.vars[vid], from.borrowsFrom[b], base + paths[k], from.borrowHandles[b] + relocate(handles[k], base));
+				const at = base + paths[k];
+				addBorrow(u.p.vars[vid], from.borrowsFrom[b], at, from.borrowHandles[b] + relocate(handles[k], base) + (byAddress ? placeHandles(at) : ""));
 			}
 			continue;
 		}
-		addBorrow(u.p.vars[vid], sid, paths[k], handles[k]);
+		addBorrow(u.p.vars[vid], sid, paths[k], handles[k] + (byAddress ? placeHandles(paths[k]) : ""));
 	}
+}
+
+function placeHandles(path: string): string {
+	return "|" + VALUE_WRITE + path + "|" + (path == "" ? "@" : path);
 }
 
 function addBorrow(v: VarEntry, sid: int32, path: string, handles: string): void {
@@ -982,14 +993,14 @@ function assign(u: BorrowUnit, node: Node, d: BinaryExprData): void {
 			borrowFrom(u, sym, d.right);
 			return;
 		}
-		if (ownsStorage(sym.symbolType)) potentialMutation(u.p, sym, d.left);
+		potentialMutation(u.p, sym, d.left, ownsStorage(sym.symbolType) ? "" : VALUE_WRITE);
 		if (d.operator == "=") {
 			deps(u, sym, d.right);
 			if (reachableByCalls(u, sym, "")) escape(u, d.right);
 		}
 		return;
 	}
-	if (ownsStorage(left.nodeType)) mutateRoots(u, left, d.left);
+	mutateRoots(u, left, d.left, "", ownsStorage(left.nodeType) ? "" : VALUE_WRITE);
 	if (d.operator != "=") return;
 	const targets0: Symbol[] = [];
 	rootsOf(left, targets0);
@@ -1276,7 +1287,7 @@ function borrowedKeys(sym: Symbol, handles: string): HandleKey[] {
 	const out: HandleKey[] = [];
 	let named = false;
 	for (const h of handles.split("|")) {
-		if (h == "") continue;
+		if (h == "" || h.startsWith(VALUE_WRITE)) continue;
 		named = true;
 		for (const k of ownKeys(followPath(sym.symbolType, h == "@" ? "" : h).t)) { addKey(out, k); }
 	}
@@ -1308,7 +1319,7 @@ function aliasedChange(u: BorrowUnit, v: VarEntry, src: VarEntry, handles: strin
 			const m = g.mutations[i];
 			if (m < v.aliveStart || m > v.aliveEnd) continue;
 			const r = g.roots[i];
-			if (r == src.sym || r == v.sym) continue;
+			if (r == src.sym || r == v.sym || g.paths[i].startsWith(VALUE_WRITE)) continue;
 			const rid = variableId(u.p, r);
 			if (rid < 0 || ufRoot(u.p, rid) == srcRoot || !inExternalGroup(u, rid)) continue;
 			if (keysMeet(keysAtPath(r, g.paths[i]), borrowed)) return [gi, i];
@@ -1390,6 +1401,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
 			walk(u, d.updateArg);
+			if (u.pass == 2) mutateRoots(u, d.updateArg, node, "", VALUE_WRITE);
 		},
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
