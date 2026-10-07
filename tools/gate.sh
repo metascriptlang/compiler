@@ -42,7 +42,7 @@ after another, and compare every red against src/test/known-red.json.
   --select       print the corpus programs whose emitted C or JS differs from the merge base
   --tree-key <rev>  print the key of the src and std tree at <rev> (what msc.key holds)
   --route        read paths on stdin, print "lane<TAB>path" for each lane a path picks
-  --self-test    check the routing table and the red parsers against fixed cases
+  --self-test    check routing, red parsers, shared-cache publication and real C/JS emit guards
 
 One gate at a time runs per machine: a run with any lane besides tools, and
 --select, queues first-come first-served in ~/.metascript/gates and starts when
@@ -75,9 +75,11 @@ It runs every tier when the compiler changed (a path under src/ outside
 src/test/, or one select cannot see), else only the tiers whose module graph
 holds a changed path.
 
-corpus and san run on the programs whose emitted C or JS the change alters
-(control = the compiler at the merge base, kept in out/gate/ctl); they run whole
-under --lanes and --release, and when a changed path cannot show in emitted code.
+corpus and san run on the programs whose emitted C or JS the change alters.
+Control compilers and matching successful program signatures are shared under
+~/.metascript/cache/gate-ctl/v1; both sides emit from one fixed source/std workspace.
+Unsealed entries, changed program keys and failed emits are never reused; four
+published control entries are kept. --lanes, --release and blind paths run the lane whole.
 
 A known red that has turned green fails too: the set is then claiming a failure
 that no longer happens, so drop the entry in the commit that fixed it. Unlike a
@@ -130,19 +132,70 @@ record_select_off() {
   [ -n "$select_why" ] && [ -n "$select_label" ] || return 0
   select_ledger select-off 0 "" "" "" "" ""
 }
+control_support() (
+  local d
+  cd "$1" || return 1
+  [ -d runtime ] && [ -d vendor ] && [ -d std ] || return 1
+  export -f hash_files
+  {
+    find -L runtime vendor std -type f -print0 | LC_ALL=C sort -z | xargs -0 -r bash -c 'hash_files "$@"' _
+    d=$(pwd -P)
+    while :; do
+      [ ! -f "$d/build.ms" ] || printf 'ambient %s %s\n' "$d" "$(hash_files <"$d/build.ms")"
+      [ "$d" != "$(dirname "$d")" ] || break
+      d=$(dirname "$d")
+    done
+  } | digest
+)
+
+control_key() {
+  local tree support emit
+  [ -n "$CONTROL_SUPPORT" ] || return 1
+  tree=$(tree_key "$1") && support=$(git ls-tree "$1" runtime vendor) || return 1
+  emit=$(declare -f emit_one emit_side hash_files digest | digest) || return 1
+  { printf 'stable-emit-v2\n%s\n%s\n%s\n%s\n%s\n' "$(uname -sm)" "$tree" "$support" "$emit" "$CONTROL_SUPPORT"; } | digest
+}
+
+control_dir() { printf '%s/entries/ctl-%s' "$CTL_CACHE" "${1:0:32}"; }
+control_binary() { printf '%s/msc%s' "$1" "$EXE_SUFFIX"; }
+control_ready() {
+  [ "$1" = "$(control_dir "$2")" ] || return 1
+  [ "$(cat "$1/complete" 2>/dev/null)" = "$2" ] && [ -s "$(control_binary "$1")" ] \
+    && [ -x "$(control_binary "$1")" ] && [ -f "$1/std/core/system/index.ms" ]
+}
+
+control_snapshot() {
+  mkdir -p "$2" && git archive "$1" src std | tar -x -C "$2" || return 1
+  cp -a "$CTL_WORK/runtime" "$CTL_WORK/vendor" "$2"
+}
+
+publish_control() {
+  local tmp=$1 dir=$2 key=$3
+  [ -s "$(control_binary "$tmp")" ] && [ -x "$(control_binary "$tmp")" ] \
+    && [ -f "$tmp/std/core/system/index.ms" ] || return 1
+  printf '%s\n' "$key" >"$tmp/complete" || return 1
+  [ ! -e "$dir" ] && mv "$tmp" "$dir" && control_ready "$dir" "$key"
+}
+
 build_ctl() {
-  local sha=$1 key ctl_dir ctl
-  key=$(tree_key "$sha")
-  [ -n "$key" ] || return 1
-  ctl_dir="$OUT/ctl-$key" ctl="$ctl_dir/msc"
-  if [ ! -x "$ctl" ]; then
-    rm -rf "$ctl_dir" "$OUT/ctl-src"
-    mkdir -p "$ctl_dir" "$OUT/ctl-src"
-    git archive "$sha" src | tar -x -C "$OUT/ctl-src" || return 1
-    (cd "$OUT/ctl-src" && bounded env -u NO_COLOR -u FORCE_COLOR $BUILDER build src/index.ms --gc=drc --danger $CC_FLAG --output="$ctl") >"$OUT/ctl.log" 2>&1
-    [ -x "$ctl" ] || return 1
+  local sha=$1 key dir tmp builder ctl
+  key=$(control_key "$sha") || return 1
+  dir=$(control_dir "$key")
+  if ! control_ready "$dir" "$key"; then
+    rm -rf "$dir"
+    mkdir -p "$CTL_CACHE/entries" || return 1
+    tmp=$(mktemp -d "$CTL_CACHE/entries/.build.XXXXXX") || return 1
+    if ! control_snapshot "$sha" "$tmp"; then rm -rf "$tmp"; return 1; fi
+    builder="$tmp/builder$EXE_SUFFIX" ctl=$(control_binary "$tmp")
+    cp "$BUILDER" "$builder" || { rm -rf "$tmp"; return 1; }
+    if ! (cd "$tmp" && bounded env -u NO_COLOR -u FORCE_COLOR "$builder" build src/index.ms --gc=drc --danger $CC_FLAG --output="$ctl" \
+      && bounded self_host_boot "$ctl" "$CC_FLAG") >"$OUT/ctl.log" 2>&1; then
+      rm -rf "$tmp"; return 1
+    fi
+    rm -rf "$tmp/out" "$builder" "${ctl}_link.rsp" "${ctl%.exe}.pdb" "$tmp/gen3_link.rsp"
+    publish_control "$tmp" "$dir" "$key" || { rm -rf "$tmp"; return 1; }
   fi
-  touch "$ctl_dir"
+  touch "$dir"
   printf '%s' "$key"
 }
 compiler_changed() { grep -E '^src/' | grep -vE '^src/test/' >/dev/null; }
@@ -253,14 +306,17 @@ select_leaves_nothing() {
   [ "$1" != tests ] && [ "$select" -eq 1 ] && [ -z "$only_csv" ]
 }
 
-control_todo() {
-  awk -v dir="$1" -v keys="$2" '
+control_rows() {
+  awk -v dir="$1" -v keys="$2" -v mode="$3" '
     BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
-    { f = dir "/" $1; have = ""; sig = ""
-      if (($1 in key) && (getline have < (f ".key")) > 0 && have == key[$1] && (getline sig < (f ".sig")) > 0 \
-        && split(sig, s, "\t") >= 4 && s[4] == "0") { close(f ".key"); close(f ".sig"); next }
-      close(f ".key"); close(f ".sig"); print }'
+    { f = dir "/" $1 ".sig"; have = ""; sig = ""
+      hit = ($1 in key) && (getline have < f) > 0 && have == key[$1] && (getline sig < f) > 0 \
+        && split(sig, s, "\t") == 5 && s[1] == $1 && s[4] == "0" && s[5] > 0
+      close(f)
+      if (hit && mode == "cached") print sig
+      if (!hit && mode == "todo") print }'
 }
+control_todo() { control_rows "$1" "$2" todo; }
 
 TIERS="src/test/c/index.ms src/test/js/index.ms src/test/handoff/index.ms src/test/checker3pass/index.ms src/test/lang/index.ms src/test/fmt/index.ms src/test/helpers.ms"
 SHARDED_TIERS="src/test/c/index.ms"
@@ -343,6 +399,11 @@ CAND="$OUT/msc"
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) CAND="$CAND.exe" ;;
 esac
+EXE_SUFFIX=""
+case "$CAND" in *.exe) EXE_SUFFIX=.exe ;; esac
+CTL_CACHE="${HOME:-$USERPROFILE}/.metascript/cache/gate-ctl/v1"
+CTL_WORK="$CTL_CACHE/work"
+CONTROL_SUPPORT=""
 EMIT="$OUT/emit"
 GATE_LEDGER=${GATE_LEDGER:-$HOME/.metascript/gate.tsv}
 GATE_SELECT_LEDGER=${GATE_SELECT_LEDGER:-$HOME/.metascript/gate-select.tsv}
@@ -385,10 +446,10 @@ route_paths() {
 program_keys() {
   awk -F'\t' -v dir="src/test/corpus/programs/" '
     function prog(p,   n, a) { sub("^" dir, "", p); n = split(p, a, "/"); if (n == 1) sub(/\.ms$/, "", a[1]); return a[1] }
-    $1 == "key" { key[prog($3)] = $2; next }
+    $1 == "key" { key[prog($3)] = key[prog($3)] $2 ";"; next }
     $1 == "dirty" { n = split($3, r, " -> "); for (i = 1; i <= n; i++) outside[prog(r[i])] = 1; next }
     $1 == "ref" {
-      c = index($3, ":\""); p = substr($3, 1, c - 1); m = substr($3, c + 2)
+      c = index($3, ":"); p = substr($3, 1, c - 1); m = substr($3, c + 2)
       rel = p; sub("^" dir, "", rel); depth = split(rel, a, "/") - 2
       if (depth < 0 || gsub(/\.\.\//, "", m) > depth) outside[prog(p)] = 1
       next }
@@ -689,6 +750,335 @@ queue_self_test() {
   return $bad
 }
 
+prepare_emit_workspace() {
+  local part
+  mkdir -p "$CTL_WORK/bin/ctrl" "$CTL_WORK/bin/cand" || return 1
+  for part in src std runtime vendor; do
+    rm -rf "$CTL_WORK/$part"
+    cp -aL "$TOP/$part" "$CTL_WORK/$part" || return 1
+  done
+  [ -f "$CTL_WORK/std/core/system/index.ms" ]
+}
+
+stage_emit_compiler() {
+  local dir="$CTL_WORK/bin/$2" bin
+  [ -f "$CTL_WORK/std/core/system/index.ms" ] || return 1
+  bin=$(control_binary "$dir")
+  rm -f "$bin"
+  cp "$1" "$bin" && chmod +x "$bin" || return 1
+  printf '%s' "$bin"
+}
+
+stable_programs() {
+  list_programs | while read -r name entry; do
+    printf '%s %s/%s\n' "$name" "$CTL_WORK" "${entry#"$TOP/"}"
+  done
+}
+
+trim_controls() {
+  local dir n=0
+  while read -r dir; do
+    case "$dir" in "$(control_dir "$1")/"|"$(control_dir "$2")/") continue ;; esac
+    n=$((n + 1))
+    [ "$n" -le 2 ] || rm -rf "$dir"
+  done < <(ls -dt "$CTL_CACHE"/entries/ctl-*/ 2>/dev/null)
+  find "$CTL_CACHE/entries" -mindepth 1 -maxdepth 1 \( -name '.build.*' -o -name '.adopt.*' \) -mmin +120 -exec rm -rf {} + 2>/dev/null
+  return 0
+}
+
+emit_side() {
+  local jobs scrub
+  jobs=$(cap_jobs "$(share_of_cores 2)" "${GATE_PAR:-}") || return $?
+  mkdir -p "$2"
+  mapfile -t scrub < <(compgen -e | grep '^MSC' | sed 's/^/--unset=/')
+  awk '{ print NR, $0 }' | bounded env -u FORCE_COLOR "${scrub[@]}" GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$1"
+}
+
+reusable_programs() (
+  local dir=src/test/corpus/programs
+  cd "$CTL_WORK" || return 1
+  export -f hash_files
+  {
+    find "$dir" -type f -print0 | LC_ALL=C sort -z | xargs -0 -r bash -c 'hash_files "$@"' _ \
+      | awk '{ p = $2; sub(/^\*/, "", p); print "key\t" $1 "@" p "\t" p }'
+    grep -rEo "[\"'\`]\.{1,2}/(\.\./)*" "$dir" | awk '{ print "ref\t\t" $0 }'
+  } | program_keys
+)
+
+
+keep_emits() {
+  local dir=$1 side=$2 tmp dest
+  mkdir -p "$dir" || return 1
+  awk -v dir="$dir" -v keys="$EMIT/ctl.keys" '
+    BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
+    ($1 in key) && NF == 5 && $4 == "0" && $5 > 0 {
+      f = dir "/" $1 ".sig"; print key[$1] > (f ".tmp"); print > (f ".tmp"); close(f ".tmp")
+      print f ".tmp\t" f }' "$side" | while IFS=$'\t' read -r tmp dest; do
+    mv -f "$tmp" "$dest" || return 1
+  done
+}
+
+adopt_candidate() {
+  local key dir tmp
+  [ -n "$cand_key" ] && [ -x "$CAND" ] && [ "$(cat "$CAND.key" 2>/dev/null)" = "$cand_key" ] || return 0
+  key=$(control_key HEAD) || return 1
+  dir=$(control_dir "$key")
+  if ! control_ready "$dir" "$key"; then
+    rm -rf "$dir"
+    tmp=$(mktemp -d "$CTL_CACHE/entries/.adopt.XXXXXX") || return 1
+    control_snapshot HEAD "$tmp" && cp "$CAND" "$(control_binary "$tmp")" \
+      && publish_control "$tmp" "$dir" "$key" || { rm -rf "$tmp"; return 1; }
+  fi
+  keep_emits "$dir/emit" "$EMIT/cand.sig" || return 1
+  touch "$dir"
+}
+
+emit_control() {
+  local dir="$2/emit"
+  mkdir -p "$dir" || return 1
+  reusable_programs >"$EMIT/ctl.keys"
+  control_todo "$dir" "$EMIT/ctl.keys" <"$EMIT/programs" >"$EMIT/ctl.todo"
+  control_rows "$dir" "$EMIT/ctl.keys" cached <"$EMIT/programs" >"$EMIT/ctl.cached"
+  emit_side "$1" "$CTL_WORK/e/ctrl" <"$EMIT/ctl.todo" | sort >"$EMIT/ctl.fresh" || return 1
+  keep_emits "$dir" "$EMIT/ctl.fresh" || return 1
+  sort "$EMIT/ctl.cached" "$EMIT/ctl.fresh" >"$EMIT/ctl.sig"
+}
+
+shared_cache_self_test() (
+  local d bad=0 key dir tmp got EMIT CTL_CACHE EXE_SUFFIX=""
+  d=$(mktemp -d) || return 1
+  CTL_CACHE="$d/cache" EMIT="$d/emit"
+  mkdir -p "$CTL_CACHE/entries" "$EMIT"
+  key=published dir=$(control_dir published) tmp="$CTL_CACHE/entries/.partial"
+  mkdir -p "$tmp/std/core/system"
+  cp "$(command -v bash)" "$(control_binary "$tmp")"
+  printf 'snapshot\n' >"$tmp/std/core/system/index.ms"
+  if control_ready "$dir" "$key"; then printf 'FAIL shared control: missing entry was read\n'; bad=1; fi
+  printf '%s\n' "$key" >"$tmp/complete"
+  if control_ready "$tmp" "$key"; then printf 'FAIL shared control: unpublished entry was read\n'; bad=1; fi
+  rm "$tmp/complete"
+  mv "$tmp" "$dir"
+  if control_ready "$dir" "$key"; then printf 'FAIL shared control: unsealed entry was read\n'; bad=1; fi
+  printf 'other\n' >"$dir/complete"
+  if control_ready "$dir" "$key"; then printf 'FAIL shared control: wrong compiler key was read\n'; bad=1; fi
+  rm -rf "$dir"
+  tmp="$CTL_CACHE/entries/.publish"
+  mkdir -p "$tmp/std/core/system"
+  cp "$(command -v bash)" "$(control_binary "$tmp")"
+  printf 'snapshot\n' >"$tmp/std/core/system/index.ms"
+  publish_control "$tmp" "$dir" "$key" || { printf 'FAIL shared control: publication failed\n'; bad=1; }
+  control_ready "$dir" "$key" || { printf 'FAIL shared control: published entry was not readable\n'; bad=1; }
+  rm "$dir/std/core/system/index.ms"
+  if control_ready "$dir" "$key"; then printf 'FAIL shared control: missing own std was accepted\n'; bad=1; fi
+  printf 'p blob1\n' >"$EMIT/ctl.keys"
+  printf 'p\tc-old\tj-old\t0\t2\n' >"$EMIT/side"
+  keep_emits "$dir/emit" "$EMIT/side" || bad=1
+  printf 'blob2\np\tc-partial\tj-partial\t0\t2\n' >"$dir/emit/p.sig.tmp"
+  got=$(printf 'p entry\n' | control_rows "$dir/emit" "$EMIT/ctl.keys" cached)
+  [ "$got" = $'p\tc-old\tj-old\t0\t2' ] || { printf 'FAIL shared emits: unpublished replacement altered the live result\n'; bad=1; }
+  printf 'p blob2\n' >"$EMIT/ctl.keys"
+  got=$(printf 'p entry\n' | control_todo "$dir/emit" "$EMIT/ctl.keys")
+  [ "$got" = 'p entry' ] || { printf 'FAIL shared emits: changed program key reused stale bytes\n'; bad=1; }
+  printf 'p\tc-new\tj-new\t0\t2\n' >"$EMIT/side"
+  keep_emits "$dir/emit" "$EMIT/side" || bad=1
+  got=$(printf 'p entry\n' | control_rows "$dir/emit" "$EMIT/ctl.keys" cached)
+  [ "$got" = $'p\tc-new\tj-new\t0\t2' ] || { printf 'FAIL shared emits: published replacement did not replace both key and bytes\n'; bad=1; }
+  printf 'p\tc-fail\tj-fail\t1\t2\n' >"$EMIT/side"
+  keep_emits "$dir/emit" "$EMIT/side" || bad=1
+  got=$(printf 'p entry\n' | control_rows "$dir/emit" "$EMIT/ctl.keys" cached)
+  [ "$got" = $'p\tc-new\tj-new\t0\t2' ] || { printf 'FAIL shared emits: failed emit displaced a successful record\n'; bad=1; }
+  local n
+  for n in 1 2 3 4 5 6; do mkdir -p "$(control_dir "$n")"; done
+  trim_controls 1 2
+  [ -d "$(control_dir 1)" ] && [ -d "$(control_dir 2)" ] \
+    && [ "$(find "$CTL_CACHE/entries" -maxdepth 1 -type d -name 'ctl-*' | wc -l)" -eq 4 ] \
+    || { printf 'FAIL shared control: retention dropped an active entry or exceeded four entries\n'; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
+stable_emit_self_test() (
+  local original=$TOP compiler d side name entry got bin key prior="" bad=0 c_ok=0 js_ok=0
+  compiler="$TOP/msc"
+  [ ! -x "$TOP/msc.exe" ] || compiler="$TOP/msc.exe"
+  [ -x "$compiler" ] || compiler=$(command -v msc) || return 1
+  d=$(mktemp -d) || return 1
+  local TOP="$d/a" CTL_CACHE="$d/cache" CTL_WORK="$d/cache/work" EMIT="$d/result"
+  mkdir -p "$TOP/src/test/corpus/programs/nested" "$TOP/runtime" "$TOP/vendor" "$EMIT"
+  cp -a "$original/std" "$TOP/std" || { rm -rf "$d"; return 1; }
+  printf 'export const answer: int32 = 41;\n' >"$TOP/std/gateCacheProbe.ms"
+  printf 'import { answer } from "std/gateCacheProbe";\nconsole.log("std=" + answer.toString());\n' >"$TOP/src/test/corpus/programs/plain.ms"
+  printf 'export function identity<T>(value: T): T { return value; }\n' >"$TOP/src/test/corpus/programs/nested/helper.ms"
+  printf 'import { identity } from "./helper";\nimport { answer } from "std/gateCacheProbe";\nconsole.log("std=" + identity(answer).toString());\n' >"$TOP/src/test/corpus/programs/nested/main.ms"
+  (cd "$TOP" && git init -q && git -c user.name=t -c user.email=t@t add src std \
+    && git -c user.name=t -c user.email=t@t commit -qm probe) >"$d/git.log" 2>&1 || { rm -rf "$d"; return 1; }
+  cp -a "$TOP" "$d/b"
+  for side in a b changed; do
+    if [ "$side" = changed ]; then
+      printf 'export const answer: int32 = 99;\n' >"$d/b/std/gateCacheProbe.ms"
+    else TOP="$d/$side"; fi
+    prepare_emit_workspace || { bad=1; break; }
+    bin=$(stage_emit_compiler "$compiler" ctrl) || { bad=1; break; }
+    stable_programs >"$EMIT/programs"
+    while read -r name entry; do
+      got=$(GATE_EMIT_DIR="$CTL_WORK/e" emit_one "$bin" "$name" "$name" "$entry")
+      printf '%s\n' "$got" >>"$EMIT/$side"
+      if ! awk -F'\t' 'NF == 5 && $4 == 0 && $5 > 0 { ok = 1 } END { exit !ok }' <<<"$got"; then
+        printf 'FAIL stable emits: %s/%s C emission failed\n' "$side" "$name"; bad=1
+      fi
+      if [ "$bad" -eq 0 ]; then c_ok=$((c_ok + 1)); fi
+      got=$(node "$CTL_WORK/e/$name/out.js" 2>&1)
+      if [ "$side" = changed ]; then key=99; else key=41; fi
+      if [ "$got" = "std=$key" ]; then js_ok=$((js_ok + 1))
+      else printf 'FAIL stable emits: %s/%s read another std (%s)\n' "$side" "$name" "$got"; bad=1; fi
+    done <"$EMIT/programs"
+  done
+  cmp -s "$EMIT/a" "$EMIT/b" || { printf 'FAIL stable emits: identical source/std from another checkout changed raw signatures\n'; bad=1; }
+  while read -r name entry; do
+    prior=$(grep "^$name"$'\t' "$EMIT/b")
+    got=$(grep "^$name"$'\t' "$EMIT/changed")
+    if ! awk -F'\t' 'NR == 1 { c = $2; j = $3; next } $2 == c || $3 == j { exit 1 }' <<<"$prior"$'\n'"$got"; then
+      printf 'FAIL stable emits: %s hid a real std change in C or JS\n' "$name"; bad=1
+    fi
+  done <"$EMIT/programs"
+  [ "$bad" -ne 0 ] || printf 'gate: stable emits A/A equal; real std change differs in C and JS; %d C emits, %d own-std executions\n' "$c_ok" "$js_ok"
+  rm -rf "$d"
+  return $bad
+)
+
+support_cache_self_test() (
+  local d old new copied before after bad=0 CONTROL_SUPPORT
+  d=$(mktemp -d) || return 1
+  mkdir -p "$d/a/src" "$d/a/std" "$d/a/runtime" "$d/a/vendor/lib" "$d/b"
+  printf 'source\n' >"$d/a/src/a.ms"; printf 'std\n' >"$d/a/std/a.ms"
+  printf '#define RUNTIME_VALUE 1\n' >"$d/a/runtime/core.h"
+  printf '#define VENDOR_VALUE 1\n' >"$d/shared.h"
+  ln -s "$d/shared.h" "$d/a/vendor/lib/shared.h"
+  (cd "$d/a" && git init -q && git -c user.name=t -c user.email=t@t add src std runtime vendor \
+    && git -c user.name=t -c user.email=t@t commit -qm inputs) >"$d/git.log" 2>&1 || { rm -rf "$d"; return 1; }
+  cp -aL "$d/a/runtime" "$d/a/vendor" "$d/a/std" "$d/b"
+  old=$(control_support "$d/a")
+  copied=$(control_support "$d/b")
+  [ "$old" = "$copied" ] || { printf 'FAIL shared support: same files at another root changed identity\n'; bad=1; }
+  CONTROL_SUPPORT=$old
+  before=$(cd "$d/a" && control_key HEAD)
+  printf '#define VENDOR_VALUE 2\n' >"$d/a/vendor/lib/shared.h"
+  new=$(control_support "$d/a")
+  copied=$(control_support "$d/b")
+  [ "$new" != "$old" ] && [ "$copied" = "$old" ] \
+    || { printf 'FAIL shared support: mutable vendor link changed the snapshot or evaded invalidation\n'; bad=1; }
+  CONTROL_SUPPORT=$new
+  after=$(cd "$d/a" && control_key HEAD)
+  [ "$before" != "$after" ] || { printf 'FAIL shared support: changed vendor bytes kept the same compiler key\n'; bad=1; }
+  printf '#define RUNTIME_VALUE 2\n' >"$d/b/runtime/core.h"
+  [ "$(control_support "$d/b")" != "$old" ] || { printf 'FAIL shared support: changed runtime bytes kept the same identity\n'; bad=1; }
+  printf 'std\r\n' >"$d/a/std/a.ms"
+  [ "$(control_support "$d/a")" != "$new" ] || { printf 'FAIL shared support: std bytes outside git kept the same identity\n'; bad=1; }
+  new=$(control_support "$d/a")
+  printf 'export default {};\n' >"$d/build.ms"
+  [ "$(control_support "$d/a")" != "$new" ] || { printf 'FAIL shared support: an ambient build.ms above the workspace kept the same identity\n'; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
+control_key_self_test() (
+  local d before after bad=0 CONTROL_SUPPORT=support
+  d=$(mktemp -d) || return 1
+  mkdir -p "$d/src/test" "$d/std" "$d/runtime" "$d/vendor"
+  printf 'compiler\n' >"$d/src/a.ms"; printf 'test\n' >"$d/src/test/t.ms"; printf 'std\n' >"$d/std/a.ms"
+  printf 'runtime\n' >"$d/runtime/a.h"; printf 'vendor\n' >"$d/vendor/a.h"
+  cd "$d" && git init -q && git -c user.name=t -c user.email=t@t add . && git -c user.name=t -c user.email=t@t commit -qm base || { rm -rf "$d"; return 1; }
+  before=$(control_key HEAD)
+  printf 'compiler2\n' >src/a.ms; git -c user.name=t -c user.email=t@t commit -qam src
+  after=$(control_key HEAD)
+  [ "$before" != "$after" ] || { printf 'FAIL control key: compiler source change kept the key\n'; bad=1; }
+  before=$after
+  printf 'std2\n' >std/a.ms; git -c user.name=t -c user.email=t@t commit -qam std
+  after=$(control_key HEAD)
+  [ "$before" != "$after" ] || { printf 'FAIL control key: std change kept the key\n'; bad=1; }
+  before=$after
+  CONTROL_SUPPORT=support2
+  [ "$(control_key HEAD)" != "$before" ] || { printf 'FAIL control key: support identity change kept the key\n'; bad=1; }
+  CONTROL_SUPPORT=support
+  eval "$(declare -f emit_one | sed 's/--emit=c --gc=drc --danger/--emit=c --gc=orc --danger/')"
+  [ "$(control_key HEAD)" != "$before" ] || { printf 'FAIL control key: changed emit definition kept the key\n'; bad=1; }
+  cd / && rm -rf "$d"
+  return $bad
+)
+
+program_key_self_test() (
+  local d got before bad=0 CTL_WORK
+  d=$(mktemp -d) || return 1
+  CTL_WORK=$d
+  mkdir -p "$d/src/test/corpus/programs/dir" "$d/src/test/corpus/programs/escape"
+  printf 'console.log(1);\n' >"$d/src/test/corpus/programs/plain.ms"
+  printf 'export const v = 1;\n' >"$d/src/test/corpus/programs/dir/helper.ms"
+  printf 'import { v } from "./helper";\n' >"$d/src/test/corpus/programs/dir/main.ms"
+  printf "import { v } from '../plain';\n" >"$d/src/test/corpus/programs/escape/main.ms"
+  got=$(reusable_programs | sort)
+  printf '%s\n' "$got" | grep -q '^plain ' && printf '%s\n' "$got" | grep -q '^dir ' \
+    || { printf 'FAIL program keys: a self-contained program was not reusable\n'; bad=1; }
+  ! printf '%s\n' "$got" | grep -q '^escape ' || { printf 'FAIL program keys: a single-quoted import outside the program was reused\n'; bad=1; }
+  before=$got
+  printf 'console.log(1);\r\n' >"$d/src/test/corpus/programs/plain.ms"
+  got=$(reusable_programs | sort)
+  [ "$(grep '^plain ' <<<"$got")" != "$(grep '^plain ' <<<"$before")" ] || { printf 'FAIL program keys: changed program bytes kept the key\n'; bad=1; }
+  printf 'export const v = 2;\n' >"$d/src/test/corpus/programs/dir/helper.ms"
+  got=$(reusable_programs | sort)
+  [ "$(grep '^dir ' <<<"$got")" != "$(grep '^dir ' <<<"$before")" ] || { printf 'FAIL program keys: changed helper bytes kept the directory key\n'; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
+publish_self_test() (
+  local d dir tmp bad=0 CTL_CACHE EXE_SUFFIX=""
+  d=$(mktemp -d) || return 1
+  CTL_CACHE=$d
+  dir=$(control_dir key) tmp="$d/entries/.build.x"
+  mkdir -p "$dir" "$tmp/std/core/system"
+  cp "$(command -v bash)" "$(control_binary "$tmp")"
+  printf 'snapshot\n' >"$tmp/std/core/system/index.ms"
+  if publish_control "$tmp" "$dir" key; then printf 'FAIL shared control: publication over a leftover entry succeeded\n'; bad=1; fi
+  [ ! -e "$dir/.build.x" ] || { printf 'FAIL shared control: publication nested into a leftover entry\n'; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
+emit_env_self_test() (
+  local d got bad=0
+  d=$(mktemp -d) || return 1
+  printf '#!/usr/bin/env bash\nfor a; do case $a in --output=*) env | grep "^MSC" | sort >"${a#--output=}" ;; esac; done\nexit 0\n' >"$d/fake"
+  chmod +x "$d/fake"
+  printf 'p %s/p.ms\n' "$d" | MSC_GATE_PROBE=leak emit_side "$d/fake" "$d/e" >/dev/null
+  got=$(cat "$d/e/1/out.js" 2>/dev/null)
+  [ -f "$d/e/1/out.js" ] || { printf 'FAIL emit env: probe emit did not run\n'; bad=1; }
+  [ -z "$got" ] || { printf 'FAIL emit env: emits saw %s\n' "$got"; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
+control_boot_self_test() (
+  local d tmp bad=0 BUILDER CC_FLAG="" OUT CTL_CACHE CTL_WORK EXE_SUFFIX="" CONTROL_SUPPORT=support key
+  d=$(mktemp -d) || return 1
+  OUT="$d/out" CTL_CACHE="$d/cache" CTL_WORK="$d/cache/work" BUILDER="$d/builder"
+  mkdir -p "$OUT" "$CTL_WORK/runtime" "$CTL_WORK/vendor" "$d/repo/src" "$d/repo/std/core/system"
+  printf 'x\n' >"$d/repo/src/index.ms"; printf 'x\n' >"$d/repo/std/core/system/index.ms"
+  cat >"$d/compiler" <<'FAKE'
+#!/usr/bin/env bash
+for a; do case $a in --output=*) o=${a#--output=} ;; esac; done
+grep -v '^# by ' "$0" >"$o"; printf '# by compiler\n' >>"$o"; chmod +x "$o"
+printf 'compiler\n' >"${o}_link.rsp"
+FAKE
+  printf '#!/usr/bin/env bash\nfor a; do case $a in --output=*) o=${a#--output=} ;; esac; done\n{ cat %q; printf "# by builder\\n"; } >"$o"; chmod +x "$o"\nprintf "builder\\n" >"${o}_link.rsp"\n' "$d/compiler" >"$BUILDER"
+  chmod +x "$BUILDER" "$d/compiler"
+  (cd "$d/repo" && git init -q && git -c user.name=t -c user.email=t@t add . && git -c user.name=t -c user.email=t@t commit -qm base) >/dev/null 2>&1 || { rm -rf "$d"; return 1; }
+  key=$(cd "$d/repo" && build_ctl HEAD) || { printf 'FAIL control boot: build failed (%s)\n' "$(tail -n 3 "$OUT/ctl.log" | tr '\n' ' ')"; rm -rf "$d"; return 1; }
+  [ "$(tail -n 1 "$(control_binary "$(control_dir "$key")")")" != "# by builder" ] \
+    || { printf 'FAIL control boot: the published control was built by the worktree builder, not by itself\n'; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
 self_test() {
   local bad=0 cases got want log
   cases=$(cat <<'CASES'
@@ -818,13 +1208,16 @@ CASES
   [ -n "$want" ] && [ "$got" = "FAIL $want: no shard ran it
 rc=1" ] || { printf 'FAIL guard claims: an unclaimed probe must be named, got "%s"\n' "$got"; bad=1; }
   log=$(mktemp -d) || return 1
-  printf 'ok k1\nfailed k2\nstale k3\nnew k4\n' >"$log/keys"
-  printf 'k1\n' >"$log/ok.key"; printf 'ok\tc\tj\t0\t9\n' >"$log/ok.sig"
-  printf 'k2\n' >"$log/failed.key"; printf 'failed\tc\tj\t1\t9\n' >"$log/failed.sig"
-  printf 'k0\n' >"$log/stale.key"; printf 'stale\tc\tj\t0\t9\n' >"$log/stale.sig"
-  got=$(printf '%s p\n' ok failed stale new | control_todo "$log" "$log/keys" | cut -d' ' -f1 | paste -sd'|' -)
+  printf 'ok k1\nfailed k2\nstale k3\nnew k4\npartial k5\nempty k6\nwrongname k7\n' >"$log/keys"
+  printf 'k1\nok\tc\tj\t0\t9\n' >"$log/ok.sig"
+  printf 'k2\nfailed\tc\tj\t1\t9\n' >"$log/failed.sig"
+  printf 'k0\nstale\tc\tj\t0\t9\n' >"$log/stale.sig"
+  printf 'k5\n' >"$log/partial.sig"
+  printf 'k6\nempty\tc\tj\t0\t0\n' >"$log/empty.sig"
+  printf 'k7\nother\tc\tj\t0\t9\n' >"$log/wrongname.sig"
+  got=$(printf '%s p\n' ok failed stale new partial empty wrongname | control_todo "$log" "$log/keys" | cut -d' ' -f1 | paste -sd'|' -)
   rm -rf "$log"
-  [ "$got" = "failed|stale|new" ] || { printf 'FAIL control reuse of emits: want "failed|stale|new", got "%s"\n' "$got"; bad=1; }
+  [ "$got" = "failed|stale|new|partial|empty|wrongname" ] || { printf 'FAIL control reuse of emits: want "failed|stale|new|partial|empty|wrongname", got "%s"\n' "$got"; bad=1; }
   got=$(ledger_fmt "2026-09-26 21:00:00" recompiler suite 553 0 2 2 0 0 30 | tr '\t' '|')
   want='2026-09-26 21:00:00|recompiler|suite|553|0|2|2|0|0|30'
   [ "$got" = "$want" ] || { printf 'FAIL ledger fmt: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
@@ -887,6 +1280,14 @@ CASES
     got=$(cap_jobs 32 "$invalid" 2>/dev/null); rc=$?
     [ "$rc" -eq 2 ] && [ -z "$got" ] || { printf 'FAIL invalid worker cap %s: rc=%s, jobs="%s"\n' "$invalid" "$rc" "$got"; bad=1; }
   done
+  shared_cache_self_test || bad=1
+  support_cache_self_test || bad=1
+  control_key_self_test || bad=1
+  program_key_self_test || bad=1
+  publish_self_test || bad=1
+  emit_env_self_test || bad=1
+  control_boot_self_test || bad=1
+  stable_emit_self_test || bad=1
   queue_self_test || bad=1
   adopt_self_test || bad=1
   boot_self_test || bad=1
@@ -1133,50 +1534,6 @@ totals_of() {
 }
 
 
-emit_side() {
-  local jobs
-  jobs=$(cap_jobs "$(share_of_cores 2)" "${GATE_PAR:-}") || return $?
-  mkdir -p "$2"
-  awk '{ print NR, $0 }' | bounded env -u FORCE_COLOR GATE_EMIT_DIR="$2" NO_COLOR=1 xargs -r -P "$jobs" -L1 "$TOP/tools/gate.sh" --emit-one "$1"
-}
-
-reusable_programs() {
-  local dir=src/test/corpus/programs
-  {
-    git ls-tree HEAD "$dir/" | awk -F'\t' '{ split($1, m, " "); print "key\t" m[3] "\t" $2 }'
-    git status --porcelain --untracked-files=all -- "$dir" | awk '{ print "dirty\t\t" substr($0, 4) }'
-    grep -rEo '"\.{1,2}/(\.\./)*' "$dir" | awk '{ print "ref\t\t" $0 }'
-  } | program_keys
-}
-
-
-keep_emits() {
-  local dir=$1 side=$2
-  mkdir -p "$dir"
-  awk -v dir="$dir" -v keys="$EMIT/ctl.keys" '
-    BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
-    ($1 in key) { f = dir "/" $1; print > (f ".sig"); close(f ".sig"); print key[$1] > (f ".key"); close(f ".key") }' "$side"
-}
-
-adopt_candidate() {
-  local dir="$OUT/ctl-$cand_key"
-  [ -n "$cand_key" ] && [ -x "$CAND" ] && [ "$(cat "$CAND.key" 2>/dev/null)" = "$cand_key" ] || return 0
-  [ -x "$dir/msc" ] && return 0
-  mkdir -p "$dir.tmp" && cp "$CAND" "$dir.tmp/msc" && keep_emits "$dir.tmp/emit" "$EMIT/cand.sig" \
-    && rm -rf "$dir" && mv "$dir.tmp" "$dir" || rm -rf "$dir.tmp"
-  ls -dt "$OUT"/ctl-[0-9a-f]*/ 2>/dev/null | tail -n +4 | xargs -r rm -rf
-}
-
-emit_control() {
-  local dir="$2/emit"
-  mkdir -p "$dir"
-  reusable_programs >"$EMIT/ctl.keys"
-  control_todo "$dir" "$EMIT/ctl.keys" <"$EMIT/programs" >"$EMIT/ctl.todo"
-  emit_side "$1" "$EMIT/ctrl" <"$EMIT/ctl.todo" | awk -v dir="$dir" -v keys="$EMIT/ctl.keys" '
-    BEGIN { while ((getline l < keys) > 0) { split(l, a, " "); key[a[1]] = a[2] } }
-    { f = dir "/" $1; print > (f ".sig"); close(f ".sig"); printf "%s", (($1 in key) ? key[$1] "\n" : "") > (f ".key"); close(f ".key") }'
-  awk -v dir="$dir" '{ f = dir "/" $1 ".sig"; if ((getline l < f) > 0) print l; close(f) }' "$EMIT/programs" | sort >"$EMIT/ctl.sig"
-}
 
 select_whole() {
   select=0; say "gate: select gave up, no narrowing for $select_label ($1)"
@@ -1184,17 +1541,26 @@ select_whole() {
 }
 
 select_programs() {
-  local sha key ctl_dir ctl t0=$SECONDS n_all line
+  local sha key ctl_dir ctl cand t0=$SECONDS n_all line
   sha=$(git merge-base "$base" HEAD) || { select_whole "no merge base with $base"; return; }
-  rm -rf "$OUT/ctl"
+  if [ -n "$(git status --porcelain -- std runtime vendor)" ] \
+    || [ "$(git ls-tree "$sha" std runtime vendor)" != "$(git ls-tree HEAD std runtime vendor)" ]; then
+    select_whole "control and candidate support trees differ"; return
+  fi
+  prepare_emit_workspace || { select_whole "cannot snapshot emission inputs"; return; }
+  CONTROL_SUPPORT=$(control_support "$CTL_WORK") || { select_whole "cannot fingerprint support snapshot"; return; }
   key=$(build_ctl "$sha") || { select_whole "no control compiler at $(printf '%s' "$sha" | cut -c1-8), log: $OUT/ctl.log"; return; }
-  ctl_dir="$OUT/ctl-$key" ctl="$ctl_dir/msc"
+  ctl_dir=$(control_dir "$key")
+  ctl=$(stage_emit_compiler "$(control_binary "$ctl_dir")" ctrl) \
+    && cand=$(stage_emit_compiler "$CAND" cand) || { select_whole "cannot stage emission compilers"; return; }
   rm -rf "$EMIT"
   mkdir -p "$EMIT"
-  list_programs >"$EMIT/programs"
-  emit_control "$ctl" "$ctl_dir"
-  emit_side "$CAND" "$EMIT/cand" <"$EMIT/programs" | sort >"$EMIT/cand.sig"
-  adopt_candidate
+  stable_programs >"$EMIT/programs"
+  emit_control "$ctl" "$ctl_dir" || { select_whole "control emit or cache publication failed"; return; }
+  emit_side "$cand" "$CTL_WORK/e/cand" <"$EMIT/programs" | sort >"$EMIT/cand.sig" \
+    || { select_whole "candidate emit failed"; return; }
+  adopt_candidate || { select_whole "candidate cache publication failed"; return; }
+  trim_controls "$key" "$(control_key HEAD)"
   n_all=$(grep -c . "$EMIT/programs")
   if [ "$(grep -c . "$EMIT/ctl.sig")" -ne "$n_all" ] || [ "$(grep -c . "$EMIT/cand.sig")" -ne "$n_all" ]; then
     select_whole "an emit pass lost programs"; return
