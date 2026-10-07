@@ -1,8 +1,11 @@
-// @stdout: int32 0|string s|boolean true|int32 7|string n|boolean false|string n|Box 3|string t|string f|int32 8|array 3|string x1|string x2|int32 5|null|string s|int32 5|boolean|string s/string s|int32 3/int32 3|string n|int32 7
-// note: a union value moves into a union holding more members by assignment, argument, return and field read, and keeps the member it holds: after branches that store a string or a boolean, from a narrower return, from a class member, from a nested union field, from a nullable union, from a variable narrowed to fewer members and from a payload that owns memory. Same output on C, JS and the Raiser.
+// @stdout: int32 0|string s|boolean true|int32 7|string n|boolean false|string n|Box 3|string t|Box 6|string f|int32 8|array 3|string x1|string x2|int32 5|null|string s|int32 5|boolean|string s/string s|int32 3/int32 3|string n|int32 7|string n,int32 7,boolean true
+// note: a union value moves into a union holding more members by assignment, argument, return, object field, array element and field read, and keeps the member it holds: after branches that store a string or a boolean, from a narrower return, from a class member, from a subclass member into its base class, from a nested union field, from a nullable union, from a variable narrowed to fewer members and from a payload that owns memory. Same output on C, JS and the Raiser.
 class Box {
 	n: int32;
 	constructor(n: int32) { this.n = n; }
+}
+class Crate extends Box {
+	constructor(n: int32) { super(n); }
 }
 struct Holder {
 	u: int32 | string;
@@ -30,6 +33,9 @@ function showBox(u: Box | string | boolean): string {
 	if (u instanceof Box) return "Box " + u.n;
 	if (typeof u === "string") return "string " + u;
 	return "boolean";
+}
+function crate(): Crate | string {
+	return new Crate(6);
 }
 function box(c: int32): Box | string {
 	return c == 0 ? new Box(3) : "t";
@@ -65,6 +71,15 @@ function narrowedRead(c: int32): string {
 	}
 	return "boolean";
 }
+interface Slot {
+	value: int32 | string | boolean;
+}
+function inSlot(c: int32): Slot {
+	return { value: narrow(c) };
+}
+function inList(c: int32): (int32 | string | boolean)[] {
+	return [narrow(c), true];
+}
 const out: string[] = [];
 for (let c = 0; c < 3; c++) out.push(show(stored(c)));
 out.push(show(wide(0)));
@@ -75,6 +90,7 @@ w = narrow(1);
 out.push(show(w));
 out.push(showBox(box(0)));
 out.push(showBox(box(1)));
+out.push(showBox(crate()));
 const holders: Holder[] = [{ u: "f" }, { u: 8 }];
 for (const h of holders) {
 	const held: int32 | string | boolean = h.u;
@@ -89,4 +105,5 @@ for (let c = 0; c < 3; c++) out.push(narrowedRead(c));
 const optional: int32 | string | boolean | null = narrow(1);
 out.push(showN(optional));
 out.push(showN(narrow(0) as int32 | string | boolean | null));
+out.push(show(inSlot(1).value) + "," + show(inList(0)[0]) + "," + show(inList(0)[1]));
 console.log(out.join("|"));
