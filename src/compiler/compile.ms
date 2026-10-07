@@ -3776,7 +3776,7 @@ function jsTestHarnessSource(): string {
 		"};",
 		"globalThis.__msAssertFail = (msg, file, line) => {",
 		"  const err = new Error(msg);",
-		"  err.msAssert = true; err.msFile = file; err.msLine = line; err.msDiag = paPending;",
+		"  err.msAssert = true; err.msDefect = true; err.msFile = file; err.msLine = line; err.msDiag = paPending;",
 		"  paPending = null;",
 		"  throw err;",
 		"};",
