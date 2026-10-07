@@ -116,11 +116,19 @@ const TABLE = @comptime {
 
 Supports: number, string, boolean, null, array, object returns. Each maps to the corresponding literal AST node.
 
-The block runs on the Raiser with the Raiser's std whatever the build target. A `Map` or a `HashMap` built and ranged
-inside it folds on `--target=raiser` and on a JS build (measured 2026-10-06, corpus `comptimeMapOnEveryTarget`;
-before, a JS build stopped at `Undefined variable 'msMapFatal'`). Not yet: on a C build a comptime `Map.set` stops at
-`Ambiguous call to overloaded extension method 'push'` (a `HashMap` folds), and a class whose constructor calls an
-extension on `this`, `Set` among them, cannot be built at comptime on any target.
+The block runs on the Raiser with the Raiser's std whatever the build target. A `Map` or `HashMap`
+built and ranged inside it folds on C/ORC/danger/JS/ESM/Raiser. Measured on Windows x64,
+source tree `100fe9f96348`: `comptimeMapOnEveryTarget` prints
+`total=1 weighted=44 hashed=7 keys=a,bb` on all six lanes; its SAN cell exits 0 without
+an ASan/ledger report. Together with generic type-parameter and imported-helper scope
+variants, the focused matrix is `21 pass · 0 fail · 0 xfail · 0 xpass`.
+The prior C `Map.set` failure (`Ambiguous call to overloaded extension method 'push'`)
+came from instantiating a VM std helper in the target backend's module context.
+The existing engine body-context callback now selects the VM's own prelude for std
+modules; user-module defining contexts are unchanged.
+A separate native `Set<int32>([3, 3, 4])` comptime probe still stops during lowering at
+`extension call '.add' reached lowering without its resolved symbol`; Set constructors
+and other `this`-extension constructors were not verified on the other backends here.
 
 A `@comptime` block also gets the checker context a macro body gets, so the typed queries of Tier 2 answer inside one (landed 2026-09-12). Measured 2026-09-13 against a class `Later` declared in the same module: `getTypeImpl(bindSym("Later"))` → `Struct` (the `Ref` is peeled), `getImpl(bindSym("Later"))` → its `ClassDecl`, `resolveType("Later | null")` → `TypeUnion`, and `typeKind(resolveType("int32"))` → `Int32`.
 
