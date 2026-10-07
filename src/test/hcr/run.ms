@@ -1075,6 +1075,24 @@ function coreCell(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function globalCell(): void {
+	const tag = "hcrGlobalCell";
+	const dir = freshDir(`${TMP}/globalCell`);
+	for (const f of ["app.ms", "build.ms", "refresh.ms", "tally.ms"]) copy(`${FIXTURES}/globalCell/${f}`, `${dir}/${f}`);
+	copy(`${FIXTURES}/registrySupport.ms`, `${dir}/support.ms`);
+	const edits = ["logic.ms", "logicEdit.ms"];
+	for (let i = 0; i < edits.length; i += 1) {
+		copy(`${FIXTURES}/globalCell/${edits[i]}`, `${dir}/logic.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g${i + 1}/module${sharedLibraryExt()}`],
+			`generation ${i + 1} of global imports holding module-level arrays failed to build`);
+	}
+	runPrebuilt(tag, dir, ["logic", "support", "refresh", "tally"], "HCR-GLOBAL", [
+		"HCR-GLOBAL start: g1 1",
+		"HCR-GLOBAL g2: reloaded logic",
+		"HCR-GLOBAL after: g1,g2 2",
+	]);
+}
+
 function watchWarmDependency(): void {
 	const tag = "hcrWatchWarmDependency";
 	const root = freshDir(`${TMP}/watchWarmDependency`);
@@ -1324,6 +1342,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrInlineFunctions", run: inlineFunctions },
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrCoreCell", run: coreCell },
+	{ name: "hcrGlobalCell", run: globalCell },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
 	{ name: "hcrTypeInfoLocality", run: typeInfoLocality },
 	{ name: "hcrWatchLink", run: watchLink },
