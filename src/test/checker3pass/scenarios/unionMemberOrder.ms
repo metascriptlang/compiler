@@ -15,9 +15,9 @@ function f(a: int32 | string, x: A, y: B): void {
 }
 `;
 
-const SRC_WIDER = `
+const SRC_DISJOINT = `
 function f(a: int32 | string): void {
-	const g: boolean | int32 | string = a;
+	const g: boolean | int32 = a;
 }
 `;
 
@@ -50,9 +50,9 @@ show(q[0]);
 	assert errors.length == 0, errors.join("\n");
 }
 
-test "a wider union refusal does not claim a reorder" {
-	const text = checkOnly(SRC_WIDER).errors.join("\n");
-	assert text.contains("is not assignable to type 'boolean | int32 | string'"), "widening must stay refused: " + text;
+test "a union holding a member the target lacks is refused without claiming a reorder" {
+	const text = checkOnly(SRC_DISJOINT).errors.join("\n");
+	assert text.contains("is not assignable to type 'boolean | int32'"), "a member the target lacks stays refused: " + text;
 	assert !text.contains(ORDER_HINT), "a different member set is not a reorder: " + text;
 }
 
