@@ -57,6 +57,19 @@ checker rejects it and names the alternative.
   `class Sub extends Base<int32>`, `u as Base<int32>` passes for a `Pair<int32>` and a `Sub`,
   and `u as Base<string>` on a `Sub` stops with `invalid object conversion`, exit 1, on C and
   JS (measured 2026-10-05).
+- Conversion diagnostics name the source class, not its generated module-qualified
+  identifier. The spelling includes generic arguments (`Box<int32>`) and preserves
+  underscores in author names (`Source__MMarker`). A user-defined static `name`
+  remains the user's value; it does not rename the type in an error.
+  Measured on Windows x64, tree `490fa7bd9fc6`, with the native corpus harness over
+  seven programs: `35 pass · 0 fail · 14 xfail · 0 xpass`; all C/ORC/JS/ESM
+  diagnostic outputs are byte-identical. The xfails are the existing unchecked
+  `danger` policy and measured Raiser static-member/static-init/stderr-capture
+  limits, not waived C/JS failures. A separate unused-type-parameter probe
+  reports `Phantom<string> is not Target` on C and JS.
+  This measurement does not cover foreign JS constructors or an isolated
+  performance run. Regression consumers: `classConversionDiagnosticNames`,
+  `genericConversionDiagnosticNames`, `classConversionInStaticInitializationStops`.
 - `x as unknown as T` is two conversions, up then a tested down, never a reinterpret:
   `i as unknown as K` for an `int32` is refused — write `i as K`. `null as unknown as T`
   still works, because a `null` literal takes any type.
