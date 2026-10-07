@@ -868,3 +868,47 @@ test "different seeds give different programs" {
 	assert generate(11 as uint64, f) != generate(12 as uint64, f);
 }
 
+test "the program head names its seed and full feature vector" {
+	const f = Features.defaults();
+	const text = generate(5 as uint64, f);
+	assert text.startsWith("// smith seed=5 features=" + f.format() + "\n");
+}
+
+test "a planted program declares the plant on both sides of its flag" {
+	const f: Features = { ...Features.defaults(), plant: Plant.Opt };
+	const text = generate(5 as uint64, f);
+	assert text.contains("when (debug) {");
+	assert text.contains("plantDelta()");
+}
+
+test "fams=none emits no closure, union or generic construct" {
+	const r = Features.defaults().overlay("fams=none");
+	assert r.ok;
+	if (r.ok) {
+		for (let seed = 1; seed < 9; seed++) {
+			const text = generate(seed as uint64, r.value);
+			assert !text.contains("(q");
+			assert !text.contains("| string | null");
+			assert !text.contains("BoxG");
+		}
+	}
+}
+
+test "each family alone reaches the program" {
+	const closure = Features.defaults().overlay("fams=closure");
+	const union = Features.defaults().overlay("fams=union");
+	const generic = Features.defaults().overlay("fams=generic");
+	assert closure.ok && union.ok && generic.ok;
+	if (closure.ok && union.ok && generic.ok) {
+		let c = false;
+		let u = false;
+		let g = false;
+		for (let seed = 1; seed < 9; seed++) {
+			if (generate(seed as uint64, closure.value).contains("(q")) { c = true; }
+			if (generate(seed as uint64, union.value).contains("| string | null")) { u = true; }
+			if (generate(seed as uint64, generic.value).contains("<T>")) { g = true; }
+		}
+		assert c && u && g;
+	}
+}
+
