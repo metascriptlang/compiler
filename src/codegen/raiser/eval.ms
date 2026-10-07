@@ -194,7 +194,8 @@ function engineBodyCtx(definingModulePath: string): CheckerContext | null {
 	const outer = getComptimeOuterCtx();
 	if (outer == null || outer.registry == null || outer.graph == null) return null;
 	const mod = findModule(outer.graph, definingModulePath);
-	if (mod == null || mod.stdPrelude) return null;
+	if (mod == null) return null;
+	if (mod.stdPrelude) return raiserPreludeCtx();
 	const declCtx = lookupModuleCtx(definingModulePath);
 	if (declCtx == null) return null;
 	const known = _engine.bodyCtxs.get(declCtx);
