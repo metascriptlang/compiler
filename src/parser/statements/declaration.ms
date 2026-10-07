@@ -867,6 +867,10 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 			}
 			decorators.push(dec);
 		}
+		if (decorators.length > 0 && nodeKind == NodeKind.StructDecl && (current(state).kind == TokenKind.Get || current(state).kind == TokenKind.Set)
+				&& isIdentLike(peek(state, 1)) && peek(state, 2).kind == TokenKind.LParen) {
+			return Result.err(`Decorated getter '${peek(state, 1).value}' at line ${current(state).line} is not supported: a struct getter takes no decorators`);
+		}
 		let visibility = "";
 		const modifier = current(state);
 		if ((modifier.kind == TokenKind.Private || modifier.kind == TokenKind.Public || modifier.kind == TokenKind.Protected)
