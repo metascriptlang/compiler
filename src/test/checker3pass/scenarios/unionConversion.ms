@@ -33,13 +33,25 @@ const none = narrow() as boolean | int32[];
 	assert text.contains("cannot convert int32 | string to int32[] | boolean — no member of 'int32 | string' is a member of 'int32[] | boolean'"), "a disjoint target is refused: " + text;
 }
 
-test "a union whose member reaches the target only by another conversion is refused" {
+test "a union member widening losslessly to a target number converts" {
 	const src = `
 function narrow(): int32 | string { return 1; }
+function small(): uint8 | boolean { return 1; }
 const g: float64 | string = narrow();
+const h: int16 | boolean = small();
+const i = narrow() as float64 | string;
 `;
 	const errors = checkOnly(src).errors;
-	assert errors.length > 0, "int32 converts to float64 on its own, not as a member of the same type";
+	assert errors.length == 0, "int32 into float64 and uint8 into int16 are lossless: " + errors.join("\n");
+}
+
+test "a union member that would lose its value converting to the target number is refused by name" {
+	const src = `
+function wide(): int64 | string { return 1; }
+const g: float64 | string = wide();
+`;
+	const text = checkOnly(src).errors.join("\n");
+	assert text.contains("'int64' to 'float64' may lose integer precision above 2^53"), "the lossy member pair is named: " + text;
 }
 
 test "as from a union to a nullable type holding none of its members is refused" {
