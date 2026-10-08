@@ -525,6 +525,18 @@ function markRootDecl(decl: Node, modulePath: string): void {
 	else markAndWalk(modulePath, topDeclName(decl));
 }
 
+// A complete HCR core keeps what an image may demand on its first use: a class's TypeInfo and
+// hooks otherwise appear only with an allocation site.
+function markCompleteClassHooks(decl: Node, modulePath: string): void {
+	if (decl.kind != NodeKind.ClassDecl || decl.resolvedSym == null) return;
+	if (decl.nodeType != null && hasGenericParams(decl.nodeType)) return;
+	const name = topDeclName(decl);
+	const hookName = hookBaseCNameOfSym(name, decl.resolvedSym);
+	markAndWalk(modulePath, name + "TypeInfo");
+	markAndWalk(modulePath, hookName + "Destroy");
+	markAndWalk(modulePath, hookName + "Trace");
+}
+
 function walkDecl(di: int32): void {
 	if (_declWalked[di]) return;
 	_declWalked[di] = true;
@@ -775,6 +787,7 @@ export function computeAliveSet(
 				const decl = topDecl(bare);
 				if (decl != null) {
 					markRootDecl(decl, modulePath);
+					if (modulePath != entryPath && !_imageModules.has(modulePath)) markCompleteClassHooks(decl, modulePath);
 				} else {
 					const name = getDeclName(bare);
 					if (name != "") markAndWalk(modulePath, name);

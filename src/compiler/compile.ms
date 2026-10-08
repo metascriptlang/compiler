@@ -47,7 +47,7 @@ import { setGlobalHookOwners, setJsProgramScope, hookOwnerMark, hookOwnersFrom, 
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, tryLoadPreludeDeps, writePreludeDeps, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
-import { modulePassIdentity } from "../checker/prelude";
+import { modulePassIdentity, defaultGlobalImports } from "../checker/prelude";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
@@ -1965,6 +1965,40 @@ function hcrReloadHandlers(program: Node | null, flag: SymbolFlag): string[] {
 	return names;
 }
 
+const RAISER_ONLY_STD_DIRS = ["meta"];
+
+function stdModuleName(modPath: string, stdPath: string): string {
+	const rel = replaceExt(relative(stdPath, modPath), "");
+	return `std/${rel.endsWith("/index") ? rel.substring(0, rel.length - 6) : rel}`;
+}
+
+function hcrCompleteCoreModules(graph: ModuleGraph, stdPath: string, imageModules: string[]): string[] {
+	const roots = defaultGlobalImports();
+	roots.push("std/hcr");
+	const pending: string[] = [];
+	for (const modPath of graph.loadOrder) {
+		if (isUnder(modPath, stdPath) && roots.includes(stdModuleName(modPath, stdPath))) pending.push(modPath);
+	}
+	const core: string[] = [];
+	while (pending.length > 0) {
+		const modPath = pending.pop()!;
+		if (core.includes(modPath) || imageModules.includes(modPath)) continue;
+		let raiserOnly = false;
+		for (const dir of RAISER_ONLY_STD_DIRS) {
+			if (isUnder(modPath, join(stdPath, dir))) raiserOnly = true;
+		}
+		if (raiserOnly) continue;
+		core.push(modPath);
+		const mod = findModule(graph, modPath);
+		if (mod == null) continue;
+		for (const imported of mod.imports) {
+			if (isUnder(imported.sourcePath, stdPath)) pending.push(imported.sourcePath);
+		}
+	}
+	core.sort();
+	return core;
+}
+
 function hcrRootFunctions(modulePaths: string[]): Symbol[] {
 	const roots: Symbol[] = [];
 	for (const modPath of modulePaths) {
@@ -2802,7 +2836,12 @@ setGlobalHookOwners(sharedHookOwners);
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
 	if (opts.isHcr) resetRaises();
 	else inferRaises(transformedPrograms);
-	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths, hcrRootFunctions(hcrModulePaths), hcrModulePaths);
+	const exportRootModules: string[] = [];
+	for (const path of hcrModulePaths) exportRootModules.push(path);
+	if (opts.isHcr) {
+		for (const path of hcrCompleteCoreModules(graph, config.stdPath, hcrModulePaths)) exportRootModules.push(path);
+	}
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, exportRootModules, hcrRootFunctions(hcrModulePaths), hcrModulePaths);
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
 	transformedPaths = [];
