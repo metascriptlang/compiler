@@ -1,8 +1,9 @@
-// @stdout: 7 7 9|1 5|6 9 11|5 1
+// @stdout: 7 7 9|1 5|6 9 11|5 1|9 1 2 50
 // note: a Span built from a field reached through a `ref` parameter is dereferenced once, a
 // Span over interface elements carries the element-slot pointer type, and the source of a Span
-// is evaluated once. The Span's `data` and `len` read one shared source node; the var-parameter
-// deref pass used to wrap it twice (`(*(*data))`), and the interface element pointer was `void **`.
+// is evaluated once, under a ternary arm and in a loop condition too: a call inside it becomes a
+// temp and each read copies the remaining pure path (reference: openArrayLoc). One source node
+// used to hang under both `data` and `len`, so a pass rewriting it in place dereferenced twice.
 @passC("-Werror=incompatible-pointer-types");
 
 struct Data { items: Vec<int32>; more: Vec<int32>; }
@@ -37,4 +38,11 @@ out.push(`${lowest(items)} ${lowest(shelf.items)}`);
 out.push(`${total(make())} ${total(bags[at()].items)} ${calls}`);
 let v: Vec<int32> = [1, 2, 3, 4];
 out.push(`${total(v[start()..3])} ${starts}`);
+let probes: int32 = 0;
+function slot(i: int32): int32 { probes += 10; return i; }
+function pick(c: boolean): int32 { return c ? total(bags[slot(0)].items) : total(more[slot(0)].items); }
+let more: Bag[] = [{ items: [1] }];
+let n = 0;
+while (total(bags[slot(0)].items) + n < 11) { n += 1; }
+out.push(`${pick(true)} ${pick(false)} ${n} ${probes}`);
 console.log(out.join("|"));
