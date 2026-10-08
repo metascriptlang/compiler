@@ -551,8 +551,8 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		},
 		NodeKind.HiddenAddr => {
 			const hd = node.data as HiddenDerefData;
-			const t = skipModifier(node.nodeType);
-			if ((t != null && t.kind == TypeKind.Borrow) || !heldByLocation(s, hd.expr.nodeType)) return compileExpr(s, hd.expr);
+			if (!heldByLocation(s, hd.expr.nodeType)) return compileExpr(s, hd.expr);
+			if (!isPlace(s, hd.expr)) return compileCellAddress(s, hd.expr);
 			return compileAddress(s, hd.expr);
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
@@ -690,6 +690,26 @@ function derefTarget(s: RaiserCompState, target: Node): Node | null {
 		if (held != null && held.kind == TypeKind.Ptr && heldByLocation(s, target.nodeType)) return d.array;
 	}
 	return null;
+}
+
+function compileCellAddress(s: RaiserCompState, value: Node): int32 {
+	const cell = allocReg(s);
+	const slot = allocReg(s);
+	const reg = compileExpr(s, value);
+	if (reg != slot) emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
+	emitInst(s, raiserABC(RaiserOpcode.NewArray, cell, 1, 0));
+	const zero = allocReg(s);
+	emitLoadConst(s, zero, raiserInt(0));
+	const dest = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.AddrIndex, dest, cell, zero));
+	return dest;
+}
+
+function isPlace(s: RaiserCompState, node: Node): boolean {
+	if (node.kind == NodeKind.Identifier) {
+		return resolveGlobal(s, node.resolvedSym) >= 0 || resolveLocal(s, (node.data as IdentifierData).name) >= 0;
+	}
+	return node.kind == NodeKind.ArrayAccess || node.kind == NodeKind.MemberExpr || node.kind == NodeKind.HiddenDeref;
 }
 
 function compileAddress(s: RaiserCompState, place: Node): int32 {
@@ -1420,21 +1440,19 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 			}
 			return lastReg;
 		}
-		// Multi-arg: coerce each (ConcatStr with "") and space-join into one line (C/JS parity).
-		const spaceReg = allocReg(s);
-		emitLoadConst(s, spaceReg, raiserString(" "));
-		const emptyReg = allocReg(s);
-		emitLoadConst(s, emptyReg, raiserString(""));
-		const acc = allocReg(s);
-		const firstReg = compileStringPart(s, d.arguments[0]);
-		emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, firstReg, emptyReg));
-		for (let i = 1; i < d.arguments.length; i = i + 1) {
-			emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, acc, spaceReg));
-			const argReg = compileStringPart(s, d.arguments[i]);
-			emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, acc, argReg));
-		}
+		const acc = compileEchoLine(s, d.arguments);
 		emitInst(s, raiserABC(RaiserOpcode.Print, acc, 0, 0));
 		return acc;
+	}
+
+	if (isConsoleStderr(d.callee)) {
+		const dest = allocReg(s);
+		const lineReg = allocReg(s);
+		const line = compileEchoLine(s, d.arguments);
+		if (line != lineReg) emitInst(s, raiserABC(RaiserOpcode.Move, lineReg, line, 0));
+		const nameIdx = addConst(s, raiserString("msEprintln"));
+		emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, 1));
+		return dest;
 	}
 
 	// Generic native call: any callee resolved to a Symbol with nativeName
@@ -2071,6 +2089,35 @@ function compileStrSlice(s: RaiserCompState, node: Node): int32 {
 	const dest = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.StrSlice, dest, strReg, slotStart));
 	return dest;
+}
+
+// Coerce each argument (ConcatStr with "") and space-join them into one line (C/JS parity).
+function compileEchoLine(s: RaiserCompState, args: Node[]): int32 {
+	const spaceReg = allocReg(s);
+	emitLoadConst(s, spaceReg, raiserString(" "));
+	const emptyReg = allocReg(s);
+	emitLoadConst(s, emptyReg, raiserString(""));
+	const acc = allocReg(s);
+	if (args.length == 0) {
+		emitInst(s, raiserABC(RaiserOpcode.Move, acc, emptyReg, 0));
+		return acc;
+	}
+	const firstReg = compileStringPart(s, args[0]);
+	emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, firstReg, emptyReg));
+	for (let i = 1; i < args.length; i = i + 1) {
+		emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, acc, spaceReg));
+		const argReg = compileStringPart(s, args[i]);
+		emitInst(s, raiserABC(RaiserOpcode.ConcatStr, acc, acc, argReg));
+	}
+	return acc;
+}
+
+function isConsoleStderr(node: Node): boolean {
+	if (node.kind != NodeKind.MemberExpr) return false;
+	const d = node.data as MemberExprData;
+	if (d.property != "warn" && d.property != "error") return false;
+	if (d.object.kind != NodeKind.Identifier) return false;
+	return (d.object.data as IdentifierData).name == "console";
 }
 
 // --- Console.log detection ---

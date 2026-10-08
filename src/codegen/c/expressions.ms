@@ -1658,7 +1658,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		// Numerics: x = 0 (MS_NIL is void*, incompatible with int/float in C).
 		if (d.operator == "=" && (finalRight == "MS_NIL" || finalRight == "NULL" || finalRight == "((void*)0)")) {
 			const lt = d.left.nodeType;
-			if (lt != null && isNilableValueType(lt)) {
+			if (lt != null && (isNilableValueType(lt) || lt.kind == TypeKind.Span)) {
 				const cType = getTypeDesc(g, lt);
 				ctx.results.push(`memset(&(${left}), 0, sizeof(${cType}))`);
 				return;
@@ -1749,10 +1749,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		}
 		const narrowUnary = subIntTypeDesc(g, node.nodeType);
 		if (narrowUnary != "" && (d.unaryOp == "-" || d.unaryOp == "~")) {
-			ctx.results.push(`((${narrowUnary})(${d.unaryOp}${operand}))`);
+			ctx.results.push(`((${narrowUnary})(${d.unaryOp}(${operand})))`);
 			return;
 		}
-		ctx.results.push(`(${d.unaryOp}${operand})`);
+		ctx.results.push(`(${d.unaryOp}(${operand}))`);
 		return;
 	}
 
@@ -3430,9 +3430,9 @@ test "not equal" { assert exprSnippet("x !== y;") == "(x != y)"; }
 
 test "nested" { assert exprSnippet("a + b * c;") == "(a + (b * c))"; }
 
-test "negation" { assert exprSnippet("-x;") == "(-x)"; }
+test "negation" { assert exprSnippet("-x;") == "(-(x))"; }
 
-test "logical not" { assert exprSnippet("!flag;") == "(!flag)"; }
+test "logical not" { assert exprSnippet("!flag;") == "(!(flag))"; }
 
 test "no args" { assert exprSnippet("foo();") == "foo()"; }
 

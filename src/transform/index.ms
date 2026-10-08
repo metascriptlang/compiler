@@ -95,6 +95,8 @@ import { spanLower } from "./lowering/spanLower";
 import { spanParamExpand } from "./native/spanParamExpand";
 import { lowerNullable } from "./native/nullableLower";
 import { projectNarrowedUnions, checkVariantReads } from "./native/unionProjectLower";
+import { lowerUnionTags } from "./lowering/unionTagLower";
+import { lowerUnionConversions } from "./lowering/unionConvLower";
 import { unwrapMaybe } from "./native/maybeUnwrap";
 import { lowerDCE } from "./analysis/dce";
 import { liftDestructors } from "./lowering/destructorLifting";
@@ -166,6 +168,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerLambda(result, ctx); }
 	// Hoist fresh RC-returning calls out of non-RC bindings so the analyzer cleans
 	// them (fixes `const has = provide(path).ok` leaking the Result). C/DRC only.
+	result = lowerUnionConversions(result, ctx);
 	if (!jsBackend) { result = lowerCallHoist(result, ctx); }
 	result = lowerBuiltins(result, ctx);
 	if (jsBackend) { result = lowerStringLengthJS(result, ctx); }
@@ -186,6 +189,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerUpdateExpr(result, ctx); }
 	if (!jsBackend) { result = lowerNullable(result, ctx); }
 	if (!jsBackend) { result = projectNarrowedUnions(result, ctx); }
+	if (jsBackend) { result = lowerUnionTags(result, ctx); }
 	if (jsBackend) { result = checkVariantReads(result, ctx, true); }
 	// C materializes the Maybe struct (above); JS de-materializes it — the two
 	// backends are inverse directions of the same T|null lowering. Keeps JS on

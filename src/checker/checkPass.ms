@@ -34,6 +34,7 @@ import { bindFlowGraph } from "../binder/index";
 import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
+import { checkPointerEscapes } from "./pointerAddress";
 import { getModuleDir, appendFlag } from "../utils/string";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { checkExpr, refuseFallingOffEnd, refuseGeneratorReturnValue, refuseReturnedPromise } from "./checkExprPass";
@@ -41,7 +42,7 @@ import { inlineDecorator } from "./decoratorHelpers";
 import { foldUserOperatorConstant, typeTraitOf, resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, takeDefaultArgTemps, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed } from "./callResolve";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
-import { fitNode, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
+import { convertStoredUnionRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerSelfReadType, registerLaterDeclarationNote } from "./checkerCallbacks";
@@ -775,7 +776,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions
 	if (declType != null && d.initializer != null) {
-		d.initializer = fitNode(ctx, d.initializer, declType, initType);
+		d.initializer = fitViewLocal(ctx, fitNode(ctx, d.initializer, declType, initType), declType);
 	}
 	// Prefer explicit type annotation over inferred type
 	let varType = initType;
@@ -785,6 +786,9 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		const closT = closureStorageType(initType);
 		d.initializer = fitNode(ctx, d.initializer, closT, initType);
 		varType = closT;
+	} else if (initType != null && d.initializer != null) {
+		const storedRead = convertStoredUnionRead(d.initializer, initType, initType);
+		if (storedRead != null) d.initializer = storedRead;
 	}
 	node.nodeType = varType;
 	// If already collected in pass 1 (e.g. export const) OR pre-registered above
@@ -3756,6 +3760,7 @@ function checkProgramCore(
 	stampJsModulePaths(ctx);
 	analyzeParamMutations(ctx, program);
 	checkViewBorrows(ctx, program);
+	checkPointerEscapes(ctx, program);
 	sgSortRecords(ctx.symRecords);
 	// Register this module's ctx so later cross-module generic instantiation can
 	// re-check cloned bodies in THIS module's scope (resolving private consts,

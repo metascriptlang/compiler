@@ -22,6 +22,19 @@ interface Named { name: string; }
 
 struct Point { x: int32 }
 
+struct Other { y: int32 }
+
+function pointOrOther(k: int32): Point | Other {
+	if (k == 0) { const p: Point = { x: 3 }; return p; }
+	const o: Other = { y: 4 };
+	return o;
+}
+
+function intOrFloat(k: int32): int32 | float64 {
+	if (k == 0) return 7;
+	return 1.5;
+}
+
 function numOrText(k: int32): int32 | string {
 	if (k == 0) return 41;
 	return "s";
@@ -47,8 +60,30 @@ function asList(k: int32): int32[] { return rowOrList(k) as int32[]; }
 function asNamed(k: int32): Named { return rowOrNamed(k) as Named; }
 function asPoint(k: int32): Point { return pointOrText(k) as Point; }
 
+function asPointOfPair(k: int32): Point { return pointOrOther(k) as Point; }
+function asOtherOfPair(k: int32): Other { return pointOrOther(k) as Other; }
+function asIntOfNum(k: int32): int32 { return intOrFloat(k) as int32; }
+function asFloatOfNum(k: int32): float64 { return intOrFloat(k) as float64; }
+
+type RowOrLists = Row | int32[] | string[];
+
+function sameHeld(x: RowOrLists, y: RowOrLists): boolean {
+	let same = true;
+	when (js || raiser) {
+		same = x == y;
+	}
+	return same;
+}
+
+function sameHeldRow(): boolean {
+	const held = new Row(1);
+	return sameHeld(held, held);
+}
+
 function validPaths(): boolean {
-	return asInt(0) + 1 == 42 && asList(0).length == 2 && asNamed(0).name == "n" && asPoint(0).x == 3;
+	return asInt(0) + 1 == 42 && asList(0).length == 2 && asNamed(0).name == "n" && asPoint(0).x == 3
+		&& asPointOfPair(0).x == 3 && asOtherOfPair(1).y == 4 && asIntOfNum(0) == 7 && asFloatOfNum(1) == 1.5
+		&& sameHeldRow();
 }
 
 if (validPaths()) {

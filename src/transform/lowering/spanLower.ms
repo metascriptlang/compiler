@@ -79,13 +79,6 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 			}
 
 			if (ctx.jsBackend) return node;
-			// Borrow promotion: HiddenStdConv(expr, Borrow<T>) → HiddenAddr(expr) (takes &expr in C)
-			if (targetType.kind == TypeKind.Borrow) {
-				const loc = node.location;
-				const addr = makeHiddenAddr(d.convExpr, loc);
-				addr.nodeType = targetType;
-				return addr;
-			}
 			if (takesAddressAtCArg(d.convExpr.nodeType, targetType)) {
 				const addr = makeHiddenAddr(d.convExpr, node.location);
 				addr.nodeType = nonNullMemberOfNullable(targetType);
@@ -147,7 +140,7 @@ function wrapSpanAssign(node: Node): Node {
 	if (bd.operator != "=") return node;
 	if (bd.left.nodeType == null || bd.left.nodeType.kind != TypeKind.Span || bd.left.nodeType.typeReturn == null) return node;
 	const rhs = bd.right;
-	if (rhs != null && rhs.nodeType != null && !isSpanValued(rhs.nodeType)) {
+	if (rhs != null && rhs.kind != NodeKind.NullLiteral && rhs.nodeType != null && !isSpanValued(rhs.nodeType)) {
 		bd.right = makeHiddenStdConv(rhs, bd.left.nodeType, rhs.location);
 	}
 	return node;
@@ -159,7 +152,7 @@ function wrapSpanDeclInit(node: Node): Node {
 	if (declType == null || declType.kind != TypeKind.Span || declType.typeReturn == null) return node;
 	const vd = node.data as VariableDeclData;
 	const init = vd.initializer;
-	if (init != null && init.nodeType != null && !isSpanValued(init.nodeType)) {
+	if (init != null && init.kind != NodeKind.NullLiteral && init.nodeType != null && !isSpanValued(init.nodeType)) {
 		vd.initializer = makeHiddenStdConv(init, declType, init.location);
 	}
 	return node;

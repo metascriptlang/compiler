@@ -4,8 +4,10 @@
 export extern class console {
 	@builtin("Echo")
 	static extern log(...values: unknown[]): void;
-	static extern error(value: string): void;
-	static extern warn(value: string): void;
+	@builtin("Echo")
+	static extern error(...values: unknown[]): void from "msEprintln";
+	@builtin("Echo")
+	static extern warn(...values: unknown[]): void from "msWarnln";
 }
 
 export extern class process {
@@ -61,6 +63,30 @@ function msDefect(message: string): never {
 @compilerFunc
 function msFieldError(head: string, actual: string): never {
 	@emit(`${msDefect}(${head} + ${actual} + "'");`);
+	unreachable;
+}
+
+@compilerFunc
+function msMaybeGet(v: unknown, head: string, labels: string): unknown {
+	@emit(`if (${v} == null) ${msDefect}(${head} + ${labels} + "'"); return ${v};`);
+	unreachable;
+}
+
+@compilerFunc
+function msUnionRead(u: unknown, slots: int32[], head: string, labels: string[]): unknown {
+	@emit(`if (${slots}.length !== 0 && !${slots}.includes(${u}.$tag)) ${msDefect}(${head} + ${labels}[${u}.$tag] + "'"); return ${u}.$v;`);
+	unreachable;
+}
+
+@compilerFunc
+function msUnionReadMaybe(u: unknown, slots: int32[], head: string, labels: string[]): unknown {
+	@emit(`if (${u} == null) return null; if (${slots}.length !== 0 && !${slots}.includes(${u}.$tag)) ${msDefect}(${head} + ${labels}[${u}.$tag] + "'"); return ${u}.$v;`);
+	unreachable;
+}
+
+@compilerFunc
+function msUnionWrapMaybe(v: unknown, tag: int32): unknown {
+	@emit(`return ${v} == null ? null : { $tag: ${tag}, $v: ${v} };`);
 	unreachable;
 }
 

@@ -10,7 +10,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeMember, makeNumber, runtimeRef } from "../util";
 import { createPrimitive, isWideningInt64Conv } from "../../checker/types";
-import { isFloatKind } from "./bigIntJS";
+import { isFloatKind, readsUnionMember } from "./bigIntJS";
 import { rangeCheckHelper, makeRangeCheckFor } from "../native/rangeCheckInject";
 import { parseInput, makeCtx, getStmts, firstExprKindAfter } from "../testUtil";
 import { VariableDeclData } from "../../ast/node";
@@ -54,7 +54,7 @@ function materializeIntConv(node: Node): Node {
 		const d = node.data as TypeAssertionData;
 		if (node.nodeType == null || d.asType == "!") return node;
 		const kind = node.nodeType.kind;
-		if (node.flags.has(NodeFlag.ConvCheck)) return isIntConvKind(kind) ? truncateTo(node, kind, node.location) : node;
+		if (node.flags.has(NodeFlag.ConvCheck)) return isIntConvKind(kind) && !readsUnionMember(d) ? truncateTo(node, kind, node.location) : node;
 		if (!isIntConvKind(kind)) {
 			if (isFloatKind(kind) && d.asExpr != null) {
 				const srcT = d.asExpr.nodeType;

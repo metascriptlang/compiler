@@ -254,6 +254,39 @@ test "uint32 prefix decrement wraps" {
 	assert result.value.contains(">>> 0");
 }
 
+test "uint64 compound subtract wraps and loses the compound form" {
+	const result = compileToJS("function f(b: uint64): uint64 { let a: uint64 = 1; a -= b; return a; }");
+	assert result.ok;
+	assert result.value.contains("asUintN(64");
+	assert !result.value.contains("-=");
+}
+
+test "uint64 compound multiply on a field wraps" {
+	const result = compileToJS("class B { v: uint64 = 0; } function f(o: B, n: uint32): void { o.v *= n; }");
+	assert result.ok;
+	assert result.value.contains("asUintN(64");
+	assert !result.value.contains("*=");
+}
+
+test "uint64 postfix decrement wraps and reads back the value before it" {
+	const result = compileToJS("function f(a: uint64): uint64 { let x = a; const b = x--; return b + x; }");
+	assert result.ok;
+	assert result.value.contains("asUintN(64");
+	assert !result.value.contains("x--");
+}
+
+test "int64 compound add is left alone" {
+	const result = compileToJS("function f(b: int64): int64 { let a: int64 = 1; a += b; return a; }");
+	assert result.ok;
+	assert result.value.contains("+=");
+}
+
+test "uint8 step on a call-indexed element hoists the index and wraps" {
+	const result = compileToJS("let n: int32 = 0; function at(): int32 { n += 1; return 0; } function f(a: uint8[]): void { a[at()]++; }");
+	assert result.ok;
+	assert result.value.contains("& 255");
+}
+
 test "int32 increment is left alone" {
 	const result = compileToJS("function f(a: int32): int32 { let x = a; x++; return x; }");
 	assert result.ok;

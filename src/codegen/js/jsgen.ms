@@ -429,7 +429,7 @@ test "throw" {
 
 test "unreachable" {
 	const js = genFromSource("unreachable;");
-	assert js == "throw new Error(\"unreachable\");\n";
+	assert js == "msDefect(\"unreachable\");\n";
 }
 
 test "unary not" {

@@ -361,6 +361,20 @@ main_blob() {
   fi
 }
 
+# A branch that carries a merge (another line folded in, e.g. origin/main) catches up by
+# merging the new base: a rebase would flatten it and replay that line under new ids, so
+# the line would stop being an ancestor of what lands.
+catch_up() {
+  if [ -n "$(git -C "$1" rev-list --merges "$2..HEAD" | head -1)" ]; then
+    git -C "$1" merge --no-edit "$2" >&2 && return 0
+    git -C "$1" merge --abort >/dev/null 2>&1
+    return 1
+  fi
+  git -C "$1" rebase "$2" >&2 && return 0
+  git -C "$1" rebase --abort >/dev/null 2>&1
+  return 1
+}
+
 main_held() {
   local old=$1 paths=$2 p was
   while IFS= read -r p; do
@@ -465,9 +479,8 @@ cmd_land() {
   [ "$(git -C "$MAIN" symbolic-ref -q HEAD)" = "refs/heads/$BASE" ] || die "land: the main checkout is not on $BASE"
   [ -z "$(git -C "$w" status --porcelain --untracked-files=no)" ] || die "land: $w has uncommitted changes to tracked files"
   old=$(git -C "$MAIN" rev-parse "$BASE")
-  if ! git -C "$w" merge-base --is-ancestor "$old" HEAD && ! git -C "$w" rebase "$old" >&2; then
-    git -C "$w" rebase --abort >/dev/null 2>&1
-    die "land: rebase onto $BASE conflicts; rebase by hand in $w"
+  if ! git -C "$w" merge-base --is-ancestor "$old" HEAD && ! catch_up "$w" "$old"; then
+    die "land: catching up with $BASE conflicts; merge or rebase by hand in $w"
   fi
   new=$(git -C "$w" rev-parse HEAD)
   [ "$new" != "$old" ] || die "land: nothing to land"
@@ -518,10 +531,7 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
     if [ "$moved" != "$old" ]; then
       (cd "$w" && tools/gate.sh --inert "$old" "$moved") || die "land: $BASE moved during the gate to $(git -C "$MAIN" rev-parse --short "$moved") with paths a lane tests; run land again"
       say "land: $BASE moved to $(git -C "$MAIN" rev-parse --short "$moved") by paths no lane tests; rebasing onto it without a second gate"
-      if ! git -C "$w" rebase "$moved" >&2; then
-        git -C "$w" rebase --abort >/dev/null 2>&1
-        die "land: rebase onto $BASE conflicts; rebase by hand in $w"
-      fi
+      catch_up "$w" "$moved" || die "land: catching up with $BASE conflicts; merge or rebase by hand in $w"
       old=$moved
       new=$(git -C "$w" rev-parse HEAD)
     fi

@@ -5,7 +5,7 @@
 // json builders (jsonObject/jsonString/jsonNumber/jsonBool) + stringify from std/core/json.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol, createNode } from "../../ast/node";
-import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, int32Type } from "../../checker/types";
+import { isNumeric, isWideInteger, stringType, booleanType, createPtr, voidType, createArray, unwrapRef, unwrapRefNullUnion, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, int32Type } from "../../checker/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension } from "../../checker/context";
@@ -263,8 +263,10 @@ function callDumpFn(dumpSym: Symbol, arg: Node, ctx: TransformContext, loc: Sour
 	return call;
 }
 
-function wrapFieldAsJson(fieldAccess: Node, ftype: Type, loc: SourceLocation, ctx: TransformContext): Node {
-	if (ftype == null) return makeCall(resolveDbgIdent("jsonNull", ctx, loc), [], loc);
+function wrapFieldAsJson(fieldAccess: Node, fieldType: Type, loc: SourceLocation, ctx: TransformContext): Node {
+	if (fieldType == null) return makeCall(resolveDbgIdent("jsonNull", ctx, loc), [], loc);
+	const pointer = unwrapRefNullUnion(fieldType);
+	const ftype = pointer != null ? pointer : fieldType;
 
 	// Primitives
 	const primWrapper = match (ftype.kind) {
@@ -382,12 +384,20 @@ export function buildStructToString(arg: Node, inner: Type, loc: SourceLocation,
 	return strCall;
 }
 
+function echoSym(node: Node): Symbol | null {
+	if (node.resolvedSym != null && node.resolvedSym.builtinKind == "Echo") return node.resolvedSym;
+	const callee = (node.data as CallExprData).callee;
+	return callee.resolvedSym != null && callee.resolvedSym.builtinKind == "Echo" ? callee.resolvedSym : null;
+}
+
 export function rewriteEcho(node: Node, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	const loc = node.location;
+	const echo = echoSym(node);
+	const sink = echo != null && echo.nativeName != "" ? echo.nativeName : "msPrintln";
 	// No args → msPrintln("")
 	if (cd.arguments.length == 0) {
-		return makeCall(runtimeRef("msPrintln", loc), [makeString("", loc)], loc);
+		return makeCall(runtimeRef(sink, loc), [makeString("", loc)], loc);
 	}
 	// Coerce all args to string
 	const coerced: Node[] = [];
@@ -398,7 +408,7 @@ export function rewriteEcho(node: Node, ctx: TransformContext): Node {
 	}
 	// Single arg → msPrintln(coerced)
 	if (coerced.length == 1) {
-		return makeCall(runtimeRef("msPrintln", loc), [coerced[0]], loc);
+		return makeCall(runtimeRef(sink, loc), [coerced[0]], loc);
 	}
 	// Multi-arg: build "coerced[0] + " " + coerced[1] + ..." chain
 	let result = coerced[0];
@@ -413,5 +423,5 @@ export function rewriteEcho(node: Node, ctx: TransformContext): Node {
 		i = i + 1;
 	}
 	result.nodeType = stringType();
-	return makeCall(runtimeRef("msPrintln", loc), [result], loc);
+	return makeCall(runtimeRef(sink, loc), [result], loc);
 }

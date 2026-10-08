@@ -1,6 +1,5 @@
 // @exit: 1
 // @stdout: before native
-// @skip-js: node exits 1 with the same "invalid object conversion: DomNode is not NativeNode" line but wraps it in its own uncaught-error report, and parity compares merged stdout+stderr (sibling of 826)
 // @xfail(danger): --danger drops the forced conversion check, so the wrong downcast reads the other class's memory instead of stopping
 // @xfail(raiser): the Raiser stops at the same conversion with exit 1, but its 'raiser runtime error: invalid object conversion: …' goes to stderr, which the raiser cell keeps apart from the compared output
 

@@ -3,7 +3,8 @@
 
 import { TokenKind, Token } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, FunctionDeclData, BlockStmtData, BooleanLiteralData, ProgramData, createNode } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd, takePendingComments, isGenericCallAhead, captureGenericTypeArgs, takeTrailingDecls } from "../context";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize, stampEnd, takePendingComments, captureGenericTypeArgs, parenGroupThen, takeTrailingDecls } from "../context";
+import { isGenericCallAhead } from "../typeAnnotation";
 import { getParserDefines } from "../context";
 import { isDefined, definedValue } from "../../compiler/defines";
 import { parseIntStr } from "../../utils/string";
@@ -12,7 +13,7 @@ import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinu
 import { parseVariableDecl, parseStaticVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseMacroDecl, parseConverterDecl, distinctModifierRemoved , parseObjectPattern, parseArrayPattern } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
 import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStateProgramParser, registerPatternParsers } from "./callbacks";
-import { attachComments } from "../util";
+import { attachComments, isIdentLike, continuesIdentifier } from "../util";
 
 
 // Type aliases
@@ -65,7 +66,7 @@ function parseStatementCore(state: ParserState): NodeResult {
 
 	// Template declaration — `template name<T>(...): T { ... }`
 	// Parsed like a function but without the `function` keyword.
-	if (token.kind == TokenKind.Template) {
+	if (token.kind == TokenKind.Template && isIdentLike(peek(state, 1))) {
 		const fn = try parseFunctionDecl(state);
 		const fd = fn.data as FunctionDeclData;
 		fd.fnFlags = fd.fnFlags == "" ? "template" : fd.fnFlags + "|template";
@@ -109,25 +110,25 @@ function parseStatementCore(state: ParserState): NodeResult {
 		TokenKind.LBrace => parseBlockStmt(state),
 		TokenKind.Import => parseImportDecl(state),
 		TokenKind.Export => parseExportDecl(state),
-		TokenKind.Type => parseTypeAliasDecl(state),
+		TokenKind.Type when isIdentLike(peek(state, 1)) && peek(state, 1).line == token.line => parseTypeAliasDecl(state),
 		TokenKind.Enum => parseEnumDecl(state),
 		TokenKind.Interface => parseInterfaceDecl(state),
-		TokenKind.Struct => parseStructDecl(state),
+		TokenKind.Struct when isIdentLike(peek(state, 1)) => parseStructDecl(state),
 		TokenKind.Throw => parseThrowStmt(state),
 		TokenKind.Try when peek(state, 1).kind == TokenKind.LBrace => parseTryCatchStmt(state),
 		TokenKind.Do => parseDoWhileStmt(state),
 		TokenKind.Switch => parseSwitchStmt(state),
-		TokenKind.Class | TokenKind.Abstract => parseClassDecl(state),
-		TokenKind.Actor => parseActorDecl(state),
-		TokenKind.Defer => parseDeferStmt(state),
-		TokenKind.Unreachable => parseUnreachableStmt(state),
-		TokenKind.Extern => parseExternDecl(state),
-		TokenKind.Distinct => distinctModifierRemoved(state),
-		TokenKind.Macro => parseMacroDecl(state),
-		TokenKind.Converter => parseConverterDecl(state),
-		TokenKind.Match => parseExprStmt(state),
-		TokenKind.Test => parseTestDecl(state),
-		TokenKind.Assert => parseAssertStmt(state),
+		TokenKind.Class => parseClassDecl(state),
+		TokenKind.Abstract when peek(state, 1).kind == TokenKind.Class => parseClassDecl(state),
+		TokenKind.Actor when isIdentLike(peek(state, 1)) => parseActorDecl(state),
+		TokenKind.Defer when !continuesIdentifier(peek(state, 1)) => parseDeferStmt(state),
+		TokenKind.Unreachable when unreachableStarts(state) => parseUnreachableStmt(state),
+		TokenKind.Extern when peek(state, 1).kind != TokenKind.LParen && !continuesIdentifier(peek(state, 1)) => parseExternDecl(state),
+		TokenKind.Distinct when peek(state, 1).kind == TokenKind.Type => distinctModifierRemoved(state),
+		TokenKind.Macro when isIdentLike(peek(state, 1)) => parseMacroDecl(state),
+		TokenKind.Converter when isIdentLike(peek(state, 1)) => parseConverterDecl(state),
+		TokenKind.Test when peek(state, 1).kind == TokenKind.String || peek(state, 1).kind == TokenKind.LBrace => parseTestDecl(state),
+		TokenKind.Assert when !continuesIdentifier(peek(state, 1)) => parseAssertStmt(state),
 		_ => parseExprStmt(state),
 	};
 
@@ -136,6 +137,22 @@ function parseStatementCore(state: ParserState): NodeResult {
 	return Result.ok(attachComments(state, res.value));
 }
 
+
+// `unreachable;` and `unreachable("why")` are the statement; any other
+// continuation reads `unreachable` as a name.
+function unreachableStarts(state: ParserState): boolean {
+	const next = peek(state, 1);
+	if (next.kind == TokenKind.LParen) {
+		const arg = peek(state, 2).kind;
+		return arg == TokenKind.RParen || (arg == TokenKind.String && peek(state, 3).kind == TokenKind.RParen);
+	}
+	if (next.kind == TokenKind.Semicolon || next.kind == TokenKind.RBrace || next.kind == TokenKind.Eof) return true;
+	return !continuesIdentifier(next);
+}
+
+function startsWhen(state: ParserState): boolean {
+	return current(state).kind == TokenKind.When && parenGroupThen(state, 1, TokenKind.LBrace);
+}
 
 // ===== Conditional Compilation =====
 // `when (flag) { … } else when (…) { … } else { … }`.
@@ -378,7 +395,7 @@ export function parseBlockStmt(state: ParserState): NodeResult {
 
 	const stmts: Node[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
-		if (current(state).kind == TokenKind.When) {
+		if (startsWhen(state)) {
 			const picked = try parseWhenChain(state);
 			for (const w of picked) { stmts.push(w); }
 			continue;
@@ -418,7 +435,7 @@ export function parseProgram(state: ParserState): NodeResult {
 	const token = current(state);
 	const stmts: Node[] = [];
 	while (!isAtEnd(state)) {
-		if (current(state).kind == TokenKind.When) {
+		if (startsWhen(state)) {
 			const chain = parseWhenChain(state);
 			if (chain.ok) {
 				for (const w of chain.value) {
@@ -479,4 +496,57 @@ test "statement end covers a closing string's quotes and raw escapes" {
 test "statement end after a semicolon is the semicolon's column plus one" {
 	assert firstStmtEnd("let x = 1;") == "1:11";
 	assert firstStmtEnd("let s = \"a\\tb\";") == "1:16";
+}
+
+// A parse error answers Program, which no first statement can be.
+function firstStmtKind(src: string): NodeKind {
+	const res = parseSource(src);
+	if (!res.ok) return NodeKind.Program;
+	return (res.value.data as ProgramData).programStmts[0].kind;
+}
+
+test "test, assert, defer and unreachable keep their statement forms" {
+	assert firstStmtKind("test \"t\" { }") == NodeKind.TestDecl;
+	assert firstStmtKind("assert (1 == 1);") == NodeKind.AssertStmt;
+	assert firstStmtKind("assert !done;") == NodeKind.AssertStmt;
+	assert firstStmtKind("assert -1 < 0;") == NodeKind.AssertStmt;
+	assert firstStmtKind("defer { }") == NodeKind.DeferStmt;
+	assert firstStmtKind("defer close(f);") == NodeKind.DeferStmt;
+	assert firstStmtKind("unreachable;") == NodeKind.UnreachableStmt;
+	assert firstStmtKind("unreachable(\"why\");") == NodeKind.UnreachableStmt;
+}
+
+test "test, assert, defer and unreachable read as names before an operand continuation" {
+	assert firstStmtKind("test = \"a\";") == NodeKind.ExprStmt;
+	assert firstStmtKind("test(1);") == NodeKind.ExprStmt;
+	assert firstStmtKind("assert = 1;") == NodeKind.ExprStmt;
+	assert firstStmtKind("defer.x;") == NodeKind.ExprStmt;
+	assert firstStmtKind("unreachable[0];") == NodeKind.ExprStmt;
+	assert firstStmtKind("unreachable(1);") == NodeKind.ExprStmt;
+}
+
+test "declaration keywords declare only when a name follows" {
+	assert firstStmtKind("type A = int32;") == NodeKind.TypeAliasDecl;
+	assert firstStmtKind("struct P { x: int32; }") == NodeKind.StructDecl;
+	assert firstStmtKind("abstract class C { }") == NodeKind.ClassDecl;
+	assert firstStmtKind("macro m() { }") == NodeKind.MacroDecl;
+	const ext = firstStmtKind("extern function f(): void;");
+	assert ext != NodeKind.ExprStmt && ext != NodeKind.Program;
+}
+
+test "declaration keywords read as names when no name follows" {
+	assert firstStmtKind("type = 1;") == NodeKind.ExprStmt;
+	assert firstStmtKind("struct.x;") == NodeKind.ExprStmt;
+	assert firstStmtKind("abstract += 1;") == NodeKind.ExprStmt;
+	assert firstStmtKind("actor[0];") == NodeKind.ExprStmt;
+	assert firstStmtKind("macro;") == NodeKind.ExprStmt;
+	assert firstStmtKind("converter(1);") == NodeKind.ExprStmt;
+	assert firstStmtKind("template = 1;") == NodeKind.ExprStmt;
+	assert firstStmtKind("extern(1);") == NodeKind.ExprStmt;
+	assert firstStmtKind("distinct = 1;") == NodeKind.ExprStmt;
+	assert firstStmtKind("when = 1;") == NodeKind.ExprStmt;
+}
+
+test "type on its own line before a name is an expression statement" {
+	assert firstStmtKind("type\nA = 1;") == NodeKind.ExprStmt;
 }

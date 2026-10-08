@@ -2,7 +2,7 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { refuseMemberAccess, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
+import { UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -13,9 +13,9 @@ import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBloc
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
-import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint } from "./fit";
+import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
-import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
+import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState, requiresInit } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
 import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity, ensureShaped, recordGenericTypeInstantiation, resolveAnnotation } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
@@ -946,11 +946,42 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			fillDefaults(ctx, d.newArguments, defaults, defaults.length, 0, ctorParamTypes, classModule, ctorType != null ? ctorType.typeNames : null);
 		}
 	}
+	if (!hasCtor && d.newArguments.length == 0 && d.newCallee.resolvedSym != null) {
+		const missing = fieldsWithoutDefault(ctx, d.newCallee.resolvedSym, 0);
+		if (missing.length > 0) {
+			addError(ctx, `'new ${d.newCallee.resolvedSym.name}()' leaves ${missing.map((m) => `'${m}'`).join(", ")} without a value: the class has no constructor and the field's type has no default value — give the field an initializer, add a constructor that assigns it, or declare it optional with '?'`, node.location.line, node.location.column);
+		}
+	}
 	if (generic.instance != null) d.newCallee.resolvedSym = generic.instance;
 	if (resolvedType != null && (resolvedType.kind == TypeKind.Struct || resolvedType.kind == TypeKind.Ref || resolvedType.kind == TypeKind.GenericInstance)) {
 		return resolvedType;
 	}
 	return inferredType();
+}
+
+function fieldsWithoutDefault(ctx: CheckerContext, classSym: Symbol, depth: int32): string[] {
+	const missing: string[] = [];
+	const decl = classSym.declNode;
+	if (decl == null || decl.kind != NodeKind.ClassDecl || depth > 16) return missing;
+	const cd = decl.data as ClassDeclData;
+	if (cd.classExtends != "") {
+		const parent = lookupSymbol(ctx.table, cd.classExtends);
+		if (parent != null && !hasFlag(parent, SymbolFlag.HasConstructor)) {
+			for (const name of fieldsWithoutDefault(ctx, parent, depth + 1)) missing.push(name);
+		}
+	}
+	for (const raw of cd.classBody) {
+		let member = raw;
+		if (member.kind == NodeKind.DecoratedDecl) {
+			const dd = member.data as DecoratedDeclData;
+			if (dd.decoratedNode != null) member = dd.decoratedNode;
+		}
+		if (member.kind != NodeKind.PropertyDecl) continue;
+		const pd = member.data as PropertyDeclData;
+		if (pd.propIsStatic || pd.propInitializer != null || !requiresInit(member.nodeType)) continue;
+		missing.push(pd.propName);
+	}
+	return missing;
 }
 
 export function checkTryExpr(ctx: CheckerContext, node: Node): Type | null {
@@ -1971,6 +2002,11 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			const formalAwaitsBinding = pi < args.length && args[pi] != null
 				&& hasGenericParams(paramType);
 			let addressAtC = false;
+			const unionFit = formalAwaitsBinding ? null : fitUnionIntoUnion(args[pi], argTypes[pi], paramType);
+			if (unionFit != null) {
+				args[pi] = unionFit;
+				argTypes[pi] = paramType;
+			}
 			if (!formalAwaitsBinding && !isAssignable(argTypes[pi], paramType)) {
 				if (takesAddressAtCArg(argTypes[pi], paramType) && (node.resolvedSym == null || !hasFlag(node.resolvedSym, SymbolFlag.ImportC))) {
 					addError(ctx, "Argument type mismatch in '" + getCalleeName(d.callee) + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType)
@@ -2007,7 +2043,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 							argTypes[pi] = args[pi].nodeType!;
 						} else {
 							const calleeName = getCalleeName(d.callee);
-							addError(ctx, "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType), node.location.line, node.location.column);
+							addError(ctx, "Argument type mismatch in '" + calleeName + "' " + argLabel(pi, hasReceiver) + ": got " + typeDisplayName(argTypes[pi]) + ", expected " + typeDisplayName(paramType) + numericUnionRefusal(argTypes[pi], paramType) + explainStructuralPrefix(argTypes[pi], paramType) + refDerefHint(args[pi], argTypes[pi], paramType), node.location.line, node.location.column);
 						}
 					}
 				}

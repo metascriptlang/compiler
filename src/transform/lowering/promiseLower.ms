@@ -25,7 +25,7 @@
 import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind } from "../../ast/node";
 import { isAwaitable, awaitedType, unwrapRef } from "../../checker/types";
 import { TransformContext } from "../context";
-import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef } from "../util";
+import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef, makeValueShareFn } from "../util";
 
 // ===== Type-tag dispatch =====
 
@@ -58,7 +58,7 @@ function futureTypedSuffix(t: Type | null): string {
 		TypeKind.Int64 | TypeKind.Uint64 => "int64",
 		TypeKind.Boolean => "bool",
 		TypeKind.String => "msString",
-		TypeKind.Ref | TypeKind.Ptr | TypeKind.Function => "ptr",
+		TypeKind.Ref | TypeKind.Ptr => "ptr",
 		_ => "",  // struct, array, void, unknown → fall through to boxed path
 	};
 }
@@ -90,6 +90,8 @@ function promiseAllFnForInner(t: Type | null): string {
 	if (t != null && t.kind == TypeKind.Struct && t.typeName != "") {
 		return "msPromiseAllFor_msFuture_" + t.typeName;
 	}
+	// Codegen names the per-type instance; this name only routes the call there.
+	if (boxedInFuture(t) && t!.kind != TypeKind.Array) return "msPromiseAllFor_msFuture_value";
 	return "";
 }
 
@@ -217,7 +219,7 @@ function lowerPromiseSpawn(node: Node, loc: SourceLocation): Node {
 // Only void-returning promises fall through to the generic path (no value to
 // copy). Unknown inner types also fall through but will read garbage — caller's
 // responsibility to type the argument correctly.
-function lowerPromiseAll(node: Node, loc: SourceLocation): Node {
+function lowerPromiseAll(node: Node, loc: SourceLocation, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	if (cd.arguments.length < 1 || cd.arguments[0].nodeType == null) return node;
 	const argArrType = unwrapRef(cd.arguments[0].nodeType!);
@@ -233,7 +235,7 @@ function lowerPromiseAll(node: Node, loc: SourceLocation): Node {
 		throw new Error(`internal: typed Promise.all '${typedFn}' is already the builtin '${typedSym.builtinKind}'`);
 	}
 	typedSym.builtinKind = "PromiseAllFor";
-	const typedCall = makeCall(typedCallee, cd.arguments, loc);
+	const typedCall = makeCall(typedCallee, [cd.arguments[0], makeValueShareFn(innerT!, ctx, loc)], loc);
 	typedCall.nodeType = node.nodeType;
 	return typedCall;
 }
@@ -254,7 +256,7 @@ export function tryLowerPromiseBuiltin(node: Node, builtinKind: string, ctx: Tra
 	}
 	if (builtinKind == "PromiseResolve") return lowerPromiseResolve(node, loc);
 	if (builtinKind == "PromiseSpawn") return lowerPromiseSpawn(node, loc);
-	if (builtinKind == "PromiseAll") return lowerPromiseAll(node, loc);
+	if (builtinKind == "PromiseAll") return lowerPromiseAll(node, loc, ctx);
 	return null as unknown as Node;
 }
 

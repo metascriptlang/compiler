@@ -1202,11 +1202,8 @@ function escapeForC(s: string): string {
 
 function genUnreachableStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	const d = node.data as UnreachableStmtData;
-	if (d.unreachableMsg.length > 0) {
-		const msg = `"${escapeForC(d.unreachableMsg)}"`;
-		emitStmtsLine(p, `fprintf(stderr, "unreachable: %s\\n", ${msg});`);
-	}
-	emitStmtsLine(p, "__builtin_trap();");
+	const text = d.unreachableMsg.length > 0 ? "unreachable: " + d.unreachableMsg : "unreachable";
+	emitStmtsLine(p, `msRaiseUnreachable("${escapeForC(text)}");`);
 }
 
 // ===== Tests =====

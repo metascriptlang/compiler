@@ -58,6 +58,10 @@ The bridge table is compiler-side, so Tier 1 exists only where a host compiler d
 
 A call to an extern with no bridge compiles with `raiser warning: no host bridge for '<name>'` at the call site and fails at runtime with `Unknown host function: <name>`. It is a warning, not an error, because std bodies the program never calls may contain unbridged externs.
 
+Host errors distinguish recoverable exceptions from fatal runtime checks (`hostRegistry.ms` `raiseFromHost`, `vm.ms` `vmHandleCallHost`). A failed union-member check is fatal: guest `catch` and `finally` cannot resume execution after an invalid read. Recoverable host errors still unwind normally.
+
+Measured 2026-10-07 on `wt/danger-bound-checks`: `./msc.final run --target=<c|js|raiser> src/test/corpus/programs/asTaggedUnionInTryStops.ms` and `asTaggedMaybeInTryStops.ms` each exit 1 after `before 3` and `before 7`, respectively; neither prints `caught` or `after`. The old Raiser candidate printed both. Both member diagnostics now match across C/JS/Raiser. `./msc.fatal test src/raiser/vm.ms --tests-in-dir` passes 186 tests, including a fatal host error followed by a recoverable one that prints `host failure` and `finally`. This does not verify value-named union conversions such as `Point | string`.
+
 ## Execution budget
 
 The VM stops after `loopLimit` backward jumps (default 10M):

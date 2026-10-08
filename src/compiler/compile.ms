@@ -1,7 +1,7 @@
 // MetaScript Compiler CLI — compile command
 
 import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env } from "std/process";
-import { watch, nextChanges, msIoRunOnce, writeSettled, FsWatch, FsChanges } from "std/fs/watch";
+import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
 import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
@@ -2209,6 +2209,7 @@ function writesSettled(pending: PendingWrites): boolean {
 }
 
 const RESCAN_SETTLE_MS = 60;
+const WRITES_QUIET_MS = 20;
 const WRITER_WAIT_LIMIT_MS = 500;
 
 function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
@@ -2223,9 +2224,12 @@ function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
 		if (!pending.rescan && pending.shown.length == 0) continue;
 		console.log(pending.rescan ? "watch: changed (rescan)" : `watch: changed ${pending.shown.join(" ")}`);
 		const start = performance.now();
+		let lastBatch = start;
 		while (true) {
-			const waited = performance.now() - start;
-			const settled = pending.rescan ? waited >= RESCAN_SETTLE_MS : writesSettled(pending);
+			const now = performance.now();
+			const waited = now - start;
+			const quiet = !writerCloseObservable && now - lastBatch >= WRITES_QUIET_MS;
+			const settled = pending.rescan ? waited >= RESCAN_SETTLE_MS : quiet || writesSettled(pending);
 			if (settled) {
 				pumpFeed(feed, 0);
 				if (feed.batches.length == 0) break;
@@ -2235,6 +2239,7 @@ function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
 			} else {
 				pumpFeed(feed, pending.rescan ? 20 : 2);
 			}
+			if (feed.batches.length > 0) lastBatch = performance.now();
 			absorbBatches(feed, pending);
 			if (pending.ended) return false;
 		}
@@ -3781,7 +3786,7 @@ function jsTestHarnessSource(): string {
 		"};",
 		"globalThis.__msAssertFail = (msg, file, line) => {",
 		"  const err = new Error(msg);",
-		"  err.msAssert = true; err.msFile = file; err.msLine = line; err.msDiag = paPending;",
+		"  err.msAssert = true; err.msDefect = true; err.msFile = file; err.msLine = line; err.msDiag = paPending;",
 		"  paPending = null;",
 		"  throw err;",
 		"};",

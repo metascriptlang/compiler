@@ -134,3 +134,5 @@ import "./routineInterface";
 import "./enumConversionRange";
 import "./deferBlockCheck";
 import "./forOfPattern";
+import "./viewBorrows";
+import "./viewBorrowPaths";

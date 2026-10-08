@@ -17,14 +17,24 @@
 
 import { Node, NodeKind, NodeFlag, TypeKind, BinaryExprData, MemberExprData, ArrayAccessData, OutExprData, HiddenStdConvData, TypeAssertionData, Type } from "../../ast/node";
 import { isMaybeType, unwrapMaybeType, isTagCarriedUnion, unwrapRefNullUnion, peelTransparentInstance } from "../../checker/types";
-import { projectTagUnionMember, narrowMaybePayload, checkedProjection } from "../../checker/fit";
+import { projectTagUnionMember, narrowMaybePayload, checkedProjection, storesUnionTag } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember } from "../util";
 
 export function materializeMaybeReads(program: Node, ctx: TransformContext): Node {
 	const project = !ctx.jsBackend;
-	return walkNode(program, (n: Node): Node => visitMaybeRead(n, project));
+	return walkNode(program, (n: Node): Node => visitMaybeRead(n, project, false));
+}
+
+export function projectTaggedMaybeReads(program: Node): Node {
+	return walkNode(program, (n: Node): Node => visitMaybeRead(n, false, true));
+}
+
+function carriesTaggedUnion(carrier: Type | null): boolean {
+	if (carrier == null || !isMaybeType(carrier)) return false;
+	const payload = unwrapMaybeType(carrier);
+	return payload != null && payload.kind == TypeKind.Union && storesUnionTag(payload);
 }
 
 function isAssignOp(op: string): boolean {
@@ -106,7 +116,18 @@ function narrowAssertedCarrier(node: Node): Node {
 	return narrowed;
 }
 
-function visitMaybeRead(node: Node, project: boolean): Node {
+function qualifiesForTagged(node: Node): boolean {
+	if (node.kind == NodeKind.TypeAssertion) {
+		const inner = (node.data as TypeAssertionData).asExpr;
+		return inner != null && carriesTaggedUnion(inner.nodeType);
+	}
+	if (node.kind != NodeKind.Identifier && node.kind != NodeKind.MemberExpr && node.kind != NodeKind.ArrayAccess) return false;
+	return carriesTaggedUnion(declaredMaybeOf(node));
+}
+
+function visitMaybeRead(node: Node, projectAll: boolean, taggedOnly: boolean): Node {
+	if (taggedOnly && !qualifiesForTagged(node)) return node;
+	const project = projectAll || taggedOnly || qualifiesForTagged(node);
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
 		if (isAssignOp(d.operator)) d.left = unwrapIfMaterialized(d.left);

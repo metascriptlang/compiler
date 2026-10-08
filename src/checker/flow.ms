@@ -18,7 +18,7 @@ import {
 	ArrayLiteralData, ObjectLiteralData, SpreadExprData, SymbolFlag,
 } from "../ast/node";
 import {
-	createUnion, inferredType, nullType, neverType,
+	createUnion, createUnionInOrder, inferredType, nullType, neverType,
 	detectUnionDiscriminant, findVariantByDiscriminant,
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance,
@@ -129,13 +129,13 @@ function writeFlowCacheKey(node: Node): string {
 	return "@nondotted";
 }
 
-// Check if any FlowLoopInfo in the stack matches this (loopNode, refKey) pair.
+// The FlowLoopInfo on the stack for this (loopNode, refKey) that already holds a type.
 // Used to detect re-entry during back-edge recursion.
-function findLoopInfo(stack: FlowLoopInfo[], loopNode: FlowNode, refKey: string): FlowLoopInfo {
+function findPopulatedLoopInfo(stack: FlowLoopInfo[], loopNode: FlowNode, refKey: string): FlowLoopInfo {
 	let i = 0;
 	while (i < stack.length) {
 		const info = stack[i];
-		if (info.loopNode == loopNode && info.refKey == refKey) return info;
+		if (info.loopNode == loopNode && info.refKey == refKey && info.types.length > 0) return info;
 		i = i + 1;
 	}
 	return null as unknown as FlowLoopInfo;
@@ -281,10 +281,24 @@ export function getFlowTypeOfReference(refNode: Node, declaredType: Type): Type 
 	const flow = refNode.flowNode;
 	if (flow == null) return declaredType;
 	const state = createFlowState(refNode, declaredType);
+	if (endsInNeverCall(flow)) return declaredType;
 	const ft = getTypeAtFlowNode(state, flow);
 	const t = ft.t;
 	if (t == null) return declaredType;
 	return t;
+}
+
+function endsInNeverCall(flow: FlowNode | null): boolean {
+	let current = flow;
+	while (current != null) {
+		const flags = current.flags;
+		if (flags.has(FlowFlag.Unreachable)) return false;
+		if (flags.has(FlowFlag.Call) && callNeverReturns(current.node)) return true;
+		if (flags.has(FlowFlag.Start) || flags.has(FlowFlag.BranchLabel) || flags.has(FlowFlag.LoopLabel)
+				|| flags.has(FlowFlag.SwitchClause) || flags.has(FlowFlag.ReduceLabel)) return false;
+		current = current.antecedent;
+	}
+	return false;
 }
 
 // Phase 4: Ref<T> nullability query for --strict-nil. Walks the flow graph
@@ -639,7 +653,7 @@ function getTypeAtBranchLabel(state: FlowState, flow: FlowNode): FlowType {
 		// no information to the join. Including them broke the fast-path below:
 		// Unreachable returns declaredType, which short-circuited the join and
 		// erased real narrowing from sibling branches.
-		if (list.flow.flags.has(FlowFlag.Unreachable)) {
+		if (list.flow.flags.has(FlowFlag.Unreachable) || endsInNeverCall(list.flow)) {
 			list = list.next;
 			continue;
 		}
@@ -716,15 +730,9 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 	}
 	// Re-entry detection: if this (loopNode, refKey) is already on the
 	// stack, return the current accumulated union.
-	const existing = findLoopInfo(state.flowLoopStack, flow, state.refKey);
+	const existing = findPopulatedLoopInfo(state.flowLoopStack, flow, state.refKey);
 	if (existing != null) {
-		// Re-entry: return accumulated types if any, otherwise declared type.
-		// The types.length===0 case means the first antecedent cycled back
-		// before producing any narrowing — conservatively return declared type.
-		if (existing.types.length > 0) {
-			return flowType(unionOfTypes(existing.types, state.declaredType), true);
-		}
-		return flowType(state.declaredType, true);
+		return flowType(unionOfTypes(existing.types, state.declaredType), true);
 	}
 	// First visit: walk antecedents in REVERSE order. The binder prepends
 	// antecedents (addAntecedent puts new entries at the list head), so the
@@ -746,6 +754,7 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 	// back-edge walk DOES re-enter and must see info.types populated already.
 	state.flowLoopStack.push(info);
 	for (let ri = reversed.length - 1; ri >= 0; ri = ri - 1) {
+		if (reversed[ri].flags.has(FlowFlag.Unreachable) || endsInNeverCall(reversed[ri])) continue;
 		const ft = getTypeAtFlowNode(state, reversed[ri]);
 		if (firstAnteType == null) {
 			firstAnteType = ft;
@@ -1643,7 +1652,7 @@ export function narrowTypeByDiscriminantProperty(
 // disc field, so a bare createUnion residual would reject `n.kind` — and a
 // single-variant residual must stay a 1-child union for the same reason.
 function unionPreservingDiscriminant(parent: Type, remaining: Type[]): Type {
-	const u = createUnion(remaining);
+	const u = createUnionInOrder(remaining);
 	if (u.kind != TypeKind.Union) return u;
 	if (parent.typeExtra == null || parent.typeNames == null
 		|| parent.typeNames.length == 0 || parent.typeChildren == null) return u;

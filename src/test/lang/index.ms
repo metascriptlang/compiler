@@ -65,3 +65,5 @@ import "./refParamDeref";
 import "./refParamWrites";
 import "./structFieldDecorators";
 import "./enumNames";
+import "./sizedArrayConstDimension";
+import "./sizedArrayLiteralCarriesSize";

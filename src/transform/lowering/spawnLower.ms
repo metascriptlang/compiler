@@ -9,7 +9,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionDa
 import { createFunction, createPtr, voidType, isAwaitable, awaitedType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym } from "../util";
+import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym, boxedInFuture } from "../util";
 
 function needsBoxing(t: Type): boolean {
 	if (t == null) return false;
@@ -19,9 +19,7 @@ function needsBoxing(t: Type): boolean {
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
 			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => true,
 		TypeKind.String => true,
-		TypeKind.Struct | TypeKind.GenericInstance | TypeKind.Tuple => true,
-		TypeKind.Array => true,
-		_ => false,
+		_ => boxedInFuture(t),
 	};
 }
 
@@ -41,18 +39,17 @@ export function boxForType(retVal: Node, retType: Type, loc: SourceLocation): No
 			// 16-byte struct into the shell and memsets the source: payload ownership
 			// transfers to the box, the source's scope-exit destroy becomes a no-op,
 			// and readers (msUnboxString copy-out / worker inline memcpy) are unchanged.
-			const call = makeCall(runtimeRef("msSinkBoxStruct", loc), [retVal], loc);
-			call.nodeType = retType;
-			return call;
+			return boxValue(retVal, retType, loc);
 		},
-		TypeKind.Struct | TypeKind.GenericInstance | TypeKind.Tuple | TypeKind.Array => {
-			// msSinkBoxStruct: codegen expands to malloc+memcpy+wasMoved (DRC-aware)
-			const call = makeCall(runtimeRef("msSinkBoxStruct", loc), [retVal], loc);
-			call.nodeType = retType;
-			return call;
-		},
-		_ => retVal,
+		_ => boxedInFuture(retType) ? boxValue(retVal, retType, loc) : retVal,
 	};
+}
+
+// msSinkBoxStruct: codegen expands to malloc+memcpy+wasMoved (DRC-aware)
+function boxValue(retVal: Node, retType: Type, loc: SourceLocation): Node {
+	const call = makeCall(runtimeRef("msSinkBoxStruct", loc), [retVal], loc);
+	call.nodeType = retType;
+	return call;
 }
 
 // Recursively wrap ReturnStmt values in boxing calls.

@@ -36,7 +36,7 @@ import {
 import { TransformContext, freshTempSym, freshOwnedSym, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { walkExpandBlocksHooked, containsExprKind, walkNode } from "../walker";
-import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym } from "../util";
+import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck } from "../util";
 import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
 import { typedFutureReadFn } from "./promiseLower";
 import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
@@ -302,6 +302,7 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 	// a temp so it's only evaluated once. Without this, actor CALL futures get
 	// created twice — once for msWaitForReady and once for msFutureReadT — and
 	// the second future is never awaited, causing an assertion failure.
+	const soleRead = isSoleFutureRead(handleExpr);
 	let futIdent = handleExpr;
 	if (handleExpr.kind != NodeKind.Identifier) {
 		const tmp = makeTempDecl(ctx, "fut", handleExpr, handleExpr.nodeType, loc);
@@ -314,6 +315,10 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 		setFlag(tmp.sym, SymbolFlag.AwaitHandle);
 		stmts.push(tmp.decl);
 		futIdent = tmp.ident;
+	}
+
+	if (!soleRead && innerType != null && ownedInFuture(innerType)) {
+		return expandSharedAwait(futIdent, stmts, loc, ctx, innerType);
 	}
 
 	// Typed path: msWaitForReady(handle) + msFutureReadT(handle) → typed value
@@ -332,6 +337,32 @@ function expandDeferredAwait(handleExpr: Node, loc: SourceLocation, ctx: Transfo
 	const res = makeTempDecl(ctx, "aw", makeCall(runtimeRef("msWaitFor", loc), [futIdent], loc), VOID_PTR_TYPE, loc);
 	stmts.push(res.decl);
 	return { stmts, resultIdent: res.ident, typed: false };
+}
+
+// An await of a future that other code may also read: an owning future keeps its
+// value and this reader copies it; a future completed across threads has one
+// reader, which takes the value as before.
+function expandSharedAwait(futIdent: Node, stmts: Node[], loc: SourceLocation, ctx: TransformContext, innerType: Type): { stmts: Node[], resultIdent: Node, typed: boolean } {
+	const fut = (): Node => futIdent.resolvedSym != null ? makeIdentResolved(futIdent.resolvedSym!, loc) : futIdent;
+	stmts.push(makeExprStmt(makeCall(runtimeRef("msWaitForReady", loc), [fut()], loc), loc));
+	const res = makeTempDecl(ctx, "aw", makeDefaultValue(innerType, loc), innerType, loc);
+	(res.decl.data as VariableDeclData).declKind = DeclKind.Let;
+	stmts.push(res.decl);
+	const readFn = typedFutureReadFn(innerType);
+	let take: Node | null = null;
+	if (readFn != "") {
+		take = makeCall(runtimeRef(readFn, loc), [fut()], loc);
+		take.nodeType = innerType;
+	} else {
+		const raw = makeCall(runtimeRef("msWaitFor", loc), [fut()], loc);
+		raw.nodeType = VOID_PTR_TYPE;
+		take = makeUnboxCall(raw, innerType, loc);
+	}
+	const copy = makeFutureCopyRead(fut(), innerType, loc);
+	stmts.push(makeIf(makeOwnsValueCheck(fut(), loc),
+		makeBlock([makeExprStmt(makeAssign(makeIdentResolved(res.sym, loc), copy, loc), loc)], loc),
+		makeBlock([makeExprStmt(makeAssign(makeIdentResolved(res.sym, loc), take!, loc), loc)], loc), loc));
+	return { stmts, resultIdent: makeIdentResolved(res.sym, loc), typed: true };
 }
 
 // ===== Unified Expansion =====

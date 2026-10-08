@@ -53,6 +53,19 @@ void msPrintln(msString s) {
 	fflush(stdout);
 }
 
+void msEprintln(msString s) {
+	fflush(stdout);
+	if (s.p != NULL && s.len > 0) {
+		fwrite(s.p->data, 1, s.len, stderr);
+	}
+	fputc('\n', stderr);
+	fflush(stderr);
+}
+
+void msWarnln(msString s) {
+	msEprintln(s);
+}
+
 void msClearException(void) {
 	msErr = false;
 	msCurrException = NULL;
@@ -213,6 +226,12 @@ msString msStrLitConv(msString s, msString members, msString target) {
 		i += n;
 	}
 	msRaiseStrLitError(s, target);
+}
+
+_Noreturn void msRaiseUnreachable(const char* text) {
+	fprintf(stderr, "Error: %s\n", text);
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
 }
 
 _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag) {

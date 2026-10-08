@@ -575,6 +575,12 @@ function fail(msg: string): never {
 }   // error: 'fail' returns 'never' but can reach the end of its body
 ```
 
+A call to a function or method declared `never` ends the flow as `throw` does, so a guard
+`if (!r.ok) { stop("no"); }` narrows the code after it, in a loop of any depth and in a macro body
+(`error(...)` returns `never`); verified 2026-10-06, corpus `neverCallEndsFlow` and
+`neverCallEndsFlowInMacro`, C and JS. Not verified: a `never` function reached through a function
+value whose type is only a union or a generic parameter.
+
 A function or method without a return annotation returns what its body returns, wherever it is
 called from: a call checked before the callee's body (a later function, a later method through
 `this` or a parameter, a module that imports this one back) checks that body first. A return type
@@ -762,7 +768,11 @@ const h: Handler = { tag: 1 };            // cb omitted → null
 if (h.cb !== null) { h.cb(7); }           // narrow, then call
 ```
 
-A **bare** function-typed field (no `?`, no `| null`) must be initialized — a NULL function pointer has no safe default, so the checker rejects omission; `?` is the opt-out. `?` is a parse error on `struct` fields (a value type would silently become a union — write the union explicitly) and on class methods (declare a function-typed property instead). `?` applies to interface fields, class properties, and anonymous object types alike.
+**Fields without a default value** (measured 2026-10-06 on C, JS and the Raiser; checker3pass `constructionFieldInit`, corpus `constructionGivesEveryField`, `classFieldZeroValue`): a field whose type has no default — an array, a class instance, a `Map`, a function, or a struct holding one — must be given wherever the object is built. An object literal that omits one is an error (`field 'items' must be initialized: type 'int32[]' has no default value`) unless the class declares an initializer for it. `new C()` of a class without a constructor is an error when such a field, its own or a parent's, has no initializer (`'new Rec()' leaves 'items' without a value`). Value fields (numbers, `boolean`, `string`, a struct of those) keep their zero value; `?` and `| null` opt out, and a nullable function defaults to `null`. Before this rule the omitted field read as nil: `b.items.length` crashed on C, JS and the Raiser. `tsc` refuses every omitted non-optional property (TS2739/TS2741), value fields included; MS keeps the zero value for those. A class field without initializer, a struct-valued one included, reads its zero value after `new` on JS as on C (it read `undefined` before).
+
+**Field initializers in an object literal** (measured 2026-10-07 on C, JS and the Raiser, ASan clean; corpus `literalFieldInitializer`, checker3pass `constructionFieldInit`): an object literal of a class type runs the initializer of every field it omits, own or inherited, the same initializer `new C()` runs. `class C { k: int32 = 5; xs: int32[] = [1, 2]; }` gives `{}` → `k` 5, `xs` `[1, 2]` (before: `k` read 0, an omitted `xs` crashed). Each literal runs its own copy, once, after the fields it names, so a call in an initializer runs per literal and not at all when the literal gives the field; names in the initializer resolve in the class's module (a private constant of another module works, a local of the same name at the literal does not capture it). Generic classes (`G<string>`, and `G<T>` inside a generic function) and nested literals (`inner: Inner = {}`) take them too. An initializer that reads `this` is refused at the literal (`field 'b' of 'T' has an initializer that reads 'this', which an object literal cannot run`); today such an initializer is already refused at its declaration. A class that declares a constructor takes them too, without running the constructor. A literal with a spread or a computed key takes no initializers. Not measured: a spread whose source lacks an initialized field. A `struct` field takes no initializer, so a struct literal is unchanged.
+
+`?` is a parse error on `struct` fields (a value type would silently become a union — write the union explicitly) and on class methods (declare a function-typed property instead). `?` applies to interface fields, class properties, and anonymous object types alike.
 
 **C backend**: Interfaces emit as C structs, passed by pointer (`T*`), heap-allocated with DRC refcounting.
 
@@ -1290,11 +1300,14 @@ type Extended = IUser & { role: string };
 struct SuperUser = IUser & { role: string; };
 ```
 
-A union value carries the position of the member it holds, so `int32 | string` and
-`string | int32` are different types: one is refused where the other is expected, with an error that
-says the members are the same in another order. A value narrowed to one member fits any union that
-holds that member, whatever the order. Measured 2026-10-06 on C, JS and the Raiser (corpus
-`narrowedUnionIntoAnotherOrder`); before, C read the narrowed value with the wrong member's layout.
+A union is one type whatever order its members are written in, as in TypeScript: `int32 | string`
+and `string | int32` are the same type in every module, nullable, inside an array and through a generic
+parameter once it is known, and a value moves between them with no conversion. The members are kept in
+one canonical order where the union is built; error messages show that order, `null` last
+(`int32 | string | null`). A declared discriminated union keeps its declared variant order. A value
+narrowed to one member fits any union that holds that member. Measured 2026-10-06 on C, JS and the
+Raiser (corpus `unionMemberOrderIdentity`, `narrowedUnionIntoAnotherOrder`); before, the other order
+was refused.
 
 #### `as` between a union and its members
 
@@ -1325,12 +1338,14 @@ const r = slot as Row | null;   // slot: number | Row | null — a Row converts,
   converts out of `Base | Child` to `Child`, and a held `Child` converts to `Base`. A member that
   holds no object stops with `Error: member 'Row' is not accessible for type 'number | Row' using
   'number'`, an object of another class with `Error: invalid object conversion: Base is not Child`.
-- JS holds no tag; it tests what the value itself names: `instanceof` the class for a class
-  target, `typeof` for a primitive member, `Array.isArray` for the only array member, and a
-  non-array object of none of the union's classes for the only struct or interface member, with
-  the C message. A member that shares its runtime kind with another (`P | Q`, `int32 | float64`,
-  two array members) converts on JS without a test (a number member keeps the `typeof` test),
-  while C tests the stored tag.
+- JS tests what the value itself names: `instanceof` the class for a class target, `typeof` for
+  a primitive member, `Array.isArray` for the only array member, and a non-array object of none
+  of the union's classes for the only struct or interface member, with the C message. A union
+  with two members of one runtime kind (`P | Q`, `int32 | float64`, two array members) cannot be
+  told apart by its value, so JS stores `{ $tag, $v }` for it, as C stores `_tag` and the
+  variant, and every checked read tests the tag with the same message. `number | string`,
+  `Row | null`, `Base | Child` and the discriminated unions stay raw values. A function declared
+  with `extern` that returns such a union is an error on JS, because the host value has no tag.
 - `--danger` drops the membership test and the tag test, of a bare and of a nullable union
   (`Wire as Align | null`, `number | Row | null as Row | null`) alike, as it drops bound checks.
 
@@ -1365,8 +1380,19 @@ Members the JS value names, measured on the same tree: `int32 | string` as `int3
 as `int32[]`, `Row | Named` as `Named` and `Point | string` as `Point` convert the held member and
 stop on the other with `member … is not accessible` on C and JS (guard `asMemberValueChecked`);
 before, JS let the wrong member through (`undefined` fields, a string truncated to `0` as an int32).
-Not covered: `P | Q` as `P` and `int32 | float64` as `int32` still test the tag on C and pass the
-wrong member on JS (`2` for a held `1.5` plus one).
+`P | Q` as `P` holding a `Q`, and `int32 | float64` as `int32` holding `1.5`, stop on C and JS with
+`member 'P' is not accessible for type 'P | Q' using 'Q'` and `member 'int32' is not accessible for
+type 'int32 | float64' using 'float64'` (guard `asMemberValueChecked` on C and JS, tree `2e22d0152`);
+before, JS passed the wrong member (`undefined` for the `P` field, `1` for the `1.5`). The held
+members convert to the same output on C, JS, ESM and Raiser (corpus `649`, the `5/6/8 5/6 7/1.5`
+tokens: an injection by return, by literal and by `push`, an `as` and a field read after it).
+The Raiser stores the same wrapper: `b3` and `c5` stop with the C message (`raiser runtime error: unhandled
+exception: member 'P' is not accessible …`) and `e1` prints the held members, `asMemberValueChecked` passes under
+`msc run --target=raiser` (by hand; the guard runner has no Raiser lane) and corpus `506`, `509`, `510`, `513`, `252`, `711`
+and `649` pass on every lane. The macro bridge unwraps `{ $tag, $v }` by that reserved field pair in `valueToNode`.
+`704` and `762` fail to build on every lane with or without this change (known red, `src/test/known-red.json`). A union inside a struct field read through `.field`, a flow-narrowed member read
+through a `Maybe` carrier and a tagged union passed as an `unknown` argument of a host function
+were probed only on the shapes above.
 
 ### Discriminated Union Types
 
@@ -2885,16 +2911,18 @@ not rerun for this fixture correction.
 To achieve peak performance with large structs, MetaScript provides the `Borrow<T>` type (similar to the standard reference `lent T` pattern).
 
 - **Purpose**: Avoid memory copies when accessing large objects or array elements.
-- **Behavior**: Passes a pointer instead of copying the struct value.
-- **Safety**: Managed by the analyzer to ensure the borrow does not outlive the owner.
+- **Behavior**: A `Borrow<T>` local or parameter holds the address of a variable, field or element; every read goes through it, so `b.field`, `b[i]`, `b.length`, `b + 1`, `b == x` and `${b}` read the place as it is now. Copying it out (`const c = b`) copies the `T`.
+- **Safety**: read-only: `b = …`, `b.x = …`, `b[0] = 5` (also on a `Borrow<int32[]>` or a class), `b.push(…)` and passing `b[0]` to a `ref` parameter are refused; write through the source or a `ref` parameter. The initializer must be a variable, field or element: a call result or literal is refused. While the local is in use, a change of its place (`n = 2`, `n++`, `s.x = 5`, `xs[0] = 7`, a `ref` argument) or of the storage it lies in (`xs.push`, rule 4 of Span below) is refused; capturing it in a closure is refused.
 
 ```typescript
-interface LargeData { /* many fields */ }
+struct LargeData { a: int32; /* many fields */ }
 const data: LargeData[] = [...];
 
-// No copy: 'item' is a pointer to the element in the array
+// No copy: 'item' is the address of the element
 const item: Borrow<LargeData> = data[0];
 ```
+
+Measured 2026-10-08, C, JS and the Raiser alike: corpus `borrowLocalReadsThroughAddress` prints `card=3/2 scalar=8/true/7 text=5/hello!/true struct=6/10 class=5 field=5/12 element=3 param=16 generic=4/x copy=7 alias=9/7 temp=5/8/4 nested=2` on each, covering scalar, string, struct, array and class `T`, local, field, element and parameter sources, a generic instance, a change through an alias or a callee (`alias=9/7`) and a temporary argument to a `Borrow<T>` parameter.
 
 ### 5. Reference Types (`Ref<T>` and `Ptr<T>`)
 
@@ -2979,8 +3007,7 @@ An empty pointer span stops at that conversion with `index 0 out of bounds
 the Raiser VM. Native `--danger` retains its deliberate unchecked-index mode.
 `pointerLocationTransfer` also matches on C/DRC, C/ORC, JS and the Raiser VM;
 see [Raiser's measured location matrix](RAISER.md#memory-model). Raw-pointer
-escape and invalidation by storage growth remain unchecked, not covered by
-that matrix.
+escape and invalidation by storage growth are checked separately (below).
 
 The suspension result above is not a general lifetime-safety claim. A nested
 `function` or `const` arrow inside an `async` function or a generator is rebuilt
@@ -3006,9 +3033,26 @@ too: the reference's JS backend has no pointer arithmetic, so it was a mechanism
 this arc). It silently turned std/solana's `load(123456)` from reading memory at `123456` into
 returning `123456`, so the integer keeps the reference's `cast` meaning.
 
-Not checked: a `Ptr<T>` outliving its target. Returning a local's address reads `0` on C and the
-old value on JS; a pointer into a `T[]` that grows crashes C and writes the old storage on JS.
-The reference checks an escaping address only for `var T` results, never `ptr T`.
+Checked since 2026-10-06, alike on C, JS and the Raiser VM (the checker refuses before any backend):
+
+- **A local's address stays in its frame.** The address of a local or value parameter (or of a
+  struct field or sized-array element inside one), and any local or struct value holding it, may not
+  reach a `return`, a module-level variable, a `ref`/`out` parameter, a field or element of heap
+  storage, or a `sink` argument such as `push`:
+  `'s' escapes its stack frame: the address taken at 2:57 reaches the return value, which outlives the call`.
+  Passing it to a call (`bump(s as Ptr<S>)`, an FFI `extern`) stays legal. The address of a `T[]`
+  element or of a `ref` parameter's location is not frame storage and may be returned.
+- **An address into array storage is refused while that storage can move.** A `Ptr<T>` local taken
+  with `xs[i] as Ptr<T>` or `view as Ptr<T>` follows the view rule of §Spans (rule 4): a `push`, a
+  reassignment of `xs` or a `ref`/`move` hand-off while the pointer is still read is refused (`pointer 'p' addresses storage of 'xs', which is potentially changed at 2:111 while 'p' is in
+  use`). Writes into the slot (`xs[0].n = 3`, `s = { … }`, `s.name = "c"`) and growth after the last
+  read stay legal. The arena pattern below is unaffected: an `interface` element converts to `Ptr<T>`
+  without `as`, points at the object rather than the slot, and survives growth (ASan clean).
+
+Before, on `b4c92597`: returning a local's address printed `q11 0 143` on C and `q11 5 143` on JS
+and the Raiser VM (ASan: stack-use-after-return); a pointer into a `T[]` that grew printed garbage
+on C and `9` on JS (ASan: heap-use-after-free). Still not checked: an address handed to a closure,
+or returned through a call (`identity(s as Ptr<S>)`).
 
 #### Linked structures: arena ownership + `Ptr<T>` links
 
@@ -3899,7 +3943,15 @@ const inc: Span<number> = items[1...3]; // [20, 30, 40] (length 3)
 2. **No Return**: A `Span<T>` cannot be returned from a function at all (checker-enforced since 2026-08-28: `cannot return Span<T>: a Span borrows memory owned by its source; return the owning container (Vec<T> or T[]) instead`) — regardless of where the Span was created.
 3. **Parameter Primary**: The primary use case for `Span<T>` is as a function parameter — structurally safe (the callee's frame always dies before the caller's owner), zero-copy from every source (`T[]`, `Vec<T>`, `T[N]`, literals, slices).
 
-Safety tier and intent: today `Span` sits exactly where Zig slices sit — safe as a parameter by construction, unchecked as storage. The planned upgrade is escape-analysis lite in the checker (view-style inference over a few countable escape shapes), NOT a borrow checker: no lifetime annotations will ever enter the syntax (TS surface).
+4. **A view local is refused while the storage it reads can move** (checker-enforced since 2026-10-06, alike on C, JS and the Raiser VM). A `Span<T>`, `Borrow<T>` or a struct holding one, bound in a function body, borrows the variable, field or element path it was taken from (`xs`, `bag.items`, `s.asBytes()`, `xs[1..3]`, a view of a view). Between its creation and its last read, these are refused: growing or shrinking the borrowed array (`push`, `pop`, `splice`, `setLength`, …, also through an alias such as `const alias = xs`), reassigning it or a path above it (`xs = …`, `rows[0] = …` under a view of `rows[0].items`), passing it to a `ref`/`out` parameter or with `move`, and handing it whole to another binding (`const t = xs`):
+
+   ```
+   cannot borrow 'sp': what it borrows from ('xs') is potentially changed at 2:110 while 'sp' is in use; take the view after the change, or copy what it reads
+   ```
+
+   Legal, because the storage stays put: writes into elements or sibling fields (`xs[0].n = 5`, `xs[0] = { … }`, `bag.count = 3`, `rows[0].items.push(3)` under a view of `rows`), reassigning a sized array in place, ordinary calls that receive the array or its owner (`take(xs)`, `xs.indexOf(x)`, `world.kOf()`), a view of a call result or literal in the same block (the temporary lives to the end of the block), growth after the last read, and a view re-taken each loop iteration before the growth. A view whose source lives in an inner block (`sp = inner` inside `{ }`) is refused with `which does not live long enough`. Measured on the 2026-10-06 candidate: before, `const sp = xs as Span<S>` followed by 1000 `push` printed `3` on C and `1` on JS (ASan: heap-use-after-free); reassigning `xs`, `const t = xs` in an inner block and reassigning a viewed string did the same. Not checked: a callee that grows the array it receives (`function grow(a: S[]) { a.push(…) }` called as `grow(xs)`, or through a class or a value struct holding the array), a source changed through a closure, and a module-level view; a callee summary would close the first and is not built. A generic routine is checked in each instance (`firstAfter<T>` with a `Span<T>` local is refused at `firstAfter([1, 2], 3)`).
+
+Safety tier and intent: `Span` is safe as a parameter by construction, checked as a local (rule 4), unchecked as storage. No lifetime annotations will ever enter the syntax (TS surface).
 
 #### Value Bindings Are Read-Only Views (Checker-Enforced)
 

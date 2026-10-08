@@ -40,10 +40,11 @@ import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap, raiserNil,
 	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
 	heapArrayLen, heapArrayGet, heapAllocArray, heapArrayPush, raiserArray,
+	heapAllocObject, heapObjectSetField, raiserObject, raiserInt,
 } from "../../raiser/value";
 import {
 	HostCapability, registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized,
-	activeHostObjectHeap, activeHostArrayHeap, activeProgramArgv,
+	activeHostObjectHeap, activeHostArrayHeap, activeProgramArgv, raiseFromHost,
 } from "../../raiser/hostRegistry";
 import {
 	unboxString, unboxInt, unboxFloat,
@@ -370,6 +371,11 @@ function _bridgeMsWriteStdout(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsWriteStderr(args: RaiserValue[]): RaiserValue {
 	writeStderr(unboxString(args[0]));
+	return raiserNil();
+}
+
+function _bridgeMsEprintln(args: RaiserValue[]): RaiserValue {
+	writeStderr(unboxString(args[0]) + "\n");
 	return raiserNil();
 }
 
@@ -785,8 +791,69 @@ export function _resetBridgeStateForTests(): void {
 	_spawnPipeOk = 1;
 }
 
+function _unionSlotAllowed(arrHeap: RaiserArrayHeap, slots: RaiserValue, tag: int64): boolean {
+	const n = heapArrayLen(arrHeap, slots.intVal);
+	if (n == 0) return true;
+	for (let i = 0; i < n; i = i + 1) {
+		if (heapArrayGet(arrHeap, slots.intVal, i).intVal == tag) return true;
+	}
+	return false;
+}
+
+function _unionRead(args: RaiserValue[], maybe: boolean): RaiserValue {
+	const objHeap = activeHostObjectHeap();
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap == null || arrHeap == null) return raiserNil();
+	const u = args[0];
+	if (maybe && u.kind == RaiserValueKind.Nil) return raiserNil();
+	const tag = heapObjectGetField(objHeap, u.intVal, "$tag").intVal;
+	if (!_unionSlotAllowed(arrHeap, args[1], tag)) {
+		const label = heapArrayGet(arrHeap, args[3].intVal, tag);
+		raiseFromHost(unboxString(args[2]) + label.strVal + "'", true);
+		return raiserNil();
+	}
+	return heapObjectGetField(objHeap, u.intVal, "$v");
+}
+
+function _bridgeMsUnionRead(args: RaiserValue[]): RaiserValue {
+	return _unionRead(args, false);
+}
+
+function _bridgeMsUnionReadMaybe(args: RaiserValue[]): RaiserValue {
+	return _unionRead(args, true);
+}
+
+function _bridgeMsCheckRangeI32(args: RaiserValue[]): RaiserValue {
+	const v = args[0];
+	const lo = args[1].kind == RaiserValueKind.Float ? args[1].floatVal as int64 : args[1].intVal;
+	const hi = args[2].kind == RaiserValueKind.Float ? args[2].floatVal as int64 : args[2].intVal;
+	const inRange = v.kind == RaiserValueKind.Float ? v.floatVal > (lo as float64) - 1.0 && v.floatVal < (hi as float64) + 1.0 : v.intVal >= lo && v.intVal <= hi;
+	if (!inRange) raiseFromHost(`value ${v.kind == RaiserValueKind.Float ? `${v.floatVal}` : `${v.intVal}`} not in range ${lo} .. ${hi}`, true);
+	return v.kind == RaiserValueKind.Float ? raiserInt(v.floatVal as int64) : v;
+}
+
+function _bridgeMsMaybeGet(args: RaiserValue[]): RaiserValue {
+	if (args[0].kind == RaiserValueKind.Nil) raiseFromHost(unboxString(args[1]) + unboxString(args[2]) + "'", true);
+	return args[0];
+}
+
+function _bridgeMsUnionWrapMaybe(args: RaiserValue[]): RaiserValue {
+	const objHeap = activeHostObjectHeap();
+	if (objHeap == null || args[0].kind == RaiserValueKind.Nil) return raiserNil();
+	const handle = heapAllocObject(objHeap);
+	heapObjectSetField(objHeap, handle, "$tag", args[1]);
+	heapObjectSetField(objHeap, handle, "$v", args[0]);
+	return raiserObject(handle);
+}
+
 export function ensureHostTableLoaded(): void {
 	if (isHostRegistryInitialized()) return;
+
+	registerHostFn("msUnionRead", _bridgeMsUnionRead, HostCapability.Pure);
+	registerHostFn("msUnionReadMaybe", _bridgeMsUnionReadMaybe, HostCapability.Pure);
+	registerHostFn("msUnionWrapMaybe", _bridgeMsUnionWrapMaybe, HostCapability.Pure);
+	registerHostFn("msMaybeGet", _bridgeMsMaybeGet, HostCapability.Pure);
+	registerHostFn("msCheckRangeI32", _bridgeMsCheckRangeI32, HostCapability.Pure);
 
 	// fs predicates
 	registerHostFn("msFsExists",         _bridgeMsFsExists, HostCapability.FileRead);
@@ -848,6 +915,8 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStdinHasData",        _bridgeMsStdinHasData);
 	registerHostFn("msWriteStdout",        _bridgeMsWriteStdout);
 	registerHostFn("msWriteStderr",        _bridgeMsWriteStderr);
+	registerHostFn("msEprintln",           _bridgeMsEprintln);
+	registerHostFn("msWarnln",             _bridgeMsEprintln);
 	when (!testBuild) {
 		registerHostFn("msZipReaderOpen",       _bridgeMsZipReaderOpen);
 		registerHostFn("msZipReaderCount",      _bridgeMsZipReaderCount);

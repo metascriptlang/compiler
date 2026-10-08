@@ -370,6 +370,7 @@ export function evalProgramViaEngine(program: Node, token: CheckerContext, fnNam
 		objectHeap: result.vm.objectHeap,
 		lastError: result.vm.error,
 		gcMode: result.vm.gcMode,
+		orphanFailures: [],
 	};
 }
 

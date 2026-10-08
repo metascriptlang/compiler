@@ -9,7 +9,7 @@
 import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention } from "../ast/node";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
-import { peelToStructOrUnion, withoutReadonlyView, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, isAwaitable, awaitedType, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
+import { isSysType, peelToStructOrUnion, withoutReadonlyView, isReadonlyView, isMaybeType, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, declFieldNamesJoined, declFieldTypesJoined, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, isAwaitable, awaitedType, createIterator, createUnion, createUnionInOrder, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, createBitSet, nullableUnionOf, isNullableShape } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag, ctorFnTypeOf } from "./symbol";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, recordGlobalTypeShape, extractGenericParamDecls, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
 import { forEachChild } from "../ast/visitor";
@@ -19,6 +19,7 @@ import { findCallTypeArg, addGenericTypeInst, findGenericTypeInstIdx } from "../
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
 import { buildTypeArgKeys, monoBaseName, monoInstanceNameOf, monoTypeKey } from "../monomorphize/registry";
+import { constantLiteralOf } from "./constFold";
 
 function anyHasGenericParams(types: Type[]): boolean {
 	for (const t of types) {
@@ -418,6 +419,30 @@ export function builtinTypeNamed(ctx: CheckerContext, name: string): Type | null
 	return isUnresolvedType(t) || t.kind == TypeKind.Null || t.sym != null ? null : t;
 }
 
+function isAllDigits(s: string): boolean {
+	if (s.length == 0) return false;
+	for (let i = 0; i < s.byteLength; i += 1) {
+		const code = s.byteAt(i);
+		if (code < "0".code || code > "9".code) return false;
+	}
+	return true;
+}
+
+function constArrayDimension(name: string, ctx: CheckerContext, line: int32, col: int32): int32 {
+	const sym = lookupSymbol(ctx.table, name);
+	if (sym != null) {
+		markUsedIn(ctx, sym);
+		const ident = createNodeAt(NodeKind.Identifier, { name }, makeLoc(line, col));
+		ident.resolvedSym = sym;
+		const folded = constantLiteralOf(ident, 0);
+		if (folded != null && folded.kind == NodeKind.NumberLiteral) {
+			const fd = folded.data as NumberLiteralData;
+			if (!fd.isFloat && fd.intVal >= 0 && fd.intVal <= 2147483647) return fd.intVal as int32;
+		}
+	}
+	return -1;
+}
+
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	let trimmed = text.trim();
 	if (trimmed == "") return inferredType();
@@ -699,8 +724,19 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			if (sizeStr == "" || sizeStr == " ") {
 				return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
 			}
-			const size = parseIntStr(sizeStr) as int32;
-			return createSizedArray(resolveAnnotation(inner, ctx, line, col), size);
+			if (isAllDigits(sizeStr)) {
+				return createSizedArray(resolveAnnotation(inner, ctx, line, col), parseIntStr(sizeStr));
+			}
+
+			const dim = constArrayDimension(sizeStr, ctx, line, col);
+			if (dim < 0) {
+				if (line > 0) {
+					addError(ctx, `array size '${sizeStr}' must be a compile-time integer constant`, line, col);
+					return errorType();
+				}
+				return createSizedArray(resolveAnnotation(inner, ctx, line, col), 0);
+			}
+			return createSizedArray(resolveAnnotation(inner, ctx, line, col), dim);
 		}
 	}
 
@@ -1980,7 +2016,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 			&& wft.typeReturn.typeName == d.interfaceName) {
 			warnOwningSelfRef(ctx, d.interfaceFields[wi], d.interfaceName, wLine, wCol);
 		}
-		refuseViewField(ctx, d.interfaceFields[wi], d.interfaceName, wft, wLine, wCol);
+		if (node.kind != NodeKind.StructDecl) refuseViewField(ctx, d.interfaceFields[wi], d.interfaceName, wft, wLine, wCol);
 	}
 
 	// Update sym type in-place — avoid temporary Type that shares typeChildren
@@ -2107,7 +2143,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		resolved.typeName = d.aliasName;
 	}
 	// Tier 3: for generic aliases, stamp the typeName so instantiation can reference the alias
-	if (hasGenericAlias && resolved.typeName == "") {
+	if (hasGenericAlias && resolved.typeName == "" && !isSysType(resolved)) {
 		resolved.typeName = d.aliasName;
 	}
 	if (hasGenericAlias && resolved.kind == TypeKind.Ref && resolved.typeReturn != null
@@ -2246,7 +2282,7 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 	// Build Union type with discriminant metadata.
 	// typeExtra = discriminant type (Enum or Boolean primitive)
 	// typeNames = [discFieldName, key0, key1, ...]
-	const unionType = createUnion(variantTypes);
+	const unionType = createUnionInOrder(variantTypes);
 	unionType.typeName = d.aliasName;
 	unionType.typeExtra = isBooleanDisc ? booleanType() : discType;
 	const names: string[] = [d.discriminantName];
@@ -2744,7 +2780,7 @@ function declareGeneric(ctx: CheckerContext, kind: NodeKind, name: string, param
 		}
 		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classDisplayName: name, classExtends: "", classBody: body, nameLocation: zl }, zl);
 	} else {
-		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldDecorators: noFieldDecorators(fields.length) }, zl);
+		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length) }, zl);
 	}
 	decl.typeArg = params;
 	const sym = makeSymbol(name, kind == NodeKind.ClassDecl ? SymbolKind.Class : SymbolKind.Interface, createStruct(name, fields, [], true), false);
@@ -2827,8 +2863,10 @@ test "string | number" {
 	const t = resolveWith("string | number");
 	assert t.kind == TypeKind.Union;
 	assert t.typeChildren.length == 2;
-	assert t.typeChildren[0].kind == TypeKind.String;
-	assert t.typeChildren[1].kind == TypeKind.Number;
+	assert t.typeChildren[0].kind == TypeKind.Number;
+	assert t.typeChildren[1].kind == TypeKind.String;
+	const back = resolveWith("number | string");
+	assert back.typeChildren[0].kind == TypeKind.Number && back.typeChildren[1].kind == TypeKind.String;
 }
 
 test "known symbol" {
@@ -3013,13 +3051,13 @@ test "Ref<number> | null stays Union(Ref, Null)" {
 	assert t.typeChildren[1].kind == TypeKind.Null;
 }
 
-test "null | Ref<string> stays Union(Null, Ref)" {
+test "null | Ref<string> stays Union(Ref, Null)" {
 	const t = resolveWith("null | Ref<string>");
 	assert t.kind == TypeKind.Union;
 	assert t.typeChildren.length == 2;
-	assert t.typeChildren[0].kind == TypeKind.Null;
-	assert t.typeChildren[1].kind == TypeKind.Ref;
-	const inner1 = t.typeChildren[1].typeReturn;
+	assert t.typeChildren[0].kind == TypeKind.Ref;
+	assert t.typeChildren[1].kind == TypeKind.Null;
+	const inner1 = t.typeChildren[0].typeReturn;
 	assert inner1 != null && inner1.kind == TypeKind.String;
 }
 
@@ -3033,13 +3071,13 @@ test "Ptr<number> | null stays Union(Ptr, Null)" {
 	assert t.typeChildren[1].kind == TypeKind.Null;
 }
 
-test "null | Ptr<boolean> stays Union(Null, Ptr)" {
+test "null | Ptr<boolean> stays Union(Ptr, Null)" {
 	const t = resolveWith("null | Ptr<boolean>");
 	assert t.kind == TypeKind.Union;
 	assert t.typeChildren.length == 2;
-	assert t.typeChildren[0].kind == TypeKind.Null;
-	assert t.typeChildren[1].kind == TypeKind.Ptr;
-	const inner1 = t.typeChildren[1].typeReturn;
+	assert t.typeChildren[0].kind == TypeKind.Ptr;
+	assert t.typeChildren[1].kind == TypeKind.Null;
+	const inner1 = t.typeChildren[0].typeReturn;
 	assert inner1 != null && inner1.kind == TypeKind.Boolean;
 }
 

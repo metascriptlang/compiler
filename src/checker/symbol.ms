@@ -418,9 +418,38 @@ export function makeSymbol(name: string, kind: SymbolKind, symType: Type | null,
 }
 
 export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | null, mutable: boolean, state: SymbolState): Symbol {
-	const sym = new Symbol();
-	initSymbol(sym, name, kind, symType, mutable, state);
-	return sym;
+	return {
+		name,
+		nameId: 0,
+		symbolKind: kind,
+		symbolType: symType!,
+		state,
+		location: makeLoc(0, 0),
+		declNode: null as unknown as Node,
+		overloads: [],
+		nativeName: "",
+		exportName: "",
+		builtinKind: "",
+		symFlags: mutable ? (0 as BitSet<SymbolFlag>).incl(SymbolFlag.Mutable) : (0 as BitSet<SymbolFlag>),
+		defaultParams: [],
+		modulePath: "",
+		headerPath: "",
+		jsModulePath: "",
+		overloadIdx: 0,
+		disamb: 0,
+		mutatedParams: 0,
+		staticFields: [],
+		fieldDecoratorNames: [],
+		fieldDecorators: [],
+		metaKeys: [],
+		metaValues: [],
+		nonisolatedFields: [],
+		duVariantSlot: 0,
+		itemModule: -1,
+		item: 0,
+		instantiatedFrom: null,
+		borrowedFrom: null,
+	};
 }
 
 export function initSymbol(sym: Symbol, name: string, kind: SymbolKind, symType: Type | null, mutable: boolean, state: SymbolState): void {

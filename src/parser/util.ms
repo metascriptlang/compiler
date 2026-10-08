@@ -6,6 +6,7 @@ import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, NumberLiteralDat
 import { ParserState, createState, current, advance, peek, isAtEnd, takePendingComments, collectTokenText, addError } from "./context";
 import { skipTypeAnnotation, parseTypeExpr } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
+import { isBinaryOperator } from "./expressions/precedence";
 import { callExprParser, callObjectPatternParser, callArrayPatternParser } from "./statements/callbacks";
 
 
@@ -106,6 +107,23 @@ export function captureOptionalType(state: ParserState): string {
 }
 
 // ===== Identifier Recognition =====
+// A contextual keyword followed by one of these heads an expression as a plain
+// identifier: the token can only continue an operand, never begin one. `+ - !
+// ~ (` are absent because they also begin an operand (`assert -x < 0`).
+export function continuesIdentifier(token: Token): boolean {
+	const k = token.kind;
+	if (k == TokenKind.Plus || k == TokenKind.Minus) return false;
+	if (isBinaryOperator(token)) return true;
+	return match (k) {
+		TokenKind.Dot | TokenKind.QuestionDot | TokenKind.LBracket => true,
+		TokenKind.PlusPlus | TokenKind.MinusMinus | TokenKind.Question => true,
+		TokenKind.Semicolon | TokenKind.Comma | TokenKind.Colon => true,
+		TokenKind.RParen | TokenKind.RBracket | TokenKind.RBrace | TokenKind.Eof => true,
+		TokenKind.TemplateMiddle | TokenKind.TemplateTail | TokenKind.Arrow | TokenKind.As => true,
+		_ => false,
+	};
+}
+
 // Returns true if the token is an identifier or a contextual keyword
 // that can be used in identifier positions (variable names, fields, etc.)
 export function isIdentLike(token: Token): boolean {

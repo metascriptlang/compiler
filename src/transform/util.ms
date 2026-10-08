@@ -1,9 +1,9 @@
 // Transform Utilities — node-building helpers for AST transforms
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
-import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, noFieldDecorators } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, setRepr } from "../checker/types";
+import { isAffineAwaitable, createFunction, createClosureType, createStruct, createArray, createPtr, createVar, numberType, int32Type, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, setRepr } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { lookupHookSym, requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
@@ -42,16 +42,97 @@ export function isCSwitchableType(t: Type | null): boolean {
 // reader (awaitLower). Exactly one of these holds per type:
 //   inlineInFuture → 16-byte typed slot (msFutureCreateInline / msSpawnInto)
 //   boxedInFuture  → heap box in the void* slot (msSinkBoxStruct / msUnboxStruct)
+//   refInFuture    → a counted reference in the void* slot
 //   neither        → primitive bits in the void* slot
 // A writer/reader pair disagreeing on this = silent garbage or UAF; do not
-// branch on layout anywhere else.
+// branch on layout anywhere else. A closure is a two-word value, so it is boxed.
 export function inlineInFuture(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.String;
 }
 
 export function boxedInFuture(t: Type | null): boolean {
 	if (t == null) return false;
-	return t.kind == TypeKind.Array || (isStructLikeType(t) && t.kind != TypeKind.String);
+	return t.kind == TypeKind.Array || t.kind == TypeKind.Function || (isStructLikeType(t) && t.kind != TypeKind.String);
+}
+
+export function refInFuture(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Ref;
+}
+
+// The future holds a value that has a destructor: the async writer makes it the
+// value's owner and every reader that may not be the last one copies it out.
+export function ownedInFuture(t: Type | null): boolean {
+	return inlineInFuture(t) || boxedInFuture(t) || refInFuture(t);
+}
+
+// This await is the only reader the future can have, so it may take the value
+// instead of copying it: the future was made by this very call (an async function,
+// an actor CALL's reply), or it is a spawn handle, which R2 lets be awaited once.
+export function isSoleFutureRead(e: Node | null): boolean {
+	if (e == null) return false;
+	if (isAffineAwaitable(e.nodeType)) return true;
+	if (e.kind != NodeKind.CallExpr) return false;
+	const callee = (e.data as CallExprData).callee;
+	const sym = e.resolvedSym != null ? e.resolvedSym : callee.resolvedSym;
+	if (sym != null && sym.declNode != null && sym.declNode.flags.has(NodeFlag.WasAsync)) return true;
+	if (callee.kind != NodeKind.MemberExpr) return false;
+	let recv = (callee.data as MemberExprData).object.nodeType;
+	if (recv != null && recv.kind == TypeKind.Ref && recv.typeReturn != null) recv = recv.typeReturn;
+	return recv != null && recv.sym != null && recv.sym.symbolKind == SymbolKind.Actor;
+}
+
+// A read of an owning future that may not be its last: bind from the value's own
+// location (the slot, or the box it points at), so the binding copies through the
+// type's hook and the future keeps its value for the next reader.
+export function makeFutureCopyRead(fut: Node, t: Type, loc: SourceLocation): Node {
+	const at = makeCall(runtimeRef(boxedInFuture(t) ? "msFutureBoxAt" : "msFutureValueAt", loc), [fut], loc);
+	at.nodeType = createPtr(voidType());
+	// Var<T> is T's address in C for every T, a handle's slot included.
+	const slot = makeHiddenDeref(makeHiddenStdConv(at, createVar(t), loc), loc);
+	slot.nodeType = t;
+	return slot;
+}
+
+// share(dst, fut): copies an owning future's value into the slot at `dst`, for a
+// runtime combinator that collects values out of futures other code may also read.
+// The builtin pass runs after lambda lifting, so the routine is a generated
+// top-level function (collected here, appended by lowerBuiltins) passed as a
+// closure without an environment.
+let _shareFnDecls: Node[] = [];
+
+export function takeValueShareFns(): Node[] {
+	const out = _shareFnDecls;
+	_shareFnDecls = [];
+	return out;
+}
+
+export function makeValueShareFn(t: Type, ctx: TransformContext, loc: SourceLocation): Node {
+	const voidPtrType = createPtr(voidType());
+	const sym = mintSym(ctx, SymbolKind.Function, "$share" + _shareFnDecls.length.toString(), null);
+	const dstSym = mintSym(ctx, SymbolKind.Parameter, "dst", voidPtrType);
+	const futSym = mintSym(ctx, SymbolKind.Parameter, "fut", voidPtrType);
+	const stmts: Node[] = [];
+	if (ownedInFuture(t)) {
+		const slot = makeHiddenDeref(makeHiddenStdConv(makeTypedIdentResolved(dstSym, voidPtrType, loc), createVar(t), loc), loc);
+		slot.nodeType = t;
+		const copy = makeFutureCopyRead(makeTypedIdentResolved(futSym, voidPtrType, loc), t, loc);
+		stmts.push(makeExprStmt(makeAssign(slot, copy, loc), loc));
+	}
+	const fnNode = makeFnDecl(sym.name, [dstSym, futSym], ["Ptr<void>", "Ptr<void>"], makeBlock(stmts, loc), "", "void", loc);
+	fnNode.nodeType = createFunction([voidPtrType, voidPtrType], ["dst", "fut"], voidType());
+	sym.symbolType = fnNode.nodeType;
+	fnNode.resolvedSym = sym;
+	_shareFnDecls.push(fnNode);
+	const pair = makeObjectLiteral(["fn", "env"], [makeTypedIdentResolved(sym, fnNode.nodeType, loc), makeNull(loc)], loc);
+	pair.flags = pair.flags.incl(NodeFlag.Closure);
+	pair.nodeType = createClosureType([voidPtrType, voidPtrType], ["dst", "fut"], voidType());
+	return pair;
+}
+
+export function makeOwnsValueCheck(fut: Node, loc: SourceLocation): Node {
+	const call = makeCall(runtimeRef("msFutureOwnsValue", loc), [fut], loc);
+	call.nodeType = booleanType();
+	return call;
 }
 
 // Value-layout types — passed by-value or via NRVO out-param, NOT as void*.
@@ -96,7 +177,7 @@ export function unboxFnNameForType(t: Type | null): string {
 // Tiers (matches spawnLower.boxForType / actor dispatch):
 //   primitive       → msUnbox<T>(voidPtr)        (bits stored in void* slot)
 //   struct-like     → msUnboxStruct(voidPtr)     (cast+deref+free — heap-boxed)
-//   pointer-shape   → voidPtr unchanged           (Ref/Ptr/Function — already void*)
+//   pointer-shape   → voidPtr unchanged           (Ref/Ptr — already void*)
 //   void            → voidPtr unchanged           (no value to extract)
 export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, loc: SourceLocation): Node {
 	if (innerType == null || innerType.kind == TypeKind.Void) return voidPtrExpr;
@@ -107,12 +188,12 @@ export function unboxVoidPtrToTyped(voidPtrExpr: Node, innerType: Type | null, l
 		return c;
 	}
 	// Heap-boxed via msSinkBoxStruct → cast+deref+free shell.
-	if (isStructLikeType(innerType) || innerType.kind == TypeKind.Array) {
+	if (boxedInFuture(innerType) || innerType.kind == TypeKind.String) {
 		const call = makeCall(runtimeRef("msUnboxStruct", loc), [voidPtrExpr], loc);
 		call.nodeType = innerType;
 		return call;
 	}
-	// Pointer-shape (Ref/Ptr/Function): spawnLower returns these unboxed —
+	// Pointer-shape (Ref/Ptr): spawnLower returns these unboxed —
 	// the void* IS the pointer. C handles implicit conversion at assignment.
 	return voidPtrExpr;
 }
@@ -232,6 +313,20 @@ export function runtimeProcSym(procName: string): Symbol {
 	if (_runtimeIdentCache != null) sym.nameId = getIdentId(_runtimeIdentCache, procName);
 	_runtimeSyms.set(procName, sym);
 	return sym;
+}
+
+export type CompilerFuncScope = { funcs: HashMap<string, Symbol>, syms: HashMap<string, Symbol>, cache: IdentCache | null };
+
+export function enterCompilerFuncs(declared: HashMap<string, Symbol>, identCache: IdentCache): CompilerFuncScope {
+	const saved: CompilerFuncScope = { funcs: _compilerFuncs, syms: _runtimeSyms, cache: _runtimeIdentCache };
+	bindCompilerFuncs(declared, identCache);
+	return saved;
+}
+
+export function leaveCompilerFuncs(saved: CompilerFuncScope): void {
+	_compilerFuncs = saved.funcs;
+	_runtimeSyms = saved.syms;
+	_runtimeIdentCache = saved.cache;
 }
 
 export function compilerFuncSym(procName: string): Symbol | null {
@@ -539,7 +634,7 @@ export function makeInterfaceDeclFromTypes(name: string, fields: string[], field
 		interfaceName: name, interfaceFields: fields, interfaceFieldTypes: fieldTypes,
 		interfaceExtends: [] as string[],
 		nameLocation: loc,
-		interfaceFieldDecorators: noFieldDecorators(fields.length),
+		interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length),
 	}, syntheticToken(loc));
 	n.nodeType = createStruct(name, fields, resolvedTypes, true);
 	return n;

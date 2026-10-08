@@ -182,7 +182,7 @@ function rewriteGlobalRefs(node: Node, globals: HashMap<Symbol, HcrGlobal>): Nod
 export function hcrStorageDecl(t: Type, loc: SourceLocation): Node {
 	const decl = createNode(NodeKind.StructDecl, {
 		interfaceName: t.typeName, interfaceFields: ["value"], interfaceFieldTypes: [],
-		interfaceExtends: [], nameLocation: loc, interfaceFieldDecorators: noFieldDecorators(1),
+		interfaceExtends: [], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(1),
 	}, syntheticToken(loc));
 	decl.nodeType = t;
 	return decl;

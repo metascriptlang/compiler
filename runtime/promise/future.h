@@ -97,6 +97,11 @@ typedef struct msFutureBase {
 	                            * to serialize with the dispatcher drain. */
 	void* error;          /* error payload (may be NULL even when failed) */
 	void (*valueDestructor)(void*); /* optional: frees value on destroy (combinators) */
+	/* Set by the async writer: the future owns its value, readers copy it out and
+	 * this drops whatever the slot still holds when the future is destroyed. NULL
+	 * on futures completed across threads (spawn, actor reply, doneFut): their
+	 * single reader takes the value. */
+	void (*valueDrop)(void* fut);
 	msFutureCb* callbacks;
 	msFutureCb* cbTail;   /* tail pointer for O(1) append */
 	/* Set when a reader consumes the failure (msFutureRaiseFrom) or a callback
@@ -216,6 +221,7 @@ static inline void msFutureDestroyInner(void* fp) {
 		void* val = ((msFuture_ptr*)fp)->value;
 		if (val != NULL) f->valueDestructor(val);
 	}
+	if (f->valueDrop != NULL) f->valueDrop(fp);
 	msFutureCb* cb = f->callbacks;
 	while (cb) {
 		msFutureCb* next = cb->next;
@@ -520,6 +526,35 @@ static inline void* msFutureRead(void* fp) {
 	void* v = f->value;
 	f->value = NULL;
 	return v;
+}
+
+/* Owning futures (valueDrop set). The drop routine takes the slot without the
+ * finished/failed checks: an unfinished or failed future holds an empty slot. */
+static inline bool msFutureOwnsValue(void* fp) {
+	return ((msFutureBase*)fp)->valueDrop != NULL;
+}
+static inline void msFutureSetValueDrop(void* fp, msClosure drop) {
+	((msFutureBase*)fp)->valueDrop = (void (*)(void*))drop.fn;
+}
+static inline void* msFutureTakeRaw(void* fp) {
+	msFuture* f = (msFuture*)fp;
+	void* v = f->value;
+	f->value = NULL;
+	return v;
+}
+/* Where an owning future's reader copies from: the slot itself (string, reference)
+ * or the heap box the slot points at (boxed values). Neither moves the value. */
+static inline void* msFutureValueAt(void* fp) {
+	msFuture* f = (msFuture*)fp;
+	assert(atomic_load_explicit(&f->base.finished, memory_order_acquire) && "Future not yet finished");
+	if (f->base.cancelled || f->base.failed) { msFutureRaiseFrom(&f->base); return NULL; }
+	return &f->value;
+}
+static inline void* msFutureBoxAt(void* fp) {
+	msFuture* f = (msFuture*)fp;
+	assert(atomic_load_explicit(&f->base.finished, memory_order_acquire) && "Future not yet finished");
+	if (f->base.cancelled || f->base.failed) { msFutureRaiseFrom(&f->base); return NULL; }
+	return f->value;
 }
 
 /* ===== DRC lifecycle ===== */

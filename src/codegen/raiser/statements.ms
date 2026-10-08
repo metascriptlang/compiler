@@ -3,7 +3,7 @@
 
 import {
 	Node, NodeKind,
-	ReturnStmtData, BlockStmtData, ExprStmtData, MacroInvocationData,
+	ReturnStmtData, BlockStmtData, ExprStmtData, MacroInvocationData, UnreachableStmtData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
 	ForStmtData, ForOfStmtData, BreakStmtData, ContinueStmtData,
 	ExportDeclData, DecoratedDeclData, ImportDeclData,
@@ -88,6 +88,10 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 			const d = node.data as ThrowStmtData;
 			const reg = compileExpr(s, d.throwArg);
 			emitInst(s, raiserABC(RaiserOpcode.Throw, reg, 0, 0));
+		},
+		NodeKind.UnreachableStmt => {
+			const d = node.data as UnreachableStmtData;
+			emitTrapNil(s, d.unreachableMsg.length > 0 ? "unreachable: " + d.unreachableMsg : "unreachable");
 		},
 		NodeKind.EnumDecl | NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.TypeAliasDecl | NodeKind.ClassDecl => {},
 		_ => {},

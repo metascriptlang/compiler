@@ -45,8 +45,9 @@ import { nodeHasPositionalNew } from "./newExprLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
 import { isLowerableSpreadLiteral, expandSpreadLiteral } from "../desugar/arraySpreadLower";
 import { spreadStructOf, expandObjectSpread } from "../desugar/objectSpreadLower";
-import { needsIntegerCompoundRewrite } from "../coercion/intArithJS";
+import { needsIntegerCompoundRewrite, needsIntegerUpdateRewrite, cloneIfPure } from "../coercion/intArithJS";
 import { isImpureArrayOp } from "./bitSetLower";
+import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
 
 // ===== Hoist (top-down) =====
 
@@ -395,6 +396,20 @@ function lowerShortCircuitExpr(expr: Node, hoisted: Node[], ctx: TransformContex
 	return makeIdentResolved(resSym, loc);
 }
 
+// JS evaluates in place and skips the hoist, except where a width step must
+// read its operand twice: then the operand's effects are hoisted as on C, the
+// statement-level form of the reference's maybeMakeTempAssignable.
+function hasImpureIntegerUpdate(n: Node): boolean {
+	if (n == null || isFunctionNode(n) || n.kind == NodeKind.BlockStmt) return false;
+	if (n.kind == NodeKind.UpdateExpr) {
+		const d = n.data as UpdateExprData;
+		if (needsIntegerUpdateRewrite(d) && cloneIfPure(d.updateArg) == null) return true;
+	}
+	let found = false;
+	forEachChild(n, (c: Node): void => { if (!found && hasImpureIntegerUpdate(c)) found = true; });
+	return found;
+}
+
 // ===== Statement expansion =====
 
 // The expander runs ONCE per statement and its output is only re-walked into
@@ -426,16 +441,17 @@ function hasGuardedImpureArrayOp(node: Node, guarded: boolean = false): boolean 
 function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 // On JS, ternaries and short-circuits are native and need no statement
 	// rewrite — UNLESS one holds a positional `new`, which cannot stay in a JS
-	// expression after newExprLower refused it, or a guarded impure array op
+	// expression after newExprLower refused it, a guarded impure array op
 	// (aggregate bitset receiver), which needs the full expansion so the
-	// receiver lands in a real scope. Gate the whole statement on both, so
-	// `const x = true ? 1 : 2` stays `(true ? 1 : 2)` on JS.
-	if (ctx.jsBackend && !nodeHasPositionalNew(stmt) && !hasGuardedImpureArrayOp(stmt)) {
+	// receiver lands in a real scope, or a width step on an effectful target.
+	// Gate the whole statement on all three, so `const x = true ? 1 : 2`
+	// stays `(true ? 1 : 2)` on JS.
+	if (ctx.jsBackend && !nodeHasPositionalNew(stmt) && !hasGuardedImpureArrayOp(stmt) && !hasImpureIntegerUpdate(stmt)) {
 		if (stmt.kind == NodeKind.ExprStmt) {
 			const expr = (stmt.data as ExprStmtData).expr;
 			if (expr.kind == NodeKind.BinaryExpr) {
 				const d = expr.data as BinaryExprData;
-				if (needsIntegerCompoundRewrite(d)) {
+				if (needsIntegerCompoundRewrite(d) || needsUint64CompoundWrap(d)) {
 					const pre: Node[] = [];
 					d.left = hoistAssignTargetEffects(d.left, pre, ctx, []);
 					if (pre.length > 0) {
@@ -491,6 +507,7 @@ function expandConditionalStmt(stmt: Node, ctx: TransformContext): Node[] {
 				const ud = d.expr.data as UpdateExprData;
 				const pre: Node[] = [];
 				ud.updateArg = hoistTernaries(ud.updateArg, pre, ctx);
+				if (ctx.jsBackend && needsIntegerUpdateRewrite(ud)) { ud.updateArg = hoistAssignTargetEffects(ud.updateArg, pre, ctx, []); }
 				if (pre.length == 0) return [stmt];
 				pre.push(stmt);
 				return pre;

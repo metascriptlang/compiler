@@ -182,6 +182,14 @@ function unaryAsUnsigned(node: Node): Node {
 	return truncateTo(node, t.kind, node.location);
 }
 
+// A step at a wrapping width is stored as `x = wrap(x ± 1)`, which reads its
+// operand twice (updateAtWidth here, updateAsBigInt for uint64).
+export function needsIntegerUpdateRewrite(d: UpdateExprData): boolean {
+	const t = peelToRepr(d.updateArg.nodeType);
+	if (t == null) return false;
+	return t.kind == TypeKind.Uint32 || t.kind == TypeKind.Uint64 || subIntKind(t) != TypeKind.Unknown;
+}
+
 // A postfix step reads back the value before the step: on a wrapping width that
 // is the wrapped new value stepped back, so no temporary is needed.
 function updateAtWidth(node: Node, ctx: TransformContext): Node {

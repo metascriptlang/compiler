@@ -20,7 +20,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -481,9 +481,20 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 
 	// console.log (Echo builtin) and its lowered msPrintln → console.log (strings are native)
 	const isMsPrintln = isRuntimeProcSym(sym, "msPrintln");
-	if (isMsPrintln || (sym != null && sym.builtinKind == "Echo")) {
-		markNamed(gen, calleeOriginNode(d.callee), isMsPrintln ? "msPrintln" : "console.log");
-		emit(gen, "console.log(");
+	const isMsWarnln = isRuntimeProcSym(sym, "msWarnln");
+	const isMsEprintln = isRuntimeProcSym(sym, "msEprintln");
+	if (isMsPrintln || isMsWarnln || isMsEprintln) {
+		const method = isMsWarnln ? "warn" : isMsEprintln ? "error" : "log";
+		markNamed(gen, calleeOriginNode(d.callee), isMsWarnln ? "msWarnln" : isMsEprintln ? "msEprintln" : "msPrintln");
+		emit(gen, `console.${method}(`);
+		emitJoinedNodes(gen, d.arguments, ", ");
+		emit(gen, ")");
+		return;
+	}
+	if (sym != null && sym.builtinKind == "Echo") {
+		const method = sym.name;
+		markNamed(gen, calleeOriginNode(d.callee), `console.${method}`);
+		emit(gen, `console.${method}(`);
 		emitJoinedNodes(gen, d.arguments, ", ");
 		emit(gen, ")");
 		return;
@@ -599,15 +610,33 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 	const d = node.data as ArrayLiteralData;
 	const t = node.nodeType;
+	const sized = t != null && t.kind == TypeKind.SizedArray && t.typeReturn != null;
+	if (sized && d.elements.length == 0) {
+		emit(gen, jsDefaultValue(t));
+		return;
+	}
 	let typedName = "";
-	if (t != null && t.kind == TypeKind.SizedArray && t.typeReturn != null) {
+	if (sized) {
 		typedName = jsTypedArrayName(t.typeReturn.kind);
 	}
 	if (typedName != "") emit(gen, "new " + typedName + "(");
 	emit(gen, "[");
+	let needComma = false;
 	for (let i = 0; i < d.elements.length; i += 1) {
-		if (i > 0) emit(gen, ", ");
+		if (needComma) emit(gen, ", ");
 		emitArrayElement(gen, d.elements[i]);
+		needComma = true;
+	}
+	if (sized) {
+		const elemDefault = jsDefaultValue(t.typeReturn);
+		const fill = elemDefault != "" ? elemDefault : (typedName != "" ? "0" : "null");
+		let extra = (t.typeValue as int32) - d.elements.length;
+		while (extra > 0) {
+			if (needComma) emit(gen, ", ");
+			emit(gen, fill);
+			needComma = true;
+			extra = extra - 1;
+		}
 	}
 	emit(gen, "]");
 	if (typedName != "") emit(gen, ")");
@@ -735,7 +764,7 @@ function assertedUnion(d: TypeAssertionData): Type | null {
 }
 
 function openTagTest(gen: JSGenerator, member: Type, union: Type, pass: string, location: SourceLocation): void {
-	openMemberTest(gen, member, union, pass + "typeof v === \"" + typeofTagOf(member) + "\"", [], location);
+	openMemberTest(gen, member, union, pass + "typeof v === \"" + heldKindOf(member) + "\"", [], location);
 }
 
 function openMemberTest(gen: JSGenerator, member: Type, union: Type, check: string, excluded: Symbol[], location: SourceLocation): void {
@@ -809,13 +838,6 @@ function heldKindTest(kind: string): string {
 	if (kind == "array") return "Array.isArray(v)";
 	if (kind == "object") return "(v !== null && typeof v === \"object\" && !Array.isArray(v))";
 	return "typeof v === \"" + kind + "\"";
-}
-
-function jsMemberKind(t: Type): string {
-	if (t.kind == TypeKind.Null) return "null";
-	if (t.kind == TypeKind.Ref && runtimeClassSym(t.typeReturn) != null) return "class";
-	if (isArrayShaped(t) || t.kind == TypeKind.Tuple) return "array";
-	return typeofTagOf(t);
 }
 
 function soleMemberOfKind(union: Type, kind: string): boolean {

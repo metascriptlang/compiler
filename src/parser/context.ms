@@ -359,40 +359,55 @@ function skipGenericParamRest(state: ParserState): void {
 	}
 }
 
-// Lookahead: is this '<' the start of generic type args followed by '('?
-// Scans ahead for balanced <...> then checks for '(' immediately after.
-// Does NOT consume tokens — only peeks.
-export function isGenericCallAhead(state: ParserState): boolean {
+// Lookahead: the '(' at peek(offset) closes, and the token after its ')' is `follow`.
+export function parenGroupThen(state: ParserState, offset: int32, follow: TokenKind): boolean {
+	if (peek(state, offset).kind != TokenKind.LParen) return false;
+	let depth = 0;
+	for (let pos = offset; pos < state.tokens.length; pos += 1) {
+		const k = peek(state, pos).kind;
+		if (k == TokenKind.Eof) return false;
+		if (k == TokenKind.LParen) depth += 1;
+		if (k == TokenKind.RParen) {
+			depth -= 1;
+			if (depth == 0) return peek(state, pos + 1).kind == follow;
+		}
+	}
+	return false;
+}
+
+// Lookahead: the peek offset of the '(' right after the '>' that balances
+// this '<', or -1. Does NOT consume tokens — only peeks.
+export function genericCallParenOffset(state: ParserState): int32 {
 	// Current token should be '<'
-	if (isAtEnd(state) || current(state).kind != TokenKind.Lt) return false;
+	if (isAtEnd(state) || current(state).kind != TokenKind.Lt) return -1;
 	let angleDepth = 1;
 	let braceDepth = 0;
 	let bracketDepth = 0;
 	let parenDepth = 0;
 	for (let pos = 1; pos < 100; pos += 1) {
 		const tok = peek(state, pos);
-		if (tok.kind == TokenKind.Eof) return false;
+		if (tok.kind == TokenKind.Eof) return -1;
 		if (tok.kind == TokenKind.LBrace) { braceDepth += 1; }
-		if (tok.kind == TokenKind.RBrace) { braceDepth -= 1; if (braceDepth < 0) return false; }
+		if (tok.kind == TokenKind.RBrace) { braceDepth -= 1; if (braceDepth < 0) return -1; }
 		if (tok.kind == TokenKind.LBracket) { bracketDepth += 1; }
-		if (tok.kind == TokenKind.RBracket) { bracketDepth -= 1; if (bracketDepth < 0) return false; }
+		if (tok.kind == TokenKind.RBracket) { bracketDepth -= 1; if (bracketDepth < 0) return -1; }
 		if (tok.kind == TokenKind.LParen) { parenDepth += 1; }
-		if (tok.kind == TokenKind.RParen) { parenDepth -= 1; if (parenDepth < 0) return false; }
+		if (tok.kind == TokenKind.RParen) { parenDepth -= 1; if (parenDepth < 0) return -1; }
 		// Only count angle brackets at top level (not inside {} [] ())
 		if (braceDepth == 0 && bracketDepth == 0 && parenDepth == 0) {
 			if (tok.kind == TokenKind.Lt) { angleDepth += 1; }
 			angleDepth -= angleCloserWidth(tok.kind);
-			if (angleDepth < 0) return false;
+			if (angleDepth < 0) return -1;
 			if (angleDepth == 0) {
-				const next = peek(state, pos + 1);
-				return next.kind == TokenKind.LParen;
+				return peek(state, pos + 1).kind == TokenKind.LParen ? pos + 1 : -1;
 			}
 		}
 		// Bail on tokens that can't appear in type args
-		if (tok.kind == TokenKind.Semicolon) return false;
-		if (tok.kind == TokenKind.Assign) return false;
+		if (tok.kind == TokenKind.Semicolon) return -1;
+		if (tok.kind == TokenKind.Assign) return -1;
+		if (tok.kind == TokenKind.GtEq || tok.kind == TokenKind.GtGtEq || tok.kind == TokenKind.GtGtGtEq) return -1;
 	}
-	return false;
+	return -1;
 }
 
 // Capture generic type args at call site: <number, string> → "number,string"

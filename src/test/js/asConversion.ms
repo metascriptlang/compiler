@@ -35,7 +35,7 @@ test "JS: an as up to a base class out of a union with a subclass member tests i
 test "JS: a union access error names an array member by its element type" {
 	const js = compileToJS("function f(u: number | int32[]): number { return u as number; }");
 	assert js.ok;
-	assert js.value.contains("type 'number | int32[]'");
+	assert js.value.contains("type 'int32[] | number'");
 }
 
 test "JS: an as to the only array member of a union tests Array.isArray" {
@@ -54,4 +54,31 @@ test "JS: an as to an int32 member tests the member before truncating" {
 	const js = compileToJS("function f(u: int32 | string): int32 { return u as int32; }");
 	assert js.ok;
 	assert js.value.contains("typeof v === \"number\"");
+}
+
+test "JS: an as out of two same-kind struct members reads the member through its stored tag" {
+	const js = compileToJS("struct P { a: int32 }\nstruct Q { b: int32 }\nfunction mk(): P | Q { const q: Q = { b: 2 }; return q; }\nfunction f(): int32 { const p = mk() as P; return p.a; }");
+	assert js.ok;
+	assert js.value.contains("$tag: 1");
+	assert js.value.contains("msUnionRead");
+	assert js.value.contains("member 'P' is not accessible for type 'P | Q' using '");
+}
+
+test "JS: an as out of int32 | float64 reads the member through its stored tag" {
+	const js = compileToJS("function mk(): int32 | float64 { return 1.5; }\nfunction f(): int32 { return mk() as int32; }");
+	assert js.ok;
+	assert js.value.contains("$tag: 0, $v: 1.5");
+	assert js.value.contains("member 'int32' is not accessible for type 'float64 | int32' using '");
+}
+
+test "JS: a union whose members the value names keeps the raw value" {
+	const js = compileToJS("function mk(): number | string { return 1; }\nfunction f(): number { return mk() as number; }");
+	assert js.ok;
+	assert !js.value.contains("$tag");
+}
+
+test "JS: a union value returned by a host function is refused" {
+	const js = compileToJS("extern function pick(k: int32): int32 | float64 from \"(#)\";\nconst v = pick(2);");
+	assert !js.ok;
+	assert js.error.contains("carries no tag naming its member");
 }

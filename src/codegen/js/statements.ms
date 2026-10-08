@@ -6,8 +6,9 @@ import {
 	ExprStmtData, ReturnStmtData, BreakStmtData, ContinueStmtData,
 	SwitchStmtData, SwitchCaseData, ThrowStmtData, TryCatchStmtData,
 	ForStmtData, ForOfStmtData, MacroInvocationData, StringLiteralData,
-	AssertStmtData, BlockStmtData, isEmptyBlock, Type,
+	AssertStmtData, BlockStmtData, UnreachableStmtData, isEmptyBlock, Type,
 } from "../../ast/node";
+import { runtimeRef } from "../../transform/util";
 import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt, escapeJSString } from "./emit";
 import { safeJsName, jsSymbolName } from "./expressions";
 import { emitCopyOnRead, jsDefaultValue } from "./valueCopy";
@@ -372,5 +373,9 @@ export function emitForOfStmt(gen: JSGenerator, node: Node): void {
 // ===== Unreachable Statement =====
 
 export function emitUnreachableStmt(gen: JSGenerator, node: Node): void {
-	emitLine(gen, "throw new Error(\"unreachable\");");
+	const d = node.data as UnreachableStmtData;
+	emitIndent(gen);
+	emitNode(gen, runtimeRef("msDefect", node.location));
+	const text = d.unreachableMsg.length > 0 ? "unreachable: " + d.unreachableMsg : "unreachable";
+	emit(gen, `("${escapeJSString(text)}");\n`);
 }

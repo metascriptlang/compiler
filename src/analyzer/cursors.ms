@@ -14,7 +14,7 @@
 // false positives would be unsound (dangling pointer).
 
 import {
-	Node, NodeKind, Symbol,
+	Node, NodeKind, Symbol, Type,
 	VariableDeclData, MemberExprData, ArrayAccessData,
 	BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData,
 	WhileStmtData, ForStmtData, DoWhileStmtData,
@@ -27,14 +27,74 @@ import {
 	TypeAssertionData, HiddenStdConvData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import {
-	VF_OWNS_DATA, VF_PREVENT_CURSOR, VF_IS_REASSIGNED, VF_IS_COND_REASSIGNED, VF_IS_PARAM, CK_ROOT_OF,
-	Partitions, createPartitions, variableId, registerVariable, ufRoot, ufConnect,
-	potentialMutation, dangerousMutation, getIdentSym, allRoots, connectStore, potentialMutationViaArg,
-} from "../checker/varPartitions";
 import { setFlag, hasFlag, isCursorSym, SymbolFlag } from "../checker/symbol";
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
+import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
+
+// ===== VarFlag (per-variable analysis flags) =====
+
+const VF_OWNS_DATA: int32 = 1;
+const VF_PREVENT_CURSOR: int32 = 2;
+const VF_IS_REASSIGNED: int32 = 4;
+const VF_IS_COND_REASSIGNED: int32 = 8;
+const VF_IS_PARAM: int32 = 16;
+
+function registerVariable(p: Partitions, sym: Symbol | null, isParam: boolean): void {
+	registerPartitionVariable(p, sym, isParam, VF_IS_PARAM);
+}
+
+// ===== Helpers =====
+
+function getIdentSym(node: Node): Symbol | null {
+	if (node == null) return null;
+	if (node.kind == NodeKind.Identifier) return node.resolvedSym;
+	return null;
+}
+
+function allRoots(node: Node, result: Symbol[]): void {
+	if (node == null) return;
+	match (node.kind) {
+		NodeKind.Identifier => { if (node.resolvedSym != null) result.push(node.resolvedSym); },
+		NodeKind.MemberExpr => allRoots((node.data as MemberExprData).object, result),
+		NodeKind.ArrayAccess => allRoots((node.data as ArrayAccessData).array, result),
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => allRoots((node.data as { expr: Node }).expr, result),
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => allRoots((node.data as HiddenStdConvData).convExpr, result),
+		NodeKind.TypeAssertion => allRoots((node.data as TypeAssertionData).asExpr, result),
+		NodeKind.ConditionalExpr => {
+			const d = node.data as ConditionalExprData;
+			allRoots(d.ternaryConsequent, result);
+			allRoots(d.ternaryAlternate, result);
+		},
+		NodeKind.ArrayLiteral => { for (const e of (node.data as ArrayLiteralData).elements) { allRoots(e, result); } },
+		NodeKind.ObjectLiteral => { for (const e of (node.data as ObjectLiteralData).properties) { allRoots(e, result); } },
+		NodeKind.SpreadExpr => allRoots((node.data as SpreadExprData).spreadArg, result),
+		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { allRoots(a, result); } },
+		NodeKind.CallExpr => {
+			if (containsPointer(node.nodeType, 0)) {
+				for (const a of (node.data as CallExprData).arguments) { allRoots(a, result); }
+			}
+		},
+		_ => {},
+	};
+}
+
+function connectStore(p: Partitions, targets: Symbol[], destType: Type | null, src: Node): void {
+	if (!containsPointer(destType, 0)) return;
+	const sources: Symbol[] = [];
+	allRoots(src, sources);
+	for (const t of targets) {
+		for (const s of sources) { ufConnect(p, t, s); }
+	}
+}
+
+function potentialMutationViaArg(p: Partitions, arg: Node): void {
+	if (arg == null || arg.kind == NodeKind.HiddenAddr) return;
+	if (!containsPointer(arg.nodeType, 0)) return;
+	const roots: Symbol[] = [];
+	allRoots(arg, roots);
+	for (const r of roots) { potentialMutation(p, r); }
+}
 
 // ===== destMightOwn — determines if dest OWNS data from src =====
 // If dest owns → marked ownsData → cannot be cursor.

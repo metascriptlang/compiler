@@ -28,6 +28,7 @@ import {
 	makeTypedIdentResolved, makeVarDecl, makeExprStmt, makeReturn,
 	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeWhile, makeBool, makeNumber, makeString,
 	makeAssign, makeBinary, makeTryCatch, makeCatchSym, makeContinue, syntheticToken, extractBodyStmts, runtimeRef,
+	isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck,
 } from "../util";
 import { createSymSet, symSetAdd } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
@@ -71,7 +72,7 @@ function promiseTypeFor(inner: Type | null): Type {
 	return inner != null ? createPromise(inner) : createPromise(voidType());
 }
 
-import { isStructLikeType, inlineInFuture, boxedInFuture } from "../util";
+import { isStructLikeType, inlineInFuture, boxedInFuture, ownedInFuture } from "../util";
 
 // $retFut allocation: String needs the 16-byte inline slot; everything else uses
 // the 8-byte generic future (boxed types store a void*). nodeType carries
@@ -85,6 +86,57 @@ function makeRetFutAlloc(innerType: Type | null, loc: SourceLocation): Node {
 	const call = makeCall(runtimeRef("msFutureCreate", loc), [], loc);
 	call.nodeType = promiseTypeFor(innerType);
 	return call;
+}
+
+// The routine a future runs on its value when the future is destroyed: it takes
+// whatever the slot still holds into a local, and the local's scope exit runs the
+// value's own destructor. A reader that took the value left the slot empty.
+function makeValueDropFn(t: Type, ctx: TransformContext, loc: SourceLocation): Node {
+	const voidPtrType = createPtr(createPrimitive(TypeKind.Void));
+	const futSym = mintSym(ctx, SymbolKind.Parameter, "fut", voidPtrType);
+	const stmts: Node[] = [];
+	if (boxedInFuture(t)) {
+		const rawSym = mintSym(ctx, SymbolKind.Variable, "$raw", voidPtrType);
+		const take = makeCall(runtimeRef("msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
+		take.nodeType = voidPtrType;
+		stmts.push(makeLocalDecl(rawSym, take, voidPtrType, loc));
+		const unbox = makeCall(runtimeRef("msUnboxStruct", loc), [makeTypedIdentResolved(rawSym, voidPtrType, loc)], loc);
+		unbox.nodeType = t;
+		const held = makeBinary(makeTypedIdentResolved(rawSym, voidPtrType, loc), "!=", makeNull(loc), loc);
+		held.nodeType = booleanType();
+		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
+		stmts.push(makeIf(held, makeBlock([makeLocalDecl(droppedSym, unbox, t, loc)], loc), null, loc));
+	} else {
+		const take = makeCall(runtimeRef(inlineInFuture(t) ? "msFutureTakeStringRaw" : "msFutureTakeRaw", loc), [makeTypedIdentResolved(futSym, voidPtrType, loc)], loc);
+		take.nodeType = t;
+		const droppedSym = mintSym(ctx, SymbolKind.Variable, "$dropped", t);
+		stmts.push(makeLocalDecl(droppedSym, take, t, loc));
+	}
+	const fnExpr = createNode(NodeKind.FunctionExpr, {
+		funcExprParams: ["fut"],
+		funcExprParamTypes: ["Ptr<void>"],
+		funcExprBody: makeBlock(stmts, loc),
+		funcExprFlags: "",
+		funcExprReturnType: "void",
+	}, syntheticToken(loc));
+	fnExpr.nodeType = createClosureType([voidPtrType], ["fut"], voidType());
+	fnExpr.paramSyms = [futSym];
+	return fnExpr;
+}
+
+function makeLocalDecl(sym: Symbol, init: Node, t: Type, loc: SourceLocation): Node {
+	const decl = makeVarDecl(sym.name, init, DeclKind.Const, loc);
+	decl.nodeType = t;
+	decl.resolvedSym = sym;
+	return decl;
+}
+
+// msFutureSetValueDrop($retFut, drop): the async function's future owns its value.
+function makeOwnValueStmt(retFutSym: Symbol, retFutType: Type, fnReturnInner: Type | null, ctx: TransformContext, loc: SourceLocation): Node | null {
+	if (!ownedInFuture(fnReturnInner)) return null;
+	const call = makeCall(runtimeRef("msFutureSetValueDrop", loc),
+		[makeTypedIdentResolved(retFutSym, retFutType, loc), makeValueDropFn(fnReturnInner!, ctx, loc)], loc);
+	return makeExprStmt(call, loc);
 }
 
 // Zero value for a type — used as fallback in msFutureReadT(f, zeroval) when future failed
@@ -202,6 +254,12 @@ function rewriteAsyncReturn(node: Node, promiseType: Type, fnReturnInner: Type |
 // This walks recursively to find and extract it, returning the yield arg (future node).
 // Also replaces the found return+stateAssign with empty stmts to prevent duplicate emission.
 function extractYieldArgDeep(stmts: Node[]): Node {
+	return locateYieldArg(stmts, true);
+}
+
+// The yield argument a state hands to the dispatcher; `remove` also deletes its
+// return and the state assign before it.
+function locateYieldArg(stmts: Node[], remove: boolean): Node {
 	for (let i = stmts.length - 1; i >= 0; i -= 1) {
 		const s = stmts[i];
 		if (s.kind == NodeKind.ReturnStmt) {
@@ -211,8 +269,8 @@ function extractYieldArgDeep(stmts: Node[]): Node {
 				if (od.properties.length > 0) {
 					const yieldArg = od.properties[0];
 					// Remove return + preceding state assign
-					if (i > 0) { stmts.splice(i - 1, 2); }
-					else { stmts.splice(i, 1); }
+					if (remove && i > 0) { stmts.splice(i - 1, 2); }
+					else if (remove) { stmts.splice(i, 1); }
 					return yieldArg;
 				}
 			}
@@ -220,17 +278,17 @@ function extractYieldArgDeep(stmts: Node[]): Node {
 		// Recurse into blocks
 		if (s.kind == NodeKind.BlockStmt) {
 			const bd = s.data as BlockStmtData;
-			const found = extractYieldArgDeep(bd.statements);
+			const found = locateYieldArg(bd.statements, remove);
 			if (found != null) return found;
 		}
 		if (s.kind == NodeKind.IfStmt) {
 			const id = s.data as IfStmtData;
 			if (id.consequent != null && id.consequent.kind == NodeKind.BlockStmt) {
-				const found = extractYieldArgDeep((id.consequent.data as BlockStmtData).statements);
+				const found = locateYieldArg((id.consequent.data as BlockStmtData).statements, remove);
 				if (found != null) return found;
 			}
 			if (id.alternate != null && id.alternate.kind == NodeKind.BlockStmt) {
-				const found = extractYieldArgDeep((id.alternate.data as BlockStmtData).statements);
+				const found = locateYieldArg((id.alternate.data as BlockStmtData).statements, remove);
 				if (found != null) return found;
 			}
 		}
@@ -265,6 +323,13 @@ function yieldFutureSym(yfs: YieldFuture[], state: number): Symbol {
 function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promiseType: Type, closureType: Type, loc: SourceLocation): Node {
 	// Default (terminal) state: return null (stepper done)
 	let current: Node = makeBlock([makeReturn(makeNull(loc), loc)], loc);
+
+	// Which yields are their future's only reader (states are built last to
+	// first, so a resume state is built before the yield it resumes from).
+	const soleRead: boolean[] = [];
+	for (const item of sc.items) {
+		soleRead.push(item.isYield && isSoleFutureRead(locateYieldArg(item.stmts, false)));
+	}
 
 	// Build if-else chain from last state to first
 	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
@@ -318,10 +383,15 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 					readExpr = rawRead;
 				}
 			}
-			stateStmts.push(makeExprStmt(
-				makeAssign(makeTypedIdentResolved(varSym, varType, loc), readExpr, loc),
-				loc,
-			));
+			const takeStmt = makeExprStmt(makeAssign(makeTypedIdentResolved(varSym, varType, loc), readExpr, loc), loc);
+			if (soleRead[prevIdx] || !ownedInFuture(varType)) {
+				stateStmts.push(takeStmt);
+			} else {
+				const copyRead = makeFutureCopyRead(makeTypedIdentResolved(prevYfSym, prevYfType, loc), varType!, loc);
+				const copyStmt = makeExprStmt(makeAssign(makeTypedIdentResolved(varSym, varType, loc), copyRead, loc), loc);
+				const owns = makeOwnsValueCheck(makeTypedIdentResolved(prevYfSym, prevYfType, loc), loc);
+				stateStmts.push(makeIf(owns, makeBlock([copyStmt], loc), makeBlock([takeStmt], loc), loc));
+			}
 		}
 
 		if (state.isYield) {
@@ -546,6 +616,8 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	retFutDecl.nodeType = retFutType;
 	retFutDecl.resolvedSym = retFutSym;
 	outerStmts.push(retFutDecl);
+	const ownValue = makeOwnValueStmt(retFutSym, retFutType, fnReturnInner, ctx, loc);
+	if (ownValue != null) outerStmts.push(ownValue);
 
 	// let $state = 0;
 	const stateDecl = makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc);
@@ -709,7 +781,8 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tra
 	const catchBody = makeBlock([failCall, makeReturn(makeTypedIdentResolved(retFutSym, retFutType, loc), loc)], loc);
 	const tryCatch = makeTryCatch(makeBlock(tryStmts, loc), excSym, catchBody, makeBlock([], loc), loc);
 
-	return makeBlock([retFutDecl, tryCatch], loc);
+	const ownValue = makeOwnValueStmt(retFutSym, retFutType, fnReturnInner, ctx, loc);
+	return makeBlock(ownValue != null ? [retFutDecl, ownValue, tryCatch] : [retFutDecl, tryCatch], loc);
 }
 
 // ===== Walk: Find was-async functions and rewrite =====

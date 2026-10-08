@@ -20,7 +20,7 @@ import { walkNode } from "../walker";
 import {
 	makeTypedIdentResolved, makeCall, makeString, makeNumber, makeMember, makeConditional,
 	makeObjectLiteral, makeBool, makeHiddenStdConv, enumToStringSym,
-	makeHiddenAddr, runtimeRef,
+	makeHiddenAddr, runtimeRef, takeValueShareFns,
 } from "../util";
 import { rewriteEcho, buildStructToString, buildUnionText, resetStructDumpFns, takeStructDumpFns } from "./debugLower";
 import { isSlotUnion } from "../../checker/fit";
@@ -52,6 +52,7 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 		return node;
 	});
 	const dumpFns = takeStructDumpFns();
+	for (const decl of takeValueShareFns()) dumpFns.push(decl);
 	if (dumpFns.length > 0 && result.kind == NodeKind.Program) {
 		const pd = result.data as ProgramData;
 		for (const decl of dumpFns) { pd.programStmts.push(decl); }

@@ -730,11 +730,10 @@ export macro accounts(): Node {
 						error("accounts<" + decl.interfaceName + ">(): @seeds on field '" + self +
 							"' gives no program address for the programId of build.ms", seeded);
 					}
-					const address = found.value.key.bytes;
 					const words: Node[] = [key];
 					for (let w = 0; w < 4; w += 1) {
 						let word: uint64 = 0;
-						for (let b = 7; b >= 0; b -= 1) { word = (word << 8) | (address[w * 8 + b] as uint64); }
+						for (let b = 7; b >= 0; b -= 1) { word = (word << 8) | (found.value.key.bytes[w * 8 + b] as uint64); }
 						words.push({
 							kind: NodeKind.NumberLiteral,
 							line: seeded.line,

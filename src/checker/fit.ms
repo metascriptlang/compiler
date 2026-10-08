@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { TypeRelation, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, unionOrderHint, isStructIntoPtr, isStructIntoRef, isRefIntoValue, needsStdConv, nonNullMemberOfNullable, sameType, isAnonLiteralName } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, isGeneratorFlags, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion } from "./types";
+import { peelTransparentInstance, literalBase, classAncestorInstance, errorType, createIterator, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, duVariantIndexOfType, maybePayloadWidenSlot, variantIndexInUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, runtimeClassSym, objectConversion, ObjConv, isResult, enumOrdinalBounds, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral } from "./types";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
 import { constantLiteralOf, isUntypedConstant, isUntypedIntegerConstant, exactUntypedInteger, integerValueOf, integerValueFits, typedIntegerLiteral } from "./constFold";
@@ -1456,7 +1456,7 @@ function structuralMemberIndex(formal: Type, exprType: Type): int32 {
 	return found;
 }
 
-function unionSlotOf(formal: Type, exprType: Type): int32 {
+export function unionSlotOf(formal: Type, exprType: Type): int32 {
 	const vi = variantIndexInUnion(formal, unwrapRef(exprType));
 	return vi >= 0 ? vi : structuralMemberIndex(formal, exprType);
 }
@@ -1561,6 +1561,186 @@ export function isSlotUnion(t: Type): boolean {
 		if (child.kind != TypeKind.StringLiteral) allStrLit = false;
 	}
 	return !allStrLit;
+}
+
+export function convertsBetweenUnions(source: Type | null, target: Type | null): boolean {
+	if (source == null || target == null || source.kind != TypeKind.Union || target.kind != TypeKind.Union) return false;
+	if (hasGenericParams(source) || hasGenericParams(target)) return false;
+	return isSlotUnion(source) && isSlotUnion(target) && !sameType(source, target);
+}
+
+function unionMembers(t: Type): Type[] {
+	return t.kind == TypeKind.Union && t.typeChildren != null ? t.typeChildren : [t];
+}
+
+function isClassRef(t: Type): boolean {
+	return t.kind == TypeKind.Ref && runtimeClassSym(t.typeReturn) != null;
+}
+
+function exactMemberSlot(target: Type, member: Type): int32 {
+	let found: int32 = -1;
+	let widened: int32 = -1;
+	const members = unionMembers(target);
+	for (let ti: int32 = 0; ti < members.length; ti += 1) {
+		const child = members[ti];
+		if (sameType(child, member)) {
+			if (found >= 0) return -1;
+			found = ti;
+		} else if ((member.kind == TypeKind.StringLiteral && child.kind == TypeKind.String)
+			|| (isClassRef(member) && isClassRef(child) && derivesFrom(member, child))) {
+			widened = widened == -1 ? ti : -2;
+		}
+	}
+	if (found >= 0) return found;
+	if (widened >= 0) return widened;
+	return numericWideningSlot(target, member);
+}
+
+function numericWideningSlot(target: Type, member: Type): int32 {
+	if (!isNumeric(member)) return -1;
+	const members = unionMembers(target);
+	const reached = numericMembersReached(member, members);
+	if (reached.length != 1) return -1;
+	for (let ti: int32 = 0; ti < members.length; ti += 1) {
+		if (members[ti] == reached[0]) return ti;
+	}
+	return -1;
+}
+
+export function booleanLiteralSlots(target: Type, member: Type): int32[] {
+	const slots: int32[] = [];
+	if (peelTransparentInstance(member).kind != TypeKind.Boolean) return slots;
+	const members = unionMembers(target);
+	for (let ti: int32 = 0; ti < members.length; ti += 1) {
+		if (members[ti].kind == TypeKind.BooleanLiteral) slots.push(ti);
+	}
+	return slots;
+}
+
+function numericMemberRefusal(member: Type, target: Type): string {
+	if (!isNumeric(member)) return "";
+	const reached = numericMembersReached(member, unionMembers(target));
+	if (reached.length > 1) return `'${typeDisplayName(member)}' widens to both '${typeDisplayName(reached[0])}' and '${typeDisplayName(reached[1])}'; convert it on its own before the union`;
+	for (const t of unionMembers(target)) {
+		if (isNumeric(t) && numericConvRefuses(member, t)) return `'${typeDisplayName(member)}' to '${typeDisplayName(t)}' ${numericRefusalReason(member, t)}; convert it on its own before the union`;
+	}
+	return "";
+}
+
+export function unionMemberSlots(source: Type, target: Type): int32[] {
+	const slots: int32[] = [];
+	for (const member of source.typeChildren) slots.push(exactMemberSlot(target, member));
+	return slots;
+}
+
+function membersComparable(a: Type, b: Type): boolean {
+	return sameType(a, b) || sameType(literalBase(a), b) || sameType(a, literalBase(b)) || isAssignable(a, b) || isAssignable(b, a);
+}
+
+export function unionsOverlap(source: Type, target: Type): boolean {
+	for (const a of unionMembers(source)) {
+		for (const b of unionMembers(target)) {
+			if (membersComparable(a, b)) return true;
+		}
+	}
+	return false;
+}
+
+export function heldInTarget(source: Type, target: Type): boolean {
+	const slots = unionMemberSlots(source, target);
+	for (let i = 0; i < slots.length; i += 1) {
+		if (slots[i] >= 0 || booleanLiteralSlots(target, source.typeChildren[i]).length > 0) return true;
+	}
+	return false;
+}
+
+export function numericUnionRefusal(source: Type | null, target: Type | null): string {
+	if (!convertsBetweenUnions(source, target)) return "";
+	const slots = unionMemberSlots(source!, target!);
+	for (let i = 0; i < slots.length; i += 1) {
+		if (slots[i] >= 0) continue;
+		const refusal = numericMemberRefusal(source!.typeChildren[i], target!);
+		if (refusal != "") return " — " + refusal;
+	}
+	return "";
+}
+
+export function unionConversionRefusal(source: Type, target: Type, implicit: boolean): string {
+	const slots = unionMemberSlots(source, target);
+	let held = 0;
+	for (let i = 0; i < slots.length; i += 1) {
+		if (slots[i] >= 0) { held += 1; continue; }
+		const member = source.typeChildren[i];
+		if (!implicit && booleanLiteralSlots(target, member).length > 0) { held += 1; continue; }
+		const numeric = numericMemberRefusal(member, target);
+		if (numeric != "") return numeric;
+		for (const t of unionMembers(target)) {
+			if (isAssignable(member, t)) return `'${typeDisplayName(member)}' converts to '${typeDisplayName(t)}', not as a member of the same type; convert it on its own before the union`;
+		}
+		if (implicit) return `'${typeDisplayName(member)}' is not a member of '${typeDisplayName(target)}'`;
+	}
+	return held == 0 ? `no member of '${typeDisplayName(source)}' is a member of '${typeDisplayName(target)}'` : "";
+}
+
+export function nullableUnionPayloads(source: Type | null, target: Type | null): Type[] | null {
+	if (!isMaybeType(source) || !isMaybeType(target)) return null;
+	const from = source!.typeReturn;
+	const to = target!.typeReturn;
+	return convertsBetweenUnions(from, to) ? [from!, to!] : null;
+}
+
+export function convertsUnionImplicitly(source: Type | null, target: Type | null): boolean {
+	const payloads = nullableUnionPayloads(source, target);
+	if (payloads != null) return unionConversionRefusal(payloads[0], payloads[1], true) == "";
+	return convertsBetweenUnions(source, target) && unionConversionRefusal(source!, target!, true) == "";
+}
+
+export function fitUnionIntoUnion(expr: Node, exprType: Type, formal: Type): Node | null {
+	const storedRead = convertStoredUnionRead(expr, exprType, formal);
+	if (storedRead != null) return storedRead;
+	if (convertsUnionImplicitly(exprType, formal)) return convertUnionToUnion(expr, exprType, formal);
+	if (!isMaybeType(formal) || formal.typeReturn == null || exprType.kind != TypeKind.Union) return null;
+	const payload = formal.typeReturn;
+	const converted = convertStoredUnionRead(expr, exprType, payload) ?? (convertsUnionImplicitly(exprType, payload) ? convertUnionToUnion(expr, exprType, payload) : null);
+	return converted != null ? synthMaybeWrap(converted, formal, payload) : null;
+}
+
+export function convertStoredUnionRead(expr: Node, exprType: Type, formal: Type): Node | null {
+	if (exprType.kind != TypeKind.Union || !isSlotUnion(exprType)) return null;
+	const declared = declaredTagUnionOf(expr);
+	if (declared == null || sameType(declared, exprType) || !convertsBetweenUnions(declared, formal)) return null;
+	if (!sameType(exprType, formal) && unionConversionRefusal(exprType, formal, true) != "") return null;
+	return convertUnionToUnion(expr, exprType, formal);
+}
+
+export function convertUnionToUnion(expr: Node, source: Type, target: Type): Node {
+	const declared = declaredTagUnionOf(expr);
+	if (declared != null && sameType(declared, target)) {
+		expr.nodeType = target;
+		return expr;
+	}
+	if (declared != null) expr.nodeType = declared;
+	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: expr, convType: target }, createToken(TokenKind.Ident, "", expr.location.line));
+	convNode.nodeType = target;
+	convNode.flags = convNode.flags.incl(NodeFlag.Sem);
+	if (target.kind != TypeKind.Union) convNode.flags = convNode.flags.incl(NodeFlag.ConvCheck);
+	return convNode;
+}
+
+function hasSharedDiscriminant(t: Type): boolean {
+	return findSharedStringDiscriminant(t) != "" || findSharedBooleanDiscriminant(t) != "" || findSharedEnumDiscriminant(t) != "";
+}
+
+export function storesUnionTag(t: Type): boolean {
+	if (!isSlotUnion(t) || isDiscriminatedUnion(t) || hasSharedDiscriminant(t)) return false;
+	const seen: string[] = [];
+	for (const m of t.typeChildren) {
+		const kind = jsMemberKind(m);
+		if (kind == "class") continue;
+		if (seen.indexOf(kind) >= 0) return true;
+		seen.push(kind);
+	}
+	return false;
 }
 
 function flatUnionTakesNull(t: Type): boolean {
@@ -1783,6 +1963,31 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 	return wrapInConv(expr, formal);
 }
 
+function isPathRootedInVariable(node: Node): boolean {
+	let n = node;
+	while (n.kind != NodeKind.Identifier) {
+		if (n.kind == NodeKind.MemberExpr) n = (n.data as MemberExprData).object;
+		else if (n.kind == NodeKind.ArrayAccess) n = (n.data as ArrayAccessData).array;
+		else if (n.kind == NodeKind.HiddenDeref) n = (n.data as { expr: Node }).expr;
+		else return false;
+	}
+	return n.resolvedSym != null;
+}
+
+// A Borrow<T> local holds the address of its initializer, so the initializer must be a
+// variable, or a field or element reached from one.
+export function fitViewLocal(ctx: CheckerContext, init: Node, declType: Type): Node {
+	const view = peelTransparentInstance(declType);
+	if (view.kind != TypeKind.Borrow || init.nodeType == null || init.nodeType.kind == TypeKind.Error) return init;
+	if (!isPathRootedInVariable(init)) {
+		addError(ctx, "cannot borrow from this expression: a " + typeDisplayName(declType)
+			+ " local holds the address of a variable, or of a field or element reached from one; bind the value to a local first",
+			init.location.line, init.location.column);
+		return init;
+	}
+	return wrapInConv(init, declType);
+}
+
 export function convertIntoUnknown(expr: Node, exprType: Type | null, formal: Type): Node {
 	const slot = skipModifier(formal) ?? formal;
 	const slotHeld = slot.kind == TypeKind.Union ? unwrapRefNullUnion(slot) : slot;
@@ -1860,6 +2065,8 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	// them. Skip when expr is already Maybe-typed (passthrough like
 	// `return otherMaybeFn()`).
 	if (isMaybeType(formal) && formal.typeReturn != null && !isMaybeType(exprType)) {
+		const unionFit = fitUnionIntoUnion(expr, exprType, formal);
+		if (unionFit != null) return unionFit;
 		if (isNominalMismatch(exprType, formal)) {
 			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal.typeReturn) + " | null'", expr.location.line, expr.location.column);
 			return expr;
@@ -1892,6 +2099,13 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	if (formal.kind != TypeKind.Union && exprType.kind != TypeKind.Union) {
 		const projected = narrowUnionToVariant(expr, exprType);
 		if (projected != null as unknown as Node) return projected;
+	}
+	const unionFit = fitUnionIntoUnion(expr, exprType, formal);
+	if (unionFit != null) return unionFit;
+	const numericRefusal = numericUnionRefusal(exprType, formal);
+	if (numericRefusal != "") {
+		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + numericRefusal, expr.location.line, expr.location.column);
+		return expr;
 	}
 	if (isNominalMismatch(exprType, formal)) {
 		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'", expr.location.line, expr.location.column);
@@ -2119,10 +2333,14 @@ export function fitNumericIntoUnion(ctx: CheckerContext, expr: Node, exprType: T
 }
 
 function implicitNumericMembers(exprType: Type, formal: Type): Type[] {
+	return formal.typeChildren == null ? [] as Type[] : numericMembersReached(exprType, formal.typeChildren);
+}
+
+function numericMembersReached(exprType: Type, candidates: Type[]): Type[] {
 	const members: Type[] = [];
-	if (!isNumeric(exprType) || formal.typeChildren == null) return members;
+	if (!isNumeric(exprType)) return members;
 	let best = TypeRelation.None;
-	for (const member of formal.typeChildren) {
+	for (const member of candidates) {
 		if (member == null || !isNumeric(member) || numericConvRefuses(exprType, member)) continue;
 		const rel = typeRelation(member, exprType);
 		if (rel == TypeRelation.None || (rel as number) < (best as number)) continue;
@@ -2258,4 +2476,26 @@ export function settleYields(ctx: CheckerContext, name: string, at: SourceLocati
 	}
 	ctx.inferredReturnStmts = [];
 	return createIterator(elem);
+}
+
+test "a union of two structs stores its tag" {
+	const p = createStruct("P", ["a"], [int32Type()], false);
+	const q = createStruct("Q", ["b"], [int32Type()], false);
+	assert storesUnionTag(createUnion([p, q]));
+}
+
+test "a union of two numbers stores its tag" {
+	assert storesUnionTag(createUnion([int32Type(), float64Type()]));
+}
+
+test "a union with a shared literal discriminant keeps no tag" {
+	const a = createStruct("A", ["kind"], [createStringLiteral("a")], false);
+	const b = createStruct("B", ["kind"], [createStringLiteral("b")], false);
+	assert !storesUnionTag(createUnion([a, b]));
+}
+
+test "a union whose members the value names keeps no tag" {
+	assert !storesUnionTag(createUnion([numberType(), stringType()]));
+	const p = createStruct("P", ["a"], [int32Type()], false);
+	assert !storesUnionTag(createUnion([p, stringType()]));
 }

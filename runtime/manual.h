@@ -535,6 +535,11 @@ _Noreturn static inline void msRaiseSliceError(int64_t start, int64_t end, int64
     __builtin_trap();
 }
 
+_Noreturn static inline void msRaiseUnreachable(const char* text) {
+    (void)text;
+    __builtin_trap();
+}
+
 _Noreturn static inline void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
     (void)val; (void)lo; (void)hi;
     __builtin_trap();
@@ -590,6 +595,18 @@ static inline int64_t msSliceLen(int64_t start, int64_t end, int64_t len) {
     __typeof__(u) __vv = (u); \
     if ((int64_t)__vv._tag != (int64_t)(slot)) __builtin_trap(); \
     __vv; \
+})
+
+#define msMaybeAccess(m, head, labels) (*({ \
+    __typeof__(m)* __pm = &(m); \
+    if (!__pm->present) __builtin_trap(); \
+    __pm; \
+}))
+
+#define msMaybeAccessVal(m, head, labels) ({ \
+    __typeof__(m) __mv = (m); \
+    if (!__mv.present) __builtin_trap(); \
+    __mv; \
 })
 
 /* ===== Range-Checked Integer Casts ===== */
@@ -674,6 +691,7 @@ typedef struct msFutureBase {
     bool crossThreadPublished;
     void* error;
     void (*valueDestructor)(void*);
+    void (*valueDrop)(void*);
     msFutureCb* callbacks;
     msFutureCb* cbTail;
     bool errorObserved;

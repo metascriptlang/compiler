@@ -96,10 +96,7 @@ function createFlowSwitchClause(antecedent: FlowNode, switchStmt: Node, clauseSt
 	if (antecedent == null) return antecedent;
 	const f = createFlowNode(FlowFlag.SwitchClause);
 	f.antecedent = antecedent;
-	const data = new FlowSwitchClauseData();
-	data.switchStatement = switchStmt;
-	data.clauseStart = clauseStart;
-	data.clauseEnd = clauseEnd;
+	const data: FlowSwitchClauseData = { switchStatement: switchStmt, clauseStart, clauseEnd };
 	f.switchClauseData = data;
 	setFlowNodeReferenced(antecedent);
 	return f;
@@ -115,9 +112,7 @@ function addAntecedent(label: FlowNode | null, ante: FlowNode | null): void {
 		if (cur.flow == ante) return;
 		cur = cur.next;
 	}
-	const link = new FlowList();
-	link.flow = ante;
-	link.next = label.antecedents;
+	const link: FlowList = { flow: ante, next: label.antecedents };
 	label.antecedents = link;
 	setFlowNodeReferenced(ante);
 }
@@ -159,14 +154,15 @@ export class BinderState {
 }
 
 function createBinderState(): BinderState {
-	const s = new BinderState();
-	s.unreachableFlow = createUnreachableFlow();
-	s.currentFlow = s.unreachableFlow;
-	s.currentBreakTarget = null;
-	s.currentContinueTarget = null;
-	s.currentReturnTarget = null;
-	s.currentExceptionTarget = null;
-	return s;
+	const unreachable = createUnreachableFlow();
+	return {
+		currentFlow: unreachable,
+		currentBreakTarget: null,
+		currentContinueTarget: null,
+		currentReturnTarget: null,
+		currentExceptionTarget: null,
+		unreachableFlow: unreachable,
+	};
 }
 
 // ===== Entry Point =====
