@@ -13,7 +13,7 @@ import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBloc
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
 import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
-import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
+import { adoptLiteralArms, adoptLiteralTo, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint, fitUnionIntoUnion, numericUnionRefusal } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState, requiresInit } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
@@ -1002,6 +1002,7 @@ export function checkTryExpr(ctx: CheckerContext, node: Node): Type | null {
 	if (argType != null && isResult(argType) && getResultOkType(argType) != null) {
 		const okT = getResultOkType(argType);
 		if (d.hasCatch && d.catchVal != null && okT != null && okT.kind != TypeKind.Void && d.catchVal.nodeType != null) {
+			if (isNumeric(okT)) adoptLiteralTo(ctx, d.catchVal, okT);
 			const joined = joinBranchTypes([okT, d.catchVal.nodeType]);
 			if (!isUnresolvedType(joined)) {
 				d.catchVal = fitJoinedBranch(ctx, d.catchVal, joined);
@@ -3392,6 +3393,18 @@ function isValueCallee(callee: Node): boolean {
 // Reference (semIndirectOp, semexprs.nim): a value is called only through a
 // procedure type; every other type in call position is refused. A type not
 // known yet is left to the code that settles it.
+// The node whose value a match arm yields: its expression, or the argument of
+// the return that ends its block.
+function matchArmValue(cd: MatchCaseData, asStatement: boolean): Node {
+	const none = null as unknown as Node;
+	if (cd.caseBody.kind != NodeKind.BlockStmt) return cd.caseBody;
+	if (asStatement) return none;
+	const bd = cd.caseBody.data as BlockStmtData;
+	if (bd.statements.length == 0) return none;
+	const last = bd.statements[bd.statements.length - 1];
+	return last.kind == NodeKind.ReturnStmt ? (last.data as ReturnStmtData).argument ?? none : none;
+}
+
 function unionHasFunction(t: Type): boolean {
 	for (const m of t.typeChildren) {
 		if (m.kind == TypeKind.Function) return true;
@@ -5014,6 +5027,12 @@ export function checkMatchExpr(ctx: CheckerContext, node: Node, expectedType: Ty
 		}
 	}
 	let matchJoined: Type | null = null;
+	const armValues: Node[] = [];
+	for (const c of d.matchCases) armValues.push(matchArmValue(c.data as MatchCaseData, asStatement));
+	adoptLiteralArms(ctx, armValues);
+	for (let ai = 0; ai < armValues.length && ai < branchBodyTypes.length; ai += 1) {
+		if (armValues[ai] != null && armValues[ai].nodeType != null) branchBodyTypes[ai] = armValues[ai].nodeType;
+	}
 	const joined = joinBranchTypes(branchBodyTypes);
 	if (!isUnresolvedType(joined)) { matchJoined = joined; returnType = joined; }
 	for (const c of d.matchCases) {
