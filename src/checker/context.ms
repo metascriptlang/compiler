@@ -578,6 +578,34 @@ export function resolveOperatorCall(table: SymbolTable, registry: ExtensionRegis
 	return best != null && builtinOperatorBeats(best, methodName, argTypes) ? null as unknown as ExtensionMethod : best;
 }
 
+// The parameter type every declared operator agrees on for one operand, given
+// the other's type — the slot a context-sensitive operand (an object literal)
+// is checked against, as a call checks such an argument against its winner.
+export function operatorOperandSlot(table: SymbolTable, registry: ExtensionRegistry, methodName: string, other: Type | null, otherIdx: int32): Type | null {
+	if (other == null) return null;
+	const cands: ExtensionMethod[] = [];
+	if (registry != null) {
+		for (const e of findAllExtensionsByName(registry, methodName)) cands.push(e);
+	}
+	if (table != null) {
+		const sym = lookupSymbol(table, methodName);
+		if (sym != null) {
+			addPlainOperatorCandidate(cands, sym);
+			for (const o of sym.overloads) addPlainOperatorCandidate(cands, o);
+		}
+	}
+	let slot: Type | null = null;
+	for (const c of cands) {
+		const ft = getExtFnType(c);
+		if (ft == null || ft.kind != TypeKind.Function || ft.typeChildren.length != 2) continue;
+		if (!isAssignable(other, ft.typeChildren[otherIdx])) continue;
+		const mine = ft.typeChildren[1 - otherIdx];
+		if (slot == null) slot = mine;
+		else if (!sameType(slot, mine)) return null;
+	}
+	return slot;
+}
+
 function isNumberOperator(name: string): boolean {
 	return match (name) {
 		"+" | "-" | "*" | "/" | "%" | "**" | "&" | "|" | "^" | "~" | "<<" | ">>" | ">>>"

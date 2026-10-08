@@ -7,7 +7,7 @@ import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { peelTransparentInstance, literalBase, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duVariantIndexOfType, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, getResultErrType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, peelThrough, PEEL_ALL, isValuePointee, classParentOf } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, getCtorParamTypes, classDeclNodeOf, parentClassSymOf, lookupCtorDefaults, isVisibleSymbol } from "./symbol";
-import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, findExtension, findAccessor } from "./context";
+import { markUsedIn, operatorOperandSlot, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, findExtension, findAccessor } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates,
@@ -758,9 +758,14 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			if (isAsgn) {
 				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
 			}
+			let rightPrechecked = false;
 			if (isAsgn && d.left.kind == NodeKind.ArrayLiteral) {
 				if (d.operator != "=") addError(ctx, "a destructuring pattern can only be assigned with '='", d.left.location.line, d.left.location.column);
 				checkAssignTarget(ctx, d.left);
+			} else if (!isAsgn && d.left.kind == NodeKind.ObjectLiteral && d.right.kind != NodeKind.ObjectLiteral && ctx.extensionRegistry != null) {
+				checkExpr(ctx, d.right, wideOperandLiteralSlot(d.right));
+				rightPrechecked = true;
+				checkExpr(ctx, d.left, operatorOperandSlot(ctx.table, ctx.extensionRegistry, d.operator, d.right.nodeType, 1));
 			} else {
 				checkExpr(ctx, d.left, wideOperandLiteralSlot(d.left));
 			}
@@ -797,7 +802,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 			const rhsGuarded = d.operator == "&&" || d.operator == "||" || d.operator == "??";
 			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth + 1;
 			if (d.operator == "instanceof") checkInTypeSlot(ctx, d.right);
-			else checkExpr(ctx, d.right, rightExpected);
+			else if (!rightPrechecked) checkExpr(ctx, d.right, !isAsgn && d.right.kind == NodeKind.ObjectLiteral && ctx.extensionRegistry != null && !rhsGuarded
+				? operatorOperandSlot(ctx.table, ctx.extensionRegistry, d.operator, leftType, 0) ?? rightExpected
+				: rightExpected);
 			if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth - 1;
 			let rightType = d.right.nodeType;
 			if (!isAsgn && d.operator != "??") {
@@ -2489,6 +2496,8 @@ function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expecte
 	}
 	retypeEmptyArrayBranch(d.ternaryConsequent, d.ternaryAlternate.nodeType);
 	retypeEmptyArrayBranch(d.ternaryAlternate, d.ternaryConsequent.nodeType);
+	adoptLiteralArm(ctx, d.ternaryConsequent, d.ternaryAlternate.nodeType);
+	adoptLiteralArm(ctx, d.ternaryAlternate, d.ternaryConsequent.nodeType);
 	const branchTypes: Type[] = [];
 	if (d.ternaryConsequent.nodeType != null) { branchTypes.push(d.ternaryConsequent.nodeType); }
 	if (d.ternaryAlternate.nodeType != null) { branchTypes.push(d.ternaryAlternate.nodeType); }
@@ -2497,6 +2506,18 @@ function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expecte
 	d.ternaryConsequent = fitJoinedBranch(ctx, d.ternaryConsequent, joined);
 	d.ternaryAlternate = fitJoinedBranch(ctx, d.ternaryAlternate, joined);
 	return joined;
+}
+
+// A literal arm beside a typed numeric arm takes that type, as a literal
+// operand does beside a typed operand (CK-135); the join then keeps it.
+function adoptLiteralArm(ctx: CheckerContext, arm: Node, other: Type | null): void {
+	if (other == null || arm.kind != NodeKind.NumberLiteral) return;
+	if (isIntegerType(other) && isNodeIntLit(arm) && literalFitsInType(arm, other, false)) {
+		arm.nodeType = other;
+	} else if (other.kind == TypeKind.Float32 && literalAdoptsFloat32(arm)) {
+		reportFloat32LiteralRange(ctx, arm);
+		arm.nodeType = other;
+	}
 }
 
 function fitArm(ctx: CheckerContext, arm: Node, expectedType: Type, converting: boolean): Node {
