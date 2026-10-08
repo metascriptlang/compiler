@@ -1428,6 +1428,27 @@ function rebindRedeclaredParams(body: Node, params: string[]): void {
 	forEachChild(body, (child: Node): void => { rebindRedeclaredParams(child, params); });
 }
 
+let _gensymSuffix = "";
+
+export function valueToExpansion(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation, gensymSuffix: string): Node {
+	const outer = _gensymSuffix;
+	_gensymSuffix = gensymSuffix;
+	const node = valueToNode(val, objHeap, arrHeap, fallbackLoc);
+	_gensymSuffix = outer;
+	return node;
+}
+
+function gensymName(objHeap: RaiserObjectHeap, h: int64, name: string): string {
+	return name != "" && readBool(objHeap, h, "gensym") ? name + _gensymSuffix : name;
+}
+
+function gensymNames(objHeap: RaiserObjectHeap, h: int64, names: string[]): string[] {
+	if (!readBool(objHeap, h, "gensym")) return names;
+	const out: string[] = [];
+	for (const nm of names) out.push(nm + _gensymSuffix);
+	return out;
+}
+
 export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
 	return match (val.kind) {
 		RaiserValueKind.Int => mkInt(val.intVal, fallbackLoc),
@@ -1574,7 +1595,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 
 		// === Identifier ===
 		NodeKind.Identifier => {
-			const n = createNodeAt(NodeKind.Identifier, { name: readStr(objHeap, h, "name") }, loc);
+			const n = createNodeAt(NodeKind.Identifier, { name: gensymName(objHeap, h, readStr(objHeap, h, "name")) }, loc);
 			const hv = heapObjectGetField(objHeap, h, "symHandle");
 			if (hv.kind == RaiserValueKind.Int && hv.intVal >= 0 && hv.intVal < _boundSyms.length) {
 				n.resolvedSym = _boundSyms[hv.intVal];
@@ -1642,7 +1663,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 
 		// === Function expressions ===
 		NodeKind.ArrowFunction => {
-			const arrowParams = readStrs(objHeap, arrHeap, h, "arrowParams");
+			const arrowParams = gensymNames(objHeap, h, readStrs(objHeap, arrHeap, h, "arrowParams"));
 			const arrowParamTypes = readStrs(objHeap, arrHeap, h, "arrowParamTypes");
 			const arrowBody = readNode(objHeap, arrHeap, h, "arrowBody", loc);
 			const arrowFlags = readStr(objHeap, h, "arrowFlags");
@@ -1663,7 +1684,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			}, loc);
 		},
 		NodeKind.FunctionExpr => {
-			const funcExprParams = readStrs(objHeap, arrHeap, h, "funcExprParams");
+			const funcExprParams = gensymNames(objHeap, h, readStrs(objHeap, arrHeap, h, "funcExprParams"));
 			const funcExprParamTypes = readStrs(objHeap, arrHeap, h, "funcExprParamTypes");
 			const funcExprBody = readNode(objHeap, arrHeap, h, "funcExprBody", loc);
 			const funcExprFlags = readStr(objHeap, h, "funcExprFlags");
@@ -1800,7 +1821,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.BlockStmt, { statements }, loc);
 		},
 		NodeKind.VariableDecl => {
-			const declName = readStr(objHeap, h, "declName");
+			const declName = gensymName(objHeap, h, readStr(objHeap, h, "declName"));
 			const declType = readStr(objHeap, h, "declType");
 			const initializer = readNode(objHeap, arrHeap, h, "initializer", loc);
 			const declKind = readInt(objHeap, h, "declKind") as DeclKind;
@@ -1835,7 +1856,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			return createNodeAt(NodeKind.ForStmt, { forInit, forCondition, forUpdate, forBody, forLabel: "" }, loc);
 		},
 		NodeKind.ForOfStmt => {
-			const forOfBinding = readStr(objHeap, h, "forOfBinding");
+			const forOfBinding = gensymName(objHeap, h, readStr(objHeap, h, "forOfBinding"));
 			const forOfIsConst = readBool(objHeap, h, "forOfIsConst");
 			const forOfIterable = readNode(objHeap, arrHeap, h, "forOfIterable", loc);
 			const forOfBody = readNode(objHeap, arrHeap, h, "forOfBody", loc);
@@ -1845,7 +1866,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			}, loc);
 		},
 		NodeKind.ForInStmt => {
-			const forInBinding = readStr(objHeap, h, "forInBinding");
+			const forInBinding = gensymName(objHeap, h, readStr(objHeap, h, "forInBinding"));
 			const forInIsConst = readBool(objHeap, h, "forInIsConst");
 			const forInObject = readNode(objHeap, arrHeap, h, "forInObject", loc);
 			const forInBody = readNode(objHeap, arrHeap, h, "forInBody", loc);
@@ -1878,7 +1899,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		},
 		NodeKind.TryCatchStmt => {
 			const tryBody = readNode(objHeap, arrHeap, h, "tryBody", loc);
-			const catchName = readStr(objHeap, h, "catchName");
+			const catchName = gensymName(objHeap, h, readStr(objHeap, h, "catchName"));
 			const catchBody = readNode(objHeap, arrHeap, h, "catchBody", loc);
 			const finallyBody = readNode(objHeap, arrHeap, h, "finallyBody", loc);
 			return createNodeAt(NodeKind.TryCatchStmt, {
@@ -1891,7 +1912,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		// === Declarations ===
 		NodeKind.FunctionDecl => {
 			const fnName = readStr(objHeap, h, "fnName");
-			const params = readStrs(objHeap, arrHeap, h, "params");
+			const params = gensymNames(objHeap, h, readStrs(objHeap, arrHeap, h, "params"));
 			const fnParamTypes = readStrs(objHeap, arrHeap, h, "fnParamTypes");
 			const fnBody = readNode(objHeap, arrHeap, h, "fnBody", loc);
 			const fnFlags = readStr(objHeap, h, "fnFlags");

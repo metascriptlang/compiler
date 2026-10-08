@@ -55,6 +55,8 @@ import {
 } from "../../ast/node";
 import { CheckerContext, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
+import { forEachChild } from "../../ast/visitor";
+import { nextQuoteGensymSuffix } from "../../checker/template";
 import { lookupModuleCtx } from "../../checker/instantiate";
 import { isUnresolvedType } from "../../checker/types";
 import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -69,7 +71,7 @@ import { RaiserContext } from "../../raiser/context";
 import { RaiserVM } from "../../raiser/vm";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
-import { valueToNode, takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType } from "./bridge";
+import { valueToExpansion, takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType } from "./bridge";
 import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
 import { addWarning } from "../../checker/context";
@@ -94,12 +96,95 @@ function isSpliceCall(node: Node | null): boolean {
 	return (cd.callee.data as IdentifierData).name == "splice" && cd.arguments.length == 1;
 }
 
+let _quoteGensym: HashSet<Node> = new HashSet<Node>();
+
+function withNames(scope: string[], names: string[]): string[] {
+	if (names.length == 0) return scope;
+	const out: string[] = [];
+	for (const s of scope) out.push(s);
+	for (const nm of names) { if (nm != "") out.push(nm); }
+	return out;
+}
+
+function withoutNames(scope: string[], names: string[]): string[] {
+	if (names.length == 0) return scope;
+	const out: string[] = [];
+	for (const s of scope) { if (!names.includes(s)) out.push(s); }
+	return out;
+}
+
+function patternNames(n: Node | null, out: string[]): void {
+	if (n == null) return;
+	if (n.kind == NodeKind.Identifier) { out.push((n.data as IdentifierData).name); return; }
+	forEachChild(n, (c: Node): void => { patternNames(c, out); });
+}
+
+function markQuoteChildren(n: Node, scope: string[]): void {
+	forEachChild(n, (c: Node): void => { markQuoteLocals(c, scope); });
+}
+
+function markQuoteLocals(n: Node | null, scope: string[]): void {
+	if (n == null || isSpliceCall(n)) return;
+	const k = n.kind;
+	if (k == NodeKind.Identifier) {
+		if (scope.includes((n.data as IdentifierData).name)) _quoteGensym.add(n);
+	} else if (k == NodeKind.BlockStmt) {
+		const declared: string[] = [];
+		const destructured: string[] = [];
+		for (const s of (n.data as BlockStmtData).statements) {
+			if (s.kind == NodeKind.VariableDecl) declared.push((s.data as VariableDeclData).declName);
+			else if (s.kind == NodeKind.DestructuringDecl) patternNames((s.data as DestructuringDeclData).destrPattern, destructured);
+		}
+		markQuoteChildren(n, withoutNames(withNames(scope, declared), destructured));
+	} else if (k == NodeKind.VariableDecl) {
+		_quoteGensym.add(n);
+		markQuoteChildren(n, scope);
+	} else if (k == NodeKind.ForStmt) {
+		const init = (n.data as ForStmtData).forInit;
+		const names: string[] = init != null && init.kind == NodeKind.VariableDecl ? [(init.data as VariableDeclData).declName] : [];
+		markQuoteChildren(n, withNames(scope, names));
+	} else if (k == NodeKind.ForOfStmt) {
+		const d = n.data as ForOfStmtData;
+		if (d.forOfPattern != null) {
+			const bound: string[] = [];
+			patternNames(d.forOfPattern, bound);
+			markQuoteChildren(n, withoutNames(scope, bound));
+		} else {
+			_quoteGensym.add(n);
+			markQuoteChildren(n, withNames(scope, [d.forOfBinding]));
+		}
+	} else if (k == NodeKind.ForInStmt) {
+		_quoteGensym.add(n);
+		markQuoteChildren(n, withNames(scope, [(n.data as ForInStmtData).forInBinding]));
+	} else if (k == NodeKind.TryCatchStmt) {
+		const d = n.data as TryCatchStmtData;
+		if (d.catchName != "") _quoteGensym.add(n);
+		markQuoteLocals(d.tryBody, scope);
+		markQuoteLocals(d.catchBody, withNames(scope, [d.catchName]));
+		markQuoteLocals(d.finallyBody, scope);
+	} else if (k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr || k == NodeKind.FunctionDecl) {
+		const params = k == NodeKind.ArrowFunction ? (n.data as ArrowFunctionData).arrowParams
+			: k == NodeKind.FunctionExpr ? (n.data as FunctionExprData).funcExprParams
+			: (n.data as FunctionDeclData).params;
+		if (params.length > 0) _quoteGensym.add(n);
+		markQuoteChildren(n, withNames(scope, params));
+	} else if (k == NodeKind.MatchCase) {
+		const bound: string[] = [];
+		for (const p of (n.data as MatchCaseData).casePatterns) patternNames(p, bound);
+		markQuoteChildren(n, withoutNames(scope, bound));
+	} else {
+		markQuoteChildren(n, scope);
+	}
+}
+
 function lowerQuoteExpr(node: Node): Node {
 	const d = node.data as QuoteExprData;
 	const body = d.quoteBody;
 	if (body == null) return mkNull(node.location);
 	const loc = node.location;
 
+	_quoteGensym = new HashSet<Node>();
+	markQuoteLocals(body, []);
 	// Enable splice detection in nodeToASTLiteral
 	_quoteSpliceActive = true;
 
@@ -120,6 +205,7 @@ function lowerQuoteExpr(node: Node): Node {
 	}
 
 	_quoteSpliceActive = false;
+	_quoteGensym = new HashSet<Node>();
 	return result;
 }
 
@@ -150,6 +236,10 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 	values.push(mkNumber(node.location.line, loc));
 	keys.push("column");
 	values.push(mkNumber(node.location.column, loc));
+	if (_quoteSpliceActive && _quoteGensym.has(node)) {
+		keys.push("gensym");
+		values.push(mkBool(true, loc));
+	}
 	if (node.location.endLine > 0) {
 		keys.push("endLine");
 		values.push(mkNumber(node.location.endLine, loc));
@@ -1815,7 +1905,7 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 	}
 
 	// Deserialize result
-	const result = valueToNode(vmCtx.lastResult, vmCtx.objectHeap, vmCtx.arrayHeap, node.location);
+	const result = valueToExpansion(vmCtx.lastResult, vmCtx.objectHeap, vmCtx.arrayHeap, node.location, nextQuoteGensymSuffix());
 	for (const refusal of takeWireRefusals()) {
 		const at = refusal.location.line > 0 ? refusal.location : node.location;
 		addError(ctx, `Macro '${d.macroName}': ${refusal.message}`, at.line, at.column);
