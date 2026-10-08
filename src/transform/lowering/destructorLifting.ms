@@ -52,11 +52,20 @@ import { sizedArrayHookName } from "../../analyzer/classify";
 // (observed as `undefined symbol: _SymbolTypeInfo` link errors).
 let _globalHookOwners: NameSet = createNameSet();
 let _globalTypeInfoOwners: NameSet = createNameSet();
+let _jsProgramScope = false;
 
 export function setGlobalHookOwners(owners: NameSet): void {
 	_globalHookOwners = owners;
 	_globalTypeInfoOwners = createNameSet();
+	_jsProgramScope = false;
 	resetHookSyms();
+}
+
+// A JS bundle is one module scope, so its modules share the claim C makes over
+// one image; a split file sees only its own top level and keeps its own copy.
+export function setJsProgramScope(on: boolean): void {
+	_jsProgramScope = on;
+	_globalHookOwners = createNameSet();
 }
 
 export function hookOwnerMark(): int32 {
@@ -1860,12 +1869,10 @@ function generateEq(typeName: string, objType: Type, orig: Type, lctx: LiftCtx, 
 
 // ===== Ensure Eq (on-demand: only for struct/interface types actually compared) =====
 
-// C links every module into one image, so one module owns each Eq; a JS module
-// only sees its own top level, so each module that compares emits its own.
 function claimEq(key: string, lctx: LiftCtx): boolean {
 	if (nameSetContains(lctx.generated, key)) return false;
 	nameSetAdd(lctx.generated, key);
-	if (lctx.jsBackend) return true;
+	if (lctx.jsBackend && !_jsProgramScope) return true;
 	if (isGloballyOwned(key)) return false;
 	claimGlobal(key);
 	return true;
