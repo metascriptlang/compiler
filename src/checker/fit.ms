@@ -1494,7 +1494,7 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 	}
 	const valueType = unwrapRef(exprType);
 	const exactSlot = unionSlotOf(formal, exprType);
-	const vi = exactSlot >= 0 || !isClassRef(exprType) ? exactSlot : exactMemberSlot(formal, exprType);
+	const vi = exactSlot >= 0 || formal.kind != TypeKind.Union || !isClassRef(exprType) ? exactSlot : exactMemberSlot(formal, exprType);
 	if (vi < 0) return null as unknown as Node;
 	if (vi != exactSlot) expr = classUpcast(expr, formal.typeChildren[vi]);
 	if (valueType == exprType && formal.typeChildren[vi].kind == TypeKind.Ref) return null as unknown as Node;
