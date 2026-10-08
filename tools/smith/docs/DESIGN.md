@@ -144,7 +144,11 @@ bundle reran VOID, and the output named the missing key.
 
 Reductions: planted `smith1` 21,853 → 139 bytes; the real JS double-negation finding
 48,945 → 35 bytes (inbox `2026-10-08-js-double-negation-emits-decrement.md`); C `_envP`
-61,701 → 2,227 bytes, capped; C `dollarhoist_N_` 19,115 → 1,312 bytes, capped.
+61,701 → 2,227 bytes, capped, then cut by hand to 5 lines (inbox
+`2026-10-08-capture-free-lambda-links-child-env-to-missing-envP.md`); C `dollarhoist_N_`
+19,115 → 1,312 bytes (capped) → 890 bytes (fixpoint), then cut by hand to 10 lines (inbox
+`2026-10-08-ternary-hoist-lost-when-else-holds-a-nested-ternary.md`). For both C cases creduce
+stopped above 800 bytes. The last step to a clean repro was manual, guided by the emitted C.
 
 ### Debt — workarounds to repay
 
