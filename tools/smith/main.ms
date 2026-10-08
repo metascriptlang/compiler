@@ -5,7 +5,7 @@ import { rerunBundle, runSeeds } from "./drive";
 
 function usage(): int32 {
 	console.log("usage: msc run tools/smith/main.ms gen <seed> [--features=\"key=value ...\"] [--plant=none|backend|opt] [--swarm]");
-	console.log("       msc run tools/smith/main.ms run <firstSeed> <count> [--features=...] [--plant=...] [--swarm]");
+	console.log("       msc run tools/smith/main.ms run <firstSeed> <count> [--features=...] [--plant=...] [--swarm] [--san]");
 	console.log("       msc run tools/smith/main.ms rerun <bundleDir>");
 	return 2;
 }
@@ -32,6 +32,7 @@ function main(): int32 {
 	const positional: string[] = [];
 	let overlayText = "";
 	let swarmed = false;
+	let san = false;
 	for (let i = 1; i < argv.length; i++) {
 		const a = argv[i];
 		if (a.startsWith("--features=")) {
@@ -40,6 +41,8 @@ function main(): int32 {
 			overlayText += " plant=" + a.slice("--plant=".length, a.length);
 		} else if (a == "--swarm") {
 			swarmed = true;
+		} else if (a == "--san") {
+			san = true;
 		} else if (a.startsWith("--")) {
 			console.log("smith: unknown flag " + a);
 			return usage();
@@ -73,11 +76,11 @@ function main(): int32 {
 			console.log("smith: count must be at least 1");
 			return 2;
 		}
-		return runSeeds(first.value, n.value, f, swarmed);
+		return runSeeds(first.value, n.value, f, swarmed, san);
 	}
 	if (positional.length == 2 && positional[0] == "rerun") {
-		if (overlayText != "" || swarmed) {
-			console.log("smith: rerun takes its features from the bundle; drop --features/--plant/--swarm");
+		if (overlayText != "" || swarmed || san) {
+			console.log("smith: rerun takes its features from the bundle; drop --features/--plant/--swarm/--san");
 			return 2;
 		}
 		return rerunBundle(positional[1]);
