@@ -65,9 +65,9 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 			// boxed dynamic type, so an FFI handle typed unknown gets boxed on
 			// module-boundary crossings and C receives a garbage pointer.
 			if (t.base.kind == CTypeKind.Void) return "Ptr<void>";
-			// char* → cstring
-			if (t.base.kind == CTypeKind.Char) return "cstring";
-			// const char* → cstring (base is Char regardless of const)
+			// char* and const char* → cstring; unsigned char and the fixed-width
+			// byte typedefs (uint8_t, int8_t) point at bytes, not text.
+			if (t.base.kind == CTypeKind.Char && t.base.isSigned && mapRuntimeType(t.base.typedefName) == "") return "cstring";
 			// Function pointer → closure type
 			if (t.base.kind == CTypeKind.Func) return emitFuncType(t.base);
 			if (isOpaqueTag(t.base)) return `Ptr<${t.base.tagName}>`;
