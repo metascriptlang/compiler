@@ -938,7 +938,9 @@ function borrowFrom(u: BorrowUnit, dest: Symbol, src: Node): void {
 		const sym = s.resolvedSym;
 		if (sym == null) continue;
 		if (hasFlag(sym, SymbolFlag.Global)) {
-			if (!hasFlag(sym, SymbolFlag.Mutable) && keysOf(sym.symbolType, false).length == 0) continue;
+			const fixed = !hasFlag(sym, SymbolFlag.Mutable);
+			if ((pointer || (byAddress && fixed)) && staysPut(sym, withoutHandle(handles[k], paths[k]))) continue;
+			if (!pointer && !byAddress && fixed && keysOf(sym.symbolType, false).length == 0) continue;
 			addError(u.ctx, `cannot borrow '${dest.name}' from module-level '${sym.name}': a call can change it unseen; pass it as a parameter`, src.location.line, src.location.column);
 			return;
 		}
@@ -1293,6 +1295,13 @@ function borrowedKeys(sym: Symbol, handles: string): HandleKey[] {
 	}
 	if (!named) out.push(anyKey());
 	return out;
+}
+
+function staysPut(sym: Symbol, handles: string): boolean {
+	for (const h of handles.split("|")) {
+		if (h != "" && !h.startsWith(VALUE_WRITE)) return borrowedKeys(sym, handles).length == 0;
+	}
+	return true;
 }
 
 function inExternalGroup(u: BorrowUnit, id: int32): boolean {
