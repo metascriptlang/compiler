@@ -1,0 +1,7 @@
+export function label(): string {
+	try {
+		throw new Error("caught");
+	} catch (e) {
+		return (e as Error).message;
+	}
+}

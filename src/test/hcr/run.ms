@@ -878,6 +878,23 @@ function runCommand(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function stdFirstUse(): void {
+	const tag = "hcrStdFirstUse";
+	const dir = freshDir(`${TMP}/stdFirstUse`);
+	for (const f of ["app.ms", "logic.ms", "upper.txt", "error.txt", "path.txt"]) copy(`${FIXTURES}/stdFirstUse/${f}`, `${dir}/${f}`);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-STD ")) seen.push(line);
+	}
+	const want = ["HCR-STD start plain", "HCR-STD reloaded LOUD", "HCR-STD reloaded caught", "HCR-STD reloaded joined.ms"];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "a first use of a standard-library method, class or module did not reload into the running app");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function stepCrash(): void {
 	const tag = "hcrStepCrash";
 	const dir = freshDir(`${TMP}/stepCrash`);
@@ -1490,6 +1507,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrLiftNames", run: liftNames },
 	{ name: "hcrLiftKinds", run: liftKinds },
 	{ name: "hcrRun", run: runCommand },
+	{ name: "hcrStdFirstUse", run: stdFirstUse },
 	{ name: "hcrStepCrash", run: stepCrash },
 	{ name: "hcrCrossImageNew", run: crossImageNew },
 	{ name: "hcrGenericCtor", run: genericCtor },

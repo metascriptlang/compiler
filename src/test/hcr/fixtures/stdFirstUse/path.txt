@@ -1,0 +1,5 @@
+import { basename } from "std/fs/path";
+
+export function label(): string {
+	return basename("dir/joined.ms");
+}
