@@ -47,3 +47,41 @@ console.log(pick("s"), pick(1), inside(raw));
 	assert hasMessage(messages, "pick"), messages.join("\n");
 	assert messages.length == 1, messages.join("\n");
 }
+
+const twoDModule = `export struct Scene { nodes: int32; }
+export const LIMIT: int32 = 2;
+`;
+const threeDModule = `export struct Scene { nodes: int32; }
+export const LIMIT: int32 = 3;
+`;
+
+test "routineInterface: a type or a value of one name imported from two modules is a duplicate identifier" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/twoD.ms", entrySource: twoDModule },
+		{ entryPath: "src/threeD.ms", entrySource: threeDModule },
+		{ entryPath: "src/main.ms", entrySource: `import { Scene, LIMIT } from "./twoD";
+import { Scene, LIMIT } from "./threeD";
+const s: Scene = { nodes: LIMIT };
+console.log(String(s.nodes));
+` },
+	];
+	const messages = checkProjectDiagnostics(entries, "src/main.ms");
+	assert hasMessage(messages, "Duplicate identifier 'Scene'"), messages.join("\n");
+	assert hasMessage(messages, "Duplicate identifier 'LIMIT'"), messages.join("\n");
+}
+
+test "routineInterface: the same symbol imported twice binds once, and an alias keeps the second apart" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/twoD.ms", entrySource: twoDModule },
+		{ entryPath: "src/threeD.ms", entrySource: threeDModule },
+		{ entryPath: "src/main.ms", entrySource: `import { Scene } from "./twoD";
+import { Scene } from "./twoD";
+import { Scene as Scene3D } from "./threeD";
+const s: Scene = { nodes: 1 };
+const t: Scene3D = { nodes: 2 };
+console.log(String(s.nodes + t.nodes));
+` },
+	];
+	const messages = checkProjectDiagnostics(entries, "src/main.ms");
+	assert messages.length == 0, messages.join("\n");
+}
