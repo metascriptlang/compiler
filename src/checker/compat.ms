@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, variantIndexInUnion, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance } from "./types";
+import { isNumeric, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -2265,4 +2265,63 @@ test "two sets relate as their element types do, and below a generic match they 
 	assert typeRelation(createBitSet(createGenericParam("E")), createBitSet(color)) == TypeRelation.Generic;
 	assert typeRelation(createBitSet(shade), createBitSet(color)) == TypeRelation.None;
 	assert typeRelation(createBitSet(numberType()), createBitSet(createPrimitive(TypeKind.Int32))) == TypeRelation.None;
+}
+
+export function duVariantIndexOfType(unionType: Type | null, variantType: Type | null): int32 {
+	if (unionType == null || unionType.typeChildren == null || variantType == null) return -1;
+	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
+		if (unionType.typeChildren[i] == variantType) return i;
+	}
+	const target = peelToStruct(variantType);
+	if (target == null) return -1;
+	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
+		if (sameType(peelToStruct(unionType.typeChildren[i]), target)) return i;
+	}
+	return -1;
+}
+
+export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
+	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return -1;
+	if (exprType.kind != TypeKind.Struct) return primitiveMemberIndexInUnion(formal, exprType);
+	// Identity/name first; a named variant resolves there. Union variants are
+	// often ANONYMOUS object types while the value carries a type ALIAS name
+	// (`NodeData`'s variants vs `TypeUnionData`), so fall back to the same
+	// structural match the object-literal path uses to pick its variant.
+	const byIdentity = duVariantIndexOfType(formal, exprType) as int32;
+	if (byIdentity >= 0) return byIdentity;
+	const names = exprType.typeNames;
+	if (names == null || names.length == 0) return -1;
+	// Candidates that survive the type comparison are the same structural type;
+	// they share a layout only when their storage matches, else refuse.
+	const types = exprType.typeChildren;
+	let found: int32 = -1;
+	let vi: int32 = 0;
+	for (const member of formal.typeChildren) {
+		const child = peelToStruct(member);
+		if (child != null && child.typeNames != null && child.typeNames.length == names.length) {
+			let same = true;
+			for (let fi = 0; fi < names.length; fi += 1) {
+				if (child.typeNames[fi] != names[fi]) { same = false; break; }
+			}
+			if (same && types != null && child.typeChildren != null
+					&& child.typeChildren.length == types.length) {
+				for (let fi = 0; fi < types.length; fi += 1) {
+					const want = types[fi];
+					const have = child.typeChildren[fi];
+					if (want == null || have == null) continue;
+					if (want.kind != have.kind || want.typeName != have.typeName) { same = false; break; }
+					if (want.kind == TypeKind.EnumLiteral && want.typeNames.join(",") != have.typeNames.join(",")) { same = false; break; }
+				}
+			}
+			if (same) {
+				if (found < 0) {
+					found = vi;
+				} else if (formal.typeChildren[found].kind != member.kind) {
+					return -1;
+				}
+			}
+		}
+		vi += 1;
+	}
+	return found;
 }

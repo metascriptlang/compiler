@@ -884,28 +884,6 @@ function findVariantByFieldNameInner(unionType: Type | null, fieldName: string):
 	return -1;
 }
 
-// Index of a narrowed variant within its declaring union — identity first
-// (flow narrowing returns the union's own typeChildren element), then identity
-// after peeling Ref wrappers (TS-style DU variants are Ref<interface>), then
-// typeName (variants are stamped "<Alias>.<Key>" / interface names, unique per union).
-export function duVariantIndexOfType(unionType: Type | null, variantType: Type | null): int32 {
-	if (unionType == null || unionType.typeChildren == null || variantType == null) return -1;
-	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
-		if (unionType.typeChildren[i] == variantType) return i;
-	}
-	const target = peelToStruct(variantType);
-	if (target == null) return -1;
-	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
-		if (peelToStruct(unionType.typeChildren[i]) == target) return i;
-	}
-	if (target.typeName == "") return -1;
-	for (let i = 0; i < unionType.typeChildren.length; i += 1) {
-		const v = peelToStruct(unionType.typeChildren[i]);
-		if (v != null && v.typeName == target.typeName) return i;
-	}
-	return -1;
-}
-
 // Which slot of a union a value belongs in — the checker's half of codegen's
 // own rule (expressions.ms, "Variant struct → discriminated union"), so the two
 // agree on the tag. Lives here rather than beside its callers because the
@@ -940,52 +918,6 @@ export function primitiveMemberIndexInUnion(formal: Type, exprType: Type): int32
 		if (hit) {
 			if (found >= 0) return -1;
 			found = vi;
-		}
-		vi += 1;
-	}
-	return found;
-}
-
-export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
-	if (formal.kind != TypeKind.Union || formal.typeChildren == null) return -1;
-	if (exprType.kind != TypeKind.Struct) return primitiveMemberIndexInUnion(formal, exprType);
-	// Identity/name first; a named variant resolves there. Union variants are
-	// often ANONYMOUS object types while the value carries a type ALIAS name
-	// (`NodeData`'s variants vs `TypeUnionData`), so fall back to the same
-	// structural match the object-literal path uses to pick its variant.
-	const byIdentity = duVariantIndexOfType(formal, exprType) as int32;
-	if (byIdentity >= 0) return byIdentity;
-	const names = exprType.typeNames;
-	if (names == null || names.length == 0) return -1;
-	// Candidates that survive the type comparison are the same structural type;
-	// they share a layout only when their storage matches, else refuse.
-	const types = exprType.typeChildren;
-	let found: int32 = -1;
-	let vi: int32 = 0;
-	for (const member of formal.typeChildren) {
-		const child = peelToStruct(member);
-		if (child != null && child.typeNames != null && child.typeNames.length == names.length) {
-			let same = true;
-			for (let fi = 0; fi < names.length; fi += 1) {
-				if (child.typeNames[fi] != names[fi]) { same = false; break; }
-			}
-			if (same && types != null && child.typeChildren != null
-					&& child.typeChildren.length == types.length) {
-				for (let fi = 0; fi < types.length; fi += 1) {
-					const want = types[fi];
-					const have = child.typeChildren[fi];
-					if (want == null || have == null) continue;
-					if (want.kind != have.kind || want.typeName != have.typeName) { same = false; break; }
-					if (want.kind == TypeKind.EnumLiteral && want.typeNames.join(",") != have.typeNames.join(",")) { same = false; break; }
-				}
-			}
-			if (same) {
-				if (found < 0) {
-					found = vi;
-				} else if (formal.typeChildren[found].kind != member.kind) {
-					return -1;
-				}
-			}
 		}
 		vi += 1;
 	}
