@@ -1,4 +1,4 @@
-import { DeclKind, Node, NodeKind, bindSym, define, getImpl, getType, stringValue } from "std/meta";
+import { DeclKind, Node, NodeKind, bindSym, define, getImpl, getType, getTypeImpl, stringValue } from "std/meta";
 import { eventDiscriminator, instructionDiscriminator, word } from "./discriminator";
 import { ProgramError } from "./error";
 import { derivedAddressOf } from "./pda";
@@ -1508,8 +1508,8 @@ export macro signed(call: Node, seeds: Node): Node {
 	if (shape != null && shape.kind === NodeKind.TypeFunction && shape.typExprParams.length > 0) {
 		const last = shape.typExprParams[shape.typExprParams.length - 1];
 		if (last.kind === NodeKind.TypeArray) {
-			const element = last.typExprElement;
-			takesSigners = element.kind === NodeKind.TypeObject &&
+			const element = getTypeImpl(last.typExprElement);
+			takesSigners = element != null && element.kind === NodeKind.TypeObject &&
 				element.typExprTypeName == "SignerSeeds";
 		}
 	}
