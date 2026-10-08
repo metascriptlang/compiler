@@ -204,15 +204,47 @@ threshold, rather than a fixed coin. `gen.ms` `Gen.nodesLeft`, `Gen.reserve`,
 weighted numeric blocks/loops/calls and selection retries using the existing
 budget model. No compiler pass or runtime protocol was added.
 
-**Still open:** scalar expression/helper costs, callback/closure invocation
-weights (including repeated generic callbacks), safe budget composition through
-capture graphs, and observation coverage. Source fuel and these small consumer
-probes do NOT prove a whole-program execution bound or full family coverage.
-The mixed-family C build needs a longer isolated deadline after the heavy gate;
-it must not be called a bug or silently omitted. The 100-seed execution campaign,
-closure-only campaign, driver controls, SAN and reducer remain unrun/unimplemented
-at this checkpoint. Old bundles keep their source/identity; they are not rewritten
-for the changed generator.
+### Execution work bound — measured 2026-10-08
+
+Every node the generator emits is now charged to the existing `Gen.reserve` budget:
+expression and condition nodes cost 1, and a closure body is built in its own
+`Gen.routine` frame. A deferred body (named callable, effect, closure array, maker)
+records its cost on its `Ent`, the same way `Fn.cost` does. A call site reserves
+`cost + 1` under the loop multiplier, or falls back. An immediate invocation (IIFE,
+`twiceG` ×2, `BoxG.map`) takes its body cap from `Gen.spare` and pays `times × cost`.
+Closure bodies may now call `fN` routines; the old `costCap = cost` block is gone. The
+one uncharged repeat is the closure-array fill loop, at most 4 pushes per execution.
+
+| check | result |
+|---|---|
+| `msc test tools/smith/gen.ms`, C / `--target=js`, `./msc` SHA-256 `a71ac39a…` | **326/326**, **89/89**, 0 red |
+| Five mutants (expression free, named call free, `twiceG` charged once, IIFE body free, deferred frame cap 0), C and JS | **10/10 red**, each only on its own guard |
+| 200 seeds × default knobs, total source bytes before → after | none 2,538,556 → 2,516,991; closure 2,909,506 → 2,822,925; all three 3,450,493 → 3,561,067 |
+| Closure bodies that open with an `fN(` call, same sweep | closure 0 → 196; all three 0 → 95 |
+| Seeds 1,2,3 × `fams=none` / `closure` / `closure,union,generic`, `funcs=64 globals=64 stmts=32 depth=8 expr=8 trips=64 entries=64`, `./msc` | 9/9 generated (48–64 KB); every run that built finished in ≤ **0.60 s** C and ≤ **0.06 s** JS; the 6 seeds that built and ran on both lanes printed identical stdout |
+
+The run times come from the shared machine at load 16–60. They show that the extreme
+vectors finish quickly, not how fast an idle machine runs them.
+
+The same sweep found three compiler failures on valid programs, reproduced with the
+installed `msc` (BUILD `c0949e9f2`, SHA-256 `1362b92c…`) outside the worktree:
+
+- `none-1`: C runs; JS throws `SyntaxError: Invalid left-hand side expression in prefix operation`.
+- `closure-3`: JS runs; C fails with `use of undeclared identifier '_envP'`.
+- `closure_union_generic-2`: JS runs; C fails with `use of undeclared identifier 'dollarhoist_6_'`.
+
+No inbox card covers them. Their inputs and logs are kept in `out/smith/budget/findings/`
+as real-divergence inputs for the reducer. They are reduced and filed when the reducer
+exists, or earlier if the person asks. The 2026-10-07 mixed-family input
+(`out/smith/core/work-extreme-closure_union_generic.ms`), whose C build exceeded 30 s,
+built with the same `./msc` in **4 s** at load 7 on 2026-10-08, ran with exit 0, and
+printed stdout byte-identical to its JS run. The timeout came from the loaded machine,
+not from the compiler.
+
+**Still open:** observation coverage (locals and closure state that never reach the
+output). The 100-seed execution campaign, closure-only campaign, driver controls, SAN
+and reducer remain unrun or unimplemented at this checkpoint. Old bundles keep their
+source and identity; they are not rewritten for the changed generator.
 
 ## Approved order and NEW MECHANISM decisions
 
