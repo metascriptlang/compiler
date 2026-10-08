@@ -52,7 +52,7 @@ import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
 import { drainPendingInstances, distinctInstances, placeInstance } from "../checker/instantiate";
-import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, collectTypeInstanceRows, moduleTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
+import { BuildSession, BuildStatus, DirectiveHit, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, collectTypeInstanceRows, moduleTypeInstanceRows, typeInstanceRowsFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { hookSymMark, hookSymsFrom, replayHookSyms, opMark, opsFrom, replayOps } from "../codegen/c/types";
 import { GenericTypeInstRow, addGenericTypeInstRow, getParserDefines, setParserDefines } from "../parser/context";
 import { dbLower } from "./transam/index";
@@ -338,6 +338,8 @@ let graphPreludeCtx: CheckerContext = null as unknown as CheckerContext;
 // Global set of compiled .o file paths — deduplicates @compile directives across modules.
 // Reference parity: @compile directive processes each unique file path exactly once.
 let _compiledOFiles: HashSet<string> = new HashSet<string>();
+let _directiveMemos: HashMap<string, DirectiveHit[]> | null = null;
+let _directiveMemoRoot = "";
 
 function resetCompiledOFiles(): void {
 	_compiledOFiles = new HashSet<string>();
@@ -1020,12 +1022,36 @@ interface CompileJob {
 // project. Set by cmdBuildC.
 let emitOnlyMode = false;
 
+function memoReplays(memo: DirectiveHit[]): boolean {
+	for (const hit of memo) {
+		if (hit.oFile == "" && !_compiledOFiles.has(hit.dependencyFile)) return false;
+	}
+	return true;
+}
+
 function processCompileDirectives(directives: string, moduleDir: string, includePaths: HashSet<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean, targetOs: string, projectRoot: string, compilerRoot: string): string[] {
 	if (emitOnlyMode) return [];
 	if (directives == "") return [];
 	// Per-call user-project flag: non-empty only when moduleDir is user code.
 	// Applied to every @compile job this call emits (all share same moduleDir).
 	const upFlag = userProjectFlag(moduleDir, projectRoot, compilerRoot);
+	const memoKey = _directiveMemos != null && compilerRoot != "" && isUnder(moduleDir, join(compilerRoot, "std"))
+		? `${directives}\n${moduleDir}\n${allFlags}\n${mode}\n${ccOption}\n${ccBinary}`
+		: "";
+	if (memoKey != "") {
+		const memo = _directiveMemos!.get(memoKey);
+		if (memo != null && memoReplays(memo)) {
+			const replayed: string[] = [];
+			for (const hit of memo) {
+				markCppCompile(hit.source);
+				if (_compiledOFiles.has(hit.dependencyFile)) continue;
+				_compiledOFiles.add(hit.dependencyFile);
+				replayed.push(hit.oFile);
+			}
+			return replayed;
+		}
+	}
+	const memoHits: DirectiveHit[] = [];
 
 	// === 1. GATHER ===
 	const jobs: CompileJob[] = [];
@@ -1085,22 +1111,28 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 					if (isCompileCached(oFile, fp)) {
 						if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile} ${dim("(cached)")}`);
 						hitOFiles.push(oFile);
+						memoHits.push({ source: fullPath, dependencyFile, oFile });
 					} else {
 						const storeKey = objectStoreKey(nativeStoreSource(fullPath), ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags);
 						const stored = storeKey == "" ? "" : restoreNativeObject(fullPath, probeKey, storeKey, objectSearchDirs(ccOption, ccBinary, isCppFile(fullPath), mode, fileFlags));
 						if (stored != "") {
 							if (verbose) verboseLog(`  @compile ${fullPath} → ${stored} ${dim("(stored)")}`);
 							hitOFiles.push(stored);
+							memoHits.push({ source: fullPath, dependencyFile, oFile: stored });
 						} else {
 							jobs.push({ fullPath, oFile, cPath, fileFlags, fp, dependencyFile, dependenciesKnown, storeKey });
 						}
 					}
+				} else {
+					memoHits.push({ source: fullPath, dependencyFile, oFile: "" });
 				}
 			}
 			start = idx + 1;
 		}
 		idx = idx + 1;
 	}
+
+	if (memoKey != "" && jobs.length == 0) _directiveMemos!.set(memoKey, memoHits);
 
 	// === 2. DISPATCH (parallel) ===
 	if (verbose) {
@@ -2474,6 +2506,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	emitOnlyMode = opts.emitC;
 	initCache(opts.mode, opts.forceRebuild);
 	resetCompiledOFiles();
+	_directiveMemos = session.keep && opts.isHcr ? session.directiveMemos : null;
 	registerCoreParsers();
 	const t0 = performance.now();
 	// Before ANY phase reads it: freestanding targets imply --gc=manual, and the

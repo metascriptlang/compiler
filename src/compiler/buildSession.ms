@@ -52,6 +52,12 @@ export interface PrepareMemo {
 	writes: string[];
 }
 
+export interface DirectiveHit {
+	source: string;
+	dependencyFile: string;
+	oFile: string;
+}
+
 export interface EmitMemo {
 	program: Node;
 	key: string;
@@ -75,6 +81,7 @@ export class BuildSession {
 	typeShapes: HashMap<Type, string>;
 	prepareMemos: HashMap<string, PrepareMemo>;
 	emitMemos: HashMap<string, EmitMemo>;
+	directiveMemos: HashMap<string, DirectiveHit[]>;
 }
 
 export function createBuildSession(keep: boolean): BuildSession {
@@ -93,6 +100,7 @@ export function createBuildSession(keep: boolean): BuildSession {
 		typeShapes: new HashMap<Type, string>(),
 		prepareMemos: new HashMap<string, PrepareMemo>(),
 		emitMemos: new HashMap<string, EmitMemo>(),
+		directiveMemos: new HashMap<string, DirectiveHit[]>(),
 	};
 }
 
