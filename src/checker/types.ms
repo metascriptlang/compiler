@@ -2587,7 +2587,19 @@ function genericHeadKey(gi: Type): string {
 
 // Structural key for tuple naming. tupleTypeName is the SINGLE source of the
 // msTuple_<hash> name, so this key need only be internally stable.
+const _typeKeyStack: Type[] = [];
+
 function typeKey(t: Type): string {
+	if (t == null) return "null";
+	for (let i = 0; i < _typeKeyStack.length; i += 1) {
+		if (_typeKeyStack[i] == t) return "rec" + (_typeKeyStack.length - i).toString();
+	}
+	_typeKeyStack.push(t);
+	defer _typeKeyStack.pop();
+	return typeKeyInner(t);
+}
+
+function typeKeyInner(t: Type): string {
 	if (t == null) return "null";
 	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKey(t.typeReturn);
 	if (t.typeName != "" && isNominalKind(t.kind)) return t.typeName + "_" + _stdHashToBase36(nominalTypeKey(t));
