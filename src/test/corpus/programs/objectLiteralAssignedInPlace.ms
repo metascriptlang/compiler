@@ -13,9 +13,14 @@ function swapped(a: int64): string {
 }
 function throughSpan(): string {
 	let b: Box = { p: { x: 1, y: 2 }, arr: [{ x: 3, y: 4 }, { x: 5, y: 6 }, { x: 7, y: 8 }], n: 9 };
-	const s: Span<Pair> = b.arr;
-	b.arr[1] = { x: s[1].y, y: s[1].x };
-	b.arr[0] = { x: s[2].x + s[1].x, y: b.arr[0].y };
+	{
+		const s: Span<Pair> = b.arr;
+		b.arr[1] = { x: s[1].y, y: s[1].x };
+	}
+	{
+		const s: Span<Pair> = b.arr;
+		b.arr[0] = { x: s[2].x + s[1].x, y: b.arr[0].y };
+	}
 	return `${b.arr[0].x},${b.arr[0].y},${b.arr[1].x},${b.arr[1].y}`;
 }
 function narrowed(): string {

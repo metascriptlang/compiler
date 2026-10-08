@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Macro 'memo' body: Type 'NodeFlag' is not assignable to type 'BitSet<NodeFlag>'
+// @xfail(raiser): static macro prefixes still run per call: macro-expr-hoist FAIL builds=5 wbuilds=2 notes=2 wired=W3
 // @stdout: macro-expr-hoist PASS
 // note: a macro invoked at an EXPRESSION position emitting a statement ahead of its value. The macro returns SpliceMany: the last element is the value that replaces the call site, the ones before it are hoisted into the enclosing statement list. Runtime proof the unit guard (src/test/handoff/macroExpansionBoundary.ms) cannot give — it only sees the emitted C. If the prefix were not hoisted at all, `tpl` would be undefined; if it were hoisted but re-run per call (the storage class not surviving the macro bridge, i.e. the `flags` whitelist dropping StaticStorage), `builds` would reach 3 and the three reads would differ. The slot is string-typed on purpose: an int-typed slot needs no cleanup and stays green even when module-scope storage is still queued for scope-exit destroy, which is the failure this shape exists to catch. Parity C↔JS is the point — the macro expands in the compile-time VM, so both backends must receive the same hoisted AST and reach the same answer.
 
@@ -14,7 +14,7 @@ macro memo(): Node {
 				kind: NodeKind.VariableDecl,
 				line: 0,
 				column: 0,
-				flags: NodeFlag.StaticStorage,
+				flags: (0 as BitSet<NodeFlag>).incl(NodeFlag.StaticStorage),
 				declName: "tpl",
 				declType: "string",
 				initializer: {
@@ -90,7 +90,7 @@ macro memoWired(): Node {
 				kind: NodeKind.VariableDecl,
 				line: 0,
 				column: 0,
-				flags: NodeFlag.StaticStorage,
+				flags: (0 as BitSet<NodeFlag>).incl(NodeFlag.StaticStorage),
 				declName: "tplW",
 				declType: "string",
 				initializer: {

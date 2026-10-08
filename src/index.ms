@@ -16,7 +16,7 @@ import "./ast/childTableGuard";
 import "./ast/childSlotGuard";
 import { join, isAbsolute, normalize } from "std/fs/path";
 import { exists } from "std/fs";
-import { setExtraGlobalImports } from "./checker/prelude";
+import { setExtraGlobalImports, setModulePasses } from "./checker/prelude";
 // Import the package manager hub for test discovery. Individual commands
 // (msc add, install, publish, ...) are wired up from this module as they land.
 // NOTE: imported so test discovery finds these modules' inline tests; any link
@@ -33,6 +33,12 @@ function requireFile(opts: CliOptions): void {
 		printUsage();
 		process.exit(1);
 	}
+}
+
+function globalImportEntry(projectRoot: string, gi: string): string {
+	if (gi.length > 4 && gi.slice(0, 4) == "std/") return gi;
+	if (isAbsolute(gi)) return normalize(gi);
+	return normalize(join(projectRoot, gi));
 }
 
 export function main(): int32 {
@@ -83,16 +89,11 @@ export function main(): int32 {
 		const giCfg = loadBuildConfig(buildMsPath, false);
 		if (giCfg.valid && giCfg.globalImports.length > 0) {
 			const extras: string[] = [];
-			for (const gi of giCfg.globalImports) {
-				if (gi.length > 4 && gi.slice(0, 4) == "std/") {
-					extras.push(gi);
-				} else if (isAbsolute(gi)) {
-					extras.push(normalize(gi));
-				} else {
-					extras.push(normalize(join(projectRoot, gi)));
-				}
-			}
+			for (const gi of giCfg.globalImports) extras.push(globalImportEntry(projectRoot, gi));
 			setExtraGlobalImports(extras, buildMsPath);
+			const passFrom: string[] = [];
+			for (const from of giCfg.modulePassFrom) passFrom.push(globalImportEntry(projectRoot, from));
+			setModulePasses(passFrom, giCfg.modulePassMacro);
 		}
 	}
 

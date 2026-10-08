@@ -166,6 +166,19 @@ function Counter(props: { initial: number }): Element {
 const app = @jsx <Counter initial={0} />;
 ```
 
+### Inline literals through re-checked component callbacks
+
+Inline union-valued fields keep their values when a generic component's row or nullable
+footer is checked again. No typed hoist is required for `<View style={{ height: 20 }} />`
+in a row, or the same literal with `height: 48` in a footer.
+
+Measured 2026-10-07 with the `wt/fix-inline-style-union` candidate:
+`./msc run [--target=js] src/test/corpus/programs/jsxRecheckedUnionPayload.ms`
+printed `rows 20 21; footer 48; variants auto true 2.5 false; empty null` on C and JS.
+The pin also checks a second union's captured integer and boolean payloads. The retained
+Neon footer printed `mounted footer` on both backends; its For-row test passed on both.
+Physical iPhone execution and other native targets were not verified by these runs.
+
 ## Boundary Lowering via Converter (IMPLEMENTED 2026-07-31 — main `9ce47eb`, guards in `src/test/c/converter.ms`; build.ms global-import tier awaits build.ms globalImports wiring)
 
 Decided 2026-07-30. JSX remains a free compile-time value —

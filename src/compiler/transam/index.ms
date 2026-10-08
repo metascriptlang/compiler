@@ -53,6 +53,7 @@ import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
 import "../meta/expand"; // side-effect: registers expandMacroInvocation callback
+import "../meta/modulePass";
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
 import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, removeFromNameIndex, findExportedSymbol, collectExports } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel, declOfStatement } from "../../checker/collectPass";
@@ -66,6 +67,7 @@ import { inlineHeaderImports, createTaReadProvider, SourceProvider, MapEntry, cr
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { resolveRuntimeDir } from "../../utils/path";
 import { errorCount as checkErrorCount } from "../../checker/context";
+import { modulePasses, modulePassExempt } from "../../checker/prelude";
 
 // ===== Stdlib Detection =====
 
@@ -641,6 +643,17 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		inputHashes.push(depCheckHash);
 	}
 
+	if (!modulePassExempt(filePath)) {
+		for (const pass of modulePasses()) {
+			const passId = getFileId(db.fileInput, pass.modulePath);
+			if (passId < 0) continue;
+			const passCheckEntry = cacheGet(db.cache, createQueryKey(TaQueryKind.TypeCheck, passId));
+			const passCheckHash = passCheckEntry != null ? passCheckEntry.outputHash : 0;
+			recordDependency(db.depStack, createQueryKey(TaQueryKind.TypeCheck, passId), passCheckHash);
+			inputHashes.push(passCheckHash);
+		}
+	}
+
 	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
 	const graph: ModuleGraph = graphMod != null ? db.graph! : createModuleGraph();
 	const mod = graphMod != null ? graphMod : createModule(filePath);
@@ -653,7 +666,8 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const checkerCtx = checkProgramWithRegistryCancellable(
 		program, db.exportRegistry, graph, mod,
 		db.preludeCtx, db.cancelCtx, startVersion,
-		earlyAdoptions(db, filePath, cachedProgram, program)
+		earlyAdoptions(db, filePath, cachedProgram, program),
+		true
 	);
 
 	// If cancelled, discard frame without caching — partial result not reliable

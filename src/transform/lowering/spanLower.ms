@@ -69,8 +69,9 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
 					} else if (srcType.kind == TypeKind.String) {
 						// String -> Span<char>: { data: msArrDataOr0(str.p), len: str.len }
-						const dataExpr2 = makeCall(generatedRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
-						dataExpr2.nodeType = createPtr(spanTarget.typeReturn);
+						const bytes = makeCall(generatedRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
+						bytes.nodeType = createPtr(spanTarget.typeReturn);
+						const dataExpr2 = makeHiddenStdConv(bytes, createPtr(spanTarget.typeReturn), loc);
 						const lenExpr2 = makeMember(d.convExpr, "len", loc);
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr2, lenExpr2], targetType, loc);
 					}
@@ -78,13 +79,6 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 			}
 
 			if (ctx.jsBackend) return node;
-			// Borrow promotion: HiddenStdConv(expr, Borrow<T>) → HiddenAddr(expr) (takes &expr in C)
-			if (targetType.kind == TypeKind.Borrow) {
-				const loc = node.location;
-				const addr = makeHiddenAddr(d.convExpr, loc);
-				addr.nodeType = targetType;
-				return addr;
-			}
 			if (takesAddressAtCArg(d.convExpr.nodeType, targetType)) {
 				const addr = makeHiddenAddr(d.convExpr, node.location);
 				addr.nodeType = nonNullMemberOfNullable(targetType);
@@ -146,7 +140,7 @@ function wrapSpanAssign(node: Node): Node {
 	if (bd.operator != "=") return node;
 	if (bd.left.nodeType == null || bd.left.nodeType.kind != TypeKind.Span || bd.left.nodeType.typeReturn == null) return node;
 	const rhs = bd.right;
-	if (rhs != null && rhs.nodeType != null && !isSpanValued(rhs.nodeType)) {
+	if (rhs != null && rhs.kind != NodeKind.NullLiteral && rhs.nodeType != null && !isSpanValued(rhs.nodeType)) {
 		bd.right = makeHiddenStdConv(rhs, bd.left.nodeType, rhs.location);
 	}
 	return node;
@@ -158,7 +152,7 @@ function wrapSpanDeclInit(node: Node): Node {
 	if (declType == null || declType.kind != TypeKind.Span || declType.typeReturn == null) return node;
 	const vd = node.data as VariableDeclData;
 	const init = vd.initializer;
-	if (init != null && init.nodeType != null && !isSpanValued(init.nodeType)) {
+	if (init != null && init.kind != NodeKind.NullLiteral && init.nodeType != null && !isSpanValued(init.nodeType)) {
 		vd.initializer = makeHiddenStdConv(init, declType, init.location);
 	}
 	return node;

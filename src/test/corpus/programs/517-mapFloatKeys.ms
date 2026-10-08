@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Undefined variable 'Number'
 // Parity program — a float key finds its entry by `==`, so NaN never matches: a lookup of NaN
 // misses, and each insert of NaN adds an entry of its own. 0 and -0 stay one key. Covers Map,
 // HashMap, Set and HashSet, float32, an alias of number, a Map literal, a key reached through a

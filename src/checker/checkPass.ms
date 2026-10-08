@@ -22,9 +22,9 @@ import { inlineHeaderImports, createFileSystemProvider } from "../module/loader"
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType } from "./compat";
-import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType } from "./types";
+import { setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, stringType, isUnknownType, findViewType, ownedAlternativeOf } from "./types";
 setConditionalAssignFn(isAssignable);
-import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseSuspendingViewParam, bodyMentionsName } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx } from "./instantiate";
 import { CtorRow, ctorRoutineMark, ctorRoutinesFrom, replayCtorRoutines } from "./ctorRoutine";
@@ -45,10 +45,10 @@ import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineI
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit } from "./template";
-import { fitNode, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
+import { convertStoredUnionRead, fitNode, fitViewLocal, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, offersProtocol } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerSelfReadType, registerLaterDeclarationNote } from "./checkerCallbacks";
+import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerSelfReadType, registerLaterDeclarationNote } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
@@ -773,7 +773,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions
 	if (declType != null && d.initializer != null) {
-		d.initializer = fitNode(ctx, d.initializer, declType, initType);
+		d.initializer = fitViewLocal(ctx, fitNode(ctx, d.initializer, declType, initType), declType);
 	}
 	// Prefer explicit type annotation over inferred type
 	let varType = initType;
@@ -783,6 +783,9 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		const closT = closureStorageType(initType);
 		d.initializer = fitNode(ctx, d.initializer, closT, initType);
 		varType = closT;
+	} else if (initType != null && d.initializer != null) {
+		const storedRead = convertStoredUnionRead(d.initializer, initType, initType);
+		if (storedRead != null) d.initializer = storedRead;
 	}
 	node.nodeType = varType;
 	// If already collected in pass 1 (e.g. export const) OR pre-registered above
@@ -815,7 +818,22 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	if (node.flags.has(NodeFlag.StaticStorage)) {
 		checkStaticStorageDecl(ctx, node, d);
 	}
+	refuseStoredView(ctx, node, d, varType);
 	// `let x;` with no initializer → NOT marked → will warn on use
+}
+
+function refuseStoredView(ctx: CheckerContext, node: Node, d: VariableDeclData, varType: Type | null): void {
+	if (node.resolvedSym == null || varType == null) return;
+	if (!hasFlag(node.resolvedSym, SymbolFlag.Global)) {
+		refuseNestedView(ctx, "'" + d.declName + "'", varType, d.nameLocation.line, d.nameLocation.column);
+		return;
+	}
+	if (d.declKind == DeclKind.Const) return;
+	const view = findViewType(varType);
+	if (view == null) return;
+	addError(ctx, "'" + d.declName + "' lives for the whole program and cannot hold " + typeDisplayName(view)
+		+ ": a view borrows memory its source can free first — bind it inside a function, or store " + ownedAlternativeOf(view),
+		d.nameLocation.line, d.nameLocation.column);
 }
 
 function checkStaticStorageDecl(ctx: CheckerContext, node: Node, d: VariableDeclData): void {
@@ -1156,7 +1174,7 @@ function demandReturnType(ctx: CheckerContext, sym: Symbol, read: Node): void {
 		return;
 	}
 	if (ctx.decoratorsPending) return;
-	const bodyCtx = pickBodyCtx(sym.modulePath, ctx);
+	const bodyCtx = pickBodyCtx(sym.modulePath, ctx, sym);
 	if (sym.modulePath != "" && bodyCtx.modulePath != sym.modulePath) return;
 	if (decl.kind == NodeKind.FunctionDecl) demandFunctionBody(bodyCtx, decl, sym);
 	else demandMethodBody(bodyCtx, decl, sym);
@@ -2642,6 +2660,12 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	const affineSnap = saveConsumeState(ctx.affineTracker);
 	const boundNames = bindContainerNames(ctx, params, body);
 	openScope(ctx.table, ScopeKind.Function);
+	let declFlags = "";
+	let flagsDecl = sym != null ? sym.declNode : null;
+	while (flagsDecl != null && flagsDecl.kind == NodeKind.DecoratedDecl) flagsDecl = (flagsDecl.data as DecoratedDeclData).decoratedNode;
+	if (flagsDecl != null && flagsDecl.kind == NodeKind.FunctionDecl) declFlags = (flagsDecl.data as FunctionDeclData).fnFlags;
+	else if (flagsDecl != null && flagsDecl.kind == NodeKind.MethodDecl) declFlags = (flagsDecl.data as MethodDeclData).methodFlags;
+	const suspends = declFlags.indexOf("async") >= 0 || declFlags.indexOf("generator") >= 0;
 	let i = 0;
 	for (const param of params) {
 		let paramType = inferredType();
@@ -2657,6 +2681,10 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		if (param.indexOf("_destr") == 0 && (paramType == null || paramType.kind == TypeKind.Inferred || paramType.kind == TypeKind.Unknown)) {
 			const at = (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) ? paramLocs[i] : body.location;
 			addError(ctx, "a destructured parameter needs a type annotation", at.line, at.column);
+		}
+		if (suspends && bodyMentionsName(body, param)) {
+			const at = (paramLocs != null && i < paramLocs.length && paramLocs[i] != null) ? paramLocs[i] : body.location;
+			refuseSuspendingViewParam(ctx, param, paramType, at.line, at.column);
 		}
 		if (defaults != null && i < defaults.length && defaults[i] != null) checkDefaultInParamScope(ctx, defaults[i], paramType);
 		const paramSym = paramSymbol(ctx, body, i, param, SymbolKind.Parameter, paramType);
@@ -3660,6 +3688,7 @@ function checkProgramCore(
 	cancelCtx: CancelCtx | null,
 	cancelVersion: int32,
 	adoptedDecls: HashMap<Node, Symbol> | null,
+	applyModulePasses: boolean = false,
 ): CheckerContext {
 	// Use shared IdentCache from prelude (one cache per compilation)
 	const sharedCache = preludeCtx.table.identCache;
@@ -3686,6 +3715,7 @@ function checkProgramCore(
 	openScope(ctx.table, ScopeKind.Module);
 	drainSeedSymbols(ctx);
 	const outerGensym = beginGensymUnit();
+	if (applyModulePasses) callApplyModulePasses(ctx, program);
 	runThreePasses(ctx, program);
 	rewindTemplateGensym(outerGensym);
 	collectDirectives(ctx, program);
@@ -3809,9 +3839,10 @@ export function checkProgramWithRegistryCancellable(
 	graph: ModuleGraph, mod: Module,
 	preludeCtx: CheckerContext,
 	cancelCtx: CancelCtx, cancelVersion: int32,
-	adoptedDecls: HashMap<Node, Symbol> | null = null
+	adoptedDecls: HashMap<Node, Symbol> | null = null,
+	applyModulePasses: boolean = false
 ): CheckerContext {
-	return checkProgramCore(program, preludeCtx, registry, graph, mod, cancelCtx, cancelVersion, adoptedDecls);
+	return checkProgramCore(program, preludeCtx, registry, graph, mod, cancelCtx, cancelVersion, adoptedDecls, applyModulePasses);
 }
 
 // Register callbacks at module load time

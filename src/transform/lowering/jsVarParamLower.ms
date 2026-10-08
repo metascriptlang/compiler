@@ -23,6 +23,10 @@ function isVarType(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Var;
 }
 
+function isBorrowType(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Borrow;
+}
+
 function calleeFormals(d: CallExprData): Type[] | null {
 	let t = d.callee.nodeType;
 	if ((t == null || t.kind != TypeKind.Function)
@@ -45,7 +49,7 @@ function noteBoxedArg(arg: Node): void {
 	const inner = unwrapAddr(arg);
 	if (inner.kind == NodeKind.Identifier && inner.resolvedSym != null) {
 		const s = inner.resolvedSym;
-		if (!isVarType(s.symbolType)) {
+		if (!isVarType(s.symbolType) && !isBorrowType(s.symbolType)) {
 			if (!isBoxed(s)) boxedSyms.push(s);
 			if (s.symbolKind == SymbolKind.Parameter) recordParamPrologue(s);
 		}
@@ -135,7 +139,7 @@ function pairize(arg: Node): Node {
 	if (inner.kind == NodeKind.Identifier) {
 		const s = inner.resolvedSym;
 		if (s == null) return arg;
-		if (isVarType(s.symbolType)) return inner;
+		if (isVarType(s.symbolType) || isBorrowType(s.symbolType)) return inner;
 		if (isBoxed(s)) {
 			const cont = makeIdentResolved(s, inner.location);
 			cont.nodeType = null;
@@ -162,6 +166,11 @@ function pairize(arg: Node): Node {
 		const cell = cellLit(rw((inner.data as HiddenDerefData).expr), inner);
 		cell.nodeType = null;
 		return pairLit(cell, makeNumber(0, inner.location), inner);
+	}
+	if (arg.kind == NodeKind.HiddenAddr && isBorrowType(arg.nodeType)) {
+		const temp = cellLit(rw(inner), inner);
+		temp.nodeType = null;
+		return pairLit(temp, makeNumber(0, inner.location), inner);
 	}
 	return arg;
 }
@@ -192,7 +201,7 @@ function rw(node: Node): Node {
 	}
 	if (node.kind == NodeKind.Identifier) {
 		const s = node.resolvedSym;
-		if (s != null && isVarType(s.symbolType) && s.symbolKind == SymbolKind.Parameter) {
+		if (s != null && ((isVarType(s.symbolType) && s.symbolKind == SymbolKind.Parameter) || isBorrowType(s.symbolType))) {
 			return derefPair(s, node);
 		}
 		if (s != null && isBoxed(s)) {

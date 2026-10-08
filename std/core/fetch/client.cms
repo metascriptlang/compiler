@@ -81,7 +81,8 @@ export function resolveFetchOptions(options: FetchOptions | null, defaultTimeout
 	if (options != null) {
 		if (options.method != "") method = parseMethod(options.method);
 		body = options.body;
-		if (options.headers._names.length > 0) headers = options.headers;
+		const given = options.headers;
+		if (given != null && given._names.length > 0) headers = given;
 		if (options.timeout > 0) timeout = options.timeout;
 		if (options.maxRedirects >= 0) maxRedirects = options.maxRedirects;
 	}

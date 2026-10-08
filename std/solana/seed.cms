@@ -149,7 +149,7 @@ export function findAt(
 }
 
 export function createAddress(
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 	program: uint64,
 ): Result<Pubkey, ProgramError> {
 	return createAt(tableAddress(seeds), seeds.length as uint64, program);
@@ -178,7 +178,7 @@ export function fillWithBump(
 }
 
 export function createAddressWithBump(
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 	bump: uint8,
 	program: uint64,
 ): Result<Pubkey, ProgramError> {

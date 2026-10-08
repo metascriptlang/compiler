@@ -88,7 +88,7 @@ test "E2E: macro reads nodeType.kind on self-referential Tree (cycle safety)" {
 	const src = `
 import { Node, NodeKind } from "std/meta";
 
-class Tree { children: Tree[]; }
+class Tree { children: Tree[] = []; }
 
 macro typeKindOfTree(x: Node): Node {
 	return {

@@ -19,6 +19,14 @@ function typeofProjectionChain(v: string | int32 | boolean): int32 {
 	return v.length;
 }
 
+interface TypeofChainHolder { v: float64 | boolean | string | int32; }
+
+function typeofFieldChain(h: TypeofChainHolder): string {
+	if (typeof h.v === "boolean") { return "b"; }
+	if (typeof h.v === "string") { return "s"; }
+	return typeof h.v;
+}
+
 interface TypeofProjectionPoint { x: int32; }
 
 function typeofProjectionUnwrap(v: TypeofProjectionPoint | int32): int32 {
@@ -134,6 +142,13 @@ test "unionUpdates: a chain of typeof guards narrows through the residual union"
 	assert typeofProjectionChain(true) == 1;
 	assert typeofProjectionChain(21) == 42;
 	assert typeofProjectionChain("abcd") == 4;
+}
+
+test "unionUpdates: typeof on a narrowed field reads the tag of the stored union" {
+	assert typeofFieldChain({ v: true }) == "b";
+	assert typeofFieldChain({ v: "x" }) == "s";
+	assert typeofFieldChain({ v: 3 as int32 }) == "number";
+	assert typeofFieldChain({ v: 2.5 }) == "number";
 }
 
 test "unionUpdates: typeof object selects the struct member" {

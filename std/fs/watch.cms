@@ -2,6 +2,7 @@
 @compile("runtime/io/engineSelect.c");
 
 import { IoError, IoErrorKind, ioError, notFound, permissionDenied, notDirectory } from "../io/errors";
+import { platform } from "../process";
 
 extern function msFsWatchOpen_ms(path: string): int32;
 extern function msFsWatchLastError(): int32;
@@ -83,6 +84,8 @@ export async function nextChanges(w: FsWatch): Promise<FsChanges> {
 export function writeSettled(path: string): boolean {
 	return msFsWriteSettled_ms(path) == 1;
 }
+
+export const writerCloseObservable: boolean = platform != "darwin";
 
 export function closeWatch(w: FsWatch): void {
 	if (!w.open) return;

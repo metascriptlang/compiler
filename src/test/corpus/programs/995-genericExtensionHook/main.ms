@@ -39,7 +39,7 @@ function onDestroy(this self: Tag<string>): void {
 }
 
 class Tally<T> {
-	seen: T[];
+	seen: T[] = [];
 	onDestroy(): void { trail = trail + " t"; }
 }
 

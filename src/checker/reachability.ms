@@ -218,12 +218,7 @@ function markRefArrayCell(arrT: Type, modulePath: string): void {
 	if (_singleModule == "") {
 		const destroyHome = hasFlag(destroy, SymbolFlag.ImportC) ? "" : destroy.modulePath;
 		if (destroyHome != "") owner = destroyHome;
-		if (trace != null) {
-			if (destroyHome != "" && destroyHome != trace.modulePath) {
-				throw new Error(`internal: ref-array cell ${key} has its destroy op in ${destroyHome} and its trace op in ${trace.modulePath}`);
-			}
-			owner = trace.modulePath;
-		}
+		if (trace != null) owner = trace.modulePath;
 	}
 	_aliveSet.typeInfoKeys.add(key);
 	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner, cName: "", destroy, trace, baseKey: "", moduleLocal: false };

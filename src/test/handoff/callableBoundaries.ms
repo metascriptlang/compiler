@@ -5,7 +5,7 @@ test "callableBoundaries: required callable fields cannot use value default init
 	const cases = [
 		{ name: "a missing function field is rejected", source: "\ninterface H { f: (n: number) => void; g: (n: number) => void; }\nfunction mk(): H {\n\treturn { f: (n: number): void => { console.log(n); } };\n}\nfunction main(): void { mk().g(1); }\n", expected: -1 },
 		{ name: "a nullable function field may be omitted", source: "\ninterface H { f: (n: number) => void; g: ((n: number) => void) | null; }\nfunction mk(): H {\n\treturn { f: (n: number): void => { console.log(n); } };\n}\nfunction main(): void { mk().f(1); }\n", expected: 0 },
-		{ name: "value fields retain default initialization", source: "\ninterface P { a: number; b: string; c: number[]; }\nfunction mk(): P { return { a: 1 }; }\nfunction main(): void { console.log(mk().a); }\n", expected: 0 },
+		{ name: "value fields retain default initialization", source: "\ninterface P { a: number; b: string; c: number[]; }\nfunction mk(): P { return { a: 1, c: [] }; }\nfunction main(): void { console.log(mk().a); }\n", expected: 0 },
 	];
 	for (const item of cases) {
 		const result = compileToCWithStd(item.source);

@@ -1,7 +1,5 @@
 // @stdout: comptime 4417 runtime 4417
 // @exit: 0
-// @xfail(js): a sized-array literal shorter than N starts short on JS (inbox 2026-09-29-js-sized-array-local-starts-empty, wt/sized-arrays)
-// @xfail(esm): same as js
 
 struct Slot { a: uint64; b: uint8; }
 struct Holder { slots: Slot[3]; count: uint64; }

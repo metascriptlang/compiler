@@ -573,6 +573,7 @@ _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi);
 _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi);
 _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected);
 _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag);
+_Noreturn void msRaiseUnreachable(const char* text);
 _Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target);
 _Noreturn void msRaiseStrLitError(msString s, msString target);
 msString msStrLitConv(msString s, msString members, msString target);
@@ -595,6 +596,18 @@ static inline void msFfiRelease(void* p) { msDecrefCyclic(p); }
 	__typeof__(u) __vv = (u); \
 	if ((int64_t)__vv._tag != (int64_t)(slot)) msRaiseFieldError((head), (labels), (int64_t)__vv._tag); \
 	__vv; \
+})
+
+#define msMaybeAccess(m, head, labels) (*({ \
+	__typeof__(m)* __pm = &(m); \
+	if (!__pm->present) msRaiseFieldError((head), (labels), 0); \
+	__pm; \
+}))
+
+#define msMaybeAccessVal(m, head, labels) ({ \
+	__typeof__(m) __mv = (m); \
+	if (!__mv.present) msRaiseFieldError((head), (labels), 0); \
+	__mv; \
 })
 
 #define msVariantHolds(mask, tag) ((((uint64_t)(mask)) >> (uint64_t)(tag)) & 1u)

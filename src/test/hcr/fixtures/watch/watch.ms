@@ -1,5 +1,5 @@
 import { mkdir, writeFile, rename, remove } from "std/fs";
-import { watch, nextChanges, closeWatch, msIoRunOnce, writeSettled, FsChanges, FsWatch } from "std/fs/watch";
+import { watch, nextChanges, closeWatch, msIoRunOnce, writeSettled, writerCloseObservable, FsChanges, FsWatch } from "std/fs/watch";
 import { platform } from "std/process";
 
 function waitBatch(w: FsWatch): FsChanges {
@@ -58,6 +58,7 @@ if (!opened.ok) {
 	}
 	console.log(`WATCH a missing file has no writer: ${writeSettled("tree/never.ms")}`);
 	console.log(`WATCH a closed file proves no writer: ${writeSettled("tree/saved.ms")}`);
+	console.log(`WATCH a writer close is observable: ${writerCloseObservable}`);
 	closeWatch(w);
 	console.log(`WATCH after close: ended ${waitBatch(w).ended}`);
 }

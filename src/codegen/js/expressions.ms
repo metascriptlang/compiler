@@ -20,7 +20,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeofTagOf, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind } from "../../checker/types";
 
 // ===== Literal Emitters =====
 
@@ -611,15 +611,33 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 	const d = node.data as ArrayLiteralData;
 	const t = node.nodeType;
+	const sized = t != null && t.kind == TypeKind.SizedArray && t.typeReturn != null;
+	if (sized && d.elements.length == 0) {
+		emit(gen, jsDefaultValue(t));
+		return;
+	}
 	let typedName = "";
-	if (t != null && t.kind == TypeKind.SizedArray && t.typeReturn != null) {
+	if (sized) {
 		typedName = jsTypedArrayName(t.typeReturn.kind);
 	}
 	if (typedName != "") emit(gen, "new " + typedName + "(");
 	emit(gen, "[");
+	let needComma = false;
 	for (let i = 0; i < d.elements.length; i += 1) {
-		if (i > 0) emit(gen, ", ");
+		if (needComma) emit(gen, ", ");
 		emitArrayElement(gen, d.elements[i]);
+		needComma = true;
+	}
+	if (sized) {
+		const elemDefault = jsDefaultValue(t.typeReturn);
+		const fill = elemDefault != "" ? elemDefault : (typedName != "" ? "0" : "null");
+		let extra = (t.typeValue as int32) - d.elements.length;
+		while (extra > 0) {
+			if (needComma) emit(gen, ", ");
+			emit(gen, fill);
+			needComma = true;
+			extra = extra - 1;
+		}
 	}
 	emit(gen, "]");
 	if (typedName != "") emit(gen, ")");
@@ -723,7 +741,7 @@ export function emitTypeAssertion(gen: JSGenerator, node: Node): void {
 	emitNode(gen, classReference(target, node.location));
 	const shown = target.instantiatedFrom != null ? namedTypeDisplay(checkedConversionBody(node)!) : target.name;
 	emit(gen, ") ? v : ");
-	emitDefectCall(gen, "\"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + escapeJSString(shown) + "\"", node.location);
+	emitDefectCall(gen, "\"invalid object conversion: \" + " + classDisplayName(gen) + " + \" is not " + escapeJSString(shown) + "\"", node.location);
 	emit(gen, ")(");
 	emitNode(gen, d.asExpr);
 	emit(gen, ")");
@@ -747,7 +765,7 @@ function assertedUnion(d: TypeAssertionData): Type | null {
 }
 
 function openTagTest(gen: JSGenerator, member: Type, union: Type, pass: string, location: SourceLocation): void {
-	openMemberTest(gen, member, union, pass + "typeof v === \"" + typeofTagOf(member) + "\"", [], location);
+	openMemberTest(gen, member, union, pass + "typeof v === \"" + heldKindOf(member) + "\"", [], location);
 }
 
 function openMemberTest(gen: JSGenerator, member: Type, union: Type, check: string, excluded: Symbol[], location: SourceLocation): void {
@@ -847,6 +865,14 @@ function emitDefectCall(gen: JSGenerator, message: string, location: SourceLocat
 	emit(gen, "(" + message + ")");
 }
 
+function classDisplayName(gen: JSGenerator): string {
+	if (!gen.helpers.classNameRuntime) {
+		gen.helpers.classNameRuntime = true;
+		gen.staticSlots.push("function msClassDisplayName(v) { const c = v.constructor; const k = globalThis.Symbol.for(\"metascript.typeDisplayName\"); return globalThis.Object.prototype.hasOwnProperty.call(c, k) ? c[k] : c.name; }\n");
+	}
+	return "msClassDisplayName(v)";
+}
+
 function classReference(sym: Symbol, location: SourceLocation): Node {
 	const classRef = createNodeAt(NodeKind.Identifier, { name: sym.name } as IdentifierData, location);
 	classRef.resolvedSym = sym;
@@ -860,7 +886,7 @@ function openClassTest(gen: JSGenerator, cls: Symbol, member: Type, union: Type,
 	emitNode(gen, classReference(cls, location));
 	emit(gen, ") ? v : ");
 	emitNode(gen, runtimeRef("msDefect", location));
-	emit(gen, "(v !== null && typeof v === \"object\" && !Array.isArray(v) && v.constructor !== Object ? \"invalid object conversion: \" + String(v.constructor.name).split(\"__Z\")[0] + \" is not " + shown + "\" : \"member '" + shown + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + ");
+	emit(gen, "(v !== null && typeof v === \"object\" && !Array.isArray(v) && v.constructor !== Object ? \"invalid object conversion: \" + " + classDisplayName(gen) + " + \" is not " + shown + "\" : \"member '" + shown + "' is not accessible for type '" + escapeJSString(namedTypeDisplay(union)) + "' using '\" + ");
 	emitHeldMember(gen, union, location);
 	emit(gen, " + \"'\"))(");
 }

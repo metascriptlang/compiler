@@ -292,7 +292,7 @@ export function createResult(okType: Type, errType: Type): Type {
 	falseVariant.kind = TypeKind.Struct;
 	falseVariant.typeNames = ["ok", "error"];
 	falseVariant.typeChildren = [createBooleanLiteral(false), eParam];
-	const base = createUnion([trueVariant, falseVariant]);
+	const base = createUnionInOrder([trueVariant, falseVariant]);
 	base.typeName = "Result";
 	base.typeExtra = booleanType();
 	base.typeNames = ["ok", "true", "false"];
@@ -552,6 +552,14 @@ function hasNullMember(t: Type): boolean {
 }
 
 export function createUnion(types: Type[]): Type {
+	return buildUnion(types, true);
+}
+
+export function createUnionInOrder(types: Type[]): Type {
+	return buildUnion(types, false);
+}
+
+function buildUnion(types: Type[], canonical: boolean): Type {
 	// Flatten nested unions — `Union(Null, Union(A, B))` becomes `Union(Null, A, B)`.
 	// Without flattening, downstream shape checks miss the canonical form and
 	// codegen falls back to a literal tagged union.
@@ -587,6 +595,7 @@ export function createUnion(types: Type[]): Type {
 		}
 		if (!dup) seen.push(k);
 	}
+	if (canonical && !extendsDeclaredSum(types)) sortUnionMembers(seen);
 	const t = emptyType();
 	t.kind = TypeKind.Union;
 	t.typeChildren = seen;
@@ -633,6 +642,42 @@ export function createUnion(types: Type[]): Type {
 		}
 	}
 	return t;
+}
+
+function extendsDeclaredSum(types: Type[]): boolean {
+	for (const ut of types) {
+		if (ut != null && ut.kind == TypeKind.Union && ut.typeNames != null && ut.typeNames.length >= 2) return true;
+	}
+	return false;
+}
+
+export function sortUnionMembers(members: Type[]): void {
+	const keys: string[] = [];
+	for (const m of members) keys.push(unionMemberKey(m));
+	for (let i = 1; i < members.length; i += 1) {
+		const m = members[i];
+		const k = keys[i];
+		let j = i - 1;
+		while (j >= 0 && keys[j] > k) {
+			members[j + 1] = members[j];
+			keys[j + 1] = keys[j];
+			j -= 1;
+		}
+		members[j + 1] = m;
+		keys[j + 1] = k;
+	}
+}
+
+function unionMemberKey(t: Type): string {
+	if (t.kind == TypeKind.Null) return "~null";
+	let owner: Type | null = t;
+	let depth = 0;
+	while (owner != null && owner.sym == null && owner.typeReturn != null && depth < PEEL_MAX_DEPTH) {
+		owner = owner.typeReturn;
+		depth += 1;
+	}
+	const ownerPath = owner != null && owner.sym != null ? owner.sym.modulePath : "";
+	return typeKey(t) + "\u0001" + ownerPath;
 }
 
 // DU-variant identity (Nim attachedOps-by-ItemId analog for structural types):
@@ -1580,6 +1625,51 @@ export function withoutReadonlyView(t: Type | null): Type {
 	return c;
 }
 
+export function isViewKind(t: Type | null): boolean {
+	return t != null && (t.kind == TypeKind.Span || t.kind == TypeKind.Borrow
+		|| t.kind == TypeKind.Lent || t.kind == TypeKind.Var);
+}
+
+// Struct and class fields are not descended: a field never holds a view (refused at its declaration).
+export function findViewType(t: Type | null): Type | null {
+	return findViewTypeAt(t, 0);
+}
+
+function findViewTypeAt(t: Type | null, depth: int32): Type | null {
+	if (t == null || depth > 8) return null;
+	if (isViewKind(t)) return t;
+	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Ref
+			|| t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias || t.kind == TypeKind.Sink) {
+		return findViewTypeAt(t.typeReturn, depth + 1);
+	}
+	if (t.kind == TypeKind.Tuple || t.kind == TypeKind.Union || t.kind == TypeKind.GenericInstance
+			|| t.kind == TypeKind.Varargs) {
+		for (const c of t.typeChildren) {
+			const v = findViewTypeAt(c, depth + 1);
+			if (v != null) return v;
+		}
+	}
+	return null;
+}
+
+export function nestedViewType(t: Type | null): Type | null {
+	let top = t;
+	if (top != null && top.kind == TypeKind.Union && top.typeChildren.length == 2) {
+		const a = top.typeChildren[0];
+		const b = top.typeChildren[1];
+		if (a != null && a.kind == TypeKind.Null) top = b;
+		else if (b != null && b.kind == TypeKind.Null) top = a;
+	}
+	if (top != null && top.kind == TypeKind.Var && top.typeReturn != null && top.typeReturn.kind == TypeKind.Span) top = top.typeReturn;
+	if (isViewKind(top)) return findViewType(top!.typeReturn);
+	return findViewType(top);
+}
+
+export function ownedAlternativeOf(view: Type): string {
+	const elem = view.typeReturn != null ? typeDisplayName(view.typeReturn) : "T";
+	return view.kind == TypeKind.Span ? "an owning " + elem + "[] (copy it with [...x])" : "a " + elem + " value";
+}
+
 // The T of a Locked<T> — the cell's third field. Null for anything else.
 export function lockedPayloadType(t: Type | null): Type {
 	if (!isLockedRef(t) || t.typeReturn == null) return null as unknown as Type;
@@ -1987,6 +2077,11 @@ export function getSysType(kind: TypeKind): Type {
 	const idx = kind as number;
 	if (idx >= 0 && idx < _sysTypes.length) return _sysTypes[idx];
 	return createPrimitive(kind);
+}
+
+export function isSysType(t: Type): boolean {
+	const idx = t.kind as number;
+	return idx >= 0 && idx < _sysTypes.length && _sysTypes[idx] == t;
 }
 
 // ===== Well-Known Type Accessors =====
@@ -3163,6 +3258,7 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 				if (t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)) return t;
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlace(copy, paramName, concrete, active);
+				if (t.kind == TypeKind.Union && copy.typeName == "" && (copy.typeNames == null || copy.typeNames.length == 0)) sortUnionMembers(copy.typeChildren);
 				if (t.kind == TypeKind.Union && isNullableShape(copy.typeChildren) && !hasGenericParams(copy)) {
 					return nullableUnionOf(copy.typeChildren);
 				}
@@ -3252,6 +3348,7 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 				if (t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)) return t;
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(copy, names, concretes, active);
+				if (t.kind == TypeKind.Union && copy.typeName == "" && (copy.typeNames == null || copy.typeNames.length == 0)) sortUnionMembers(copy.typeChildren);
 				if (t.kind == TypeKind.Union && isNullableShape(copy.typeChildren) && !hasGenericParams(copy)) {
 					return nullableUnionOf(copy.typeChildren);
 				}
@@ -4022,6 +4119,7 @@ function typeDisplayNameInner(t: Type | null): string {
 		TypeKind.Inferred => "<inferring>",
 		TypeKind.Function => "function",
 		TypeKind.GenericParam => t.typeName != "" ? t.typeName : "<T>",
+		TypeKind.BooleanLiteral => t.typeName,
 		_ => "<kind:" + t.kind.toString() + ">",
 	};
 }

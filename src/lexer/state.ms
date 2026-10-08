@@ -43,8 +43,11 @@ export function peekAt(s: LexerState, offset: int32): int32 {
 export function advanceChar(s: LexerState): int32 {
 	const ch = peek(s);
 	s.pos += 1;
-	if (ch == "\n".code) {
+	if (ch == "\r".code) {
 		s.line += 1;
+		s.column = 1;
+	} else if (ch == "\n".code) {
+		if (s.pos < 2 || s.source.byteAt(s.pos - 2) != "\r".code) s.line += 1;
 		s.column = 1;
 	} else {
 		s.column += 1;
@@ -138,10 +141,14 @@ test "advanceChar updates pos and column" {
 }
 
 test "advanceChar newline updates line" {
-	const s = createLexerState("\nx");
-	advanceChar(s);
-	assert s.line == 2;
-	assert s.column == 1;
+	for (const newline of ["\n", "\r\n", "\r"]) {
+		const s = createLexerState(newline + "x");
+		skip(s, newline.byteLength);
+		assert s.pos == newline.byteLength;
+		assert s.line == 2;
+		assert s.column == 1;
+		assert peek(s) == "x".code;
+	}
 }
 
 test "skip advances N chars" {

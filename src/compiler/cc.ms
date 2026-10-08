@@ -1132,9 +1132,14 @@ export function objectSearchDirs(ccOption: number, ccBinary: string, isCpp: bool
 	return quote;
 }
 
+function needsMathLibrary(targetOs: string): boolean {
+	const os = targetOs == "bare" ? platform : targetOs;
+	return os != "windows" && os != "macos" && os != "darwin";
+}
+
 // Compile a .c file to a native binary.
 // Returns Result.ok on exit-code 0; Result.err carries gcc/clang stderr.
-export function compileC(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
+export function compileC(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string, targetOs: string): Result<void, ProcessError> {
 	ensureDir(dirname(outBinary));
 	const isCpp = isCppFile(cFile);
 	if (isCpp) _hasCppCompile = true;
@@ -1152,7 +1157,7 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 	args.push(outBinary);
 	const flags = appendParsedFlags(command.path, args, extraFlags);
 	if (!flags.ok) return Result.err(flags.error);
-	if (!args.includes("-nostdlib") && !args.includes("-nodefaultlibs")) args.push("-lm");
+	if (needsMathLibrary(targetOs) && !args.includes("-nostdlib") && !args.includes("-nodefaultlibs")) args.push("-lm");
 	const r = runCc(command, args);
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
@@ -1253,7 +1258,7 @@ interface LinkCommand {
 	flagArgs: string[];
 }
 
-function linkCommand(extraFlags: string, ccOption: number, ccBinary: string): Result<LinkCommand, ProcessError> {
+function linkCommand(extraFlags: string, ccOption: number, ccBinary: string, targetOs: string): Result<LinkCommand, ProcessError> {
 	const resolved = compilerCommand(ccOption, ccBinary, _hasCppCompile);
 	if (!resolved.ok) return Result.err(resolved.error);
 	const command = resolved.value;
@@ -1263,18 +1268,18 @@ function linkCommand(extraFlags: string, ccOption: number, ccBinary: string): Re
 	const flagArgs: string[] = [];
 	const flags = appendParsedFlags(command.path, flagArgs, extraFlags);
 	if (!flags.ok) return Result.err(flags.error);
-	if (!flagArgs.includes("-nostdlib") && !flagArgs.includes("-nodefaultlibs")) flagArgs.push("-lm");
+	if (needsMathLibrary(targetOs) && !flagArgs.includes("-nostdlib") && !flagArgs.includes("-nodefaultlibs")) flagArgs.push("-lm");
 	return Result.ok({ command, prefix, flagArgs });
 }
 
-export function warmLinkPlan(outBinary: string, extraFlags: string, ccOption: number, ccBinary: string): void {
-	const link = linkCommand(extraFlags, ccOption, ccBinary);
+export function warmLinkPlan(outBinary: string, extraFlags: string, ccOption: number, ccBinary: string, targetOs: string): void {
+	const link = linkCommand(extraFlags, ccOption, ccBinary, targetOs);
 	if (link.ok) linkPlanFor(link.value.command, link.value.prefix, link.value.flagArgs, outBinary);
 }
 
-export function linkObjects(oFiles: string[], outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): Result<void, ProcessError> {
+export function linkObjects(oFiles: string[], outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string, targetOs: string): Result<void, ProcessError> {
 	ensureDir(dirname(outBinary));
-	const link = linkCommand(extraFlags, ccOption, ccBinary);
+	const link = linkCommand(extraFlags, ccOption, ccBinary, targetOs);
 	if (!link.ok) return Result.err(link.error);
 	const command = link.value.command;
 	const prefix = link.value.prefix;
@@ -1320,6 +1325,33 @@ export function archiveStatic(oFiles: string[], outArchive: string): Result<void
 // Get the runtime directory path (for -I include path).
 export function getRuntimeDir(): string {
 	return resolveRuntime();
+}
+
+test "the default math library follows the link target, not the host" {
+	for (const os of ["linux", "freebsd", "android", "windows", "macos", "darwin"]) {
+		const link = linkCommand("", 1, "", os);
+		assert link.ok;
+		assert link.value.flagArgs.includes("-lm") == (os == "linux" || os == "freebsd" || os == "android");
+	}
+}
+
+test "a host-runnable bare link uses the host target's math library policy" {
+	const bare = linkCommand("", 1, "", "bare");
+	const host = linkCommand("", 1, "", platform);
+	assert bare.ok;
+	assert host.ok;
+	assert bare.value.flagArgs.includes("-lm") == host.value.flagArgs.includes("-lm");
+}
+
+test "no-default-library flags suppress implicit math linkage but preserve explicit libraries" {
+	for (const flag of ["-nostdlib", "-nodefaultlibs"]) {
+		const implicit = linkCommand(flag, 1, "", "linux");
+		assert implicit.ok;
+		assert !implicit.value.flagArgs.includes("-lm");
+		const explicit = linkCommand(flag + " -lm", 1, "", "linux");
+		assert explicit.ok;
+		assert explicit.value.flagArgs.includes("-lm");
+	}
 }
 
 test "an SBF build with LTO compiles bitcode, and one without LTO native objects" {

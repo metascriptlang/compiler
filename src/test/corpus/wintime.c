@@ -78,6 +78,7 @@ int main(void) {
 		fprintf(stderr, "wintime: usage: wintime <command> [args...]\n");
 		fprintf(stderr, "                wintime --sleep-ms <n>\n");
 		fprintf(stderr, "                wintime --detach <command> [args...]\n");
+		fprintf(stderr, "                wintime --wait-ms <n> <command> [args...]\n");
 		fprintf(stderr, "                wintime --mtime <path>\n");
 		return 127;
 	}
@@ -106,6 +107,44 @@ int main(void) {
 		/* FILETIME counts 100 ns ticks from 1601-01-01; shift to the Unix
 		 * epoch so the output is directly comparable with `git log %ct`. */
 		printf("%llu\n", (t - 116444736000000000ULL) / 10000000ULL);
+		return 0;
+	}
+
+	if (strncmp(p, "--wait-ms", 9) == 0) {
+		char* end = NULL;
+		DWORD limit = (DWORD)strtoul(p + 9, &end, 10);
+		while (end && *end == ' ') end++;
+		if (!end || *end == '\0') {
+			fprintf(stderr, "wintime: --wait-ms needs a limit and a command\n");
+			return 127;
+		}
+		STARTUPINFOA wsi;
+		PROCESS_INFORMATION wpi;
+		ZeroMemory(&wsi, sizeof wsi);
+		wsi.cb = sizeof wsi;
+		ZeroMemory(&wpi, sizeof wpi);
+		HANDLE job = CreateJobObjectA(NULL, NULL);
+		if (!job || !CreateProcessA(NULL, end, NULL, NULL, FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED,
+		                            NULL, NULL, &wsi, &wpi)) {
+			fprintf(stderr, "wintime: CreateProcess failed (%lu)\n", GetLastError());
+			return 127;
+		}
+		if (!AssignProcessToJobObject(job, wpi.hProcess)) {
+			fprintf(stderr, "wintime: AssignProcessToJobObject failed (%lu)\n", GetLastError());
+			TerminateProcess(wpi.hProcess, 127);
+			return 127;
+		}
+		ResumeThread(wpi.hThread);
+		DWORD waited = WaitForSingleObject(wpi.hProcess, limit);
+		CloseHandle(wpi.hThread);
+		CloseHandle(wpi.hProcess);
+		if (waited == WAIT_TIMEOUT) {
+			TerminateJobObject(job, 124);
+			CloseHandle(job);
+			printf("timeout\n");
+			return 124;
+		}
+		CloseHandle(job);
 		return 0;
 	}
 

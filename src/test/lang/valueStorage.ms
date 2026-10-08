@@ -28,7 +28,7 @@ function arrayProjection(): int32 { const values: int32[] = [10, 20, 30]; return
 struct EntryLookupPair<K, V> { hcode: int64; key: K; value: V; }
 
 class EntryLookupMap<K, V> {
-	entries: EntryLookupPair<K, V>[];
+	entries: EntryLookupPair<K, V>[] = [];
 }
 
 function entryLookupLookup<K, V>(m: EntryLookupMap<K, V>, target: K, h: int64): boolean {

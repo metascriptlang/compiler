@@ -13,12 +13,15 @@ import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScop
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
+import { isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType } from "./types";
+import { forEachChild } from "../ast/visitor";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
 import { findCallTypeArg } from "../parser/context";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
 import { mintCtorRoutine, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
 import { monoTypeKey } from "../monomorphize/registry";
+import { constantLiteralOf } from "./constFold";
 
 function anyHasGenericParams(types: Type[]): boolean {
 	for (const t of types) {
@@ -293,8 +296,32 @@ export function resolveReturnAnnotation(text: string, ctx: CheckerContext, line:
 	if (t.kind == TypeKind.Span) {
 		const elem = t.typeReturn != null ? typeDisplayName(t.typeReturn) : "T";
 		addError(ctx, "cannot return Span<" + elem + ">: a Span borrows memory owned by its source; return the owning container (Vec<" + elem + "> or " + elem + "[]) instead", line, col);
+	} else {
+		refuseNestedView(ctx, "a return value", t, line, col);
 	}
 	return t;
+}
+
+export function refuseNestedView(ctx: CheckerContext, what: string, t: Type | null, line: int32, col: int32): void {
+	const view = nestedViewType(t);
+	if (view == null) return;
+	addError(ctx, what + " of type " + typeDisplayName(t!) + " cannot hold " + typeDisplayName(view)
+		+ " inside it: a view borrows memory its source can free while the container still holds it — use " + ownedAlternativeOf(view), line, col);
+}
+export function refuseSuspendingViewParam(ctx: CheckerContext, name: string, t: Type | null, line: int32, col: int32): void {
+	const view = findViewType(t);
+	if (view == null) return;
+	const what = view.kind == TypeKind.Var ? "a ref/out parameter" : "a " + typeDisplayName(view) + " view";
+	addError(ctx, "parameter '" + name + "' of an async or generator function cannot be " + what
+		+ ": its parameters are captured into the frame the function suspends in, and the memory they point at can change or die across an await or yield — take the view again after each await, or pass a copy with [...x]", line, col);
+}
+
+export function bodyMentionsName(body: Node | null, name: string): boolean {
+	if (body == null) return false;
+	if (body.kind == NodeKind.Identifier && (body.data as IdentifierData).name == name) return true;
+	let hit = false;
+	forEachChild(body, (c: Node): void => { if (!hit && bodyMentionsName(c, name)) hit = true; });
+	return hit;
 }
 
 export function bindFromExplicitTypeArgs(node: Node, paramNames: string[], ctx: CheckerContext): UnifyBindings {
@@ -398,6 +425,30 @@ export function builtinTypeNamed(ctx: CheckerContext, name: string): Type | null
 	if (lookupSymbol(ctx.table, name) != null) return null;
 	const t = resolveAnnotation(name, ctx, 0, 0);
 	return isUnresolvedType(t) || t.kind == TypeKind.Null || t.sym != null ? null : t;
+}
+
+function isAllDigits(s: string): boolean {
+	if (s.length == 0) return false;
+	for (let i = 0; i < s.byteLength; i += 1) {
+		const code = s.byteAt(i);
+		if (code < "0".code || code > "9".code) return false;
+	}
+	return true;
+}
+
+function constArrayDimension(name: string, ctx: CheckerContext, line: int32, col: int32): int32 {
+	const sym = lookupSymbol(ctx.table, name);
+	if (sym != null) {
+		markUsedIn(ctx, sym);
+		const ident = createNodeAt(NodeKind.Identifier, { name }, makeLoc(line, col));
+		ident.resolvedSym = sym;
+		const folded = constantLiteralOf(ident, 0);
+		if (folded != null && folded.kind == NodeKind.NumberLiteral) {
+			const fd = folded.data as NumberLiteralData;
+			if (!fd.isFloat && fd.intVal >= 0 && fd.intVal <= 2147483647) return fd.intVal as int32;
+		}
+	}
+	return -1;
 }
 
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
@@ -681,8 +732,19 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			if (sizeStr == "" || sizeStr == " ") {
 				return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
 			}
-			const size = parseIntStr(sizeStr) as int32;
-			return createSizedArray(resolveAnnotation(inner, ctx, line, col), size);
+			if (isAllDigits(sizeStr)) {
+				return createSizedArray(resolveAnnotation(inner, ctx, line, col), parseIntStr(sizeStr));
+			}
+
+			const dim = constArrayDimension(sizeStr, ctx, line, col);
+			if (dim < 0) {
+				if (line > 0) {
+					addError(ctx, `array size '${sizeStr}' must be a compile-time integer constant`, line, col);
+					return errorType();
+				}
+				return createSizedArray(resolveAnnotation(inner, ctx, line, col), 0);
+			}
+			return createSizedArray(resolveAnnotation(inner, ctx, line, col), dim);
 		}
 	}
 
@@ -1444,6 +1506,11 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 			}
 		}
 	}
+	for (let pi = 0; pi < paramTypes.length && pi < d.params.length; pi += 1) {
+		const pLoc = node.paramLocations != null && pi < node.paramLocations.length && node.paramLocations[pi] != null
+			? node.paramLocations[pi] : node.location;
+		refuseNestedView(ctx, "parameter '" + d.params[pi] + "'", paramTypes[pi], pLoc.line, pLoc.column);
+	}
 
 	const retLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
 	// Type predicate detection: fnReturnType is `"<paramName> is <typeText>"`
@@ -1718,6 +1785,13 @@ function warnOwningSelfRef(ctx: CheckerContext, fieldName: string, typeName: str
 	addWarning(ctx, "owning self-referential field '" + fieldName + "' in '" + typeName + "': destroy recurses per node — a long chain overflows the stack; for non-owning links use Cursor<" + typeName + "> with an arena/array owner", line, col);
 }
 
+function refuseViewField(ctx: CheckerContext, fieldName: string, typeName: string, fieldType: Type | null, line: int32, col: int32): void {
+	const view = findViewType(fieldType);
+	if (view == null) return;
+	addError(ctx, "field '" + fieldName + "' of '" + typeName + "' cannot hold " + typeDisplayName(view)
+		+ ": a view borrows memory its source can free while the field still holds it — store " + ownedAlternativeOf(view), line, col);
+}
+
 function interfaceCycleChain(ctx: CheckerContext, currentName: string, targetName: string, visited: string[]): string {
 	for (const v of visited) {
 		if (v == currentName) return "";
@@ -1857,16 +1931,17 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	for (let wi = 0; wi < d.interfaceFields.length; wi += 1) {
 		if (wi >= fieldTypes.length) break;
 		const wft = fieldTypes[wi];
+		let wLine = node.location.line;
+		let wCol = node.location.column;
+		if (node.paramLocations != null && wi < node.paramLocations.length) {
+			wLine = node.paramLocations[wi].line;
+			wCol = node.paramLocations[wi].column;
+		}
 		if (wft != null && wft.kind == TypeKind.Ref && wft.typeReturn != null
 			&& declaresType(wft.typeReturn, sym)) {
-			let wLine = node.location.line;
-			let wCol = node.location.column;
-			if (node.paramLocations != null && wi < node.paramLocations.length) {
-				wLine = node.paramLocations[wi].line;
-				wCol = node.paramLocations[wi].column;
-			}
 			warnOwningSelfRef(ctx, d.interfaceFields[wi], d.interfaceName, wLine, wCol);
 		}
+		if (node.kind != NodeKind.StructDecl) refuseViewField(ctx, d.interfaceFields[wi], d.interfaceName, wft, wLine, wCol);
 	}
 
 	// Update sym type in-place — avoid temporary Type that shares typeChildren
@@ -1994,7 +2069,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		resolved.typeName = d.aliasName;
 	}
 	// Tier 3: for generic aliases, stamp the typeName so instantiation can reference the alias
-	if (hasGenericAlias && resolved.typeName == "") {
+	if (hasGenericAlias && resolved.typeName == "" && !isSysType(resolved)) {
 		resolved.typeName = d.aliasName;
 	}
 	if (hasGenericAlias && resolved.kind == TypeKind.Ref && resolved.typeReturn != null
@@ -2135,7 +2210,7 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 	// Build Union type with discriminant metadata.
 	// typeExtra = discriminant type (Enum or Boolean primitive)
 	// typeNames = [discFieldName, key0, key1, ...]
-	const unionType = createUnion(variantTypes);
+	const unionType = createUnionInOrder(variantTypes);
 	unionType.typeName = d.aliasName;
 	unionType.typeExtra = isBooleanDisc ? booleanType() : discType;
 	const names: string[] = [d.discriminantName];
@@ -2267,6 +2342,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	const sym = lookupSymbol(ctx.table, d.className);
 	if (sym == null) return;
 	node.resolvedSym = sym;
+	if (sym.instantiatedFrom == null) d.classDisplayName = d.className;
 
 	// Set state to Shaped immediately to allow circular references in methods/properties
 	sym.state = SymbolState.Shaped;
@@ -2345,6 +2421,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				if (pd.propType != "") {
 					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
+					refuseViewField(ctx, pd.propName, d.className, staticType, member.location.line, member.location.column);
 				}
 				member.nodeType = staticType;
 				const sf = member.resolvedSym;
@@ -2366,6 +2443,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 						&& declaresType(propType.typeReturn, sym)) {
 						warnOwningSelfRef(ctx, pd.propName, d.className, member.location.line, member.location.column);
 					}
+					refuseViewField(ctx, pd.propName, d.className, propType, member.location.line, member.location.column);
 				} else {
 					memberTypes.push(inferredType());
 				}
@@ -2558,6 +2636,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 				if (pd.propType != "") {
 					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
+					refuseViewField(ctx, pd.propName, d.actorName, staticType, member.location.line, member.location.column);
 				}
 				member.nodeType = staticType;
 				const sf = member.resolvedSym;
@@ -2575,6 +2654,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 				resolveTypeExpr(member.typeExpr, ctx);
 				member.nodeType = propType;
 				memberTypes.push(propType);
+				refuseViewField(ctx, pd.propName, d.actorName, propType, member.location.line, member.location.column);
 			} else {
 				memberTypes.push(inferredType());
 			}
@@ -2620,9 +2700,9 @@ function declareGeneric(ctx: CheckerContext, kind: NodeKind, name: string, param
 		for (let i = 0; i < fields.length; i += 1) {
 			body.push(createNodeAt(NodeKind.PropertyDecl, { propName: fields[i], propType: types[i], propIsStatic: false, propIsReadonly: false, propVisibility: "", propInitializer: null as unknown as Node }, zl));
 		}
-		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classExtends: "", classBody: body, nameLocation: zl }, zl);
+		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classDisplayName: name, classExtends: "", classBody: body, nameLocation: zl }, zl);
 	} else {
-		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldDecorators: noFieldDecorators(fields.length) }, zl);
+		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length) }, zl);
 	}
 	decl.typeArg = params;
 	const sym = makeSymbol(name, kind == NodeKind.ClassDecl ? SymbolKind.Class : SymbolKind.Interface, createStruct(name, fields, [], true), false);
@@ -2705,8 +2785,10 @@ test "string | number" {
 	const t = resolveWith("string | number");
 	assert t.kind == TypeKind.Union;
 	assert t.typeChildren.length == 2;
-	assert t.typeChildren[0].kind == TypeKind.String;
-	assert t.typeChildren[1].kind == TypeKind.Number;
+	assert t.typeChildren[0].kind == TypeKind.Number;
+	assert t.typeChildren[1].kind == TypeKind.String;
+	const back = resolveWith("number | string");
+	assert back.typeChildren[0].kind == TypeKind.Number && back.typeChildren[1].kind == TypeKind.String;
 }
 
 test "known symbol" {
@@ -2862,13 +2944,13 @@ test "Ref<number> | null stays Union(Ref, Null)" {
 	assert t.typeChildren[1].kind == TypeKind.Null;
 }
 
-test "null | Ref<string> stays Union(Null, Ref)" {
+test "null | Ref<string> stays Union(Ref, Null)" {
 	const t = resolveWith("null | Ref<string>");
 	assert t.kind == TypeKind.Union;
 	assert t.typeChildren.length == 2;
-	assert t.typeChildren[0].kind == TypeKind.Null;
-	assert t.typeChildren[1].kind == TypeKind.Ref;
-	const inner1 = t.typeChildren[1].typeReturn;
+	assert t.typeChildren[0].kind == TypeKind.Ref;
+	assert t.typeChildren[1].kind == TypeKind.Null;
+	const inner1 = t.typeChildren[0].typeReturn;
 	assert inner1 != null && inner1.kind == TypeKind.String;
 }
 
@@ -2882,13 +2964,13 @@ test "Ptr<number> | null stays Union(Ptr, Null)" {
 	assert t.typeChildren[1].kind == TypeKind.Null;
 }
 
-test "null | Ptr<boolean> stays Union(Null, Ptr)" {
+test "null | Ptr<boolean> stays Union(Ptr, Null)" {
 	const t = resolveWith("null | Ptr<boolean>");
 	assert t.kind == TypeKind.Union;
 	assert t.typeChildren.length == 2;
-	assert t.typeChildren[0].kind == TypeKind.Null;
-	assert t.typeChildren[1].kind == TypeKind.Ptr;
-	const inner1 = t.typeChildren[1].typeReturn;
+	assert t.typeChildren[0].kind == TypeKind.Ptr;
+	assert t.typeChildren[1].kind == TypeKind.Null;
+	const inner1 = t.typeChildren[0].typeReturn;
 	assert inner1 != null && inner1.kind == TypeKind.Boolean;
 }
 

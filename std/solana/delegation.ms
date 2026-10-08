@@ -66,7 +66,7 @@ function closeBuffer(payer: Account, buffer: Account): Result<uint64, ProgramErr
 
 export function delegateAt(
 	accounts: DelegationAccounts,
-	seeds: Span<SeedSlice>,
+	seeds: Readonly<Span<SeedSlice>>,
 	bump: uint8,
 	config: DelegationConfig,
 ): Result<uint64, ProgramError> {

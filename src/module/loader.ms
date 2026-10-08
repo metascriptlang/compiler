@@ -52,22 +52,22 @@ export class SourceProvider {
 	entries: MapEntry[];
 	useFileSystem: boolean;
 	taReadFn: TaReadFn;  // null for map/filesystem providers; non-null for Trans-Am-backed
-	readLog: string[];   // null normally; set per-call by the header-inline cache wrapper to record every probe as "<path>\t<hash>" / "<path>\t-"
+	readLog: string[] | null;   // set per-call by the header-inline cache wrapper to record every probe as "<path>\t<hash>" / "<path>\t-"
 }
 
 export function createMapProvider(entries: MapEntry[]): SourceProvider {
-	return { entries, useFileSystem: false, taReadFn: null as unknown as TaReadFn, readLog: null as unknown as string[] };
+	return { entries, useFileSystem: false, taReadFn: null as unknown as TaReadFn, readLog: null };
 }
 
 export function createFileSystemProvider(): SourceProvider {
-	return { entries: [], useFileSystem: true, taReadFn: null as unknown as TaReadFn, readLog: null as unknown as string[] };
+	return { entries: [], useFileSystem: true, taReadFn: null as unknown as TaReadFn, readLog: null };
 }
 
 // Trans-Am-backed provider. The callback MUST load the file into Trans-Am, record a
 // FileText dependency on the current query frame, and return the raw source string.
 // Constructed by transam/index.ms:createTaSourceProvider.
 export function createTaReadProvider(readFn: TaReadFn): SourceProvider {
-	return { entries: [], useFileSystem: false, taReadFn: readFn };
+	return { entries: [], useFileSystem: false, taReadFn: readFn, readLog: null };
 }
 
 export function provideSource(provider: SourceProvider, path: string): Result<string, string> {

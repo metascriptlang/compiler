@@ -1,9 +1,5 @@
 // @stdout: byte view span slots 294 294 98 99 3 97 120 97 4 98 abc | 630720
 
-struct Chunk {
-	bytes: Readonly<Span<uint8>>;
-}
-
 function sum(bytes: Readonly<Span<uint8>>): int32 {
 	let total: int32 = 0;
 	for (const b of bytes) { total = total + (b as int32); }
@@ -39,9 +35,9 @@ function assigned(text: string): int32 {
 	return at(view, 2);
 }
 
-function fieldLength(text: string): int32 {
-	const chunk: Chunk = { bytes: text.asBytes() };
-	return chunk.bytes.length as int32;
+function viewLength(text: string): int32 {
+	const view: Readonly<Span<uint8>> = text.asBytes();
+	return view.length as int32;
 }
 
 function copied(text: string): uint8[] {
@@ -56,10 +52,10 @@ function churn(): int32 {
 		const t = build(i + 1);
 		acc = acc + sum(s.asBytes()) + at(t.asBytes(), 1) + sum(build(i).asBytes());
 		const span: Readonly<Span<uint8>> = t.asBytes();
-		const chunk: Chunk = { bytes: s.asBytes() };
+		const second: Readonly<Span<uint8>> = s.asBytes();
 		const kept = copied(s);
 		kept.push(33);
-		acc = acc + at(span, 0) + (chunk.bytes.length as int32) + kept.length + bump(kept);
+		acc = acc + at(span, 0) + (second.length as int32) + kept.length + bump(kept);
 		i = i + 1;
 	}
 	return acc;
@@ -72,5 +68,10 @@ function grown(text: string): string {
 }
 
 const text = "abc";
-const top: Readonly<Span<uint8>> = text.asBytes();
-console.log(`byte view span slots ${sum(text.asBytes())} ${sum((text.asBytes()))} ${typedLocal(text)} ${assigned(text)} ${fieldLength(text)} ${at(top, 0)} ${at(fresh().asBytes(), 0)} ${at(text.asBytes(), 0)} ${grown(text)} ${text} | ${churn()}`);
+
+function fromModuleConst(): int32 {
+	const view = text.asBytes();
+	return at(view, 0);
+}
+
+console.log(`byte view span slots ${sum(text.asBytes())} ${sum((text.asBytes()))} ${typedLocal(text)} ${assigned(text)} ${viewLength(text)} ${fromModuleConst()} ${at(fresh().asBytes(), 0)} ${at(text.asBytes(), 0)} ${grown(text)} ${text} | ${churn()}`);

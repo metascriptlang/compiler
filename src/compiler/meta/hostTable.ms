@@ -823,6 +823,20 @@ function _bridgeMsUnionReadMaybe(args: RaiserValue[]): RaiserValue {
 	return _unionRead(args, true);
 }
 
+function _bridgeMsCheckRangeI32(args: RaiserValue[]): RaiserValue {
+	const v = args[0];
+	const lo = args[1].kind == RaiserValueKind.Float ? args[1].floatVal as int64 : args[1].intVal;
+	const hi = args[2].kind == RaiserValueKind.Float ? args[2].floatVal as int64 : args[2].intVal;
+	const inRange = v.kind == RaiserValueKind.Float ? v.floatVal > (lo as float64) - 1.0 && v.floatVal < (hi as float64) + 1.0 : v.intVal >= lo && v.intVal <= hi;
+	if (!inRange) raiseFromHost(`value ${v.kind == RaiserValueKind.Float ? `${v.floatVal}` : `${v.intVal}`} not in range ${lo} .. ${hi}`, true);
+	return v.kind == RaiserValueKind.Float ? raiserInt(v.floatVal as int64) : v;
+}
+
+function _bridgeMsMaybeGet(args: RaiserValue[]): RaiserValue {
+	if (args[0].kind == RaiserValueKind.Nil) raiseFromHost(unboxString(args[1]) + unboxString(args[2]) + "'", true);
+	return args[0];
+}
+
 function _bridgeMsUnionWrapMaybe(args: RaiserValue[]): RaiserValue {
 	const objHeap = activeHostObjectHeap();
 	if (objHeap == null || args[0].kind == RaiserValueKind.Nil) return raiserNil();
@@ -838,6 +852,8 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msUnionRead", _bridgeMsUnionRead, HostCapability.Pure);
 	registerHostFn("msUnionReadMaybe", _bridgeMsUnionReadMaybe, HostCapability.Pure);
 	registerHostFn("msUnionWrapMaybe", _bridgeMsUnionWrapMaybe, HostCapability.Pure);
+	registerHostFn("msMaybeGet", _bridgeMsMaybeGet, HostCapability.Pure);
+	registerHostFn("msCheckRangeI32", _bridgeMsCheckRangeI32, HostCapability.Pure);
 
 	// fs predicates
 	registerHostFn("msFsExists",         _bridgeMsFsExists, HostCapability.FileRead);

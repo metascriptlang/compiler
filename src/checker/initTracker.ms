@@ -11,7 +11,7 @@
 // spawnAffinity.ms so both trackers stay in lockstep.
 
 import { Node, NodeKind, BlockStmtData, CallExprData, ExprStmtData, BooleanLiteralData, TypeKind, Type } from "../ast/node";
-import { skipModifier, isStructType } from "./types";
+import { skipModifier, isStructType, isMaybeType } from "./types";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { BreakState, addName, hasName, collectSince, mergeBranches } from "./branchSet";
 
@@ -143,7 +143,7 @@ export function requiresInit(t: Type | null): boolean {
 
 function requiresInitAt(t: Type | null, depth: int32): boolean {
 	const inner = skipModifier(t);
-	if (inner == null || depth > 16) return false;
+	if (inner == null || depth > 16 || isMaybeType(inner)) return false;
 	if (inner.kind == TypeKind.Function || inner.kind == TypeKind.Ref) return true;
 	if (!isStructType(inner) || inner.typeChildren == null) return false;
 	for (const field of inner.typeChildren) {

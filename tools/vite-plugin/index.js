@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync, readFileSync, mkdirSync } from "node:fs";
-import { join, resolve, dirname, sep } from "node:path";
+import { existsSync, realpathSync, readFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { join, resolve, dirname, relative } from "node:path";
+import MagicString from "magic-string";
 
-const MS_RE = /\.ms(\?.*)?$/;
+const MS_RE = /\.(?:ms|jms)(\?.*)?$/;
 
 // Vite hands ids through the platform's real path (/tmp is a symlink to
 // /private/tmp on macOS) while plugin options and the manifest keep the
@@ -26,6 +27,7 @@ export default function metascript(options = {}) {
 	let entry = options.entry ? canon(resolve(options.entry)) : null;
 	let emitted = null;
 	let server = null;
+	let compileFailed = false;
 
 	// One emit covers the whole graph, so the first .ms resolve pays for all of
 	// them; later resolves reuse the tree until a source file changes. The
@@ -36,7 +38,7 @@ export default function metascript(options = {}) {
 		mkdirSync(outDir, { recursive: true });
 		// Vite reads the sourceMappingURL comment off the file it loads, so the
 		// map only has to exist beside the emitted module.
-		const args = ["build", entry, "--target=js", "--split", `--output=${outDir}`];
+		const args = ["build", entry, ...(options.compilerArgs ?? []), "--target=js", "--split", `--output=${outDir}`];
 		if (options.sourcemap !== false) args.push("--sourcemap");
 		try {
 			execFileSync(msc, args, {
@@ -48,8 +50,20 @@ export default function metascript(options = {}) {
 		}
 		const manifest = JSON.parse(readFileSync(join(outDir, "_manifest.json"), "utf8"));
 		const bySource = new Map();
-		for (const m of manifest.modules) bySource.set(canon(m.source), join(outDir, m.out));
-		emitted = { bySource };
+		const byOutput = new Map();
+		for (const m of manifest.modules) {
+			const file = canon(join(outDir, m.out));
+			const mapFile = `${file}.map`;
+			const code = readFileSync(file, "utf8").replace(/\n*\/\/# sourceMappingURL=[^\n]*\n?/, "\n");
+			let map = options.sourcemap !== false && existsSync(mapFile)
+				? JSON.parse(readFileSync(mapFile, "utf8"))
+				: null;
+			if (map) map = { ...map, sources: map.sources.map(source => resolve(dirname(file), source).replace(/\\/g, "/")) };
+			const source = canon(m.source);
+			bySource.set(source, file);
+			byOutput.set(file, { source, code, map });
+		}
+		emitted = { bySource, byOutput };
 		// Vite only watches inside root, so .ms sources living outside it have
 		// to be registered explicitly or an edit never reaches the handler.
 		if (server) server.watcher.add([...bySource.keys()]);
@@ -68,17 +82,42 @@ export default function metascript(options = {}) {
 		configureServer(s) {
 			server = s;
 			if (emitted) s.watcher.add([...emitted.bySource.keys()]);
-			// A .ms edit invalidates the whole emitted tree: cross-module type
-			// information means one edit can change another module's output.
-			s.watcher.on("change", (file) => {
-				if (!MS_RE.test(file)) return;
-				emitted = null;
-				// Importers cache their resolved import paths, so invalidating
-				// only the emitted modules leaves them serving the stale tree
-				// without ever re-entering resolveId (which re-emits).
-				s.moduleGraph.invalidateAll();
-				s.ws.send({ type: "full-reload" });
-			});
+		},
+
+		handleHotUpdate(ctx) {
+			if (emitted === null) return;
+			const source = canon(ctx.file);
+			if (emitted.byOutput.has(source)) return [];
+			if (!emitted.bySource.has(source)) return;
+			const previous = emitted;
+			try {
+				emit();
+			} catch (error) {
+				compileFailed = true;
+				ctx.server.ws.send({
+					type: "error",
+					err: { message: error.message, stack: error.stack, plugin: "vite-plugin-metascript" },
+				});
+				return [];
+			}
+			const changed = new Set();
+			for (const [file, output] of emitted.byOutput) {
+				if (previous.byOutput.get(file)?.code !== output.code) changed.add(output.source);
+			}
+			for (const [file, output] of previous.byOutput) {
+				if (emitted.byOutput.has(file)) continue;
+				changed.add(output.source);
+				if (existsSync(file)) unlinkSync(file);
+				if (existsSync(`${file}.map`)) unlinkSync(`${file}.map`);
+			}
+			const modules = new Set();
+			for (const file of changed) {
+				const loaded = ctx.server.moduleGraph.getModulesByFile(file.replace(/\\/g, "/"));
+				if (loaded) for (const module of loaded) modules.add(module);
+			}
+			if (compileFailed && modules.size === 0) ctx.server.ws.send({ type: "update", updates: [] });
+			compileFailed = false;
+			return [...modules];
 		},
 
 		// Rollup loads the emitted file through its own fs and does not follow
@@ -86,15 +125,28 @@ export default function metascript(options = {}) {
 		// generated .js unless the map is handed over here. Dev goes through the
 		// same hook, which also spares the browser a second request for it.
 		load(id) {
-			const file = stripQuery(id);
-			if (!file.startsWith(outDir + sep) || !file.endsWith(".js")) return null;
-			const mapFile = `${file}.map`;
-			if (!existsSync(file) || !existsSync(mapFile)) return null;
-			const code = readFileSync(file, "utf8");
-			return {
-				code: code.replace(/\n*\/\/# sourceMappingURL=[^\n]*\n?/, "\n"),
-				map: JSON.parse(readFileSync(mapFile, "utf8")),
-			};
+			const source = canon(stripQuery(id));
+			const output = emitted?.bySource.get(source);
+			const module = output ? emitted.byOutput.get(output) : null;
+			return module ? { code: module.code, map: module.map } : null;
+		},
+
+		transform(code, id) {
+			const source = canon(stripQuery(id));
+			const output = emitted?.bySource.get(source);
+			if (!output) return null;
+			let rewritten = null;
+			for (const statement of this.parse(code).body) {
+				const specifier = statement.source;
+				if (!specifier || !specifier.value.startsWith(".")) continue;
+				const target = emitted.byOutput.get(canon(resolve(dirname(output), specifier.value)));
+				if (!target) continue;
+				let path = relative(dirname(source), target.source).replace(/\\/g, "/");
+				if (!path.startsWith(".")) path = "./" + path;
+				if (!rewritten) rewritten = new MagicString(code);
+				rewritten.overwrite(specifier.start, specifier.end, JSON.stringify(path));
+			}
+			return rewritten ? { code: rewritten.toString(), map: rewritten.generateMap({ hires: true, source: id, includeContent: true }) } : null;
 		},
 
 		resolveId(source, importer) {
@@ -104,7 +156,7 @@ export default function metascript(options = {}) {
 			if (!existsSync(file)) return null;
 			if (entry === null) entry = file;
 			if (emitted === null) emit();
-			return emitted.bySource.get(file) ?? null;
+			return emitted.bySource.has(file) ? file.replace(/\\/g, "/") : null;
 		},
 	};
 }

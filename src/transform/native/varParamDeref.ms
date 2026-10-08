@@ -1,4 +1,4 @@
-// Var (out/ref) param uses are locations behind a pointer. Materialize the
+// Var (out/ref) param uses and Borrow<T> uses are locations behind a pointer. Materialize the
 // deref in the AST (HiddenDeref) before the analyzer so lifecycle hooks see
 // a location, not a raw pointer-typed identifier (Reference: tyVar use deref).
 // Args bound to a Var formal get the implicit ADDR instead (Reference
@@ -29,9 +29,13 @@ function calleeFormals(d: CallExprData): Type[] {
 	return t.typeChildren;
 }
 
+function readsThroughPointer(t: Type): boolean {
+	return isVarType(t) || (t != null && t.kind == TypeKind.Borrow);
+}
+
 function wrapVarUse(node: Node): Node {
 	const s = node.resolvedSym;
-	if (s == null || !isVarType(s.symbolType)) return node;
+	if (s == null || !readsThroughPointer(s.symbolType)) return node;
 	const hd = makeHiddenDeref(node, node.location);
 	// ONE peel off the SYMBOL's Var type — the ident's own nodeType may already
 	// be peeled by the checker's read path, and `(*ident)` is exactly one

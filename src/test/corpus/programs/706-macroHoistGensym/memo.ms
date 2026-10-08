@@ -9,7 +9,7 @@ export macro memo(): Node {
 			kind: NodeKind.VariableDecl,
 			line: 0,
 			column: 0,
-			flags: NodeFlag.StaticStorage,
+			flags: (0 as BitSet<NodeFlag>).incl(NodeFlag.StaticStorage),
 			declName: "tpl",
 			declType: "string",
 			initializer: {
@@ -34,7 +34,7 @@ export macro memoShow(): Node {
 			kind: NodeKind.VariableDecl,
 			line: 0,
 			column: 0,
-			flags: NodeFlag.StaticStorage,
+			flags: (0 as BitSet<NodeFlag>).incl(NodeFlag.StaticStorage),
 			declName: "tpl",
 			declType: "string",
 			initializer: {

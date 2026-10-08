@@ -551,8 +551,8 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		},
 		NodeKind.HiddenAddr => {
 			const hd = node.data as HiddenDerefData;
-			const t = skipModifier(node.nodeType);
-			if ((t != null && t.kind == TypeKind.Borrow) || !heldByLocation(s, hd.expr.nodeType)) return compileExpr(s, hd.expr);
+			if (!heldByLocation(s, hd.expr.nodeType)) return compileExpr(s, hd.expr);
+			if (!isPlace(s, hd.expr)) return compileCellAddress(s, hd.expr);
 			return compileAddress(s, hd.expr);
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
@@ -690,6 +690,26 @@ function derefTarget(s: RaiserCompState, target: Node): Node | null {
 		if (held != null && held.kind == TypeKind.Ptr && heldByLocation(s, target.nodeType)) return d.array;
 	}
 	return null;
+}
+
+function compileCellAddress(s: RaiserCompState, value: Node): int32 {
+	const cell = allocReg(s);
+	const slot = allocReg(s);
+	const reg = compileExpr(s, value);
+	if (reg != slot) emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
+	emitInst(s, raiserABC(RaiserOpcode.NewArray, cell, 1, 0));
+	const zero = allocReg(s);
+	emitLoadConst(s, zero, raiserInt(0));
+	const dest = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.AddrIndex, dest, cell, zero));
+	return dest;
+}
+
+function isPlace(s: RaiserCompState, node: Node): boolean {
+	if (node.kind == NodeKind.Identifier) {
+		return resolveGlobal(s, node.resolvedSym) >= 0 || resolveLocal(s, (node.data as IdentifierData).name) >= 0;
+	}
+	return node.kind == NodeKind.ArrayAccess || node.kind == NodeKind.MemberExpr || node.kind == NodeKind.HiddenDeref;
 }
 
 function compileAddress(s: RaiserCompState, place: Node): int32 {

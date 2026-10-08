@@ -74,3 +74,5 @@ import "./sequentialTypeof";
 import "./cborNestedTypeIdentity";
 import "./structFieldDecorators";
 import "./enumNames";
+import "./sizedArrayConstDimension";
+import "./sizedArrayLiteralCarriesSize";

@@ -5,7 +5,7 @@
 // the specialized version. No separate monomorphize pass needed.
 
 import { methodOwnerClass } from "./visibility";
-import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf } from "./types";
 import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
@@ -78,9 +78,9 @@ export function lookupModuleProgram(modulePath: string): Node | null {
 //   4. Caller's ctx — last resort when all lookups miss.
 // Reference parity: Nim's `graph.ifaces[module]` via the `symMap` for generic
 // instantiation body re-check.
-let _engineBodyCtxFn: (definingModulePath: string) => CheckerContext | null = (definingModulePath: string): CheckerContext | null => null;
+let _engineBodyCtxFn: (definingModulePath: string, owner: Symbol | null) => CheckerContext | null = (definingModulePath: string, owner: Symbol | null): CheckerContext | null => null;
 
-export function registerEngineBodyCtxFn(fn: (definingModulePath: string) => CheckerContext | null): void {
+export function registerEngineBodyCtxFn(fn: (definingModulePath: string, owner: Symbol | null) => CheckerContext | null): void {
 	_engineBodyCtxFn = fn;
 }
 
@@ -102,10 +102,10 @@ export function declaringModuleCtx(ctx: CheckerContext, sym: Symbol): CheckerCon
 	return null;
 }
 
-export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext): CheckerContext {
+export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, owner: Symbol | null = null): CheckerContext {
 	if (definingModulePath == "" || definingModulePath == ctx.modulePath) return ctx;
 	if (isEngineCheckMode()) {
-		const engineCtx = _engineBodyCtxFn(definingModulePath);
+		const engineCtx = _engineBodyCtxFn(definingModulePath, owner);
 		if (engineCtx != null) return engineCtx;
 	}
 	const defining = lookupModuleCtx(definingModulePath);
@@ -188,7 +188,7 @@ export function declaresUserHook(t: Type, ctx: CheckerContext): boolean {
 		if (lookupInstanceHook(t, hookName) != null) return true;
 	}
 	const owner = nominalTypeSym(t);
-	return owner != null && declaresLifecycleHook(pickBodyCtx(owner.modulePath, ctx), owner);
+	return owner != null && declaresLifecycleHook(pickBodyCtx(owner.modulePath, ctx, owner), owner);
 }
 
 function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, instanceName: string, names: string[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
@@ -209,7 +209,7 @@ function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, insta
 }
 
 function instantiateExtensionHooks(genericSym: Symbol, instType: Type, ctx: CheckerContext, loc: SourceLocation): boolean {
-	const registry = pickBodyCtx(genericSym.modulePath, ctx).extensionRegistry;
+	const registry = pickBodyCtx(genericSym.modulePath, ctx, genericSym).extensionRegistry;
 	if (registry == null) return true;
 	let settled = true;
 	for (const hookName of LIFECYCLE_HOOK_NAMES) {
@@ -694,11 +694,11 @@ const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.BoundSym | NodeFlag.StaticS
 
 function isCheckerWrapper(node: Node): boolean {
 	if (node.kind == NodeKind.HiddenDeref) return !node.flags.has(NodeFlag.ExplicitDeref);
-	return node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.HiddenStdConv;
+	return node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv;
 }
 
 // ===== clearCheckerState =====
-// Collapse HiddenDeref/HiddenAddr/HiddenStdConv wrappers and clear resolvedSym/flags on a
+// Collapse checker-inserted wrappers and clear resolvedSym/flags on a
 // cloned AST so the re-check regenerates them against concrete types. forEachChild drives
 // the recursion so EVERY NodeKind is covered — a manual match silently missed ForStmt/Switch/
 // Match etc., stacking a second deref on loop/array accesses in instantiated method bodies.
@@ -722,7 +722,7 @@ function bindsInto(node: Node, redeclared: Symbol[]): boolean {
 function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void {
 	if (node == null) return;
 	while (isCheckerWrapper(node)) {
-		const inner = node.kind == NodeKind.HiddenStdConv
+		const inner = node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv
 			? (node.data as HiddenStdConvData).convExpr
 			: (node.data as HiddenDerefData).expr;
 		if (inner == null) break;
@@ -837,7 +837,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	const mangledName = mangleMonoName(monoRoutineBaseName(mangleBase, sym.modulePath, sym.disamb), dedup.types);
 
 
-	const bodyCtx = pickBodyCtx(sym.modulePath, ctx);
+	const bodyCtx = pickBodyCtx(sym.modulePath, ctx, sym);
 	const _ig0 = performance.now();
 	_igfMisses = _igfMisses + 1;
 	const fnNode = unwrapToFunctionDecl(sym.declNode);
@@ -997,7 +997,7 @@ function instanceFieldInits(classData: ClassDeclData, names: string[], types: Ty
 		if (pd.propInitializer != null) initialized += 1;
 	}
 	if (initialized == 0) return fields;
-	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
+	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 	const callerScope = openInstanceScope(bodyCtx, names, types);
@@ -1033,6 +1033,84 @@ function canonicalInstance(base: Type, typeArgs: Type[], classSym: Symbol): Type
 	return inst;
 }
 
+// ===== Field initializers of an object literal =====
+// An object literal of a class type takes the initializer of every field it omits, the way
+// `new C()` runs it: a fresh copy re-checked in the class's module, at the field's type.
+
+function classDeclOf(classSym: Symbol): Node {
+	const decl = classSym.declNode;
+	if (decl == null || decl.kind != NodeKind.ClassDecl) throw new Error(`internal: class '${classSym.name}' reached field initialization without its declaration`);
+	return decl;
+}
+
+function ownField(decl: Node, fieldName: string): PropertyDeclData | null {
+	for (const raw of (decl.data as ClassDeclData).classBody) {
+		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
+		if (member == null || member.kind != NodeKind.PropertyDecl) continue;
+		const pd = member.data as PropertyDeclData;
+		if (!pd.propIsStatic && pd.propName == fieldName) return pd;
+	}
+	return null;
+}
+
+function readsThis(node: Node): boolean {
+	if (node == null) return false;
+	if (node.kind == NodeKind.Identifier && (node.data as IdentifierData).name == "this") return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => { if (!found && readsThis(child)) found = true; });
+	return found;
+}
+
+export function literalFieldInitializer(ctx: CheckerContext, classType: Type | null, fieldName: string, fieldType: Type, loc: SourceLocation): Node | null {
+	let cur = classType;
+	for (let depth = 0; cur != null && depth < 16; depth += 1) {
+		const body = cur.kind == TypeKind.Ref && cur.typeReturn != null ? cur.typeReturn : cur;
+		const classSym = runtimeClassSym(body);
+		if (classSym == null) return null;
+		const decl = classDeclOf(classSym);
+		const pd = ownField(decl, fieldName);
+		if (pd != null) {
+			if (pd.propInitializer == null) return null;
+			if (readsThis(pd.propInitializer)) {
+				addError(ctx, `field '${fieldName}' of '${classSym.name}' has an initializer that reads 'this', which an object literal cannot run — give '${fieldName}' a value in the literal`, loc.line, loc.column);
+				return null;
+			}
+			const names = body.kind == TypeKind.GenericInstance ? splitTopLevel(genericParamNamesOf(symGenericParams(classSym)), ",").map((n: string): string => n.trim()) : [];
+			const types = body.kind == TypeKind.GenericInstance ? body.typeChildren : [];
+			return checkFieldInitializerCopy(ctx, pd.propInitializer, fieldName, fieldType, classSym, names, types, loc);
+		}
+		cur = classParentOf(body);
+	}
+	return null;
+}
+
+function checkFieldInitializerCopy(ctx: CheckerContext, init: Node, fieldName: string, fieldType: Type, classSym: Symbol, names: string[], types: Type[], loc: SourceLocation): Node {
+	let copy = monoCloneNode(init);
+	clearCheckerState(copy);
+	if (names.length > 0) replaceTypeVars(copy, names, types);
+	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
+	const savedModulePath = bodyCtx.modulePath;
+	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
+	const callerScope = openInstanceScope(bodyCtx, names, types);
+	bodyCtx.table.current.privateAccess = classSym;
+	const injectedSyms: Symbol[] = [];
+	for (const ct of types) injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
+	const extPreCount = injectCallerExtensions(bodyCtx, ctx);
+	const errBefore = bodyCtx.errors.length;
+	callCheckExpr(bodyCtx, copy, fieldType);
+	if (copy.nodeType != null) copy = fitNode(bodyCtx, copy, fieldType, copy.nodeType);
+	if (bodyCtx.errors.length > errBefore) {
+		const first = bodyCtx.errors[errBefore].message;
+		bodyCtx.errors.length = errBefore;
+		addError(ctx, `the initializer of field '${fieldName}' of '${classSym.name}', run for this literal: ${first}`, loc.line, loc.column);
+	}
+	bodyCtx.modulePath = savedModulePath;
+	removeInjectedSyms(bodyCtx, injectedSyms);
+	bodyCtx.table.current = callerScope;
+	truncateCallerExtensions(bodyCtx, extPreCount);
+	return copy;
+}
+
 // ===== On-Demand Constructor Instantiation =====
 // Reference parity: on-demand proc instantiation (same pattern as standard generateInstance).
 // For classes with constructors, we generate a standalone FunctionDecl named ClassName_new.
@@ -1048,7 +1126,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	const existing = cachedInstance(host.typeInstCache, classSym, dedup.types);
 	if (existing != null) return existing;
 	const mangledClass = monoInstanceNameOf(classSym.name, classSym.modulePath, dedup.types);
-	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
+	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
 
 	const classDeclNode = classSym.declNode;
 	if (classDeclNode == null || classDeclNode.kind != NodeKind.ClassDecl) {
@@ -1083,7 +1161,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	// the ctor — without it, `this` falls back to `void*` in the generated
 	// `<MangledClass>_init` signature and `(*this).field` accesses fail to type
 	// check at the C level.
-	const classNodeData: NodeData = { className: mangledClass, classExtends: parent != null ? typeDisplayName(parent) : "", classBody, nameLocation: loc };
+	const classNodeData: NodeData = { className: mangledClass, classDisplayName: typeDisplayName(canonical), classExtends: parent != null ? typeDisplayName(parent) : "", classBody, nameLocation: loc };
 	const classNode = createNodeAt(NodeKind.ClassDecl, classNodeData, loc);
 	classNode.nodeType = concreteClassType;
 	classNode.resolvedSym = instSym;
@@ -1168,7 +1246,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, nam
 	ctorDeclNode.nodeType = createFunction(resolvedParamTypes, fnParams, null as unknown as Type);
 
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
-	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx);
+	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
 	const ctorSym = mintCtorRoutine(bodyCtx, instSym, mangledClass, thisType, resolvedParamTypes, fnParams, ctorDeclNode, fnDefaults);
 	ctorSym.state = SymbolState.Checked;
 	if (ctorNode.resolvedSym == null) throw new Error(`internal: generic constructor '${classSym.name}' has no routine symbol`);

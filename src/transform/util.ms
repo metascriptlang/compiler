@@ -323,6 +323,20 @@ export function generatedRef(procName: string, loc: SourceLocation): Node {
 	return makeTypedIdentResolved(generatedProcSym(procName), null, loc);
 }
 
+export type CompilerFuncScope = { funcs: HashMap<string, Symbol>, syms: HashMap<string, Symbol>, cache: IdentCache | null };
+
+export function enterCompilerFuncs(declared: HashMap<string, Symbol>, identCache: IdentCache): CompilerFuncScope {
+	const saved: CompilerFuncScope = { funcs: _compilerFuncs, syms: _runtimeSyms, cache: _runtimeIdentCache };
+	bindCompilerFuncs(declared, identCache);
+	return saved;
+}
+
+export function leaveCompilerFuncs(saved: CompilerFuncScope): void {
+	_compilerFuncs = saved.funcs;
+	_runtimeSyms = saved.syms;
+	_runtimeIdentCache = saved.cache;
+}
+
 export function compilerFuncSym(procName: string): Symbol | null {
 	return _compilerFuncs.get(procName);
 }
@@ -637,7 +651,7 @@ export function makeInterfaceDeclFromTypes(name: string, fields: string[], field
 		interfaceName: name, interfaceFields: fields, interfaceFieldTypes: fieldTypes,
 		interfaceExtends: [] as string[],
 		nameLocation: loc,
-		interfaceFieldDecorators: noFieldDecorators(fields.length),
+		interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length),
 	}, syntheticToken(loc));
 	n.nodeType = spelled(createStruct(name, fields, resolvedTypes, true));
 	return n;

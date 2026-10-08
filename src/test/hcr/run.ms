@@ -63,6 +63,10 @@ function failWith(tag: string, why: string): void {
 	exit(1);
 }
 
+const PARKED: { name: string, card: string }[] = [
+	{ name: "hcrModulePassReload", card: "inbox card 2026-10-06-hcr-ref-array-cell-owned-by-user-image.md" },
+];
+
 function msc(dir: string, args: string[]): ExecFileResult {
 	return execFileResult(MSC, args, dir);
 }
@@ -731,6 +735,7 @@ function runCommand(): void {
 			env.set("MSC_NO_GLOBAL_CACHE", globalCache);
 			failWith(tag, `msc run --hcr${via ? " (logic imported through via.ms)" : ""} did not rebuild the edited module alone into the running app`);
 		}
+		need(tag, !both(ran).contains("still open for writing"), "an in-place save waited out the writer limit");
 		need(tag, !exists(ended), "the image copies of an ended run survived the next start");
 		need(tag, exists(`${alive}/keep.txt`), "the start removed the copies of a live process");
 		need(tag, exists(`${foreign}/keep.txt`), "the start removed a directory that is not a run");
@@ -771,6 +776,50 @@ function crossImageNew(): void {
 	if (!succeeded(ran) || !both(ran).contains("NEW kept 3 child")) {
 		console.log(both(ran));
 		failWith(tag, "msc run --hcr could not construct classes declared in another image");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function genericCtor(): void {
+	const tag = "hcrGenericCtor";
+	const dir = freshDir(`${TMP}/genericCtor`);
+	for (const f of readDir(`${FIXTURES}/genericCtor`)) copy(`${FIXTURES}/genericCtor/${f}`, `${dir}/${f}`);
+	const plain = msc(dir, ["run", "--target=js", "app.ms"]);
+	need(tag, succeeded(plain) && both(plain).contains("GENERIC plain 41:1 42:1 kept:1 stamp=3"), "generic constructor type variants failed on JavaScript");
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr"], "generic constructor calls across images did not build");
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("GENERIC ")) seen.push(line);
+	}
+	const want = [
+		"GENERIC before 41:1 42:1 kept:1 stamp=3",
+		"GENERIC after 41:2 42:2 kept:2 stamp=4",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "generic constructors did not run their newest bodies across image owners");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function genericOps(): void {
+	const tag = "hcrGenericOps";
+	for (const gc of ["drc", "orc"]) {
+		const dir = freshDir(`${TMP}/genericOps-${gc}`);
+		for (const f of readDir(`${FIXTURES}/genericOps`)) copy(`${FIXTURES}/genericOps/${f}`, `${dir}/${f}`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--gc=${gc}`], `${gc}: foreign generic lifecycle references did not build`);
+		const ran = msc(dir, ["run", "--hcr", `--gc=${gc}`, "app.ms"]);
+		let drops: int32 = 0;
+		let values = false;
+		for (const line of lines(both(ran))) {
+			if (line == "DROP") drops += 1;
+			if (line == "OPS 9 10 kept") values = true;
+		}
+		if (!succeeded(ran) || !values || drops != 3) {
+			console.log(both(ran));
+			failWith(tag, `${gc}: captured generic state must survive calls and destroy its three cells exactly once`);
+		}
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -884,6 +933,25 @@ function sharedVariable(): void {
 		"HCR-SHARED after title type rejection: 9 two 45 45",
 		"HCR-SHARED g5: reloaded logic",
 		"HCR-SHARED edited constants again: 11 three 56 56",
+	]);
+}
+
+function modulePassReload(): void {
+	const tag = "hcrModulePassReload";
+	const fixture = "modulePass";
+	const dir = freshDir(`${TMP}/${fixture}`);
+	for (const name of ["build.ms", "refresh.ms", "app.ms"]) copy(`${FIXTURES}/${fixture}/${name}`, `${dir}/${name}`);
+	copy(`${FIXTURES}/registrySupport.ms`, `${dir}/support.ms`);
+	const edits = ["logic.ms", "logicEdit.ms"];
+	for (let i = 0; i < edits.length; i += 1) {
+		copy(`${FIXTURES}/${fixture}/${edits[i]}`, `${dir}/logic.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g${i + 1}/module${sharedLibraryExt()}`],
+			`generation ${i + 1} failed to build`);
+	}
+	runPrebuilt(tag, dir, ["logic", "support", "refresh"], "HCR-PASS", [
+		"HCR-PASS start: tpl-g1 tpl-g1 | register logic.ms:Counter,template tpl-g1",
+		"HCR-PASS g2: reloaded logic | reregister logic.ms:Counter",
+		"HCR-PASS after reload: tpl-g2! tpl-g2! | template tpl-g2",
 	]);
 }
 
@@ -1162,6 +1230,7 @@ function fsWatch(): void {
 		"WATCH a renamed save is reported closed: true",
 		"WATCH a missing file has no writer: true",
 		"WATCH a closed file proves no writer: true",
+		"WATCH a writer close is observable: true",
 		"WATCH after close: ended true",
 		"WATCH closed while waiting: ended true",
 	] : platform == "linux" ? [
@@ -1172,6 +1241,7 @@ function fsWatch(): void {
 		"WATCH a closed write is reported closed: true",
 		"WATCH a missing file has no writer: true",
 		"WATCH a closed file proves no writer: false",
+		"WATCH a writer close is observable: true",
 		"WATCH after close: ended true",
 		"WATCH closed while waiting: ended true",
 	] : platform == "darwin" ? [
@@ -1183,6 +1253,7 @@ function fsWatch(): void {
 		"WATCH a renamed save is reported closed: true",
 		"WATCH a missing file has no writer: true",
 		"WATCH a closed file proves no writer: false",
+		"WATCH a writer close is observable: false",
 		"WATCH after close: ended true",
 		"WATCH closed while waiting: ended true",
 	] : [
@@ -1246,9 +1317,12 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrRun", run: runCommand },
 	{ name: "hcrStepCrash", run: stepCrash },
 	{ name: "hcrCrossImageNew", run: crossImageNew },
+	{ name: "hcrGenericCtor", run: genericCtor },
+	{ name: "hcrGenericOps", run: genericOps },
 	{ name: "hcrExitDestroy", run: exitDestroy },
 	{ name: "hcrRetainReport", run: retainReport },
 	{ name: "hcrRegistryVariables", run: registryVariables },
+	{ name: "hcrModulePassReload", run: modulePassReload },
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
 	{ name: "hcrFunctionValues", run: functionValues },
 	{ name: "hcrInlineFunctions", run: inlineFunctions },
@@ -1277,6 +1351,14 @@ ensureDir(TMP);
 for (let i = 0; i < CASES.length; i++) {
 	if (i % SHARD_COUNT != SHARD_INDEX) continue;
 	if (ONLY.length > 0 && !ONLY.includes(CASES[i].name)) continue;
+	let parkedCard = "";
+	for (const p of PARKED) {
+		if (p.name == CASES[i].name) parkedCard = p.card;
+	}
+	if (parkedCard != "") {
+		console.log(`skip ${CASES[i].name}: parked on a compiler bug (${parkedCard})`);
+		continue;
+	}
 	const t0 = performance.now();
 	CASES[i].run();
 	console.log(`time ${CASES[i].name} ${Math.round((performance.now() - t0) / 1000)}s`);

@@ -302,9 +302,10 @@ void msIoEngineCancelFd(msIoEngine* e, int fd) {
 #include <strings.h>
 #include <sys/stat.h>
 
-#define MS_FS_WATCH_LATENCY 0.05
+#define MS_FS_WATCH_LATENCY 0.01
 #define MS_FS_WATCH_BATCH_LIMIT (1 << 20)
 #define MS_FSE_SINCE_NOW 0xFFFFFFFFFFFFFFFFULL
+#define MS_FSE_CREATE_NO_DEFER 0x00000002u
 #define MS_FSE_CREATE_WATCH_ROOT 0x00000004u
 #define MS_FSE_CREATE_FILE_EVENTS 0x00000010u
 #define MS_FSE_MUST_SCAN_SUB_DIRS 0x00000001u
@@ -525,7 +526,7 @@ int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 	msFseContext context = { 0, w, NULL, NULL, NULL };
 	if (roots != NULL) {
 		w->stream = msFse.streamCreate(NULL, fsWatchCollect, &context, roots, MS_FSE_SINCE_NOW, MS_FS_WATCH_LATENCY,
-			MS_FSE_CREATE_WATCH_ROOT | MS_FSE_CREATE_FILE_EVENTS);
+			MS_FSE_CREATE_NO_DEFER | MS_FSE_CREATE_WATCH_ROOT | MS_FSE_CREATE_FILE_EVENTS);
 		msFse.cfRelease(roots);
 	}
 	if (root != NULL) msFse.cfRelease(root);

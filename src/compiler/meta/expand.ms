@@ -1652,9 +1652,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 
 	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(loc));
 
-	const declCtx = declaringModuleCtx(ctx, macroSym);
-	if (declCtx == null) throw new Error(`internal: macro '${macroName}' is declared in '${macroSym.modulePath}', which has no checked scope`);
-	const result = callMacroEngineCompiler(program, ctx, "__macroBody", declCtx);
+	const result = callMacroEngineCompiler(program, ctx, "__macroBody", regCtx);
 	if (result == null as unknown as EngineMacroResult || result.funcIdx < 0) return null;
 	let broken = false;
 	if (result.errors != null && result.errors.length > 0) {
@@ -1674,7 +1672,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	return cm;
 }
 
-export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: int32): Node {
+export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 	const d = node.data as MacroInvocationData;
 
 	if (isDirectiveInvocation(node)) return node;
@@ -1688,12 +1686,14 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		}
 		return node;
 	}
-	// Bound macro (bindSym): the caller never imported it, so the body is built
-	// against the DECLARING module's scope.
 	let regCtx = ctx;
-	if (node.flags.has(NodeFlag.BoundSym) && macroSym.modulePath != "") {
+	if (macroSym.modulePath != "" && macroSym.modulePath != ctx.modulePath) {
 		const bmc = lookupModuleCtx(macroSym.modulePath);
-		if (bmc != null) regCtx = bmc;
+		if (bmc == null) {
+			addError(ctx, `macro '${d.macroName}' has no checked declaring scope '${macroSym.modulePath}'`, node.location.line, node.location.column);
+			return node;
+		}
+		regCtx = bmc;
 	}
 	const body = decl.macroDeclBody;
 	const params = decl.macroDeclParams;
@@ -1774,6 +1774,7 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 		objectHeap: vm.objectHeap,
 		lastError: vm.error,
 		gcMode: vm.gcMode,
+		orphanFailures: [],
 	};
 
 	// Check for VM-level errors (instruction budget, division by zero, etc.)
@@ -1816,7 +1817,7 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	}
 
 	// Deserialize result
-	let result = valueToNode(vmCtx.lastResult, vmCtx.objectHeap, vmCtx.arrayHeap, node.location);
+	const result = valueToNode(vmCtx.lastResult, vmCtx.objectHeap, vmCtx.arrayHeap, node.location);
 	for (const refusal of takeWireRefusals()) {
 		const at = refusal.location.line > 0 ? refusal.location : node.location;
 		addError(ctx, `Macro '${d.macroName}': ${refusal.message}`, at.line, at.column);
@@ -1826,6 +1827,12 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	clearObjectHeap(vmCtx.objectHeap);
 	clearArrayHeap(vmCtx.arrayHeap);
 	vmCtx = null;
+	return result;
+}
+
+export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: int32): Node {
+	let result = invokeMacro(node, ctx);
+	if (result == node) return node;
 
 	// Deserialized result has fresh CallExpr nodes for any nested
 	// macro references — the checker's CallExpr→MacroInvocation rewrite at
@@ -2430,7 +2437,7 @@ test "hasUserMacroInvocation detects macro in ClassDecl body" {
 		methodDefaults: [], nativeName: "", nameLocation: loc,
 	}, synthToken(loc));
 	const cls = createNode(NodeKind.ClassDecl, {
-		className: "C", classExtends: "", classBody: [method], nameLocation: loc,
+		className: "C", classDisplayName: "C", classExtends: "", classBody: [method], nameLocation: loc,
 	}, synthToken(loc));
 	assert hasUserMacroInvocation(cls, ctx);
 }
@@ -2441,7 +2448,7 @@ test "hasUserMacroInvocation detects macro in DecoratedDecl decorators" {
 	defineTestMacro(ctx, "myDeco", loc);
 	const inv = createNode(NodeKind.MacroInvocation, { macroName: "myDeco", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const inner = createNode(NodeKind.InterfaceDecl, {
-		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [],
+		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [],
 	}, synthToken(loc));
 	const dec = createNode(NodeKind.DecoratedDecl, {
 		decorators: [inv], decoratedNode: inner,

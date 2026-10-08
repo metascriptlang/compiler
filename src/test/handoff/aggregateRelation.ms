@@ -23,7 +23,7 @@ test "aggregate relation: storage wrappers preserve element identity at every sl
 		{ source: "[int32, string]", target: "[string, int32]", accepted: false },
 		{ source: "[int32, string]", target: "[int32, string]", accepted: true },
 		{ source: "string | int32", target: "boolean | string", accepted: false },
-		{ source: "string | int32", target: "string | int32 | boolean", accepted: false },
+		{ source: "string | int32", target: "string | int32 | boolean", accepted: true },
 		{ source: "string | null", target: "int32 | boolean", accepted: false },
 		{ source: "string | int32", target: "string | int32", accepted: true },
 		{ source: "null | Animal", target: "Animal | null", accepted: true },

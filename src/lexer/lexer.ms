@@ -198,6 +198,27 @@ test "template strings" {
 	assert lexFirstVal("``") == "";
 	assert lexFirstVal("`a\\`b`") == "a`b";
 	assert lexFirstVal("`\\$100`") == "$100";
+	for (const newline of ["\n", "\r\n", "\r"]) {
+		assert lexFirstVal("`a" + newline + "b`") == "a\nb";
+		assert lexFirstVal("`" + newline + "a" + newline + "`") == "\na\n";
+		assert lexFirst("`+" + newline + "`") == TokenKind.TemplateNoSub;
+		assert lexFirstVal("`+" + newline + "`") == "+\n";
+		assert lexFirstVal("`é" + newline + "界`") == "é\n界";
+		assert lexFirstVal("`a\\r" + newline + "b`") == "a\r\nb";
+		assert lexFirstVal("`a\\r\\" + newline + "b`") == "a\rb";
+		assert lexFirstVal("`a\\" + newline + "b`") == "ab";
+		assert lexLineAt("`a" + newline + "b` z", 1) == 2;
+		assert lexColAt("`a" + newline + "b` z", 1) == 4;
+		assert lexLineAt("`a\\" + newline + "b` z", 1) == 2;
+		assert lexColAt("`a\\" + newline + "b` z", 1) == 4;
+	}
+	assert lexFirstVal("`a\r\r\nb`") == "a\n\nb";
+	assert lexLineAt("`a\r\r\nb` z", 1) == 3;
+	assert lexFirstVal("`a\\rb`") == "a\rb";
+	assert lexFirstVal("`a\\r\\nb`") == "a\r\nb";
+	assert lexFirstVal("`a\\x0Db`") == "a\rb";
+	assert lexFirstVal("`a\\u000Db`") == "a\rb";
+	assert lexLineAt("`a\\rb` z", 1) == 1;
 }
 
 test "operator identifiers" {
@@ -235,6 +256,22 @@ test "template interpolation tokens" {
 	assert lexKindAt("`${x}`", 0) == TokenKind.TemplateHead;
 	assert lexKindAt("`${x}`", 1) == TokenKind.Ident;
 	assert lexKindAt("`${x}`", 2) == TokenKind.TemplateTail;
+	for (const newline of ["\n", "\r\n", "\r"]) {
+		const source = "`a" + newline + "${x}b" + newline + "${y}c" + newline + "` z";
+		assert lexKindAt(source, 0) == TokenKind.TemplateHead;
+		assert lexValAt(source, 0) == "a\n";
+		assert lexKindAt(source, 2) == TokenKind.TemplateMiddle;
+		assert lexValAt(source, 2) == "b\n";
+		assert lexKindAt(source, 4) == TokenKind.TemplateTail;
+		assert lexValAt(source, 4) == "c\n";
+		assert lexValAt(source, 5) == "z";
+		assert lexLineAt(source, 1) == 2;
+		assert lexColAt(source, 1) == 3;
+		assert lexLineAt(source, 3) == 3;
+		assert lexColAt(source, 3) == 3;
+		assert lexLineAt(source, 5) == 4;
+		assert lexColAt(source, 5) == 3;
+	}
 }
 
 test "template interpolation ends at its own brace, not the first one" {

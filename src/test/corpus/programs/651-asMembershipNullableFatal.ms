@@ -1,6 +1,5 @@
 // @exit: 1
 // @stdout: before center null
-// @skip-js: node exits 1 with the same "invalid union conversion: \"middle\" is not Align" line but wraps it in its own uncaught-error report, and parity compares merged stdout+stderr (sibling of 647)
 // @xfail(raiser): the Raiser VM does not test union conversions
 // @xfail(danger): --danger drops the membership test, so the string outside the set passes through
 

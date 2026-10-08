@@ -1,8 +1,9 @@
 import { Rng, seeded } from "./rng";
-import { ALL_TYS, Features, Plant, Ty, tyName, format } from "./features";
+import { ALL_TYS, ALL_FAMS, Fam, Features, Plant, Ty, tyName, format } from "./features";
 
 const FN_COST_CAP: int64 = 20000 as int64;
 const TOP_COST_CAP: int64 = 200000 as int64;
+const GEN_NODE_CAP: int32 = 4096;
 
 enum Shape {
 	Literal,
@@ -14,6 +15,22 @@ struct Var {
 	name: string;
 	ty: Ty;
 	writable: boolean;
+}
+
+enum EntKind {
+	Callable,
+	Effect,
+	ClosureArray,
+	UnionVar,
+	BoxVar,
+}
+
+struct Ent {
+	kind: EntKind;
+	name: string;
+	ty: Ty;
+	params: Ty[];
+	len: int32;
 }
 
 struct Fn {
@@ -143,10 +160,22 @@ class Gen {
 	cost: int64 = 0 as int64;
 	costCap: int64 = 0 as int64;
 	mult: int64 = 1 as int64;
+	fams: Fam[] = [];
+	ents: Ent[] = [];
+	entCount: int32 = 0;
+	makerCount: int32 = 0;
+	nodesLeft: int32 = GEN_NODE_CAP;
 
 	pickTy(): Ty { return this.tys[this.rng.below(this.tys.length)]; }
 
 	pickOp(ops: string[]): string { return ops[this.rng.below(ops.length)]; }
+
+	reserve(work: int64): boolean {
+		const remaining = this.costCap - this.cost;
+		if (remaining < 0 || work > remaining / this.mult) { return false; }
+		this.cost = this.cost + this.mult * work;
+		return true;
+	}
 
 	intTys(): Ty[] {
 		const out: Ty[] = [];
@@ -310,8 +339,9 @@ class Gen {
 
 	convert(t: Ty, depth: int32): string {
 		if (this.tys.length < 2) { return this.binary(t, depth); }
-		let from = this.pickTy();
-		while (from == t) { from = this.pickTy(); }
+		const alternatives: Ty[] = [];
+		for (const from of this.tys) { if (from != t) { alternatives.push(from); } }
+		const from = alternatives[this.rng.below(alternatives.length)];
 		const a = this.expr(from, depth + 1);
 		const checkedAtCompileTime = this.shape != Shape.Other;
 		if (checkedAtCompileTime && isSigned(from) && !isSigned(t) && !isFloat(t)) { return this.wrapHelper(from, t) + "(" + a + ")"; }
@@ -320,6 +350,11 @@ class Gen {
 	}
 
 	cond(depth: int32): string {
+		if (this.nodesLeft == 0) {
+			const t = this.pickTy();
+			return "(" + this.leaf(t) + " == " + this.leaf(t) + ")";
+		}
+		this.nodesLeft--;
 		if (depth >= this.exprMax || this.rng.chance(60)) {
 			const t = this.pickTy();
 			const a = this.expr(t, depth + 1);
@@ -338,9 +373,7 @@ class Gen {
 		for (const f of this.fns) { if (f.ret == t) { candidates.push(f); } }
 		if (candidates.length == 0) { return ""; }
 		const f = candidates[this.rng.below(candidates.length)];
-		const added = this.mult * f.cost + (1 as int64);
-		if (this.cost + added > this.costCap) { return ""; }
-		this.cost = this.cost + added;
+		if (!this.reserve(f.cost + (1 as int64))) { return ""; }
 		let args = "";
 		for (const p of f.params) {
 			const a = this.expr(p, depth + 1);
@@ -350,7 +383,16 @@ class Gen {
 	}
 
 	expr(t: Ty, depth: int32): string {
+		if (this.nodesLeft == 0) { return this.leaf(t); }
+		this.nodesLeft--;
 		if (depth >= this.exprMax) { return this.leaf(t); }
+		if (this.fams.length > 0 && this.rng.chance(20)) {
+			const fam = this.famExpr(t, depth);
+			if (fam != "") {
+				this.shape = Shape.Other;
+				return fam;
+			}
+		}
 		const k = this.rng.below(100);
 		if (k < 25) { return this.leaf(t); }
 		let out = "";
@@ -370,6 +412,265 @@ class Gen {
 		}
 		this.shape = shape;
 		return out;
+	}
+
+	has(f: Fam): boolean {
+		for (const g of this.fams) { if (g == f) { return true; } }
+		return false;
+	}
+
+	entsOf(kind: EntKind, t: Ty): Ent[] {
+		const out: Ent[] = [];
+		for (const e of this.ents) { if (e.kind == kind && e.ty == t) { out.push(e); } }
+		return out;
+	}
+
+	entName(prefix: string): string {
+		const name = prefix + String(this.entCount);
+		this.entCount = this.entCount + 1;
+		return name;
+	}
+
+	args(params: Ty[], depth: int32): string {
+		let out = "";
+		for (const p of params) {
+			const a = this.expr(p, depth + 1);
+			out = out == "" ? a : out + ", " + a;
+		}
+		return out;
+	}
+
+	closureBody(t: Ty, depth: int32): string {
+		const savedCap = this.costCap;
+		this.costCap = this.cost;
+		const body = this.expr(t, depth);
+		this.costCap = savedCap;
+		return body;
+	}
+
+	lambda(params: Ty[], ret: Ty, depth: int32): string {
+		const saved = this.scope.length;
+		let sig = "";
+		for (const p of params) {
+			const name = this.entName("q");
+			this.scope.push({ name: name, ty: p, writable: false });
+			sig = sig == "" ? name + ": " + tyName(p) : sig + ", " + name + ": " + tyName(p);
+		}
+		const body = this.closureBody(ret, depth + 1);
+		while (this.scope.length > saved) { this.scope.pop(); }
+		return "(" + sig + "): " + tyName(ret) + " => " + body;
+	}
+
+	smallInt(depth: int32): string {
+		for (const t of this.tys) {
+			if (t == Ty.Int32) { return this.expr(Ty.Int32, depth + 1); }
+		}
+		return String(this.rng.below(9));
+	}
+
+	famExpr(t: Ty, depth: int32): string {
+		const fam = this.fams[this.rng.below(this.fams.length)];
+		if (fam == Fam.Closure) { return this.closureExpr(t, depth); }
+		if (fam == Fam.Union) { return this.unionExpr(t, depth); }
+		return this.genericExpr(t, depth);
+	}
+
+	closureExpr(t: Ty, depth: int32): string {
+		const k = this.rng.below(3);
+		if (k == 0) {
+			const named = this.entsOf(EntKind.Callable, t);
+			if (named.length > 0) {
+				const c = named[this.rng.below(named.length)];
+				return c.name + "(" + this.args(c.params, depth) + ")";
+			}
+		}
+		if (k == 1) {
+			const arrays = this.entsOf(EntKind.ClosureArray, t);
+			if (arrays.length > 0) {
+				const a = arrays[this.rng.below(arrays.length)];
+				return a.name + "[" + String(this.rng.below(a.len)) + "](" + this.expr(t, depth + 1) + ")";
+			}
+		}
+		const params: Ty[] = [];
+		const n = this.rng.between(1, 2);
+		for (let i = 0; i < n; i++) { params.push(this.pickTy()); }
+		return "(" + this.lambda(params, t, depth) + ")(" + this.args(params, depth) + ")";
+	}
+
+	unionHelpers(t: Ty): string {
+		const T = tyName(t);
+		const U = T + " | string | null";
+		this.useHelper("boxU" + tyTitle(t), "function boxU" + tyTitle(t) + "(k: int32, v: " + T + "): " + U + " {\n" +
+			"\tconst r = k % 3;\n" +
+			"\tif (r == 0) { return null; }\n" +
+			"\tif (r == 1 || r == -1) { return \"s\" + String(v); }\n" +
+			"\treturn v;\n}\n");
+		this.useHelper("lenU" + tyTitle(t), "function lenU" + tyTitle(t) + "(u: " + U + "): int32 {\n" +
+			"\tif (u === null) { return -1; }\n" +
+			"\tif (typeof u === \"string\") { return u.length; }\n" +
+			"\treturn 0;\n}\n");
+		return this.useHelper("unboxU" + tyTitle(t), "function unboxU" + tyTitle(t) + "(u: " + U + ", d: " + T + "): " + T + " {\n" +
+			"\tif (u === null) { return d; }\n" +
+			"\tif (typeof u === \"string\") { return d; }\n" +
+			"\treturn u;\n}\n");
+	}
+
+	unionExpr(t: Ty, depth: int32): string {
+		if (t == Ty.Int32 && this.rng.chance(30)) {
+			const s = this.pickTy();
+			this.unionHelpers(s);
+			const vars = this.entsOf(EntKind.UnionVar, s);
+			const u = vars.length > 0 && this.rng.chance(60)
+				? vars[this.rng.below(vars.length)].name
+				: "boxU" + tyTitle(s) + "(" + this.smallInt(depth) + ", " + this.expr(s, depth + 1) + ")";
+			return "lenU" + tyTitle(s) + "(" + u + ")";
+		}
+		const unbox = this.unionHelpers(t);
+		const vars = this.entsOf(EntKind.UnionVar, t);
+		if (vars.length > 0 && this.rng.chance(60)) {
+			return unbox + "(" + vars[this.rng.below(vars.length)].name + ", " + this.expr(t, depth + 1) + ")";
+		}
+		return unbox + "(boxU" + tyTitle(t) + "(" + this.smallInt(depth) + ", " + this.expr(t, depth + 1) + "), " + this.expr(t, depth + 1) + ")";
+	}
+
+	genericHelpers(): void {
+		this.useHelper("idG", "function idG<T>(x: T): T { return x; }\n");
+		this.useHelper("twiceG", "function twiceG<T>(f: (x: T) => T, x: T): T { return f(f(x)); }\n");
+		this.useHelper("pickG", "function pickG<T>(xs: T[], i: int32, d: T): T { return i >= 0 && i < xs.length ? xs[i] : d; }\n");
+		this.useHelper("BoxG", "class BoxG<T> {\n" +
+			"\tv: T;\n" +
+			"\tconstructor(v: T) { this.v = v; }\n" +
+			"\tget(): T { return this.v; }\n" +
+			"\tmap<U>(f: (x: T) => U): BoxG<U> { return new BoxG<U>(f(this.v)); }\n" +
+			"}\n");
+	}
+
+	genericExpr(t: Ty, depth: int32): string {
+		this.genericHelpers();
+		const T = tyName(t);
+		const k = this.rng.below(6);
+		if (k == 0) { return "idG<" + T + ">(" + this.expr(t, depth + 1) + ")"; }
+		if (k == 1) { return "twiceG<" + T + ">(" + this.lambda([t], t, depth) + ", " + this.expr(t, depth + 1) + ")"; }
+		if (k == 2) {
+			const n = this.rng.between(1, 3);
+			let items = "";
+			for (let i = 0; i < n; i++) {
+				const e = this.expr(t, depth + 1);
+				items = items == "" ? e : items + ", " + e;
+			}
+			return "pickG<" + T + ">([" + items + "], " + String(this.rng.below(n + 1)) + ", " + this.expr(t, depth + 1) + ")";
+		}
+		if (k == 3) {
+			const s = this.pickTy();
+			return "new BoxG<" + tyName(s) + ">(" + this.expr(s, depth + 1) + ").map<" + T + ">(" + this.lambda([s], t, depth) + ").get()";
+		}
+		const boxes = this.entsOf(EntKind.BoxVar, t);
+		if (boxes.length > 0) { return boxes[this.rng.below(boxes.length)].name + ".get()"; }
+		return "new BoxG<" + T + ">(" + this.expr(t, depth + 1) + ").get()";
+	}
+
+	maker(t: Ty): string {
+		const name = "mk" + String(this.makerCount);
+		this.makerCount = this.makerCount + 1;
+		const T = tyName(t);
+		const savedScope = this.scope;
+		const savedEnts = this.ents;
+		const savedCost = this.cost;
+		const savedCap = this.costCap;
+		const savedMult = this.mult;
+		this.scope = [{ name: "st", ty: t, writable: true }, { name: "x", ty: t, writable: false }];
+		this.ents = [];
+		this.cost = 0 as int64;
+		this.costCap = 0 as int64;
+		this.mult = 1 as int64;
+		const next = this.expr(t, 1);
+		this.scope = savedScope;
+		this.ents = savedEnts;
+		this.cost = savedCost;
+		this.costCap = savedCap;
+		this.mult = savedMult;
+		return this.useHelper(name, "function " + name + "(seed: " + T + "): (x: " + T + ") => " + T + " {\n" +
+			"\tlet st: " + T + " = seed;\n" +
+			"\treturn (x: " + T + "): " + T + " => {\n" +
+			"\t\tst = " + next + ";\n" +
+			"\t\treturn st;\n" +
+			"\t};\n}\n");
+	}
+
+	famStatement(indent: string): string {
+		const fam = this.fams[this.rng.below(this.fams.length)];
+		const t = this.pickTy();
+		const T = tyName(t);
+		if (fam == Fam.Closure) {
+			const k = this.rng.below(5);
+			if (k == 0) {
+				const params: Ty[] = [];
+				const n = this.rng.below(3);
+				for (let i = 0; i < n; i++) { params.push(this.pickTy()); }
+				const name = this.entName("c");
+				const text = indent + "const " + name + " = " + this.lambda(params, t, 0) + ";\n";
+				this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: params, len: 0 });
+				return text;
+			}
+			if (k == 1) {
+				const vars = this.visible(t, true);
+				if (vars.length == 0) { return ""; }
+				const v = vars[this.rng.below(vars.length)];
+				const name = this.entName("c");
+				const d = this.entName("q");
+				this.scope.push({ name: d, ty: t, writable: false });
+				const body = this.closureBody(t, 1);
+				this.scope.pop();
+				this.ents.push({ kind: EntKind.Effect, name: name, ty: t, params: [t], len: 0 });
+				return indent + "const " + name + " = (" + d + ": " + T + "): void => { " + v.name + " = " + body + "; };\n" +
+					indent + name + "(" + this.expr(t, 0) + ");\n";
+			}
+			if (k == 2) {
+				const effects = this.entsOf(EntKind.Effect, t);
+				if (effects.length == 0) { return ""; }
+				const e = effects[this.rng.below(effects.length)];
+				return indent + e.name + "(" + this.expr(t, 0) + ");\n";
+			}
+			if (k == 3) {
+				const mk = this.maker(t);
+				const name = this.entName("k");
+				const text = indent + "const " + name + " = " + mk + "(" + this.expr(t, 0) + ");\n";
+				this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: [t], len: 0 });
+				return text;
+			}
+			const name = this.entName("a");
+			const j = this.entName("j");
+			const n = this.rng.between(1, 4);
+			this.scope.push({ name: j, ty: Ty.Int32, writable: false });
+			const body = this.lambda([t], t, 0);
+			this.scope.pop();
+			this.ents.push({ kind: EntKind.ClosureArray, name: name, ty: t, params: [t], len: n });
+			return indent + "const " + name + ": ((x: " + T + ") => " + T + ")[] = [];\n" +
+				indent + "for (let " + j + ": int32 = 0; " + j + " < " + String(n) + "; " + j + "++) { " + name + ".push(" + body + "); }\n";
+		}
+		if (fam == Fam.Union) {
+			this.unionHelpers(t);
+			const vars = this.entsOf(EntKind.UnionVar, t);
+			if (vars.length > 0 && this.rng.chance(50)) {
+				const u = vars[this.rng.below(vars.length)];
+				const k = this.rng.below(3);
+				const value = k == 0 ? "null" : k == 1 ? "\"s\" + String(" + this.expr(t, 0) + ")" : this.expr(t, 0);
+				return indent + u.name + " = " + value + ";\n";
+			}
+			const name = this.entName("u");
+			const text = indent + "let " + name + ": " + T + " | string | null = boxU" + tyTitle(t) + "(" + this.smallInt(0) + ", " + this.expr(t, 0) + ");\n";
+			this.ents.push({ kind: EntKind.UnionVar, name: name, ty: t, params: [], len: 0 });
+			return text;
+		}
+		this.genericHelpers();
+		const boxes = this.entsOf(EntKind.BoxVar, t);
+		if (boxes.length > 0 && this.rng.chance(50)) {
+			return indent + boxes[this.rng.below(boxes.length)].name + ".v = " + this.expr(t, 0) + ";\n";
+		}
+		const name = this.entName("b");
+		const text = indent + "const " + name + " = new BoxG<" + T + ">(" + this.expr(t, 0) + ");\n";
+		this.ents.push({ kind: EntKind.BoxVar, name: name, ty: t, params: [], len: 0 });
+		return text;
 	}
 
 	newLocal(t: Ty): string {
@@ -408,7 +709,12 @@ class Gen {
 	}
 
 	statement(depth: int32, indent: string, inLoop: boolean, ret: Ty, inFn: boolean): string {
-		this.cost = this.cost + this.mult;
+		this.nodesLeft--;
+		if (!this.reserve(1 as int64)) { return ""; }
+		if (this.fams.length > 0 && this.rng.chance(20)) {
+			const fam = this.famStatement(indent);
+			if (fam != "") { return fam; }
+		}
 		const nested = depth < this.depthMax;
 		const k = this.rng.below(100);
 		if (k < 25) {
@@ -438,10 +744,13 @@ class Gen {
 			if (this.rng.chance(50)) { text += " else {\n" + this.block(depth + 1, indent + "\t", inLoop, ret, inFn) + indent + "}"; }
 			return text + "\n";
 		}
-		if (k < 82 && nested) {
+		const available = (this.costCap - this.cost) / this.mult;
+		const maxTrips = Math.min(this.tripMax, (available / (3 as int64)) as int32);
+		if (k < 82 && nested && maxTrips > 0) {
 			const name = "i" + String(this.loopCount);
 			this.loopCount = this.loopCount + 1;
-			const trips = this.rng.between(1, this.tripMax);
+			const trips = this.rng.between(1, maxTrips);
+			if (!this.reserve((2 * trips) as int64)) { return ""; }
 			const savedMult = this.mult;
 			this.mult = this.mult * (trips as int64);
 			this.scope.push({ name: name, ty: Ty.Int32, writable: false });
@@ -468,10 +777,15 @@ class Gen {
 
 	block(depth: int32, indent: string, inLoop: boolean, ret: Ty, inFn: boolean): string {
 		const saved = this.scope.length;
+		const savedEnts = this.ents.length;
 		const n = this.rng.between(1, this.stmtMax);
 		let out = "";
-		for (let i = 0; i < n; i++) { out += this.statement(depth, indent, inLoop, ret, inFn); }
+		for (let i = 0; i < n; i++) {
+			if (this.nodesLeft == 0 || this.cost + this.mult > this.costCap) { break; }
+			out += this.statement(depth, indent, inLoop, ret, inFn);
+		}
 		while (this.scope.length > saved) { this.scope.pop(); }
+		while (this.ents.length > savedEnts) { this.ents.pop(); }
 		return out;
 	}
 
@@ -481,6 +795,8 @@ class Gen {
 		const paramCount = this.rng.below(4);
 		let sig = "";
 		this.scope = [];
+		this.ents = [];
+		this.entCount = 0;
 		this.localCount = 0;
 		this.loopCount = 0;
 		this.cost = 0 as int64;
@@ -494,6 +810,7 @@ class Gen {
 			sig = sig == "" ? name + ": " + tyName(t) : sig + ", " + name + ": " + tyName(t);
 		}
 		const body = this.block(0, "\t", false, ret, true);
+		this.ents = [];
 		const tail = "\treturn " + this.expr(ret, 0) + ";\n";
 		const name = "f" + String(index);
 		this.fns.push({ name: name, ret: ret, params: params, cost: this.cost });
@@ -517,6 +834,7 @@ export function generate(seed: uint64, f: Features): string {
 	const g = new Gen();
 	g.rng = Rng.seeded(seed);
 	for (const t of ALL_TYS) { if (f.types.has(t)) { g.tys.push(t); } }
+	for (const m of ALL_FAMS) { if (f.fams.has(m)) { g.fams.push(m); } }
 	g.stmtMax = f.stmts;
 	g.depthMax = f.depth;
 	g.exprMax = f.exprDepth;
@@ -572,6 +890,74 @@ test "different seeds give different programs" {
 	assert generate(11 as uint64, f) != generate(12 as uint64, f);
 }
 
+test "numeric loop and routine weights stay capped and restore their scope" {
+	for (let seed = 1; seed < 13; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int8, Ty.Int64, Ty.Float64];
+		g.stmtMax = 32;
+		g.depthMax = 8;
+		g.exprMax = 8;
+		g.tripMax = 64;
+		g.fn(0);
+		assert g.cost <= FN_COST_CAP;
+		assert g.fns[0].cost <= FN_COST_CAP;
+		assert g.mult == (1 as int64);
+		assert g.scope.length == g.fns[0].params.length;
+		assert g.ents.length == 0;
+	}
+}
+
+test "a call is refused before its weighted product could overflow" {
+	const g = new Gen();
+	g.rng = Rng.seeded(1 as uint64);
+	g.mult = FN_COST_CAP;
+	g.costCap = FN_COST_CAP;
+	g.fns = [{
+		name: "huge",
+		ret: Ty.Int8,
+		params: [],
+		cost: 9223372036854775806 as int64,
+	}];
+	assert g.call(Ty.Int8, 0) == "";
+	assert g.cost == (0 as int64);
+}
+
+test "call overhead is charged for every loop iteration" {
+	const g = new Gen();
+	g.rng = Rng.seeded(1 as uint64);
+	g.mult = 64 as int64;
+	g.costCap = 63 as int64;
+	g.fns = [{ name: "tiny", ret: Ty.Int8, params: [], cost: 0 as int64 }];
+	assert g.call(Ty.Int8, 0) == "";
+	assert g.cost == (0 as int64);
+}
+
+test "an exhausted weighted budget emits no block and preserves scope" {
+	for (const t of [Ty.Int8, Ty.Float64]) {
+		const g = new Gen();
+		g.rng = Rng.seeded(1 as uint64);
+		g.tys = [t];
+		g.costCap = FN_COST_CAP;
+		g.cost = FN_COST_CAP - (1 as int64);
+		g.mult = 64 as int64;
+		const text = g.block(0, "", false, t, true);
+		assert text == "";
+		assert g.cost == FN_COST_CAP - (1 as int64);
+		assert g.scope.length == 0 && g.ents.length == 0;
+	}
+}
+
+test "a legal deep vector cannot explode generated source" {
+	const parsed = Features.defaults().overlay(
+		"fams=none funcs=1 globals=1 stmts=32 depth=4 expr=1 trips=64 entries=1",
+	);
+	assert parsed.ok;
+	if (parsed.ok) {
+		assert generate(1 as uint64, parsed.value).byteLength < 1048576;
+	}
+}
+
 test "the program head names its seed and full feature vector" {
 	const f = Features.defaults();
 	const text = generate(5 as uint64, f);
@@ -584,3 +970,35 @@ test "a planted program declares the plant on both sides of its flag" {
 	assert text.contains("when (debug) {");
 	assert text.contains("plantDelta()");
 }
+
+test "fams=none emits no closure, union or generic construct" {
+	const r = Features.defaults().overlay("fams=none");
+	assert r.ok;
+	if (r.ok) {
+		for (let seed = 1; seed < 9; seed++) {
+			const text = generate(seed as uint64, r.value);
+			assert !text.contains("(q");
+			assert !text.contains("| string | null");
+			assert !text.contains("BoxG");
+		}
+	}
+}
+
+test "each family alone reaches the program" {
+	const closure = Features.defaults().overlay("fams=closure");
+	const union = Features.defaults().overlay("fams=union");
+	const generic = Features.defaults().overlay("fams=generic");
+	assert closure.ok && union.ok && generic.ok;
+	if (closure.ok && union.ok && generic.ok) {
+		let c = false;
+		let u = false;
+		let g = false;
+		for (let seed = 1; seed < 9; seed++) {
+			if (generate(seed as uint64, closure.value).contains("(q")) { c = true; }
+			if (generate(seed as uint64, union.value).contains("| string | null")) { u = true; }
+			if (generate(seed as uint64, generic.value).contains("<T>")) { g = true; }
+		}
+		assert c && u && g;
+	}
+}
+

@@ -23,47 +23,38 @@
 
 class Chain {
 	label: string;
-	next: Chain;
+	next: Chain | null;
 }
 
 class Ping {
 	tag: string;
-	other: Pong;
+	other: Pong | null;
 }
 
 class Pong {
 	tag: string;
-	back: Ping;
+	back: Ping | null;
 }
 
 class Outer {
 	tag: string;
-	inner: Chain;
+	inner: Chain | null;
 }
 
 function main(): void {
-	const c = new Chain();
-	c.label = "a";
-	c.next = new Chain();
-	c.next.label = "b";
-	c.next.next = new Chain();
-	c.next.next.label = "c";
+	const c: Chain = { label: "a", next: { label: "b", next: { label: "c", next: null } } };
 
 	const dump = "" + c;
 	console.log(dump);
 	if (dump.indexOf("\"b\"") < 0) { throw "GUARD RED: chain dump truncated before depth 2: " + dump; }
 	if (dump.indexOf("\"c\"") < 0) { throw "GUARD RED: chain dump truncated before depth 3: " + dump; }
 
-	const p = new Ping();
-	p.tag = "ping";
-	p.other = new Pong();
-	p.other.tag = "pong";
+	const p: Ping = { tag: "ping", other: { tag: "pong", back: null } };
 	const mutual = "" + p;
 	console.log(mutual);
 	if (mutual.indexOf("\"pong\"") < 0) { throw "GUARD RED: mutual recursion dropped the far side: " + mutual; }
 
-	const o = new Outer();
-	o.tag = "t";
+	const o: Outer = { tag: "t", inner: null };
 	const nulled = "" + o;
 	console.log(nulled);
 	if (nulled.indexOf("null") < 0) { throw "GUARD RED: null reference field not reported as null: " + nulled; }

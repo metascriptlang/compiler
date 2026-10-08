@@ -1,7 +1,7 @@
 // MetaScript Compiler CLI — compile command
 
 import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env } from "std/process";
-import { watch, nextChanges, msIoRunOnce, writeSettled, FsWatch, FsChanges } from "std/fs/watch";
+import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr } from "std/io";
 import { ClassDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, FunctionDeclData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
@@ -47,6 +47,7 @@ import { resetLiftedOps } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, tryLoadPreludeDeps, writePreludeDeps, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
+import { modulePassIdentity } from "../checker/prelude";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
@@ -1210,7 +1211,7 @@ let _hcrWarmLinks: HcrWarmLink[] = [];
 function warmHcrSession(opts: Readonly<CliOptions>): void {
 	for (const j of _hcrWarmJobs) compilePlanFor(j.cFile, j.depFile != "", j.flags, opts.mode, opts.ccCompiler, opts.ccBinary);
 	ensurePchs(_hcrWarmJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
-	for (const link of _hcrWarmLinks) warmLinkPlan(link.image, link.flags, opts.ccCompiler, opts.ccBinary);
+	for (const link of _hcrWarmLinks) warmLinkPlan(link.image, link.flags, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 	_hcrWarmJobs = [];
 	_hcrWarmLinks = [];
 }
@@ -1807,7 +1808,7 @@ function linkHcrImage(objects: string[], externalInputs: string[], image: string
 		_hcrWarmLinks.push({ image, flags });
 		return;
 	}
-	const linked = linkObjects(objects, image, flags, opts.mode, opts.ccCompiler, opts.ccBinary);
+	const linked = linkObjects(objects, image, flags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 	if (!linked.ok) {
 		console.log(`${error("error")}: link failed for HCR image ${image} ${dim(`(exit ${linked.error.exitCode})`)}`);
 		if (linked.error.errorOutput != "") console.log(linked.error.errorOutput);
@@ -2166,6 +2167,7 @@ function writesSettled(pending: PendingWrites): boolean {
 }
 
 const RESCAN_SETTLE_MS = 60;
+const WRITES_QUIET_MS = 20;
 const WRITER_WAIT_LIMIT_MS = 500;
 
 function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
@@ -2180,9 +2182,12 @@ function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
 		if (!pending.rescan && pending.shown.length == 0) continue;
 		console.log(pending.rescan ? "watch: changed (rescan)" : `watch: changed ${pending.shown.join(" ")}`);
 		const start = performance.now();
+		let lastBatch = start;
 		while (true) {
-			const waited = performance.now() - start;
-			const settled = pending.rescan ? waited >= RESCAN_SETTLE_MS : writesSettled(pending);
+			const now = performance.now();
+			const waited = now - start;
+			const quiet = !writerCloseObservable && now - lastBatch >= WRITES_QUIET_MS;
+			const settled = pending.rescan ? waited >= RESCAN_SETTLE_MS : quiet || writesSettled(pending);
 			if (settled) {
 				pumpFeed(feed, 0);
 				if (feed.batches.length == 0) break;
@@ -2192,6 +2197,7 @@ function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
 			} else {
 				pumpFeed(feed, pending.rescan ? 20 : 2);
 			}
+			if (feed.batches.length > 0) lastBatch = performance.now();
 			absorbBatches(feed, pending);
 			if (pending.ended) return false;
 		}
@@ -2409,8 +2415,8 @@ resetLiftedOps();
 	// in resolveTargetGcMode (it has to happen before the check pass).
 	// Both halves come from Anza's platform-tools bundle - a stock LLVM will not
 	// do, so the diagnostic points at the bundle rather than at a package manager.
-	if (opts.targetOs == "solana") {
-		if (opts.mode == 0) opts.mode = 1;
+	if (opts.targetOs == "solana" && opts.mode == 0) opts.mode = 1;
+	if (opts.targetOs == "solana" && !opts.emitC) {
 		if (opts.ccBinary == "") {
 			const sbfClang = resolveBpfClang();
 			if (sbfClang == "") {
@@ -2468,7 +2474,7 @@ resetLiftedOps();
 	// Project-level cache: skip entire pipeline if nothing changed.
 	// Reference-aligned: changeDetectedViaJsonBuildInstructions — early return before codegen.
 	const allFlags0 = cliCompileFlags(opts);
-	const buildIdentityFlags = cliLinkFlags(allFlags0, opts) + defineIdentity(opts.defines);
+	const buildIdentityFlags = cliLinkFlags(allFlags0, opts) + defineIdentity(opts.defines) + modulePassIdentity();
 	const projectDeps: string[] = [];
 	for (const path of graph.loadOrder) projectDeps.push(path);
 	for (const path of globalLinkObjects()) projectDeps.push(path);
@@ -3145,7 +3151,7 @@ resetLiftedOps();
 			throw new Error(BUILD_STOPPED);
 		}
 	} else {
-		const linkRes = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
+		const linkRes = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 		if (!linkRes.ok) {
 			printDiag(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 			if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
@@ -3426,7 +3432,7 @@ resetLiftedOps();
 	let testLink = cliLinkFlags(allFlags, opts, true);
 	for (const obj of globalLinkObjects()) oFiles.push(obj);
 	for (const flag of globalLinkFlags()) { testLink = appendFlag(testLink, flag); }
-	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary);
+	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 	if (!linkRes.ok) {
 		printDiag(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 		if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
@@ -3704,7 +3710,7 @@ function jsTestHarnessSource(): string {
 		"};",
 		"globalThis.__msAssertFail = (msg, file, line) => {",
 		"  const err = new Error(msg);",
-		"  err.msAssert = true; err.msFile = file; err.msLine = line; err.msDiag = paPending;",
+		"  err.msAssert = true; err.msDefect = true; err.msFile = file; err.msLine = line; err.msDiag = paPending;",
 		"  paPending = null;",
 		"  throw err;",
 		"};",

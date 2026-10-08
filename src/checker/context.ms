@@ -27,7 +27,7 @@ export interface ExportedSymInfo {
 	sym: Symbol;
 	ext: ExtensionMethod | null;
 	overloadExts: (ExtensionMethod | null)[];
-	converterTargetType: Type; // resolved converter target (null when unresolved / not a converter)
+	converterTargetType: Type | null;
 }
 
 export interface ModuleExports {

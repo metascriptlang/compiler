@@ -75,7 +75,7 @@ function materializeBigInt(node: Node, ctx: TransformContext): Node {
 		const dstK = reprKind(node.nodeType);
 		if (dstK == TypeKind.Unknown || d.asExpr == null) return node;
 		const srcK = reprKind(d.asExpr.nodeType);
-		if (srcK == TypeKind.Unknown) return node;
+		if (srcK == TypeKind.Unknown || readsUnionMember(d)) return node;
 		if (!is64Kind(dstK) && !is64Kind(srcK)) return node;
 		return bigConvert(d.asExpr, srcK, dstK, node.location);
 	}
@@ -107,6 +107,12 @@ function bigLit(text: string, kind: TypeKind, loc: SourceLocation): Node {
 }
 
 // ===== Conversions (genConv rows, exact-C narrow variant) =====
+
+export function readsUnionMember(d: TypeAssertionData): boolean {
+	if (d.asExpr == null) return false;
+	if (d.asExpr.kind == NodeKind.HiddenSubConv) return true;
+	return d.asExpr.nodeType != null && d.asExpr.nodeType.kind == TypeKind.Union;
+}
 
 // `x as bigint` / `b as <numeric>`. int64 and uint64 are already native BigInt
 // on this backend, so those legs only need the width clamp C applies.

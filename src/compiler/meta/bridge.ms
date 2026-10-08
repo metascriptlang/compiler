@@ -243,7 +243,7 @@ function enumToAst(t: Type, loc: SourceLocation): Node {
 		enumMembers: t.typeNames,
 		enumValues,
 		nameLocation: loc,
-		memberLocations: [],
+		memberLocations: [], enumInits: [] as Node[],
 	}, loc);
 }
 
@@ -689,7 +689,7 @@ function setTypeFields(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, hand
 export function stripMacroArgWrappers(node: Node): Node {
 	let n = node;
 	while (n != null) {
-		if (n.kind == NodeKind.HiddenDeref || n.kind == NodeKind.HiddenAddr) {
+		if ((n.kind == NodeKind.HiddenDeref && !n.flags.has(NodeFlag.ExplicitDeref)) || n.kind == NodeKind.HiddenAddr) {
 			n = (n.data as HiddenDerefData).expr;
 		} else if (n.kind == NodeKind.HiddenStdConv || n.kind == NodeKind.HiddenSubConv) {
 			n = (n.data as HiddenStdConvData).convExpr;
@@ -714,6 +714,8 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		heapObjectSetField(objHeap, handle, "endLine", raiserInt(node.location.endLine));
 		heapObjectSetField(objHeap, handle, "endColumn", raiserInt(node.location.endColumn));
 	}
+	const syntaxFlags = node.flags.intersection(PARSER_NODE_FLAGS);
+	if (!syntaxFlags.isEmpty()) heapObjectSetField(objHeap, handle, "flags", raiserInt((syntaxFlags as uint32) as int64));
 
 	match (node.kind) {
 		// === Literals ===
@@ -1455,13 +1457,12 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 					}
 					const typed = boundTypeOfObject(objHeap, handle);
 					if (typed != null) out.nodeType = typed;
-					// One flag, by name, not the whole word: a macro that could set
-					// Sem/Transf/LL would forge pipeline state on a node the passes
-					// have never processed. Widen this list only per-flag.
-					const rawFlags = readInt(objHeap, handle, "flags") as int32;
-					if (rawFlags == NodeFlag.StaticStorage as int32) {
-						out.flags = out.flags.incl(NodeFlag.StaticStorage);
+					const rawFlags = (readInt(objHeap, handle, "flags") as uint32) as BitSet<NodeFlag>;
+					const pipeline = rawFlags.difference(PARSER_NODE_FLAGS);
+					if (!pipeline.isEmpty()) {
+						_wireRefusals.push({ message: `flags may hold only what the parser writes (${PARSER_NODE_FLAGS.toString()}), not ${pipeline.toString()}; build the set with (0 as BitSet<NodeFlag>).incl(NodeFlag.X)`, location: out.location });
 					}
+					out.flags = out.flags.union(rawFlags.intersection(PARSER_NODE_FLAGS));
 					if (typed != null && readBool(objHeap, handle, "folded")) out.flags = out.flags.incl(NodeFlag.Folded);
 				}
 				return out;
@@ -1483,6 +1484,8 @@ function deserializeObjectLiteral(handle: int64, objHeap: RaiserObjectHeap, arrH
 	}
 	return createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc);
 }
+
+const PARSER_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.Parenthesized | NodeFlag.WhenPicked | NodeFlag.ExplicitDeref | NodeFlag.CommaWritten;
 
 export interface WireRefusal {
 	message: string;
@@ -1912,7 +1915,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const enumName = readStr(objHeap, h, "enumName");
 			const enumMembers = readStrs(objHeap, arrHeap, h, "enumMembers");
 			return createNodeAt(NodeKind.EnumDecl, {
-				enumName, enumMembers, enumValues: readNums(objHeap, arrHeap, h, "enumValues"), nameLocation: loc, memberLocations: [],
+				enumName, enumMembers, enumValues: readNums(objHeap, arrHeap, h, "enumValues"), nameLocation: loc, memberLocations: [], enumInits: [] as Node[],
 			}, loc);
 		},
 		NodeKind.InterfaceDecl => {
@@ -2500,6 +2503,82 @@ test "round-trip VariableDecl" {
 	assert d.initializer.kind == NodeKind.NumberLiteral;
 }
 
+test "round-trip keeps every flag the parser writes" {
+	const loc = makeLoc(3, 0);
+	const syntax: NodeFlag[] = [NodeFlag.ExportDefault, NodeFlag.ExternC, NodeFlag.Converter, NodeFlag.StaticStorage, NodeFlag.Parenthesized, NodeFlag.WhenPicked, NodeFlag.ExplicitDeref, NodeFlag.CommaWritten];
+	for (const f of syntax) {
+		const objH = createStructHeap();
+		const arrH = createArrayHeap();
+		const orig = mkNumber(1, loc);
+		orig.flags = orig.flags.incl(f);
+		const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+		assert back.flags == orig.flags;
+	}
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const all = mkNumber(1, loc);
+	for (const f of syntax) all.flags = all.flags.incl(f);
+	assert valueToNode(nodeToValue(all, objH, arrH), objH, arrH, loc).flags == all.flags;
+}
+
+test "a written p[] crosses the wire as written; a checker-inserted deref is peeled" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const written = createNode(NodeKind.HiddenDeref, { expr: createNode(NodeKind.Identifier, { name: "p" }, synthToken(loc)) }, synthToken(loc));
+	written.flags = written.flags.incl(NodeFlag.ExplicitDeref);
+	const back = valueToNode(nodeToValue(written, objH, arrH), objH, arrH, loc);
+	assert back.kind == NodeKind.HiddenDeref;
+	assert back.flags.has(NodeFlag.ExplicitDeref);
+	const inserted = createNode(NodeKind.HiddenDeref, { expr: createNode(NodeKind.Identifier, { name: "p" }, synthToken(loc)) }, synthToken(loc));
+	assert valueToNode(nodeToValue(inserted, objH, arrH), objH, arrH, loc).kind == NodeKind.Identifier;
+}
+
+test "round-trip drops pipeline flags and keeps the syntax beside them" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const orig = mkNumber(1, loc);
+	orig.flags = orig.flags.incl(NodeFlag.Sem).incl(NodeFlag.Transf).incl(NodeFlag.LastRead).incl(NodeFlag.Parenthesized);
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	assert back.flags == (0 as BitSet<NodeFlag>).incl(NodeFlag.Parenthesized);
+}
+
+test "a pipeline flag forged by a macro is refused and does not reach the node" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const val = nodeToValue(mkNumber(1, loc), objH, arrH);
+	const forged = (0 as BitSet<NodeFlag>).incl(NodeFlag.Sem).incl(NodeFlag.LL).incl(NodeFlag.StaticStorage);
+	heapObjectSetField(objH, val.intVal, "flags", raiserInt((forged as uint32) as int64));
+	const back = valueToNode(val, objH, arrH, loc);
+	assert back.flags == (0 as BitSet<NodeFlag>).incl(NodeFlag.StaticStorage);
+	const refused = takeWireRefusals();
+	assert refused.length == 1;
+	assert refused[0].message.contains("Sem");
+}
+
+test "an enum ordinal written as flags is refused, not read as a set" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const val = nodeToValue(mkNumber(1, loc), objH, arrH);
+	heapObjectSetField(objH, val.intVal, "flags", raiserInt(NodeFlag.StaticStorage as int64));
+	const back = valueToNode(val, objH, arrH, loc);
+	assert !back.flags.has(NodeFlag.StaticStorage);
+	assert takeWireRefusals().length == 1;
+}
+
+test "a node that crossed the wire with only parser flags is not refused" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 0);
+	const orig = mkNumber(1, loc);
+	orig.flags = orig.flags.incl(NodeFlag.StaticStorage).incl(NodeFlag.Parenthesized);
+	valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	assert takeWireRefusals().length == 0;
+}
+
 test "round-trip FunctionDecl" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
@@ -2780,7 +2859,7 @@ test "round-trip EnumDecl keeps the member values a macro reads" {
 	const loc = makeLoc(2, 1);
 	const orig = createNode(NodeKind.EnumDecl, {
 		enumName: "Status", enumMembers: ["Active", "Inactive"], enumValues: [5, 2],
-		nameLocation: loc, memberLocations: [],
+		nameLocation: loc, memberLocations: [], enumInits: [] as Node[],
 	}, synthToken(loc));
 	const d = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc).data as EnumDeclData;
 	assert d.enumValues.length == 2 && d.enumValues[0] == 5 && d.enumValues[1] == 2;
@@ -3746,7 +3825,7 @@ test "round-trip InterfaceDecl keeps interfaceExtends" {
 	const loc = makeLoc(3, 1);
 	const orig = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: "Child", interfaceFields: ["x"], interfaceFieldTypes: ["number"],
-		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldDecorators: [[]],
+		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
@@ -3760,7 +3839,7 @@ test "round-trip StructDecl keeps interfaceExtends" {
 	const loc = makeLoc(3, 1);
 	const orig = createNode(NodeKind.StructDecl, {
 		interfaceName: "S", interfaceFields: [], interfaceFieldTypes: [],
-		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldDecorators: [],
+		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
@@ -3775,7 +3854,7 @@ test "round-trip StructDecl keeps each field's decorators with their arguments" 
 	const dec = createNode(NodeKind.MacroInvocation, { macroName: "seeds", macroArgs: [arg], macroHasParens: true }, synthToken(loc));
 	const orig = createNode(NodeKind.StructDecl, {
 		interfaceName: "S", interfaceFields: ["a", "b"], interfaceFieldTypes: ["int32", "int32"],
-		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [[dec], []],
+		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [[dec], []],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
@@ -3792,7 +3871,7 @@ test "round-trip pads a declaration built without decorators to one empty row pe
 	const loc = makeLoc(3, 1);
 	const orig = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: "I", interfaceFields: ["a", "b", "c"], interfaceFieldTypes: ["int32", "int32", "int32"],
-		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [],
+		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
@@ -3805,15 +3884,15 @@ test "round-trip keeps the generic params of an interface, a struct, a class and
 	const loc = makeLoc(3, 1);
 	const iface = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: "Box", interfaceFields: ["v"], interfaceFieldTypes: ["T"],
-		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [[]],
+		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	iface.typeArg = "T";
 	const strukt = createNode(NodeKind.StructDecl, {
 		interfaceName: "Cell", interfaceFields: ["v"], interfaceFieldTypes: ["T"],
-		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldDecorators: [[]],
+		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	strukt.typeArg = "T:number";
-	const cls = createNode(NodeKind.ClassDecl, { className: "Pair", classExtends: "", classBody: [] as Node[], nameLocation: loc }, synthToken(loc));
+	const cls = createNode(NodeKind.ClassDecl, { className: "Pair", classDisplayName: "Pair", classExtends: "", classBody: [] as Node[], nameLocation: loc }, synthToken(loc));
 	cls.typeArg = "A,B:number";
 	const act = createNode(NodeKind.ActorDecl, { actorName: "Worker", actorBody: [] as Node[], nameLocation: loc }, synthToken(loc));
 	act.typeArg = "M";
@@ -3870,7 +3949,7 @@ test "round-trip InterfaceDecl keeps interfaceExtends" {
 	const loc = makeLoc(3, 1);
 	const orig = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: "Child", interfaceFields: ["x"], interfaceFieldTypes: ["number"],
-		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldDecorators: [[]],
+		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;
@@ -3884,7 +3963,7 @@ test "round-trip StructDecl keeps interfaceExtends" {
 	const loc = makeLoc(3, 1);
 	const orig = createNode(NodeKind.StructDecl, {
 		interfaceName: "S", interfaceFields: [], interfaceFieldTypes: [],
-		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldDecorators: [],
+		interfaceExtends: ["Base"], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [],
 	}, synthToken(loc));
 	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
 	const d = back.data as InterfaceDeclData;

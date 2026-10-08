@@ -26,8 +26,10 @@
 // serial until the fp-keyed artifact cache stopped letting sibling msc
 // processes fight over one shared std module: they swapped the .c under each
 // other's cc and deleted each other's .o (cache.ms writeCSource /
-// invalidateCompileCache, cc.ms compileCFile). Builds are joined IN INPUT
-// ORDER and each joined slot is refilled at once, so progress lines, the tally and the parity grouping are byte-for-
+// invalidateCompileCache, cc.ms compileCFile). BUILD_SLOTS workers claim jobs by
+// removing out/corpus/claims/<i>, so cell launches on the main thread never
+// idle a build slot, while builds are reported IN INPUT
+// ORDER, so progress lines, the tally and the parity grouping are byte-for-
 // byte what the serial loop produced; only the wall clock moves. Progress
 // streams to stderr unbuffered; stdout carries the final summary.
 //
@@ -45,9 +47,10 @@
 // ASan (shadow memory inflates RSS). ASan on this platform has no leak
 // sanitizer — the ledger IS the leak signal in this lane.
 
-import { exec, exit, env, platform, cmdExists, findOnPath } from "std/process";
-import { readFile, writeFile, readDir, exists, ensureDir, remove, isDir } from "std/fs";
+import { exec, execFileCapture, execFileResult, exit, env, platform, cmdExists, findOnPath } from "std/process";
+import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, isDir } from "std/fs";
 import { writeStderr } from "std/io";
+import { isNotFound } from "std/io/errors";
 
 const PROG_DIR = "src/test/corpus/programs/";
 const OUT_DIR = "out/corpus/";
@@ -323,9 +326,18 @@ function progress(line: string): void {
 }
 
 function readFileOr(path: string, dflt: string): string {
-	const r = readFile(path);
-	if (r.ok) { return r.value; }
-	return dflt;
+	const deadline = performance.now() + 2000;
+	while (true) {
+		const r = readFile(path);
+		if (r.ok) { return r.value; }
+		if (isNotFound(r.error)) { return dflt; }
+		if (performance.now() >= deadline) {
+			progress(`  !! cannot read ${path}: ${r.error.message}`);
+			return dflt;
+		}
+		progress(`  · read of ${path} failed (${r.error.message}), retrying`);
+		pollSleep("0.05", 50);
+	}
 }
 
 function shellOut(cmd: string): string {
@@ -583,7 +595,7 @@ function parseRssMB(output: string): float64 {
 // disagree, so the entry module is read back out of the emitted manifest. A
 // miss returns a path that does not exist, which node reports loudly — an
 // empty argument would open a REPL and hang the cell instead.
-function esmEntryJs(c: Cell): string {
+function esmEntryJs(c: Readonly<Cell>): string {
 	const missing = c.bin + "/_manifest.missing.js";
 	const manifest = readFileOr(c.bin + "/_manifest.json", "");
 	const entryKey = "\"entry\": \"";
@@ -609,7 +621,7 @@ function esmEntryJs(c: Cell): string {
 // The cell body, in whichever shell this platform has. Both spellings run the
 // binary with its output redirected, then publish the exit code through a
 // temp-file rename so a half-written sentinel is never observed.
-function cellInner(c: Cell, q: (p: string) => string): string {
+function cellInner(c: Readonly<Cell>, q: (p: string) => string): string {
 	const bin = q(c.bin);
 	if (c.lane == "san") {
 		// detect_leaks=0: the DRC LEDGER is this lane's leak signal (by design —
@@ -646,14 +658,17 @@ function posixQuote(p: string): string { return p; }
 function winQuote(p: string): string { return "\"" + winPath(p) + "\""; }
 
 function launchCell(c: Cell): void {
+	c.launchedAtMs = performance.now();
+	c.pid = startCellProcess(c);
+	c.launched = true;
+}
+
+function startCellProcess(c: Readonly<Cell>): string {
 	ensureDir(c.dir);
 	if (exists(c.dir + "done")) { remove(c.dir + "done"); }
-	c.launchedAtMs = performance.now();
 	if (!IS_WIN) {
 		const inner = cellInner(c, posixQuote);
-		c.pid = shellOut("set -m; ( " + inner + "; echo $? > " + c.dir + "done.tmp; mv " + c.dir + "done.tmp " + c.dir + "done ) > /dev/null 2>&1 & echo $!");
-		c.launched = true;
-		return;
+		return shellOut("set -m; ( " + inner + "; echo $? > " + c.dir + "done.tmp; mv " + c.dir + "done.tmp " + c.dir + "done ) > /dev/null 2>&1 & echo $!");
 	}
 	// Windows: the cell body goes into a .bat rather than onto the command
 	// line. It carries redirects, `%`-expansion and quoted paths, and pushing
@@ -664,6 +679,11 @@ function launchCell(c: Cell): void {
 	// %ERRORLEVEL% expands when cmd PARSES the line, i.e. before the program
 	// has run, so every cell would report the exit code of the previous
 	// statement. Measured — it reported 0 for a cell that exited 5.
+	const launched = execFileCapture(winPath(WINTIME), ["--detach", "cmd", "/d", "/s", "/c", writeCellBat(c)]);
+	return launched.ok ? launched.value.trim() : "";
+}
+
+function writeCellBat(c: Readonly<Cell>): string {
 	const bat = c.dir + "cell.bat";
 	const inner = cellInner(c, winQuote);
 	writeFile(bat,
@@ -672,11 +692,26 @@ function launchCell(c: Cell): void {
 		inner + "\r\n" +
 		"(echo !ERRORLEVEL!)> " + winQuote(c.dir + "done.tmp") + "\r\n" +
 		"move /y " + winQuote(c.dir + "done.tmp") + " " + winQuote(c.dir + "done") + " >nul\r\n");
-	c.pid = shellOut(winQuote(WINTIME) + " --detach cmd /d /s /c " + winQuote(bat));
-	c.launched = true;
+	return winPath(bat);
 }
 
-function cellDone(c: Cell): boolean {
+function runsOnBuildWorker(c: Readonly<Cell>): boolean {
+	return IS_WIN && !c.spec.serial && !assertsRss(c);
+}
+
+function runCellOnWorker(c: Readonly<Cell>): void {
+	ensureDir(c.dir);
+	if (exists(c.dir + "done")) { remove(c.dir + "done"); }
+	if (exists(c.dir + "aborted")) { remove(c.dir + "aborted"); }
+	const r = execFileResult(winPath(WINTIME), ["--wait-ms", `${CELL_TIMEOUT_MS as int64}`, "cmd", "/d", "/s", "/c", writeCellBat(c)]);
+	if (r.exitCode == 124) {
+		writeFile(c.dir + "aborted", `cell TIMEOUT after ${CELL_TIMEOUT_MS / 1000.0}s — no exit; the program hung (process tree killed by wintime's job object on its build worker; rerun the cell binary directly to reproduce)`);
+	} else if (r.exitCode != 0 || !r.started) {
+		writeFile(c.dir + "aborted", `cell did not start — wintime --wait-ms exited ${r.exitCode}: ${r.errorOutput.trim()}`);
+	}
+}
+
+function cellDone(c: Readonly<Cell>): boolean {
 	return exists(c.dir + "done");
 }
 
@@ -715,11 +750,17 @@ function finishRssCell(c: Cell): void {
 
 	let detail = "rss=" + rssMB + "MB exit=" + rawExit;
 	if (!exitOk) { detail = detail + " [exit≠" + c.spec.expectExit + " sig=" + signal + "]"; }
-	if (!outOk) { detail = detail + " [stdout missing '" + c.spec.stdoutSub + "']"; }
+	if (!outOk) { detail = detail + missingStdout(c, c.dir + "stdout.log", stdoutLog); }
 	if (!rssOk) { detail = detail + " [RSS>" + c.spec.maxRssMb + "MB]"; }
 	c.pass = exitOk && outOk && rssOk;
 	c.detail = detail;
 	c.finished = true;
+}
+
+function missingStdout(c: Cell, path: string, seen: string): string {
+	const again = readFileOr(path, "");
+	const found = again.contains(c.spec.stdoutSub) ? ", which has the line" : "";
+	return ` [stdout missing '${c.spec.stdoutSub}'; read ${seen.length} bytes of ${path}, a re-read ${again.length}${found}]`;
 }
 
 function finishParityCell(c: Cell): void {
@@ -729,7 +770,7 @@ function finishParityCell(c: Cell): void {
 	const outOk = c.spec.stdoutSub == "" || merged.contains(c.spec.stdoutSub);
 
 	let detail = "exit=" + rawExit;
-	if (!outOk) { detail = detail + " [stdout missing '" + c.spec.stdoutSub + "']"; }
+	if (!outOk) { detail = detail + missingStdout(c, c.dir + "out.log", merged); }
 	c.pass = exitOk && outOk;
 	c.detail = detail;
 	c.finished = true;
@@ -838,7 +879,7 @@ function reportCell(c: Cell, t: Tally): void {
 	}
 }
 
-function isRssCell(c: Cell): boolean {
+function isRssCell(c: Readonly<Cell>): boolean {
 	return c.spec.maxRssMb >= 0.0 && c.lane != "js" && c.lane != "esm" && c.lane != "raiser";
 }
 
@@ -964,7 +1005,69 @@ const BUILD_OK: int32 = 0;
 const BUILD_OK_RETRIED: int32 = 1;
 const BUILD_FAILED: int32 = 2;
 
-function buildOneJob(job: Readonly<BuildJob>): int32 {
+const BUILD_PENDING: int32 = -1;
+const CLAIM_DIR = OUT_DIR + "claims/";
+
+function builtMarker(job: Readonly<BuildJob>): string {
+	return job.cell.dir + "built";
+}
+
+function buildOneJob(job: Readonly<BuildJob>): void {
+	const code = buildJobVerdict(job);
+	const ran = code != BUILD_FAILED && job.cmd != "" && runsOnBuildWorker(job.cell);
+	if (ran) { runCellOnWorker(job.cell); }
+	publishMarker(builtMarker(job), ran ? `${code} ran\n` : `${code}\n`);
+}
+
+// Written in place, never renamed: on Windows a scanner holding the fresh tmp
+// open without FILE_SHARE_DELETE failed about 1 in 280 renames (measured
+// 2026-10-05) and the lost marker stalled the main thread for good. A marker
+// counts only once its closing newline is there.
+function publishMarker(path: string, text: string): void {
+	const deadline = performance.now() + 5000;
+	while (true) {
+		const w = writeFile(path, text);
+		if (w.ok) { return; }
+		if (performance.now() >= deadline) {
+			writeStderr(`  !! cannot write ${path}: ${w.error.message} — the main thread waits on it forever\n`);
+			return;
+		}
+		pollSleep("0.05", 50);
+	}
+}
+
+function ranOnWorker(job: BuildJob): boolean {
+	return readFileOr(builtMarker(job), "").contains("ran");
+}
+
+function buildWorker(jobs: Readonly<BuildJob[]>, first: int32): number {
+	let built = 0;
+	for (let i: int32 = first; i < jobs.length; i += 1) {
+		if (!remove(CLAIM_DIR + i).ok) { continue; }
+		buildOneJob(jobs[i]);
+		built = built + 1;
+	}
+	return built;
+}
+
+function builtCode(job: BuildJob): int32 {
+	if (!exists(builtMarker(job))) { return BUILD_PENDING; }
+	const text = readFileOr(builtMarker(job), "");
+	if (!text.endsWith("\n")) { return BUILD_PENDING; }
+	return text.trim().split(" ")[0].parseInt() as int32;
+}
+
+function prepareClaims(jobs: BuildJob[]): void {
+	if (exists(CLAIM_DIR)) { removeAll(CLAIM_DIR); }
+	ensureDir(CLAIM_DIR);
+	for (let i: int32 = 0; i < jobs.length; i += 1) {
+		ensureDir(jobs[i].cell.dir);
+		if (exists(builtMarker(jobs[i]))) { remove(builtMarker(jobs[i])); }
+		writeFile(CLAIM_DIR + i, "");
+	}
+}
+
+function buildJobVerdict(job: Readonly<BuildJob>): int32 {
 	if (job.cmd == "") { return BUILD_OK; }
 	let b = runCapture(job.cmd + " 2>&1");
 	const jsLane = job.lane == "js" || job.lane == "esm";
@@ -1008,7 +1111,7 @@ function activeInPool(running: Cell[], rss: boolean): int32 {
 	return n;
 }
 
-function assertsRss(c: Cell): boolean {
+function assertsRss(c: Readonly<Cell>): boolean {
 	return isRssCell(c) && c.lane != "san";
 }
 
@@ -1021,13 +1124,15 @@ function assertsRss(c: Cell): boolean {
 const CELL_TIMEOUT_MS: float64 = envOr("MSCORPUS_CELL_TIMEOUT_MS", "300000").parseInt() as float64;
 
 function cellTimedOut(c: Cell): boolean {
-	return c.launched && !c.finished && !cellDone(c) && performance.now() - c.launchedAtMs > CELL_TIMEOUT_MS;
+	if (!c.launched || c.finished || cellDone(c)) { return false; }
+	return exists(c.dir + "aborted") || performance.now() - c.launchedAtMs > CELL_TIMEOUT_MS;
 }
 
 function failCellTimeout(c: Cell, t: Tally): void {
 	c.pass = false;
 	const secs = ((performance.now() - c.launchedAtMs) / 1000).toString();
-	c.detail = "cell TIMEOUT after " + secs + "s — no exit; the program hung (" + killCellTree(c) + "; rerun the cell binary directly to reproduce)";
+	const aborted = readFileOr(c.dir + "aborted", "");
+	c.detail = aborted != "" ? aborted : "cell TIMEOUT after " + secs + "s — no exit; the program hung (" + killCellTree(c) + "; rerun the cell binary directly to reproduce)";
 	c.finished = true;
 	reportCell(c, t);
 }
@@ -1150,7 +1255,7 @@ function main(): void {
 	// compileCFile): before that, two builds racing one shared std module
 	// swapped the .c under each other's cc and deleted each other's .o.
 	//
-	// Builds are JOINED IN INPUT ORDER, so every progress line, every tally and
+	// Builds are REPORTED IN INPUT ORDER, so every progress line, every tally and
 	// the parity grouping come out exactly as the serial loop produced them —
 	// only the wall clock changes. Awaiting the handles from an array (never a
 	// handle re-read across iterations) is the shape the affine-Promise rules
@@ -1158,20 +1263,19 @@ function main(): void {
 	//
 	// "Up to date" = msc's self-skip when the cell binary is already fresh —
 	// a success, not a failure (unchanged reruns hit it on every native cell)
-	const futures: Promise<number>[] = [];
-	let nextBuild = 0;
-	while (nextBuild < jobs.length && nextBuild < BUILD_SLOTS) {
-		const job = jobs[nextBuild];
-		futures.push(spawn(() => buildOneJob(job) as number));
-		nextBuild = nextBuild + 1;
+	prepareClaims(jobs);
+	const workers: Promise<number>[] = [];
+	for (let w: int32 = 0; w < BUILD_SLOTS && w < jobs.length; w += 1) {
+		const first = w;
+		workers.push(spawn(() => buildWorker(jobs, first)));
 	}
 	let ci = 0;
 	while (ci < jobs.length) {
-		const code = (await futures[ci]) as int32;
-		if (nextBuild < jobs.length) {
-			const refill = jobs[nextBuild];
-			futures.push(spawn(() => buildOneJob(refill) as number));
-			nextBuild = nextBuild + 1;
+		const code = builtCode(jobs[ci]);
+		if (code == BUILD_PENDING) {
+			launchQueued(running, queued, t, parityDone);
+			pollSleep("0.05", 50);
+			continue;
 		}
 		const job = jobs[ci];
 		ci = ci + 1;
@@ -1186,13 +1290,18 @@ function main(): void {
 			progress("  · flake-retry " + job.spec.name + " [" + job.lane + "]: toolchain race, rebuilt");
 		}
 		if (job.cmd != "") { progress("  · built " + job.spec.name + " [" + job.lane + "]"); }
-		if (job.cell.spec.serial) {
+		if (ranOnWorker(job)) {
+			job.cell.launched = true;
+			job.cell.launchedAtMs = performance.now();
+			running.push(job.cell);
+		} else if (job.cell.spec.serial) {
 			pendingSerial.push(job.cell);
 		} else {
 			queued.push(job.cell);
 		}
 		launchQueued(running, queued, t, parityDone);
 	}
+	for (const worker of workers) { await worker; }
 
 	// drain the parallel tail
 	while (queued.length > 0 || activeCount(running) > 0) {

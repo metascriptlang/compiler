@@ -15,9 +15,9 @@ function f(a: int32 | string, x: A, y: B): void {
 }
 `;
 
-const SRC_WIDER = `
+const SRC_DISJOINT = `
 function f(a: int32 | string): void {
-	const g: boolean | int32 | string = a;
+	const g: boolean | int32 = a;
 }
 `;
 
@@ -33,20 +33,37 @@ function f(a: int32 | string): void {
 }
 `;
 
-test "a union written in another member order is refused, naming the order" {
+test "a union written in another member order is the same type" {
 	const errors = checkOnly(SRC_REORDERED).errors;
-	let named = 0;
-	for (const e of errors) if (e.contains(ORDER_HINT)) named += 1;
-	assert named == 4, "declaration, assignment, argument and nullable field must name the order: " + errors.join("\n");
+	assert errors.length == 0, "declaration, assignment, argument and nullable field take the other order: " + errors.join("\n");
 }
 
-test "a wider union refusal does not claim a reorder" {
-	const text = checkOnly(SRC_WIDER).errors.join("\n");
-	assert text.contains("is not assignable to type 'boolean | int32 | string'"), "widening must stay refused: " + text;
+test "a generic union settles into the same order once its parameter is known" {
+	const src = `
+function pick<T>(v: T | string): T | string { return v; }
+function show(v: string | int32): string { return typeof v == "string" ? v : "n"; }
+const p: string | int32 = pick<int32>(3);
+const q: (int32 | string)[] = [pick<int32>(4)];
+show(q[0]);
+`;
+	const errors = checkOnly(src).errors;
+	assert errors.length == 0, errors.join("\n");
+}
+
+test "a union holding a member the target lacks is refused without claiming a reorder" {
+	const text = checkOnly(SRC_DISJOINT).errors.join("\n");
+	assert text.contains("is not assignable to type 'boolean | int32'"), "a member the target lacks stays refused: " + text;
 	assert !text.contains(ORDER_HINT), "a different member set is not a reorder: " + text;
 }
 
 test "a narrowed union reference fits a union in another order" {
 	const result = checkOnly(SRC_NARROWED);
 	assert result.errors.length == 0, "a narrowed member converts into any union holding it: " + result.errors.join("\n");
+}
+
+test "a generic alias over a primitive leaves the order of unions holding it" {
+	const overString = checkOnly("type Label<T> = string;\nfunction f(a: number | string): void { const x: boolean = a; }\n").errors.join("\n");
+	assert overString.contains("'number | string'"), "string keeps its place after a generic alias names it: " + overString;
+	const overNumber = checkOnly("type Count<T> = number;\nfunction f(b: boolean | number): void { const y: string = b; }\n").errors.join("\n");
+	assert overNumber.contains("'boolean | number'"), "number keeps its place after a generic alias names it: " + overNumber;
 }

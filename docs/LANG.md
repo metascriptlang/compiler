@@ -57,6 +57,19 @@ checker rejects it and names the alternative.
   `class Sub extends Base<int32>`, `u as Base<int32>` passes for a `Pair<int32>` and a `Sub`,
   and `u as Base<string>` on a `Sub` stops with `invalid object conversion`, exit 1, on C and
   JS (measured 2026-10-05).
+- Conversion diagnostics name the source class, not its generated module-qualified
+  identifier. The spelling includes generic arguments (`Box<int32>`) and preserves
+  underscores in author names (`Source__MMarker`). A user-defined static `name`
+  remains the user's value; it does not rename the type in an error.
+  Measured on Windows x64, tree `490fa7bd9fc6`, with the native corpus harness over
+  seven programs: `35 pass · 0 fail · 14 xfail · 0 xpass`; all C/ORC/JS/ESM
+  diagnostic outputs are byte-identical. The xfails are the existing unchecked
+  `danger` policy and measured Raiser static-member/static-init/stderr-capture
+  limits, not waived C/JS failures. A separate unused-type-parameter probe
+  reports `Phantom<string> is not Target` on C and JS.
+  This measurement does not cover foreign JS constructors or an isolated
+  performance run. Regression consumers: `classConversionDiagnosticNames`,
+  `genericConversionDiagnosticNames`, `classConversionInStaticInitializationStops`.
 - `x as unknown as T` is two conversions, up then a tested down, never a reinterpret:
   `i as unknown as K` for an `int32` is refused — write `i as K`. `null as unknown as T`
   still works, because a `null` literal takes any type.
@@ -446,6 +459,17 @@ type yet and prints the built-in results.
 `${a} + ${b} = ${a + b}`    // Multiple substitutions
 ```
 
+Physical LF, CRLF and CR line endings have the same LF value inside a template;
+an escaped carriage return still has its escape value. The same rule applies to
+interpolation heads, middles and tails, while source positions count CRLF once.
+
+Measured 2026-10-06 on Windows x64, source tree `2220eaeb47c5`: lexer tests
+376/376, including newline/escape/location variants. The unchanged
+`headerImportSpelledInAString` oracle prints `34 32 32 kept` on C/ORC/danger/JS/ESM/Raiser;
+before, CRLF made it print `35 32 32 kept` on all six. Tagged-template/raw APIs
+were not added or revalidated.
+
+
 ### Backtick-Escaped Identifiers
 ```typescript
 `if`            // Use reserved word as identifier
@@ -744,7 +768,11 @@ const h: Handler = { tag: 1 };            // cb omitted → null
 if (h.cb !== null) { h.cb(7); }           // narrow, then call
 ```
 
-A **bare** function-typed field (no `?`, no `| null`) must be initialized — a NULL function pointer has no safe default, so the checker rejects omission; `?` is the opt-out. `?` is a parse error on `struct` fields (a value type would silently become a union — write the union explicitly) and on class methods (declare a function-typed property instead). `?` applies to interface fields, class properties, and anonymous object types alike.
+**Fields without a default value** (measured 2026-10-06 on C, JS and the Raiser; checker3pass `constructionFieldInit`, corpus `constructionGivesEveryField`, `classFieldZeroValue`): a field whose type has no default — an array, a class instance, a `Map`, a function, or a struct holding one — must be given wherever the object is built. An object literal that omits one is an error (`field 'items' must be initialized: type 'int32[]' has no default value`) unless the class declares an initializer for it. `new C()` of a class without a constructor is an error when such a field, its own or a parent's, has no initializer (`'new Rec()' leaves 'items' without a value`). Value fields (numbers, `boolean`, `string`, a struct of those) keep their zero value; `?` and `| null` opt out, and a nullable function defaults to `null`. Before this rule the omitted field read as nil: `b.items.length` crashed on C, JS and the Raiser. `tsc` refuses every omitted non-optional property (TS2739/TS2741), value fields included; MS keeps the zero value for those. A class field without initializer, a struct-valued one included, reads its zero value after `new` on JS as on C (it read `undefined` before).
+
+**Field initializers in an object literal** (measured 2026-10-07 on C, JS and the Raiser, ASan clean; corpus `literalFieldInitializer`, checker3pass `constructionFieldInit`): an object literal of a class type runs the initializer of every field it omits, own or inherited, the same initializer `new C()` runs. `class C { k: int32 = 5; xs: int32[] = [1, 2]; }` gives `{}` → `k` 5, `xs` `[1, 2]` (before: `k` read 0, an omitted `xs` crashed). Each literal runs its own copy, once, after the fields it names, so a call in an initializer runs per literal and not at all when the literal gives the field; names in the initializer resolve in the class's module (a private constant of another module works, a local of the same name at the literal does not capture it). Generic classes (`G<string>`, and `G<T>` inside a generic function) and nested literals (`inner: Inner = {}`) take them too. An initializer that reads `this` is refused at the literal (`field 'b' of 'T' has an initializer that reads 'this', which an object literal cannot run`); today such an initializer is already refused at its declaration. A class that declares a constructor takes them too, without running the constructor. A literal with a spread or a computed key takes no initializers. Not measured: a spread whose source lacks an initialized field. A `struct` field takes no initializer, so a struct literal is unchanged.
+
+`?` is a parse error on `struct` fields (a value type would silently become a union — write the union explicitly) and on class methods (declare a function-typed property instead). `?` applies to interface fields, class properties, and anonymous object types alike.
 
 **C backend**: Interfaces emit as C structs, passed by pointer (`T*`), heap-allocated with DRC refcounting.
 
@@ -1272,11 +1300,14 @@ type Extended = IUser & { role: string };
 struct SuperUser = IUser & { role: string; };
 ```
 
-A union value carries the position of the member it holds, so `int32 | string` and
-`string | int32` are different types: one is refused where the other is expected, with an error that
-says the members are the same in another order. A value narrowed to one member fits any union that
-holds that member, whatever the order. Measured 2026-10-06 on C, JS and the Raiser (corpus
-`narrowedUnionIntoAnotherOrder`); before, C read the narrowed value with the wrong member's layout.
+A union is one type whatever order its members are written in, as in TypeScript: `int32 | string`
+and `string | int32` are the same type in every module, nullable, inside an array and through a generic
+parameter once it is known, and a value moves between them with no conversion. The members are kept in
+one canonical order where the union is built; error messages show that order, `null` last
+(`int32 | string | null`). A declared discriminated union keeps its declared variant order. A value
+narrowed to one member fits any union that holds that member. Measured 2026-10-06 on C, JS and the
+Raiser (corpus `unionMemberOrderIdentity`, `narrowedUnionIntoAnotherOrder`); before, the other order
+was refused.
 
 #### `as` between a union and its members
 
@@ -1711,6 +1742,17 @@ Record<K, V>         // Object type with keys K and values V (planned)
 Pick<T, K>           // Subset of properties (planned)
 Omit<T, K>           // Exclude properties (planned)
 ```
+
+`Readonly<T>` can widen into a union through a compatible read-only member. A mutable
+member, or an unrelated read-only member beside a mutable one, does not allow the view
+to be dropped. This does not relax the storage restrictions on borrowed views.
+
+Checked 2026-10-06 on Windows x64, source tree `11fdb5911671`: the compatibility guard
+passes 542/542 native tests, including Span and reference variants and the refused mutable
+branches. A typed macro receiving `["pet", view]` with `view: Readonly<Span<uint8>>`
+prints `7` on C and JavaScript; the old compiler refuses both with PARALOCK E24.
+The complete compatibility module's JavaScript tests were not run: its unchanged
+`checker/types.ms` dependency fails at `(t as unknown).hash()`.
 
 ### Mapped Types
 ```ms
@@ -2850,7 +2892,8 @@ To avoid heap allocations when parsing or processing strings, MetaScript allows 
 
 - **Zero-Copy Slicing**: Slicing a string with `..` (exclusive) or `...` (inclusive) performs pointer arithmetic instead of a heap copy; the slice is a `Readonly<Span<char>>`.
 - **Unified Params**: Functions taking `Readonly<Span<char>>` accept a `string`, a string slice and a `Span<char>` zero-copy.
-- **Read-only**: a string is immutable, so it never reaches a writable `Span<char>` — an argument, a local, a field, an assignment, a `this` receiver or a generic `Span<T>` refuses it (`cannot view 'lit' as a writable Span — a string is immutable; a view that only reads is Readonly<Span<T>>`), and a write through a string slice is E24.
+- **Read-only**: a string is immutable, so it never reaches a writable `Span<char>` — an argument, a local, an assignment, a `this` receiver or a generic `Span<T>` refuses it (`cannot view 'lit' as a writable Span — a string is immutable; a view that only reads is Readonly<Span<T>>`), and a write through a string slice is E24.
+- **Storage**: read-only does not make a borrowed view owning. Neither `Span<char>` nor `Readonly<Span<char>>` can be a field; use a parameter or a local whose source outlives the view. The storage-refusal cases live in `handoff/storageMutability.ms`.
 
 ```typescript
 function parseIdent(view: Readonly<Span<char>>): int32 {
@@ -2864,20 +2907,30 @@ parseIdent(source);        // 15
 
 Measured 2026-10-05 on C and JS (handoff `storageMutability` "a string reaches only a read-only Span, its slices too"). Before, a write through such a view hit the literal's read-only bytes (SIGBUS) or changed a built string on C only.
 
+Rechecked 2026-10-06 on Windows x64, compiler core `bca7f3e6`: the corrected
+`storageMutability` file passes 16/16, checking C and JS acceptance/refusal. A native
+and JavaScript caller reading a literal, a built string, slices, a local view, a generic
+reader and a read-only receiver prints `104 120 101 3 5 104 114 e` on both.
+The former accepted fixture declared a view field and was itself invalid; that case is
+now tested as a storage refusal, without weakening the compiler. Other backends were
+not rerun for this fixture correction.
+
 ### 4. Borrowed References (`Borrow<T>`)
 To achieve peak performance with large structs, MetaScript provides the `Borrow<T>` type (similar to the standard reference `lent T` pattern).
 
 - **Purpose**: Avoid memory copies when accessing large objects or array elements.
-- **Behavior**: Passes a pointer instead of copying the struct value.
-- **Safety**: Managed by the analyzer to ensure the borrow does not outlive the owner.
+- **Behavior**: A `Borrow<T>` local or parameter holds the address of a variable, field or element; every read goes through it, so `b.field`, `b[i]`, `b.length`, `b + 1`, `b == x` and `${b}` read the place as it is now. Copying it out (`const c = b`) copies the `T`.
+- **Safety**: read-only: `b = …`, `b.x = …`, `b[0] = 5` (also on a `Borrow<int32[]>` or a class), `b.push(…)` and passing `b[0]` to a `ref` parameter are refused; write through the source or a `ref` parameter. The initializer must be a variable, field or element: a call result or literal is refused. While the local is in use, a change of its place (`n = 2`, `n++`, `s.x = 5`, `xs[0] = 7`, a `ref` argument) or of the storage it lies in (`xs.push`, rule 4 of Span below) is refused; capturing it in a closure is refused.
 
 ```typescript
-interface LargeData { /* many fields */ }
+struct LargeData { a: int32; /* many fields */ }
 const data: LargeData[] = [...];
 
-// No copy: 'item' is a pointer to the element in the array
+// No copy: 'item' is the address of the element
 const item: Borrow<LargeData> = data[0];
 ```
+
+Measured 2026-10-08, C, JS and the Raiser alike: corpus `borrowLocalReadsThroughAddress` prints `card=3/2 scalar=8/true/7 text=5/hello!/true struct=6/10 class=5 field=5/12 element=3 param=16 generic=4/x copy=7 alias=9/7 temp=5/8/4 nested=2` on each, covering scalar, string, struct, array and class `T`, local, field, element and parameter sources, a generic instance, a change through an alias or a callee (`alias=9/7`) and a temporary argument to a `Borrow<T>` parameter.
 
 ### 5. Reference Types (`Ref<T>` and `Ptr<T>`)
 

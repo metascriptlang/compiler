@@ -1,4 +1,4 @@
-// @xfail(raiser): error: Undefined variable 'Number'
+// @xfail(raiser): error: Property 'fromCharCode' does not exist on type 'function'; Undefined variable 'BigInt'
 // @stdout: static member namespace ok
 
 // A static member (`this typeof T`) belongs to its receiver type, never to the

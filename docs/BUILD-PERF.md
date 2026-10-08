@@ -1,5 +1,30 @@
 # Build Performance — Roadmap
 
+## Measured 2026-10-05 — output identity inside the filesystem settle window (Windows x64)
+
+The link-cache rewrite invariant failed during integration on `e8bf07ba`; its
+cache implementation was unchanged from base `5c4246fb`. The correction from
+`3d58ade7` reuses the existing settle rule; implementation and deterministic
+consumer tests live in `src/compiler/cache.ms`.
+
+On the integrated tree `ea6b6ab8`, a native consumer repeated 200 times:
+write `first`, record the link cache, check the fresh hit, write same-size
+`other`, then check for a stale hit. Output: `fresh link hits 200/200; wrong
+rewrite hits 0/200`. The compiler was the integration gate's `--danger`
+candidate, compiling the current cache source; this was not an isolated speed
+benchmark. The cache module and its dependencies passed 761/761.
+
+The cache owner reported the same rewrite probe on base code yielding 71/200
+and 72/200 wrong hits, then 0/200 twice with the correction; those counts were
+printed in that session, not independently re-run here. The owner also
+mutation-checked both new settle-window tests by removing the settle check.
+
+A successful link-cache hit promotes its verified content record once the
+output has settled. Project-level up-to-date checks remain content-based until
+a later real build rewrites their record; no stamp-only project-mode warm-hit
+speedup is claimed. Full-suite, HCR, corpus and SAN verification belongs to
+the combined integration gate, not these focused measurements.
+
 ## Measured 2026-10-04 — prelude serialization and compiler coexistence (Windows x64)
 
 Control source tree `ed9d96bc8e9dcaddf87835a75cb8e4ead953aa74` (`7d2fc199`).

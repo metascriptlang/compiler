@@ -185,12 +185,13 @@ function isVmPreludeSym(sym: Symbol): boolean {
 	return _vmPreludeSyms!.has(origin);
 }
 
-function engineBodyCtx(definingModulePath: string): CheckerContext | null {
+function engineBodyCtx(definingModulePath: string, owner: Symbol | null): CheckerContext | null {
 	if (_engine == null || _raiserPreludeBuilding) return null;
 	const outer = getComptimeOuterCtx();
 	if (outer == null || outer.registry == null || outer.graph == null) return null;
 	const mod = findModule(outer.graph, definingModulePath);
-	if (mod == null || mod.stdPrelude) return null;
+	if (mod == null) return null;
+	if (mod.stdPrelude) return owner != null && isVmPreludeSym(owner) ? raiserPreludeCtx() : null;
 	const declCtx = lookupModuleCtx(definingModulePath);
 	if (declCtx == null) return null;
 	const known = _engine.bodyCtxs.get(declCtx);
@@ -365,6 +366,7 @@ export function evalProgramViaEngine(program: Node, token: CheckerContext, fnNam
 		objectHeap: result.vm.objectHeap,
 		lastError: result.vm.error,
 		gcMode: result.vm.gcMode,
+		orphanFailures: [],
 	};
 }
 

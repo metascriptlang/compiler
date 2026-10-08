@@ -1142,8 +1142,8 @@ test "a seed list derives the address the heap seeds derived, kind by kind" {
 
 test "a seed list takes a byte array, a span and a heap array like a byte literal" {
 	const program = hostProgram();
-	let fixed: uint8[1] = [7];
-	const span: Span<uint8> = fixed;
+	const fixed: uint8[1] = [7];
+	const span: Readonly<Span<uint8>> = fixed;
 	const heap: uint8[] = [7];
 	const literal = findProgramAddressOf(program, ["pet", [7]]);
 	assert literal.ok;

@@ -10,10 +10,11 @@
 //   5. Value wrapping (assign): x = tok → x = { value: tok, present: true }
 
 import { Node, NodeKind, NodeFlag, SourceLocation, MemberExprData, TypeAssertionData, VariableDeclData, BinaryExprData, Type, TypeKind } from "../../ast/node";
-import { isStructType, isMaybeType, isTagCarriedUnion, getProperty } from "../../checker/types";
+import { isStructType, isMaybeType, isTagCarriedUnion, getProperty, unionMemberDisplay, isUnknownType, peelTransparentInstance, unionHasMemberOfKind } from "../../checker/types";
+import { isLocation } from "../../checker/assignable";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeMember, makeBool, makeNull, makeTypedObjectLiteral } from "../util";
+import { makeMember, makeBool, makeNull, makeTypedObjectLiteral, makeCall, makeString, runtimeRef } from "../util";
 import { isNullExpr } from "../lowering/operatorLower";
 
 // Wrap a value for assignment/return into a Maybe<T> slot. Canonical entry
@@ -80,6 +81,34 @@ function maybeSlotType(n: Node): Type | null {
 
 // ===== Main Entry Point =====
 
+export function unwrapRefusesNull(target: Type): boolean {
+	const t = peelTransparentInstance(target);
+	if (isUnknownType(t) || isMaybeType(t) || t.kind == TypeKind.Null) return false;
+	return !unionHasMemberOfKind(t, TypeKind.Null);
+}
+
+export function nullAccessHead(carrier: Type): string {
+	const payload = carrier.typeReturn != null ? unionMemberDisplay(carrier.typeReturn) : "?";
+	return `member '${payload}' is not accessible for type '${payload} | null' using '`;
+}
+
+// Keep this after the analyzer: it must see a plain `.value` read to own it.
+export function checkMaybeReads(program: Node): void {
+	walkNode(program, (n: Node): Node => {
+		if (n.kind != NodeKind.MemberExpr || !n.flags.has(NodeFlag.ConvCheck)) return n;
+		const d = n.data as MemberExprData;
+		const carrier = d.object != null ? d.object.nodeType : null;
+		if (d.property != "value" || carrier == null || !isMaybeType(carrier)) return n;
+		const loc = n.location;
+		const check = isLocation(d.object) ? "msMaybeAccess" : "msMaybeAccessVal";
+		const call = makeCall(runtimeRef(check, loc), [d.object, makeString(nullAccessHead(carrier), loc), makeString("null", loc)], loc);
+		call.nodeType = carrier;
+		d.object = call;
+		n.flags = n.flags.excl(NodeFlag.ConvCheck);
+		return n;
+	});
+}
+
 export function lowerNullable(program: Node, ctx: TransformContext): Node {
 	walkNode(program, lowerNullableNode);
 	return program;
@@ -106,6 +135,7 @@ function lowerNullableNode(node: Node): Node {
 			&& isMaybeType(d.asExpr.nodeType)
 			&& node.nodeType != null && !isMaybeType(node.nodeType)) {
 			const member = makeMember(d.asExpr, "value", loc);
+			if (unwrapRefusesNull(node.nodeType)) member.flags = member.flags.incl(NodeFlag.ConvCheck);
 			if (node.flags.has(NodeFlag.ConvCheck)) {
 				member.nodeType = d.asExpr.nodeType.typeReturn;
 				d.asExpr = member;
