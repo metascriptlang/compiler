@@ -2,7 +2,7 @@ import { execFileResult } from "std/process";
 import { ensureDir, exists, isDir, readFile, remove, removeAll, writeFile } from "std/fs";
 import { subjectMsc } from "./drive";
 import {
-	Identity, firstDiff, firstCompilerError, forbidOf, formatIdentity, hasCompilerError, hasLine, missingKeep, parseIdentity, presentForbidden, throwLine,
+	Identity, firstDiff, firstCompilerError, forbidOf, formatIdentity, hasLine, missingKeep, onlyCompilerError, parseIdentity, presentForbidden, throwLine,
 } from "./identity";
 
 const WATCHDOG: string = "my $t = shift; my $pid = fork; if (!$pid) { setpgrp(0, 0); exec @ARGV; exit 127; } $SIG{ALRM} = sub { kill 'TERM', -$pid; }; alarm $t; waitpid($pid, 0); exit($? >> 8);";
@@ -73,7 +73,7 @@ function judge(id: Identity, msc: string, file: string): string {
 	const c = lane(msc, file, "c");
 	if (id.mode == "c-build") {
 		if (c.built) { return "C build succeeds"; }
-		return hasCompilerError(c.buildLog, id.symptom) ? "" : "C build fails differently: " + firstCompilerError(c.buildLog);
+		return onlyCompilerError(c.buildLog, id.symptom) ? "" : "C build fails differently: " + firstCompilerError(c.buildLog);
 	}
 	if (!c.built || c.exit != 0) { return "lane split moved: C " + describe(c); }
 	if (c.out != c.again) { return "C output is not deterministic (an address or a race), so the split is not a finding"; }

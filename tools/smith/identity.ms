@@ -93,6 +93,17 @@ export function hasCompilerError(text: string, pattern: string): boolean {
 	return false;
 }
 
+export function onlyCompilerError(text: string, pattern: string): boolean {
+	let seen = false;
+	for (const raw of text.split("\n")) {
+		const message = compilerError(raw);
+		if (message == "") { continue; }
+		if (!globMatch(pattern, message)) { return false; }
+		seen = true;
+	}
+	return seen;
+}
+
 export function firstCompilerError(text: string): string {
 	for (const raw of text.split("\n")) {
 		const message = compilerError(raw);
@@ -184,6 +195,13 @@ test "a compiler error is matched by its message, not by its position" {
 	assert !hasCompilerError(log, "use of undeclared identifier '_envQ'");
 	assert !hasCompilerError("x.ms:1:1: warning: use of undeclared identifier '_envP'\n", "use of undeclared identifier '_envP'");
 	assert firstCompilerError(log) == "use of undeclared identifier '_envP'";
+}
+
+test "a build that fails with any other error besides the pinned one is another bug" {
+	const one = "x.ms:1:1: error: use of undeclared identifier '_envP'\n";
+	assert onlyCompilerError(one + one, "use of undeclared identifier '_envP'");
+	assert !onlyCompilerError(one + "x.ms:2:1: error: call to undeclared function 'a'\n", "use of undeclared identifier '_envP'");
+	assert !onlyCompilerError("2 warnings generated.\n", "use of undeclared identifier '_envP'");
 }
 
 test "only the node error line of the pinned class counts as the throw" {
