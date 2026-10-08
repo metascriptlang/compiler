@@ -28,7 +28,7 @@
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, MemberExprData, ArrayAccessData, CallExprData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, StringLiteralData, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, MemberExprData, ArrayAccessData, CallExprData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
@@ -324,6 +324,11 @@ export function cloneIfPure(node: Node): Node | null {
 	if (node.kind == NodeKind.NumberLiteral) {
 		const d = node.data as NumberLiteralData;
 		const c = makeNumber(d.value, node.location);
+		c.nodeType = node.nodeType;
+		return c;
+	}
+	if (node.kind == NodeKind.StringLiteral) {
+		const c = createNodeAt(NodeKind.StringLiteral, { value: (node.data as StringLiteralData).value }, node.location);
 		c.nodeType = node.nodeType;
 		return c;
 	}
