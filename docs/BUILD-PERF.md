@@ -139,6 +139,78 @@ Tried and dropped (no time gain): `memchr` in the non-ASCII `msStringIndexOf` pa
 import edge (75.14G vs 75.27G). Not verified: Windows; fixes 2 and 3 on lc-1 (written after
 its battery started); `test` and cold builds with fixes 2 and 3.
 
+## Measured 2026-10-08 — build-object reuse, test gap and missing-header false hit
+
+Snapshot `1090f7899`, tree `5d2c1980d324f06890ea612e51ab3addc502fda0`.
+The consumer was installed v0.3.2, binary/support BUILD `2d7abb082`,
+SHA-256 `7325946d4fae8732eb77af957377cce1913958f402014a24e0e88ccc3271a73c`.
+Its `src`, `std`, `runtime` and `vendor` trees match the snapshot; only
+`tools/gate.sh` differs between those commits.
+
+Shared macOS arm64 host, Apple clang 21.0.0, private fresh HOME and local
+caches, roots with and without spaces, and one counted driver limited to two
+actual C compiler processes. No real user cache was wiped.
+Commands used `build main.ms --output=app` or `test main.ms`, with
+`--cc=<counted-clang> --lto=off --emit-jobs=1 --colors=off --verbose -t`.
+A fresh local state used a new empty `MSC_CACHE_DIR`, not a shared mutable
+project cache. Counts below are actual compilation/link invocations.
+
+| Consumer and cache state | Native / generated / dispatcher compilations | Links | Result |
+|---|---:|---:|---|
+| Simple app, A cold | 23 / 1 / 1 | 1 | `42` |
+| Simple app, B fresh with A's shared objects | 0 / 1 / 1 | 1 | `42` |
+| Simple app, A local-warm | 0 / 0 / 0 | 0 | `42` |
+| Simple app, A new local cache | 0 / 0 / 1 | 1 | `42` |
+| Shared-module app, A / B fresh roots | 0 / 2 / 1 → 0 / 1 / 1 | 1 each | `42` each |
+| Shared-module app, B new local cache | 0 / 0 / 1 | 1 | `42` |
+| Tests, B fresh or A new local cache | 0 / 49 / 1 | 1 each | 299/299 each |
+| Tests, A local-warm | 0 / 0 / 1 | 1 | 299/299 |
+
+The simple app was `console.log(42);`. Both shared-module app roots imported
+the same `../shared/lib.ms`, exporting `twice(value: int32): int32` as
+`value * 2`; B restored that module and compiled only its own entry.
+The two test roots instead contained byte-identical copies of that library
+and tests asserting `twice(21) == 42` and `twice(-3) == -6`.
+Both roots compiled 49 generated C files, **47 byte-identical**, while B
+restored all 97 native objects. Four test runs passed 299/299 each.
+Inspect `src/compiler/compile.ms` `cmdTest` for the generated-object path;
+shared build restoration is in `src/compiler/cache.ms` `restoreModuleObject`.
+
+Separate ordinary edits preserved invalidation: a native header changed
+stdout `11` to `22`, the shared library changed `42` to `63`, and an entry
+edit changed `42` to `43`. These do not establish every invalidation axis.
+
+The missing-header consumer declared `probeValue` in `api.h`; its entry used
+`@include("./api.h")`, `@compile("./native.c")`, an extern declaration and
+`console.log(probeValue())`. The native source was:
+
+```c
+#if __has_include("optional.h")
+#include "optional.h"
+#else
+#define VALUE 11
+#endif
+int probeValue(void) { return VALUE; }
+```
+
+Initially no `optional.h` existed; stdout was `11`. After creating it with
+`#define VALUE 22`, a new-local/shared-cache build restored the old native
+object, compiled no native source, exited 0 and still printed **`11`**.
+With the same compiler, cwd, source and headers, `MSC_NO_GLOBAL_CACHE=1`
+and another empty local cache compiled native source and printed **`22`**.
+The control also changed the counter-log filename; no program input changed.
+The originally absent header is not in the first native dependency record.
+Inspect `src/compiler/cache.ms` `storeManifest`, `manifestDeps` and
+`presenceSignature`. No fix was applied.
+
+Raw commands, sources, counters and output are retained in the machine-local
+`~/metascript/.wt/evidence/2026-10-08-cache-reuse-main-audit.json`.
+The private fixtures, driver and caches were removed after capture.
+Not verified: JS or other hosts, concurrency/collection, retention, other
+target/GC/optimization/toolchain variants, a full gate or any prospective
+speedup A/B. The old local-only build-object observation below is historical,
+not the current shared-store baseline.
+
 ## Measured 2026-10-05 — output identity inside the filesystem settle window (Windows x64)
 
 The link-cache rewrite invariant failed during integration on `e8bf07ba`; its
