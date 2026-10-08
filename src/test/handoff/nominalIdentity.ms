@@ -34,7 +34,6 @@ test "nominal identity: a declared type named like a builtin generic is that dec
 
 test "nominal identity: as between unions without a conversion is refused" {
 	const refused = [
-		"function f(x: string | int32): int32 | string | boolean { return x as int32 | string | boolean; }",
 		"class Mark { line: int32 = 0; }\nclass Spot { line: int32 = 2; }\nclass Other { tag: string = \"o\"; }\nfunction f(x: Other | null): Mark | Spot | null { return x as Mark | Spot | null; }",
 	];
 	for (const src of refused) {
@@ -44,6 +43,7 @@ test "nominal identity: as between unions without a conversion is refused" {
 		"class Mark { line: int32 = 0; }\nclass Spot { line: int32 = 2; }\nfunction f(x: Spot | null): Mark | Spot | null { return x as Mark | Spot | null; }",
 		"class Row { value: int32 = 1; }\nfunction f(x: number | Row | null): Row | null { return x as Row | null; }",
 		"function f(x: int32 | string): int32 | string { return x as int32 | string; }",
+		"function f(x: string | int32): int32 | string | boolean { return x as int32 | string | boolean; }",
 	];
 	for (const src of converted) {
 		assert strictErrorCount(src) == 0, src;
