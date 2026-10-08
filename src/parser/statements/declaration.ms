@@ -881,6 +881,10 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 			visibility = "private";
 			advance(state);
 		}
+		if (current(state).kind == TokenKind.Readonly && isPropertyName(peek(state, 1))) {
+			visibility = visibility == "" ? "readonly" : `${visibility} readonly`;
+			advance(state);
+		}
 		const field = current(state);
 		if (!isPropertyName(field)) {
 			return Result.err(`Expected field name in ${keyword} at line ${field.line}`);
