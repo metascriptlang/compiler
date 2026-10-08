@@ -50,3 +50,14 @@ const none = narrow() as boolean | null;
 	const text = checkOnly(src).errors.join("\n");
 	assert text.contains("no member of 'int32 | string' is a member of 'boolean'"), "a disjoint nullable target is refused: " + text;
 }
+
+test "as from a union holding string to a set of string literals is not refused" {
+	const src = `
+type Align = "auto" | "center";
+function wire(): int32 | string { return "auto"; }
+const a = wire() as Align | null;
+const b = wire() as Align;
+`;
+	const errors = checkOnly(src).errors;
+	assert errors.length == 0, "a string literal is a member of string, so the unions overlap: " + errors.join("\n");
+}
