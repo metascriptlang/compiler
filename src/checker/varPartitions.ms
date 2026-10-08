@@ -1537,7 +1537,7 @@ function runPass(u: BorrowUnit, body: Node, pass: int32): void {
 }
 
 function checkUnit(ctx: CheckerContext, body: Node | null): void {
-	if (body == null || body.kind != NodeKind.BlockStmt) return;
+	if (body == null || (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program)) return;
 	const pointers: Symbol[] = [];
 	collectPointers(body, pointers);
 	if (pointers.length == 0 && !declaresView(body)) return;
@@ -1613,5 +1613,6 @@ export function checkRoutineBorrows(ctx: CheckerContext, routine: Node): void {
 
 export function checkViewBorrows(ctx: CheckerContext, program: Node): void {
 	if (program == null || program.kind != NodeKind.Program) return;
+	checkUnit(ctx, program);
 	for (const stmt of (program.data as ProgramData).programStmts) { scanUnits(ctx, stmt); }
 }
