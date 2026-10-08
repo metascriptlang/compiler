@@ -24,6 +24,7 @@ import {
 import { booleanType, int32Type } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 import { hashStringSigned } from "std/hash";
+import { endsInNoReturn } from "../analysis/dce";
 
 // ===== Nested MatchExpr Hoisting =====
 // Position-aware walk: a hoist out of a conditionally-evaluated position
@@ -529,10 +530,6 @@ function moveInto(node: Node, mode: string, varName: string, assignSym: Symbol |
 		}
 		return node;
 	}
-	// Control flow terminals: BreakStmt/ContinueStmt keep as-is
-	if (node.kind == NodeKind.BreakStmt || node.kind == NodeKind.ContinueStmt) {
-		return node;
-	}
 	// ReturnStmt in "return" mode: keep as-is (already correct).
 	// ReturnStmt in "assign" mode: strip return, convert to assignment.
 	// This supports `const x = match { arm => { return expr; } }` syntax.
@@ -544,6 +541,7 @@ function moveInto(node: Node, mode: string, varName: string, assignSym: Symbol |
 		}
 		return node;
 	}
+	if (endsInNoReturn(node, ctx)) return node;
 	// ExprStmt: unwrap and wrap in return/assign
 	if (node.kind == NodeKind.ExprStmt) {
 		const expr = (node.data as ExprStmtData).expr;
