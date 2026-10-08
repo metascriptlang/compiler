@@ -716,15 +716,11 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 	}
 	// Re-entry detection: if this (loopNode, refKey) is already on the
 	// stack, return the current accumulated union.
+	// Reference: a frame is on the stack only while its looping antecedents
+	// are walked, after the entry path has typed it, so its list is never empty.
 	const existing = findLoopInfo(state.flowLoopStack, flow, state.refKey);
-	if (existing != null) {
-		// Re-entry: return accumulated types if any, otherwise declared type.
-		// The types.length===0 case means the first antecedent cycled back
-		// before producing any narrowing — conservatively return declared type.
-		if (existing.types.length > 0) {
-			return flowType(unionOfTypes(existing.types, state.declaredType), true);
-		}
-		return flowType(state.declaredType, true);
+	if (existing != null && existing.types.length > 0) {
+		return flowType(unionOfTypes(existing.types, state.declaredType), true);
 	}
 	// First visit: walk antecedents in REVERSE order. The binder prepends
 	// antecedents (addAntecedent puts new entries at the list head), so the
@@ -741,11 +737,15 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 		reversed.push(cursor.flow);
 		cursor = cursor.next;
 	}
-	// Push BEFORE recursing so nested re-entries find us. The pre-loop walk
-	// is acyclic relative to this loop and won't trigger re-entry; the
-	// back-edge walk DOES re-enter and must see info.types populated already.
-	state.flowLoopStack.push(info);
+	// The entry path is walked with no frame of ours on the stack: a nested
+	// loop it passes through is typed afresh, not handed this loop's empty
+	// list. The frame goes on for the back-edges, which do re-enter.
+	let pushed = false;
 	for (let ri = reversed.length - 1; ri >= 0; ri = ri - 1) {
+		if (firstAnteType != null && !pushed) {
+			state.flowLoopStack.push(info);
+			pushed = true;
+		}
 		const ft = getTypeAtFlowNode(state, reversed[ri]);
 		if (firstAnteType == null) {
 			firstAnteType = ft;
@@ -756,8 +756,7 @@ function getTypeAtFlowLoopLabel(state: FlowState, flow: FlowNode): FlowType {
 			break;
 		}
 	}
-	// Pop our frame.
-	state.flowLoopStack.pop();
+	if (pushed) state.flowLoopStack.pop();
 	// If we widened to declaredType, that's the result.
 	if (widened) {
 		return flowType(state.declaredType, firstAnteType != null ? firstAnteType.incomplete : false);
