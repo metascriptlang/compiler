@@ -31,6 +31,12 @@ struct Ent {
 	ty: Ty;
 	params: Ty[];
 	len: int32;
+	cost: int64;
+}
+
+struct Routine {
+	text: string;
+	cost: int64;
 }
 
 struct Fn {
@@ -175,6 +181,13 @@ class Gen {
 		if (remaining < 0 || work > remaining / this.mult) { return false; }
 		this.cost = this.cost + this.mult * work;
 		return true;
+	}
+
+	spare(times: int64): int64 {
+		const remaining = this.costCap - this.cost;
+		if (remaining <= 0) { return 0 as int64; }
+		const share = remaining / this.mult / times;
+		return share < FN_COST_CAP ? share : FN_COST_CAP;
 	}
 
 	intTys(): Ty[] {
@@ -350,7 +363,7 @@ class Gen {
 	}
 
 	cond(depth: int32): string {
-		if (this.nodesLeft == 0) {
+		if (this.nodesLeft == 0 || !this.reserve(1 as int64)) {
 			const t = this.pickTy();
 			return "(" + this.leaf(t) + " == " + this.leaf(t) + ")";
 		}
@@ -385,7 +398,7 @@ class Gen {
 	expr(t: Ty, depth: int32): string {
 		if (this.nodesLeft == 0) { return this.leaf(t); }
 		this.nodesLeft--;
-		if (depth >= this.exprMax) { return this.leaf(t); }
+		if (depth >= this.exprMax || !this.reserve(1 as int64)) { return this.leaf(t); }
 		if (this.fams.length > 0 && this.rng.chance(20)) {
 			const fam = this.famExpr(t, depth);
 			if (fam != "") {
@@ -440,15 +453,22 @@ class Gen {
 		return out;
 	}
 
-	closureBody(t: Ty, depth: int32): string {
+	routine(t: Ty, depth: int32, cap: int64): Routine {
+		const savedCost = this.cost;
 		const savedCap = this.costCap;
-		this.costCap = this.cost;
-		const body = this.expr(t, depth);
+		const savedMult = this.mult;
+		this.cost = 0 as int64;
+		this.costCap = cap;
+		this.mult = 1 as int64;
+		const text = this.expr(t, depth);
+		const cost = this.cost;
+		this.cost = savedCost;
 		this.costCap = savedCap;
-		return body;
+		this.mult = savedMult;
+		return { text: text, cost: cost };
 	}
 
-	lambda(params: Ty[], ret: Ty, depth: int32): string {
+	lambda(params: Ty[], ret: Ty, depth: int32, cap: int64): Routine {
 		const saved = this.scope.length;
 		let sig = "";
 		for (const p of params) {
@@ -456,9 +476,9 @@ class Gen {
 			this.scope.push({ name: name, ty: p, writable: false });
 			sig = sig == "" ? name + ": " + tyName(p) : sig + ", " + name + ": " + tyName(p);
 		}
-		const body = this.closureBody(ret, depth + 1);
+		const body = this.routine(ret, depth + 1, cap);
 		while (this.scope.length > saved) { this.scope.pop(); }
-		return "(" + sig + "): " + tyName(ret) + " => " + body;
+		return { text: "(" + sig + "): " + tyName(ret) + " => " + body.text, cost: body.cost };
 	}
 
 	smallInt(depth: int32): string {
@@ -481,20 +501,24 @@ class Gen {
 			const named = this.entsOf(EntKind.Callable, t);
 			if (named.length > 0) {
 				const c = named[this.rng.below(named.length)];
-				return c.name + "(" + this.args(c.params, depth) + ")";
+				if (this.reserve(c.cost + (1 as int64))) { return c.name + "(" + this.args(c.params, depth) + ")"; }
 			}
 		}
 		if (k == 1) {
 			const arrays = this.entsOf(EntKind.ClosureArray, t);
 			if (arrays.length > 0) {
 				const a = arrays[this.rng.below(arrays.length)];
-				return a.name + "[" + String(this.rng.below(a.len)) + "](" + this.expr(t, depth + 1) + ")";
+				if (this.reserve(a.cost + (1 as int64))) {
+					return a.name + "[" + String(this.rng.below(a.len)) + "](" + this.expr(t, depth + 1) + ")";
+				}
 			}
 		}
 		const params: Ty[] = [];
 		const n = this.rng.between(1, 2);
 		for (let i = 0; i < n; i++) { params.push(this.pickTy()); }
-		return "(" + this.lambda(params, t, depth) + ")(" + this.args(params, depth) + ")";
+		const f = this.lambda(params, t, depth, this.spare(1 as int64));
+		if (!this.reserve(f.cost)) { return ""; }
+		return "(" + f.text + ")(" + this.args(params, depth) + ")";
 	}
 
 	unionHelpers(t: Ty): string {
@@ -550,7 +574,11 @@ class Gen {
 		const T = tyName(t);
 		const k = this.rng.below(6);
 		if (k == 0) { return "idG<" + T + ">(" + this.expr(t, depth + 1) + ")"; }
-		if (k == 1) { return "twiceG<" + T + ">(" + this.lambda([t], t, depth) + ", " + this.expr(t, depth + 1) + ")"; }
+		if (k == 1) {
+			const f = this.lambda([t], t, depth, this.spare(2 as int64));
+			if (!this.reserve((2 as int64) * f.cost)) { return ""; }
+			return "twiceG<" + T + ">(" + f.text + ", " + this.expr(t, depth + 1) + ")";
+		}
 		if (k == 2) {
 			const n = this.rng.between(1, 3);
 			let items = "";
@@ -562,39 +590,33 @@ class Gen {
 		}
 		if (k == 3) {
 			const s = this.pickTy();
-			return "new BoxG<" + tyName(s) + ">(" + this.expr(s, depth + 1) + ").map<" + T + ">(" + this.lambda([s], t, depth) + ").get()";
+			const f = this.lambda([s], t, depth, this.spare(1 as int64));
+			if (!this.reserve(f.cost)) { return ""; }
+			return "new BoxG<" + tyName(s) + ">(" + this.expr(s, depth + 1) + ").map<" + T + ">(" + f.text + ").get()";
 		}
 		const boxes = this.entsOf(EntKind.BoxVar, t);
 		if (boxes.length > 0) { return boxes[this.rng.below(boxes.length)].name + ".get()"; }
 		return "new BoxG<" + T + ">(" + this.expr(t, depth + 1) + ").get()";
 	}
 
-	maker(t: Ty): string {
+	maker(t: Ty): Routine {
 		const name = "mk" + String(this.makerCount);
 		this.makerCount = this.makerCount + 1;
 		const T = tyName(t);
 		const savedScope = this.scope;
 		const savedEnts = this.ents;
-		const savedCost = this.cost;
-		const savedCap = this.costCap;
-		const savedMult = this.mult;
 		this.scope = [{ name: "st", ty: t, writable: true }, { name: "x", ty: t, writable: false }];
 		this.ents = [];
-		this.cost = 0 as int64;
-		this.costCap = 0 as int64;
-		this.mult = 1 as int64;
-		const next = this.expr(t, 1);
+		const next = this.routine(t, 1, FN_COST_CAP);
 		this.scope = savedScope;
 		this.ents = savedEnts;
-		this.cost = savedCost;
-		this.costCap = savedCap;
-		this.mult = savedMult;
-		return this.useHelper(name, "function " + name + "(seed: " + T + "): (x: " + T + ") => " + T + " {\n" +
+		this.useHelper(name, "function " + name + "(seed: " + T + "): (x: " + T + ") => " + T + " {\n" +
 			"\tlet st: " + T + " = seed;\n" +
 			"\treturn (x: " + T + "): " + T + " => {\n" +
-			"\t\tst = " + next + ";\n" +
+			"\t\tst = " + next.text + ";\n" +
 			"\t\treturn st;\n" +
 			"\t};\n}\n");
+		return { text: name, cost: next.cost };
 	}
 
 	famStatement(indent: string): string {
@@ -608,9 +630,9 @@ class Gen {
 				const n = this.rng.below(3);
 				for (let i = 0; i < n; i++) { params.push(this.pickTy()); }
 				const name = this.entName("c");
-				const text = indent + "const " + name + " = " + this.lambda(params, t, 0) + ";\n";
-				this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: params, len: 0 });
-				return text;
+				const f = this.lambda(params, t, 0, FN_COST_CAP);
+				this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: params, len: 0, cost: f.cost });
+				return indent + "const " + name + " = " + f.text + ";\n";
 			}
 			if (k == 1) {
 				const vars = this.visible(t, true);
@@ -619,34 +641,36 @@ class Gen {
 				const name = this.entName("c");
 				const d = this.entName("q");
 				this.scope.push({ name: d, ty: t, writable: false });
-				const body = this.closureBody(t, 1);
+				const body = this.routine(t, 1, FN_COST_CAP);
 				this.scope.pop();
-				this.ents.push({ kind: EntKind.Effect, name: name, ty: t, params: [t], len: 0 });
-				return indent + "const " + name + " = (" + d + ": " + T + "): void => { " + v.name + " = " + body + "; };\n" +
-					indent + name + "(" + this.expr(t, 0) + ");\n";
+				this.ents.push({ kind: EntKind.Effect, name: name, ty: t, params: [t], len: 0, cost: body.cost });
+				const decl = indent + "const " + name + " = (" + d + ": " + T + "): void => { " + v.name + " = " + body.text + "; };\n";
+				if (!this.reserve(body.cost + (1 as int64))) { return decl; }
+				return decl + indent + name + "(" + this.expr(t, 0) + ");\n";
 			}
 			if (k == 2) {
 				const effects = this.entsOf(EntKind.Effect, t);
 				if (effects.length == 0) { return ""; }
 				const e = effects[this.rng.below(effects.length)];
+				if (!this.reserve(e.cost + (1 as int64))) { return ""; }
 				return indent + e.name + "(" + this.expr(t, 0) + ");\n";
 			}
 			if (k == 3) {
 				const mk = this.maker(t);
 				const name = this.entName("k");
-				const text = indent + "const " + name + " = " + mk + "(" + this.expr(t, 0) + ");\n";
-				this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: [t], len: 0 });
+				const text = indent + "const " + name + " = " + mk.text + "(" + this.expr(t, 0) + ");\n";
+				this.ents.push({ kind: EntKind.Callable, name: name, ty: t, params: [t], len: 0, cost: mk.cost });
 				return text;
 			}
 			const name = this.entName("a");
 			const j = this.entName("j");
 			const n = this.rng.between(1, 4);
 			this.scope.push({ name: j, ty: Ty.Int32, writable: false });
-			const body = this.lambda([t], t, 0);
+			const body = this.lambda([t], t, 0, FN_COST_CAP);
 			this.scope.pop();
-			this.ents.push({ kind: EntKind.ClosureArray, name: name, ty: t, params: [t], len: n });
+			this.ents.push({ kind: EntKind.ClosureArray, name: name, ty: t, params: [t], len: n, cost: body.cost });
 			return indent + "const " + name + ": ((x: " + T + ") => " + T + ")[] = [];\n" +
-				indent + "for (let " + j + ": int32 = 0; " + j + " < " + String(n) + "; " + j + "++) { " + name + ".push(" + body + "); }\n";
+				indent + "for (let " + j + ": int32 = 0; " + j + " < " + String(n) + "; " + j + "++) { " + name + ".push(" + body.text + "); }\n";
 		}
 		if (fam == Fam.Union) {
 			this.unionHelpers(t);
@@ -659,7 +683,7 @@ class Gen {
 			}
 			const name = this.entName("u");
 			const text = indent + "let " + name + ": " + T + " | string | null = boxU" + tyTitle(t) + "(" + this.smallInt(0) + ", " + this.expr(t, 0) + ");\n";
-			this.ents.push({ kind: EntKind.UnionVar, name: name, ty: t, params: [], len: 0 });
+			this.ents.push({ kind: EntKind.UnionVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
 			return text;
 		}
 		this.genericHelpers();
@@ -669,7 +693,7 @@ class Gen {
 		}
 		const name = this.entName("b");
 		const text = indent + "const " + name + " = new BoxG<" + T + ">(" + this.expr(t, 0) + ");\n";
-		this.ents.push({ kind: EntKind.BoxVar, name: name, ty: t, params: [], len: 0 });
+		this.ents.push({ kind: EntKind.BoxVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
 		return text;
 	}
 
@@ -899,6 +923,7 @@ test "numeric loop and routine weights stay capped and restore their scope" {
 		g.depthMax = 8;
 		g.exprMax = 8;
 		g.tripMax = 64;
+		g.fams = seed % 2 == 0 ? [Fam.Closure, Fam.Union, Fam.Generic] : [];
 		g.fn(0);
 		assert g.cost <= FN_COST_CAP;
 		assert g.fns[0].cost <= FN_COST_CAP;
@@ -1002,3 +1027,92 @@ test "each family alone reaches the program" {
 	}
 }
 
+test "an exhausted budget emits one leaf for an expression or condition" {
+	for (let seed = 1; seed < 21; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int32, Ty.Float64];
+		g.exprMax = 8;
+		g.fams = [Fam.Closure, Fam.Union, Fam.Generic];
+		g.expr(Ty.Int32, 0);
+		g.cond(0);
+		assert g.nodesLeft == GEN_NODE_CAP - 1;
+		assert g.cost == (0 as int64);
+	}
+}
+
+test "a named closure is invoked only when its weighted body fits" {
+	for (const bodyCost of [0 as int64, FN_COST_CAP]) {
+		let invoked = false;
+		for (let seed = 1; seed < 41; seed++) {
+			const g = new Gen();
+			g.rng = Rng.seeded(seed as uint64);
+			g.tys = [Ty.Int32];
+			g.exprMax = 4;
+			g.fams = [Fam.Closure];
+			g.costCap = FN_COST_CAP;
+			g.mult = 2 as int64;
+			g.ents = [{ kind: EntKind.Callable, name: "c0", ty: Ty.Int32, params: [], len: 0, cost: bodyCost }];
+			if (g.closureExpr(Ty.Int32, 0).contains("c0(")) { invoked = true; }
+			assert g.cost <= g.costCap;
+		}
+		assert invoked == (bodyCost == (0 as int64));
+	}
+}
+
+function countOf(text: string, needle: string): int32 {
+	let n = 0;
+	let at = text.indexOf(needle);
+	while (at >= 0) {
+		n++;
+		at = text.indexOf(needle, at + needle.length);
+	}
+	return n;
+}
+
+function firstArg(call: string): string {
+	let depth = 0;
+	const open = call.indexOf("(");
+	for (let i = open + 1; i < call.length; i++) {
+		const c = call.slice(i, i + 1);
+		if (c == "(") { depth++; }
+		if (c == ")") { depth--; }
+		if (depth == 0 && c == ",") { return call.slice(open + 1, i); }
+	}
+	return "";
+}
+
+test "a callback body may call a routine and is charged once per invocation" {
+	let reached = false;
+	for (let seed = 1; seed < 81; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int32];
+		g.exprMax = 3;
+		g.fams = [Fam.Closure, Fam.Generic];
+		g.costCap = FN_COST_CAP;
+		g.fns = [{ name: "f0", ret: Ty.Int32, params: [], cost: 100 as int64 }];
+		const text = g.famExpr(Ty.Int32, 0);
+		const calls = countOf(text, "f0(");
+		const twice = text.startsWith("twiceG<") ? countOf(firstArg(text), "f0(") : 0;
+		if (calls > 0 && text.contains("=>")) { reached = true; }
+		assert g.cost >= (((calls + twice) * 101) as int64);
+		assert g.cost <= g.costCap;
+	}
+	assert reached;
+}
+
+test "a deferred closure body keeps its own budget" {
+	let shaped = false;
+	for (let seed = 1; seed < 21; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int32];
+		g.exprMax = 4;
+		g.costCap = 0 as int64;
+		const f = g.lambda([Ty.Int32], Ty.Int32, 0, FN_COST_CAP);
+		if (f.cost > (0 as int64)) { shaped = true; }
+		assert g.cost == (0 as int64) && g.costCap == (0 as int64) && g.mult == (1 as int64);
+	}
+	assert shaped;
+}
