@@ -261,3 +261,61 @@ test "rule 3: a struct that holds Span fields declared and used locally is legal
 	const errors = errorsOf(program("", `${ARR} const around: Around = { pets: xs, base: 1 }; return around.pets[0].n + around.base;`));
 	assert errors == "", errors;
 }
+
+test "module level: a view of a module-level Vec that is pushed afterwards is refused" {
+	const why = refusal(`${HEAD}${VEC} const v: Span<int32> = xs; for (let i = 0; i < 100; i += 1) xs.push(i); console.log(v[0]);`, BORROW);
+	assert why == "", why;
+}
+
+test "module level: a view of a module-level array grown through a call is refused" {
+	const decls = "function growS(a: S[]): void { a.push({ n: 2, name: \"b\" }); }\n";
+	const why = refusal(`${HEAD}${decls}${ARR} const sp: Span<S> = xs; growS(xs); console.log(sp[0].n);`, BORROW);
+	assert why == "", why;
+}
+
+test "module level: a module-level view of a mutable module-level Vec is refused even when read before any change" {
+	const why = refusal(`${HEAD}${VEC} const v: Span<int32> = xs; console.log(v[0]);`, BORROW);
+	assert why == "", why;
+}
+
+test "module level: a module-level read-only view of a const sized array is legal" {
+	const errors = errorsOf(`${HEAD}const fixed: int32[3] = [1, 2, 3]; const r: Readonly<Span<int32>> = fixed; console.log(r[2]);`);
+	assert errors == "", errors;
+}
+
+test "module level: a view in a top-level block of a block-local Vec pushed afterwards is refused" {
+	const why = refusal(`${HEAD}{ ${VEC} const v: Span<int32> = xs; xs.push(33); console.log(v[0]); }`, BORROW);
+	assert why == "", why;
+}
+
+test "module level: a view in a top-level block read before the push is legal" {
+	const errors = errorsOf(`${HEAD}{ ${VEC} const v: Span<int32> = xs; console.log(v[0]); xs.push(33); }`);
+	assert errors == "", errors;
+}
+
+test "module level: a pointer to a mutable module-level struct is legal, at module level and inside a function" {
+	const decls = "struct In { v: int32; }\nlet g: In = { v: 1 };\nconst gp = g as Ptr<In>;\nfunction readG(): int32 { const lp = g as Ptr<In>; g = { v: 2 }; return lp.v; }\n";
+	const errors = errorsOf(`${HEAD}${decls}g = { v: 3 }; console.log(gp.v + readG());`);
+	assert errors == "", errors;
+}
+
+test "module level: a pointer into an element of a module-level Vec is refused" {
+	const why = refusal(`${HEAD}struct In { v: int32; }\nlet ps: Vec<In> = [{ v: 1 }];\nconst p = ps[0] as Ptr<In>;\nconsole.log(p.v);`, BORROW);
+	assert why == "", why;
+}
+
+test "module level: a Borrow of a mutable module-level struct is refused" {
+	const why = refusal(`${HEAD}struct In { v: int32; }\nlet g: In = { v: 1 };\nconst b: Borrow<In> = g;\nconsole.log(b.v);`, BORROW);
+	assert why == "", why;
+}
+
+test "module level: a Borrow into an element of a const module-level shared array is refused" {
+	const why = refusal(`${HEAD}const ns = [1, 2, 3];\nconst e: Borrow<int32> = ns[2];\nconsole.log(e);`, BORROW);
+	assert why == "", why;
+}
+
+test "module level: a Borrow of a const module-level array handle or struct field is legal" {
+	const decls = "struct Bag2 { items: int32[]; k: int32; }\nconst bag: Bag2 = { items: [4, 5], k: 1 };\nconst ns = [1, 2, 3];\n";
+	const errors = errorsOf(`${HEAD}${decls}const bi: Borrow<int32[]> = bag.items; const bk: Borrow<int32> = bag.k; const bn: Borrow<int32[]> = ns; console.log(bi[1] + bk + bn[0]);`);
+	assert errors == "", errors;
+}

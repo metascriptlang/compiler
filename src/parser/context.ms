@@ -25,10 +25,18 @@ export class ParserState {
 	// `when` guard, where a bare `ident =>` must NOT start an arrow function —
 	// that `=>` belongs to the match arm. Parenthesized arrows still parse.
 	noBareArrow: int32;
+	trailingDecls: Node[];
 }
 
 export function createState(tokens: Token[]): ParserState {
-	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "", noBareArrow: 0 };
+	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [], pendingTypeArg: "", noBareArrow: 0, trailingDecls: [] };
+}
+
+export function takeTrailingDecls(state: ParserState, mark: int32): Node[] {
+	const taken: Node[] = [];
+	for (let i = mark; i < state.trailingDecls.length; i += 1) taken.push(state.trailingDecls[i]);
+	while (state.trailingDecls.length > mark) state.trailingDecls.pop();
+	return taken;
 }
 
 // Stamp a node's end position from the last consumed token (position - 1).

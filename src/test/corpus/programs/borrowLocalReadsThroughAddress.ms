@@ -56,7 +56,7 @@ const s = "hello";
 const bs: Borrow<string> = s;
 out.push(`text=${bs.length}/${bs + "!"}/${bs == "hello"}`);
 
-const bigs: Big[] = [{ a: 1, b: 2, c: 3, d: 4, e: 5 }, { a: 6, b: 7, c: 8, d: 9, e: 10 }];
+const bigs: Big[2] = [{ a: 1, b: 2, c: 3, d: 4, e: 5 }, { a: 6, b: 7, c: 8, d: 9, e: 10 }];
 const be: Borrow<Big> = bigs[1];
 out.push(`struct=${be.a}/${be.e}`);
 
@@ -69,7 +69,8 @@ const bf: Borrow<int32[]> = bag.items;
 const bg: Borrow<Big> = bag.big;
 out.push(`field=${bf[1]}/${bg.b}`);
 
-const element: Borrow<int32> = xs[2];
+const digits: int32[3] = [1, 2, 3];
+const element: Borrow<int32> = digits[2];
 out.push(`element=${element}`);
 out.push(`param=${fromParams(xs, bigs[1])}`);
 out.push(`generic=${viaGeneric<int32>(4)}/${viaGeneric<string>("x")}`);

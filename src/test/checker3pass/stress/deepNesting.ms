@@ -9,6 +9,8 @@ import { TypeKind, Node, NodeKind } from "../../../ast/node";
 import { forEachChild } from "../../../ast/visitor";
 import { checkOnly, findFnDecl } from "../helpers";
 import { checkNoGenericParamLeakage, formatViolations } from "../invariant";
+import { checkSource } from "../../handoff/helpers";
+import { hasErrors } from "../../../checker/context";
 
 const SRC_DEEP = `
 function layer1<T>(f: (x: T) => T, init: T): T { return f(init); }
@@ -58,4 +60,20 @@ test "stress deep-nesting: innermost closure typed Int32" {
 	assert arrow != null;
 	assert arrow.nodeType != null;
 	assert arrow.nodeType.typeChildren[0].kind == TypeKind.Int32;
+}
+
+// The suite binary is built at -O0, where each nesting level pays the checker's whole
+// per-expression frames: 64 levels hold them under ~120 KB a level on an 8 MB stack.
+const NESTED_EXPRESSION_DEPTH = 64;
+
+function nestedSum(depth: int32): string {
+	let source = "one";
+	for (let level = 0; level < depth; level += 1) source = `${source} + one`;
+	return `function total(one: int32): int32 { return ${source}; }`;
+}
+
+test "an expression nested 64 levels deep checks without exhausting the stack" {
+	const ctx = checkSource(nestedSum(NESTED_EXPRESSION_DEPTH));
+	assert ctx != null;
+	assert !hasErrors(ctx);
 }

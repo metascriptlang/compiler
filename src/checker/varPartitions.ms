@@ -938,7 +938,9 @@ function borrowFrom(u: BorrowUnit, dest: Symbol, src: Node): void {
 		const sym = s.resolvedSym;
 		if (sym == null) continue;
 		if (hasFlag(sym, SymbolFlag.Global)) {
-			if (!hasFlag(sym, SymbolFlag.Mutable) && keysOf(sym.symbolType, false).length == 0) continue;
+			const fixed = !hasFlag(sym, SymbolFlag.Mutable);
+			if ((pointer || (byAddress && fixed)) && staysPut(sym, withoutHandle(handles[k], paths[k]))) continue;
+			if (!pointer && !byAddress && fixed && keysOf(sym.symbolType, false).length == 0) continue;
 			addError(u.ctx, `cannot borrow '${dest.name}' from module-level '${sym.name}': a call can change it unseen; pass it as a parameter`, src.location.line, src.location.column);
 			return;
 		}
@@ -1295,6 +1297,13 @@ function borrowedKeys(sym: Symbol, handles: string): HandleKey[] {
 	return out;
 }
 
+function staysPut(sym: Symbol, handles: string): boolean {
+	for (const h of handles.split("|")) {
+		if (h != "" && !h.startsWith(VALUE_WRITE)) return borrowedKeys(sym, handles).length == 0;
+	}
+	return true;
+}
+
 function inExternalGroup(u: BorrowUnit, id: int32): boolean {
 	if (u.p.vars[id].external) return true;
 	const root = ufRoot(u.p, id);
@@ -1537,7 +1546,7 @@ function runPass(u: BorrowUnit, body: Node, pass: int32): void {
 }
 
 function checkUnit(ctx: CheckerContext, body: Node | null): void {
-	if (body == null || body.kind != NodeKind.BlockStmt) return;
+	if (body == null || (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program)) return;
 	const pointers: Symbol[] = [];
 	collectPointers(body, pointers);
 	if (pointers.length == 0 && !declaresView(body)) return;
@@ -1613,5 +1622,6 @@ export function checkRoutineBorrows(ctx: CheckerContext, routine: Node): void {
 
 export function checkViewBorrows(ctx: CheckerContext, program: Node): void {
 	if (program == null || program.kind != NodeKind.Program) return;
+	checkUnit(ctx, program);
 	for (const stmt of (program.data as ProgramData).programStmts) { scanUnits(ctx, stmt); }
 }

@@ -1,6 +1,6 @@
 import { expansionOf, markExpansion } from "../../checker/visibility";
 import {
-	Node, NodeKind, SymbolKind, SourceLocation, Symbol, Type, TypeKind, createNodeAt,
+	Node, NodeKind, NodeFlag, SymbolKind, SourceLocation, Symbol, Type, TypeKind, createNodeAt,
 	ProgramData, ExportDeclData, ClassDeclData, ActorDeclData, DecoratedDeclData,
 	MacroInvocationData, MacroDeclData, MethodDeclData, PropertyDeclData, FunctionDeclData,
 	BlockStmtData, VariableDeclData, ArrowFunctionData, CallExprData, IdentifierData,
@@ -356,6 +356,12 @@ function runDecorators(ctx: CheckerContext, decorators: Node[], target: Node, pl
 		if (isIntrinsicDecorator(ctx, md.macroName, dec)) continue;
 		if (plan == null || current == null || !decoratorPositionValid(current)) {
 			addError(ctx, "Decorators are not valid here", dec.location.line, dec.location.column);
+			continue;
+		}
+		if (current.flags.has(NodeFlag.Accessor)) {
+			const name = (current.data as MethodDeclData).methodName;
+			addError(ctx, `decorator '${md.macroName}' cannot apply to accessor '${name.slice(0, 3)} ${name.slice(4, name.length)}': decorated getters and setters are not supported`,
+				dec.location.line, dec.location.column);
 			continue;
 		}
 		current = runDecorator(ctx, dec, md, current, plan);

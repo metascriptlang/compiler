@@ -63,7 +63,8 @@ import {
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase } from "../../checker/types";
-import { hasFlag, isTypeSymbol, SymbolFlag, symbolCarried, overloadWinner } from "../../checker/symbol";
+import { hasFlag, isTypeSymbol, SymbolFlag, symbolCarried, overloadWinner, isFrameValue } from "../../checker/symbol";
+import { forEachChild } from "../../ast/visitor";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -658,6 +659,13 @@ export function boundTypeOfObject(objHeap: RaiserObjectHeap, handle: int64): Typ
 	return null;
 }
 
+function calleeSymOf(call: Node, d: CallExprData): Symbol | null {
+	if (call.resolvedSym == null) return null;
+	const winner = overloadWinner(call.resolvedSym, d.resolvedOverloadIdx);
+	if (stripMacroArgWrappers(d.callee).kind == NodeKind.MemberExpr) return winner.symbolKind == SymbolKind.Function ? winner : null;
+	return winner != call.resolvedSym ? winner : null;
+}
+
 // `declNode` skipped to avoid Symbol↔Node cycle; reach it via getImpl.
 function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap): RaiserValue {
 	const handle = heapAllocObject(objHeap);
@@ -749,9 +757,8 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
 			setStr(objHeap, handle, "name", d.name);
-			const carried = node.resolvedSym != null && isTypeSymbol(node.resolvedSym) ? node.resolvedSym : symbolCarried(node);
-			if (carried != null) {
-				heapObjectSetField(objHeap, handle, "symHandle", raiserInt(registerBoundSym(carried) as int64));
+			if (node.resolvedSym != null) {
+				heapObjectSetField(objHeap, handle, "symHandle", raiserInt(registerBoundSym(node.resolvedSym) as int64));
 			}
 		},
 
@@ -778,13 +785,14 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
 			setNode(objHeap, arrHeap, handle, "callee", d.callee);
-			if (node.resolvedSym != null) {
-				const winner = overloadWinner(node.resolvedSym, d.resolvedOverloadIdx);
-				const calleeVal = heapObjectGetField(objHeap, handle, "callee");
-				if (winner != node.resolvedSym && winner.symbolType != null && calleeVal.kind == RaiserValueKind.Object) {
+			const winner = calleeSymOf(node, d);
+			const calleeVal = heapObjectGetField(objHeap, handle, "callee");
+			if (winner != null && calleeVal.kind == RaiserValueKind.Object) {
+				if (winner != node.resolvedSym && winner.symbolType != null) {
 					setTypeFields(objHeap, arrHeap, calleeVal.intVal, winner.symbolType, d.callee.location, includeTypeAst);
 					heapObjectSetField(objHeap, calleeVal.intVal, "resolvedSym", symbolToValue(winner, objHeap));
 				}
+				heapObjectSetField(objHeap, calleeVal.intVal, "symHandle", raiserInt(registerBoundSym(winner) as int64));
 			}
 			setNodes(objHeap, arrHeap, handle, "arguments", d.arguments);
 			setStr(objHeap, handle, "typeArg", node.typeArg);
@@ -1417,6 +1425,16 @@ function readFieldDecorators(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap
 	return rows;
 }
 
+function rebindRedeclaredParams(body: Node, params: string[]): void {
+	if (body == null || params.length == 0) return;
+	if (body.kind == NodeKind.Identifier && body.flags.has(NodeFlag.BoundSym) && body.resolvedSym != null
+		&& isFrameValue(body.resolvedSym) && params.includes((body.data as IdentifierData).name)) {
+		body.resolvedSym = null;
+		body.flags = body.flags.excl(NodeFlag.BoundSym);
+	}
+	forEachChild(body, (child: Node): void => { rebindRedeclaredParams(child, params); });
+}
+
 export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
 	return match (val.kind) {
 		RaiserValueKind.Int => mkInt(val.intVal, fallbackLoc),
@@ -1603,6 +1621,11 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 				callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: 0,
 			}, loc);
 			call.typeArg = readStr(objHeap, h, "typeArg");
+			if (call.typeArg != "" && callee.kind == NodeKind.Identifier && callee.resolvedSym != null
+					&& callee.resolvedSym.name != (callee.data as IdentifierData).name) {
+				callee.resolvedSym = null;
+				callee.flags = callee.flags.excl(NodeFlag.BoundSym);
+			}
 			return call;
 		},
 		NodeKind.MemberExpr => {
@@ -1645,6 +1668,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 				arrowDefaults.push(null as unknown as Node);
 				dpi = dpi + 1;
 			}
+			rebindRedeclaredParams(arrowBody, arrowParams);
 			return createNodeAt(NodeKind.ArrowFunction, {
 				arrowParams, arrowParamTypes, arrowBody, arrowFlags, arrowReturnType,
 				arrowDefaults,
@@ -1656,6 +1680,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const funcExprBody = readNode(objHeap, arrHeap, h, "funcExprBody", loc);
 			const funcExprFlags = readStr(objHeap, h, "funcExprFlags");
 			const funcExprReturnType = readStr(objHeap, h, "funcExprReturnType");
+			rebindRedeclaredParams(funcExprBody, funcExprParams);
 			return createNodeAt(NodeKind.FunctionExpr, {
 				funcExprParams, funcExprParamTypes, funcExprBody, funcExprFlags, funcExprReturnType,
 			}, loc);
@@ -1883,6 +1908,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const fnBody = readNode(objHeap, arrHeap, h, "fnBody", loc);
 			const fnFlags = readStr(objHeap, h, "fnFlags");
 			const fnReturnType = readStr(objHeap, h, "fnReturnType");
+			rebindRedeclaredParams(fnBody, params);
 			return createNodeAt(NodeKind.FunctionDecl, {
 				fnName, params, fnParamTypes, fnBody, fnFlags, fnReturnType,
 				fnDefaults: [], nativeName: "", nameLocation: loc,
@@ -3751,18 +3777,19 @@ test "nodeToValue — a call that resolved to the first overload keeps its calle
 	assert boundTypeOfObject(objH, calleeVal.intVal) == parts[1].nodeType;
 }
 
-test "valueToNode — drops resolvedSym field (forward-only design)" {
+test "valueToNode — a resolved identifier comes back bound to its symbol" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
 	const loc = makeLoc(1, 0);
 	const ident = createNodeAt(NodeKind.Identifier, { name: "x" }, loc);
-	ident.resolvedSym = makeSymbol("x", SymbolKind.Variable);
+	const sym = makeSymbol("x", SymbolKind.Variable);
+	ident.resolvedSym = sym;
 	const v = nodeToValue(ident, objH, arrH);
 	const back = valueToNode(v, objH, arrH, loc);
 	assert back.kind == NodeKind.Identifier;
 	assert (back.data as IdentifierData).name == "x";
-	// Forward-only: reverse path leaves resolvedSym as the null-cast sentinel.
-	assert back.resolvedSym == null;
+	assert back.resolvedSym == sym;
+	assert back.flags.has(NodeFlag.BoundSym);
 }
 
 test "nodeToValue — Symbol with empty name still emits object with empty string" {

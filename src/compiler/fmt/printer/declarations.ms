@@ -5,7 +5,7 @@ import {
 	ImportDeclData, ExportDeclData,
 	ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData,
 	ExternDeclData, ExternKind, DecoratedDeclData, TestDeclData, AssertStmtData,
-	PropertyDeclData, MethodDeclData, ConstructorDeclData, MacroDeclData,
+	PropertyDeclData, MethodDeclData, ConstructorDeclData, MacroDeclData, FunctionDeclData,
 } from "../../../ast/node";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
@@ -15,7 +15,7 @@ import {
 import { Token } from "../../../lexer/token";
 import { callPrintNode } from "./callbacks";
 import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional } from "./literals";
-import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, printBlock, wrapNodeComments, isSynthesized } from "./statements";
+import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, printBlock, wrapNodeComments, isSynthesized, takeStructAccessors } from "./statements";
 
 function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): Doc | null {
 	const endLine = node.location.endLine > 0 ? node.location.endLine : 999999;
@@ -296,7 +296,9 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 	const d = node.data as InterfaceDeclData;
 	const extendsClause = d.interfaceExtends.length > 0 ? " extends " + d.interfaceExtends.join(", ") : "";
 	const head = keyword + " " + d.interfaceName + genericsFor(options, d.nameLocation, d.interfaceName, node.typeArg) + extendsClause;
-	if (d.interfaceFields.length == 0) return docText(head + " {}");
+	const accessors = keyword == "struct" ? takeStructAccessors() : [];
+	let accessorIdx = 0;
+	if (d.interfaceFields.length == 0 && accessors.length == 0) return docText(head + " {}");
 
 	// Field source positions are stored on node.paramLocations
 	// (parser repurposes that slot — see declaration.ms parseInterfaceLikeDecl).
@@ -331,6 +333,10 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 	let standaloneIdx = 0;
 	for (let i = 0; i < d.interfaceFields.length; i += 1) {
 		const fieldLine = i < fieldLocs.length ? fieldLocs[i].line : 0;
+		while (accessorIdx < accessors.length && accessors[accessorIdx].location.line < fieldLine) {
+			fields.push(printStructGetter(accessors[accessorIdx], options));
+			accessorIdx = accessorIdx + 1;
+		}
 		// Emit any standalone comments that appear BEFORE this field's line.
 		while (standaloneIdx < standalone.length && standalone[standaloneIdx].line < fieldLine) {
 			fields.push(docText(standalone[standaloneIdx].value));
@@ -377,6 +383,14 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 			fields.push(docText(field + sep));
 		}
 	}
+	while (accessorIdx < accessors.length) {
+		while (standaloneIdx < standalone.length && standalone[standaloneIdx].line < accessors[accessorIdx].location.line) {
+			fields.push(docText(standalone[standaloneIdx].value));
+			standaloneIdx = standaloneIdx + 1;
+		}
+		fields.push(printStructGetter(accessors[accessorIdx], options));
+		accessorIdx = accessorIdx + 1;
+	}
 	// Any standalone comments after the last field — emit at end of body.
 	while (standaloneIdx < standalone.length) {
 		fields.push(docText(standalone[standaloneIdx].value));
@@ -388,6 +402,12 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 		docHardLine(),
 		docText("}"),
 	]);
+}
+
+function printStructGetter(fn: Node, options: FormatOptions): Doc {
+	const fd = fn.data as FunctionDeclData;
+	const ret = fd.fnReturnType != "" ? ": " + fd.fnReturnType : "";
+	return docGroup([docText("get " + fd.fnName.slice(4, fd.fnName.length) + "()" + ret + " "), callPrintNode(fd.fnBody, options)]);
 }
 
 export function printInterfaceDecl(node: Node, options: FormatOptions): Doc {
@@ -644,7 +664,7 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 		+ (isExtern ? "extern " : "")
 		+ (isAsync ? "async " : "")
 		+ (isGen ? "*" : "")
-		+ writtenName(options, d.nameLocation, d.methodName) + genericsFor(options, d.nameLocation, writtenName(options, d.nameLocation, d.methodName), flagGet(d.methodFlags, "gen"));
+		+ (node.flags.has(NodeFlag.Accessor) ? d.methodName.slice(0, 3) + " " + d.methodName.slice(4, d.methodName.length) : writtenName(options, d.nameLocation, d.methodName)) + genericsFor(options, d.nameLocation, writtenName(options, d.nameLocation, d.methodName), flagGet(d.methodFlags, "gen"));
 
 	const parts: Doc[] = [docText(head)];
 	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options, node.paramLocations);

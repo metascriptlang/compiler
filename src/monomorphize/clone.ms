@@ -9,6 +9,7 @@
 import { Node, NodeFlag, makeLocRange, createNodeAt, SourceLocation, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
 import { isResult, getResultOkType, getResultErrType, refSubstInner, refWrapperName, emptyType } from "../checker/types";
 import { FieldXform, rebuildNodeData, pkSamples, pkDumpNode } from "../ast/fieldspec";
+import { isFrameValue } from "../checker/symbol";
 
 // ===== Clone Mode =====
 // Mono: monomorphization (copies nodeType, drops typeExpr — used by generic instantiation)
@@ -150,7 +151,8 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 		dst.nodeType = src.nodeType;
 	} else if (src.resolvedSym != null && src.flags.has(NodeFlag.BoundSym)) {
 		// bindSym: pre-bound symbol travels by reference; checker re-derives nodeType.
-		dst.resolvedSym = src.resolvedSym;
+		if (isFrameValue(src.resolvedSym)) dst.flags = dst.flags.excl(NodeFlag.BoundSym);
+		else dst.resolvedSym = src.resolvedSym;
 	}
 	return dst;
 }

@@ -5,7 +5,7 @@ import {
 	ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
-	DestructuringDeclData, SourceLocation, IdentifierData,
+	DestructuringDeclData, SourceLocation, IdentifierData, ExportDeclData,
 } from "../../../ast/node";
 import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
@@ -51,6 +51,7 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 				parts.push(docHardLine());
 			}
 		}
+		_structAccessors = structAccessorsAfter(d.programStmts, stmt);
 		parts.push(callPrintNode(stmt, options));
 
 		// Emit inter-statement comments: blank line before first, single newline between
@@ -67,10 +68,35 @@ function lastLineOf(node: Node): int32 {
 	return node.location.endLine > 0 ? node.location.endLine : node.location.line;
 }
 
+let _structAccessors: Node[] = [];
+
+export function takeStructAccessors(): Node[] {
+	const taken = _structAccessors;
+	_structAccessors = [];
+	return taken;
+}
+
+function structAccessorDecl(s: Node): Node | null {
+	const inner = s.kind == NodeKind.ExportDecl ? (s.data as ExportDeclData).exportedDecl : s;
+	return inner.kind == NodeKind.FunctionDecl && inner.flags.has(NodeFlag.Accessor) ? inner : null;
+}
+
+function structAccessorsAfter(stmts: Node[], stmt: Node): Node[] {
+	const out: Node[] = [];
+	let i = stmts.indexOf(stmt) + 1;
+	while (i > 0 && i < stmts.length) {
+		const acc = structAccessorDecl(stmts[i]);
+		if (acc == null) break;
+		out.push(acc);
+		i += 1;
+	}
+	return out;
+}
+
 function unpicked(stmts: Node[]): Node[] {
 	const out: Node[] = [];
 	for (const s of stmts) {
-		if (!s.flags.has(NodeFlag.WhenPicked) && !isParamPatternDecl(s)) out.push(s);
+		if (!s.flags.has(NodeFlag.WhenPicked) && !isParamPatternDecl(s) && structAccessorDecl(s) == null) out.push(s);
 	}
 	return out;
 }
@@ -137,6 +163,7 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 	if (written.length == 0 && inner.length == 0) return docText("{}");
 	const stmts: Doc[] = [];
 	for (const s of written) {
+		_structAccessors = structAccessorsAfter(d.statements, s);
 		stmts.push(callPrintNode(s, options));
 	}
 	for (const c of inner) {
