@@ -117,14 +117,21 @@ export function lowerHcrIndirection(
 	const storageTypes = new HashMap<string, Type>();
 	let bindings = "";
 	let bindSlot: int32 = 0;
+	const foreignOps: string[] = [];
+	const foreignOpKeys = new HashMap<string, string>();
 	for (const entry of aliveSet.foreignOps.data) {
 		if (entry.hcode == 0 || !entry.value.includes(own.modulePath)) continue;
 		const op = entry.key;
 		const symbol = opCName(op);
-		if (ownFunctions.has(symbol)) continue;
+		if (ownFunctions.has(symbol) || foreignOpKeys.has(symbol)) continue;
+		foreignOps.push(symbol);
+		foreignOpKeys.set(symbol, "f:" + hcrSignatureKey(op.symbolType));
+	}
+	foreignOps.sort();
+	for (const symbol of foreignOps) {
 		const owner = owners.get(symbol);
 		if (owner == null || owner == own.moduleId) continue;
-		const key = "f:" + hcrSignatureKey(op.symbolType);
+		const key = foreignOpKeys.get(symbol)!;
 		const id = owner + "\n" + symbol + "\n" + key;
 		if (bound.has(id)) continue;
 		const pointer = `_ms_hcr_bind_${mangleModuleName(own.modulePath)}_${bindSlot}`;
