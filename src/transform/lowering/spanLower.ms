@@ -58,8 +58,9 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 					}
 
 					if (srcType.kind == TypeKind.Array) {
-						const dataExpr = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
-						dataExpr.nodeType = createPtr(spanTarget.typeReturn);
+						const elems = makeCall(runtimeRef("msArrDataOr0", loc), [makeMember(d.convExpr, "p", loc)], loc);
+						elems.nodeType = createPtr(spanTarget.typeReturn);
+						const dataExpr = makeHiddenStdConv(elems, spanDataPtr(spanTarget.typeReturn), loc);
 						const lenExpr = makeMember(d.convExpr, "length", loc);
 						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
 					} else if (srcType.kind == TypeKind.SizedArray) {
@@ -88,6 +89,14 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 
 		return node;
 	});
+}
+
+// The type of a Span's `data` member: a pointer to one element slot. A Ptr
+// over a Ref names the referent itself, so a slot holding a Ref is a Ptr to a
+// Ptr of what the Ref points at.
+function spanDataPtr(elem: Type | null): Type {
+	if (elem != null && elem.kind == TypeKind.Ref && elem.typeReturn != null) return createPtr(createPtr(elem.typeReturn));
+	return createPtr(elem);
 }
 
 function calleeFnType(node: Node): Type {
