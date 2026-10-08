@@ -246,6 +246,40 @@ output). The 100-seed execution campaign, closure-only campaign, driver controls
 and reducer remain unrun or unimplemented at this checkpoint. Old bundles keep their
 source and identity; they are not rewritten for the changed generator.
 
+### Per-construct weights (G3, first half) — measured 2026-10-08
+
+`Features.w` holds 34 `w.<group>.<name>=0..100` weights: `w.expr.{leaf,binary,unary,
+convert,ternary,call}`, `w.stmt.{let,assign,compound,if,for,match,break,return}`,
+`w.fam.{closure,union,generic}`, `w.closure.{named,array,iife,decl,effect,invoke,maker,fill}`,
+`w.generic.{id,twice,pick,map,box}` and the percentages `w.expr.fam`, `w.stmt.fam`,
+`w.stmt.else`, `w.union.len`. A group may not be all zero. `format` prints only
+non-default weights, so every old header and bundle parses unchanged. Kind groups draw
+`below(sum)`, which at the defaults is `below(100)` / `below(3)` / `below(6)` as before.
+Source tree `7c55bccb7decbcac72337f174dbfc16355888f4d`; installed `msc`
+(`~/.metascript/BUILD` `525c8ba4f`).
+
+| check | result |
+|---|---|
+| `gen <seed>` of the base (`8894ce287`) and this tree, seeds 1..200, `cmp`: default / `fams=none` / `fams=closure` / `--swarm` / `fams=union types=int32,uint8` / `fams=generic stmts=8 depth=4 expr=4` / `plant=backend` | **200/200** identical for each of the 7 vectors, header line included |
+| `msc test tools/smith/gen.ms`, C / `--target=js` | **341/341**, **104/104** (base 326 / 89) |
+| 10 mutants (weights ignored, `format` printing all / none, `g.w` not set, iife guard, two binary-fallback guards, compound guard, family weights ignored, all-zero group accepted), C and JS | **10/10 red**, each on 1–3 intended guards, no collateral |
+| Aimed batches, seeds 1..200; hit = target marker count strictly exceeds each other marker count in the program body (markers: ` ? `, `fN(` calls, `(qN:` lambdas, convert, unary, binary spellings by regex) | below |
+| `msc check` of seeds 1..20 of each aimed vector | **20/20 clean** for all three |
+
+| aimed vector (on top of base) | dominant | same, no weights | count: base → aimed (mean per program) |
+|---|---|---|---|
+| ternary: `fams=none` + `w.expr.ternary=80 leaf=10 binary=4 unary=2 convert=2 call=2` | **200/200** | 0/200 | 26 → 355 |
+| call: `fams=none types=int32 funcs=16 expr=2 stmts=2` + `w.expr.call=80 leaf=10 binary=4 unary=2 convert=2 ternary=2 w.stmt.let=60 assign=20 if=5 for=5 compound=4 match=2 break=2 return=2` | **191/200** | 0/200 | 29 → 64 |
+| closure: `fams=closure` + `w.expr.fam=90 w.stmt.fam=60 w.closure.iife=4` | **200/200** | 0/200 | 65 → 267 |
+
+Not measured: with `w.expr.call` alone and the default type set, calls stay at
+**0/200** dominant (mean 14 → 28): the cost bound refuses a call whose callee is
+expensive, and a call needs an earlier routine of the requested type. A caller
+aims calls by also narrowing `types`, `expr` and `stmts`. Markers are regex counts
+of generated text, not generator decisions; negative-literal casts inflate the
+convert and binary counts, which is conservative for the aimed construct. Bash
+and script sources of the measurement are in `out/smith/weights/` (untracked).
+
 ## Approved order and NEW MECHANISM decisions
 
 1. Harden the existing core, then SAN and reducer, before expanding families.
