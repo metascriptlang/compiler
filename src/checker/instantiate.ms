@@ -5,12 +5,12 @@
 // the specialized version. No separate monomorphize pass needed.
 
 import { methodOwnerClass } from "./visibility";
-import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, VariableDeclData, ForOfStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType, isUnresolvedType, isReadonlyView, instantiateGeneric, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, classParentOf, runtimeClassSym, genericParamNamesOf } from "./types";
 import { resolveAnnotation, ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
 import { splitTopLevel } from "../utils/string";
-import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind, registerCtorDefaults, resetCtorRegistry } from "./symbol";
+import { lookupSymbol, makeSymbol, addSymbolToScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind, registerCtorDefaults, resetCtorRegistry, isFrameValue } from "./symbol";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
@@ -594,7 +594,9 @@ export function clearCheckerState(node: Node): void {
 	if (node == null) return;
 	const redeclared: Symbol[] = [];
 	collectDeclaredSyms(node, redeclared);
-	clearStateKeepingOuterBindings(node, redeclared);
+	const names: string[] = [];
+	collectDeclaredNames(node, names);
+	clearStateKeepingOuterBindings(node, redeclared, names);
 }
 
 function collectDeclaredSyms(node: Node, into: Symbol[]): void {
@@ -602,12 +604,25 @@ function collectDeclaredSyms(node: Node, into: Symbol[]): void {
 	forEachChild(node, (child: Node): void => { if (child != null) collectDeclaredSyms(child, into); });
 }
 
+export function collectDeclaredNames(node: Node, into: string[]): void {
+	match (node.kind) {
+		NodeKind.VariableDecl => { into.push((node.data as VariableDeclData).declName); },
+		NodeKind.ForOfStmt => { into.push((node.data as ForOfStmtData).forOfBinding); },
+		NodeKind.TryCatchStmt => { into.push((node.data as TryCatchStmtData).catchName); },
+		NodeKind.ArrowFunction => { for (const p of (node.data as ArrowFunctionData).arrowParams) into.push(p); },
+		NodeKind.FunctionExpr => { for (const p of (node.data as FunctionExprData).funcExprParams) into.push(p); },
+		NodeKind.FunctionDecl => { for (const p of (node.data as FunctionDeclData).params) into.push(p); },
+		_ => {},
+	}
+	forEachChild(node, (child: Node): void => { if (child != null) collectDeclaredNames(child, into); });
+}
+
 function bindsInto(node: Node, redeclared: Symbol[]): boolean {
 	for (const s of redeclared) { if (node.resolvedSym == s) return true; }
 	return false;
 }
 
-function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void {
+function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[], names: string[]): void {
 	if (node == null) return;
 	while (isCheckerWrapper(node)) {
 		const inner = node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv
@@ -624,14 +639,15 @@ function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void 
 	// clone.ms preserves it). The enum member type is concrete, never generic, so
 	// it needs no regeneration against the instance's concrete types. Keep it.
 	// See NIM-REF CK-22 "Enum member repr & generic-instantiation survival".
-	const rebinds = node.kind == NodeKind.Identifier && node.flags.has(NodeFlag.BoundSym) && bindsInto(node, redeclared);
+	const rebinds = node.kind == NodeKind.Identifier && node.flags.has(NodeFlag.BoundSym)
+		&& (bindsInto(node, redeclared) || (node.resolvedSym != null && isFrameValue(node.resolvedSym) && names.includes((node.data as IdentifierData).name)));
 	if (rebinds) node.flags = node.flags.excl(NodeFlag.BoundSym);
 	const keepBound = node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null;
 	if (!keepBound && (node.resolvedSym == null || node.resolvedSym.symbolKind != SymbolKind.EnumMember)) {
 		node.resolvedSym = null;
 	}
 	node.flags = node.flags.intersection(SYNTAX_NODE_FLAGS);
-	forEachChild(node, (child: Node): void => { clearStateKeepingOuterBindings(child, redeclared); });
+	forEachChild(node, (child: Node): void => { clearStateKeepingOuterBindings(child, redeclared, names); });
 }
 
 // ===== replaceTypeVars =====
