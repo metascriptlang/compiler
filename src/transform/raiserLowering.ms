@@ -3,7 +3,6 @@
 // Ordering matches the proven transformProgram pipeline (1000+ tests):
 //   lowerConstFold before lowerMatch (patterns resolved)
 
-import { bindCompilerFuncs } from "./util";
 import { Node } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import { createTransformContextWithChecker, TransformContext } from "./context";
@@ -43,12 +42,11 @@ import { injectEnumRangeChecks } from "./native/rangeCheckInject";
 import { enterCompilerFuncs, leaveCompilerFuncs } from "./util";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
-	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
-	const ctx = createTransformContextWithChecker(checkerCtx);
-	ctx.raiserBackend = true;
-	ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
 	const outer = enterCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	try {
+		const ctx = createTransformContextWithChecker(checkerCtx);
+		ctx.raiserBackend = true;
+		ctx.keepBuiltinMemberCalls = true;  // Raiser has special-case opcodes for arr.push/console.*/etc.
 		return lowerForRaiser(program, ctx);
 	} finally {
 		leaveCompilerFuncs(outer);
