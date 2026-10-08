@@ -2551,7 +2551,8 @@ setGlobalHookOwners(sharedHookOwners);
 	const projectChanged = session.keep || projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 	const hcrBundleCurrent = hcrBuildAbi == null
 		|| (hcrBuildAbi.hadCurrent && hcrBundlesMatch(hcrBuildAbi.current, hcrBuildAbi.candidate));
-	const upToDate = session.keep ? lastBuilt && session.check.rechecked.size == 0 && hcrBundleCurrent : !projectChanged && hcrBundleCurrent;
+	// The project cache vouches for the binary only; a request for the C asks for outputs it never recorded.
+	const upToDate = !opts.emitC && (session.keep ? lastBuilt && session.check.rechecked.size == 0 && hcrBundleCurrent : !projectChanged && hcrBundleCurrent);
 	if (upToDate) {
 		printDiag(success("Up to date") + " " + bold(outBinary));
 		if (opts.genDeps) {
