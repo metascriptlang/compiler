@@ -1520,6 +1520,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			}
 		}
 		const calleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
+		// Overloaded extension: a context-sensitive argument waits for the winner
+		// (Pass 2 in resolveExtensionOverloadCall), as resolveOverloadCall does.
+		if (extMultiFiltered.length > 1 && isContextSensitive(d.arguments[ai])) continue;
 		if (ai == 0 && calleeSym != null && calleeSym.builtinKind == "PromiseSpawn") ctx.pendingSpawnThunk = true;
 		callCheckExpr(ctx, d.arguments[ai], paramExpected);
 		ctx.pendingSpawnThunk = false;
@@ -2975,11 +2978,41 @@ function intLiteralArg(arg: Node): Node | null {
 	return null;
 }
 
+// A string literal argument against a literal-typed formal: the TS overload
+// rule picks the signature whose literal type the argument is.
+function stringLiteralRelation(formal: Type, value: string): int32 {
+	if (formal.kind == TypeKind.StringLiteral) return (formal.typeName == value ? TypeRelation.Exact : TypeRelation.None) as int32;
+	if (formal.kind != TypeKind.Union) return -1;
+	let onlyLiterals = true;
+	for (const m of formal.typeChildren) {
+		if (m.kind == TypeKind.StringLiteral && m.typeName == value) return TypeRelation.Subtype as int32;
+		if (m.kind != TypeKind.StringLiteral) onlyLiterals = false;
+	}
+	return onlyLiterals ? TypeRelation.None as int32 : -1;
+}
+
+// A string literal the winner took by its literal type carries that type.
+function adoptLiteralArgs(args: Node[], winnerType: Type, argTypes: Type[]): void {
+	for (let ai = 0; ai < args.length && ai < winnerType.typeChildren.length && ai < argTypes.length; ai += 1) {
+		if (args[ai].kind != NodeKind.StringLiteral) continue;
+		const formal = skipModifier(winnerType.typeChildren[ai]);
+		if (formal == null || stringLiteralRelation(formal, (args[ai].data as StringLiteralData).value) <= 0) continue;
+		args[ai].nodeType = formal;
+		argTypes[ai] = formal;
+	}
+}
+
 function literalRelations(paramTypes: Type[], args: Node[], argTypes: Type[]): int32[] {
 	const rels: int32[] = [];
 	for (let i = 0; i < args.length; i += 1) {
 		const lit = intLiteralArg(args[i]);
 		const formal = i < paramTypes.length ? skipModifier(paramTypes[i]) : null;
+		const strRel = formal != null && args[i].kind == NodeKind.StringLiteral
+			? stringLiteralRelation(formal, (args[i].data as StringLiteralData).value) : -1;
+		if (strRel >= 0) {
+			rels.push(strRel);
+			continue;
+		}
 		const floatFormal = formal != null && (formal.kind == TypeKind.Float32 || formal.kind == TypeKind.Float64 || formal.kind == TypeKind.Number);
 		if (lit == null || formal == null || (!isIntegerType(formal) && !floatFormal)
 			|| (argTypes[i] != null && argTypes[i].kind == formal.kind)) {
@@ -3184,6 +3217,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	// the redirect localized to codegen avoids conflating "which overload
 	// matched" with "which symbol gets emitted".
 	if (winnerType.kind == TypeKind.Function && winnerType.typeChildren != null) {
+		adoptLiteralArgs(args, winnerType, argTypes);
 		relateCallArgs(ctx, callNode, winnerType, argTypes, false);
 	}
 	const winnerSymFinal = candSyms[bestIdx];
@@ -3455,7 +3489,16 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		scopeDepths.push(exts[di].scopeDepth);
 		di = di + 1;
 	}
-	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths, recvRelations, exts);
+	const args = (callNode.data as CallExprData).arguments;
+	const skipMask: boolean[] = [];
+	let allSkipped = args.length > 0;
+	for (let ai = 0; ai < argTypes.length; ai += 1) {
+		const skipped = argTypes[ai] == null;
+		skipMask.push(skipped);
+		if (!skipped) allSkipped = false;
+	}
+	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths, recvRelations, exts, skipMask);
+	if (idx == -2 && allSkipped) idx = firstApplicable(candidates, argTypes, skipMask);
 	if (idx == -2) {
 		// Tiebreaker: an exact receiver beats a widening one — `this uint8[]`
 		// wins over `this number[]` on a uint8[] object instead of tying.
@@ -3527,7 +3570,15 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		const ovDefaultOffset = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
 	}
-	if (winnerType.kind == TypeKind.Function) relateMethodCallArgs(ctx, callNode, winnerType, recvFormals[idx], argTypes, false);
+	if (winnerType.kind == TypeKind.Function) {
+		for (let ai = 0; ai < args.length && ai < winnerType.typeChildren.length; ai += 1) {
+			if (!skipMask[ai]) continue;
+			callCheckExpr(ctx, args[ai], winnerType.typeChildren[ai]);
+			if (args[ai].nodeType != null) argTypes[ai] = args[ai].nodeType;
+		}
+		adoptLiteralArgs(args, winnerType, argTypes);
+		relateMethodCallArgs(ctx, callNode, winnerType, recvFormals[idx], argTypes, false);
+	}
 	if (extWinnerSym != null && !exts[idx].isStatic && objType != null && extWinnerSym.declNode != null
 			&& extWinnerSym.builtinKind == "" && extWinnerSym.declNode.kind == NodeKind.FunctionDecl
 			&& isGenericFn((extWinnerSym.declNode.data as FunctionDeclData).fnFlags)) {
@@ -3623,15 +3674,25 @@ function receiverRelation(formal: Type, objType: Type | null): TypeRelation {
 }
 
 // Resolve overloads with inheritance penalty.
+function firstApplicable(candidates: Type[], argTypes: Type[], skipMask: boolean[]): number {
+	for (let i = 0; i < candidates.length; i += 1) {
+		if (candidates[i].kind != TypeKind.Function) continue;
+		if (!isNoMatch(scoreCandidateWithSkip(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]), skipMask))) return i;
+	}
+	return -2;
+}
+
 function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type[],
-	argTypes: Type[], scopeDepths: number[], recvRelations: TypeRelation[], exts: ExtensionMethod[]): number {
+	argTypes: Type[], scopeDepths: number[], recvRelations: TypeRelation[], exts: ExtensionMethod[], skipMask: boolean[] | null = null): number {
 	let bestIdx = -1;
 	let bestScore = emptyCandidateScore();
 	let ambiguous = false;
 	let i = 0;
 	while (i < candidates.length) {
 		if (candidates[i].kind != TypeKind.Function) { i = i + 1; continue; }
-		const score = scoreCandidatePriority(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]));
+		const score = skipMask != null && skipMask.indexOf(true) >= 0
+			? scoreCandidateWithSkip(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]), skipMask)
+			: scoreCandidatePriority(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]));
 		if (isNoMatch(score)) { i = i + 1; continue; }
 		if (i < recvRelations.length) countRelation(score, recvRelations[i]);
 		if (i < scopeDepths.length) {
@@ -3643,7 +3704,7 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 		while (pi < candidates[i].typeChildren.length && pi < argTypes.length) {
 			const pType = candidates[i].typeChildren[pi];
 			const aType = argTypes[pi];
-			if (pType.kind == TypeKind.Struct && aType.kind == TypeKind.Struct) {
+			if (aType != null && pType.kind == TypeKind.Struct && aType.kind == TypeKind.Struct) {
 				if (pType.typeName != "" && aType.typeName != "" && pType.typeName != aType.typeName) {
 					const depth = inheritanceDepth(aType, pType, ctx);
 					if (depth > 0 && (maxDepth == -1 || depth > maxDepth)) {
