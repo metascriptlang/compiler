@@ -3391,6 +3391,11 @@ function isValueCallee(callee: Node): boolean {
 		|| sym.symbolKind == SymbolKind.Property || sym.symbolKind == SymbolKind.Temp;
 }
 
+function hasExtensionFor(ctx: CheckerContext, objType: Type, name: string): boolean {
+	if (ctx.extensionRegistry == null) return false;
+	return filterExtsByReceiverType(findAllExtensionsByName(ctx.extensionRegistry, name), objType).length > 0;
+}
+
 function isNeverCallable(t: Type): boolean {
 	return match (t.kind) {
 		TypeKind.Void | TypeKind.Null | TypeKind.Boolean | TypeKind.BooleanLiteral
@@ -3967,7 +3972,13 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	const d = node.data as MemberExprData;
 	checkInTypeSlot(ctx, d.object);
 	const declaredUnion = d.object.nodeType != null && d.object.nodeType.kind != TypeKind.Union ? declaredTagUnionOf(d.object) : null;
-	if (declaredUnion != null && !(isDiscriminatedUnion(declaredUnion) && getDiscriminantName(declaredUnion) == d.property)) {
+	if (declaredUnion != null && d.object.kind == NodeKind.Identifier
+			&& findFieldInVariant(peelTransparentInstance(d.object.nodeType!), d.property) == null
+			&& hasExtensionFor(ctx, declaredUnion, d.property)) {
+		// A narrowed binding is stored as its declared union; that union's
+		// extension takes the whole value, so the access sees the union.
+		d.object.nodeType = declaredUnion;
+	} else if (declaredUnion != null && !(isDiscriminatedUnion(declaredUnion) && getDiscriminantName(declaredUnion) == d.property)) {
 		const projected = narrowUnionToVariant(d.object, d.object.nodeType!);
 		if (projected != null as unknown as Node) d.object = projected;
 	}
@@ -4214,7 +4225,9 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				// readable: variant structs do not re-declare it (it lives in the
 				// union's metadata at a fixed offset), and disc re-reads inside a
 				// narrowed block were always legal.
-				if (getDiscriminantName(resolvedObjType) != d.property) {
+				// An extension of the declared union still takes the narrowed value:
+				// it is a value of that union, as TS keeps it assignable there.
+				if (getDiscriminantName(resolvedObjType) != d.property && !hasExtensionFor(ctx, objType, d.property)) {
 					addError(ctx, `Property '${d.property}' does not exist on type '${typeDisplayName(narrowedObjType)}'. Available: ${pinnedVariant.typeNames.join(", ")}`,
 						node.location.line, node.location.column);
 					return propType;
