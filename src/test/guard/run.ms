@@ -561,6 +561,49 @@ function helloEmitClean(): void {
 	ok(tag);
 }
 
+// `--emit=c` after a plain build of the same entry writes the C: the project
+// cache vouches for the binary, not for C it never recorded. An included
+// header beside a compiled C source is what used to take the up-to-date exit.
+function emitCAfterBuild(): void {
+	const tag = "emitCAfterBuild";
+	const dir = freshDir("emitafterbuild");
+	writeFile(`${dir}/value.c`, "int readValue(void) { return 7; }
+");
+	writeFile(`${dir}/api.h`, "int readValue(void);
+");
+	writeFile(`${dir}/main.ms`, "@include(\"./api.h\");
+@compile(\"./value.c\");
+extern function readValue(): int32;
+console.log(`${readValue()}`);
+");
+	// The second build is the one the project cache answers.
+	for (let i = 0; i < 2; i += 1) {
+		const b = execFileResult(MSC, ["build", "main.ms", "--gc=drc", `--output=${dir}/main_bin`], dir);
+		if (!succeeded(b)) {
+			fail(tag, "build error");
+			return;
+		}
+	}
+	if (exists(`${dir}/out/debug`)) {
+		for (const f of readDir(`${dir}/out/debug`)) {
+			if (f.endsWith(".c")) remove(`${dir}/out/debug/${f}`);
+		}
+	}
+	const e = execFileResult(MSC, ["build", "main.ms", "--gc=drc", `--output=${dir}/main_bin`, "--emit=c"], dir);
+	writeFile(`${LOG_DIR}/${tag}.log`, both(e));
+	let wrote = 0;
+	if (exists(`${dir}/out/debug`)) {
+		for (const f of readDir(`${dir}/out/debug`)) {
+			if (f.endsWith(".c")) wrote = wrote + 1;
+		}
+	}
+	if (!succeeded(e) || wrote == 0) {
+		fail(tag, `--emit=c after a build wrote ${wrote} C file(s): ${e.output.trim()}`);
+		return;
+	}
+	ok(tag);
+}
+
 function deadFrameEmitsNoHooks(): void {
 	const tag = "deadFrameEmitsNoHooks";
 	const dir = freshDir("deadframe");
@@ -687,6 +730,7 @@ function main(): void {
 	}
 
 	helloEmitClean();
+	emitCAfterBuild();
 	deadFrameEmitsNoHooks();
 	fieldNameKeepsNoRoutine();
 	preludeGate("preludeUserModule", "gi", `${GUARD_DIR}/fixtures/preludeUserModule`, "neonGuardPreludeProbe",
