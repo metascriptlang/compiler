@@ -28,6 +28,7 @@
 import { Node, NodeKind, DeclKind, FunctionDeclData, CallExprData, ObjectLiteralData, ArrayLiteralData, BlockStmtData, Type, TypeKind } from "../../ast/node";
 import { createPtr, createSpan, getSysType, copyTypeShallow } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
+import { secondRead } from "../lowering/spanLower";
 import { TransformContext, reportTransformError } from "../context";
 import { walkNode } from "../walker";
 import {
@@ -247,9 +248,8 @@ function expandCallSite(node: Node): void {
 			// Case 2: Span-typed expression — expand to (arg.data, arg.len).
 			// An empty Array's payload pointer is NULL (no allocation), so a
 			// direct arg.data dereferences NULL; p != NULL whenever len > 0, so
-			// the len guard hands out null for the empty case. spanLower binds
-			// every non-location source to a temp first, so repeating `arg`
-			// here repeats a NAME, never an evaluation.
+			// the len guard hands out null for the empty case. spanLower made
+			// every span argument a pure path, so each read is its own copy.
 			const loc = arg.location;
 
 			if (arg.kind == NodeKind.ArrayLiteral && (arg.data as ArrayLiteralData).elements.length == 0) {
@@ -275,7 +275,7 @@ function expandCallSite(node: Node): void {
 			if (arg.kind == NodeKind.Identifier || arg.kind == NodeKind.MemberExpr) {
 				const dataArg = makeConditional(
 					makeBinary(makeMember(arg, "len", loc), ">", makeNumber(0, loc), loc),
-					makeMember(arg, "data", loc),
+					makeMember(secondRead(arg), "data", loc),
 					makeNull(loc),
 					loc,
 				);
@@ -284,7 +284,7 @@ function expandCallSite(node: Node): void {
 			} else {
 				newArgs.push(makeMember(arg, "data", loc));
 			}
-			newArgs.push(makeMember(arg, "len", loc));
+			newArgs.push(makeMember(secondRead(arg), "len", loc));
 		} else {
 			newArgs.push(oldArgs[ai]);
 		}
