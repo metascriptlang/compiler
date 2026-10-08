@@ -919,6 +919,41 @@ function runCommand(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function coreGroup(): void {
+	const tag = "hcrCoreGroup";
+	const dir = freshDir(`${TMP}/coreGroup`);
+	copy(`${FIXTURES}/stdFirstUse/logic.ms`, `${dir}/logic.ms`);
+	const source = read(`${FIXTURES}/stdFirstUse/app.ms`);
+	const extras = [
+		"",
+		'import { hash } from "std/hash";\nconsole.log(hash("extra"));\n',
+		'import { sha256 } from "std/crypto";\nconsole.log(sha256("extra").ok);\n',
+		'import { CborKind } from "std/serialize/cbor";\nconsole.log(CborKind.Int.toString());\n',
+	];
+	let baseline = "";
+	for (const extra of extras) {
+		put(`${dir}/app.ms`, extra + source);
+		const output = mustBuild(tag, dir,
+			["build", "app.ms", "--hcr", "--emit=c", "--verbose"],
+			"an engine dependency-group variant failed to emit");
+		const group: string[] = [];
+		for (const line of lines(output)) {
+			if (line.startsWith("  hcr-core ")) group.push(line.slice(11, line.length));
+		}
+		group.sort();
+		need(tag, group.length > 0, "the engine's complete dependency group is empty");
+		for (const member of group) {
+			for (const excluded of ["core/promise/", "actor/", "crypto/", "core/fetch/",
+				"core/websocket/", "net/"]) {
+				need(tag, !member.startsWith(excluded), `hcr-core includes '${member}'`);
+			}
+		}
+		if (baseline == "") baseline = group.join("\n");
+		else need(tag, group.join("\n") == baseline, "app imports changed hcr-core");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function stdFirstUse(): void {
 	const tag = "hcrStdFirstUse";
 	const dir = freshDir(`${TMP}/stdFirstUse`);
@@ -1549,6 +1584,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrLiftNames", run: liftNames },
 	{ name: "hcrLiftKinds", run: liftKinds },
 	{ name: "hcrRun", run: runCommand },
+	{ name: "hcrCoreGroup", run: coreGroup },
 	{ name: "hcrStdFirstUse", run: stdFirstUse },
 	{ name: "hcrStepCrash", run: stepCrash },
 	{ name: "hcrCrossImageNew", run: crossImageNew },

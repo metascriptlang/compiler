@@ -73,6 +73,7 @@ export class BuildSession {
 	lowerDiagnostics: HashMap<string, ModuleError[]>;
 	lowerClaims: HashMap<string, LowerClaims>;
 	hcrTypeRegistryFingerprint: string;
+	hcrCoreModules: string[];
 	staleReason: string;
 	moduleCount: int32;
 	lastBuilt: boolean;
@@ -92,6 +93,7 @@ export function createBuildSession(keep: boolean): BuildSession {
 		lowerDiagnostics: new HashMap<string, ModuleError[]>(),
 		lowerClaims: new HashMap<string, LowerClaims>(),
 		hcrTypeRegistryFingerprint: "",
+		hcrCoreModules: [],
 		staleReason: "",
 		moduleCount: 0,
 		lastBuilt: false,

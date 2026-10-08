@@ -135,6 +135,7 @@ function visitedAdd(key: string): void {
 let _aliveSet: AliveSet = createAliveSet();
 let _singleModule = "";
 let _imageModules = new HashSet<string>();
+let _sourceDependenciesOnly = false;
 
 // ===== Core Walker =====
 
@@ -253,6 +254,7 @@ function moveCellOwnerIntoCore(key: string, demander: string): void {
 }
 
 function markRefArrayCell(arrT: Type, modulePath: string): void {
+	if (_sourceDependenciesOnly) return;
 	const key = refArrayCellKey(arrT);
 	if (_aliveSet.typeInfoKeys.has(key)) {
 		moveCellOwnerIntoCore(key, modulePath);
@@ -275,6 +277,7 @@ function markRefArrayCell(arrT: Type, modulePath: string): void {
 }
 
 function markPromiseAllResult(resultType: Type, modulePath: string): void {
+	if (_sourceDependenciesOnly) return;
 	let collected = awaitedType(resultType);
 	if (collected != null && collected.kind == TypeKind.Ref && collected.typeReturn != null) collected = collected.typeReturn;
 	if (collected == null || collected.kind != TypeKind.Array || collected.typeReturn == null) return;
@@ -286,6 +289,7 @@ function markPromiseAllResult(resultType: Type, modulePath: string): void {
 // Union narrow/project sites make codegen emit variant Copy/Destroy calls by
 // name with no AST edge — any walked node typed Union pins its variants' hooks.
 function markUnionHookEdges(t: Type): void {
+	if (_sourceDependenciesOnly) return;
 	for (const vt of t.typeChildren) {
 		if (vt == null) continue;
 		let vbase = vt;
@@ -346,7 +350,7 @@ function markRematerializedMemberTypeInfo(conv: Type | null, modulePath: string)
 }
 
 function markTypeInfoOf(type: Type | null, modulePath: string): void {
-	if (type == null) return;
+	if (_sourceDependenciesOnly || type == null) return;
 	let t = peelTransparentInstance(type);
 	const nullableRef = unwrapRefNullUnion(t);
 	if (nullableRef != null) t = nullableRef;
@@ -528,7 +532,7 @@ function markRootDecl(decl: Node, modulePath: string): void {
 // A complete HCR core keeps what an image may demand on its first use: a class's TypeInfo and
 // hooks otherwise appear only with an allocation site.
 function markCompleteClassHooks(decl: Node, modulePath: string): void {
-	if (decl.kind != NodeKind.ClassDecl || decl.resolvedSym == null) return;
+	if (_sourceDependenciesOnly || decl.kind != NodeKind.ClassDecl || decl.resolvedSym == null) return;
 	if (decl.nodeType != null && hasGenericParams(decl.nodeType)) return;
 	const name = topDeclName(decl);
 	const hookName = hookBaseCNameOfSym(name, decl.resolvedSym);
@@ -691,7 +695,10 @@ export function computeAliveSet(
 	exportRootModules: string[] = [],
 	exportRootFunctions: Symbol[] = [],
 	imageModules: string[] = [],
+	rootModulesOnly: boolean = false,
+	sourceDependenciesOnly: boolean = false,
 ): AliveSet {
+	_sourceDependenciesOnly = sourceDependenciesOnly;
 	const rootFunctions = new HashSet<Symbol>();
 	for (const sym of exportRootFunctions) {
 		rootFunctions.add(sym);
@@ -713,6 +720,9 @@ export function computeAliveSet(
 		const modulePath = paths[m];
 		const program = programs[m];
 		if (program == null) continue;
+		if (rootModulesOnly && modulePath != entryPath && !exportRootModules.includes(modulePath)) {
+			continue;
+		}
 		const d = program.data as ProgramData;
 
 		for (const stmt of d.programStmts) {
@@ -825,6 +835,7 @@ function takeReachability(): AliveSet {
 	_aliveSet = createAliveSet();
 	_singleModule = "";
 	_imageModules = new HashSet<string>();
+	_sourceDependenciesOnly = false;
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
 	_nameIndex = new HashMap<string, string>();
@@ -841,6 +852,7 @@ function takeReachability(): AliveSet {
 }
 
 export function collectModuleTypeInfoDemands(program: Node, modulePath: string): AliveSet {
+	_sourceDependenciesOnly = false;
 	_aliveSet = createAliveSet();
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
@@ -1053,6 +1065,51 @@ test "a frame hook a live statement calls stays alive" {
 	if (program == null) return;
 	const alive = computeAliveSet([program], ["owner.ms"], "owner.ms", false, createModuleGraph());
 	assert functionDeclIsAlive(alive, "owner.ms", (program.data as ProgramData).programStmts[0]);
+}
+
+test "restricted roots exclude unrelated init but keep complete-module init" {
+	const program = generatedHookProgram(
+		"function $Env_otherDestroy(): void {}\n$Env_otherDestroy();",
+		"$Env_otherDestroy",
+	);
+	assert program != null;
+	if (program == null) return;
+	const graph = createModuleGraph();
+	const restricted = computeAliveSet([program], ["other.ms"], "engine.ms", false,
+		graph, [], [], [], true);
+	assert !aliveSetHasModule(restricted, "other.ms");
+	const complete = computeAliveSet([program], ["other.ms"], "engine.ms", false,
+		graph, ["other.ms"], [], [], true);
+	assert functionDeclIsAlive(complete, "other.ms", (program.data as ProgramData).programStmts[0]);
+	const ordinary = computeAliveSet([program], ["other.ms"], "engine.ms", false, graph);
+	assert functionDeclIsAlive(ordinary, "other.ms", (program.data as ProgramData).programStmts[0]);
+}
+
+test "source dependencies keep callees without demanding unlifted runtime ops" {
+	const parsed = parseSource("box(values);");
+	assert parsed.ok;
+	if (!parsed.ok) return;
+	const stmt = (parsed.value.data as ProgramData).programStmts[0];
+	const call = (stmt.data as ExprStmtData).expr.data as CallExprData;
+	const callee = makeSymbol("box", SymbolKind.Function, null, false);
+	callee.modulePath = "native.ms";
+	callee.builtinKind = "BoxRefArray";
+	call.callee.resolvedSym = callee;
+	call.arguments[0].nodeType = createArray(
+		createStruct("SourceDependencyElement", ["label"], [stringType()], true),
+	);
+	const graph = createModuleGraph();
+	const source = computeAliveSet([parsed.value], ["engine.ms"], "engine.ms", false,
+		graph, [], [], [], true, true);
+	assert aliveSetHasModule(source, "native.ms");
+	assert source.typeInfos.length == 0;
+	let refused = false;
+	try {
+		computeAliveSet([parsed.value], ["engine.ms"], "engine.ms", false, graph);
+	} catch (e) {
+		refused = e.message.contains("before its destroy op was lifted");
+	}
+	assert refused;
 }
 
 function importGraph(edges: string[][]): ModuleGraph {
