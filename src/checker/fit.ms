@@ -1461,6 +1461,13 @@ export function unionSlotOf(formal: Type, exprType: Type): int32 {
 	return vi >= 0 ? vi : structuralMemberIndex(formal, exprType);
 }
 
+function classUpcast(expr: Node, base: Type): Node {
+	const upcast = createNode(NodeKind.HiddenSubConv, { convExpr: expr, convType: base }, createToken(TokenKind.Ident, "", expr.location.line));
+	upcast.nodeType = base;
+	upcast.flags = upcast.flags.incl(NodeFlag.Sem);
+	return upcast;
+}
+
 function slotHoldsStructByValue(member: Type): boolean {
 	return inlineVariantStruct(member) != null;
 }
@@ -1486,8 +1493,10 @@ export function widenVariantToUnion(expr: Node, formal: Type, exprType: Type): N
 		return widenVariantToUnion(projected, formal, exprType);
 	}
 	const valueType = unwrapRef(exprType);
-	const vi = unionSlotOf(formal, exprType);
+	const exactSlot = unionSlotOf(formal, exprType);
+	const vi = exactSlot >= 0 || !isClassRef(exprType) ? exactSlot : exactMemberSlot(formal, exprType);
 	if (vi < 0) return null as unknown as Node;
+	if (vi != exactSlot) expr = classUpcast(expr, formal.typeChildren[vi]);
 	if (valueType == exprType && formal.typeChildren[vi].kind == TypeKind.Ref) return null as unknown as Node;
 	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
 	// A by-value slot READS a ref operand and copies it, never consumes it:
@@ -1588,12 +1597,18 @@ function exactMemberSlot(target: Type, member: Type): int32 {
 			found = ti;
 		} else if ((member.kind == TypeKind.StringLiteral && child.kind == TypeKind.String)
 			|| (isClassRef(member) && isClassRef(child) && derivesFrom(member, child))) {
-			widened = widened == -1 ? ti : -2;
+			widened = widened == -1 ? ti : nearerBaseSlot(members, widened, ti);
 		}
 	}
 	if (found >= 0) return found;
 	if (widened >= 0) return widened;
 	return numericWideningSlot(target, member);
+}
+
+function nearerBaseSlot(members: Type[], held: int32, next: int32): int32 {
+	if (held < 0 || !isClassRef(members[held]) || !isClassRef(members[next])) return -2;
+	if (derivesFrom(members[next], members[held])) return next;
+	return derivesFrom(members[held], members[next]) ? held : -2;
 }
 
 function numericWideningSlot(target: Type, member: Type): int32 {
