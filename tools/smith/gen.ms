@@ -1,5 +1,5 @@
 import { Rng, seeded } from "./rng";
-import { ALL_TYS, ALL_FAMS, Fam, Features, Plant, Ty, tyName, format } from "./features";
+import { ALL_TYS, ALL_FAMS, Fam, Features, Plant, Ty, W, W_DEFAULTS, tyName, format } from "./features";
 
 const FN_COST_CAP: int64 = 20000 as int64;
 const TOP_COST_CAP: int64 = 200000 as int64;
@@ -171,6 +171,37 @@ class Gen {
 	entCount: int32 = 0;
 	makerCount: int32 = 0;
 	nodesLeft: int32 = GEN_NODE_CAP;
+	w: int32[] = W_DEFAULTS;
+
+	wt(k: W): int32 { return this.w[k as int32]; }
+
+	pickW(first: W, last: W): int32 {
+		const from = first as int32;
+		let total = 0;
+		for (let i = from; i <= (last as int32); i++) { total += this.w[i]; }
+		let k = this.rng.below(total);
+		for (let i = from; i <= (last as int32); i++) {
+			if (k < this.w[i]) { return i - from; }
+			k -= this.w[i];
+		}
+		unreachable;
+	}
+
+	famTotal(): int32 {
+		let total = 0;
+		for (const f of this.fams) { total += this.w[(W.FamClosure as int32) + (f as int32)]; }
+		return total;
+	}
+
+	pickFam(): Fam {
+		let k = this.rng.below(this.famTotal());
+		for (const f of this.fams) {
+			const n = this.w[(W.FamClosure as int32) + (f as int32)];
+			if (k < n) { return f; }
+			k -= n;
+		}
+		unreachable;
+	}
 
 	pickTy(): Ty { return this.tys[this.rng.below(this.tys.length)]; }
 
@@ -342,6 +373,10 @@ class Gen {
 		return "(" + a + " " + op + " " + b + ")";
 	}
 
+	binaryOrLeaf(t: Ty, depth: int32): string {
+		return this.wt(W.ExprBinary) > 0 ? this.binary(t, depth) : this.leaf(t);
+	}
+
 	unary(t: Ty, depth: int32): string {
 		const a = this.expr(t, depth + 1);
 		if (isFloat(t)) { return "(-" + a + ")"; }
@@ -351,7 +386,7 @@ class Gen {
 	}
 
 	convert(t: Ty, depth: int32): string {
-		if (this.tys.length < 2) { return this.binary(t, depth); }
+		if (this.tys.length < 2) { return this.binaryOrLeaf(t, depth); }
 		const alternatives: Ty[] = [];
 		for (const from of this.tys) { if (from != t) { alternatives.push(from); } }
 		const from = alternatives[this.rng.below(alternatives.length)];
@@ -399,28 +434,29 @@ class Gen {
 		if (this.nodesLeft == 0) { return this.leaf(t); }
 		this.nodesLeft--;
 		if (depth >= this.exprMax || !this.reserve(1 as int64)) { return this.leaf(t); }
-		if (this.fams.length > 0 && this.rng.chance(20)) {
+		if (this.fams.length > 0 && this.rng.chance(this.wt(W.ExprFam))) {
 			const fam = this.famExpr(t, depth);
 			if (fam != "") {
 				this.shape = Shape.Other;
 				return fam;
 			}
 		}
-		const k = this.rng.below(100);
-		if (k < 25) { return this.leaf(t); }
+		const kind = this.pickW(W.ExprLeaf, W.ExprCall);
+		if (kind == 0) { return this.leaf(t); }
 		let out = "";
 		let shape = Shape.Other;
-		if (k < 55) {
+		if (kind == 1) {
 			out = this.binary(t, depth);
-		} else if (k < 63) {
+		} else if (kind == 2) {
 			out = this.unary(t, depth);
-		} else if (k < 73) {
+		} else if (kind == 3) {
 			out = this.convert(t, depth);
-		} else if (k < 81) {
+		} else if (kind == 4) {
 			out = "(" + this.cond(depth + 1) + " ? " + this.expr(t, depth + 1) + " : " + this.expr(t, depth + 1) + ")";
 			shape = Shape.Ternary;
 		} else {
 			const c = this.call(t, depth);
+			if (c == "" && this.wt(W.ExprBinary) == 0) { return this.leaf(t); }
 			out = c != "" ? c : this.binary(t, depth);
 		}
 		this.shape = shape;
@@ -489,14 +525,15 @@ class Gen {
 	}
 
 	famExpr(t: Ty, depth: int32): string {
-		const fam = this.fams[this.rng.below(this.fams.length)];
+		if (this.famTotal() == 0) { return ""; }
+		const fam = this.pickFam();
 		if (fam == Fam.Closure) { return this.closureExpr(t, depth); }
 		if (fam == Fam.Union) { return this.unionExpr(t, depth); }
 		return this.genericExpr(t, depth);
 	}
 
 	closureExpr(t: Ty, depth: int32): string {
-		const k = this.rng.below(3);
+		const k = this.pickW(W.ClosureNamed, W.ClosureIife);
 		if (k == 0) {
 			const named = this.entsOf(EntKind.Callable, t);
 			if (named.length > 0) {
@@ -513,6 +550,7 @@ class Gen {
 				}
 			}
 		}
+		if (this.wt(W.ClosureIife) == 0) { return ""; }
 		const params: Ty[] = [];
 		const n = this.rng.between(1, 2);
 		for (let i = 0; i < n; i++) { params.push(this.pickTy()); }
@@ -540,7 +578,7 @@ class Gen {
 	}
 
 	unionExpr(t: Ty, depth: int32): string {
-		if (t == Ty.Int32 && this.rng.chance(30)) {
+		if (t == Ty.Int32 && this.rng.chance(this.wt(W.UnionLen))) {
 			const s = this.pickTy();
 			this.unionHelpers(s);
 			const vars = this.entsOf(EntKind.UnionVar, s);
@@ -572,7 +610,7 @@ class Gen {
 	genericExpr(t: Ty, depth: int32): string {
 		this.genericHelpers();
 		const T = tyName(t);
-		const k = this.rng.below(6);
+		const k = this.pickW(W.GenericId, W.GenericBox);
 		if (k == 0) { return "idG<" + T + ">(" + this.expr(t, depth + 1) + ")"; }
 		if (k == 1) {
 			const f = this.lambda([t], t, depth, this.spare(2 as int64));
@@ -620,11 +658,12 @@ class Gen {
 	}
 
 	famStatement(indent: string): string {
-		const fam = this.fams[this.rng.below(this.fams.length)];
+		if (this.famTotal() == 0) { return ""; }
+		const fam = this.pickFam();
 		const t = this.pickTy();
 		const T = tyName(t);
 		if (fam == Fam.Closure) {
-			const k = this.rng.below(5);
+			const k = this.pickW(W.ClosureDecl, W.ClosureFill);
 			if (k == 0) {
 				const params: Ty[] = [];
 				const n = this.rng.below(3);
@@ -735,18 +774,27 @@ class Gen {
 	statement(depth: int32, indent: string, inLoop: boolean, ret: Ty, inFn: boolean): string {
 		this.nodesLeft--;
 		if (!this.reserve(1 as int64)) { return ""; }
-		if (this.fams.length > 0 && this.rng.chance(20)) {
+		if (this.fams.length > 0 && this.rng.chance(this.wt(W.StmtFam))) {
 			const fam = this.famStatement(indent);
 			if (fam != "") { return fam; }
 		}
 		const nested = depth < this.depthMax;
-		const k = this.rng.below(100);
-		if (k < 25) {
+		let total = 0;
+		for (let i = W.StmtLet as int32; i <= (W.StmtReturn as int32); i++) { total += this.w[i]; }
+		const k = this.rng.below(total);
+		const cLet = this.wt(W.StmtLet);
+		const cAssign = cLet + this.wt(W.StmtAssign);
+		const cCompound = cAssign + this.wt(W.StmtCompound);
+		const cIf = cCompound + this.wt(W.StmtIf);
+		const cFor = cIf + this.wt(W.StmtFor);
+		const cMatch = cFor + this.wt(W.StmtMatch);
+		const cBreak = cMatch + this.wt(W.StmtBreak);
+		if (k < cLet) {
 			const t = this.pickTy();
 			const value = this.expr(t, 0);
 			return indent + "let " + this.newLocal(t) + ": " + tyName(t) + " = " + value + ";\n";
 		}
-		if (k < 50) {
+		if (k < cAssign && this.wt(W.StmtAssign) > 0) {
 			const t = this.pickTy();
 			const vars = this.visible(t, true);
 			if (vars.length > 0) {
@@ -754,7 +802,7 @@ class Gen {
 				return indent + v.name + " = " + this.expr(t, 0) + ";\n";
 			}
 		}
-		if (k < 58) {
+		if (k < cCompound && this.wt(W.StmtCompound) > 0) {
 			const t = this.pickTy();
 			const vars = this.visible(t, true);
 			if (vars.length > 0 && !trapsOnOverflow(t)) {
@@ -763,14 +811,14 @@ class Gen {
 				return indent + v.name + " " + op + " " + this.expr(t, 0) + ";\n";
 			}
 		}
-		if (k < 70 && nested) {
+		if (k < cIf && nested && this.wt(W.StmtIf) > 0) {
 			let text = indent + "if " + this.cond(0) + " {\n" + this.block(depth + 1, indent + "\t", inLoop, ret, inFn) + indent + "}";
-			if (this.rng.chance(50)) { text += " else {\n" + this.block(depth + 1, indent + "\t", inLoop, ret, inFn) + indent + "}"; }
+			if (this.rng.chance(this.wt(W.StmtElse))) { text += " else {\n" + this.block(depth + 1, indent + "\t", inLoop, ret, inFn) + indent + "}"; }
 			return text + "\n";
 		}
 		const available = (this.costCap - this.cost) / this.mult;
 		const maxTrips = Math.min(this.tripMax, (available / (3 as int64)) as int32);
-		if (k < 82 && nested && maxTrips > 0) {
+		if (k < cFor && nested && maxTrips > 0) {
 			const name = "i" + String(this.loopCount);
 			this.loopCount = this.loopCount + 1;
 			const trips = this.rng.between(1, maxTrips);
@@ -784,14 +832,14 @@ class Gen {
 			return indent + "for (let " + name + ": int32 = 0; " + name + " < " + String(trips) + "; " + name + "++) {\n" +
 				body + indent + "}\n";
 		}
-		if (k < 88) {
+		if (k < cMatch && this.wt(W.StmtMatch) > 0) {
 			const m = this.matchLet(indent);
 			if (m != "") { return m; }
 		}
-		if (k < 94 && inLoop) {
+		if (k < cBreak && inLoop && this.wt(W.StmtBreak) > 0) {
 			return indent + "if " + this.cond(0) + " { " + (this.rng.chance(50) ? "break" : "continue") + "; }\n";
 		}
-		if (inFn && this.rng.chance(50)) {
+		if (inFn && this.wt(W.StmtReturn) > 0 && this.rng.chance(50)) {
 			return indent + "if " + this.cond(0) + " { return " + this.expr(ret, 0) + "; }\n";
 		}
 		const t = this.pickTy();
@@ -863,6 +911,7 @@ export function generate(seed: uint64, f: Features): string {
 	g.depthMax = f.depth;
 	g.exprMax = f.exprDepth;
 	g.tripMax = f.trips;
+	g.w = f.w;
 
 	let globals = "";
 	for (let i = 0; i < f.globals; i++) {
@@ -980,6 +1029,126 @@ test "a legal deep vector cannot explode generated source" {
 	assert parsed.ok;
 	if (parsed.ok) {
 		assert generate(1 as uint64, parsed.value).byteLength < 1048576;
+	}
+}
+
+function withWeights(text: string): Features {
+	const parsed = Features.defaults().overlay(text);
+	if (!parsed.ok) { unreachable; }
+	return parsed.value;
+}
+
+function countOver(needle: string, seeds: int32, f: Features): int32 {
+	let n = 0;
+	for (let seed = 1; seed <= seeds; seed++) { n += countOf(generate(seed as uint64, f), needle); }
+	return n;
+}
+
+test "default weights keep the pre-weight stream" {
+	const sizes = [21703, 13475, 26098, 17328];
+	const closureSizes = [11356, 11418, 13350, 9328];
+	const closure = withWeights("fams=closure");
+	for (let i = 0; i < 4; i++) {
+		assert generate((i + 1) as uint64, Features.defaults()).byteLength == sizes[i];
+		assert generate((i + 1) as uint64, closure).byteLength == closureSizes[i];
+	}
+}
+
+test "the program head carries the non-default weights and nothing else" {
+	const f = withWeights("w.expr.ternary=80");
+	const text = generate(5 as uint64, f);
+	assert text.startsWith("// smith seed=5 features=" + f.format() + "\n");
+	assert text.contains(" plant=none w.expr.ternary=80\n");
+}
+
+test "a ternary-heavy vector multiplies ternaries and a zero weight removes them" {
+	const base = withWeights("fams=none");
+	const aimed = withWeights("fams=none w.expr.ternary=80 w.expr.leaf=10 w.expr.binary=4 w.expr.unary=2 w.expr.convert=2 w.expr.call=2");
+	const none = withWeights("fams=none w.expr.ternary=0");
+	assert countOver(" ? ", 12, aimed) > 5 * countOver(" ? ", 12, base);
+	assert countOver(" ? ", 12, none) == 0;
+}
+
+test "a zero expression weight keeps its construct out of every expression" {
+	const g = new Gen();
+	g.tys = [Ty.Int32, Ty.Int8];
+	g.exprMax = 5;
+	g.fams = [Fam.Closure];
+	g.fns = [{ name: "f0", ret: Ty.Int32, params: [], cost: 1 as int64 }];
+	g.costCap = TOP_COST_CAP;
+	g.w = withWeights("w.expr.ternary=0 w.expr.call=0 w.expr.unary=0 w.expr.convert=0 w.closure.iife=0").w;
+	for (let seed = 1; seed <= 200; seed++) {
+		g.rng = Rng.seeded(seed as uint64);
+		g.nodesLeft = GEN_NODE_CAP;
+		const text = g.expr(Ty.Int32, 0);
+		assert !text.contains(" ? ") && !text.contains("f0(") && !text.contains("(~") && !text.contains("conv") && !text.contains("wrap") && !text.contains("safeNeg");
+		assert !text.contains("(q");
+	}
+}
+
+test "a zero binary weight leaves the fallbacks of call and convert out of binary" {
+	const g = new Gen();
+	g.tys = [Ty.Int32];
+	g.exprMax = 5;
+	g.costCap = TOP_COST_CAP;
+	g.w = withWeights("w.expr.binary=0 w.expr.call=60").w;
+	for (let seed = 1; seed <= 200; seed++) {
+		g.rng = Rng.seeded(seed as uint64);
+		g.nodesLeft = GEN_NODE_CAP;
+		const text = g.expr(Ty.Int32, 0);
+		assert !text.contains(" + ") && !text.contains(" * ") && !text.contains("safeAdd") && !text.contains("safeMul") && !text.contains("safeDiv");
+	}
+}
+
+test "a zero statement weight keeps its statement out of every block" {
+	const g = new Gen();
+	g.tys = ALL_TYS;
+	g.stmtMax = 6;
+	g.depthMax = 4;
+	g.exprMax = 3;
+	g.tripMax = 4;
+	g.costCap = TOP_COST_CAP;
+	g.w = withWeights("w.stmt.for=0 w.stmt.match=0 w.stmt.compound=0 w.stmt.break=0").w;
+	for (let seed = 1; seed <= 100; seed++) {
+		g.rng = Rng.seeded(seed as uint64);
+		g.nodesLeft = GEN_NODE_CAP;
+		g.cost = 0 as int64;
+		const text = g.block(0, "", false, Ty.Int32, true);
+		assert !text.contains("for (") && !text.contains("match (") && !text.contains("+= ") && !text.contains("continue");
+	}
+}
+
+test "family weights shape the choice among enabled families only" {
+	const g = new Gen();
+	g.tys = [Ty.Int32];
+	g.exprMax = 3;
+	g.costCap = TOP_COST_CAP;
+	g.fams = [Fam.Closure, Fam.Union];
+	g.w = withWeights("w.fam.closure=0 w.fam.generic=100").w;
+	for (let seed = 1; seed <= 100; seed++) {
+		g.rng = Rng.seeded(seed as uint64);
+		g.nodesLeft = GEN_NODE_CAP;
+		const text = g.famExpr(Ty.Int32, 0);
+		assert !text.contains("BoxG") && !text.contains("(q");
+	}
+}
+
+test "a weight cannot lift the cost bound of a routine" {
+	const f = withWeights("w.expr.call=100 w.expr.fam=100 w.stmt.fam=100 w.stmt.let=100 w.stmt.for=100 w.stmt.if=100");
+	for (let seed = 1; seed <= 12; seed++) {
+		const g = new Gen();
+		g.rng = Rng.seeded(seed as uint64);
+		g.tys = [Ty.Int8, Ty.Int32];
+		g.stmtMax = 32;
+		g.depthMax = 8;
+		g.exprMax = 8;
+		g.tripMax = 64;
+		g.fams = [Fam.Closure, Fam.Union, Fam.Generic];
+		g.w = f.w;
+		g.fn(0);
+		g.fn(1);
+		assert g.cost <= FN_COST_CAP;
+		assert g.nodesLeft >= 0;
 	}
 }
 
