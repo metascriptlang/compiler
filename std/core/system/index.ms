@@ -627,6 +627,12 @@ when (mscDeclaresRuntime) {
 	extern function msFutureDrcDestroy(f: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msMaybeAccess(m: Ptr<void>, head: string, labels: string): Ptr<void>;
+
+	@compilerFunc
+	extern function msMaybeAccessVal(m: Ptr<void>, head: string, labels: string): Ptr<void>;
+
+	@compilerFunc
 	extern function msFutureValueAt(fp: Ptr<void>): Ptr<void>;
 
 	@compilerFunc
