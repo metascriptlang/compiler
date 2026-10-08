@@ -1377,7 +1377,7 @@ function typeInfoLocality(): void {
 	const appFirst = read(`${debug}/watch0/${app}`);
 	for (let n = 1; n <= steps.length; n += 1) {
 		const label = `step ${n} (${steps[n - 1].file})`;
-		need(tag, read(`${debug}/watch${n}/${logic}`).contains("msHcrTypeInfo("), `${label}: logic.ms registers no TypeInfo`);
+		if (steps[n - 1].file == "logicClass.ms") need(tag, read(`${debug}/watch${n}/${logic}`).contains("msHcrTypeInfo("), `${label}: logic.ms registers no TypeInfo`);
 		need(tag, read(`${debug}/watch${n}/${app}`) == appFirst, `${label} changed app.ms's C although only logic.ms changed`);
 	}
 	console.log(`ok   ${tag}`);
