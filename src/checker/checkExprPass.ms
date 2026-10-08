@@ -2062,6 +2062,9 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type | nu
 					const fromSpreads = joinBranchTypes(spreadTypes);
 					if (!isUnresolvedType(fromSpreads)) elemType = fromSpreads;
 				}
+				// A spread first element carries no type of its own; under a Span or other
+				// element slot every element was checked against that slot.
+				if (elemExpected != null && isUnresolvedType(elemType) && !isUnresolvedType(elemExpected)) elemType = elemExpected;
 				if (elemExpected == null && elemType != null && closureStorageType(elemType) != elemType) {
 					const storedElem = closureStorageType(elemType);
 					let si = 0;
@@ -2546,7 +2549,12 @@ function nullishArmExpected(expectedType: Type | null): Type | null {
 function fitNullishArms(ctx: CheckerContext, d: BinaryExprData, leftType: Type | null, rightType: Type | null, expectedType: Type | null, converting: boolean): Type | null {
 	if (rightType == null || rightType.kind == TypeKind.Null || isMaybeType(rightType) || nullishPayloadType(rightType) != null) return null;
 	const payload = nullishPayloadType(leftType);
-	if (payload == null) return null;
+	if (payload == null) {
+		// A left side already known non-null makes the right arm dead, yet it is
+		// still a value of the left's type: an empty array takes that type.
+		if (leftType != null) retypeEmptyArrayBranch(d.right, leftType);
+		return null;
+	}
 	const target = nullishArmExpected(expectedType);
 	if (converting && target != null && isNumeric(payload) && isNumeric(target) && numericConvRefuses(payload, target)) {
 		d.right = fitJoinedBranch(ctx, d.right, payload);
