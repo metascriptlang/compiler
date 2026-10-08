@@ -3603,7 +3603,7 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 			if (ext.sym != null && hasFlag(ext.sym, SymbolFlag.Exported)) {
 				// Imported extensions get scope depth 0 (other module).
 				// Don't mutate ext — preludeCtx may be cached across modules (LSP TransAmDb).
-				registerExtension(ctx.extensionRegistry, createExtMethod(ext.methodName, ext.receiverTypeName, ext.sourcePath, ext.fnType, ext.isStatic, ext.sym!, 0));
+				registerExtension(ctx.extensionRegistry, createExtMethod(ext.methodName, ext.receiverTypeName, ext.sourcePath, ext.fnType, ext.isStatic, ext.sym!, 0, ext.receiverSym));
 			}
 			ei = ei + 1;
 		}
@@ -3705,7 +3705,7 @@ function drainSeedSymbols(ctx: CheckerContext): void {
 		}
 	}
 	for (const ext of _pendingSeedExtensions) {
-		registerExtension(ctx.extensionRegistry, createExtMethod(ext.methodName, ext.receiverTypeName, ext.sourcePath, ext.fnType, ext.isStatic, ext.sym!, 0));
+		registerExtension(ctx.extensionRegistry, createExtMethod(ext.methodName, ext.receiverTypeName, ext.sourcePath, ext.fnType, ext.isStatic, ext.sym!, 0, ext.receiverSym));
 	}
 	_pendingSeedSymbols = [];
 	_pendingSeedExtensions = [];

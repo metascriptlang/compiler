@@ -29,6 +29,8 @@ export interface ExportedSymInfo {
 	extIsStatic: boolean;
 	overloadExtReceiverTypes: string[];
 	overloadExtIsStatic: boolean[];
+	extReceiverSym: Symbol | null;
+	overloadExtReceiverSyms: (Symbol | null)[];
 	converterTargetType: Type; // resolved converter target (null when unresolved / not a converter)
 }
 
@@ -126,11 +128,13 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	// Extension receiver metadata for primary symbol
 	let extRecv = "";
 	let extStatic = false;
+	let extRecvSym: Symbol | null = null;
 	if (extensionRegistry != null && sym.symbolKind == SymbolKind.Function) {
 		const ext = findExtensionByType(extensionRegistry, sym.name, sym.symbolType);
 		if (ext != null) {
 			extRecv = ext.receiverTypeName;
 			extStatic = ext.isStatic;
+			extRecvSym = ext.receiverSym;
 		} else {
 			// Class methods: mangled name (GPUInstance_release) doesn't match
 			// extension entry (release). Fall back to symbol identity match.
@@ -138,12 +142,14 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 			if (extSym != null) {
 				extRecv = extSym.receiverTypeName;
 				extStatic = extSym.isStatic;
+				extRecvSym = extSym.receiverSym;
 			}
 		}
 	}
 
 	const ovExtRecvs: string[] = [];
 	const ovExtStatics: boolean[] = [];
+	const ovExtRecvSyms: (Symbol | null)[] = [];
 	for (const ov of sym.overloads) {
 		let ovExt: ExtensionMethod | null = null;
 		if (extensionRegistry != null) {
@@ -152,6 +158,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		}
 		ovExtRecvs.push(ovExt != null ? ovExt.receiverTypeName : "");
 		ovExtStatics.push(ovExt != null ? ovExt.isStatic : false);
+		ovExtRecvSyms.push(ovExt != null ? ovExt.receiverSym : null);
 	}
 
 	let mConverterTargetType: Type = null as unknown as Type;
@@ -164,6 +171,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		name: exportedName != "" ? exportedName : sym.name, sym,
 		extReceiverType: extRecv, extIsStatic: extStatic,
 		overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics,
+		extReceiverSym: extRecvSym, overloadExtReceiverSyms: ovExtRecvSyms,
 		converterTargetType: mConverterTargetType,
 	};
 }
@@ -260,6 +268,7 @@ export class ExtensionMethod {
 	fnType: Type;           // fallback only — use getExtFnType(ext), never read directly
 	isStatic: boolean;
 	sym: Symbol | null;            // authoritative type source (sym.symbolType)
+	receiverSym: Symbol | null;    // static extension: the type its `this typeof T` names, resolved in the declaring module
 	scopeDepth: number;     // 0 = imported/prelude, 1 = current module (for overload resolution)
 }
 
@@ -285,11 +294,11 @@ export function createExtensionRegistry(): ExtensionRegistry {
 // Create an ExtensionMethod with proper ownership invariant enforced.
 // When sym is provided, fnType is set to noneType() — sym.symbolType is authoritative.
 // This prevents double-decref when both fnType and sym.symbolType reference the same Type.
-export function createExtMethod(methodName: string, receiverTypeName: string, sourcePath: string, fnType: Type, isStatic: boolean, sym: Symbol, scopeDepth: number): ExtensionMethod {
+export function createExtMethod(methodName: string, receiverTypeName: string, sourcePath: string, fnType: Type, isStatic: boolean, sym: Symbol, scopeDepth: number, receiverSym: Symbol | null = null): ExtensionMethod {
 	return {
 		methodName, receiverTypeName, sourcePath,
 		fnType: sym != null ? noneType() : fnType,
-		isStatic, sym, scopeDepth,
+		isStatic, sym, scopeDepth, receiverSym,
 	};
 }
 
@@ -453,13 +462,30 @@ export function hasStaticExtForReceiver(registry: ExtensionRegistry, receiverNam
 	return false;
 }
 
-export function filterStaticExtsByReceiverName(exts: ExtensionMethod[], receiverName: string): ExtensionMethod[] {
+export function filterStaticExtsByReceiverName(exts: ExtensionMethod[], receiverName: string, receiver: Symbol | null = null): ExtensionMethod[] {
 	const results: ExtensionMethod[] = [];
 	if (receiverName == "") return results;
+	const identity = receiver != null && receiver.symbolType != null ? nominalTypeSym(receiver.symbolType) : null;
 	for (const e of exts) {
-		if (e.isStatic && e.receiverTypeName == receiverName) results.push(e);
+		if (!e.isStatic) continue;
+		if (e.receiverSym != null && identity != null) {
+			if (e.receiverSym == identity) results.push(e);
+		} else if (e.receiverTypeName == receiverName) {
+			results.push(e);
+		}
 	}
 	return results;
+}
+
+// A static extension's receiver is the type its `this typeof T` names in the
+// declaring module; two types that share a name stay apart (reference: a
+// typedesc parameter matches by type identity).
+export function bindStaticReceiver(ctx: CheckerContext, fnSym: Symbol, fnFlags: string, lookupType: (ctx: CheckerContext, name: string) => Symbol | null): void {
+	if (ctx.extensionRegistry == null || !isStaticExtensionFlag(fnFlags)) return;
+	const ext = findExtensionBySym(ctx.extensionRegistry, fnSym);
+	if (ext == null || ext.receiverSym != null) return;
+	const recv = lookupType(ctx, getStaticExtTypeName(fnFlags));
+	if (recv != null && recv.symbolType != null) ext.receiverSym = nominalTypeSym(recv.symbolType);
 }
 
 // ===== Canonical Extension Type (Standard reference symbol type equivalent) =====
@@ -589,6 +615,8 @@ export function stripReceiverParam(fnType: Type): Type {
 export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boolean {
 	// Static extensions: string-based matching (receiver not in typeChildren)
 	if (ext.isStatic) {
+		const objNominal = ext.receiverSym != null && objType != null ? nominalTypeSym(objType) : null;
+		if (objNominal != null) return objNominal == ext.receiverSym;
 		if (ext.receiverTypeName == typeNameOf(objType)) return true;
 		// Type-alias fallback (mirrors the instance-branch fallback below): when
 		// the receiver expression is `Buffer` (a `type Buffer = string` alias),

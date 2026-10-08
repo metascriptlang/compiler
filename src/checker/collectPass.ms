@@ -1129,7 +1129,7 @@ function propagateImportedExtensions(
 				registerExtension(ctx.extensionRegistry, createExtMethod(
 					alias, expInfo.overloadExtReceiverTypes[ovIdx], sourcePath,
 					ovSym.symbolType, expInfo.overloadExtIsStatic[ovIdx],
-					ovSym, 1));
+					ovSym, 1, overloadReceiverSym(expInfo, ovIdx)));
 			}
 			ovIdx = ovIdx + 1;
 		}
@@ -1139,8 +1139,13 @@ function propagateImportedExtensions(
 	if (expInfo.extReceiverType != "") {
 		registerExtension(ctx.extensionRegistry, createExtMethod(
 			alias, expInfo.extReceiverType, sourcePath,
-			primary.symbolType, expInfo.extIsStatic, primary, 1));
+			primary.symbolType, expInfo.extIsStatic, primary, 1, expInfo.extReceiverSym));
 	}
+}
+
+function overloadReceiverSym(expInfo: ExportedSymInfo, i: int32): Symbol | null {
+	const syms = expInfo.overloadExtReceiverSyms;
+	return syms != null && i < syms.length ? syms[i] : null;
 }
 
 function sharedPreludeSym(ctx: CheckerContext, alias: string, importName: string, exportInfo: ExportedSymInfo): Symbol | null {
@@ -1328,7 +1333,7 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 		const methSym = expInfo.sym;
 		noteImported(ctx, methSym);
 		if (markExported) exportSymAs(ctx, methSym, expInfo.name);
-		registerExtension(ctx.extensionRegistry, createExtMethod(methName, expInfo.extReceiverType, sourcePath, methSym.symbolType, expInfo.extIsStatic, methSym, 0));
+		registerExtension(ctx.extensionRegistry, createExtMethod(methName, expInfo.extReceiverType, sourcePath, methSym.symbolType, expInfo.extIsStatic, methSym, 0, expInfo.extReceiverSym));
 		if (expInfo.overloadExtReceiverTypes != null) {
 			let ovi = 0;
 			while (ovi < expInfo.overloadExtReceiverTypes.length && ovi < methSym.overloads.length) {
@@ -1337,7 +1342,7 @@ function autoPropagateModuleExtensions(ctx: CheckerContext, sourcePath: string, 
 					const ovSym = methSym.overloads[ovi];
 					if (markExported) exportSymAs(ctx, ovSym, expInfo.name);
 					const ovStatic = expInfo.overloadExtIsStatic != null && ovi < expInfo.overloadExtIsStatic.length ? expInfo.overloadExtIsStatic[ovi] : false;
-					registerExtension(ctx.extensionRegistry, createExtMethod(methName, ovRecv, sourcePath, ovSym.symbolType, ovStatic, ovSym, 0));
+					registerExtension(ctx.extensionRegistry, createExtMethod(methName, ovRecv, sourcePath, ovSym.symbolType, ovStatic, ovSym, 0, overloadReceiverSym(expInfo, ovi)));
 				}
 				ovi = ovi + 1;
 			}

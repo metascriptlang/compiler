@@ -1335,7 +1335,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				const isStaticAccess = isTypeLevelAccess(ctx, me.object);
 				let filtered = filterExtsByReceiverType(allByName, objType);
 				if (filtered.length == 0 && isStaticAccess && me.object.resolvedSym != null) {
-					filtered = filterStaticExtsByReceiverName(allByName, me.object.resolvedSym.name);
+					filtered = filterStaticExtsByReceiverName(allByName, me.object.resolvedSym.name, me.object.resolvedSym);
 				}
 				if (isStaticAccess && filtered.length > 1) {
 					const staticOnly: ExtensionMethod[] = [];
