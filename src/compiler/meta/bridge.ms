@@ -63,7 +63,8 @@ import {
 } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase } from "../../checker/types";
-import { hasFlag, isTypeSymbol, SymbolFlag, overloadWinner } from "../../checker/symbol";
+import { hasFlag, isFrameValue, isTypeSymbol, SymbolFlag, overloadWinner } from "../../checker/symbol";
+import { forEachChild } from "../../ast/visitor";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
@@ -1417,6 +1418,16 @@ function readFieldDecorators(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap
 	return rows;
 }
 
+function rebindRedeclaredParams(body: Node, params: string[]): void {
+	if (body == null || params.length == 0) return;
+	if (body.kind == NodeKind.Identifier && body.flags.has(NodeFlag.BoundSym) && body.resolvedSym != null
+		&& isFrameValue(body.resolvedSym) && params.includes((body.data as IdentifierData).name)) {
+		body.resolvedSym = null;
+		body.flags = body.flags.excl(NodeFlag.BoundSym);
+	}
+	forEachChild(body, (child: Node): void => { rebindRedeclaredParams(child, params); });
+}
+
 export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
 	return match (val.kind) {
 		RaiserValueKind.Int => mkInt(val.intVal, fallbackLoc),
@@ -1646,6 +1657,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 				arrowDefaults.push(null as unknown as Node);
 				dpi = dpi + 1;
 			}
+			rebindRedeclaredParams(arrowBody, arrowParams);
 			return createNodeAt(NodeKind.ArrowFunction, {
 				arrowParams, arrowParamTypes, arrowBody, arrowFlags, arrowReturnType,
 				arrowDefaults,
@@ -1657,6 +1669,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const funcExprBody = readNode(objHeap, arrHeap, h, "funcExprBody", loc);
 			const funcExprFlags = readStr(objHeap, h, "funcExprFlags");
 			const funcExprReturnType = readStr(objHeap, h, "funcExprReturnType");
+			rebindRedeclaredParams(funcExprBody, funcExprParams);
 			return createNodeAt(NodeKind.FunctionExpr, {
 				funcExprParams, funcExprParamTypes, funcExprBody, funcExprFlags, funcExprReturnType,
 			}, loc);
@@ -1884,6 +1897,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const fnBody = readNode(objHeap, arrHeap, h, "fnBody", loc);
 			const fnFlags = readStr(objHeap, h, "fnFlags");
 			const fnReturnType = readStr(objHeap, h, "fnReturnType");
+			rebindRedeclaredParams(fnBody, params);
 			return createNodeAt(NodeKind.FunctionDecl, {
 				fnName, params, fnParamTypes, fnBody, fnFlags, fnReturnType,
 				fnDefaults: [], nativeName: "", nameLocation: loc,
