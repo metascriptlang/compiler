@@ -114,6 +114,53 @@ picks the next vector; scouts where Smith cannot generate yet.
 | G6 automated loop + scouts | **NEW MECHANISM**, only if G5's aimed arm wins: LLM proposes vector → batch → eyes → next; ≥ 30% of budget stays random swarm; a scout program that finds a bug becomes the spec of the next family | measured against G5's numbers |
 | G7 matrix | remaining `coveragePlan.md` rows, ordered by where findings cluster; async/actor/macro scout first | every row verified or parked with repro, inbox and reopen condition |
 
+### The fourteen Csmith mechanisms — status 2026-10-08
+
+All fourteen mechanisms Smith takes from Csmith are in place or deliberately
+deferred; nothing else is ported. Evidence for each sits with its section or commit.
+
+| # | mechanism | Smith | state |
+|---|---|---|---|
+| 1 | seed and full options in the program | header `// smith seed=… features=…` | done |
+| 2 | filters consume the RNG stream; reproduction = seed + vector | per-seed vector in the bundle | done |
+| 3 | swarm, one density per configuration | `features.ms` `swarm` | done (`coveragePlan.md` §Core hardening) |
+| 4 | `safe_math` | `safeAdd`…`safeMod`, `conv`, `wrap` helpers | done (§Single-interpretation surface) |
+| 5 | size caps | node fuel and caps in `Gen` | done |
+| 6 | params before body | callees generated before callers; closure params before body | done |
+| 7 | voting across compilers / levels | lanes c / orc / danger / js / esm | done |
+| 8 | observe every global | every global and entry result printed, no CRC | done (person's call: no extra observation) |
+| 9 | driver classification and controls | `drive.ms`: VOID causes, write-once bundles, stale-run checks | done |
+| 10 | sanitizer runs | `run --san`, bundle kind `san`, mode kept on rerun | done, with no planted `san` bundle (see Debt) |
+| 11 | creduce | `reduce.ms`, `creduce --not-c` | done |
+| 12 | identity predicate | `identity.ms`: mode, symptom, split, shape, keep, forbid, determinism, `msc check` | done |
+| 13 | per-construct probabilities | `w.*` keys in `Features`, defaults byte-identical | done (`coveragePlan.md` weight table) |
+| 14 | loop fixed point | — | deferred, §Loop fixed point |
+
+Measured on the merged tree (installed msc BUILD `525c8ba4f`): `msc test tools/smith/gen.ms`
+341/341 C, 104/104 JS; `drive.ms` 426/426 C; `identity.ms` 308/308 C, 71/71 JS. Default
+generation is byte-identical to the pre-weight generator on 40/40 spot checks (4 vectors ×
+10 seeds). A planted bundle reran REPRODUCED. With its `generator:` key deleted, the same
+bundle reran VOID, and the output named the missing key.
+
+Reductions: planted `smith1` 21,853 → 139 bytes; the real JS double-negation finding
+48,945 → 35 bytes (inbox `2026-10-08-js-double-negation-emits-decrement.md`); C `_envP`
+61,701 → 2,227 bytes, capped; C `dollarhoist_N_` 19,115 → 1,312 bytes, capped.
+
+### Debt — workarounds to repay
+
+| blocker | workaround | remove when |
+|---|---|---|
+| `std/process` has no `findOnPath` on JS | `drive.ms` is tested on C only | JS `std/process` gains it, or `drive.ms` stops importing it |
+| no content manifest for the support tree | support identity = git tree hashes of `src`, `std`, `runtime`, or the `BUILD` text | a support-tree manifest hash exists |
+| bundle directory names carry an 8-hex content hash | a collision would read "already recorded" | a collision is seen; then use the full hash |
+| safe MetaScript cannot express a leak or double destroy, and `Plant` only makes a C↔JS split | the `san` kind is covered by inline tests on captured runner lines only | a SAN plant becomes expressible (a test-only runtime hook, or a fixture) |
+| creduce has no total time limit | a `perl` fork-and-alarm watchdog (`--cap`) | creduce gains a cap |
+| `execFileResult` has no timeout | each predicate lane runs under a `perl` alarm | `std/process` gains a timeout |
+| printed lines do not carry the declared type | wrong-code splits are pinned by label, value shape and `keep:`; a plain `.ms` input needs `--identity` | prints carry the type, so the width can be pinned |
+| one measured drift (`--0`) | the forbidden-operator list holds only `--` and `++` | a new drift is measured |
+| the parser accepts an unclosed `(` or `[` at end of file (inbox `2026-10-08-parser-accepts-unclosed-paren-at-eof.md`) | reduced programs can end malformed and still pass `msc check` | the parser refuses them |
+| identity inference writes the exact symptom | a wildcard symptom (`dollarhoist_*_`) needs a hand-written identity file | inference learns numbered temporaries |
+
 ### Loop fixed point — decided not to port yet (2026-10-08)
 
 Csmith re-analyzes a loop body until its facts reach a fixed point and deletes the
