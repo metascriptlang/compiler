@@ -89,6 +89,18 @@ test "E2E C: an accessor named like a field is a duplicate identifier" {
 	assert accessorError("struct V2 { x: float32; get x(): float32 { return 1.0; } }\nconst v: V2 = { x: 1.0 };").contains("Duplicate identifier 'x'");
 }
 
+test "E2E C: a readonly struct or interface field is written only by its literal" {
+	assert accessorError("interface N { readonly x: float32; }
+const n: N = { x: 1.5 };
+n.x = 2.0;").contains("cannot assign to 'x' because it is a read-only property");
+	assert accessorError("struct P { readonly id: int32; v: int32; }
+function bump(ref p: P): void { p.id += 1; }").contains("cannot assign to 'id' because it is a read-only property");
+	assert accessorError("struct P { private readonly id: int32; v: int32; }
+let p: P = { id: 1, v: 2 };
+p.v = 3;
+console.log(p.v);") == "compiled";
+}
+
 test "E2E C: a decorated accessor is refused, not dropped" {
 	const deco = "import { Node, ClassMethodDecoratorContext } from \"std/meta\";\nmacro logged(value: Node, context: ClassMethodDecoratorContext): Node { return value; }\n";
 	assert accessorError(deco + "class C { @logged get n(): int32 { return 1; } }\nconsole.log(new C().n);").contains("decorator 'logged' cannot apply to accessor 'get n'");
