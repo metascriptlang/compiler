@@ -11,19 +11,21 @@ import { makeSymbol, initSymbol, lookupSymbol } from "./symbol";
 import { CheckerContext } from "./context";
 
 class BindScope {
-	names: Map<string, Symbol>;
+	names: Map<string, Symbol> = new Map<string, Symbol>();
 }
 
 class NameBinder {
 	ctx: CheckerContext;
-	scopes: BindScope[];
-	keys: Node[];
+	scopes: BindScope[] = [];
+	keys: Node[] = [];
+
+	constructor(ctx: CheckerContext) {
+		this.ctx = ctx;
+	}
 }
 
 function openBindScope(b: NameBinder): void {
-	const scope = new BindScope();
-	scope.names = new Map<string, Symbol>();
-	b.scopes.push(scope);
+	b.scopes.push(new BindScope());
 }
 
 function closeBindScope(b: NameBinder): void {
@@ -199,11 +201,7 @@ function bindLoop(b: NameBinder, node: Node): void {
 }
 
 function newBinder(ctx: CheckerContext): NameBinder {
-	const b = new NameBinder();
-	b.ctx = ctx;
-	b.scopes = [];
-	b.keys = [];
-	return b;
+	return new NameBinder(ctx);
 }
 
 export function bindContainerNames(ctx: CheckerContext, params: string[], body: Node): Node[] {
