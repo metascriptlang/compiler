@@ -29,10 +29,16 @@ function calleeFormals(d: CallExprData): Type[] {
 	return t.typeChildren;
 }
 
+// Lowering may hang one operand under two parents (a Span's `data` and `len`
+// read the same source, so it is evaluated once); a deref this pass made is
+// not visited again, so the shared operand is dereferenced once.
+let _made: HashSet<Node> = new HashSet<Node>();
+
 function wrapVarUse(node: Node): Node {
 	const s = node.resolvedSym;
 	if (s == null || !isVarType(s.symbolType)) return node;
 	const hd = makeHiddenDeref(node, node.location);
+	_made.add(hd);
 	// ONE peel off the SYMBOL's Var type — the ident's own nodeType may already
 	// be peeled by the checker's read path, and `(*ident)` is exactly one
 	// deref of the T* the ident denotes.
@@ -72,7 +78,7 @@ function visit(node: Node): Node {
 	if (node.kind == NodeKind.Identifier) return wrapVarUse(node);
 	if (node.kind == NodeKind.HiddenDeref) {
 		const d = node.data as HiddenDerefData;
-		if (d.expr == null) return node;
+		if (d.expr == null || _made.has(node)) return node;
 		d.expr = visit(d.expr);
 		return node;
 	}
@@ -101,6 +107,8 @@ function visit(node: Node): Node {
 }
 
 export function insertVarParamDerefs(program: Node, ctx: TransformContext): Node {
+	_made = new HashSet<Node>();
 	mapChildren(program, visit);
+	_made = new HashSet<Node>();
 	return program;
 }
