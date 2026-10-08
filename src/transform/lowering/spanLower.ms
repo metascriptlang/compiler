@@ -11,7 +11,7 @@
 // - Stack-promoted literals: HiddenStdConv(ArrayLiteral, Span<T>) → SizedArray temp on stack
 
 import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, CallExprData, ObjectLiteralData, VariableDeclData, SourceLocation, Type, TypeKind } from "../../ast/node";
-import { createSizedArray, createPtr, createPrimitive, peelToStructOrUnion } from "../../checker/types";
+import { createSizedArray, createArray, createPtr, createPrimitive, peelToStructOrUnion } from "../../checker/types";
 import { takesAddressAtCArg, nonNullMemberOfNullable } from "../../checker/compat";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
@@ -52,9 +52,12 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 				} else if (srcType != null) {
 					const loc = node.location;
 
-					// Stack-promoted literal: [1,2,3] → Span → SizedArray temp on stack
+					// Stack-promoted literal: [1,2,3] → Span → SizedArray temp on stack.
+					// A spread makes the length a run-time value: the literal is a Vec the Span views.
 					if (d.convExpr.kind == NodeKind.ArrayLiteral) {
-						return lowerLiteralToSpan(d.convExpr, targetType, ctx);
+						if (!hasSpreadElement(d.convExpr)) return lowerLiteralToSpan(d.convExpr, targetType, ctx);
+						srcType = createArray(spanTarget.typeReturn);
+						d.convExpr.nodeType = srcType;
 					}
 
 					if (srcType.kind == TypeKind.Array) {
@@ -94,6 +97,13 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 // The type of a Span's `data` member: a pointer to one element slot. A Ptr
 // over a Ref names the referent itself, so a slot holding a Ref is a Ptr to a
 // Ptr of what the Ref points at.
+function hasSpreadElement(literal: Node): boolean {
+	for (const el of (literal.data as ArrayLiteralData).elements) {
+		if (el.kind == NodeKind.SpreadExpr) return true;
+	}
+	return false;
+}
+
 function spanDataPtr(elem: Type | null): Type {
 	if (elem != null && elem.kind == TypeKind.Ref && elem.typeReturn != null) return createPtr(createPtr(elem.typeReturn));
 	return createPtr(elem);
