@@ -261,3 +261,34 @@ test "rule 3: a struct that holds Span fields declared and used locally is legal
 	const errors = errorsOf(program("", `${ARR} const around: Around = { pets: xs, base: 1 }; return around.pets[0].n + around.base;`));
 	assert errors == "", errors;
 }
+
+test "module level: a view of a module-level Vec that is pushed afterwards is refused" {
+	const why = refusal(`${HEAD}${VEC} const v: Span<int32> = xs; for (let i = 0; i < 100; i += 1) xs.push(i); console.log(v[0]);`, BORROW);
+	assert why == "", why;
+}
+
+test "module level: a view of a module-level array grown through a call is refused" {
+	const decls = "function growS(a: S[]): void { a.push({ n: 2, name: \"b\" }); }\n";
+	const why = refusal(`${HEAD}${decls}${ARR} const sp: Span<S> = xs; growS(xs); console.log(sp[0].n);`, BORROW);
+	assert why == "", why;
+}
+
+test "module level: a module-level view of a mutable module-level Vec is refused even when read before any change" {
+	const why = refusal(`${HEAD}${VEC} const v: Span<int32> = xs; console.log(v[0]);`, BORROW);
+	assert why == "", why;
+}
+
+test "module level: a module-level read-only view of a const sized array is legal" {
+	const errors = errorsOf(`${HEAD}const fixed: int32[3] = [1, 2, 3]; const r: Readonly<Span<int32>> = fixed; console.log(r[2]);`);
+	assert errors == "", errors;
+}
+
+test "module level: a view in a top-level block of a block-local Vec pushed afterwards is refused" {
+	const why = refusal(`${HEAD}{ ${VEC} const v: Span<int32> = xs; xs.push(33); console.log(v[0]); }`, BORROW);
+	assert why == "", why;
+}
+
+test "module level: a view in a top-level block read before the push is legal" {
+	const errors = errorsOf(`${HEAD}{ ${VEC} const v: Span<int32> = xs; console.log(v[0]); xs.push(33); }`);
+	assert errors == "", errors;
+}
