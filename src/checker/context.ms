@@ -1873,8 +1873,14 @@ const AMBIGUOUS_OWNER = "\u0001AMBIGUOUS";
 
 const _globalTypeOwners: Map<string, string> = new Map<string, string>();
 
+let _globalTypeOwnersPaused = false;
+
+export function pauseGlobalTypeOwners(paused: boolean): void {
+	_globalTypeOwnersPaused = paused;
+}
+
 export function recordGlobalTypeOwner(name: string, modulePath: string): void {
-	if (name == "" || modulePath == "") return;
+	if (_globalTypeOwnersPaused || name == "" || modulePath == "") return;
 	const prev = _globalTypeOwners.get(name);
 	if (prev == null) {
 		_globalTypeOwners.set(name, modulePath);
@@ -1898,7 +1904,7 @@ export function getGlobalTypeOwner(name: string): string {
 const _globalTypeShapes: Map<string, string> = new Map<string, string>();
 
 export function recordGlobalTypeShape(name: string, shapeKey: string, modulePath: string): void {
-	if (name == "" || shapeKey == "" || modulePath == "") return;
+	if (_globalTypeOwnersPaused || name == "" || shapeKey == "" || modulePath == "") return;
 	const key = name + "|" + shapeKey;
 	const prev = _globalTypeShapes.get(key);
 	if (prev == null) {
