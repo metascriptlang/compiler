@@ -498,7 +498,7 @@ export function collectClass(ctx: CheckerContext, node: Node): void {
 export function mintClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	// Callable-namespace statics attachment (Number.MAX_SAFE_INTEGER): a
-	// statics-only class sharing a prelude module (.cms/.jms) with a
+	// statics-only class sharing a prelude module (.cms/.jms/.rms) with a
 	// same-named Function symbol merges its constants onto that symbol —
 	// the name must stay callable AND carry statics. User modules keep the
 	// duplicate-symbol error so a JS name collision stays loud.
@@ -512,11 +512,11 @@ export function mintClass(ctx: CheckerContext, node: Node): void {
 	}
 	if (allStatic) {
 		const existing = lookupSymbol(ctx.table, d.className);
-		// The CLASS itself must live in a prelude module (.cms/.jms) — the
+		// The CLASS itself must live in a prelude module (.cms/.jms/.rms) — the
 		// existing symbol's modulePath is always prelude, so checking it
 		// would let any user file silently extend a global name.
 		if (existing != null && existing.symbolKind == SymbolKind.Function
-				&& (ctx.modulePath.endsWith(".cms") || ctx.modulePath.endsWith(".jms"))) {
+				&& (ctx.modulePath.endsWith(".cms") || ctx.modulePath.endsWith(".jms") || ctx.modulePath.endsWith(".rms"))) {
 			for (const raw of d.classBody) {
 				const member = classMemberDecl(raw);
 				const pdm = member.data as PropertyDeclData;
