@@ -1741,7 +1741,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		return nullableRet;
 	}
 	if (calleeType != null && isValueCallee(d.callee) && isNeverCallable(calleeType)) {
-		addError(ctx, "This expression is not callable: type '" + typeDisplayName(calleeType) + "' has no call signatures",
+		addError(ctx, "This expression is not callable: type '" + typeDisplayName(calleeType) + "' has no call signatures" + dynamicFieldCalleeHint(d.callee),
 			node.location.line, node.location.column);
 		node.nodeType = inferredType();
 		return node.nodeType;
@@ -3396,9 +3396,30 @@ function isNeverCallable(t: Type): boolean {
 			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
 			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
 			| TypeKind.Char | TypeKind.String | TypeKind.StringLiteral | TypeKind.CString
-			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Array | TypeKind.SizedArray => true,
+			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Array | TypeKind.SizedArray
+			| TypeKind.Span | TypeKind.Tuple => true,
+		// A data value — a struct, a union of them, a reference to one — has no call signature.
+		TypeKind.Struct | TypeKind.Union => !isFunctionShapedData(t),
+		TypeKind.Ref => t.typeReturn != null && isNeverCallable(t.typeReturn),
 		_ => false,
 	};
+}
+
+function isFunctionShapedData(t: Type): boolean {
+	if (t.kind != TypeKind.Union) return false;
+	for (const m of t.typeChildren) {
+		if (m.kind == TypeKind.Function) return true;
+	}
+	return false;
+}
+
+function dynamicFieldCalleeHint(callee: Node): string {
+	if (callee.kind != NodeKind.CallExpr) return "";
+	const inner = (callee.data as CallExprData).callee;
+	if (inner.kind != NodeKind.MemberExpr || (inner.data as MemberExprData).property != "getDynamicField") return "";
+	const args = (callee.data as CallExprData).arguments;
+	const key = args.length > 0 && args[0].kind == NodeKind.StringLiteral ? (args[0].data as StringLiteralData).value : "";
+	return ` — '${key}' is read as a dynamic field here, not a method; a free function is called as '${key}(value, …)'`;
 }
 
 // Declared types, not `candidates`: those have the receiver stripped, and the receiver is what differs.
