@@ -332,6 +332,31 @@ function watchWarm(): void {
 	console.log("ok   hcrWatchWarm");
 }
 
+function watchAsync(): void {
+	const tag = "hcrWatchAsync";
+	const dir = freshDir(`${TMP}/watchAsync`);
+	for (const f of readDir(`${FIXTURES}/watchAsync`)) copy(`${FIXTURES}/watchAsync/${f}`, `${dir}/${f}`);
+	const steps: WatchStep[] = [
+		{ file: "logicBody.ms", target: "logic.ms", warm: true, fails: false },
+	];
+	replayMatchesCold(tag, dir, `${FIXTURES}/watchAsync`, ["logic.ms"], steps);
+	const debug = `${dir}/out/debug`;
+	const shared: string[] = [];
+	for (const f of cFilesIn(debug)) shared.push(read(`${debug}/${f}`));
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	for (const f of cFilesIn(debug)) removeAll(`${debug}/${f}`);
+	const fresh = msc(dir, ["build", "app.ms", "--hcr", "--emit=c"]);
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	need(tag, succeeded(fresh), "the build without the global cache failed");
+	const files = cFilesIn(debug);
+	need(tag, files.length == shared.length, `the build without the global cache emitted ${files.length} files, ${shared.length} with it`);
+	for (let i = 0; i < files.length; i += 1) {
+		need(tag, read(`${debug}/${files[i]}`) == shared[i], `${files[i]} differs between a build that checks the prelude from source and one that loads it packed`);
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function watchGeneric(): void {
 	const tag = "hcrWatchGeneric";
 	const dir = copyAppAndLib("watchGeneric");
@@ -1511,6 +1536,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrModuleLocalNames", run: localNames },
 	{ name: "hcrWatchWarm", run: watchWarm },
 	{ name: "hcrWatchGeneric", run: watchGeneric },
+	{ name: "hcrWatchAsync", run: watchAsync },
 	{ name: "hcrNewInstance", run: newInstance },
 	{ name: "hcrPrivateHelper", run: privateHelper },
 	{ name: "hcrSubdirModule", run: subdirModule },
