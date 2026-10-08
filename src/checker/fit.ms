@@ -256,7 +256,8 @@ function equalityEntry(ctx: CheckerContext, left: Type, right: Type): string {
 		const carrier = isMaybeType(a) ? a : b;
 		const other = isMaybeType(a) ? b : a;
 		if (isMaybeType(other)) return sameType(a, b) ? "nullableEquals" : "";
-		return isUnknownType(other) ? "" : "nullableEquals";
+		if (isUnknownType(other) || carrier.typeReturn == null) return "";
+		return equalityOperandsOk(carrier.typeReturn, other) ? "nullableEquals" : "";
 	}
 	if (isResult(a) && isResult(b)) return sameType(a, b) ? "resultEquals" : "";
 	if (comparedByFields(a) && comparedByFields(b)) {
