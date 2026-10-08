@@ -199,9 +199,20 @@ function isDeclaringCtorThisWrite(ctx: CheckerContext, object: Node, declaring: 
 	return receiver.sym == declaring || classDeclNodeOf(receiver.sym) == classDeclNodeOf(declaring);
 }
 
+function isReadonlyAttachedStatic(owner: Node, field: Symbol | null): boolean {
+	if (owner.resolvedSym == null || owner.resolvedSym.symbolKind != SymbolKind.Function) return false;
+	if (field == null || field.declNode == null || field.declNode.kind != NodeKind.PropertyDecl) return false;
+	return (field.declNode.data as PropertyDeclData).propIsReadonly;
+}
+
 function reportReadonlyField(ctx: CheckerContext, target: Node): void {
 	const md = target.data as MemberExprData;
 	if (md.object.nodeType == null) return;
+	if (isReadonlyAttachedStatic(md.object, target.resolvedSym)) {
+		addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
+			target.location.line, target.location.column);
+		return;
+	}
 	let ownerType = md.object.nodeType;
 	if (ownerType.kind == TypeKind.Ref && ownerType.typeReturn != null) ownerType = ownerType.typeReturn;
 	if (ownerType.sym == null) return;
