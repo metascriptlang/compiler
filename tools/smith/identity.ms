@@ -6,10 +6,11 @@ export struct Identity {
 	label: string;
 	shape: string;
 	keep: string;
+	forbid: string;
 }
 
 export function formatIdentity(id: Identity): string {
-	return "mode: " + id.mode + "\nsymptom: " + id.symptom + "\nlabel: " + id.label + "\nshape: " + id.shape + "\nkeep: " + id.keep + "\n";
+	return "mode: " + id.mode + "\nsymptom: " + id.symptom + "\nlabel: " + id.label + "\nshape: " + id.shape + "\nkeep: " + id.keep + "\nforbid: " + id.forbid + "\n";
 }
 
 function valueOf(text: string, key: string): string {
@@ -28,9 +29,10 @@ export function parseIdentity(text: string): Result<Identity, string> {
 	const label = valueOf(text, "label");
 	const shape = valueOf(text, "shape");
 	const keep = valueOf(text, "keep");
+	const forbid = valueOf(text, "forbid");
 	if (mode != "split" && symptom == "") { return Result.err("identity mode " + mode + " needs a symptom"); }
 	if (mode == "split" && (label == "" || shape == "")) { return Result.err("identity mode split needs a label and a value shape"); }
-	return Result.ok({ mode: mode, symptom: symptom, label: label, shape: shape, keep: keep });
+	return Result.ok({ mode: mode, symptom: symptom, label: label, shape: shape, keep: keep, forbid: forbid });
 }
 
 export function missingKeep(keep: string, program: string): string {
@@ -38,6 +40,23 @@ export function missingKeep(keep: string, program: string): string {
 	for (const part of keep.split(",")) {
 		const token = part.trim();
 		if (token != "" && !program.contains(token)) { return token; }
+	}
+	return "";
+}
+
+export const INTRODUCED: string[] = ["--", "++"];
+
+export function forbidOf(original: string): string {
+	const out: string[] = [];
+	for (const token of INTRODUCED) { if (!original.contains(token)) { out.push(token); } }
+	return out.join(",");
+}
+
+export function presentForbidden(forbid: string, program: string): string {
+	if (forbid == "") { return ""; }
+	for (const part of forbid.split(",")) {
+		const token = part.trim();
+		if (token != "" && program.contains(token)) { return token; }
 	}
 	return "";
 }
@@ -137,7 +156,7 @@ export function firstDiff(a: string, b: string): Diff {
 }
 
 test "an identity round-trips through its text" {
-	const id: Identity = { mode: "c-build", symptom: "use of undeclared identifier '_envP'", label: "", shape: "", keep: "" };
+	const id: Identity = { mode: "c-build", symptom: "use of undeclared identifier '_envP'", label: "", shape: "", keep: "", forbid: "" };
 	const r = parseIdentity(formatIdentity(id));
 	assert r.ok;
 	if (r.ok) { assert r.value.mode == "c-build" && r.value.symptom == id.symptom && r.value.label == ""; }
@@ -195,4 +214,11 @@ test "a pinned construct that left the program is named" {
 	assert missingKeep("plantDelta", "g0 = g0 ^ plantDelta();") == "";
 	assert missingKeep("plantDelta, g0", "let c = b;") == "plantDelta";
 	assert missingKeep("", "anything") == "";
+}
+
+test "a reduction may not introduce an operator the original never had" {
+	assert forbidOf("let a = -(-b);") == "--,++";
+	assert forbidOf("i++;") == "--";
+	assert presentForbidden(forbidOf("let a = -(-b);"), "function f() { --0 }") == "--";
+	assert presentForbidden(forbidOf("let a = -(-b);"), "let a = -(-b);") == "";
 }

@@ -2,7 +2,7 @@ import { execFileResult } from "std/process";
 import { ensureDir, exists, isDir, readFile, remove, removeAll, writeFile } from "std/fs";
 import { subjectMsc } from "./drive";
 import {
-	Identity, firstDiff, firstCompilerError, formatIdentity, hasCompilerError, hasLine, missingKeep, parseIdentity, throwLine,
+	Identity, firstDiff, firstCompilerError, forbidOf, formatIdentity, hasCompilerError, hasLine, missingKeep, parseIdentity, presentForbidden, throwLine,
 } from "./identity";
 
 const WATCHDOG: string = "my $t = shift; my $pid = fork; if (!$pid) { setpgrp(0, 0); exec @ARGV; exit 127; } $SIG{ALRM} = sub { kill 'TERM', -$pid; }; alarm $t; waitpid($pid, 0); exit($? >> 8);";
@@ -58,6 +58,8 @@ function judge(id: Identity, msc: string, file: string): string {
 	if (!text.ok) { return "cannot read the candidate"; }
 	const gone = missingKeep(id.keep, text.value);
 	if (gone != "") { return "the pinned construct '" + gone + "' is gone"; }
+	const introduced = presentForbidden(id.forbid, text.value);
+	if (introduced != "") { return "the candidate introduced '" + introduced + "', which the input never had"; }
 	if (ran(msc, ["check", file, "--no-color"], dir, 60).exit != 0) { return "msc check rejects the candidate"; }
 	const js = lane(msc, file, "js");
 	if (id.mode == "js-throws") {
@@ -90,14 +92,14 @@ function infer(msc: string, file: string): Result<Identity, string> {
 	const jsOk = js.built && js.exit == 0;
 	const cOk = c.built && c.exit == 0;
 	if (js.built && js.exit != 0 && cOk && throwLine(js.err) != "") {
-		return Result.ok({ mode: "js-throws", symptom: throwLine(js.err), label: "", shape: "", keep: "" });
+		return Result.ok({ mode: "js-throws", symptom: throwLine(js.err), label: "", shape: "", keep: "", forbid: "" });
 	}
 	if (!c.built && jsOk && firstCompilerError(c.buildLog) != "") {
-		return Result.ok({ mode: "c-build", symptom: firstCompilerError(c.buildLog), label: "", shape: "", keep: "" });
+		return Result.ok({ mode: "c-build", symptom: firstCompilerError(c.buildLog), label: "", shape: "", keep: "", forbid: "" });
 	}
 	if (jsOk && cOk && firstDiff(c.out, js.out).label != "") {
 		const d = firstDiff(c.out, js.out);
-		return Result.ok({ mode: "split", symptom: "", label: d.label, shape: d.shape, keep: "" });
+		return Result.ok({ mode: "split", symptom: "", label: d.label, shape: d.shape, keep: "", forbid: "" });
 	}
 	return Result.err("no single-lane finding to pin: C " + describe(c) + "; JS " + describe(js));
 }
@@ -153,6 +155,7 @@ export function reduceInput(root: string, input: string, identityPath: string, j
 		if (!inferred.ok) { return fail(inferred.error); }
 		id = { ...inferred.value, keep: isDir(input) ? plantKeep(input) : "" };
 	}
+	if (id.forbid == "") { id = { ...id, forbid: forbidOf(original.value) }; }
 	writeFile(out + "/identity.txt", formatIdentity(id));
 	console.log("smith reduce — " + source + " (" + String(original.value.byteLength) + " bytes), msc " + msc);
 	console.log("  accepted identity (anything else is drift and is rejected):");
