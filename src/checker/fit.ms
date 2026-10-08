@@ -1600,6 +1600,26 @@ export function unionMemberSlots(source: Type, target: Type): int32[] {
 	return slots;
 }
 
+function membersComparable(a: Type, b: Type): boolean {
+	return sameType(a, b) || sameType(literalBase(a), b) || sameType(a, literalBase(b)) || isAssignable(a, b) || isAssignable(b, a);
+}
+
+export function unionsOverlap(source: Type, target: Type): boolean {
+	for (const a of unionMembers(source)) {
+		for (const b of unionMembers(target)) {
+			if (membersComparable(a, b)) return true;
+		}
+	}
+	return false;
+}
+
+export function heldInTarget(source: Type, target: Type): boolean {
+	for (const slot of unionMemberSlots(source, target)) {
+		if (slot >= 0) return true;
+	}
+	return false;
+}
+
 export function unionConversionRefusal(source: Type, target: Type, implicit: boolean): string {
 	const slots = unionMemberSlots(source, target);
 	let held = 0;
