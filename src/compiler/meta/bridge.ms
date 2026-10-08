@@ -1611,9 +1611,8 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			}, loc);
 			call.typeArg = readStr(objHeap, h, "typeArg");
 			if (call.typeArg != "" && callee.kind == NodeKind.Identifier && callee.resolvedSym != null
-					&& callee.resolvedSym.name != (callee.data as IdentifierData).name) {
-				callee.resolvedSym = null;
-				callee.flags = callee.flags.excl(NodeFlag.BoundSym);
+					&& callee.resolvedSym.instantiatedFrom != null) {
+				callee.resolvedSym = callee.resolvedSym.instantiatedFrom;
 			}
 			return call;
 		},
