@@ -204,6 +204,18 @@ export function shadowedImportOf(ctx: CheckerContext, sym: Symbol): Symbol | nul
 	return ctx.shadowedImports.get(sym) ?? null;
 }
 
+// Every routine set a binding gathers: a local over an import, an import over
+// another module's import, each link once.
+export function gatheredImports(ctx: CheckerContext, sym: Symbol): Symbol[] {
+	const chain: Symbol[] = [];
+	let cur = shadowedImportOf(ctx, sym);
+	while (cur != null && cur != sym && chain.indexOf(cur) < 0) {
+		chain.push(cur);
+		cur = shadowedImportOf(ctx, cur);
+	}
+	return chain;
+}
+
 export function markUsedIn(ctx: CheckerContext, sym: Symbol): void {
 	markUsed(sym);
 	if (ctx.importSet.has(sym)) ctx.usedImports.add(sym);

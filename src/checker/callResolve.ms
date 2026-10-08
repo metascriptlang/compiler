@@ -12,7 +12,7 @@ import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, wri
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation } from "./compat";
-import { markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
+import { markUsedIn, noteImported, shadowedImportOf, gatheredImports, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, filterStaticExtsByReceiverName, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, hasStaticExtForReceiver, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, defaultCheckedAtDeclaration, findAccessor } from "./context";
 import { checkSwitchCase, convertIntoUnknown, fitIntegerConstant, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, tryValueStructUpcast, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, refDerefHint } from "./fit";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, mergeInitBranches, restoreInitState, saveInitState } from "./initTracker";
@@ -3015,8 +3015,11 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	const candSyms: Symbol[] = [sym];
 	for (const o of sym.overloads) candSyms.push(o);
 	const ownCount = candSyms.length;
-	const gathered = shadowedImportOf(ctx, sym);
-	if (gathered != null) {
+	const sets: Symbol[] = [];
+	const setStarts: int32[] = [];
+	for (const gathered of gatheredImports(ctx, sym)) {
+		sets.push(gathered);
+		setStarts.push(candSyms.length);
 		candSyms.push(gathered);
 		for (const o of gathered.overloads) candSyms.push(o);
 	}
@@ -3184,10 +3187,12 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		relateCallArgs(ctx, callNode, winnerType, argTypes, false);
 	}
 	const winnerSymFinal = candSyms[bestIdx];
-	if (gathered != null && bestIdx >= ownCount) {
-		sym = gathered;
+	if (bestIdx >= ownCount) {
+		let si = sets.length - 1;
+		while (si > 0 && setStarts[si] > bestIdx) si -= 1;
+		sym = sets[si];
 		impl = findOverloadImpl(sym) ?? winnerSymFinal;
-		bestIdx = bestIdx - ownCount;
+		bestIdx = bestIdx - setStarts[si];
 	}
 	d.resolvedOverloadIdx = bestIdx;
 	callNode.resolvedSym = sym;
@@ -3293,8 +3298,7 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 		for (const o of set.overloads) {
 			if (o != sym) cands.push(o);
 		}
-		const gathered = shadowedImportOf(ctx, set);
-		if (gathered != null) {
+		for (const gathered of gatheredImports(ctx, set)) {
 			cands.push(gathered);
 			for (const o of gathered.overloads) cands.push(o);
 		}

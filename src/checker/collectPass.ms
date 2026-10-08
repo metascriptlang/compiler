@@ -4,7 +4,7 @@ import { inferredType, noneType, emptyType, createStruct, createEnum, createType
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, bindUserHook, isLifecycleHookName, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy } from "./context";
+import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, bindUserHook, isLifecycleHookName, isStaticExtensionFlag, isGenericFn, getExtTypeName, findExtension, sgRecordSym, recordGlobalTypeOwner, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, isStaticExtensionSym, newSym, isExportedBy, shadowedImportOf } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
@@ -1097,6 +1097,29 @@ export function importSymFromRegistry(
 	return sym;
 }
 
+function sameOverloadSet(a: Symbol, b: Symbol): boolean {
+	if (a == b) return true;
+	for (const o of a.overloads) {
+		if (o == b) return true;
+	}
+	return false;
+}
+
+// A routine imported under a name another module's routine already holds:
+// the newer binding gathers the older one, so a call scores both sets.
+function importSymFromRegistryOver(
+	ctx: CheckerContext, alias: string, importName: string,
+	exportInfo: ExportedSymInfo, sourcePath: string,
+	nameLoc: SourceLocation, bound: Symbol,
+): Symbol {
+	const sym = exportInfo.sym;
+	if (shadowedImportOf(ctx, sym) == null) ctx.shadowedImports.set(sym, bound);
+	redefineSymbol(ctx.table, alias, sym);
+	noteImported(ctx, sym);
+	sgRecordSym(ctx, nameLoc.line, nameLoc.column, nameLoc.column + alias.length, sym, sym.symbolType, sym.symbolKind, alias, "", false);
+	return sym;
+}
+
 // Propagate extension-method dispatch entries from an imported/re-exported
 // symbol's exportInfo into the current module's extensionRegistry. Single
 // path used by:
@@ -1255,8 +1278,23 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 		const importName = d.importNames[i];
 		const localAlias = d.importAliases[i];
 
-		// Dedup: skip if already imported (same file may import same symbol twice, e.g. main + test section)
-		if (lookupLocal(ctx.table, localAlias) != null) continue;
+		// The same symbol imported twice (e.g. main + test section) binds once.
+		// Routines of one name from two modules form one overload set, as a local
+		// routine does with an imported one; any other second binding is refused.
+		const bound = lookupLocal(ctx.table, localAlias);
+		if (bound != null) {
+			const again = sourcePath != "" ? findExportedSymbol(ctx.exportRegistry, sourcePath, importName) : null;
+			if (again != null && again.sym != null && !sameOverloadSet(bound, again.sym) && bound.symbolKind != SymbolKind.Module) {
+				const nameLoc = d.nameLocations != null && i < d.nameLocations.length ? d.nameLocations[i] : node.location;
+				if (bound.symbolKind == SymbolKind.Function && again.sym.symbolKind == SymbolKind.Function && ctx.importSet.has(bound)) {
+					const joined = importSymFromRegistryOver(ctx, localAlias, importName, again, sourcePath, nameLoc, bound);
+					propagateImportedExtensions(ctx, localAlias, again, sourcePath, joined);
+				} else {
+					addError(ctx, `Duplicate identifier '${localAlias}': it is already bound${bound.modulePath != "" ? " to the one from '" + bound.modulePath + "'" : ""}; import this one under another name ('${importName} as …')`, nameLoc.line, nameLoc.column);
+				}
+			}
+			continue;
+		}
 
 		if (sourcePath != "") {
 			const exportInfo = findExportedSymbol(ctx.exportRegistry, sourcePath, importName);
