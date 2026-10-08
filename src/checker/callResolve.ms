@@ -1740,7 +1740,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		node.nodeType = nullableRet;
 		return nullableRet;
 	}
-	if (calleeType != null && isValueCallee(d.callee) && isNeverCallable(calleeType)) {
+	if (calleeType != null && isValueCallee(d.callee) && !isCallableValueType(calleeType)) {
 		addError(ctx, "This expression is not callable: type '" + typeDisplayName(calleeType) + "' has no call signatures" + dynamicFieldCalleeHint(d.callee),
 			node.location.line, node.location.column);
 		node.nodeType = inferredType();
@@ -3389,28 +3389,26 @@ function isValueCallee(callee: Node): boolean {
 		|| sym.symbolKind == SymbolKind.Property || sym.symbolKind == SymbolKind.Temp;
 }
 
-function isNeverCallable(t: Type): boolean {
-	return match (t.kind) {
-		TypeKind.Void | TypeKind.Null | TypeKind.Boolean | TypeKind.BooleanLiteral
-			| TypeKind.Number | TypeKind.Float32 | TypeKind.Float64
-			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
-			| TypeKind.Char | TypeKind.String | TypeKind.StringLiteral | TypeKind.CString
-			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Array | TypeKind.SizedArray
-			| TypeKind.Span | TypeKind.Tuple => true,
-		// A data value — a struct, a union of them, a reference to one — has no call signature.
-		TypeKind.Struct | TypeKind.Union => !isFunctionShapedData(t),
-		TypeKind.Ref => t.typeReturn != null && isNeverCallable(t.typeReturn),
-		_ => false,
-	};
-}
-
-function isFunctionShapedData(t: Type): boolean {
-	if (t.kind != TypeKind.Union) return false;
+// Reference (semIndirectOp, semexprs.nim): a value is called only through a
+// procedure type; every other type in call position is refused. A type not
+// known yet is left to the code that settles it.
+function unionHasFunction(t: Type): boolean {
 	for (const m of t.typeChildren) {
 		if (m.kind == TypeKind.Function) return true;
 	}
 	return false;
+}
+
+function isCallableValueType(t: Type): boolean {
+	return match (t.kind) {
+		TypeKind.Function => true,
+		TypeKind.Inferred | TypeKind.Unknown | TypeKind.Pending | TypeKind.Error | TypeKind.Never
+			| TypeKind.GenericParam | TypeKind.GenericInstance | TypeKind.TypeReference | TypeKind.Conditional => true,
+		TypeKind.Ref | TypeKind.Var | TypeKind.Lent | TypeKind.Sink | TypeKind.Borrow | TypeKind.Alias | TypeKind.Distinct =>
+			t.typeReturn == null || isCallableValueType(t.typeReturn),
+		TypeKind.Union => unionHasFunction(t),
+		_ => false,
+	};
 }
 
 function dynamicFieldCalleeHint(callee: Node): string {
