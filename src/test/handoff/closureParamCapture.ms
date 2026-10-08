@@ -307,8 +307,8 @@ let v: int32[] = [1, 2, 3];
 console.log(sum(v));
 ` },
 		{ name: "module-level Span read inside a closure", src: `
-const backing: int32[] = [5, 6];
-const top: Span<int32> = backing;
+const backing: int32[2] = [5, 6];
+const top: Readonly<Span<int32>> = backing;
 function read(): int32 {
 	const at = (): int32 => top[1];
 	return at();
