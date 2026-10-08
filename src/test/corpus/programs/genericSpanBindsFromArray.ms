@@ -11,9 +11,11 @@ function headOf<T>(this storage: Span<T>): T {
 	return storage[0];
 }
 
-let sized: uint8[4] = [7, 0, 0, 0];
-let vec: Vec<int32> = [5, 6];
-const shared: int32[] = [8, 9];
-const view: Span<uint8> = sized;
-let points: Vec<Point> = [{ x: 5, y: 1 }];
-console.log(firstOf(sized), firstOf(vec), firstOf(shared), firstOf(view), sized.headOf(), vec.headOf(), firstOf(points).x);
+{
+	let sized: uint8[4] = [7, 0, 0, 0];
+	let vec: Vec<int32> = [5, 6];
+	const shared: int32[] = [8, 9];
+	const view: Span<uint8> = sized;
+	let points: Vec<Point> = [{ x: 5, y: 1 }];
+	console.log(firstOf(sized), firstOf(vec), firstOf(shared), firstOf(view), sized.headOf(), vec.headOf(), firstOf(points).x);
+}

@@ -25,7 +25,7 @@ test "byteViews: a byte view through an intermediate typed pointer is refused on
 }
 
 test "byteViews: a reinterpret between typed scalar pointers is refused on JS" {
-	assert refused("let ns: uint32[] = [258]; const v: Span<uint32> = ns; const p = v as Ptr<uint32>; console.log((p as Ptr<uint8>)[0]);\n",
+	assert refused("{ let ns: uint32[] = [258]; const v: Span<uint32> = ns; const p = v as Ptr<uint32>; console.log((p as Ptr<uint8>)[0]); }\n",
 		"cannot convert Ptr<uint32> to Ptr<uint8>");
 }
 
@@ -81,17 +81,17 @@ test "byteViews: a span of references is not a pointer to its objects on either 
 }
 
 test "byteViews: pointer arithmetic and ordering are refused on JS" {
-	const at = "let xs: uint8[] = [1, 2, 3]; let p = xs[0..3] as Ptr<uint8>; const q = xs[1..3] as Ptr<uint8>;\n";
-	assert refusedOp(at + "console.log((p + 1)[0]);\n", "cannot apply '+' to a pointer");
-	assert refusedOp(at + "console.log(q - p);\n", "cannot apply '-' to a pointer");
-	assert refusedOp(at + "console.log(p < q);\n", "cannot apply '<' to a pointer");
-	assert refusedOp(at + "p += 1; console.log(p[0]);\n", "cannot apply '+=' to a pointer");
-	assert refusedOp(at + "console.log(p[1]);\n", "cannot index a pointer past the element it addresses");
-	assert refusedOp(at + "let i = 0; console.log(p[i]);\n", "cannot index a pointer past the element it addresses");
+	const at = (body: string): string => "{ let xs: uint8[] = [1, 2, 3]; let p = xs[0..3] as Ptr<uint8>; const q = xs[1..3] as Ptr<uint8>;\n" + body + "}\n";
+	assert refusedOp(at("console.log((p + 1)[0]);\n"), "cannot apply '+' to a pointer");
+	assert refusedOp(at("console.log(q - p);\n"), "cannot apply '-' to a pointer");
+	assert refusedOp(at("console.log(p < q);\n"), "cannot apply '<' to a pointer");
+	assert refusedOp(at("p += 1; console.log(p[0]);\n"), "cannot apply '+=' to a pointer");
+	assert refusedOp(at("console.log(p[1]);\n"), "cannot index a pointer past the element it addresses");
+	assert refusedOp(at("let i = 0; console.log(p[i]);\n"), "cannot index a pointer past the element it addresses");
 }
 
 test "byteViews: pointer identity and the first element stay legal on JS" {
-	const out = js("let xs: uint8[] = [1, 2]; const p = xs[0..2] as Ptr<uint8>; const q = xs[0..1] as Ptr<uint8>;\nconsole.log(`${p == q} ${p[0]} ${p[]}`);\n");
+	const out = js("{ let xs: uint8[] = [1, 2]; const p = xs[0..2] as Ptr<uint8>; const q = xs[0..1] as Ptr<uint8>;\nconsole.log(`${p == q} ${p[0]} ${p[]}`); }\n");
 	assert !out.startsWith("ERROR:"), out.slice(0, 300);
 }
 

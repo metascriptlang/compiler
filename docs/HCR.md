@@ -76,7 +76,8 @@ macOS arm64, 2026-10-05, macOS 26.6.2, tree `5700282b06cb`, a candidate built by
 src/test/hcr/run.ms` printed `ok` for all 31 cases with none skipped (`hcrWindowsReload` runs on
 Windows only), and each case printed `ok` alone under `HCR_ONLY=<case>`. On the installed
 compiler of main `719e18ad2` the same runner fails `hcrFsWatch` with `WATCH tree opened: false`.
-Not verified on macOS: `examples/hcrProbe/run.sh`, x86_64, reload latency and call cost.
+Not verified on macOS: `examples/hcrProbe/run.sh`, x86_64, reload latency and call cost (the
+watch wait is measured in the FSEvents paragraph below).
 
 
 Implementation anchors: `src/transform/native/hcrLift.ms` `liftHcrState`,
@@ -915,7 +916,7 @@ row); on the compiler of `91dbf527` it fails at the first step that rebuilds fro
 (`logicMap.ms`), and with the `box` steps moved first, at `boxHookBody.ms`.
 
 The macOS watcher is FSEvents (`runtime/io/engineReadiness.c` `msFsWatchOpen`): one recursive
-stream per watched root with per-file events and 0.05 s latency, CoreServices opened with `dlopen`
+stream per watched root with per-file events, `NoDefer` and 0.01 s latency, CoreServices opened with `dlopen`
 so no program links a framework. Its callback runs on a dispatch queue, appends to the watcher's
 batch under a lock and writes one byte to a pipe; the pipe is the `MS_IO_WATCH` request's
 descriptor in the engine's kqueue, the shape the Linux backend gives the inotify descriptor, so
@@ -926,7 +927,23 @@ in-place write fires only on the written file's own descriptor, one descriptor p
 Dart's `dart:io` watcher (`runtime/bin/file_system_watcher_macos.cc`), Rust `notify` (default
 `macos_fsevent`) and Phoenix's `file_system` also use FSEvents. FSEvents reports no close: a
 renamed save is reported closed, an in-place rewrite is seen but not reported closed
-(`hcrFsWatch`); how long `waitForSourceChange` then waits on macOS was not measured.
+(`hcrFsWatch`), and POSIX cannot see an open writer. So `std/fs/watch` exports
+`writerCloseObservable` (false on darwin) and `waitForSourceChange` builds once no batch has
+arrived for `WRITES_QUIET_MS` (20 ms); Linux still waits for the close, Windows for a writer-free
+open. Before this the macOS wait ran to the 500 ms writer limit on every in-place save; `hcrRun`
+fails if its in-place save prints `still open for writing`.
+
+Measured 2026-10-07, macOS arm64 (M3 Max, 14 cores), shared machine at load about 40,
+`examples/hcrApp` under `msc build --hcr --watch`, a Python writer, four saves of each kind: save
+to `watch: changed` 11–13 ms for an in-place and a renamed save; then 21–22 ms of quiet before an
+in-place build, 0 ms before a renamed one. Before (installed `8506eaf03`, load 79): in-place save
+to built 941–1013 ms, of which 490–560 ms waiting. A standalone FSEvents probe on the same host
+(`open`/`write`/`close`, eight writes per row) put the first callback at 14–71 ms with 0.05 s
+latency and no `NoDefer`, 10–14 ms with 0.01 s and `NoDefer`, and saw one event per in-place
+write. Common watch tools wait 20 ms (webpack `aggregateTimeout`) to 50 ms (zig `build --watch`,
+watchexec) after the first event; 20 ms is the lowest of those, so an editor that touches a file
+twice more than 20 ms apart builds twice. Not measured: a real editor's save, an idle machine,
+Linux and Windows wait after these commits, and reload or edit-to-visible latency on macOS.
 
 Not verified: a project with import cycles, and edits to `build.ms` during a watch (it is not
 re-read).

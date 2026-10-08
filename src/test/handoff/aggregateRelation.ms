@@ -102,7 +102,7 @@ test "aggregate relation: a sized array or a Vec converts to a Span of its own e
 		assert !c.ok, item.name;
 		assert c.error.contains(item.message), item.name + ": " + c.error;
 	}
-	assert strictErrorCount(pre + "const a: uint8 = firstOf(sized); const b: uint8 = firstOf(vec); const view: Span<uint8> = sized;") == 0;
+	assert strictErrorCount(pre + "const a: uint8 = firstOf(sized); const b: uint8 = firstOf(vec); { let local: uint8[4] = [7, 1, 0, 0]; const view: Span<uint8> = local; }") == 0;
 }
 
 test "aggregate relation: scalar inference cannot widen writable array elements in either argument order" {
