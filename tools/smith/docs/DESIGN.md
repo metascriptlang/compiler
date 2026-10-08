@@ -2,13 +2,14 @@
 
 Status: direction approved (2026-10-03..05, in conversation); slice 1 proven
 2026-10-05 and slice 2 integrated/probed 2026-10-07 (§Slice 2 — measured).
-This file owns the agreed four-slice shape, the constraints that forced it and
-the measurements behind the generator's surface. Csmith-derived evidence lives
-in `CSMITH-STUDY.md`. The broader full-language goal confirmed 2026-10-07 is
-audited in `coveragePlan.md`; its domain/oracle matrix and four tooling mechanisms
-were approved by user resume. That file also holds the measured core hardening
-and its still-open bounds; approval is not implementation or coverage evidence.
-Compiler findings are now retained and parked, not fixed within this goal.
+On 2026-10-08 the person approved the overall plan in §Plan: Smith as the
+generator an LLM strategist aims, replacing the four-slice list. This file owns
+that plan, the constraints that forced it and the measurements behind the
+generator's surface. Csmith-derived evidence lives in `CSMITH-STUDY.md`. The
+full-language domain/oracle matrix and four tooling mechanisms are in
+`coveragePlan.md`, together with the measured core hardening; approval is not
+implementation or coverage evidence. Compiler findings are retained and parked,
+not fixed within this goal.
 
 ## Goal
 
@@ -17,6 +18,11 @@ compiler crashes, DRC ledger violations — by random differential testing:
 generate deterministic MetaScript programs, run them through the existing
 corpus lanes, record divergences as reproducible bundles, reduce them, and
 graduate confirmed regressions into the corpus.
+
+Smith is the weapon, not the whole system. It produces valid, terminating,
+reproducible programs fast. A strategist (an agent session first, an automated
+LLM loop only if it earns it) reads compiler passes, ASTs, findings and coverage,
+and chooses where Smith strikes: a feature vector and construct weights per batch.
 
 ## Why this shape, and not another
 
@@ -60,22 +66,57 @@ graduate confirmed regressions into the corpus.
 
 ## Non-goals
 
+- Not a race for program count; see §What we take, and what we leave.
+- Not a compiler for AI authors yet: the "pen" use (a strategist choosing every
+  generator decision) was discussed 2026-10-08 and deferred by the person.
 - Not a benchmark, not a parser fuzzer (random token soup tests nothing past
   the parser), not a std-API exerciser (the corpus owns that surface), not
   distributed.
 - No vendored Csmith code — mechanisms only. The reference checkout path is
   machine-local and stays on the arc card.
 
-## Slices
+## What we take, and what we leave
 
-1. **Smallest closed loop**: generator for one family (integer/float
-   arithmetic + control flow + canonical prints), lane run via the corpus
-   runner, bundle on divergence. Proven on a planted divergence.
-2. **Swarm + scope/lifetime families**: feature vectors; closures, captures,
-   unions, generics — the constructs whose divergence yield we actually want.
-3. **SAN lane**: DRC-ledger and sanitizer divergences as bundle kinds.
-4. **Reduction**: `creduce --not-c` + predicate; graduate one failure
-   end-to-end into the corpus.
+Csmith tests mature optimizing C compilers, where the front end is solid, bugs sit
+deep in optimizers, and UB avoidance dominates the generator. `msc` is young: the
+three findings of 2026-10-08 (`coveragePlan.md` §Execution work bound) were a JS
+emit error and two C lowering errors, from 9 programs. Bugs here are dense and live
+in transforms, emit and lifetime, so construct diversity limits Smith, not volume.
+
+| source | take | leave |
+|---|---|---|
+| Csmith | seed + full vector in the program; swarm; runtime-safe arithmetic; termination budget; failure-identity predicates; per-construct probability tables (`--probability-configuration`) | digest oracle; pointer/UB fact engine; volume as the goal; its broken options (CSMITH-STUDY §Broken corners) |
+| WhiteFox (Yang et al., OOPSLA 2024, DOI 10.1145/3689736) | an LLM reads a pass's source and states what input reaches it; inputs that reached it seed the next round | the LLM writing the main test programs |
+| Fuzz4All (Xia et al., ICSE 2024, DOI 10.1145/3597503.3639121) | free-form LLM programs as scouts where Smith has no family yet | crash as the only oracle |
+| ours | C ↔ JS ↔ raiser parity; SAN/DRC ledger as the primary lifetime oracle; inbox dedupe and corpus pins | — |
+
+Why volume is not the goal: Fuzz4All Table 2, 24 h on GCC — Csmith 61,883 programs
+99.99% valid coverage 111,668; YARPGen 255,581 / 166,614; Fuzz4All 44,324 programs
+37.26% valid, coverage 198,927. The same paper cites a six-month Csmith run that
+found no new GCC/Clang bug. Smith's yardstick is **distinct findings per CPU-hour**,
+plus per-pass coverage and the hit rate of the targeted construct.
+
+## Plan
+
+Three layers. **Weapon**: generator, driver, oracle, bundle, reducer. **Eyes**: what
+a batch reached (passes and branches, constructs, inbox matches; `msc dump-ast`
+already exists). **Strategist**: reads pass sources, ASTs, inbox and the eyes, and
+picks the next vector; scouts where Smith cannot generate yet.
+
+| phase | work | done when |
+|---|---|---|
+| G0 core | driver controls (lost lane, malformed metadata, rerun cannot overwrite evidence); 100-seed swarm and closure-only campaigns | measured programs per hour and finding rate |
+| G1 SAN | the driver stops forcing SAN off; leak / UAF become a bundle kind | a planted SAN divergence goes the full loop |
+| G2 reducer | `creduce --not-c` + identity predicate; the 2026-10-08 findings as real inputs | one planted and one real divergence graduated into the corpus |
+| G3 handle | per-construct weights and shape knobs (nesting, capture in loop, aggregate into sink) in `Features`; heap/ownership families H6, H10, H2, H12 written with them | one vector concentrates ≥ 70% of a batch on the chosen construct |
+| G4 eyes | **NEW MECHANISM**: coverage-instrumented `msc`, a per-pass report per batch; findings still confirmed on a normal build | a per-pass report for `lambdaLifting`, `generatorLower`, DRC inject that reruns identically |
+| G5 manual strategist | an agent session aims one pass (first: `lambdaLifting`, two of three 2026-10-08 findings) against random swarm on the same CPU budget | per-pass branch coverage and distinct findings per CPU-hour for both arms |
+| G6 automated loop + scouts | **NEW MECHANISM**, only if G5's aimed arm wins: LLM proposes vector → batch → eyes → next; ≥ 30% of budget stays random swarm; a scout program that finds a bug becomes the spec of the next family | measured against G5's numbers |
+| G7 matrix | remaining `coveragePlan.md` rows, ordered by where findings cluster; async/actor/macro scout first | every row verified or parked with repro, inbox and reopen condition |
+
+Slices 1–2 are done (§Slice 1, §Slice 2). The old slice 3 is G1 and slice 4 is G2.
+G4 and G6 each need their own approval when reached; approving this plan approved
+the direction, not those mechanisms.
 
 ## Slice 1 — measured
 
