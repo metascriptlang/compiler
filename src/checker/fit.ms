@@ -2649,9 +2649,18 @@ export function settleYields(ctx: CheckerContext, name: string, at: SourceLocati
 	return createIterator(elem);
 }
 
+import { makeSymbol } from "./symbol";
+import { SymbolKind } from "../ast/node";
+
+function declaredStruct(name: string, names: string[], types: Type[], isValue: boolean): Type {
+	const t = createStruct(name, names, types, isValue);
+	t.sym = makeSymbol(name, SymbolKind.Struct, t, false);
+	return t;
+}
+
 test "a union of two structs stores its tag" {
-	const p = createStruct("P", ["a"], [int32Type()], false);
-	const q = createStruct("Q", ["b"], [int32Type()], false);
+	const p = declaredStruct("P", ["a"], [int32Type()], false);
+	const q = declaredStruct("Q", ["b"], [int32Type()], false);
 	assert storesUnionTag(createUnion([p, q]));
 }
 
@@ -2660,13 +2669,13 @@ test "a union of two numbers stores its tag" {
 }
 
 test "a union with a shared literal discriminant keeps no tag" {
-	const a = createStruct("A", ["kind"], [createStringLiteral("a")], false);
-	const b = createStruct("B", ["kind"], [createStringLiteral("b")], false);
+	const a = declaredStruct("A", ["kind"], [createStringLiteral("a")], false);
+	const b = declaredStruct("B", ["kind"], [createStringLiteral("b")], false);
 	assert !storesUnionTag(createUnion([a, b]));
 }
 
 test "a union whose members the value names keeps no tag" {
 	assert !storesUnionTag(createUnion([numberType(), stringType()]));
-	const p = createStruct("P", ["a"], [int32Type()], false);
+	const p = declaredStruct("P", ["a"], [int32Type()], false);
 	assert !storesUnionTag(createUnion([p, stringType()]));
 }

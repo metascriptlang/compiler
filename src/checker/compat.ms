@@ -2223,10 +2223,16 @@ test "complexDisambiguation per-param contradiction returns 0" {
 	assert cmp == 0;
 }
 
+function declaredStruct(name: string, names: string[], types: Type[], isValue: boolean): Type {
+	const t = createStruct(name, names, types, isValue);
+	t.sym = makeSymbol(name, SymbolKind.Struct, t, false);
+	return t;
+}
+
 test "narrowing a readonly union to a variant is not dropping the view" {
-	const leaf = createRef(createStruct("Leaf", ["v"], [numberType()], false));
-	const pair = createStruct("PairData", ["leaf", "other"], [leaf, leaf], true);
-	const name = createStruct("NameData", ["label"], [stringType()], true);
+	const leaf = createRef(declaredStruct("Leaf", ["v"], [numberType()], false));
+	const pair = declaredStruct("PairData", ["leaf", "other"], [leaf, leaf], true);
+	const name = declaredStruct("NameData", ["label"], [stringType()], true);
 	const u = createUnion([pair, name]);
 	const view = createReadonlyView(u);
 	assert isReadonlyView(view);
@@ -2236,7 +2242,7 @@ test "narrowing a readonly union to a variant is not dropping the view" {
 }
 
 test "a view assigned into a nullable of itself keeps the view" {
-	const leaf = createRef(createStruct("Leaf", ["v"], [numberType()], false));
+	const leaf = createRef(declaredStruct("Leaf", ["v"], [numberType()], false));
 	const view = createReadonlyView(leaf);
 	const nullableView = createUnion([view, nullType()]);
 	const nullableLeaf = createUnion([leaf, nullType()]);
@@ -2259,7 +2265,7 @@ test "a read-only view reaches a union only through a matching read-only member"
 	const wrongBranch = createUnion([unrelated, writable]);
 	assert !isAssignable(view, wrongBranch);
 	assert dropsReadonlyView(view, wrongBranch);
-	const leaf = createRef(createStruct("UnionLeaf", ["v"], [numberType()], false));
+	const leaf = createRef(declaredStruct("UnionLeaf", ["v"], [numberType()], false));
 	const leafView = createReadonlyView(leaf);
 	assert isAssignable(leafView, createUnion([leafView, stringType()]));
 	assert !isAssignable(leafView, createUnion([leaf, stringType()]));

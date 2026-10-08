@@ -4513,10 +4513,16 @@ test "getProperty" {
 	assert getProperty(numberType(), "x").kind == TypeKind.Inferred;
 }
 
+function declaredStruct(name: string, names: string[], types: Type[], isValue: boolean): Type {
+	const t = createStruct(name, names, types, isValue);
+	t.sym = makeSymbol(name, SymbolKind.Struct, t, false);
+	return t;
+}
+
 test "a ref-carrying union is viewable" {
-	const leaf = createRef(createStruct("Leaf", ["v"], [int32Type()], false));
-	const pair = createStruct("PairData", ["leaf", "other"], [leaf, leaf], true);
-	const name = createStruct("NameData", ["label"], [stringType()], true);
+	const leaf = createRef(declaredStruct("Leaf", ["v"], [int32Type()], false));
+	const pair = declaredStruct("PairData", ["leaf", "other"], [leaf, leaf], true);
+	const name = declaredStruct("NameData", ["label"], [stringType()], true);
 	const structUnion = createUnion([pair, name]);
 	assert !isReadonlyView(structUnion);
 	assert isReadonlyView(createReadonlyView(structUnion));
@@ -4524,8 +4530,8 @@ test "a ref-carrying union is viewable" {
 }
 
 test "a union of ref variants is viewable" {
-	const namedA = createRef(createStruct("NamedA", ["leaf"], [createRef(createStruct("Leaf", ["v"], [int32Type()], false))], false));
-	const namedB = createRef(createStruct("NamedB", ["label"], [stringType()], false));
+	const namedA = createRef(declaredStruct("NamedA", ["leaf"], [createRef(declaredStruct("Leaf", ["v"], [int32Type()], false))], false));
+	const namedB = createRef(declaredStruct("NamedB", ["label"], [stringType()], false));
 	const classUnion = createUnion([namedA, namedB]);
 	assert isReadonlyView(createReadonlyView(classUnion));
 }
