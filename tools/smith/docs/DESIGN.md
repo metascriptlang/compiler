@@ -114,6 +114,26 @@ picks the next vector; scouts where Smith cannot generate yet.
 | G6 automated loop + scouts | **NEW MECHANISM**, only if G5's aimed arm wins: LLM proposes vector → batch → eyes → next; ≥ 30% of budget stays random swarm; a scout program that finds a bug becomes the spec of the next family | measured against G5's numbers |
 | G7 matrix | remaining `coveragePlan.md` rows, ordered by where findings cluster; async/actor/macro scout first | every row verified or parked with repro, inbox and reopen condition |
 
+### Loop fixed point — decided not to port yet (2026-10-08)
+
+Csmith re-analyzes a loop body until its facts reach a fixed point and deletes the
+tail statements that break it (`Block::post_creation_analysis`, `Block::find_fixed_point`
+in `src/Block.cpp`, reference commit `0cdc710`). It needs this because its facts are
+flow-sensitive: `FactPointTo` (what a pointer may target) and `FactUnion` (which union
+field was last written). A second iteration can see a pointer to a dead variable, or
+read a different union field.
+
+Smith keeps no flow-sensitive fact today. Scope, `Ent` visibility and the cost
+multiplier are lexical. Every arithmetic and conversion is guarded whatever its value.
+Union values are read only through `lenU`/`unboxU` helpers that test every member.
+So the second iteration of a generated loop is legal whenever the first one is.
+
+Reopen when a family adds a fact that one iteration can invalidate for the next:
+move or sink of an owned value (H12: a value moved in iteration 1 is gone in
+iteration 2), flow narrowing of a union or nullable (H8), definite assignment.
+That family then needs this analysis, or a construction that cannot invalidate
+the fact.
+
 Slices 1–2 are done (§Slice 1, §Slice 2). The old slice 3 is G1 and slice 4 is G2.
 G4 and G6 each need their own approval when reached; approving this plan approved
 the direction, not those mechanisms.
