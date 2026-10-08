@@ -173,6 +173,18 @@ function linkKeys(dir: string): string[] {
 	return keys;
 }
 
+function sameLink(cold: string, warm: string): boolean {
+	const before = cold.split("\n");
+	const after = warm.split("\n");
+	if (before.length != after.length) return false;
+	for (let i = 0; i < before.length; i += 1) {
+		if (before[i] == after[i]) continue;
+		const settledOnly = before[i].startsWith("outputHash:content:") && after[i].startsWith("outputHash:settled:");
+		if (!settledOnly) return false;
+	}
+	return true;
+}
+
 function firstWarmBuild(): void {
 	const tag = "hcrFirstWarmBuild";
 	const dir = freshDir(`${TMP}/firstWarm`);
@@ -186,7 +198,11 @@ function firstWarmBuild(): void {
 	let relinked = 0;
 	const changed: string[] = [];
 	for (const key of linkKeys(dir)) {
-		if (!cold.includes(key)) {
+		let kept = false;
+		for (const entry of cold) {
+			if (sameLink(entry, key)) kept = true;
+		}
+		if (!kept) {
 			relinked += 1;
 			changed.push(key);
 		}
