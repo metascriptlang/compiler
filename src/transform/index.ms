@@ -28,8 +28,9 @@
 // 25. dce                   — dead code elimination (2-tier: statement + symbol level)
 // 26. destructorLifting     — generate per-type _destroy/_copy function bodies
 
-import { Node, NodeKind, ProgramData } from "../ast/node";
+import { Node, NodeKind, ProgramData, SymbolKind } from "../ast/node";
 import { CheckerContext } from "../checker/context";
+import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
 import { createTransformContextWithChecker } from "./context";
 import { bindCompilerFuncs } from "./util";
 import { lowerDefer } from "./lowering/deferLower";
@@ -221,7 +222,26 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (jsBackend) { result = lowerEnumToString(result, ctx); }
 	result = liftDestructors(result, ctx, !jsBackend);
 	if (jsBackend) { result = dropLocalTypeLift(result, checkerCtx); }
+	if (jsBackend) { result = ownModuleScopeTemps(result, checkerCtx); }
 	return result;
+}
+
+// A binding the lowerings declare at module scope belongs to the module, as one
+// the author wrote does. C keeps such a slot apart with static linkage per
+// translation unit; a JS bundle is one flat scope, so the slot takes the module
+// qualifier every module-level variable carries.
+function ownModuleScopeTemps(program: Node, checkerCtx: CheckerContext): Node {
+	if (program.kind != NodeKind.Program) return program;
+	const pd = program.data as ProgramData;
+	for (const s of pd.programStmts) {
+		if (s.kind != NodeKind.VariableDecl) continue;
+		const sym = s.resolvedSym;
+		if (sym == null || hasFlag(sym, SymbolFlag.Global)) continue;
+		if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Temp) continue;
+		if (sym.modulePath == "") sym.modulePath = checkerCtx.modulePath;
+		setFlag(sym, SymbolFlag.Global);
+	}
+	return program;
 }
 
 function dropLocalTypeLift(program: Node, checkerCtx: CheckerContext): Node {

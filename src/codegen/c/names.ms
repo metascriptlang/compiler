@@ -320,12 +320,13 @@ export function resolveOverloadWinner(sym: Symbol, rawIdx: number): OverloadWinn
 // (global decl, cross-module extern, identifier reference) — extracting prevents drift if
 // the definition changes (e.g. future static class fields).
 //
-// Criteria: Symbol is a Variable, has Global flag (set by collectPass on module-level
-// declarations), and has a known defining module.
+// Criteria: Symbol is a Variable (or a lowering's Temp), has Global flag (set by
+// collectPass on module-level declarations, and by the JS pipeline on bindings the
+// lowerings declare at module scope), and has a known defining module.
 
 export function isModuleGlobalVar(sym: Symbol | null): boolean {
 	if (sym == null) return false;
-	if (sym.symbolKind != SymbolKind.Variable) return false;
+	if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Temp) return false;
 	// Flag set in two places: (1) collectPass for own-module top-level VariableDecl,
 	// (2) importSymFromRegistry for imported Variable syms (exports can only be
 	// module-level). Distinguishes module-level globals from locals — both have
