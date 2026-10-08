@@ -1,7 +1,8 @@
 import { Node, NodeKind, NodeFlag, TypeKind, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, ProgramData } from "../../ast/node";
-import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads } from "../../checker/fit";
-import { peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType } from "../../checker/types";
+import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv } from "../../checker/fit";
+import { peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue } from "../../checker/types";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
+import { sameType } from "../../checker/compat";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeBlock, makeCall, makeExprStmt, makeFnDecl, makeIf, makeIdentResolved, makeIntNumber, makeMember, makeReturn, makeString, makeTypedIdentResolved, makeTypedObjectLiteral, makeUnary, runtimeRef, syntheticToken, makeBool, makeNull, makeHiddenSubConv } from "../util";
@@ -39,7 +40,12 @@ function unionPair(node: Node): Type[] | null {
 	const source = peelTransparentInstance(d.convExpr.nodeType);
 	const target = peelTransparentInstance(d.convType);
 	if (nullableUnionPayloads(source, target) != null) return [source, target];
+	if (node.flags.has(NodeFlag.ConvCheck) && target.kind != TypeKind.Union && isSlotUnion(source)) return [source, target];
 	return convertsBetweenUnions(source, target) ? [source, target] : null;
+}
+
+function targetMembers(target: Type): Type[] {
+	return target.kind == TypeKind.Union ? target.typeChildren : [target];
 }
 
 function lowerConversion(node: Node, ctx: TransformContext): Node {
@@ -69,9 +75,12 @@ function lowerConversion(node: Node, ctx: TransformContext): Node {
 
 function passesUnchanged(source: Type, target: Type, ctx: TransformContext): boolean {
 	if (!ctx.jsBackend && !ctx.raiserBackend) return false;
-	if (storesUnionTag(source) || storesUnionTag(target)) return false;
-	for (const slot of unionMemberSlots(source, target)) {
-		if (slot < 0) return false;
+	if (target.kind != TypeKind.Union || storesUnionTag(source) || storesUnionTag(target)) return false;
+	const slots = unionMemberSlots(source, target);
+	for (let i = 0; i < slots.length; i += 1) {
+		if (slots[i] < 0) return false;
+		const member = source.typeChildren[i];
+		if (isNumeric(member) && !sameType(member, target.typeChildren[slots[i]])) return false;
 	}
 	return true;
 }
@@ -143,22 +152,47 @@ function conversionArms(source: Type, target: Type, valueSym: Symbol, ctx: Trans
 		const vi = order[k];
 		const member = source.typeChildren[vi];
 		const arm = slots[vi] >= 0
-			? makeReturn(slotConv(heldAs(slotConv(read(valueSym, source, loc), member, vi), target.typeChildren[slots[vi]], loc), target, slots[vi]), loc)
-			: memberMissing(source, target, vi, ctx, loc);
+			? [makeReturn(intoTarget(heldAs(slotConv(read(valueSym, source, loc), member, vi), targetMembers(target)[slots[vi]], loc), target, slots[vi]), loc)]
+			: literalArms(source, target, valueSym, vi, ctx, loc);
 		if (k == order.length - 1) {
-			stmts.push(arm);
+			for (const stmt of arm) stmts.push(stmt);
 		} else {
-			stmts.push(makeIf(holdsMember(source, valueSym, vi, ctx, loc), makeBlock([arm], loc), null, loc));
+			stmts.push(makeIf(holdsMember(source, valueSym, vi, ctx, loc), makeBlock(arm, loc), null, loc));
 		}
 	}
 	return stmts;
 }
 
 function heldAs(held: Node, slot: Type, loc: SourceLocation): Node {
-	if (held.nodeType == null || held.nodeType == slot || held.nodeType.kind != TypeKind.Ref || slot.kind != TypeKind.Ref) return held;
+	if (held.nodeType == null || held.nodeType == slot) return held;
+	if (isNumeric(held.nodeType) && isNumeric(slot) && !sameType(held.nodeType, slot)) return wrapInConv(held, slot);
+	if (held.nodeType.kind != TypeKind.Ref || slot.kind != TypeKind.Ref) return held;
 	const upcast = makeHiddenSubConv(held, slot, loc);
 	upcast.nodeType = slot;
 	return upcast;
+}
+
+function intoTarget(held: Node, target: Type, slot: int32): Node {
+	if (target.kind != TypeKind.Union) {
+		held.nodeType = target;
+		return held;
+	}
+	return slotConv(held, target, slot);
+}
+
+function literalArms(source: Type, target: Type, valueSym: Symbol, vi: int32, ctx: TransformContext, loc: SourceLocation): Node[] {
+	const member = source.typeChildren[vi];
+	const stmts: Node[] = [];
+	for (const slot of booleanLiteralSlots(target, member)) {
+		const literal = targetMembers(target)[slot];
+		const held = slotConv(read(valueSym, source, loc), member, vi);
+		const same = makeBinary(held, "==", makeBool(booleanLiteralValue(literal), loc), loc);
+		same.nodeType = booleanType();
+		const value = slotConv(read(valueSym, source, loc), literal, vi);
+		stmts.push(makeIf(same, makeBlock([makeReturn(intoTarget(value, target, slot), loc)], loc), null, loc));
+	}
+	stmts.push(memberMissing(source, target, vi, ctx, loc));
+	return stmts;
 }
 
 function testsByTag(source: Type, ctx: TransformContext): boolean {

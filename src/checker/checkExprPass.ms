@@ -3452,7 +3452,18 @@ function convertAsBetweenUnions(ctx: CheckerContext, node: Node, srcType: Type, 
 	let refusalSource: Type = srcType;
 	let refusalTarget: Type = targetType;
 	let converted: Node | null = null;
-	if (nullableTarget != null && (convertsBetweenUnions(srcType, nullableTarget) || unionConversionRefusal(srcType, nullableTarget, false) != "")) {
+	const scalarTarget = nullableTarget != null ? nullableTarget : targetType;
+	const reachesScalar = isSlotUnion(srcType) && scalarTarget.kind != TypeKind.Union && !isMaybeType(scalarTarget)
+		&& tagUnionMemberSlot(srcType, scalarTarget) < 0 && heldInTarget(srcType, scalarTarget);
+	if (reachesScalar && nullableTarget == null) {
+		const scalar = convertUnionToUnion(d.asExpr, srcType, targetType);
+		node.kind = NodeKind.HiddenSubConv;
+		node.data = scalar.data;
+		node.flags = node.flags.incl(NodeFlag.Sem).incl(NodeFlag.ConvCheck);
+		node.nodeType = targetType;
+		return true;
+	}
+	if (nullableTarget != null && (convertsBetweenUnions(srcType, nullableTarget) || reachesScalar || unionConversionRefusal(srcType, nullableTarget, false) != "")) {
 		refusalTarget = nullableTarget;
 		if (unionConversionRefusal(srcType, nullableTarget, false) == "") converted = synthMaybeWrap(convertUnionToUnion(d.asExpr, srcType, nullableTarget), targetType, nullableTarget);
 	} else {
@@ -3476,6 +3487,7 @@ function convertAsBetweenUnions(ctx: CheckerContext, node: Node, srcType: Type, 
 		node.kind = NodeKind.HiddenSubConv;
 		node.data = converted.data;
 		node.flags = node.flags.incl(NodeFlag.Sem);
+		if (converted.flags.has(NodeFlag.ConvCheck)) node.flags = node.flags.incl(NodeFlag.ConvCheck);
 	} else {
 		node.data = { asExpr: converted, asType: d.asType };
 	}

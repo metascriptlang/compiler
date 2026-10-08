@@ -1591,7 +1591,40 @@ function exactMemberSlot(target: Type, member: Type): int32 {
 			widened = widened == -1 ? ti : -2;
 		}
 	}
-	return found >= 0 ? found : widened >= 0 ? widened : -1;
+	if (found >= 0) return found;
+	if (widened >= 0) return widened;
+	return numericWideningSlot(target, member);
+}
+
+function numericWideningSlot(target: Type, member: Type): int32 {
+	if (!isNumeric(member)) return -1;
+	const members = unionMembers(target);
+	const reached = numericMembersReached(member, members);
+	if (reached.length != 1) return -1;
+	for (let ti: int32 = 0; ti < members.length; ti += 1) {
+		if (members[ti] == reached[0]) return ti;
+	}
+	return -1;
+}
+
+export function booleanLiteralSlots(target: Type, member: Type): int32[] {
+	const slots: int32[] = [];
+	if (peelTransparentInstance(member).kind != TypeKind.Boolean) return slots;
+	const members = unionMembers(target);
+	for (let ti: int32 = 0; ti < members.length; ti += 1) {
+		if (members[ti].kind == TypeKind.BooleanLiteral) slots.push(ti);
+	}
+	return slots;
+}
+
+function numericMemberRefusal(member: Type, target: Type): string {
+	if (!isNumeric(member)) return "";
+	const reached = numericMembersReached(member, unionMembers(target));
+	if (reached.length > 1) return `'${typeDisplayName(member)}' widens to both '${typeDisplayName(reached[0])}' and '${typeDisplayName(reached[1])}'; convert it on its own before the union`;
+	for (const t of unionMembers(target)) {
+		if (isNumeric(t) && numericConvRefuses(member, t)) return `'${typeDisplayName(member)}' to '${typeDisplayName(t)}' ${numericRefusalReason(member, t)}; convert it on its own before the union`;
+	}
+	return "";
 }
 
 export function unionMemberSlots(source: Type, target: Type): int32[] {
@@ -1614,10 +1647,22 @@ export function unionsOverlap(source: Type, target: Type): boolean {
 }
 
 export function heldInTarget(source: Type, target: Type): boolean {
-	for (const slot of unionMemberSlots(source, target)) {
-		if (slot >= 0) return true;
+	const slots = unionMemberSlots(source, target);
+	for (let i = 0; i < slots.length; i += 1) {
+		if (slots[i] >= 0 || booleanLiteralSlots(target, source.typeChildren[i]).length > 0) return true;
 	}
 	return false;
+}
+
+export function numericUnionRefusal(source: Type | null, target: Type | null): string {
+	if (!convertsBetweenUnions(source, target)) return "";
+	const slots = unionMemberSlots(source!, target!);
+	for (let i = 0; i < slots.length; i += 1) {
+		if (slots[i] >= 0) continue;
+		const refusal = numericMemberRefusal(source!.typeChildren[i], target!);
+		if (refusal != "") return " — " + refusal;
+	}
+	return "";
 }
 
 export function unionConversionRefusal(source: Type, target: Type, implicit: boolean): string {
@@ -1626,6 +1671,9 @@ export function unionConversionRefusal(source: Type, target: Type, implicit: boo
 	for (let i = 0; i < slots.length; i += 1) {
 		if (slots[i] >= 0) { held += 1; continue; }
 		const member = source.typeChildren[i];
+		if (!implicit && booleanLiteralSlots(target, member).length > 0) { held += 1; continue; }
+		const numeric = numericMemberRefusal(member, target);
+		if (numeric != "") return numeric;
 		for (const t of unionMembers(target)) {
 			if (isAssignable(member, t)) return `'${typeDisplayName(member)}' converts to '${typeDisplayName(t)}', not as a member of the same type; convert it on its own before the union`;
 		}
@@ -1675,6 +1723,7 @@ export function convertUnionToUnion(expr: Node, source: Type, target: Type): Nod
 	const convNode = createNode(NodeKind.HiddenSubConv, { convExpr: expr, convType: target }, createToken(TokenKind.Ident, "", expr.location.line));
 	convNode.nodeType = target;
 	convNode.flags = convNode.flags.incl(NodeFlag.Sem);
+	if (target.kind != TypeKind.Union) convNode.flags = convNode.flags.incl(NodeFlag.ConvCheck);
 	return convNode;
 }
 
@@ -2053,6 +2102,11 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	}
 	const unionFit = fitUnionIntoUnion(expr, exprType, formal);
 	if (unionFit != null) return unionFit;
+	const numericRefusal = numericUnionRefusal(exprType, formal);
+	if (numericRefusal != "") {
+		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'" + numericRefusal, expr.location.line, expr.location.column);
+		return expr;
+	}
 	if (isNominalMismatch(exprType, formal)) {
 		addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "'", expr.location.line, expr.location.column);
 		return expr;
@@ -2279,10 +2333,14 @@ export function fitNumericIntoUnion(ctx: CheckerContext, expr: Node, exprType: T
 }
 
 function implicitNumericMembers(exprType: Type, formal: Type): Type[] {
+	return formal.typeChildren == null ? [] as Type[] : numericMembersReached(exprType, formal.typeChildren);
+}
+
+function numericMembersReached(exprType: Type, candidates: Type[]): Type[] {
 	const members: Type[] = [];
-	if (!isNumeric(exprType) || formal.typeChildren == null) return members;
+	if (!isNumeric(exprType)) return members;
 	let best = TypeRelation.None;
-	for (const member of formal.typeChildren) {
+	for (const member of candidates) {
 		if (member == null || !isNumeric(member) || numericConvRefuses(exprType, member)) continue;
 		const rel = typeRelation(member, exprType);
 		if (rel == TypeRelation.None || (rel as number) < (best as number)) continue;
